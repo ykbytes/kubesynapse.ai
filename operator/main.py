@@ -12,6 +12,9 @@ from utils import (
     build_workflow_run_id,
     merge_goose_config_files,
     now_iso,
+    parse_a2a_peer_refs,
+    parse_agent_a2a_config,
+    parse_policy_a2a_config,
     parse_goose_config_files,
     validate_supported_policy_spec,
     validate_workflow_graph,
@@ -125,8 +128,13 @@ AGENT_CPU_REQUEST = os.getenv("AGENT_CPU_REQUEST", "100m").strip() or "100m"
 AGENT_MEMORY_REQUEST = os.getenv("AGENT_MEMORY_REQUEST", "256Mi").strip() or "256Mi"
 AGENT_CPU_LIMIT = os.getenv("AGENT_CPU_LIMIT", "1").strip() or "1"
 AGENT_MEMORY_LIMIT = os.getenv("AGENT_MEMORY_LIMIT", "1Gi").strip() or "1Gi"
+A2A_DEFAULT_TIMEOUT_SECONDS = get_float_env("A2A_DEFAULT_TIMEOUT_SECONDS", 60.0, minimum=1.0)
 IMAGE_PULL_SECRETS = get_csv_env("IMAGE_PULL_SECRETS")
 SUPPORTED_RUNTIME_KINDS = {"langgraph", "goose"}
+A2A_ALLOWED_CALLERS_ENV = "A2A_ALLOWED_CALLERS_JSON"
+A2A_ALLOWED_TARGETS_ENV = "A2A_ALLOWED_TARGETS_JSON"
+A2A_REQUIRE_HITL_ENV = "A2A_REQUIRE_HITL"
+A2A_MAX_TIMEOUT_SECONDS_ENV = "A2A_MAX_TIMEOUT_SECONDS"
 # MCP Hub: namespace where shared enterprise MCP servers run and the auth
 # secret that agents must present as a bearer token on every MCP call.
 MCP_HUB_NAMESPACE = os.getenv("MCP_HUB_NAMESPACE", "mcp-hub").strip()
@@ -177,6 +185,10 @@ PLATFORM_MANAGED_GOOSE_ENV = {
     "XDG_DATA_HOME",
     "GOOSE_BIN",
     "GOOSE_WORKDIR",
+    A2A_ALLOWED_CALLERS_ENV,
+    A2A_ALLOWED_TARGETS_ENV,
+    A2A_REQUIRE_HITL_ENV,
+    A2A_MAX_TIMEOUT_SECONDS_ENV,
     GOOSE_RUNTIME_CONFIG_FILES_ENV,
 }
 
@@ -455,6 +467,10 @@ def resolve_runtime_kind(spec: dict[str, Any]) -> str:
 def validate_runtime_configuration(runtime_kind: str, spec: dict[str, Any]) -> None:
     runtime_spec = spec.get("runtime") or {}
     goose_spec = runtime_spec.get("goose") if isinstance(runtime_spec, dict) else None
+    try:
+        parse_agent_a2a_config(spec.get("a2a"), source="AIAgent.spec.a2a")
+    except ValueError as exc:
+        raise kopf.PermanentError(str(exc)) from exc
 
     if runtime_kind != "goose":
         if goose_spec is not None:
@@ -654,6 +670,28 @@ def create_agent_statefulset_manifest(
         {"name": "AGENT_NAMESPACE", "value": namespace},
         {"name": "AGENT_SYSTEM_PROMPT", "value": system_prompt},
     ]
+    agent_a2a_config = parse_agent_a2a_config(spec.get("a2a"), source="AIAgent.spec.a2a")
+    policy_a2a_config = parse_policy_a2a_config(policy_spec or {})
+    env.extend(
+        [
+            {
+                "name": A2A_ALLOWED_CALLERS_ENV,
+                "value": json.dumps(agent_a2a_config.get("allowedCallers", []), ensure_ascii=False, sort_keys=True),
+            },
+            {
+                "name": A2A_ALLOWED_TARGETS_ENV,
+                "value": json.dumps(policy_a2a_config.get("allowedTargets", []), ensure_ascii=False, sort_keys=True),
+            },
+            {
+                "name": A2A_REQUIRE_HITL_ENV,
+                "value": serialize_env_value(policy_a2a_config.get("requireHitl", False)),
+            },
+            {
+                "name": A2A_MAX_TIMEOUT_SECONDS_ENV,
+                "value": serialize_env_value(policy_a2a_config.get("maxTimeoutSeconds", A2A_DEFAULT_TIMEOUT_SECONDS)),
+            },
+        ]
+    )
 
     volume_mounts = [
         {"name": "tmp-volume", "mountPath": "/tmp"},
@@ -793,11 +831,15 @@ def create_agent_statefulset_manifest(
             "httpGet": {"path": "/ready", "port": "http"},
             "initialDelaySeconds": 5,
             "periodSeconds": 10,
+            "timeoutSeconds": 5,
+            "failureThreshold": 6,
         },
         "livenessProbe": {
             "httpGet": {"path": "/health", "port": "http"},
             "initialDelaySeconds": 15,
             "periodSeconds": 20,
+            "timeoutSeconds": 5,
+            "failureThreshold": 6,
         },
         "volumeMounts": volume_mounts,
         "env": env,
@@ -1045,6 +1087,92 @@ def create_mcp_network_policy_manifest(name: str, namespace: str, allowed_mcp_ty
     return manifest
 
 
+def create_a2a_egress_network_policy_manifest(
+    name: str,
+    namespace: str,
+    allowed_targets: list[dict[str, str]],
+) -> dict[str, Any]:
+    egress_rules: list[dict[str, Any]] = []
+    for target in allowed_targets:
+        egress_rules.append(
+            {
+                "to": [
+                    {
+                        "namespaceSelector": {
+                            "matchLabels": {"kubernetes.io/metadata.name": target["namespace"]}
+                        },
+                        "podSelector": {
+                            "matchLabels": {"app": "ai-agent", "agent-name": target["name"]}
+                        },
+                    }
+                ],
+                "ports": [{"protocol": "TCP", "port": API_PORT}],
+            }
+        )
+
+    return {
+        "apiVersion": "networking.k8s.io/v1",
+        "kind": "NetworkPolicy",
+        "metadata": {
+            "name": f"{sandbox_name(name)}-a2a-egress",
+            "namespace": namespace,
+            "labels": {
+                "app": "ai-agent",
+                "agent-name": name,
+                "sandbox.enterprise.ai/policy-type": "a2a-egress",
+            },
+        },
+        "spec": {
+            "podSelector": {"matchLabels": {"app": "ai-agent", "agent-name": name}},
+            "policyTypes": ["Egress"],
+            "egress": egress_rules,
+        },
+    }
+
+
+def create_a2a_ingress_network_policy_manifest(
+    name: str,
+    namespace: str,
+    allowed_callers: list[dict[str, str]],
+) -> dict[str, Any]:
+    ingress_rules: list[dict[str, Any]] = []
+    for caller in allowed_callers:
+        ingress_rules.append(
+            {
+                "from": [
+                    {
+                        "namespaceSelector": {
+                            "matchLabels": {"kubernetes.io/metadata.name": caller["namespace"]}
+                        },
+                        "podSelector": {
+                            "matchLabels": {"app": "ai-agent", "agent-name": caller["name"]}
+                        },
+                    }
+                ],
+                "ports": [{"protocol": "TCP", "port": API_PORT}],
+            }
+        )
+
+    return {
+        "apiVersion": "networking.k8s.io/v1",
+        "kind": "NetworkPolicy",
+        "metadata": {
+            "name": f"{sandbox_name(name)}-a2a-ingress",
+            "namespace": namespace,
+            "labels": {
+                "app": "ai-agent",
+                "agent-name": name,
+                "sandbox.enterprise.ai/policy-type": "a2a-ingress",
+            },
+        },
+        "spec": {
+            "podSelector": {"matchLabels": {"app": "ai-agent", "agent-name": name}},
+            "policyTypes": ["Ingress"],
+            "ingress": ingress_rules,
+        },
+    }
+
+
 def ensure_network_policy(namespace: str, manifest: dict[str, Any]) -> None:
     networking_api = kubernetes.client.NetworkingV1Api()
     policy_name = str(manifest["metadata"]["name"])
@@ -1065,6 +1193,8 @@ def create_agent_resources(spec: dict[str, Any], name: str, namespace: str, logg
     policy_name, policy_spec = resolve_agent_policy(namespace, spec.get("policyRef"))
     tenant_spec = resolve_tenant_for_namespace(namespace)
     validate_agent_model(spec.get("model", "gpt-4"), policy_spec, tenant_spec)
+    agent_a2a_config = parse_agent_a2a_config(spec.get("a2a"), source="AIAgent.spec.a2a")
+    policy_a2a_config = parse_policy_a2a_config(policy_spec or {})
     allowed_mcp = sorted(
         {
             str(item).strip()
@@ -1076,11 +1206,28 @@ def create_agent_resources(spec: dict[str, Any], name: str, namespace: str, logg
     service_manifest = create_agent_service_manifest(name, namespace)
     statefulset_manifest = create_agent_statefulset_manifest(name, namespace, spec, policy_name, policy_spec)
     network_policy_manifest = create_mcp_network_policy_manifest(name, namespace, allowed_mcp)
+    a2a_egress_policy_manifest = create_a2a_egress_network_policy_manifest(
+        name,
+        namespace,
+        parse_a2a_peer_refs(policy_a2a_config.get("allowedTargets"), source="AgentPolicy.spec.a2a.allowedTargets"),
+    )
+    a2a_ingress_policy_manifest = create_a2a_ingress_network_policy_manifest(
+        name,
+        namespace,
+        parse_a2a_peer_refs(agent_a2a_config.get("allowedCallers"), source="AIAgent.spec.a2a.allowedCallers"),
+    )
     mcp_auth_secret_manifest: dict[str, Any] | None = None
     if allowed_mcp:
         mcp_auth_secret_manifest = create_mcp_auth_secret_manifest(namespace)
 
-    for manifest in (service_manifest, statefulset_manifest, network_policy_manifest, mcp_auth_secret_manifest):
+    for manifest in (
+        service_manifest,
+        statefulset_manifest,
+        network_policy_manifest,
+        a2a_egress_policy_manifest,
+        a2a_ingress_policy_manifest,
+        mcp_auth_secret_manifest,
+    ):
         if manifest is None:
             continue
         kopf.adopt(manifest)
@@ -1090,6 +1237,8 @@ def create_agent_resources(spec: dict[str, Any], name: str, namespace: str, logg
         ensure_secret(namespace, mcp_auth_secret_manifest)
     ensure_statefulset(namespace, statefulset_manifest)
     ensure_network_policy(namespace, network_policy_manifest)
+    ensure_network_policy(namespace, a2a_egress_policy_manifest)
+    ensure_network_policy(namespace, a2a_ingress_policy_manifest)
 
 
 @kopf.on.create("sandbox.enterprise.ai", "v1alpha1", "aiagents")  # type: ignore[arg-type]

@@ -16,12 +16,14 @@ Examples:
 agentctl health
 agentctl agents list
 agentctl agents create -f examples/sample-agent.yaml
+agentctl agents discover workspace-assistant
 agentctl agents update goose-assistant --goose-config-file config.yaml=.goose/config.yaml
 agentctl agents update goose-assistant --goose-config-text prompts/review.md="Review changes conservatively."
 agentctl agents update goose-assistant --clear-goose-config-files
 agentctl workflows update research-report-pipeline -f examples/sample-workflow.yaml
 agentctl evals delete --file examples/sample-eval.yaml --yes
 agentctl invoke research-assistant "Explain Kubernetes namespaces"
+agentctl invoke research-assistant "Ask the reviewer for a second opinion" --a2a-target-agent reviewer --a2a-target-namespace team-b --a2a-timeout-seconds 20
 agentctl invoke goose-assistant "Summarize /workspace notes" --max-turns 20 --system "Stay read-only" --builtin developer
 agentctl approvals approve approval-name --reason "Reviewed by ops"
 ```

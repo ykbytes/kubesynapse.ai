@@ -21,7 +21,7 @@ interface InspectorPanelProps {
   onLoadLogs: () => void;
 }
 
-function renderJsonBlock(value: Record<string, unknown> | null | undefined) {
+function renderJsonBlock(value: unknown) {
   if (!value) {
     return <p className="muted-copy">No data yet.</p>;
   }
@@ -172,6 +172,14 @@ export function InspectorPanel({
           <strong>Sandbox Session</strong>
         </div>
         {renderJsonBlock(summary?.sandboxSession)}
+      </section>
+
+      <section className="inspector-card">
+        <div className="card-title-row">
+          <Activity size={16} />
+          <strong>A2A Metadata</strong>
+        </div>
+        {renderJsonBlock(summary?.a2a)}
       </section>
 
       <section className="inspector-card">

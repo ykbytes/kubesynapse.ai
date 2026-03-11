@@ -89,6 +89,37 @@ spec:
                     When true (default), every MCP tool call is routed through hitl_gate()
                     before execution, requiring an AgentApproval CR to be created and approved.
                     Set to false only for fully-trusted, read-only MCP tools.
+                a2a:
+                  type: object
+                  description: |
+                    Optional outbound A2A policy. These settings control which peer agents the
+                    runtime may invoke directly over the internal /invoke API.
+                  properties:
+                    allowedTargets:
+                      type: array
+                      description: "Explicit list of peer agents this policy allows the runtime to invoke"
+                      items:
+                        type: object
+                        properties:
+                          name:
+                            type: string
+                            description: "Target AIAgent name"
+                          namespace:
+                            type: string
+                            description: "Target AIAgent namespace"
+                        required:
+                          - name
+                          - namespace
+                    maxTimeoutSeconds:
+                      type: number
+                      minimum: 1
+                      description: "Maximum outbound A2A HTTP timeout allowed for this policy"
+                    requireHitl:
+                      type: boolean
+                      default: false
+                      description: |
+                        When true, direct outbound A2A calls must pass through the runtime HITL gate
+                        even if the caller did not explicitly set require_approval.
   scope: Namespaced
   names:
     plural: agentpolicies

@@ -1,6 +1,7 @@
 import { Save, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 
+import { A2A_ALLOWED_CALLERS_PLACEHOLDER, stringifyA2APeerRefs } from "../lib/a2a";
 import { GOOSE_CONFIG_FILES_PLACEHOLDER, stringifyGooseConfigFiles } from "../lib/gooseConfig";
 import type { AgentDetail, PolicyInfo, RuntimeKind, UpdateAgentPayload } from "../types";
 
@@ -10,7 +11,7 @@ interface AgentManagementPanelProps {
   isSaving: boolean;
   isDeleting: boolean;
   error: string;
-  onSave: (payload: UpdateAgentPayload, gooseConfigFilesText: string) => void;
+  onSave: (payload: UpdateAgentPayload, gooseConfigFilesText: string, a2aAllowedCallersText: string) => void;
   onDelete: () => void;
 }
 
@@ -29,6 +30,7 @@ export function AgentManagementPanel({
   const [storageSize, setStorageSize] = useState(agent.storage_size ?? "1Gi");
   const [runtimeKind, setRuntimeKind] = useState<RuntimeKind>(agent.runtime_kind ?? "langgraph");
   const [enableGvisor, setEnableGvisor] = useState(agent.enable_gvisor);
+  const [a2aAllowedCallersText, setA2aAllowedCallersText] = useState(stringifyA2APeerRefs(agent.a2a_config.allowed_callers));
   const [gooseConfigFilesText, setGooseConfigFilesText] = useState(stringifyGooseConfigFiles(agent.goose_config_files));
 
   useEffect(() => {
@@ -38,6 +40,7 @@ export function AgentManagementPanel({
     setStorageSize(agent.storage_size ?? "1Gi");
     setRuntimeKind(agent.runtime_kind ?? "langgraph");
     setEnableGvisor(agent.enable_gvisor);
+    setA2aAllowedCallersText(stringifyA2APeerRefs(agent.a2a_config.allowed_callers));
     setGooseConfigFilesText(stringifyGooseConfigFiles(agent.goose_config_files));
   }, [agent]);
 
@@ -95,6 +98,16 @@ export function AgentManagementPanel({
               onChange={(event) => setSystemPrompt(event.target.value)}
             />
           </label>
+          <label>
+            <span>Allowed caller agents (A2A)</span>
+            <textarea
+              className="prompt-input compact-input"
+              rows={5}
+              value={a2aAllowedCallersText}
+              onChange={(event) => setA2aAllowedCallersText(event.target.value)}
+              placeholder={A2A_ALLOWED_CALLERS_PLACEHOLDER}
+            />
+          </label>
           {runtimeKind === "goose" ? (
             <label>
               <span>Goose config files (JSON)</span>
@@ -112,6 +125,7 @@ export function AgentManagementPanel({
               Keys must be relative Goose config-root paths such as <code>config.yaml</code> or <code>prompts/review.md</code>.
             </p>
           ) : null}
+          <p className="hint-text">List one caller per line as <code>namespace/name</code>. These entries drive inbound A2A access and ingress policy generation.</p>
           {error ? <p className="error-banner">{error}</p> : null}
           <div className="composer-actions wrap-actions">
             <p className="hint-text">Saving updates the agent spec and triggers the operator to reconcile the runtime.</p>
@@ -127,7 +141,7 @@ export function AgentManagementPanel({
                     storage_size: storageSize.trim() || undefined,
                     runtime_kind: runtimeKind,
                     enable_gvisor: enableGvisor,
-                  }, gooseConfigFilesText)
+                  }, gooseConfigFilesText, a2aAllowedCallersText)
                 }
                 disabled={!model.trim() || isSaving}
               >

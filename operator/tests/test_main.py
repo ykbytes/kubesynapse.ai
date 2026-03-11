@@ -1,3 +1,4 @@
+import json
 import sys
 import types
 import unittest
@@ -90,6 +91,78 @@ class OperatorManifestTests(unittest.TestCase):
             [{"name": "state-volume", "mountPath": "/app/state"}],
         )
         self.assertIn("chown -R 1000:1000 /app/state", init_container["command"][2])
+
+    def test_statefulset_manifest_includes_a2a_env(self) -> None:
+        manifest = operator_main.create_agent_statefulset_manifest(
+            "workspace-assistant",
+            "default",
+            {
+                "model": "gpt-4",
+                "runtime": {"kind": "langgraph"},
+                "storage": {"size": "1Gi"},
+                "systemPrompt": "Be precise.",
+                "a2a": {
+                    "allowedCallers": [
+                        {"name": "research-agent", "namespace": "team-a"},
+                    ]
+                },
+            },
+            "team-policy",
+            {
+                "a2a": {
+                    "allowedTargets": [
+                        {"name": "analysis-agent", "namespace": "team-b"},
+                    ],
+                    "maxTimeoutSeconds": 45,
+                    "requireHitl": True,
+                }
+            },
+        )
+
+        env = {
+            item["name"]: item["value"]
+            for item in manifest["spec"]["template"]["spec"]["containers"][0]["env"]
+            if "value" in item
+        }
+
+        self.assertEqual(
+            json.loads(env[operator_main.A2A_ALLOWED_CALLERS_ENV]),
+            [{"name": "research-agent", "namespace": "team-a"}],
+        )
+        self.assertEqual(
+            json.loads(env[operator_main.A2A_ALLOWED_TARGETS_ENV]),
+            [{"name": "analysis-agent", "namespace": "team-b"}],
+        )
+        self.assertEqual(env[operator_main.A2A_REQUIRE_HITL_ENV], "true")
+        self.assertEqual(env[operator_main.A2A_MAX_TIMEOUT_SECONDS_ENV], "45.0")
+
+    def test_a2a_network_policy_manifests_scope_to_named_agents(self) -> None:
+        ingress = operator_main.create_a2a_ingress_network_policy_manifest(
+            "workspace-assistant",
+            "default",
+            [{"name": "research-agent", "namespace": "team-a"}],
+        )
+        egress = operator_main.create_a2a_egress_network_policy_manifest(
+            "workspace-assistant",
+            "default",
+            [{"name": "analysis-agent", "namespace": "team-b"}],
+        )
+
+        ingress_rule = ingress["spec"]["ingress"][0]["from"][0]
+        egress_rule = egress["spec"]["egress"][0]["to"][0]
+
+        self.assertEqual(ingress["metadata"]["labels"]["sandbox.enterprise.ai/policy-type"], "a2a-ingress")
+        self.assertEqual(egress["metadata"]["labels"]["sandbox.enterprise.ai/policy-type"], "a2a-egress")
+        self.assertEqual(
+            ingress_rule["namespaceSelector"]["matchLabels"]["kubernetes.io/metadata.name"],
+            "team-a",
+        )
+        self.assertEqual(ingress_rule["podSelector"]["matchLabels"]["agent-name"], "research-agent")
+        self.assertEqual(
+            egress_rule["namespaceSelector"]["matchLabels"]["kubernetes.io/metadata.name"],
+            "team-b",
+        )
+        self.assertEqual(egress_rule["podSelector"]["matchLabels"]["agent-name"], "analysis-agent")
 
 
 if __name__ == "__main__":

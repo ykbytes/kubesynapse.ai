@@ -24,6 +24,25 @@ spec:
                 policyRef:
                   type: string
                   description: "Optional AgentPolicy name to enforce for this agent"
+                a2a:
+                  type: object
+                  description: "Optional inbound A2A caller allow-list for direct agent-to-agent invocation"
+                  properties:
+                    allowedCallers:
+                      type: array
+                      description: "Explicit list of caller agents allowed to invoke this agent directly over the runtime API"
+                      items:
+                        type: object
+                        properties:
+                          name:
+                            type: string
+                            description: "Caller AIAgent name"
+                          namespace:
+                            type: string
+                            description: "Caller AIAgent namespace"
+                        required:
+                          - name
+                          - namespace
                 runtime:
                   type: object
                   description: "Selects which runtime implementation should execute this agent"

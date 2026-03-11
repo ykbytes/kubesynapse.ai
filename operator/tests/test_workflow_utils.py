@@ -7,6 +7,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from utils import (  # noqa: E402
     merge_goose_config_files,
     normalize_step_execution,
+    parse_agent_a2a_config,
+    parse_policy_a2a_config,
     parse_goose_config_files,
     ready_workflow_steps,
     render_prompt,
@@ -123,6 +125,57 @@ class WorkflowUtilsTests(unittest.TestCase):
                 "outputGuardrails": {"maxOutputTokens": 4096},
                 "allowedModels": ["gpt-4"],
             }
+        )
+
+    def test_parse_policy_a2a_config_normalizes_targets(self) -> None:
+        parsed = parse_policy_a2a_config(
+            {
+                "a2a": {
+                    "allowedTargets": [
+                        {"name": "analysis-agent", "namespace": "tenant-a"},
+                        {"name": "analysis-agent", "namespace": "tenant-a"},
+                    ],
+                    "maxTimeoutSeconds": 45,
+                    "requireHitl": True,
+                }
+            }
+        )
+
+        self.assertEqual(
+            parsed,
+            {
+                "allowedTargets": [{"name": "analysis-agent", "namespace": "tenant-a"}],
+                "maxTimeoutSeconds": 45.0,
+                "requireHitl": True,
+            },
+        )
+
+    def test_parse_policy_a2a_config_rejects_invalid_timeout(self) -> None:
+        with self.assertRaisesRegex(ValueError, "maxTimeoutSeconds"):
+            parse_policy_a2a_config(
+                {
+                    "a2a": {
+                        "allowedTargets": [{"name": "analysis-agent", "namespace": "tenant-a"}],
+                        "maxTimeoutSeconds": 0,
+                    }
+                }
+            )
+
+    def test_parse_agent_a2a_config_normalizes_allowed_callers(self) -> None:
+        parsed = parse_agent_a2a_config(
+            {
+                "allowedCallers": [
+                    {"name": "research-agent", "namespace": "tenant-a"},
+                    {"name": "research-agent", "namespace": "tenant-a"},
+                ]
+            }
+        )
+
+        self.assertEqual(
+            parsed,
+            {
+                "allowedCallers": [{"name": "research-agent", "namespace": "tenant-a"}],
+            },
         )
 
     def test_parse_goose_config_files_normalizes_relative_paths(self) -> None:

@@ -88,6 +88,9 @@ metadata:
   annotations:
     nginx.ingress.kubernetes.io/proxy-body-size: "10m"
     nginx.ingress.kubernetes.io/enable-cors: "true"
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
 spec:
   ingressClassName: {{ .Values.apiGateway.ingressClassName | default "nginx" }}
   {{- if and .Values.apiGateway.tls.enabled .Values.apiGateway.tls.secretName }}
@@ -101,6 +104,20 @@ spec:
       http:
         paths:
           - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "ai-agent-sandbox.fullname" . }}-api-gateway
+                port:
+                  number: 8080
+          - path: /.well-known
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "ai-agent-sandbox.fullname" . }}-api-gateway
+                port:
+                  number: 8080
+          - path: /a2a
             pathType: Prefix
             backend:
               service:

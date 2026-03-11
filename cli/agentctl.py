@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 import textwrap
 from dataclasses import dataclass
@@ -26,6 +27,7 @@ APP_NAME = "agentctl"
 APP_VERSION = "0.1.0"
 DEFAULT_GATEWAY_URL = "http://localhost:8080"
 DEFAULT_NAMESPACE = "default"
+K8S_NAME_RE = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
 
 THEME = Theme(
     {
@@ -287,6 +289,59 @@ def render_policies(items: list[dict[str, Any]], json_output: bool, namespace: s
     console.print(table)
 
 
+def render_agent_discovery(data: dict[str, Any], json_output: bool, include_unreachable: bool) -> None:
+    if json_output:
+        print_json(data)
+        return
+
+    peers = data.get("peers") or []
+    if not isinstance(peers, list):
+        fatal("A2A discovery response must include a peers list.")
+    visible_peers = peers if include_unreachable else [item for item in peers if bool(item.get("reachable"))]
+
+    render_info_table(
+        "A2A Discovery",
+        [
+            ("Agent", str(data.get("agent_name", ""))),
+            ("Namespace", str(data.get("namespace", ""))),
+            ("Policy", str(data.get("policy_ref") or "-")),
+            ("Configured Targets", str(len(peers))),
+            ("Shown", str(len(visible_peers))),
+        ],
+    )
+
+    if not visible_peers:
+        message = (
+            "No discoverable peers are currently reachable."
+            if not include_unreachable
+            else "No A2A targets are configured for this agent."
+        )
+        console.print(Panel(message, title="Discovery", border_style="warn"))
+        return
+
+    table = Table(title="Target Peers", box=box.ROUNDED)
+    table.add_column("Name", style="title")
+    table.add_column("Namespace", style="muted")
+    table.add_column("Reachable")
+    table.add_column("Status")
+    table.add_column("Runtime", style="accent")
+    table.add_column("Model", style="accent")
+    table.add_column("Reason")
+    for item in visible_peers:
+        reachable = bool(item.get("reachable"))
+        status = str(item.get("status") or "missing")
+        table.add_row(
+            str(item.get("name", "")),
+            str(item.get("namespace", "")),
+            Text("YES", style="ok") if reachable else Text("NO", style="warn"),
+            styled_status(status),
+            str(item.get("runtime_kind") or "-"),
+            str(item.get("model") or "-"),
+            str(item.get("reason") or "-"),
+        )
+    console.print(table)
+
+
 def render_markdown_response(title: str, response_text: str) -> None:
     body = response_text.strip() or "(empty response)"
     console.print(Panel(Markdown(body), title=title, border_style="accent"))
@@ -297,6 +352,32 @@ def render_warnings(warnings: list[str]) -> None:
         return
     content = "\n".join(f"- {item}" for item in warnings)
     console.print(Panel(content, title="Warnings", border_style="warn"))
+
+
+def render_a2a_metadata(payload: Any) -> None:
+    if not isinstance(payload, dict) or not payload:
+        return
+
+    target_agent = str(payload.get("targetAgent") or "")
+    target_namespace = str(payload.get("targetNamespace") or "")
+    caller_agent = str(payload.get("callerAgent") or "")
+    caller_namespace = str(payload.get("callerNamespace") or "")
+    rows: list[tuple[str, str]] = []
+    if target_agent or target_namespace:
+        rows.append(("Target", f"{target_namespace}/{target_agent}".strip("/")))
+    if payload.get("targetThreadId"):
+        rows.append(("Target Thread", str(payload.get("targetThreadId"))))
+    if payload.get("responseStatus"):
+        rows.append(("Target Status", str(payload.get("responseStatus"))))
+    if caller_agent or caller_namespace:
+        rows.append(("Caller", f"{caller_namespace}/{caller_agent}".strip("/")))
+    if payload.get("parentThreadId"):
+        rows.append(("Parent Thread", str(payload.get("parentThreadId"))))
+    if payload.get("callerRequestId"):
+        rows.append(("Caller Request", str(payload.get("callerRequestId"))))
+
+    if rows:
+        render_info_table("A2A", rows)
 
 
 def render_invoke_result(data: dict[str, Any], json_output: bool) -> None:
@@ -321,6 +402,7 @@ def render_invoke_result(data: dict[str, Any], json_output: bool) -> None:
     sandbox_session = data.get("sandbox_session")
     if sandbox_session:
         console.print(Panel(Pretty(sandbox_session), title="Sandbox Session", border_style="accent"))
+    render_a2a_metadata(data.get("a2a"))
     render_warnings(list(data.get("warnings") or []))
 
 
@@ -427,6 +509,50 @@ def normalize_goose_config_files_value(value: Any, field_name: str) -> dict[str,
     return dict(value)
 
 
+def normalize_a2a_peer_ref(value: Any, field_name: str) -> dict[str, str]:
+    if not isinstance(value, dict):
+        fatal(f"{field_name} entries must be objects with name and namespace fields.")
+    name = str(value.get("name", "")).strip()
+    namespace = str(value.get("namespace", "")).strip()
+    if not name or not namespace:
+        fatal(f"{field_name} entries must include non-empty name and namespace values.")
+    if not K8S_NAME_RE.fullmatch(name):
+        fatal(f"{field_name}.name must be a valid lowercase Kubernetes resource name.")
+    if not K8S_NAME_RE.fullmatch(namespace):
+        fatal(f"{field_name}.namespace must be a valid lowercase Kubernetes namespace name.")
+    return {"name": name, "namespace": namespace}
+
+
+def normalize_a2a_peer_refs(value: Any, field_name: str) -> list[dict[str, str]]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        fatal(f"{field_name} must be a list.")
+    normalized: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for index, item in enumerate(value):
+        peer_ref = normalize_a2a_peer_ref(item, f"{field_name}[{index}]")
+        identity = (peer_ref["namespace"], peer_ref["name"])
+        if identity in seen:
+            continue
+        seen.add(identity)
+        normalized.append(peer_ref)
+    return normalized
+
+
+def normalize_a2a_config_value(value: Any, field_name: str) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        fatal(f"{field_name} must be an object.")
+    return {
+        "allowed_callers": normalize_a2a_peer_refs(
+            snake_or_camel(value, "allowed_callers", "allowedCallers", []),
+            f"{field_name}.allowed_callers",
+        )
+    }
+
+
 def parse_goose_config_assignment(spec: str, *, field_name: str) -> tuple[str, str]:
     relative_path, separator, raw_value = spec.partition("=")
     if not separator or not relative_path.strip() or not raw_value.strip():
@@ -474,6 +600,7 @@ def agent_payload_from_detail(detail: dict[str, Any]) -> dict[str, Any]:
         "enable_gvisor": bool(detail.get("enable_gvisor", False)),
         "mcp_servers": normalize_list_of_strings(detail.get("mcp_servers"), "mcp_servers"),
         "mcp_sidecars": normalize_sidecars(detail.get("mcp_sidecars")),
+        "a2a_config": normalize_a2a_config_value(detail.get("a2a_config"), "a2a_config"),
         "goose_config_files": normalize_goose_config_files_value(
             detail.get("goose_config_files"),
             "goose_config_files",
@@ -497,6 +624,7 @@ def coerce_agent_payload(document: dict[str, Any], *, for_update: bool) -> tuple
             "enable_gvisor": bool(spec.get("enableGVisor", False)),
             "mcp_servers": normalize_list_of_strings(spec.get("mcpServers"), "mcpServers"),
             "mcp_sidecars": normalize_sidecars(spec.get("mcpSidecars")),
+            "a2a_config": normalize_a2a_config_value(spec.get("a2a"), "spec.a2a"),
             "goose_config_files": normalize_goose_config_files_value(
                 goose_runtime.get("configFiles"),
                 "runtime.goose.configFiles",
@@ -519,6 +647,10 @@ def coerce_agent_payload(document: dict[str, Any], *, for_update: bool) -> tuple
             "mcp_servers",
         ),
         "mcp_sidecars": normalize_sidecars(snake_or_camel(payload, "mcp_sidecars", "mcpSidecars", [])),
+        "a2a_config": normalize_a2a_config_value(
+            snake_or_camel(payload, "a2a_config", "a2aConfig", {}),
+            "a2a_config",
+        ),
         "goose_config_files": normalize_goose_config_files_value(
             snake_or_camel(payload, "goose_config_files", "gooseConfigFiles", {}),
             "goose_config_files",
@@ -837,6 +969,22 @@ def invoke(
         "--http-extension",
         help="Add a Goose Streamable HTTP extension URL for this invoke. Can be repeated.",
     ),
+    a2a_target_agent: str | None = typer.Option(
+        None,
+        "--a2a-target-agent",
+        help="Route this request through an explicit A2A call to the named target agent.",
+    ),
+    a2a_target_namespace: str | None = typer.Option(
+        None,
+        "--a2a-target-namespace",
+        help="Namespace of the explicit A2A target agent.",
+    ),
+    a2a_timeout_seconds: float | None = typer.Option(
+        None,
+        "--a2a-timeout-seconds",
+        min=1.0,
+        help="Maximum time the caller should wait for the callee response.",
+    ),
 ) -> None:
     """Invoke an agent with a prompt."""
     settings = ctx_settings(ctx)
@@ -848,6 +996,12 @@ def invoke(
         fatal("Prompt must not be empty.")
     if no_session and thread_id:
         fatal("--thread-id cannot be combined with --no-session.")
+    if bool(a2a_target_agent) != bool(a2a_target_namespace):
+        fatal("Pass both --a2a-target-agent and --a2a-target-namespace together.")
+    if a2a_target_agent and not K8S_NAME_RE.fullmatch(a2a_target_agent.strip()):
+        fatal("--a2a-target-agent must be a valid lowercase Kubernetes resource name.")
+    if a2a_target_namespace and not K8S_NAME_RE.fullmatch(a2a_target_namespace.strip()):
+        fatal("--a2a-target-namespace must be a valid lowercase Kubernetes namespace name.")
 
     payload: dict[str, Any] = {"prompt": prompt}
     if thread_id:
@@ -872,6 +1026,11 @@ def invoke(
         payload["stdio_extensions"] = extension
     if http_extension:
         payload["streamable_http_extensions"] = http_extension
+    if a2a_target_agent and a2a_target_namespace:
+        payload["a2a_target_agent"] = a2a_target_agent.strip()
+        payload["a2a_target_namespace"] = a2a_target_namespace.strip()
+    if a2a_timeout_seconds is not None:
+        payload["a2a_timeout_seconds"] = a2a_timeout_seconds
 
     if stream:
         try:
@@ -934,6 +1093,7 @@ def invoke(
                         ("Approval", str(completed_payload.get("approval_name") or "-")),
                     ],
                 )
+                render_a2a_metadata(completed_payload.get("a2a"))
                 render_warnings(list(completed_payload.get("warnings") or []))
         return
 
@@ -1020,6 +1180,31 @@ def agents_show(ctx: typer.Context, agent_name: str = typer.Argument(..., help="
     except ApiError as exc:
         fatal(str(exc), status_code=exc.status_code)
     render_generic_detail(f"Agent: {agent_name}", data, settings.json_output)
+
+
+@agents_app.command("discover")
+def agents_discover(
+    ctx: typer.Context,
+    agent_name: str = typer.Argument(..., help="Agent name."),
+    include_unreachable: bool = typer.Option(
+        False,
+        "--include-unreachable",
+        help="Include configured targets that are currently blocked, missing, or not running.",
+    ),
+) -> None:
+    """Show the agent's configured A2A targets and which ones are currently callable."""
+    settings = ctx_settings(ctx)
+    try:
+        with console.status(f"[accent]Discovering A2A peers for {agent_name}...[/accent]"):
+            with ApiClient(settings) as client:
+                data = client.json(
+                    "GET",
+                    f"/api/agents/{agent_name}/discover",
+                    params=namespace_params(settings),
+                )
+    except ApiError as exc:
+        fatal(str(exc), status_code=exc.status_code)
+    render_agent_discovery(data, settings.json_output, include_unreachable)
 
 
 @agents_app.command("update")

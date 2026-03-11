@@ -1,5 +1,44 @@
 export type RuntimeKind = "langgraph" | "goose";
 
+export interface A2APeerRef {
+  name: string;
+  namespace: string;
+}
+
+export interface AgentA2AConfig {
+  allowed_callers?: A2APeerRef[];
+}
+
+export interface A2AInvocationMetadata {
+  targetAgent?: string | null;
+  targetNamespace?: string | null;
+  targetThreadId?: string | null;
+  responseStatus?: string | null;
+  callerAgent?: string | null;
+  callerNamespace?: string | null;
+  parentThreadId?: string | null;
+  callerRequestId?: string | null;
+}
+
+export interface AgentDiscoveryPeer {
+  name: string;
+  namespace: string;
+  exists: boolean;
+  model?: string | null;
+  status?: string | null;
+  runtime_kind?: RuntimeKind | null;
+  accepts_caller: boolean;
+  reachable: boolean;
+  reason?: string | null;
+}
+
+export interface AgentDiscoveryResponse {
+  agent_name: string;
+  namespace: string;
+  policy_ref?: string | null;
+  peers: AgentDiscoveryPeer[];
+}
+
 export interface AgentInfo {
   name: string;
   model: string;
@@ -23,6 +62,7 @@ export interface AgentDetail extends AgentInfo {
   enable_gvisor: boolean;
   mcp_servers: string[];
   mcp_sidecars: Array<Record<string, unknown>>;
+  a2a_config: AgentA2AConfig;
   goose_config_files: Record<string, unknown>;
   created_at?: string | null;
 }
@@ -35,6 +75,7 @@ export interface CreateAgentPayload {
   storage_size?: string;
   runtime_kind?: RuntimeKind;
   enable_gvisor?: boolean;
+  a2a_config?: AgentA2AConfig;
   goose_config_files?: Record<string, unknown>;
 }
 
@@ -45,6 +86,7 @@ export interface UpdateAgentPayload {
   storage_size?: string;
   runtime_kind?: RuntimeKind;
   enable_gvisor?: boolean;
+  a2a_config?: AgentA2AConfig;
   goose_config_files?: Record<string, unknown>;
 }
 
@@ -66,6 +108,9 @@ export interface InvokePayload {
   tool_name?: string;
   tool_args?: Record<string, unknown>;
   mcp_server?: string;
+  a2a_target_agent?: string;
+  a2a_target_namespace?: string;
+  a2a_timeout_seconds?: number;
   debug?: boolean;
   no_session?: boolean;
   max_turns?: number;
@@ -87,6 +132,7 @@ export interface InvokeResponse {
   status: string;
   approval_name?: string | null;
   retry_after_seconds?: number | null;
+  a2a?: A2AInvocationMetadata | null;
   warnings: string[];
 }
 
@@ -214,6 +260,7 @@ export interface InvocationSummary {
   sandboxSession?: Record<string, unknown> | null;
   approvalName?: string | null;
   retryAfterSeconds?: number | null;
+  a2a?: A2AInvocationMetadata | null;
   warnings: string[];
 }
 

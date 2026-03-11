@@ -23,6 +23,7 @@ import {
   deleteAgent,
   deleteEval,
   deleteWorkflow,
+  discoverAgentPeers,
   fetchAgent,
   fetchAgentLogs,
   fetchGatewayHealth,
@@ -36,9 +37,11 @@ import {
   updateEval,
   updateWorkflow,
 } from "./lib/api";
+import { isValidK8sName, parseA2APeerRefsText } from "./lib/a2a";
 import { parseGooseConfigFilesText } from "./lib/gooseConfig";
 import type {
   AgentDetail,
+  AgentDiscoveryPeer,
   AgentInfo,
   EvalInfo,
   EvalPayload,
@@ -98,6 +101,20 @@ function parseGooseMaxTurns(value: string): number | undefined {
   const parsed = Number.parseInt(trimmed, 10);
   if (parsed < 1) {
     throw new Error("Goose max turns must be at least 1.");
+  }
+
+  return parsed;
+}
+
+function parseA2ATimeoutSeconds(value: string): number | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  const parsed = Number.parseFloat(trimmed);
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    throw new Error("A2A timeout seconds must be a number greater than or equal to 1.");
   }
 
   return parsed;
@@ -234,7 +251,14 @@ export default function App() {
   const [createAgentModel, setCreateAgentModel] = useState(DEFAULT_AGENT_MODEL);
   const [createAgentSystemPrompt, setCreateAgentSystemPrompt] = useState(DEFAULT_SYSTEM_PROMPT);
   const [createAgentRuntimeKind, setCreateAgentRuntimeKind] = useState<"langgraph" | "goose">("langgraph");
+  const [createAgentA2AAllowedCallersText, setCreateAgentA2AAllowedCallersText] = useState("");
   const [createAgentGooseConfigFilesText, setCreateAgentGooseConfigFilesText] = useState("");
+  const [a2aTargetAgent, setA2ATargetAgent] = useState("");
+  const [a2aTargetNamespace, setA2ATargetNamespace] = useState("");
+  const [a2aTimeoutSeconds, setA2ATimeoutSeconds] = useState("");
+  const [discoverablePeers, setDiscoverablePeers] = useState<AgentDiscoveryPeer[]>([]);
+  const [discoveryLoading, setDiscoveryLoading] = useState(false);
+  const [discoveryError, setDiscoveryError] = useState("");
 
   const threadIdsRef = useRef<Record<string, string>>({});
   const pendingRequestRef = useRef<Record<string, InvokePayload | null>>({});
@@ -269,6 +293,12 @@ export default function App() {
       setRequireApproval(false);
     }
   }, [approvalSupported, requireApproval]);
+
+  useEffect(() => {
+    setA2ATargetAgent("");
+    setA2ATargetNamespace("");
+    setA2ATimeoutSeconds("");
+  }, [selectedAgentName, selectedRuntimeKind]);
 
   function setMessagesForAgent(agentName: string, updater: (current: UiMessage[]) => UiMessage[]) {
     setMessagesByAgent((current) => ({
@@ -470,6 +500,40 @@ export default function App() {
     };
   }, [token, namespace, selectedAgentName, agentCreateMode]);
 
+  useEffect(() => {
+    if (!token.trim() || !selectedAgentName || agentCreateMode) {
+      setDiscoverablePeers([]);
+      setDiscoveryError("");
+      setDiscoveryLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setDiscoveryLoading(true);
+    void discoverAgentPeers(token, namespace, selectedAgentName)
+      .then((response) => {
+        if (!cancelled) {
+          setDiscoverablePeers(response.peers);
+          setDiscoveryError("");
+        }
+      })
+      .catch((nextError) => {
+        if (!cancelled) {
+          setDiscoverablePeers([]);
+          setDiscoveryError(nextError instanceof Error ? nextError.message : String(nextError));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setDiscoveryLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [token, namespace, selectedAgentName, agentCreateMode, selectedAgentDetail?.policy_ref, agents]);
+
   function pushActivity(agentName: string, event: string, payload: Record<string, unknown>) {
     if (event === "response.delta") {
       return;
@@ -525,6 +589,7 @@ export default function App() {
     setIsCreatingAgent(true);
     setCreateError("");
     try {
+      const allowedCallers = parseA2APeerRefsText(createAgentA2AAllowedCallersText);
       const gooseConfigFiles =
         createAgentRuntimeKind === "goose" ? parseGooseConfigFilesText(createAgentGooseConfigFilesText) : undefined;
       const createdAgent = await createAgent(token, namespace, {
@@ -532,9 +597,11 @@ export default function App() {
         model: createAgentModel.trim(),
         system_prompt: createAgentSystemPrompt.trim(),
         runtime_kind: createAgentRuntimeKind,
+        a2a_config: allowedCallers.length > 0 ? { allowed_callers: allowedCallers } : undefined,
         goose_config_files: gooseConfigFiles,
       });
       setAgentCreateMode(false);
+      setCreateAgentA2AAllowedCallersText("");
       setCreateAgentGooseConfigFilesText("");
       setSelectedAgentName(createdAgent.name);
       setMessagesForAgent(createdAgent.name, (current) =>
@@ -558,7 +625,7 @@ export default function App() {
     }
   }
 
-  async function handleSaveAgent(payload: UpdateAgentPayload, gooseConfigFilesText: string) {
+  async function handleSaveAgent(payload: UpdateAgentPayload, gooseConfigFilesText: string, a2aAllowedCallersText: string) {
     if (!token.trim() || !selectedAgentName) {
       return;
     }
@@ -566,8 +633,10 @@ export default function App() {
     setSavingAgent(true);
     setAgentManageError("");
     try {
+      const allowedCallers = parseA2APeerRefsText(a2aAllowedCallersText);
       const nextPayload: UpdateAgentPayload = {
         ...payload,
+        a2a_config: { allowed_callers: allowedCallers },
         goose_config_files:
           payload.runtime_kind === "goose" ? parseGooseConfigFilesText(gooseConfigFilesText) : {},
       };
@@ -887,6 +956,7 @@ export default function App() {
     const nextPrompt = prompt.trim();
     let gooseMaxTurns: number | undefined;
     let gooseWorkingDirectory: string | undefined;
+    let explicitA2ATimeoutSeconds: number | undefined;
 
     if (selectedRuntimeKind === "goose") {
       try {
@@ -898,11 +968,39 @@ export default function App() {
       }
     }
 
+    try {
+      explicitA2ATimeoutSeconds = parseA2ATimeoutSeconds(a2aTimeoutSeconds);
+    } catch (nextError) {
+      setChatError(nextError instanceof Error ? nextError.message : String(nextError));
+      return;
+    }
+
+    const normalizedA2ATargetAgent = a2aTargetAgent.trim();
+    const normalizedA2ATargetNamespace = a2aTargetNamespace.trim();
+    const hasExplicitA2ATarget = normalizedA2ATargetAgent.length > 0 || normalizedA2ATargetNamespace.length > 0;
+    if (hasExplicitA2ATarget) {
+      if (!normalizedA2ATargetAgent || !normalizedA2ATargetNamespace) {
+        setChatError("Provide both an A2A target namespace and an A2A target agent.");
+        return;
+      }
+      if (!isValidK8sName(normalizedA2ATargetAgent)) {
+        setChatError("A2A target agent must be a valid lowercase Kubernetes name.");
+        return;
+      }
+      if (!isValidK8sName(normalizedA2ATargetNamespace)) {
+        setChatError("A2A target namespace must be a valid lowercase Kubernetes name.");
+        return;
+      }
+    }
+
     const payload: InvokePayload = {
       prompt: nextPrompt,
       thread_id: threadIdsRef.current[agentName],
       require_approval: requireApproval,
       approval_action: requireApproval ? `Approve UI request for ${agentName}` : undefined,
+      a2a_target_agent: hasExplicitA2ATarget ? normalizedA2ATargetAgent : undefined,
+      a2a_target_namespace: hasExplicitA2ATarget ? normalizedA2ATargetNamespace : undefined,
+      a2a_timeout_seconds: explicitA2ATimeoutSeconds,
       max_turns: gooseMaxTurns,
       working_directory: gooseWorkingDirectory,
     };
@@ -1204,6 +1302,7 @@ export default function App() {
                   model={createAgentModel}
                   systemPrompt={createAgentSystemPrompt}
                   runtimeKind={createAgentRuntimeKind}
+                  a2aAllowedCallersText={createAgentA2AAllowedCallersText}
                   gooseConfigFilesText={createAgentGooseConfigFilesText}
                   isCreating={isCreatingAgent}
                   error={createError}
@@ -1211,6 +1310,7 @@ export default function App() {
                   onModelChange={setCreateAgentModel}
                   onSystemPromptChange={setCreateAgentSystemPrompt}
                   onRuntimeKindChange={setCreateAgentRuntimeKind}
+                  onA2AAllowedCallersTextChange={setCreateAgentA2AAllowedCallersText}
                   onGooseConfigFilesTextChange={setCreateAgentGooseConfigFilesText}
                   onCreate={() => void handleCreateAgent()}
                 />
@@ -1221,7 +1321,9 @@ export default function App() {
                   isSaving={savingAgent}
                   isDeleting={deletingAgent}
                   error={agentManageError}
-                  onSave={(payload, gooseConfigFilesText) => void handleSaveAgent(payload, gooseConfigFilesText)}
+                  onSave={(payload, gooseConfigFilesText, a2aAllowedCallersText) =>
+                    void handleSaveAgent(payload, gooseConfigFilesText, a2aAllowedCallersText)
+                  }
                   onDelete={() => void handleDeleteAgent()}
                 />
               ) : (
@@ -1241,6 +1343,12 @@ export default function App() {
                   streamMode={streamMode}
                   requireApproval={requireApproval}
                   approvalSupported={approvalSupported}
+                  a2aTargetAgent={a2aTargetAgent}
+                  a2aTargetNamespace={a2aTargetNamespace}
+                  a2aTimeoutSeconds={a2aTimeoutSeconds}
+                  discoveryPeers={discoverablePeers}
+                  discoveryLoading={discoveryLoading}
+                  discoveryError={discoveryError}
                   gooseMaxTurns={selectedGooseChatSettings.maxTurns}
                   gooseWorkingDirectory={selectedGooseChatSettings.workingDirectory}
                   gooseSystemPrompt={gooseSystemPromptPreview}
@@ -1249,6 +1357,18 @@ export default function App() {
                   onPromptChange={setPrompt}
                   onToggleStreamMode={setStreamMode}
                   onToggleRequireApproval={setRequireApproval}
+                  onA2ATargetAgentChange={(value) => {
+                    setChatError("");
+                    setA2ATargetAgent(value);
+                  }}
+                  onA2ATargetNamespaceChange={(value) => {
+                    setChatError("");
+                    setA2ATargetNamespace(value);
+                  }}
+                  onA2ATimeoutSecondsChange={(value) => {
+                    setChatError("");
+                    setA2ATimeoutSeconds(value);
+                  }}
                   onGooseMaxTurnsChange={(value) => {
                     setChatError("");
                     setGooseChatSettingsForAgent(selectedAgentName, (current) => ({

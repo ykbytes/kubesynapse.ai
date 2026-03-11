@@ -2,24 +2,31 @@
 
 import asyncio
 import contextlib
+import copy
 import hmac
 import json
 import logging
 import os
+import re
+import threading
 import time
 import uuid
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Any
+from urllib.parse import urlencode
 
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from jose import jwk, jwt
 from jose.utils import base64url_decode
 from pydantic import BaseModel, Field, model_validator
 
 logger = logging.getLogger("api-gateway")
+K8S_NAME_PATTERN = r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+K8S_NAME_RE = re.compile(K8S_NAME_PATTERN)
 
 
 @contextlib.asynccontextmanager
@@ -71,6 +78,33 @@ AGENT_RUNTIME_TIMEOUT_SECONDS = max(float(os.getenv("AGENT_RUNTIME_TIMEOUT_SECON
 OIDC_JWKS_TIMEOUT_SECONDS = max(float(os.getenv("OIDC_JWKS_TIMEOUT_SECONDS", "10")), 1.0)
 JWKS_CACHE: dict[str, Any] = {"keys": [], "expires_at": 0.0}
 STREAM_KEEPALIVE_SECONDS = max(float(os.getenv("API_GATEWAY_STREAM_KEEPALIVE_SECONDS", "15")), 5.0)
+A2A_PROTOCOL_VERSION = "1.0"
+A2A_TASK_RETENTION_SECONDS = max(int(os.getenv("A2A_TASK_RETENTION_SECONDS", "3600")), 60)
+A2A_PUBLIC_BASE_URL = os.getenv("API_GATEWAY_PUBLIC_BASE_URL", "").strip()
+A2A_PROVIDER_ORGANIZATION = os.getenv("A2A_PROVIDER_ORGANIZATION", "Kubeminionagents").strip()
+A2A_PROVIDER_URL = os.getenv("A2A_PROVIDER_URL", "").strip()
+A2A_TERMINAL_STATES = {
+    "TASK_STATE_COMPLETED",
+    "TASK_STATE_FAILED",
+    "TASK_STATE_CANCELED",
+    "TASK_STATE_REJECTED",
+}
+A2A_INTERRUPTED_STATES = {
+    "TASK_STATE_INPUT_REQUIRED",
+    "TASK_STATE_AUTH_REQUIRED",
+}
+JSONRPC_PARSE_ERROR = -32700
+JSONRPC_INVALID_REQUEST = -32600
+JSONRPC_METHOD_NOT_FOUND = -32601
+JSONRPC_INVALID_PARAMS = -32602
+JSONRPC_INTERNAL_ERROR = -32603
+A2A_TASK_NOT_FOUND_ERROR = -32001
+A2A_PUSH_NOTIFICATION_NOT_SUPPORTED_ERROR = -32003
+A2A_UNSUPPORTED_OPERATION_ERROR = -32004
+A2A_CONTENT_TYPE_NOT_SUPPORTED_ERROR = -32005
+A2A_VERSION_NOT_SUPPORTED_ERROR = -32009
+A2A_TASK_STORE_LOCK = threading.Lock()
+A2A_TASK_STORE: dict[tuple[str, str, str], dict[str, Any]] = {}
 
 
 class InvokeRequest(BaseModel):
@@ -84,6 +118,9 @@ class InvokeRequest(BaseModel):
     tool_args: dict[str, Any] = Field(default_factory=dict)
     sandbox_session: dict[str, Any] | None = None
     mcp_server: str | None = None
+    a2a_target_agent: str | None = Field(default=None, max_length=63)
+    a2a_target_namespace: str | None = Field(default=None, max_length=63)
+    a2a_timeout_seconds: float | None = Field(default=None, ge=1.0)
     debug: bool = False
     no_session: bool = False
     max_turns: int | None = None
@@ -101,10 +138,25 @@ class InvokeRequest(BaseModel):
         self.approval_action = self.approval_action.strip() or None if self.approval_action is not None else None
         self.tool_name = self.tool_name.strip()
         self.mcp_server = self.mcp_server.strip() or None if self.mcp_server is not None else None
+        self.a2a_target_agent = self.a2a_target_agent.strip() or None if self.a2a_target_agent is not None else None
+        self.a2a_target_namespace = (
+            self.a2a_target_namespace.strip() or None if self.a2a_target_namespace is not None else None
+        )
         self.working_directory = self.working_directory.strip() or None if self.working_directory is not None else None
         self.builtin_extensions = [str(item).strip() for item in self.builtin_extensions if str(item).strip()]
         self.stdio_extensions = [str(item).strip() for item in self.stdio_extensions if str(item).strip()]
         self.streamable_http_extensions = [str(item).strip() for item in self.streamable_http_extensions if str(item).strip()]
+        if self.a2a_target_agent or self.a2a_target_namespace:
+            if not self.a2a_target_agent or not self.a2a_target_namespace:
+                raise ValueError("a2a_target_agent and a2a_target_namespace must be provided together")
+            if not K8S_NAME_RE.fullmatch(self.a2a_target_agent):
+                raise ValueError("a2a_target_agent must be a valid lowercase Kubernetes resource name")
+            if not K8S_NAME_RE.fullmatch(self.a2a_target_namespace):
+                raise ValueError("a2a_target_namespace must be a valid lowercase Kubernetes namespace name")
+            if self.tool_name:
+                raise ValueError("a2a_target_* cannot be combined with tool_name")
+            if self.mcp_server:
+                raise ValueError("a2a_target_* cannot be combined with mcp_server")
         return self
 
 
@@ -120,6 +172,7 @@ class InvokeResponse(BaseModel):
     status: str = "completed"
     approval_name: str | None = None
     retry_after_seconds: int | None = None
+    a2a: dict[str, Any] | None = None
     warnings: list[str] = Field(default_factory=list)
 
 
@@ -169,8 +222,36 @@ class AgentDetail(AgentInfo):
     enable_gvisor: bool = False
     mcp_servers: list[str] = Field(default_factory=list)
     mcp_sidecars: list[dict[str, Any]] = Field(default_factory=list)
+    a2a_config: dict[str, Any] = Field(default_factory=dict)
     goose_config_files: dict[str, Any] = Field(default_factory=dict)
     created_at: str | None = None
+
+
+class AgentDiscoveryPeer(BaseModel):
+    name: str
+    namespace: str
+    exists: bool = False
+    model: str | None = None
+    status: str | None = None
+    runtime_kind: str | None = None
+    accepts_caller: bool = False
+    reachable: bool = False
+    reason: str | None = None
+
+
+class AgentDiscoveryResponse(BaseModel):
+    agent_name: str
+    namespace: str
+    policy_ref: str | None = None
+    peers: list[AgentDiscoveryPeer] = Field(default_factory=list)
+
+
+class A2AJSONRPCError(Exception):
+    def __init__(self, code: int, message: str, data: dict[str, Any] | None = None):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.data = data or {}
 
 
 class CreateAgentRequest(BaseModel):
@@ -187,6 +268,7 @@ class CreateAgentRequest(BaseModel):
     enable_gvisor: bool = False
     mcp_servers: list[str] = Field(default_factory=list)
     mcp_sidecars: list[dict[str, Any]] = Field(default_factory=list)
+    a2a_config: dict[str, Any] | None = None
     goose_config_files: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -199,6 +281,7 @@ class UpdateAgentRequest(BaseModel):
     enable_gvisor: bool = False
     mcp_servers: list[str] = Field(default_factory=list)
     mcp_sidecars: list[dict[str, Any]] = Field(default_factory=list)
+    a2a_config: dict[str, Any] | None = None
     goose_config_files: dict[str, Any] | None = None
 
 
@@ -344,6 +427,88 @@ def normalize_goose_config_file_path(raw_path: object) -> str:
     return candidate
 
 
+def parse_a2a_peer_ref(raw_value: Any, *, source: str) -> dict[str, str]:
+    if not isinstance(raw_value, dict):
+        raise HTTPException(status_code=400, detail=f"{source} entries must be objects with name and namespace fields")
+
+    name = str(raw_value.get("name", "")).strip()
+    namespace = str(raw_value.get("namespace", "")).strip()
+    if not name or not namespace:
+        raise HTTPException(status_code=400, detail=f"{source} entries must include non-empty name and namespace values")
+    if not K8S_NAME_RE.fullmatch(name):
+        raise HTTPException(status_code=400, detail=f"{source}.name must be a valid lowercase Kubernetes resource name")
+    if not K8S_NAME_RE.fullmatch(namespace):
+        raise HTTPException(status_code=400, detail=f"{source}.namespace must be a valid lowercase Kubernetes namespace name")
+    return {"name": name, "namespace": namespace}
+
+
+def parse_a2a_peer_refs(peer_refs: Any, *, source: str) -> list[dict[str, str]]:
+    if peer_refs is None:
+        return []
+    if not isinstance(peer_refs, list):
+        raise HTTPException(status_code=400, detail=f"{source} must be a list of peer reference objects")
+
+    normalized: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for index, raw_value in enumerate(peer_refs):
+        peer_ref = parse_a2a_peer_ref(raw_value, source=f"{source}[{index}]")
+        identity = (peer_ref["namespace"], peer_ref["name"])
+        if identity in seen:
+            continue
+        seen.add(identity)
+        normalized.append(peer_ref)
+    return normalized
+
+
+def parse_a2a_agent_config(config: Any, *, source: str) -> dict[str, Any]:
+    if config is None:
+        return {}
+    if not isinstance(config, dict):
+        raise HTTPException(status_code=400, detail=f"{source} must be an object")
+
+    raw_allowed_callers = config.get("allowed_callers")
+    if raw_allowed_callers is None:
+        raw_allowed_callers = config.get("allowedCallers")
+
+    allowed_callers = parse_a2a_peer_refs(raw_allowed_callers, source=f"{source}.allowed_callers")
+    return {"allowedCallers": allowed_callers} if allowed_callers else {}
+
+
+def parse_a2a_policy_config(config: Any, *, source: str) -> dict[str, Any]:
+    if config is None:
+        return {}
+    if not isinstance(config, dict):
+        raise HTTPException(status_code=400, detail=f"{source} must be an object")
+
+    normalized: dict[str, Any] = {}
+    raw_allowed_targets = config.get("allowed_targets")
+    if raw_allowed_targets is None:
+        raw_allowed_targets = config.get("allowedTargets")
+
+    allowed_targets = parse_a2a_peer_refs(raw_allowed_targets, source=f"{source}.allowed_targets")
+    if allowed_targets:
+        normalized["allowedTargets"] = allowed_targets
+
+    raw_max_timeout_seconds = config.get("max_timeout_seconds")
+    if raw_max_timeout_seconds is None:
+        raw_max_timeout_seconds = config.get("maxTimeoutSeconds")
+    if raw_max_timeout_seconds is not None:
+        try:
+            normalized["maxTimeoutSeconds"] = max(float(raw_max_timeout_seconds), 1.0)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=f"{source}.max_timeout_seconds must be a positive number") from exc
+
+    raw_require_hitl = config.get("require_hitl")
+    if raw_require_hitl is None:
+        raw_require_hitl = config.get("requireHitl")
+    if raw_require_hitl is not None:
+        if not isinstance(raw_require_hitl, bool):
+            raise HTTPException(status_code=400, detail=f"{source}.require_hitl must be a boolean")
+        normalized["requireHitl"] = raw_require_hitl
+
+    return normalized
+
+
 def parse_goose_config_files(config_files: Any, *, source: str) -> dict[str, Any]:
     if config_files is None:
         return {}
@@ -396,6 +561,10 @@ def validate_invoke_runtime_compatibility(runtime_kind: str, request: InvokeRequ
         unsupported_fields.append("mcp_server")
     if request.sandbox_session is not None:
         unsupported_fields.append("sandbox_session")
+    if request.a2a_target_agent or request.a2a_target_namespace:
+        unsupported_fields.append("a2a_target")
+    if request.a2a_timeout_seconds is not None:
+        unsupported_fields.append("a2a_timeout_seconds")
 
     if unsupported_fields:
         joined_fields = ", ".join(unsupported_fields)
@@ -451,6 +620,863 @@ def sse_keepalive_comment() -> str:
     return ": keepalive\n\n"
 
 
+def now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def dedupe_text_values(values: list[str]) -> list[str]:
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for raw_value in values:
+        value = str(raw_value).strip()
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        deduped.append(value)
+    return deduped
+
+
+def jsonrpc_success_response(request_id: Any, result: dict[str, Any]) -> dict[str, Any]:
+    return {"jsonrpc": "2.0", "id": request_id, "result": result}
+
+
+def jsonrpc_error_response(
+    request_id: Any,
+    code: int,
+    message: str,
+    data: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    error_payload: dict[str, Any] = {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "error": {
+            "code": code,
+            "message": message,
+        },
+    }
+    if data:
+        error_payload["error"]["data"] = data
+    return error_payload
+
+
+def jsonrpc_sse_message(payload: dict[str, Any]) -> str:
+    return f"data: {json.dumps(payload, ensure_ascii=False, default=str)}\n\n"
+
+
+def canonical_a2a_method(method: str) -> str:
+    normalized = method.strip()
+    aliases = {
+        "SendMessage": "message/send",
+        "message/send": "message/send",
+        "SendStreamingMessage": "message/stream",
+        "message/stream": "message/stream",
+        "GetTask": "tasks/get",
+        "tasks/get": "tasks/get",
+    }
+    return aliases.get(normalized, normalized)
+
+
+def parse_jsonrpc_payload(payload: Any) -> tuple[Any, str, dict[str, Any]]:
+    if not isinstance(payload, dict):
+        raise A2AJSONRPCError(JSONRPC_INVALID_REQUEST, "JSON-RPC request must be a JSON object")
+    if payload.get("jsonrpc") != "2.0":
+        raise A2AJSONRPCError(JSONRPC_INVALID_REQUEST, "jsonrpc must be '2.0'")
+
+    method = str(payload.get("method") or "").strip()
+    if not method:
+        raise A2AJSONRPCError(JSONRPC_INVALID_REQUEST, "method is required")
+
+    params = payload.get("params")
+    if params is None:
+        params = {}
+    if not isinstance(params, dict):
+        raise A2AJSONRPCError(JSONRPC_INVALID_PARAMS, "params must be an object")
+
+    return payload.get("id"), canonical_a2a_method(method), params
+
+
+def validate_a2a_version(request: Request) -> None:
+    requested_version = (request.headers.get("A2A-Version") or request.query_params.get("A2A-Version") or "").strip()
+    if not requested_version:
+        return
+    if requested_version != A2A_PROTOCOL_VERSION:
+        raise A2AJSONRPCError(
+            A2A_VERSION_NOT_SUPPORTED_ERROR,
+            f"Requested A2A protocol version {requested_version} is not supported",
+            {"requestedVersion": requested_version, "supportedVersions": [A2A_PROTOCOL_VERSION]},
+        )
+
+
+def resolve_a2a_agent_reference(assistant_id: str, namespace: str | None) -> tuple[str, str]:
+    raw_assistant_id = assistant_id.strip()
+    if not raw_assistant_id:
+        raise A2AJSONRPCError(JSONRPC_INVALID_PARAMS, "assistant_id must not be blank")
+
+    if "/" in raw_assistant_id:
+        parts = [part.strip() for part in raw_assistant_id.split("/", 1)]
+        if len(parts) != 2 or not parts[0] or not parts[1]:
+            raise A2AJSONRPCError(JSONRPC_INVALID_PARAMS, "assistant_id must use namespace/name syntax when it contains '/'")
+        resolved_namespace, agent_name = parts
+        if namespace and namespace.strip() and namespace.strip() != resolved_namespace:
+            raise A2AJSONRPCError(JSONRPC_INVALID_PARAMS, "namespace query parameter must match assistant_id namespace")
+    else:
+        resolved_namespace = (namespace or "default").strip() or "default"
+        agent_name = raw_assistant_id
+
+    if not K8S_NAME_RE.fullmatch(agent_name):
+        raise A2AJSONRPCError(JSONRPC_INVALID_PARAMS, "assistant_id must resolve to a valid Kubernetes resource name")
+    if not K8S_NAME_RE.fullmatch(resolved_namespace):
+        raise A2AJSONRPCError(JSONRPC_INVALID_PARAMS, "namespace must be a valid Kubernetes namespace name")
+
+    return agent_name, resolved_namespace
+
+
+def public_base_url(request: Request) -> str:
+    if A2A_PUBLIC_BASE_URL:
+        return A2A_PUBLIC_BASE_URL.rstrip("/")
+    return str(request.base_url).rstrip("/")
+
+
+def a2a_interface_url(request: Request, agent_name: str, namespace: str) -> str:
+    return f"{public_base_url(request)}/a2a/{agent_name}?{urlencode({'namespace': namespace})}"
+
+
+def skill_id(value: str) -> str:
+    normalized = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+    return normalized or "skill"
+
+
+def summarize_text(value: str, *, fallback: str, max_length: int = 240) -> str:
+    text = value.strip() or fallback
+    collapsed = re.sub(r"\s+", " ", text).strip()
+    if len(collapsed) <= max_length:
+        return collapsed
+    return collapsed[: max_length - 3].rstrip() + "..."
+
+
+def build_agent_card_skills(agent: AgentDetail, policy_targets: list[dict[str, str]]) -> list[dict[str, Any]]:
+    base_description = summarize_text(
+        agent.system_prompt,
+        fallback=(
+            f"{agent.runtime_kind.capitalize()} assistant backed by model {agent.model}."
+        ),
+    )
+    base_tags = dedupe_text_values(
+        [
+            "assistant",
+            agent.runtime_kind,
+            agent.model,
+            *agent.mcp_servers,
+            *(str(sidecar.get("name") or "") for sidecar in agent.mcp_sidecars if isinstance(sidecar, dict)),
+            *( ["a2a", "delegation"] if policy_targets else [] ),
+        ]
+    )
+    skills: list[dict[str, Any]] = [
+        {
+            "id": skill_id(f"{agent.name}-assistant"),
+            "name": f"{agent.name} assistant",
+            "description": base_description,
+            "tags": base_tags or ["assistant"],
+            "inputModes": ["text/plain"],
+            "outputModes": ["text/plain"],
+        }
+    ]
+
+    for server_name in dedupe_text_values(agent.mcp_servers):
+        skills.append(
+            {
+                "id": skill_id(f"mcp-{server_name}"),
+                "name": f"{server_name} tool access",
+                "description": f"Can use the {server_name} MCP server while working on delegated tasks.",
+                "tags": ["mcp", server_name],
+                "inputModes": ["text/plain"],
+                "outputModes": ["text/plain"],
+            }
+        )
+
+    sidecar_names = [
+        str(sidecar.get("name") or "")
+        for sidecar in agent.mcp_sidecars
+        if isinstance(sidecar, dict) and str(sidecar.get("name") or "").strip()
+    ]
+    for sidecar_name in dedupe_text_values(sidecar_names):
+        skills.append(
+            {
+                "id": skill_id(f"sidecar-{sidecar_name}"),
+                "name": f"{sidecar_name} sidecar capability",
+                "description": f"Uses the {sidecar_name} sidecar capability from inside the agent sandbox.",
+                "tags": ["sidecar", sidecar_name],
+                "inputModes": ["text/plain"],
+                "outputModes": ["text/plain"],
+            }
+        )
+
+    if policy_targets:
+        skills.append(
+            {
+                "id": "peer-delegation",
+                "name": "Peer delegation",
+                "description": f"Can delegate subtasks to {len(policy_targets)} explicitly allowed peer agents over A2A.",
+                "tags": ["a2a", "delegation"],
+                "inputModes": ["text/plain"],
+                "outputModes": ["text/plain"],
+            }
+        )
+
+    return skills
+
+
+def build_agent_card(agent_name: str, namespace: str, request: Request) -> dict[str, Any]:
+    agent_resource = read_agent(agent_name, namespace)
+    agent_detail = agent_detail_from_resource(agent_resource)
+    policy_targets: list[dict[str, str]] = []
+    if agent_detail.policy_ref:
+        try:
+            policy_targets = policy_a2a_targets_from_resource(
+                read_custom_resource("agentpolicies", agent_detail.policy_ref, namespace, "Policy")
+            )
+        except HTTPException as exc:
+            if exc.status_code != 404:
+                raise
+            logger.warning(
+                "Agent %s/%s references missing policy %s while building agent card",
+                namespace,
+                agent_name,
+                agent_detail.policy_ref,
+            )
+
+    generation = agent_resource.get("metadata", {}).get("generation")
+    version = f"1.0.{generation}" if generation is not None else app.version
+    interface_url = a2a_interface_url(request, agent_name, namespace)
+    security_requirements = [{"bearerAuth": []}]
+    provider_url = A2A_PROVIDER_URL or public_base_url(request)
+    card: dict[str, Any] = {
+        "name": agent_detail.name,
+        "description": summarize_text(
+            agent_detail.system_prompt,
+            fallback=(
+                f"{agent_detail.runtime_kind.capitalize()} agent in namespace {namespace} running model {agent_detail.model}."
+            ),
+        ),
+        "url": interface_url,
+        "supportedInterfaces": [
+            {
+                "url": interface_url,
+                "protocolBinding": "JSONRPC",
+                "protocolVersion": A2A_PROTOCOL_VERSION,
+                "tenant": namespace,
+            }
+        ],
+        "provider": {
+            "organization": A2A_PROVIDER_ORGANIZATION or "Kubeminionagents",
+            "url": provider_url,
+        },
+        "version": version,
+        "documentationUrl": f"{public_base_url(request)}/docs",
+        "capabilities": {
+            "streaming": True,
+            "pushNotifications": False,
+            "extendedAgentCard": False,
+        },
+        "securitySchemes": {
+            "bearerAuth": {
+                "httpAuthSecurityScheme": {
+                    "scheme": "Bearer",
+                    "bearerFormat": "JWT" if AUTH_MODE == "oidc" else "Opaque",
+                    "description": "Bearer token required by the API gateway.",
+                }
+            }
+        },
+        "securityRequirements": security_requirements,
+        "security": security_requirements,
+        "defaultInputModes": ["text/plain"],
+        "defaultOutputModes": ["text/plain"],
+        "skills": build_agent_card_skills(agent_detail, policy_targets),
+    }
+    return card
+
+
+def purge_expired_a2a_tasks() -> None:
+    cutoff = time.time() - A2A_TASK_RETENTION_SECONDS
+    stale_keys = [key for key, record in A2A_TASK_STORE.items() if float(record.get("updatedAt", 0.0)) < cutoff]
+    for key in stale_keys:
+        A2A_TASK_STORE.pop(key, None)
+
+
+def a2a_task_store_key(namespace: str, agent_name: str, task_id: str) -> tuple[str, str, str]:
+    return namespace, agent_name, task_id
+
+
+def create_a2a_status_message(text: str, context_id: str, task_id: str) -> dict[str, Any]:
+    return {
+        "messageId": str(uuid.uuid4()),
+        "contextId": context_id,
+        "taskId": task_id,
+        "role": "ROLE_AGENT",
+        "parts": [{"text": text, "mediaType": "text/plain"}],
+    }
+
+
+def create_a2a_history_message(role: str, text: str, context_id: str, task_id: str) -> dict[str, Any]:
+    return {
+        "messageId": str(uuid.uuid4()),
+        "contextId": context_id,
+        "taskId": task_id,
+        "role": role,
+        "parts": [{"text": text, "mediaType": "text/plain"}],
+    }
+
+
+def create_a2a_task_record(agent_name: str, namespace: str, context_id: str, task_id: str, thread_id: str) -> dict[str, Any]:
+    return {
+        "assistantName": agent_name,
+        "namespace": namespace,
+        "threadId": thread_id,
+        "artifactText": "",
+        "updatedAt": time.time(),
+        "task": {
+            "id": task_id,
+            "contextId": context_id,
+            "status": {
+                "state": "TASK_STATE_SUBMITTED",
+                "timestamp": now_iso(),
+            },
+            "history": [],
+            "metadata": {
+                "assistantName": agent_name,
+                "assistantNamespace": namespace,
+                "threadId": thread_id,
+            },
+        },
+    }
+
+
+def store_a2a_task_record(record: dict[str, Any]) -> None:
+    with A2A_TASK_STORE_LOCK:
+        purge_expired_a2a_tasks()
+        record["updatedAt"] = time.time()
+        task_id = str(record.get("task", {}).get("id") or "")
+        A2A_TASK_STORE[a2a_task_store_key(record["namespace"], record["assistantName"], task_id)] = record
+
+
+def get_a2a_task_record(namespace: str, agent_name: str, task_id: str) -> dict[str, Any] | None:
+    with A2A_TASK_STORE_LOCK:
+        purge_expired_a2a_tasks()
+        return A2A_TASK_STORE.get(a2a_task_store_key(namespace, agent_name, task_id))
+
+
+def append_a2a_task_history(record: dict[str, Any], message: dict[str, Any]) -> None:
+    with A2A_TASK_STORE_LOCK:
+        history = record.setdefault("task", {}).setdefault("history", [])
+        message_id = str(message.get("messageId") or "")
+        if message_id and any(str(item.get("messageId") or "") == message_id for item in history):
+            return
+        history.append(copy.deepcopy(message))
+        record["updatedAt"] = time.time()
+
+
+def set_a2a_task_artifact_text(record: dict[str, Any], text: str) -> None:
+    with A2A_TASK_STORE_LOCK:
+        record["artifactText"] = text
+        task = record.setdefault("task", {})
+        if text:
+            task["artifacts"] = [
+                {
+                    "artifactId": f"{task['id']}-response",
+                    "name": "response",
+                    "description": "Text response emitted by the agent.",
+                    "parts": [{"text": text, "mediaType": "text/plain"}],
+                }
+            ]
+        else:
+            task.pop("artifacts", None)
+        record["updatedAt"] = time.time()
+
+
+def append_a2a_task_artifact_delta(record: dict[str, Any], delta: str) -> None:
+    with A2A_TASK_STORE_LOCK:
+        current_text = str(record.get("artifactText") or "") + delta
+    set_a2a_task_artifact_text(record, current_text)
+
+
+def set_a2a_task_status(
+    record: dict[str, Any],
+    state: str,
+    message_text: str | None = None,
+    metadata_updates: dict[str, Any] | None = None,
+) -> None:
+    with A2A_TASK_STORE_LOCK:
+        task = record.setdefault("task", {})
+        status_payload: dict[str, Any] = {
+            "state": state,
+            "timestamp": now_iso(),
+        }
+        if message_text:
+            status_payload["message"] = create_a2a_status_message(
+                message_text,
+                str(task.get("contextId") or ""),
+                str(task.get("id") or ""),
+            )
+        task["status"] = status_payload
+        if metadata_updates:
+            metadata = task.setdefault("metadata", {})
+            metadata.update(metadata_updates)
+        record["updatedAt"] = time.time()
+
+
+def a2a_task_state_from_invoke_status(status: str) -> str:
+    normalized = status.strip().lower()
+    if normalized == "completed":
+        return "TASK_STATE_COMPLETED"
+    if normalized == "approval_pending":
+        return "TASK_STATE_AUTH_REQUIRED"
+    if normalized == "blocked":
+        return "TASK_STATE_REJECTED"
+    return "TASK_STATE_WORKING"
+
+
+def parse_history_length(raw_value: Any, *, field_name: str) -> int | None:
+    if raw_value is None:
+        return None
+    try:
+        history_length = int(raw_value)
+    except (TypeError, ValueError) as exc:
+        raise A2AJSONRPCError(JSONRPC_INVALID_PARAMS, f"{field_name} must be a non-negative integer") from exc
+    if history_length < 0:
+        raise A2AJSONRPCError(JSONRPC_INVALID_PARAMS, f"{field_name} must be a non-negative integer")
+    return history_length
+
+
+def normalize_a2a_parts(parts: Any) -> tuple[list[dict[str, Any]], str]:
+    if not isinstance(parts, list) or not parts:
+        raise A2AJSONRPCError(JSONRPC_INVALID_PARAMS, "message.parts must be a non-empty array")
+
+    normalized_parts: list[dict[str, Any]] = []
+    prompt_parts: list[str] = []
+    for index, raw_part in enumerate(parts):
+        if not isinstance(raw_part, dict):
+            raise A2AJSONRPCError(JSONRPC_INVALID_PARAMS, f"message.parts[{index}] must be an object")
+
+        normalized_part: dict[str, Any]
+        if raw_part.get("text") is not None:
+            normalized_part = {
+                "text": str(raw_part.get("text") or ""),
+                "mediaType": str(raw_part.get("mediaType") or "text/plain"),
+            }
+            prompt_parts.append(normalized_part["text"])
+        elif "data" in raw_part:
+            normalized_part = {
+                "data": raw_part.get("data"),
+                "mediaType": str(raw_part.get("mediaType") or "application/json"),
+            }
+            prompt_parts.append(json.dumps(raw_part.get("data"), ensure_ascii=False, default=str))
+        else:
+            raise A2AJSONRPCError(
+                A2A_CONTENT_TYPE_NOT_SUPPORTED_ERROR,
+                "Only text and structured data parts are supported by this A2A facade",
+                {"partIndex": index},
+            )
+
+        metadata = raw_part.get("metadata")
+        if isinstance(metadata, dict) and metadata:
+            normalized_part["metadata"] = metadata
+        filename = raw_part.get("filename")
+        if isinstance(filename, str) and filename.strip():
+            normalized_part["filename"] = filename.strip()
+
+        normalized_parts.append(normalized_part)
+
+    prompt = "\n\n".join(part for part in prompt_parts if part.strip()).strip()
+    if not prompt:
+        raise A2AJSONRPCError(JSONRPC_INVALID_PARAMS, "message.parts must contain at least one non-empty text or data part")
+
+    return normalized_parts, prompt
+
+
+def parse_reference_task_ids(raw_value: Any) -> list[str]:
+    if raw_value is None:
+        return []
+    if not isinstance(raw_value, list):
+        raise A2AJSONRPCError(JSONRPC_INVALID_PARAMS, "message.referenceTaskIds must be an array of strings")
+
+    reference_task_ids: list[str] = []
+    for index, item in enumerate(raw_value):
+        task_id = str(item or "").strip()
+        if not task_id:
+            raise A2AJSONRPCError(JSONRPC_INVALID_PARAMS, f"message.referenceTaskIds[{index}] must not be blank")
+        reference_task_ids.append(task_id)
+    return reference_task_ids
+
+
+def infer_context_from_reference_tasks(agent_name: str, namespace: str, reference_task_ids: list[str]) -> str | None:
+    for task_id in reference_task_ids:
+        referenced_record = get_a2a_task_record(namespace, agent_name, task_id)
+        if referenced_record is not None:
+            return str(referenced_record.get("task", {}).get("contextId") or "").strip() or None
+    return None
+
+
+def prepare_a2a_task_for_message(
+    agent_name: str,
+    namespace: str,
+    params: dict[str, Any],
+) -> tuple[dict[str, Any], str, int | None]:
+    raw_message = params.get("message")
+    if not isinstance(raw_message, dict):
+        raise A2AJSONRPCError(JSONRPC_INVALID_PARAMS, "message is required and must be an object")
+
+    role = str(raw_message.get("role") or "").strip().upper()
+    if role not in {"ROLE_USER", "USER"}:
+        raise A2AJSONRPCError(JSONRPC_INVALID_PARAMS, "message.role must be ROLE_USER")
+
+    message_id = str(raw_message.get("messageId") or "").strip()
+    if not message_id:
+        raise A2AJSONRPCError(JSONRPC_INVALID_PARAMS, "message.messageId is required")
+
+    normalized_parts, prompt = normalize_a2a_parts(raw_message.get("parts"))
+    reference_task_ids = parse_reference_task_ids(raw_message.get("referenceTaskIds"))
+    context_id = str(raw_message.get("contextId") or "").strip() or None
+    task_id = str(raw_message.get("taskId") or "").strip() or None
+
+    configuration = params.get("configuration") or {}
+    if configuration is not None and not isinstance(configuration, dict):
+        raise A2AJSONRPCError(JSONRPC_INVALID_PARAMS, "configuration must be an object when provided")
+    if configuration.get("taskPushNotificationConfig") is not None:
+        raise A2AJSONRPCError(
+            A2A_PUSH_NOTIFICATION_NOT_SUPPORTED_ERROR,
+            "Push notifications are not supported by this gateway",
+        )
+    history_length = parse_history_length(configuration.get("historyLength"), field_name="configuration.historyLength")
+
+    if task_id:
+        record = get_a2a_task_record(namespace, agent_name, task_id)
+        if record is None:
+            raise A2AJSONRPCError(
+                A2A_TASK_NOT_FOUND_ERROR,
+                "Task not found",
+                {"taskId": task_id, "timestamp": now_iso()},
+            )
+        existing_context_id = str(record.get("task", {}).get("contextId") or "").strip()
+        if context_id and existing_context_id != context_id:
+            raise A2AJSONRPCError(JSONRPC_INVALID_PARAMS, "message.contextId does not match the referenced task")
+        existing_state = str(record.get("task", {}).get("status", {}).get("state") or "TASK_STATE_UNSPECIFIED")
+        if existing_state in A2A_TERMINAL_STATES:
+            raise A2AJSONRPCError(
+                A2A_UNSUPPORTED_OPERATION_ERROR,
+                "Messages cannot be sent to tasks that are already in a terminal state",
+                {"taskId": task_id, "state": existing_state},
+            )
+        if existing_state in {"TASK_STATE_SUBMITTED", "TASK_STATE_WORKING"}:
+            raise A2AJSONRPCError(
+                A2A_UNSUPPORTED_OPERATION_ERROR,
+                "Messages cannot be sent to tasks that are still actively processing",
+                {"taskId": task_id, "state": existing_state},
+            )
+        context_id = existing_context_id
+    else:
+        context_id = context_id or infer_context_from_reference_tasks(agent_name, namespace, reference_task_ids) or str(uuid.uuid4())
+        task_id = str(uuid.uuid4())
+        record = create_a2a_task_record(agent_name, namespace, context_id, task_id, context_id)
+        store_a2a_task_record(record)
+
+    normalized_message: dict[str, Any] = {
+        "messageId": message_id,
+        "contextId": context_id,
+        "taskId": task_id,
+        "role": "ROLE_USER",
+        "parts": normalized_parts,
+    }
+    metadata = raw_message.get("metadata")
+    if isinstance(metadata, dict) and metadata:
+        normalized_message["metadata"] = metadata
+    if reference_task_ids:
+        normalized_message["referenceTaskIds"] = reference_task_ids
+
+    append_a2a_task_history(record, normalized_message)
+    return record, prompt, history_length
+
+
+def public_a2a_task(record: dict[str, Any], history_length: int | None = None) -> dict[str, Any]:
+    task = copy.deepcopy(record.get("task", {}))
+    history = task.get("history") if isinstance(task.get("history"), list) else []
+    if history_length == 0:
+        task.pop("history", None)
+    elif history:
+        if history_length is None:
+            task["history"] = history
+        else:
+            task["history"] = history[-history_length:]
+    else:
+        task.pop("history", None)
+
+    if not task.get("artifacts"):
+        task.pop("artifacts", None)
+    if not task.get("metadata"):
+        task.pop("metadata", None)
+    if not isinstance(task.get("status"), dict):
+        task["status"] = {"state": "TASK_STATE_UNSPECIFIED", "timestamp": now_iso()}
+    return task
+
+
+def task_status_update_event(record: dict[str, Any]) -> dict[str, Any]:
+    task = record.get("task", {})
+    return {
+        "taskId": task.get("id"),
+        "contextId": task.get("contextId"),
+        "status": copy.deepcopy(task.get("status") or {}),
+        "metadata": copy.deepcopy(task.get("metadata") or {}),
+    }
+
+
+def task_artifact_update_event(record: dict[str, Any], delta: str, *, append: bool, last_chunk: bool) -> dict[str, Any]:
+    task = record.get("task", {})
+    return {
+        "taskId": task.get("id"),
+        "contextId": task.get("contextId"),
+        "artifact": {
+            "artifactId": f"{task.get('id')}-response",
+            "name": "response",
+            "parts": [{"text": delta, "mediaType": "text/plain"}],
+        },
+        "append": append,
+        "lastChunk": last_chunk,
+        "metadata": copy.deepcopy(task.get("metadata") or {}),
+    }
+
+
+def apply_invoke_response_to_a2a_task(record: dict[str, Any], invoke_response: InvokeResponse) -> None:
+    metadata_updates: dict[str, Any] = {
+        "threadId": invoke_response.thread_id,
+        "model": invoke_response.model,
+        "policyName": invoke_response.policy_name,
+        "status": invoke_response.status,
+    }
+    if invoke_response.approval_name:
+        metadata_updates["approvalName"] = invoke_response.approval_name
+    if invoke_response.retry_after_seconds is not None:
+        metadata_updates["retryAfterSeconds"] = invoke_response.retry_after_seconds
+    if invoke_response.a2a is not None:
+        metadata_updates["a2a"] = invoke_response.a2a
+    if invoke_response.warnings:
+        metadata_updates["warnings"] = invoke_response.warnings
+
+    task_state = a2a_task_state_from_invoke_status(invoke_response.status)
+    response_text = invoke_response.response.strip()
+    if response_text:
+        append_a2a_task_history(
+            record,
+            create_a2a_history_message(
+                "ROLE_AGENT",
+                response_text,
+                str(record.get("task", {}).get("contextId") or ""),
+                str(record.get("task", {}).get("id") or ""),
+            ),
+        )
+
+    if task_state == "TASK_STATE_COMPLETED":
+        set_a2a_task_artifact_text(record, response_text)
+        set_a2a_task_status(record, task_state, None, metadata_updates)
+    else:
+        set_a2a_task_artifact_text(record, "")
+        set_a2a_task_status(record, task_state, response_text or invoke_response.status, metadata_updates)
+
+
+def mark_a2a_task_failed(record: dict[str, Any], error_message: str) -> None:
+    append_a2a_task_history(
+        record,
+        create_a2a_history_message(
+            "ROLE_AGENT",
+            error_message,
+            str(record.get("task", {}).get("contextId") or ""),
+            str(record.get("task", {}).get("id") or ""),
+        ),
+    )
+    set_a2a_task_artifact_text(record, "")
+    set_a2a_task_status(
+        record,
+        "TASK_STATE_FAILED",
+        error_message,
+        {"status": "failed"},
+    )
+
+
+async def handle_a2a_send_message(
+    agent_name: str,
+    namespace: str,
+    params: dict[str, Any],
+    request_id: Any,
+    gateway_request_id: str,
+) -> dict[str, Any]:
+    record, prompt, history_length = prepare_a2a_task_for_message(agent_name, namespace, params)
+    set_a2a_task_status(record, "TASK_STATE_WORKING", None, {"status": "working"})
+    store_a2a_task_record(record)
+
+    raw_request = SimpleNamespace(headers={"x-request-id": gateway_request_id})
+    invoke_request = InvokeRequest(prompt=prompt, thread_id=str(record.get("threadId") or ""))
+    try:
+        invoke_response = await invoke_agent(agent_name, invoke_request, raw_request, namespace, user={})
+    except HTTPException as exc:
+        mark_a2a_task_failed(record, str(exc.detail))
+    except Exception as exc:
+        logger.exception("A2A SendMessage failed for %s/%s", namespace, agent_name)
+        mark_a2a_task_failed(record, f"Agent invocation failed: {exc}")
+    else:
+        apply_invoke_response_to_a2a_task(record, invoke_response)
+
+    store_a2a_task_record(record)
+    return jsonrpc_success_response(request_id, {"task": public_a2a_task(record, history_length)})
+
+
+async def iter_runtime_sse_events(body_iterator: Any) -> Any:
+    buffer = ""
+    async for chunk in body_iterator:
+        if isinstance(chunk, bytes):
+            buffer += chunk.decode("utf-8", errors="ignore")
+        else:
+            buffer += str(chunk)
+        while "\n\n" in buffer:
+            raw_event, buffer = buffer.split("\n\n", 1)
+            event_name = "message"
+            data_lines: list[str] = []
+            for line in raw_event.splitlines():
+                if line.startswith(":"):
+                    continue
+                if line.startswith("event:"):
+                    event_name = line[6:].strip() or "message"
+                elif line.startswith("data:"):
+                    data_lines.append(line[5:].strip())
+            if not data_lines:
+                continue
+            yield event_name, "\n".join(data_lines)
+
+
+async def handle_a2a_stream_message(
+    agent_name: str,
+    namespace: str,
+    params: dict[str, Any],
+    request_id: Any,
+    gateway_request_id: str,
+) -> StreamingResponse:
+    record, prompt, history_length = prepare_a2a_task_for_message(agent_name, namespace, params)
+    set_a2a_task_status(record, "TASK_STATE_WORKING", None, {"status": "working"})
+    store_a2a_task_record(record)
+
+    raw_request = SimpleNamespace(headers={"x-request-id": gateway_request_id})
+    invoke_request = InvokeRequest(prompt=prompt, thread_id=str(record.get("threadId") or ""))
+
+    async def event_generator() -> Any:
+        yielded_artifact = False
+        try:
+            upstream_response = await invoke_agent_stream(agent_name, invoke_request, raw_request, namespace, user={})
+        except HTTPException as exc:
+            mark_a2a_task_failed(record, str(exc.detail))
+            yield jsonrpc_sse_message(jsonrpc_success_response(request_id, {"task": public_a2a_task(record, history_length)}))
+            yield jsonrpc_sse_message(jsonrpc_success_response(request_id, {"statusUpdate": task_status_update_event(record)}))
+            return
+        except Exception as exc:
+            logger.exception("A2A SendStreamingMessage failed to start for %s/%s", namespace, agent_name)
+            mark_a2a_task_failed(record, f"Agent invocation failed: {exc}")
+            yield jsonrpc_sse_message(jsonrpc_success_response(request_id, {"task": public_a2a_task(record, history_length)}))
+            yield jsonrpc_sse_message(jsonrpc_success_response(request_id, {"statusUpdate": task_status_update_event(record)}))
+            return
+
+        yield jsonrpc_sse_message(jsonrpc_success_response(request_id, {"task": public_a2a_task(record, history_length)}))
+
+        try:
+            async for event_name, raw_data in iter_runtime_sse_events(upstream_response.body_iterator):
+                try:
+                    payload = json.loads(raw_data)
+                except json.JSONDecodeError as exc:
+                    mark_a2a_task_failed(record, f"Invalid upstream stream payload: {exc}")
+                    yield jsonrpc_sse_message(jsonrpc_success_response(request_id, {"statusUpdate": task_status_update_event(record)}))
+                    return
+
+                if event_name == "response.delta":
+                    delta = str(payload.get("delta") or "")
+                    if not delta:
+                        continue
+                    append_a2a_task_artifact_delta(record, delta)
+                    yielded_artifact = True
+                    store_a2a_task_record(record)
+                    yield jsonrpc_sse_message(
+                        jsonrpc_success_response(
+                            request_id,
+                            {"artifactUpdate": task_artifact_update_event(record, delta, append=True, last_chunk=False)},
+                        )
+                    )
+                    continue
+
+                if event_name == "response.completed":
+                    response_status = str(payload.get("status") or "completed")
+                    metadata_updates: dict[str, Any] = {
+                        "threadId": str(record.get("threadId") or ""),
+                        "status": response_status,
+                    }
+                    if payload.get("policy_name"):
+                        metadata_updates["policyName"] = payload.get("policy_name")
+                    if payload.get("approval_name"):
+                        metadata_updates["approvalName"] = payload.get("approval_name")
+                    if payload.get("retry_after_seconds") is not None:
+                        metadata_updates["retryAfterSeconds"] = payload.get("retry_after_seconds")
+                    if payload.get("a2a") is not None:
+                        metadata_updates["a2a"] = payload.get("a2a")
+                    warnings = payload.get("warnings")
+                    if isinstance(warnings, list) and warnings:
+                        metadata_updates["warnings"] = warnings
+
+                    final_text = str(record.get("artifactText") or "")
+                    task_state = a2a_task_state_from_invoke_status(response_status)
+                    if final_text:
+                        append_a2a_task_history(
+                            record,
+                            create_a2a_history_message(
+                                "ROLE_AGENT",
+                                final_text,
+                                str(record.get("task", {}).get("contextId") or ""),
+                                str(record.get("task", {}).get("id") or ""),
+                            ),
+                        )
+
+                    if task_state == "TASK_STATE_COMPLETED":
+                        set_a2a_task_status(record, task_state, None, metadata_updates)
+                    else:
+                        set_a2a_task_artifact_text(record, "")
+                        set_a2a_task_status(record, task_state, final_text or response_status, metadata_updates)
+
+                    store_a2a_task_record(record)
+                    yield jsonrpc_sse_message(jsonrpc_success_response(request_id, {"statusUpdate": task_status_update_event(record)}))
+                    return
+
+                if event_name == "response.error":
+                    error_message = str(payload.get("error") or "Agent invocation failed")
+                    mark_a2a_task_failed(record, error_message)
+                    store_a2a_task_record(record)
+                    yield jsonrpc_sse_message(jsonrpc_success_response(request_id, {"statusUpdate": task_status_update_event(record)}))
+                    return
+        except Exception as exc:
+            logger.exception("A2A SendStreamingMessage failed while translating the upstream stream")
+            mark_a2a_task_failed(record, f"Agent invocation failed: {exc}")
+            store_a2a_task_record(record)
+            yield jsonrpc_sse_message(jsonrpc_success_response(request_id, {"statusUpdate": task_status_update_event(record)}))
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+def handle_a2a_get_task(agent_name: str, namespace: str, params: dict[str, Any], request_id: Any) -> dict[str, Any]:
+    task_id = str(params.get("id") or "").strip()
+    if not task_id:
+        raise A2AJSONRPCError(JSONRPC_INVALID_PARAMS, "params.id is required")
+    history_length = parse_history_length(params.get("historyLength"), field_name="historyLength")
+    record = get_a2a_task_record(namespace, agent_name, task_id)
+    if record is None:
+        raise A2AJSONRPCError(
+            A2A_TASK_NOT_FOUND_ERROR,
+            "Task not found",
+            {"taskId": task_id, "timestamp": now_iso()},
+        )
+    return jsonrpc_success_response(request_id, {"task": public_a2a_task(record, history_length)})
+
+
 def build_agent_spec(
     body: CreateAgentRequest | UpdateAgentRequest,
     existing_spec: dict[str, Any] | None = None,
@@ -458,6 +1484,7 @@ def build_agent_spec(
     existing_runtime = (existing_spec or {}).get("runtime") or {}
     existing_runtime_kind = None
     existing_goose_config_files: Any = None
+    existing_a2a_config: Any = (existing_spec or {}).get("a2a")
     if isinstance(existing_runtime, dict):
         existing_runtime_kind = existing_runtime.get("kind")
         existing_goose = existing_runtime.get("goose") or {}
@@ -477,6 +1504,12 @@ def build_agent_spec(
             source="goose_config_files",
         )
 
+    requested_a2a_config = getattr(body, "a2a_config", None)
+    if requested_a2a_config is None:
+        a2a_config = parse_a2a_agent_config(existing_a2a_config, source="existing spec.a2a")
+    else:
+        a2a_config = parse_a2a_agent_config(requested_a2a_config, source="a2a_config")
+
     if runtime_kind != "goose" and goose_config_files:
         raise HTTPException(
             status_code=400,
@@ -492,6 +1525,8 @@ def build_agent_spec(
         "mcpSidecars": body.mcp_sidecars,
         "runtime": {"kind": runtime_kind},
     }
+    if a2a_config:
+        spec["a2a"] = a2a_config
     if runtime_kind == "goose" and goose_config_files:
         spec["runtime"]["goose"] = {"configFiles": goose_config_files}
     if body.policy_ref and body.policy_ref.strip():
@@ -695,11 +1730,90 @@ def agent_detail_from_resource(agent: dict[str, Any]) -> AgentDetail:
         enable_gvisor=bool(spec.get("enableGVisor", False)),
         mcp_servers=spec.get("mcpServers") or [],
         mcp_sidecars=spec.get("mcpSidecars") or [],
+        a2a_config=parse_a2a_agent_config(spec.get("a2a"), source="AIAgent.spec.a2a"),
         goose_config_files=parse_goose_config_files(
             goose_runtime.get("configFiles"),
             source="AIAgent.spec.runtime.goose.configFiles",
         ),
         created_at=metadata.get("creationTimestamp"),
+    )
+
+
+def policy_a2a_targets_from_resource(policy: dict[str, Any]) -> list[dict[str, str]]:
+    spec = policy.get("spec") if isinstance(policy.get("spec"), dict) else {}
+    config = parse_a2a_policy_config(spec.get("a2a"), source="AgentPolicy.spec.a2a")
+    return list(config.get("allowedTargets") or [])
+
+
+def discover_agent_peers(agent_name: str, namespace: str) -> AgentDiscoveryResponse:
+    caller_agent = read_agent(agent_name, namespace)
+    caller_spec = caller_agent.get("spec") if isinstance(caller_agent.get("spec"), dict) else {}
+    policy_ref = str(caller_spec.get("policyRef") or "").strip() or None
+    allowed_targets: list[dict[str, str]] = []
+    if policy_ref:
+        allowed_targets = policy_a2a_targets_from_resource(
+            read_custom_resource("agentpolicies", policy_ref, namespace, "Policy")
+        )
+
+    caller_identity = (namespace, agent_name)
+    peers: list[AgentDiscoveryPeer] = []
+    for target in allowed_targets:
+        target_name = target["name"]
+        target_namespace = target["namespace"]
+        try:
+            target_agent = read_agent(target_name, target_namespace)
+        except HTTPException as exc:
+            if exc.status_code == 404:
+                peers.append(
+                    AgentDiscoveryPeer(
+                        name=target_name,
+                        namespace=target_namespace,
+                        exists=False,
+                        accepts_caller=False,
+                        reachable=False,
+                        reason="Target agent does not exist.",
+                    )
+                )
+                continue
+            raise
+
+        target_info = agent_info_from_resource(target_agent)
+        target_spec = target_agent.get("spec") if isinstance(target_agent.get("spec"), dict) else {}
+        target_allowed_callers = parse_a2a_agent_config(
+            target_spec.get("a2a"),
+            source=f"AIAgent[{target_namespace}/{target_name}].spec.a2a",
+        ).get("allowedCallers", [])
+        allowed_callers = {(item["namespace"], item["name"]) for item in target_allowed_callers}
+        accepts_caller = caller_identity in allowed_callers
+        reachable = accepts_caller and target_info.status == "running"
+
+        reason: str | None = None
+        if not accepts_caller:
+            reason = (
+                f"Target agent does not list {namespace}/{agent_name} in spec.a2a.allowedCallers."
+            )
+        elif target_info.status != "running":
+            reason = f"Target agent status is '{target_info.status}'."
+
+        peers.append(
+            AgentDiscoveryPeer(
+                name=target_info.name,
+                namespace=target_info.namespace,
+                exists=True,
+                model=target_info.model,
+                status=target_info.status,
+                runtime_kind=target_info.runtime_kind,
+                accepts_caller=accepts_caller,
+                reachable=reachable,
+                reason=reason,
+            )
+        )
+
+    return AgentDiscoveryResponse(
+        agent_name=agent_name,
+        namespace=namespace,
+        policy_ref=policy_ref,
+        peers=peers,
     )
 
 
@@ -984,6 +2098,13 @@ async def verify_token(authorization: str = Header(...)) -> dict[str, Any]:
     raise HTTPException(status_code=503, detail=f"Unsupported auth mode '{AUTH_MODE}'")
 
 
+def a2a_card_http_exception(error: A2AJSONRPCError) -> HTTPException:
+    detail = error.message
+    if error.data:
+        detail = f"{detail}: {json.dumps(error.data, ensure_ascii=False, default=str)}"
+    return HTTPException(status_code=400, detail=detail)
+
+
 @app.get("/api/health")
 def health() -> dict[str, Any]:
     return {
@@ -998,6 +2119,105 @@ def health() -> dict[str, Any]:
 @app.get("/api/ready")
 def ready() -> dict[str, Any]:
     return {"status": "ready", "gateway": "ai-agent-sandbox"}
+
+
+@app.get("/.well-known/agent-card.json")
+async def get_well_known_agent_card(
+    request: Request,
+    assistant_id: str,
+    namespace: str | None = None,
+    authorization: str | None = Header(default=None),
+):
+    if authorization is not None and authorization.strip():
+        await verify_token(authorization)
+
+    try:
+        agent_name, resolved_namespace = resolve_a2a_agent_reference(assistant_id, namespace)
+    except A2AJSONRPCError as exc:
+        raise a2a_card_http_exception(exc) from exc
+
+    return JSONResponse(build_agent_card(agent_name, resolved_namespace, request))
+
+
+@app.post("/a2a/{assistant_id}")
+async def a2a_jsonrpc(
+    assistant_id: str,
+    raw_request: Request,
+    namespace: str | None = None,
+    user=Depends(verify_token),
+):
+    del user
+    request_id: Any = None
+    try:
+        validate_a2a_version(raw_request)
+        try:
+            payload = await raw_request.json()
+        except json.JSONDecodeError:
+            return JSONResponse(
+                jsonrpc_error_response(request_id, JSONRPC_PARSE_ERROR, "Invalid JSON payload"),
+                status_code=200,
+            )
+
+        request_id, method, params = parse_jsonrpc_payload(payload)
+        agent_name, resolved_namespace = resolve_a2a_agent_reference(assistant_id, namespace)
+        gateway_request_id = raw_request.headers.get("x-request-id") or str(uuid.uuid4())
+
+        if method == "message/send":
+            return JSONResponse(
+                await handle_a2a_send_message(
+                    agent_name,
+                    resolved_namespace,
+                    params,
+                    request_id,
+                    gateway_request_id,
+                ),
+                status_code=200,
+            )
+
+        if method == "message/stream":
+            return await handle_a2a_stream_message(
+                agent_name,
+                resolved_namespace,
+                params,
+                request_id,
+                gateway_request_id,
+            )
+
+        if method == "tasks/get":
+            return JSONResponse(
+                handle_a2a_get_task(agent_name, resolved_namespace, params, request_id),
+                status_code=200,
+            )
+
+        return JSONResponse(
+            jsonrpc_error_response(
+                request_id,
+                JSONRPC_METHOD_NOT_FOUND,
+                "Method not found",
+                {"method": method},
+            ),
+            status_code=200,
+        )
+    except A2AJSONRPCError as exc:
+        return JSONResponse(
+            jsonrpc_error_response(request_id, exc.code, exc.message, exc.data),
+            status_code=200,
+        )
+    except HTTPException as exc:
+        detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+        error_code = JSONRPC_INVALID_PARAMS if exc.status_code == 404 else JSONRPC_INTERNAL_ERROR
+        return JSONResponse(jsonrpc_error_response(request_id, error_code, detail), status_code=200)
+    except Exception as exc:
+        logger.exception("Unhandled A2A JSON-RPC error")
+        return JSONResponse(
+            jsonrpc_error_response(
+                request_id,
+                JSONRPC_INTERNAL_ERROR,
+                "Internal error",
+                {"detail": str(exc)},
+            ),
+            status_code=200,
+        )
 
 
 @app.get("/api/approvals/{approval_name}", response_model=ApprovalInfo)
@@ -1115,6 +2335,16 @@ def get_agent(
 ):
     del user
     return agent_detail_from_resource(read_agent(agent_name, namespace))
+
+
+@app.get("/api/agents/{agent_name}/discover", response_model=AgentDiscoveryResponse)
+def discover_agent_targets(
+    agent_name: str,
+    namespace: str = "default",
+    user=Depends(verify_token),
+):
+    del user
+    return discover_agent_peers(agent_name, namespace)
 
 
 @app.patch("/api/agents/{agent_name}", response_model=AgentDetail)
@@ -1303,6 +2533,7 @@ async def invoke_agent(
         status=data.get("status", "completed"),
         approval_name=data.get("approval_name"),
         retry_after_seconds=data.get("retry_after_seconds"),
+        a2a=data.get("a2a"),
         warnings=data.get("warnings") or [],
     )
 

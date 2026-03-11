@@ -1,9 +1,11 @@
 import asyncio
 import contextlib
 from contextvars import ContextVar
+import hashlib
 import json
 import logging
 import os
+import re
 import sqlite3
 import threading
 import time
@@ -56,6 +58,71 @@ def configure_logging() -> None:
 configure_logging()
 logger = logging.getLogger("agent-runtime")
 
+K8S_NAME_RE = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
+
+
+def normalize_a2a_identifier(value: Any, *, source: str) -> str:
+    text = str(value).strip()
+    if not text:
+        raise ValueError(f"{source} must not be blank")
+    if len(text) > 63 or not K8S_NAME_RE.fullmatch(text):
+        raise ValueError(f"{source} must be a valid lowercase Kubernetes resource name")
+    return text
+
+
+def parse_a2a_peer_ref(raw_value: Any, *, source: str) -> dict[str, str]:
+    if not isinstance(raw_value, dict):
+        raise ValueError(f"{source} entries must be objects with 'name' and 'namespace' fields")
+    return {
+        "name": normalize_a2a_identifier(raw_value.get("name", ""), source=f"{source}.name"),
+        "namespace": normalize_a2a_identifier(raw_value.get("namespace", ""), source=f"{source}.namespace"),
+    }
+
+
+def parse_a2a_peer_refs(peer_refs: Any, *, source: str) -> list[dict[str, str]]:
+    if peer_refs is None:
+        return []
+    if not isinstance(peer_refs, list):
+        raise ValueError(f"{source} must be a list of peer reference objects")
+
+    normalized: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for index, raw_value in enumerate(peer_refs):
+        peer_ref = parse_a2a_peer_ref(raw_value, source=f"{source}[{index}]")
+        identity = (peer_ref["namespace"], peer_ref["name"])
+        if identity in seen:
+            continue
+        seen.add(identity)
+        normalized.append(peer_ref)
+    return normalized
+
+
+def parse_a2a_peer_refs_env(name: str) -> frozenset[tuple[str, str]]:
+    raw_value = os.getenv(name, "").strip()
+    if not raw_value:
+        return frozenset()
+
+    try:
+        parsed = json.loads(raw_value)
+        peer_refs = parse_a2a_peer_refs(parsed, source=name)
+    except (ValueError, json.JSONDecodeError) as exc:
+        logger.warning("Ignoring invalid %s value: %s", name, exc)
+        return frozenset()
+
+    return frozenset((item["namespace"], item["name"]) for item in peer_refs)
+
+
+def dedupe_text_items(values: list[str]) -> list[str]:
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for raw_value in values:
+        value = str(raw_value).strip()
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        deduped.append(value)
+    return deduped
+
 
 SERVICE_NAME = os.getenv("AGENT_NAME", "agent-runtime")
 SERVICE_NAMESPACE = os.getenv("AGENT_NAMESPACE", "default")
@@ -80,6 +147,10 @@ MCP_BEARER_TOKEN = os.getenv("MCP_BEARER_TOKEN", "").strip()
 MCP_HUB_NAMESPACE = os.getenv("MCP_HUB_NAMESPACE", "mcp-hub").strip()
 _raw_allowed = os.getenv("ALLOWED_MCP_SERVERS", "").strip()
 ALLOWED_MCP_SERVERS: frozenset[str] = frozenset(s.strip() for s in _raw_allowed.split(",") if s.strip())
+A2A_ALLOWED_CALLERS = parse_a2a_peer_refs_env("A2A_ALLOWED_CALLERS_JSON")
+A2A_ALLOWED_TARGETS_SNAPSHOT = parse_a2a_peer_refs_env("A2A_ALLOWED_TARGETS_JSON")
+A2A_REQUIRE_HITL_DEFAULT = get_bool_env("A2A_REQUIRE_HITL", False)
+A2A_MAX_TIMEOUT_SECONDS = get_float_env("A2A_MAX_TIMEOUT_SECONDS", 60.0, minimum=1.0)
 MAX_TOOL_ARGS_BYTES = get_int_env("AGENT_MAX_TOOL_ARGS_BYTES", 16384, minimum=512)
 MAX_CONCURRENT_REQUESTS = get_int_env("AGENT_MAX_CONCURRENT_REQUESTS", 4, minimum=1)
 REQUEST_QUEUE_TIMEOUT_SECONDS = get_float_env("AGENT_REQUEST_QUEUE_TIMEOUT_SECONDS", 5.0, minimum=0.1)
@@ -90,6 +161,19 @@ RAG_REQUEST_TIMEOUT_SECONDS = get_float_env("AGENT_RAG_TIMEOUT_SECONDS", 10.0, m
 SQLITE_TIMEOUT_SECONDS = get_float_env("AGENT_SQLITE_TIMEOUT_SECONDS", 30.0, minimum=1.0)
 BLOCKED_RESPONSE_PREFIX = "Request blocked"
 SENSITIVE_STREAM_EVENT_SUFFIXES = (".stdout", ".stderr", ".result")
+
+
+def build_thread_id(prefix: str, *parts: object, max_length: int = MAX_THREAD_ID_CHARS) -> str:
+    normalized_parts = [re.sub(r"[^a-zA-Z0-9_-]+", "-", str(part).strip()).strip("-_") for part in parts if str(part).strip()]
+    normalized_parts = [part for part in normalized_parts if part]
+    base = "-".join([prefix, *normalized_parts])
+    if len(base) <= max_length:
+        return base
+
+    digest = hashlib.sha1(base.encode("utf-8")).hexdigest()[:10]
+    keep_length = max(max_length - len(digest) - 1, 1)
+    truncated = base[:keep_length].rstrip("-_") or prefix
+    return f"{truncated}-{digest}"
 
 resource = Resource(attributes={
     "service.name": SERVICE_NAME,
@@ -155,6 +239,7 @@ async def bind_request_context(request: Request, call_next):
 
 
 class State(TypedDict, total=False):
+    thread_id: str
     messages: Annotated[list[Any], add_messages]
     request_prompt: str
     context: str
@@ -166,6 +251,17 @@ class State(TypedDict, total=False):
     tool_args: dict[str, Any]
     tool_result: dict[str, Any] | None
     sandbox_session: dict[str, Any] | None
+    approval_name: str | None
+    retry_after_seconds: int | None
+    warnings: list[str]
+    a2a: dict[str, Any] | None
+    a2a_target_agent: str
+    a2a_target_namespace: str
+    a2a_timeout_seconds: float | None
+    caller_agent_name: str
+    caller_agent_namespace: str
+    parent_thread_id: str
+    caller_request_id: str
     # MCP tool invocation fields – populated by invoke_graph when the caller
     # sets mcp_server on InvokeRequest.  The mcp_tool graph node reads these.
     mcp_server: str
@@ -182,6 +278,13 @@ class InvokeRequest(BaseModel):
     tool_name: str = Field(default="", max_length=128)
     tool_args: dict[str, Any] = Field(default_factory=dict)
     sandbox_session: dict[str, Any] | None = None
+    a2a_target_agent: str | None = Field(default=None, max_length=63)
+    a2a_target_namespace: str | None = Field(default=None, max_length=63)
+    a2a_timeout_seconds: float | None = Field(default=None, ge=1.0)
+    caller_agent_name: str | None = Field(default=None, max_length=63)
+    caller_agent_namespace: str | None = Field(default=None, max_length=63)
+    parent_thread_id: str | None = Field(default=None, max_length=MAX_THREAD_ID_CHARS)
+    caller_request_id: str | None = Field(default=None, max_length=128)
     mcp_server: str | None = Field(
         default=None,
         max_length=128,
@@ -199,11 +302,23 @@ class InvokeRequest(BaseModel):
         self.model = self.model.strip() or None if self.model is not None else None
         self.approval_action = self.approval_action.strip() or None if self.approval_action is not None else None
         self.tool_name = self.tool_name.strip()
+        self.a2a_target_agent = self.a2a_target_agent.strip() or None if self.a2a_target_agent is not None else None
+        self.a2a_target_namespace = (
+            self.a2a_target_namespace.strip() or None if self.a2a_target_namespace is not None else None
+        )
+        self.caller_agent_name = self.caller_agent_name.strip() or None if self.caller_agent_name is not None else None
+        self.caller_agent_namespace = (
+            self.caller_agent_namespace.strip() or None if self.caller_agent_namespace is not None else None
+        )
+        self.parent_thread_id = self.parent_thread_id.strip() or None if self.parent_thread_id is not None else None
+        self.caller_request_id = self.caller_request_id.strip() or None if self.caller_request_id is not None else None
         self.mcp_server = self.mcp_server.strip() or None if self.mcp_server is not None else None
 
         prompt = self.prompt
         tool_name = self.tool_name
         mcp_server = self.mcp_server or ""
+        a2a_target_agent = self.a2a_target_agent or ""
+        a2a_target_namespace = self.a2a_target_namespace or ""
 
         if not prompt and not tool_name:
             raise ValueError("prompt must not be blank unless tool_name is provided")
@@ -213,6 +328,22 @@ class InvokeRequest(BaseModel):
 
         if mcp_server and is_sandbox_tool(tool_name):
             raise ValueError("sandbox tools cannot be invoked through mcp_server")
+
+        if a2a_target_agent or a2a_target_namespace:
+            if not a2a_target_agent or not a2a_target_namespace:
+                raise ValueError("a2a_target_agent and a2a_target_namespace must be provided together")
+            normalize_a2a_identifier(a2a_target_agent, source="a2a_target_agent")
+            normalize_a2a_identifier(a2a_target_namespace, source="a2a_target_namespace")
+            if tool_name:
+                raise ValueError("a2a_target_* cannot be combined with tool_name")
+            if mcp_server:
+                raise ValueError("a2a_target_* cannot be combined with mcp_server")
+
+        if self.caller_agent_name or self.caller_agent_namespace:
+            if not self.caller_agent_name or not self.caller_agent_namespace:
+                raise ValueError("caller_agent_name and caller_agent_namespace must be provided together")
+            normalize_a2a_identifier(self.caller_agent_name, source="caller_agent_name")
+            normalize_a2a_identifier(self.caller_agent_namespace, source="caller_agent_namespace")
 
         if not prompt and tool_name and not mcp_server and not is_sandbox_tool(tool_name):
             raise ValueError(f"Unsupported tool_name '{tool_name}'")
@@ -239,6 +370,7 @@ class InvokeResponse(BaseModel):
     status: str = "completed"
     approval_name: str | None = None
     retry_after_seconds: int | None = None
+    a2a: dict[str, Any] | None = None
     warnings: list[str] = Field(default_factory=list)
 
 
@@ -336,6 +468,8 @@ def build_request_guard_text(
     tool_name: str,
     tool_args: dict[str, Any],
     mcp_server: str,
+    a2a_target_agent: str,
+    a2a_target_namespace: str,
 ) -> str:
     sections: list[str] = []
     if prompt.strip():
@@ -349,6 +483,19 @@ def build_request_guard_text(
         if mcp_server.strip():
             tool_payload["mcp_server"] = mcp_server.strip()
         sections.append(json.dumps(tool_payload, ensure_ascii=False, sort_keys=True, default=str))
+
+    if a2a_target_agent.strip() and a2a_target_namespace.strip():
+        sections.append(
+            json.dumps(
+                {
+                    "a2a_target_agent": a2a_target_agent.strip(),
+                    "a2a_target_namespace": a2a_target_namespace.strip(),
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                default=str,
+            )
+        )
 
     return "\n\n".join(section for section in sections if section)
 
@@ -542,13 +689,69 @@ def build_guardrails(policy_spec: dict[str, Any]) -> GuardrailsEngine:
     )
 
 
+def parse_effective_a2a_policy_config(policy_spec: dict[str, Any]) -> tuple[frozenset[tuple[str, str]], float, bool]:
+    allowed_targets = A2A_ALLOWED_TARGETS_SNAPSHOT
+    max_timeout_seconds = A2A_MAX_TIMEOUT_SECONDS
+    require_hitl = A2A_REQUIRE_HITL_DEFAULT
+    a2a_config = policy_spec.get("a2a") if isinstance(policy_spec, dict) else None
+    if a2a_config is None:
+        return allowed_targets, max_timeout_seconds, require_hitl
+    if not isinstance(a2a_config, dict):
+        logger.warning("Ignoring invalid AgentPolicy.spec.a2a value: expected an object")
+        return allowed_targets, max_timeout_seconds, require_hitl
+
+    if "allowedTargets" in a2a_config:
+        try:
+            parsed_targets = parse_a2a_peer_refs(
+                a2a_config.get("allowedTargets"),
+                source="AgentPolicy.spec.a2a.allowedTargets",
+            )
+        except ValueError as exc:
+            logger.warning("Ignoring invalid AgentPolicy A2A targets: %s", exc)
+        else:
+            allowed_targets = frozenset((item["namespace"], item["name"]) for item in parsed_targets)
+
+    if "maxTimeoutSeconds" in a2a_config and a2a_config.get("maxTimeoutSeconds") is not None:
+        try:
+            max_timeout_seconds = max(float(a2a_config.get("maxTimeoutSeconds")), 1.0)
+        except (TypeError, ValueError):
+            logger.warning("Ignoring invalid AgentPolicy.spec.a2a.maxTimeoutSeconds value")
+
+    if "requireHitl" in a2a_config:
+        require_hitl = bool(a2a_config.get("requireHitl"))
+
+    return allowed_targets, max_timeout_seconds, require_hitl
+
+
+def validate_inbound_a2a_request(request: InvokeRequest) -> None:
+    caller_agent_name = (request.caller_agent_name or "").strip()
+    caller_agent_namespace = (request.caller_agent_namespace or "").strip()
+    if not caller_agent_name and not caller_agent_namespace:
+        return
+
+    if (caller_agent_namespace, caller_agent_name) not in A2A_ALLOWED_CALLERS:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"Agent '{caller_agent_name}' in namespace '{caller_agent_namespace}' is not allowed "
+                f"to invoke agent '{SERVICE_NAME}' in namespace '{SERVICE_NAMESPACE}'."
+            ),
+        )
+
+
+def a2a_runtime_url(agent_name: str, namespace: str) -> str:
+    return f"http://{agent_name}-sandbox.{namespace}.svc.cluster.local:8080"
+
+
 def route_state(state: State) -> str:
-    """Route after input_guard: blocked → END, sandbox → sandbox_tool, MCP → mcp_tool, chat → rag_retrieve."""
+    """Route after input_guard: blocked → END, sandbox → sandbox_tool, A2A → a2a_call, MCP → mcp_tool, chat → rag_retrieve."""
     status = state.get("invoke_status", "continue")
     if status == "blocked":
         return "blocked"
     if is_sandbox_tool(state.get("tool_name")):
         return "sandbox_tool"
+    if state.get("a2a_target_agent"):
+        return "a2a_call"
     if state.get("mcp_server"):
         return "mcp_tool"
     return "continue"
@@ -629,6 +832,8 @@ def create_agent(llm: ChatOpenAI):
                     state.get("tool_name", ""),
                     state.get("tool_args") or {},
                     state.get("mcp_server", ""),
+                    state.get("a2a_target_agent", ""),
+                    state.get("a2a_target_namespace", ""),
                 )
                 if not guard_input.strip():
                     return {"context": "", "invoke_status": "continue"}
@@ -845,11 +1050,179 @@ def create_agent(llm: ChatOpenAI):
 
         return run_graph_node("mcp_tool", _run)
 
+    def a2a_call(state: State) -> dict[str, Any]:
+        def _run() -> dict[str, Any]:
+            with tracer.start_as_current_span("a2a_agent_invocation") as span:
+                target_agent = (state.get("a2a_target_agent") or "").strip()
+                target_namespace = (state.get("a2a_target_namespace") or "").strip()
+                if not target_agent or not target_namespace:
+                    return {
+                        "messages": [AIMessage(content=blocked_response("A2A target agent and namespace are required"))],
+                        "invoke_status": "blocked",
+                        "a2a": None,
+                    }
+
+                allowed_targets, max_timeout_seconds, _ = parse_effective_a2a_policy_config(state.get("policy", {}))
+                if (target_namespace, target_agent) not in allowed_targets:
+                    return {
+                        "messages": [
+                            AIMessage(
+                                content=blocked_response(
+                                    (
+                                        f"A2A target '{target_agent}' in namespace '{target_namespace}' is not allowed. "
+                                        "Update AgentPolicy.spec.a2a.allowedTargets to grant access."
+                                    )
+                                )
+                            )
+                        ],
+                        "invoke_status": "blocked",
+                        "a2a": None,
+                    }
+
+                requested_timeout = state.get("a2a_timeout_seconds")
+                if requested_timeout is not None and float(requested_timeout) > max_timeout_seconds:
+                    return {
+                        "messages": [
+                            AIMessage(
+                                content=blocked_response(
+                                    (
+                                        f"Requested A2A timeout {requested_timeout} exceeds policy limit "
+                                        f"of {max_timeout_seconds} seconds."
+                                    )
+                                )
+                            )
+                        ],
+                        "invoke_status": "blocked",
+                        "a2a": None,
+                    }
+
+                timeout_seconds = float(requested_timeout or max_timeout_seconds)
+                thread_id = str(state.get("thread_id", "")).strip()
+                target_thread_id = build_thread_id(
+                    "a2a",
+                    SERVICE_NAMESPACE,
+                    SERVICE_NAME,
+                    target_namespace,
+                    target_agent,
+                    thread_id,
+                )
+                request_id = REQUEST_ID.get() or str(uuid.uuid4())
+                payload = {
+                    "prompt": state.get("request_prompt", ""),
+                    "thread_id": target_thread_id,
+                    "caller_agent_name": SERVICE_NAME,
+                    "caller_agent_namespace": SERVICE_NAMESPACE,
+                    "parent_thread_id": thread_id or None,
+                    "caller_request_id": request_id,
+                }
+                publish_runtime_event(
+                    "a2a.call",
+                    {
+                        "status": "started",
+                        "targetAgent": target_agent,
+                        "targetNamespace": target_namespace,
+                        "targetThreadId": target_thread_id,
+                        "timeoutSeconds": timeout_seconds,
+                    },
+                )
+
+                try:
+                    with httpx.Client(
+                        timeout=timeout_seconds,
+                        transport=httpx.HTTPTransport(retries=2),
+                        trust_env=False,
+                    ) as client:
+                        response = client.post(
+                            f"{a2a_runtime_url(target_agent, target_namespace)}/invoke",
+                            json=payload,
+                            headers={"x-request-id": request_id},
+                        )
+                        response.raise_for_status()
+                        result = response.json()
+                except httpx.HTTPStatusError as exc:
+                    publish_runtime_event(
+                        "a2a.call",
+                        {
+                            "status": "failed",
+                            "targetAgent": target_agent,
+                            "targetNamespace": target_namespace,
+                            "httpStatus": exc.response.status_code,
+                        },
+                    )
+                    return {
+                        "messages": [
+                            AIMessage(
+                                content=blocked_response(
+                                    f"A2A target returned HTTP {exc.response.status_code}"
+                                )
+                            )
+                        ],
+                        "invoke_status": "blocked",
+                        "a2a": None,
+                    }
+                except Exception as exc:
+                    publish_runtime_event(
+                        "a2a.call",
+                        {
+                            "status": "failed",
+                            "targetAgent": target_agent,
+                            "targetNamespace": target_namespace,
+                            "error": str(exc),
+                        },
+                    )
+                    return {
+                        "messages": [AIMessage(content=blocked_response(f"A2A call failed: {exc}"))],
+                        "invoke_status": "blocked",
+                        "a2a": None,
+                    }
+
+                if not isinstance(result, dict):
+                    return {
+                        "messages": [AIMessage(content=blocked_response("A2A callee returned a non-object JSON payload"))],
+                        "invoke_status": "blocked",
+                        "a2a": None,
+                    }
+
+                response_text = str(result.get("response", ""))
+                response_status = str(result.get("status", "completed") or "completed")
+                warnings = dedupe_text_items([str(item) for item in (result.get("warnings") or [])])
+                a2a_payload = {
+                    "callerAgent": SERVICE_NAME,
+                    "callerNamespace": SERVICE_NAMESPACE,
+                    "targetAgent": target_agent,
+                    "targetNamespace": target_namespace,
+                    "targetThreadId": result.get("thread_id") or target_thread_id,
+                    "parentThreadId": thread_id or None,
+                    "responseStatus": response_status,
+                }
+                publish_runtime_event(
+                    "a2a.call",
+                    {
+                        **a2a_payload,
+                        "status": "completed",
+                        "bytes": len(response_text),
+                    },
+                )
+                span.set_attribute("a2a.target_agent", target_agent)
+                span.set_attribute("a2a.target_namespace", target_namespace)
+                span.set_attribute("a2a.timeout_seconds", timeout_seconds)
+                return {
+                    "messages": [AIMessage(content=response_text)],
+                    "invoke_status": response_status,
+                    "approval_name": result.get("approval_name"),
+                    "retry_after_seconds": result.get("retry_after_seconds"),
+                    "warnings": warnings,
+                    "a2a": a2a_payload,
+                }
+
+        return run_graph_node("a2a_call", _run)
+
     graph_builder = StateGraph(State)
     graph_builder.add_node("input_guard", input_guard)
     graph_builder.add_node("rag_retrieve", rag_retrieve)
     graph_builder.add_node("chatbot", chatbot)
     graph_builder.add_node("sandbox_tool", sandbox_tool)
+    graph_builder.add_node("a2a_call", a2a_call)
     graph_builder.add_node("mcp_tool", mcp_tool)
     graph_builder.add_node("output_guard", output_guard)
 
@@ -861,12 +1234,14 @@ def create_agent(llm: ChatOpenAI):
             "continue": "rag_retrieve",
             "blocked": END,
             "sandbox_tool": "sandbox_tool",
+            "a2a_call": "a2a_call",
             "mcp_tool": "mcp_tool",
         },
     )
     graph_builder.add_edge("rag_retrieve", "chatbot")
     graph_builder.add_edge("chatbot", "output_guard")
     graph_builder.add_edge("sandbox_tool", "output_guard")
+    graph_builder.add_edge("a2a_call", "output_guard")
     graph_builder.add_edge("mcp_tool", "output_guard")
     graph_builder.add_edge("output_guard", END)
     return graph_builder
@@ -943,14 +1318,21 @@ def preflight_request_approval(
     request: InvokeRequest,
     thread_id: str,
     policy_name: str | None,
+    *,
+    require_approval: bool | None = None,
 ) -> InvokeResponse | None:
     default_action = request.approval_action or (
         f"Invoke tool {request.tool_name} on agent {SERVICE_NAME}"
         if request.tool_name
-        else f"Invoke agent {SERVICE_NAME}"
+        else (
+            f"Invoke agent {request.a2a_target_agent} in namespace {request.a2a_target_namespace} from agent {SERVICE_NAME}"
+            if request.a2a_target_agent and request.a2a_target_namespace
+            else f"Invoke agent {SERVICE_NAME}"
+        )
     )
 
-    if not request.require_approval:
+    approval_required = request.require_approval if require_approval is None else require_approval
+    if not approval_required:
         return None
 
     try:
@@ -1014,6 +1396,9 @@ def invoke_graph(
     prompt = request.prompt.strip()
     tool_name = request.tool_name.strip()
     mcp_server = (request.mcp_server or "").strip()
+    a2a_target_agent = (request.a2a_target_agent or "").strip()
+    a2a_target_namespace = (request.a2a_target_namespace or "").strip()
+    validate_inbound_a2a_request(request)
     if request.model and request.model != MODEL_NAME:
         raise HTTPException(
             status_code=400,
@@ -1025,8 +1410,17 @@ def invoke_graph(
 
     try:
         policy_name, policy_spec = load_active_policy()
+        _, _, a2a_require_hitl = parse_effective_a2a_policy_config(policy_spec)
         thread_id = request.thread_id or str(uuid.uuid4())
-        route_name = "sandbox_tool" if is_sandbox_tool(tool_name) else "mcp_tool" if mcp_server else "chat"
+        route_name = (
+            "sandbox_tool"
+            if is_sandbox_tool(tool_name)
+            else "a2a_call"
+            if a2a_target_agent
+            else "mcp_tool"
+            if mcp_server
+            else "chat"
+        )
 
         with bind_event_publisher(publish_event):
             publish_runtime_event(
@@ -1040,12 +1434,27 @@ def invoke_graph(
                     "tool_name": tool_name or None,
                 },
             )
+            if request.caller_agent_name and request.caller_agent_namespace:
+                publish_runtime_event(
+                    "a2a.received",
+                    {
+                        "callerAgent": request.caller_agent_name,
+                        "callerNamespace": request.caller_agent_namespace,
+                        "parentThreadId": request.parent_thread_id,
+                    },
+                )
 
-            approval_response = preflight_request_approval(request, thread_id, policy_name)
+            approval_response = preflight_request_approval(
+                request,
+                thread_id,
+                policy_name,
+                require_approval=request.require_approval or bool(a2a_target_agent and a2a_require_hitl),
+            )
             if approval_response is not None:
                 return approval_response
 
             initial_state: State = {
+                "thread_id": thread_id,
                 "messages": [HumanMessage(content=prompt)] if prompt else [],
                 "request_prompt": prompt,
                 "context": "",
@@ -1056,6 +1465,17 @@ def invoke_graph(
                 "tool_name": tool_name,
                 "tool_args": request.tool_args,
                 "tool_result": None,
+                "approval_name": None,
+                "retry_after_seconds": None,
+                "warnings": [],
+                "a2a": None,
+                "a2a_target_agent": a2a_target_agent,
+                "a2a_target_namespace": a2a_target_namespace,
+                "a2a_timeout_seconds": request.a2a_timeout_seconds,
+                "caller_agent_name": request.caller_agent_name or "",
+                "caller_agent_namespace": request.caller_agent_namespace or "",
+                "parent_thread_id": request.parent_thread_id or "",
+                "caller_request_id": request.caller_request_id or "",
                 "mcp_server": mcp_server,
                 "mcp_tool_name": tool_name,
                 "mcp_tool_args": request.tool_args,
@@ -1079,7 +1499,8 @@ def invoke_graph(
     guardrails = build_guardrails(policy_spec)
     sanitized_tool_result = sanitize_public_payload(result.get("tool_result"), guardrails)
     sanitized_sandbox_session = sanitize_public_payload(result.get("sandbox_session"), guardrails)
-    warnings: list[str] = []
+    sanitized_a2a = sanitize_public_payload(result.get("a2a"), guardrails)
+    warnings: list[str] = list(result.get("warnings") or [])
     if isinstance(sanitized_sandbox_session, dict):
         expires_at_value = sanitized_sandbox_session.get("expires_at")
         if isinstance(expires_at_value, str) and expires_at_value:
@@ -1093,6 +1514,19 @@ def invoke_graph(
             except ValueError:
                 logger.debug("Ignoring invalid sandbox expiration timestamp: %s", expires_at_value)
 
+    if sanitized_a2a is None and request.caller_agent_name and request.caller_agent_namespace:
+        sanitized_a2a = sanitize_public_payload(
+            {
+                "callerAgent": request.caller_agent_name,
+                "callerNamespace": request.caller_agent_namespace,
+                "parentThreadId": request.parent_thread_id,
+                "callerRequestId": request.caller_request_id,
+            },
+            guardrails,
+        )
+
+    warnings = dedupe_text_items(warnings)
+
     return InvokeResponse(
         thread_id=thread_id,
         response=response_text,
@@ -1103,6 +1537,9 @@ def invoke_graph(
         tool_result=sanitized_tool_result,
         sandbox_session=sanitized_sandbox_session,
         status=response_status,
+        approval_name=result.get("approval_name"),
+        retry_after_seconds=result.get("retry_after_seconds"),
+        a2a=sanitized_a2a,
         warnings=warnings,
     )
 
@@ -1188,7 +1625,6 @@ class StreamEventPublisher:
 
 @app.get("/health")
 async def health() -> dict[str, Any]:
-    policy_name, _ = load_active_policy()
     ready = bool(RUNTIME.get("graph") and RUNTIME.get("connection"))
     return {
         "status": "shutting-down" if _SHUTDOWN.is_set() else "healthy" if ready else "starting",
@@ -1197,7 +1633,7 @@ async def health() -> dict[str, Any]:
         "agent": SERVICE_NAME,
         "namespace": SERVICE_NAMESPACE,
         "model": MODEL_NAME,
-        "policy": policy_name,
+        "policy": POLICY_CACHE.get("name"),
         "ragEnabled": RAG_ENABLED,
         "qdrantCollection": DISCOVERED_QDRANT_COLLECTION,
         "policyAccess": K8S_POLICY_ACCESS,
@@ -1276,6 +1712,7 @@ async def invoke_stream(request: InvokeRequest) -> StreamingResponse:
                     "tool_name": response.tool_name,
                     "tool_result": response.tool_result,
                     "sandbox_session": response.sandbox_session,
+                    "a2a": response.a2a,
                     "warnings": response.warnings,
                 },
             )

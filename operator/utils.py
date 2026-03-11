@@ -15,6 +15,7 @@ import httpx
 
 logger = logging.getLogger("operator-utils")
 PLACEHOLDER_RE = re.compile(r"{{\s*([^{}]+?)\s*}}")
+K8S_NAME_RE = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
 
 
 def get_float_env(name: str, default: float, minimum: float = 0.0) -> float:
@@ -283,6 +284,86 @@ def unsupported_policy_budget_fields(policy_spec: dict[str, Any]) -> list[str]:
     return unsupported_fields
 
 
+def normalize_a2a_peer_ref(raw_value: Any, *, source: str) -> dict[str, str]:
+    if not isinstance(raw_value, dict):
+        raise ValueError(f"{source} entries must be objects with 'name' and 'namespace' fields.")
+
+    name = str(raw_value.get("name", "")).strip()
+    namespace = str(raw_value.get("namespace", "")).strip()
+    if not name or not namespace:
+        raise ValueError(f"{source} entries must include non-empty 'name' and 'namespace' values.")
+    if not K8S_NAME_RE.fullmatch(name):
+        raise ValueError(f"{source} name '{name}' must be a valid lowercase Kubernetes resource name.")
+    if not K8S_NAME_RE.fullmatch(namespace):
+        raise ValueError(
+            f"{source} namespace '{namespace}' must be a valid lowercase Kubernetes namespace name."
+        )
+
+    return {"name": name, "namespace": namespace}
+
+
+def parse_a2a_peer_refs(peer_refs: Any, *, source: str) -> list[dict[str, str]]:
+    if peer_refs is None:
+        return []
+    if not isinstance(peer_refs, list):
+        raise ValueError(f"{source} must be a list of objects with 'name' and 'namespace' fields.")
+
+    normalized: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for index, raw_value in enumerate(peer_refs):
+        peer_ref = normalize_a2a_peer_ref(raw_value, source=f"{source}[{index}]")
+        identity = (peer_ref["namespace"], peer_ref["name"])
+        if identity in seen:
+            continue
+        seen.add(identity)
+        normalized.append(peer_ref)
+    return normalized
+
+
+def parse_agent_a2a_config(a2a_config: Any, *, source: str = "AIAgent.spec.a2a") -> dict[str, Any]:
+    if a2a_config is None:
+        return {}
+    if not isinstance(a2a_config, dict):
+        raise ValueError(f"{source} must be an object when provided.")
+
+    allowed_callers = parse_a2a_peer_refs(
+        a2a_config.get("allowedCallers"),
+        source=f"{source}.allowedCallers",
+    )
+    return {"allowedCallers": allowed_callers} if allowed_callers else {}
+
+
+def parse_policy_a2a_config(policy_spec: dict[str, Any]) -> dict[str, Any]:
+    a2a_config = policy_spec.get("a2a")
+    if a2a_config is None:
+        return {}
+    if not isinstance(a2a_config, dict):
+        raise ValueError("AgentPolicy.spec.a2a must be an object when provided.")
+
+    allowed_targets = parse_a2a_peer_refs(
+        a2a_config.get("allowedTargets"),
+        source="AgentPolicy.spec.a2a.allowedTargets",
+    )
+    require_hitl = bool(a2a_config.get("requireHitl", False))
+    max_timeout_seconds = a2a_config.get("maxTimeoutSeconds")
+    if max_timeout_seconds is not None:
+        try:
+            max_timeout_seconds = float(max_timeout_seconds)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("AgentPolicy.spec.a2a.maxTimeoutSeconds must be a number.") from exc
+        if max_timeout_seconds < 1:
+            raise ValueError("AgentPolicy.spec.a2a.maxTimeoutSeconds must be at least 1 second.")
+
+    parsed: dict[str, Any] = {}
+    if allowed_targets:
+        parsed["allowedTargets"] = allowed_targets
+    if max_timeout_seconds is not None:
+        parsed["maxTimeoutSeconds"] = max_timeout_seconds
+    if require_hitl:
+        parsed["requireHitl"] = True
+    return parsed
+
+
 def validate_supported_policy_spec(policy_spec: dict[str, Any]) -> None:
     unsupported_fields = unsupported_policy_budget_fields(policy_spec)
     if unsupported_fields:
@@ -291,6 +372,7 @@ def validate_supported_policy_spec(policy_spec: dict[str, Any]) -> None:
             "AgentPolicy.spec.budget is reserved for future distributed enforcement and is not supported today. "
             f"Remove these fields to use this policy: {joined_fields}."
         )
+    parse_policy_a2a_config(policy_spec)
 
 
 def normalize_goose_config_file_path(raw_path: object) -> str:

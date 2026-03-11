@@ -1,5 +1,6 @@
 import { Bot, LoaderCircle, PlusCircle } from "lucide-react";
 
+import { A2A_ALLOWED_CALLERS_PLACEHOLDER } from "../lib/a2a";
 import { GOOSE_CONFIG_FILES_PLACEHOLDER } from "../lib/gooseConfig";
 import type { RuntimeKind } from "../types";
 
@@ -8,6 +9,7 @@ interface CreateAgentPanelProps {
   model: string;
   systemPrompt: string;
   runtimeKind: RuntimeKind;
+  a2aAllowedCallersText: string;
   gooseConfigFilesText: string;
   isCreating: boolean;
   error: string;
@@ -15,6 +17,7 @@ interface CreateAgentPanelProps {
   onModelChange: (value: string) => void;
   onSystemPromptChange: (value: string) => void;
   onRuntimeKindChange: (value: RuntimeKind) => void;
+  onA2AAllowedCallersTextChange: (value: string) => void;
   onGooseConfigFilesTextChange: (value: string) => void;
   onCreate: () => void;
 }
@@ -24,6 +27,7 @@ export function CreateAgentPanel({
   model,
   systemPrompt,
   runtimeKind,
+  a2aAllowedCallersText,
   gooseConfigFilesText,
   isCreating,
   error,
@@ -31,6 +35,7 @@ export function CreateAgentPanel({
   onModelChange,
   onSystemPromptChange,
   onRuntimeKindChange,
+  onA2AAllowedCallersTextChange,
   onGooseConfigFilesTextChange,
   onCreate,
 }: CreateAgentPanelProps) {
@@ -82,6 +87,16 @@ export function CreateAgentPanel({
               placeholder="You are a helpful enterprise assistant. Be concise, factual, and do not fabricate information."
             />
           </label>
+          <label>
+            <span>Allowed caller agents (A2A)</span>
+            <textarea
+              className="prompt-input compact-input"
+              rows={4}
+              value={a2aAllowedCallersText}
+              onChange={(event) => onA2AAllowedCallersTextChange(event.target.value)}
+              placeholder={A2A_ALLOWED_CALLERS_PLACEHOLDER}
+            />
+          </label>
           {runtimeKind === "goose" ? (
             <label>
               <span>Goose config files (JSON)</span>
@@ -100,6 +115,8 @@ export function CreateAgentPanel({
               Use a JSON object keyed by relative Goose config-root paths such as <code>config.yaml</code> or <code>prompts/review.md</code>.
             </p>
           ) : null}
+
+          <p className="hint-text">List one caller per line as <code>namespace/name</code>. Only listed agents can invoke this agent over A2A.</p>
 
           {error ? <p className="error-banner">{error}</p> : null}
 

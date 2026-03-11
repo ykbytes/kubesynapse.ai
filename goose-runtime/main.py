@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import uuid
@@ -43,6 +44,58 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
 logger = logging.getLogger("goose-runtime")
+K8S_NAME_RE = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
+
+
+def normalize_a2a_identifier(value: Any, *, source: str) -> str:
+    text = str(value).strip()
+    if not text:
+        raise ValueError(f"{source} must not be blank")
+    if len(text) > 63 or not K8S_NAME_RE.fullmatch(text):
+        raise ValueError(f"{source} must be a valid lowercase Kubernetes resource name")
+    return text
+
+
+def parse_a2a_peer_ref(raw_value: Any, *, source: str) -> dict[str, str]:
+    if not isinstance(raw_value, dict):
+        raise ValueError(f"{source} entries must be objects with 'name' and 'namespace' fields")
+    return {
+        "name": normalize_a2a_identifier(raw_value.get("name", ""), source=f"{source}.name"),
+        "namespace": normalize_a2a_identifier(raw_value.get("namespace", ""), source=f"{source}.namespace"),
+    }
+
+
+def parse_a2a_peer_refs(value: Any, *, source: str) -> list[dict[str, str]]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError(f"{source} must be a list of peer reference objects")
+
+    normalized: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for index, item in enumerate(value):
+        peer_ref = parse_a2a_peer_ref(item, source=f"{source}[{index}]")
+        identity = (peer_ref["namespace"], peer_ref["name"])
+        if identity in seen:
+            continue
+        seen.add(identity)
+        normalized.append(peer_ref)
+    return normalized
+
+
+def parse_a2a_peer_refs_env(name: str) -> frozenset[tuple[str, str]]:
+    raw_value = os.getenv(name, "").strip()
+    if not raw_value:
+        return frozenset()
+
+    try:
+        parsed = json.loads(raw_value)
+        peer_refs = parse_a2a_peer_refs(parsed, source=name)
+    except (ValueError, json.JSONDecodeError) as exc:
+        logger.warning("Ignoring invalid %s value: %s", name, exc)
+        return frozenset()
+
+    return frozenset((item["namespace"], item["name"]) for item in peer_refs)
 
 SERVICE_NAME = os.getenv("AGENT_NAME", "goose-runtime")
 SERVICE_NAMESPACE = os.getenv("AGENT_NAMESPACE", "default")
@@ -97,6 +150,7 @@ def parse_string_list_env(name: str) -> list[str]:
 DEFAULT_BUILTIN_EXTENSIONS = parse_string_list_env("GOOSE_RUNTIME_BUILTINS")
 DEFAULT_STDIO_EXTENSIONS = parse_string_list_env("GOOSE_RUNTIME_STDIO_EXTENSIONS")
 DEFAULT_STREAMABLE_HTTP_EXTENSIONS = parse_string_list_env("GOOSE_RUNTIME_STREAMABLE_HTTP_EXTENSIONS")
+A2A_ALLOWED_CALLERS = parse_a2a_peer_refs_env("A2A_ALLOWED_CALLERS_JSON")
 GOOSE_RUNTIME_CONFIG_FILES_ENV = "GOOSE_RUNTIME_CONFIG_FILES_JSON"
 
 
@@ -230,6 +284,13 @@ class InvokeRequest(BaseModel):
     tool_args: dict[str, Any] = Field(default_factory=dict)
     sandbox_session: dict[str, Any] | None = None
     mcp_server: str | None = Field(default=None, max_length=128)
+    a2a_target_agent: str | None = Field(default=None, max_length=63)
+    a2a_target_namespace: str | None = Field(default=None, max_length=63)
+    a2a_timeout_seconds: float | None = Field(default=None, ge=1.0)
+    caller_agent_name: str | None = Field(default=None, max_length=63)
+    caller_agent_namespace: str | None = Field(default=None, max_length=63)
+    parent_thread_id: str | None = Field(default=None, max_length=MAX_THREAD_ID_CHARS)
+    caller_request_id: str | None = Field(default=None, max_length=128)
     debug: bool = False
     no_session: bool = False
     max_turns: int | None = Field(default=None, ge=1, le=MAX_TURNS_LIMIT)
@@ -246,6 +307,16 @@ class InvokeRequest(BaseModel):
         self.system = self.system.strip() or None if self.system is not None else None
         self.approval_action = self.approval_action.strip() or None if self.approval_action is not None else None
         self.tool_name = self.tool_name.strip()
+        self.a2a_target_agent = self.a2a_target_agent.strip() or None if self.a2a_target_agent is not None else None
+        self.a2a_target_namespace = (
+            self.a2a_target_namespace.strip() or None if self.a2a_target_namespace is not None else None
+        )
+        self.caller_agent_name = self.caller_agent_name.strip() or None if self.caller_agent_name is not None else None
+        self.caller_agent_namespace = (
+            self.caller_agent_namespace.strip() or None if self.caller_agent_namespace is not None else None
+        )
+        self.parent_thread_id = self.parent_thread_id.strip() or None if self.parent_thread_id is not None else None
+        self.caller_request_id = self.caller_request_id.strip() or None if self.caller_request_id is not None else None
         self.mcp_server = self.mcp_server.strip() or None if self.mcp_server is not None else None
 
         if not self.prompt:
@@ -258,6 +329,13 @@ class InvokeRequest(BaseModel):
             raise ValueError("goose runtime does not support direct tool_name execution yet")
         if self.mcp_server:
             raise ValueError("goose runtime does not support gateway-routed mcp_server execution yet")
+        if self.a2a_target_agent or self.a2a_target_namespace or self.a2a_timeout_seconds is not None:
+            raise ValueError("goose runtime does not support outbound A2A invocation yet")
+        if self.caller_agent_name or self.caller_agent_namespace:
+            if not self.caller_agent_name or not self.caller_agent_namespace:
+                raise ValueError("caller_agent_name and caller_agent_namespace must be provided together")
+            normalize_a2a_identifier(self.caller_agent_name, source="caller_agent_name")
+            normalize_a2a_identifier(self.caller_agent_namespace, source="caller_agent_namespace")
         if self.sandbox_session is not None:
             raise ValueError("goose runtime does not support sandbox_session continuity")
 
@@ -307,6 +385,7 @@ class InvokeResponse(BaseModel):
     response: str
     model: str
     status: str = "completed"
+    a2a: dict[str, Any] | None = None
     warnings: list[str] = Field(default_factory=list)
 
 
@@ -409,6 +488,33 @@ def merged_payload_warnings(payload: dict[str, Any], request: InvokeRequest) -> 
     if isinstance(raw_warnings, list):
         warnings.extend(str(value).strip() for value in raw_warnings if str(value).strip())
     return dedupe_items(warnings)
+
+
+def validate_inbound_a2a_request(request: InvokeRequest) -> None:
+    caller_agent_name = (request.caller_agent_name or "").strip()
+    caller_agent_namespace = (request.caller_agent_namespace or "").strip()
+    if not caller_agent_name and not caller_agent_namespace:
+        return
+
+    if (caller_agent_namespace, caller_agent_name) not in A2A_ALLOWED_CALLERS:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"Agent '{caller_agent_name}' in namespace '{caller_agent_namespace}' is not allowed "
+                f"to invoke agent '{SERVICE_NAME}' in namespace '{SERVICE_NAMESPACE}'."
+            ),
+        )
+
+
+def a2a_response_metadata(request: InvokeRequest) -> dict[str, Any] | None:
+    if not request.caller_agent_name or not request.caller_agent_namespace:
+        return None
+    return {
+        "callerAgent": request.caller_agent_name,
+        "callerNamespace": request.caller_agent_namespace,
+        "parentThreadId": request.parent_thread_id,
+        "callerRequestId": request.caller_request_id,
+    }
 
 
 def normalize_goose_event_name(event_type: str) -> str:
@@ -605,6 +711,7 @@ async def stream_goose_events(
     stdio_extensions: list[str],
     streamable_http_extensions: list[str],
     working_directory: str,
+    a2a: dict[str, Any] | None,
     warnings: list[str],
 ) -> AsyncIterator[str]:
     attempts = [True, False] if allow_resume else [False]
@@ -742,6 +849,7 @@ async def stream_goose_events(
                     "response": assistant_text,
                     "model": model,
                     "status": "completed",
+                    "a2a": a2a,
                     "warnings": warnings,
                 },
             )
@@ -797,6 +905,7 @@ def debug_goose_info() -> dict[str, Any]:
 
 @app.post("/invoke", response_model=InvokeResponse)
 async def invoke(request: InvokeRequest) -> InvokeResponse:
+    validate_inbound_a2a_request(request)
     model = (request.model or DEFAULT_MODEL).strip() or DEFAULT_MODEL
     thread_id = request.thread_id or str(uuid.uuid4())
     session_name = normalize_session_name(thread_id)
@@ -837,12 +946,14 @@ async def invoke(request: InvokeRequest) -> InvokeResponse:
         response=response_text,
         model=model,
         status=status,
+        a2a=a2a_response_metadata(request),
         warnings=merged_payload_warnings(payload, request),
     )
 
 
 @app.post("/invoke/stream")
 async def invoke_stream(request: InvokeRequest) -> StreamingResponse:
+    validate_inbound_a2a_request(request)
     model = (request.model or DEFAULT_MODEL).strip() or DEFAULT_MODEL
     allow_resume = bool(request.thread_id) and not request.no_session
     thread_id = request.thread_id or str(uuid.uuid4())
@@ -872,6 +983,7 @@ async def invoke_stream(request: InvokeRequest) -> StreamingResponse:
             stdio_extensions=stdio_extensions,
             streamable_http_extensions=streamable_http_extensions,
             working_directory=working_directory,
+            a2a=a2a_response_metadata(request),
             warnings=warnings,
         ):
             yield event

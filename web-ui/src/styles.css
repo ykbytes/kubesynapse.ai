@@ -138,6 +138,9 @@ pre {
 .toolbar-card input,
 .setup-form input,
 .setup-form select,
+.goose-control-panel input,
+.a2a-control-panel input,
+.a2a-control-panel select,
 .prompt-input {
   width: 100%;
   border: 1px solid rgba(29, 36, 51, 0.14);
@@ -458,13 +461,30 @@ pre {
   padding: 14px;
 }
 
+.a2a-control-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border: 1px solid rgba(29, 36, 51, 0.08);
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.72);
+  padding: 14px;
+}
+
 .goose-control-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
 }
 
+.a2a-control-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
 .goose-control-panel label,
+.a2a-control-panel label,
 .goose-system-preview {
   display: flex;
   flex-direction: column;
@@ -472,6 +492,7 @@ pre {
 }
 
 .goose-control-panel label span,
+.a2a-control-panel label span,
 .goose-system-preview span {
   color: var(--ink-soft);
   font-size: 0.78rem;
@@ -788,6 +809,10 @@ pre {
   }
 
   .goose-control-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .a2a-control-grid {
     grid-template-columns: 1fr;
   }
 }

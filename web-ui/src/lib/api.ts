@@ -1,8 +1,13 @@
 import { fetchEventSource } from "@microsoft/fetch-event-source";
 
 import type {
+  A2AInvocationMetadata,
+  A2APeerRef,
+  AgentA2AConfig,
   AgentInfo,
   AgentDetail,
+  AgentDiscoveryPeer,
+  AgentDiscoveryResponse,
   AgentLogsResponse,
   ApprovalInfo,
   CreateAgentPayload,
@@ -169,6 +174,86 @@ function readRuntimeKind(record: JsonRecord, key: string, label: string, fallbac
   return runtimeKind;
 }
 
+function readOptionalRuntimeKind(record: JsonRecord, key: string, label: string): RuntimeKind | null {
+  const value = record[key];
+  if (value === undefined || value === null) {
+    return null;
+  }
+  return readRuntimeKind(record, key, label);
+}
+
+function parseA2APeerRefPayload(payload: unknown, label: string): A2APeerRef {
+  const record = expectRecord(payload, label);
+  return {
+    name: readString(record, "name", label),
+    namespace: readString(record, "namespace", label),
+  };
+}
+
+function parseA2APeerRefArrayPayload(payload: unknown, label: string): A2APeerRef[] {
+  if (!Array.isArray(payload)) {
+    throw new Error(`${label} must be an array.`);
+  }
+  return payload.map((item, index) => parseA2APeerRefPayload(item, `${label}[${index}]`));
+}
+
+function parseAgentA2AConfigPayload(payload: unknown, label: string): AgentA2AConfig {
+  if (payload === undefined || payload === null) {
+    return { allowed_callers: [] };
+  }
+
+  const record = expectRecord(payload, label);
+  const rawAllowedCallers = record.allowed_callers ?? record.allowedCallers;
+  return {
+    allowed_callers:
+      rawAllowedCallers === undefined ? [] : parseA2APeerRefArrayPayload(rawAllowedCallers, `${label}.allowed_callers`),
+  };
+}
+
+function parseA2AInvocationMetadataPayload(payload: unknown, label: string): A2AInvocationMetadata {
+  const record = expectRecord(payload, label);
+  return {
+    targetAgent: readOptionalString(record, "targetAgent", label),
+    targetNamespace: readOptionalString(record, "targetNamespace", label),
+    targetThreadId: readOptionalString(record, "targetThreadId", label),
+    responseStatus: readOptionalString(record, "responseStatus", label),
+    callerAgent: readOptionalString(record, "callerAgent", label),
+    callerNamespace: readOptionalString(record, "callerNamespace", label),
+    parentThreadId: readOptionalString(record, "parentThreadId", label),
+    callerRequestId: readOptionalString(record, "callerRequestId", label),
+  };
+}
+
+function parseAgentDiscoveryPeerPayload(payload: unknown, label: string): AgentDiscoveryPeer {
+  const record = expectRecord(payload, label);
+  return {
+    name: readString(record, "name", label),
+    namespace: readString(record, "namespace", label),
+    exists: readBoolean(record, "exists", label, false),
+    model: readOptionalString(record, "model", label),
+    status: readOptionalString(record, "status", label),
+    runtime_kind: readOptionalRuntimeKind(record, "runtime_kind", label),
+    accepts_caller: readBoolean(record, "accepts_caller", label, false),
+    reachable: readBoolean(record, "reachable", label, false),
+    reason: readOptionalString(record, "reason", label),
+  };
+}
+
+function parseAgentDiscoveryResponsePayload(payload: unknown): AgentDiscoveryResponse {
+  const record = expectRecord(payload, "AgentDiscoveryResponse");
+  const peers = record.peers;
+  if (peers !== undefined && !Array.isArray(peers)) {
+    throw new Error("AgentDiscoveryResponse.peers must be an array.");
+  }
+
+  return {
+    agent_name: readString(record, "agent_name", "AgentDiscoveryResponse"),
+    namespace: readString(record, "namespace", "AgentDiscoveryResponse"),
+    policy_ref: readOptionalString(record, "policy_ref", "AgentDiscoveryResponse"),
+    peers: (peers ?? []).map((item, index) => parseAgentDiscoveryPeerPayload(item, `AgentDiscoveryResponse.peers[${index}]`)),
+  };
+}
+
 function parseAgentInfoPayload(payload: unknown, label = "AgentInfo"): AgentInfo {
   const record = expectRecord(payload, label);
   return {
@@ -192,6 +277,7 @@ function parseAgentDetailPayload(payload: unknown): AgentDetail {
     enable_gvisor: readBoolean(record, "enable_gvisor", "AgentDetail", false),
     mcp_servers: readStringArray(record, "mcp_servers", "AgentDetail"),
     mcp_sidecars: readRecordArray(record, "mcp_sidecars", "AgentDetail"),
+    a2a_config: parseAgentA2AConfigPayload(record.a2a_config, "AgentDetail.a2a_config"),
     goose_config_files: readRecord(record, "goose_config_files", "AgentDetail"),
     created_at: readOptionalString(record, "created_at", "AgentDetail"),
   };
@@ -327,6 +413,7 @@ function parseInvokeResponsePayload(payload: unknown): InvokeResponse {
     status: readString(record, "status", "InvokeResponse", "completed"),
     approval_name: readOptionalString(record, "approval_name", "InvokeResponse"),
     retry_after_seconds: readOptionalNumber(record, "retry_after_seconds", "InvokeResponse"),
+    a2a: record.a2a === undefined || record.a2a === null ? null : parseA2AInvocationMetadataPayload(record.a2a, "InvokeResponse.a2a"),
     warnings: record.warnings === undefined ? [] : readStringArray(record, "warnings", "InvokeResponse"),
   };
 }
@@ -357,6 +444,10 @@ export function buildInvocationSummary(fallbackThreadId: string, payload: unknow
     sandboxSession: readOptionalRecord(record, "sandbox_session", "Invocation summary payload"),
     approvalName: readOptionalString(record, "approval_name", "Invocation summary payload"),
     retryAfterSeconds: readOptionalNumber(record, "retry_after_seconds", "Invocation summary payload"),
+    a2a:
+      record.a2a === undefined || record.a2a === null
+        ? null
+        : parseA2AInvocationMetadataPayload(record.a2a, "Invocation summary payload.a2a"),
     warnings: record.warnings === undefined ? [] : readStringArray(record, "warnings", "Invocation summary payload"),
   };
 }
@@ -437,6 +528,17 @@ export async function fetchAgent(token: string, namespace: string, agentName: st
     headers: buildHeaders(token),
   });
   return parseJsonResponse(response, parseAgentDetailPayload);
+}
+
+export async function discoverAgentPeers(
+  token: string,
+  namespace: string,
+  agentName: string,
+): Promise<AgentDiscoveryResponse> {
+  const response = await fetch(buildUrl(`/api/agents/${agentName}/discover`, namespace), {
+    headers: buildHeaders(token),
+  });
+  return parseJsonResponse(response, parseAgentDiscoveryResponsePayload);
 }
 
 export async function updateAgent(
