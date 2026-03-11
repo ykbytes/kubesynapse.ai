@@ -1,0 +1,33 @@
+agentRuntime:
+  image:
+    repository: localhost/kubeminionagents/ai-agent-runtime
+    tag: dev
+    pullPolicy: IfNotPresent
+
+operator:
+  image:
+    repository: localhost/kubeminionagents/ai-operator
+    tag: dev
+    pullPolicy: IfNotPresent
+  workerImage:
+    repository: localhost/kubeminionagents/ai-operator
+    tag: dev
+    pullPolicy: IfNotPresent
+
+gooseRuntime:
+  image:
+    repository: localhost/kubeminionagents/ai-goose-runtime
+    tag: dev
+    pullPolicy: IfNotPresent
+
+apiGateway:
+  image:
+    repository: localhost/kubeminionagents/ai-api-gateway
+    tag: dev
+    pullPolicy: IfNotPresent
+
+webUi:
+  image:
+    repository: localhost/kubeminionagents/ai-agent-sandbox-web-ui
+    tag: dev
+    pullPolicy: IfNotPresent

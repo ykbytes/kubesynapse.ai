@@ -1,0 +1,22 @@
+{{- /*
+  mcp-hub-namespace.yaml
+  Creates and labels the dedicated mcp-hub namespace so that:
+    1. The default-deny NetworkPolicy in mcp-hub-network-policy.yaml
+       is applied immediately on install.
+    2. Agent-namespace NetworkPolicies that use
+         namespaceSelector: {sandbox.enterprise.ai/mcp-hub: "true"}
+       resolve correctly without a manual `kubectl label` step.
+*/ -}}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Values.mcpHub.namespace | default "mcp-hub" }}
+  labels:
+    {{- /* Required so agent-namespace NetworkPolicy egress rule matches this NS */}}
+    sandbox.enterprise.ai/mcp-hub: "true"
+    {{- /* Standard Helm ownership labels */}}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    helm.sh/chart: {{ include "ai-agent-sandbox.chart" . }}
+  annotations:
+    {{- /* Prevent accidental deletion via `helm uninstall --purge` without --keep-history */}}
+    helm.sh/resource-policy: keep

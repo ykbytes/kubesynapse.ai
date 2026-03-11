@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ai-agent-sandbox.fullname" . }}-litellm
+  labels:
+    app: litellm
+spec:
+  replicas: {{ .Values.litellm.replicaCount }}
+  selector:
+    matchLabels:
+      app: litellm
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/litellm-configmap.yaml") . | sha256sum }}
+        checksum/secrets: {{ include (print $.Template.BasePath "/external-secrets.yaml") . | sha256sum }}
+      labels:
+        app: litellm
+    spec:
+{{- with (include "ai-agent-sandbox.imagePullSecrets" .) }}
+{{ . | nindent 6 }}
+{{- end }}
+      containers:
+        - name: litellm
+          image: "{{ .Values.litellm.image.repository }}:{{ .Values.litellm.image.tag }}"
+          imagePullPolicy: {{ .Values.litellm.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 4000
+              protocol: TCP
+          volumeMounts:
+            - name: config
+              mountPath: /app/config.yaml
+              subPath: config.yaml
+          envFrom:
+            - secretRef:
+                name: {{ include "ai-agent-sandbox.fullname" . }}-llm-api-keys
+                optional: true
+          args: ["--config", "/app/config.yaml"]
+          resources:
+{{ toYaml .Values.litellm.resources | indent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /health/liveliness
+              port: 4000
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health/readiness
+              port: 4000
+            initialDelaySeconds: 15
+            periodSeconds: 15
+            failureThreshold: 3
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "ai-agent-sandbox.fullname" . }}-litellm-config

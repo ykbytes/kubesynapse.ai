@@ -1,0 +1,264 @@
+global:
+  imagePullSecrets: []
+
+litellm:
+  image:
+    repository: ghcr.io/berriai/litellm
+    tag: main-latest
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+  service:
+    type: ClusterIP
+    port: 4000
+  masterKey: "replace-me-litellm-master-key"  # fallback when platformSecrets.native.litellmMasterKey is not set
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "1"
+      memory: "1Gi"
+  config:
+    model_list:
+      - model_name: gpt-4
+        litellm_params:
+          model: openai/gpt-4
+          api_key: "os.environ/OPENAI_API_KEY"
+      - model_name: openrouter-gpt-4o-mini
+        litellm_params:
+          model: openrouter/openai/gpt-4o-mini
+          api_key: "os.environ/OPENROUTER_API_KEY"
+    general_settings:
+      master_key: "os.environ/LITELLM_MASTER_KEY"
+
+agentRuntime:
+  image:
+    repository: ghcr.io/your-org/ai-agent-runtime
+    tag: latest
+    pullPolicy: IfNotPresent
+  storage:
+    size: 1Gi
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "1"
+      memory: "1Gi"
+  qdrantCollection: agent-knowledge
+  hitl:
+    mode: enforce
+    notificationWebhookUrl: ""
+  openSandbox:
+    domain: ""
+    protocol: "http"
+    useServerProxy: false
+    requestTimeoutSeconds: 300
+    connectTimeoutSeconds: 30
+    defaultTtlSeconds: 600
+    secureRuntimeType: ""
+    auth:
+      apiKeySecretName: ""
+      apiKeySecretKey: "api-key"
+    images:
+      default: "python:3.11"
+      code: "opensandbox/code-interpreter:latest"
+      browser: "opensandbox/chrome:latest"
+      editor: "opensandbox/vscode:latest"
+    languages:
+      pythonVersion: "3.11"
+      javaVersion: "17"
+      nodeVersion: "20"
+      goVersion: "1.24"
+
+gooseRuntime:
+  image:
+    repository: ghcr.io/your-org/ai-goose-runtime
+    tag: latest
+    pullPolicy: IfNotPresent
+  provider: litellm
+
+operator:
+  replicaCount: 2
+  image:
+    repository: ghcr.io/your-org/ai-operator
+    tag: latest
+    pullPolicy: IfNotPresent
+  workerImage:
+    repository: ghcr.io/your-org/ai-operator
+    tag: latest
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+  clusterSecretStoreName: ""
+  runtimeTimeoutSeconds: 360
+  workerActiveDeadlineSeconds: 1800
+  workerTtlSecondsAfterFinished: 3600
+  evalSchedulePollSeconds: 60
+  evalQueueStaleSeconds: 600
+  workflowPollSeconds: 30
+  workflowQueueStaleSeconds: 300
+  workflowRunningStaleSeconds: 1800
+  workerResources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+  workerArtifacts:
+    size: 2Gi
+    storageClassName: ""
+
+apiGateway:
+  replicaCount: 1
+  image:
+    repository: ghcr.io/your-org/ai-api-gateway
+    tag: latest
+    pullPolicy: IfNotPresent
+  ingressClassName: nginx
+  ingressHost: ""  # override e.g. "agents.mycompany.com"; defaults to agents.example.com
+  tls:
+    enabled: false
+    secretName: ""  # TLS secret name in the Ingress namespace; create via cert-manager or manually
+  auth:
+    mode: shared_token
+    oidcIssuer: ""
+    oidcAudience: ""
+    oidcJwksUrl: ""
+
+webUi:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: ghcr.io/your-org/ai-agent-sandbox-web-ui
+    tag: latest
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 80
+  ingress:
+    path: "/"
+  resources:
+    requests:
+      cpu: "25m"
+      memory: "64Mi"
+    limits:
+      cpu: "250m"
+      memory: "256Mi"
+
+redis:
+  image:
+    repository: redis
+    tag: 7-alpine
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "64Mi"
+    limits:
+      cpu: "200m"
+      memory: "256Mi"
+  persistence:
+    enabled: false
+    size: "1Gi"
+    storageClassName: ""
+
+qdrant:
+  image:
+    repository: qdrant/qdrant
+    tag: v1.7.4
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "2"
+      memory: "2Gi"
+
+nats:
+  image:
+    repository: nats
+    tag: 2.10-alpine
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: "25m"
+      memory: "32Mi"
+    limits:
+      cpu: "100m"
+      memory: "128Mi"
+
+platformSecrets:
+  mode: native
+  native:
+    openaiApiKey: ""
+    openrouterApiKey: ""
+    anthropicApiKey: ""
+    litellmMasterKey: "replace-me"
+    apiGatewaySharedToken: "replace-me-with-a-long-random-bearer-token"
+  externalSecrets:
+    refreshInterval: 1h
+    createClusterSecretStore: true
+
+telemetry:
+  otlpEndpoint: ""
+
+# ---------------------------------------------------------------------------
+# MCP Hub – shared enterprise MCP server pool
+# ---------------------------------------------------------------------------
+mcpHub:
+  # Dedicated namespace for all shared MCP servers.
+  # The operator/cluster-admin must label this namespace:
+  #   kubectl label namespace mcp-hub sandbox.enterprise.ai/mcp-hub=true
+  # Tenant namespaces must be labelled:
+  #   sandbox.enterprise.ai/tenant=true
+  namespace: mcp-hub
+
+  # Auth: bearer token agents present in the Authorization header on every
+  # MCP call. The same secret is mounted into each MCP server pod so it can
+  # validate inbound requests. Rotate via ExternalSecret / Vault in production.
+  # NEVER leave the default value in a real deployment.
+  auth:
+    bearerToken: "replace-me-with-a-strong-random-secret"
+    # If using ExternalSecret, set secretName to the K8s secret that holds
+    # the bearer-token key and leave bearerToken empty. The deployment template
+    # will reference that secret instead of creating a new one.
+    secretName: ""
+
+  # Per-server configuration. Set enabled: false to skip deploying a server.
+  servers:
+    # Real upstream MCP images are opt-in only. The current runtime still
+    # targets an internal /tools/<tool> HTTP bridge, so stock MCP servers need
+    # either a compatible adapter layer or a runtime refactor to standard MCP
+    # transport before agents can invoke them successfully.
+    github:
+      enabled: false
+      image: "ghcr.io/github/github-mcp-server:latest"
+      args:
+        - http
+      port: 8082
+      servicePort: 8000
+      env:
+        - name: GITHUB_PERSONAL_ACCESS_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: github-mcp-auth
+              key: token
+      replicas: 1
+      resources:
+        requests:
+          cpu: "50m"
+          memory: "64Mi"
+        limits:
+          cpu: "300m"
+          memory: "256Mi"
+
+nameOverride: ""
+fullnameOverride: ""

@@ -1,0 +1,31 @@
+apiVersion: sandbox.enterprise.ai/v1alpha1
+kind: AgentWorkflow
+metadata:
+  name: research-report-pipeline
+  namespace: default
+spec:
+  description: "Multi-agent pipeline: Research → Analysis → Report Generation"
+  input: "Impact of private 5G adoption on industrial automation"
+  messageBus: in-memory
+  steps:
+    - name: research
+      agentRef: research-assistant
+      prompt: "Research the following topic thoroughly: {{input}}"
+      execution:
+        timeoutSeconds: 180
+        maxAttempts: 2
+        backoffSeconds: 3
+    - name: analysis
+      agentRef: analysis-agent
+      prompt: "Analyze the following research findings and identify key insights: {{previous_output}}"
+      dependsOn:
+        - research
+      execution:
+        timeoutSeconds: 120
+        continueOnError: false
+    - name: report
+      agentRef: report-writer
+      prompt: "Write a professional executive summary based on: {{previous_output}}"
+      dependsOn:
+        - analysis
+      requireApproval: true

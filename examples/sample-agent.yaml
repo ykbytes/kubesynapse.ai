@@ -1,0 +1,15 @@
+apiVersion: sandbox.enterprise.ai/v1alpha1
+kind: AIAgent
+metadata:
+  name: research-assistant
+  namespace: default
+spec:
+  model: gpt-4
+  policyRef: strict-enterprise-policy
+  systemPrompt: >
+    You are an enterprise research assistant. You help analysts
+    find and summarize information from internal documents and data sources.
+    Always cite your sources and never fabricate information.
+  storage:
+    size: 1Gi
+  enableGVisor: false

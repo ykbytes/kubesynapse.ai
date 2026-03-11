@@ -1,0 +1,78 @@
+# Example cluster deployment override.
+# Replace image repositories, ingress settings, and secrets before using this file.
+
+global:
+  imagePullSecrets: []
+
+operator:
+  image:
+    repository: ghcr.io/your-org/ai-operator
+    tag: latest
+    pullPolicy: Always
+  workerImage:
+    repository: ghcr.io/your-org/ai-operator
+    tag: latest
+    pullPolicy: Always
+
+agentRuntime:
+  image:
+    repository: ghcr.io/your-org/ai-agent-runtime
+    tag: latest
+    pullPolicy: Always
+
+gooseRuntime:
+  image:
+    repository: ghcr.io/your-org/ai-goose-runtime
+    tag: latest
+    pullPolicy: Always
+
+apiGateway:
+  image:
+    repository: ghcr.io/your-org/ai-api-gateway
+    tag: latest
+    pullPolicy: Always
+  ingressClassName: nginx
+  ingressHost: agents.example.com
+  tls:
+    enabled: false
+    secretName: ""
+  auth:
+    mode: shared_token
+
+webUi:
+  enabled: true
+  image:
+    repository: ghcr.io/your-org/ai-agent-sandbox-web-ui
+    tag: latest
+    pullPolicy: Always
+
+litellm:
+  config:
+    model_list:
+      - model_name: gpt-4
+        litellm_params:
+          model: openrouter/openai/gpt-4o
+          api_key: "os.environ/OPENROUTER_API_KEY"
+      - model_name: gpt-4o-mini
+        litellm_params:
+          model: openrouter/openai/gpt-4o-mini
+          api_key: "os.environ/OPENROUTER_API_KEY"
+    general_settings:
+      master_key: "os.environ/LITELLM_MASTER_KEY"
+
+platformSecrets:
+  mode: native
+  native:
+    openaiApiKey: ""
+    openrouterApiKey: "replace-me"
+    anthropicApiKey: ""
+    litellmMasterKey: "replace-me"
+    apiGatewaySharedToken: "replace-me-with-a-long-random-bearer-token"
+
+mcpHub:
+  auth:
+    bearerToken: "replace-me-if-you-enable-mcp"
+    secretName: ""
+  servers:
+    github:
+      enabled: false

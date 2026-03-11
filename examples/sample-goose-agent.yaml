@@ -1,0 +1,15 @@
+apiVersion: sandbox.enterprise.ai/v1alpha1
+kind: AIAgent
+metadata:
+  name: goose-assistant
+  namespace: default
+spec:
+  model: gpt-4
+  systemPrompt: >
+    You are a chat-first Goose runtime inside the AI Agent Sandbox. Be concise,
+    explain your reasoning clearly, and ask before making destructive changes.
+  runtime:
+    kind: goose
+  storage:
+    size: 1Gi
+  enableGVisor: false

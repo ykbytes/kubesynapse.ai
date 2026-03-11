@@ -1,0 +1,116 @@
+# Agent REST API Gateway — exposes agents externally via Ingress
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ai-agent-sandbox.fullname" . }}-api-gateway
+  labels:
+    app: api-gateway
+spec:
+  replicas: {{ .Values.apiGateway.replicaCount | default 1 }}
+  selector:
+    matchLabels:
+      app: api-gateway
+  template:
+    metadata:
+      labels:
+        app: api-gateway
+    spec:
+{{- with (include "ai-agent-sandbox.imagePullSecrets" .) }}
+{{ . | nindent 6 }}
+{{- end }}
+      serviceAccountName: {{ include "ai-agent-sandbox.fullname" . }}-api-gateway-sa
+      containers:
+        - name: api-gateway
+          image: "{{ .Values.apiGateway.image.repository }}:{{ .Values.apiGateway.image.tag }}"
+          imagePullPolicy: {{ .Values.apiGateway.image.pullPolicy | default "IfNotPresent" }}
+          ports:
+            - containerPort: 8080
+              name: http
+          env:
+            - name: API_GATEWAY_SHARED_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ai-agent-sandbox.fullname" . }}-llm-api-keys
+                  key: API_GATEWAY_SHARED_TOKEN
+                  optional: true
+            - name: NATS_URL
+              value: "nats://{{ include "ai-agent-sandbox.fullname" . }}-nats:4222"
+            - name: QDRANT_URL
+              value: "http://{{ include "ai-agent-sandbox.fullname" . }}-qdrant:6333"
+            - name: API_GATEWAY_AUTH_MODE
+              value: {{ .Values.apiGateway.auth.mode | quote }}
+            - name: OIDC_ISSUER
+              value: {{ .Values.apiGateway.auth.oidcIssuer | quote }}
+            - name: OIDC_AUDIENCE
+              value: {{ .Values.apiGateway.auth.oidcAudience | quote }}
+            - name: OIDC_JWKS_URL
+              value: {{ .Values.apiGateway.auth.oidcJwksUrl | quote }}
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 20
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "ai-agent-sandbox.fullname" . }}-api-gateway
+spec:
+  type: ClusterIP
+  selector:
+    app: api-gateway
+  ports:
+    - protocol: TCP
+      port: 8080
+      targetPort: 8080
+      name: http
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "ai-agent-sandbox.fullname" . }}-ingress
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+spec:
+  ingressClassName: {{ .Values.apiGateway.ingressClassName | default "nginx" }}
+  {{- if and .Values.apiGateway.tls.enabled .Values.apiGateway.tls.secretName }}
+  tls:
+    - hosts:
+        - {{ .Values.apiGateway.ingressHost | default "agents.example.com" }}
+      secretName: {{ .Values.apiGateway.tls.secretName | quote }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.apiGateway.ingressHost | default "agents.example.com" }}
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "ai-agent-sandbox.fullname" . }}-api-gateway
+                port:
+                  number: 8080
+          {{- if .Values.webUi.enabled }}
+          - path: {{ .Values.webUi.ingress.path | default "/" }}
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "ai-agent-sandbox.fullname" . }}-web-ui
+                port:
+                  number: {{ .Values.webUi.service.port }}
+          {{- end }}

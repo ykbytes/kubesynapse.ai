@@ -1,0 +1,74 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: aiagents.sandbox.enterprise.ai
+spec:
+  group: sandbox.enterprise.ai
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                model:
+                  type: string
+                  description: "The LLM model to use, routed via LiteLLM (e.g., gpt-4)"
+                systemPrompt:
+                  type: string
+                  description: "The system instructions for the agent"
+                policyRef:
+                  type: string
+                  description: "Optional AgentPolicy name to enforce for this agent"
+                runtime:
+                  type: object
+                  description: "Selects which runtime implementation should execute this agent"
+                  properties:
+                    kind:
+                      type: string
+                      enum:
+                        - langgraph
+                        - goose
+                      description: "Runtime implementation to provision for this agent"
+                mcpServers:
+                  type: array
+                  items:
+                    type: string
+                  description: "List of remote MCP server names to connect to (Legacy/Shared)"
+                mcpSidecars:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                      image:
+                        type: string
+                      port:
+                        type: integer
+                  description: "List of MCP servers to inject as local sidecars for zero-trust security"
+                enableGVisor:
+                  type: boolean
+                  description: "If true, configures the Pod to use the gVisor runtime class (if available)"
+                storage:
+                  type: object
+                  properties:
+                    size:
+                      type: string
+                      description: "Persistent storage request for LangGraph checkpoints (for example '1Gi')"
+                    storageClassName:
+                      type: string
+                      description: "Optional StorageClass name for checkpoint persistence"
+              required:
+                - model
+  scope: Namespaced
+  names:
+    plural: aiagents
+    singular: aiagent
+    kind: AIAgent
+    shortNames:
+      - agent

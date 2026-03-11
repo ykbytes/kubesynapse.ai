@@ -1,0 +1,165 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  IMAGE_REGISTRY: ghcr.io
+  IMAGE_NAMESPACE: ${{ github.repository_owner }}
+  VERSION: ${{ github.sha }}
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install linters
+        run: pip install flake8
+      - name: Lint Operator
+        run: cd operator && flake8 . --max-line-length=120
+      - name: Lint Agent Runtime
+        run: cd agent-runtime && flake8 . --max-line-length=120
+      - name: Lint Goose Runtime
+        run: cd goose-runtime && flake8 . --max-line-length=120
+      - name: Lint API Gateway
+        run: cd api-gateway && flake8 . --max-line-length=120
+
+  test:
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          pip install -r operator/requirements.txt
+          pip install -r agent-runtime/requirements.txt
+          pip install -r goose-runtime/requirements.txt
+          pip install -r api-gateway/requirements.txt
+          pip install pytest
+      - name: Run Operator Tests
+        run: |
+          if [ -d operator/tests ]; then
+            cd operator && python -m pytest tests/ -v
+          else
+            echo "No operator tests found"
+          fi
+      - name: Run Agent Runtime Tests
+        run: |
+          if [ -d agent-runtime/tests ]; then
+            cd agent-runtime && python -m pytest tests/ -v
+          else
+            echo "No agent-runtime tests found"
+          fi
+      - name: Run Goose Runtime Tests
+        run: |
+          if [ -d goose-runtime/tests ]; then
+            cd goose-runtime && python -m pytest tests/ -v
+          else
+            echo "No goose-runtime tests found"
+          fi
+      - name: Run API Gateway Tests
+        run: |
+          if [ -d api-gateway/tests ]; then
+            cd api-gateway && python -m pytest tests/ -v
+          else
+            echo "No api-gateway tests found"
+          fi
+
+  helm-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v3
+        with:
+          version: v3.14.0
+      - name: Helm Lint
+        run: helm lint ./charts/ai-agent-sandbox
+
+  build-and-push:
+    runs-on: ubuntu-latest
+    needs: [test, helm-lint]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v3
+        with:
+          version: v3.14.0
+      - name: Install Podman
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y podman
+
+      - name: Log in to GHCR
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | podman login ${{ env.IMAGE_REGISTRY }} -u "${{ github.actor }}" --password-stdin
+
+      - name: Build & Push Operator
+        run: |
+          podman build --format docker -t ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/ai-operator:${{ env.VERSION }} ./operator
+          podman push ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/ai-operator:${{ env.VERSION }}
+
+      - name: Build & Push Agent Runtime
+        run: |
+          podman build --format docker -t ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/ai-agent-runtime:${{ env.VERSION }} ./agent-runtime
+          podman push ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/ai-agent-runtime:${{ env.VERSION }}
+
+      - name: Build & Push Goose Runtime
+        run: |
+          podman build --format docker -t ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/ai-goose-runtime:${{ env.VERSION }} ./goose-runtime
+          podman push ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/ai-goose-runtime:${{ env.VERSION }}
+
+      - name: Build & Push API Gateway
+        run: |
+          podman build --format docker -t ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/ai-api-gateway:${{ env.VERSION }} ./api-gateway
+          podman push ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/ai-api-gateway:${{ env.VERSION }}
+
+      - name: Build & Push Web UI
+        run: |
+          podman build --format docker -t ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/ai-agent-sandbox-web-ui:${{ env.VERSION }} ./web-ui
+          podman push ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/ai-agent-sandbox-web-ui:${{ env.VERSION }}
+
+      - name: Verify Chart Renders With Built Images
+        run: |
+          helm template ai-agent-sandbox ./charts/ai-agent-sandbox \
+            --set operator.image.repository=${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/ai-operator \
+            --set operator.image.tag=${{ env.VERSION }} \
+            --set operator.workerImage.repository=${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/ai-operator \
+            --set operator.workerImage.tag=${{ env.VERSION }} \
+            --set agentRuntime.image.repository=${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/ai-agent-runtime \
+            --set agentRuntime.image.tag=${{ env.VERSION }} \
+            --set gooseRuntime.image.repository=${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/ai-goose-runtime \
+            --set gooseRuntime.image.tag=${{ env.VERSION }} \
+            --set apiGateway.image.repository=${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/ai-api-gateway \
+            --set apiGateway.image.tag=${{ env.VERSION }} \
+            --set webUi.image.repository=${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/ai-agent-sandbox-web-ui \
+            --set webUi.image.tag=${{ env.VERSION }} > /tmp/chart-render.yaml
+
+  helm-package:
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v3
+        with:
+          version: v3.14.0
+      - name: Package Helm Chart
+        run: |
+          mkdir -p dist
+          helm package ./charts/ai-agent-sandbox -d ./dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: helm-chart
+          path: dist/*.tgz

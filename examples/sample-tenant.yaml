@@ -1,0 +1,18 @@
+apiVersion: sandbox.enterprise.ai/v1alpha1
+kind: AgentTenant
+metadata:
+  name: data-science-team
+spec:
+  tenantName: data-science
+  namespace: agent-tenant-data-science
+  resourceQuota:
+    maxCPU: "16"
+    maxMemory: "32Gi"
+    maxPods: 20
+  allowedModels:
+    - gpt-4
+    - claude-3-sonnet
+    - gemini-pro
+  adminUsers:
+    - alice@enterprise.com
+    - bob@enterprise.com

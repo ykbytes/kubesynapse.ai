@@ -1,0 +1,147 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: agentworkflows.sandbox.enterprise.ai
+spec:
+  group: sandbox.enterprise.ai
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                description:
+                  type: string
+                  description: "Human-readable description of the workflow"
+                input:
+                  type: string
+                  description: "Initial workflow input used to resolve the workflow input placeholder"
+                steps:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                        description: "Step identifier"
+                      agentRef:
+                        type: string
+                        description: "Name of the AIAgent CRD to execute this step"
+                      prompt:
+                        type: string
+                        description: "Prompt template for this step. Supports previous-step output interpolation"
+                      dependsOn:
+                        type: array
+                        items:
+                          type: string
+                        description: "List of step names that must complete before this step runs"
+                      requireApproval:
+                        type: boolean
+                        description: "If true, pause for HITL approval before executing"
+                      execution:
+                        type: object
+                        description: "Per-step execution policy for retries, timeouts, and non-fatal failures"
+                        properties:
+                          timeoutSeconds:
+                            type: number
+                            minimum: 1
+                          maxAttempts:
+                            type: integer
+                            minimum: 1
+                          backoffSeconds:
+                            type: number
+                            minimum: 0
+                          retryable:
+                            type: boolean
+                          continueOnError:
+                            type: boolean
+                    required:
+                      - name
+                      - agentRef
+                  description: "Ordered list of steps forming the workflow DAG"
+                messageBus:
+                  type: string
+                  enum: ["in-memory"]
+                  description: "Reserved for future transports. The production workflow engine currently uses in-memory dependency passing only."
+              required:
+                - steps
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  enum: ["pending", "queued", "running", "waiting-approval", "completed", "failed"]
+                runId:
+                  type: string
+                currentStep:
+                  type: string
+                observedGeneration:
+                  type: integer
+                summary:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                artifactRef:
+                  type: object
+                  properties:
+                    namespace:
+                      type: string
+                    pvcName:
+                      type: string
+                    path:
+                      type: string
+                    journalPath:
+                      type: string
+                    generation:
+                      type: integer
+                    updatedAt:
+                      type: string
+                journalRef:
+                  type: object
+                  properties:
+                    namespace:
+                      type: string
+                    pvcName:
+                      type: string
+                    path:
+                      type: string
+                    generation:
+                      type: integer
+                    updatedAt:
+                      type: string
+                pendingApproval:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                stepStates:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                workerJob:
+                  type: object
+                  properties:
+                    name:
+                      type: string
+                    namespace:
+                      type: string
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Current Step
+          type: string
+          jsonPath: .status.currentStep
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+  scope: Namespaced
+  names:
+    plural: agentworkflows
+    singular: agentworkflow
+    kind: AgentWorkflow
+    shortNames:
+      - workflow
