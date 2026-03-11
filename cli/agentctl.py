@@ -419,19 +419,88 @@ def snake_or_camel(payload: dict[str, Any], snake_key: str, camel_key: str, defa
     return default
 
 
+def normalize_goose_config_files_value(value: Any, field_name: str) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(f"{field_name} must be an object keyed by relative Goose config file paths.")
+    return dict(value)
+
+
+def parse_goose_config_assignment(spec: str, *, field_name: str) -> tuple[str, str]:
+    relative_path, separator, raw_value = spec.partition("=")
+    if not separator or not relative_path.strip() or not raw_value.strip():
+        raise ValueError(f"{field_name} entries must use RELATIVE_PATH=VALUE syntax.")
+    return relative_path.strip(), raw_value.strip()
+
+
+def build_goose_config_files_payload(
+    current: Any,
+    *,
+    clear_existing: bool = False,
+    file_assignments: list[str] | None = None,
+    text_assignments: list[str] | None = None,
+) -> dict[str, Any]:
+    merged = {} if clear_existing else normalize_goose_config_files_value(current, "goose_config_files")
+
+    for assignment in file_assignments or []:
+        relative_path, source_path_text = parse_goose_config_assignment(
+            assignment,
+            field_name="--goose-config-file",
+        )
+        source_path = Path(source_path_text)
+        try:
+            merged[relative_path] = source_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise ValueError(f"Failed to read Goose config source file {source_path}: {exc}") from exc
+
+    for assignment in text_assignments or []:
+        relative_path, inline_text = parse_goose_config_assignment(
+            assignment,
+            field_name="--goose-config-text",
+        )
+        merged[relative_path] = inline_text
+
+    return merged
+
+
+def agent_payload_from_detail(detail: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "model": str(detail.get("model", "")),
+        "system_prompt": str(detail.get("system_prompt", "")),
+        "policy_ref": detail.get("policy_ref"),
+        "storage_size": detail.get("storage_size") or "1Gi",
+        "runtime_kind": str(detail.get("runtime_kind") or "langgraph"),
+        "enable_gvisor": bool(detail.get("enable_gvisor", False)),
+        "mcp_servers": normalize_list_of_strings(detail.get("mcp_servers"), "mcp_servers"),
+        "mcp_sidecars": normalize_sidecars(detail.get("mcp_sidecars")),
+        "goose_config_files": normalize_goose_config_files_value(
+            detail.get("goose_config_files"),
+            "goose_config_files",
+        ),
+    }
+
+
 def coerce_agent_payload(document: dict[str, Any], *, for_update: bool) -> tuple[dict[str, Any], str | None]:
     metadata = document.get("metadata") if isinstance(document.get("metadata"), dict) else {}
     if document.get("kind") == "AIAgent" and isinstance(document.get("spec"), dict):
         spec = document["spec"]
         storage = spec.get("storage") if isinstance(spec.get("storage"), dict) else {}
+        runtime = spec.get("runtime") if isinstance(spec.get("runtime"), dict) else {}
+        goose_runtime = runtime.get("goose") if isinstance(runtime.get("goose"), dict) else {}
         payload: dict[str, Any] = {
             "model": str(spec.get("model", "")),
             "system_prompt": str(spec.get("systemPrompt", "")),
             "policy_ref": spec.get("policyRef"),
             "storage_size": storage.get("size", "1Gi"),
+            "runtime_kind": str(runtime.get("kind", "langgraph") or "langgraph"),
             "enable_gvisor": bool(spec.get("enableGVisor", False)),
             "mcp_servers": normalize_list_of_strings(spec.get("mcpServers"), "mcpServers"),
             "mcp_sidecars": normalize_sidecars(spec.get("mcpSidecars")),
+            "goose_config_files": normalize_goose_config_files_value(
+                goose_runtime.get("configFiles"),
+                "runtime.goose.configFiles",
+            ),
         }
         if not for_update:
             payload["name"] = str(metadata.get("name", ""))
@@ -443,12 +512,17 @@ def coerce_agent_payload(document: dict[str, Any], *, for_update: bool) -> tuple
         "system_prompt": str(snake_or_camel(payload, "system_prompt", "systemPrompt", "")),
         "policy_ref": snake_or_camel(payload, "policy_ref", "policyRef"),
         "storage_size": snake_or_camel(payload, "storage_size", "storageSize", "1Gi"),
+        "runtime_kind": str(snake_or_camel(payload, "runtime_kind", "runtimeKind", "langgraph") or "langgraph"),
         "enable_gvisor": bool(snake_or_camel(payload, "enable_gvisor", "enableGVisor", False)),
         "mcp_servers": normalize_list_of_strings(
             snake_or_camel(payload, "mcp_servers", "mcpServers", []),
             "mcp_servers",
         ),
         "mcp_sidecars": normalize_sidecars(snake_or_camel(payload, "mcp_sidecars", "mcpSidecars", [])),
+        "goose_config_files": normalize_goose_config_files_value(
+            snake_or_camel(payload, "goose_config_files", "gooseConfigFiles", {}),
+            "goose_config_files",
+        ),
     }
     resource_name = str(snake_or_camel(payload, "name", "name", metadata.get("name", "")) or "")
     if not for_update:
@@ -737,8 +811,32 @@ def invoke(
     stream: bool = typer.Option(False, "--stream", "-s", help="Use SSE streaming output."),
     prompt_file: Path | None = typer.Option(None, "--file", exists=True, file_okay=True, dir_okay=False),
     thread_id: str | None = typer.Option(None, "--thread-id", help="Reuse an existing thread id."),
+    system: str | None = typer.Option(None, "--system", help="Additional Goose system instructions."),
     require_approval: bool = typer.Option(False, "--require-approval", help="Request HITL approval."),
     approval_action: str | None = typer.Option(None, "--approval-action", help="Approval action label."),
+    no_session: bool = typer.Option(False, "--no-session", help="Disable Goose session persistence for this invoke."),
+    max_turns: int | None = typer.Option(None, "--max-turns", min=1, help="Limit Goose autonomous turns for this invoke."),
+    debug: bool = typer.Option(False, "--debug", help="Enable Goose debug output for this invoke."),
+    working_directory: str | None = typer.Option(
+        None,
+        "--working-directory",
+        help="Run Goose from a subdirectory inside the runtime workspace.",
+    ),
+    builtin: list[str] | None = typer.Option(
+        None,
+        "--builtin",
+        help="Enable a Goose builtin extension for this invoke. Can be repeated.",
+    ),
+    extension: list[str] | None = typer.Option(
+        None,
+        "--extension",
+        help="Add a Goose stdio extension command for this invoke. Can be repeated.",
+    ),
+    http_extension: list[str] | None = typer.Option(
+        None,
+        "--http-extension",
+        help="Add a Goose Streamable HTTP extension URL for this invoke. Can be repeated.",
+    ),
 ) -> None:
     """Invoke an agent with a prompt."""
     settings = ctx_settings(ctx)
@@ -748,14 +846,32 @@ def invoke(
         fatal(f"Failed to read prompt file: {exc}")
     if not prompt:
         fatal("Prompt must not be empty.")
+    if no_session and thread_id:
+        fatal("--thread-id cannot be combined with --no-session.")
 
     payload: dict[str, Any] = {"prompt": prompt}
     if thread_id:
         payload["thread_id"] = thread_id
+    if system:
+        payload["system"] = system
     if require_approval:
         payload["require_approval"] = True
     if approval_action:
         payload["approval_action"] = approval_action
+    if no_session:
+        payload["no_session"] = True
+    if max_turns is not None:
+        payload["max_turns"] = max_turns
+    if debug:
+        payload["debug"] = True
+    if working_directory:
+        payload["working_directory"] = working_directory
+    if builtin:
+        payload["builtin_extensions"] = builtin
+    if extension:
+        payload["stdio_extensions"] = extension
+    if http_extension:
+        payload["streamable_http_extensions"] = http_extension
 
     if stream:
         try:
@@ -910,14 +1026,72 @@ def agents_show(ctx: typer.Context, agent_name: str = typer.Argument(..., help="
 def agents_update(
     ctx: typer.Context,
     agent_name: str | None = typer.Argument(None, help="Agent name. Optional when the file contains metadata.name."),
-    file_path: Path = typer.Option(..., "--file", "-f", exists=True, file_okay=True, dir_okay=False),
+    file_path: Path | None = typer.Option(None, "--file", "-f", exists=True, file_okay=True, dir_okay=False),
+    goose_config_file: list[str] | None = typer.Option(
+        None,
+        "--goose-config-file",
+        help="Map a Goose config-root path to a local file using RELATIVE_PATH=FILE. Can be repeated.",
+    ),
+    goose_config_text: list[str] | None = typer.Option(
+        None,
+        "--goose-config-text",
+        help="Set a Goose config-root file from inline text using RELATIVE_PATH=TEXT. Can be repeated.",
+    ),
+    clear_goose_config_files: bool = typer.Option(
+        False,
+        "--clear-goose-config-files",
+        help="Remove all existing agent-specific Goose config files before applying overrides.",
+    ),
 ) -> None:
-    """Update an agent from a JSON or YAML file."""
+    """Update an agent from a file or patch Goose config files directly."""
     settings = ctx_settings(ctx)
-    document = read_structured_file(file_path)
-    payload, inferred_name = coerce_agent_payload(document, for_update=True)
-    namespace = resolve_namespace(settings, document)
+    document: dict[str, Any] = {}
+    inferred_name: str | None = None
+    namespace = settings.namespace
+    override_requested = clear_goose_config_files or bool(goose_config_file) or bool(goose_config_text)
+
+    if file_path is not None:
+        document = read_structured_file(file_path)
+        payload, inferred_name = coerce_agent_payload(document, for_update=True)
+        namespace = resolve_namespace(settings, document)
+    else:
+        if not override_requested:
+            fatal("Pass --file or at least one Goose config override flag.")
+        if not agent_name or not agent_name.strip():
+            fatal("Agent name is required when updating without --file.")
+        resolved_name = resolve_resource_name(agent_name, None, None, "agent")
+        try:
+            with console.status(f"[accent]Loading agent {resolved_name}...[/accent]"):
+                with ApiClient(settings) as client:
+                    current_detail = client.json(
+                        "GET",
+                        f"/api/agents/{resolved_name}",
+                        params=namespace_params(settings),
+                    )
+        except ApiError as exc:
+            fatal(str(exc), status_code=exc.status_code)
+
+        if not isinstance(current_detail, dict):
+            fatal("Agent detail response must be a JSON object.")
+        payload = agent_payload_from_detail(current_detail)
+
     resolved_name = resolve_resource_name(agent_name, file_path, inferred_name, "agent")
+
+    try:
+        if override_requested:
+            runtime_kind = str(payload.get("runtime_kind", "langgraph") or "langgraph").strip().lower() or "langgraph"
+            if runtime_kind != "goose":
+                fatal(
+                    "Goose config overrides require a Goose agent/runtime. Switch the agent to runtime_kind=goose first or update from a file that sets it."
+                )
+            payload["goose_config_files"] = build_goose_config_files_payload(
+                payload.get("goose_config_files"),
+                clear_existing=clear_goose_config_files,
+                file_assignments=goose_config_file,
+                text_assignments=goose_config_text,
+            )
+    except ValueError as exc:
+        fatal(str(exc))
 
     try:
         with console.status(f"[accent]Updating agent {resolved_name}...[/accent]"):

@@ -170,7 +170,7 @@ The platform uses custom resources as its primary declarative interface.
 | CRD | Scope | Purpose |
 |---|---|---|
 | `AIAgent` | Namespaced | Defines an agent model, system prompt, policy reference, MCP integrations, and storage |
-| `AgentPolicy` | Namespaced | Defines input guardrails, output guardrails, budgets, and allowed models |
+| `AgentPolicy` | Namespaced | Defines input guardrails, output guardrails, per-request token caps, and allowed models |
 | `AgentApproval` | Namespaced | Represents human approval requests for high-risk actions |
 | `AgentWorkflow` | Namespaced | Defines multi-step agent DAGs with dependencies and optional approval gates |
 | `AgentEval` | Namespaced | Defines evaluation suites and thresholds for an agent |
@@ -201,7 +201,7 @@ The `AgentPolicy` CRD governs:
 - output masking and output regex redaction
 - token limits for input and output
 - model allow-lists
-- policy-level budget metadata
+- budget fields reserved for future distributed enforcement
 
 Reference: [charts/ai-agent-sandbox/templates/agentpolicy-crd.yaml](charts/ai-agent-sandbox/templates/agentpolicy-crd.yaml)
 
@@ -685,7 +685,7 @@ The platform is already structured like a real control-plane/data-plane system, 
 
 - consider moving worker artifacts to object storage for retention and analytics
 - externalize runtime checkpoint storage if one agent must scale beyond a single stateful pod
-- add stronger budget enforcement from `AgentPolicy`
+- add distributed budget enforcement from `AgentPolicy`
 - add approval notifications to Slack or email
 
 ### Priority 3

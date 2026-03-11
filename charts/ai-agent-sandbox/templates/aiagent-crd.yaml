@@ -34,6 +34,18 @@ spec:
                         - langgraph
                         - goose
                       description: "Runtime implementation to provision for this agent"
+                    goose:
+                      type: object
+                      description: "Goose-specific configuration used when runtime.kind=goose"
+                      properties:
+                        configFiles:
+                          type: object
+                          description: |
+                            Optional map of relative Goose config-root paths to file contents,
+                            for example config.yaml or prompts/review.md. Agent-specific entries
+                            override chart-wide GOOSE_RUNTIME_CONFIG_FILES_JSON defaults by path.
+                          additionalProperties:
+                            x-kubernetes-preserve-unknown-fields: true
                 mcpServers:
                   type: array
                   items:

@@ -43,6 +43,12 @@ AGENT_RUNTIME_TIMEOUT_SECONDS = get_float_env("AGENT_RUNTIME_TIMEOUT_SECONDS", 3
 MAX_THREAD_ID_CHARS = get_int_env("AGENT_MAX_THREAD_ID_CHARS", 128, minimum=16)
 DEFAULT_WORKFLOW_STEP_MAX_ATTEMPTS = get_int_env("WORKFLOW_DEFAULT_MAX_ATTEMPTS", 1, minimum=1)
 DEFAULT_WORKFLOW_STEP_BACKOFF_SECONDS = get_float_env("WORKFLOW_DEFAULT_BACKOFF_SECONDS", 2.0, minimum=0.0)
+UNSUPPORTED_POLICY_BUDGET_FIELDS = (
+    "maxTokensPerHour",
+    "maxRequestsPerMinute",
+    "maxCostPerDayUSD",
+)
+GOOSE_CONFIG_FORBIDDEN_FILES = {"secrets.yaml"}
 
 
 def now_iso() -> str:
@@ -259,6 +265,91 @@ def normalize_step_execution(step: dict[str, Any]) -> dict[str, Any]:
         "retryable": bool(execution.get("retryable", True)),
         "continueOnError": bool(execution.get("continueOnError", False)),
     }
+
+
+def unsupported_policy_budget_fields(policy_spec: dict[str, Any]) -> list[str]:
+    budget = policy_spec.get("budget") or {}
+    if not isinstance(budget, dict):
+        return []
+
+    unsupported_fields: list[str] = []
+    for field_name in UNSUPPORTED_POLICY_BUDGET_FIELDS:
+        value = budget.get(field_name)
+        if value is None:
+            continue
+        if isinstance(value, str) and not value.strip():
+            continue
+        unsupported_fields.append(field_name)
+    return unsupported_fields
+
+
+def validate_supported_policy_spec(policy_spec: dict[str, Any]) -> None:
+    unsupported_fields = unsupported_policy_budget_fields(policy_spec)
+    if unsupported_fields:
+        joined_fields = ", ".join(sorted(unsupported_fields))
+        raise ValueError(
+            "AgentPolicy.spec.budget is reserved for future distributed enforcement and is not supported today. "
+            f"Remove these fields to use this policy: {joined_fields}."
+        )
+
+
+def normalize_goose_config_file_path(raw_path: object) -> str:
+    normalized_path = str(raw_path).replace("\\", "/").strip()
+    if not normalized_path:
+        raise ValueError("Goose config file paths must not be blank.")
+    if normalized_path.startswith("/"):
+        raise ValueError("Goose config file paths must be relative to the Goose config root.")
+
+    parts = [part for part in normalized_path.split("/") if part]
+    if not parts or any(part in {".", ".."} for part in parts):
+        raise ValueError(f"Goose config file path '{raw_path}' is invalid.")
+
+    candidate = "/".join(parts)
+    if candidate in GOOSE_CONFIG_FORBIDDEN_FILES:
+        raise ValueError(
+            "Goose secrets.yaml is not supported here. Inject provider secrets through environment variables instead."
+        )
+    if parts[0] == "permissions":
+        raise ValueError(
+            "Goose config files under permissions/ are runtime-managed and cannot be preseeded."
+        )
+    return candidate
+
+
+def parse_goose_config_files(config_files: Any, *, source: str) -> dict[str, Any]:
+    if config_files is None:
+        return {}
+
+    if isinstance(config_files, str):
+        trimmed = config_files.strip()
+        if not trimmed:
+            return {}
+        try:
+            config_files = json.loads(trimmed)
+        except ValueError as exc:
+            raise ValueError(
+                f"{source} must be a JSON object or mapping of relative Goose config file paths to contents."
+            ) from exc
+
+    if not isinstance(config_files, dict):
+        raise ValueError(
+            f"{source} must be a mapping of relative Goose config file paths to contents."
+        )
+
+    normalized_files: dict[str, Any] = {}
+    for raw_path, raw_content in sorted(config_files.items(), key=lambda item: str(item[0])):
+        normalized_path = normalize_goose_config_file_path(raw_path)
+        if raw_content is None:
+            raise ValueError(f"{source}.{normalized_path} must not be null.")
+        normalized_files[normalized_path] = raw_content
+    return normalized_files
+
+
+def merge_goose_config_files(*config_sets: tuple[Any, str]) -> dict[str, Any]:
+    merged: dict[str, Any] = {}
+    for value, source in config_sets:
+        merged.update(parse_goose_config_files(value, source=source))
+    return merged
 
 
 def invoke_agent_runtime(

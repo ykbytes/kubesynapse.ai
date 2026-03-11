@@ -48,16 +48,23 @@ spec:
                 # --- Budget & Rate Limiting ---
                 budget:
                   type: object
+                  description: |
+                    Reserved for future distributed budget enforcement. These fields are
+                    intentionally unsupported today and are rejected so policies cannot
+                    silently advertise limits that the runtime does not enforce.
+                  x-kubernetes-validations:
+                    - rule: "!has(self.maxTokensPerHour) && !has(self.maxRequestsPerMinute) && !has(self.maxCostPerDayUSD)"
+                      message: "AgentPolicy.spec.budget is reserved for future distributed enforcement and is not supported today. Remove spec.budget to use this policy."
                   properties:
                     maxTokensPerHour:
                       type: integer
-                      description: "Hard cap on total tokens (input+output) per hour"
+                      description: "Reserved for future distributed enforcement. Unsupported today."
                     maxRequestsPerMinute:
                       type: integer
-                      description: "Rate limit: max LLM requests per minute"
+                      description: "Reserved for future distributed enforcement. Unsupported today."
                     maxCostPerDayUSD:
                       type: string
-                      description: "Maximum dollar spend per day (e.g., '10.00')"
+                      description: "Reserved for future distributed enforcement. Unsupported today."
                 # --- Allowed Models ---
                 allowedModels:
                   type: array

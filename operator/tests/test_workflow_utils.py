@@ -5,9 +5,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from utils import (  # noqa: E402
+    merge_goose_config_files,
     normalize_step_execution,
+    parse_goose_config_files,
     ready_workflow_steps,
     render_prompt,
+    validate_supported_policy_spec,
     validate_workflow_graph,
 )
 
@@ -101,6 +104,82 @@ class WorkflowUtilsTests(unittest.TestCase):
         self.assertEqual(execution["backoffSeconds"], 1.5)
         self.assertFalse(execution["retryable"])
         self.assertTrue(execution["continueOnError"])
+
+    def test_validate_supported_policy_spec_rejects_budget_fields(self) -> None:
+        with self.assertRaisesRegex(ValueError, "reserved for future distributed enforcement"):
+            validate_supported_policy_spec(
+                {
+                    "budget": {
+                        "maxTokensPerHour": 100000,
+                        "maxRequestsPerMinute": 30,
+                    }
+                }
+            )
+
+    def test_validate_supported_policy_spec_allows_policy_without_budget(self) -> None:
+        validate_supported_policy_spec(
+            {
+                "inputGuardrails": {"maxInputTokens": 4096},
+                "outputGuardrails": {"maxOutputTokens": 4096},
+                "allowedModels": ["gpt-4"],
+            }
+        )
+
+    def test_parse_goose_config_files_normalizes_relative_paths(self) -> None:
+        parsed = parse_goose_config_files(
+            {
+                " config.yaml ": {"GOOSE_MODE": "smart_approve"},
+                "prompts\\review.md": "Review conservatively.",
+            },
+            source="AIAgent.spec.runtime.goose.configFiles",
+        )
+
+        self.assertEqual(
+            parsed,
+            {
+                "config.yaml": {"GOOSE_MODE": "smart_approve"},
+                "prompts/review.md": "Review conservatively.",
+            },
+        )
+
+    def test_parse_goose_config_files_rejects_runtime_managed_paths(self) -> None:
+        with self.assertRaisesRegex(ValueError, "runtime-managed"):
+            parse_goose_config_files(
+                {"permissions/tool_permissions.json": {}},
+                source="AIAgent.spec.runtime.goose.configFiles",
+            )
+
+    def test_parse_goose_config_files_rejects_secrets_yaml(self) -> None:
+        with self.assertRaisesRegex(ValueError, "environment variables"):
+            parse_goose_config_files(
+                {"secrets.yaml": {"OPENAI_API_KEY": "secret"}},
+                source="AIAgent.spec.runtime.goose.configFiles",
+            )
+
+    def test_merge_goose_config_files_prefers_later_entries(self) -> None:
+        merged = merge_goose_config_files(
+            (
+                {
+                    "config.yaml": {"GOOSE_MODE": "approve"},
+                    "prompts/review.md": "Base review prompt.",
+                },
+                "chart",
+            ),
+            (
+                {
+                    "config.yaml": {"GOOSE_MODE": "smart_approve"},
+                },
+                "agent",
+            ),
+        )
+
+        self.assertEqual(
+            merged,
+            {
+                "config.yaml": {"GOOSE_MODE": "smart_approve"},
+                "prompts/review.md": "Base review prompt.",
+            },
+        )
 
 
 if __name__ == "__main__":

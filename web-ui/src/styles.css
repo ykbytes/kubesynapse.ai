@@ -448,6 +448,42 @@ pre {
   gap: 12px;
 }
 
+.goose-control-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border: 1px solid rgba(29, 36, 51, 0.08);
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.72);
+  padding: 14px;
+}
+
+.goose-control-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.goose-control-panel label,
+.goose-system-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.goose-control-panel label span,
+.goose-system-preview span {
+  color: var(--ink-soft);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.goose-system-input {
+  min-height: 96px;
+  background: rgba(245, 247, 250, 0.92);
+}
+
 .prompt-input {
   resize: vertical;
   min-height: 120px;
@@ -748,6 +784,10 @@ pre {
   }
 
   .meta-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .goose-control-grid {
     grid-template-columns: 1fr;
   }
 }

@@ -1,4 +1,4 @@
-.PHONY: all build test lint docker-build docker-push helm-lint helm-package deploy clean ui-install ui-dev ui-build ui-preview docker-build-ui docker-push-ui docker-build-goose-runtime docker-push-goose-runtime
+.PHONY: all build test test-goose-runtime-e2e lint docker-build docker-push helm-lint helm-package deploy clean ui-install ui-dev ui-build ui-preview docker-build-ui docker-push-ui docker-build-goose-runtime docker-push-goose-runtime
 
 CONTAINER_CLI ?= podman
 CONTAINER_BUILD_FLAGS ?= --format docker
@@ -73,6 +73,9 @@ test:
 	@if [ -d agent-runtime/tests ]; then cd agent-runtime && python -m pytest tests/ -v; else echo "No agent-runtime tests found"; fi
 	@if [ -d goose-runtime/tests ]; then cd goose-runtime && python -m pytest tests/ -v; else echo "No goose-runtime tests found"; fi
 	@if [ -d api-gateway/tests ]; then cd api-gateway && python -m pytest tests/ -v; else echo "No api-gateway tests found"; fi
+
+test-goose-runtime-e2e:
+	cd goose-runtime && CONTAINER_CLI=$(CONTAINER_CLI) python -m pytest tests/test_container_e2e.py -v
 
 lint:
 	cd operator && python -m flake8 . --max-line-length=120

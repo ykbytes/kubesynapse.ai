@@ -3,11 +3,20 @@ import os
 import re
 import time
 import hashlib
+import json
 from datetime import datetime, timezone
 from typing import Any
 
 from croniter import CroniterBadCronError, croniter  # type: ignore[import-untyped]
-from utils import build_workflow_run_id, now_iso, validate_workflow_graph, workflow_journal_path
+from utils import (
+    build_workflow_run_id,
+    merge_goose_config_files,
+    now_iso,
+    parse_goose_config_files,
+    validate_supported_policy_spec,
+    validate_workflow_graph,
+    workflow_journal_path,
+)
 import kopf
 
 import kubernetes.client  # type: ignore[import-untyped]
@@ -49,6 +58,27 @@ def get_float_env(name: str, default: float, minimum: float = 0.0) -> float:
 def get_csv_env(name: str) -> list[str]:
     raw_value = os.getenv(name, "")
     return [item.strip() for item in raw_value.split(",") if item.strip()]
+
+
+def get_json_env(name: str, default: Any) -> Any:
+    raw_value = os.getenv(name, "").strip()
+    if not raw_value:
+        return default
+    try:
+        return json.loads(raw_value)
+    except ValueError:
+        logger.warning("Invalid JSON value for %s. Falling back to default.", name)
+        return default
+
+
+def serialize_env_value(value: Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, (list, dict)):
+        return json.dumps(value)
+    return str(value)
 
 
 LITELLM_SVC = os.getenv("LITELLM_SVC_NAME", "ai-agent-sandbox-litellm")
@@ -129,6 +159,65 @@ OPEN_SANDBOX_RUNTIME_ENV: dict[str, str] = {
 }
 OPEN_SANDBOX_API_KEY_SECRET_NAME = os.getenv("OPEN_SANDBOX_API_KEY_SECRET_NAME", "").strip()
 OPEN_SANDBOX_API_KEY_SECRET_KEY = os.getenv("OPEN_SANDBOX_API_KEY_SECRET_KEY", "api-key").strip() or "api-key"
+GOOSE_RUNTIME_EXTRA_ENV = get_json_env("GOOSE_RUNTIME_EXTRA_ENV_JSON", {})
+GOOSE_RUNTIME_CONFIG_FILES_ENV = "GOOSE_RUNTIME_CONFIG_FILES_JSON"
+PLATFORM_MANAGED_GOOSE_ENV = {
+    "AGENT_MODEL",
+    "AGENT_NAME",
+    "AGENT_NAMESPACE",
+    "AGENT_SYSTEM_PROMPT",
+    "GOOSE_PROVIDER",
+    "GOOSE_MODEL",
+    "GOOSE_SYSTEM_PROMPT",
+    "LITELLM_HOST",
+    "LITELLM_BASE_PATH",
+    "LITELLM_API_KEY",
+    "HOME",
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME",
+    "GOOSE_BIN",
+    "GOOSE_WORKDIR",
+    GOOSE_RUNTIME_CONFIG_FILES_ENV,
+}
+
+
+def goose_runtime_extra_env_items() -> list[dict[str, str]]:
+    if not isinstance(GOOSE_RUNTIME_EXTRA_ENV, dict):
+        logger.warning("GOOSE_RUNTIME_EXTRA_ENV_JSON must decode to a JSON object. Ignoring it.")
+        return []
+
+    items: list[dict[str, str]] = []
+    for raw_name, raw_value in sorted(GOOSE_RUNTIME_EXTRA_ENV.items(), key=lambda item: str(item[0])):
+        name = str(raw_name).strip()
+        if not name or raw_value is None:
+            continue
+        if name in PLATFORM_MANAGED_GOOSE_ENV:
+            logger.warning("Ignoring goose runtime env override for platform-managed variable %s.", name)
+            continue
+        items.append({"name": name, "value": serialize_env_value(raw_value)})
+    return items
+
+
+def merged_goose_runtime_config_files(spec: dict[str, Any]) -> dict[str, Any]:
+    runtime_spec = spec.get("runtime") or {}
+    goose_spec = runtime_spec.get("goose")
+    if goose_spec is None:
+        agent_config_files: Any = None
+    elif isinstance(goose_spec, dict):
+        agent_config_files = goose_spec.get("configFiles")
+    else:
+        raise kopf.PermanentError("AIAgent.spec.runtime.goose must be an object when provided.")
+
+    try:
+        return merge_goose_config_files(
+            (
+                GOOSE_RUNTIME_EXTRA_ENV.get(GOOSE_RUNTIME_CONFIG_FILES_ENV),
+                f"GOOSE_RUNTIME_EXTRA_ENV_JSON.{GOOSE_RUNTIME_CONFIG_FILES_ENV}",
+            ),
+            (agent_config_files, "AIAgent.spec.runtime.goose.configFiles"),
+        )
+    except ValueError as exc:
+        raise kopf.PermanentError(str(exc)) from exc
 
 
 @kopf.on.startup()
@@ -293,7 +382,12 @@ def resolve_agent_policy(namespace: str, policy_ref: str | None) -> tuple[str | 
                 plural="agentpolicies",
                 name=policy_ref,
             )
-            return policy_ref, policy.get("spec", {})
+            policy_spec = policy.get("spec", {})
+            try:
+                validate_supported_policy_spec(policy_spec)
+            except ValueError as exc:
+                raise kopf.PermanentError(f"AgentPolicy '{policy_ref}' is not supported: {exc}") from exc
+            return policy_ref, policy_spec
         except ApiException as exc:
             if exc.status == 404:
                 raise kopf.PermanentError(f"AgentPolicy '{policy_ref}' was not found") from exc
@@ -309,7 +403,13 @@ def resolve_agent_policy(namespace: str, policy_ref: str | None) -> tuple[str | 
     if not policies:
         return None, {}
     policy = policies[0]
-    return policy.get("metadata", {}).get("name"), policy.get("spec", {})
+    policy_name = policy.get("metadata", {}).get("name")
+    policy_spec = policy.get("spec", {})
+    try:
+        validate_supported_policy_spec(policy_spec)
+    except ValueError as exc:
+        raise kopf.PermanentError(f"AgentPolicy '{policy_name}' is not supported: {exc}") from exc
+    return policy_name, policy_spec
 
 
 def resolve_tenant_for_namespace(namespace: str) -> dict[str, Any] | None:
@@ -353,8 +453,25 @@ def resolve_runtime_kind(spec: dict[str, Any]) -> str:
 
 
 def validate_runtime_configuration(runtime_kind: str, spec: dict[str, Any]) -> None:
+    runtime_spec = spec.get("runtime") or {}
+    goose_spec = runtime_spec.get("goose") if isinstance(runtime_spec, dict) else None
+
     if runtime_kind != "goose":
+        if goose_spec is not None:
+            raise kopf.PermanentError(
+                "AIAgent.spec.runtime.goose is only supported when spec.runtime.kind is 'goose'."
+            )
         return
+
+    if goose_spec is not None and not isinstance(goose_spec, dict):
+        raise kopf.PermanentError("AIAgent.spec.runtime.goose must be an object when provided.")
+    try:
+        parse_goose_config_files(
+            (goose_spec or {}).get("configFiles") if isinstance(goose_spec, dict) else None,
+            source="AIAgent.spec.runtime.goose.configFiles",
+        )
+    except ValueError as exc:
+        raise kopf.PermanentError(str(exc)) from exc
     if spec.get("mcpServers"):
         raise kopf.PermanentError(
             "Goose runtime integration does not yet support spec.mcpServers. Use the LangGraph runtime for MCP routing today."
@@ -520,6 +637,9 @@ def create_agent_statefulset_manifest(
     pod_security_context = {
         "runAsNonRoot": True,
         "runAsUser": 1000,
+        "runAsGroup": 1000,
+        "fsGroup": 1000,
+        "fsGroupChangePolicy": "OnRootMismatch",
         "seccompProfile": {"type": "RuntimeDefault"},
     }
     container_security_context = {
@@ -547,6 +667,7 @@ def create_agent_statefulset_manifest(
     if runtime_kind == "goose":
         agent_image = GOOSE_RUNTIME_IMAGE
         agent_image_pull_policy = GOOSE_RUNTIME_IMAGE_PULL_POLICY
+        goose_config_files = merged_goose_runtime_config_files(spec)
         volume_mounts.append({"name": "workspace-volume", "mountPath": "/workspace"})
         volumes.append({"name": "workspace-volume", "emptyDir": {}})
         env.extend(
@@ -568,6 +689,14 @@ def create_agent_statefulset_manifest(
                 },
             ]
         )
+        if goose_config_files:
+            env.append(
+                {
+                    "name": GOOSE_RUNTIME_CONFIG_FILES_ENV,
+                    "value": json.dumps(goose_config_files, ensure_ascii=False, sort_keys=True),
+                }
+            )
+        env.extend(goose_runtime_extra_env_items())
     else:
         env.extend(
             [
@@ -601,6 +730,7 @@ def create_agent_statefulset_manifest(
             env.append({"name": "HITL_NOTIFICATION_WEBHOOK_URL", "value": HITL_NOTIFICATION_WEBHOOK_URL})
         env.append({"name": "MCP_HUB_NAMESPACE", "value": MCP_HUB_NAMESPACE})
         allowed_mcp_servers = (policy_spec or {}).get("allowedMcpServers") or []
+        require_mcp_bearer_token = bool(allowed_mcp_servers)
         env.append({"name": "ALLOWED_MCP_SERVERS", "value": ",".join(allowed_mcp_servers)})
         env.append({
             "name": "MCP_BEARER_TOKEN",
@@ -608,7 +738,7 @@ def create_agent_statefulset_manifest(
                 "secretKeyRef": {
                     "name": MCP_AUTH_SECRET_NAME,
                     "key": "bearer-token",
-                    "optional": True,
+                    "optional": not require_mcp_bearer_token,
                 }
             },
         })
@@ -626,6 +756,28 @@ def create_agent_statefulset_manifest(
                     }
                 },
             })
+
+    init_containers = [
+        {
+            "name": "init-state-volume",
+            "image": agent_image,
+            "imagePullPolicy": agent_image_pull_policy,
+            "command": [
+                "/bin/sh",
+                "-c",
+                "mkdir -p /app/state/home /app/state/data /app/state/config "
+                "&& chown -R 1000:1000 /app/state "
+                "&& chmod -R ug+rwX /app/state",
+            ],
+            "securityContext": {
+                "runAsUser": 0,
+                "runAsGroup": 0,
+                "runAsNonRoot": False,
+                "seccompProfile": {"type": "RuntimeDefault"},
+            },
+            "volumeMounts": [{"name": "state-volume", "mountPath": "/app/state"}],
+        }
+    ]
 
     agent_container = {
         "name": "agent-runtime",
@@ -672,6 +824,7 @@ def create_agent_statefulset_manifest(
     pod_spec: dict[str, Any] = {
         "serviceAccountName": RUNTIME_SERVICE_ACCOUNT,
         "securityContext": pod_security_context,
+        "initContainers": init_containers,
         "containers": containers,
         "volumes": volumes,
     }
@@ -761,12 +914,20 @@ def ensure_secret(namespace: str, manifest: dict[str, Any]) -> None:
         raise
 
 
-def ensure_tenant_runtime_secret(namespace: str, tenant_name: str, logger: logging.Logger) -> None:
+def ensure_runtime_namespace_secret(namespace: str, owner_name: str, logger: logging.Logger) -> None:
     if SECRET_PROVISIONING_MODE == "external-secrets":
         external_secret = {
             "apiVersion": "external-secrets.io/v1beta1",
             "kind": "ExternalSecret",
-            "metadata": {"name": SECRET_NAME, "namespace": namespace},
+            "metadata": {
+                "name": SECRET_NAME,
+                "namespace": namespace,
+                "labels": {
+                    "managed-by": "ai-agent-sandbox",
+                    "sandbox.enterprise.ai/runtime-secret": "true",
+                    "sandbox.enterprise.ai/owner": owner_name,
+                },
+            },
             "spec": {
                 "refreshInterval": "1h",
                 "secretStoreRef": {"name": CLUSTER_SECRET_STORE, "kind": "ClusterSecretStore"},
@@ -788,7 +949,7 @@ def ensure_tenant_runtime_secret(namespace: str, tenant_name: str, logger: loggi
                 plural="externalsecrets",
                 body=external_secret,
             )
-            logger.info("ExternalSecret '%s' provisioned for tenant '%s'", SECRET_NAME, tenant_name)
+            logger.info("ExternalSecret '%s' provisioned for namespace '%s'", SECRET_NAME, namespace)
         except ApiException as exc:
             if exc.status == 409:
                 try:
@@ -802,20 +963,20 @@ def ensure_tenant_runtime_secret(namespace: str, tenant_name: str, logger: loggi
                     )
                 except ApiException as patch_exc:
                     raise kopf.TemporaryError(
-                        f"Failed to update ExternalSecret '{SECRET_NAME}' for tenant '{tenant_name}': {patch_exc}",
+                        f"Failed to update ExternalSecret '{SECRET_NAME}' for namespace '{namespace}': {patch_exc}",
                         delay=30,
                     ) from patch_exc
             else:
                 raise kopf.TemporaryError(
-                    f"Failed to reconcile ExternalSecret '{SECRET_NAME}' for tenant '{tenant_name}': {exc}",
+                    f"Failed to reconcile ExternalSecret '{SECRET_NAME}' for namespace '{namespace}': {exc}",
                     delay=30,
                 ) from exc
         return
 
     if not DEFAULT_LITELLM_MASTER_KEY:
         logger.warning(
-            "Skipping tenant runtime secret provisioning for '%s' because DEFAULT_LITELLM_MASTER_KEY is empty.",
-            tenant_name,
+            "Skipping runtime secret provisioning for namespace '%s' because DEFAULT_LITELLM_MASTER_KEY is empty.",
+            namespace,
         )
         return
 
@@ -827,14 +988,15 @@ def ensure_tenant_runtime_secret(namespace: str, tenant_name: str, logger: loggi
             "namespace": namespace,
             "labels": {
                 "managed-by": "ai-agent-sandbox",
-                "tenant": tenant_name,
+                "sandbox.enterprise.ai/runtime-secret": "true",
+                "sandbox.enterprise.ai/owner": owner_name,
             },
         },
         "type": "Opaque",
         "stringData": {"LITELLM_MASTER_KEY": DEFAULT_LITELLM_MASTER_KEY},
     }
     ensure_secret(namespace, secret_manifest)
-    logger.info("Secret '%s' provisioned for tenant '%s'", SECRET_NAME, tenant_name)
+    logger.info("Secret '%s' provisioned for namespace '%s'", SECRET_NAME, namespace)
 
 
 def create_mcp_network_policy_manifest(name: str, namespace: str, allowed_mcp_types: list[str]) -> dict[str, Any]:
@@ -897,8 +1059,9 @@ def ensure_network_policy(namespace: str, manifest: dict[str, Any]) -> None:
             raise
 
 
-def create_agent_resources(spec: dict[str, Any], name: str, namespace: str) -> None:
+def create_agent_resources(spec: dict[str, Any], name: str, namespace: str, logger: logging.Logger) -> None:
     ensure_runtime_access(namespace)
+    ensure_runtime_namespace_secret(namespace, name, logger)
     policy_name, policy_spec = resolve_agent_policy(namespace, spec.get("policyRef"))
     tenant_spec = resolve_tenant_for_namespace(namespace)
     validate_agent_model(spec.get("model", "gpt-4"), policy_spec, tenant_spec)
@@ -933,7 +1096,7 @@ def create_agent_resources(spec: dict[str, Any], name: str, namespace: str) -> N
 def create_agent(spec: dict[str, Any], name: str, namespace: str, logger: Any, **kwargs: Any) -> None:
     logger.info("Creating sandbox for AIAgent %s in %s", name, namespace)
     try:
-        create_agent_resources(spec, name, namespace)
+        create_agent_resources(spec, name, namespace, logger)
         logger.info("Sandbox resources for %s created successfully", name)
     except ApiException as exc:
         logger.error("Exception when creating agent resources: %s", exc)
@@ -947,7 +1110,7 @@ def update_agent(spec: dict[str, Any], name: str, namespace: str, logger: loggin
     logger.info("Updating AIAgent %s by patching its singleton StatefulSet", name)
 
     try:
-        create_agent_resources(spec, name, namespace)
+        create_agent_resources(spec, name, namespace, logger)
         logger.info("AIAgent %s updated successfully", name)
     except ApiException as exc:
         logger.error("Failed to recreate sandbox resources: %s", exc)
@@ -956,9 +1119,41 @@ def update_agent(spec: dict[str, Any], name: str, namespace: str, logger: loggin
         raise kopf.TemporaryError(f"Unexpected error during update: {exc}", delay=5) from exc
 
 
+@kopf.on.resume("sandbox.enterprise.ai", "v1alpha1", "aiagents")  # type: ignore[arg-type]
+def resume_agent(spec: dict[str, Any], name: str, namespace: str, logger: logging.Logger, **kwargs: Any) -> None:
+    logger.info("Reconciling existing AIAgent %s on operator startup", name)
+
+    try:
+        create_agent_resources(spec, name, namespace, logger)
+        logger.info("AIAgent %s reconciled successfully on resume", name)
+    except ApiException as exc:
+        logger.error("Failed to reconcile sandbox resources on resume: %s", exc)
+        if exc.status in (400, 422):
+            raise kopf.PermanentError(f"Invalid pod spec on resume: {exc}") from exc
+        raise kopf.TemporaryError(f"Unexpected error during resume reconcile: {exc}", delay=5) from exc
+
+
 @kopf.on.delete("sandbox.enterprise.ai", "v1alpha1", "aiagents")  # type: ignore[arg-type]
 def delete_agent(spec: dict[str, Any], name: str, namespace: str, logger: logging.Logger, **kwargs: Any) -> None:
     logger.info("AIAgent %s deleted. StatefulSet and Service will be garbage-collected; PVCs are retained.", name)
+
+
+@kopf.on.create("sandbox.enterprise.ai", "v1alpha1", "agentpolicies")  # type: ignore[arg-type]
+def create_policy(spec: dict[str, Any], name: str, namespace: str, logger: logging.Logger, **kwargs: Any) -> None:
+    try:
+        validate_supported_policy_spec(spec)
+        logger.info("Validated AgentPolicy %s in %s", name, namespace)
+    except ValueError as exc:
+        raise kopf.PermanentError(str(exc)) from exc
+
+
+@kopf.on.update("sandbox.enterprise.ai", "v1alpha1", "agentpolicies")  # type: ignore[arg-type]
+def update_policy(spec: dict[str, Any], name: str, namespace: str, logger: logging.Logger, **kwargs: Any) -> None:
+    try:
+        validate_supported_policy_spec(spec)
+        logger.info("Validated updated AgentPolicy %s in %s", name, namespace)
+    except ValueError as exc:
+        raise kopf.PermanentError(str(exc)) from exc
 
 
 @kopf.on.create("sandbox.enterprise.ai", "v1alpha1", "agenttenants")  # type: ignore[arg-type]
@@ -1124,7 +1319,7 @@ def create_tenant(spec: dict[str, Any], name: str, logger: logging.Logger, **kwa
             else:
                 raise
 
-    ensure_tenant_runtime_secret(target_ns, tenant_name, logger)
+    ensure_runtime_namespace_secret(target_ns, tenant_name, logger)
 
     logger.info("Tenant '%s' fully provisioned", tenant_name)
 

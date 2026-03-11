@@ -12,6 +12,8 @@ spec:
       app: api-gateway
   template:
     metadata:
+      annotations:
+        checksum/secrets: {{ include (print $.Template.BasePath "/external-secrets.yaml") . | sha256sum }}
       labels:
         app: api-gateway
     spec:

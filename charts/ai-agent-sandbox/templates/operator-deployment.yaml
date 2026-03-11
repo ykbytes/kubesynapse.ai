@@ -11,6 +11,8 @@ spec:
       app: operator
   template:
     metadata:
+      annotations:
+        checksum/secrets: {{ include (print $.Template.BasePath "/external-secrets.yaml") . | sha256sum }}
       labels:
         app: operator
     spec:
@@ -48,6 +50,8 @@ spec:
               value: {{ .Values.gooseRuntime.image.pullPolicy | default "IfNotPresent" | quote }}
             - name: GOOSE_DEFAULT_PROVIDER
               value: {{ .Values.gooseRuntime.provider | default "litellm" | quote }}
+            - name: GOOSE_RUNTIME_EXTRA_ENV_JSON
+              value: {{ .Values.gooseRuntime.env | default dict | toJson | quote }}
             - name: WORKER_IMAGE
               value: "{{ .Values.operator.workerImage.repository }}:{{ .Values.operator.workerImage.tag }}"
             - name: WORKER_IMAGE_PULL_POLICY

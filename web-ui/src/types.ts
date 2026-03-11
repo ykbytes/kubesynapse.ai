@@ -23,6 +23,7 @@ export interface AgentDetail extends AgentInfo {
   enable_gvisor: boolean;
   mcp_servers: string[];
   mcp_sidecars: Array<Record<string, unknown>>;
+  goose_config_files: Record<string, unknown>;
   created_at?: string | null;
 }
 
@@ -34,6 +35,7 @@ export interface CreateAgentPayload {
   storage_size?: string;
   runtime_kind?: RuntimeKind;
   enable_gvisor?: boolean;
+  goose_config_files?: Record<string, unknown>;
 }
 
 export interface UpdateAgentPayload {
@@ -43,6 +45,7 @@ export interface UpdateAgentPayload {
   storage_size?: string;
   runtime_kind?: RuntimeKind;
   enable_gvisor?: boolean;
+  goose_config_files?: Record<string, unknown>;
 }
 
 export interface GatewayHealth {
@@ -57,11 +60,19 @@ export interface InvokePayload {
   prompt: string;
   thread_id?: string;
   model?: string;
+  system?: string;
   require_approval?: boolean;
   approval_action?: string;
   tool_name?: string;
   tool_args?: Record<string, unknown>;
   mcp_server?: string;
+  debug?: boolean;
+  no_session?: boolean;
+  max_turns?: number;
+  working_directory?: string;
+  builtin_extensions?: string[];
+  stdio_extensions?: string[];
+  streamable_http_extensions?: string[];
 }
 
 export interface InvokeResponse {

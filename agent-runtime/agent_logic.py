@@ -194,9 +194,16 @@ class InvokeRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_payload_size(self) -> "InvokeRequest":
-        prompt = self.prompt.strip()
-        tool_name = self.tool_name.strip()
-        mcp_server = (self.mcp_server or "").strip()
+        self.prompt = self.prompt.strip()
+        self.thread_id = self.thread_id.strip() or None if self.thread_id is not None else None
+        self.model = self.model.strip() or None if self.model is not None else None
+        self.approval_action = self.approval_action.strip() or None if self.approval_action is not None else None
+        self.tool_name = self.tool_name.strip()
+        self.mcp_server = self.mcp_server.strip() or None if self.mcp_server is not None else None
+
+        prompt = self.prompt
+        tool_name = self.tool_name
+        mcp_server = self.mcp_server or ""
 
         if not prompt and not tool_name:
             raise ValueError("prompt must not be blank unless tool_name is provided")
@@ -595,10 +602,12 @@ def mcp_call(
     url = f"http://{svc}:8000/tools/{tool_name}"
 
     headers: dict[str, str] = {"Content-Type": "application/json"}
-    if MCP_BEARER_TOKEN:
-        headers["Authorization"] = f"Bearer {MCP_BEARER_TOKEN}"
-    else:
-        logger.warning("MCP_BEARER_TOKEN is not set; calling MCP server %s without auth.", server_type)
+    if not MCP_BEARER_TOKEN:
+        raise PermissionError(
+            f"MCP_BEARER_TOKEN is not configured; refusing to call MCP server '{server_type}'. "
+            "Ensure the MCP auth secret is mounted into the agent runtime."
+        )
+    headers["Authorization"] = f"Bearer {MCP_BEARER_TOKEN}"
 
     with httpx.Client(
         timeout=timeout,

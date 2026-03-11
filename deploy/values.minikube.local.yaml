@@ -1,0 +1,50 @@
+agentRuntime:
+  image:
+    repository: localhost/kubeminionagents/ai-agent-runtime
+    tag: dev
+    pullPolicy: IfNotPresent
+
+operator:
+  replicaCount: 1
+  image:
+    repository: localhost/kubeminionagents/ai-operator
+    tag: dev
+    pullPolicy: IfNotPresent
+  workerImage:
+    repository: localhost/kubeminionagents/ai-operator
+    tag: dev
+    pullPolicy: IfNotPresent
+
+gooseRuntime:
+  image:
+    repository: localhost/kubeminionagents/ai-goose-runtime
+    tag: dev
+    pullPolicy: IfNotPresent
+
+apiGateway:
+  image:
+    repository: localhost/kubeminionagents/ai-api-gateway
+    tag: dev
+    pullPolicy: IfNotPresent
+  auth:
+    mode: shared_token
+
+webUi:
+  enabled: true
+  image:
+    repository: localhost/kubeminionagents/ai-agent-sandbox-web-ui
+    tag: dev
+    pullPolicy: IfNotPresent
+
+platformSecrets:
+  mode: native
+  native:
+    openaiApiKey: ""
+    openrouterApiKey: ""
+    anthropicApiKey: ""
+    litellmMasterKey: "minikube-dev-master-key"
+    apiGatewaySharedToken: "minikube-dev-shared-token"
+
+mcpHub:
+  auth:
+    bearerToken: "minikube-dev-mcp-token"

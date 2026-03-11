@@ -77,6 +77,28 @@ gooseRuntime:
     tag: latest
     pullPolicy: IfNotPresent
   provider: litellm
+  env: {}
+  # Example native Goose settings:
+  # env:
+  #   GOOSE_MAX_TURNS: 40
+  #   GOOSE_CONTEXT_STRATEGY: summarize
+  #   GOOSE_MOIM_MESSAGE_TEXT: "Run tests before writing files."
+  #   CONTEXT_FILE_NAMES:
+  #     - AGENTS.md
+  #     - .goosehints
+  #   GOOSE_RUNTIME_BUILTINS:
+  #     - developer
+  #   GOOSE_RUNTIME_CONFIG_FILES_JSON:
+  #     config.yaml: |
+  #       GOOSE_MODE: smart_approve
+  #       GOOSE_AUTO_COMPACT_THRESHOLD: 0.8
+  #       GOOSE_SEARCH_PATHS:
+  #         - /workspace/bin
+  #       slash_commands:
+  #         - command: run-tests
+  #           recipe_path: /workspace/.goose/recipes/run-tests.yaml
+  #     prompts/review.md: |
+  #       Review changes conservatively and call out regression risks.
 
 operator:
   replicaCount: 2
@@ -215,8 +237,8 @@ telemetry:
 # ---------------------------------------------------------------------------
 mcpHub:
   # Dedicated namespace for all shared MCP servers.
-  # The operator/cluster-admin must label this namespace:
-  #   kubectl label namespace mcp-hub sandbox.enterprise.ai/mcp-hub=true
+  # The chart creates this namespace and applies the required label automatically:
+  #   sandbox.enterprise.ai/mcp-hub=true
   # Tenant namespaces must be labelled:
   #   sandbox.enterprise.ai/tenant=true
   namespace: mcp-hub

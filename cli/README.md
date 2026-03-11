@@ -16,9 +16,13 @@ Examples:
 agentctl health
 agentctl agents list
 agentctl agents create -f examples/sample-agent.yaml
+agentctl agents update goose-assistant --goose-config-file config.yaml=.goose/config.yaml
+agentctl agents update goose-assistant --goose-config-text prompts/review.md="Review changes conservatively."
+agentctl agents update goose-assistant --clear-goose-config-files
 agentctl workflows update research-report-pipeline -f examples/sample-workflow.yaml
 agentctl evals delete --file examples/sample-eval.yaml --yes
 agentctl invoke research-assistant "Explain Kubernetes namespaces"
+agentctl invoke goose-assistant "Summarize /workspace notes" --max-turns 20 --system "Stay read-only" --builtin developer
 agentctl approvals approve approval-name --reason "Reviewed by ops"
 ```
 
@@ -32,6 +36,14 @@ Resource management commands:
 - `agentctl agents create|update|delete --file ...`
 - `agentctl workflows create|update|delete --file ...`
 - `agentctl evals create|update|delete --file ...`
+
+Goose-specific agent update flags:
+
+- `agentctl agents update NAME --goose-config-file RELATIVE_PATH=FILE`
+- `agentctl agents update NAME --goose-config-text RELATIVE_PATH=TEXT`
+- `agentctl agents update NAME --clear-goose-config-files`
+
+The Goose config paths must stay relative to Goose's config root, for example `config.yaml` or `prompts/review.md`.
 
 Environment variables:
 

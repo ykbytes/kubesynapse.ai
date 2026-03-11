@@ -26,6 +26,7 @@ The image serves the Vite bundle through Nginx with SPA fallback enabled. In the
 - Empty-namespace bootstrap by creating an agent from the UI
 - Agent editing and deletion
 - Chat invoke and SSE streaming invoke
+- Goose runtime remains chat-first in the UI; approvals, gateway-routed MCP tools, and sandbox session continuity remain LangGraph-only, while a limited safe subset of Goose-native run controls is exposed for chat (`max_turns`, workspace-relative `working_directory`, and a read-only system prompt preview)
 - Thread continuity per selected agent
 - Approval decisions and retry from the UI
 - Per-agent conversation and activity state

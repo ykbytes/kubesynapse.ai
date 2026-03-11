@@ -17,7 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from jose import jwk, jwt
 from jose.utils import base64url_decode
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 logger = logging.getLogger("api-gateway")
 
@@ -56,7 +56,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins(),
     allow_credentials=False,
-    allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "Accept", "X-Request-Id"],
 )
 
@@ -68,19 +68,44 @@ OIDC_ISSUER = os.getenv("OIDC_ISSUER", "").strip()
 OIDC_AUDIENCE = os.getenv("OIDC_AUDIENCE", "").strip()
 SHARED_TOKEN = os.getenv("API_GATEWAY_SHARED_TOKEN", "").strip()
 AGENT_RUNTIME_TIMEOUT_SECONDS = max(float(os.getenv("AGENT_RUNTIME_TIMEOUT_SECONDS", "360")), 1.0)
+OIDC_JWKS_TIMEOUT_SECONDS = max(float(os.getenv("OIDC_JWKS_TIMEOUT_SECONDS", "10")), 1.0)
 JWKS_CACHE: dict[str, Any] = {"keys": [], "expires_at": 0.0}
+STREAM_KEEPALIVE_SECONDS = max(float(os.getenv("API_GATEWAY_STREAM_KEEPALIVE_SECONDS", "15")), 5.0)
 
 
 class InvokeRequest(BaseModel):
     prompt: str = ""
     thread_id: str | None = None
     model: str | None = None
+    system: str | None = None
     require_approval: bool = False
     approval_action: str | None = None
     tool_name: str = ""
     tool_args: dict[str, Any] = Field(default_factory=dict)
     sandbox_session: dict[str, Any] | None = None
     mcp_server: str | None = None
+    debug: bool = False
+    no_session: bool = False
+    max_turns: int | None = None
+    working_directory: str | None = None
+    builtin_extensions: list[str] = Field(default_factory=list)
+    stdio_extensions: list[str] = Field(default_factory=list)
+    streamable_http_extensions: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def normalize_fields(self) -> "InvokeRequest":
+        self.prompt = self.prompt.strip()
+        self.thread_id = self.thread_id.strip() or None if self.thread_id is not None else None
+        self.model = self.model.strip() or None if self.model is not None else None
+        self.system = self.system.strip() or None if self.system is not None else None
+        self.approval_action = self.approval_action.strip() or None if self.approval_action is not None else None
+        self.tool_name = self.tool_name.strip()
+        self.mcp_server = self.mcp_server.strip() or None if self.mcp_server is not None else None
+        self.working_directory = self.working_directory.strip() or None if self.working_directory is not None else None
+        self.builtin_extensions = [str(item).strip() for item in self.builtin_extensions if str(item).strip()]
+        self.stdio_extensions = [str(item).strip() for item in self.stdio_extensions if str(item).strip()]
+        self.streamable_http_extensions = [str(item).strip() for item in self.streamable_http_extensions if str(item).strip()]
+        return self
 
 
 class InvokeResponse(BaseModel):
@@ -144,6 +169,7 @@ class AgentDetail(AgentInfo):
     enable_gvisor: bool = False
     mcp_servers: list[str] = Field(default_factory=list)
     mcp_sidecars: list[dict[str, Any]] = Field(default_factory=list)
+    goose_config_files: dict[str, Any] = Field(default_factory=dict)
     created_at: str | None = None
 
 
@@ -161,6 +187,7 @@ class CreateAgentRequest(BaseModel):
     enable_gvisor: bool = False
     mcp_servers: list[str] = Field(default_factory=list)
     mcp_sidecars: list[dict[str, Any]] = Field(default_factory=list)
+    goose_config_files: dict[str, Any] = Field(default_factory=dict)
 
 
 class UpdateAgentRequest(BaseModel):
@@ -172,6 +199,7 @@ class UpdateAgentRequest(BaseModel):
     enable_gvisor: bool = False
     mcp_servers: list[str] = Field(default_factory=list)
     mcp_sidecars: list[dict[str, Any]] = Field(default_factory=list)
+    goose_config_files: dict[str, Any] | None = None
 
 
 class WorkflowStepRequest(BaseModel):
@@ -291,14 +319,169 @@ def normalized_runtime_kind(raw_value: str | None) -> str:
     return runtime_kind
 
 
+def normalize_goose_config_file_path(raw_path: object) -> str:
+    normalized_path = str(raw_path).replace("\\", "/").strip()
+    if not normalized_path:
+        raise HTTPException(status_code=400, detail="goose_config_files paths must not be blank")
+    if normalized_path.startswith("/"):
+        raise HTTPException(status_code=400, detail="goose_config_files paths must be relative")
+
+    parts = [part for part in normalized_path.split("/") if part]
+    if not parts or any(part in {".", ".."} for part in parts):
+        raise HTTPException(status_code=400, detail=f"goose_config_files path '{raw_path}' is invalid")
+
+    candidate = "/".join(parts)
+    if candidate == "secrets.yaml":
+        raise HTTPException(
+            status_code=400,
+            detail="goose_config_files cannot preseed secrets.yaml; use Kubernetes secrets and environment variables instead",
+        )
+    if parts[0] == "permissions":
+        raise HTTPException(
+            status_code=400,
+            detail="goose_config_files cannot preseed permissions/* because Goose manages that path at runtime",
+        )
+    return candidate
+
+
+def parse_goose_config_files(config_files: Any, *, source: str) -> dict[str, Any]:
+    if config_files is None:
+        return {}
+    if not isinstance(config_files, dict):
+        raise HTTPException(status_code=400, detail=f"{source} must be a JSON object keyed by relative Goose config paths")
+
+    normalized: dict[str, Any] = {}
+    for raw_path, raw_content in sorted(config_files.items(), key=lambda item: str(item[0])):
+        normalized_path = normalize_goose_config_file_path(raw_path)
+        if raw_content is None:
+            raise HTTPException(status_code=400, detail=f"{source}.{normalized_path} must not be null")
+        normalized[normalized_path] = raw_content
+    return normalized
+
+
+def runtime_kind_from_spec(spec: dict[str, Any] | None) -> str:
+    runtime_spec = (spec or {}).get("runtime") or {}
+    if isinstance(runtime_spec, dict):
+        return normalized_runtime_kind(runtime_spec.get("kind"))
+    return "langgraph"
+
+
+def validate_agent_runtime_compatibility(spec: dict[str, Any]) -> None:
+    if runtime_kind_from_spec(spec) != "goose":
+        return
+
+    errors: list[str] = []
+    if spec.get("mcpServers"):
+        errors.append(
+            "Goose runtime does not support mcp_servers. Use the LangGraph runtime for MCP routing today."
+        )
+    if spec.get("mcpSidecars"):
+        errors.append(
+            "Goose runtime does not support mcp_sidecars. Use the LangGraph runtime for sidecar-based MCP tools today."
+        )
+    if errors:
+        raise HTTPException(status_code=400, detail=" ".join(errors))
+
+
+def validate_invoke_runtime_compatibility(runtime_kind: str, request: InvokeRequest) -> None:
+    if runtime_kind != "goose":
+        return
+
+    unsupported_fields: list[str] = []
+    if request.require_approval:
+        unsupported_fields.append("require_approval")
+    if request.tool_name.strip():
+        unsupported_fields.append("tool_name")
+    if (request.mcp_server or "").strip():
+        unsupported_fields.append("mcp_server")
+    if request.sandbox_session is not None:
+        unsupported_fields.append("sandbox_session")
+
+    if unsupported_fields:
+        joined_fields = ", ".join(unsupported_fields)
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Goose runtime currently supports chat-style prompt invocation plus Goose-native run controls. "
+                f"Unsupported fields for goose agents: {joined_fields}."
+            ),
+        )
+
+
+def parse_json_object_response(response: httpx.Response, *, context: str) -> dict[str, Any]:
+    try:
+        payload = response.json()
+    except json.JSONDecodeError as exc:
+        response_text = response.text.strip()
+        preview = (response_text[:400] + "...") if len(response_text) > 400 else response_text
+        raise HTTPException(
+            status_code=502,
+            detail=f"{context} returned invalid JSON: {preview or 'empty response'}",
+        ) from exc
+
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=502, detail=f"{context} returned a non-object JSON payload")
+    return payload
+
+
+def error_payload_from_body(body: bytes, fallback: str) -> dict[str, str]:
+    text = body.decode("utf-8", errors="ignore").strip()
+    if not text:
+        return {"error": fallback}
+
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return {"error": text}
+
+    if isinstance(parsed, dict):
+        for key in ("detail", "error"):
+            value = parsed.get(key)
+            if isinstance(value, str) and value.strip():
+                return {"error": value.strip()}
+
+    return {"error": text}
+
+
+def sse_event(event: str, payload: dict[str, Any]) -> str:
+    return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False, default=str)}\n\n"
+
+
+def sse_keepalive_comment() -> str:
+    return ": keepalive\n\n"
+
+
 def build_agent_spec(
     body: CreateAgentRequest | UpdateAgentRequest,
     existing_spec: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     existing_runtime = (existing_spec or {}).get("runtime") or {}
     existing_runtime_kind = None
+    existing_goose_config_files: Any = None
     if isinstance(existing_runtime, dict):
         existing_runtime_kind = existing_runtime.get("kind")
+        existing_goose = existing_runtime.get("goose") or {}
+        if isinstance(existing_goose, dict):
+            existing_goose_config_files = existing_goose.get("configFiles")
+
+    runtime_kind = normalized_runtime_kind(getattr(body, "runtime_kind", None) or existing_runtime_kind)
+    requested_goose_config_files = getattr(body, "goose_config_files", None)
+    if requested_goose_config_files is None:
+        goose_config_files = parse_goose_config_files(
+            existing_goose_config_files,
+            source="existing runtime.goose.configFiles",
+        )
+    else:
+        goose_config_files = parse_goose_config_files(
+            requested_goose_config_files,
+            source="goose_config_files",
+        )
+
+    if runtime_kind != "goose" and goose_config_files:
+        raise HTTPException(
+            status_code=400,
+            detail="goose_config_files is only supported when runtime_kind is 'goose'",
+        )
 
     spec: dict[str, Any] = {
         "model": body.model.strip(),
@@ -307,8 +490,10 @@ def build_agent_spec(
         "storage": {"size": (body.storage_size or "1Gi").strip() or "1Gi"},
         "mcpServers": [server.strip() for server in body.mcp_servers if server.strip()],
         "mcpSidecars": body.mcp_sidecars,
-        "runtime": {"kind": normalized_runtime_kind(getattr(body, "runtime_kind", None) or existing_runtime_kind)},
+        "runtime": {"kind": runtime_kind},
     }
+    if runtime_kind == "goose" and goose_config_files:
+        spec["runtime"]["goose"] = {"configFiles": goose_config_files}
     if body.policy_ref and body.policy_ref.strip():
         spec["policyRef"] = body.policy_ref.strip()
     return spec
@@ -500,6 +685,8 @@ def agent_detail_from_resource(agent: dict[str, Any]) -> AgentDetail:
     spec = agent.get("spec", {})
     metadata = agent.get("metadata", {})
     storage = spec.get("storage", {}) if isinstance(spec.get("storage"), dict) else {}
+    runtime = spec.get("runtime") if isinstance(spec.get("runtime"), dict) else {}
+    goose_runtime = runtime.get("goose") if isinstance(runtime.get("goose"), dict) else {}
     return AgentDetail(
         **info.model_dump(),
         system_prompt=spec.get("systemPrompt", "") or "",
@@ -508,6 +695,10 @@ def agent_detail_from_resource(agent: dict[str, Any]) -> AgentDetail:
         enable_gvisor=bool(spec.get("enableGVisor", False)),
         mcp_servers=spec.get("mcpServers") or [],
         mcp_sidecars=spec.get("mcpSidecars") or [],
+        goose_config_files=parse_goose_config_files(
+            goose_runtime.get("configFiles"),
+            source="AIAgent.spec.runtime.goose.configFiles",
+        ),
         created_at=metadata.get("creationTimestamp"),
     )
 
@@ -625,6 +816,9 @@ def read_agent(agent_name: str, namespace: str) -> dict[str, Any]:
 
 
 def create_agent_resource(body: CreateAgentRequest, namespace: str) -> dict[str, Any]:
+    spec = build_agent_spec(body)
+    validate_agent_runtime_compatibility(spec)
+
     try:
         from kubernetes import client
 
@@ -635,7 +829,7 @@ def create_agent_resource(body: CreateAgentRequest, namespace: str) -> dict[str,
                 "name": body.name,
                 "namespace": namespace,
             },
-            "spec": build_agent_spec(body),
+            "spec": spec,
         }
 
         return client.CustomObjectsApi().create_namespaced_custom_object(
@@ -707,7 +901,7 @@ async def load_jwks() -> list[dict[str, Any]]:
     if not OIDC_JWKS_URL:
         raise HTTPException(status_code=503, detail="OIDC JWKS URL is not configured")
 
-    async with httpx.AsyncClient(timeout=10.0) as client:
+    async with httpx.AsyncClient(timeout=OIDC_JWKS_TIMEOUT_SECONDS) as client:
         response = await client.get(OIDC_JWKS_URL)
         response.raise_for_status()
         keys = response.json().get("keys", [])
@@ -776,9 +970,16 @@ async def verify_token(authorization: str = Header(...)) -> dict[str, Any]:
         if "." in token and OIDC_JWKS_URL:
             try:
                 return await verify_oidc_token(token)
-            except HTTPException:
-                # If OIDC verification fails, fallback to shared token
-                pass
+            except HTTPException as exc:
+                logger.warning(
+                    "OIDC token verification failed in auto mode; falling back to shared token auth: %s",
+                    exc.detail,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "OIDC token verification errored in auto mode; falling back to shared token auth: %s",
+                    exc,
+                )
         return verify_shared_token(token)
     raise HTTPException(status_code=503, detail=f"Unsupported auth mode '{AUTH_MODE}'")
 
@@ -925,11 +1126,13 @@ def update_agent(
 ):
     del user
     current_agent = read_agent(agent_name, namespace)
+    next_spec = build_agent_spec(body, current_agent.get("spec", {}))
+    validate_agent_runtime_compatibility(next_spec)
     updated = replace_custom_resource_spec(
         "aiagents",
         agent_name,
         namespace,
-        build_agent_spec(body, current_agent.get("spec", {})),
+        next_spec,
     )
     return agent_detail_from_resource(updated)
 
@@ -1070,6 +1273,7 @@ async def invoke_agent(
     user=Depends(verify_token),
 ):
     agent = await asyncio.to_thread(read_agent, agent_name, namespace)
+    validate_invoke_runtime_compatibility(runtime_kind_from_spec(agent.get("spec", {})), request)
     request_payload = request.model_dump()
     request_id = raw_request.headers.get("x-request-id") or str(uuid.uuid4())
     async with httpx.AsyncClient(timeout=AGENT_RUNTIME_TIMEOUT_SECONDS, trust_env=False) as client:
@@ -1079,11 +1283,14 @@ async def invoke_agent(
                 json=request_payload,
                 headers={"x-request-id": request_id},
             )
-            response.raise_for_status()
         except Exception as exc:
             raise HTTPException(status_code=502, detail=f"Agent invocation failed: {exc}") from exc
 
-    data = response.json()
+    if response.status_code >= 400:
+        error_payload = error_payload_from_body(response.content, "Agent invocation failed")
+        raise HTTPException(status_code=502, detail=f"Agent invocation failed: {error_payload['error']}")
+
+    data = parse_json_object_response(response, context="Agent runtime /invoke")
     return InvokeResponse(
         agent_name=agent_name,
         response=data.get("response", ""),
@@ -1108,7 +1315,8 @@ async def invoke_agent_stream(
     namespace: str = "default",
     user=Depends(verify_token),
 ):
-    await asyncio.to_thread(read_agent, agent_name, namespace)
+    agent = await asyncio.to_thread(read_agent, agent_name, namespace)
+    validate_invoke_runtime_compatibility(runtime_kind_from_spec(agent.get("spec", {})), request)
     request_payload = request.model_dump()
     request_id = raw_request.headers.get("x-request-id") or str(uuid.uuid4())
 
@@ -1123,14 +1331,39 @@ async def invoke_agent_stream(
                 ) as response:
                     if response.status_code >= 400:
                         body = await response.aread()
-                        error_text = body.decode("utf-8", errors="ignore")
-                        yield f"data: {json.dumps({'error': error_text or 'Agent invocation failed'})}\n\n"
+                        yield sse_event(
+                            "response.error",
+                            error_payload_from_body(body, "Agent invocation failed"),
+                        )
                         return
-                    async for chunk in response.aiter_text():
-                        if chunk:
-                            yield chunk
+                    stream_iterator = response.aiter_text()
+                    next_chunk_task = asyncio.create_task(anext(stream_iterator))
+                    try:
+                        while True:
+                            done, _ = await asyncio.wait({next_chunk_task}, timeout=STREAM_KEEPALIVE_SECONDS)
+                            if not done:
+                                yield sse_keepalive_comment()
+                                continue
+
+                            try:
+                                chunk = next_chunk_task.result()
+                            except StopAsyncIteration:
+                                break
+
+                            if chunk:
+                                yield chunk
+
+                            next_chunk_task = asyncio.create_task(anext(stream_iterator))
+                    finally:
+                        try:
+                            if not next_chunk_task.done():
+                                next_chunk_task.cancel()
+                                with contextlib.suppress(asyncio.CancelledError):
+                                    await next_chunk_task
+                        except NameError:
+                            pass
         except Exception as exc:
-            yield f"data: {json.dumps({'error': str(exc)})}\n\n"
+            yield sse_event("response.error", {"error": str(exc)})
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 

@@ -62,7 +62,7 @@ To test this locally in your cluster (e.g., Docker Desktop, Minikube, Kind):
 #### 1. Guardrails & Safety Layer
 - Input sanitization — scan prompts for injection attacks
 - Output filtering — use Presidio/regex to mask PII, SSNs, credit cards, internal secrets before they leave the gateway
-- Token budget enforcement — hard-cap per-agent token spend
+- Per-request token caps are implemented; distributed token, request, and cost budgets remain future work
 - New `AgentPolicy` CRD for configurable guardrail policies
 
 #### 2. Human-in-the-Loop (HITL) Approval System

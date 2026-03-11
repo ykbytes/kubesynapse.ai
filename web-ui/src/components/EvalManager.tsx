@@ -20,6 +20,11 @@ type ThresholdDraft = {
   maxLatencyMs: string;
 };
 
+type ThresholdBuildResult = {
+  values: Record<string, unknown>;
+  error: string | null;
+};
+
 const METRIC_OPTIONS = ["relevance", "faithfulness", "toxicity", "latency"];
 
 function defaultCases(): EvalTestCase[] {
@@ -49,6 +54,7 @@ export function EvalManager({
   const [schedule, setSchedule] = useState("");
   const [testSuite, setTestSuite] = useState<EvalTestCase[]>(defaultCases());
   const [thresholds, setThresholds] = useState<ThresholdDraft>(thresholdsFromResource(null));
+  const [validationError, setValidationError] = useState("");
 
   useEffect(() => {
     if (evalResource) {
@@ -57,6 +63,7 @@ export function EvalManager({
       setSchedule(evalResource.schedule ?? "");
       setTestSuite(evalResource.test_suite.length > 0 ? evalResource.test_suite : defaultCases());
       setThresholds(thresholdsFromResource(evalResource));
+      setValidationError("");
       return;
     }
 
@@ -65,24 +72,50 @@ export function EvalManager({
     setSchedule("");
     setTestSuite(defaultCases());
     setThresholds(thresholdsFromResource(null));
+    setValidationError("");
   }, [evalResource, agents]);
 
   function updateCase(index: number, updater: (current: EvalTestCase) => EvalTestCase) {
     setTestSuite((current) => current.map((item, itemIndex) => (itemIndex === index ? updater(item) : item)));
   }
 
-  function buildFailureThreshold(): Record<string, unknown> {
+  function parseThresholdValue(label: string, rawValue: string): number | null {
+    const trimmed = rawValue.trim();
+    if (!trimmed) {
+      return null;
+    }
+
+    const parsed = Number(trimmed);
+    if (!Number.isFinite(parsed)) {
+      throw new Error(`${label} must be a valid number.`);
+    }
+    return parsed;
+  }
+
+  function buildFailureThreshold(): ThresholdBuildResult {
     const next: Record<string, unknown> = {};
-    if (thresholds.maxToxicity.trim()) {
-      next.maxToxicity = Number(thresholds.maxToxicity);
+    try {
+      const maxToxicity = parseThresholdValue("Max toxicity", thresholds.maxToxicity);
+      const minRelevance = parseThresholdValue("Min relevance", thresholds.minRelevance);
+      const maxLatencyMs = parseThresholdValue("Max latency ms", thresholds.maxLatencyMs);
+
+      if (maxToxicity !== null) {
+        next.maxToxicity = maxToxicity;
+      }
+      if (minRelevance !== null) {
+        next.minRelevance = minRelevance;
+      }
+      if (maxLatencyMs !== null) {
+        next.maxLatencyMs = maxLatencyMs;
+      }
+    } catch (error) {
+      return {
+        values: {},
+        error: error instanceof Error ? error.message : String(error),
+      };
     }
-    if (thresholds.minRelevance.trim()) {
-      next.minRelevance = Number(thresholds.minRelevance);
-    }
-    if (thresholds.maxLatencyMs.trim()) {
-      next.maxLatencyMs = Number(thresholds.maxLatencyMs);
-    }
-    return next;
+
+    return { values: next, error: null };
   }
 
   const canSubmit = Boolean(name.trim()) && Boolean(agentRef.trim()) && testSuite.every((item) => item.input.trim());
@@ -122,15 +155,33 @@ export function EvalManager({
           <div className="threshold-grid">
             <label>
               <span>Max toxicity</span>
-              <input value={thresholds.maxToxicity} onChange={(event) => setThresholds((current) => ({ ...current, maxToxicity: event.target.value }))} />
+              <input
+                value={thresholds.maxToxicity}
+                onChange={(event) => {
+                  setValidationError("");
+                  setThresholds((current) => ({ ...current, maxToxicity: event.target.value }));
+                }}
+              />
             </label>
             <label>
               <span>Min relevance</span>
-              <input value={thresholds.minRelevance} onChange={(event) => setThresholds((current) => ({ ...current, minRelevance: event.target.value }))} />
+              <input
+                value={thresholds.minRelevance}
+                onChange={(event) => {
+                  setValidationError("");
+                  setThresholds((current) => ({ ...current, minRelevance: event.target.value }));
+                }}
+              />
             </label>
             <label>
               <span>Max latency ms</span>
-              <input value={thresholds.maxLatencyMs} onChange={(event) => setThresholds((current) => ({ ...current, maxLatencyMs: event.target.value }))} />
+              <input
+                value={thresholds.maxLatencyMs}
+                onChange={(event) => {
+                  setValidationError("");
+                  setThresholds((current) => ({ ...current, maxLatencyMs: event.target.value }));
+                }}
+              />
             </label>
           </div>
         </div>
@@ -204,17 +255,25 @@ export function EvalManager({
             ))}
           </div>
 
-          {error ? <p className="error-banner">{error}</p> : null}
+          {validationError ? <p className="error-banner">{validationError}</p> : null}
+          {!validationError && error ? <p className="error-banner">{error}</p> : null}
           <div className="approval-actions">
             <button
               className="primary-button"
               type="button"
               onClick={() => {
+                const thresholdResult = buildFailureThreshold();
+                if (thresholdResult.error) {
+                  setValidationError(thresholdResult.error);
+                  return;
+                }
+
+                setValidationError("");
                 const payload = {
                   agent_ref: agentRef,
                   schedule: schedule.trim() || undefined,
                   test_suite: testSuite,
-                  failure_threshold: buildFailureThreshold(),
+                  failure_threshold: thresholdResult.values,
                 };
                 if (evalResource) {
                   onUpdate(evalResource.name, payload as EvalUpdatePayload);

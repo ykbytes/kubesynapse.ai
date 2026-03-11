@@ -15,6 +15,7 @@ import { ResourceInspectorPanel } from "./components/ResourceInspectorPanel";
 import { WorkflowManager } from "./components/WorkflowManager";
 import { WorkspaceSidebar, type SidebarResourceItem } from "./components/WorkspaceSidebar";
 import {
+  buildInvocationSummary,
   createAgent,
   createEval,
   createWorkflow,
@@ -35,6 +36,7 @@ import {
   updateEval,
   updateWorkflow,
 } from "./lib/api";
+import { parseGooseConfigFilesText } from "./lib/gooseConfig";
 import type {
   AgentDetail,
   AgentInfo,
@@ -45,6 +47,7 @@ import type {
   InvocationSummary,
   InvokePayload,
   PolicyInfo,
+  RuntimeKind,
   UiActivity,
   UiMessage,
   UpdateAgentPayload,
@@ -69,8 +72,59 @@ type InvokeExecutionOptions = {
   systemNotice?: string;
 };
 
+type GooseChatSettings = {
+  maxTurns: string;
+  workingDirectory: string;
+};
+
+const DEFAULT_GOOSE_CHAT_SETTINGS: GooseChatSettings = {
+  maxTurns: "",
+  workingDirectory: "",
+};
+
 function createId(): string {
   return typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
+}
+
+function parseGooseMaxTurns(value: string): number | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (!/^\d+$/.test(trimmed)) {
+    throw new Error("Goose max turns must be a positive integer.");
+  }
+
+  const parsed = Number.parseInt(trimmed, 10);
+  if (parsed < 1) {
+    throw new Error("Goose max turns must be at least 1.");
+  }
+
+  return parsed;
+}
+
+function normalizeGooseWorkingDirectory(value: string): string | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (/^(?:[A-Za-z]:[\\/]|\/)/.test(trimmed)) {
+    throw new Error("Goose working directory must stay inside the mounted workspace. Use a relative subdirectory.");
+  }
+
+  const segments = trimmed
+    .replace(/\\+/g, "/")
+    .split("/")
+    .filter((segment) => segment.length > 0);
+
+  if (segments.length === 0) {
+    return undefined;
+  }
+  if (segments.some((segment) => segment === "." || segment === "..")) {
+    throw new Error("Goose working directory must use a workspace-relative path without '.' or '..' segments.");
+  }
+
+  return segments.join("/");
 }
 
 function workflowSpecFromResource(resource: WorkflowInfo | null): Record<string, unknown> | null {
@@ -152,6 +206,7 @@ export default function App() {
   const [activityByAgent, setActivityByAgent] = useState<Record<string, UiActivity[]>>({});
   const [summaryByAgent, setSummaryByAgent] = useState<Record<string, InvocationSummary | null>>({});
   const [logsByAgent, setLogsByAgent] = useState<Record<string, string>>({});
+  const [gooseChatSettingsByAgent, setGooseChatSettingsByAgent] = useState<Record<string, GooseChatSettings>>({});
 
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [logsLoading, setLogsLoading] = useState(false);
@@ -179,6 +234,7 @@ export default function App() {
   const [createAgentModel, setCreateAgentModel] = useState(DEFAULT_AGENT_MODEL);
   const [createAgentSystemPrompt, setCreateAgentSystemPrompt] = useState(DEFAULT_SYSTEM_PROMPT);
   const [createAgentRuntimeKind, setCreateAgentRuntimeKind] = useState<"langgraph" | "goose">("langgraph");
+  const [createAgentGooseConfigFilesText, setCreateAgentGooseConfigFilesText] = useState("");
 
   const threadIdsRef = useRef<Record<string, string>>({});
   const pendingRequestRef = useRef<Record<string, InvokePayload | null>>({});
@@ -187,13 +243,18 @@ export default function App() {
   const selectedAgent = agents.find((agent) => agent.name === selectedAgentName) ?? null;
   const selectedWorkflow = workflowCreateMode ? null : workflows.find((item) => item.name === selectedWorkflowName) ?? null;
   const selectedEval = evalCreateMode ? null : evals.find((item) => item.name === selectedEvalName) ?? null;
-  const selectedRuntimeKind = selectedAgentDetail?.runtime_kind ?? "langgraph";
+  const selectedRuntimeKind: RuntimeKind = selectedAgentDetail?.runtime_kind ?? "langgraph";
   const approvalSupported = selectedRuntimeKind !== "goose";
 
   const messages = selectedAgentName ? messagesByAgent[selectedAgentName] ?? [] : [];
   const activity = selectedAgentName ? activityByAgent[selectedAgentName] ?? [] : [];
   const summary = selectedAgentName ? summaryByAgent[selectedAgentName] ?? null : null;
   const logs = selectedAgentName ? logsByAgent[selectedAgentName] ?? "" : "";
+  const selectedGooseChatSettings =
+    selectedAgentName ? gooseChatSettingsByAgent[selectedAgentName] ?? DEFAULT_GOOSE_CHAT_SETTINGS : DEFAULT_GOOSE_CHAT_SETTINGS;
+  const gooseSystemPromptPreview = selectedAgentDetail?.system_prompt.trim()
+    ? selectedAgentDetail.system_prompt
+    : "No agent-specific system prompt is configured. Goose still uses the runtime default prompt from the agent container.";
 
   useEffect(() => {
     localStorage.setItem(TOKEN_STORAGE_KEY, token);
@@ -220,6 +281,13 @@ export default function App() {
     setActivityByAgent((current) => ({
       ...current,
       [agentName]: updater(current[agentName] ?? []),
+    }));
+  }
+
+  function setGooseChatSettingsForAgent(agentName: string, updater: (current: GooseChatSettings) => GooseChatSettings) {
+    setGooseChatSettingsByAgent((current) => ({
+      ...current,
+      [agentName]: updater(current[agentName] ?? DEFAULT_GOOSE_CHAT_SETTINGS),
     }));
   }
 
@@ -428,18 +496,16 @@ export default function App() {
     );
   }
 
-  function updateSummary(agentName: string, threadId: string, payload: Record<string, unknown>) {
-    setSummaryForAgent(agentName, () => ({
-      threadId,
-      status: String(payload.status ?? "completed"),
-      policyName: (payload.policy_name as string | null | undefined) ?? null,
-      toolName: (payload.tool_name as string | null | undefined) ?? null,
-      toolResult: (payload.tool_result as Record<string, unknown> | null | undefined) ?? null,
-      sandboxSession: (payload.sandbox_session as Record<string, unknown> | null | undefined) ?? null,
-      approvalName: (payload.approval_name as string | null | undefined) ?? null,
-      retryAfterSeconds: (payload.retry_after_seconds as number | null | undefined) ?? null,
-      warnings: Array.isArray(payload.warnings) ? payload.warnings.map(String) : [],
-    }));
+  function applyInvocationFailure(agentName: string, messageId: string, message: string) {
+    pendingRequestRef.current[agentName] = null;
+    setPendingAssistantContent(agentName, messageId, message, "error");
+    setChatError(message);
+  }
+
+  function updateSummary(agentName: string, threadId: string, payload: unknown): InvocationSummary {
+    const nextSummary = buildInvocationSummary(threadId, payload);
+    setSummaryForAgent(agentName, () => nextSummary);
+    return nextSummary;
   }
 
   async function handleConnect() {
@@ -459,13 +525,17 @@ export default function App() {
     setIsCreatingAgent(true);
     setCreateError("");
     try {
+      const gooseConfigFiles =
+        createAgentRuntimeKind === "goose" ? parseGooseConfigFilesText(createAgentGooseConfigFilesText) : undefined;
       const createdAgent = await createAgent(token, namespace, {
         name: createAgentName.trim(),
         model: createAgentModel.trim(),
         system_prompt: createAgentSystemPrompt.trim(),
         runtime_kind: createAgentRuntimeKind,
+        goose_config_files: gooseConfigFiles,
       });
       setAgentCreateMode(false);
+      setCreateAgentGooseConfigFilesText("");
       setSelectedAgentName(createdAgent.name);
       setMessagesForAgent(createdAgent.name, (current) =>
         current.length > 0
@@ -488,7 +558,7 @@ export default function App() {
     }
   }
 
-  async function handleSaveAgent(payload: UpdateAgentPayload) {
+  async function handleSaveAgent(payload: UpdateAgentPayload, gooseConfigFilesText: string) {
     if (!token.trim() || !selectedAgentName) {
       return;
     }
@@ -496,7 +566,12 @@ export default function App() {
     setSavingAgent(true);
     setAgentManageError("");
     try {
-      const updated = await updateAgent(token, namespace, selectedAgentName, payload);
+      const nextPayload: UpdateAgentPayload = {
+        ...payload,
+        goose_config_files:
+          payload.runtime_kind === "goose" ? parseGooseConfigFilesText(gooseConfigFilesText) : {},
+      };
+      const updated = await updateAgent(token, namespace, selectedAgentName, nextPayload);
       setSelectedAgentDetail(updated);
       await refreshWorkspaceData({ silent: true });
     } catch (nextError) {
@@ -696,21 +771,19 @@ export default function App() {
     if (!streamMode) {
       try {
         const result = await invokeAgent(token, namespace, agentName, payload, requestId);
-        threadIdsRef.current[agentName] = result.thread_id;
+        const nextSummary = updateSummary(agentName, result.thread_id, result);
+        threadIdsRef.current[agentName] = nextSummary.threadId;
         pendingRequestRef.current[agentName] =
-          result.status === "approval_pending" ? { ...payload, thread_id: result.thread_id } : null;
-        updateSummary(agentName, result.thread_id, result as unknown as Record<string, unknown>);
+          nextSummary.status === "approval_pending" ? { ...payload, thread_id: nextSummary.threadId } : null;
         setPendingAssistantContent(
           agentName,
           assistantMessageId,
-          result.response || (result.status === "approval_pending" ? "Approval pending. Re-submit after approval." : "No response body returned."),
-          result.status === "blocked" ? "error" : "complete",
+          result.response || (nextSummary.status === "approval_pending" ? "Approval pending. Re-submit after approval." : "No response body returned."),
+          nextSummary.status === "blocked" ? "error" : "complete",
         );
       } catch (nextError) {
         const message = nextError instanceof Error ? nextError.message : String(nextError);
-        pendingRequestRef.current[agentName] = null;
-        setPendingAssistantContent(agentName, assistantMessageId, message, "error");
-        setChatError(message);
+        applyInvocationFailure(agentName, assistantMessageId, message);
       } finally {
         setIsSending(false);
       }
@@ -720,6 +793,7 @@ export default function App() {
     const abortController = new AbortController();
     streamAbortRef.current?.abort();
     streamAbortRef.current = abortController;
+    let streamErrorHandled = false;
 
     try {
       await streamAgentInvoke({
@@ -733,7 +807,11 @@ export default function App() {
           pushActivity(agentName, event, eventPayload);
 
           if (event === "response.delta") {
-            const delta = String(eventPayload.delta ?? "");
+            if (typeof eventPayload.delta !== "string") {
+              throw new Error("response.delta events must include a string delta field.");
+            }
+
+            const delta = eventPayload.delta;
             setMessagesForAgent(agentName, (current) =>
               current.map((message) =>
                 message.id === assistantMessageId
@@ -749,12 +827,10 @@ export default function App() {
           }
 
           if (event === "response.completed") {
-            const nextThreadId = String(eventPayload.thread_id ?? threadIdsRef.current[agentName] ?? createId());
-            const nextStatus = String(eventPayload.status ?? "completed");
-            threadIdsRef.current[agentName] = nextThreadId;
+            const nextSummary = updateSummary(agentName, threadIdsRef.current[agentName] ?? "", eventPayload);
+            threadIdsRef.current[agentName] = nextSummary.threadId;
             pendingRequestRef.current[agentName] =
-              nextStatus === "approval_pending" ? { ...payload, thread_id: nextThreadId } : null;
-            updateSummary(agentName, nextThreadId, eventPayload);
+              nextSummary.status === "approval_pending" ? { ...payload, thread_id: nextSummary.threadId } : null;
             setMessagesForAgent(agentName, (current) =>
               current.map((message) =>
                 message.id === assistantMessageId
@@ -762,10 +838,10 @@ export default function App() {
                       ...message,
                       content:
                         message.content ||
-                        (nextStatus === "approval_pending"
+                        (nextSummary.status === "approval_pending"
                           ? "Approval pending. Re-submit after approval."
                           : "Invocation completed."),
-                      status: nextStatus === "blocked" ? "error" : "complete",
+                      status: nextSummary.status === "blocked" ? "error" : "complete",
                     }
                   : message,
               ),
@@ -773,26 +849,23 @@ export default function App() {
             return;
           }
 
-          if ((event === "response.error" || event === "message") && eventPayload.error) {
-            const message = String(eventPayload.error);
-            pendingRequestRef.current[agentName] = null;
-            setPendingAssistantContent(agentName, assistantMessageId, message, "error");
-            setChatError(message);
+          if (event === "response.error" || event === "message") {
+            if (typeof eventPayload.error !== "string" || !eventPayload.error.trim()) {
+              throw new Error(`${event} events must include a non-empty string error field.`);
+            }
+            applyInvocationFailure(agentName, assistantMessageId, eventPayload.error);
           }
         },
         onError: (nextError) => {
-          pendingRequestRef.current[agentName] = null;
-          setPendingAssistantContent(agentName, assistantMessageId, nextError.message, "error");
-          setChatError(nextError.message);
+          streamErrorHandled = true;
+          applyInvocationFailure(agentName, assistantMessageId, nextError.message);
         },
         onClose: () => undefined,
       });
     } catch (nextError) {
-      if (!abortController.signal.aborted) {
+      if (!abortController.signal.aborted && !streamErrorHandled) {
         const message = nextError instanceof Error ? nextError.message : String(nextError);
-        pendingRequestRef.current[agentName] = null;
-        setPendingAssistantContent(agentName, assistantMessageId, message, "error");
-        setChatError(message);
+        applyInvocationFailure(agentName, assistantMessageId, message);
       }
     } finally {
       setIsSending(false);
@@ -801,17 +874,37 @@ export default function App() {
   }
 
   async function handleSubmit() {
-    if (!selectedAgentName || !prompt.trim() || !token.trim()) {
+    if (!token.trim()) {
+      setChatError("Enter the gateway token before sending chat requests.");
+      return;
+    }
+
+    if (!selectedAgentName || !prompt.trim()) {
       return;
     }
 
     const agentName = selectedAgentName;
     const nextPrompt = prompt.trim();
+    let gooseMaxTurns: number | undefined;
+    let gooseWorkingDirectory: string | undefined;
+
+    if (selectedRuntimeKind === "goose") {
+      try {
+        gooseMaxTurns = parseGooseMaxTurns(selectedGooseChatSettings.maxTurns);
+        gooseWorkingDirectory = normalizeGooseWorkingDirectory(selectedGooseChatSettings.workingDirectory);
+      } catch (nextError) {
+        setChatError(nextError instanceof Error ? nextError.message : String(nextError));
+        return;
+      }
+    }
+
     const payload: InvokePayload = {
       prompt: nextPrompt,
       thread_id: threadIdsRef.current[agentName],
       require_approval: requireApproval,
       approval_action: requireApproval ? `Approve UI request for ${agentName}` : undefined,
+      max_turns: gooseMaxTurns,
+      working_directory: gooseWorkingDirectory,
     };
 
     setPrompt("");
@@ -1111,12 +1204,14 @@ export default function App() {
                   model={createAgentModel}
                   systemPrompt={createAgentSystemPrompt}
                   runtimeKind={createAgentRuntimeKind}
+                  gooseConfigFilesText={createAgentGooseConfigFilesText}
                   isCreating={isCreatingAgent}
                   error={createError}
                   onNameChange={setCreateAgentName}
                   onModelChange={setCreateAgentModel}
                   onSystemPromptChange={setCreateAgentSystemPrompt}
                   onRuntimeKindChange={setCreateAgentRuntimeKind}
+                  onGooseConfigFilesTextChange={setCreateAgentGooseConfigFilesText}
                   onCreate={() => void handleCreateAgent()}
                 />
               ) : selectedAgentDetail ? (
@@ -1126,7 +1221,7 @@ export default function App() {
                   isSaving={savingAgent}
                   isDeleting={deletingAgent}
                   error={agentManageError}
-                  onSave={(payload) => void handleSaveAgent(payload)}
+                  onSave={(payload, gooseConfigFilesText) => void handleSaveAgent(payload, gooseConfigFilesText)}
                   onDelete={() => void handleDeleteAgent()}
                 />
               ) : (
@@ -1138,17 +1233,36 @@ export default function App() {
               {!agentCreateMode && selectedAgentName ? (
                 <ChatWorkbench
                   agentName={selectedAgentName}
+                  runtimeKind={selectedRuntimeKind}
                   prompt={prompt}
                   messages={messages}
                   isSending={isSending}
+                  tokenReady={Boolean(token.trim())}
                   streamMode={streamMode}
                   requireApproval={requireApproval}
                   approvalSupported={approvalSupported}
+                  gooseMaxTurns={selectedGooseChatSettings.maxTurns}
+                  gooseWorkingDirectory={selectedGooseChatSettings.workingDirectory}
+                  gooseSystemPrompt={gooseSystemPromptPreview}
                   emptyMessage={chatEmptyMessage}
                   error={chatError}
                   onPromptChange={setPrompt}
                   onToggleStreamMode={setStreamMode}
                   onToggleRequireApproval={setRequireApproval}
+                  onGooseMaxTurnsChange={(value) => {
+                    setChatError("");
+                    setGooseChatSettingsForAgent(selectedAgentName, (current) => ({
+                      ...current,
+                      maxTurns: value,
+                    }));
+                  }}
+                  onGooseWorkingDirectoryChange={(value) => {
+                    setChatError("");
+                    setGooseChatSettingsForAgent(selectedAgentName, (current) => ({
+                      ...current,
+                      workingDirectory: value,
+                    }));
+                  }}
                   onSubmit={() => void handleSubmit()}
                 />
               ) : null}

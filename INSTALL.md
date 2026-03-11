@@ -52,7 +52,7 @@ Key capabilities:
 
 - **Declarative agent management** via CRDs (`AIAgent`, `AgentPolicy`, `AgentTenant`, `AgentWorkflow`, `AgentEval`)
 - **Per-agent isolation** — each agent runs as its own StatefulSet with a persistent checkpoint volume
-- **Guardrails** — prompt injection detection, PII masking, token budget enforcement
+- **Guardrails** — prompt injection detection, PII masking, and per-request token caps
 - **Human-in-the-Loop** — async approval gates for high-risk actions
 - **Multi-agent workflows** — DAG-based pipelines with step dependencies
 - **Automated evaluations** — scheduled test suites with relevance/toxicity/latency thresholds
@@ -128,7 +128,7 @@ Key capabilities:
 | CRD | Scope | Purpose |
 |-----|-------|---------|
 | `AIAgent` | Namespaced | Define an agent: model, system prompt, policy, MCP tools, storage |
-| `AgentPolicy` | Namespaced | Guardrail rules, token budgets, allowed models, MCP access control |
+| `AgentPolicy` | Namespaced | Guardrail rules, per-request token caps, allowed models, MCP access control |
 | `AgentTenant` | Cluster | Namespace isolation, resource quotas, allowed models, admin users |
 | `AgentWorkflow` | Namespaced | Multi-step agent DAGs with dependencies and approval gates |
 | `AgentEval` | Namespaced | Scheduled evaluation test suites with quality thresholds |
@@ -346,6 +346,26 @@ gooseRuntime:
   image:
     repository: ghcr.io/your-org/ai-goose-runtime
     tag: "1.0.0"
+  env:
+    GOOSE_MAX_TURNS: 40
+    GOOSE_CONTEXT_STRATEGY: summarize
+    GOOSE_MOIM_MESSAGE_TEXT: "Run tests before writing files."
+    CONTEXT_FILE_NAMES:
+      - AGENTS.md
+      - .goosehints
+    GOOSE_RUNTIME_BUILTINS:
+      - developer
+    GOOSE_RUNTIME_CONFIG_FILES_JSON:
+      config.yaml: |
+        GOOSE_MODE: smart_approve
+        GOOSE_AUTO_COMPACT_THRESHOLD: 0.8
+        GOOSE_SEARCH_PATHS:
+          - /workspace/bin
+        slash_commands:
+          - command: run-tests
+            recipe_path: /workspace/.goose/recipes/run-tests.yaml
+      prompts/review.md: |
+        Review code conservatively, explain risks first, and avoid destructive actions.
 
 apiGateway:
   replicaCount: 2
@@ -413,6 +433,15 @@ The chart intentionally deploys no shared MCP servers by default. The GitHub ent
 telemetry:
   otlpEndpoint: "http://otel-collector.monitoring:4318"
 ```
+
+`GOOSE_RUNTIME_CONFIG_FILES_JSON` lets the Goose adapter write native Goose
+config files into `XDG_CONFIG_HOME/goose` before invoking `goose run`. That is
+the cleanest place to keep durable Goose defaults such as `config.yaml`, prompt
+templates under `prompts/`, search paths, and slash-command recipes, while the
+shared invoke API stays focused on per-request controls. Keep secrets in
+Kubernetes `Secret`-backed env vars instead of writing `secrets.yaml`, and do
+not preseed `permissions/tool_permissions.json` because Goose manages that file
+itself at runtime.
 
 ### 4. Install the Helm Chart
 
@@ -558,15 +587,13 @@ spec:
     blockedOutputPatterns:
       - "internal-api-key-[a-zA-Z0-9]+"
     maxOutputTokens: 4096
-  budget:
-    maxTokensPerHour: 100000
-    maxRequestsPerMinute: 30
-    maxCostPerDayUSD: "50.00"
   allowedModels:
     - gpt-4
   allowedMcpServers: []
   mcpRequireHitl: true
 ```
+
+`spec.budget` is reserved for future distributed enforcement and is rejected by the CRD and operator today. Use `maxInputTokens` and `maxOutputTokens` for currently supported limits.
 
 ```bash
 kubectl apply -f my-policy.yaml
@@ -619,6 +646,34 @@ curl -X POST http://localhost:8080/api/agents/my-assistant/invoke?namespace=agen
   -H "Authorization: Bearer my-secret-bearer-token" \
   -H "Content-Type: application/json" \
   -d '{"prompt": "Explain Kubernetes namespaces in simple terms"}'
+```
+
+Goose agents also accept Goose-native `run` controls through the same payload, for example `system`, `max_turns`, `no_session`, `working_directory`, `builtin_extensions`, `stdio_extensions`, and `streamable_http_extensions`. The `agentctl invoke` command exposes matching flags for those fields.
+
+For durable Goose defaults that should live with a specific agent rather than the
+chart, add `spec.runtime.goose.configFiles` to the `AIAgent`. Those files are
+merged over chart-wide `GOOSE_RUNTIME_CONFIG_FILES_JSON` entries by relative
+path before the Goose runtime starts.
+
+```yaml
+runtime:
+  kind: goose
+  goose:
+    configFiles:
+      config.yaml: |
+        GOOSE_MODE: smart_approve
+        GOOSE_AUTO_COMPACT_THRESHOLD: 0.8
+      "prompts/review.md": |
+        Review code conservatively and call out operational risks first.
+```
+
+To inspect the effective Goose configuration for a running Goose agent without
+entering the container, port-forward the runtime pod or StatefulSet and query
+its debug endpoint:
+
+```bash
+kubectl port-forward statefulset/goose-assistant-sandbox 18080:8080
+curl http://localhost:18080/debug/goose-info
 ```
 
 Response:
@@ -786,13 +841,13 @@ Approve or deny:
 curl -X PATCH http://localhost:8080/api/approvals/approval-name?namespace=agent-tenant-my-team \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"decision": "approved", "reviewer": "alice@mycompany.com", "reason": "Looks good"}'
+  -d '{"decision": "approved", "reason": "Looks good"}'
 
 # Deny
 curl -X PATCH http://localhost:8080/api/approvals/approval-name?namespace=agent-tenant-my-team \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"decision": "denied", "reviewer": "bob@mycompany.com", "reason": "Too risky"}'
+  -d '{"decision": "denied", "reason": "Too risky"}'
 ```
 
 Optional webhook notifications: set `agentRuntime.hitl.notificationWebhookUrl` in values.yaml to receive POST notifications when approvals are created.
@@ -1311,6 +1366,7 @@ make docker-build         # Build all 5 first-party container images
 make docker-push          # Push all images to REGISTRY
 make lint                 # Run flake8 on all Python components
 make test                 # Run pytest on all components
+make test-goose-runtime-e2e # Build the Goose runtime image and run Docker-backed E2E coverage
 make helm-lint            # Lint the Helm chart
 make helm-package         # Package chart to dist/
 make helm-template        # Render templates to stdout

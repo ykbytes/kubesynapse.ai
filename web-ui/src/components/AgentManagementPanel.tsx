@@ -1,6 +1,7 @@
 import { Save, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 
+import { GOOSE_CONFIG_FILES_PLACEHOLDER, stringifyGooseConfigFiles } from "../lib/gooseConfig";
 import type { AgentDetail, PolicyInfo, RuntimeKind, UpdateAgentPayload } from "../types";
 
 interface AgentManagementPanelProps {
@@ -9,7 +10,7 @@ interface AgentManagementPanelProps {
   isSaving: boolean;
   isDeleting: boolean;
   error: string;
-  onSave: (payload: UpdateAgentPayload) => void;
+  onSave: (payload: UpdateAgentPayload, gooseConfigFilesText: string) => void;
   onDelete: () => void;
 }
 
@@ -28,6 +29,7 @@ export function AgentManagementPanel({
   const [storageSize, setStorageSize] = useState(agent.storage_size ?? "1Gi");
   const [runtimeKind, setRuntimeKind] = useState<RuntimeKind>(agent.runtime_kind ?? "langgraph");
   const [enableGvisor, setEnableGvisor] = useState(agent.enable_gvisor);
+  const [gooseConfigFilesText, setGooseConfigFilesText] = useState(stringifyGooseConfigFiles(agent.goose_config_files));
 
   useEffect(() => {
     setModel(agent.model);
@@ -36,6 +38,7 @@ export function AgentManagementPanel({
     setStorageSize(agent.storage_size ?? "1Gi");
     setRuntimeKind(agent.runtime_kind ?? "langgraph");
     setEnableGvisor(agent.enable_gvisor);
+    setGooseConfigFilesText(stringifyGooseConfigFiles(agent.goose_config_files));
   }, [agent]);
 
   return (
@@ -92,6 +95,23 @@ export function AgentManagementPanel({
               onChange={(event) => setSystemPrompt(event.target.value)}
             />
           </label>
+          {runtimeKind === "goose" ? (
+            <label>
+              <span>Goose config files (JSON)</span>
+              <textarea
+                className="prompt-input compact-input"
+                rows={10}
+                value={gooseConfigFilesText}
+                onChange={(event) => setGooseConfigFilesText(event.target.value)}
+                placeholder={GOOSE_CONFIG_FILES_PLACEHOLDER}
+              />
+            </label>
+          ) : null}
+          {runtimeKind === "goose" ? (
+            <p className="hint-text">
+              Keys must be relative Goose config-root paths such as <code>config.yaml</code> or <code>prompts/review.md</code>.
+            </p>
+          ) : null}
           {error ? <p className="error-banner">{error}</p> : null}
           <div className="composer-actions wrap-actions">
             <p className="hint-text">Saving updates the agent spec and triggers the operator to reconcile the runtime.</p>
@@ -107,7 +127,7 @@ export function AgentManagementPanel({
                     storage_size: storageSize.trim() || undefined,
                     runtime_kind: runtimeKind,
                     enable_gvisor: enableGvisor,
-                  })
+                  }, gooseConfigFilesText)
                 }
                 disabled={!model.trim() || isSaving}
               >

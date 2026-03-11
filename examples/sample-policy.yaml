@@ -15,10 +15,9 @@ spec:
     blockedOutputPatterns:
       - "internal-api-key-[a-zA-Z0-9]+"
     maxOutputTokens: 4096
-  budget:
-    maxTokensPerHour: 100000
-    maxRequestsPerMinute: 30
-    maxCostPerDayUSD: "50.00"
+  # spec.budget is intentionally omitted.
+  # Distributed token, request, and cost budgets are reserved for a future
+  # release and are rejected by the CRD and operator today.
   allowedModels:
     - gpt-4
     - gpt-3.5-turbo

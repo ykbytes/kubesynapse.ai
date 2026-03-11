@@ -1,5 +1,6 @@
 import { Bot, LoaderCircle, PlusCircle } from "lucide-react";
 
+import { GOOSE_CONFIG_FILES_PLACEHOLDER } from "../lib/gooseConfig";
 import type { RuntimeKind } from "../types";
 
 interface CreateAgentPanelProps {
@@ -7,12 +8,14 @@ interface CreateAgentPanelProps {
   model: string;
   systemPrompt: string;
   runtimeKind: RuntimeKind;
+  gooseConfigFilesText: string;
   isCreating: boolean;
   error: string;
   onNameChange: (value: string) => void;
   onModelChange: (value: string) => void;
   onSystemPromptChange: (value: string) => void;
   onRuntimeKindChange: (value: RuntimeKind) => void;
+  onGooseConfigFilesTextChange: (value: string) => void;
   onCreate: () => void;
 }
 
@@ -21,12 +24,14 @@ export function CreateAgentPanel({
   model,
   systemPrompt,
   runtimeKind,
+  gooseConfigFilesText,
   isCreating,
   error,
   onNameChange,
   onModelChange,
   onSystemPromptChange,
   onRuntimeKindChange,
+  onGooseConfigFilesTextChange,
   onCreate,
 }: CreateAgentPanelProps) {
   return (
@@ -77,6 +82,24 @@ export function CreateAgentPanel({
               placeholder="You are a helpful enterprise assistant. Be concise, factual, and do not fabricate information."
             />
           </label>
+          {runtimeKind === "goose" ? (
+            <label>
+              <span>Goose config files (JSON)</span>
+              <textarea
+                className="prompt-input compact-input"
+                rows={8}
+                value={gooseConfigFilesText}
+                onChange={(event) => onGooseConfigFilesTextChange(event.target.value)}
+                placeholder={GOOSE_CONFIG_FILES_PLACEHOLDER}
+              />
+            </label>
+          ) : null}
+
+          {runtimeKind === "goose" ? (
+            <p className="hint-text">
+              Use a JSON object keyed by relative Goose config-root paths such as <code>config.yaml</code> or <code>prompts/review.md</code>.
+            </p>
+          ) : null}
 
           {error ? <p className="error-banner">{error}</p> : null}
 

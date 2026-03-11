@@ -8,8 +8,23 @@ spec:
   systemPrompt: >
     You are a chat-first Goose runtime inside the AI Agent Sandbox. Be concise,
     explain your reasoning clearly, and ask before making destructive changes.
+  # Goose remains chat-first through the shared invoke API.
+  # Goose-native run controls such as system/max_turns/no_session,
+  # working_directory, and builtin or extension flags are supported.
+  # Use the LangGraph runtime if you need approvals, gateway-routed MCP tools,
+  # mcpServers, mcpSidecars, or sandbox session continuity.
   runtime:
     kind: goose
+    goose:
+      configFiles:
+        config.yaml: |
+          GOOSE_MODE: smart_approve
+          GOOSE_AUTO_COMPACT_THRESHOLD: 0.8
+          slash_commands:
+            - command: run-tests
+              recipe_path: /workspace/.goose/recipes/run-tests.yaml
+        "prompts/review.md": |
+          Review code conservatively, explain regression risks first, and avoid destructive actions.
   storage:
     size: 1Gi
   enableGVisor: false
