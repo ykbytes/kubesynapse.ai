@@ -77,31 +77,31 @@ The implementation follows these design principles:
 
 ```mermaid
 flowchart LR
-    User[User / Client / UI]
-    Ingress[Ingress\nagents.example.com/api]
-    APIGW[API Gateway\nFastAPI]
-    K8s[Kubernetes API]
-    Operator[Operator\nKopf controller]
-    Worker[Workflow / Eval Worker Jobs]
-    ArtifactPVC[Worker Artifact PVCs\nJSON artifacts outside CRD status]
+    User["User / Client / UI"]
+    Ingress["Ingress\nagents.example.com/api"]
+    APIGW["API Gateway\nFastAPI"]
+    K8s["Kubernetes API"]
+    Operator["Operator\nKopf controller"]
+    Worker["Workflow / Eval Worker Jobs"]
+    ArtifactPVC["Worker Artifact PVCs\nJSON artifacts outside CRD status"]
 
-    subgraph AgentNS[Agent Namespace]
-        RuntimeSvc[Per-agent Service\nagent-name-sandbox:8080]
-        RuntimeSTS[Agent Runtime StatefulSet\n1 replica + LangGraph + Guardrails + RAG]
-        Sidecar[MCP Sidecar(s)\noptional localhost tools]
-        StatePVC[Checkpoint PVC\n/app/state/checkpoints.sqlite]
-        ApprovalCR[AgentApproval CRDs]
+    subgraph AgentNS["Agent Namespace"]
+        RuntimeSvc["Per-agent Service\nagent-name-sandbox:8080"]
+        RuntimeSTS["Agent Runtime StatefulSet\n1 replica + LangGraph + Guardrails + RAG"]
+        Sidecar["MCP Sidecar(s)\noptional localhost tools"]
+        StatePVC["Checkpoint PVC\n/app/state/checkpoints.sqlite"]
+        ApprovalCR["AgentApproval CRDs"]
     end
 
-    LiteLLM[LiteLLM Gateway]
-    Redis[Redis Cache]
-    Qdrant[Qdrant Vector DB]
-    NATS[NATS / JetStream]
-    ExtSecrets[External Secrets]
-    SecretStore[ClusterSecretStore]
-    LLM[External Model Providers]
-    SharedMCP[Shared MCP Service\nexample: github]
-    Webhook[Approval Notification Webhook\noptional]
+    LiteLLM["LiteLLM Gateway"]
+    Redis["Redis Cache"]
+    Qdrant["Qdrant Vector DB"]
+    NATS["NATS / JetStream"]
+    ExtSecrets["External Secrets"]
+    SecretStore["ClusterSecretStore"]
+    LLM["External Model Providers"]
+    SharedMCP["Shared MCP Service\nexample: github"]
+    Webhook["Approval Notification Webhook\noptional"]
 
     User --> Ingress --> APIGW
     APIGW --> RuntimeSvc --> RuntimeSTS
@@ -712,7 +712,7 @@ The platform is already structured like a real control-plane/data-plane system, 
 
 ---
 
-## 17. MCP Execution Architecture
+## 16. MCP Execution Architecture
 
 ### 3-Tier execution model
 
@@ -790,7 +790,7 @@ The platform evaluation criteria still center on the same nine categories:
 
 ---
 
-## 16. Final Assessment
+## 17. Final Assessment
 
 Kubeminionagents is best understood as a **Kubernetes-native agent platform** with:
 
