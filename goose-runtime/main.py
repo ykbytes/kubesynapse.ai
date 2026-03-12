@@ -18,6 +18,11 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, model_validator
 
+try:
+    import yaml
+except ModuleNotFoundError:  # pragma: no cover - covered by runtime packaging
+    yaml = None
+
 
 def get_int_env(name: str, default: int, *, minimum: int = 1) -> int:
     raw_value = os.getenv(name, "").strip()
@@ -97,6 +102,22 @@ def parse_a2a_peer_refs_env(name: str) -> frozenset[tuple[str, str]]:
 
     return frozenset((item["namespace"], item["name"]) for item in peer_refs)
 
+
+def normalize_json_object(value: Any, *, field_name: str, max_chars: int) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError(f"{field_name} must be an object when provided")
+
+    encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+    if len(encoded) > max_chars:
+        raise ValueError(f"{field_name} exceeds {max_chars} characters once serialized")
+
+    normalized = json.loads(encoded)
+    if not isinstance(normalized, dict):
+        raise ValueError(f"{field_name} must serialize to an object")
+    return normalized
+
 SERVICE_NAME = os.getenv("AGENT_NAME", "goose-runtime")
 SERVICE_NAMESPACE = os.getenv("AGENT_NAMESPACE", "default")
 DEFAULT_MODEL = os.getenv("GOOSE_MODEL", os.getenv("AGENT_MODEL", "gpt-4"))
@@ -116,6 +137,14 @@ MAX_EXTENSION_SPEC_CHARS = get_int_env("GOOSE_MAX_EXTENSION_SPEC_CHARS", 1024)
 MAX_EXTENSION_ITEMS = get_int_env("GOOSE_MAX_EXTENSION_ITEMS", 16)
 MAX_TURNS_LIMIT = get_int_env("GOOSE_MAX_TURNS_LIMIT", 1000)
 COMMAND_TIMEOUT_SECONDS = get_float_env("GOOSE_COMMAND_TIMEOUT_SECONDS", 600.0)
+TEAM_CONTEXT_MAX_CHARS = get_int_env("A2A_TEAM_CONTEXT_MAX_CHARS", 4096, minimum=256)
+SKILL_FILES_ENV = "AGENT_SKILL_FILES_JSON"
+SKILLS_ROOT = os.getenv("AGENT_SKILLS_ROOT", "/app/state/skills").strip() or "/app/state/skills"
+MAX_AGENT_SKILL_FILES = get_int_env("AGENT_MAX_SKILL_FILES", 24, minimum=1)
+MAX_AGENT_SKILL_FILE_PATH_CHARS = get_int_env("AGENT_MAX_SKILL_FILE_PATH_CHARS", 256, minimum=32)
+MAX_AGENT_SKILL_FILE_CONTENT_CHARS = get_int_env("AGENT_MAX_SKILL_FILE_CONTENT_CHARS", 16000, minimum=512)
+MAX_AGENT_SKILL_TOTAL_CHARS = get_int_env("AGENT_MAX_SKILL_TOTAL_CHARS", 64000, minimum=4096)
+MAX_AGENT_SKILL_PROMPT_CHARS = get_int_env("AGENT_MAX_SKILL_PROMPT_CHARS", 16000, minimum=512)
 
 
 def dedupe_items(values: list[str]) -> list[str]:
@@ -152,6 +181,16 @@ DEFAULT_STDIO_EXTENSIONS = parse_string_list_env("GOOSE_RUNTIME_STDIO_EXTENSIONS
 DEFAULT_STREAMABLE_HTTP_EXTENSIONS = parse_string_list_env("GOOSE_RUNTIME_STREAMABLE_HTTP_EXTENSIONS")
 A2A_ALLOWED_CALLERS = parse_a2a_peer_refs_env("A2A_ALLOWED_CALLERS_JSON")
 GOOSE_RUNTIME_CONFIG_FILES_ENV = "GOOSE_RUNTIME_CONFIG_FILES_JSON"
+SKILL_RUNTIME_CONFIG: dict[str, Any] = {
+    "files": {},
+    "skills": [],
+    "prompt": "",
+    "warnings": [],
+    "gooseBuiltinExtensions": frozenset(),
+    "gooseStdioExtensions": frozenset(),
+    "gooseStreamableHttpExtensions": frozenset(),
+    "skillFiles": [],
+}
 
 
 def goose_config_root() -> Path:
@@ -234,6 +273,324 @@ def current_goose_config_files() -> list[str]:
     )
 
 
+def normalize_skill_file_path(raw_path: object) -> str:
+    normalized_path = str(raw_path).replace("\\", "/").strip()
+    if not normalized_path:
+        raise RuntimeError("Skill file paths must not be blank")
+    if len(normalized_path) > MAX_AGENT_SKILL_FILE_PATH_CHARS:
+        raise RuntimeError(
+            f"Skill file paths must be {MAX_AGENT_SKILL_FILE_PATH_CHARS} characters or fewer"
+        )
+    if normalized_path.startswith("/"):
+        raise RuntimeError("Skill file paths must be relative")
+
+    parts = [part for part in normalized_path.split("/") if part]
+    if not parts or any(part in {".", ".."} for part in parts):
+        raise RuntimeError(f"Skill file path '{raw_path}' is invalid")
+
+    candidate = "/".join(parts)
+    if not candidate.lower().endswith(".md"):
+        raise RuntimeError(f"Skill file path '{candidate}' must end in .md")
+    return candidate
+
+
+def split_skill_frontmatter(content: str) -> tuple[str | None, str, str | None]:
+    normalized = str(content or "").replace("\r\n", "\n")
+    if not normalized.startswith("---\n"):
+        return None, normalized, None
+
+    lines = normalized.split("\n")
+    for index in range(1, len(lines)):
+        if lines[index].strip() == "---":
+            return "\n".join(lines[1:index]), "\n".join(lines[index + 1 :]), None
+    return None, normalized, "Skill frontmatter must end with a closing '---' line"
+
+
+def infer_skill_name(path: str) -> str:
+    parts = [part for part in path.split("/") if part]
+    if len(parts) >= 2 and parts[-1].lower() == "skill.md":
+        return parts[-2].replace("-", " ").strip() or "skill"
+    stem = parts[-1].rsplit(".", 1)[0] if parts else "skill"
+    return stem.replace("-", " ").strip() or "skill"
+
+
+def parse_skill_frontmatter(frontmatter: str) -> tuple[dict[str, Any], list[str]]:
+    warnings: list[str] = []
+    if not frontmatter.strip():
+        return {}, warnings
+
+    try:
+        if yaml is not None:
+            parsed = yaml.safe_load(frontmatter)
+        else:
+            parsed = json.loads(frontmatter)
+    except Exception as exc:
+        return {}, [f"Skill frontmatter is invalid: {exc}"]
+
+    if parsed is None:
+        return {}, warnings
+    if not isinstance(parsed, dict):
+        return {}, ["Skill frontmatter must be a YAML or JSON object"]
+    return parsed, warnings
+
+
+def skill_metadata_string_list(metadata: dict[str, Any], *keys: str) -> tuple[list[str], list[str]]:
+    warnings: list[str] = []
+    raw_value: Any = None
+    field_name = keys[0] if keys else "value"
+    for key in keys:
+        if key in metadata:
+            raw_value = metadata.get(key)
+            field_name = key
+            break
+
+    if raw_value is None:
+        return [], warnings
+    if not isinstance(raw_value, list):
+        return [], [f"{field_name} must be a list of strings"]
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for index, item in enumerate(raw_value):
+        value = str(item or "").strip()
+        if not value:
+            continue
+        if len(value) > MAX_EXTENSION_SPEC_CHARS:
+            warnings.append(f"{field_name}[{index}] must be {MAX_EXTENSION_SPEC_CHARS} characters or fewer")
+            continue
+        if value in seen:
+            continue
+        seen.add(value)
+        normalized.append(value)
+    return normalized, warnings
+
+
+def parse_skill_definition(path: str, content: str) -> dict[str, Any]:
+    warnings: list[str] = []
+    frontmatter, body, split_warning = split_skill_frontmatter(content)
+    if split_warning:
+        warnings.append(split_warning)
+    metadata, metadata_warnings = parse_skill_frontmatter(frontmatter or "")
+    warnings.extend(metadata_warnings)
+
+    raw_name = metadata.get("name")
+    if raw_name is not None and not isinstance(raw_name, str):
+        warnings.append("name must be a string")
+        raw_name = None
+    raw_description = metadata.get("description")
+    if raw_description is not None and not isinstance(raw_description, str):
+        warnings.append("description must be a string")
+        raw_description = None
+
+    goose_builtin_extensions, builtin_warnings = skill_metadata_string_list(
+        metadata,
+        "gooseBuiltinExtensions",
+        "goose_builtin_extensions",
+    )
+    goose_stdio_extensions, stdio_warnings = skill_metadata_string_list(
+        metadata,
+        "gooseStdioExtensions",
+        "goose_stdio_extensions",
+    )
+    goose_streamable_http_extensions, http_warnings = skill_metadata_string_list(
+        metadata,
+        "gooseStreamableHttpExtensions",
+        "goose_streamable_http_extensions",
+    )
+    warnings.extend(builtin_warnings)
+    warnings.extend(stdio_warnings)
+    warnings.extend(http_warnings)
+    warnings = dedupe_items(warnings)
+
+    return {
+        "path": path,
+        "name": str(raw_name or infer_skill_name(path)).strip() or infer_skill_name(path),
+        "description": str(raw_description or "").strip() or None,
+        "body": str(body or "").strip(),
+        "gooseBuiltinExtensions": goose_builtin_extensions,
+        "gooseStdioExtensions": goose_stdio_extensions,
+        "gooseStreamableHttpExtensions": goose_streamable_http_extensions,
+        "warnings": warnings,
+    }
+
+
+def render_skill_prompt(skills: list[dict[str, Any]]) -> str:
+    if not skills:
+        return ""
+
+    sections = [
+        "The following file-backed skills are available. Use their guidance when relevant and stay within their declared capability grants.",
+    ]
+    for skill in skills:
+        lines = [f"Skill: {skill.get('name')}"]
+        if skill.get("description"):
+            lines.append(f"Description: {skill.get('description')}")
+        grants: list[str] = []
+        if skill.get("gooseBuiltinExtensions"):
+            grants.append("Goose builtins: " + ", ".join(skill.get("gooseBuiltinExtensions") or []))
+        if skill.get("gooseStdioExtensions"):
+            grants.append("Goose stdio extensions: " + ", ".join(skill.get("gooseStdioExtensions") or []))
+        if skill.get("gooseStreamableHttpExtensions"):
+            grants.append(
+                "Goose streamable HTTP extensions: " + ", ".join(skill.get("gooseStreamableHttpExtensions") or [])
+            )
+        if grants:
+            lines.append("Capability grants:")
+            lines.extend(f"- {item}" for item in grants)
+        if skill.get("body"):
+            lines.append("Instructions:")
+            lines.append(str(skill.get("body") or ""))
+        sections.append("\n".join(lines).strip())
+    return truncate_text("\n\n".join(section for section in sections if section.strip()), MAX_AGENT_SKILL_PROMPT_CHARS)
+
+
+def load_skill_runtime_config() -> dict[str, Any]:
+    raw_value = os.getenv(SKILL_FILES_ENV, "").strip()
+    if not raw_value:
+        return {
+            "files": {},
+            "skills": [],
+            "prompt": "",
+            "warnings": [],
+            "gooseBuiltinExtensions": frozenset(),
+            "gooseStdioExtensions": frozenset(),
+            "gooseStreamableHttpExtensions": frozenset(),
+            "skillFiles": [],
+        }
+
+    try:
+        parsed = json.loads(raw_value)
+    except ValueError as exc:
+        warning = f"Ignoring invalid {SKILL_FILES_ENV} value: {exc}"
+        logger.warning(warning)
+        return {
+            "files": {},
+            "skills": [],
+            "prompt": "",
+            "warnings": [warning],
+            "gooseBuiltinExtensions": frozenset(),
+            "gooseStdioExtensions": frozenset(),
+            "gooseStreamableHttpExtensions": frozenset(),
+            "skillFiles": [],
+        }
+
+    if not isinstance(parsed, dict):
+        warning = f"Ignoring invalid {SKILL_FILES_ENV} value: expected a JSON object keyed by Markdown paths"
+        logger.warning(warning)
+        return {
+            "files": {},
+            "skills": [],
+            "prompt": "",
+            "warnings": [warning],
+            "gooseBuiltinExtensions": frozenset(),
+            "gooseStdioExtensions": frozenset(),
+            "gooseStreamableHttpExtensions": frozenset(),
+            "skillFiles": [],
+        }
+
+    files: dict[str, str] = {}
+    skills: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    builtin_extensions: set[str] = set()
+    stdio_extensions: set[str] = set()
+    streamable_http_extensions: set[str] = set()
+    total_chars = 0
+
+    for raw_path, raw_content in sorted(parsed.items(), key=lambda item: str(item[0])):
+        try:
+            path = normalize_skill_file_path(raw_path)
+        except RuntimeError as exc:
+            warnings.append(str(exc))
+            continue
+        if not isinstance(raw_content, str):
+            warnings.append(f"{SKILL_FILES_ENV}.{path} must be a Markdown string")
+            continue
+        if not raw_content.strip():
+            warnings.append(f"{SKILL_FILES_ENV}.{path} must not be blank")
+            continue
+        if len(raw_content) > MAX_AGENT_SKILL_FILE_CONTENT_CHARS:
+            warnings.append(f"{SKILL_FILES_ENV}.{path} exceeds {MAX_AGENT_SKILL_FILE_CONTENT_CHARS} characters")
+            continue
+        if len(files) >= MAX_AGENT_SKILL_FILES:
+            warnings.append(f"Only the first {MAX_AGENT_SKILL_FILES} skill files were loaded")
+            break
+
+        total_chars += len(raw_content)
+        if total_chars > MAX_AGENT_SKILL_TOTAL_CHARS:
+            warnings.append(f"Ignoring {path} because total skill content exceeds {MAX_AGENT_SKILL_TOTAL_CHARS} characters")
+            break
+
+        normalized_content = raw_content.replace("\r\n", "\n")
+        files[path] = normalized_content
+        skill = parse_skill_definition(path, normalized_content)
+        skills.append(skill)
+        warnings.extend(skill.get("warnings") or [])
+        builtin_extensions.update(str(item).strip() for item in (skill.get("gooseBuiltinExtensions") or []) if str(item).strip())
+        stdio_extensions.update(str(item).strip() for item in (skill.get("gooseStdioExtensions") or []) if str(item).strip())
+        streamable_http_extensions.update(
+            str(item).strip() for item in (skill.get("gooseStreamableHttpExtensions") or []) if str(item).strip()
+        )
+
+    warnings = dedupe_items(warnings)
+    return {
+        "files": files,
+        "skills": skills,
+        "prompt": render_skill_prompt(skills),
+        "warnings": warnings,
+        "gooseBuiltinExtensions": frozenset(builtin_extensions),
+        "gooseStdioExtensions": frozenset(stdio_extensions),
+        "gooseStreamableHttpExtensions": frozenset(streamable_http_extensions),
+        "skillFiles": sorted(files.keys()),
+    }
+
+
+def materialize_skill_files() -> list[str]:
+    skill_files = SKILL_RUNTIME_CONFIG.get("files") or {}
+    if os.path.isdir(SKILLS_ROOT):
+        shutil.rmtree(SKILLS_ROOT, ignore_errors=True)
+    os.makedirs(SKILLS_ROOT, exist_ok=True)
+
+    written_files: list[str] = []
+    for path, content in sorted(skill_files.items()):
+        resolved_path = (Path(SKILLS_ROOT) / Path(*path.split("/"))).resolve()
+        resolved_path.parent.mkdir(parents=True, exist_ok=True)
+        resolved_path.write_text(content.rstrip("\n") + "\n", encoding="utf-8")
+        written_files.append(path)
+    return written_files
+
+
+def validate_skill_extension_request(request: "InvokeRequest") -> None:
+    if not SKILL_RUNTIME_CONFIG.get("skills"):
+        return
+
+    allowed_builtin_extensions = SKILL_RUNTIME_CONFIG.get("gooseBuiltinExtensions") or frozenset()
+    if request.builtin_extensions and not allowed_builtin_extensions.issuperset(request.builtin_extensions):
+        disallowed = sorted(set(request.builtin_extensions) - set(allowed_builtin_extensions))
+        raise HTTPException(
+            status_code=400,
+            detail=f"Requested Goose builtin extensions are not granted by the agent's skill files: {', '.join(disallowed)}",
+        )
+
+    allowed_stdio_extensions = SKILL_RUNTIME_CONFIG.get("gooseStdioExtensions") or frozenset()
+    if request.stdio_extensions and not allowed_stdio_extensions.issuperset(request.stdio_extensions):
+        disallowed = sorted(set(request.stdio_extensions) - set(allowed_stdio_extensions))
+        raise HTTPException(
+            status_code=400,
+            detail=f"Requested Goose stdio extensions are not granted by the agent's skill files: {', '.join(disallowed)}",
+        )
+
+    allowed_streamable_http_extensions = SKILL_RUNTIME_CONFIG.get("gooseStreamableHttpExtensions") or frozenset()
+    if request.streamable_http_extensions and not allowed_streamable_http_extensions.issuperset(request.streamable_http_extensions):
+        disallowed = sorted(set(request.streamable_http_extensions) - set(allowed_streamable_http_extensions))
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Requested Goose streamable HTTP extensions are not granted by the agent's skill files: "
+                + ", ".join(disallowed)
+            ),
+        )
+
+
 def inspect_goose_configuration() -> dict[str, Any]:
     ensure_runtime_directories()
     materialize_goose_config_files()
@@ -291,6 +648,7 @@ class InvokeRequest(BaseModel):
     caller_agent_namespace: str | None = Field(default=None, max_length=63)
     parent_thread_id: str | None = Field(default=None, max_length=MAX_THREAD_ID_CHARS)
     caller_request_id: str | None = Field(default=None, max_length=128)
+    team_context: dict[str, Any] | None = None
     debug: bool = False
     no_session: bool = False
     max_turns: int | None = Field(default=None, ge=1, le=MAX_TURNS_LIMIT)
@@ -318,6 +676,11 @@ class InvokeRequest(BaseModel):
         self.parent_thread_id = self.parent_thread_id.strip() or None if self.parent_thread_id is not None else None
         self.caller_request_id = self.caller_request_id.strip() or None if self.caller_request_id is not None else None
         self.mcp_server = self.mcp_server.strip() or None if self.mcp_server is not None else None
+        self.team_context = normalize_json_object(
+            self.team_context,
+            field_name="team_context",
+            max_chars=TEAM_CONTEXT_MAX_CHARS,
+        )
 
         if not self.prompt:
             raise ValueError("prompt must not be blank")
@@ -392,6 +755,11 @@ class InvokeResponse(BaseModel):
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     ensure_runtime_directories()
+    SKILL_RUNTIME_CONFIG.clear()
+    SKILL_RUNTIME_CONFIG.update(load_skill_runtime_config())
+    SKILL_RUNTIME_CONFIG["skillFiles"] = materialize_skill_files()
+    if SKILL_RUNTIME_CONFIG.get("warnings"):
+        logger.warning("Loaded Goose skill files with warnings: %s", "; ".join(SKILL_RUNTIME_CONFIG["warnings"]))
     materialize_goose_config_files()
     if shutil.which(GOOSE_BINARY) is None:
         raise RuntimeError(f"goose binary '{GOOSE_BINARY}' is not available on PATH")
@@ -407,7 +775,7 @@ app = FastAPI(
 
 
 def ensure_runtime_directories() -> None:
-    for path in (GOOSE_WORKDIR, HOME_DIR, XDG_CONFIG_HOME, XDG_DATA_HOME, str(goose_config_root()), "/app/state"):
+    for path in (GOOSE_WORKDIR, HOME_DIR, XDG_CONFIG_HOME, XDG_DATA_HOME, str(goose_config_root()), SKILLS_ROOT, "/app/state"):
         os.makedirs(path, exist_ok=True)
 
 
@@ -435,6 +803,46 @@ def combined_error_text(stdout_text: str, stderr_text: str) -> str:
 
 def combine_system_prompt(*parts: str | None) -> str:
     return "\n\n".join(part.strip() for part in parts if part and part.strip())
+
+
+def format_team_context_system_prompt(team_context: dict[str, Any] | None) -> str:
+    if not isinstance(team_context, dict) or not team_context:
+        return ""
+
+    lines = ["This request is part of a multi-agent collaboration."]
+    caller = team_context.get("caller") if isinstance(team_context.get("caller"), dict) else None
+    if caller:
+        caller_name = str(caller.get("name") or "").strip()
+        caller_namespace = str(caller.get("namespace") or "").strip()
+        if caller_name and caller_namespace:
+            lines.append(f"Caller agent: {caller_name} in namespace {caller_namespace}.")
+        caller_thread = str(caller.get("threadId") or "").strip()
+        if caller_thread:
+            lines.append(f"Caller thread: {caller_thread}.")
+
+    objective = str(team_context.get("objective") or "").strip()
+    if objective:
+        lines.append(f"Delegated objective: {objective}")
+
+    working_agreement = [
+        str(item).strip()
+        for item in (team_context.get("workingAgreement") if isinstance(team_context.get("workingAgreement"), list) else [])
+        if str(item).strip()
+    ]
+    if working_agreement:
+        lines.append("Working agreement:")
+        lines.extend(f"- {item}" for item in working_agreement[:5])
+
+    extra = {
+        key: value
+        for key, value in team_context.items()
+        if key not in {"caller", "target", "objective", "workingAgreement", "delegationChain", "mode"}
+    }
+    if extra:
+        lines.append("Additional collaboration context:")
+        lines.append(json.dumps(extra, ensure_ascii=False, sort_keys=True, default=str))
+
+    return truncate_text("\n".join(lines), TEAM_CONTEXT_MAX_CHARS)
 
 
 def merge_setting_lists(*value_groups: list[str]) -> list[str]:
@@ -479,6 +887,7 @@ def build_invoke_warnings(request: InvokeRequest) -> list[str]:
     warnings: list[str] = []
     if request.no_session:
         warnings.append("Session persistence is disabled for this invocation; the returned thread_id cannot be resumed.")
+    warnings.extend(str(item).strip() for item in (SKILL_RUNTIME_CONFIG.get("warnings") or []) if str(item).strip())
     return warnings
 
 
@@ -877,6 +1286,11 @@ def health() -> dict[str, Any]:
         "service": SERVICE_NAME,
         "namespace": SERVICE_NAMESPACE,
         "provider": DEFAULT_PROVIDER,
+        "skills": {
+            "count": len(SKILL_RUNTIME_CONFIG.get("skills") or []),
+            "files": SKILL_RUNTIME_CONFIG.get("skillFiles") or [],
+            "warnings": SKILL_RUNTIME_CONFIG.get("warnings") or [],
+        },
     }
 
 
@@ -895,6 +1309,7 @@ def ready() -> dict[str, Any]:
         "goose_config_root": str(goose_config_root()),
         "config_files": current_goose_config_files(),
         "workspace_root": str(goose_workspace_root()),
+        "skill_files": SKILL_RUNTIME_CONFIG.get("skillFiles") or [],
     }
 
 
@@ -906,10 +1321,16 @@ def debug_goose_info() -> dict[str, Any]:
 @app.post("/invoke", response_model=InvokeResponse)
 async def invoke(request: InvokeRequest) -> InvokeResponse:
     validate_inbound_a2a_request(request)
+    validate_skill_extension_request(request)
     model = (request.model or DEFAULT_MODEL).strip() or DEFAULT_MODEL
     thread_id = request.thread_id or str(uuid.uuid4())
     session_name = normalize_session_name(thread_id)
-    system_prompt = combine_system_prompt(DEFAULT_SYSTEM_PROMPT, request.system)
+    system_prompt = combine_system_prompt(
+        DEFAULT_SYSTEM_PROMPT,
+        request.system,
+        str(SKILL_RUNTIME_CONFIG.get("prompt") or "").strip(),
+        format_team_context_system_prompt(request.team_context),
+    )
     builtin_extensions = merge_setting_lists(DEFAULT_BUILTIN_EXTENSIONS, request.builtin_extensions)
     stdio_extensions = merge_setting_lists(DEFAULT_STDIO_EXTENSIONS, request.stdio_extensions)
     streamable_http_extensions = merge_setting_lists(
@@ -954,11 +1375,17 @@ async def invoke(request: InvokeRequest) -> InvokeResponse:
 @app.post("/invoke/stream")
 async def invoke_stream(request: InvokeRequest) -> StreamingResponse:
     validate_inbound_a2a_request(request)
+    validate_skill_extension_request(request)
     model = (request.model or DEFAULT_MODEL).strip() or DEFAULT_MODEL
     allow_resume = bool(request.thread_id) and not request.no_session
     thread_id = request.thread_id or str(uuid.uuid4())
     session_name = normalize_session_name(thread_id)
-    system_prompt = combine_system_prompt(DEFAULT_SYSTEM_PROMPT, request.system)
+    system_prompt = combine_system_prompt(
+        DEFAULT_SYSTEM_PROMPT,
+        request.system,
+        str(SKILL_RUNTIME_CONFIG.get("prompt") or "").strip(),
+        format_team_context_system_prompt(request.team_context),
+    )
     builtin_extensions = merge_setting_lists(DEFAULT_BUILTIN_EXTENSIONS, request.builtin_extensions)
     stdio_extensions = merge_setting_lists(DEFAULT_STDIO_EXTENSIONS, request.stdio_extensions)
     streamable_http_extensions = merge_setting_lists(

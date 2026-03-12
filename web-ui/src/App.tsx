@@ -1,20 +1,24 @@
-import "@fontsource/newsreader/600.css";
 import "@fontsource/space-grotesk/400.css";
 import "@fontsource/space-grotesk/500.css";
 import "@fontsource/space-grotesk/700.css";
 
 import { useEffect, useRef, useState } from "react";
-import { LayoutPanelTop, Shield, Sparkles } from "lucide-react";
+import { PanelRightOpen } from "lucide-react";
+import { Toaster, toast } from "sonner";
 
 import { AgentManagementPanel } from "./components/AgentManagementPanel";
+import { AppSidebar, type SidebarResourceItem } from "./components/AppSidebar";
 import { ChatWorkbench } from "./components/ChatWorkbench";
 import { CreateAgentPanel } from "./components/CreateAgentPanel";
 import { EvalManager } from "./components/EvalManager";
-import { InspectorPanel } from "./components/InspectorPanel";
-import { ResourceInspectorPanel } from "./components/ResourceInspectorPanel";
+import { AgentInspectorDrawer, ResourceInspectorDrawer } from "./components/InspectorDrawer";
+import { SkillsCatalogPanel } from "./components/SkillsCatalogPanel";
+import { TopBar } from "./components/TopBar";
 import { WorkflowManager } from "./components/WorkflowManager";
-import { WorkspaceSidebar, type SidebarResourceItem } from "./components/WorkspaceSidebar";
+import { Button } from "@/components/ui/button";
 import {
+  buildOidcLoginUrl,
+  buildSamlLoginUrl,
   buildInvocationSummary,
   createAgent,
   createEval,
@@ -26,31 +30,43 @@ import {
   discoverAgentPeers,
   fetchAgent,
   fetchAgentLogs,
+  fetchAuthConfig,
+  fetchCurrentUser,
   fetchGatewayHealth,
   invokeAgent,
+  loginWithPassword,
   listAgents,
   listEvals,
   listPolicies,
   listWorkflows,
+  logoutSession,
+  refreshAuthSession,
+  registerWithPassword,
   streamAgentInvoke,
   updateAgent,
   updateEval,
   updateWorkflow,
 } from "./lib/api";
 import { isValidK8sName, parseA2APeerRefsText } from "./lib/a2a";
-import { parseGooseConfigFilesText } from "./lib/gooseConfig";
+import { buildGooseConfigFiles } from "./lib/gooseConfig";
+import { parseMcpServersText, parseMcpSidecarsText } from "./lib/mcp";
+import { buildSkillFiles } from "./lib/skills";
 import type {
   AgentDetail,
   AgentDiscoveryPeer,
   AgentInfo,
+  AuthConfig,
+  AuthenticatedUser,
   EvalInfo,
   EvalPayload,
   EvalUpdatePayload,
   GatewayHealth,
   InvocationSummary,
   InvokePayload,
+  SpecialistSubagentDraft,
   PolicyInfo,
   RuntimeKind,
+  TextFileDraft,
   UiActivity,
   UiMessage,
   UpdateAgentPayload,
@@ -85,6 +101,20 @@ const DEFAULT_GOOSE_CHAT_SETTINGS: GooseChatSettings = {
   workingDirectory: "",
 };
 
+function createSpecialistSubagentDraft(initial?: Partial<SpecialistSubagentDraft>): SpecialistSubagentDraft {
+  return {
+    id: createId(),
+    name: initial?.name ?? "",
+    namespace: initial?.namespace ?? "",
+    role: initial?.role ?? "",
+    task: initial?.task ?? "",
+    inputFilesText: initial?.inputFilesText ?? "",
+    resultFilePath: initial?.resultFilePath ?? "",
+    shareSandboxSession: initial?.shareSandboxSession ?? true,
+    timeoutSeconds: initial?.timeoutSeconds ?? "",
+  };
+}
+
 function createId(): string {
   return typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
 }
@@ -118,6 +148,48 @@ function parseA2ATimeoutSeconds(value: string): number | undefined {
   }
 
   return parsed;
+}
+
+function parseSubagentTimeoutSeconds(value: string): number | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  const parsed = Number.parseFloat(trimmed);
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    throw new Error("Subagent timeout seconds must be a number greater than or equal to 1.");
+  }
+
+  return parsed;
+}
+
+function parseSubagentInputFiles(text: string): Array<{ path: string; purpose?: string }> {
+  return text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const [pathPart, ...purposeParts] = line.split("|");
+      const path = pathPart?.trim() ?? "";
+      if (!path) {
+        throw new Error("Shared file entries must include a path.");
+      }
+      const purpose = purposeParts.join("|").trim();
+      return purpose ? { path, purpose } : { path };
+    });
+}
+
+function hasSpecialistTeamEntries(items: SpecialistSubagentDraft[]): boolean {
+  return items.some(
+    (item) =>
+      item.name.trim() ||
+      item.namespace.trim() ||
+      item.role.trim() ||
+      item.task.trim() ||
+      item.inputFilesText.trim() ||
+      item.resultFilePath.trim(),
+  );
 }
 
 function normalizeGooseWorkingDirectory(value: string): string | undefined {
@@ -198,9 +270,22 @@ function evalStatusFromResource(resource: EvalInfo | null): Record<string, unkno
   };
 }
 
+function resolveNamespaceForUser(user: AuthenticatedUser | null, currentNamespace: string): string {
+  if (!user) {
+    return currentNamespace || "default";
+  }
+  const namespaces = user.allowed_namespaces ?? [];
+  if (namespaces.includes("*") || namespaces.includes(currentNamespace)) {
+    return currentNamespace || "default";
+  }
+  return namespaces[0] ?? "default";
+}
+
 export default function App() {
   const [token, setToken] = useState(() => localStorage.getItem(TOKEN_STORAGE_KEY) ?? "");
   const [namespace, setNamespace] = useState(() => localStorage.getItem(NAMESPACE_STORAGE_KEY) ?? "default");
+  const [authConfig, setAuthConfig] = useState<AuthConfig | null>(null);
+  const [currentUser, setCurrentUser] = useState<AuthenticatedUser | null>(null);
   const [activeView, setActiveView] = useState<WorkspaceView>("agents");
   const [health, setHealth] = useState<GatewayHealth | null>(null);
   const [gatewayError, setGatewayError] = useState("");
@@ -228,6 +313,7 @@ export default function App() {
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [logsLoading, setLogsLoading] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
+  const [authBusy, setAuthBusy] = useState(false);
   const [isCreatingAgent, setIsCreatingAgent] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [savingAgent, setSavingAgent] = useState(false);
@@ -238,6 +324,13 @@ export default function App() {
   const [deletingEval, setDeletingEval] = useState(false);
 
   const [prompt, setPrompt] = useState("");
+  const [authUsername, setAuthUsername] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authEmail, setAuthEmail] = useState("");
+  const [authDisplayName, setAuthDisplayName] = useState("");
+  const [authPasswordConfirm, setAuthPasswordConfirm] = useState("");
+  const [passwordProvider, setPasswordProvider] = useState<"local" | "ldap">("local");
+  const [registerMode, setRegisterMode] = useState(false);
   const [streamMode, setStreamMode] = useState(true);
   const [requireApproval, setRequireApproval] = useState(false);
   const [chatError, setChatError] = useState("");
@@ -251,14 +344,21 @@ export default function App() {
   const [createAgentModel, setCreateAgentModel] = useState(DEFAULT_AGENT_MODEL);
   const [createAgentSystemPrompt, setCreateAgentSystemPrompt] = useState(DEFAULT_SYSTEM_PROMPT);
   const [createAgentRuntimeKind, setCreateAgentRuntimeKind] = useState<"langgraph" | "goose">("langgraph");
+  const [createAgentMcpServersText, setCreateAgentMcpServersText] = useState("");
+  const [createAgentMcpSidecarsText, setCreateAgentMcpSidecarsText] = useState("");
   const [createAgentA2AAllowedCallersText, setCreateAgentA2AAllowedCallersText] = useState("");
-  const [createAgentGooseConfigFilesText, setCreateAgentGooseConfigFilesText] = useState("");
+  const [createAgentSkillFileDrafts, setCreateAgentSkillFileDrafts] = useState<TextFileDraft[]>([]);
+  const [createAgentGooseConfigFileDrafts, setCreateAgentGooseConfigFileDrafts] = useState<TextFileDraft[]>([]);
   const [a2aTargetAgent, setA2ATargetAgent] = useState("");
   const [a2aTargetNamespace, setA2ATargetNamespace] = useState("");
   const [a2aTimeoutSeconds, setA2ATimeoutSeconds] = useState("");
+  const [specialistSubagents, setSpecialistSubagents] = useState<SpecialistSubagentDraft[]>([]);
+  const [subagentStrategy, setSubagentStrategy] = useState<"sequential" | "parallel">("sequential");
   const [discoverablePeers, setDiscoverablePeers] = useState<AgentDiscoveryPeer[]>([]);
   const [discoveryLoading, setDiscoveryLoading] = useState(false);
   const [discoveryError, setDiscoveryError] = useState("");
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [inspectorOpen, setInspectorOpen] = useState(false);
 
   const threadIdsRef = useRef<Record<string, string>>({});
   const pendingRequestRef = useRef<Record<string, InvokePayload | null>>({});
@@ -274,11 +374,13 @@ export default function App() {
   const activity = selectedAgentName ? activityByAgent[selectedAgentName] ?? [] : [];
   const summary = selectedAgentName ? summaryByAgent[selectedAgentName] ?? null : null;
   const logs = selectedAgentName ? logsByAgent[selectedAgentName] ?? "" : "";
+  const specialistTeamConfigured = hasSpecialistTeamEntries(specialistSubagents);
   const selectedGooseChatSettings =
     selectedAgentName ? gooseChatSettingsByAgent[selectedAgentName] ?? DEFAULT_GOOSE_CHAT_SETTINGS : DEFAULT_GOOSE_CHAT_SETTINGS;
   const gooseSystemPromptPreview = selectedAgentDetail?.system_prompt.trim()
     ? selectedAgentDetail.system_prompt
-    : "No agent-specific system prompt is configured. Goose still uses the runtime default prompt from the agent container.";
+    : "This agent is using the container-level Goose system prompt. Save an agent-specific prompt here when the runtime needs stronger guidance.";
+  const canSubmitChat = Boolean(prompt.trim() || specialistSubagents.some((item) => item.task.trim()));
 
   useEffect(() => {
     localStorage.setItem(TOKEN_STORAGE_KEY, token);
@@ -289,15 +391,87 @@ export default function App() {
   }, [namespace]);
 
   useEffect(() => {
+    let cancelled = false;
+
+    async function initializeAuth() {
+      const nextConfig = await refreshAuthConfiguration();
+      if (cancelled || !nextConfig) {
+        return;
+      }
+
+      if (token.trim()) {
+        try {
+          const refreshed = await refreshCurrentUserProfile(token);
+          if (!cancelled) {
+            if (!refreshed) {
+              setCurrentUser(null);
+            }
+          }
+        } catch {
+          if (nextConfig.browser_auth_enabled) {
+            const restored = await restoreBrowserSession({ silent: true });
+            if (!restored && !cancelled) {
+              setCurrentUser(null);
+            }
+          }
+        }
+      } else if (nextConfig.browser_auth_enabled) {
+        await restoreBrowserSession({ silent: true });
+      }
+
+      const params = new URLSearchParams(window.location.search);
+      if (params.has("auth")) {
+        const authStatus = params.get("auth");
+        if (authStatus === "success") {
+          toast.success("Single sign-on session established.");
+        } else if (authStatus === "error") {
+          toast.error("Single sign-on failed.");
+        }
+        window.history.replaceState({}, document.title, window.location.pathname);
+      }
+    }
+
+    void initializeAuth();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     if (!approvalSupported && requireApproval) {
       setRequireApproval(false);
     }
   }, [approvalSupported, requireApproval]);
 
   useEffect(() => {
+    const providers = authConfig?.password_providers ?? [];
+    if (providers.length > 0 && !providers.includes(passwordProvider)) {
+      setPasswordProvider(providers.includes("ldap") ? "ldap" : "local");
+    }
+    if (!authConfig?.registration_enabled && registerMode) {
+      setRegisterMode(false);
+    }
+    if (authConfig && !authConfig.bootstrap_complete && authConfig.registration_enabled && !registerMode) {
+      setRegisterMode(true);
+    }
+  }, [authConfig, passwordProvider, registerMode]);
+
+  useEffect(() => {
+    if (!currentUser) {
+      return;
+    }
+    const nextNamespace = resolveNamespaceForUser(currentUser, namespace);
+    if (nextNamespace !== namespace) {
+      setNamespace(nextNamespace);
+    }
+  }, [currentUser, namespace]);
+
+  useEffect(() => {
     setA2ATargetAgent("");
     setA2ATargetNamespace("");
     setA2ATimeoutSeconds("");
+    setSpecialistSubagents([]);
+    setSubagentStrategy("sequential");
   }, [selectedAgentName, selectedRuntimeKind]);
 
   function setMessagesForAgent(agentName: string, updater: (current: UiMessage[]) => UiMessage[]) {
@@ -329,6 +503,10 @@ export default function App() {
       ...current,
       [agentName]: updater(current[agentName] ?? null),
     }));
+  }
+
+  function updateSpecialistSubagentDraft(id: string, patch: Partial<SpecialistSubagentDraft>) {
+    setSpecialistSubagents((current) => current.map((item) => (item.id === id ? { ...item, ...patch } : item)));
   }
 
   function setLogsForAgent(agentName: string, value: string) {
@@ -363,6 +541,54 @@ export default function App() {
     delete pendingRequestRef.current[agentName];
   }
 
+  function applyAuthenticatedUser(nextUser: AuthenticatedUser, nextToken: string) {
+    setToken(nextToken);
+    setCurrentUser(nextUser);
+    const nextNamespace = resolveNamespaceForUser(nextUser, namespace);
+    if (nextNamespace !== namespace) {
+      setNamespace(nextNamespace);
+    }
+    return nextNamespace;
+  }
+
+  async function refreshCurrentUserProfile(activeToken = token) {
+    if (!activeToken.trim()) {
+      setCurrentUser(null);
+      return null;
+    }
+    const nextUser = await fetchCurrentUser(activeToken);
+    const nextNamespace = applyAuthenticatedUser(nextUser, activeToken);
+    return { user: nextUser, namespace: nextNamespace };
+  }
+
+  async function restoreBrowserSession(options?: { silent?: boolean }) {
+    const silent = options?.silent ?? false;
+    try {
+      const session = await refreshAuthSession();
+      const nextNamespace = applyAuthenticatedUser(session.user, session.access_token);
+      setAuthPassword("");
+      return { token: session.access_token, namespace: nextNamespace, user: session.user };
+    } catch (nextError) {
+      if (!silent) {
+        const message = nextError instanceof Error ? nextError.message : String(nextError);
+        setWorkspaceError(message);
+      }
+      return null;
+    }
+  }
+
+  async function refreshAuthConfiguration() {
+    try {
+      const nextConfig = await fetchAuthConfig();
+      setAuthConfig(nextConfig);
+      return nextConfig;
+    } catch (nextError) {
+      setAuthConfig(null);
+      setWorkspaceError(nextError instanceof Error ? nextError.message : String(nextError));
+      return null;
+    }
+  }
+
   async function refreshHealth(silent = false) {
     try {
       const nextHealth = await fetchGatewayHealth();
@@ -379,9 +605,11 @@ export default function App() {
     }
   }
 
-  async function refreshWorkspaceData(options?: { silent?: boolean }) {
+  async function refreshWorkspaceData(options?: { silent?: boolean; token?: string; namespace?: string }) {
     const silent = options?.silent ?? false;
-    if (!token.trim()) {
+    const activeToken = options?.token ?? token;
+    const activeNamespace = options?.namespace ?? namespace;
+    if (!activeToken.trim()) {
       setAgents([]);
       setPolicies([]);
       setWorkflows([]);
@@ -397,10 +625,10 @@ export default function App() {
 
     try {
       const [nextAgents, nextPolicies, nextWorkflows, nextEvals] = await Promise.all([
-        listAgents(token, namespace),
-        listPolicies(token, namespace),
-        listWorkflows(token, namespace),
-        listEvals(token, namespace),
+        listAgents(activeToken, activeNamespace),
+        listPolicies(activeToken, activeNamespace),
+        listWorkflows(activeToken, activeNamespace),
+        listEvals(activeToken, activeNamespace),
       ]);
 
       setAgents(nextAgents);
@@ -573,11 +801,80 @@ export default function App() {
   }
 
   async function handleConnect() {
+    if (!token.trim()) {
+      setWorkspaceError("Enter a bearer token or sign in with a managed account.");
+      return;
+    }
     setIsConnecting(true);
     setWorkspaceError("");
-    await refreshHealth();
-    await refreshWorkspaceData({ silent: false });
-    setIsConnecting(false);
+    try {
+      await refreshHealth();
+      const refreshed = await refreshCurrentUserProfile(token);
+      const nextNamespace = refreshed?.namespace ?? namespace;
+      await refreshWorkspaceData({ silent: false, token, namespace: nextNamespace });
+    } catch (nextError) {
+      setCurrentUser(null);
+      setWorkspaceError(nextError instanceof Error ? nextError.message : String(nextError));
+    } finally {
+      setIsConnecting(false);
+    }
+  }
+
+  async function handlePasswordAuth() {
+    setAuthBusy(true);
+    setWorkspaceError("");
+    try {
+      const wasRegistering = registerMode && passwordProvider === "local";
+      const session = wasRegistering
+          ? await registerWithPassword(authUsername, authPassword, authEmail, authDisplayName || authUsername)
+          : await loginWithPassword(authUsername, authPassword, passwordProvider);
+      const nextNamespace = applyAuthenticatedUser(session.user, session.access_token);
+      setAuthPassword("");
+      setAuthPasswordConfirm("");
+      if (wasRegistering) {
+        setRegisterMode(false);
+        setAuthEmail("");
+        setAuthDisplayName("");
+      }
+      await refreshHealth(true);
+      await refreshWorkspaceData({ silent: false, token: session.access_token, namespace: nextNamespace });
+      toast.success(wasRegistering ? "Account created." : "Signed in.");
+    } catch (nextError) {
+      const message = nextError instanceof Error ? nextError.message : String(nextError);
+      setWorkspaceError(message);
+      toast.error(message);
+    } finally {
+      setAuthBusy(false);
+    }
+  }
+
+  async function handleLogout() {
+    setAuthBusy(true);
+    try {
+      await logoutSession(token);
+    } catch (nextError) {
+      const message = nextError instanceof Error ? nextError.message : String(nextError);
+      toast.error(message);
+    } finally {
+      setAuthBusy(false);
+      setToken("");
+      setCurrentUser(null);
+      setAuthPassword("");
+      setWorkspaceError("");
+      setAgents([]);
+      setPolicies([]);
+      setWorkflows([]);
+      setEvals([]);
+      setSelectedAgentDetail(null);
+    }
+  }
+
+  function handleOidcStart(providerId: string) {
+    window.location.assign(buildOidcLoginUrl(providerId, window.location.pathname));
+  }
+
+  function handleSamlStart(providerId: string) {
+    window.location.assign(buildSamlLoginUrl(providerId, window.location.pathname));
   }
 
   async function handleCreateAgent() {
@@ -590,19 +887,28 @@ export default function App() {
     setCreateError("");
     try {
       const allowedCallers = parseA2APeerRefsText(createAgentA2AAllowedCallersText);
+      const skillFiles = buildSkillFiles(createAgentSkillFileDrafts);
+      const mcpServers = createAgentRuntimeKind === "langgraph" ? parseMcpServersText(createAgentMcpServersText) : [];
+      const mcpSidecars = createAgentRuntimeKind === "langgraph" ? parseMcpSidecarsText(createAgentMcpSidecarsText) : [];
       const gooseConfigFiles =
-        createAgentRuntimeKind === "goose" ? parseGooseConfigFilesText(createAgentGooseConfigFilesText) : undefined;
+        createAgentRuntimeKind === "goose" ? buildGooseConfigFiles(createAgentGooseConfigFileDrafts) : undefined;
       const createdAgent = await createAgent(token, namespace, {
         name: createAgentName.trim(),
         model: createAgentModel.trim(),
         system_prompt: createAgentSystemPrompt.trim(),
         runtime_kind: createAgentRuntimeKind,
+        mcp_servers: mcpServers,
+        mcp_sidecars: mcpSidecars,
         a2a_config: allowedCallers.length > 0 ? { allowed_callers: allowedCallers } : undefined,
+        skills: Object.keys(skillFiles).length > 0 ? { files: skillFiles } : undefined,
         goose_config_files: gooseConfigFiles,
       });
       setAgentCreateMode(false);
+      setCreateAgentMcpServersText("");
+      setCreateAgentMcpSidecarsText("");
       setCreateAgentA2AAllowedCallersText("");
-      setCreateAgentGooseConfigFilesText("");
+      setCreateAgentSkillFileDrafts([]);
+      setCreateAgentGooseConfigFileDrafts([]);
       setSelectedAgentName(createdAgent.name);
       setMessagesForAgent(createdAgent.name, (current) =>
         current.length > 0
@@ -617,15 +923,22 @@ export default function App() {
             ],
       );
       await refreshWorkspaceData({ silent: false });
-      setWorkspaceError("Agent created. Provisioning may take a few seconds before the runtime is ready.");
+      toast.success("Agent created", { description: "Provisioning may take a few seconds before the runtime is ready." });
     } catch (nextError) {
-      setCreateError(nextError instanceof Error ? nextError.message : String(nextError));
+      const msg = nextError instanceof Error ? nextError.message : String(nextError);
+      setCreateError(msg);
+      toast.error("Failed to create agent", { description: msg });
     } finally {
       setIsCreatingAgent(false);
     }
   }
 
-  async function handleSaveAgent(payload: UpdateAgentPayload, gooseConfigFilesText: string, a2aAllowedCallersText: string) {
+  async function handleSaveAgent(
+    payload: UpdateAgentPayload,
+    a2aAllowedCallersText: string,
+    skillFiles: Record<string, string>,
+    gooseConfigFiles: Record<string, unknown>,
+  ) {
     if (!token.trim() || !selectedAgentName) {
       return;
     }
@@ -637,14 +950,17 @@ export default function App() {
       const nextPayload: UpdateAgentPayload = {
         ...payload,
         a2a_config: { allowed_callers: allowedCallers },
-        goose_config_files:
-          payload.runtime_kind === "goose" ? parseGooseConfigFilesText(gooseConfigFilesText) : {},
+        skills: { files: skillFiles },
+        goose_config_files: payload.runtime_kind === "goose" ? gooseConfigFiles : {},
       };
       const updated = await updateAgent(token, namespace, selectedAgentName, nextPayload);
       setSelectedAgentDetail(updated);
       await refreshWorkspaceData({ silent: true });
+      toast.success("Agent saved");
     } catch (nextError) {
-      setAgentManageError(nextError instanceof Error ? nextError.message : String(nextError));
+      const msg = nextError instanceof Error ? nextError.message : String(nextError);
+      setAgentManageError(msg);
+      toast.error("Failed to save agent", { description: msg });
     } finally {
       setSavingAgent(false);
     }
@@ -665,8 +981,11 @@ export default function App() {
       setSelectedAgentDetail(null);
       setAgentCreateMode(agents.length <= 1);
       await refreshWorkspaceData({ silent: false });
+      toast.success("Agent deleted");
     } catch (nextError) {
-      setAgentManageError(nextError instanceof Error ? nextError.message : String(nextError));
+      const msg = nextError instanceof Error ? nextError.message : String(nextError);
+      setAgentManageError(msg);
+      toast.error("Failed to delete agent", { description: msg });
     } finally {
       setDeletingAgent(false);
     }
@@ -684,9 +1003,11 @@ export default function App() {
       setWorkflowCreateMode(false);
       setSelectedWorkflowName(created.name);
       await refreshWorkspaceData({ silent: false });
-      setWorkspaceError("Workflow created. The operator will queue it immediately.");
+      toast.success("Workflow created");
     } catch (nextError) {
-      setWorkflowError(nextError instanceof Error ? nextError.message : String(nextError));
+      const msg = nextError instanceof Error ? nextError.message : String(nextError);
+      setWorkflowError(msg);
+      toast.error("Failed to create workflow", { description: msg });
     } finally {
       setSavingWorkflow(false);
     }
@@ -702,8 +1023,11 @@ export default function App() {
     try {
       await updateWorkflow(token, namespace, name, payload);
       await refreshWorkspaceData({ silent: false });
+      toast.success("Workflow saved");
     } catch (nextError) {
-      setWorkflowError(nextError instanceof Error ? nextError.message : String(nextError));
+      const msg = nextError instanceof Error ? nextError.message : String(nextError);
+      setWorkflowError(msg);
+      toast.error("Failed to save workflow", { description: msg });
     } finally {
       setSavingWorkflow(false);
     }
@@ -721,8 +1045,11 @@ export default function App() {
       setSelectedWorkflowName("");
       setWorkflowCreateMode(workflows.length <= 1);
       await refreshWorkspaceData({ silent: false });
+      toast.success("Workflow deleted");
     } catch (nextError) {
-      setWorkflowError(nextError instanceof Error ? nextError.message : String(nextError));
+      const msg = nextError instanceof Error ? nextError.message : String(nextError);
+      setWorkflowError(msg);
+      toast.error("Failed to delete workflow", { description: msg });
     } finally {
       setDeletingWorkflow(false);
     }
@@ -740,9 +1067,11 @@ export default function App() {
       setEvalCreateMode(false);
       setSelectedEvalName(created.name);
       await refreshWorkspaceData({ silent: false });
-      setWorkspaceError("Evaluation created. The operator will queue it immediately.");
+      toast.success("Evaluation created");
     } catch (nextError) {
-      setEvalError(nextError instanceof Error ? nextError.message : String(nextError));
+      const msg = nextError instanceof Error ? nextError.message : String(nextError);
+      setEvalError(msg);
+      toast.error("Failed to create evaluation", { description: msg });
     } finally {
       setSavingEval(false);
     }
@@ -758,8 +1087,11 @@ export default function App() {
     try {
       await updateEval(token, namespace, name, payload);
       await refreshWorkspaceData({ silent: false });
+      toast.success("Evaluation saved");
     } catch (nextError) {
-      setEvalError(nextError instanceof Error ? nextError.message : String(nextError));
+      const msg = nextError instanceof Error ? nextError.message : String(nextError);
+      setEvalError(msg);
+      toast.error("Failed to save evaluation", { description: msg });
     } finally {
       setSavingEval(false);
     }
@@ -777,8 +1109,11 @@ export default function App() {
       setSelectedEvalName("");
       setEvalCreateMode(evals.length <= 1);
       await refreshWorkspaceData({ silent: false });
+      toast.success("Evaluation deleted");
     } catch (nextError) {
-      setEvalError(nextError instanceof Error ? nextError.message : String(nextError));
+      const msg = nextError instanceof Error ? nextError.message : String(nextError);
+      setEvalError(msg);
+      toast.error("Failed to delete evaluation", { description: msg });
     } finally {
       setDeletingEval(false);
     }
@@ -875,6 +1210,101 @@ export default function App() {
         onEvent: ({ event, payload: eventPayload }) => {
           pushActivity(agentName, event, eventPayload);
 
+          /* ---- Tool-call visibility in the chat timeline ---- */
+          const TOOL_NODES = new Set(["sandbox_tool", "mcp_tool", "retrieval", "output_guard"]);
+
+          if (event === "graph.node") {
+            const nodeName = String(eventPayload.node ?? "");
+            const nodeStatus = String(eventPayload.status ?? "");
+            if (TOOL_NODES.has(nodeName)) {
+              if (nodeStatus === "started") {
+                const toolMsgId = `tool-${nodeName}-${createId()}`;
+                setMessagesForAgent(agentName, (current) => {
+                  // insert tool message just before the trailing assistant message
+                  const idx = current.findIndex((m) => m.id === assistantMessageId);
+                  const toolMsg: UiMessage = {
+                    id: toolMsgId,
+                    role: "tool",
+                    content: "",
+                    status: "streaming",
+                    toolName: nodeName.replace(/_/g, " "),
+                    toolNode: nodeName,
+                  };
+                  if (idx >= 0) {
+                    const next = [...current];
+                    next.splice(idx, 0, toolMsg);
+                    return next;
+                  }
+                  return [...current, toolMsg];
+                });
+              } else if (nodeStatus === "completed" || nodeStatus === "failed") {
+                setMessagesForAgent(agentName, (current) =>
+                  current.map((m) =>
+                    m.role === "tool" && m.toolNode === nodeName && m.status === "streaming"
+                      ? {
+                          ...m,
+                          status: nodeStatus === "failed" ? "error" : "complete",
+                          content:
+                            nodeStatus === "failed"
+                              ? String(eventPayload.error ?? "Tool call failed")
+                              : m.content || "Completed",
+                        }
+                      : m,
+                  ),
+                );
+              }
+            }
+            return;
+          }
+
+          if (event === "mcp.result") {
+            const serverType = String(eventPayload.serverType ?? "");
+            const toolName = String(eventPayload.toolName ?? "");
+            const label = serverType ? `${serverType}/${toolName}` : toolName;
+            // Update the most recent streaming mcp_tool message with details
+            setMessagesForAgent(agentName, (current) =>
+              current.map((m) =>
+                m.role === "tool" && m.toolNode === "mcp_tool" && m.status === "streaming"
+                  ? { ...m, toolName: label, content: `${label} → ${eventPayload.bytes ?? "?"} bytes` }
+                  : m,
+              ),
+            );
+            return;
+          }
+
+          if (event === "subagent.call") {
+            const target = String(eventPayload.targetAgent ?? "subagent");
+            const status = String(eventPayload.status ?? "");
+            if (status === "started") {
+              setMessagesForAgent(agentName, (current) => {
+                const idx = current.findIndex((m) => m.id === assistantMessageId);
+                const toolMsg: UiMessage = {
+                  id: `tool-subagent-${createId()}`,
+                  role: "tool",
+                  content: "",
+                  status: "streaming",
+                  toolName: `subagent → ${target}`,
+                  toolNode: "subagent",
+                };
+                if (idx >= 0) {
+                  const next = [...current];
+                  next.splice(idx, 0, toolMsg);
+                  return next;
+                }
+                return [...current, toolMsg];
+              });
+            } else if (status === "completed" || status === "failed") {
+              setMessagesForAgent(agentName, (current) =>
+                current.map((m) =>
+                  m.role === "tool" && m.toolNode === "subagent" && m.status === "streaming"
+                    ? { ...m, status: status === "failed" ? "error" : "complete", content: m.content || "Completed" }
+                    : m,
+                ),
+              );
+            }
+            return;
+          }
+
           if (event === "response.delta") {
             if (typeof eventPayload.delta !== "string") {
               throw new Error("response.delta events must include a string delta field.");
@@ -948,7 +1378,7 @@ export default function App() {
       return;
     }
 
-    if (!selectedAgentName || !prompt.trim()) {
+    if (!selectedAgentName || !canSubmitChat) {
       return;
     }
 
@@ -957,6 +1387,7 @@ export default function App() {
     let gooseMaxTurns: number | undefined;
     let gooseWorkingDirectory: string | undefined;
     let explicitA2ATimeoutSeconds: number | undefined;
+    let specialistPayload: InvokePayload["subagents"];
 
     if (selectedRuntimeKind === "goose") {
       try {
@@ -978,6 +1409,10 @@ export default function App() {
     const normalizedA2ATargetAgent = a2aTargetAgent.trim();
     const normalizedA2ATargetNamespace = a2aTargetNamespace.trim();
     const hasExplicitA2ATarget = normalizedA2ATargetAgent.length > 0 || normalizedA2ATargetNamespace.length > 0;
+    if (specialistTeamConfigured && selectedRuntimeKind !== "langgraph") {
+      setChatError("Specialist-team orchestration is currently available for LangGraph agents only.");
+      return;
+    }
     if (hasExplicitA2ATarget) {
       if (!normalizedA2ATargetAgent || !normalizedA2ATargetNamespace) {
         setChatError("Provide both an A2A target namespace and an A2A target agent.");
@@ -993,6 +1428,58 @@ export default function App() {
       }
     }
 
+    if (hasExplicitA2ATarget && specialistTeamConfigured) {
+      setChatError("Use either an explicit A2A target or a specialist team for this request, not both.");
+      return;
+    }
+
+    if (specialistTeamConfigured) {
+      try {
+        specialistPayload = specialistSubagents
+          .filter(
+            (item) =>
+              item.name.trim() ||
+              item.namespace.trim() ||
+              item.role.trim() ||
+              item.task.trim() ||
+              item.inputFilesText.trim() ||
+              item.resultFilePath.trim(),
+          )
+          .map((item, index) => {
+            const name = item.name.trim();
+            const subagentNamespace = item.namespace.trim();
+            if (!name || !subagentNamespace) {
+              throw new Error(`Specialist ${index + 1} requires both a namespace and an agent name.`);
+            }
+            if (!isValidK8sName(name)) {
+              throw new Error(`Specialist ${index + 1} agent name must be a valid lowercase Kubernetes name.`);
+            }
+            if (!isValidK8sName(subagentNamespace)) {
+              throw new Error(`Specialist ${index + 1} namespace must be a valid lowercase Kubernetes name.`);
+            }
+            const timeoutSeconds = parseSubagentTimeoutSeconds(item.timeoutSeconds);
+            const inputFiles = parseSubagentInputFiles(item.inputFilesText);
+            const task = item.task.trim();
+            if (!nextPrompt && !task) {
+              throw new Error(`Specialist ${index + 1} requires a delegated task when the main prompt is blank.`);
+            }
+            return {
+              name,
+              namespace: subagentNamespace,
+              role: item.role.trim() || undefined,
+              task: task || undefined,
+              input_files: inputFiles.length > 0 ? inputFiles : undefined,
+              result_file_path: item.resultFilePath.trim() || undefined,
+              share_sandbox_session: item.shareSandboxSession,
+              timeout_seconds: timeoutSeconds,
+            };
+          });
+      } catch (nextError) {
+        setChatError(nextError instanceof Error ? nextError.message : String(nextError));
+        return;
+      }
+    }
+
     const payload: InvokePayload = {
       prompt: nextPrompt,
       thread_id: threadIdsRef.current[agentName],
@@ -1001,6 +1488,8 @@ export default function App() {
       a2a_target_agent: hasExplicitA2ATarget ? normalizedA2ATargetAgent : undefined,
       a2a_target_namespace: hasExplicitA2ATarget ? normalizedA2ATargetNamespace : undefined,
       a2a_timeout_seconds: explicitA2ATimeoutSeconds,
+      subagents: specialistPayload,
+      subagent_strategy: specialistPayload && specialistPayload.length > 0 ? subagentStrategy : undefined,
       max_turns: gooseMaxTurns,
       working_directory: gooseWorkingDirectory,
     };
@@ -1135,6 +1624,7 @@ export default function App() {
     agents: agents.length,
     workflows: workflows.length,
     evals: evals.length,
+    catalog: 0,
   };
 
   const sidebarItems: SidebarResourceItem[] =
@@ -1154,24 +1644,28 @@ export default function App() {
             status: workflow.phase,
             note: workflow.current_step ? `Current step: ${workflow.current_step}` : `${workflow.steps.length} steps`,
           }))
-        : evals.map((evalResource) => ({
-            id: evalResource.name,
-            title: evalResource.name,
-            subtitle: evalResource.agent_ref,
-            status: evalResource.phase,
-            note: `${evalResource.test_suite.length} case${evalResource.test_suite.length === 1 ? "" : "s"}`,
-          }));
+        : activeView === "evals"
+          ? evals.map((evalResource) => ({
+              id: evalResource.name,
+              title: evalResource.name,
+              subtitle: evalResource.agent_ref,
+              status: evalResource.phase,
+              note: `${evalResource.test_suite.length} case${evalResource.test_suite.length === 1 ? "" : "s"}`,
+            }))
+          : []; // catalog view manages its own list
 
   const sidebarSelectedId =
     activeView === "agents" ? selectedAgentName : activeView === "workflows" ? selectedWorkflowName : selectedEvalName;
 
   const emptySidebarMessage = !token.trim()
-    ? "Add a bearer token and click Connect."
+    ? "Authenticate with a gateway token and load the namespace catalog."
     : activeView === "agents"
-      ? "No agents yet. Click + to create one."
+      ? `No agents are provisioned in namespace '${namespace}'. Create an agent to start a runtime.`
       : activeView === "workflows"
-        ? "No workflows yet. Click + to create one."
-        : "No evaluations yet. Click + to create one.";
+        ? `No workflows are defined in namespace '${namespace}'. Create one to orchestrate agent steps.`
+        : activeView === "catalog"
+          ? "Browse the catalog in the main panel."
+          : `No evaluations are defined in namespace '${namespace}'. Create one to validate agent quality.`;
 
   const gatewayStatus = gatewayError ? "offline" : health?.status ?? "loading";
   const heroTitle =
@@ -1187,149 +1681,177 @@ export default function App() {
           : workflowCreateMode || workflows.length === 0
             ? "Create a workflow and let the operator queue it."
             : "Select a workflow to inspect it."
-        : selectedEval
-          ? `${selectedEval.name} evaluation suite.`
-          : evalCreateMode || evals.length === 0
-            ? "Create an evaluation suite and let the operator run it."
-            : "Select an evaluation to inspect it.";
+        : activeView === "catalog"
+          ? "Browse pre-built skills and MCP tool sidecars."
+          : selectedEval
+            ? `${selectedEval.name} evaluation suite.`
+            : evalCreateMode || evals.length === 0
+              ? "Create an evaluation suite and let the operator run it."
+              : "Select an evaluation to inspect it.";
   const selectedResourceStatus =
     activeView === "agents"
       ? selectedAgent?.status ?? (agentCreateMode ? "draft" : "none")
       : activeView === "workflows"
         ? selectedWorkflow?.phase ?? (workflowCreateMode ? "draft" : "none")
-        : selectedEval?.phase ?? (evalCreateMode ? "draft" : "none");
+        : activeView === "catalog"
+          ? "browse"
+          : selectedEval?.phase ?? (evalCreateMode ? "draft" : "none");
 
   const chatEmptyMessage = selectedAgentName
-    ? "Start a conversation with this agent. Streaming is enabled by default for faster feedback."
-    : "Choose an agent from the sidebar or create a new one.";
+    ? "Run chat requests, explicit A2A delegations, or specialist-team orchestration from this workspace. Streaming is enabled by default."
+    : "Select an agent from the catalog or create a new one to start an invocation.";
 
   const selectedWorkflowApprovalName =
     typeof selectedWorkflow?.pending_approval?.name === "string" ? selectedWorkflow.pending_approval.name : undefined;
 
   return (
-    <div className="app-shell">
-      <header className="app-header">
-        <div className="brand-block">
-          <span className="brand-mark">
-            <LayoutPanelTop size={18} />
-          </span>
-          <div>
-            <p className="eyebrow">Kubeminionagents</p>
-            <h1>Agent Sandbox Console</h1>
-          </div>
+    <div className="flex h-screen flex-col bg-background text-foreground">
+      <TopBar
+        health={health}
+        gatewayError={gatewayError}
+        token={token}
+        namespace={namespace}
+        isConnecting={isConnecting}
+        authConfig={authConfig}
+        currentUser={currentUser}
+        authBusy={authBusy}
+        authUsername={authUsername}
+        authPassword={authPassword}
+        authEmail={authEmail}
+        authDisplayName={authDisplayName}
+        authPasswordConfirm={authPasswordConfirm}
+        passwordProvider={passwordProvider}
+        registerMode={registerMode}
+        onTokenChange={setToken}
+        onNamespaceChange={setNamespace}
+        onAuthUsernameChange={setAuthUsername}
+        onAuthPasswordChange={setAuthPassword}
+        onAuthEmailChange={setAuthEmail}
+        onAuthDisplayNameChange={setAuthDisplayName}
+        onAuthPasswordConfirmChange={setAuthPasswordConfirm}
+        onPasswordProviderChange={setPasswordProvider}
+        onRegisterModeChange={setRegisterMode}
+        onConnect={() => void handleConnect()}
+        onPasswordSubmit={() => void handlePasswordAuth()}
+        onStartOidc={handleOidcStart}
+        onStartSaml={handleSamlStart}
+        onLogout={() => void handleLogout()}
+        onRefreshCurrentUser={async () => {
+          await refreshCurrentUserProfile(token);
+        }}
+      />
+
+      <div className="flex flex-1 overflow-hidden">
+        {/* Sidebar — hidden on mobile, visible md+ */}
+        <div className="hidden md:flex">
+          <AppSidebar
+            collapsed={sidebarCollapsed}
+            onToggleCollapse={() => setSidebarCollapsed((prev) => !prev)}
+            activeView={activeView}
+            counts={sidebarCounts}
+            items={sidebarItems}
+            selectedId={sidebarSelectedId}
+            loading={catalogLoading}
+            emptyMessage={emptySidebarMessage}
+            onViewChange={setActiveView}
+            onRefresh={() => void refreshWorkspaceData({ silent: false })}
+            onSelect={handleSelectResource}
+            onCreateNew={handleCreateNew}
+          />
         </div>
 
-        <div className="toolbar-card">
-          <label>
-            <span>Namespace</span>
-            <input value={namespace} onChange={(event) => setNamespace(event.target.value)} />
-          </label>
-          <label className="token-field">
-            <span>API Token</span>
-            <input
-              type="password"
-              placeholder="Bearer token"
-              value={token}
-              onChange={(event) => setToken(event.target.value)}
-            />
-          </label>
-          <button className="secondary-button" type="button" onClick={() => void handleConnect()} disabled={isConnecting}>
-            <Shield size={16} />
-            <span>{isConnecting ? "Connecting" : "Connect"}</span>
-          </button>
-        </div>
-      </header>
-
-      <main className="workspace-grid">
-        <WorkspaceSidebar
-          activeView={activeView}
-          counts={sidebarCounts}
-          items={sidebarItems}
-          selectedId={sidebarSelectedId}
-          loading={catalogLoading}
-          emptyMessage={emptySidebarMessage}
-          onViewChange={setActiveView}
-          onRefresh={() => void refreshWorkspaceData({ silent: false })}
-          onSelect={handleSelectResource}
-          onCreateNew={handleCreateNew}
-        />
-
-        <div className="center-column">
-          <section className="hero-panel">
+        {/* Center column */}
+        <main className="flex flex-1 flex-col overflow-auto p-4 gap-4">
+          {/* Inspector toggle */}
+          <div className="flex items-center justify-between">
             <div>
-              <p className="eyebrow">Workspace Status</p>
-              <h2>{heroTitle}</h2>
+              <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                Workspace Status
+              </p>
+              <h2 className="text-lg font-semibold text-foreground">{heroTitle}</h2>
             </div>
-            <div className="hero-stats">
-              <div className="hero-stat">
-                <span>Gateway</span>
-                <strong>{gatewayStatus}</strong>
-              </div>
-              <div className="hero-stat">
-                <span>Auth</span>
-                <strong>{health?.auth_mode ?? "unknown"}</strong>
-              </div>
-              <div className="hero-stat">
-                <span>View</span>
-                <strong>{activeView}</strong>
-              </div>
-              <div className="hero-stat">
-                <span>Selected</span>
-                <strong>{selectedResourceStatus}</strong>
-              </div>
+            <Button variant="outline" size="sm" className="gap-1.5" onClick={() => setInspectorOpen(true)}>
+              <PanelRightOpen className="h-4 w-4" />
+              Inspector
+            </Button>
+          </div>
+
+          {/* Status row */}
+          <div className="flex flex-wrap gap-2 text-xs">
+            <span className="rounded-md border border-border bg-card px-3 py-1.5">
+              Gateway: <strong className="text-foreground">{gatewayStatus}</strong>
+            </span>
+            <span className="rounded-md border border-border bg-card px-3 py-1.5">
+              Auth: <strong className="text-foreground">{health?.auth_mode ?? "unknown"}</strong>
+            </span>
+            <span className="rounded-md border border-border bg-card px-3 py-1.5">
+              View: <strong className="text-foreground">{activeView}</strong>
+            </span>
+            <span className="rounded-md border border-border bg-card px-3 py-1.5">
+              Selected: <strong className="text-foreground">{selectedResourceStatus}</strong>
+            </span>
+          </div>
+
+          {(workspaceError || gatewayError) && (
+            <div className="rounded-md border border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive">
+              {workspaceError || gatewayError}
             </div>
-          </section>
+          )}
 
           {!token.trim() ? (
-            <section className="panel panel-setup">
-              <div className="panel-header panel-header-chat">
-                <div>
-                  <p className="eyebrow">Connect The Workspace</p>
-                  <h2>Enter the bearer token and load your control plane</h2>
-                </div>
-                <span className="mode-pill sync">traditional flow</span>
+            <div className="flex flex-1 items-center justify-center">
+              <div className="text-center space-y-2">
+                <h3 className="text-lg font-semibold text-foreground">Connect to the Gateway</h3>
+                <p className="text-sm text-muted-foreground max-w-md">
+                  Use the top-right access dialog to connect with a bearer token, local credentials, LDAP, or enterprise SSO, then manage agents, workflows, evaluations, approvals, and chat from one place.
+                </p>
               </div>
-              <p className="setup-lead">
-                This UI talks to the API gateway only. Connect once, then manage agents, workflows, evaluations, approvals, and chat from one place.
-              </p>
-              {workspaceError ? <p className="error-banner">{workspaceError}</p> : null}
-            </section>
+            </div>
           ) : activeView === "agents" ? (
             <>
               {agentCreateMode || (!selectedAgentName && agents.length === 0) ? (
                 <CreateAgentPanel
+                  token={token}
+                  isEmptyWorkspace={agents.length === 0}
                   name={createAgentName}
                   model={createAgentModel}
                   systemPrompt={createAgentSystemPrompt}
                   runtimeKind={createAgentRuntimeKind}
+                  mcpServersText={createAgentMcpServersText}
+                  mcpSidecarsText={createAgentMcpSidecarsText}
                   a2aAllowedCallersText={createAgentA2AAllowedCallersText}
-                  gooseConfigFilesText={createAgentGooseConfigFilesText}
+                  skillFileDrafts={createAgentSkillFileDrafts}
+                  gooseConfigFileDrafts={createAgentGooseConfigFileDrafts}
                   isCreating={isCreatingAgent}
                   error={createError}
+                  onMcpServersTextChange={setCreateAgentMcpServersText}
+                  onMcpSidecarsTextChange={setCreateAgentMcpSidecarsText}
                   onNameChange={setCreateAgentName}
                   onModelChange={setCreateAgentModel}
                   onSystemPromptChange={setCreateAgentSystemPrompt}
                   onRuntimeKindChange={setCreateAgentRuntimeKind}
                   onA2AAllowedCallersTextChange={setCreateAgentA2AAllowedCallersText}
-                  onGooseConfigFilesTextChange={setCreateAgentGooseConfigFilesText}
+                  onSkillFileDraftsChange={setCreateAgentSkillFileDrafts}
+                  onGooseConfigFileDraftsChange={setCreateAgentGooseConfigFileDrafts}
                   onCreate={() => void handleCreateAgent()}
                 />
               ) : selectedAgentDetail ? (
                 <AgentManagementPanel
+                  token={token}
                   agent={selectedAgentDetail}
                   policies={policies}
                   isSaving={savingAgent}
                   isDeleting={deletingAgent}
                   error={agentManageError}
-                  onSave={(payload, gooseConfigFilesText, a2aAllowedCallersText) =>
-                    void handleSaveAgent(payload, gooseConfigFilesText, a2aAllowedCallersText)
+                  onSave={(payload, a2aAllowedCallersText, skillFiles, gooseConfigFiles) =>
+                    void handleSaveAgent(payload, a2aAllowedCallersText, skillFiles, gooseConfigFiles)
                   }
                   onDelete={() => void handleDeleteAgent()}
                 />
               ) : (
-                <section className="panel panel-setup">
-                  <p className="setup-lead">Loading the selected agent settings...</p>
-                </section>
+                <div className="flex flex-1 items-center justify-center">
+                  <p className="text-sm text-muted-foreground">Loading the selected agent settings...</p>
+                </div>
               )}
 
               {!agentCreateMode && selectedAgentName ? (
@@ -1346,6 +1868,9 @@ export default function App() {
                   a2aTargetAgent={a2aTargetAgent}
                   a2aTargetNamespace={a2aTargetNamespace}
                   a2aTimeoutSeconds={a2aTimeoutSeconds}
+                  specialistSubagents={specialistSubagents}
+                  specialistTeamConfigured={specialistTeamConfigured}
+                  subagentStrategy={subagentStrategy}
                   discoveryPeers={discoverablePeers}
                   discoveryLoading={discoveryLoading}
                   discoveryError={discoveryError}
@@ -1369,6 +1894,27 @@ export default function App() {
                     setChatError("");
                     setA2ATimeoutSeconds(value);
                   }}
+                  onSubagentStrategyChange={(value) => {
+                    setChatError("");
+                    setSubagentStrategy(value);
+                  }}
+                  onAddSpecialistSubagent={() => {
+                    setChatError("");
+                    setSpecialistSubagents((current) => [...current, createSpecialistSubagentDraft()]);
+                  }}
+                  onUpdateSpecialistSubagent={(id, patch) => {
+                    setChatError("");
+                    updateSpecialistSubagentDraft(id, patch);
+                  }}
+                  onRemoveSpecialistSubagent={(id) => {
+                    setChatError("");
+                    setSpecialistSubagents((current) => current.filter((item) => item.id !== id));
+                  }}
+                  onClearSpecialistTeam={() => {
+                    setChatError("");
+                    setSpecialistSubagents([]);
+                    setSubagentStrategy("sequential");
+                  }}
                   onGooseMaxTurnsChange={(value) => {
                     setChatError("");
                     setGooseChatSettingsForAgent(selectedAgentName, (current) => ({
@@ -1383,6 +1929,7 @@ export default function App() {
                       workingDirectory: value,
                     }));
                   }}
+                  canSubmit={canSubmitChat}
                   onSubmit={() => void handleSubmit()}
                 />
               ) : null}
@@ -1398,6 +1945,8 @@ export default function App() {
               onUpdate={(name, payload) => void handleUpdateWorkflow(name, payload)}
               onDelete={(name) => void handleDeleteWorkflow(name)}
             />
+          ) : activeView === "catalog" ? (
+            <SkillsCatalogPanel token={token} />
           ) : (
             <EvalManager
               evalResource={evalCreateMode || evals.length === 0 ? null : selectedEval}
@@ -1410,65 +1959,71 @@ export default function App() {
               onDelete={(name) => void handleDeleteEval(name)}
             />
           )}
-        </div>
+        </main>
+      </div>
 
-        {activeView === "agents" ? (
-          <InspectorPanel
-            health={health}
-            gatewayError={gatewayError}
-            workspaceError={workspaceError}
-            selectedAgentName={selectedAgentName}
-            namespace={namespace}
-            tokenPresent={Boolean(token.trim())}
-            logs={logs}
-            logsLoading={logsLoading}
-            activity={activity}
-            summary={summary}
-            approvalReason={approvalReason}
-            approvalBusy={approvalBusy}
-            onApprovalReasonChange={setApprovalReason}
-            onApprove={() => void handleAgentApprovalDecision("approved")}
-            onDeny={() => void handleAgentApprovalDecision("denied")}
-            onLoadLogs={() => void handleLoadLogs()}
-          />
-        ) : activeView === "workflows" ? (
-          <ResourceInspectorPanel
-            title="Workflow Inspector"
-            selectedName={selectedWorkflow?.name ?? ""}
-            status={selectedWorkflow?.phase ?? (workflowCreateMode ? "draft" : "none")}
-            summary={selectedWorkflow?.summary}
-            spec={workflowSpecFromResource(selectedWorkflow)}
-            details={workflowStatusFromResource(selectedWorkflow)}
-            emptyMessage="Select a workflow or create a new one."
-            pendingApprovalName={selectedWorkflowApprovalName}
-            approvalReason={approvalReason}
-            approvalBusy={approvalBusy}
-            onApprovalReasonChange={setApprovalReason}
-            onApprove={() => void handleWorkflowApprovalDecision("approved")}
-            onDeny={() => void handleWorkflowApprovalDecision("denied")}
-          />
-        ) : (
-          <ResourceInspectorPanel
-            title="Evaluation Inspector"
-            selectedName={selectedEval?.name ?? ""}
-            status={selectedEval?.phase ?? (evalCreateMode ? "draft" : "none")}
-            summary={selectedEval?.summary}
-            spec={evalSpecFromResource(selectedEval)}
-            details={evalStatusFromResource(selectedEval)}
-            emptyMessage="Select an evaluation or create a new one."
-            approvalReason={approvalReason}
-            approvalBusy={approvalBusy}
-            onApprovalReasonChange={setApprovalReason}
-            onApprove={() => undefined}
-            onDeny={() => undefined}
-          />
-        )}
-      </main>
-
-      <footer className="app-footer">
-        <Sparkles size={16} />
-        <span>Production console flow: connect to the gateway, create or edit agents, manage workflows and evaluations, approve queued operations, and chat with runtimes from the same UI.</span>
-      </footer>
+      {/* Inspector drawers */}
+      {activeView === "agents" ? (
+        <AgentInspectorDrawer
+          open={inspectorOpen}
+          onOpenChange={setInspectorOpen}
+          health={health}
+          gatewayError={gatewayError}
+          workspaceError={workspaceError}
+          selectedAgentName={selectedAgentName}
+          selectedAgentDetail={selectedAgentDetail}
+          discoverablePeers={discoverablePeers}
+          discoveryLoading={discoveryLoading}
+          discoveryError={discoveryError}
+          namespace={namespace}
+          logs={logs}
+          logsLoading={logsLoading}
+          activity={activity}
+          summary={summary}
+          approvalReason={approvalReason}
+          approvalBusy={approvalBusy}
+          onApprovalReasonChange={setApprovalReason}
+          onApprove={() => void handleAgentApprovalDecision("approved")}
+          onDeny={() => void handleAgentApprovalDecision("denied")}
+          onLoadLogs={() => void handleLoadLogs()}
+        />
+      ) : activeView === "workflows" ? (
+        <ResourceInspectorDrawer
+          open={inspectorOpen}
+          onOpenChange={setInspectorOpen}
+          title="Workflow Inspector"
+          selectedName={selectedWorkflow?.name ?? ""}
+          status={selectedWorkflow?.phase ?? (workflowCreateMode ? "draft" : "none")}
+          summary={selectedWorkflow?.summary}
+          spec={workflowSpecFromResource(selectedWorkflow)}
+          details={workflowStatusFromResource(selectedWorkflow)}
+          emptyMessage="Select a workflow or create a new one."
+          pendingApprovalName={selectedWorkflowApprovalName}
+          approvalReason={approvalReason}
+          approvalBusy={approvalBusy}
+          onApprovalReasonChange={setApprovalReason}
+          onApprove={() => void handleWorkflowApprovalDecision("approved")}
+          onDeny={() => void handleWorkflowApprovalDecision("denied")}
+        />
+      ) : (
+        <ResourceInspectorDrawer
+          open={inspectorOpen}
+          onOpenChange={setInspectorOpen}
+          title="Evaluation Inspector"
+          selectedName={selectedEval?.name ?? ""}
+          status={selectedEval?.phase ?? (evalCreateMode ? "draft" : "none")}
+          summary={selectedEval?.summary}
+          spec={evalSpecFromResource(selectedEval)}
+          details={evalStatusFromResource(selectedEval)}
+          emptyMessage="Select an evaluation or create a new one."
+          approvalReason={approvalReason}
+          approvalBusy={approvalBusy}
+          onApprovalReasonChange={setApprovalReason}
+          onApprove={() => undefined}
+          onDeny={() => undefined}
+        />
+      )}
+      <Toaster position="bottom-right" theme="dark" richColors />
     </div>
   );
 }

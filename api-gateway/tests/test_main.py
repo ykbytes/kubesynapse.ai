@@ -80,6 +80,18 @@ class GatewayRuntimeValidationTests(unittest.TestCase):
         self.assertIn("mcp_server", str(context.exception.detail))
         self.assertIn("sandbox_session", str(context.exception.detail))
 
+    def test_goose_invoke_rejects_subagents(self) -> None:
+        request = api_gateway_main.InvokeRequest(
+            prompt="Coordinate the investigation",
+            subagents=[{"name": "analysis-agent", "namespace": "team-b"}],
+        )
+
+        with self.assertRaises(HTTPException) as context:
+            api_gateway_main.validate_invoke_runtime_compatibility("goose", request)
+
+        self.assertEqual(context.exception.status_code, 400)
+        self.assertIn("subagents", str(context.exception.detail))
+
     def test_goose_invoke_rejects_a2a_fields(self) -> None:
         request = api_gateway_main.InvokeRequest(
             prompt="hello",
@@ -145,6 +157,7 @@ class GatewayRuntimeValidationTests(unittest.TestCase):
             builtin_extensions=[" developer ", "   "],
             stdio_extensions=[" echo tool ", "   "],
             streamable_http_extensions=[" https://example.com/mcp ", "   "],
+            subagent_strategy=" Parallel ",
         )
 
         self.assertEqual(request.prompt, "hello")
@@ -160,6 +173,7 @@ class GatewayRuntimeValidationTests(unittest.TestCase):
         self.assertEqual(request.builtin_extensions, ["developer"])
         self.assertEqual(request.stdio_extensions, ["echo tool"])
         self.assertEqual(request.streamable_http_extensions, ["https://example.com/mcp"])
+        self.assertEqual(request.subagent_strategy, "parallel")
 
     def test_invoke_request_requires_complete_a2a_target(self) -> None:
         with self.assertRaises(ValueError):
@@ -218,6 +232,37 @@ class GatewayRuntimeValidationTests(unittest.TestCase):
         self.assertEqual(context.exception.status_code, 400)
         self.assertIn("permissions", str(context.exception.detail))
 
+    def test_parse_agent_skills_config_normalizes_markdown_paths(self) -> None:
+        parsed = api_gateway_main.parse_agent_skills_config(
+            {
+                "files": {
+                    " .github\\skills\\reviewer\\SKILL.md ": "---\nname: reviewer\n---\nReview carefully.\n",
+                }
+            },
+            source="skills",
+            strict=True,
+        )
+
+        self.assertEqual(
+            parsed,
+            {
+                "files": {
+                    ".github/skills/reviewer/SKILL.md": "---\nname: reviewer\n---\nReview carefully.\n",
+                }
+            },
+        )
+
+    def test_parse_agent_skills_config_rejects_non_markdown_paths(self) -> None:
+        with self.assertRaises(HTTPException) as context:
+            api_gateway_main.parse_agent_skills_config(
+                {"files": {".github/skills/reviewer/config.yaml": "name: reviewer"}},
+                source="skills",
+                strict=True,
+            )
+
+        self.assertEqual(context.exception.status_code, 400)
+        self.assertIn(".md", str(context.exception.detail))
+
     def test_build_agent_spec_includes_goose_config_files(self) -> None:
         request = api_gateway_main.CreateAgentRequest(
             name="goose-agent",
@@ -251,6 +296,30 @@ class GatewayRuntimeValidationTests(unittest.TestCase):
             spec["a2a"],
             {"allowedCallers": [{"name": "research-agent", "namespace": "team-a"}]},
         )
+
+    def test_build_agent_spec_includes_skill_files(self) -> None:
+        request = api_gateway_main.CreateAgentRequest(
+            name="langgraph-agent",
+            model="gpt-4",
+            skills={
+                "files": {
+                    ".github/skills/research/SKILL.md": (
+                        "---\n"
+                        "name: research\n"
+                        "description: Gather evidence carefully.\n"
+                        "allowedSandboxTools:\n"
+                        "  - sandbox.filesystem.read\n"
+                        "---\n"
+                        "Read source material before answering.\n"
+                    )
+                }
+            },
+        )
+
+        spec = api_gateway_main.build_agent_spec(request)
+
+        self.assertIn("skills", spec)
+        self.assertIn(".github/skills/research/SKILL.md", spec["skills"]["files"])
 
     def test_build_agent_spec_preserves_existing_a2a_config_on_update(self) -> None:
         request = api_gateway_main.UpdateAgentRequest(model="gpt-4")
@@ -287,6 +356,31 @@ class GatewayRuntimeValidationTests(unittest.TestCase):
         self.assertEqual(
             spec["runtime"]["goose"]["configFiles"],
             {"config.yaml": {"GOOSE_MODE": "smart_approve"}},
+        )
+
+    def test_build_agent_spec_preserves_existing_skills_on_update(self) -> None:
+        request = api_gateway_main.UpdateAgentRequest(model="gpt-4")
+
+        spec = api_gateway_main.build_agent_spec(
+            request,
+            existing_spec={
+                "model": "gpt-4",
+                "runtime": {"kind": "langgraph"},
+                "skills": {
+                    "files": {
+                        ".github/skills/research/SKILL.md": "---\nname: research\n---\nRead first.\n",
+                    }
+                },
+            },
+        )
+
+        self.assertEqual(
+            spec["skills"],
+            {
+                "files": {
+                    ".github/skills/research/SKILL.md": "---\nname: research\n---\nRead first.\n",
+                }
+            },
         )
 
     def test_build_agent_spec_rejects_goose_config_files_for_langgraph(self) -> None:
@@ -344,6 +438,48 @@ class GatewayRuntimeValidationTests(unittest.TestCase):
             detail.a2a_config,
             {"allowedCallers": [{"name": "research-agent", "namespace": "team-a"}]},
         )
+
+    def test_agent_detail_from_resource_exposes_skill_summaries(self) -> None:
+        detail = api_gateway_main.agent_detail_from_resource(
+            {
+                "metadata": {
+                    "name": "langgraph-agent",
+                    "namespace": "default",
+                    "creationTimestamp": "2026-03-11T00:00:00Z",
+                },
+                "spec": {
+                    "model": "gpt-4",
+                    "runtime": {"kind": "langgraph"},
+                    "skills": {
+                        "files": {
+                            ".github/skills/research/SKILL.md": (
+                                "---\n"
+                                "name: research\n"
+                                "description: Gather evidence carefully.\n"
+                                "allowedSandboxTools:\n"
+                                "  - sandbox.filesystem.read\n"
+                                "allowedA2ATargets:\n"
+                                "  - name: analysis-agent\n"
+                                "    namespace: team-b\n"
+                                "allowSubagents: true\n"
+                                "---\n"
+                                "Read source material before answering.\n"
+                            )
+                        }
+                    },
+                },
+            }
+        )
+
+        self.assertEqual(set(detail.skills["files"].keys()), {".github/skills/research/SKILL.md"})
+        self.assertEqual(len(detail.skill_summaries), 1)
+        self.assertEqual(detail.skill_summaries[0]["name"], "research")
+        self.assertEqual(detail.skill_summaries[0]["allowed_sandbox_tools"], ["sandbox.filesystem.read"])
+        self.assertEqual(
+            detail.skill_summaries[0]["allowed_a2a_targets"],
+            [{"name": "analysis-agent", "namespace": "team-b"}],
+        )
+        self.assertTrue(detail.skill_summaries[0]["allow_subagents"])
 
 
 class GatewayAgentDiscoveryTests(unittest.TestCase):
@@ -511,6 +647,8 @@ class GatewayA2AProtocolTests(unittest.TestCase):
 
         self.assertEqual(card["name"], "planner")
         self.assertEqual(card["url"], "http://gateway.local/a2a/planner?namespace=default")
+        self.assertEqual(card["protocolVersion"], api_gateway_main.A2A_PROTOCOL_VERSION)
+        self.assertEqual(card["preferredTransport"], "JSONRPC")
         self.assertEqual(card["supportedInterfaces"][0]["protocolBinding"], "JSONRPC")
         self.assertEqual(card["supportedInterfaces"][0]["tenant"], "default")
         self.assertTrue(card["capabilities"]["streaming"])
@@ -552,8 +690,13 @@ class GatewayA2AProtocolAsyncTests(unittest.IsolatedAsyncioTestCase):
             )
 
         task = response["result"]["task"]
+        self.assertEqual(task["kind"], "task")
         self.assertEqual(task["status"]["state"], "TASK_STATE_COMPLETED")
+        self.assertEqual(task["history"][0]["kind"], "message")
+        self.assertEqual(task["history"][0]["parts"][0]["kind"], "text")
         self.assertEqual(task["artifacts"][0]["parts"][0]["text"], "Delegated summary")
+        self.assertEqual(task["artifacts"][0]["kind"], "artifact")
+        self.assertEqual(task["artifacts"][0]["parts"][0]["kind"], "text")
         self.assertEqual(len(task["history"]), 2)
 
         get_response = api_gateway_main.handle_a2a_get_task(
@@ -598,6 +741,8 @@ class GatewayA2AProtocolAsyncTests(unittest.IsolatedAsyncioTestCase):
         payload = "".join(chunks)
         self.assertIn('"artifactUpdate"', payload)
         self.assertIn('"statusUpdate"', payload)
+        self.assertIn('"kind": "artifact-update"', payload)
+        self.assertIn('"kind": "status-update"', payload)
         self.assertIn('TASK_STATE_COMPLETED', payload)
 
         stored_record = next(iter(api_gateway_main.A2A_TASK_STORE.values()))
@@ -714,6 +859,156 @@ class GatewayInvokeProxyTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(invoke_response.a2a["targetAgent"], "analysis-agent")
         self.assertEqual(invoke_response.a2a["targetThreadId"], "callee-thread")
+
+    async def test_invoke_agent_forwards_team_context_and_caller_metadata(self) -> None:
+        request = api_gateway_main.InvokeRequest(
+            prompt="Investigate the incident",
+            caller_agent_name="planner",
+            caller_agent_namespace="team-a",
+            parent_thread_id="thread-parent",
+            caller_request_id="req-123",
+            team_context={"objective": "Produce a reusable incident summary."},
+        )
+        raw_request = types.SimpleNamespace(headers={})
+        captured: dict[str, object] = {}
+        response = httpx.Response(
+            200,
+            json={
+                "response": "done",
+                "thread_id": "thread-1",
+                "model": "gpt-4",
+                "status": "completed",
+            },
+        )
+
+        class FakeAsyncClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def post(self, url, **kwargs):
+                captured["url"] = url
+                captured["json"] = kwargs.get("json")
+                return response
+
+        with patch.object(
+            api_gateway_main.asyncio,
+            "to_thread",
+            return_value={"spec": {"model": "gpt-4", "runtime": {"kind": "langgraph"}}},
+        ), patch.object(api_gateway_main.httpx, "AsyncClient", return_value=FakeAsyncClient()):
+            await api_gateway_main.invoke_agent("planner", request, raw_request, "default", user={})
+
+        forwarded = captured["json"]
+        self.assertEqual(forwarded["caller_agent_name"], "planner")
+        self.assertEqual(forwarded["caller_agent_namespace"], "team-a")
+        self.assertEqual(forwarded["parent_thread_id"], "thread-parent")
+        self.assertEqual(forwarded["caller_request_id"], "req-123")
+        self.assertEqual(forwarded["team_context"]["objective"], "Produce a reusable incident summary.")
+
+    async def test_invoke_agent_forwards_and_returns_subagent_metadata(self) -> None:
+        request = api_gateway_main.InvokeRequest(
+            prompt="Coordinate a root-cause analysis",
+            subagent_strategy="parallel",
+            subagents=[
+                {
+                    "name": "analysis-agent",
+                    "namespace": "team-b",
+                    "role": "incident analyst",
+                    "task": "Inspect the failing workflow.",
+                    "result_file_path": "artifacts/analysis.md",
+                }
+            ],
+        )
+        raw_request = types.SimpleNamespace(headers={})
+        captured: dict[str, object] = {}
+        response = httpx.Response(
+            200,
+            json={
+                "response": "done",
+                "thread_id": "thread-1",
+                "model": "gpt-4",
+                "status": "completed",
+                "subagents": {
+                    "strategy": "parallel",
+                    "count": 1,
+                    "results": [
+                        {
+                            "name": "analysis-agent",
+                            "namespace": "team-b",
+                            "status": "completed",
+                            "resultFilePath": "artifacts/analysis.md",
+                        }
+                    ],
+                },
+            },
+        )
+
+        class FakeAsyncClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def post(self, url, **kwargs):
+                captured["url"] = url
+                captured["json"] = kwargs.get("json")
+                return response
+
+        with patch.object(
+            api_gateway_main.asyncio,
+            "to_thread",
+            return_value={"spec": {"model": "gpt-4", "runtime": {"kind": "langgraph"}}},
+        ), patch.object(api_gateway_main.httpx, "AsyncClient", return_value=FakeAsyncClient()):
+            invoke_response = await api_gateway_main.invoke_agent("planner", request, raw_request, "default", user={})
+
+        forwarded = captured["json"]
+        self.assertEqual(forwarded["subagent_strategy"], "parallel")
+        self.assertEqual(forwarded["subagents"][0]["name"], "analysis-agent")
+        self.assertEqual(forwarded["subagents"][0]["result_file_path"], "artifacts/analysis.md")
+        self.assertEqual(invoke_response.subagents["strategy"], "parallel")
+        self.assertEqual(invoke_response.subagents["results"][0]["resultFilePath"], "artifacts/analysis.md")
+
+    async def test_invoke_agent_preserves_non_object_tool_result(self) -> None:
+        request = api_gateway_main.InvokeRequest(
+            prompt="Call the reporting tool",
+            tool_name="report.generate",
+            mcp_server="reporting",
+        )
+        raw_request = types.SimpleNamespace(headers={})
+        response = httpx.Response(
+            200,
+            json={
+                "response": "done",
+                "thread_id": "thread-1",
+                "model": "gpt-4",
+                "status": "completed",
+                "tool_name": "report.generate",
+                "tool_result": ["row-1", "row-2"],
+            },
+        )
+
+        class FakeAsyncClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def post(self, *args, **kwargs):
+                return response
+
+        with patch.object(
+            api_gateway_main.asyncio,
+            "to_thread",
+            return_value={"spec": {"model": "gpt-4", "runtime": {"kind": "langgraph"}}},
+        ), patch.object(api_gateway_main.httpx, "AsyncClient", return_value=FakeAsyncClient()):
+            invoke_response = await api_gateway_main.invoke_agent("planner", request, raw_request, "default", user={})
+
+        self.assertEqual(invoke_response.tool_name, "report.generate")
+        self.assertEqual(invoke_response.tool_result, ["row-1", "row-2"])
 
     async def test_invoke_agent_stream_emits_response_error_event_for_upstream_failure(self) -> None:
         request = api_gateway_main.InvokeRequest(prompt="hello")

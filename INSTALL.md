@@ -52,8 +52,10 @@ Key capabilities:
 
 - **Declarative agent management** via CRDs (`AIAgent`, `AgentPolicy`, `AgentTenant`, `AgentWorkflow`, `AgentEval`)
 - **Per-agent isolation** — each agent runs as its own StatefulSet with a persistent checkpoint volume
+- **File-backed skills** — `spec.skills.files` stores Markdown skill documents that steer prompts and grant scoped runtime capabilities
 - **Guardrails** — prompt injection detection, PII masking, and per-request token caps
 - **Human-in-the-Loop** — async approval gates for high-risk actions
+- **Agent-to-agent delegation** — explicit A2A calls plus specialist-team orchestration for LangGraph agents
 - **Multi-agent workflows** — DAG-based pipelines with step dependencies
 - **Automated evaluations** — scheduled test suites with relevance/toxicity/latency thresholds
 - **Model gateway** — LiteLLM proxies all LLM calls with caching (Redis) and key management
@@ -453,8 +455,11 @@ helm lint ./charts/ai-agent-sandbox -f values-prod.yaml
 helm upgrade --install ai-sandbox ./charts/ai-agent-sandbox \
   --namespace ai-platform \
   --create-namespace \
-  -f values-prod.yaml
+  -f values-prod.yaml \
+  --set-file skillsCatalog.catalogJson=./catalog/skills-catalog.json
 ```
+
+If `catalog/skills-catalog.json` exists, include it during Helm installs and upgrades so the API gateway serves the curated skills catalog instead of the chart default empty array.
 
 ### 5. Verify the Installation
 
@@ -636,6 +641,38 @@ Watch the agent come up:
 kubectl get pods -n agent-tenant-my-team -w
 kubectl get aiagents -n agent-tenant-my-team
 ```
+
+#### Optional: attach skill files and A2A caller policy
+
+The `AIAgent` spec can carry versioned skill documents and inbound A2A caller policy directly in the manifest. The operator injects the raw files into the runtime, the gateway returns parsed skill summaries, and the runtimes enforce the grants declared in frontmatter.
+
+```yaml
+spec:
+  a2a:
+    allowedCallers:
+      - name: reviewer
+        namespace: team-b
+  skills:
+    files:
+      .github/skills/research-brief/SKILL.md: |
+        ---
+        name: research-brief
+        description: Prepare evidence-backed research notes and concise briefings.
+        allowedSandboxTools:
+          - sandbox.filesystem.read
+          - sandbox.filesystem.write
+        allowedMcpServers:
+          - github
+        allowedA2ATargets:
+          - name: analysis-agent
+            namespace: agent-tenant-my-team
+        allowSubagents: true
+        ---
+        Use this skill when the request needs evidence gathering, repository inspection,
+        or a handoff to a specialist reviewer.
+```
+
+Skill files must use relative Markdown paths. The frontmatter is optional, but when present it controls the runtime capability envelope for that skill.
 
 ### Step 4 — Invoke the Agent
 
@@ -892,6 +929,7 @@ agentctl policies list
 
 # Show details for a single resource
 agentctl agents show my-assistant
+agentctl agents discover my-assistant
 agentctl approvals show approval-name
 
 # Create, update, or delete resources from JSON/YAML files
@@ -905,6 +943,13 @@ agentctl invoke my-assistant "What is Kubernetes?"
 
 # Stream a response live
 agentctl invoke my-assistant --stream "Summarize the latest deployment status"
+
+# Route a request through a specific peer over A2A
+agentctl invoke my-assistant "Ask the reviewer for a second opinion" --a2a-target-agent reviewer --a2a-target-namespace team-b --a2a-timeout-seconds 20
+
+# Launch a specialist team inline or from a file
+agentctl invoke my-assistant --subagent "team-a/reviewer|Code Review|Review the latest patch" --subagent "team-a/docs|Docs|Summarize API changes" --subagent-strategy parallel
+agentctl invoke my-assistant --subagents-file examples/sample-subagents.yaml
 
 # Invoke an agent interactively (reads from stdin)
 agentctl invoke my-assistant
@@ -921,6 +966,14 @@ agentctl get agents
 ```
 
 The file-based commands accept either full Kubernetes custom resource manifests like `AIAgent`, `AgentWorkflow`, and `AgentEval`, or direct API payload documents in JSON/YAML using snake_case fields.
+
+Goose-specific agent updates can also be patched without replacing the full manifest:
+
+```bash
+agentctl agents update goose-assistant --goose-config-file config.yaml=.goose/config.yaml
+agentctl agents update goose-assistant --goose-config-text prompts/review.md="Review changes conservatively."
+agentctl agents update goose-assistant --clear-goose-config-files
+```
 
 ---
 
@@ -941,10 +994,16 @@ kubectl port-forward svc/ai-sandbox-ai-agent-sandbox-web-ui 3000:80
 
 Features:
 - Browse and create agents
-- Invoke agents with a chat interface
-- View agent status and logs
+- Create and edit agent skill bundles and Goose config bundles with structured file editors
+- Invoke agents with a chat interface, explicit A2A targets, or specialist teams
+- View agent status, parsed skill summaries, discovered peers, activity, and logs
 - Manage workflows and evaluations
 - Review and act on pending approvals
+
+Operational notes:
+- the agent inspector surfaces parsed skill grants, inbound A2A callers, and peer reachability for the selected agent
+- Goose agents expose the safe chat controls already available through the runtime (`max_turns` and workspace-relative `working_directory`), while approval retry and gateway-routed tool continuity remain LangGraph-focused
+- the UI uses the same bearer token and namespace model as `agentctl`, so it maps cleanly to production ingress and local port-forwarding workflows
 
 For local development of the Web UI:
 
@@ -976,6 +1035,7 @@ All endpoints are prefixed with `/api` and require an `Authorization: Bearer <to
 | `GET` | `/api/agents/{name}?namespace=` | Get agent details |
 | `PATCH` | `/api/agents/{name}?namespace=` | Update agent spec |
 | `DELETE` | `/api/agents/{name}?namespace=` | Delete an agent |
+| `GET` | `/api/agents/{name}/discover?namespace=` | Discover configured A2A peers and reachability |
 | `POST` | `/api/agents/{name}/invoke?namespace=` | Invoke agent (JSON: `{"prompt": "...", "thread_id": "..."}`) |
 | `POST` | `/api/agents/{name}/invoke/stream?namespace=` | Invoke with SSE streaming |
 | `GET` | `/api/agents/{name}/logs?namespace=` | Get agent pod logs |

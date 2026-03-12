@@ -1,6 +1,12 @@
-import { PlusCircle, Save, Trash2 } from "lucide-react";
+import { LoaderCircle, PlusCircle, Save, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import type { AgentInfo, EvalInfo, EvalPayload, EvalTestCase, EvalUpdatePayload } from "../types";
 
 interface EvalManagerProps {
@@ -27,15 +33,19 @@ type ThresholdBuildResult = {
 
 const METRIC_OPTIONS = ["relevance", "faithfulness", "toxicity", "latency"];
 
+function thresholdValueToDraft(value: unknown): string {
+  return value === undefined || value === null ? "" : String(value);
+}
+
 function defaultCases(): EvalTestCase[] {
   return [{ input: "", expected_output: "", metrics: ["relevance"] }];
 }
 
 function thresholdsFromResource(evalResource: EvalInfo | null): ThresholdDraft {
   return {
-    maxToxicity: evalResource?.failure_threshold.maxToxicity ? String(evalResource.failure_threshold.maxToxicity) : "",
-    minRelevance: evalResource?.failure_threshold.minRelevance ? String(evalResource.failure_threshold.minRelevance) : "",
-    maxLatencyMs: evalResource?.failure_threshold.maxLatencyMs ? String(evalResource.failure_threshold.maxLatencyMs) : "",
+    maxToxicity: thresholdValueToDraft(evalResource?.failure_threshold.maxToxicity),
+    minRelevance: thresholdValueToDraft(evalResource?.failure_threshold.minRelevance),
+    maxLatencyMs: thresholdValueToDraft(evalResource?.failure_threshold.maxLatencyMs),
   };
 }
 
@@ -66,7 +76,6 @@ export function EvalManager({
       setValidationError("");
       return;
     }
-
     setName("");
     setAgentRef(agents[0]?.name ?? "");
     setSchedule("");
@@ -81,14 +90,9 @@ export function EvalManager({
 
   function parseThresholdValue(label: string, rawValue: string): number | null {
     const trimmed = rawValue.trim();
-    if (!trimmed) {
-      return null;
-    }
-
+    if (!trimmed) return null;
     const parsed = Number(trimmed);
-    if (!Number.isFinite(parsed)) {
-      throw new Error(`${label} must be a valid number.`);
-    }
+    if (!Number.isFinite(parsed)) throw new Error(`${label} must be a valid number.`);
     return parsed;
   }
 
@@ -98,47 +102,53 @@ export function EvalManager({
       const maxToxicity = parseThresholdValue("Max toxicity", thresholds.maxToxicity);
       const minRelevance = parseThresholdValue("Min relevance", thresholds.minRelevance);
       const maxLatencyMs = parseThresholdValue("Max latency ms", thresholds.maxLatencyMs);
-
-      if (maxToxicity !== null) {
-        next.maxToxicity = maxToxicity;
-      }
-      if (minRelevance !== null) {
-        next.minRelevance = minRelevance;
-      }
-      if (maxLatencyMs !== null) {
-        next.maxLatencyMs = maxLatencyMs;
-      }
-    } catch (error) {
-      return {
-        values: {},
-        error: error instanceof Error ? error.message : String(error),
-      };
+      if (maxToxicity !== null) next.maxToxicity = maxToxicity;
+      if (minRelevance !== null) next.minRelevance = minRelevance;
+      if (maxLatencyMs !== null) next.maxLatencyMs = maxLatencyMs;
+    } catch (err) {
+      return { values: {}, error: err instanceof Error ? err.message : String(err) };
     }
-
     return { values: next, error: null };
   }
 
   const canSubmit = Boolean(name.trim()) && Boolean(agentRef.trim()) && testSuite.every((item) => item.input.trim());
 
   return (
-    <section className="panel panel-setup">
-      <div className="panel-header panel-header-chat">
-        <div>
-          <p className="eyebrow">Evaluation Suite</p>
-          <h2>{evalResource ? evalResource.name : "Create evaluation"}</h2>
+    <Card>
+      <CardHeader className="pb-3">
+        <div className="flex items-center gap-3">
+          <div className="flex-1">
+            <CardTitle className="text-base">
+              {evalResource ? evalResource.name : "Create evaluation"}
+            </CardTitle>
+            <CardDescription>
+              {evalResource ? "Edit evaluation configuration and test cases." : "Define test cases and quality thresholds."}
+            </CardDescription>
+          </div>
+          <Badge variant={evalResource?.phase === "running" ? "default" : "secondary"}>
+            {evalResource?.phase ?? "draft"}
+          </Badge>
         </div>
-        <span className={`mode-pill ${evalResource?.phase === "running" ? "live" : "sync"}`}>{evalResource?.phase ?? "draft"}</span>
-      </div>
-
-      <div className="resource-grid">
-        <div className="setup-form">
-          <label>
-            <span>Name</span>
-            <input value={name} onChange={(event) => setName(event.target.value)} placeholder="research-assistant-eval" disabled={Boolean(evalResource)} />
-          </label>
-          <label>
-            <span>Agent</span>
-            <select value={agentRef} onChange={(event) => setAgentRef(event.target.value)}>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {/* Config */}
+        <div className="grid gap-4 sm:grid-cols-3">
+          <div className="space-y-1.5">
+            <Label className="text-xs">Name</Label>
+            <Input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="research-assistant-eval"
+              disabled={Boolean(evalResource)}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs">Agent</Label>
+            <select
+              className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              value={agentRef}
+              onChange={(e) => setAgentRef(e.target.value)}
+            >
               <option value="">Select agent</option>
               {agents.map((agent) => (
                 <option key={agent.name} value={agent.name}>
@@ -146,155 +156,187 @@ export function EvalManager({
                 </option>
               ))}
             </select>
-          </label>
-          <label>
-            <span>Schedule</span>
-            <input value={schedule} onChange={(event) => setSchedule(event.target.value)} placeholder="0 */6 * * *" />
-          </label>
-
-          <div className="threshold-grid">
-            <label>
-              <span>Max toxicity</span>
-              <input
-                value={thresholds.maxToxicity}
-                onChange={(event) => {
-                  setValidationError("");
-                  setThresholds((current) => ({ ...current, maxToxicity: event.target.value }));
-                }}
-              />
-            </label>
-            <label>
-              <span>Min relevance</span>
-              <input
-                value={thresholds.minRelevance}
-                onChange={(event) => {
-                  setValidationError("");
-                  setThresholds((current) => ({ ...current, minRelevance: event.target.value }));
-                }}
-              />
-            </label>
-            <label>
-              <span>Max latency ms</span>
-              <input
-                value={thresholds.maxLatencyMs}
-                onChange={(event) => {
-                  setValidationError("");
-                  setThresholds((current) => ({ ...current, maxLatencyMs: event.target.value }));
-                }}
-              />
-            </label>
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs">Schedule (cron)</Label>
+            <Input
+              value={schedule}
+              onChange={(e) => setSchedule(e.target.value)}
+              placeholder="0 */6 * * *"
+            />
           </div>
         </div>
 
-        <div className="setup-form">
-          <div className="resource-section-header">
-            <span>Test cases</span>
-            <button
-              className="secondary-button"
-              type="button"
-              onClick={() => setTestSuite((current) => [...current, { input: "", expected_output: "", metrics: ["relevance"] }])}
-            >
-              <PlusCircle size={16} />
-              <span>Add case</span>
-            </button>
+        {/* Thresholds */}
+        <div className="space-y-1.5">
+          <h3 className="text-xs font-medium text-muted-foreground">Failure thresholds</h3>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div className="space-y-1">
+              <Label className="text-[11px]">Max toxicity</Label>
+              <Input
+                className="h-8 text-xs"
+                value={thresholds.maxToxicity}
+                onChange={(e) => {
+                  setValidationError("");
+                  setThresholds((c) => ({ ...c, maxToxicity: e.target.value }));
+                }}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-[11px]">Min relevance</Label>
+              <Input
+                className="h-8 text-xs"
+                value={thresholds.minRelevance}
+                onChange={(e) => {
+                  setValidationError("");
+                  setThresholds((c) => ({ ...c, minRelevance: e.target.value }));
+                }}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-[11px]">Max latency (ms)</Label>
+              <Input
+                className="h-8 text-xs"
+                value={thresholds.maxLatencyMs}
+                onChange={(e) => {
+                  setValidationError("");
+                  setThresholds((c) => ({ ...c, maxLatencyMs: e.target.value }));
+                }}
+              />
+            </div>
           </div>
+        </div>
 
-          <div className="subresource-stack">
-            {testSuite.map((testCase, index) => (
-              <article key={`${index}-${testCase.input}`} className="subresource-card">
-                <div className="resource-section-header">
-                  <strong>Case {index + 1}</strong>
-                  <button
-                    className="secondary-button"
-                    type="button"
-                    onClick={() => setTestSuite((current) => current.filter((_, caseIndex) => caseIndex !== index))}
+        {/* Test cases heading */}
+        <div className="flex items-center justify-between border-t border-border pt-4">
+          <h3 className="text-sm font-medium">Test cases</h3>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 text-xs"
+            onClick={() =>
+              setTestSuite((current) => [
+                ...current,
+                { input: "", expected_output: "", metrics: ["relevance"] },
+              ])
+            }
+          >
+            <PlusCircle className="mr-1 h-3 w-3" />
+            Add case
+          </Button>
+        </div>
+
+        {/* Test case cards */}
+        <div className="space-y-3">
+          {testSuite.map((testCase, index) => (
+            <Card key={index} className="shadow-none">
+              <CardContent className="p-3 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-medium">Case {index + 1}</span>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 text-xs text-destructive hover:text-destructive"
                     disabled={testSuite.length === 1}
+                    onClick={() =>
+                      setTestSuite((current) => current.filter((_, i) => i !== index))
+                    }
                   >
-                    <Trash2 size={14} />
-                    <span>Remove</span>
-                  </button>
+                    <Trash2 className="mr-1 h-3 w-3" />
+                    Remove
+                  </Button>
                 </div>
-                <label>
-                  <span>Input</span>
-                  <textarea
-                    className="prompt-input compact-input"
-                    rows={3}
+                <div className="space-y-1">
+                  <Label className="text-[11px]">Input</Label>
+                  <Textarea
+                    rows={2}
+                    className="text-xs"
                     value={testCase.input}
-                    onChange={(event) => updateCase(index, (current) => ({ ...current, input: event.target.value }))}
+                    onChange={(e) =>
+                      updateCase(index, (c) => ({ ...c, input: e.target.value }))
+                    }
                   />
-                </label>
-                <label>
-                  <span>Expected output</span>
-                  <textarea
-                    className="prompt-input compact-input"
-                    rows={3}
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-[11px]">Expected output</Label>
+                  <Textarea
+                    rows={2}
+                    className="text-xs"
                     value={testCase.expected_output}
-                    onChange={(event) => updateCase(index, (current) => ({ ...current, expected_output: event.target.value }))}
+                    onChange={(e) =>
+                      updateCase(index, (c) => ({ ...c, expected_output: e.target.value }))
+                    }
                   />
-                </label>
-                <div className="metric-grid">
+                </div>
+                <div className="flex flex-wrap gap-3">
                   {METRIC_OPTIONS.map((metric) => (
-                    <label key={metric} className="toggle-chip align-start">
+                    <label key={metric} className="flex items-center gap-1.5 cursor-pointer text-xs">
                       <input
-                        checked={testCase.metrics.includes(metric)}
                         type="checkbox"
-                        onChange={(event) =>
-                          updateCase(index, (current) => ({
-                            ...current,
-                            metrics: event.target.checked
-                              ? [...current.metrics, metric]
-                              : current.metrics.filter((item) => item !== metric),
+                        checked={testCase.metrics.includes(metric)}
+                        onChange={(e) =>
+                          updateCase(index, (c) => ({
+                            ...c,
+                            metrics: e.target.checked
+                              ? [...c.metrics, metric]
+                              : c.metrics.filter((m) => m !== metric),
                           }))
                         }
+                        className="h-3.5 w-3.5 rounded border-input"
                       />
-                      <span>{metric}</span>
+                      {metric}
                     </label>
                   ))}
                 </div>
-              </article>
-            ))}
-          </div>
-
-          {validationError ? <p className="error-banner">{validationError}</p> : null}
-          {!validationError && error ? <p className="error-banner">{error}</p> : null}
-          <div className="approval-actions">
-            <button
-              className="primary-button"
-              type="button"
-              onClick={() => {
-                const thresholdResult = buildFailureThreshold();
-                if (thresholdResult.error) {
-                  setValidationError(thresholdResult.error);
-                  return;
-                }
-
-                setValidationError("");
-                const payload = {
-                  agent_ref: agentRef,
-                  schedule: schedule.trim() || undefined,
-                  test_suite: testSuite,
-                  failure_threshold: thresholdResult.values,
-                };
-                if (evalResource) {
-                  onUpdate(evalResource.name, payload as EvalUpdatePayload);
-                  return;
-                }
-                onCreate({ name, ...payload });
-              }}
-              disabled={!canSubmit || isSaving}
-            >
-              <Save size={16} />
-              <span>{isSaving ? "Saving" : evalResource ? "Save evaluation" : "Create evaluation"}</span>
-            </button>
-            {evalResource ? (
-              <button className="secondary-button danger-button" type="button" onClick={() => onDelete(evalResource.name)} disabled={isDeleting}>
-                <Trash2 size={16} />
-                <span>{isDeleting ? "Deleting" : "Delete evaluation"}</span>
-              </button>
-            ) : null}
-          </div>
+              </CardContent>
+            </Card>
+          ))}
         </div>
-      </div>
-    </section>
+
+        {(validationError || error) && (
+          <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+            {validationError || error}
+          </div>
+        )}
+
+        <div className="flex items-center justify-end gap-2 border-t border-border pt-4">
+          <Button
+            onClick={() => {
+              const thresholdResult = buildFailureThreshold();
+              if (thresholdResult.error) {
+                setValidationError(thresholdResult.error);
+                return;
+              }
+              setValidationError("");
+              const payload = {
+                agent_ref: agentRef,
+                schedule: schedule.trim() || undefined,
+                test_suite: testSuite,
+                failure_threshold: thresholdResult.values,
+              };
+              if (evalResource) {
+                onUpdate(evalResource.name, payload as EvalUpdatePayload);
+                return;
+              }
+              onCreate({ name, ...payload });
+            }}
+            disabled={!canSubmit || isSaving}
+          >
+            {isSaving ? <LoaderCircle className="mr-1.5 h-4 w-4 animate-spin" /> : <Save className="mr-1.5 h-4 w-4" />}
+            {isSaving ? "Saving..." : evalResource ? "Save evaluation" : "Create evaluation"}
+          </Button>
+          {evalResource && (
+            <Button
+              variant="destructive"
+              onClick={() => onDelete(evalResource.name)}
+              disabled={isDeleting}
+            >
+              {isDeleting ? <LoaderCircle className="mr-1.5 h-4 w-4 animate-spin" /> : <Trash2 className="mr-1.5 h-4 w-4" />}
+              {isDeleting ? "Deleting..." : "Delete"}
+            </Button>
+          )}
+        </div>
+      </CardContent>
+    </Card>
   );
 }

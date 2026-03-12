@@ -46,6 +46,65 @@ class GooseRuntimeTests(unittest.TestCase):
         self.assertEqual(request.stdio_extensions, ["echo tool"])
         self.assertEqual(request.streamable_http_extensions, ["https://example.com/mcp"])
 
+    def test_request_accepts_team_context_object(self) -> None:
+        request = goose_runtime_main.InvokeRequest(
+            prompt="hello",
+            team_context={"objective": "Investigate the regression."},
+        )
+
+        self.assertEqual(request.team_context, {"objective": "Investigate the regression."})
+
+    def test_parse_skill_definition_extracts_goose_extension_grants(self) -> None:
+        definition = goose_runtime_main.parse_skill_definition(
+            ".github/skills/reviewer/SKILL.md",
+            (
+                "---\n"
+                "name: reviewer\n"
+                "description: Review code changes.\n"
+                "gooseBuiltinExtensions:\n"
+                "  - developer\n"
+                "gooseStdioExtensions:\n"
+                "  - echo reviewer-tool\n"
+                "gooseStreamableHttpExtensions:\n"
+                "  - https://example.com/mcp\n"
+                "---\n"
+                "Review conservatively and explain risks first.\n"
+            ),
+        )
+
+        self.assertEqual(definition["name"], "reviewer")
+        self.assertEqual(definition["gooseBuiltinExtensions"], ["developer"])
+        self.assertEqual(definition["gooseStdioExtensions"], ["echo reviewer-tool"])
+        self.assertEqual(definition["gooseStreamableHttpExtensions"], ["https://example.com/mcp"])
+
+    def test_validate_skill_extension_request_rejects_ungranted_extensions(self) -> None:
+        request = goose_runtime_main.InvokeRequest(
+            prompt="hello",
+            builtin_extensions=["developer"],
+            stdio_extensions=["echo reviewer-tool"],
+            streamable_http_extensions=["https://example.com/mcp"],
+        )
+
+        with patch.object(
+            goose_runtime_main,
+            "SKILL_RUNTIME_CONFIG",
+            {
+                "skills": [{"name": "reviewer"}],
+                "gooseBuiltinExtensions": frozenset({"developer"}),
+                "gooseStdioExtensions": frozenset(),
+                "gooseStreamableHttpExtensions": frozenset(),
+                "warnings": [],
+            },
+        ):
+            with self.assertRaises(HTTPException) as context:
+                goose_runtime_main.validate_skill_extension_request(request)
+
+        self.assertIn("stdio", str(context.exception.detail))
+
+    def test_request_rejects_invalid_team_context_shape(self) -> None:
+        with self.assertRaises(ValueError):
+            goose_runtime_main.InvokeRequest(prompt="hello", team_context=["not-an-object"])
+
     def test_build_goose_run_command_supports_documented_run_flags(self) -> None:
         command = goose_runtime_main.build_goose_run_command(
             model="gpt-4",
@@ -123,6 +182,35 @@ class GooseRuntimeTests(unittest.TestCase):
                 (config_root / "prompts" / "review.md").read_text(encoding="utf-8"),
                 "Review conservatively.\n",
             )
+
+    def test_load_skill_runtime_config_builds_prompt_and_extension_sets(self) -> None:
+        with patch.dict(
+            goose_runtime_main.os.environ,
+            {
+                goose_runtime_main.SKILL_FILES_ENV: json.dumps(
+                    {
+                        ".github/skills/reviewer/SKILL.md": (
+                            "---\n"
+                            "name: reviewer\n"
+                            "description: Review code changes.\n"
+                            "gooseBuiltinExtensions:\n"
+                            "  - developer\n"
+                            "gooseStdioExtensions:\n"
+                            "  - echo reviewer-tool\n"
+                            "---\n"
+                            "Review conservatively and explain risks first.\n"
+                        )
+                    }
+                )
+            },
+            clear=False,
+        ):
+            config = goose_runtime_main.load_skill_runtime_config()
+
+        self.assertEqual(config["skillFiles"], [".github/skills/reviewer/SKILL.md"])
+        self.assertEqual(config["gooseBuiltinExtensions"], frozenset({"developer"}))
+        self.assertEqual(config["gooseStdioExtensions"], frozenset({"echo reviewer-tool"}))
+        self.assertIn("reviewer", config["prompt"])
 
     def test_materialize_goose_config_files_rejects_runtime_managed_paths(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir, patch.object(
@@ -305,6 +393,52 @@ class GooseRuntimeTests(unittest.TestCase):
 
         self.assertEqual(captured["input"], b"multi\nline prompt")
         self.assertEqual(payload["metadata"]["status"], "completed")
+
+    def test_format_team_context_system_prompt_includes_objective_and_caller(self) -> None:
+        prompt = goose_runtime_main.format_team_context_system_prompt(
+            {
+                "objective": "Review the failing workflow.",
+                "caller": {"name": "planner", "namespace": "team-a", "threadId": "thread-1"},
+                "workingAgreement": ["Return concrete findings."],
+            }
+        )
+
+        self.assertIn("multi-agent collaboration", prompt)
+        self.assertIn("planner", prompt)
+        self.assertIn("Review the failing workflow.", prompt)
+
+    def test_invoke_passes_team_context_into_system_prompt(self) -> None:
+        captured: dict[str, object] = {}
+
+        async def fake_execute_goose_json(**kwargs):
+            captured.update(kwargs)
+            return {
+                "messages": [{"role": "assistant", "content": "done"}],
+                "metadata": {"status": "completed"},
+            }
+
+        async def run_test() -> goose_runtime_main.InvokeResponse:
+            request = goose_runtime_main.InvokeRequest(
+                prompt="Investigate the issue",
+                system="Stay concise.",
+                team_context={
+                    "objective": "Review the failing workflow.",
+                    "caller": {"name": "planner", "namespace": "team-a"},
+                },
+            )
+            with patch.object(goose_runtime_main, "execute_goose_json", side_effect=fake_execute_goose_json), patch.object(
+                goose_runtime_main,
+                "resolve_working_directory",
+                return_value="/workspace",
+            ):
+                return await goose_runtime_main.invoke(request)
+
+        response = asyncio.run(run_test())
+
+        self.assertEqual(response.response, "done")
+        self.assertIn("Stay concise.", str(captured["system_prompt"]))
+        self.assertIn("Review the failing workflow.", str(captured["system_prompt"]))
+        self.assertIn("planner", str(captured["system_prompt"]))
 
 
 if __name__ == "__main__":

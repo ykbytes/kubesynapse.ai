@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import sys
 import types
 import unittest
@@ -42,14 +43,20 @@ class _FakeStreamingResponse:
         self.kwargs = kwargs
 
 
-fastapi_module = types.ModuleType("fastapi")
-fastapi_module.FastAPI = _FakeFastAPI
-fastapi_module.HTTPException = _HTTPException
-fastapi_module.Request = type("Request", (), {})
-fastapi_responses_module = types.ModuleType("fastapi.responses")
-fastapi_responses_module.StreamingResponse = _FakeStreamingResponse
-sys.modules.setdefault("fastapi", fastapi_module)
-sys.modules.setdefault("fastapi.responses", fastapi_responses_module)
+try:
+    import fastapi  # noqa: F401
+    import fastapi.responses  # noqa: F401
+except ModuleNotFoundError:
+    fastapi_module = types.ModuleType("fastapi")
+    fastapi_module.FastAPI = _FakeFastAPI
+    fastapi_module.HTTPException = _HTTPException
+    fastapi_module.Request = type("Request", (), {})
+    fastapi_module.Depends = lambda *args, **kwargs: None
+    fastapi_module.Header = lambda *args, **kwargs: None
+    fastapi_responses_module = types.ModuleType("fastapi.responses")
+    fastapi_responses_module.StreamingResponse = _FakeStreamingResponse
+    sys.modules.setdefault("fastapi", fastapi_module)
+    sys.modules.setdefault("fastapi.responses", fastapi_responses_module)
 
 env_utils_module = types.ModuleType("env_utils")
 env_utils_module.get_bool_env = lambda _name, default, **_kwargs: default
@@ -213,6 +220,140 @@ class AgentRuntimeA2ATests(unittest.TestCase):
                 a2a_target_namespace="team-b",
             )
 
+    def test_invoke_request_rejects_combined_tool_and_subagents(self) -> None:
+        with self.assertRaises(ValueError):
+            agent_logic_main.InvokeRequest(
+                prompt="hello",
+                tool_name="sandbox.exec",
+                subagents=[{"name": "analysis-agent", "namespace": "team-b"}],
+            )
+
+    def test_invoke_request_normalizes_subagent_strategy(self) -> None:
+        request = agent_logic_main.InvokeRequest(
+            prompt="Investigate the regression",
+            subagent_strategy=" Parallel ",
+            subagents=[
+                {
+                    "name": "analysis-agent",
+                    "namespace": "team-b",
+                    "role": " incident analyst ",
+                    "task": " inspect the failing workflow ",
+                    "result_file_path": " artifacts/analysis.md ",
+                }
+            ],
+        )
+
+        self.assertEqual(request.subagent_strategy, "parallel")
+        self.assertEqual(request.subagents[0].role, "incident analyst")
+        self.assertEqual(request.subagents[0].task, "inspect the failing workflow")
+        self.assertEqual(request.subagents[0].result_file_path, "artifacts/analysis.md")
+
+    def test_invoke_response_allows_non_object_tool_result(self) -> None:
+        response = agent_logic_main.InvokeResponse(
+            thread_id="thread-1",
+            response="done",
+            model="gpt-4",
+            tool_result=["item-1", "item-2"],
+        )
+
+        self.assertEqual(response.tool_result, ["item-1", "item-2"])
+
+    def test_parse_skill_definition_extracts_capabilities(self) -> None:
+        definition = agent_logic_main.parse_skill_definition(
+            ".github/skills/research/SKILL.md",
+            (
+                "---\n"
+                "name: research\n"
+                "description: Gather evidence carefully.\n"
+                "allowedSandboxTools:\n"
+                "  - sandbox.filesystem.read\n"
+                "allowedMcpServers:\n"
+                "  - github\n"
+                "allowedA2ATargets:\n"
+                "  - name: analysis-agent\n"
+                "    namespace: team-b\n"
+                "allowSubagents: true\n"
+                "---\n"
+                "Read source material before answering.\n"
+            ),
+        )
+
+        self.assertEqual(definition["name"], "research")
+        self.assertEqual(definition["allowedSandboxTools"], ["sandbox.filesystem.read"])
+        self.assertEqual(definition["allowedMcpServers"], ["github"])
+        self.assertEqual(definition["allowedA2ATargets"], [{"name": "analysis-agent", "namespace": "team-b"}])
+        self.assertTrue(definition["allowSubagents"])
+        self.assertIn("Read source material", definition["body"])
+
+    def test_skill_block_reason_rejects_ungranted_capabilities(self) -> None:
+        skill_config = {
+            "skills": [{"name": "research"}],
+            "allowedSandboxToolPatterns": frozenset({"sandbox.filesystem.read"}),
+            "allowedMcpServers": frozenset({"github"}),
+            "allowedA2ATargets": frozenset({("team-b", "analysis-agent")}),
+            "allowSubagents": False,
+            "warnings": [],
+        }
+
+        with patch.object(agent_logic_main, "SKILL_RUNTIME_CONFIG", skill_config):
+            with patch.object(agent_logic_main, "is_sandbox_tool", return_value=True):
+                sandbox_reason = agent_logic_main.skill_block_reason(
+                    tool_name="sandbox.exec",
+                    mcp_server="",
+                    a2a_target_agent="",
+                    a2a_target_namespace="",
+                    subagents=[],
+                )
+            mcp_reason = agent_logic_main.skill_block_reason(
+                tool_name="tool.run",
+                mcp_server="prometheus",
+                a2a_target_agent="",
+                a2a_target_namespace="",
+                subagents=[],
+            )
+            subagent_reason = agent_logic_main.skill_block_reason(
+                tool_name="",
+                mcp_server="",
+                a2a_target_agent="",
+                a2a_target_namespace="",
+                subagents=[agent_logic_main.SubagentRequest(name="analysis-agent", namespace="team-b")],
+            )
+
+        self.assertIn("sandbox.exec", sandbox_reason)
+        self.assertIn("prometheus", mcp_reason)
+        self.assertIn("Specialist subagent coordination", subagent_reason)
+
+    def test_load_skill_runtime_config_builds_prompt_and_capability_sets(self) -> None:
+        with patch.dict(
+            agent_logic_main.os.environ,
+            {
+                agent_logic_main.SKILL_FILES_ENV: json.dumps(
+                    {
+                        ".github/skills/research/SKILL.md": (
+                            "---\n"
+                            "name: research\n"
+                            "description: Gather evidence carefully.\n"
+                            "allowedSandboxTools:\n"
+                            "  - sandbox.filesystem.read\n"
+                            "allowedMcpServers:\n"
+                            "  - github\n"
+                            "allowSubagents: true\n"
+                            "---\n"
+                            "Read source material before answering.\n"
+                        )
+                    }
+                )
+            },
+            clear=False,
+        ):
+            config = agent_logic_main.load_skill_runtime_config()
+
+        self.assertEqual(config["skillFiles"], [".github/skills/research/SKILL.md"])
+        self.assertEqual(config["allowedSandboxToolPatterns"], frozenset({"sandbox.filesystem.read"}))
+        self.assertEqual(config["allowedMcpServers"], frozenset({"github"}))
+        self.assertTrue(config["allowSubagents"])
+        self.assertIn("research", config["prompt"])
+
     def test_validate_inbound_a2a_request_rejects_unauthorized_caller(self) -> None:
         request = agent_logic_main.InvokeRequest(
             prompt="hello",
@@ -250,6 +391,167 @@ class AgentRuntimeA2ATests(unittest.TestCase):
         self.assertEqual(targets, frozenset({("team-b", "analysis-agent")}))
         self.assertEqual(timeout_seconds, 45.0)
         self.assertTrue(require_hitl)
+
+    def test_invoke_request_rejects_invalid_team_context_shape(self) -> None:
+        with self.assertRaises(ValueError):
+            agent_logic_main.InvokeRequest(prompt="hello", team_context=["not-an-object"])
+
+    def test_build_inbound_team_context_merges_caller_metadata(self) -> None:
+        request = agent_logic_main.InvokeRequest(
+            prompt="Summarize the incident timeline",
+            caller_agent_name="planner",
+            caller_agent_namespace="team-a",
+            parent_thread_id="thread-parent",
+            caller_request_id="req-123",
+            team_context={"objective": "Build a reusable incident summary."},
+        )
+
+        team_context = agent_logic_main.build_inbound_team_context(request)
+
+        self.assertEqual(team_context["caller"]["name"], "planner")
+        self.assertEqual(team_context["caller"]["namespace"], "team-a")
+        self.assertEqual(team_context["caller"]["threadId"], "thread-parent")
+        self.assertEqual(team_context["caller"]["requestId"], "req-123")
+        self.assertEqual(team_context["objective"], "Build a reusable incident summary.")
+        self.assertTrue(team_context["workingAgreement"])
+
+    def test_invoke_a2a_target_uses_gateway_fallback_after_direct_failure(self) -> None:
+        calls: list[tuple[str, dict[str, object]]] = []
+
+        class FakeResponse:
+            def __init__(self, payload):
+                self._payload = payload
+                self.status_code = 200
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return self._payload
+
+        class FakeClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def post(self, url, **kwargs):
+                calls.append((url, kwargs))
+                if len(calls) == 1:
+                    raise RuntimeError("network policy blocked direct access")
+                return FakeResponse({"response": "done", "status": "completed", "thread_id": "callee-thread"})
+
+        with patch.object(agent_logic_main.httpx, "Client", FakeClient), patch.object(
+            agent_logic_main,
+            "API_GATEWAY_INTERNAL_URL",
+            "http://gateway.local",
+        ), patch.object(agent_logic_main, "API_GATEWAY_SHARED_TOKEN", "shared-token"):
+            result, transport, fallback_reason = agent_logic_main.invoke_a2a_target_with_fallback(
+                "analysis-agent",
+                "team-b",
+                {"prompt": "Investigate"},
+                "req-1",
+                15.0,
+            )
+
+        self.assertEqual(result["response"], "done")
+        self.assertEqual(transport, "gateway")
+        self.assertIn("Direct A2A transport failed", fallback_reason)
+        self.assertIn("analysis-agent-sandbox.team-b.svc.cluster.local", calls[0][0])
+        self.assertEqual(calls[1][0], "http://gateway.local/api/agents/analysis-agent/invoke")
+        self.assertEqual(calls[1][1]["params"]["namespace"], "team-b")
+        self.assertEqual(calls[1][1]["headers"]["Authorization"], "Bearer shared-token")
+
+    def test_coordinate_specialized_subagents_shares_files_and_writes_artifacts(self) -> None:
+        writes: list[dict[str, object]] = []
+        captured_payloads: list[dict[str, object]] = []
+
+        async def fake_execute(tool_name, tool_args, current_session, publish_event):
+            del publish_event
+            if tool_name == "sandbox.filesystem.read":
+                return (
+                    {"content": "def bug():\n    return 'fixed'\n"},
+                    {"sandbox_id": "shared", "expires_at": "2099-01-01T00:00:00+00:00"},
+                )
+            if tool_name == "sandbox.filesystem.mkdir":
+                return (
+                    {"createdPaths": tool_args["paths"]},
+                    current_session,
+                )
+            if tool_name == "sandbox.filesystem.write":
+                writes.append(dict(tool_args))
+                return (
+                    {"writtenPaths": [tool_args["path"]]},
+                    {"sandbox_id": "shared", "expires_at": "2099-01-02T00:00:00+00:00"},
+                )
+            raise AssertionError(f"Unexpected sandbox tool: {tool_name}")
+
+        def fake_invoke(target_agent, target_namespace, payload, request_id, timeout_seconds):
+            del request_id, timeout_seconds
+            captured_payloads.append(payload)
+            self.assertEqual(target_agent, "analysis-agent")
+            self.assertEqual(target_namespace, "team-b")
+            return (
+                {
+                    "response": "Root cause isolated in src/app.py.",
+                    "status": "completed",
+                    "thread_id": "callee-thread",
+                    "sandbox_session": {"sandbox_id": "shared", "expires_at": "2099-01-03T00:00:00+00:00"},
+                },
+                "gateway",
+                "Direct A2A transport failed: blocked",
+            )
+
+        state = {
+            "thread_id": "thread-1",
+            "request_prompt": "Investigate the failing workflow and capture reusable notes.",
+            "policy": {
+                "a2a": {
+                    "allowedTargets": [{"name": "analysis-agent", "namespace": "team-b"}],
+                    "maxTimeoutSeconds": 30,
+                }
+            },
+            "team_context": {"objective": "Investigate the failing workflow."},
+            "sandbox_session": {"sandbox_id": "shared", "expires_at": "2099-01-01T00:00:00+00:00"},
+            "subagents": [
+                {
+                    "name": "analysis-agent",
+                    "namespace": "team-b",
+                    "role": "incident analyst",
+                    "task": "Inspect the failing workflow and explain the root cause.",
+                    "input_files": [{"path": "src/app.py", "purpose": "main runtime logic", "include_content": True}],
+                    "result_file_path": "artifacts/analysis.md",
+                    "share_sandbox_session": True,
+                }
+            ],
+            "subagent_strategy": "sequential",
+            "warnings": [],
+        }
+
+        with patch.object(agent_logic_main, "execute_sandbox_tool", fake_execute), patch.object(
+            agent_logic_main,
+            "invoke_a2a_target_with_fallback",
+            side_effect=fake_invoke,
+        ):
+            result = agent_logic_main.coordinate_specialized_subagents(
+                state,
+                synthesizer=lambda _objective, _strategy, _results: "Combined summary",
+            )
+
+        self.assertEqual(result["invoke_status"], "completed")
+        self.assertEqual(result["messages"][0].content, "Combined summary")
+        self.assertEqual(captured_payloads[0]["sandbox_session"]["sandbox_id"], "shared")
+        self.assertEqual(captured_payloads[0]["team_context"]["sharedFiles"][0]["path"], "src/app.py")
+        self.assertIn("Relevant files from the shared sandbox", captured_payloads[0]["prompt"])
+        self.assertEqual(writes[0]["path"], "artifacts/analysis.md")
+        self.assertEqual(result["subagent_results"]["results"][0]["resultFilePath"], "artifacts/analysis.md")
+        self.assertTrue(
+            any("Completed via API gateway fallback" in warning for warning in result["warnings"]),
+        )
 
 
 if __name__ == "__main__":

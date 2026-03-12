@@ -36,6 +36,7 @@ agentRuntime:
     repository: ghcr.io/your-org/ai-agent-runtime
     tag: latest
     pullPolicy: IfNotPresent
+  env: {}
   storage:
     size: 1Gi
   resources:
@@ -136,6 +137,7 @@ operator:
   workerArtifacts:
     size: 2Gi
     storageClassName: ""
+  stateDbEnabled: true
 
 apiGateway:
   replicaCount: 1
@@ -145,14 +147,64 @@ apiGateway:
     pullPolicy: IfNotPresent
   ingressClassName: nginx
   ingressHost: ""  # override e.g. "agents.mycompany.com"; defaults to agents.example.com
+  publicBaseUrl: ""
+  corsOrigins: []
   tls:
     enabled: false
     secretName: ""  # TLS secret name in the Ingress namespace; create via cert-manager or manually
   auth:
-    mode: shared_token
+    mode: hybrid
+    localAuthEnabled: true
+    registrationEnabled: false
+    jwtIssuer: ai-agent-sandbox
+    accessTokenTtlSeconds: 900
+    refreshTokenTtlSeconds: 604800
+    cookieSecure: false
+    cookieSameSite: lax
+    cookieDomain: ""
+    bootstrapAdminUsername: admin
+    bootstrapAdminEmail: admin@example.com
+    bootstrapAdminDisplayName: Platform Admin
+    bootstrapAdminNamespaces:
+      - "*"
     oidcIssuer: ""
     oidcAudience: ""
     oidcJwksUrl: ""
+    ldap:
+      enabled: false
+      serverUrl: ""
+      bindDn: ""
+      userSearchBase: ""
+      userSearchFilter: "(uid={username})"
+      groupSearchBase: ""
+      groupSearchFilter: "(member={user_dn})"
+      groupAttribute: memberOf
+      usernameAttribute: uid
+      emailAttribute: mail
+      displayNameAttribute: displayName
+      tlsEnabled: false
+      groupRoleMapping: {}
+
+postgresql:
+  enabled: true
+  image:
+    repository: postgres
+    tag: 16-alpine
+    pullPolicy: IfNotPresent
+  service:
+    port: 5432
+  database: ai_agent_sandbox
+  username: ai_agent_sandbox
+  persistence:
+    size: 8Gi
+    storageClassName: ""
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "1"
+      memory: "1Gi"
 
 webUi:
   enabled: true
@@ -225,6 +277,16 @@ platformSecrets:
     anthropicApiKey: ""
     litellmMasterKey: "replace-me"
     apiGatewaySharedToken: "replace-me-with-a-long-random-bearer-token"
+    databasePassword: "replace-me-with-a-long-random-database-password"
+    jwtSecret: "replace-me-with-a-long-random-jwt-secret"
+    authBootstrapAdminPassword: ""
+    ldapBindPassword: ""
+    # JSON array of OIDC provider objects, for example:
+    # [{"id":"entra","name":"Microsoft Entra ID","issuer":"https://login.microsoftonline.com/<tenant>/v2.0","client_id":"...","client_secret":"..."}]
+    oidcProvidersJson: "[]"
+    # JSON array of SAML provider objects, for example:
+    # [{"id":"corp-saml","name":"Corporate SSO","idp_entity_id":"https://idp.example.com/metadata","sso_url":"https://idp.example.com/sso","x509cert":"-----BEGIN CERTIFICATE-----..."}]
+    samlProvidersJson: "[]"
   externalSecrets:
     refreshInterval: 1h
     createClusterSecretStore: true
@@ -284,3 +346,54 @@ mcpHub:
 
 nameOverride: ""
 fullnameOverride: ""
+
+# ---------------------------------------------------------------------------
+# Skills Catalog – browsable catalog of reusable skill files
+# ---------------------------------------------------------------------------
+skillsCatalog:
+  enabled: true
+  # JSON catalog data. Generate with: python scripts/build-catalog-index.py
+  # Then paste the contents of catalog/skills-catalog.json here, or mount
+  # the ConfigMap in the api-gateway deployment.
+  catalogJson: "[]"
+
+# ---------------------------------------------------------------------------
+# MCP Tool Sidecar Images – per-agent tool containers
+# ---------------------------------------------------------------------------
+mcpToolSidecars:
+  codeExec:
+    image: docker.io/yakdhane/mcp-code-exec
+    tag: v1
+    port: 8080
+  webSearch:
+    image: docker.io/yakdhane/mcp-web-search
+    tag: v1
+    port: 8081
+  documents:
+    image: docker.io/yakdhane/mcp-documents
+    tag: v1
+    port: 8082
+  browser:
+    image: docker.io/yakdhane/mcp-browser
+    tag: v1
+    port: 8083
+  database:
+    image: docker.io/yakdhane/mcp-database
+    tag: v1
+    port: 8084
+  git:
+    image: docker.io/yakdhane/mcp-git
+    tag: v1
+    port: 8085
+  kubernetes:
+    image: docker.io/yakdhane/mcp-kubernetes
+    tag: v1
+    port: 8086
+  messaging:
+    image: docker.io/yakdhane/mcp-messaging
+    tag: v1
+    port: 8087
+  rag:
+    image: docker.io/yakdhane/mcp-rag
+    tag: v1
+    port: 8088

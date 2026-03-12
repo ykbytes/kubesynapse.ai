@@ -150,7 +150,7 @@ def _json_default(value: Any) -> Any:
     return str(value)
 
 
-def format_tool_payload(payload: dict[str, Any]) -> str:
+def format_tool_payload(payload: Any) -> str:
     return json.dumps(payload, ensure_ascii=False, indent=2, default=_json_default)
 
 

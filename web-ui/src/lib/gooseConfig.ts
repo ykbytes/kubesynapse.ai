@@ -1,9 +1,26 @@
+import type { TextFileDraft } from "../types";
+
 type GooseConfigFiles = Record<string, unknown>;
 
-export const GOOSE_CONFIG_FILES_PLACEHOLDER = `{
-  "config.yaml": "GOOSE_MODE: smart_approve\\nGOOSE_AUTO_COMPACT_THRESHOLD: 0.8\\n",
-  "prompts/review.md": "Review code conservatively and explain risks first.\\n"
-}`;
+function createDraftId(): string {
+  return typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random()}`;
+}
+
+export function createGooseConfigFileDraft(initial?: Partial<TextFileDraft>): TextFileDraft {
+  return {
+    id: initial?.id ?? createDraftId(),
+    path: initial?.path ?? "config.yaml",
+    content:
+      initial?.content ??
+      [
+        "GOOSE_MODE: smart_approve",
+        "GOOSE_AUTO_COMPACT_THRESHOLD: 0.8",
+        "",
+      ].join("\n"),
+  };
+}
 
 function isRecord(value: unknown): value is GooseConfigFiles {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -31,6 +48,43 @@ function normalizeGooseConfigPath(rawPath: string): string {
     throw new Error("Goose permissions/* files are runtime-managed and cannot be preseeded here.");
   }
   return candidate;
+}
+
+export function gooseConfigFileDraftsFromFiles(value: GooseConfigFiles | null | undefined): TextFileDraft[] {
+  if (!value || Object.keys(value).length === 0) {
+    return [];
+  }
+
+  return Object.entries(value)
+    .sort(([leftPath], [rightPath]) => leftPath.localeCompare(rightPath))
+    .map(([path, content]) =>
+      createGooseConfigFileDraft({
+        path,
+        content: typeof content === "string" ? content : JSON.stringify(content, null, 2),
+      }),
+    );
+}
+
+export function buildGooseConfigFiles(drafts: TextFileDraft[]): GooseConfigFiles {
+  const normalized: GooseConfigFiles = {};
+
+  for (const draft of drafts) {
+    const rawPath = draft.path.trim();
+    const rawContent = draft.content.replace(/\r\n/g, "\n");
+    if (!rawPath && !rawContent.trim()) {
+      continue;
+    }
+    if (!rawPath) {
+      throw new Error("Each Goose config file needs a relative path.");
+    }
+    const normalizedPath = normalizeGooseConfigPath(rawPath);
+    if (normalizedPath in normalized) {
+      throw new Error(`Goose config file path '${normalizedPath}' is duplicated.`);
+    }
+    normalized[normalizedPath] = rawContent;
+  }
+
+  return normalized;
 }
 
 export function stringifyGooseConfigFiles(value: GooseConfigFiles | null | undefined): string {

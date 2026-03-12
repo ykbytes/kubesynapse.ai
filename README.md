@@ -24,6 +24,8 @@
 Kubeminionagents is designed as a **shareable, end-to-end AI agent platform** for Kubernetes:
 
 - 🧠 **AI runtime ready** — supports LangGraph-based and Goose-based execution paths
+- 🗂️ **File-backed skills** — agent behavior and capability grants can be versioned as Markdown skill files inside the agent spec
+- 🤝 **Delegation built in** — explicit A2A routing and specialist-team orchestration are available through the gateway, CLI, and web UI
 - 🛡️ **Platform-first** — operator, policies, tenants, and approvals live with the app stack
 - 🌐 **Full product surface** — API gateway and browser UI are included, not bolted on later
 - 📦 **Deployment friendly** — Helm chart, deploy overrides, and packaging scripts are built in
@@ -41,6 +43,14 @@ Kubeminionagents is designed as a **shareable, end-to-end AI agent platform** fo
 | `charts/ai-agent-sandbox/` | Full Helm install | Packages the entire platform for deployment |
 | `deploy/` | Shareable values overrides | Makes cluster-specific rollout easier |
 | `scripts/` + `.github/` | Packaging + CI automation | Keeps build and release workflows repeatable |
+
+## 🚦 What you can do today
+
+- Define `spec.skills.files` to steer runtimes with repo-tracked Markdown skills and scoped capability grants
+- Seed Goose agents with per-agent `runtime.goose.configFiles` instead of relying on chart-wide defaults only
+- Route a request to an explicit peer over A2A or launch a sequential or parallel specialist team from the same invoke surface
+- Inspect approvals, runtime logs, peer reachability, and parsed skill summaries from the bundled web console
+- Manage agents, workflows, and evaluations through either Kubernetes manifests, the API gateway, the CLI, or the UI
 
 ## ⚡ Quick start
 
@@ -87,6 +97,7 @@ Jump straight to the guide you need:
 - **`INSTALL.md`** — install steps, operations, and usage
 - **`architecture-overview.md`** — system architecture and design decisions
 - **`walkthrough.md`** — implementation narrative and flow
+- **`web-ui/README.md`** — local frontend workflow and console feature coverage
 - **`docs/upstream-reference-repos.md`** — optional local research checkouts
 
 ## 🧱 Repository boundaries

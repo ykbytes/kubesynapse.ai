@@ -1,4 +1,4 @@
-import { Bot, FlaskConical, GitBranch, Plus, RefreshCw } from "lucide-react";
+import { Bot, FlaskConical, GitBranch, Package, Plus, RefreshCw } from "lucide-react";
 
 import type { WorkspaceView } from "../types";
 
@@ -27,6 +27,7 @@ const VIEW_META: Record<WorkspaceView, { label: string; title: string; icon: typ
   agents: { label: "Agents", title: "Runtime Catalog", icon: Bot },
   workflows: { label: "Workflows", title: "Workflow Catalog", icon: GitBranch },
   evals: { label: "Evaluations", title: "Evaluation Catalog", icon: FlaskConical },
+  catalog: { label: "Catalog", title: "Skills Catalog", icon: Package },
 };
 
 export function WorkspaceSidebar({
@@ -70,10 +71,10 @@ export function WorkspaceSidebar({
           <h2>{viewMeta.title}</h2>
         </div>
         <div className="header-actions">
-          <button className="icon-button" type="button" onClick={onCreateNew}>
+          <button aria-label={`Create ${viewMeta.label.toLowerCase()}`} className="icon-button" type="button" onClick={onCreateNew}>
             <Plus size={16} />
           </button>
-          <button className="icon-button" type="button" onClick={onRefresh} disabled={loading}>
+          <button aria-label={`Refresh ${viewMeta.label.toLowerCase()}`} className="icon-button" type="button" onClick={onRefresh} disabled={loading}>
             <RefreshCw size={16} className={loading ? "spin" : ""} />
           </button>
         </div>

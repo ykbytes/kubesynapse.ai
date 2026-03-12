@@ -8,21 +8,83 @@ import json
 import logging
 import os
 import re
+import sys
 import threading
 import time
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from urllib.parse import urlencode
 
 import httpx
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 from jose import jwk, jwt
 from jose.utils import base64url_decode
 from pydantic import BaseModel, Field, model_validator
+
+CURRENT_DIR = Path(__file__).resolve().parent
+if str(CURRENT_DIR) not in sys.path:
+    sys.path.insert(0, str(CURRENT_DIR))
+
+from auth_store import (
+    ROLE_PRIORITY,
+    change_user_password,
+    count_users,
+    create_local_user,
+    create_session_for_user,
+    ensure_bootstrap_admin,
+    get_active_user_context,
+    get_user_by_username,
+    init_database,
+    is_session_active,
+    is_user_locked,
+    list_users as list_local_users,
+    login_rate_limit_key,
+    login_rate_limited,
+    normalize_namespaces,
+    note_login_attempt,
+    record_audit_log,
+    record_failed_login,
+    reset_failed_logins,
+    revoke_refresh_token,
+    rotate_refresh_session,
+    serialize_user,
+    update_user_fields,
+    upsert_external_user,
+    verify_password,
+)
+from enterprise_auth import (
+    auth_configuration,
+    authenticate_ldap_user,
+    build_oidc_authorization_request,
+    build_saml_authorization_request,
+    exchange_oidc_code,
+    exchange_saml_response,
+    get_oidc_provider,
+    get_saml_provider,
+    ldap_enabled,
+    oidc_providers,
+    resolve_role_mapping,
+    saml_metadata_xml,
+    saml_providers,
+    sanitize_redirect_path,
+)
+from jwt_utils import (
+    ACCESS_TOKEN_TTL_SECONDS,
+    REFRESH_COOKIE_NAME,
+    REFRESH_TOKEN_TTL_SECONDS,
+    create_access_token,
+    decode_access_token,
+)
+
+try:
+    import yaml
+except ModuleNotFoundError:  # pragma: no cover - covered by runtime packaging
+    yaml = None
 
 logger = logging.getLogger("api-gateway")
 K8S_NAME_PATTERN = r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
@@ -42,6 +104,11 @@ async def lifespan(app: FastAPI):
             logger.info("Loaded local kubeconfig file.")
     except Exception as exc:
         logger.warning("Failed to load K8s config on startup (API might fail): %s", exc)
+    try:
+        init_database()
+        ensure_bootstrap_admin()
+    except Exception as exc:
+        logger.exception("Failed to initialize auth database: %s", exc)
     yield
 
 app = FastAPI(
@@ -62,7 +129,7 @@ def cors_origins() -> list[str]:
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins(),
-    allow_credentials=False,
+    allow_credentials=True,
     allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "Accept", "X-Request-Id"],
 )
@@ -74,6 +141,16 @@ OIDC_JWKS_URL = os.getenv("OIDC_JWKS_URL", "").strip()
 OIDC_ISSUER = os.getenv("OIDC_ISSUER", "").strip()
 OIDC_AUDIENCE = os.getenv("OIDC_AUDIENCE", "").strip()
 SHARED_TOKEN = os.getenv("API_GATEWAY_SHARED_TOKEN", "").strip()
+LOCAL_AUTH_ENABLED = os.getenv("LOCAL_AUTH_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
+if not LOCAL_AUTH_ENABLED:
+    LOCAL_AUTH_ENABLED = AUTH_MODE in {"local", "hybrid", "enterprise"}
+REGISTRATION_ENABLED = os.getenv("AUTH_REGISTRATION_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
+AUTH_COOKIE_SECURE = os.getenv("AUTH_COOKIE_SECURE", "").strip().lower() in {"1", "true", "yes", "on"}
+AUTH_COOKIE_DOMAIN = os.getenv("AUTH_COOKIE_DOMAIN", "").strip() or None
+AUTH_COOKIE_PATH = os.getenv("AUTH_COOKIE_PATH", "/").strip() or "/"
+AUTH_COOKIE_SAMESITE = os.getenv("AUTH_COOKIE_SAMESITE", "lax").strip().lower() or "lax"
+OIDC_TRANSACTION_COOKIE_NAME = os.getenv("AUTH_OIDC_TRANSACTION_COOKIE_NAME", "ai-agent-oidc").strip() or "ai-agent-oidc"
+OIDC_TRANSACTION_COOKIE_TTL_SECONDS = max(int(os.getenv("AUTH_OIDC_TRANSACTION_TTL_SECONDS", "600")), 60)
 AGENT_RUNTIME_TIMEOUT_SECONDS = max(float(os.getenv("AGENT_RUNTIME_TIMEOUT_SECONDS", "360")), 1.0)
 OIDC_JWKS_TIMEOUT_SECONDS = max(float(os.getenv("OIDC_JWKS_TIMEOUT_SECONDS", "10")), 1.0)
 JWKS_CACHE: dict[str, Any] = {"keys": [], "expires_at": 0.0}
@@ -105,6 +182,96 @@ A2A_CONTENT_TYPE_NOT_SUPPORTED_ERROR = -32005
 A2A_VERSION_NOT_SUPPORTED_ERROR = -32009
 A2A_TASK_STORE_LOCK = threading.Lock()
 A2A_TASK_STORE: dict[tuple[str, str, str], dict[str, Any]] = {}
+TEAM_CONTEXT_MAX_CHARS = max(int(os.getenv("A2A_TEAM_CONTEXT_MAX_CHARS", "4096")), 256)
+MAX_SUBAGENT_FILE_CHARS = max(int(os.getenv("AGENT_MAX_SUBAGENT_FILE_CHARS", "4000")), 256)
+MAX_SUBAGENT_METADATA_CHARS = max(int(os.getenv("AGENT_MAX_SUBAGENT_METADATA_CHARS", "2048")), 256)
+MAX_SUBAGENTS = max(int(os.getenv("AGENT_MAX_SUBAGENTS", "6")), 1)
+SUBAGENT_STRATEGIES = frozenset({"sequential", "parallel"})
+MAX_AGENT_SKILL_FILES = max(int(os.getenv("AGENT_MAX_SKILL_FILES", "24")), 1)
+MAX_AGENT_SKILL_FILE_PATH_CHARS = max(int(os.getenv("AGENT_MAX_SKILL_FILE_PATH_CHARS", "256")), 32)
+MAX_AGENT_SKILL_FILE_CONTENT_CHARS = max(int(os.getenv("AGENT_MAX_SKILL_FILE_CONTENT_CHARS", "16000")), 512)
+MAX_AGENT_SKILL_TOTAL_CHARS = max(int(os.getenv("AGENT_MAX_SKILL_TOTAL_CHARS", "64000")), 4096)
+
+
+def normalize_json_object(value: Any, *, field_name: str, max_chars: int) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError(f"{field_name} must be an object when provided")
+
+    encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+    if len(encoded) > max_chars:
+        raise ValueError(f"{field_name} exceeds {max_chars} characters once serialized")
+
+    normalized = json.loads(encoded)
+    if not isinstance(normalized, dict):
+        raise ValueError(f"{field_name} must serialize to an object")
+    return normalized
+
+
+def normalize_subagent_strategy(value: Any) -> str:
+    strategy = str(value or "sequential").strip().lower() or "sequential"
+    if strategy not in SUBAGENT_STRATEGIES:
+        raise ValueError(
+            f"subagent_strategy must be one of {', '.join(sorted(SUBAGENT_STRATEGIES))}"
+        )
+    return strategy
+
+
+def normalize_path_text(value: Any, *, source: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        raise ValueError(f"{source} must not be blank")
+    if len(text) > 512:
+        raise ValueError(f"{source} must not exceed 512 characters")
+    return text
+
+
+class SubagentFileRef(BaseModel):
+    path: str = Field(max_length=512)
+    purpose: str | None = Field(default=None, max_length=256)
+    include_content: bool = True
+    max_chars: int = Field(default=MAX_SUBAGENT_FILE_CHARS, ge=128, le=MAX_SUBAGENT_FILE_CHARS)
+
+    @model_validator(mode="after")
+    def normalize_fields(self) -> "SubagentFileRef":
+        self.path = normalize_path_text(self.path, source="subagents[].input_files[].path")
+        self.purpose = self.purpose.strip() or None if self.purpose is not None else None
+        return self
+
+
+class SubagentRequest(BaseModel):
+    name: str = Field(max_length=63)
+    namespace: str = Field(max_length=63)
+    role: str | None = Field(default=None, max_length=128)
+    task: str | None = Field(default=None, max_length=12000)
+    input_files: list[SubagentFileRef] = Field(default_factory=list)
+    result_file_path: str | None = Field(default=None, max_length=512)
+    share_sandbox_session: bool = True
+    metadata: dict[str, Any] | None = None
+    timeout_seconds: float | None = Field(default=None, ge=1.0)
+
+    @model_validator(mode="after")
+    def normalize_fields(self) -> "SubagentRequest":
+        self.name = self.name.strip()
+        self.namespace = self.namespace.strip()
+        if not K8S_NAME_RE.fullmatch(self.name):
+            raise ValueError("subagents[].name must be a valid lowercase Kubernetes resource name")
+        if not K8S_NAME_RE.fullmatch(self.namespace):
+            raise ValueError("subagents[].namespace must be a valid lowercase Kubernetes namespace name")
+        self.role = self.role.strip() or None if self.role is not None else None
+        self.task = self.task.strip() or None if self.task is not None else None
+        self.result_file_path = (
+            normalize_path_text(self.result_file_path, source="subagents[].result_file_path")
+            if self.result_file_path is not None
+            else None
+        )
+        self.metadata = normalize_json_object(
+            self.metadata,
+            field_name="subagents[].metadata",
+            max_chars=MAX_SUBAGENT_METADATA_CHARS,
+        )
+        return self
 
 
 class InvokeRequest(BaseModel):
@@ -121,6 +288,13 @@ class InvokeRequest(BaseModel):
     a2a_target_agent: str | None = Field(default=None, max_length=63)
     a2a_target_namespace: str | None = Field(default=None, max_length=63)
     a2a_timeout_seconds: float | None = Field(default=None, ge=1.0)
+    caller_agent_name: str | None = Field(default=None, max_length=63)
+    caller_agent_namespace: str | None = Field(default=None, max_length=63)
+    parent_thread_id: str | None = Field(default=None, max_length=128)
+    caller_request_id: str | None = Field(default=None, max_length=128)
+    team_context: dict[str, Any] | None = None
+    subagents: list[SubagentRequest] = Field(default_factory=list)
+    subagent_strategy: str = Field(default="sequential", max_length=16)
     debug: bool = False
     no_session: bool = False
     max_turns: int | None = None
@@ -142,10 +316,17 @@ class InvokeRequest(BaseModel):
         self.a2a_target_namespace = (
             self.a2a_target_namespace.strip() or None if self.a2a_target_namespace is not None else None
         )
+        self.caller_agent_name = self.caller_agent_name.strip() or None if self.caller_agent_name is not None else None
+        self.caller_agent_namespace = (
+            self.caller_agent_namespace.strip() or None if self.caller_agent_namespace is not None else None
+        )
+        self.parent_thread_id = self.parent_thread_id.strip() or None if self.parent_thread_id is not None else None
+        self.caller_request_id = self.caller_request_id.strip() or None if self.caller_request_id is not None else None
         self.working_directory = self.working_directory.strip() or None if self.working_directory is not None else None
         self.builtin_extensions = [str(item).strip() for item in self.builtin_extensions if str(item).strip()]
         self.stdio_extensions = [str(item).strip() for item in self.stdio_extensions if str(item).strip()]
         self.streamable_http_extensions = [str(item).strip() for item in self.streamable_http_extensions if str(item).strip()]
+        self.subagent_strategy = normalize_subagent_strategy(self.subagent_strategy)
         if self.a2a_target_agent or self.a2a_target_namespace:
             if not self.a2a_target_agent or not self.a2a_target_namespace:
                 raise ValueError("a2a_target_agent and a2a_target_namespace must be provided together")
@@ -157,6 +338,29 @@ class InvokeRequest(BaseModel):
                 raise ValueError("a2a_target_* cannot be combined with tool_name")
             if self.mcp_server:
                 raise ValueError("a2a_target_* cannot be combined with mcp_server")
+        if self.subagents:
+            if len(self.subagents) > MAX_SUBAGENTS:
+                raise ValueError(f"subagents cannot exceed {MAX_SUBAGENTS} entries")
+            if self.tool_name:
+                raise ValueError("subagents cannot be combined with tool_name")
+            if self.mcp_server:
+                raise ValueError("subagents cannot be combined with mcp_server")
+            if self.a2a_target_agent or self.a2a_target_namespace:
+                raise ValueError("subagents cannot be combined with a2a_target_*")
+            if not self.prompt and not any(item.task for item in self.subagents):
+                raise ValueError("prompt must not be blank when subagents do not provide explicit tasks")
+        if self.caller_agent_name or self.caller_agent_namespace:
+            if not self.caller_agent_name or not self.caller_agent_namespace:
+                raise ValueError("caller_agent_name and caller_agent_namespace must be provided together")
+            if not K8S_NAME_RE.fullmatch(self.caller_agent_name):
+                raise ValueError("caller_agent_name must be a valid lowercase Kubernetes resource name")
+            if not K8S_NAME_RE.fullmatch(self.caller_agent_namespace):
+                raise ValueError("caller_agent_namespace must be a valid lowercase Kubernetes namespace name")
+        self.team_context = normalize_json_object(
+            self.team_context,
+            field_name="team_context",
+            max_chars=TEAM_CONTEXT_MAX_CHARS,
+        )
         return self
 
 
@@ -167,12 +371,13 @@ class InvokeResponse(BaseModel):
     model: str
     policy_name: str | None = None
     tool_name: str | None = None
-    tool_result: dict[str, Any] | None = None
+    tool_result: Any = None
     sandbox_session: dict[str, Any] | None = None
     status: str = "completed"
     approval_name: str | None = None
     retry_after_seconds: int | None = None
     a2a: dict[str, Any] | None = None
+    subagents: dict[str, Any] | None = None
     warnings: list[str] = Field(default_factory=list)
 
 
@@ -223,6 +428,8 @@ class AgentDetail(AgentInfo):
     mcp_servers: list[str] = Field(default_factory=list)
     mcp_sidecars: list[dict[str, Any]] = Field(default_factory=list)
     a2a_config: dict[str, Any] = Field(default_factory=dict)
+    skills: dict[str, Any] = Field(default_factory=dict)
+    skill_summaries: list[dict[str, Any]] = Field(default_factory=list)
     goose_config_files: dict[str, Any] = Field(default_factory=dict)
     created_at: str | None = None
 
@@ -269,6 +476,7 @@ class CreateAgentRequest(BaseModel):
     mcp_servers: list[str] = Field(default_factory=list)
     mcp_sidecars: list[dict[str, Any]] = Field(default_factory=list)
     a2a_config: dict[str, Any] | None = None
+    skills: dict[str, Any] | None = None
     goose_config_files: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -282,6 +490,7 @@ class UpdateAgentRequest(BaseModel):
     mcp_servers: list[str] = Field(default_factory=list)
     mcp_sidecars: list[dict[str, Any]] = Field(default_factory=list)
     a2a_config: dict[str, Any] | None = None
+    skills: dict[str, Any] | None = None
     goose_config_files: dict[str, Any] | None = None
 
 
@@ -382,6 +591,40 @@ class DeleteResponse(BaseModel):
     namespace: str
 
 
+class AuthRegisterRequest(BaseModel):
+    username: str = Field(min_length=3, max_length=128)
+    password: str = Field(min_length=8, max_length=256)
+    email: str | None = Field(default=None, max_length=320)
+    display_name: str | None = Field(default=None, max_length=255)
+
+
+class AuthLoginRequest(BaseModel):
+    username: str = Field(min_length=1, max_length=256)
+    password: str = Field(min_length=1, max_length=256)
+    provider: str = Field(default="local", max_length=64)
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(min_length=1, max_length=256)
+    new_password: str = Field(min_length=8, max_length=256)
+
+
+class CreateUserRequest(BaseModel):
+    username: str = Field(min_length=3, max_length=128)
+    password: str = Field(min_length=8, max_length=256)
+    email: str | None = Field(default=None, max_length=320)
+    display_name: str | None = Field(default=None, max_length=255)
+    role: str = Field(default="viewer", pattern=r"^(viewer|operator|admin)$")
+    allowed_namespaces: list[str] = Field(default_factory=list)
+
+
+class UpdateUserRequest(BaseModel):
+    display_name: str | None = Field(default=None, max_length=255)
+    role: str | None = Field(default=None, pattern=r"^(viewer|operator|admin)$")
+    is_active: bool | None = None
+    allowed_namespaces: list[str] | None = None
+
+
 RESOURCE_GROUP = "sandbox.enterprise.ai"
 RESOURCE_VERSION = "v1alpha1"
 RESOURCE_KIND_BY_PLURAL = {
@@ -425,6 +668,354 @@ def normalize_goose_config_file_path(raw_path: object) -> str:
             detail="goose_config_files cannot preseed permissions/* because Goose manages that path at runtime",
         )
     return candidate
+
+
+def normalize_skill_file_path(raw_path: object) -> str:
+    normalized_path = str(raw_path).replace("\\", "/").strip()
+    if not normalized_path:
+        raise HTTPException(status_code=400, detail="skills.files paths must not be blank")
+    if len(normalized_path) > MAX_AGENT_SKILL_FILE_PATH_CHARS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"skills.files paths must be {MAX_AGENT_SKILL_FILE_PATH_CHARS} characters or fewer"
+            ),
+        )
+    if normalized_path.startswith("/"):
+        raise HTTPException(status_code=400, detail="skills.files paths must be relative")
+
+    parts = [part for part in normalized_path.split("/") if part]
+    if not parts or any(part in {".", ".."} for part in parts):
+        raise HTTPException(status_code=400, detail=f"skills.files path '{raw_path}' is invalid")
+
+    candidate = "/".join(parts)
+    if not candidate.lower().endswith(".md"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"skills.files path '{candidate}' must point to a Markdown file ending in .md",
+        )
+    return candidate
+
+
+def split_skill_frontmatter(content: str) -> tuple[str | None, str, str | None]:
+    normalized = str(content or "").replace("\r\n", "\n")
+    if not normalized.startswith("---\n"):
+        return None, normalized, None
+
+    lines = normalized.split("\n")
+    for index in range(1, len(lines)):
+        if lines[index].strip() == "---":
+            frontmatter = "\n".join(lines[1:index])
+            body = "\n".join(lines[index + 1 :])
+            return frontmatter, body, None
+    return None, normalized, "Skill frontmatter must end with a closing '---' line"
+
+
+def parse_skill_frontmatter(frontmatter: str, *, source: str, strict: bool) -> tuple[dict[str, Any], list[str]]:
+    warnings: list[str] = []
+    if not frontmatter.strip():
+        return {}, warnings
+
+    try:
+        if yaml is not None:
+            parsed = yaml.safe_load(frontmatter)
+        else:
+            parsed = json.loads(frontmatter)
+    except Exception as exc:
+        message = f"{source} frontmatter is invalid: {exc}"
+        if strict:
+            raise HTTPException(status_code=400, detail=message) from exc
+        warnings.append(message)
+        return {}, warnings
+
+    if parsed is None:
+        return {}, warnings
+    if not isinstance(parsed, dict):
+        message = f"{source} frontmatter must be a YAML or JSON object"
+        if strict:
+            raise HTTPException(status_code=400, detail=message)
+        warnings.append(message)
+        return {}, warnings
+    return parsed, warnings
+
+
+def skill_metadata_string_list(
+    metadata: dict[str, Any],
+    *keys: str,
+    strict: bool,
+    source: str,
+    warnings: list[str],
+) -> list[str]:
+    raw_value: Any = None
+    for key in keys:
+        if key in metadata:
+            raw_value = metadata.get(key)
+            break
+
+    if raw_value is None:
+        return []
+    if not isinstance(raw_value, list):
+        message = f"{source} must be a list of strings"
+        if strict:
+            raise HTTPException(status_code=400, detail=message)
+        warnings.append(message)
+        return []
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for index, item in enumerate(raw_value):
+        value = str(item or "").strip()
+        if not value:
+            continue
+        if len(value) > 512:
+            message = f"{source}[{index}] must be 512 characters or fewer"
+            if strict:
+                raise HTTPException(status_code=400, detail=message)
+            warnings.append(message)
+            continue
+        if value in seen:
+            continue
+        seen.add(value)
+        normalized.append(value)
+    return normalized
+
+
+def skill_metadata_bool(
+    metadata: dict[str, Any],
+    *keys: str,
+    strict: bool,
+    source: str,
+    warnings: list[str],
+) -> bool:
+    for key in keys:
+        if key not in metadata:
+            continue
+        value = metadata.get(key)
+        if isinstance(value, bool):
+            return value
+        message = f"{source} must be a boolean"
+        if strict:
+            raise HTTPException(status_code=400, detail=message)
+        warnings.append(message)
+        return False
+    return False
+
+
+def infer_skill_name(path: str) -> str:
+    parts = [part for part in path.split("/") if part]
+    if len(parts) >= 2 and parts[-1].lower() == "skill.md":
+        return parts[-2].replace("-", " ").strip() or "skill"
+    stem = parts[-1].rsplit(".", 1)[0] if parts else "skill"
+    return stem.replace("-", " ").strip() or "skill"
+
+
+def parse_skill_summary(path: str, content: str, *, strict: bool) -> dict[str, Any]:
+    warnings: list[str] = []
+    frontmatter, body, frontmatter_warning = split_skill_frontmatter(content)
+    if frontmatter_warning:
+        if strict:
+            raise HTTPException(
+                status_code=400,
+                detail=f"skills.files.{path}: {frontmatter_warning}",
+            )
+        warnings.append(f"skills.files.{path}: {frontmatter_warning}")
+    metadata, metadata_warnings = parse_skill_frontmatter(
+        frontmatter or "",
+        source=f"skills.files.{path}",
+        strict=strict,
+    )
+    warnings.extend(metadata_warnings)
+
+    raw_name = metadata.get("name")
+    if raw_name is not None and not isinstance(raw_name, str):
+        message = f"skills.files.{path}.name must be a string"
+        if strict:
+            raise HTTPException(status_code=400, detail=message)
+        warnings.append(message)
+        raw_name = None
+    raw_description = metadata.get("description")
+    if raw_description is not None and not isinstance(raw_description, str):
+        message = f"skills.files.{path}.description must be a string"
+        if strict:
+            raise HTTPException(status_code=400, detail=message)
+        warnings.append(message)
+        raw_description = None
+
+    name = str(raw_name or infer_skill_name(path)).strip() or infer_skill_name(path)
+    description = str(raw_description or "").strip() or None
+    instructions_preview = summarize_text(body, fallback=description or name, max_length=320)
+    raw_allowed_a2a_targets = metadata.get("allowedA2ATargets", metadata.get("allowed_a2a_targets"))
+    if raw_allowed_a2a_targets is None:
+        allowed_a2a_targets: list[dict[str, str]] = []
+    else:
+        try:
+            allowed_a2a_targets = parse_a2a_peer_refs(
+                raw_allowed_a2a_targets,
+                source=f"skills.files.{path}.allowed_a2a_targets",
+            )
+        except HTTPException as exc:
+            if strict:
+                raise
+            warnings.append(str(exc.detail))
+            allowed_a2a_targets = []
+
+    return {
+        "path": path,
+        "name": name,
+        "description": description,
+        "instructions_preview": instructions_preview,
+        "allowed_sandbox_tools": skill_metadata_string_list(
+            metadata,
+            "allowedSandboxTools",
+            "allowed_sandbox_tools",
+            strict=strict,
+            source=f"skills.files.{path}.allowed_sandbox_tools",
+            warnings=warnings,
+        ),
+        "allowed_mcp_servers": skill_metadata_string_list(
+            metadata,
+            "allowedMcpServers",
+            "allowed_mcp_servers",
+            strict=strict,
+            source=f"skills.files.{path}.allowed_mcp_servers",
+            warnings=warnings,
+        ),
+        "allowed_a2a_targets": allowed_a2a_targets,
+        "allow_subagents": skill_metadata_bool(
+            metadata,
+            "allowSubagents",
+            "allow_subagents",
+            strict=strict,
+            source=f"skills.files.{path}.allow_subagents",
+            warnings=warnings,
+        ),
+        "goose_builtin_extensions": skill_metadata_string_list(
+            metadata,
+            "gooseBuiltinExtensions",
+            "goose_builtin_extensions",
+            strict=strict,
+            source=f"skills.files.{path}.goose_builtin_extensions",
+            warnings=warnings,
+        ),
+        "goose_stdio_extensions": skill_metadata_string_list(
+            metadata,
+            "gooseStdioExtensions",
+            "goose_stdio_extensions",
+            strict=strict,
+            source=f"skills.files.{path}.goose_stdio_extensions",
+            warnings=warnings,
+        ),
+        "goose_streamable_http_extensions": skill_metadata_string_list(
+            metadata,
+            "gooseStreamableHttpExtensions",
+            "goose_streamable_http_extensions",
+            strict=strict,
+            source=f"skills.files.{path}.goose_streamable_http_extensions",
+            warnings=warnings,
+        ),
+        "valid": not bool(warnings),
+        "warnings": warnings,
+    }
+
+
+def parse_agent_skills_config(config: Any, *, source: str, strict: bool = False) -> dict[str, Any]:
+    if config is None:
+        return {}
+    if not isinstance(config, dict):
+        raise HTTPException(status_code=400, detail=f"{source} must be an object")
+
+    raw_files = config.get("files")
+    if raw_files is None:
+        if config:
+            raise HTTPException(status_code=400, detail=f"{source}.files is required when skills are provided")
+        return {}
+    if not isinstance(raw_files, dict):
+        raise HTTPException(status_code=400, detail=f"{source}.files must be an object keyed by Markdown file path")
+    if len(raw_files) > MAX_AGENT_SKILL_FILES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{source}.files cannot contain more than {MAX_AGENT_SKILL_FILES} entries",
+        )
+
+    normalized_files: dict[str, str] = {}
+    total_chars = 0
+    for raw_path, raw_content in sorted(raw_files.items(), key=lambda item: str(item[0])):
+        path = normalize_skill_file_path(raw_path)
+        if not isinstance(raw_content, str):
+            raise HTTPException(status_code=400, detail=f"{source}.files.{path} must be a Markdown string")
+        if not raw_content.strip():
+            raise HTTPException(status_code=400, detail=f"{source}.files.{path} must not be blank")
+        if len(raw_content) > MAX_AGENT_SKILL_FILE_CONTENT_CHARS:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"{source}.files.{path} exceeds {MAX_AGENT_SKILL_FILE_CONTENT_CHARS} characters"
+                ),
+            )
+        total_chars += len(raw_content)
+        if total_chars > MAX_AGENT_SKILL_TOTAL_CHARS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{source}.files exceeds the total limit of {MAX_AGENT_SKILL_TOTAL_CHARS} characters",
+            )
+        normalized_files[path] = raw_content.replace("\r\n", "\n")
+        if strict:
+            parse_skill_summary(path, normalized_files[path], strict=True)
+
+    return {"files": normalized_files} if normalized_files else {}
+
+
+def parse_agent_skill_summaries(config: Any) -> list[dict[str, Any]]:
+    if not isinstance(config, dict):
+        return []
+    raw_files = config.get("files")
+    if not isinstance(raw_files, dict):
+        return []
+
+    summaries: list[dict[str, Any]] = []
+    for raw_path, raw_content in sorted(raw_files.items(), key=lambda item: str(item[0])):
+        try:
+            path = normalize_skill_file_path(raw_path)
+        except HTTPException as exc:
+            summaries.append(
+                {
+                    "path": str(raw_path),
+                    "name": infer_skill_name(str(raw_path)),
+                    "description": None,
+                    "instructions_preview": None,
+                    "allowed_sandbox_tools": [],
+                    "allowed_mcp_servers": [],
+                    "allowed_a2a_targets": [],
+                    "allow_subagents": False,
+                    "goose_builtin_extensions": [],
+                    "goose_stdio_extensions": [],
+                    "goose_streamable_http_extensions": [],
+                    "valid": False,
+                    "warnings": [str(exc.detail)],
+                }
+            )
+            continue
+        if not isinstance(raw_content, str):
+            summaries.append(
+                {
+                    "path": path,
+                    "name": infer_skill_name(path),
+                    "description": None,
+                    "instructions_preview": None,
+                    "allowed_sandbox_tools": [],
+                    "allowed_mcp_servers": [],
+                    "allowed_a2a_targets": [],
+                    "allow_subagents": False,
+                    "goose_builtin_extensions": [],
+                    "goose_stdio_extensions": [],
+                    "goose_streamable_http_extensions": [],
+                    "valid": False,
+                    "warnings": [f"skills.files.{path} must be a Markdown string"],
+                }
+            )
+            continue
+        summaries.append(parse_skill_summary(path, raw_content, strict=False))
+    return summaries
 
 
 def parse_a2a_peer_ref(raw_value: Any, *, source: str) -> dict[str, str]:
@@ -565,6 +1156,8 @@ def validate_invoke_runtime_compatibility(runtime_kind: str, request: InvokeRequ
         unsupported_fields.append("a2a_target")
     if request.a2a_timeout_seconds is not None:
         unsupported_fields.append("a2a_timeout_seconds")
+    if request.subagents:
+        unsupported_fields.append("subagents")
 
     if unsupported_fields:
         joined_fields = ", ".join(unsupported_fields)
@@ -782,6 +1375,35 @@ def build_agent_card_skills(agent: AgentDetail, policy_targets: list[dict[str, s
         }
     ]
 
+    if agent.skill_summaries:
+        for summary in agent.skill_summaries:
+            summary_name = str(summary.get("name") or "skill").strip() or "skill"
+            summary_description = summarize_text(
+                str(summary.get("description") or summary.get("instructions_preview") or "").strip(),
+                fallback=f"Skill file {summary.get('path') or summary_name}",
+            )
+            tags = dedupe_text_values(
+                [
+                    "skill",
+                    *(summary.get("allowed_mcp_servers") or []),
+                    *( ["sandbox"] if summary.get("allowed_sandbox_tools") else [] ),
+                    *( ["a2a"] if summary.get("allowed_a2a_targets") else [] ),
+                    *( ["subagents"] if summary.get("allow_subagents") else [] ),
+                    *( ["goose"] if summary.get("goose_builtin_extensions") or summary.get("goose_stdio_extensions") or summary.get("goose_streamable_http_extensions") else [] ),
+                ]
+            )
+            skills.append(
+                {
+                    "id": skill_id(f"{agent.name}-{summary_name}"),
+                    "name": summary_name,
+                    "description": summary_description,
+                    "tags": tags or ["skill"],
+                    "inputModes": ["text/plain"],
+                    "outputModes": ["text/plain"],
+                }
+            )
+        return skills
+
     for server_name in dedupe_text_values(agent.mcp_servers):
         skills.append(
             {
@@ -859,6 +1481,8 @@ def build_agent_card(agent_name: str, namespace: str, request: Request) -> dict[
             ),
         ),
         "url": interface_url,
+        "protocolVersion": A2A_PROTOCOL_VERSION,
+        "preferredTransport": "JSONRPC",
         "supportedInterfaces": [
             {
                 "url": interface_url,
@@ -882,7 +1506,7 @@ def build_agent_card(agent_name: str, namespace: str, request: Request) -> dict[
             "bearerAuth": {
                 "httpAuthSecurityScheme": {
                     "scheme": "Bearer",
-                    "bearerFormat": "JWT" if AUTH_MODE == "oidc" else "Opaque",
+                    "bearerFormat": "JWT" if AUTH_MODE in {"oidc", "local", "hybrid", "enterprise", "auto"} else "Opaque",
                     "description": "Bearer token required by the API gateway.",
                 }
             }
@@ -909,21 +1533,23 @@ def a2a_task_store_key(namespace: str, agent_name: str, task_id: str) -> tuple[s
 
 def create_a2a_status_message(text: str, context_id: str, task_id: str) -> dict[str, Any]:
     return {
+        "kind": "message",
         "messageId": str(uuid.uuid4()),
         "contextId": context_id,
         "taskId": task_id,
         "role": "ROLE_AGENT",
-        "parts": [{"text": text, "mediaType": "text/plain"}],
+        "parts": [{"kind": "text", "text": text, "mediaType": "text/plain"}],
     }
 
 
 def create_a2a_history_message(role: str, text: str, context_id: str, task_id: str) -> dict[str, Any]:
     return {
+        "kind": "message",
         "messageId": str(uuid.uuid4()),
         "contextId": context_id,
         "taskId": task_id,
         "role": role,
-        "parts": [{"text": text, "mediaType": "text/plain"}],
+        "parts": [{"kind": "text", "text": text, "mediaType": "text/plain"}],
     }
 
 
@@ -935,6 +1561,7 @@ def create_a2a_task_record(agent_name: str, namespace: str, context_id: str, tas
         "artifactText": "",
         "updatedAt": time.time(),
         "task": {
+            "kind": "task",
             "id": task_id,
             "contextId": context_id,
             "status": {
@@ -982,10 +1609,11 @@ def set_a2a_task_artifact_text(record: dict[str, Any], text: str) -> None:
         if text:
             task["artifacts"] = [
                 {
+                    "kind": "artifact",
                     "artifactId": f"{task['id']}-response",
                     "name": "response",
                     "description": "Text response emitted by the agent.",
-                    "parts": [{"text": text, "mediaType": "text/plain"}],
+                    "parts": [{"kind": "text", "text": text, "mediaType": "text/plain"}],
                 }
             ]
         else:
@@ -1060,12 +1688,14 @@ def normalize_a2a_parts(parts: Any) -> tuple[list[dict[str, Any]], str]:
         normalized_part: dict[str, Any]
         if raw_part.get("text") is not None:
             normalized_part = {
+                "kind": "text",
                 "text": str(raw_part.get("text") or ""),
                 "mediaType": str(raw_part.get("mediaType") or "text/plain"),
             }
             prompt_parts.append(normalized_part["text"])
         elif "data" in raw_part:
             normalized_part = {
+                "kind": "data",
                 "data": raw_part.get("data"),
                 "mediaType": str(raw_part.get("mediaType") or "application/json"),
             }
@@ -1120,7 +1750,7 @@ def prepare_a2a_task_for_message(
     agent_name: str,
     namespace: str,
     params: dict[str, Any],
-) -> tuple[dict[str, Any], str, int | None]:
+) -> tuple[dict[str, Any], str, int | None, dict[str, Any]]:
     raw_message = params.get("message")
     if not isinstance(raw_message, dict):
         raise A2AJSONRPCError(JSONRPC_INVALID_PARAMS, "message is required and must be an object")
@@ -1180,6 +1810,7 @@ def prepare_a2a_task_for_message(
         store_a2a_task_record(record)
 
     normalized_message: dict[str, Any] = {
+        "kind": "message",
         "messageId": message_id,
         "contextId": context_id,
         "taskId": task_id,
@@ -1193,11 +1824,27 @@ def prepare_a2a_task_for_message(
         normalized_message["referenceTaskIds"] = reference_task_ids
 
     append_a2a_task_history(record, normalized_message)
-    return record, prompt, history_length
+    team_context: dict[str, Any] = {
+        "mode": "a2a-jsonrpc",
+        "contextId": context_id,
+        "taskId": task_id,
+        "messageId": message_id,
+        "workingAgreement": [
+            "Treat this as one step in an A2A collaboration.",
+            "Return concrete results that another agent can reuse.",
+            "Mention blockers or missing information explicitly.",
+        ],
+    }
+    if reference_task_ids:
+        team_context["referenceTaskIds"] = reference_task_ids
+    if isinstance(metadata, dict) and metadata:
+        team_context["messageMetadata"] = metadata
+    return record, prompt, history_length, team_context
 
 
 def public_a2a_task(record: dict[str, Any], history_length: int | None = None) -> dict[str, Any]:
     task = copy.deepcopy(record.get("task", {}))
+    task.setdefault("kind", "task")
     history = task.get("history") if isinstance(task.get("history"), list) else []
     if history_length == 0:
         task.pop("history", None)
@@ -1221,6 +1868,7 @@ def public_a2a_task(record: dict[str, Any], history_length: int | None = None) -
 def task_status_update_event(record: dict[str, Any]) -> dict[str, Any]:
     task = record.get("task", {})
     return {
+        "kind": "status-update",
         "taskId": task.get("id"),
         "contextId": task.get("contextId"),
         "status": copy.deepcopy(task.get("status") or {}),
@@ -1231,12 +1879,14 @@ def task_status_update_event(record: dict[str, Any]) -> dict[str, Any]:
 def task_artifact_update_event(record: dict[str, Any], delta: str, *, append: bool, last_chunk: bool) -> dict[str, Any]:
     task = record.get("task", {})
     return {
+        "kind": "artifact-update",
         "taskId": task.get("id"),
         "contextId": task.get("contextId"),
         "artifact": {
+            "kind": "artifact",
             "artifactId": f"{task.get('id')}-response",
             "name": "response",
-            "parts": [{"text": delta, "mediaType": "text/plain"}],
+            "parts": [{"kind": "text", "text": delta, "mediaType": "text/plain"}],
         },
         "append": append,
         "lastChunk": last_chunk,
@@ -1307,12 +1957,16 @@ async def handle_a2a_send_message(
     request_id: Any,
     gateway_request_id: str,
 ) -> dict[str, Any]:
-    record, prompt, history_length = prepare_a2a_task_for_message(agent_name, namespace, params)
+    record, prompt, history_length, team_context = prepare_a2a_task_for_message(agent_name, namespace, params)
     set_a2a_task_status(record, "TASK_STATE_WORKING", None, {"status": "working"})
     store_a2a_task_record(record)
 
     raw_request = SimpleNamespace(headers={"x-request-id": gateway_request_id})
-    invoke_request = InvokeRequest(prompt=prompt, thread_id=str(record.get("threadId") or ""))
+    invoke_request = InvokeRequest(
+        prompt=prompt,
+        thread_id=str(record.get("threadId") or ""),
+        team_context=team_context,
+    )
     try:
         invoke_response = await invoke_agent(agent_name, invoke_request, raw_request, namespace, user={})
     except HTTPException as exc:
@@ -1357,12 +2011,16 @@ async def handle_a2a_stream_message(
     request_id: Any,
     gateway_request_id: str,
 ) -> StreamingResponse:
-    record, prompt, history_length = prepare_a2a_task_for_message(agent_name, namespace, params)
+    record, prompt, history_length, team_context = prepare_a2a_task_for_message(agent_name, namespace, params)
     set_a2a_task_status(record, "TASK_STATE_WORKING", None, {"status": "working"})
     store_a2a_task_record(record)
 
     raw_request = SimpleNamespace(headers={"x-request-id": gateway_request_id})
-    invoke_request = InvokeRequest(prompt=prompt, thread_id=str(record.get("threadId") or ""))
+    invoke_request = InvokeRequest(
+        prompt=prompt,
+        thread_id=str(record.get("threadId") or ""),
+        team_context=team_context,
+    )
 
     async def event_generator() -> Any:
         yielded_artifact = False
@@ -1485,6 +2143,7 @@ def build_agent_spec(
     existing_runtime_kind = None
     existing_goose_config_files: Any = None
     existing_a2a_config: Any = (existing_spec or {}).get("a2a")
+    existing_skills: Any = (existing_spec or {}).get("skills")
     if isinstance(existing_runtime, dict):
         existing_runtime_kind = existing_runtime.get("kind")
         existing_goose = existing_runtime.get("goose") or {}
@@ -1510,6 +2169,12 @@ def build_agent_spec(
     else:
         a2a_config = parse_a2a_agent_config(requested_a2a_config, source="a2a_config")
 
+    requested_skills = getattr(body, "skills", None)
+    if requested_skills is None:
+        skills_config = parse_agent_skills_config(existing_skills, source="existing spec.skills", strict=False)
+    else:
+        skills_config = parse_agent_skills_config(requested_skills, source="skills", strict=True)
+
     if runtime_kind != "goose" and goose_config_files:
         raise HTTPException(
             status_code=400,
@@ -1527,6 +2192,8 @@ def build_agent_spec(
     }
     if a2a_config:
         spec["a2a"] = a2a_config
+    if skills_config:
+        spec["skills"] = skills_config
     if runtime_kind == "goose" and goose_config_files:
         spec["runtime"]["goose"] = {"configFiles": goose_config_files}
     if body.policy_ref and body.policy_ref.strip():
@@ -1722,6 +2389,11 @@ def agent_detail_from_resource(agent: dict[str, Any]) -> AgentDetail:
     storage = spec.get("storage", {}) if isinstance(spec.get("storage"), dict) else {}
     runtime = spec.get("runtime") if isinstance(spec.get("runtime"), dict) else {}
     goose_runtime = runtime.get("goose") if isinstance(runtime.get("goose"), dict) else {}
+    try:
+        skills_config = parse_agent_skills_config(spec.get("skills"), source="AIAgent.spec.skills", strict=False)
+    except HTTPException as exc:
+        logger.warning("Ignoring invalid skills config for agent %s/%s: %s", info.namespace, info.name, exc.detail)
+        skills_config = {}
     return AgentDetail(
         **info.model_dump(),
         system_prompt=spec.get("systemPrompt", "") or "",
@@ -1731,6 +2403,8 @@ def agent_detail_from_resource(agent: dict[str, Any]) -> AgentDetail:
         mcp_servers=spec.get("mcpServers") or [],
         mcp_sidecars=spec.get("mcpSidecars") or [],
         a2a_config=parse_a2a_agent_config(spec.get("a2a"), source="AIAgent.spec.a2a"),
+        skills=skills_config,
+        skill_summaries=parse_agent_skill_summaries(skills_config),
         goose_config_files=parse_goose_config_files(
             goose_runtime.get("configFiles"),
             source="AIAgent.spec.runtime.goose.configFiles",
@@ -2024,6 +2698,262 @@ async def load_jwks() -> list[dict[str, Any]]:
     return keys
 
 
+def request_client_ip(request: Request) -> str | None:
+    forwarded_for = request.headers.get("x-forwarded-for", "").strip()
+    if forwarded_for:
+        return forwarded_for.split(",", 1)[0].strip() or None
+    if request.client is not None:
+        return request.client.host
+    return None
+
+
+def cookie_samesite() -> str:
+    if AUTH_COOKIE_SAMESITE in {"lax", "strict", "none"}:
+        return AUTH_COOKIE_SAMESITE
+    return "lax"
+
+
+def set_refresh_cookie(response: Response, refresh_token: str) -> None:
+    response.set_cookie(
+        key=REFRESH_COOKIE_NAME,
+        value=refresh_token,
+        max_age=REFRESH_TOKEN_TTL_SECONDS,
+        httponly=True,
+        secure=AUTH_COOKIE_SECURE,
+        samesite=cookie_samesite(),
+        path=AUTH_COOKIE_PATH,
+        domain=AUTH_COOKIE_DOMAIN,
+    )
+
+
+def clear_refresh_cookie(response: Response) -> None:
+    response.delete_cookie(
+        key=REFRESH_COOKIE_NAME,
+        path=AUTH_COOKIE_PATH,
+        domain=AUTH_COOKIE_DOMAIN,
+    )
+
+
+def set_oidc_transaction_cookie(response: Response, cookie_value: str) -> None:
+    response.set_cookie(
+        key=OIDC_TRANSACTION_COOKIE_NAME,
+        value=cookie_value,
+        max_age=OIDC_TRANSACTION_COOKIE_TTL_SECONDS,
+        httponly=True,
+        secure=AUTH_COOKIE_SECURE,
+        samesite=cookie_samesite(),
+        path=AUTH_COOKIE_PATH,
+        domain=AUTH_COOKIE_DOMAIN,
+    )
+
+
+def clear_oidc_transaction_cookie(response: Response) -> None:
+    response.delete_cookie(
+        key=OIDC_TRANSACTION_COOKIE_NAME,
+        path=AUTH_COOKIE_PATH,
+        domain=AUTH_COOKIE_DOMAIN,
+    )
+
+
+def shared_token_enabled() -> bool:
+    return bool(SHARED_TOKEN) and AUTH_MODE in {"shared_token", "auto", "hybrid", "enterprise"}
+
+
+def oidc_bearer_enabled() -> bool:
+    return bool(OIDC_JWKS_URL) and AUTH_MODE in {"oidc", "auto", "hybrid", "enterprise"}
+
+
+def local_access_enabled() -> bool:
+    return LOCAL_AUTH_ENABLED or AUTH_MODE == "local"
+
+
+def browser_auth_enabled() -> bool:
+    return local_access_enabled() or ldap_enabled() or bool(oidc_providers()) or bool(saml_providers())
+
+
+def registration_allowed() -> bool:
+    return local_access_enabled() and (REGISTRATION_ENABLED or count_users() == 0)
+
+
+def auth_configuration_payload() -> dict[str, Any]:
+    return {
+        "auth_mode": AUTH_MODE,
+        "local_enabled": local_access_enabled(),
+        "registration_enabled": registration_allowed(),
+        "shared_token_enabled": shared_token_enabled(),
+        "browser_auth_enabled": browser_auth_enabled(),
+        "bootstrap_complete": count_users() > 0,
+        **auth_configuration(),
+    }
+
+
+def claim_string_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    text = str(value).strip()
+    return [text] if text else []
+
+
+def normalize_principal(
+    *,
+    sub: str,
+    username: str,
+    display_name: str | None,
+    email: str | None,
+    role: str,
+    allowed_namespaces: list[str] | None,
+    auth_provider: str,
+    session_id: str | None = None,
+    is_active: bool = True,
+) -> dict[str, Any]:
+    normalized_role = role if role in ROLE_PRIORITY else "viewer"
+    normalized_namespaces = normalize_namespaces(allowed_namespaces or ["*"]) or ["*"]
+    return {
+        "sub": sub,
+        "id": sub,
+        "username": username,
+        "display_name": display_name or username,
+        "email": email,
+        "role": normalized_role,
+        "allowed_namespaces": normalized_namespaces,
+        "auth_provider": auth_provider,
+        "session_id": session_id,
+        "is_active": is_active,
+    }
+
+
+def build_shared_token_principal() -> dict[str, Any]:
+    return normalize_principal(
+        sub="shared-token-user",
+        username="shared-token-user",
+        display_name="Shared Token",
+        email=None,
+        role="admin",
+        allowed_namespaces=["*"],
+        auth_provider="shared_token",
+    )
+
+
+def principal_from_local_user(user: dict[str, Any], session_id: str) -> dict[str, Any]:
+    return normalize_principal(
+        sub=str(user["id"]),
+        username=str(user["username"]),
+        display_name=user.get("display_name"),
+        email=user.get("email"),
+        role=str(user.get("role") or "viewer"),
+        allowed_namespaces=user.get("allowed_namespaces") or ["default"],
+        auth_provider=str(user.get("auth_provider") or "local"),
+        session_id=session_id,
+        is_active=bool(user.get("is_active", True)),
+    )
+
+
+def principal_from_oidc_claims(claims: dict[str, Any]) -> dict[str, Any]:
+    provider = get_oidc_provider(issuer=str(claims.get("iss") or ""))
+    group_claim = str(provider.get("group_claim") or "groups") if provider else "groups"
+    groups = claim_string_list(claims.get(group_claim))
+    mapped_role = None
+    mapped_namespaces: list[str] = []
+    if provider is not None:
+        role_mapping = provider.get("group_role_mapping")
+        if isinstance(role_mapping, dict):
+            mapped_role, mapped_namespaces = resolve_role_mapping(groups, role_mapping)
+
+    role_candidates = claim_string_list(claims.get("roles"))
+    if claims.get("role") is not None:
+        role_candidates.insert(0, str(claims.get("role")))
+    role = mapped_role if mapped_role in ROLE_PRIORITY else next(
+        (item for item in role_candidates if item in ROLE_PRIORITY),
+        "admin",
+    )
+    allowed_namespaces = mapped_namespaces or normalize_namespaces(
+        claims.get("allowed_namespaces") or claims.get("namespaces") or ["*"]
+    ) or ["*"]
+    email = str(claims.get("email") or "").strip() or None
+    preferred_username = str(
+        claims.get("preferred_username")
+        or claims.get("upn")
+        or email
+        or claims.get("sub")
+        or "oidc-user"
+    ).strip()
+    username = preferred_username.split("@", 1)[0].lower() if "@" in preferred_username else preferred_username.lower()
+    auth_provider = f"oidc:{provider['id']}" if provider else "oidc"
+    return normalize_principal(
+        sub=str(claims.get("sub") or username),
+        username=username,
+        display_name=str(claims.get("name") or claims.get("display_name") or username),
+        email=email,
+        role=role,
+        allowed_namespaces=allowed_namespaces,
+        auth_provider=auth_provider,
+    )
+
+
+def safe_record_audit(
+    *,
+    action: str,
+    principal: dict[str, Any] | None,
+    resource_kind: str | None = None,
+    resource_name: str | None = None,
+    resource_namespace: str | None = None,
+    detail: dict[str, Any] | None = None,
+    ip_address: str | None = None,
+) -> None:
+    try:
+        record_audit_log(
+            action=action,
+            actor_sub=str(principal.get("sub")) if principal else None,
+            actor_username=str(principal.get("username")) if principal else None,
+            auth_provider=str(principal.get("auth_provider")) if principal else None,
+            resource_kind=resource_kind,
+            resource_name=resource_name,
+            resource_namespace=resource_namespace,
+            detail=detail,
+            ip_address=ip_address,
+        )
+    except Exception:
+        logger.exception("Failed to persist audit log for action '%s'.", action)
+
+
+def build_session_payload(user: dict[str, Any], session_record: dict[str, Any]) -> dict[str, Any]:
+    principal = principal_from_local_user(user, str(session_record["id"]))
+    access_token, expires_at, expires_in = create_access_token(principal, session_id=str(session_record["id"]))
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "expires_in": expires_in,
+        "expires_at": expires_at,
+        "refresh_expires_at": session_record.get("expires_at"),
+        "user": principal,
+        "auth_mode": AUTH_MODE,
+    }
+
+
+def issue_session_response(user: dict[str, Any], session_record: dict[str, Any], refresh_token: str, *, status_code: int = 200) -> JSONResponse:
+    response = JSONResponse(build_session_payload(user, session_record), status_code=status_code)
+    set_refresh_cookie(response, refresh_token)
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+def ensure_role(user: dict[str, Any], minimum_role: str) -> dict[str, Any]:
+    current_role = str(user.get("role") or "viewer")
+    if ROLE_PRIORITY.get(current_role, 0) < ROLE_PRIORITY.get(minimum_role, 0):
+        raise HTTPException(status_code=403, detail=f"{minimum_role.capitalize()} role is required")
+    return user
+
+
+def ensure_namespace_access(user: dict[str, Any], namespace: str, minimum_role: str = "viewer") -> dict[str, Any]:
+    ensure_role(user, minimum_role)
+    allowed_namespaces = normalize_namespaces(user.get("allowed_namespaces") or ["*"]) or ["*"]
+    if "*" in allowed_namespaces or namespace in allowed_namespaces:
+        return user
+    raise HTTPException(status_code=403, detail=f"Access to namespace '{namespace}' is not permitted")
+
+
 def validate_claims(claims: dict[str, Any]) -> None:
     now = int(time.time())
     if claims.get("exp") is not None and now >= int(claims["exp"]):
@@ -2057,7 +2987,29 @@ async def verify_oidc_token(token: str) -> dict[str, Any]:
 
     claims = jwt.get_unverified_claims(token)
     validate_claims(claims)
-    return claims
+    return principal_from_oidc_claims(claims)
+
+
+def verify_local_access_token(token: str) -> dict[str, Any]:
+    try:
+        claims = decode_access_token(token)
+    except ValueError as exc:
+        raise HTTPException(status_code=401, detail=f"Invalid local access token: {exc}") from exc
+
+    try:
+        user_id = int(str(claims.get("sub") or ""))
+    except ValueError as exc:
+        raise HTTPException(status_code=401, detail="Local access token subject is invalid") from exc
+
+    session_id = str(claims.get("session_id") or "").strip()
+    if not session_id or not is_session_active(session_id, user_id=user_id):
+        raise HTTPException(status_code=401, detail="Local access token session is invalid")
+
+    user = get_active_user_context(user_id)
+    if user is None:
+        raise HTTPException(status_code=401, detail="Local access token user is unavailable")
+
+    return principal_from_local_user(user, session_id)
 
 
 def verify_shared_token(token: str) -> dict[str, Any]:
@@ -2065,37 +3017,57 @@ def verify_shared_token(token: str) -> dict[str, Any]:
         raise HTTPException(status_code=503, detail="Gateway shared token is not configured")
     if not hmac.compare_digest(token, SHARED_TOKEN):
         raise HTTPException(status_code=401, detail="Invalid bearer token")
-    return {"sub": "shared-token-user"}
+    return build_shared_token_principal()
 
 
-async def verify_token(authorization: str = Header(...)) -> dict[str, Any]:
-    if not authorization.startswith("Bearer "):
+async def authenticate_bearer_token(token: str) -> dict[str, Any]:
+    if AUTH_MODE == "shared_token":
+        return verify_shared_token(token)
+    if AUTH_MODE == "oidc":
+        return await verify_oidc_token(token)
+    if AUTH_MODE == "local":
+        return verify_local_access_token(token)
+
+    if AUTH_MODE not in {"auto", "hybrid", "enterprise"}:
+        raise HTTPException(status_code=503, detail=f"Unsupported auth mode '{AUTH_MODE}'")
+
+    failures: list[str] = []
+    is_jwt_like = token.count(".") == 2
+
+    if local_access_enabled() and is_jwt_like:
+        try:
+            return verify_local_access_token(token)
+        except HTTPException as exc:
+            failures.append(str(exc.detail))
+
+    if oidc_bearer_enabled() and is_jwt_like:
+        try:
+            return await verify_oidc_token(token)
+        except HTTPException as exc:
+            failures.append(str(exc.detail))
+        except Exception as exc:
+            logger.warning("OIDC bearer verification failed in hybrid mode: %s", exc)
+            failures.append(str(exc))
+
+    if shared_token_enabled():
+        try:
+            return verify_shared_token(token)
+        except HTTPException as exc:
+            failures.append(str(exc.detail))
+
+    detail = failures[0] if failures else "No configured auth strategy accepted the presented token"
+    raise HTTPException(status_code=401, detail=detail)
+
+
+async def verify_token(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    if authorization is None or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Invalid authorization header")
 
     token = authorization[7:].strip()
     if not token:
         raise HTTPException(status_code=401, detail="Missing token")
 
-    if AUTH_MODE == "oidc":
-        return await verify_oidc_token(token)
-    if AUTH_MODE == "shared_token":
-        return verify_shared_token(token)
-    if AUTH_MODE == "auto":
-        if "." in token and OIDC_JWKS_URL:
-            try:
-                return await verify_oidc_token(token)
-            except HTTPException as exc:
-                logger.warning(
-                    "OIDC token verification failed in auto mode; falling back to shared token auth: %s",
-                    exc.detail,
-                )
-            except Exception as exc:
-                logger.warning(
-                    "OIDC token verification errored in auto mode; falling back to shared token auth: %s",
-                    exc,
-                )
-        return verify_shared_token(token)
-    raise HTTPException(status_code=503, detail=f"Unsupported auth mode '{AUTH_MODE}'")
+    return await authenticate_bearer_token(token)
 
 
 def a2a_card_http_exception(error: A2AJSONRPCError) -> HTTPException:
@@ -2105,12 +3077,615 @@ def a2a_card_http_exception(error: A2AJSONRPCError) -> HTTPException:
     return HTTPException(status_code=400, detail=detail)
 
 
+# ---------------------------------------------------------------------------
+# Authentication
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/auth/config")
+def get_auth_config() -> dict[str, Any]:
+    return auth_configuration_payload()
+
+
+@app.post("/api/auth/register")
+def register_local_user(body: AuthRegisterRequest, raw_request: Request):
+    if not local_access_enabled():
+        raise HTTPException(status_code=503, detail="Local authentication is not enabled")
+    if not registration_allowed():
+        raise HTTPException(status_code=403, detail="Self-registration is disabled")
+
+    is_first_user = count_users() == 0
+    role = "admin" if is_first_user else "viewer"
+    namespaces = ["*"] if is_first_user else ["default"]
+    try:
+        user = create_local_user(
+            username=body.username,
+            password=body.password,
+            email=body.email,
+            display_name=body.display_name,
+            role=role,
+            allowed_namespaces=namespaces,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    session_record, refresh_token = create_session_for_user(
+        int(user["id"]),
+        auth_provider=str(user.get("auth_provider") or "local"),
+        ip_address=request_client_ip(raw_request),
+        user_agent=raw_request.headers.get("user-agent"),
+        ttl_seconds=REFRESH_TOKEN_TTL_SECONDS,
+    )
+    principal = principal_from_local_user(user, str(session_record["id"]))
+    safe_record_audit(
+        action="auth.register",
+        principal=principal,
+        detail={"role": role},
+        ip_address=request_client_ip(raw_request),
+    )
+    return issue_session_response(user, session_record, refresh_token, status_code=201)
+
+
+@app.post("/api/auth/login")
+def login(body: AuthLoginRequest, raw_request: Request):
+    provider = body.provider.strip().lower() or "local"
+    username = body.username.strip().lower()
+    rate_limit_key = login_rate_limit_key(request_client_ip(raw_request), username)
+    if login_rate_limited(rate_limit_key):
+        raise HTTPException(status_code=429, detail="Too many login attempts. Try again shortly.")
+
+    user: dict[str, Any]
+    if provider == "local":
+        if not local_access_enabled():
+            raise HTTPException(status_code=503, detail="Local authentication is not enabled")
+        db_user = get_user_by_username(username)
+        if db_user is None or not verify_password(body.password, db_user.password_hash):
+            note_login_attempt(rate_limit_key, success=False)
+            record_failed_login(username)
+            raise HTTPException(status_code=401, detail="Invalid username or password")
+        if not bool(db_user.is_active):
+            raise HTTPException(status_code=403, detail="User account is inactive")
+        if is_user_locked(db_user):
+            raise HTTPException(status_code=423, detail="User account is temporarily locked")
+        reset_failed_logins(int(db_user.id))
+        user = get_active_user_context(int(db_user.id)) or serialize_user(db_user)
+    elif provider == "ldap":
+        if not ldap_enabled():
+            raise HTTPException(status_code=503, detail="LDAP authentication is not enabled")
+        try:
+            ldap_identity = authenticate_ldap_user(username, body.password)
+            user = upsert_external_user(
+                username=str(ldap_identity["username"]),
+                email=ldap_identity.get("email"),
+                display_name=ldap_identity.get("display_name"),
+                auth_provider=str(ldap_identity.get("auth_provider") or "ldap"),
+                external_id=str(ldap_identity["external_id"]),
+                role=str(ldap_identity.get("role") or "viewer"),
+                allowed_namespaces=ldap_identity.get("allowed_namespaces"),
+            )
+        except ValueError as exc:
+            note_login_attempt(rate_limit_key, success=False)
+            raise HTTPException(status_code=401, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+    else:
+        raise HTTPException(status_code=400, detail=f"Unsupported auth provider '{provider}'")
+
+    note_login_attempt(rate_limit_key, success=True)
+    session_record, refresh_token = create_session_for_user(
+        int(user["id"]),
+        auth_provider=str(user.get("auth_provider") or provider),
+        ip_address=request_client_ip(raw_request),
+        user_agent=raw_request.headers.get("user-agent"),
+        ttl_seconds=REFRESH_TOKEN_TTL_SECONDS,
+    )
+    principal = principal_from_local_user(user, str(session_record["id"]))
+    safe_record_audit(
+        action="auth.login",
+        principal=principal,
+        detail={"provider": provider},
+        ip_address=request_client_ip(raw_request),
+    )
+    return issue_session_response(user, session_record, refresh_token)
+
+
+@app.post("/api/auth/refresh")
+def refresh_session(
+    raw_request: Request,
+    refresh_token: str | None = Cookie(default=None, alias=REFRESH_COOKIE_NAME),
+):
+    if not refresh_token:
+        raise HTTPException(status_code=401, detail="Refresh token cookie is missing")
+    try:
+        user, session_record, new_refresh_token = rotate_refresh_session(
+            refresh_token,
+            ip_address=request_client_ip(raw_request),
+            user_agent=raw_request.headers.get("user-agent"),
+            ttl_seconds=REFRESH_TOKEN_TTL_SECONDS,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+
+    principal = principal_from_local_user(user, str(session_record["id"]))
+    safe_record_audit(
+        action="auth.refresh",
+        principal=principal,
+        ip_address=request_client_ip(raw_request),
+    )
+    return issue_session_response(user, session_record, new_refresh_token)
+
+
+@app.post("/api/auth/logout")
+async def logout(
+    raw_request: Request,
+    authorization: str | None = Header(default=None),
+    refresh_token: str | None = Cookie(default=None, alias=REFRESH_COOKIE_NAME),
+):
+    principal: dict[str, Any] | None = None
+    if authorization and authorization.startswith("Bearer "):
+        with contextlib.suppress(HTTPException):
+            principal = await authenticate_bearer_token(authorization[7:].strip())
+
+    if refresh_token:
+        revoke_refresh_token(refresh_token)
+
+    response = JSONResponse({"status": "logged_out"})
+    clear_refresh_cookie(response)
+    clear_oidc_transaction_cookie(response)
+    safe_record_audit(
+        action="auth.logout",
+        principal=principal,
+        ip_address=request_client_ip(raw_request),
+    )
+    return response
+
+
+@app.get("/api/auth/me")
+def get_current_user(user=Depends(verify_token)) -> dict[str, Any]:
+    return {"user": user, "auth_mode": AUTH_MODE}
+
+
+@app.post("/api/auth/change-password")
+def change_password_endpoint(
+    body: ChangePasswordRequest,
+    raw_request: Request,
+    user=Depends(verify_token),
+) -> dict[str, Any]:
+    if str(user.get("auth_provider") or "") != "local":
+        raise HTTPException(status_code=400, detail="Password changes are only supported for local users")
+    try:
+        updated_user = change_user_password(int(str(user.get("sub") or "0")), body.current_password, body.new_password)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    principal = principal_from_local_user(updated_user, str(user.get("session_id") or ""))
+    safe_record_audit(
+        action="auth.change-password",
+        principal=principal,
+        ip_address=request_client_ip(raw_request),
+    )
+    return {"status": "updated", "user": principal}
+
+
+@app.get("/api/admin/users")
+def admin_list_users(user=Depends(verify_token)) -> list[dict[str, Any]]:
+    ensure_role(user, "admin")
+    return list_local_users()
+
+
+@app.post("/api/admin/users", status_code=201)
+def admin_create_user(
+    body: CreateUserRequest,
+    raw_request: Request,
+    user=Depends(verify_token),
+) -> dict[str, Any]:
+    ensure_role(user, "admin")
+    try:
+        created = create_local_user(
+            username=body.username,
+            password=body.password,
+            email=body.email,
+            display_name=body.display_name,
+            role=body.role,
+            allowed_namespaces=body.allowed_namespaces or ["default"],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    safe_record_audit(
+        action="admin.create-user",
+        principal=user,
+        resource_kind="user",
+        resource_name=str(created.get("username") or body.username),
+        detail={"role": created.get("role")},
+        ip_address=request_client_ip(raw_request),
+    )
+    return created
+
+
+@app.patch("/api/admin/users/{user_id}")
+def admin_update_user(
+    user_id: int,
+    body: UpdateUserRequest,
+    raw_request: Request,
+    user=Depends(verify_token),
+) -> dict[str, Any]:
+    ensure_role(user, "admin")
+    try:
+        updated = update_user_fields(
+            user_id,
+            display_name=body.display_name,
+            role=body.role,
+            is_active=body.is_active,
+            allowed_namespaces=body.allowed_namespaces,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    safe_record_audit(
+        action="admin.update-user",
+        principal=user,
+        resource_kind="user",
+        resource_name=str(updated.get("username") or user_id),
+        detail={
+            "role": updated.get("role"),
+            "is_active": updated.get("is_active"),
+            "allowed_namespaces": updated.get("allowed_namespaces"),
+        },
+        ip_address=request_client_ip(raw_request),
+    )
+    return updated
+
+
+@app.get("/api/auth/oidc/start/{provider_id}")
+def start_oidc_login(provider_id: str, raw_request: Request, next: str = "/"):
+    if get_oidc_provider(provider_id=provider_id) is None:
+        raise HTTPException(status_code=404, detail=f"OIDC provider '{provider_id}' is not configured")
+    try:
+        auth_request = build_oidc_authorization_request(provider_id, public_base_url(raw_request), next)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    response = RedirectResponse(url=auth_request["authorization_url"], status_code=status.HTTP_302_FOUND)
+    set_oidc_transaction_cookie(response, auth_request["cookie_value"])
+    return response
+
+
+@app.get("/api/auth/oidc/callback/{provider_id}")
+def finish_oidc_login(
+    provider_id: str,
+    raw_request: Request,
+    code: str,
+    state: str,
+    oidc_transaction: str | None = Cookie(default=None, alias=OIDC_TRANSACTION_COOKIE_NAME),
+):
+    if not oidc_transaction:
+        raise HTTPException(status_code=400, detail="OIDC login transaction cookie is missing")
+
+    try:
+        identity = exchange_oidc_code(
+            provider_id,
+            code,
+            state,
+            oidc_transaction,
+            public_base_url(raw_request),
+        )
+        user = upsert_external_user(
+            username=str(identity["username"]),
+            email=identity.get("email"),
+            display_name=identity.get("display_name"),
+            auth_provider=str(identity.get("auth_provider") or f"oidc:{provider_id}"),
+            external_id=str(identity["external_id"]),
+            role=str(identity.get("role") or "viewer"),
+            allowed_namespaces=identity.get("allowed_namespaces"),
+        )
+        session_record, refresh_token = create_session_for_user(
+            int(user["id"]),
+            auth_provider=str(user.get("auth_provider") or f"oidc:{provider_id}"),
+            ip_address=request_client_ip(raw_request),
+            user_agent=raw_request.headers.get("user-agent"),
+            ttl_seconds=REFRESH_TOKEN_TTL_SECONDS,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    redirect_path = sanitize_redirect_path(str(identity.get("next") or "/"))
+    separator = "&" if "?" in redirect_path else "?"
+    response = RedirectResponse(
+        url=f"{redirect_path}{separator}auth=success&provider={provider_id}",
+        status_code=status.HTTP_302_FOUND,
+    )
+    set_refresh_cookie(response, refresh_token)
+    clear_oidc_transaction_cookie(response)
+    response.headers["Cache-Control"] = "no-store"
+    principal = principal_from_local_user(user, str(session_record["id"]))
+    safe_record_audit(
+        action="auth.oidc-login",
+        principal=principal,
+        detail={"provider": provider_id},
+        ip_address=request_client_ip(raw_request),
+    )
+    return response
+
+
+@app.get("/api/auth/saml/start/{provider_id}")
+def start_saml_login(provider_id: str, raw_request: Request, next: str = "/"):
+    if get_saml_provider(provider_id=provider_id) is None:
+        raise HTTPException(status_code=404, detail=f"SAML provider '{provider_id}' is not configured")
+    try:
+        auth_request = build_saml_authorization_request(provider_id, public_base_url(raw_request), next)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    response = RedirectResponse(url=auth_request["authorization_url"], status_code=status.HTTP_302_FOUND)
+    set_oidc_transaction_cookie(response, auth_request["cookie_value"])
+    return response
+
+
+@app.api_route("/api/auth/saml/callback/{provider_id}", methods=["GET", "POST"])
+async def finish_saml_login(
+    provider_id: str,
+    raw_request: Request,
+    oidc_transaction: str | None = Cookie(default=None, alias=OIDC_TRANSACTION_COOKIE_NAME),
+):
+    if not oidc_transaction:
+        raise HTTPException(status_code=400, detail="SAML login transaction cookie is missing")
+
+    query_data = {key: value for key, value in raw_request.query_params.multi_items()}
+    post_data: dict[str, Any] = {}
+    if raw_request.method.upper() == "POST":
+        form_data = await raw_request.form()
+        post_data = {str(key): str(value) for key, value in form_data.multi_items()}
+
+    saml_response = str(post_data.get("SAMLResponse") or query_data.get("SAMLResponse") or "").strip()
+    relay_state = str(post_data.get("RelayState") or query_data.get("RelayState") or "").strip() or None
+
+    try:
+        identity = exchange_saml_response(
+            provider_id,
+            saml_response=saml_response,
+            relay_state=relay_state,
+            cookie_value=oidc_transaction,
+            base_url=public_base_url(raw_request),
+            request_path=raw_request.url.path,
+            query_data=query_data,
+            post_data=post_data,
+        )
+        user = upsert_external_user(
+            username=str(identity["username"]),
+            email=identity.get("email"),
+            display_name=identity.get("display_name"),
+            auth_provider=str(identity.get("auth_provider") or f"saml:{provider_id}"),
+            external_id=str(identity["external_id"]),
+            role=str(identity.get("role") or "viewer"),
+            allowed_namespaces=identity.get("allowed_namespaces"),
+        )
+        session_record, refresh_token = create_session_for_user(
+            int(user["id"]),
+            auth_provider=str(user.get("auth_provider") or f"saml:{provider_id}"),
+            ip_address=request_client_ip(raw_request),
+            user_agent=raw_request.headers.get("user-agent"),
+            ttl_seconds=REFRESH_TOKEN_TTL_SECONDS,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    redirect_path = sanitize_redirect_path(str(identity.get("next") or "/"))
+    separator = "&" if "?" in redirect_path else "?"
+    response = RedirectResponse(
+        url=f"{redirect_path}{separator}auth=success&provider={provider_id}",
+        status_code=status.HTTP_302_FOUND,
+    )
+    set_refresh_cookie(response, refresh_token)
+    clear_oidc_transaction_cookie(response)
+    response.headers["Cache-Control"] = "no-store"
+    principal = principal_from_local_user(user, str(session_record["id"]))
+    safe_record_audit(
+        action="auth.saml-login",
+        principal=principal,
+        detail={"provider": provider_id},
+        ip_address=request_client_ip(raw_request),
+    )
+    return response
+
+
+@app.get("/api/auth/saml/metadata/{provider_id}")
+def get_saml_metadata(provider_id: str, raw_request: Request) -> Response:
+    if get_saml_provider(provider_id=provider_id) is None:
+        raise HTTPException(status_code=404, detail=f"SAML provider '{provider_id}' is not configured")
+    try:
+        metadata_xml = saml_metadata_xml(provider_id, public_base_url(raw_request))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return Response(content=metadata_xml, media_type="application/xml")
+
+
+# ---------------------------------------------------------------------------
+# Skills Catalog
+# ---------------------------------------------------------------------------
+
+SKILLS_CATALOG_PATH = os.getenv("SKILLS_CATALOG_PATH", "/data/skills-catalog.json")
+_SKILLS_CATALOG_CACHE: list[dict[str, Any]] | None = None
+_MCP_SIDECAR_CATALOG_CACHE: dict[str, dict[str, Any]] | None = None
+
+MCP_TOOL_CATEGORY_KEY_MAP: dict[str, str] = {
+    "code-exec": "codeExec",
+    "web-search": "webSearch",
+    "documents": "documents",
+    "browser": "browser",
+    "database": "database",
+    "git": "git",
+    "kubernetes": "kubernetes",
+    "messaging": "messaging",
+    "rag": "rag",
+}
+
+
+def _load_skills_catalog() -> list[dict[str, Any]]:
+    global _SKILLS_CATALOG_CACHE
+    if _SKILLS_CATALOG_CACHE is not None:
+        return _SKILLS_CATALOG_CACHE
+
+    env_json = os.getenv("SKILLS_CATALOG_JSON", "").strip()
+    if env_json:
+        try:
+            data = json.loads(env_json)
+            if isinstance(data, list):
+                _SKILLS_CATALOG_CACHE = data
+                logger.info("Loaded skills catalog from SKILLS_CATALOG_JSON env (%d skills)", len(data))
+                return _SKILLS_CATALOG_CACHE
+        except json.JSONDecodeError:
+            logger.warning("SKILLS_CATALOG_JSON env is not valid JSON; falling back to file.")
+
+    if os.path.isfile(SKILLS_CATALOG_PATH):
+        with open(SKILLS_CATALOG_PATH, encoding="utf-8") as fh:
+            data = json.load(fh)
+        if isinstance(data, list):
+            _SKILLS_CATALOG_CACHE = data
+            logger.info("Loaded skills catalog from %s (%d skills)", SKILLS_CATALOG_PATH, len(data))
+            return _SKILLS_CATALOG_CACHE
+
+    _SKILLS_CATALOG_CACHE = []
+    logger.info("No skills catalog found; catalog endpoints will return empty results.")
+    return _SKILLS_CATALOG_CACHE
+
+
+def _load_mcp_sidecar_catalog() -> dict[str, dict[str, Any]]:
+    global _MCP_SIDECAR_CATALOG_CACHE
+    if _MCP_SIDECAR_CATALOG_CACHE is not None:
+        return _MCP_SIDECAR_CATALOG_CACHE
+
+    raw = os.getenv("MCP_SIDECAR_CATALOG_JSON", "").strip()
+    if not raw:
+        _MCP_SIDECAR_CATALOG_CACHE = {}
+        return _MCP_SIDECAR_CATALOG_CACHE
+
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        logger.warning("MCP_SIDECAR_CATALOG_JSON env is not valid JSON; tool image metadata will be unavailable.")
+        _MCP_SIDECAR_CATALOG_CACHE = {}
+        return _MCP_SIDECAR_CATALOG_CACHE
+
+    if not isinstance(data, dict):
+        logger.warning("MCP_SIDECAR_CATALOG_JSON env is not a JSON object; tool image metadata will be unavailable.")
+        _MCP_SIDECAR_CATALOG_CACHE = {}
+        return _MCP_SIDECAR_CATALOG_CACHE
+
+    normalized: dict[str, dict[str, Any]] = {}
+    for key, value in data.items():
+        if isinstance(key, str) and isinstance(value, dict):
+            normalized[key] = value
+    _MCP_SIDECAR_CATALOG_CACHE = normalized
+    return _MCP_SIDECAR_CATALOG_CACHE
+
+
+def _resolve_sidecar_image(tool_id: str) -> str | None:
+    catalog = _load_mcp_sidecar_catalog()
+    entry = catalog.get(tool_id)
+    if not isinstance(entry, dict):
+        mapped_key = MCP_TOOL_CATEGORY_KEY_MAP.get(tool_id, tool_id)
+        entry = catalog.get(mapped_key)
+    if not isinstance(entry, dict):
+        return None
+    image = entry.get("image")
+    return image if isinstance(image, str) and image.strip() else None
+
+
+MCP_TOOL_CATEGORIES: list[dict[str, Any]] = [
+    {"id": "code-exec", "name": "Code Execution", "description": "Run Python, Bash, and Node.js code in a sandboxed environment.", "icon": "terminal", "default_port": 8080},
+    {"id": "web-search", "name": "Web Search", "description": "Search the web, fetch URLs, and extract text content.", "icon": "globe", "default_port": 8081},
+    {"id": "documents", "name": "PDF & Office", "description": "Read, create, and manipulate PDF, DOCX, XLSX, and PPTX files.", "icon": "file-text", "default_port": 8082},
+    {"id": "browser", "name": "Browser Automation", "description": "Browse pages, take screenshots, click elements, and fill forms.", "icon": "monitor", "default_port": 8083},
+    {"id": "database", "name": "Database", "description": "Query SQL databases, list tables, and describe schemas.", "icon": "database", "default_port": 8084},
+    {"id": "git", "name": "Git & GitHub", "description": "Clone repos, view diffs, create commits, and interact with GitHub API.", "icon": "git-branch", "default_port": 8085},
+    {"id": "kubernetes", "name": "Kubernetes & Cloud", "description": "List pods, get logs, apply manifests, and manage cluster resources.", "icon": "server", "default_port": 8086},
+    {"id": "messaging", "name": "Email & Messaging", "description": "Send emails and Slack messages, list conversations.", "icon": "mail", "default_port": 8087},
+    {"id": "rag", "name": "RAG & Vector Search", "description": "Index documents, perform semantic search, and retrieve context.", "icon": "search", "default_port": 8088},
+]
+
+
+@app.get("/api/skills/catalog")
+def get_skills_catalog(
+    category: str | None = None,
+    search: str | None = None,
+    user=Depends(verify_token),
+) -> list[dict[str, Any]]:
+    del user
+    catalog = _load_skills_catalog()
+    results = catalog
+
+    if category:
+        category_lower = category.strip().lower()
+        results = [s for s in results if s.get("category", "").lower() == category_lower]
+
+    if search:
+        search_lower = search.strip().lower()
+        results = [
+            s for s in results
+            if search_lower in s.get("name", "").lower()
+            or search_lower in s.get("description", "").lower()
+            or search_lower in s.get("id", "").lower()
+        ]
+
+    return [
+        {
+            "id": s.get("id"),
+            "name": s.get("name"),
+            "description": s.get("description"),
+            "category": s.get("category"),
+            "source": s.get("source"),
+            "license": s.get("license"),
+            "instructions_preview": s.get("instructions_preview"),
+            "allowed_mcp_servers": s.get("allowed_mcp_servers", []),
+            "allowed_sandbox_tools": s.get("allowed_sandbox_tools", []),
+            "bundled_assets": s.get("bundled_assets", []),
+        }
+        for s in results
+    ]
+
+
+@app.get("/api/skills/catalog/{skill_id}")
+def get_skill_detail(
+    skill_id: str,
+    user=Depends(verify_token),
+) -> dict[str, Any]:
+    del user
+    catalog = _load_skills_catalog()
+    for s in catalog:
+        if s.get("id") == skill_id:
+            return s
+    raise HTTPException(status_code=404, detail=f"Skill '{skill_id}' not found in catalog")
+
+
+@app.get("/api/skills/tools")
+def get_tool_categories(
+    user=Depends(verify_token),
+) -> list[dict[str, Any]]:
+    del user
+    return [
+        {
+            **tool,
+            "sidecar_image": _resolve_sidecar_image(str(tool.get("id", ""))),
+        }
+        for tool in MCP_TOOL_CATEGORIES
+    ]
+
+
 @app.get("/api/health")
 def health() -> dict[str, Any]:
     return {
         "status": "healthy",
         "gateway": "ai-agent-sandbox",
         "auth_mode": AUTH_MODE,
+        "browser_auth_enabled": browser_auth_enabled(),
+        "local_auth_enabled": local_access_enabled(),
+        "shared_token_enabled": shared_token_enabled(),
         "nats_url": NATS_URL,
         "qdrant_url": QDRANT_URL,
     }
@@ -2146,7 +3721,6 @@ async def a2a_jsonrpc(
     namespace: str | None = None,
     user=Depends(verify_token),
 ):
-    del user
     request_id: Any = None
     try:
         validate_a2a_version(raw_request)
@@ -2160,6 +3734,7 @@ async def a2a_jsonrpc(
 
         request_id, method, params = parse_jsonrpc_payload(payload)
         agent_name, resolved_namespace = resolve_a2a_agent_reference(assistant_id, namespace)
+        ensure_namespace_access(user, resolved_namespace)
         gateway_request_id = raw_request.headers.get("x-request-id") or str(uuid.uuid4())
 
         if method == "message/send":
@@ -2226,6 +3801,7 @@ def get_approval(
     namespace: str = "default",
     user=Depends(verify_token),
 ):
+    ensure_namespace_access(user, namespace)
     approval = read_approval(approval_name, namespace)
     spec = approval.get("spec", {})
     status = approval.get("status", {})
@@ -2244,7 +3820,7 @@ def get_approval(
 
 @app.get("/api/policies", response_model=list[PolicyInfo])
 def list_policies(namespace: str = "default", user=Depends(verify_token)):
-    del user
+    ensure_namespace_access(user, namespace)
     return sorted(
         [policy_info_from_resource(policy) for policy in get_policies(namespace)],
         key=lambda item: item.name,
@@ -2265,6 +3841,7 @@ def decide_approval(
     The agent runtime watches ``status.decision`` and resumes or blocks
     execution once the field is set.
     """
+    ensure_namespace_access(user, namespace, "operator")
     approval = read_approval(approval_name, namespace)
     spec = approval.get("spec", {})
 
@@ -2310,6 +3887,7 @@ def decide_approval(
 
 @app.get("/api/agents", response_model=list[AgentInfo])
 def list_agents(namespace: str = "default", user=Depends(verify_token)):
+    ensure_namespace_access(user, namespace)
     return sorted([
         agent_info_from_resource(agent)
         for agent in get_agents(namespace)
@@ -2322,7 +3900,7 @@ def create_agent(
     namespace: str = "default",
     user=Depends(verify_token),
 ):
-    del user
+    ensure_namespace_access(user, namespace, "operator")
     agent = create_agent_resource(body, namespace)
     return agent_detail_from_resource(agent)
 
@@ -2333,7 +3911,7 @@ def get_agent(
     namespace: str = "default",
     user=Depends(verify_token),
 ):
-    del user
+    ensure_namespace_access(user, namespace)
     return agent_detail_from_resource(read_agent(agent_name, namespace))
 
 
@@ -2343,7 +3921,7 @@ def discover_agent_targets(
     namespace: str = "default",
     user=Depends(verify_token),
 ):
-    del user
+    ensure_namespace_access(user, namespace)
     return discover_agent_peers(agent_name, namespace)
 
 
@@ -2354,7 +3932,7 @@ def update_agent(
     namespace: str = "default",
     user=Depends(verify_token),
 ):
-    del user
+    ensure_namespace_access(user, namespace, "operator")
     current_agent = read_agent(agent_name, namespace)
     next_spec = build_agent_spec(body, current_agent.get("spec", {}))
     validate_agent_runtime_compatibility(next_spec)
@@ -2373,14 +3951,14 @@ def delete_agent(
     namespace: str = "default",
     user=Depends(verify_token),
 ):
-    del user
+    ensure_namespace_access(user, namespace, "operator")
     delete_custom_resource("aiagents", agent_name, namespace, "Agent")
     return DeleteResponse(status="deleted", kind="agent", name=agent_name, namespace=namespace)
 
 
 @app.get("/api/workflows", response_model=list[WorkflowInfo])
 def list_workflows(namespace: str = "default", user=Depends(verify_token)):
-    del user
+    ensure_namespace_access(user, namespace)
     return sorted(
         [workflow_info_from_resource(item) for item in list_custom_resources("agentworkflows", namespace)],
         key=lambda item: item.name,
@@ -2393,7 +3971,7 @@ def create_workflow(
     namespace: str = "default",
     user=Depends(verify_token),
 ):
-    del user
+    ensure_namespace_access(user, namespace, "operator")
     created = create_custom_resource(
         "agentworkflows",
         namespace,
@@ -2409,7 +3987,7 @@ def get_workflow(
     namespace: str = "default",
     user=Depends(verify_token),
 ):
-    del user
+    ensure_namespace_access(user, namespace)
     return workflow_info_from_resource(read_custom_resource("agentworkflows", workflow_name, namespace, "Workflow"))
 
 
@@ -2420,7 +3998,7 @@ def update_workflow(
     namespace: str = "default",
     user=Depends(verify_token),
 ):
-    del user
+    ensure_namespace_access(user, namespace, "operator")
     updated = replace_custom_resource_spec("agentworkflows", workflow_name, namespace, build_workflow_spec(body))
     return workflow_info_from_resource(updated)
 
@@ -2431,14 +4009,14 @@ def delete_workflow(
     namespace: str = "default",
     user=Depends(verify_token),
 ):
-    del user
+    ensure_namespace_access(user, namespace, "operator")
     delete_custom_resource("agentworkflows", workflow_name, namespace, "Workflow")
     return DeleteResponse(status="deleted", kind="workflow", name=workflow_name, namespace=namespace)
 
 
 @app.get("/api/evals", response_model=list[EvalInfo])
 def list_evals(namespace: str = "default", user=Depends(verify_token)):
-    del user
+    ensure_namespace_access(user, namespace)
     return sorted(
         [eval_info_from_resource(item) for item in list_custom_resources("agentevals", namespace)],
         key=lambda item: item.name,
@@ -2451,7 +4029,7 @@ def create_eval(
     namespace: str = "default",
     user=Depends(verify_token),
 ):
-    del user
+    ensure_namespace_access(user, namespace, "operator")
     created = create_custom_resource(
         "agentevals",
         namespace,
@@ -2467,7 +4045,7 @@ def get_eval(
     namespace: str = "default",
     user=Depends(verify_token),
 ):
-    del user
+    ensure_namespace_access(user, namespace)
     return eval_info_from_resource(read_custom_resource("agentevals", eval_name, namespace, "Eval"))
 
 
@@ -2478,7 +4056,7 @@ def update_eval(
     namespace: str = "default",
     user=Depends(verify_token),
 ):
-    del user
+    ensure_namespace_access(user, namespace, "operator")
     updated = replace_custom_resource_spec("agentevals", eval_name, namespace, build_eval_spec(body))
     return eval_info_from_resource(updated)
 
@@ -2489,7 +4067,7 @@ def delete_eval(
     namespace: str = "default",
     user=Depends(verify_token),
 ):
-    del user
+    ensure_namespace_access(user, namespace, "operator")
     delete_custom_resource("agentevals", eval_name, namespace, "Eval")
     return DeleteResponse(status="deleted", kind="eval", name=eval_name, namespace=namespace)
 
@@ -2502,6 +4080,7 @@ async def invoke_agent(
     namespace: str = "default",
     user=Depends(verify_token),
 ):
+    ensure_namespace_access(user, namespace)
     agent = await asyncio.to_thread(read_agent, agent_name, namespace)
     validate_invoke_runtime_compatibility(runtime_kind_from_spec(agent.get("spec", {})), request)
     request_payload = request.model_dump()
@@ -2534,6 +4113,7 @@ async def invoke_agent(
         approval_name=data.get("approval_name"),
         retry_after_seconds=data.get("retry_after_seconds"),
         a2a=data.get("a2a"),
+        subagents=data.get("subagents"),
         warnings=data.get("warnings") or [],
     )
 
@@ -2546,6 +4126,7 @@ async def invoke_agent_stream(
     namespace: str = "default",
     user=Depends(verify_token),
 ):
+    ensure_namespace_access(user, namespace)
     agent = await asyncio.to_thread(read_agent, agent_name, namespace)
     validate_invoke_runtime_compatibility(runtime_kind_from_spec(agent.get("spec", {})), request)
     request_payload = request.model_dump()
@@ -2605,6 +4186,7 @@ def get_agent_logs(
     namespace: str = "default",
     user=Depends(verify_token),
 ):
+    ensure_namespace_access(user, namespace)
     read_agent(agent_name, namespace)
     try:
         pods = list_agent_pods(agent_name, namespace)

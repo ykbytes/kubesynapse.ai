@@ -11,6 +11,7 @@ import kubernetes.client  # type: ignore[import-untyped]
 import kubernetes.config  # type: ignore[import-untyped]
 
 from utils import (
+    build_eval_run_id,
     build_thread_id,
     build_workflow_run_id,
     estimate_toxicity,
@@ -24,6 +25,7 @@ from utils import (
     validate_workflow_graph,
     workflow_journal_path,
 )
+from state_store import init_database as init_state_database, safe_record_eval_state, safe_record_workflow_state
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("operator-worker")
@@ -47,6 +49,7 @@ ARTIFACT_JOURNAL_PATH = (
 )
 ARTIFACT_PVC_NAME = os.getenv("ARTIFACT_PVC_NAME", "").strip()
 WORKFLOW_RUN_ID = os.getenv("WORKFLOW_RUN_ID", "").strip()
+EVAL_RUN_ID = os.getenv("EVAL_RUN_ID", "").strip()
 
 
 def resource_plural() -> str:
@@ -227,27 +230,26 @@ def patch_workflow_status(
     worker_job: dict[str, Any],
     pending_approval: dict[str, Any] | None = None,
     extra_summary: dict[str, Any] | None = None,
-) -> None:
+) -> dict[str, Any]:
     summary = workflow_summary(step_states, total_steps, run_id)
     summary["startedAt"] = started_at
     if extra_summary:
         summary.update(extra_summary)
 
-    patch_custom_status(
-        plural,
-        {
-            "phase": phase,
-            "runId": run_id,
-            "currentStep": current_step,
-            "observedGeneration": generation,
-            "artifactRef": artifact_ref(generation),
-            "journalRef": journal_ref(generation),
-            "workerJob": worker_job,
-            "summary": summary,
-            "pendingApproval": pending_approval,
-            "stepStates": step_states,
-        },
-    )
+    status_payload = {
+        "phase": phase,
+        "runId": run_id,
+        "currentStep": current_step,
+        "observedGeneration": generation,
+        "artifactRef": artifact_ref(generation),
+        "journalRef": journal_ref(generation),
+        "workerJob": worker_job,
+        "summary": summary,
+        "pendingApproval": pending_approval,
+        "stepStates": step_states,
+    }
+    patch_custom_status(plural, status_payload)
+    return status_payload
 
 
 def previous_output_for_dependencies(
@@ -632,7 +634,7 @@ def run_workflow_worker() -> None:
         },
     )
     current_step = str(status.get("currentStep", "") or "")
-    patch_workflow_status(
+    workflow_status_payload = patch_workflow_status(
         plural=plural,
         phase="running",
         generation=generation,
@@ -643,6 +645,15 @@ def run_workflow_worker() -> None:
         step_states=step_states,
         worker_job=worker_job,
         pending_approval=None,
+    )
+    safe_record_workflow_state(
+        namespace=TARGET_NAMESPACE,
+        resource_name=TARGET_NAME,
+        generation=generation,
+        run_id=run_id,
+        phase="running",
+        spec=spec,
+        status=workflow_status_payload,
     )
 
     try:
@@ -667,7 +678,7 @@ def run_workflow_worker() -> None:
                 "workflow.frontier.started",
                 {"runId": run_id, "steps": frontier_names},
             )
-            patch_workflow_status(
+            workflow_status_payload = patch_workflow_status(
                 plural=plural,
                 phase="running",
                 generation=generation,
@@ -679,6 +690,15 @@ def run_workflow_worker() -> None:
                 worker_job=worker_job,
                 pending_approval=None,
                 extra_summary={"currentFrontier": frontier_names},
+            )
+            safe_record_workflow_state(
+                namespace=TARGET_NAMESPACE,
+                resource_name=TARGET_NAME,
+                generation=generation,
+                run_id=run_id,
+                phase="running",
+                spec=spec,
+                status=workflow_status_payload,
             )
 
             outcome_by_name: dict[str, dict[str, Any]] = {}
@@ -730,7 +750,7 @@ def run_workflow_worker() -> None:
                         pending_approval=pending_approval,
                     )
                     write_artifact(snapshot)
-                    patch_workflow_status(
+                    workflow_status_payload = patch_workflow_status(
                         plural=plural,
                         phase="waiting-approval",
                         generation=generation,
@@ -742,6 +762,15 @@ def run_workflow_worker() -> None:
                         worker_job=worker_job,
                         pending_approval=pending_approval,
                         extra_summary={"currentFrontier": frontier_names},
+                    )
+                    safe_record_workflow_state(
+                        namespace=TARGET_NAMESPACE,
+                        resource_name=TARGET_NAME,
+                        generation=generation,
+                        run_id=run_id,
+                        phase="waiting-approval",
+                        spec=spec,
+                        status=workflow_status_payload,
                     )
                     return
 
@@ -760,7 +789,7 @@ def run_workflow_worker() -> None:
                 step_states=step_states,
             )
             write_artifact(snapshot)
-            patch_workflow_status(
+            workflow_status_payload = patch_workflow_status(
                 plural=plural,
                 phase="running",
                 generation=generation,
@@ -772,6 +801,15 @@ def run_workflow_worker() -> None:
                 worker_job=worker_job,
                 pending_approval=None,
                 extra_summary={"currentFrontier": frontier_names},
+            )
+            safe_record_workflow_state(
+                namespace=TARGET_NAMESPACE,
+                resource_name=TARGET_NAME,
+                generation=generation,
+                run_id=run_id,
+                phase="running",
+                spec=spec,
+                status=workflow_status_payload,
             )
             append_journal_event(
                 "workflow.frontier.completed",
@@ -805,7 +843,7 @@ def run_workflow_worker() -> None:
             "workflow.completed",
             {"runId": run_id, "completedAt": completed_at},
         )
-        patch_workflow_status(
+        workflow_status_payload = patch_workflow_status(
             plural=plural,
             phase="completed",
             generation=generation,
@@ -817,6 +855,15 @@ def run_workflow_worker() -> None:
             worker_job=worker_job,
             pending_approval=None,
             extra_summary={"completedAt": completed_at},
+        )
+        safe_record_workflow_state(
+            namespace=TARGET_NAMESPACE,
+            resource_name=TARGET_NAME,
+            generation=generation,
+            run_id=run_id,
+            phase="completed",
+            spec=spec,
+            status=workflow_status_payload,
         )
     except Exception as exc:
         failed_at = now_iso()
@@ -835,7 +882,7 @@ def run_workflow_worker() -> None:
             "workflow.failed",
             {"runId": run_id, "failedAt": failed_at, "error": str(exc)},
         )
-        patch_workflow_status(
+        workflow_status_payload = patch_workflow_status(
             plural=plural,
             phase="failed",
             generation=generation,
@@ -847,6 +894,15 @@ def run_workflow_worker() -> None:
             worker_job=worker_job,
             pending_approval=None,
             extra_summary={"failedAt": failed_at, "error": str(exc)},
+        )
+        safe_record_workflow_state(
+            namespace=TARGET_NAMESPACE,
+            resource_name=TARGET_NAME,
+            generation=generation,
+            run_id=run_id,
+            phase="failed",
+            spec=spec,
+            status=workflow_status_payload,
         )
         raise
 
@@ -861,23 +917,43 @@ def run_eval_worker() -> None:
         raise ValueError("AgentEval must contain at least one test case")
 
     generation = int(metadata.get("generation", 1))
+    artifact = load_artifact()
+    run_id = str(
+        resource.get("status", {}).get("runId")
+        or artifact.get("runId")
+        or EVAL_RUN_ID
+        or build_eval_run_id(TARGET_NAMESPACE, TARGET_NAME, generation)
+    ).strip()
     failure_threshold = spec.get("failureThreshold", {})
     results: list[dict[str, Any]] = []
     passed = True
     started_at = now_iso()
+    worker_job = {"name": WORKER_JOB_NAME, "namespace": OPERATOR_NAMESPACE}
 
-    patch_custom_status(
-        plural,
-        {
-            "phase": "running",
-            "observedGeneration": generation,
-            "artifactRef": artifact_ref(generation),
-            "summary": {
-                "caseCount": len(test_suite),
-                "completedCases": 0,
-                "updatedAt": now_iso(),
-            },
+    eval_status_payload = {
+        "phase": "running",
+        "runId": run_id,
+        "observedGeneration": generation,
+        "artifactRef": artifact_ref(generation),
+        "workerJob": worker_job,
+        "summary": {
+            "caseCount": len(test_suite),
+            "completedCases": 0,
+            "updatedAt": now_iso(),
+            "runId": run_id,
+            "startedAt": started_at,
         },
+    }
+    patch_custom_status(plural, eval_status_payload)
+    safe_record_eval_state(
+        namespace=TARGET_NAMESPACE,
+        resource_name=TARGET_NAME,
+        generation=generation,
+        run_id=run_id,
+        phase="running",
+        passed=None,
+        spec=spec,
+        status=eval_status_payload,
     )
 
     try:
@@ -986,23 +1062,36 @@ def run_eval_worker() -> None:
                 {
                     "kind": "eval",
                     "generation": generation,
+                    "runId": run_id,
                     "updatedAt": now_iso(),
                     "startedAt": started_at,
                     "cases": results,
                 }
             )
-            patch_custom_status(
-                plural,
-                {
-                    "phase": "running",
-                    "observedGeneration": generation,
-                    "artifactRef": artifact_ref(generation),
-                    "summary": {
-                        "caseCount": len(test_suite),
-                        "completedCases": len(results),
-                        "updatedAt": now_iso(),
-                    },
+            eval_status_payload = {
+                "phase": "running",
+                "runId": run_id,
+                "observedGeneration": generation,
+                "artifactRef": artifact_ref(generation),
+                "workerJob": worker_job,
+                "summary": {
+                    "caseCount": len(test_suite),
+                    "completedCases": len(results),
+                    "updatedAt": now_iso(),
+                    "runId": run_id,
+                    "startedAt": started_at,
                 },
+            }
+            patch_custom_status(plural, eval_status_payload)
+            safe_record_eval_state(
+                namespace=TARGET_NAMESPACE,
+                resource_name=TARGET_NAME,
+                generation=generation,
+                run_id=run_id,
+                phase="running",
+                passed=None,
+                spec=spec,
+                status=eval_status_payload,
             )
 
         completed_at = now_iso()
@@ -1013,11 +1102,13 @@ def run_eval_worker() -> None:
             "completedCases": len(results),
             "startedAt": started_at,
             "completedAt": completed_at,
+            "runId": run_id,
         }
         write_artifact(
             {
                 "kind": "eval",
                 "generation": generation,
+                "runId": run_id,
                 "updatedAt": completed_at,
                 "startedAt": started_at,
                 "completedAt": completed_at,
@@ -1025,16 +1116,26 @@ def run_eval_worker() -> None:
                 "cases": results,
             }
         )
-        patch_custom_status(
-            plural,
-            {
-                "phase": "completed",
-                "lastRun": completed_at,
-                "passed": passed,
-                "observedGeneration": generation,
-                "artifactRef": artifact_ref(generation),
-                "summary": summary,
-            },
+        eval_status_payload = {
+            "phase": "completed",
+            "runId": run_id,
+            "lastRun": completed_at,
+            "passed": passed,
+            "observedGeneration": generation,
+            "artifactRef": artifact_ref(generation),
+            "workerJob": worker_job,
+            "summary": summary,
+        }
+        patch_custom_status(plural, eval_status_payload)
+        safe_record_eval_state(
+            namespace=TARGET_NAMESPACE,
+            resource_name=TARGET_NAME,
+            generation=generation,
+            run_id=run_id,
+            phase="completed",
+            passed=passed,
+            spec=spec,
+            status=eval_status_payload,
         )
     except Exception as exc:
         failed_at = now_iso()
@@ -1042,6 +1143,7 @@ def run_eval_worker() -> None:
             {
                 "kind": "eval",
                 "generation": generation,
+                "runId": run_id,
                 "updatedAt": failed_at,
                 "startedAt": started_at,
                 "failedAt": failed_at,
@@ -1049,21 +1151,32 @@ def run_eval_worker() -> None:
                 "cases": results,
             }
         )
-        patch_custom_status(
-            plural,
-            {
-                "phase": "failed",
-                "lastRun": failed_at,
-                "passed": False,
-                "observedGeneration": generation,
-                "artifactRef": artifact_ref(generation),
-                "summary": {
-                    "caseCount": len(test_suite),
-                    "completedCases": len(results),
-                    "failedAt": failed_at,
-                    "error": str(exc),
-                },
+        eval_status_payload = {
+            "phase": "failed",
+            "runId": run_id,
+            "lastRun": failed_at,
+            "passed": False,
+            "observedGeneration": generation,
+            "artifactRef": artifact_ref(generation),
+            "workerJob": worker_job,
+            "summary": {
+                "caseCount": len(test_suite),
+                "completedCases": len(results),
+                "failedAt": failed_at,
+                "error": str(exc),
+                "runId": run_id,
             },
+        }
+        patch_custom_status(plural, eval_status_payload)
+        safe_record_eval_state(
+            namespace=TARGET_NAMESPACE,
+            resource_name=TARGET_NAME,
+            generation=generation,
+            run_id=run_id,
+            phase="failed",
+            passed=False,
+            spec=spec,
+            status=eval_status_payload,
         )
         raise
 
@@ -1076,6 +1189,7 @@ def main() -> int:
         return 2
 
     load_kubernetes_config()
+    init_state_database()
 
     try:
         if WORKER_KIND == "workflow":

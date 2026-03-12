@@ -1,0 +1,136 @@
+import importlib.util
+import os
+import sys
+import tempfile
+import unittest
+import uuid
+from pathlib import Path
+from unittest.mock import patch
+
+
+MODULE_PATH = Path(__file__).resolve().parents[1] / "state_store.py"
+
+
+def load_state_store(database_path: Path) -> tuple[str, object]:
+    module_name = f"operator_state_store_test_{uuid.uuid4().hex}"
+    spec = importlib.util.spec_from_file_location(module_name, MODULE_PATH)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("Failed to load state_store module for tests")
+
+    module = importlib.util.module_from_spec(spec)
+    with patch.dict(
+        os.environ,
+        {
+            "DATABASE_URL": "",
+            "DATABASE_HOST": "",
+            "DATABASE_SQLITE_PATH": str(database_path),
+            "STATE_DB_ENABLED": "true",
+        },
+        clear=False,
+    ):
+        sys.modules[module_name] = module
+        try:
+            spec.loader.exec_module(module)
+        except Exception:
+            sys.modules.pop(module_name, None)
+            raise
+
+    return module_name, module
+
+
+class StateStoreTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp_dir.cleanup)
+
+        database_path = Path(self.temp_dir.name) / "state-store.db"
+        self.module_name, self.state_store = load_state_store(database_path)
+        self.addCleanup(self.state_store.ENGINE.dispose)
+        self.addCleanup(lambda: sys.modules.pop(self.module_name, None))
+
+        self.state_store.init_database()
+
+    def test_safe_record_workflow_state_upserts_single_run(self) -> None:
+        self.state_store.safe_record_workflow_state(
+            namespace="team-a",
+            resource_name="workflow-one",
+            generation=3,
+            run_id="workflow-one-3",
+            phase="waiting-approval",
+            spec={"steps": [{"name": "review"}]},
+            status={
+                "summary": {"phase": "waiting-approval"},
+                "stepResults": {"review": {"status": "pending"}},
+                "stepStates": {"review": "pending"},
+                "artifactRef": {"path": "/tmp/workflow.json", "journalPath": "/tmp/workflow.log"},
+                "workerJob": {"name": "workflow-worker"},
+                "pendingApproval": {"name": "approval-one"},
+            },
+        )
+
+        self.state_store.safe_record_workflow_state(
+            namespace="team-a",
+            resource_name="workflow-one",
+            generation=3,
+            run_id="workflow-one-3",
+            phase="completed",
+            spec={"steps": [{"name": "review"}]},
+            status={
+                "summary": {"phase": "completed", "completedAt": "2026-03-12T00:00:00Z"},
+                "stepResults": {"review": {"status": "completed"}},
+                "stepStates": {"review": "completed"},
+                "artifactRef": {"path": "/tmp/workflow.json", "journalPath": "/tmp/workflow.log"},
+                "workerJob": {"name": "workflow-worker"},
+            },
+        )
+
+        with self.state_store.db_session() as session:
+            records = session.query(self.state_store.WorkflowRun).all()
+
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0].phase, "completed")
+        self.assertEqual(records[0].artifact_path, "/tmp/workflow.json")
+        self.assertEqual(records[0].journal_path, "/tmp/workflow.log")
+        self.assertEqual(records[0].worker_job_name, "workflow-worker")
+        self.assertIsNotNone(records[0].completed_at)
+
+    def test_safe_record_eval_state_persists_summary_and_pass_fail(self) -> None:
+        self.state_store.safe_record_eval_state(
+            namespace="team-b",
+            resource_name="eval-one",
+            generation=7,
+            run_id="eval-one-7",
+            phase="running",
+            passed=None,
+            spec={"cases": 4},
+            status={
+                "summary": {"progress": 0.5},
+                "artifactRef": {"path": "/tmp/eval.json"},
+                "workerJob": {"name": "eval-worker"},
+            },
+        )
+
+        self.state_store.safe_record_eval_state(
+            namespace="team-b",
+            resource_name="eval-one",
+            generation=7,
+            run_id="eval-one-7",
+            phase="completed",
+            passed=True,
+            spec={"cases": 4},
+            status={
+                "summary": {"passed": 4, "failed": 0, "completedAt": "2026-03-12T01:00:00Z"},
+                "artifactRef": {"path": "/tmp/eval.json"},
+                "workerJob": {"name": "eval-worker"},
+            },
+        )
+
+        with self.state_store.db_session() as session:
+            records = session.query(self.state_store.EvalRun).all()
+
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0].phase, "completed")
+        self.assertTrue(records[0].passed)
+        self.assertEqual(records[0].artifact_path, "/tmp/eval.json")
+        self.assertEqual(records[0].worker_job_name, "eval-worker")
+        self.assertIsNotNone(records[0].completed_at)

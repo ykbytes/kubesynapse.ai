@@ -24,6 +24,8 @@ agentctl workflows update research-report-pipeline -f examples/sample-workflow.y
 agentctl evals delete --file examples/sample-eval.yaml --yes
 agentctl invoke research-assistant "Explain Kubernetes namespaces"
 agentctl invoke research-assistant "Ask the reviewer for a second opinion" --a2a-target-agent reviewer --a2a-target-namespace team-b --a2a-timeout-seconds 20
+agentctl invoke research-assistant --subagent "team-a/reviewer|Code Review|Review the latest patch" --subagent "team-a/docs|Docs|Summarize API changes" --subagent-strategy parallel
+agentctl invoke research-assistant --subagents-file examples/sample-subagents.yaml
 agentctl invoke goose-assistant "Summarize /workspace notes" --max-turns 20 --system "Stay read-only" --builtin developer
 agentctl approvals approve approval-name --reason "Reviewed by ops"
 ```
@@ -38,6 +40,31 @@ Resource management commands:
 - `agentctl agents create|update|delete --file ...`
 - `agentctl workflows create|update|delete --file ...`
 - `agentctl evals create|update|delete --file ...`
+
+Specialist team invoke inputs:
+
+- `--subagent namespace/name|role|task` can be repeated to assemble a team inline.
+- `--subagents-file FILE` accepts JSON or YAML containing either a top-level `subagents` array or a single subagent object.
+- `--subagent-strategy sequential|parallel` controls whether specialists run one at a time or concurrently.
+- Shared file entries in `input_files` also support `include_content` and `max_chars` so large files can be referenced without always embedding full contents.
+
+Example `subagents` file:
+
+```yaml
+subagent_strategy: parallel
+subagents:
+	- namespace: team-a
+		name: reviewer
+		role: Code Review
+		task: Review the implementation and list defects.
+		input_files:
+			- path: /workspace/README.md
+				purpose: Current public documentation
+	- ref: team-a/docs
+		role: Docs
+		task: Draft release notes for the same change.
+		result_file_path: /workspace/artifacts/docs-summary.md
+```
 
 Goose-specific agent update flags:
 

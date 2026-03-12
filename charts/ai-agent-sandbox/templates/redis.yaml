@@ -17,6 +17,7 @@ spec:
 {{- with (include "ai-agent-sandbox.imagePullSecrets" .) }}
 {{ . | nindent 6 }}
 {{- end }}
+      automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
         runAsUser: 999

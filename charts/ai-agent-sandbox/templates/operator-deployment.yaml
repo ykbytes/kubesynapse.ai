@@ -20,16 +20,58 @@ spec:
 {{ . | nindent 6 }}
 {{- end }}
       serviceAccountName: {{ include "ai-agent-sandbox.fullname" . }}-operator-sa
+      automountServiceAccountToken: true
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 37
+        fsGroup: 37
+        seccompProfile:
+          type: RuntimeDefault
+      volumes:
+        - name: tmp
+          emptyDir: {}
       containers:
         - name: operator
           image: "{{ .Values.operator.image.repository }}:{{ .Values.operator.image.tag }}"
           imagePullPolicy: {{ .Values.operator.image.pullPolicy | default "IfNotPresent" }}
           command: ["kopf"]
           args: ["run", "/app/main.py", "--verbose", "--liveness=http://0.0.0.0:8080/healthz"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
           ports:
             - containerPort: 8080
               name: http
           env:
+            - name: HOME
+              value: /tmp
+            - name: XDG_CACHE_HOME
+              value: /tmp
+            - name: STATE_DB_ENABLED
+              value: {{ .Values.operator.stateDbEnabled | quote }}
+{{- if .Values.postgresql.enabled }}
+            - name: DATABASE_HOST
+              value: {{ printf "%s-postgresql" (include "ai-agent-sandbox.fullname" .) | quote }}
+            - name: DATABASE_PORT
+              value: {{ .Values.postgresql.service.port | quote }}
+            - name: DATABASE_NAME
+              value: {{ .Values.postgresql.database | quote }}
+            - name: DATABASE_USER
+              value: {{ .Values.postgresql.username | quote }}
+            - name: DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ai-agent-sandbox.fullname" . }}-llm-api-keys
+                  key: DATABASE_PASSWORD
+                  optional: true
+{{- else }}
+            - name: DATABASE_SQLITE_PATH
+              value: /tmp/ai-agent-sandbox-operator.db
+{{- end }}
             - name: OPERATOR_NAMESPACE
               valueFrom:
                 fieldRef:
@@ -44,6 +86,8 @@ spec:
               value: "{{ .Values.agentRuntime.image.repository }}:{{ .Values.agentRuntime.image.tag }}"
             - name: AGENT_RUNTIME_IMAGE_PULL_POLICY
               value: {{ .Values.agentRuntime.image.pullPolicy | default "IfNotPresent" | quote }}
+            - name: AGENT_RUNTIME_EXTRA_ENV_JSON
+              value: {{ .Values.agentRuntime.env | default dict | toJson | quote }}
             - name: GOOSE_RUNTIME_IMAGE
               value: "{{ .Values.gooseRuntime.image.repository }}:{{ .Values.gooseRuntime.image.tag }}"
             - name: GOOSE_RUNTIME_IMAGE_PULL_POLICY
@@ -104,6 +148,14 @@ spec:
                   name: {{ include "ai-agent-sandbox.fullname" . }}-llm-api-keys
                   key: LITELLM_MASTER_KEY
                   optional: true
+            - name: DEFAULT_API_GATEWAY_SHARED_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ai-agent-sandbox.fullname" . }}-llm-api-keys
+                  key: API_GATEWAY_SHARED_TOKEN
+                  optional: true
+            - name: API_GATEWAY_INTERNAL_URL
+              value: {{ printf "http://%s-api-gateway.%s.svc.cluster.local:8080" (include "ai-agent-sandbox.fullname" .) .Release.Namespace | quote }}
             - name: AGENT_HITL_MODE
               value: {{ .Values.agentRuntime.hitl.mode | quote }}
             - name: HITL_NOTIFICATION_WEBHOOK_URL
@@ -160,6 +212,13 @@ spec:
               value: {{ .Values.agentRuntime.resources.limits.cpu | quote }}
             - name: AGENT_MEMORY_LIMIT
               value: {{ .Values.agentRuntime.resources.limits.memory | quote }}
+            {{- if .Values.mcpToolSidecars }}
+            - name: MCP_SIDECAR_CATALOG_JSON
+              value: {{ include "ai-agent-sandbox.mcpSidecarCatalogJson" . | quote }}
+            {{- end }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
           resources:
 {{ toYaml .Values.operator.resources | indent 12 }}
           readinessProbe:

@@ -50,6 +50,10 @@ UNSUPPORTED_POLICY_BUDGET_FIELDS = (
     "maxCostPerDayUSD",
 )
 GOOSE_CONFIG_FORBIDDEN_FILES = {"secrets.yaml"}
+MAX_AGENT_SKILL_FILES = get_int_env("AGENT_MAX_SKILL_FILES", 24, minimum=1)
+MAX_AGENT_SKILL_FILE_PATH_CHARS = get_int_env("AGENT_MAX_SKILL_FILE_PATH_CHARS", 256, minimum=32)
+MAX_AGENT_SKILL_FILE_CONTENT_CHARS = get_int_env("AGENT_MAX_SKILL_FILE_CONTENT_CHARS", 16000, minimum=512)
+MAX_AGENT_SKILL_TOTAL_CHARS = get_int_env("AGENT_MAX_SKILL_TOTAL_CHARS", 64000, minimum=4096)
 
 
 def now_iso() -> str:
@@ -85,6 +89,14 @@ def build_workflow_run_id(namespace: str, workflow_name: str, generation: int) -
         f"workflow:{namespace}:{workflow_name}:{generation}:{epoch_ms}".encode("utf-8")
     ).hexdigest()[:8]
     return build_thread_id("wf-run", namespace, workflow_name, generation, epoch_ms, digest, max_length=96)
+
+
+def build_eval_run_id(namespace: str, eval_name: str, generation: int) -> str:
+    epoch_ms = int(time.time() * 1000)
+    digest = hashlib.sha1(
+        f"eval:{namespace}:{eval_name}:{generation}:{epoch_ms}".encode("utf-8")
+    ).hexdigest()[:8]
+    return build_thread_id("eval-run", namespace, eval_name, generation, epoch_ms, digest, max_length=96)
 
 
 def workflow_journal_path(artifact_path: str) -> str:
@@ -425,6 +437,63 @@ def parse_goose_config_files(config_files: Any, *, source: str) -> dict[str, Any
             raise ValueError(f"{source}.{normalized_path} must not be null.")
         normalized_files[normalized_path] = raw_content
     return normalized_files
+
+
+def normalize_skill_file_path(raw_path: object) -> str:
+    normalized_path = str(raw_path).replace("\\", "/").strip()
+    if not normalized_path:
+        raise ValueError("Skill file paths must not be blank.")
+    if len(normalized_path) > MAX_AGENT_SKILL_FILE_PATH_CHARS:
+        raise ValueError(
+            f"Skill file paths must be {MAX_AGENT_SKILL_FILE_PATH_CHARS} characters or fewer."
+        )
+    if normalized_path.startswith("/"):
+        raise ValueError("Skill file paths must be relative to the agent skill root.")
+
+    parts = [part for part in normalized_path.split("/") if part]
+    if not parts or any(part in {".", ".."} for part in parts):
+        raise ValueError(f"Skill file path '{raw_path}' is invalid.")
+
+    candidate = "/".join(parts)
+    if not candidate.lower().endswith(".md"):
+        raise ValueError(f"Skill file path '{candidate}' must point to a Markdown file ending in .md.")
+    return candidate
+
+
+def parse_agent_skills_config(skills_config: Any, *, source: str = "AIAgent.spec.skills") -> dict[str, Any]:
+    if skills_config is None:
+        return {}
+    if not isinstance(skills_config, dict):
+        raise ValueError(f"{source} must be an object when provided.")
+
+    raw_files = skills_config.get("files")
+    if raw_files is None:
+        if skills_config:
+            raise ValueError(f"{source}.files is required when skills are configured.")
+        return {}
+    if not isinstance(raw_files, dict):
+        raise ValueError(f"{source}.files must be a mapping of relative Markdown paths to file contents.")
+    if len(raw_files) > MAX_AGENT_SKILL_FILES:
+        raise ValueError(f"{source}.files cannot contain more than {MAX_AGENT_SKILL_FILES} entries.")
+
+    normalized_files: dict[str, str] = {}
+    total_chars = 0
+    for raw_path, raw_content in sorted(raw_files.items(), key=lambda item: str(item[0])):
+        normalized_path = normalize_skill_file_path(raw_path)
+        if not isinstance(raw_content, str):
+            raise ValueError(f"{source}.files.{normalized_path} must be a Markdown string.")
+        if not raw_content.strip():
+            raise ValueError(f"{source}.files.{normalized_path} must not be blank.")
+        if len(raw_content) > MAX_AGENT_SKILL_FILE_CONTENT_CHARS:
+            raise ValueError(
+                f"{source}.files.{normalized_path} exceeds {MAX_AGENT_SKILL_FILE_CONTENT_CHARS} characters."
+            )
+        total_chars += len(raw_content)
+        if total_chars > MAX_AGENT_SKILL_TOTAL_CHARS:
+            raise ValueError(f"{source}.files exceeds the total limit of {MAX_AGENT_SKILL_TOTAL_CHARS} characters.")
+        normalized_files[normalized_path] = raw_content.replace("\r\n", "\n")
+
+    return {"files": normalized_files} if normalized_files else {}
 
 
 def merge_goose_config_files(*config_sets: tuple[Any, str]) -> dict[str, Any]:

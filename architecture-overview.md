@@ -69,7 +69,7 @@ The implementation follows these design principles:
    Runtime tracing, health checks, and evaluation resources are part of the platform design.
 
 6. **Progressive extensibility**  
-   The design supports future A2A messaging, additional MCP servers, richer evaluation, and multi-tenant scaling.
+    Explicit A2A delegation and specialist-team orchestration are available today, while NATS and the broader message-bus model remain extension points for deeper async coordination.
 
 ---
 
@@ -184,8 +184,11 @@ The `AIAgent` CRD supports:
 - `systemPrompt`
 - `policyRef`
 - `runtime.kind`
+- `runtime.goose.configFiles`
 - `mcpServers`
 - `mcpSidecars`
+- `a2a.allowedCallers`
+- `skills.files`
 - `enableGVisor`
 - `storage.size`
 - `storage.storageClassName`
@@ -315,6 +318,7 @@ The gateway currently provides:
 
 - `/api/health`
 - `/api/agents`
+- `/api/agents/{agent}/discover`
 - `/api/approvals/{approval_name}`
 - `/api/agents/{agent}/invoke`
 - `/api/agents/{agent}/invoke/stream`
@@ -424,7 +428,29 @@ The runtime performs governance checks around generation:
 - input validation through `GuardrailsEngine`
 - output sanitation through `GuardrailsEngine`
 
-#### 9.6 Readiness endpoints
+#### 9.6 Skill materialization and capability enforcement
+
+Both runtimes load skill files from the agent spec, materialize them into runtime-local state, and derive a parsed summary that is returned through the gateway. Skill frontmatter can grant sandbox tools, MCP servers, A2A targets, subagent usage, and Goose extensions.
+
+This produces two important behaviors:
+
+- agent behavior can be versioned alongside the rest of the agent manifest instead of being hidden in container images
+- the runtime has a concrete capability envelope to enforce at invoke time rather than relying on prompt text alone
+
+For Goose agents, `runtime.goose.configFiles` uses the same pattern for config-root files such as `config.yaml` and prompt fragments.
+
+#### 9.7 Peer delegation and specialist teams
+
+The LangGraph runtime can either route a single request to an explicit A2A target or orchestrate a specialist team in sequential or parallel mode.
+
+Key properties:
+
+- explicit A2A routing and specialist-team orchestration are mutually exclusive within one invoke request
+- A2A targets are validated against caller policy and agent reachability through the gateway
+- specialist tasks can share sandbox session context and emit result files back into the workspace
+- the gateway returns structured A2A and subagent metadata so the CLI and UI can inspect the full delegation path
+
+#### 9.8 Readiness endpoints
 
 The runtime exposes:
 

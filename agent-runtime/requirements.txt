@@ -14,3 +14,4 @@ opensandbox==0.1.4
 opensandbox-code-interpreter==0.1.0
 python-json-logger>=2.0,<3.0
 prometheus-fastapi-instrumentator>=6.1,<7.0
+PyYAML>=6.0,<7.0

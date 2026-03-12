@@ -4,6 +4,8 @@ CONTAINER_CLI ?= podman
 CONTAINER_BUILD_FLAGS ?= --format docker
 REGISTRY ?= ghcr.io/your-org
 VERSION ?= latest
+SKILLS_CATALOG_FILE ?= ./catalog/skills-catalog.json
+HELM_SKILLS_CATALOG_ARG := $(if $(wildcard $(SKILLS_CATALOG_FILE)),--set-file skillsCatalog.catalogJson=$(SKILLS_CATALOG_FILE),)
 
 # ===========================
 # Build
@@ -94,14 +96,14 @@ helm-package:
 	helm package ./charts/ai-agent-sandbox -d ./dist
 
 helm-template:
-	helm template ai-sandbox ./charts/ai-agent-sandbox
+	helm template ai-sandbox ./charts/ai-agent-sandbox $(HELM_SKILLS_CATALOG_ARG)
 
 # ===========================
 # Deploy (local cluster)
 # ===========================
 
 deploy:
-	helm upgrade --install ai-agent-sandbox ./charts/ai-agent-sandbox
+	helm upgrade --install ai-agent-sandbox ./charts/ai-agent-sandbox $(HELM_SKILLS_CATALOG_ARG)
 
 deploy-sample:
 	kubectl apply -f examples/sample-agent.yaml

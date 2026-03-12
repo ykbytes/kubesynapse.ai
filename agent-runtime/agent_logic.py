@@ -1,11 +1,13 @@
 import asyncio
 import contextlib
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextvars import ContextVar
 import hashlib
 import json
 import logging
 import os
 import re
+import shutil
 import sqlite3
 import threading
 import time
@@ -32,6 +34,11 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from pydantic import BaseModel, Field, SecretStr, model_validator
 from prometheus_fastapi_instrumentator import Instrumentator
 from pythonjsonlogger import jsonlogger
+
+try:
+    import yaml
+except ModuleNotFoundError:  # pragma: no cover - covered by runtime packaging
+    yaml = None
 
 from env_utils import get_bool_env, get_float_env, get_int_env
 from guardrails import GuardrailsEngine
@@ -151,6 +158,18 @@ A2A_ALLOWED_CALLERS = parse_a2a_peer_refs_env("A2A_ALLOWED_CALLERS_JSON")
 A2A_ALLOWED_TARGETS_SNAPSHOT = parse_a2a_peer_refs_env("A2A_ALLOWED_TARGETS_JSON")
 A2A_REQUIRE_HITL_DEFAULT = get_bool_env("A2A_REQUIRE_HITL", False)
 A2A_MAX_TIMEOUT_SECONDS = get_float_env("A2A_MAX_TIMEOUT_SECONDS", 60.0, minimum=1.0)
+API_GATEWAY_INTERNAL_URL = os.getenv("API_GATEWAY_INTERNAL_URL", "").strip().rstrip("/")
+API_GATEWAY_SHARED_TOKEN = os.getenv("API_GATEWAY_SHARED_TOKEN", "").strip()
+TEAM_CONTEXT_MAX_CHARS = get_int_env("A2A_TEAM_CONTEXT_MAX_CHARS", 4096, minimum=256)
+TEAMWORK_WORKING_AGREEMENT = (
+    "Treat this request as one delegated step in a multi-agent workflow.",
+    "Do the subtask directly and return concrete findings or next actions.",
+    "Call out blockers, uncertainties, or missing inputs explicitly instead of guessing.",
+)
+MAX_SUBAGENTS = get_int_env("AGENT_MAX_SUBAGENTS", 6, minimum=1)
+MAX_SUBAGENT_FILE_CHARS = get_int_env("AGENT_MAX_SUBAGENT_FILE_CHARS", 4000, minimum=256)
+MAX_SUBAGENT_METADATA_CHARS = get_int_env("AGENT_MAX_SUBAGENT_METADATA_CHARS", 2048, minimum=256)
+SUBAGENT_STRATEGIES = frozenset({"sequential", "parallel"})
 MAX_TOOL_ARGS_BYTES = get_int_env("AGENT_MAX_TOOL_ARGS_BYTES", 16384, minimum=512)
 MAX_CONCURRENT_REQUESTS = get_int_env("AGENT_MAX_CONCURRENT_REQUESTS", 4, minimum=1)
 REQUEST_QUEUE_TIMEOUT_SECONDS = get_float_env("AGENT_REQUEST_QUEUE_TIMEOUT_SECONDS", 5.0, minimum=0.1)
@@ -159,6 +178,13 @@ LITELLM_TIMEOUT_SECONDS = get_float_env("AGENT_LITELLM_TIMEOUT_SECONDS", 60.0, m
 EMBEDDING_TIMEOUT_SECONDS = get_float_env("AGENT_EMBEDDING_TIMEOUT_SECONDS", 30.0, minimum=1.0)
 RAG_REQUEST_TIMEOUT_SECONDS = get_float_env("AGENT_RAG_TIMEOUT_SECONDS", 10.0, minimum=1.0)
 SQLITE_TIMEOUT_SECONDS = get_float_env("AGENT_SQLITE_TIMEOUT_SECONDS", 30.0, minimum=1.0)
+SKILL_FILES_ENV = "AGENT_SKILL_FILES_JSON"
+SKILLS_ROOT = os.getenv("AGENT_SKILLS_ROOT", "/app/state/skills").strip() or "/app/state/skills"
+MAX_AGENT_SKILL_FILES = get_int_env("AGENT_MAX_SKILL_FILES", 24, minimum=1)
+MAX_AGENT_SKILL_FILE_PATH_CHARS = get_int_env("AGENT_MAX_SKILL_FILE_PATH_CHARS", 256, minimum=32)
+MAX_AGENT_SKILL_FILE_CONTENT_CHARS = get_int_env("AGENT_MAX_SKILL_FILE_CONTENT_CHARS", 16000, minimum=512)
+MAX_AGENT_SKILL_TOTAL_CHARS = get_int_env("AGENT_MAX_SKILL_TOTAL_CHARS", 64000, minimum=4096)
+MAX_AGENT_SKILL_PROMPT_CHARS = get_int_env("AGENT_MAX_SKILL_PROMPT_CHARS", 16000, minimum=512)
 BLOCKED_RESPONSE_PREFIX = "Request blocked"
 SENSITIVE_STREAM_EVENT_SUFFIXES = (".stdout", ".stderr", ".result")
 
@@ -174,6 +200,772 @@ def build_thread_id(prefix: str, *parts: object, max_length: int = MAX_THREAD_ID
     keep_length = max(max_length - len(digest) - 1, 1)
     truncated = base[:keep_length].rstrip("-_") or prefix
     return f"{truncated}-{digest}"
+
+
+def truncate_text(value: str, max_chars: int) -> str:
+    text = str(value or "").strip()
+    if len(text) <= max_chars:
+        return text
+    if max_chars <= 3:
+        return text[:max_chars]
+    return f"{text[: max_chars - 3].rstrip()}..."
+
+
+def normalize_json_object(value: Any, *, field_name: str, max_chars: int) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError(f"{field_name} must be an object when provided")
+
+    encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+    if len(encoded) > max_chars:
+        raise ValueError(f"{field_name} exceeds {max_chars} characters once serialized")
+
+    normalized = json.loads(encoded)
+    if not isinstance(normalized, dict):
+        raise ValueError(f"{field_name} must serialize to an object")
+    return normalized
+
+
+def normalize_subagent_strategy(value: Any) -> str:
+    strategy = str(value or "sequential").strip().lower() or "sequential"
+    if strategy not in SUBAGENT_STRATEGIES:
+        raise ValueError(
+            f"subagent_strategy must be one of {', '.join(sorted(SUBAGENT_STRATEGIES))}"
+        )
+    return strategy
+
+
+def normalize_path_text(value: Any, *, source: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        raise ValueError(f"{source} must not be blank")
+    if len(text) > 512:
+        raise ValueError(f"{source} must not exceed 512 characters")
+    return text
+
+
+def normalize_skill_file_path(value: Any, *, source: str) -> str:
+    text = str(value or "").replace("\\", "/").strip()
+    if not text:
+        raise ValueError(f"{source} must not be blank")
+    if len(text) > MAX_AGENT_SKILL_FILE_PATH_CHARS:
+        raise ValueError(
+            f"{source} must be {MAX_AGENT_SKILL_FILE_PATH_CHARS} characters or fewer"
+        )
+    if text.startswith("/"):
+        raise ValueError(f"{source} must be relative")
+
+    parts = [part for part in text.split("/") if part]
+    if not parts or any(part in {".", ".."} for part in parts):
+        raise ValueError(f"{source} is invalid")
+
+    normalized = "/".join(parts)
+    if not normalized.lower().endswith(".md"):
+        raise ValueError(f"{source} must point to a Markdown file ending in .md")
+    return normalized
+
+
+def split_skill_frontmatter(content: str) -> tuple[str | None, str, str | None]:
+    normalized = str(content or "").replace("\r\n", "\n")
+    if not normalized.startswith("---\n"):
+        return None, normalized, None
+
+    lines = normalized.split("\n")
+    for index in range(1, len(lines)):
+        if lines[index].strip() == "---":
+            return "\n".join(lines[1:index]), "\n".join(lines[index + 1 :]), None
+    return None, normalized, "Skill frontmatter must end with a closing '---' line"
+
+
+def infer_skill_name(path: str) -> str:
+    parts = [part for part in path.split("/") if part]
+    if len(parts) >= 2 and parts[-1].lower() == "skill.md":
+        return parts[-2].replace("-", " ").strip() or "skill"
+    stem = parts[-1].rsplit(".", 1)[0] if parts else "skill"
+    return stem.replace("-", " ").strip() or "skill"
+
+
+def parse_skill_frontmatter(frontmatter: str) -> tuple[dict[str, Any], list[str]]:
+    warnings: list[str] = []
+    if not frontmatter.strip():
+        return {}, warnings
+
+    try:
+        if yaml is not None:
+            parsed = yaml.safe_load(frontmatter)
+        else:
+            parsed = json.loads(frontmatter)
+    except Exception as exc:
+        warnings.append(f"Skill frontmatter is invalid: {exc}")
+        return {}, warnings
+
+    if parsed is None:
+        return {}, warnings
+    if not isinstance(parsed, dict):
+        warnings.append("Skill frontmatter must be a YAML or JSON object")
+        return {}, warnings
+    return parsed, warnings
+
+
+def skill_metadata_string_list(metadata: dict[str, Any], *keys: str) -> tuple[list[str], list[str]]:
+    warnings: list[str] = []
+    raw_value: Any = None
+    field_name = keys[0] if keys else "value"
+    for key in keys:
+        if key in metadata:
+            raw_value = metadata.get(key)
+            field_name = key
+            break
+
+    if raw_value is None:
+        return [], warnings
+    if not isinstance(raw_value, list):
+        return [], [f"{field_name} must be a list of strings"]
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for index, item in enumerate(raw_value):
+        value = str(item or "").strip()
+        if not value:
+            continue
+        if len(value) > 512:
+            warnings.append(f"{field_name}[{index}] must be 512 characters or fewer")
+            continue
+        if value in seen:
+            continue
+        seen.add(value)
+        normalized.append(value)
+    return normalized, warnings
+
+
+def skill_metadata_bool(metadata: dict[str, Any], *keys: str) -> tuple[bool, list[str]]:
+    field_name = keys[0] if keys else "value"
+    for key in keys:
+        if key not in metadata:
+            continue
+        field_name = key
+        value = metadata.get(key)
+        if isinstance(value, bool):
+            return value, []
+        return False, [f"{field_name} must be a boolean"]
+    return False, []
+
+
+def skill_metadata_a2a_targets(metadata: dict[str, Any], *keys: str) -> tuple[list[dict[str, str]], list[str]]:
+    for key in keys:
+        if key not in metadata:
+            continue
+        try:
+            return parse_a2a_peer_refs(metadata.get(key), source=key), []
+        except ValueError as exc:
+            return [], [str(exc)]
+    return [], []
+
+
+def summarize_skill_body(value: str, fallback: str) -> str:
+    body = str(value or "").strip()
+    if not body:
+        return fallback
+    return truncate_text(body, 320)
+
+
+def parse_skill_definition(path: str, content: str) -> dict[str, Any]:
+    warnings: list[str] = []
+    frontmatter, body, split_warning = split_skill_frontmatter(content)
+    if split_warning:
+        warnings.append(split_warning)
+    metadata, metadata_warnings = parse_skill_frontmatter(frontmatter or "")
+    warnings.extend(metadata_warnings)
+
+    raw_name = metadata.get("name")
+    if raw_name is not None and not isinstance(raw_name, str):
+        warnings.append("name must be a string")
+        raw_name = None
+    raw_description = metadata.get("description")
+    if raw_description is not None and not isinstance(raw_description, str):
+        warnings.append("description must be a string")
+        raw_description = None
+
+    allowed_sandbox_tools, sandbox_warnings = skill_metadata_string_list(
+        metadata,
+        "allowedSandboxTools",
+        "allowed_sandbox_tools",
+    )
+    allowed_mcp_servers, mcp_warnings = skill_metadata_string_list(
+        metadata,
+        "allowedMcpServers",
+        "allowed_mcp_servers",
+    )
+    allowed_a2a_targets, a2a_warnings = skill_metadata_a2a_targets(
+        metadata,
+        "allowedA2ATargets",
+        "allowed_a2a_targets",
+    )
+    allow_subagents, subagent_warnings = skill_metadata_bool(
+        metadata,
+        "allowSubagents",
+        "allow_subagents",
+    )
+    goose_builtin_extensions, builtin_warnings = skill_metadata_string_list(
+        metadata,
+        "gooseBuiltinExtensions",
+        "goose_builtin_extensions",
+    )
+    goose_stdio_extensions, stdio_warnings = skill_metadata_string_list(
+        metadata,
+        "gooseStdioExtensions",
+        "goose_stdio_extensions",
+    )
+    goose_streamable_http_extensions, http_warnings = skill_metadata_string_list(
+        metadata,
+        "gooseStreamableHttpExtensions",
+        "goose_streamable_http_extensions",
+    )
+    warnings.extend(sandbox_warnings)
+    warnings.extend(mcp_warnings)
+    warnings.extend(a2a_warnings)
+    warnings.extend(subagent_warnings)
+    warnings.extend(builtin_warnings)
+    warnings.extend(stdio_warnings)
+    warnings.extend(http_warnings)
+    warnings = dedupe_text_items(warnings)
+
+    name = str(raw_name or infer_skill_name(path)).strip() or infer_skill_name(path)
+    description = str(raw_description or "").strip() or None
+
+    return {
+        "path": path,
+        "name": name,
+        "description": description,
+        "body": body.strip(),
+        "instructionsPreview": summarize_skill_body(body, description or name),
+        "allowedSandboxTools": allowed_sandbox_tools,
+        "allowedMcpServers": allowed_mcp_servers,
+        "allowedA2ATargets": allowed_a2a_targets,
+        "allowSubagents": allow_subagents,
+        "gooseBuiltinExtensions": goose_builtin_extensions,
+        "gooseStdioExtensions": goose_stdio_extensions,
+        "gooseStreamableHttpExtensions": goose_streamable_http_extensions,
+        "warnings": warnings,
+    }
+
+
+def render_skill_prompt(skills: list[dict[str, Any]]) -> str:
+    if not skills:
+        return ""
+
+    sections = [
+        "The following file-backed skills are available. Use their guidance when relevant and stay within the declared capability grants.",
+    ]
+    for skill in skills:
+        lines = [f"Skill: {skill.get('name')}"]
+        if skill.get("description"):
+            lines.append(f"Description: {skill.get('description')}")
+        grants: list[str] = []
+        if skill.get("allowedSandboxTools"):
+            grants.append("Sandbox tools: " + ", ".join(skill.get("allowedSandboxTools") or []))
+        if skill.get("allowedMcpServers"):
+            grants.append("MCP servers: " + ", ".join(skill.get("allowedMcpServers") or []))
+        if skill.get("allowedA2ATargets"):
+            grants.append(
+                "A2A targets: "
+                + ", ".join(
+                    f"{item['namespace']}/{item['name']}"
+                    for item in (skill.get("allowedA2ATargets") or [])
+                    if isinstance(item, dict)
+                )
+            )
+        if skill.get("allowSubagents"):
+            grants.append("Specialist subagents: allowed")
+        if grants:
+            lines.append("Capability grants:")
+            lines.extend(f"- {item}" for item in grants)
+        if skill.get("body"):
+            lines.append("Instructions:")
+            lines.append(str(skill.get("body") or "").strip())
+        sections.append("\n".join(lines).strip())
+    return truncate_text("\n\n".join(section for section in sections if section.strip()), MAX_AGENT_SKILL_PROMPT_CHARS)
+
+
+def load_skill_runtime_config() -> dict[str, Any]:
+    raw_value = os.getenv(SKILL_FILES_ENV, "").strip()
+    if not raw_value:
+        return {
+            "files": {},
+            "skills": [],
+            "prompt": "",
+            "warnings": [],
+            "allowedSandboxToolPatterns": frozenset(),
+            "allowedMcpServers": frozenset(),
+            "allowedA2ATargets": frozenset(),
+            "allowSubagents": False,
+            "skillFiles": [],
+        }
+
+    try:
+        parsed = json.loads(raw_value)
+    except ValueError as exc:
+        warning = f"Ignoring invalid {SKILL_FILES_ENV} value: {exc}"
+        logger.warning(warning)
+        return {
+            "files": {},
+            "skills": [],
+            "prompt": "",
+            "warnings": [warning],
+            "allowedSandboxToolPatterns": frozenset(),
+            "allowedMcpServers": frozenset(),
+            "allowedA2ATargets": frozenset(),
+            "allowSubagents": False,
+            "skillFiles": [],
+        }
+
+    if not isinstance(parsed, dict):
+        warning = f"Ignoring invalid {SKILL_FILES_ENV} value: expected a JSON object keyed by Markdown paths"
+        logger.warning(warning)
+        return {
+            "files": {},
+            "skills": [],
+            "prompt": "",
+            "warnings": [warning],
+            "allowedSandboxToolPatterns": frozenset(),
+            "allowedMcpServers": frozenset(),
+            "allowedA2ATargets": frozenset(),
+            "allowSubagents": False,
+            "skillFiles": [],
+        }
+
+    files: dict[str, str] = {}
+    skills: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    sandbox_patterns: set[str] = set()
+    allowed_mcp_servers: set[str] = set()
+    allowed_a2a_targets: set[tuple[str, str]] = set()
+    allow_subagents = False
+    total_chars = 0
+
+    for raw_path, raw_content in sorted(parsed.items(), key=lambda item: str(item[0])):
+        try:
+            path = normalize_skill_file_path(raw_path, source=f"{SKILL_FILES_ENV}.{raw_path}")
+        except ValueError as exc:
+            warnings.append(str(exc))
+            continue
+        if not isinstance(raw_content, str):
+            warnings.append(f"{SKILL_FILES_ENV}.{path} must be a Markdown string")
+            continue
+        if not raw_content.strip():
+            warnings.append(f"{SKILL_FILES_ENV}.{path} must not be blank")
+            continue
+        if len(raw_content) > MAX_AGENT_SKILL_FILE_CONTENT_CHARS:
+            warnings.append(
+                f"{SKILL_FILES_ENV}.{path} exceeds {MAX_AGENT_SKILL_FILE_CONTENT_CHARS} characters"
+            )
+            continue
+        if len(files) >= MAX_AGENT_SKILL_FILES:
+            warnings.append(f"Only the first {MAX_AGENT_SKILL_FILES} skill files were loaded")
+            break
+
+        total_chars += len(raw_content)
+        if total_chars > MAX_AGENT_SKILL_TOTAL_CHARS:
+            warnings.append(
+                f"Ignoring {path} because total skill content exceeds {MAX_AGENT_SKILL_TOTAL_CHARS} characters"
+            )
+            break
+
+        normalized_content = raw_content.replace("\r\n", "\n")
+        files[path] = normalized_content
+        skill = parse_skill_definition(path, normalized_content)
+        skills.append(skill)
+        warnings.extend(skill.get("warnings") or [])
+        sandbox_patterns.update(str(item).strip() for item in (skill.get("allowedSandboxTools") or []) if str(item).strip())
+        allowed_mcp_servers.update(str(item).strip() for item in (skill.get("allowedMcpServers") or []) if str(item).strip())
+        allowed_a2a_targets.update(
+            (str(item.get("namespace") or "").strip(), str(item.get("name") or "").strip())
+            for item in (skill.get("allowedA2ATargets") or [])
+            if isinstance(item, dict)
+            and str(item.get("namespace") or "").strip()
+            and str(item.get("name") or "").strip()
+        )
+        allow_subagents = allow_subagents or bool(skill.get("allowSubagents"))
+
+    warnings = dedupe_text_items(warnings)
+    return {
+        "files": files,
+        "skills": skills,
+        "prompt": render_skill_prompt(skills),
+        "warnings": warnings,
+        "allowedSandboxToolPatterns": frozenset(sandbox_patterns),
+        "allowedMcpServers": frozenset(allowed_mcp_servers),
+        "allowedA2ATargets": frozenset(allowed_a2a_targets),
+        "allowSubagents": allow_subagents,
+        "skillFiles": sorted(files.keys()),
+    }
+
+
+def materialize_skill_files(skill_files: dict[str, str]) -> list[str]:
+    if os.path.isdir(SKILLS_ROOT):
+        shutil.rmtree(SKILLS_ROOT, ignore_errors=True)
+    os.makedirs(SKILLS_ROOT, exist_ok=True)
+
+    written_files: list[str] = []
+    for path, content in sorted(skill_files.items()):
+        absolute_path = os.path.join(SKILLS_ROOT, *path.split("/"))
+        os.makedirs(os.path.dirname(absolute_path), exist_ok=True)
+        with open(absolute_path, "w", encoding="utf-8") as handle:
+            handle.write(content.rstrip("\n") + "\n")
+        written_files.append(path)
+    return written_files
+
+
+def skill_allows_sandbox_tool(tool_name: str, patterns: frozenset[str]) -> bool:
+    if not patterns:
+        return False
+    for pattern in patterns:
+        if pattern == "*" or pattern == tool_name:
+            return True
+        if pattern.endswith("*") and tool_name.startswith(pattern[:-1]):
+            return True
+    return False
+
+
+def skill_block_reason(
+    *,
+    tool_name: str,
+    mcp_server: str,
+    a2a_target_agent: str,
+    a2a_target_namespace: str,
+    subagents: list[Any],
+) -> str | None:
+    if not SKILL_RUNTIME_CONFIG.get("skills"):
+        return None
+
+    if is_sandbox_tool(tool_name):
+        allowed_patterns = SKILL_RUNTIME_CONFIG.get("allowedSandboxToolPatterns") or frozenset()
+        if not skill_allows_sandbox_tool(tool_name, allowed_patterns):
+            return f"Sandbox tool '{tool_name}' is not granted by the agent's skill files"
+
+    if mcp_server:
+        allowed_mcp_servers = SKILL_RUNTIME_CONFIG.get("allowedMcpServers") or frozenset()
+        if not allowed_mcp_servers or mcp_server not in allowed_mcp_servers:
+            return f"MCP server '{mcp_server}' is not granted by the agent's skill files"
+
+    if a2a_target_agent and a2a_target_namespace:
+        allowed_targets = SKILL_RUNTIME_CONFIG.get("allowedA2ATargets") or frozenset()
+        if not allowed_targets or (a2a_target_namespace, a2a_target_agent) not in allowed_targets:
+            return (
+                f"A2A target '{a2a_target_namespace}/{a2a_target_agent}' is not granted by the agent's skill files"
+            )
+
+    if subagents:
+        if not bool(SKILL_RUNTIME_CONFIG.get("allowSubagents")):
+            return "Specialist subagent coordination is not granted by the agent's skill files"
+        allowed_targets = SKILL_RUNTIME_CONFIG.get("allowedA2ATargets") or frozenset()
+        if not allowed_targets:
+            return "Skill files allow specialist subagents but do not grant any A2A targets"
+        for subagent in subagents:
+            if (subagent.namespace, subagent.name) not in allowed_targets:
+                return (
+                    f"Subagent target '{subagent.namespace}/{subagent.name}' is not granted by the agent's skill files"
+                )
+
+    return None
+
+
+def parse_iso_datetime(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        return datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def merge_sandbox_sessions(
+    current_session: dict[str, Any] | None,
+    candidate_session: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if not isinstance(candidate_session, dict):
+        return current_session
+    if not isinstance(current_session, dict):
+        return candidate_session
+
+    current_expires = parse_iso_datetime(current_session.get("expires_at"))
+    candidate_expires = parse_iso_datetime(candidate_session.get("expires_at"))
+    if current_expires and candidate_expires and candidate_expires < current_expires:
+        return {**candidate_session, **current_session}
+    return {**current_session, **candidate_session}
+
+
+def parent_directory(path: str) -> str:
+    normalized = str(path or "").strip().rstrip("/\\")
+    if not normalized:
+        return ""
+
+    leading_slash = normalized.startswith("/")
+    parts = [part for part in re.split(r"[/\\]+", normalized) if part]
+    if len(parts) <= 1:
+        return ""
+
+    directory = "/".join(parts[:-1])
+    return f"/{directory}" if leading_slash else directory
+
+
+def dedupe_delegation_chain(values: Any) -> list[dict[str, Any]]:
+    if not isinstance(values, list):
+        return []
+
+    chain: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str, str]] = set()
+    for item in values:
+        if not isinstance(item, dict):
+            continue
+
+        name = str(item.get("name") or "").strip()
+        namespace = str(item.get("namespace") or "").strip()
+        if not name or not namespace:
+            continue
+
+        entry: dict[str, Any] = {"name": name, "namespace": namespace}
+        thread_id = str(item.get("threadId") or "").strip()
+        request_id = str(item.get("requestId") or "").strip()
+        if thread_id:
+            entry["threadId"] = truncate_text(thread_id, MAX_THREAD_ID_CHARS)
+        if request_id:
+            entry["requestId"] = truncate_text(request_id, 128)
+
+        identity = (
+            entry["namespace"],
+            entry["name"],
+            str(entry.get("threadId") or ""),
+            str(entry.get("requestId") or ""),
+        )
+        if identity in seen:
+            continue
+        seen.add(identity)
+        chain.append(entry)
+    return chain
+
+
+def build_inbound_team_context(request: "InvokeRequest") -> dict[str, Any] | None:
+    team_context = dict(request.team_context or {})
+    if request.caller_agent_name and request.caller_agent_namespace:
+        caller_entry: dict[str, Any] = {
+            "name": request.caller_agent_name,
+            "namespace": request.caller_agent_namespace,
+        }
+        if request.parent_thread_id:
+            caller_entry["threadId"] = request.parent_thread_id
+        if request.caller_request_id:
+            caller_entry["requestId"] = request.caller_request_id
+
+        existing_caller = team_context.get("caller") if isinstance(team_context.get("caller"), dict) else {}
+        team_context["caller"] = {**existing_caller, **caller_entry}
+        team_context.setdefault("mode", "delegation")
+        if request.prompt.strip():
+            team_context.setdefault("objective", truncate_text(request.prompt, 1024))
+
+        working_agreement = team_context.get("workingAgreement")
+        if not isinstance(working_agreement, list) or not any(str(item).strip() for item in working_agreement):
+            team_context["workingAgreement"] = list(TEAMWORK_WORKING_AGREEMENT)
+
+        existing_chain = team_context.get("delegationChain") if isinstance(team_context.get("delegationChain"), list) else []
+        delegation_chain = dedupe_delegation_chain([*existing_chain, caller_entry])
+        if delegation_chain:
+            team_context["delegationChain"] = delegation_chain
+
+    return team_context or None
+
+
+def build_outbound_team_context(
+    state: "State",
+    target_agent: str,
+    target_namespace: str,
+    target_thread_id: str,
+) -> dict[str, Any]:
+    team_context = dict(state.get("team_context") or {})
+    caller_entry: dict[str, Any] = {
+        "name": SERVICE_NAME,
+        "namespace": SERVICE_NAMESPACE,
+    }
+    caller_thread_id = str(state.get("thread_id") or "").strip()
+    caller_request_id = REQUEST_ID.get() or str(state.get("caller_request_id") or "").strip()
+    if caller_thread_id:
+        caller_entry["threadId"] = caller_thread_id
+    if caller_request_id:
+        caller_entry["requestId"] = caller_request_id
+
+    existing_caller = team_context.get("caller") if isinstance(team_context.get("caller"), dict) else {}
+    team_context["caller"] = {**existing_caller, **caller_entry}
+    team_context["target"] = {
+        "name": target_agent,
+        "namespace": target_namespace,
+        "threadId": target_thread_id,
+    }
+    team_context.setdefault("mode", "delegation")
+
+    objective = str(team_context.get("objective") or state.get("request_prompt") or "").strip()
+    if objective:
+        team_context["objective"] = truncate_text(objective, 1024)
+
+    working_agreement = team_context.get("workingAgreement")
+    if not isinstance(working_agreement, list) or not any(str(item).strip() for item in working_agreement):
+        team_context["workingAgreement"] = list(TEAMWORK_WORKING_AGREEMENT)
+
+    existing_chain = team_context.get("delegationChain") if isinstance(team_context.get("delegationChain"), list) else []
+    delegation_chain = dedupe_delegation_chain([*existing_chain, caller_entry])
+    if delegation_chain:
+        team_context["delegationChain"] = delegation_chain
+
+    try:
+        return normalize_json_object(
+            team_context,
+            field_name="team_context",
+            max_chars=TEAM_CONTEXT_MAX_CHARS,
+        ) or {}
+    except ValueError:
+        return {
+            "mode": "delegation",
+            "objective": truncate_text(str(state.get("request_prompt") or ""), 1024),
+            "caller": caller_entry,
+            "target": {
+                "name": target_agent,
+                "namespace": target_namespace,
+                "threadId": target_thread_id,
+            },
+            "workingAgreement": list(TEAMWORK_WORKING_AGREEMENT),
+            "delegationChain": dedupe_delegation_chain([caller_entry]),
+        }
+
+
+def format_team_context_system_message(team_context: dict[str, Any] | None) -> str:
+    if not isinstance(team_context, dict) or not team_context:
+        return ""
+
+    lines = ["This request is part of a multi-agent collaboration."]
+    caller = team_context.get("caller") if isinstance(team_context.get("caller"), dict) else None
+    if caller:
+        caller_name = str(caller.get("name") or "").strip()
+        caller_namespace = str(caller.get("namespace") or "").strip()
+        if caller_name and caller_namespace:
+            lines.append(f"Caller agent: {caller_name} in namespace {caller_namespace}.")
+        caller_thread = str(caller.get("threadId") or "").strip()
+        if caller_thread:
+            lines.append(f"Caller thread: {caller_thread}.")
+
+    objective = str(team_context.get("objective") or "").strip()
+    if objective:
+        lines.append(f"Delegated objective: {objective}")
+
+    working_agreement = [
+        str(item).strip()
+        for item in (team_context.get("workingAgreement") if isinstance(team_context.get("workingAgreement"), list) else [])
+        if str(item).strip()
+    ]
+    if working_agreement:
+        lines.append("Working agreement:")
+        lines.extend(f"- {item}" for item in working_agreement[:5])
+
+    delegation_chain = dedupe_delegation_chain(team_context.get("delegationChain"))
+    if delegation_chain:
+        lines.append("Delegation chain:")
+        for entry in delegation_chain[-4:]:
+            label = f"- {entry['name']} ({entry['namespace']})"
+            if entry.get("threadId"):
+                label = f"{label} thread {entry['threadId']}"
+            lines.append(label)
+
+    extra = {
+        key: value
+        for key, value in team_context.items()
+        if key not in {"caller", "target", "objective", "workingAgreement", "delegationChain", "mode"}
+    }
+    if extra:
+        lines.append("Additional collaboration context:")
+        lines.append(json.dumps(extra, ensure_ascii=False, sort_keys=True, default=str))
+
+    return truncate_text("\n".join(lines), TEAM_CONTEXT_MAX_CHARS)
+
+
+def gateway_fallback_available() -> bool:
+    return bool(API_GATEWAY_INTERNAL_URL and API_GATEWAY_SHARED_TOKEN)
+
+
+def invoke_direct_a2a_target(
+    target_agent: str,
+    target_namespace: str,
+    payload: dict[str, Any],
+    request_id: str,
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    with httpx.Client(
+        timeout=timeout_seconds,
+        transport=httpx.HTTPTransport(retries=2),
+        trust_env=False,
+    ) as client:
+        response = client.post(
+            f"{a2a_runtime_url(target_agent, target_namespace)}/invoke",
+            json=payload,
+            headers={"x-request-id": request_id},
+        )
+        response.raise_for_status()
+        return response.json()  # type: ignore[no-any-return]
+
+
+def invoke_gateway_a2a_target(
+    target_agent: str,
+    target_namespace: str,
+    payload: dict[str, Any],
+    request_id: str,
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    if not gateway_fallback_available():
+        raise RuntimeError("API gateway fallback is not configured for agent runtimes")
+
+    with httpx.Client(
+        timeout=timeout_seconds,
+        transport=httpx.HTTPTransport(retries=2),
+        trust_env=False,
+    ) as client:
+        response = client.post(
+            f"{API_GATEWAY_INTERNAL_URL}/api/agents/{target_agent}/invoke",
+            params={"namespace": target_namespace},
+            json=payload,
+            headers={
+                "Authorization": f"Bearer {API_GATEWAY_SHARED_TOKEN}",
+                "x-request-id": request_id,
+            },
+        )
+        response.raise_for_status()
+        return response.json()  # type: ignore[no-any-return]
+
+
+def invoke_a2a_target_with_fallback(
+    target_agent: str,
+    target_namespace: str,
+    payload: dict[str, Any],
+    request_id: str,
+    timeout_seconds: float,
+) -> tuple[dict[str, Any], str, str | None]:
+    try:
+        return invoke_direct_a2a_target(target_agent, target_namespace, payload, request_id, timeout_seconds), "direct", None
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code < 500:
+            raise
+        direct_failure = f"Direct A2A target returned HTTP {exc.response.status_code}"
+    except Exception as exc:
+        direct_failure = f"Direct A2A transport failed: {exc}"
+
+    if not gateway_fallback_available():
+        raise RuntimeError(direct_failure)
+
+    logger.warning("%s. Retrying %s/%s through the API gateway.", direct_failure, target_namespace, target_agent)
+    try:
+        result = invoke_gateway_a2a_target(target_agent, target_namespace, payload, request_id, timeout_seconds)
+    except httpx.HTTPStatusError as exc:
+        raise RuntimeError(f"{direct_failure}; API gateway fallback returned HTTP {exc.response.status_code}") from exc
+    except Exception as exc:
+        raise RuntimeError(f"{direct_failure}; API gateway fallback failed: {exc}") from exc
+    return result, "gateway", direct_failure
 
 resource = Resource(attributes={
     "service.name": SERVICE_NAME,
@@ -219,6 +1011,17 @@ INVOCATION_SLOTS = threading.BoundedSemaphore(MAX_CONCURRENT_REQUESTS)
 POLICY_CACHE: dict[str, Any] = {"timestamp": 0.0, "name": None, "spec": {}}
 K8S_POLICY_ACCESS = False
 _SHUTDOWN = threading.Event()
+SKILL_RUNTIME_CONFIG: dict[str, Any] = {
+    "files": {},
+    "skills": [],
+    "prompt": "",
+    "warnings": [],
+    "allowedSandboxToolPatterns": frozenset(),
+    "allowedMcpServers": frozenset(),
+    "allowedA2ATargets": frozenset(),
+    "allowSubagents": False,
+    "skillFiles": [],
+}
 EVENT_PUBLISHER: ContextVar[Callable[[str, dict[str, Any]], None] | None] = ContextVar(
     "event_publisher",
     default=None,
@@ -238,23 +1041,70 @@ async def bind_request_context(request: Request, call_next):
     return response
 
 
+class SubagentFileRef(BaseModel):
+    path: str = Field(max_length=512)
+    purpose: str | None = Field(default=None, max_length=256)
+    include_content: bool = True
+    max_chars: int = Field(default=MAX_SUBAGENT_FILE_CHARS, ge=128, le=MAX_SUBAGENT_FILE_CHARS)
+
+    @model_validator(mode="after")
+    def normalize_fields(self) -> "SubagentFileRef":
+        self.path = normalize_path_text(self.path, source="subagents[].input_files[].path")
+        self.purpose = self.purpose.strip() or None if self.purpose is not None else None
+        return self
+
+
+class SubagentRequest(BaseModel):
+    name: str = Field(max_length=63)
+    namespace: str = Field(max_length=63)
+    role: str | None = Field(default=None, max_length=128)
+    task: str | None = Field(default=None, max_length=MAX_PROMPT_CHARS)
+    input_files: list[SubagentFileRef] = Field(default_factory=list)
+    result_file_path: str | None = Field(default=None, max_length=512)
+    share_sandbox_session: bool = True
+    metadata: dict[str, Any] | None = None
+    timeout_seconds: float | None = Field(default=None, ge=1.0)
+
+    @model_validator(mode="after")
+    def normalize_fields(self) -> "SubagentRequest":
+        self.name = normalize_a2a_identifier(self.name, source="subagents[].name")
+        self.namespace = normalize_a2a_identifier(self.namespace, source="subagents[].namespace")
+        self.role = self.role.strip() or None if self.role is not None else None
+        self.task = self.task.strip() or None if self.task is not None else None
+        self.result_file_path = (
+            normalize_path_text(self.result_file_path, source="subagents[].result_file_path")
+            if self.result_file_path is not None
+            else None
+        )
+        self.metadata = normalize_json_object(
+            self.metadata,
+            field_name="subagents[].metadata",
+            max_chars=MAX_SUBAGENT_METADATA_CHARS,
+        )
+        return self
+
+
 class State(TypedDict, total=False):
     thread_id: str
     messages: Annotated[list[Any], add_messages]
     request_prompt: str
     context: str
+    team_context: dict[str, Any] | None
+    subagents: list[dict[str, Any]]
+    subagent_strategy: str
     invoke_status: str
     policy_name: str
     policy: dict[str, Any]
     system_prompt: str
     tool_name: str
     tool_args: dict[str, Any]
-    tool_result: dict[str, Any] | None
+    tool_result: Any
     sandbox_session: dict[str, Any] | None
     approval_name: str | None
     retry_after_seconds: int | None
     warnings: list[str]
     a2a: dict[str, Any] | None
+    subagent_results: dict[str, Any] | None
     a2a_target_agent: str
     a2a_target_namespace: str
     a2a_timeout_seconds: float | None
@@ -285,6 +1135,9 @@ class InvokeRequest(BaseModel):
     caller_agent_namespace: str | None = Field(default=None, max_length=63)
     parent_thread_id: str | None = Field(default=None, max_length=MAX_THREAD_ID_CHARS)
     caller_request_id: str | None = Field(default=None, max_length=128)
+    team_context: dict[str, Any] | None = None
+    subagents: list[SubagentRequest] = Field(default_factory=list)
+    subagent_strategy: str = Field(default="sequential", max_length=16)
     mcp_server: str | None = Field(
         default=None,
         max_length=128,
@@ -319,9 +1172,16 @@ class InvokeRequest(BaseModel):
         mcp_server = self.mcp_server or ""
         a2a_target_agent = self.a2a_target_agent or ""
         a2a_target_namespace = self.a2a_target_namespace or ""
+        self.subagent_strategy = normalize_subagent_strategy(self.subagent_strategy)
 
-        if not prompt and not tool_name:
-            raise ValueError("prompt must not be blank unless tool_name is provided")
+        if not prompt and not tool_name and not self.subagents:
+            raise ValueError("prompt must not be blank unless tool_name or subagents are provided")
+
+        if self.subagents and len(self.subagents) > MAX_SUBAGENTS:
+            raise ValueError(f"subagents cannot exceed {MAX_SUBAGENTS} entries")
+
+        if self.subagents and not prompt and not any(item.task for item in self.subagents):
+            raise ValueError("prompt must not be blank when subagents do not provide explicit tasks")
 
         if mcp_server and not tool_name:
             raise ValueError("tool_name is required when mcp_server is provided")
@@ -339,6 +1199,14 @@ class InvokeRequest(BaseModel):
             if mcp_server:
                 raise ValueError("a2a_target_* cannot be combined with mcp_server")
 
+        if self.subagents:
+            if tool_name:
+                raise ValueError("subagents cannot be combined with tool_name")
+            if mcp_server:
+                raise ValueError("subagents cannot be combined with mcp_server")
+            if a2a_target_agent or a2a_target_namespace:
+                raise ValueError("subagents cannot be combined with a2a_target_*")
+
         if self.caller_agent_name or self.caller_agent_namespace:
             if not self.caller_agent_name or not self.caller_agent_namespace:
                 raise ValueError("caller_agent_name and caller_agent_namespace must be provided together")
@@ -354,6 +1222,11 @@ class InvokeRequest(BaseModel):
 
         if self.sandbox_session is not None:
             json.dumps(self.sandbox_session, default=str)
+        self.team_context = normalize_json_object(
+            self.team_context,
+            field_name="team_context",
+            max_chars=TEAM_CONTEXT_MAX_CHARS,
+        )
 
         return self
 
@@ -365,12 +1238,13 @@ class InvokeResponse(BaseModel):
     model: str
     policy_name: str | None = None
     tool_name: str | None = None
-    tool_result: dict[str, Any] | None = None
+    tool_result: Any = None
     sandbox_session: dict[str, Any] | None = None
     status: str = "completed"
     approval_name: str | None = None
     retry_after_seconds: int | None = None
     a2a: dict[str, Any] | None = None
+    subagents: dict[str, Any] | None = None
     warnings: list[str] = Field(default_factory=list)
 
 
@@ -470,6 +1344,7 @@ def build_request_guard_text(
     mcp_server: str,
     a2a_target_agent: str,
     a2a_target_namespace: str,
+    subagents: list[dict[str, Any]] | None = None,
 ) -> str:
     sections: list[str] = []
     if prompt.strip():
@@ -497,6 +1372,27 @@ def build_request_guard_text(
             )
         )
 
+    if subagents:
+        sections.append(
+            json.dumps(
+                {
+                    "subagents": [
+                        {
+                            "name": str(item.get("name") or "").strip(),
+                            "namespace": str(item.get("namespace") or "").strip(),
+                            "role": str(item.get("role") or "").strip() or None,
+                            "task": str(item.get("task") or "").strip() or None,
+                        }
+                        for item in subagents
+                        if isinstance(item, dict)
+                    ]
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                default=str,
+            )
+        )
+
     return "\n\n".join(section for section in sections if section)
 
 
@@ -514,6 +1410,779 @@ def sanitize_public_payload(value: Any, guardrails: GuardrailsEngine) -> Any:
             sanitized[key] = sanitize_public_payload(item, guardrails)
         return sanitized
     return value
+
+
+def prepare_subagent_shared_files(
+    file_refs: list[dict[str, Any]],
+    sandbox_session: dict[str, Any] | None,
+    *,
+    target_agent: str,
+    target_namespace: str,
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None, list[str]]:
+    if not file_refs:
+        return [], sandbox_session, []
+
+    if not isinstance(sandbox_session, dict):
+        warning = (
+            f"Skipped shared file snapshots for {target_namespace}/{target_agent} because no sandbox_session was available."
+        )
+        return [], sandbox_session, [warning]
+
+    current_session = sandbox_session
+    snapshots: list[dict[str, Any]] = []
+    warnings: list[str] = []
+
+    for file_ref in file_refs:
+        path = str(file_ref.get("path") or "").strip()
+        if not path:
+            continue
+
+        publish_runtime_event(
+            "subagent.file",
+            {
+                "status": "started",
+                "action": "read",
+                "path": path,
+                "targetAgent": target_agent,
+                "targetNamespace": target_namespace,
+            },
+        )
+        try:
+            result, next_session = asyncio.run(
+                execute_sandbox_tool(
+                    "sandbox.filesystem.read",
+                    {"path": path},
+                    current_session,
+                    publish_runtime_event,
+                )
+            )
+            current_session = merge_sandbox_sessions(current_session, next_session)
+            content = ""
+            if isinstance(result, dict):
+                content = truncate_text(
+                    str(result.get("content") or ""),
+                    int(file_ref.get("max_chars") or MAX_SUBAGENT_FILE_CHARS),
+                )
+
+            snapshot: dict[str, Any] = {
+                "path": path,
+                "purpose": str(file_ref.get("purpose") or "").strip() or None,
+                "chars": len(content),
+            }
+            if bool(file_ref.get("include_content", True)) and content:
+                snapshot["content"] = content
+            snapshots.append(snapshot)
+            publish_runtime_event(
+                "subagent.file",
+                {
+                    "status": "prepared",
+                    "action": "read",
+                    "path": path,
+                    "chars": len(content),
+                    "targetAgent": target_agent,
+                    "targetNamespace": target_namespace,
+                },
+            )
+        except Exception as exc:
+            warning = f"Unable to prepare shared file '{path}' for {target_namespace}/{target_agent}: {exc}"
+            warnings.append(warning)
+            publish_runtime_event(
+                "subagent.file",
+                {
+                    "status": "failed",
+                    "action": "read",
+                    "path": path,
+                    "targetAgent": target_agent,
+                    "targetNamespace": target_namespace,
+                    "error": str(exc),
+                },
+            )
+
+    return snapshots, current_session, warnings
+
+
+def build_subagent_team_context(
+    state: State,
+    subagent: dict[str, Any],
+    *,
+    target_thread_id: str,
+    shared_files: list[dict[str, Any]],
+    team_messages: list[dict[str, Any]],
+    strategy: str,
+    position: int,
+    total_subagents: int,
+) -> dict[str, Any]:
+    target_agent = str(subagent.get("name") or "").strip()
+    target_namespace = str(subagent.get("namespace") or "").strip()
+    role = str(subagent.get("role") or "").strip()
+    task = str(subagent.get("task") or "").strip()
+
+    team_context = build_outbound_team_context(state, target_agent, target_namespace, target_thread_id)
+    team_context["mode"] = "subagent-orchestration"
+    team_context["orchestration"] = {
+        "strategy": strategy,
+        "position": position,
+        "totalSubagents": total_subagents,
+    }
+    if role or task:
+        specialization: dict[str, Any] = {}
+        if role:
+            specialization["role"] = role
+        if task:
+            specialization["task"] = task
+        team_context["specialization"] = specialization
+
+    shared_file_metadata = [
+        {
+            "path": item.get("path"),
+            "purpose": item.get("purpose"),
+            "chars": item.get("chars"),
+        }
+        for item in shared_files
+    ]
+    if shared_file_metadata:
+        team_context["sharedFiles"] = shared_file_metadata
+
+    compact_messages = [
+        {
+            "name": item.get("name"),
+            "namespace": item.get("namespace"),
+            "role": item.get("role"),
+            "status": item.get("status"),
+            "summary": truncate_text(str(item.get("summary") or ""), 320),
+        }
+        for item in team_messages[-4:]
+        if str(item.get("summary") or "").strip()
+    ]
+    if compact_messages:
+        team_context["teamMessages"] = compact_messages
+
+    metadata = subagent.get("metadata")
+    if isinstance(metadata, dict) and metadata:
+        team_context["subagentMetadata"] = metadata
+
+    if bool(subagent.get("share_sandbox_session", True)) and isinstance(state.get("sandbox_session"), dict):
+        team_context["sharedSandboxSession"] = True
+
+    try:
+        return normalize_json_object(
+            team_context,
+            field_name="team_context",
+            max_chars=TEAM_CONTEXT_MAX_CHARS,
+        ) or {}
+    except ValueError:
+        return {
+            "mode": "subagent-orchestration",
+            "objective": truncate_text(str(state.get("request_prompt") or ""), 1024),
+            "caller": team_context.get("caller"),
+            "target": {"name": target_agent, "namespace": target_namespace, "threadId": target_thread_id},
+            "orchestration": {"strategy": strategy, "position": position, "totalSubagents": total_subagents},
+            "specialization": team_context.get("specialization"),
+            "sharedFiles": shared_file_metadata,
+        }
+
+
+def build_subagent_prompt(
+    state: State,
+    subagent: dict[str, Any],
+    *,
+    shared_files: list[dict[str, Any]],
+    team_messages: list[dict[str, Any]],
+) -> str:
+    objective = str(state.get("request_prompt") or "").strip()
+    role = str(subagent.get("role") or "").strip()
+    task = str(subagent.get("task") or "").strip()
+    result_file_path = str(subagent.get("result_file_path") or "").strip()
+
+    lines = ["You are a specialized subagent participating in a coordinated multi-agent workflow."]
+    if objective:
+        lines.append(f"Coordinator objective:\n{objective}")
+    if role:
+        lines.append(f"Your specialization:\n{role}")
+    if task:
+        lines.append(f"Your delegated task:\n{task}")
+    else:
+        lines.append("Advance the coordinator objective from your area of expertise.")
+
+    if team_messages:
+        lines.append("Messages from teammate agents:")
+        for item in team_messages[-4:]:
+            summary = str(item.get("summary") or "").strip()
+            if not summary:
+                continue
+            label = f"- {item.get('name')} ({item.get('namespace')})"
+            if item.get("role"):
+                label = f"{label} [{item.get('role')}]"
+            lines.append(f"{label}: {truncate_text(summary, 500)}")
+
+    if shared_files:
+        lines.append("Relevant files from the shared sandbox:")
+        for item in shared_files:
+            entry = f"Path: {item.get('path')}"
+            if item.get("purpose"):
+                entry = f"{entry}\nPurpose: {item.get('purpose')}"
+            if item.get("content"):
+                entry = f"{entry}\nContent:\n{item.get('content')}"
+            lines.append(entry)
+
+    if result_file_path:
+        lines.append(
+            "If you produce reusable notes or artifacts, write or summarize them at "
+            f"{result_file_path}."
+        )
+    lines.append("Return concrete findings, file paths you inspected or changed, and any blockers.")
+    return truncate_text("\n\n".join(lines), MAX_PROMPT_CHARS)
+
+
+def write_subagent_result_artifact(
+    sandbox_session: dict[str, Any] | None,
+    *,
+    target_agent: str,
+    target_namespace: str,
+    role: str,
+    task: str,
+    status: str,
+    result_file_path: str,
+    response_text: str,
+) -> tuple[dict[str, Any] | None, str | None, list[str]]:
+    if not result_file_path:
+        return sandbox_session, None, []
+
+    if not isinstance(sandbox_session, dict):
+        warning = (
+            f"Skipped writing subagent result for {target_namespace}/{target_agent} because no sandbox_session was available."
+        )
+        return sandbox_session, None, [warning]
+
+    current_session = sandbox_session
+    warnings: list[str] = []
+    directory = parent_directory(result_file_path)
+    if directory:
+        try:
+            _result, next_session = asyncio.run(
+                execute_sandbox_tool(
+                    "sandbox.filesystem.mkdir",
+                    {"paths": [directory]},
+                    current_session,
+                    publish_runtime_event,
+                )
+            )
+            current_session = merge_sandbox_sessions(current_session, next_session)
+        except Exception:
+            logger.debug("Ignoring subagent artifact directory create failure for %s", directory, exc_info=True)
+
+    artifact_lines = [
+        f"Subagent: {target_agent} ({target_namespace})",
+        f"Status: {status}",
+    ]
+    if role:
+        artifact_lines.append(f"Role: {role}")
+    if task:
+        artifact_lines.append(f"Task: {task}")
+    artifact_lines.append("")
+    artifact_lines.append(response_text.strip())
+    artifact_text = "\n".join(artifact_lines).rstrip() + "\n"
+
+    publish_runtime_event(
+        "subagent.file",
+        {
+            "status": "started",
+            "action": "write",
+            "path": result_file_path,
+            "targetAgent": target_agent,
+            "targetNamespace": target_namespace,
+        },
+    )
+    try:
+        _result, next_session = asyncio.run(
+            execute_sandbox_tool(
+                "sandbox.filesystem.write",
+                {"path": result_file_path, "data": artifact_text},
+                current_session,
+                publish_runtime_event,
+            )
+        )
+        current_session = merge_sandbox_sessions(current_session, next_session)
+        publish_runtime_event(
+            "subagent.file",
+            {
+                "status": "written",
+                "action": "write",
+                "path": result_file_path,
+                "chars": len(artifact_text),
+                "targetAgent": target_agent,
+                "targetNamespace": target_namespace,
+            },
+        )
+        return current_session, result_file_path, warnings
+    except Exception as exc:
+        warning = f"Unable to write subagent result artifact '{result_file_path}' for {target_namespace}/{target_agent}: {exc}"
+        warnings.append(warning)
+        publish_runtime_event(
+            "subagent.file",
+            {
+                "status": "failed",
+                "action": "write",
+                "path": result_file_path,
+                "targetAgent": target_agent,
+                "targetNamespace": target_namespace,
+                "error": str(exc),
+            },
+        )
+        return current_session, None, warnings
+
+
+def render_subagent_summary(
+    objective: str,
+    strategy: str,
+    results: list[dict[str, Any]],
+) -> str:
+    lines = [f"Coordinated {len(results)} specialized subagent(s) using {strategy} execution."]
+    if objective:
+        lines.append(f"Objective: {objective}")
+
+    for result in results:
+        header = f"{result.get('name')} ({result.get('namespace')})"
+        if result.get("role"):
+            header = f"{header} [{result.get('role')}]"
+        lines.append(header)
+        if result.get("task"):
+            lines.append(f"Task: {result.get('task')}")
+        lines.append(f"Status: {result.get('status')}")
+        preview = str(result.get("responsePreview") or result.get("error") or "").strip()
+        if preview:
+            lines.append(preview)
+        if result.get("resultFilePath"):
+            lines.append(f"Result file: {result.get('resultFilePath')}")
+        result_warnings = [str(item).strip() for item in (result.get("warnings") or []) if str(item).strip()]
+        if result_warnings:
+            lines.append(f"Warnings: {'; '.join(result_warnings[:2])}")
+
+    return truncate_text("\n\n".join(lines), MAX_PROMPT_CHARS)
+
+
+def synthesize_subagent_summary(
+    objective: str,
+    strategy: str,
+    results: list[dict[str, Any]],
+    synthesizer: Callable[[str, str, list[dict[str, Any]]], str] | None,
+) -> tuple[str, str | None]:
+    fallback = render_subagent_summary(objective, strategy, results)
+    if synthesizer is None or not results:
+        return fallback, None
+
+    try:
+        synthesized = str(synthesizer(objective, strategy, results)).strip()
+    except Exception as exc:
+        return fallback, f"Coordinator synthesis failed after subagent execution: {exc}"
+
+    return synthesized or fallback, None
+
+
+def coordinate_specialized_subagents(
+    state: State,
+    *,
+    synthesizer: Callable[[str, str, list[dict[str, Any]]], str] | None = None,
+) -> dict[str, Any]:
+    subagents = [dict(item) for item in (state.get("subagents") or []) if isinstance(item, dict)]
+    if not subagents:
+        return {
+            "messages": [AIMessage(content=blocked_response("No subagents were provided for coordination"))],
+            "invoke_status": "blocked",
+            "subagent_results": None,
+        }
+
+    request_prompt = str(state.get("request_prompt") or "").strip()
+    strategy = normalize_subagent_strategy(state.get("subagent_strategy"))
+    allowed_targets, max_timeout_seconds, _ = parse_effective_a2a_policy_config(state.get("policy", {}))
+    base_request_id = REQUEST_ID.get() or str(uuid.uuid4())
+    current_session = state.get("sandbox_session") if isinstance(state.get("sandbox_session"), dict) else None
+    initial_session_present = current_session is not None
+    warnings: list[str] = list(state.get("warnings") or [])
+    result_entries: dict[int, dict[str, Any]] = {}
+    team_messages: list[dict[str, Any]] = []
+
+    def prepare_job(
+        subagent: dict[str, Any],
+        index: int,
+        working_session: dict[str, Any] | None,
+        prior_messages: list[dict[str, Any]],
+    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None, dict[str, Any] | None, list[str]]:
+        target_agent = str(subagent.get("name") or "").strip()
+        target_namespace = str(subagent.get("namespace") or "").strip()
+        role = str(subagent.get("role") or "").strip()
+        task = str(subagent.get("task") or "").strip()
+        target_thread_id = build_thread_id(
+            "subagent",
+            SERVICE_NAMESPACE,
+            SERVICE_NAME,
+            target_namespace,
+            target_agent,
+            state.get("thread_id") or "",
+            index,
+        )
+        result_file_path = str(subagent.get("result_file_path") or "").strip() or None
+
+        def blocked_entry(reason: str) -> dict[str, Any]:
+            return {
+                "index": index,
+                "name": target_agent,
+                "namespace": target_namespace,
+                "role": role or None,
+                "task": task or None,
+                "status": "blocked",
+                "transport": None,
+                "threadId": target_thread_id,
+                "responsePreview": truncate_text(reason, MAX_CONTEXT_CHARS),
+                "resultFilePath": None,
+                "sharedFiles": [],
+                "warnings": [reason],
+                "error": reason,
+            }
+
+        if (target_namespace, target_agent) not in allowed_targets:
+            reason = (
+                f"Subagent target '{target_agent}' in namespace '{target_namespace}' is not allowed. "
+                "Update AgentPolicy.spec.a2a.allowedTargets to grant access."
+            )
+            return None, blocked_entry(reason), working_session, []
+
+        requested_timeout = subagent.get("timeout_seconds")
+        if requested_timeout is not None and float(requested_timeout) > max_timeout_seconds:
+            reason = (
+                f"Requested subagent timeout {requested_timeout} exceeds policy limit of {max_timeout_seconds} seconds."
+            )
+            return None, blocked_entry(reason), working_session, []
+
+        shared_files, next_session, snapshot_warnings = prepare_subagent_shared_files(
+            [dict(item) for item in subagent.get("input_files") or [] if isinstance(item, dict)],
+            working_session,
+            target_agent=target_agent,
+            target_namespace=target_namespace,
+        )
+        next_session = merge_sandbox_sessions(working_session, next_session)
+        payload = {
+            "prompt": build_subagent_prompt(
+                state,
+                subagent,
+                shared_files=shared_files,
+                team_messages=prior_messages,
+            ),
+            "thread_id": target_thread_id,
+            "caller_agent_name": SERVICE_NAME,
+            "caller_agent_namespace": SERVICE_NAMESPACE,
+            "parent_thread_id": str(state.get("thread_id") or "").strip() or None,
+            "caller_request_id": build_thread_id("subreq", base_request_id, index, max_length=128),
+            "team_context": build_subagent_team_context(
+                state,
+                subagent,
+                target_thread_id=target_thread_id,
+                shared_files=shared_files,
+                team_messages=prior_messages,
+                strategy=strategy,
+                position=index,
+                total_subagents=len(subagents),
+            ),
+        }
+        if bool(subagent.get("share_sandbox_session", True)) and next_session is not None:
+            payload["sandbox_session"] = next_session
+
+        return {
+            "index": index,
+            "name": target_agent,
+            "namespace": target_namespace,
+            "role": role or None,
+            "task": task or None,
+            "thread_id": target_thread_id,
+            "timeout_seconds": float(requested_timeout or max_timeout_seconds),
+            "payload": payload,
+            "shared_files": [
+                {
+                    "path": item.get("path"),
+                    "purpose": item.get("purpose"),
+                    "chars": item.get("chars"),
+                }
+                for item in shared_files
+            ],
+            "result_file_path": result_file_path,
+            "metadata": subagent.get("metadata") if isinstance(subagent.get("metadata"), dict) else None,
+        }, None, next_session, snapshot_warnings
+
+    def invoke_job(job: dict[str, Any]) -> dict[str, Any]:
+        try:
+            result, transport, fallback_reason = invoke_a2a_target_with_fallback(
+                str(job.get("name") or ""),
+                str(job.get("namespace") or ""),
+                dict(job.get("payload") or {}),
+                str((job.get("payload") or {}).get("caller_request_id") or base_request_id),
+                float(job.get("timeout_seconds") or max_timeout_seconds),
+            )
+            return {
+                "ok": True,
+                "result": result,
+                "transport": transport,
+                "fallback_reason": fallback_reason,
+            }
+        except httpx.HTTPStatusError as exc:
+            return {
+                "ok": False,
+                "error": f"A2A target returned HTTP {exc.response.status_code}",
+                "transport": "direct",
+            }
+        except Exception as exc:
+            return {
+                "ok": False,
+                "error": str(exc),
+                "transport": "gateway" if gateway_fallback_available() else "direct",
+            }
+
+    def finalize_job(
+        job: dict[str, Any],
+        invocation: dict[str, Any],
+        working_session: dict[str, Any] | None,
+    ) -> tuple[dict[str, Any], dict[str, Any] | None, list[str]]:
+        entry_warnings: list[str] = []
+        if not invocation.get("ok"):
+            error_text = str(invocation.get("error") or "Subagent invocation failed")
+            response_text = error_text
+            response_status = "failed"
+            transport = invocation.get("transport")
+            result_payload: dict[str, Any] = {}
+        else:
+            result_payload = invocation.get("result") if isinstance(invocation.get("result"), dict) else {}
+            response_text = str(result_payload.get("response", ""))
+            response_status = str(result_payload.get("status", "completed") or "completed")
+            transport = invocation.get("transport")
+            entry_warnings.extend(str(item) for item in (result_payload.get("warnings") or []))
+            fallback_reason = str(invocation.get("fallback_reason") or "").strip()
+            if transport == "gateway" and fallback_reason:
+                entry_warnings.append(f"{fallback_reason}. Completed via API gateway fallback.")
+
+        working_session = merge_sandbox_sessions(
+            working_session,
+            result_payload.get("sandbox_session") if isinstance(result_payload.get("sandbox_session"), dict) else None,
+        )
+
+        result_file_path = str(job.get("result_file_path") or "").strip()
+        written_result_path: str | None = None
+        if result_file_path:
+            working_session, written_result_path, artifact_warnings = write_subagent_result_artifact(
+                working_session,
+                target_agent=str(job.get("name") or ""),
+                target_namespace=str(job.get("namespace") or ""),
+                role=str(job.get("role") or ""),
+                task=str(job.get("task") or ""),
+                status=response_status,
+                result_file_path=result_file_path,
+                response_text=response_text or str(invocation.get("error") or ""),
+            )
+            entry_warnings.extend(artifact_warnings)
+
+        entry_warnings = dedupe_text_items(entry_warnings)
+        entry = {
+            "index": job.get("index"),
+            "name": job.get("name"),
+            "namespace": job.get("namespace"),
+            "role": job.get("role"),
+            "task": job.get("task"),
+            "status": response_status,
+            "transport": transport,
+            "threadId": result_payload.get("thread_id") or job.get("thread_id"),
+            "responsePreview": truncate_text(response_text or str(invocation.get("error") or ""), MAX_CONTEXT_CHARS),
+            "resultFilePath": written_result_path,
+            "sharedFiles": job.get("shared_files") or [],
+            "warnings": entry_warnings,
+            "approvalName": result_payload.get("approval_name"),
+            "retryAfterSeconds": result_payload.get("retry_after_seconds"),
+        }
+        if job.get("metadata"):
+            entry["metadata"] = job.get("metadata")
+        if not invocation.get("ok"):
+            entry["error"] = str(invocation.get("error") or "Subagent invocation failed")
+        return entry, working_session, entry_warnings
+
+    publish_runtime_event(
+        "subagent.plan",
+        {
+            "status": "started",
+            "count": len(subagents),
+            "strategy": strategy,
+            "sharedSandboxSession": initial_session_present,
+        },
+    )
+
+    if strategy == "parallel":
+        jobs: list[dict[str, Any]] = []
+        for index, subagent in enumerate(subagents, start=1):
+            job, blocked_entry, current_session, preparation_warnings = prepare_job(subagent, index, current_session, [])
+            warnings.extend(preparation_warnings)
+            if blocked_entry is not None:
+                result_entries[index] = blocked_entry
+                warnings.extend(blocked_entry.get("warnings") or [])
+                continue
+            if job is None:
+                continue
+            jobs.append(job)
+            publish_runtime_event(
+                "subagent.call",
+                {
+                    "status": "started",
+                    "targetAgent": job.get("name"),
+                    "targetNamespace": job.get("namespace"),
+                    "targetThreadId": job.get("thread_id"),
+                    "strategy": strategy,
+                    "role": job.get("role"),
+                },
+            )
+
+        if jobs:
+            with ThreadPoolExecutor(max_workers=min(len(jobs), MAX_SUBAGENTS)) as executor:
+                future_map = {executor.submit(invoke_job, job): job for job in jobs}
+                for future in as_completed(future_map):
+                    job = future_map[future]
+                    invocation = future.result()
+                    entry, current_session, entry_warnings = finalize_job(job, invocation, current_session)
+                    result_entries[int(job.get("index") or 0)] = entry
+                    warnings.extend(entry_warnings)
+                    publish_runtime_event(
+                        "subagent.call",
+                        {
+                            "status": "completed" if invocation.get("ok") else "failed",
+                            "targetAgent": job.get("name"),
+                            "targetNamespace": job.get("namespace"),
+                            "targetThreadId": entry.get("threadId"),
+                            "strategy": strategy,
+                            "role": job.get("role"),
+                            "transport": entry.get("transport"),
+                            "bytes": len(str(entry.get("responsePreview") or "")),
+                            "resultFilePath": entry.get("resultFilePath"),
+                            "error": entry.get("error"),
+                        },
+                    )
+    else:
+        for index, subagent in enumerate(subagents, start=1):
+            job, blocked_entry, current_session, preparation_warnings = prepare_job(
+                subagent,
+                index,
+                current_session,
+                team_messages,
+            )
+            warnings.extend(preparation_warnings)
+            if blocked_entry is not None:
+                result_entries[index] = blocked_entry
+                warnings.extend(blocked_entry.get("warnings") or [])
+                team_messages.append(
+                    {
+                        "name": blocked_entry.get("name"),
+                        "namespace": blocked_entry.get("namespace"),
+                        "role": blocked_entry.get("role"),
+                        "status": blocked_entry.get("status"),
+                        "summary": blocked_entry.get("responsePreview"),
+                    }
+                )
+                continue
+            if job is None:
+                continue
+
+            publish_runtime_event(
+                "subagent.call",
+                {
+                    "status": "started",
+                    "targetAgent": job.get("name"),
+                    "targetNamespace": job.get("namespace"),
+                    "targetThreadId": job.get("thread_id"),
+                    "strategy": strategy,
+                    "role": job.get("role"),
+                },
+            )
+            invocation = invoke_job(job)
+            entry, current_session, entry_warnings = finalize_job(job, invocation, current_session)
+            result_entries[index] = entry
+            warnings.extend(entry_warnings)
+            publish_runtime_event(
+                "subagent.call",
+                {
+                    "status": "completed" if invocation.get("ok") else "failed",
+                    "targetAgent": job.get("name"),
+                    "targetNamespace": job.get("namespace"),
+                    "targetThreadId": entry.get("threadId"),
+                    "strategy": strategy,
+                    "role": job.get("role"),
+                    "transport": entry.get("transport"),
+                    "bytes": len(str(entry.get("responsePreview") or "")),
+                    "resultFilePath": entry.get("resultFilePath"),
+                    "error": entry.get("error"),
+                },
+            )
+            team_messages.append(
+                {
+                    "name": entry.get("name"),
+                    "namespace": entry.get("namespace"),
+                    "role": entry.get("role"),
+                    "status": entry.get("status"),
+                    "summary": entry.get("responsePreview"),
+                }
+            )
+
+    ordered_results = [result_entries[index] for index in sorted(result_entries)]
+    warnings = dedupe_text_items(warnings)
+    final_status = "blocked"
+    if any(str(item.get("status") or "") == "completed" for item in ordered_results):
+        final_status = "completed"
+    elif any(str(item.get("status") or "") == "approval_pending" for item in ordered_results):
+        final_status = "approval_pending"
+    elif ordered_results:
+        final_status = str(ordered_results[0].get("status") or "blocked")
+
+    response_text, synthesis_warning = synthesize_subagent_summary(
+        request_prompt,
+        strategy,
+        ordered_results,
+        synthesizer,
+    )
+    if synthesis_warning:
+        warnings.append(synthesis_warning)
+        warnings = dedupe_text_items(warnings)
+
+    shared_files_summary: list[dict[str, Any]] = []
+    seen_shared_files: set[tuple[str, str | None]] = set()
+    result_files: list[str] = []
+    for item in ordered_results:
+        for shared_file in item.get("sharedFiles") or []:
+            identity = (str(shared_file.get("path") or ""), str(shared_file.get("purpose") or "") or None)
+            if identity in seen_shared_files:
+                continue
+            seen_shared_files.add(identity)
+            shared_files_summary.append(shared_file)
+        if item.get("resultFilePath"):
+            result_files.append(str(item["resultFilePath"]))
+
+    publish_runtime_event(
+        "subagent.plan",
+        {
+            "status": "completed",
+            "count": len(subagents),
+            "strategy": strategy,
+            "completedCount": sum(1 for item in ordered_results if item.get("status") == "completed"),
+            "sharedSandboxSession": initial_session_present,
+            "resultFiles": result_files,
+        },
+    )
+
+    return {
+        "messages": [AIMessage(content=response_text)],
+        "invoke_status": final_status,
+        "sandbox_session": current_session,
+        "subagent_results": {
+            "strategy": strategy,
+            "count": len(ordered_results),
+            "sharedSandboxSession": initial_session_present,
+            "sharedFiles": shared_files_summary,
+            "resultFiles": result_files,
+            "results": ordered_results,
+        },
+        "warnings": warnings,
+    }
 
 
 def get_litellm_headers() -> dict[str, str]:
@@ -744,12 +2413,14 @@ def a2a_runtime_url(agent_name: str, namespace: str) -> str:
 
 
 def route_state(state: State) -> str:
-    """Route after input_guard: blocked → END, sandbox → sandbox_tool, A2A → a2a_call, MCP → mcp_tool, chat → rag_retrieve."""
+    """Route after input_guard: blocked → END, sandbox → sandbox_tool, subagents → subagent_team, A2A → a2a_call, MCP → mcp_tool, chat → rag_retrieve."""
     status = state.get("invoke_status", "continue")
     if status == "blocked":
         return "blocked"
     if is_sandbox_tool(state.get("tool_name")):
         return "sandbox_tool"
+    if state.get("subagents"):
+        return "subagent_team"
     if state.get("a2a_target_agent"):
         return "a2a_call"
     if state.get("mcp_server"):
@@ -791,6 +2462,12 @@ def mcp_call(
         PermissionError: If server_type is not in the allow-list.
         httpx.HTTPStatusError: On non-2xx MCP responses.
     """
+    skill_allowed_servers = SKILL_RUNTIME_CONFIG.get("allowedMcpServers") or frozenset()
+    if SKILL_RUNTIME_CONFIG.get("skills") and (not skill_allowed_servers or server_type not in skill_allowed_servers):
+        raise PermissionError(
+            f"MCP server '{server_type}' is not granted by the agent's skill files."
+        )
+
     if ALLOWED_MCP_SERVERS and server_type not in ALLOWED_MCP_SERVERS:
         raise PermissionError(
             f"MCP server type '{server_type}' is not in the agent's allowed list "
@@ -823,6 +2500,66 @@ def mcp_call(
 
 
 def create_agent(llm: ChatOpenAI):
+    def synthesize_specialized_subagents(
+        objective: str,
+        strategy: str,
+        results: list[dict[str, Any]],
+    ) -> str:
+        publish_runtime_event(
+            "subagent.summary",
+            {"status": "started", "strategy": strategy, "count": len(results)},
+        )
+
+        fallback = render_subagent_summary(objective, strategy, results)
+        if not hasattr(llm, "invoke"):
+            publish_runtime_event(
+                "subagent.summary",
+                {"status": "completed", "strategy": strategy, "count": len(results), "fallback": True},
+            )
+            return fallback
+
+        payload = {
+            "objective": objective,
+            "strategy": strategy,
+            "results": [
+                {
+                    "name": item.get("name"),
+                    "namespace": item.get("namespace"),
+                    "role": item.get("role"),
+                    "task": item.get("task"),
+                    "status": item.get("status"),
+                    "responsePreview": item.get("responsePreview"),
+                    "resultFilePath": item.get("resultFilePath"),
+                    "warnings": item.get("warnings") or [],
+                }
+                for item in results
+            ],
+        }
+        response = llm.invoke(
+            [
+                SystemMessage(
+                    content=(
+                        "You are coordinating specialist subagents. "
+                        "Synthesize their outputs into one concise, actionable response. "
+                        "Mention concrete file paths, blockers, and next actions when present."
+                    )
+                ),
+                HumanMessage(content=json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)),
+            ]
+        )
+        synthesized = get_message_content(response).strip()
+        publish_runtime_event(
+            "subagent.summary",
+            {
+                "status": "completed",
+                "strategy": strategy,
+                "count": len(results),
+                "chars": len(synthesized),
+                "fallback": not bool(synthesized),
+            },
+        )
+        return synthesized or fallback
+
     def input_guard(state: State) -> dict[str, Any]:
         def _run() -> dict[str, Any]:
             with tracer.start_as_current_span("guardrails_input_validation"):
@@ -834,6 +2571,7 @@ def create_agent(llm: ChatOpenAI):
                     state.get("mcp_server", ""),
                     state.get("a2a_target_agent", ""),
                     state.get("a2a_target_namespace", ""),
+                    state.get("subagents") or [],
                 )
                 if not guard_input.strip():
                     return {"context": "", "invoke_status": "continue"}
@@ -875,6 +2613,14 @@ def create_agent(llm: ChatOpenAI):
                 if system_prompt:
                     messages.append(SystemMessage(content=system_prompt))
 
+                skill_prompt = str(SKILL_RUNTIME_CONFIG.get("prompt") or "").strip()
+                if skill_prompt:
+                    messages.append(SystemMessage(content=skill_prompt))
+
+                collaboration_context = format_team_context_system_message(state.get("team_context"))
+                if collaboration_context:
+                    messages.append(SystemMessage(content=collaboration_context))
+
                 context = state.get("context", "")
                 if context:
                     messages.append(
@@ -912,6 +2658,8 @@ def create_agent(llm: ChatOpenAI):
 
                 span.set_attribute("model", MODEL_NAME)
                 span.set_attribute("rag.context_present", bool(context))
+                span.set_attribute("teamwork.context_present", bool(collaboration_context))
+                span.set_attribute("skills.present", bool(skill_prompt))
                 span.set_attribute("llm.streaming", publisher is not None)
                 return {"messages": [response], "invoke_status": "completed"}
 
@@ -1114,7 +2862,15 @@ def create_agent(llm: ChatOpenAI):
                     "caller_agent_namespace": SERVICE_NAMESPACE,
                     "parent_thread_id": thread_id or None,
                     "caller_request_id": request_id,
+                    "team_context": build_outbound_team_context(
+                        state,
+                        target_agent,
+                        target_namespace,
+                        target_thread_id,
+                    ),
                 }
+                if isinstance(state.get("sandbox_session"), dict):
+                    payload["sandbox_session"] = state.get("sandbox_session")
                 publish_runtime_event(
                     "a2a.call",
                     {
@@ -1127,18 +2883,13 @@ def create_agent(llm: ChatOpenAI):
                 )
 
                 try:
-                    with httpx.Client(
-                        timeout=timeout_seconds,
-                        transport=httpx.HTTPTransport(retries=2),
-                        trust_env=False,
-                    ) as client:
-                        response = client.post(
-                            f"{a2a_runtime_url(target_agent, target_namespace)}/invoke",
-                            json=payload,
-                            headers={"x-request-id": request_id},
-                        )
-                        response.raise_for_status()
-                        result = response.json()
+                    result, transport, fallback_reason = invoke_a2a_target_with_fallback(
+                        target_agent,
+                        target_namespace,
+                        payload,
+                        request_id,
+                        timeout_seconds,
+                    )
                 except httpx.HTTPStatusError as exc:
                     publish_runtime_event(
                         "a2a.call",
@@ -1146,6 +2897,7 @@ def create_agent(llm: ChatOpenAI):
                             "status": "failed",
                             "targetAgent": target_agent,
                             "targetNamespace": target_namespace,
+                            "transport": "direct",
                             "httpStatus": exc.response.status_code,
                         },
                     )
@@ -1167,6 +2919,7 @@ def create_agent(llm: ChatOpenAI):
                             "status": "failed",
                             "targetAgent": target_agent,
                             "targetNamespace": target_namespace,
+                            "transport": "gateway" if gateway_fallback_available() else "direct",
                             "error": str(exc),
                         },
                     )
@@ -1185,7 +2938,10 @@ def create_agent(llm: ChatOpenAI):
 
                 response_text = str(result.get("response", ""))
                 response_status = str(result.get("status", "completed") or "completed")
-                warnings = dedupe_text_items([str(item) for item in (result.get("warnings") or [])])
+                warnings = [str(item) for item in (result.get("warnings") or [])]
+                if transport == "gateway" and fallback_reason:
+                    warnings.append(f"{fallback_reason}. Completed via API gateway fallback.")
+                warnings = dedupe_text_items(warnings)
                 a2a_payload = {
                     "callerAgent": SERVICE_NAME,
                     "callerNamespace": SERVICE_NAMESPACE,
@@ -1194,6 +2950,7 @@ def create_agent(llm: ChatOpenAI):
                     "targetThreadId": result.get("thread_id") or target_thread_id,
                     "parentThreadId": thread_id or None,
                     "responseStatus": response_status,
+                    "transport": transport,
                 }
                 publish_runtime_event(
                     "a2a.call",
@@ -1206,16 +2963,36 @@ def create_agent(llm: ChatOpenAI):
                 span.set_attribute("a2a.target_agent", target_agent)
                 span.set_attribute("a2a.target_namespace", target_namespace)
                 span.set_attribute("a2a.timeout_seconds", timeout_seconds)
+                span.set_attribute("a2a.transport", transport)
                 return {
                     "messages": [AIMessage(content=response_text)],
                     "invoke_status": response_status,
                     "approval_name": result.get("approval_name"),
                     "retry_after_seconds": result.get("retry_after_seconds"),
+                    "sandbox_session": merge_sandbox_sessions(
+                        state.get("sandbox_session") if isinstance(state.get("sandbox_session"), dict) else None,
+                        result.get("sandbox_session") if isinstance(result.get("sandbox_session"), dict) else None,
+                    ),
                     "warnings": warnings,
                     "a2a": a2a_payload,
                 }
 
         return run_graph_node("a2a_call", _run)
+
+    def subagent_team(state: State) -> dict[str, Any]:
+        def _run() -> dict[str, Any]:
+            with tracer.start_as_current_span("subagent_orchestration") as span:
+                span.set_attribute("subagent.count", len(state.get("subagents") or []))
+                span.set_attribute("subagent.strategy", normalize_subagent_strategy(state.get("subagent_strategy")))
+                result = coordinate_specialized_subagents(
+                    state,
+                    synthesizer=synthesize_specialized_subagents,
+                )
+                summary = result.get("subagent_results") if isinstance(result.get("subagent_results"), dict) else {}
+                span.set_attribute("subagent.completed_count", len(summary.get("results") or []))
+                return result
+
+        return run_graph_node("subagent_team", _run)
 
     graph_builder = StateGraph(State)
     graph_builder.add_node("input_guard", input_guard)
@@ -1223,6 +3000,7 @@ def create_agent(llm: ChatOpenAI):
     graph_builder.add_node("chatbot", chatbot)
     graph_builder.add_node("sandbox_tool", sandbox_tool)
     graph_builder.add_node("a2a_call", a2a_call)
+    graph_builder.add_node("subagent_team", subagent_team)
     graph_builder.add_node("mcp_tool", mcp_tool)
     graph_builder.add_node("output_guard", output_guard)
 
@@ -1234,6 +3012,7 @@ def create_agent(llm: ChatOpenAI):
             "continue": "rag_retrieve",
             "blocked": END,
             "sandbox_tool": "sandbox_tool",
+            "subagent_team": "subagent_team",
             "a2a_call": "a2a_call",
             "mcp_tool": "mcp_tool",
         },
@@ -1241,6 +3020,7 @@ def create_agent(llm: ChatOpenAI):
     graph_builder.add_edge("rag_retrieve", "chatbot")
     graph_builder.add_edge("chatbot", "output_guard")
     graph_builder.add_edge("sandbox_tool", "output_guard")
+    graph_builder.add_edge("subagent_team", "output_guard")
     graph_builder.add_edge("a2a_call", "output_guard")
     graph_builder.add_edge("mcp_tool", "output_guard")
     graph_builder.add_edge("output_guard", END)
@@ -1256,6 +3036,12 @@ def initialize_runtime() -> None:
             return
 
         configure_kubernetes_access()
+        skill_config = load_skill_runtime_config()
+        written_skill_files = materialize_skill_files(skill_config.get("files") or {})
+        SKILL_RUNTIME_CONFIG.clear()
+        SKILL_RUNTIME_CONFIG.update({**skill_config, "skillFiles": written_skill_files})
+        if SKILL_RUNTIME_CONFIG.get("warnings"):
+            logger.warning("Loaded agent skill files with warnings: %s", "; ".join(SKILL_RUNTIME_CONFIG["warnings"]))
         logger.info("Initializing agent runtime for %s in namespace %s.", SERVICE_NAME, SERVICE_NAMESPACE)
 
         litellm_api_key = LITELLM_API_KEY or LITELLM_PLACEHOLDER_API_KEY
@@ -1321,15 +3107,22 @@ def preflight_request_approval(
     *,
     require_approval: bool | None = None,
 ) -> InvokeResponse | None:
-    default_action = request.approval_action or (
-        f"Invoke tool {request.tool_name} on agent {SERVICE_NAME}"
-        if request.tool_name
-        else (
-            f"Invoke agent {request.a2a_target_agent} in namespace {request.a2a_target_namespace} from agent {SERVICE_NAME}"
-            if request.a2a_target_agent and request.a2a_target_namespace
-            else f"Invoke agent {SERVICE_NAME}"
+    if request.approval_action:
+        default_action = request.approval_action
+    elif request.tool_name:
+        default_action = f"Invoke tool {request.tool_name} on agent {SERVICE_NAME}"
+    elif request.subagents:
+        targets = ", ".join(f"{item.namespace}/{item.name}" for item in request.subagents[:3])
+        if len(request.subagents) > 3:
+            targets = f"{targets}, and {len(request.subagents) - 3} more"
+        default_action = f"Coordinate {len(request.subagents)} subagents from agent {SERVICE_NAME}: {targets}"
+    elif request.a2a_target_agent and request.a2a_target_namespace:
+        default_action = (
+            f"Invoke agent {request.a2a_target_agent} in namespace {request.a2a_target_namespace} "
+            f"from agent {SERVICE_NAME}"
         )
-    )
+    else:
+        default_action = f"Invoke agent {SERVICE_NAME}"
 
     approval_required = request.require_approval if require_approval is None else require_approval
     if not approval_required:
@@ -1412,9 +3205,29 @@ def invoke_graph(
         policy_name, policy_spec = load_active_policy()
         _, _, a2a_require_hitl = parse_effective_a2a_policy_config(policy_spec)
         thread_id = request.thread_id or str(uuid.uuid4())
+        skill_violation = skill_block_reason(
+            tool_name=tool_name,
+            mcp_server=mcp_server,
+            a2a_target_agent=a2a_target_agent,
+            a2a_target_namespace=a2a_target_namespace,
+            subagents=request.subagents,
+        )
+        if skill_violation:
+            return InvokeResponse(
+                thread_id=thread_id,
+                response=blocked_response(skill_violation),
+                context="",
+                model=MODEL_NAME,
+                policy_name=policy_name,
+                tool_name=tool_name or None,
+                status="blocked",
+                warnings=dedupe_text_items(list(SKILL_RUNTIME_CONFIG.get("warnings") or [])),
+            )
         route_name = (
             "sandbox_tool"
             if is_sandbox_tool(tool_name)
+            else "subagent_team"
+            if request.subagents
             else "a2a_call"
             if a2a_target_agent
             else "mcp_tool"
@@ -1458,6 +3271,7 @@ def invoke_graph(
                 "messages": [HumanMessage(content=prompt)] if prompt else [],
                 "request_prompt": prompt,
                 "context": "",
+                "team_context": build_inbound_team_context(request),
                 "invoke_status": "continue",
                 "policy_name": policy_name or "",
                 "policy": policy_spec,
@@ -1465,10 +3279,14 @@ def invoke_graph(
                 "tool_name": tool_name,
                 "tool_args": request.tool_args,
                 "tool_result": None,
+                "sandbox_session": request.sandbox_session,
                 "approval_name": None,
                 "retry_after_seconds": None,
                 "warnings": [],
                 "a2a": None,
+                "subagent_results": None,
+                "subagents": [item.model_dump() for item in request.subagents],
+                "subagent_strategy": request.subagent_strategy,
                 "a2a_target_agent": a2a_target_agent,
                 "a2a_target_namespace": a2a_target_namespace,
                 "a2a_timeout_seconds": request.a2a_timeout_seconds,
@@ -1500,7 +3318,9 @@ def invoke_graph(
     sanitized_tool_result = sanitize_public_payload(result.get("tool_result"), guardrails)
     sanitized_sandbox_session = sanitize_public_payload(result.get("sandbox_session"), guardrails)
     sanitized_a2a = sanitize_public_payload(result.get("a2a"), guardrails)
+    sanitized_subagents = sanitize_public_payload(result.get("subagent_results"), guardrails)
     warnings: list[str] = list(result.get("warnings") or [])
+    warnings.extend(str(item).strip() for item in (SKILL_RUNTIME_CONFIG.get("warnings") or []) if str(item).strip())
     if isinstance(sanitized_sandbox_session, dict):
         expires_at_value = sanitized_sandbox_session.get("expires_at")
         if isinstance(expires_at_value, str) and expires_at_value:
@@ -1540,6 +3360,7 @@ def invoke_graph(
         approval_name=result.get("approval_name"),
         retry_after_seconds=result.get("retry_after_seconds"),
         a2a=sanitized_a2a,
+        subagents=sanitized_subagents,
         warnings=warnings,
     )
 
@@ -1639,6 +3460,11 @@ async def health() -> dict[str, Any]:
         "policyAccess": K8S_POLICY_ACCESS,
         "maxConcurrentRequests": MAX_CONCURRENT_REQUESTS,
         "openSandbox": sandbox_runtime_metadata(),
+        "skills": {
+            "count": len(SKILL_RUNTIME_CONFIG.get("skills") or []),
+            "files": SKILL_RUNTIME_CONFIG.get("skillFiles") or [],
+            "warnings": SKILL_RUNTIME_CONFIG.get("warnings") or [],
+        },
     }
 
 
@@ -1713,6 +3539,7 @@ async def invoke_stream(request: InvokeRequest) -> StreamingResponse:
                     "tool_result": response.tool_result,
                     "sandbox_session": response.sandbox_session,
                     "a2a": response.a2a,
+                    "subagents": response.subagents,
                     "warnings": response.warnings,
                 },
             )

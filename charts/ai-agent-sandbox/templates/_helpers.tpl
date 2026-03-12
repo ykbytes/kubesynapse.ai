@@ -35,7 +35,28 @@ Render pod imagePullSecrets from values.global.imagePullSecrets.
 {{- with .Values.global.imagePullSecrets }}
 imagePullSecrets:
 {{- range . }}
-	- name: {{ . | quote }}
+  - name: {{ . | quote }}
 {{- end }}
 {{- end }}
+{{- end }}
+
+{{/*
+Common labels for all resources.
+*/}}
+{{- define "ai-agent-sandbox.labels" -}}
+helm.sh/chart: {{ include "ai-agent-sandbox.chart" . }}
+app.kubernetes.io/name: {{ include "ai-agent-sandbox.name" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+{{- end }}
+
+{{/*
+Build a JSON object mapping MCP sidecar names to {image, port} for operator auto-injection.
+*/}}
+{{- define "ai-agent-sandbox.mcpSidecarCatalogJson" -}}
+{{- $catalog := dict }}
+{{- range $key, $val := .Values.mcpToolSidecars }}
+{{- $_ := set $catalog $key (dict "image" $val.image "port" $val.port) }}
+{{- end }}
+{{- $catalog | toJson }}
 {{- end }}

@@ -24,12 +24,25 @@ The image serves the Vite bundle through Nginx with SPA fallback enabled. In the
 
 - Agent discovery through the API gateway
 - Empty-namespace bootstrap by creating an agent from the UI
-- Agent editing and deletion
+- Agent editing and deletion with structured editors for file-backed skills and Goose config files
 - Chat invoke and SSE streaming invoke
+- Explicit A2A routing and specialist-team orchestration for LangGraph agents from the chat workbench
 - Goose runtime remains chat-first in the UI; approvals, gateway-routed MCP tools, and sandbox session continuity remain LangGraph-only, while a limited safe subset of Goose-native run controls is exposed for chat (`max_turns`, workspace-relative `working_directory`, and a read-only system prompt preview)
 - Thread continuity per selected agent
 - Approval decisions and retry from the UI
 - Per-agent conversation and activity state
 - Runtime log inspection
+- Selected-agent inspector coverage for parsed skill summaries, capability grants, inbound A2A callers, and discovered peer reachability
 - Workflow creation, editing, inspection, and deletion
 - Evaluation creation, editing, inspection, and deletion
+
+## Operator workflow
+
+The UI is built around the same production surfaces exposed by the API gateway and operator:
+
+- connect once with a namespace and bearer token, then browse agents, workflows, and evaluations from the same session
+- create and edit agents without raw JSON for `skills.files` or Goose config bundles
+- inspect runtime-facing configuration, parsed skill summaries, tool and A2A metadata, logs, and approval state side-by-side with chat
+- use the chat workbench for standard prompts, explicit A2A delegation, or specialist-team requests
+
+For release verification, run `npm run build` before publishing a new image.

@@ -8,7 +8,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY main.py worker.py utils.py ./
+COPY main.py worker.py utils.py state_store.py ./
 
 RUN chown -R operator:operator /app
 USER operator

@@ -1,21 +1,134 @@
-import { Save, Trash2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import {
+  Bot,
+  Brain,
+  Code,
+  Database,
+  FileText,
+  GitBranch,
+  Globe,
+  LoaderCircle,
+  Mail,
+  Monitor,
+  Package,
+  Save,
+  Search,
+  Server,
+  Sparkles,
+  Trash2,
+  Wrench,
+} from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Separator } from "@/components/ui/separator";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Textarea } from "@/components/ui/textarea";
 import { A2A_ALLOWED_CALLERS_PLACEHOLDER, stringifyA2APeerRefs } from "../lib/a2a";
-import { GOOSE_CONFIG_FILES_PLACEHOLDER, stringifyGooseConfigFiles } from "../lib/gooseConfig";
-import type { AgentDetail, PolicyInfo, RuntimeKind, UpdateAgentPayload } from "../types";
+import {
+  buildGooseConfigFiles,
+  createGooseConfigFileDraft,
+  gooseConfigFileDraftsFromFiles,
+} from "../lib/gooseConfig";
+import {
+  MCP_SERVERS_PLACEHOLDER,
+  MCP_SIDECARS_PLACEHOLDER,
+  parseMcpServersText,
+  parseMcpSidecarsText,
+  stringifyMcpServers,
+  stringifyMcpSidecars,
+} from "../lib/mcp";
+import { buildSkillFiles, createSkillFileDraft, skillFileDraftsFromFiles } from "../lib/skills";
+import { fetchCatalogSkillDetail, fetchMcpToolCategories, fetchSkillsCatalog } from "../lib/api";
+import type {
+  AgentDetail,
+  CatalogSkill,
+  CatalogSkillDetail,
+  McpToolCategory,
+  PolicyInfo,
+  RuntimeKind,
+  TextFileDraft,
+  UpdateAgentPayload,
+} from "../types";
+import { TextFileBundleEditor } from "./TextFileBundleEditor";
+
+const TOOL_ICONS: Record<string, typeof Code> = {
+  "code-exec": Code,
+  "web-search": Globe,
+  documents: FileText,
+  browser: Monitor,
+  database: Database,
+  git: GitBranch,
+  kubernetes: Server,
+  messaging: Mail,
+  rag: Brain,
+};
+
+const SKILL_CATEGORY_STYLES: Record<string, string> = {
+  design: "border-fuchsia-500/30 bg-fuchsia-500/10 text-fuchsia-200",
+  development: "border-sky-500/30 bg-sky-500/10 text-sky-200",
+  document: "border-amber-500/30 bg-amber-500/10 text-amber-200",
+  communication: "border-emerald-500/30 bg-emerald-500/10 text-emerald-200",
+  productivity: "border-cyan-500/30 bg-cyan-500/10 text-cyan-200",
+};
+
+function normalizeDraftPath(path: string): string {
+  return path.replace(/\\+/g, "/").trim();
+}
+
+function mergeSkillDrafts(drafts: TextFileDraft[], detail: CatalogSkillDetail): TextFileDraft[] {
+  const nextDrafts = [...drafts];
+  const pathToIndex = new Map(nextDrafts.map((draft, index) => [normalizeDraftPath(draft.path), index]));
+  for (const [path, content] of Object.entries(detail.assets)) {
+    const normalizedPath = normalizeDraftPath(path);
+    const existingIndex = pathToIndex.get(normalizedPath);
+    if (existingIndex === undefined) {
+      pathToIndex.set(normalizedPath, nextDrafts.length);
+      nextDrafts.push(createSkillFileDraft({ path: normalizedPath, content }));
+      continue;
+    }
+    nextDrafts[existingIndex] = { ...nextDrafts[existingIndex], path: normalizedPath, content };
+  }
+  return nextDrafts;
+}
+
+function removeSkillDrafts(drafts: TextFileDraft[], detail: CatalogSkillDetail): TextFileDraft[] {
+  const managedPaths = new Set(Object.keys(detail.assets).map(normalizeDraftPath));
+  return drafts.filter((draft) => !managedPaths.has(normalizeDraftPath(draft.path)));
+}
+
+function hasSkillAttached(detail: CatalogSkillDetail | undefined, draftPaths: Set<string>): boolean {
+  if (!detail) return false;
+  return Object.keys(detail.assets).every((path) => draftPaths.has(normalizeDraftPath(path)));
+}
+
+function buildManagedSidecarSpec(tool: McpToolCategory): Record<string, unknown> {
+  return { name: tool.id, image: tool.sidecar_image, port: tool.default_port };
+}
 
 interface AgentManagementPanelProps {
+  token: string;
   agent: AgentDetail;
   policies: PolicyInfo[];
   isSaving: boolean;
   isDeleting: boolean;
   error: string;
-  onSave: (payload: UpdateAgentPayload, gooseConfigFilesText: string, a2aAllowedCallersText: string) => void;
+  onSave: (
+    payload: UpdateAgentPayload,
+    a2aAllowedCallersText: string,
+    skillFiles: Record<string, string>,
+    gooseConfigFiles: Record<string, unknown>,
+  ) => void;
   onDelete: () => void;
 }
 
 export function AgentManagementPanel({
+  token,
   agent,
   policies,
   isSaving,
@@ -30,8 +143,22 @@ export function AgentManagementPanel({
   const [storageSize, setStorageSize] = useState(agent.storage_size ?? "1Gi");
   const [runtimeKind, setRuntimeKind] = useState<RuntimeKind>(agent.runtime_kind ?? "langgraph");
   const [enableGvisor, setEnableGvisor] = useState(agent.enable_gvisor);
+  const [mcpServersText, setMcpServersText] = useState(stringifyMcpServers(agent.mcp_servers));
+  const [mcpSidecarsText, setMcpSidecarsText] = useState(stringifyMcpSidecars(agent.mcp_sidecars));
   const [a2aAllowedCallersText, setA2aAllowedCallersText] = useState(stringifyA2APeerRefs(agent.a2a_config.allowed_callers));
-  const [gooseConfigFilesText, setGooseConfigFilesText] = useState(stringifyGooseConfigFiles(agent.goose_config_files));
+  const [skillFileDrafts, setSkillFileDrafts] = useState(skillFileDraftsFromFiles(agent.skills.files));
+  const [gooseConfigFileDrafts, setGooseConfigFileDrafts] = useState(gooseConfigFileDraftsFromFiles(agent.goose_config_files));
+  const [localError, setLocalError] = useState("");
+
+  // Catalog state
+  const [catalogSkills, setCatalogSkills] = useState<CatalogSkill[]>([]);
+  const [catalogTools, setCatalogTools] = useState<McpToolCategory[]>([]);
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [catalogError, setCatalogError] = useState("");
+  const [skillSearch, setSkillSearch] = useState("");
+  const [skillCategory, setSkillCategory] = useState("");
+  const [skillDetailsById, setSkillDetailsById] = useState<Record<string, CatalogSkillDetail>>({});
+  const [skillBusyId, setSkillBusyId] = useState("");
 
   useEffect(() => {
     setModel(agent.model);
@@ -40,122 +167,706 @@ export function AgentManagementPanel({
     setStorageSize(agent.storage_size ?? "1Gi");
     setRuntimeKind(agent.runtime_kind ?? "langgraph");
     setEnableGvisor(agent.enable_gvisor);
+    setMcpServersText(stringifyMcpServers(agent.mcp_servers));
+    setMcpSidecarsText(stringifyMcpSidecars(agent.mcp_sidecars));
     setA2aAllowedCallersText(stringifyA2APeerRefs(agent.a2a_config.allowed_callers));
-    setGooseConfigFilesText(stringifyGooseConfigFiles(agent.goose_config_files));
+    setSkillFileDrafts(skillFileDraftsFromFiles(agent.skills.files));
+    setGooseConfigFileDrafts(gooseConfigFileDraftsFromFiles(agent.goose_config_files));
+    setLocalError("");
   }, [agent]);
 
+  // Fetch catalog tools and skills
+  useEffect(() => {
+    if (!token.trim()) {
+      setCatalogSkills([]);
+      setCatalogTools([]);
+      setCatalogError("");
+      return;
+    }
+    let cancelled = false;
+    setCatalogLoading(true);
+    setCatalogError("");
+    Promise.all([fetchSkillsCatalog(token), fetchMcpToolCategories(token)])
+      .then(([skills, tools]) => {
+        if (!cancelled) {
+          setCatalogSkills(skills);
+          setCatalogTools(tools);
+        }
+      })
+      .catch((nextError) => {
+        if (!cancelled) setCatalogError(nextError instanceof Error ? nextError.message : String(nextError));
+      })
+      .finally(() => {
+        if (!cancelled) setCatalogLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [token]);
+
+  useEffect(() => {
+    setLocalError("");
+  }, [
+    model, systemPrompt, policyRef, storageSize, runtimeKind, enableGvisor,
+    mcpServersText, mcpSidecarsText, a2aAllowedCallersText, skillFileDrafts, gooseConfigFileDrafts,
+  ]);
+
+  // Sidecar parsing
+  const sidecarState = useMemo(() => {
+    try {
+      return { items: runtimeKind === "langgraph" ? parseMcpSidecarsText(mcpSidecarsText) : [], error: "" };
+    } catch (nextError) {
+      return { items: [] as Array<Record<string, unknown>>, error: nextError instanceof Error ? nextError.message : String(nextError) };
+    }
+  }, [mcpSidecarsText, runtimeKind]);
+
+  const selectedToolIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const sidecar of sidecarState.items) {
+      const sidecarName = sidecar.name;
+      if (typeof sidecarName === "string" && sidecarName.trim()) ids.add(sidecarName.trim());
+    }
+    return ids;
+  }, [sidecarState.items]);
+
+  const sharedMcpServers = useMemo(() => parseMcpServersText(mcpServersText), [mcpServersText]);
+
+  // Skill catalog helpers
+  const draftPaths = useMemo(
+    () => new Set(skillFileDrafts.map((d) => normalizeDraftPath(d.path)).filter(Boolean)),
+    [skillFileDrafts],
+  );
+  const skillFileDraftsRef = useRef(skillFileDrafts);
+  skillFileDraftsRef.current = skillFileDrafts;
+  const draftPathsRef = useRef(draftPaths);
+  draftPathsRef.current = draftPaths;
+
+  const filteredSkills = useMemo(() => {
+    const query = skillSearch.trim().toLowerCase();
+    return catalogSkills.filter((skill) => {
+      if (skillCategory && skill.category !== skillCategory) return false;
+      if (!query) return true;
+      return skill.name.toLowerCase().includes(query) || skill.description.toLowerCase().includes(query) || skill.tags.some((t) => t.toLowerCase().includes(query));
+    });
+  }, [catalogSkills, skillCategory, skillSearch]);
+
+  const selectedCatalogSkills = useMemo(
+    () => catalogSkills.filter((skill) => hasSkillAttached(skillDetailsById[skill.id], draftPaths)),
+    [catalogSkills, draftPaths, skillDetailsById],
+  );
+
+  const skillCategories = useMemo(
+    () => [...new Set(catalogSkills.map((s) => s.category).filter(Boolean))].sort(),
+    [catalogSkills],
+  );
+
+  async function ensureSkillDetail(skillId: string): Promise<CatalogSkillDetail> {
+    const cached = skillDetailsById[skillId];
+    if (cached) return cached;
+    const detail = await fetchCatalogSkillDetail(token, skillId);
+    setSkillDetailsById((current) => ({ ...current, [skillId]: detail }));
+    return detail;
+  }
+
+  async function handleToggleSkill(skillId: string): Promise<void> {
+    setCatalogError("");
+    setSkillBusyId(skillId);
+    try {
+      const detail = await ensureSkillDetail(skillId);
+      const currentDrafts = skillFileDraftsRef.current;
+      const currentPaths = draftPathsRef.current;
+      const attached = hasSkillAttached(detail, currentPaths);
+      setSkillFileDrafts(attached ? removeSkillDrafts(currentDrafts, detail) : mergeSkillDrafts(currentDrafts, detail));
+    } catch (nextError) {
+      setCatalogError(nextError instanceof Error ? nextError.message : String(nextError));
+    } finally {
+      setSkillBusyId("");
+    }
+  }
+
+  function handleToggleTool(tool: McpToolCategory) {
+    if (!tool.sidecar_image) return;
+    const nextSidecars = sidecarState.items.filter((sidecar) => {
+      const sidecarName = sidecar.name;
+      return !(typeof sidecarName === "string" && sidecarName.trim() === tool.id);
+    });
+    if (!selectedToolIds.has(tool.id)) nextSidecars.push(buildManagedSidecarSpec(tool));
+    setMcpSidecarsText(stringifyMcpSidecars(nextSidecars));
+  }
+
+  function handleSaveClick() {
+    try {
+      const skillFiles = buildSkillFiles(skillFileDrafts);
+      const gooseConfigFiles = runtimeKind === "goose" ? buildGooseConfigFiles(gooseConfigFileDrafts) : {};
+      const mcpServers = runtimeKind === "langgraph" ? parseMcpServersText(mcpServersText) : [];
+      const mcpSidecars = runtimeKind === "langgraph" ? parseMcpSidecarsText(mcpSidecarsText) : [];
+      onSave(
+        {
+          model: model.trim(),
+          system_prompt: systemPrompt,
+          policy_ref: policyRef.trim() || undefined,
+          storage_size: storageSize.trim() || undefined,
+          runtime_kind: runtimeKind,
+          enable_gvisor: enableGvisor,
+          mcp_servers: mcpServers,
+          mcp_sidecars: mcpSidecars,
+        },
+        a2aAllowedCallersText,
+        skillFiles,
+        gooseConfigFiles,
+      );
+    } catch (nextError) {
+      setLocalError(nextError instanceof Error ? nextError.message : String(nextError));
+    }
+  }
+
+  const displayError = localError || error;
+
   return (
-    <section className="panel panel-setup">
-      <div className="panel-header panel-header-chat">
-        <div>
-          <p className="eyebrow">Agent Settings</p>
-          <h2>{agent.name}</h2>
-        </div>
-        <span className={`mode-pill ${agent.status === "running" ? "live" : "sync"}`}>{agent.status}</span>
-      </div>
-
-      <div className="resource-grid resource-grid-agent">
-        <div className="setup-form">
-          <label>
-            <span>Model</span>
-            <input value={model} onChange={(event) => setModel(event.target.value)} placeholder="gpt-4" />
-          </label>
-          <label>
-            <span>Policy</span>
-            <select value={policyRef} onChange={(event) => setPolicyRef(event.target.value)}>
-              <option value="">No policy</option>
-              {policies.map((policy) => (
-                <option key={policy.name} value={policy.name}>
-                  {policy.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            <span>Storage size</span>
-            <input value={storageSize} onChange={(event) => setStorageSize(event.target.value)} placeholder="1Gi" />
-          </label>
-          <label>
-            <span>Runtime</span>
-            <select value={runtimeKind} onChange={(event) => setRuntimeKind(event.target.value as RuntimeKind)}>
-              <option value="langgraph">LangGraph runtime</option>
-              <option value="goose">Goose runtime</option>
-            </select>
-          </label>
-          <label className="toggle-chip align-start">
-            <input checked={enableGvisor} type="checkbox" onChange={(event) => setEnableGvisor(event.target.checked)} />
-            <span>Enable gVisor runtime class</span>
-          </label>
-        </div>
-
-        <div className="setup-form">
-          <label>
-            <span>System prompt</span>
-            <textarea
-              className="prompt-input compact-input"
-              rows={8}
-              value={systemPrompt}
-              onChange={(event) => setSystemPrompt(event.target.value)}
-            />
-          </label>
-          <label>
-            <span>Allowed caller agents (A2A)</span>
-            <textarea
-              className="prompt-input compact-input"
-              rows={5}
-              value={a2aAllowedCallersText}
-              onChange={(event) => setA2aAllowedCallersText(event.target.value)}
-              placeholder={A2A_ALLOWED_CALLERS_PLACEHOLDER}
-            />
-          </label>
-          {runtimeKind === "goose" ? (
-            <label>
-              <span>Goose config files (JSON)</span>
-              <textarea
-                className="prompt-input compact-input"
-                rows={10}
-                value={gooseConfigFilesText}
-                onChange={(event) => setGooseConfigFilesText(event.target.value)}
-                placeholder={GOOSE_CONFIG_FILES_PLACEHOLDER}
-              />
-            </label>
-          ) : null}
-          {runtimeKind === "goose" ? (
-            <p className="hint-text">
-              Keys must be relative Goose config-root paths such as <code>config.yaml</code> or <code>prompts/review.md</code>.
-            </p>
-          ) : null}
-          <p className="hint-text">List one caller per line as <code>namespace/name</code>. These entries drive inbound A2A access and ingress policy generation.</p>
-          {error ? <p className="error-banner">{error}</p> : null}
-          <div className="composer-actions wrap-actions">
-            <p className="hint-text">Saving updates the agent spec and triggers the operator to reconcile the runtime.</p>
-            <div className="approval-actions">
-              <button
-                className="primary-button"
-                type="button"
-                onClick={() =>
-                  onSave({
-                    model: model.trim(),
-                    system_prompt: systemPrompt,
-                    policy_ref: policyRef.trim() || undefined,
-                    storage_size: storageSize.trim() || undefined,
-                    runtime_kind: runtimeKind,
-                    enable_gvisor: enableGvisor,
-                  }, gooseConfigFilesText, a2aAllowedCallersText)
-                }
-                disabled={!model.trim() || isSaving}
-              >
-                <Save size={16} />
-                <span>{isSaving ? "Saving" : "Save changes"}</span>
-              </button>
-              <button className="secondary-button danger-button" type="button" onClick={onDelete} disabled={isDeleting}>
-                <Trash2 size={16} />
-                <span>{isDeleting ? "Deleting" : "Delete agent"}</span>
-              </button>
+    <Card className="border-border/70 bg-card/95 shadow-[0_24px_80px_-48px_rgba(0,0,0,0.65)]">
+      <CardHeader className="pb-4">
+        <div className="flex flex-wrap items-start gap-4">
+          <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-primary/20 bg-primary/10 text-primary shadow-inner shadow-primary/10">
+            <Bot className="h-5 w-5" />
+          </div>
+          <div className="min-w-0 flex-1 space-y-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <CardTitle className="text-lg">{agent.name}</CardTitle>
+              <Badge variant={agent.status === "running" ? "default" : "secondary"}>{agent.status}</Badge>
+            </div>
+            <CardDescription className="max-w-3xl text-sm leading-6">
+              Agent settings &middot; saving updates the spec and triggers an operator reconcile.
+            </CardDescription>
+          </div>
+          <div className="grid min-w-[240px] gap-2 rounded-2xl border border-border/60 bg-background/70 p-3 text-xs text-muted-foreground sm:grid-cols-3">
+            <div>
+              <p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground/70">Runtime</p>
+              <p className="mt-1 font-medium text-foreground">{runtimeKind === "langgraph" ? "LangGraph" : "Goose"}</p>
+            </div>
+            <div>
+              <p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground/70">Skills</p>
+              <p className="mt-1 font-medium text-foreground">{skillFileDrafts.length} files</p>
+            </div>
+            <div>
+              <p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground/70">Tools</p>
+              <p className="mt-1 font-medium text-foreground">{selectedToolIds.size} sidecars</p>
             </div>
           </div>
         </div>
-      </div>
-    </section>
+      </CardHeader>
+      <CardContent>
+        <Tabs defaultValue="basics" className="space-y-5">
+          <TabsList className="h-auto flex-wrap justify-start gap-1 rounded-2xl border border-border/60 bg-background/70 p-1.5">
+            <TabsTrigger value="basics">Basics</TabsTrigger>
+            <TabsTrigger value="behavior">Behavior</TabsTrigger>
+            <TabsTrigger value="tools">Capabilities</TabsTrigger>
+            <TabsTrigger value="files">Skills & Files</TabsTrigger>
+            <TabsTrigger value="advanced">Advanced</TabsTrigger>
+          </TabsList>
+
+          {/* ─── Basics ─── */}
+          <TabsContent value="basics" className="space-y-5">
+            <div className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Card className="shadow-none">
+                  <CardHeader className="pb-3">
+                    <CardTitle className="text-sm">Agent identity</CardTitle>
+                    <CardDescription>Model and policy govern how this agent responds and which guardrails apply.</CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Model</Label>
+                      <Input value={model} onChange={(e) => setModel(e.target.value)} placeholder="gpt-4" />
+                      <p className="text-[11px] text-muted-foreground">Must match a route exposed by LiteLLM.</p>
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Policy</Label>
+                      <select
+                        className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                        value={policyRef}
+                        onChange={(e) => setPolicyRef(e.target.value)}
+                      >
+                        <option value="">No policy</option>
+                        {policies.map((policy) => (
+                          <option key={policy.name} value={policy.name}>{policy.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                <Card className="shadow-none">
+                  <CardHeader className="pb-3">
+                    <CardTitle className="text-sm">Runtime profile</CardTitle>
+                    <CardDescription>Capability options adapt to the selected engine.</CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    <div className="grid gap-2">
+                      {(["langgraph", "goose"] as RuntimeKind[]).map((rt) => {
+                        const active = runtimeKind === rt;
+                        return (
+                          <button
+                            key={rt}
+                            type="button"
+                            onClick={() => setRuntimeKind(rt)}
+                            className={`rounded-2xl border px-4 py-3 text-left transition ${
+                              active
+                                ? "border-primary/40 bg-primary/10 text-foreground shadow-inner shadow-primary/10"
+                                : "border-border/70 bg-background/60 text-muted-foreground hover:border-primary/30 hover:bg-accent/40 hover:text-foreground"
+                            }`}
+                          >
+                            <div className="flex items-center justify-between gap-3">
+                              <div>
+                                <p className="font-medium text-sm">{rt === "langgraph" ? "LangGraph runtime" : "Goose runtime"}</p>
+                                <p className="mt-1 text-xs leading-5">
+                                  {rt === "langgraph"
+                                    ? "Best for tool-rich agents, MCP routing, and sidecar-based capabilities."
+                                    : "Best for Goose-native workflows and config-driven conversational behavior."}
+                                </p>
+                              </div>
+                              {active ? <Badge>Selected</Badge> : null}
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+
+              <Card className="shadow-none">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-sm">Active configuration</CardTitle>
+                  <CardDescription>Current state of this agent.</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-3 text-sm text-muted-foreground">
+                  {agent.skill_summaries.length > 0 && (
+                    <div className="rounded-2xl border border-border/60 bg-background/60 p-3">
+                      <p className="font-medium text-foreground">Active skills</p>
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {agent.skill_summaries.map((skill) => (
+                          <Badge key={skill.name} variant="outline" className="text-[11px]">{skill.name}</Badge>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  <div className="rounded-2xl border border-border/60 bg-background/60 p-3">
+                    <p className="font-medium text-foreground">Changes are reversible</p>
+                    <p className="mt-1 leading-6">Save triggers a reconcile. The operator rolls back automatically on spec errors.</p>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          </TabsContent>
+
+          {/* ─── Behavior ─── */}
+          <TabsContent value="behavior" className="space-y-4">
+            <Card className="shadow-none">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm">System behavior</CardTitle>
+                <CardDescription>Describe how the agent should think, respond, and constrain itself.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="space-y-1.5">
+                  <Label className="text-xs">System prompt</Label>
+                  <Textarea rows={8} value={systemPrompt} onChange={(e) => setSystemPrompt(e.target.value)} />
+                </div>
+                <Separator />
+                <div className="space-y-1.5">
+                  <Label className="text-xs">Allowed caller agents (A2A)</Label>
+                  <Textarea
+                    rows={4}
+                    value={a2aAllowedCallersText}
+                    onChange={(e) => setA2aAllowedCallersText(e.target.value)}
+                    placeholder={A2A_ALLOWED_CALLERS_PLACEHOLDER}
+                    className="font-mono text-xs"
+                  />
+                  <p className="text-[11px] text-muted-foreground">
+                    One caller per line as namespace/name. Drives inbound A2A access and ingress policy.
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* ─── Capabilities (Tools) ─── */}
+          <TabsContent value="tools" className="space-y-4">
+            {runtimeKind === "langgraph" ? (
+              <>
+                <div className="grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
+                  <Card className="shadow-none">
+                    <CardHeader className="pb-3">
+                      <div className="flex items-center gap-2">
+                        <div className="flex h-8 w-8 items-center justify-center rounded-xl border border-primary/20 bg-primary/10 text-primary">
+                          <Wrench className="h-4 w-4" />
+                        </div>
+                        <div>
+                          <CardTitle className="text-sm">Managed toolkits</CardTitle>
+                          <CardDescription>Attach or remove deployable sidecars from the platform catalog.</CardDescription>
+                        </div>
+                      </div>
+                    </CardHeader>
+                    <CardContent className="space-y-3">
+                      {catalogError ? (
+                        <div className="rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">{catalogError}</div>
+                      ) : null}
+                      {sidecarState.error ? (
+                        <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+                          The raw sidecar JSON is invalid. Fix it in Advanced routing before using the managed picker.
+                        </div>
+                      ) : null}
+                      <div className="grid gap-3 md:grid-cols-2">
+                        {catalogTools.map((tool) => {
+                          const Icon = TOOL_ICONS[tool.id] ?? Wrench;
+                          const selected = selectedToolIds.has(tool.id);
+                          return (
+                            <div
+                              key={tool.id}
+                              className={`rounded-2xl border p-4 transition ${
+                                selected
+                                  ? "border-primary/40 bg-primary/10 shadow-inner shadow-primary/10"
+                                  : "border-border/70 bg-background/60 hover:border-primary/20 hover:bg-accent/40"
+                              }`}
+                            >
+                              <div className="flex items-start gap-3">
+                                <div className="mt-0.5 flex h-10 w-10 items-center justify-center rounded-xl border border-border/70 bg-card text-primary">
+                                  <Icon className="h-4 w-4" />
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <p className="font-medium text-foreground">{tool.name}</p>
+                                    <Badge variant={selected ? "default" : "outline"}>Port {tool.default_port}</Badge>
+                                  </div>
+                                  <p className="mt-1 text-sm leading-6 text-muted-foreground">{tool.description}</p>
+                                </div>
+                              </div>
+                              <div className="mt-4 flex items-center justify-between gap-3">
+                                <p className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground/70">{tool.id}</p>
+                                <Button
+                                  variant={selected ? "secondary" : "default"}
+                                  size="sm"
+                                  onClick={() => handleToggleTool(tool)}
+                                  disabled={!tool.sidecar_image || Boolean(sidecarState.error)}
+                                >
+                                  {selected ? "Remove" : "Add toolkit"}
+                                </Button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      {catalogLoading ? (
+                        <div className="flex items-center justify-center py-3 text-sm text-muted-foreground">
+                          <LoaderCircle className="mr-2 h-4 w-4 animate-spin" /> Loading platform toolkits...
+                        </div>
+                      ) : null}
+                      {!catalogLoading && catalogTools.length === 0 && !catalogError ? (
+                        <div className="rounded-2xl border border-dashed border-border/70 bg-background/40 px-4 py-8 text-center text-sm text-muted-foreground">
+                          No managed toolkits available in the catalog. Use the advanced section below to configure sidecars manually.
+                        </div>
+                      ) : null}
+                    </CardContent>
+                  </Card>
+
+                  <Card className="shadow-none">
+                    <CardHeader className="pb-3">
+                      <div className="flex items-center gap-2">
+                        <div className="flex h-8 w-8 items-center justify-center rounded-xl border border-emerald-500/20 bg-emerald-500/10 text-emerald-300">
+                          <Sparkles className="h-4 w-4" />
+                        </div>
+                        <div>
+                          <CardTitle className="text-sm">Active capability set</CardTitle>
+                          <CardDescription>Tools currently attached to this agent.</CardDescription>
+                        </div>
+                      </div>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="rounded-2xl border border-border/60 bg-background/60 p-3">
+                          <p className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground/70">Sidecars</p>
+                          <p className="mt-1 text-xl font-semibold text-foreground">{selectedToolIds.size}</p>
+                        </div>
+                        <div className="rounded-2xl border border-border/60 bg-background/60 p-3">
+                          <p className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground/70">Shared MCP</p>
+                          <p className="mt-1 text-xl font-semibold text-foreground">{sharedMcpServers.length}</p>
+                        </div>
+                      </div>
+                      <div className="space-y-2">
+                        <p className="text-xs font-medium text-foreground">Attached toolkits</p>
+                        {selectedToolIds.size > 0 ? (
+                          <div className="flex flex-wrap gap-2">
+                            {catalogTools
+                              .filter((tool) => selectedToolIds.has(tool.id))
+                              .map((tool) => (
+                                <Badge key={tool.id} variant="secondary" className="rounded-full px-3 py-1">{tool.name}</Badge>
+                              ))}
+                          </div>
+                        ) : (
+                          <p className="text-sm text-muted-foreground">No managed sidecars selected yet.</p>
+                        )}
+                      </div>
+                      <div className="space-y-2">
+                        <p className="text-xs font-medium text-foreground">Enterprise MCP endpoints</p>
+                        {sharedMcpServers.length > 0 ? (
+                          <div className="flex flex-wrap gap-2">
+                            {sharedMcpServers.map((serverName) => (
+                              <Badge key={serverName} variant="outline" className="rounded-full px-3 py-1">{serverName}</Badge>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="text-sm text-muted-foreground">None configured. Use Advanced routing to add shared MCP endpoints.</p>
+                        )}
+                      </div>
+                    </CardContent>
+                  </Card>
+                </div>
+
+                <Accordion type="single" collapsible className="rounded-2xl border border-border/70 bg-background/50 px-4">
+                  <AccordionItem value="advanced-routing" className="border-none">
+                    <AccordionTrigger className="py-4 text-sm font-medium">Advanced routing & raw overrides</AccordionTrigger>
+                    <AccordionContent className="space-y-4">
+                      <div className="grid gap-4 xl:grid-cols-2">
+                        <div className="space-y-1.5">
+                          <Label className="text-xs">Shared MCP servers</Label>
+                          <Textarea
+                            rows={4}
+                            value={mcpServersText}
+                            onChange={(e) => setMcpServersText(e.target.value)}
+                            placeholder={MCP_SERVERS_PLACEHOLDER}
+                            className="font-mono text-xs"
+                          />
+                          <p className="text-[11px] text-muted-foreground">One shared enterprise MCP server per line.</p>
+                        </div>
+                        <div className="space-y-1.5">
+                          <Label className="text-xs">Raw sidecar JSON</Label>
+                          <Textarea
+                            rows={7}
+                            value={mcpSidecarsText}
+                            onChange={(e) => setMcpSidecarsText(e.target.value)}
+                            placeholder={MCP_SIDECARS_PLACEHOLDER}
+                            className="font-mono text-xs"
+                          />
+                          <p className="text-[11px] text-muted-foreground">Full access to custom sidecar specs and manual overrides.</p>
+                        </div>
+                      </div>
+                    </AccordionContent>
+                  </AccordionItem>
+                </Accordion>
+              </>
+            ) : (
+              <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-300">
+                Goose runtimes do not support shared MCP servers or sidecars yet. Switch to LangGraph to use the managed toolkit picker.
+              </div>
+            )}
+          </TabsContent>
+
+          {/* ─── Skills & Files ─── */}
+          <TabsContent value="files" className="space-y-4">
+            <div className="grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
+              <Card className="shadow-none">
+                <CardHeader className="pb-3">
+                  <div className="flex items-center gap-2">
+                    <div className="flex h-8 w-8 items-center justify-center rounded-xl border border-sky-500/20 bg-sky-500/10 text-sky-300">
+                      <Package className="h-4 w-4" />
+                    </div>
+                    <div>
+                      <CardTitle className="text-sm">Skill library</CardTitle>
+                      <CardDescription>Attach curated skills from the catalog with one click.</CardDescription>
+                    </div>
+                  </div>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <div className="flex gap-2">
+                    <div className="relative flex-1">
+                      <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                      <Input value={skillSearch} onChange={(e) => setSkillSearch(e.target.value)} placeholder="Search skills, behaviors, or capability tags" className="pl-9" />
+                    </div>
+                    <select
+                      className="flex h-9 rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      value={skillCategory}
+                      onChange={(e) => setSkillCategory(e.target.value)}
+                    >
+                      <option value="">All categories</option>
+                      {skillCategories.map((cat) => (
+                        <option key={cat} value={cat}>{cat}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <ScrollArea className="max-h-[430px] pr-3">
+                    <div className="space-y-3">
+                      {filteredSkills.map((skill) => {
+                        const detail = skillDetailsById[skill.id];
+                        const attached = hasSkillAttached(detail, draftPaths);
+                        return (
+                          <div
+                            key={skill.id}
+                            className={`rounded-2xl border p-4 transition ${
+                              attached
+                                ? "border-primary/35 bg-primary/10 shadow-inner shadow-primary/10"
+                                : "border-border/70 bg-background/60 hover:border-primary/20 hover:bg-accent/35"
+                            }`}
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0 space-y-2">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <p className="font-medium text-foreground">{skill.name}</p>
+                                  <Badge variant="outline" className={SKILL_CATEGORY_STYLES[skill.category] ?? ""}>{skill.category}</Badge>
+                                </div>
+                                <p className="text-sm leading-6 text-muted-foreground">{skill.description}</p>
+                                <div className="flex flex-wrap gap-2">
+                                  {skill.tags.slice(0, 4).map((tag) => (
+                                    <Badge key={tag} variant="secondary" className="rounded-full px-2.5 py-0.5 text-[10px]">{tag}</Badge>
+                                  ))}
+                                </div>
+                              </div>
+                              <Button
+                                variant={attached ? "secondary" : "default"}
+                                size="sm"
+                                onClick={() => void handleToggleSkill(skill.id)}
+                                disabled={skillBusyId === skill.id || !token.trim()}
+                              >
+                                {skillBusyId === skill.id ? <LoaderCircle className="mr-1.5 h-4 w-4 animate-spin" /> : null}
+                                {attached ? "Remove" : "Attach"}
+                              </Button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                      {!catalogLoading && filteredSkills.length === 0 ? (
+                        <div className="rounded-2xl border border-dashed border-border/70 bg-background/40 px-4 py-8 text-center text-sm text-muted-foreground">
+                          No skills match the current filters.
+                        </div>
+                      ) : null}
+                      {catalogLoading ? (
+                        <div className="flex items-center justify-center py-3 text-sm text-muted-foreground">
+                          <LoaderCircle className="mr-2 h-4 w-4 animate-spin" /> Loading skill catalog...
+                        </div>
+                      ) : null}
+                    </div>
+                  </ScrollArea>
+                </CardContent>
+              </Card>
+
+              <Card className="shadow-none">
+                <CardHeader className="pb-3">
+                  <div className="flex items-center gap-2">
+                    <div className="flex h-8 w-8 items-center justify-center rounded-xl border border-violet-500/20 bg-violet-500/10 text-violet-300">
+                      <Sparkles className="h-4 w-4" />
+                    </div>
+                    <div>
+                      <CardTitle className="text-sm">Attached guidance</CardTitle>
+                      <CardDescription>Curated skills and custom files shipping with this agent.</CardDescription>
+                    </div>
+                  </div>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="rounded-2xl border border-border/60 bg-background/60 p-3">
+                      <p className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground/70">Catalog skills</p>
+                      <p className="mt-1 text-xl font-semibold text-foreground">{selectedCatalogSkills.length}</p>
+                    </div>
+                    <div className="rounded-2xl border border-border/60 bg-background/60 p-3">
+                      <p className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground/70">Markdown files</p>
+                      <p className="mt-1 text-xl font-semibold text-foreground">{skillFileDrafts.length}</p>
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <p className="text-xs font-medium text-foreground">Selected catalog skills</p>
+                    {selectedCatalogSkills.length > 0 ? (
+                      <div className="flex flex-wrap gap-2">
+                        {selectedCatalogSkills.map((skill) => (
+                          <Badge key={skill.id} variant="secondary" className="rounded-full px-3 py-1">{skill.name}</Badge>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-sm text-muted-foreground">No curated skills attached yet.</p>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+
+            <Accordion type="single" collapsible className="rounded-2xl border border-border/70 bg-background/50 px-4">
+              <AccordionItem value="advanced-files" className="border-none">
+                <AccordionTrigger className="py-4 text-sm font-medium">Advanced file editors</AccordionTrigger>
+                <AccordionContent className="space-y-4">
+                  <TextFileBundleEditor
+                    title="Skill files"
+                    description="Custom Markdown skill documents mounted into the runtime."
+                    entries={skillFileDrafts}
+                    addLabel="Add custom skill file"
+                    emptyMessage="No skill documents attached. Use the library above or add a custom file manually."
+                    pathHint="Repo-relative Markdown path, e.g. .github/skills/reviewer/SKILL.md"
+                    contentHint="Full skill document including optional frontmatter."
+                    onAdd={() => setSkillFileDrafts((current) => [...current, createSkillFileDraft()])}
+                    onChange={setSkillFileDrafts}
+                  />
+                  {runtimeKind === "goose" ? (
+                    <TextFileBundleEditor
+                      title="Goose config files"
+                      description="Preseed the Goose config root with prompts or runtime settings."
+                      entries={gooseConfigFileDrafts}
+                      addLabel="Add Goose file"
+                      emptyMessage="No Goose config files attached."
+                      pathHint="Path relative to Goose config root, e.g. config.yaml"
+                      contentHint="YAML, Markdown, or plain text."
+                      onAdd={() => setGooseConfigFileDrafts((current) => [...current, createGooseConfigFileDraft()])}
+                      onChange={setGooseConfigFileDrafts}
+                    />
+                  ) : null}
+                </AccordionContent>
+              </AccordionItem>
+            </Accordion>
+          </TabsContent>
+
+          {/* ─── Advanced ─── */}
+          <TabsContent value="advanced" className="space-y-4">
+            <Card className="shadow-none">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm">Infrastructure</CardTitle>
+                <CardDescription>Storage and sandbox isolation settings.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Storage size</Label>
+                    <Input value={storageSize} onChange={(e) => setStorageSize(e.target.value)} placeholder="1Gi" />
+                  </div>
+                </div>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={enableGvisor}
+                    onChange={(e) => setEnableGvisor(e.target.checked)}
+                    className="h-4 w-4 rounded border-input"
+                  />
+                  <span className="text-sm">Enable gVisor runtime class</span>
+                </label>
+              </CardContent>
+            </Card>
+          </TabsContent>
+        </Tabs>
+
+        {displayError && (
+          <div className="mt-4 rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+            {displayError}
+          </div>
+        )}
+
+        <div className="mt-5 flex flex-wrap items-center justify-between gap-4 border-t border-border pt-4">
+          <p className="max-w-2xl text-xs leading-5 text-muted-foreground">
+            Saving updates the spec and triggers an operator reconcile.
+          </p>
+          <div className="flex gap-2">
+            <Button onClick={handleSaveClick} disabled={!model.trim() || isSaving} className="min-w-[140px]">
+              {isSaving ? <LoaderCircle className="mr-1.5 h-4 w-4 animate-spin" /> : <Save className="mr-1.5 h-4 w-4" />}
+              {isSaving ? "Saving..." : "Save changes"}
+            </Button>
+            <Button variant="destructive" onClick={onDelete} disabled={isDeleting}>
+              {isDeleting ? <LoaderCircle className="mr-1.5 h-4 w-4 animate-spin" /> : <Trash2 className="mr-1.5 h-4 w-4" />}
+              {isDeleting ? "Deleting..." : "Delete"}
+            </Button>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
   );
 }

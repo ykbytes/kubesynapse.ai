@@ -3,13 +3,23 @@ import { fetchEventSource } from "@microsoft/fetch-event-source";
 import type {
   A2AInvocationMetadata,
   A2APeerRef,
+  AdminUser,
   AgentA2AConfig,
   AgentInfo,
   AgentDetail,
   AgentDiscoveryPeer,
   AgentDiscoveryResponse,
   AgentLogsResponse,
+  AgentSkillSummary,
+  AgentSkillsConfig,
+  AuthConfig,
+  AuthProviderSummary,
+  AuthSession,
+  AuthenticatedUser,
   ApprovalInfo,
+  CatalogSkill,
+  CatalogSkillDetail,
+  CreateUserPayload,
   CreateAgentPayload,
   DeleteResponse,
   EvalInfo,
@@ -20,9 +30,14 @@ import type {
   InvocationSummary,
   InvokePayload,
   InvokeResponse,
+  McpToolCategory,
   PolicyInfo,
   RuntimeKind,
+  SubagentInvocationMetadata,
+  SubagentInvocationResult,
+  SubagentSharedFile,
   StreamEvent,
+  UpdateUserPayload,
   UpdateAgentPayload,
   WorkflowInfo,
   WorkflowPayload,
@@ -53,6 +68,13 @@ function buildHeaders(token?: string, requestId?: string): Record<string, string
     headers["X-Request-Id"] = requestId;
   }
   return headers;
+}
+
+function buildCredentialedInit(init: RequestInit = {}): RequestInit {
+  return {
+    credentials: "include",
+    ...init,
+  };
 }
 
 function isRecord(value: unknown): value is JsonRecord {
@@ -121,6 +143,14 @@ function readOptionalNumber(record: JsonRecord, key: string, label: string): num
   return value;
 }
 
+function readNumber(record: JsonRecord, key: string, label: string): number {
+  const value = record[key];
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error(`${label}.${key} must be a finite number.`);
+  }
+  return value;
+}
+
 function readStringArrayValue(value: unknown, label: string): string[] {
   if (!Array.isArray(value)) {
     throw new Error(`${label} must be an array.`);
@@ -155,6 +185,11 @@ function readOptionalRecord(record: JsonRecord, key: string, label: string): Jso
     return null;
   }
   return expectRecord(value, `${label}.${key}`);
+}
+
+function readOptionalJsonValue(record: JsonRecord, key: string): unknown {
+  const value = record[key];
+  return value === undefined ? null : value;
 }
 
 function readRecord(record: JsonRecord, key: string, label: string, fallback: JsonRecord = {}): JsonRecord {
@@ -210,6 +245,49 @@ function parseAgentA2AConfigPayload(payload: unknown, label: string): AgentA2ACo
   };
 }
 
+function parseAgentSkillsConfigPayload(payload: unknown, label: string): AgentSkillsConfig {
+  if (payload === undefined || payload === null) {
+    return { files: {} };
+  }
+
+  const record = expectRecord(payload, label);
+  const files = record.files;
+  if (files === undefined || files === null) {
+    return { files: {} };
+  }
+  if (!isRecord(files)) {
+    throw new Error(`${label}.files must be an object keyed by Markdown file path.`);
+  }
+
+  const normalizedFiles: Record<string, string> = {};
+  for (const [path, value] of Object.entries(files)) {
+    if (typeof value !== "string") {
+      throw new Error(`${label}.files.${path} must be a string.`);
+    }
+    normalizedFiles[path] = value;
+  }
+  return { files: normalizedFiles };
+}
+
+function parseAgentSkillSummaryPayload(payload: unknown, label: string): AgentSkillSummary {
+  const record = expectRecord(payload, label);
+  return {
+    path: readString(record, "path", label),
+    name: readString(record, "name", label),
+    description: readOptionalString(record, "description", label),
+    instructions_preview: readOptionalString(record, "instructions_preview", label),
+    allowed_sandbox_tools: readStringArray(record, "allowed_sandbox_tools", label, []),
+    allowed_mcp_servers: readStringArray(record, "allowed_mcp_servers", label, []),
+    allowed_a2a_targets: parseA2APeerRefArrayPayload(record.allowed_a2a_targets ?? [], `${label}.allowed_a2a_targets`),
+    allow_subagents: readBoolean(record, "allow_subagents", label, false),
+    goose_builtin_extensions: readStringArray(record, "goose_builtin_extensions", label, []),
+    goose_stdio_extensions: readStringArray(record, "goose_stdio_extensions", label, []),
+    goose_streamable_http_extensions: readStringArray(record, "goose_streamable_http_extensions", label, []),
+    valid: readBoolean(record, "valid", label, true),
+    warnings: readStringArray(record, "warnings", label, []),
+  };
+}
+
 function parseA2AInvocationMetadataPayload(payload: unknown, label: string): A2AInvocationMetadata {
   const record = expectRecord(payload, label);
   return {
@@ -217,10 +295,68 @@ function parseA2AInvocationMetadataPayload(payload: unknown, label: string): A2A
     targetNamespace: readOptionalString(record, "targetNamespace", label),
     targetThreadId: readOptionalString(record, "targetThreadId", label),
     responseStatus: readOptionalString(record, "responseStatus", label),
+    transport: readOptionalString(record, "transport", label),
     callerAgent: readOptionalString(record, "callerAgent", label),
     callerNamespace: readOptionalString(record, "callerNamespace", label),
     parentThreadId: readOptionalString(record, "parentThreadId", label),
     callerRequestId: readOptionalString(record, "callerRequestId", label),
+  };
+}
+
+function parseSubagentSharedFilePayload(payload: unknown, label: string): SubagentSharedFile {
+  const record = expectRecord(payload, label);
+  return {
+    path: readOptionalString(record, "path", label),
+    purpose: readOptionalString(record, "purpose", label),
+    chars: readOptionalNumber(record, "chars", label),
+  };
+}
+
+function parseSubagentSharedFileArray(payload: unknown, label: string): SubagentSharedFile[] {
+  if (payload === undefined || payload === null) {
+    return [];
+  }
+  if (!Array.isArray(payload)) {
+    throw new Error(`${label} must be an array.`);
+  }
+  return payload.map((item, index) => parseSubagentSharedFilePayload(item, `${label}[${index}]`));
+}
+
+function parseSubagentInvocationResultPayload(payload: unknown, label: string): SubagentInvocationResult {
+  const record = expectRecord(payload, label);
+  return {
+    name: readString(record, "name", label),
+    namespace: readString(record, "namespace", label),
+    role: readOptionalString(record, "role", label),
+    task: readOptionalString(record, "task", label),
+    status: readString(record, "status", label, "unknown"),
+    transport: readOptionalString(record, "transport", label),
+    threadId: readOptionalString(record, "threadId", label),
+    responsePreview: readOptionalString(record, "responsePreview", label),
+    resultFilePath: readOptionalString(record, "resultFilePath", label),
+    sharedFiles: parseSubagentSharedFileArray(record.sharedFiles, `${label}.sharedFiles`),
+    warnings: readStringArray(record, "warnings", label, []),
+    approvalName: readOptionalString(record, "approvalName", label),
+    retryAfterSeconds: readOptionalNumber(record, "retryAfterSeconds", label),
+    error: readOptionalString(record, "error", label),
+    metadata: readOptionalRecord(record, "metadata", label),
+  };
+}
+
+function parseSubagentInvocationMetadataPayload(payload: unknown, label: string): SubagentInvocationMetadata {
+  const record = expectRecord(payload, label);
+  const rawResults = record.results;
+  if (rawResults !== undefined && !Array.isArray(rawResults)) {
+    throw new Error(`${label}.results must be an array.`);
+  }
+
+  return {
+    strategy: readOptionalString(record, "strategy", label),
+    count: readOptionalNumber(record, "count", label),
+    sharedSandboxSession: readOptionalBoolean(record, "sharedSandboxSession", label),
+    sharedFiles: parseSubagentSharedFileArray(record.sharedFiles, `${label}.sharedFiles`),
+    resultFiles: readStringArray(record, "resultFiles", label, []),
+    results: (rawResults ?? []).map((item, index) => parseSubagentInvocationResultPayload(item, `${label}.results[${index}]`)),
   };
 }
 
@@ -268,6 +404,10 @@ function parseAgentInfoPayload(payload: unknown, label = "AgentInfo"): AgentInfo
 function parseAgentDetailPayload(payload: unknown): AgentDetail {
   const base = parseAgentInfoPayload(payload, "AgentDetail");
   const record = expectRecord(payload, "AgentDetail");
+  const rawSkillSummaries = record.skill_summaries;
+  if (rawSkillSummaries !== undefined && !Array.isArray(rawSkillSummaries)) {
+    throw new Error("AgentDetail.skill_summaries must be an array.");
+  }
   return {
     ...base,
     system_prompt: readString(record, "system_prompt", "AgentDetail", ""),
@@ -278,6 +418,10 @@ function parseAgentDetailPayload(payload: unknown): AgentDetail {
     mcp_servers: readStringArray(record, "mcp_servers", "AgentDetail"),
     mcp_sidecars: readRecordArray(record, "mcp_sidecars", "AgentDetail"),
     a2a_config: parseAgentA2AConfigPayload(record.a2a_config, "AgentDetail.a2a_config"),
+    skills: parseAgentSkillsConfigPayload(record.skills, "AgentDetail.skills"),
+    skill_summaries: (rawSkillSummaries ?? []).map((item, index) =>
+      parseAgentSkillSummaryPayload(item, `AgentDetail.skill_summaries[${index}]`),
+    ),
     goose_config_files: readRecord(record, "goose_config_files", "AgentDetail"),
     created_at: readOptionalString(record, "created_at", "AgentDetail"),
   };
@@ -297,8 +441,96 @@ function parseGatewayHealthPayload(payload: unknown): GatewayHealth {
     status: readString(record, "status", "GatewayHealth"),
     gateway: readString(record, "gateway", "GatewayHealth"),
     auth_mode: readString(record, "auth_mode", "GatewayHealth"),
+    browser_auth_enabled: readOptionalBoolean(record, "browser_auth_enabled", "GatewayHealth") ?? undefined,
+    local_auth_enabled: readOptionalBoolean(record, "local_auth_enabled", "GatewayHealth") ?? undefined,
+    shared_token_enabled: readOptionalBoolean(record, "shared_token_enabled", "GatewayHealth") ?? undefined,
     nats_url: readString(record, "nats_url", "GatewayHealth"),
     qdrant_url: readString(record, "qdrant_url", "GatewayHealth"),
+  };
+}
+
+function parseAuthProviderSummaryPayload(payload: unknown, label: string): AuthProviderSummary {
+  const record = expectRecord(payload, label);
+  return {
+    id: readString(record, "id", label),
+    name: readString(record, "name", label),
+    kind: readString(record, "kind", label),
+    supported: readOptionalBoolean(record, "supported", label) ?? undefined,
+  };
+}
+
+function parseAuthenticatedUserPayload(payload: unknown, label = "AuthenticatedUser"): AuthenticatedUser {
+  const record = expectRecord(payload, label);
+  const role = readString(record, "role", label) as AuthenticatedUser["role"];
+  if (role !== "viewer" && role !== "operator" && role !== "admin") {
+    throw new Error(`${label}.role must be viewer, operator, or admin.`);
+  }
+  return {
+    sub: readString(record, "sub", label),
+    id: readString(record, "id", label),
+    username: readString(record, "username", label),
+    display_name: readString(record, "display_name", label),
+    email: readOptionalString(record, "email", label),
+    role,
+    allowed_namespaces: readStringArray(record, "allowed_namespaces", label, []),
+    auth_provider: readString(record, "auth_provider", label),
+    session_id: readOptionalString(record, "session_id", label),
+    is_active: readBoolean(record, "is_active", label, true),
+  };
+}
+
+function parseAdminUserPayload(payload: unknown, label = "AdminUser"): AdminUser {
+  const record = expectRecord(payload, label);
+  const role = readString(record, "role", label) as AdminUser["role"];
+  if (role !== "viewer" && role !== "operator" && role !== "admin") {
+    throw new Error(`${label}.role must be viewer, operator, or admin.`);
+  }
+  return {
+    id: readNumber(record, "id", label),
+    username: readString(record, "username", label),
+    email: readOptionalString(record, "email", label),
+    display_name: readString(record, "display_name", label),
+    role,
+    allowed_namespaces: readStringArray(record, "allowed_namespaces", label, []),
+    auth_provider: readString(record, "auth_provider", label),
+    is_active: readBoolean(record, "is_active", label, true),
+    created_at: readOptionalString(record, "created_at", label),
+    updated_at: readOptionalString(record, "updated_at", label),
+    last_login_at: readOptionalString(record, "last_login_at", label),
+  };
+}
+
+function parseAuthConfigPayload(payload: unknown): AuthConfig {
+  const record = expectRecord(payload, "AuthConfig");
+  const oidcProviders = Array.isArray(record.oidc_providers)
+    ? record.oidc_providers.map((item, index) => parseAuthProviderSummaryPayload(item, `AuthConfig.oidc_providers[${index}]`))
+    : [];
+  const samlProviders = Array.isArray(record.saml_providers)
+    ? record.saml_providers.map((item, index) => parseAuthProviderSummaryPayload(item, `AuthConfig.saml_providers[${index}]`))
+    : [];
+  return {
+    auth_mode: readString(record, "auth_mode", "AuthConfig"),
+    local_enabled: readBoolean(record, "local_enabled", "AuthConfig", false),
+    registration_enabled: readBoolean(record, "registration_enabled", "AuthConfig", false),
+    shared_token_enabled: readBoolean(record, "shared_token_enabled", "AuthConfig", false),
+    browser_auth_enabled: readBoolean(record, "browser_auth_enabled", "AuthConfig", false),
+    bootstrap_complete: readBoolean(record, "bootstrap_complete", "AuthConfig", false),
+    password_providers: readStringArray(record, "password_providers", "AuthConfig", []),
+    oidc_providers: oidcProviders,
+    saml_providers: samlProviders,
+  };
+}
+
+function parseAuthSessionPayload(payload: unknown): AuthSession {
+  const record = expectRecord(payload, "AuthSession");
+  return {
+    access_token: readString(record, "access_token", "AuthSession"),
+    token_type: readString(record, "token_type", "AuthSession"),
+    expires_in: readOptionalNumber(record, "expires_in", "AuthSession") ?? 0,
+    expires_at: readString(record, "expires_at", "AuthSession"),
+    refresh_expires_at: readOptionalString(record, "refresh_expires_at", "AuthSession"),
+    user: parseAuthenticatedUserPayload(record.user, "AuthSession.user"),
+    auth_mode: readString(record, "auth_mode", "AuthSession"),
   };
 }
 
@@ -408,12 +640,16 @@ function parseInvokeResponsePayload(payload: unknown): InvokeResponse {
     model: readString(record, "model", "InvokeResponse"),
     policy_name: readOptionalString(record, "policy_name", "InvokeResponse"),
     tool_name: readOptionalString(record, "tool_name", "InvokeResponse"),
-    tool_result: readOptionalRecord(record, "tool_result", "InvokeResponse"),
+    tool_result: readOptionalJsonValue(record, "tool_result"),
     sandbox_session: readOptionalRecord(record, "sandbox_session", "InvokeResponse"),
     status: readString(record, "status", "InvokeResponse", "completed"),
     approval_name: readOptionalString(record, "approval_name", "InvokeResponse"),
     retry_after_seconds: readOptionalNumber(record, "retry_after_seconds", "InvokeResponse"),
     a2a: record.a2a === undefined || record.a2a === null ? null : parseA2AInvocationMetadataPayload(record.a2a, "InvokeResponse.a2a"),
+    subagents:
+      record.subagents === undefined || record.subagents === null
+        ? null
+        : parseSubagentInvocationMetadataPayload(record.subagents, "InvokeResponse.subagents"),
     warnings: record.warnings === undefined ? [] : readStringArray(record, "warnings", "InvokeResponse"),
   };
 }
@@ -440,7 +676,7 @@ export function buildInvocationSummary(fallbackThreadId: string, payload: unknow
     status: readString(record, "status", "Invocation summary payload", "completed"),
     policyName: readOptionalString(record, "policy_name", "Invocation summary payload"),
     toolName: readOptionalString(record, "tool_name", "Invocation summary payload"),
-    toolResult: readOptionalRecord(record, "tool_result", "Invocation summary payload"),
+    toolResult: readOptionalJsonValue(record, "tool_result"),
     sandboxSession: readOptionalRecord(record, "sandbox_session", "Invocation summary payload"),
     approvalName: readOptionalString(record, "approval_name", "Invocation summary payload"),
     retryAfterSeconds: readOptionalNumber(record, "retry_after_seconds", "Invocation summary payload"),
@@ -448,6 +684,10 @@ export function buildInvocationSummary(fallbackThreadId: string, payload: unknow
       record.a2a === undefined || record.a2a === null
         ? null
         : parseA2AInvocationMetadataPayload(record.a2a, "Invocation summary payload.a2a"),
+    subagents:
+      record.subagents === undefined || record.subagents === null
+        ? null
+        : parseSubagentInvocationMetadataPayload(record.subagents, "Invocation summary payload.subagents"),
     warnings: record.warnings === undefined ? [] : readStringArray(record, "warnings", "Invocation summary payload"),
   };
 }
@@ -481,6 +721,168 @@ async function parseJsonResponse<T>(response: Response, parser: (payload: unknow
 export async function fetchGatewayHealth(): Promise<GatewayHealth> {
   const response = await fetch(buildUrl("/api/health"));
   return parseJsonResponse(response, parseGatewayHealthPayload);
+}
+
+export async function fetchAuthConfig(): Promise<AuthConfig> {
+  const response = await fetch(buildUrl("/api/auth/config"), buildCredentialedInit());
+  return parseJsonResponse(response, parseAuthConfigPayload);
+}
+
+export async function loginWithPassword(
+  username: string,
+  password: string,
+  provider: "local" | "ldap" = "local",
+): Promise<AuthSession> {
+  const response = await fetch(
+    buildUrl("/api/auth/login"),
+    buildCredentialedInit({
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ username, password, provider }),
+    }),
+  );
+  return parseJsonResponse(response, parseAuthSessionPayload);
+}
+
+export async function registerWithPassword(
+  username: string,
+  password: string,
+  email?: string,
+  displayName?: string,
+): Promise<AuthSession> {
+  const response = await fetch(
+    buildUrl("/api/auth/register"),
+    buildCredentialedInit({
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        username,
+        password,
+        email: email?.trim() || undefined,
+        display_name: displayName?.trim() || undefined,
+      }),
+    }),
+  );
+  return parseJsonResponse(response, parseAuthSessionPayload);
+}
+
+export async function refreshAuthSession(): Promise<AuthSession> {
+  const response = await fetch(
+    buildUrl("/api/auth/refresh"),
+    buildCredentialedInit({
+      method: "POST",
+      headers: { Accept: "application/json" },
+    }),
+  );
+  return parseJsonResponse(response, parseAuthSessionPayload);
+}
+
+export async function logoutSession(token?: string): Promise<void> {
+  const response = await fetch(
+    buildUrl("/api/auth/logout"),
+    buildCredentialedInit({
+      method: "POST",
+      headers: buildHeaders(token),
+    }),
+  );
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || `Logout failed with status ${response.status}`);
+  }
+}
+
+export async function fetchCurrentUser(token: string): Promise<AuthenticatedUser> {
+  const response = await fetch(buildUrl("/api/auth/me"), {
+    headers: buildHeaders(token),
+  });
+  return parseJsonResponse(response, (payload) => {
+    const record = expectRecord(payload, "CurrentUserResponse");
+    return parseAuthenticatedUserPayload(record.user, "CurrentUserResponse.user");
+  });
+}
+
+export async function changePassword(token: string, currentPassword: string, newPassword: string): Promise<AuthenticatedUser> {
+  const response = await fetch(buildUrl("/api/auth/change-password"), {
+    method: "POST",
+    headers: {
+      ...buildHeaders(token),
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      current_password: currentPassword,
+      new_password: newPassword,
+    }),
+  });
+  return parseJsonResponse(response, (payload) => {
+    const record = expectRecord(payload, "ChangePasswordResponse");
+    return parseAuthenticatedUserPayload(record.user, "ChangePasswordResponse.user");
+  });
+}
+
+export async function listUsers(token: string): Promise<AdminUser[]> {
+  const response = await fetch(buildUrl("/api/admin/users"), {
+    headers: buildHeaders(token),
+  });
+  return parseJsonResponse(response, (payload) => {
+    if (!Array.isArray(payload)) {
+      throw new Error("Admin user list response must be an array.");
+    }
+    return payload.map((item, index) => parseAdminUserPayload(item, `AdminUser[${index}]`));
+  });
+}
+
+export async function createUser(token: string, payload: CreateUserPayload): Promise<AdminUser> {
+  const response = await fetch(buildUrl("/api/admin/users"), {
+    method: "POST",
+    headers: {
+      ...buildHeaders(token),
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      username: payload.username.trim(),
+      password: payload.password,
+      email: payload.email?.trim() || undefined,
+      display_name: payload.display_name?.trim() || undefined,
+      role: payload.role ?? "viewer",
+      allowed_namespaces: payload.allowed_namespaces?.map((item) => item.trim()).filter(Boolean) ?? [],
+    }),
+  });
+  return parseJsonResponse(response, (payloadBody) => parseAdminUserPayload(payloadBody, "AdminUser"));
+}
+
+export async function updateUser(token: string, userId: number, payload: UpdateUserPayload): Promise<AdminUser> {
+  const response = await fetch(buildUrl(`/api/admin/users/${userId}`), {
+    method: "PATCH",
+    headers: {
+      ...buildHeaders(token),
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      display_name: payload.display_name?.trim() || undefined,
+      role: payload.role,
+      is_active: payload.is_active,
+      allowed_namespaces: payload.allowed_namespaces?.map((item) => item.trim()).filter(Boolean),
+    }),
+  });
+  return parseJsonResponse(response, (payloadBody) => parseAdminUserPayload(payloadBody, "AdminUser"));
+}
+
+export function buildOidcLoginUrl(providerId: string, nextPath = window.location.pathname): string {
+  const url = new URL(buildUrl(`/api/auth/oidc/start/${providerId}`), API_BASE_URL || window.location.origin);
+  url.searchParams.set("next", nextPath || "/");
+  return API_BASE_URL ? url.toString() : `${url.pathname}${url.search}`;
+}
+
+export function buildSamlLoginUrl(providerId: string, nextPath = window.location.pathname): string {
+  const url = new URL(buildUrl(`/api/auth/saml/start/${providerId}`), API_BASE_URL || window.location.origin);
+  url.searchParams.set("next", nextPath || "/");
+  return API_BASE_URL ? url.toString() : `${url.pathname}${url.search}`;
 }
 
 export async function listAgents(token: string, namespace: string): Promise<AgentInfo[]> {
@@ -769,4 +1171,108 @@ export async function streamAgentInvoke(options: StreamHandlers): Promise<void> 
       options.onClose();
     },
   });
+}
+
+/* ── Skills Catalog API ── */
+
+function parseCatalogSkillPayload(payload: unknown, label: string): CatalogSkill {
+  const record = expectRecord(payload, label);
+  const filesRecord = readRecord(record, "files", label, {});
+  const filePaths = Object.keys(filesRecord);
+  const totalSizeBytes = Object.values(filesRecord).reduce<number>((total, value, index) => {
+    if (typeof value !== "string") {
+      throw new Error(`${label}.files entry ${index} must be a string.`);
+    }
+    return total + value.length;
+  }, 0);
+
+  return {
+    id: readString(record, "id", label),
+    name: readString(record, "name", label),
+    description: readString(record, "description", label),
+    category: readString(record, "category", label),
+    tags: [
+      ...readStringArray(record, "allowed_mcp_servers", label, []),
+      ...readStringArray(record, "allowed_sandbox_tools", label, []),
+    ],
+    files: filePaths,
+    total_size_bytes: totalSizeBytes,
+  };
+}
+
+function parseCatalogSkillDetailPayload(payload: unknown, label: string): CatalogSkillDetail {
+  const record = expectRecord(payload, label);
+  const filesRecord = readRecord(record, "files", label, {});
+  const assets: Record<string, string> = {};
+
+  for (const [path, value] of Object.entries(filesRecord)) {
+    if (typeof value !== "string") {
+      throw new Error(`${label}.files.${path} must be a string.`);
+    }
+    assets[path] = value;
+  }
+
+  return {
+    ...parseCatalogSkillPayload(record, label),
+    assets,
+  };
+}
+
+function parseMcpToolCategoryPayload(payload: unknown, label: string): McpToolCategory {
+  const record = expectRecord(payload, label);
+  return {
+    id: readString(record, "id", label),
+    name: readString(record, "name", label),
+    description: readString(record, "description", label),
+    icon: readString(record, "icon", label),
+    default_port: readOptionalNumber(record, "default_port", label) ?? 0,
+    sidecar_image: readOptionalString(record, "sidecar_image", label),
+  };
+}
+
+export async function fetchSkillsCatalog(
+  token: string,
+  category?: string,
+  search?: string,
+): Promise<CatalogSkill[]> {
+  const query = new URLSearchParams();
+  if (category) query.set("category", category);
+  if (search) query.set("search", search);
+  const baseUrl = buildUrl("/api/skills/catalog");
+  const requestUrl = query.size > 0 ? `${baseUrl}${baseUrl.includes("?") ? "&" : "?"}${query.toString()}` : baseUrl;
+  const res = await fetch(requestUrl, { headers: buildHeaders(token) });
+  if (!res.ok) throw new Error(`Failed to fetch skills catalog: ${res.status}`);
+  const data = await res.json();
+  if (Array.isArray(data)) {
+    return data.map((item, index) => parseCatalogSkillPayload(item, `skills[${index}]`));
+  }
+  if (isRecord(data) && Array.isArray(data.skills)) {
+    return data.skills.map((item, index) => parseCatalogSkillPayload(item, `skills[${index}]`));
+  }
+  throw new Error("Invalid catalog response");
+}
+
+export async function fetchCatalogSkillDetail(
+  token: string,
+  skillId: string,
+): Promise<CatalogSkillDetail> {
+  const res = await fetch(buildUrl(`/api/skills/catalog/${skillId}`), {
+    headers: buildHeaders(token),
+  });
+  if (!res.ok) throw new Error(`Failed to fetch skill detail: ${res.status}`);
+  const data = await res.json();
+  return parseCatalogSkillDetailPayload(data, "skill_detail");
+}
+
+export async function fetchMcpToolCategories(token: string): Promise<McpToolCategory[]> {
+  const res = await fetch(buildUrl("/api/skills/tools"), { headers: buildHeaders(token) });
+  if (!res.ok) throw new Error(`Failed to fetch tool categories: ${res.status}`);
+  const data = await res.json();
+  if (Array.isArray(data)) {
+    return data.map((item, index) => parseMcpToolCategoryPayload(item, `categories[${index}]`));
+  }
+  if (isRecord(data) && Array.isArray(data.categories)) {
+    return data.categories.map((item, index) => parseMcpToolCategoryPayload(item, `categories[${index}]`));
+  }
+  throw new Error("Invalid tools response");
 }

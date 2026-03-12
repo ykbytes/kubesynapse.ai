@@ -5,21 +5,24 @@ import time
 import hashlib
 import json
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 
 from croniter import CroniterBadCronError, croniter  # type: ignore[import-untyped]
 from utils import (
+    build_eval_run_id,
     build_workflow_run_id,
     merge_goose_config_files,
     now_iso,
     parse_a2a_peer_refs,
     parse_agent_a2a_config,
+    parse_agent_skills_config,
     parse_policy_a2a_config,
     parse_goose_config_files,
     validate_supported_policy_spec,
     validate_workflow_graph,
     workflow_journal_path,
 )
+from state_store import init_database as init_state_database, safe_record_eval_state, safe_record_workflow_state
 import kopf
 
 import kubernetes.client  # type: ignore[import-untyped]
@@ -27,6 +30,225 @@ import kubernetes.config  # type: ignore[import-untyped]
 from kubernetes.client.rest import ApiException  # type: ignore[import-untyped]
 
 logger = logging.getLogger("operator")
+
+PERMANENT_API_ERROR_STATUSES = {400, 401, 403, 404, 405, 422}
+HIGH_BACKOFF_API_ERROR_STATUSES = {429, 500, 502, 503, 504}
+MAX_LOG_FIELD_LENGTH = 400
+
+
+def _serialize_log_field(value: Any) -> str:
+    try:
+        if isinstance(value, str):
+            serialized = json.dumps(value)
+        else:
+            serialized = json.dumps(value, sort_keys=True, default=str)
+    except TypeError:
+        serialized = json.dumps(str(value))
+    if len(serialized) > MAX_LOG_FIELD_LENGTH:
+        return f"{serialized[: MAX_LOG_FIELD_LENGTH - 3]}..."
+    return serialized
+
+
+def format_log_fields(fields: dict[str, Any]) -> str:
+    parts: list[str] = []
+    for key in sorted(fields):
+        value = fields[key]
+        if value in (None, "", [], {}):
+            continue
+        parts.append(f"{key}={_serialize_log_field(value)}")
+    return " ".join(parts)
+
+
+def resource_log_fields(
+    resource_kind: str | None = None,
+    name: str | None = None,
+    namespace: str | None = None,
+    *,
+    meta: dict[str, Any] | None = None,
+    generation: int | None = None,
+    **extra: Any,
+) -> dict[str, Any]:
+    fields: dict[str, Any] = {}
+    if resource_kind:
+        fields["resourceKind"] = resource_kind
+    if name:
+        fields["name"] = name
+    if namespace:
+        fields["namespace"] = namespace
+    resolved_generation = generation
+    if resolved_generation is None and meta is not None:
+        resolved_generation = int((meta or {}).get("generation", 0) or 0)
+    if resolved_generation:
+        fields["generation"] = resolved_generation
+    for key, value in extra.items():
+        if value in (None, "", [], {}):
+            continue
+        fields[key] = value
+    return fields
+
+
+def log_operator_event(
+    logger: logging.Logger,
+    level: int,
+    message: str,
+    *,
+    resource_kind: str | None = None,
+    name: str | None = None,
+    namespace: str | None = None,
+    meta: dict[str, Any] | None = None,
+    generation: int | None = None,
+    **extra: Any,
+) -> None:
+    formatted_fields = format_log_fields(
+        resource_log_fields(
+            resource_kind,
+            name,
+            namespace,
+            meta=meta,
+            generation=generation,
+            **extra,
+        )
+    )
+    if formatted_fields:
+        logger.log(level, "%s %s", message, formatted_fields)
+        return
+    logger.log(level, message)
+
+
+def describe_api_exception(exc: ApiException) -> str:
+    details: list[str] = []
+    status = getattr(exc, "status", None)
+    if status is not None:
+        details.append(f"status={status}")
+    reason = str(getattr(exc, "reason", "") or "").strip()
+    if reason:
+        details.append(f"reason={reason}")
+    body = str(getattr(exc, "body", "") or "").strip()
+    if body:
+        if len(body) > MAX_LOG_FIELD_LENGTH:
+            body = f"{body[: MAX_LOG_FIELD_LENGTH - 3]}..."
+        details.append(f"body={body}")
+    message = str(exc).strip()
+    if message and message not in {reason, body}:
+        details.append(f"message={message}")
+    return ", ".join(details) or exc.__class__.__name__
+
+
+def classify_reconcile_error(action: str, exc: Exception, *, default_delay: int = 10) -> Exception:
+    if isinstance(exc, (kopf.PermanentError, kopf.TemporaryError)):
+        return exc
+    if isinstance(exc, ValueError):
+        return kopf.PermanentError(str(exc))
+    if isinstance(exc, ApiException):
+        status = int(getattr(exc, "status", 0) or 0)
+        details = describe_api_exception(exc)
+        message = f"{action} failed: {details}"
+        if status in PERMANENT_API_ERROR_STATUSES:
+            return kopf.PermanentError(message)
+        delay = max(default_delay, 30) if status in HIGH_BACKOFF_API_ERROR_STATUSES else default_delay
+        return kopf.TemporaryError(message, delay=delay)
+    return kopf.TemporaryError(f"{action} failed: {exc}", delay=default_delay)
+
+
+def raise_reconcile_error(
+    logger: logging.Logger,
+    action: str,
+    exc: Exception,
+    *,
+    resource_kind: str,
+    name: str,
+    namespace: str | None = None,
+    meta: dict[str, Any] | None = None,
+    generation: int | None = None,
+    default_delay: int = 10,
+    **extra: Any,
+) -> None:
+    resolved_error = classify_reconcile_error(action, exc, default_delay=default_delay)
+    message = (
+        "Reconcile operation failed permanently."
+        if isinstance(resolved_error, kopf.PermanentError)
+        else "Reconcile operation failed and will be retried."
+    )
+    log_details = resource_log_fields(
+        resource_kind,
+        name,
+        namespace,
+        meta=meta,
+        generation=generation,
+        action=action,
+        error=str(resolved_error),
+        sourceErrorType=type(exc).__name__,
+        **extra,
+    )
+    if isinstance(exc, (kopf.PermanentError, kopf.TemporaryError)):
+        logger.log(
+            logging.ERROR if isinstance(resolved_error, kopf.PermanentError) else logging.WARNING,
+            "%s %s",
+            message,
+            format_log_fields(log_details),
+        )
+    else:
+        logger.exception("%s %s", message, format_log_fields(log_details))
+    raise resolved_error from exc
+
+
+def execute_reconcile(
+    operation: Callable[[], Any],
+    *,
+    logger: logging.Logger,
+    action: str,
+    resource_kind: str,
+    name: str,
+    namespace: str | None = None,
+    meta: dict[str, Any] | None = None,
+    generation: int | None = None,
+    default_delay: int = 10,
+    start_message: str | None = None,
+    success_message: str | None = None,
+    **extra: Any,
+) -> Any:
+    if start_message:
+        log_operator_event(
+            logger,
+            logging.INFO,
+            start_message,
+            resource_kind=resource_kind,
+            name=name,
+            namespace=namespace,
+            meta=meta,
+            generation=generation,
+            action=action,
+            **extra,
+        )
+    try:
+        result = operation()
+    except Exception as exc:
+        raise_reconcile_error(
+            logger,
+            action,
+            exc,
+            resource_kind=resource_kind,
+            name=name,
+            namespace=namespace,
+            meta=meta,
+            generation=generation,
+            default_delay=default_delay,
+            **extra,
+        )
+    if success_message:
+        log_operator_event(
+            logger,
+            logging.INFO,
+            success_message,
+            resource_kind=resource_kind,
+            name=name,
+            namespace=namespace,
+            meta=meta,
+            generation=generation,
+            action=action,
+            **extra,
+        )
+    return result
 
 
 def get_string_env(name: str, default: str) -> str:
@@ -100,6 +322,8 @@ DEFAULT_STORAGE_SIZE = os.getenv("AGENT_STORAGE_SIZE", "1Gi")
 CLUSTER_SECRET_STORE = os.getenv("CLUSTER_SECRET_STORE", "ai-agent-sandbox-vault-backend")
 SECRET_PROVISIONING_MODE = os.getenv("SECRET_PROVISIONING_MODE", "native").strip().lower() or "native"
 DEFAULT_LITELLM_MASTER_KEY = os.getenv("DEFAULT_LITELLM_MASTER_KEY", "").strip()
+DEFAULT_API_GATEWAY_SHARED_TOKEN = os.getenv("DEFAULT_API_GATEWAY_SHARED_TOKEN", "").strip()
+API_GATEWAY_INTERNAL_URL = os.getenv("API_GATEWAY_INTERNAL_URL", "").strip()
 API_PORT = 8080
 PROTECTED_NAMESPACES = {"default", "kube-system", "kube-public", "kube-node-lease"}
 OPERATOR_NAMESPACE = os.getenv("OPERATOR_NAMESPACE", "default").strip() or "default"
@@ -167,8 +391,80 @@ OPEN_SANDBOX_RUNTIME_ENV: dict[str, str] = {
 }
 OPEN_SANDBOX_API_KEY_SECRET_NAME = os.getenv("OPEN_SANDBOX_API_KEY_SECRET_NAME", "").strip()
 OPEN_SANDBOX_API_KEY_SECRET_KEY = os.getenv("OPEN_SANDBOX_API_KEY_SECRET_KEY", "api-key").strip() or "api-key"
+AGENT_RUNTIME_EXTRA_ENV = get_json_env("AGENT_RUNTIME_EXTRA_ENV_JSON", {})
 GOOSE_RUNTIME_EXTRA_ENV = get_json_env("GOOSE_RUNTIME_EXTRA_ENV_JSON", {})
 GOOSE_RUNTIME_CONFIG_FILES_ENV = "GOOSE_RUNTIME_CONFIG_FILES_JSON"
+AGENT_SKILL_FILES_ENV = "AGENT_SKILL_FILES_JSON"
+
+# Mapping of MCP server names (as referenced in skill frontmatter) to sidecar images.
+# The operator auto-injects these sidecars when a skill's allowedMcpServers references them.
+MCP_SIDECAR_CATALOG: dict[str, dict[str, Any]] = {}
+
+def _load_mcp_sidecar_catalog() -> None:
+    """Load the MCP sidecar catalog from the MCP_SIDECAR_CATALOG_JSON env var."""
+    raw = os.getenv("MCP_SIDECAR_CATALOG_JSON", "").strip()
+    if not raw:
+        return
+    try:
+        catalog = json.loads(raw)
+        if isinstance(catalog, dict):
+            MCP_SIDECAR_CATALOG.update(catalog)
+    except (json.JSONDecodeError, TypeError):
+        logger.warning("MCP_SIDECAR_CATALOG_JSON is not valid JSON; ignoring.")
+
+_load_mcp_sidecar_catalog()
+
+
+def _extract_skill_mcp_servers(skills_config: dict[str, Any]) -> set[str]:
+    """Extract allowedMcpServers from skill file frontmatter."""
+    servers: set[str] = set()
+    files = skills_config.get("files", {})
+    for content in files.values():
+        if not isinstance(content, str):
+            continue
+        # Parse YAML frontmatter between --- delimiters
+        if content.startswith("---"):
+            parts = content.split("---", 2)
+            if len(parts) >= 3:
+                try:
+                    import yaml
+                    fm = yaml.safe_load(parts[1])
+                    if isinstance(fm, dict):
+                        mcp = fm.get("allowedMcpServers") or fm.get("allowed_mcp_servers") or []
+                        if isinstance(mcp, list):
+                            servers.update(s for s in mcp if isinstance(s, str))
+                except Exception:
+                    pass
+    return servers
+
+
+def _auto_inject_mcp_sidecars(
+    explicit_sidecars: list[dict[str, Any]],
+    skills_config: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Merge explicitly declared sidecars with auto-injected ones from skill frontmatter."""
+    if not MCP_SIDECAR_CATALOG or not skills_config:
+        return explicit_sidecars
+
+    required_servers = _extract_skill_mcp_servers(skills_config)
+    if not required_servers:
+        return explicit_sidecars
+
+    existing_names = {s.get("name") for s in explicit_sidecars}
+    merged = list(explicit_sidecars)
+    for server_name in sorted(required_servers):
+        if server_name in existing_names:
+            continue
+        if server_name in MCP_SIDECAR_CATALOG:
+            entry = MCP_SIDECAR_CATALOG[server_name]
+            merged.append({
+                "name": server_name,
+                "image": entry.get("image", "busybox"),
+                "port": entry.get("port", 8080),
+            })
+            logger.info("Auto-injected MCP sidecar '%s' from skill frontmatter", server_name)
+    return merged
+
 PLATFORM_MANAGED_GOOSE_ENV = {
     "AGENT_MODEL",
     "AGENT_NAME",
@@ -192,22 +488,74 @@ PLATFORM_MANAGED_GOOSE_ENV = {
     GOOSE_RUNTIME_CONFIG_FILES_ENV,
 }
 
+PLATFORM_MANAGED_AGENT_ENV = {
+    "AGENT_MODEL",
+    "AGENT_NAME",
+    "AGENT_NAMESPACE",
+    "AGENT_SYSTEM_PROMPT",
+    "API_GATEWAY_INTERNAL_URL",
+    "API_GATEWAY_SHARED_TOKEN",
+    A2A_ALLOWED_CALLERS_ENV,
+    A2A_ALLOWED_TARGETS_ENV,
+    A2A_REQUIRE_HITL_ENV,
+    A2A_MAX_TIMEOUT_SECONDS_ENV,
+    AGENT_SKILL_FILES_ENV,
+    "LITELLM_API_BASE",
+    "MCP_SERVERS",
+    "MCP_SIDECARS",
+    "QDRANT_URL",
+    "QDRANT_COLLECTION",
+    "LITELLM_API_KEY",
+    "AGENT_POLICY_NAME",
+    "OTEL_EXPORTER_OTLP_ENDPOINT",
+    "HITL_MODE",
+    "HITL_NOTIFICATION_WEBHOOK_URL",
+    "MCP_HUB_NAMESPACE",
+    "ALLOWED_MCP_SERVERS",
+    "MCP_BEARER_TOKEN",
+    "OPEN_SANDBOX_API_KEY",
+} | set(OPEN_SANDBOX_RUNTIME_ENV)
 
-def goose_runtime_extra_env_items() -> list[dict[str, str]]:
-    if not isinstance(GOOSE_RUNTIME_EXTRA_ENV, dict):
-        logger.warning("GOOSE_RUNTIME_EXTRA_ENV_JSON must decode to a JSON object. Ignoring it.")
+
+def runtime_extra_env_items(
+    raw_env: Any,
+    *,
+    source_env_name: str,
+    runtime_name: str,
+    platform_managed_names: set[str],
+) -> list[dict[str, str]]:
+    if not isinstance(raw_env, dict):
+        logger.warning("%s must decode to a JSON object. Ignoring it.", source_env_name)
         return []
 
     items: list[dict[str, str]] = []
-    for raw_name, raw_value in sorted(GOOSE_RUNTIME_EXTRA_ENV.items(), key=lambda item: str(item[0])):
+    for raw_name, raw_value in sorted(raw_env.items(), key=lambda item: str(item[0])):
         name = str(raw_name).strip()
         if not name or raw_value is None:
             continue
-        if name in PLATFORM_MANAGED_GOOSE_ENV:
-            logger.warning("Ignoring goose runtime env override for platform-managed variable %s.", name)
+        if name in platform_managed_names:
+            logger.warning("Ignoring %s env override for platform-managed variable %s.", runtime_name, name)
             continue
         items.append({"name": name, "value": serialize_env_value(raw_value)})
     return items
+
+
+def goose_runtime_extra_env_items() -> list[dict[str, str]]:
+    return runtime_extra_env_items(
+        GOOSE_RUNTIME_EXTRA_ENV,
+        source_env_name="GOOSE_RUNTIME_EXTRA_ENV_JSON",
+        runtime_name="goose runtime",
+        platform_managed_names=PLATFORM_MANAGED_GOOSE_ENV,
+    )
+
+
+def agent_runtime_extra_env_items() -> list[dict[str, str]]:
+    return runtime_extra_env_items(
+        AGENT_RUNTIME_EXTRA_ENV,
+        source_env_name="AGENT_RUNTIME_EXTRA_ENV_JSON",
+        runtime_name="agent runtime",
+        platform_managed_names=PLATFORM_MANAGED_AGENT_ENV,
+    )
 
 
 def merged_goose_runtime_config_files(spec: dict[str, Any]) -> dict[str, Any]:
@@ -243,10 +591,29 @@ def configure(settings: kopf.OperatorSettings, **_) -> None:
     except kubernetes.config.ConfigException:
         kubernetes.config.load_kube_config()
         logger.info("Loaded local kubeconfig file.")
+    init_state_database()
+    log_operator_event(
+        logger,
+        logging.INFO,
+        "Operator startup configuration loaded.",
+        action="startup",
+        operatorNamespace=OPERATOR_NAMESPACE,
+        peering=OPERATOR_PEERING_NAME,
+        secretProvisioningMode=SECRET_PROVISIONING_MODE,
+        workflowPollSeconds=WORKFLOW_POLL_SECONDS,
+        evalSchedulePollSeconds=EVAL_SCHEDULE_POLL_SECONDS,
+        workerImage=WORKER_IMAGE,
+    )
 
 
 def sandbox_name(agent_name: str) -> str:
     return f"{agent_name}-sandbox"
+
+
+def resolved_api_gateway_internal_url() -> str:
+    if API_GATEWAY_INTERNAL_URL:
+        return API_GATEWAY_INTERNAL_URL.rstrip("/")
+    return f"http://ai-agent-sandbox-api-gateway.{OPERATOR_NAMESPACE}.svc.cluster.local:8080"
 
 
 def slugify_name(value: str, max_length: int = 63) -> str:
@@ -269,6 +636,25 @@ def artifact_file_path(kind: str, namespace: str, name: str, generation: int) ->
     safe_namespace = slugify_name(namespace, max_length=40)
     safe_name = slugify_name(name, max_length=40)
     return f"{kind}s/{safe_namespace}/{safe_name}/generation-{generation}.json"
+
+
+def worker_passthrough_env() -> list[dict[str, str]]:
+    items: list[dict[str, str]] = []
+    for name in (
+        "STATE_DB_ENABLED",
+        "DATABASE_URL",
+        "DATABASE_HOST",
+        "DATABASE_PORT",
+        "DATABASE_NAME",
+        "DATABASE_USER",
+        "DATABASE_PASSWORD",
+        "DATABASE_DRIVER",
+        "DATABASE_SQLITE_PATH",
+    ):
+        value = os.getenv(name, "")
+        if value:
+            items.append({"name": name, "value": value})
+    return items
 
 
 def build_artifact_ref(
@@ -471,6 +857,10 @@ def validate_runtime_configuration(runtime_kind: str, spec: dict[str, Any]) -> N
         parse_agent_a2a_config(spec.get("a2a"), source="AIAgent.spec.a2a")
     except ValueError as exc:
         raise kopf.PermanentError(str(exc)) from exc
+    try:
+        parse_agent_skills_config(spec.get("skills"), source="AIAgent.spec.skills")
+    except ValueError as exc:
+        raise kopf.PermanentError(str(exc)) from exc
 
     if runtime_kind != "goose":
         if goose_spec is not None:
@@ -649,6 +1039,8 @@ def create_agent_statefulset_manifest(
     mcp_sidecars = spec.get("mcpSidecars") or []
     enable_gvisor = spec.get("enableGVisor", False)
     system_prompt = spec.get("systemPrompt", "")
+    skills_config = parse_agent_skills_config(spec.get("skills"), source="AIAgent.spec.skills")
+    mcp_sidecars = _auto_inject_mcp_sidecars(mcp_sidecars, skills_config)
 
     pod_security_context = {
         "runAsNonRoot": True,
@@ -669,6 +1061,17 @@ def create_agent_statefulset_manifest(
         {"name": "AGENT_NAME", "value": name},
         {"name": "AGENT_NAMESPACE", "value": namespace},
         {"name": "AGENT_SYSTEM_PROMPT", "value": system_prompt},
+        {"name": "API_GATEWAY_INTERNAL_URL", "value": resolved_api_gateway_internal_url()},
+        {
+            "name": "API_GATEWAY_SHARED_TOKEN",
+            "valueFrom": {
+                "secretKeyRef": {
+                    "name": SECRET_NAME,
+                    "key": "API_GATEWAY_SHARED_TOKEN",
+                    "optional": True,
+                }
+            },
+        },
     ]
     agent_a2a_config = parse_agent_a2a_config(spec.get("a2a"), source="AIAgent.spec.a2a")
     policy_a2a_config = parse_policy_a2a_config(policy_spec or {})
@@ -692,6 +1095,13 @@ def create_agent_statefulset_manifest(
             },
         ]
     )
+    if skills_config:
+        env.append(
+            {
+                "name": AGENT_SKILL_FILES_ENV,
+                "value": json.dumps(skills_config.get("files", {}), ensure_ascii=False, sort_keys=True),
+            }
+        )
 
     volume_mounts = [
         {"name": "tmp-volume", "mountPath": "/tmp"},
@@ -794,6 +1204,7 @@ def create_agent_statefulset_manifest(
                     }
                 },
             })
+        env.extend(agent_runtime_extra_env_items())
 
     init_containers = [
         {
@@ -977,7 +1388,11 @@ def ensure_runtime_namespace_secret(namespace: str, owner_name: str, logger: log
                 "data": [
                     {
                         "secretKey": "LITELLM_MASTER_KEY",
-                        "remoteRef": {"key": "litellm-master-key"},
+                        "remoteRef": {"key": "ai-agent-sandbox/litellm-master-key"},
+                    },
+                    {
+                        "secretKey": "API_GATEWAY_SHARED_TOKEN",
+                        "remoteRef": {"key": "ai-agent-sandbox/api-gateway-shared-token"},
                     }
                 ],
             },
@@ -1015,9 +1430,18 @@ def ensure_runtime_namespace_secret(namespace: str, owner_name: str, logger: log
                 ) from exc
         return
 
-    if not DEFAULT_LITELLM_MASTER_KEY:
+    string_data: dict[str, str] = {}
+    if DEFAULT_LITELLM_MASTER_KEY:
+        string_data["LITELLM_MASTER_KEY"] = DEFAULT_LITELLM_MASTER_KEY
+    if DEFAULT_API_GATEWAY_SHARED_TOKEN:
+        string_data["API_GATEWAY_SHARED_TOKEN"] = DEFAULT_API_GATEWAY_SHARED_TOKEN
+
+    if not string_data:
         logger.warning(
-            "Skipping runtime secret provisioning for namespace '%s' because DEFAULT_LITELLM_MASTER_KEY is empty.",
+            (
+                "Skipping runtime secret provisioning for namespace '%s' because "
+                "DEFAULT_LITELLM_MASTER_KEY and DEFAULT_API_GATEWAY_SHARED_TOKEN are empty."
+            ),
             namespace,
         )
         return
@@ -1035,10 +1459,85 @@ def ensure_runtime_namespace_secret(namespace: str, owner_name: str, logger: log
             },
         },
         "type": "Opaque",
-        "stringData": {"LITELLM_MASTER_KEY": DEFAULT_LITELLM_MASTER_KEY},
+        "stringData": string_data,
     }
     ensure_secret(namespace, secret_manifest)
     logger.info("Secret '%s' provisioned for namespace '%s'", SECRET_NAME, namespace)
+
+
+def platform_namespace_selector() -> dict[str, dict[str, str]]:
+    return {"matchLabels": {"kubernetes.io/metadata.name": OPERATOR_NAMESPACE}}
+
+
+def agent_baseline_ingress_peers() -> list[dict[str, Any]]:
+    return [
+        {
+            "namespaceSelector": platform_namespace_selector(),
+            "podSelector": {"matchLabels": {"app": "api-gateway"}},
+        },
+        {
+            "namespaceSelector": platform_namespace_selector(),
+            "podSelector": {"matchLabels": {"app": "operator"}},
+        },
+        {
+            "namespaceSelector": platform_namespace_selector(),
+            "podSelector": {"matchLabels": {"app": "operator-worker"}},
+        },
+    ]
+
+
+def agent_baseline_egress_rules() -> list[dict[str, Any]]:
+    rules: list[dict[str, Any]] = [
+        {
+            "ports": [
+                {"protocol": "UDP", "port": 53},
+                {"protocol": "TCP", "port": 53},
+            ],
+        },
+        {
+            "to": [
+                {
+                    "namespaceSelector": platform_namespace_selector(),
+                    "podSelector": {"matchLabels": {"app": "api-gateway"}},
+                }
+            ],
+            "ports": [{"protocol": "TCP", "port": API_PORT}],
+        },
+        {
+            "to": [
+                {
+                    "namespaceSelector": platform_namespace_selector(),
+                    "podSelector": {"matchLabels": {"app": "litellm"}},
+                }
+            ],
+            "ports": [{"protocol": "TCP", "port": 4000}],
+        },
+        {
+            "to": [
+                {
+                    "namespaceSelector": platform_namespace_selector(),
+                    "podSelector": {"matchLabels": {"app": "qdrant"}},
+                }
+            ],
+            "ports": [{"protocol": "TCP", "port": 6333}],
+        },
+        {
+            "ports": [{"protocol": "TCP", "port": 443}],
+        },
+    ]
+    if OTEL_ENDPOINT:
+        rules.append(
+            {
+                "to": [
+                    {
+                        "namespaceSelector": platform_namespace_selector(),
+                        "podSelector": {"matchLabels": {"app": "otel-collector"}},
+                    }
+                ],
+                "ports": [{"protocol": "TCP", "port": 4317}],
+            }
+        )
+    return rules
 
 
 def create_mcp_network_policy_manifest(name: str, namespace: str, allowed_mcp_types: list[str]) -> dict[str, Any]:
@@ -1050,7 +1549,7 @@ def create_mcp_network_policy_manifest(name: str, namespace: str, allowed_mcp_ty
     label ``sandbox.enterprise.ai/mcp-hub=true``.  If allowedMcpServers is
     empty, no MCP egress is allowed at all.
     """
-    egress_rules: list[dict[str, Any]] = []
+    egress_rules: list[dict[str, Any]] = agent_baseline_egress_rules()
     for mcp_type in allowed_mcp_types:
         egress_rules.append({
             "to": [
@@ -1135,21 +1634,16 @@ def create_a2a_ingress_network_policy_manifest(
     namespace: str,
     allowed_callers: list[dict[str, str]],
 ) -> dict[str, Any]:
-    ingress_rules: list[dict[str, Any]] = []
+    allowed_sources: list[dict[str, Any]] = agent_baseline_ingress_peers()
     for caller in allowed_callers:
-        ingress_rules.append(
+        allowed_sources.append(
             {
-                "from": [
-                    {
-                        "namespaceSelector": {
-                            "matchLabels": {"kubernetes.io/metadata.name": caller["namespace"]}
-                        },
-                        "podSelector": {
-                            "matchLabels": {"app": "ai-agent", "agent-name": caller["name"]}
-                        },
-                    }
-                ],
-                "ports": [{"protocol": "TCP", "port": API_PORT}],
+                "namespaceSelector": {
+                    "matchLabels": {"kubernetes.io/metadata.name": caller["namespace"]}
+                },
+                "podSelector": {
+                    "matchLabels": {"app": "ai-agent", "agent-name": caller["name"]}
+                },
             }
         )
 
@@ -1168,7 +1662,7 @@ def create_a2a_ingress_network_policy_manifest(
         "spec": {
             "podSelector": {"matchLabels": {"app": "ai-agent", "agent-name": name}},
             "policyTypes": ["Ingress"],
-            "ingress": ingress_rules,
+            "ingress": [{"from": allowed_sources, "ports": [{"protocol": "TCP", "port": API_PORT}]}],
         },
     }
 
@@ -1220,6 +1714,21 @@ def create_agent_resources(spec: dict[str, Any], name: str, namespace: str, logg
     if allowed_mcp:
         mcp_auth_secret_manifest = create_mcp_auth_secret_manifest(namespace)
 
+    log_operator_event(
+        logger,
+        logging.INFO,
+        "Resolved agent resource configuration.",
+        resource_kind="AIAgent",
+        name=name,
+        namespace=namespace,
+        policyName=policy_name,
+        allowedMcpServers=allowed_mcp,
+        hasTenantPolicy=bool(tenant_spec),
+        runtimeKind=str((spec.get("runtime") or {}).get("kind") or "langgraph")
+        if isinstance(spec.get("runtime") or {}, dict)
+        else "langgraph",
+    )
+
     for manifest in (
         service_manifest,
         statefulset_manifest,
@@ -1243,250 +1752,375 @@ def create_agent_resources(spec: dict[str, Any], name: str, namespace: str, logg
 
 @kopf.on.create("sandbox.enterprise.ai", "v1alpha1", "aiagents")  # type: ignore[arg-type]
 def create_agent(spec: dict[str, Any], name: str, namespace: str, logger: Any, **kwargs: Any) -> None:
-    logger.info("Creating sandbox for AIAgent %s in %s", name, namespace)
-    try:
-        create_agent_resources(spec, name, namespace, logger)
-        logger.info("Sandbox resources for %s created successfully", name)
-    except ApiException as exc:
-        logger.error("Exception when creating agent resources: %s", exc)
-        if exc.status in (400, 422):
-            raise kopf.PermanentError(f"Invalid agent resource spec: {exc}") from exc
-        raise kopf.TemporaryError(f"Failed to create agent resources: {exc}", delay=10) from exc
+    del kwargs
+    execute_reconcile(
+        lambda: create_agent_resources(spec, name, namespace, logger),
+        logger=logger,
+        action="create-agent",
+        resource_kind="AIAgent",
+        name=name,
+        namespace=namespace,
+        default_delay=10,
+        start_message="Reconciling AIAgent create event.",
+        success_message="AIAgent resources reconciled.",
+        policyRef=spec.get("policyRef"),
+    )
 
 
 @kopf.on.update("sandbox.enterprise.ai", "v1alpha1", "aiagents")  # type: ignore[arg-type]
 def update_agent(spec: dict[str, Any], name: str, namespace: str, logger: logging.Logger, **kwargs: Any) -> None:
-    logger.info("Updating AIAgent %s by patching its singleton StatefulSet", name)
-
-    try:
-        create_agent_resources(spec, name, namespace, logger)
-        logger.info("AIAgent %s updated successfully", name)
-    except ApiException as exc:
-        logger.error("Failed to recreate sandbox resources: %s", exc)
-        if exc.status in (400, 422):
-            raise kopf.PermanentError(f"Invalid pod spec for update: {exc}") from exc
-        raise kopf.TemporaryError(f"Unexpected error during update: {exc}", delay=5) from exc
+    del kwargs
+    execute_reconcile(
+        lambda: create_agent_resources(spec, name, namespace, logger),
+        logger=logger,
+        action="update-agent",
+        resource_kind="AIAgent",
+        name=name,
+        namespace=namespace,
+        default_delay=5,
+        start_message="Reconciling AIAgent update event.",
+        success_message="AIAgent update reconciled.",
+        policyRef=spec.get("policyRef"),
+    )
 
 
 @kopf.on.resume("sandbox.enterprise.ai", "v1alpha1", "aiagents")  # type: ignore[arg-type]
 def resume_agent(spec: dict[str, Any], name: str, namespace: str, logger: logging.Logger, **kwargs: Any) -> None:
-    logger.info("Reconciling existing AIAgent %s on operator startup", name)
-
-    try:
-        create_agent_resources(spec, name, namespace, logger)
-        logger.info("AIAgent %s reconciled successfully on resume", name)
-    except ApiException as exc:
-        logger.error("Failed to reconcile sandbox resources on resume: %s", exc)
-        if exc.status in (400, 422):
-            raise kopf.PermanentError(f"Invalid pod spec on resume: {exc}") from exc
-        raise kopf.TemporaryError(f"Unexpected error during resume reconcile: {exc}", delay=5) from exc
+    del kwargs
+    execute_reconcile(
+        lambda: create_agent_resources(spec, name, namespace, logger),
+        logger=logger,
+        action="resume-agent",
+        resource_kind="AIAgent",
+        name=name,
+        namespace=namespace,
+        default_delay=5,
+        start_message="Reconciling existing AIAgent on operator startup.",
+        success_message="AIAgent resume reconcile completed.",
+        policyRef=spec.get("policyRef"),
+    )
 
 
 @kopf.on.delete("sandbox.enterprise.ai", "v1alpha1", "aiagents")  # type: ignore[arg-type]
 def delete_agent(spec: dict[str, Any], name: str, namespace: str, logger: logging.Logger, **kwargs: Any) -> None:
-    logger.info("AIAgent %s deleted. StatefulSet and Service will be garbage-collected; PVCs are retained.", name)
+    del spec, kwargs
+    log_operator_event(
+        logger,
+        logging.INFO,
+        "AIAgent deleted; Kubernetes-owned resources will be garbage-collected while PVCs are retained.",
+        resource_kind="AIAgent",
+        name=name,
+        namespace=namespace,
+        action="delete-agent",
+    )
 
 
 @kopf.on.create("sandbox.enterprise.ai", "v1alpha1", "agentpolicies")  # type: ignore[arg-type]
 def create_policy(spec: dict[str, Any], name: str, namespace: str, logger: logging.Logger, **kwargs: Any) -> None:
-    try:
-        validate_supported_policy_spec(spec)
-        logger.info("Validated AgentPolicy %s in %s", name, namespace)
-    except ValueError as exc:
-        raise kopf.PermanentError(str(exc)) from exc
+    del kwargs
+    execute_reconcile(
+        lambda: validate_supported_policy_spec(spec),
+        logger=logger,
+        action="validate-policy",
+        resource_kind="AgentPolicy",
+        name=name,
+        namespace=namespace,
+        start_message="Validating AgentPolicy create event.",
+        success_message="AgentPolicy validated.",
+    )
 
 
 @kopf.on.update("sandbox.enterprise.ai", "v1alpha1", "agentpolicies")  # type: ignore[arg-type]
 def update_policy(spec: dict[str, Any], name: str, namespace: str, logger: logging.Logger, **kwargs: Any) -> None:
-    try:
-        validate_supported_policy_spec(spec)
-        logger.info("Validated updated AgentPolicy %s in %s", name, namespace)
-    except ValueError as exc:
-        raise kopf.PermanentError(str(exc)) from exc
+    del kwargs
+    execute_reconcile(
+        lambda: validate_supported_policy_spec(spec),
+        logger=logger,
+        action="update-policy",
+        resource_kind="AgentPolicy",
+        name=name,
+        namespace=namespace,
+        start_message="Validating AgentPolicy update event.",
+        success_message="AgentPolicy update validated.",
+    )
 
 
 @kopf.on.create("sandbox.enterprise.ai", "v1alpha1", "agenttenants")  # type: ignore[arg-type]
 def create_tenant(spec: dict[str, Any], name: str, logger: logging.Logger, **kwargs: Any) -> None:
+    del kwargs
     tenant_name = spec.get("tenantName", name)
     target_ns = spec.get("namespace", f"agent-tenant-{tenant_name}")
     quota_spec = spec.get("resourceQuota", {})
     admin_users = spec.get("adminUsers", [])
 
     if target_ns in PROTECTED_NAMESPACES or target_ns == OPERATOR_NAMESPACE:
+        log_operator_event(
+            logger,
+            logging.ERROR,
+            "Refusing to provision AgentTenant into a protected namespace.",
+            resource_kind="AgentTenant",
+            name=name,
+            action="create-tenant",
+            tenantName=tenant_name,
+            targetNamespace=target_ns,
+        )
         raise kopf.PermanentError(
             f"Refusing to provision tenant '{tenant_name}' into protected namespace '{target_ns}'."
         )
 
-    logger.info("Provisioning tenant '%s' in namespace '%s'", tenant_name, target_ns)
-
-    core_api = kubernetes.client.CoreV1Api()
-    rbac_api = kubernetes.client.RbacAuthorizationV1Api()
-
-    namespace_body = kubernetes.client.V1Namespace(
-        metadata=kubernetes.client.V1ObjectMeta(
-            name=target_ns,
-            labels={
-                "managed-by": "ai-agent-sandbox",
-                "tenant": tenant_name,
-                # Required by the mcp-hub NetworkPolicy to allow ingress from
-                # tenant agent pods into the mcp-hub namespace MCP server pods.
-                "sandbox.enterprise.ai/tenant": "true",
-            },
-        )
+    log_operator_event(
+        logger,
+        logging.INFO,
+        "Reconciling AgentTenant create event.",
+        resource_kind="AgentTenant",
+        name=name,
+        action="create-tenant",
+        tenantName=tenant_name,
+        targetNamespace=target_ns,
+        adminUserCount=len(admin_users),
     )
+
     try:
-        core_api.create_namespace(body=namespace_body)
-        logger.info("Namespace '%s' created", target_ns)
-    except ApiException as exc:
-        if exc.status == 409:
-            core_api.patch_namespace(
+        core_api = kubernetes.client.CoreV1Api()
+        rbac_api = kubernetes.client.RbacAuthorizationV1Api()
+
+        namespace_body = kubernetes.client.V1Namespace(
+            metadata=kubernetes.client.V1ObjectMeta(
                 name=target_ns,
-                body={"metadata": {"labels": namespace_body.metadata.labels}},
+                labels={
+                    "managed-by": "ai-agent-sandbox",
+                    "tenant": tenant_name,
+                    # Required by the mcp-hub NetworkPolicy to allow ingress from
+                    # tenant agent pods into the mcp-hub namespace MCP server pods.
+                    "sandbox.enterprise.ai/tenant": "true",
+                },
             )
-            logger.info("Namespace '%s' already exists", target_ns)
-        elif exc.status in (400, 422):
-            raise kopf.PermanentError(f"Invalid namespace spec: {exc}") from exc
-        else:
-            raise
-
-    ensure_runtime_access(target_ns)
-
-    hard_limits = {}
-    if quota_spec.get("maxCPU"):
-        hard_limits["limits.cpu"] = quota_spec["maxCPU"]
-    if quota_spec.get("maxMemory"):
-        hard_limits["limits.memory"] = quota_spec["maxMemory"]
-    if quota_spec.get("maxPods"):
-        hard_limits["pods"] = str(quota_spec["maxPods"])
-    if quota_spec.get("maxGPU"):
-        hard_limits["requests.nvidia.com/gpu"] = quota_spec["maxGPU"]
-
-    if hard_limits:
-        quota_body = kubernetes.client.V1ResourceQuota(
-            metadata=kubernetes.client.V1ObjectMeta(name=f"{tenant_name}-quota"),
-            spec=kubernetes.client.V1ResourceQuotaSpec(hard=hard_limits),
         )
         try:
-            core_api.create_namespaced_resource_quota(namespace=target_ns, body=quota_body)
-            logger.info("ResourceQuota created for tenant '%s': %s", tenant_name, hard_limits)
+            core_api.create_namespace(body=namespace_body)
+            logger.info("Namespace '%s' created", target_ns)
         except ApiException as exc:
             if exc.status == 409:
-                core_api.patch_namespaced_resource_quota(
-                    name=f"{tenant_name}-quota",
+                core_api.patch_namespace(
+                    name=target_ns,
+                    body={"metadata": {"labels": namespace_body.metadata.labels}},
+                )
+                logger.info("Namespace '%s' already exists", target_ns)
+            elif exc.status in (400, 422):
+                raise kopf.PermanentError(f"Invalid namespace spec: {describe_api_exception(exc)}") from exc
+            else:
+                raise
+
+        ensure_runtime_access(target_ns)
+
+        hard_limits = {}
+        if quota_spec.get("maxCPU"):
+            hard_limits["limits.cpu"] = quota_spec["maxCPU"]
+        if quota_spec.get("maxMemory"):
+            hard_limits["limits.memory"] = quota_spec["maxMemory"]
+        if quota_spec.get("maxPods"):
+            hard_limits["pods"] = str(quota_spec["maxPods"])
+        if quota_spec.get("maxGPU"):
+            hard_limits["requests.nvidia.com/gpu"] = quota_spec["maxGPU"]
+
+        if hard_limits:
+            quota_body = kubernetes.client.V1ResourceQuota(
+                metadata=kubernetes.client.V1ObjectMeta(name=f"{tenant_name}-quota"),
+                spec=kubernetes.client.V1ResourceQuotaSpec(hard=hard_limits),
+            )
+            try:
+                core_api.create_namespaced_resource_quota(namespace=target_ns, body=quota_body)
+                logger.info("ResourceQuota created for tenant '%s': %s", tenant_name, hard_limits)
+            except ApiException as exc:
+                if exc.status == 409:
+                    core_api.patch_namespaced_resource_quota(
+                        name=f"{tenant_name}-quota",
+                        namespace=target_ns,
+                        body=quota_body,
+                    )
+                else:
+                    raise
+
+        limit_range = kubernetes.client.V1LimitRange(
+            metadata=kubernetes.client.V1ObjectMeta(name=f"{tenant_name}-limits"),
+            spec=kubernetes.client.V1LimitRangeSpec(
+                limits=[
+                    kubernetes.client.V1LimitRangeItem(
+                        type="Container",
+                        default={"cpu": "500m", "memory": "512Mi"},
+                        default_request={"cpu": "100m", "memory": "128Mi"},
+                    )
+                ]
+            ),
+        )
+        try:
+            core_api.create_namespaced_limit_range(namespace=target_ns, body=limit_range)
+            logger.info("LimitRange created for tenant '%s'", tenant_name)
+        except ApiException as exc:
+            if exc.status == 409:
+                core_api.patch_namespaced_limit_range(
+                    name=f"{tenant_name}-limits",
                     namespace=target_ns,
-                    body=quota_body,
+                    body=limit_range,
                 )
             else:
                 raise
 
-    limit_range = kubernetes.client.V1LimitRange(
-        metadata=kubernetes.client.V1ObjectMeta(name=f"{tenant_name}-limits"),
-        spec=kubernetes.client.V1LimitRangeSpec(
-            limits=[
-                kubernetes.client.V1LimitRangeItem(
-                    type="Container",
-                    default={"cpu": "500m", "memory": "512Mi"},
-                    default_request={"cpu": "100m", "memory": "128Mi"},
-                )
-            ]
-        ),
-    )
-    try:
-        core_api.create_namespaced_limit_range(namespace=target_ns, body=limit_range)
-        logger.info("LimitRange created for tenant '%s'", tenant_name)
-    except ApiException as exc:
-        if exc.status == 409:
-            core_api.patch_namespaced_limit_range(
-                name=f"{tenant_name}-limits",
-                namespace=target_ns,
-                body=limit_range,
-            )
-        else:
-            raise
-
-    role = kubernetes.client.V1Role(
-        metadata=kubernetes.client.V1ObjectMeta(name=f"{tenant_name}-agent-admin", namespace=target_ns),
-        rules=[
-            kubernetes.client.V1PolicyRule(
-                api_groups=["sandbox.enterprise.ai"],
-                resources=["aiagents", "agentpolicies", "agentapprovals", "agentworkflows", "agentevals"],
-                verbs=["*"],
-            ),
-            kubernetes.client.V1PolicyRule(
-                api_groups=[""],
-                resources=["pods", "pods/exec", "pods/portforward", "pods/log", "services"],
-                verbs=["get", "list", "watch", "create"],
-            ),
-        ],
-    )
-    try:
-        rbac_api.create_namespaced_role(namespace=target_ns, body=role)
-    except ApiException as exc:
-        if exc.status == 409:
-            rbac_api.patch_namespaced_role(
-                name=f"{tenant_name}-agent-admin",
-                namespace=target_ns,
-                body=role,
-            )
-        else:
-            raise
-
-    for user in admin_users:
-        safe_user = re.sub(r"[^a-z0-9-]", "-", user.lower().strip()).strip("-")
-        if not safe_user:
-            logger.warning("Skipping empty or invalid user string: %s", user)
-            continue
-
-        binding = kubernetes.client.V1RoleBinding(
-            metadata=kubernetes.client.V1ObjectMeta(
-                name=f"{tenant_name}-{safe_user}-binding",
-                namespace=target_ns,
-            ),
-            role_ref=kubernetes.client.V1RoleRef(
-                api_group="rbac.authorization.k8s.io",
-                kind="Role",
-                name=f"{tenant_name}-agent-admin",
-            ),
-            subjects=[
-                kubernetes.client.V1Subject(
-                    kind="User",
-                    name=user,
-                    api_group="rbac.authorization.k8s.io",
-                )
+        role = kubernetes.client.V1Role(
+            metadata=kubernetes.client.V1ObjectMeta(name=f"{tenant_name}-agent-admin", namespace=target_ns),
+            rules=[
+                kubernetes.client.V1PolicyRule(
+                    api_groups=["sandbox.enterprise.ai"],
+                    resources=["aiagents", "agentpolicies", "agentapprovals", "agentworkflows", "agentevals"],
+                    verbs=["*"],
+                ),
+                kubernetes.client.V1PolicyRule(
+                    api_groups=[""],
+                    resources=["pods", "pods/exec", "pods/portforward", "pods/log", "services"],
+                    verbs=["get", "list", "watch", "create"],
+                ),
             ],
         )
         try:
-            rbac_api.create_namespaced_role_binding(namespace=target_ns, body=binding)
-            logger.info("RoleBinding created for user '%s' in tenant '%s'", user, tenant_name)
+            rbac_api.create_namespaced_role(namespace=target_ns, body=role)
         except ApiException as exc:
             if exc.status == 409:
-                rbac_api.patch_namespaced_role_binding(
-                    name=f"{tenant_name}-{safe_user}-binding",
+                rbac_api.patch_namespaced_role(
+                    name=f"{tenant_name}-agent-admin",
                     namespace=target_ns,
-                    body=binding,
+                    body=role,
                 )
             else:
                 raise
 
-    ensure_runtime_namespace_secret(target_ns, tenant_name, logger)
+        for user in admin_users:
+            safe_user = re.sub(r"[^a-z0-9-]", "-", user.lower().strip()).strip("-")
+            if not safe_user:
+                logger.warning("Skipping empty or invalid user string: %s", user)
+                continue
 
-    logger.info("Tenant '%s' fully provisioned", tenant_name)
+            binding = kubernetes.client.V1RoleBinding(
+                metadata=kubernetes.client.V1ObjectMeta(
+                    name=f"{tenant_name}-{safe_user}-binding",
+                    namespace=target_ns,
+                ),
+                role_ref=kubernetes.client.V1RoleRef(
+                    api_group="rbac.authorization.k8s.io",
+                    kind="Role",
+                    name=f"{tenant_name}-agent-admin",
+                ),
+                subjects=[
+                    kubernetes.client.V1Subject(
+                        kind="User",
+                        name=user,
+                        api_group="rbac.authorization.k8s.io",
+                    )
+                ],
+            )
+            try:
+                rbac_api.create_namespaced_role_binding(namespace=target_ns, body=binding)
+                logger.info("RoleBinding created for user '%s' in tenant '%s'", user, tenant_name)
+            except ApiException as exc:
+                if exc.status == 409:
+                    rbac_api.patch_namespaced_role_binding(
+                        name=f"{tenant_name}-{safe_user}-binding",
+                        namespace=target_ns,
+                        body=binding,
+                    )
+                else:
+                    raise
+
+        ensure_runtime_namespace_secret(target_ns, tenant_name, logger)
+
+        log_operator_event(
+            logger,
+            logging.INFO,
+            "AgentTenant resources reconciled.",
+            resource_kind="AgentTenant",
+            name=name,
+            action="create-tenant",
+            tenantName=tenant_name,
+            targetNamespace=target_ns,
+            adminUserCount=len(admin_users),
+            quotaConfigured=bool(hard_limits),
+        )
+    except Exception as exc:
+        raise_reconcile_error(
+            logger,
+            "create-tenant",
+            exc,
+            resource_kind="AgentTenant",
+            name=name,
+            default_delay=15,
+            tenantName=tenant_name,
+            targetNamespace=target_ns,
+            adminUserCount=len(admin_users),
+        )
 
 
 @kopf.on.delete("sandbox.enterprise.ai", "v1alpha1", "agenttenants")  # type: ignore[arg-type]
 def delete_tenant(spec: dict[str, Any], name: str, logger: logging.Logger, **kwargs: Any) -> None:
+    del kwargs
     tenant_name = spec.get("tenantName", name)
     target_ns = spec.get("namespace", f"agent-tenant-{tenant_name}")
-    if target_ns in PROTECTED_NAMESPACES:
-        logger.error("Refusing to delete protected namespace '%s' via tenant deletion.", target_ns)
+    if target_ns in PROTECTED_NAMESPACES or target_ns == OPERATOR_NAMESPACE:
+        log_operator_event(
+            logger,
+            logging.ERROR,
+            "Refusing to delete protected namespace via AgentTenant deletion.",
+            resource_kind="AgentTenant",
+            name=name,
+            action="delete-tenant",
+            tenantName=tenant_name,
+            targetNamespace=target_ns,
+        )
         return
 
-    logger.info("Deleting tenant '%s' by removing namespace '%s'", tenant_name, target_ns)
     try:
+        log_operator_event(
+            logger,
+            logging.INFO,
+            "Deleting tenant namespace.",
+            resource_kind="AgentTenant",
+            name=name,
+            action="delete-tenant",
+            tenantName=tenant_name,
+            targetNamespace=target_ns,
+        )
         kubernetes.client.CoreV1Api().delete_namespace(name=target_ns)
     except ApiException as exc:
         if exc.status != 404:
-            raise
+            raise_reconcile_error(
+                logger,
+                "delete-tenant",
+                exc,
+                resource_kind="AgentTenant",
+                name=name,
+                default_delay=15,
+                tenantName=tenant_name,
+                targetNamespace=target_ns,
+            )
+        log_operator_event(
+            logger,
+            logging.INFO,
+            "Tenant namespace already absent during delete.",
+            resource_kind="AgentTenant",
+            name=name,
+            action="delete-tenant",
+            tenantName=tenant_name,
+            targetNamespace=target_ns,
+        )
+        return
+    log_operator_event(
+        logger,
+        logging.INFO,
+        "Tenant namespace deletion requested.",
+        resource_kind="AgentTenant",
+        name=name,
+        action="delete-tenant",
+        tenantName=tenant_name,
+        targetNamespace=target_ns,
+    )
 
 
 def patch_custom_status(plural: str, namespace: str, name: str, status: dict[str, Any]) -> None:
@@ -1579,7 +2213,9 @@ def create_worker_job_manifest(
                                 {"name": "ARTIFACT_PVC_NAME", "value": artifact_pvc_name},
                                 {"name": "AGENT_RUNTIME_TIMEOUT_SECONDS", "value": AGENT_RUNTIME_TIMEOUT_SECONDS},
                                 {"name": "WORKFLOW_RUN_ID", "value": run_id or ""},
+                                {"name": "EVAL_RUN_ID", "value": run_id or ""},
                                 {"name": "PYTHONDONTWRITEBYTECODE", "value": "1"},
+                                *worker_passthrough_env(),
                             ],
                             "volumeMounts": [
                                 {"name": "artifacts", "mountPath": ARTIFACT_MOUNT_PATH},
@@ -1659,6 +2295,7 @@ def enqueue_eval_job(
 ) -> None:
     test_suite = spec.get("testSuite") or []
     generation = int((meta or {}).get("generation", 1))
+    run_id = build_eval_run_id(namespace, name, generation)
     artifact_pvc_name = ensure_worker_artifact_storage("eval", namespace, name)
     artifact_path = artifact_file_path("eval", namespace, name, generation)
     job_name = enqueue_worker_job(
@@ -1668,27 +2305,53 @@ def enqueue_eval_job(
         generation,
         artifact_pvc_name,
         artifact_path,
+        run_id=run_id,
     )
     summary = {
         "queuedAt": now_iso(),
         "caseCount": len(test_suite),
         "completedCases": 0,
+        "runId": run_id,
     }
     if scheduled:
         summary["scheduleTriggered"] = True
+    status_payload = {
+        "phase": "queued",
+        "runId": run_id,
+        "observedGeneration": generation,
+        "artifactRef": build_artifact_ref(artifact_pvc_name, artifact_path, generation),
+        "workerJob": {"name": job_name, "namespace": OPERATOR_NAMESPACE},
+        "summary": summary,
+    }
     patch_custom_status(
         "agentevals",
         namespace,
         name,
-        {
-            "phase": "queued",
-            "observedGeneration": generation,
-            "artifactRef": build_artifact_ref(artifact_pvc_name, artifact_path, generation),
-            "workerJob": {"name": job_name, "namespace": OPERATOR_NAMESPACE},
-            "summary": summary,
-        },
+        status_payload,
     )
-    logger.info("Queued eval '%s/%s' for background execution in job '%s'.", namespace, name, job_name)
+    safe_record_eval_state(
+        namespace=namespace,
+        resource_name=name,
+        generation=generation,
+        run_id=run_id,
+        phase="queued",
+        passed=None,
+        spec=spec,
+        status=status_payload,
+    )
+    log_operator_event(
+        logger,
+        logging.INFO,
+        "Queued AgentEval for worker execution.",
+        resource_kind="AgentEval",
+        name=name,
+        namespace=namespace,
+        meta=meta,
+        generation=generation,
+        workerJob=job_name,
+        caseCount=len(test_suite),
+        scheduled=scheduled,
+    )
 
 
 def enqueue_workflow_job(
@@ -1758,12 +2421,51 @@ def enqueue_workflow_job(
             "stepStates": workflow_status.get("stepStates", {}) or {},
         },
     )
+    safe_record_workflow_state(
+        namespace=namespace,
+        resource_name=name,
+        generation=generation,
+        run_id=resolved_run_id,
+        phase="queued",
+        spec=spec,
+        status={
+            "phase": "queued",
+            "runId": resolved_run_id,
+            "currentStep": str(workflow_status.get("currentStep", "") or ""),
+            "observedGeneration": generation,
+            "artifactRef": build_artifact_ref(
+                artifact_pvc_name,
+                artifact_path,
+                generation,
+                journal_path=journal_path,
+            ),
+            "journalRef": build_journal_ref(artifact_pvc_name, journal_path, generation),
+            "workerJob": {"name": job_name, "namespace": OPERATOR_NAMESPACE},
+            "summary": summary,
+            "pendingApproval": None,
+            "stepStates": workflow_status.get("stepStates", {}) or {},
+        },
+    )
     logger.info(
         "Queued workflow '%s/%s' for background execution in job '%s' with run '%s'.",
         namespace,
         name,
         job_name,
         resolved_run_id,
+    )
+    log_operator_event(
+        logger,
+        logging.INFO,
+        "Queued AgentWorkflow for worker execution.",
+        resource_kind="AgentWorkflow",
+        name=name,
+        namespace=namespace,
+        meta=meta,
+        generation=generation,
+        workerJob=job_name,
+        runId=resolved_run_id,
+        requeueReason=requeue_reason,
+        stepCount=len(steps),
     )
     return job_name
 
@@ -1788,28 +2490,52 @@ def run_workflow(
     observed_generation = int(current_status.get("observedGeneration", 0) or 0)
     phase = str(current_status.get("phase", ""))
     if observed_generation == generation and phase in {"queued", "running", "waiting-approval", "completed"}:
-        logger.info("Workflow '%s' generation %s is already %s; skipping enqueue.", name, generation, phase)
+        log_operator_event(
+            logger,
+            logging.INFO,
+            "Skipping workflow enqueue because the current generation is already reconciled.",
+            resource_kind="AgentWorkflow",
+            name=name,
+            namespace=namespace,
+            meta=meta,
+            generation=generation,
+            action="run-workflow",
+            observedGeneration=observed_generation,
+            phase=phase,
+        )
         return
 
-    try:
-        patch_custom_status(
-            "agentworkflows",
-            namespace,
-            name,
-            {
-                **current_status,
-                "summary": {
-                    **(current_status.get("summary", {}) or {}),
-                    "totalSteps": len(steps),
-                    "rootSteps": graph.get("roots") or [],
-                    "updatedAt": now_iso(),
+    execute_reconcile(
+        lambda: (
+            patch_custom_status(
+                "agentworkflows",
+                namespace,
+                name,
+                {
+                    **current_status,
+                    "summary": {
+                        **(current_status.get("summary", {}) or {}),
+                        "totalSteps": len(steps),
+                        "rootSteps": graph.get("roots") or [],
+                        "updatedAt": now_iso(),
+                    },
                 },
-            },
-        )
-        enqueue_workflow_job(spec, meta, name, namespace, logger, current_status=current_status)
-    except ApiException as exc:
-        logger.error("Failed to enqueue workflow '%s/%s': %s", namespace, name, exc)
-        raise kopf.TemporaryError(f"Failed to enqueue workflow: {exc}", delay=10) from exc
+            ),
+            enqueue_workflow_job(spec, meta, name, namespace, logger, current_status=current_status),
+        ),
+        logger=logger,
+        action="run-workflow",
+        resource_kind="AgentWorkflow",
+        name=name,
+        namespace=namespace,
+        meta=meta,
+        generation=generation,
+        default_delay=10,
+        start_message="Reconciling AgentWorkflow for execution.",
+        success_message="AgentWorkflow queued successfully.",
+        observedGeneration=observed_generation,
+        stepCount=len(steps),
+    )
 
 
 @kopf.on.create("sandbox.enterprise.ai", "v1alpha1", "agentevals")  # type: ignore[arg-type]
@@ -1836,14 +2562,37 @@ def run_eval(
     observed_generation = int(current_status.get("observedGeneration", 0) or 0)
     phase = str(current_status.get("phase", ""))
     if observed_generation == generation and phase in {"queued", "running", "completed", "failed"}:
-        logger.info("Eval '%s/%s' generation %s is already %s; skipping enqueue.", name, namespace, generation, phase)
+        log_operator_event(
+            logger,
+            logging.INFO,
+            "Skipping eval enqueue because the current generation is already reconciled.",
+            resource_kind="AgentEval",
+            name=name,
+            namespace=namespace,
+            meta=meta,
+            generation=generation,
+            action="run-eval",
+            observedGeneration=observed_generation,
+            phase=phase,
+        )
         return
 
-    try:
-        enqueue_eval_job(spec, meta, name, namespace, logger)
-    except ApiException as exc:
-        logger.error("Failed to enqueue eval '%s/%s': %s", namespace, name, exc)
-        raise kopf.TemporaryError(f"Failed to enqueue eval: {exc}", delay=10) from exc
+    execute_reconcile(
+        lambda: enqueue_eval_job(spec, meta, name, namespace, logger),
+        logger=logger,
+        action="run-eval",
+        resource_kind="AgentEval",
+        name=name,
+        namespace=namespace,
+        meta=meta,
+        generation=generation,
+        default_delay=10,
+        start_message="Reconciling AgentEval for execution.",
+        success_message="AgentEval queued successfully.",
+        observedGeneration=observed_generation,
+        caseCount=len(test_suite),
+        schedule=schedule,
+    )
 
 
 @kopf.timer(
@@ -1879,8 +2628,8 @@ def run_workflow_watchdog(
         name,
         reason,
     )
-    try:
-        enqueue_workflow_job(
+    execute_reconcile(
+        lambda: enqueue_workflow_job(
             spec,
             meta,
             name,
@@ -1889,10 +2638,21 @@ def run_workflow_watchdog(
             current_status=current_status,
             run_id=str(current_status.get("runId") or "") or None,
             requeue_reason=reason,
-        )
-    except ApiException as exc:
-        logger.error("Failed to re-enqueue stale workflow '%s/%s': %s", namespace, name, exc)
-        raise kopf.TemporaryError(f"Failed to re-enqueue workflow: {exc}", delay=10) from exc
+        ),
+        logger=logger,
+        action="watchdog-requeue-workflow",
+        resource_kind="AgentWorkflow",
+        name=name,
+        namespace=namespace,
+        meta=meta,
+        default_delay=10,
+        start_message="Re-enqueueing stale AgentWorkflow from watchdog.",
+        success_message="Watchdog re-enqueued AgentWorkflow.",
+        reason=reason,
+        phase=str(current_status.get("phase", "") or ""),
+        workerJob=current_status.get("workerJob", {}) or {},
+        jobState=job_state,
+    )
 
 
 @kopf.timer(
@@ -1957,18 +2717,38 @@ def run_scheduled_eval(
     if not retry_stale_queue and not scheduled_eval_due(schedule, str(current_status.get("lastRun") or "")):
         return
 
-    try:
-        enqueue_eval_job(spec, meta, name, namespace, logger, scheduled=True)
-    except ApiException as exc:
-        logger.error("Failed to enqueue scheduled eval '%s/%s': %s", namespace, name, exc)
-        raise kopf.TemporaryError(f"Failed to enqueue scheduled eval: {exc}", delay=10) from exc
+    execute_reconcile(
+        lambda: enqueue_eval_job(spec, meta, name, namespace, logger, scheduled=True),
+        logger=logger,
+        action="schedule-eval",
+        resource_kind="AgentEval",
+        name=name,
+        namespace=namespace,
+        meta=meta,
+        default_delay=10,
+        start_message="Enqueuing scheduled AgentEval run.",
+        success_message="Scheduled AgentEval queued successfully.",
+        schedule=schedule,
+        retryStaleQueue=retry_stale_queue,
+        phase=phase,
+    )
 
 
 @kopf.on.field("sandbox.enterprise.ai", "v1alpha1", "agentapprovals", field="status.decision")  # type: ignore[arg-type]
 def on_approval_decision(old: str, new: str, name: str, namespace: str, logger: logging.Logger, **kwargs: Any) -> None:
     del kwargs
     if old == "pending" and new in ("approved", "denied"):
-        logger.info("AgentApproval '%s' decision changed from '%s' to '%s'", name, old, new)
+        log_operator_event(
+            logger,
+            logging.INFO,
+            "Observed AgentApproval decision change.",
+            resource_kind="AgentApproval",
+            name=name,
+            namespace=namespace,
+            action="approval-decision",
+            previousDecision=old,
+            decision=new,
+        )
         custom_api = kubernetes.client.CustomObjectsApi()
         workflows = custom_api.list_namespaced_custom_object(
             group="sandbox.enterprise.ai",
@@ -1992,22 +2772,43 @@ def on_approval_decision(old: str, new: str, name: str, namespace: str, logger: 
             run_id = str(workflow_status.get("runId") or "") or None
 
             if new == "approved":
-                job_name = enqueue_workflow_job(
-                    workflow_spec,
-                    workflow_meta,
-                    workflow_name,
-                    namespace,
-                    logger,
-                    current_status=workflow_status,
-                    run_id=run_id,
-                    requeue_reason=f"approval '{name}' was approved",
+                job_name = execute_reconcile(
+                    lambda: enqueue_workflow_job(
+                        workflow_spec,
+                        workflow_meta,
+                        workflow_name,
+                        namespace,
+                        logger,
+                        current_status=workflow_status,
+                        run_id=run_id,
+                        requeue_reason=f"approval '{name}' was approved",
+                    ),
+                    logger=logger,
+                    action="resume-workflow-after-approval",
+                    resource_kind="AgentWorkflow",
+                    name=workflow_name,
+                    namespace=namespace,
+                    meta=workflow_meta,
+                    generation=generation,
+                    default_delay=10,
+                    start_message="Resuming workflow after approval.",
+                    success_message="Workflow resumed after approval.",
+                    approval=name,
+                    decision=new,
                 )
-                logger.info(
-                    "Resumed workflow '%s/%s' after approval '%s' via job '%s'.",
-                    namespace,
-                    workflow_name,
-                    name,
-                    job_name,
+                log_operator_event(
+                    logger,
+                    logging.INFO,
+                    "Workflow resumed after approval.",
+                    resource_kind="AgentWorkflow",
+                    name=workflow_name,
+                    namespace=namespace,
+                    meta=workflow_meta,
+                    generation=generation,
+                    action="resume-workflow-after-approval",
+                    approval=name,
+                    decision=new,
+                    workerJob=job_name,
                 )
             else:
                 current_step = str(workflow_status.get("currentStep", "") or "")
@@ -2041,11 +2842,59 @@ def on_approval_decision(old: str, new: str, name: str, namespace: str, logger: 
                     artifact_ref.get("path")
                     or artifact_file_path("workflow", namespace, workflow_name, generation)
                 )
-                patch_custom_status(
-                    "agentworkflows",
-                    namespace,
-                    workflow_name,
-                    {
+                execute_reconcile(
+                    lambda: patch_custom_status(
+                        "agentworkflows",
+                        namespace,
+                        workflow_name,
+                        {
+                            "phase": "failed",
+                            "runId": workflow_status.get("runId"),
+                            "currentStep": current_step,
+                            "observedGeneration": generation,
+                            "artifactRef": build_artifact_ref(
+                                artifact_pvc_name,
+                                artifact_path,
+                                generation,
+                                journal_path=journal_path,
+                            ),
+                            "journalRef": build_journal_ref(artifact_pvc_name, journal_path, generation),
+                            "summary": {
+                                **(workflow_status.get("summary", {}) or {}),
+                                "failedAt": now_iso(),
+                                "error": f"Approval '{name}' was denied",
+                                "updatedAt": now_iso(),
+                            },
+                            "pendingApproval": {
+                                "name": name,
+                                "namespace": namespace,
+                                "decision": new,
+                            },
+                            "stepStates": step_states,
+                        },
+                    ),
+                    logger=logger,
+                    action="deny-workflow-after-approval",
+                    resource_kind="AgentWorkflow",
+                    name=workflow_name,
+                    namespace=namespace,
+                    meta=workflow_meta,
+                    generation=generation,
+                    default_delay=10,
+                    start_message="Marking workflow as failed after approval denial.",
+                    success_message="Workflow marked failed after approval denial.",
+                    approval=name,
+                    decision=new,
+                    currentStep=current_step,
+                )
+                safe_record_workflow_state(
+                    namespace=namespace,
+                    resource_name=workflow_name,
+                    generation=generation,
+                    run_id=str(workflow_status.get("runId") or ""),
+                    phase="failed",
+                    spec=workflow_spec,
+                    status={
                         "phase": "failed",
                         "runId": workflow_status.get("runId"),
                         "currentStep": current_step,

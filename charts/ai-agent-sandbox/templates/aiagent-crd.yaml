@@ -43,6 +43,19 @@ spec:
                         required:
                           - name
                           - namespace
+                skills:
+                  type: object
+                  description: "Optional file-backed skills used to steer the agent and declare runtime capability grants"
+                  properties:
+                    files:
+                      type: object
+                      description: |
+                        Map of relative Markdown skill paths, typically .github/skills/<name>/SKILL.md,
+                        to the file contents that should be materialized inside the runtime.
+                        The skill file body steers the agent and optional frontmatter can declare
+                        allowed sandbox tools, MCP servers, A2A targets, subagent usage, and Goose extensions.
+                      additionalProperties:
+                        type: string
                 runtime:
                   type: object
                   description: "Selects which runtime implementation should execute this agent"

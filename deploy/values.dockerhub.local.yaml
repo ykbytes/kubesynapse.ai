@@ -1,0 +1,91 @@
+global:
+  imagePullSecrets:
+    - dockerhub-regcred
+
+agentRuntime:
+  image:
+    repository: docker.io/yakdhane/ai-agent-runtime
+    tag: registration-20260312-221904
+    pullPolicy: IfNotPresent
+
+operator:
+  replicaCount: 1
+  image:
+    repository: docker.io/yakdhane/ai-operator
+    tag: registration-20260312-221904
+    pullPolicy: IfNotPresent
+  workerImage:
+    repository: docker.io/yakdhane/ai-operator
+    tag: registration-20260312-221904
+    pullPolicy: IfNotPresent
+
+gooseRuntime:
+  image:
+    repository: docker.io/yakdhane/ai-goose-runtime
+    tag: registration-20260312-221904
+    pullPolicy: IfNotPresent
+
+apiGateway:
+  image:
+    repository: docker.io/yakdhane/ai-api-gateway
+    tag: registration-20260312-221904
+    pullPolicy: IfNotPresent
+  auth:
+    mode: hybrid
+    localAuthEnabled: true
+    registrationEnabled: true
+
+webUi:
+  enabled: true
+  image:
+    repository: docker.io/yakdhane/ai-agent-sandbox-web-ui
+    tag: mgmt-v2-20260312-231747
+    pullPolicy: Always
+
+platformSecrets:
+  mode: native
+  native:
+    openaiApiKey: ""
+    openrouterApiKey: ""
+    anthropicApiKey: ""
+    litellmMasterKey: "minikube-dev-master-key"
+    apiGatewaySharedToken: "minikube-dev-shared-token"
+    databasePassword: "minikube-dev-database-password"
+    jwtSecret: "minikube-dev-jwt-secret"
+    authBootstrapAdminPassword: "minikube-dev-admin-password"
+
+mcpHub:
+  auth:
+    bearerToken: "minikube-dev-mcp-token"
+
+skillsCatalog:
+  enabled: true
+
+mcpToolSidecars:
+  codeExec:
+    image: docker.io/yakdhane/mcp-code-exec:catalog-20260312-135631
+    port: 8080
+  webSearch:
+    image: docker.io/yakdhane/mcp-web-search:catalog-20260312-135631
+    port: 8081
+  documents:
+    image: docker.io/yakdhane/mcp-documents:catalog-20260312-135631
+    port: 8082
+  browser:
+    image: docker.io/yakdhane/mcp-browser:catalog-20260312-135631
+    port: 8083
+  database:
+    image: docker.io/yakdhane/mcp-database:catalog-20260312-135631
+    port: 8084
+  git:
+    image: docker.io/yakdhane/mcp-git:catalog-20260312-135631
+    port: 8085
+  kubernetes:
+    image: docker.io/yakdhane/mcp-kubernetes:catalog-20260312-135631
+    port: 8086
+  messaging:
+    image: docker.io/yakdhane/mcp-messaging:catalog-20260312-135631
+    port: 8087
+  rag:
+    image: docker.io/yakdhane/mcp-rag:catalog-20260312-135631
+    port: 8088

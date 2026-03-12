@@ -14,6 +14,9 @@ spec:
     metadata:
       annotations:
         checksum/secrets: {{ include (print $.Template.BasePath "/external-secrets.yaml") . | sha256sum }}
+{{- if .Values.skillsCatalog.enabled }}
+        checksum/skills-catalog: {{ include (print $.Template.BasePath "/skills-catalog-configmap.yaml") . | sha256sum }}
+{{- end }}
       labels:
         app: api-gateway
     spec:
@@ -21,32 +24,175 @@ spec:
 {{ . | nindent 6 }}
 {{- end }}
       serviceAccountName: {{ include "ai-agent-sandbox.fullname" . }}-api-gateway-sa
+      automountServiceAccountToken: true
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      volumes:
+        - name: tmp
+          emptyDir: {}
+{{- if .Values.skillsCatalog.enabled }}
+        - name: skills-catalog
+          configMap:
+            name: {{ include "ai-agent-sandbox.fullname" . }}-skills-catalog
+{{- end }}
       containers:
         - name: api-gateway
           image: "{{ .Values.apiGateway.image.repository }}:{{ .Values.apiGateway.image.tag }}"
           imagePullPolicy: {{ .Values.apiGateway.image.pullPolicy | default "IfNotPresent" }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
           ports:
             - containerPort: 8080
               name: http
           env:
+            - name: HOME
+              value: /tmp
+            - name: XDG_CACHE_HOME
+              value: /tmp
+            - name: API_GATEWAY_PUBLIC_BASE_URL
+              value: {{ .Values.apiGateway.publicBaseUrl | quote }}
             - name: API_GATEWAY_SHARED_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: {{ include "ai-agent-sandbox.fullname" . }}-llm-api-keys
                   key: API_GATEWAY_SHARED_TOKEN
                   optional: true
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ai-agent-sandbox.fullname" . }}-llm-api-keys
+                  key: JWT_SECRET
+                  optional: true
+            - name: AUTH_BOOTSTRAP_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ai-agent-sandbox.fullname" . }}-llm-api-keys
+                  key: AUTH_BOOTSTRAP_ADMIN_PASSWORD
+                  optional: true
+            - name: LDAP_BIND_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ai-agent-sandbox.fullname" . }}-llm-api-keys
+                  key: LDAP_BIND_PASSWORD
+                  optional: true
+            - name: OIDC_PROVIDERS_JSON
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ai-agent-sandbox.fullname" . }}-llm-api-keys
+                  key: OIDC_PROVIDERS_JSON
+                  optional: true
+            - name: SAML_PROVIDERS_JSON
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ai-agent-sandbox.fullname" . }}-llm-api-keys
+                  key: SAML_PROVIDERS_JSON
+                  optional: true
+{{- if .Values.postgresql.enabled }}
+            - name: DATABASE_HOST
+              value: {{ printf "%s-postgresql" (include "ai-agent-sandbox.fullname" .) | quote }}
+            - name: DATABASE_PORT
+              value: {{ .Values.postgresql.service.port | quote }}
+            - name: DATABASE_NAME
+              value: {{ .Values.postgresql.database | quote }}
+            - name: DATABASE_USER
+              value: {{ .Values.postgresql.username | quote }}
+            - name: DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ai-agent-sandbox.fullname" . }}-llm-api-keys
+                  key: DATABASE_PASSWORD
+                  optional: true
+{{- else }}
+            - name: DATABASE_SQLITE_PATH
+              value: /tmp/ai-agent-sandbox-gateway.db
+{{- end }}
             - name: NATS_URL
               value: "nats://{{ include "ai-agent-sandbox.fullname" . }}-nats:4222"
             - name: QDRANT_URL
               value: "http://{{ include "ai-agent-sandbox.fullname" . }}-qdrant:6333"
             - name: API_GATEWAY_AUTH_MODE
               value: {{ .Values.apiGateway.auth.mode | quote }}
+            - name: LOCAL_AUTH_ENABLED
+              value: {{ .Values.apiGateway.auth.localAuthEnabled | quote }}
+            - name: AUTH_REGISTRATION_ENABLED
+              value: {{ .Values.apiGateway.auth.registrationEnabled | quote }}
+            - name: JWT_ISSUER
+              value: {{ .Values.apiGateway.auth.jwtIssuer | quote }}
+            - name: AUTH_ACCESS_TOKEN_TTL_SECONDS
+              value: {{ .Values.apiGateway.auth.accessTokenTtlSeconds | quote }}
+            - name: AUTH_REFRESH_TOKEN_TTL_SECONDS
+              value: {{ .Values.apiGateway.auth.refreshTokenTtlSeconds | quote }}
+            - name: AUTH_COOKIE_SECURE
+              value: {{ .Values.apiGateway.auth.cookieSecure | quote }}
+            - name: AUTH_COOKIE_SAMESITE
+              value: {{ .Values.apiGateway.auth.cookieSameSite | quote }}
+            - name: AUTH_COOKIE_DOMAIN
+              value: {{ .Values.apiGateway.auth.cookieDomain | quote }}
+            - name: AUTH_BOOTSTRAP_ADMIN_USERNAME
+              value: {{ .Values.apiGateway.auth.bootstrapAdminUsername | quote }}
+            - name: AUTH_BOOTSTRAP_ADMIN_EMAIL
+              value: {{ .Values.apiGateway.auth.bootstrapAdminEmail | quote }}
+            - name: AUTH_BOOTSTRAP_ADMIN_DISPLAY_NAME
+              value: {{ .Values.apiGateway.auth.bootstrapAdminDisplayName | quote }}
+            - name: AUTH_BOOTSTRAP_ADMIN_NAMESPACES
+              value: {{ join "," (.Values.apiGateway.auth.bootstrapAdminNamespaces | default (list "*")) | quote }}
             - name: OIDC_ISSUER
               value: {{ .Values.apiGateway.auth.oidcIssuer | quote }}
             - name: OIDC_AUDIENCE
               value: {{ .Values.apiGateway.auth.oidcAudience | quote }}
             - name: OIDC_JWKS_URL
               value: {{ .Values.apiGateway.auth.oidcJwksUrl | quote }}
+            - name: LDAP_ENABLED
+              value: {{ .Values.apiGateway.auth.ldap.enabled | quote }}
+            - name: LDAP_SERVER_URL
+              value: {{ .Values.apiGateway.auth.ldap.serverUrl | quote }}
+            - name: LDAP_BIND_DN
+              value: {{ .Values.apiGateway.auth.ldap.bindDn | quote }}
+            - name: LDAP_USER_SEARCH_BASE
+              value: {{ .Values.apiGateway.auth.ldap.userSearchBase | quote }}
+            - name: LDAP_USER_SEARCH_FILTER
+              value: {{ .Values.apiGateway.auth.ldap.userSearchFilter | quote }}
+            - name: LDAP_GROUP_SEARCH_BASE
+              value: {{ .Values.apiGateway.auth.ldap.groupSearchBase | quote }}
+            - name: LDAP_GROUP_SEARCH_FILTER
+              value: {{ .Values.apiGateway.auth.ldap.groupSearchFilter | quote }}
+            - name: LDAP_GROUP_ATTRIBUTE
+              value: {{ .Values.apiGateway.auth.ldap.groupAttribute | quote }}
+            - name: LDAP_USERNAME_ATTRIBUTE
+              value: {{ .Values.apiGateway.auth.ldap.usernameAttribute | quote }}
+            - name: LDAP_EMAIL_ATTRIBUTE
+              value: {{ .Values.apiGateway.auth.ldap.emailAttribute | quote }}
+            - name: LDAP_DISPLAY_NAME_ATTRIBUTE
+              value: {{ .Values.apiGateway.auth.ldap.displayNameAttribute | quote }}
+            - name: LDAP_TLS_ENABLED
+              value: {{ .Values.apiGateway.auth.ldap.tlsEnabled | quote }}
+            - name: LDAP_GROUP_ROLE_MAPPING
+              value: {{ .Values.apiGateway.auth.ldap.groupRoleMapping | toJson | quote }}
+{{- if .Values.apiGateway.corsOrigins }}
+            - name: API_GATEWAY_CORS_ORIGINS
+              value: {{ join "," .Values.apiGateway.corsOrigins | quote }}
+{{- end }}
+{{- if .Values.mcpToolSidecars }}
+            - name: MCP_SIDECAR_CATALOG_JSON
+              value: {{ include "ai-agent-sandbox.mcpSidecarCatalogJson" . | quote }}
+{{- end }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+{{- if .Values.skillsCatalog.enabled }}
+            - name: skills-catalog
+              mountPath: /data
+              readOnly: true
+{{- end }}
           resources:
             requests:
               cpu: "50m"
