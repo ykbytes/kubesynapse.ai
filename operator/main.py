@@ -33,10 +33,13 @@ from kubernetes.client.rest import ApiException  # type: ignore[import-untyped]
 
 logger = logging.getLogger("operator")
 
+ApiTypeError = getattr(kubernetes.client, "ApiTypeError", TypeError)
+
 PERMANENT_API_ERROR_STATUSES = {400, 401, 403, 404, 405, 422}
 HIGH_BACKOFF_API_ERROR_STATUSES = {429, 500, 502, 503, 504}
 MAX_LOG_FIELD_LENGTH = 400
 POD_TEMPLATE_REVISION_ANNOTATION = "sandbox.enterprise.ai/pod-template-revision"
+KUBERNETES_RESOURCE_NAME_PATTERN = re.compile(r"^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$")
 STORAGE_QUANTITY_MULTIPLIERS: dict[str, Decimal] = {
     "": Decimal(1),
     "n": Decimal("1e-9"),
@@ -487,7 +490,7 @@ def _auto_inject_mcp_sidecars(
             entry = MCP_SIDECAR_CATALOG[server_name]
             merged.append({
                 "name": server_name,
-                "image": entry.get("image", "busybox"),
+                "image": entry.get("image"),
                 "port": entry.get("port", 8080),
             })
             logger.info("Auto-injected MCP sidecar '%s' from skill frontmatter", server_name)
@@ -936,6 +939,7 @@ def validate_runtime_configuration(runtime_kind: str, spec: dict[str, Any]) -> N
     runtime_spec = spec.get("runtime") or {}
     goose_spec = runtime_spec.get("goose") if isinstance(runtime_spec, dict) else None
     codex_spec = runtime_spec.get("codex") if isinstance(runtime_spec, dict) else None
+    explicit_sidecars = spec.get("mcpSidecars")
     try:
         parse_agent_a2a_config(spec.get("a2a"), source="AIAgent.spec.a2a")
     except ValueError as exc:
@@ -944,6 +948,8 @@ def validate_runtime_configuration(runtime_kind: str, spec: dict[str, Any]) -> N
         parse_agent_skills_config(spec.get("skills"), source="AIAgent.spec.skills")
     except ValueError as exc:
         raise kopf.PermanentError(str(exc)) from exc
+    if explicit_sidecars is not None and not isinstance(explicit_sidecars, list):
+        raise kopf.PermanentError("AIAgent.spec.mcpSidecars must be an array when provided.")
 
     if runtime_kind == "goose":
         if codex_spec is not None:
@@ -1108,6 +1114,33 @@ def _extract_statefulset_storage_request(manifest: dict[str, Any], claim_name: s
     return None
 
 
+def _statefulset_template_signature(manifest: dict[str, Any]) -> dict[str, Any]:
+    template = ((manifest.get("spec") or {}).get("template") or {})
+    template_metadata = template.get("metadata") or {}
+    template_spec = template.get("spec") or {}
+
+    def port_signature(port: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "containerPort": port.get("containerPort"),
+            "name": port.get("name"),
+            "protocol": port.get("protocol") or "TCP",
+        }
+
+    def container_signature(container: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "name": container.get("name"),
+            "image": container.get("image"),
+            "ports": [port_signature(port) for port in container.get("ports") or []],
+            "env": copy.deepcopy(container.get("env") or []),
+        }
+
+    return {
+        "revision": (template_metadata.get("annotations") or {}).get(POD_TEMPLATE_REVISION_ANNOTATION),
+        "containers": [container_signature(container) for container in template_spec.get("containers") or []],
+        "initContainers": [container_signature(container) for container in template_spec.get("initContainers") or []],
+    }
+
+
 def _parse_storage_quantity(value: str) -> Decimal:
     normalized = str(value or "").strip()
     match = re.fullmatch(r"([0-9]+(?:\.[0-9]+)?)([KMGTPE]i|[numkKMGTPE])?", normalized)
@@ -1120,6 +1153,74 @@ def _parse_storage_quantity(value: str) -> Decimal:
     except InvalidOperation as exc:
         raise ValueError(f"Unsupported storage quantity: {value!r}") from exc
     return number * STORAGE_QUANTITY_MULTIPLIERS[suffix or ""]
+
+
+def _validate_mcp_sidecars(sidecars: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    normalized_sidecars: list[dict[str, Any]] = []
+    seen_names: dict[str, int] = {}
+    seen_ports: dict[int, int] = {}
+
+    for index, sidecar in enumerate(sidecars):
+        if not isinstance(sidecar, dict):
+            raise kopf.PermanentError(
+                f"AIAgent.spec.mcpSidecars[{index}] must be an object with name, image, and port fields."
+            )
+
+        raw_name = str(sidecar.get("name") or "").strip()
+        if not raw_name:
+            raise kopf.PermanentError(f"AIAgent.spec.mcpSidecars[{index}].name is required.")
+        if len(raw_name) > 59:
+            raise kopf.PermanentError(
+                f"AIAgent.spec.mcpSidecars[{index}].name '{raw_name}' is too long; keep it to 59 characters or fewer."
+            )
+        if not KUBERNETES_RESOURCE_NAME_PATTERN.fullmatch(raw_name):
+            raise kopf.PermanentError(
+                (
+                    f"AIAgent.spec.mcpSidecars[{index}].name '{raw_name}' is invalid. "
+                    "Use lowercase letters, numbers, and hyphens only."
+                )
+            )
+
+        raw_image = str(sidecar.get("image") or "").strip()
+        if not raw_image:
+            raise kopf.PermanentError(
+                f"AIAgent.spec.mcpSidecars[{index}].image is required for sidecar '{raw_name}'."
+            )
+
+        raw_port = sidecar.get("port", 8080)
+        try:
+            port = int(raw_port)
+        except (TypeError, ValueError) as exc:
+            raise kopf.PermanentError(
+                f"AIAgent.spec.mcpSidecars[{index}].port must be an integer for sidecar '{raw_name}'."
+            ) from exc
+        if port < 1 or port > 65535:
+            raise kopf.PermanentError(
+                f"AIAgent.spec.mcpSidecars[{index}].port must be between 1 and 65535 for sidecar '{raw_name}'."
+            )
+
+        previous_name_index = seen_names.get(raw_name)
+        if previous_name_index is not None:
+            raise kopf.PermanentError(
+                (
+                    f"AIAgent.spec.mcpSidecars[{index}].name '{raw_name}' duplicates "
+                    f"AIAgent.spec.mcpSidecars[{previous_name_index}].name."
+                )
+            )
+        previous_port_index = seen_ports.get(port)
+        if previous_port_index is not None:
+            raise kopf.PermanentError(
+                (
+                    f"AIAgent.spec.mcpSidecars[{index}].port {port} duplicates "
+                    f"AIAgent.spec.mcpSidecars[{previous_port_index}].port."
+                )
+            )
+
+        seen_names[raw_name] = index
+        seen_ports[port] = index
+        normalized_sidecars.append({"name": raw_name, "image": raw_image, "port": port})
+
+    return normalized_sidecars
 
 
 def _preserve_statefulset_immutable_fields(
@@ -1136,6 +1237,46 @@ def _preserve_statefulset_immutable_fields(
             patched_spec[field_name] = current_value
 
     return patched_manifest
+
+
+def _patch_statefulset_with_merge_patch(
+    apps_api: Any,
+    namespace: str,
+    statefulset_name: str,
+    manifest: dict[str, Any],
+) -> Any:
+    try:
+        return apps_api.patch_namespaced_stateful_set(
+            name=statefulset_name,
+            namespace=namespace,
+            body=manifest,
+            _content_type="application/merge-patch+json",
+        )
+    except ApiTypeError:
+        api_client = apps_api.api_client
+        return api_client.call_api(
+            "/apis/apps/v1/namespaces/{namespace}/statefulsets/{name}",
+            "PATCH",
+            {"name": statefulset_name, "namespace": namespace},
+            [],
+            {
+                "Accept": api_client.select_header_accept(
+                    [
+                        "application/json",
+                        "application/yaml",
+                        "application/vnd.kubernetes.protobuf",
+                    ]
+                ),
+                "Content-Type": "application/merge-patch+json",
+            },
+            body=manifest,
+            post_params=[],
+            files={},
+            response_type="V1StatefulSet",
+            auth_settings=["BearerToken"],
+            _return_http_data_only=True,
+            collection_formats={},
+        )
 
 
 def _resize_statefulset_persistent_volume_claims(
@@ -1210,15 +1351,12 @@ def _resize_statefulset_persistent_volume_claims(
                 )
             except ApiException as exc:
                 if exc.status in (403, 422):
-                    outcome = "forbidden" if exc.status == 403 else "rejected"
-                    logger.warning(
-                        "PVC resize request was %s for '%s' in namespace '%s': %s",
-                        outcome,
-                        pvc_name,
-                        namespace,
-                        describe_api_exception(exc),
+                    raise kopf.PermanentError(
+                        (
+                            f"PVC resize request for '{pvc_name}' in namespace '{namespace}' could not be applied: "
+                            f"{describe_api_exception(exc)}"
+                        )
                     )
-                    continue
                 raise
 
 
@@ -1311,6 +1449,7 @@ def create_agent_statefulset_manifest(
     system_prompt = spec.get("systemPrompt", "")
     skills_config = parse_agent_skills_config(spec.get("skills"), source="AIAgent.spec.skills")
     mcp_sidecars = _auto_inject_mcp_sidecars(mcp_sidecars, skills_config)
+    mcp_sidecars = _validate_mcp_sidecars(mcp_sidecars)
 
     pod_security_context = {
         "runAsNonRoot": True,
@@ -1543,7 +1682,7 @@ def create_agent_statefulset_manifest(
         "image": agent_image,
         "imagePullPolicy": agent_image_pull_policy,
         "securityContext": container_security_context,
-        "ports": [{"containerPort": API_PORT, "name": "http"}],
+        "ports": [{"containerPort": API_PORT, "name": "http", "protocol": "TCP"}],
         "resources": {
             "requests": {"cpu": AGENT_CPU_REQUEST, "memory": AGENT_MEMORY_REQUEST},
             "limits": {"cpu": AGENT_CPU_LIMIT, "memory": AGENT_MEMORY_LIMIT},
@@ -1574,9 +1713,23 @@ def create_agent_statefulset_manifest(
             containers.append(
                 {
                     "name": f"mcp-{sidecar_name}",
-                    "image": sidecar_spec.get("image", "busybox"),
-                    "ports": [{"containerPort": sidecar_port}],
+                    "image": sidecar_spec["image"],
+                    "ports": [{"containerPort": sidecar_port, "protocol": "TCP"}],
                     "env": [{"name": "MCP_LISTEN_PORT", "value": str(sidecar_port)}],
+                    "readinessProbe": {
+                        "tcpSocket": {"port": sidecar_port},
+                        "initialDelaySeconds": 1,
+                        "periodSeconds": 5,
+                        "timeoutSeconds": 3,
+                        "failureThreshold": 6,
+                    },
+                    "livenessProbe": {
+                        "tcpSocket": {"port": sidecar_port},
+                        "initialDelaySeconds": 15,
+                        "periodSeconds": 20,
+                        "timeoutSeconds": 3,
+                        "failureThreshold": 3,
+                    },
                     "securityContext": container_security_context,
                     "resources": {
                         "requests": {"cpu": "50m", "memory": "64Mi"},
@@ -1672,16 +1825,25 @@ def ensure_statefulset(namespace: str, manifest: dict[str, Any]) -> None:
             )
             desired_storage = _extract_statefulset_storage_request(manifest)
             patched_manifest = _preserve_statefulset_immutable_fields(manifest, current_statefulset)
-            apps_api.patch_namespaced_stateful_set(
-                name=statefulset_name,
-                namespace=namespace,
-                body=patched_manifest,
+            _patch_statefulset_with_merge_patch(apps_api, namespace, statefulset_name, patched_manifest)
+            reconciled_statefulset = _sanitize_kube_resource(
+                apps_api.read_namespaced_stateful_set(name=statefulset_name, namespace=namespace)
             )
+            desired_signature = _statefulset_template_signature(patched_manifest)
+            actual_signature = _statefulset_template_signature(reconciled_statefulset)
+            if actual_signature != desired_signature:
+                raise kopf.TemporaryError(
+                    (
+                        f"StatefulSet '{statefulset_name}' in namespace '{namespace}' did not converge to the "
+                        "desired pod template after patching."
+                    ),
+                    delay=2,
+                )
             _resize_statefulset_persistent_volume_claims(
                 core_api,
                 namespace,
                 statefulset_name,
-                current_statefulset,
+                reconciled_statefulset,
                 desired_storage,
             )
             return

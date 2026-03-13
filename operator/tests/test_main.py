@@ -1,3 +1,4 @@
+import copy
 import json
 import sys
 import types
@@ -299,11 +300,94 @@ class OperatorManifestTests(unittest.TestCase):
         self.assertEqual(env[operator_main.CODEX_MCP_SIDECARS_ENV], json.dumps(sidecars, ensure_ascii=False, sort_keys=True))
         self.assertEqual(json.loads(env[operator_main.CODEX_RUNTIME_CONFIG_FILES_ENV]), {"config.toml": 'model = "gpt-4"'})
         self.assertEqual(pod_spec["containers"][1]["name"], "mcp-browser")
-        self.assertEqual(pod_spec["containers"][1]["ports"], [{"containerPort": 8081}])
+        self.assertEqual(pod_spec["containers"][1]["ports"], [{"containerPort": 8081, "protocol": "TCP"}])
         self.assertEqual(
             pod_spec["containers"][1]["env"],
             [{"name": "MCP_LISTEN_PORT", "value": "8081"}],
         )
+        self.assertEqual(
+            pod_spec["containers"][1]["readinessProbe"],
+            {
+                "tcpSocket": {"port": 8081},
+                "initialDelaySeconds": 1,
+                "periodSeconds": 5,
+                "timeoutSeconds": 3,
+                "failureThreshold": 6,
+            },
+        )
+        self.assertEqual(
+            pod_spec["containers"][1]["livenessProbe"],
+            {
+                "tcpSocket": {"port": 8081},
+                "initialDelaySeconds": 15,
+                "periodSeconds": 20,
+                "timeoutSeconds": 3,
+                "failureThreshold": 3,
+            },
+        )
+
+    def test_statefulset_manifest_rejects_duplicate_sidecar_ports(self) -> None:
+        with self.assertRaises(operator_main.kopf.PermanentError):
+            operator_main.create_agent_statefulset_manifest(
+                "workspace-assistant",
+                "default",
+                {
+                    "model": "gpt-4",
+                    "runtime": {"kind": "codex", "codex": {}},
+                    "storage": {"size": "1Gi"},
+                    "systemPrompt": "Be precise.",
+                    "mcpSidecars": [
+                        {"name": "browser", "image": "example/browser:latest", "port": 8081},
+                        {"name": "documents", "image": "example/documents:latest", "port": 8081},
+                    ],
+                },
+                None,
+                {},
+            )
+
+    def test_statefulset_manifest_rejects_missing_sidecar_image(self) -> None:
+        with self.assertRaises(operator_main.kopf.PermanentError):
+            operator_main.create_agent_statefulset_manifest(
+                "workspace-assistant",
+                "default",
+                {
+                    "model": "gpt-4",
+                    "runtime": {"kind": "langgraph"},
+                    "storage": {"size": "1Gi"},
+                    "systemPrompt": "Be precise.",
+                    "mcpSidecars": [{"name": "browser", "port": 8081}],
+                },
+                None,
+                {},
+            )
+
+    def test_statefulset_manifest_rejects_invalid_auto_injected_sidecar_image(self) -> None:
+        with patch.dict(operator_main.MCP_SIDECAR_CATALOG, {"browser": {"port": 8081}}, clear=True):
+            with self.assertRaises(operator_main.kopf.PermanentError):
+                operator_main.create_agent_statefulset_manifest(
+                    "workspace-assistant",
+                    "default",
+                    {
+                        "model": "gpt-4",
+                        "runtime": {"kind": "codex", "codex": {}},
+                        "storage": {"size": "1Gi"},
+                        "systemPrompt": "Be precise.",
+                        "skills": {
+                            "files": {
+                                ".github/skills/browser/SKILL.md": (
+                                    "---\n"
+                                    "name: browser\n"
+                                    "allowedMcpServers:\n"
+                                    "  - browser\n"
+                                    "---\n"
+                                    "Use the browser MCP server.\n"
+                                )
+                            }
+                        },
+                    },
+                    None,
+                    {},
+                )
 
     def test_statefulset_manifest_sets_revision_hash_annotation_and_changes_with_storage(self) -> None:
         base_spec = {
@@ -460,10 +544,12 @@ class StatefulSetReconcileTests(unittest.TestCase):
             None,
             {},
         )
+        reconciled_manifest = copy.deepcopy(desired_manifest)
+        reconciled_manifest["spec"]["volumeClaimTemplates"] = current_manifest["spec"]["volumeClaimTemplates"]
 
         apps_api = Mock()
         apps_api.create_namespaced_stateful_set.side_effect = _api_exception(409)
-        apps_api.read_namespaced_stateful_set.return_value = current_manifest
+        apps_api.read_namespaced_stateful_set.side_effect = [current_manifest, reconciled_manifest]
 
         core_api = Mock()
         core_api.read_namespaced_persistent_volume_claim.return_value = {
@@ -479,6 +565,10 @@ class StatefulSetReconcileTests(unittest.TestCase):
             operator_main.ensure_statefulset("default", desired_manifest)
 
         patched_statefulset = apps_api.patch_namespaced_stateful_set.call_args.kwargs["body"]
+        self.assertEqual(
+            apps_api.patch_namespaced_stateful_set.call_args.kwargs["_content_type"],
+            "application/merge-patch+json",
+        )
         self.assertEqual(
             patched_statefulset["spec"]["volumeClaimTemplates"][0]["spec"]["resources"]["requests"]["storage"],
             "1Gi",
@@ -503,7 +593,90 @@ class StatefulSetReconcileTests(unittest.TestCase):
         self.assertEqual(pvc_patch["namespace"], "default")
         self.assertEqual(pvc_patch["body"]["spec"]["resources"]["requests"]["storage"], "4Gi")
 
-    def test_ensure_statefulset_continues_when_pvc_resize_is_forbidden(self) -> None:
+    def test_ensure_statefulset_falls_back_to_low_level_merge_patch_when_client_rejects_content_type(self) -> None:
+        desired_manifest = operator_main.create_agent_statefulset_manifest(
+            "workspace-assistant",
+            "default",
+            {
+                "model": "gpt-4",
+                "runtime": {"kind": "langgraph"},
+                "storage": {"size": "1Gi"},
+                "systemPrompt": "Use langgraph.",
+            },
+            None,
+            {},
+        )
+
+        apps_api = Mock()
+        apps_api.create_namespaced_stateful_set.side_effect = _api_exception(409)
+        apps_api.patch_namespaced_stateful_set.side_effect = operator_main.ApiTypeError("unsupported kwarg")
+        apps_api.read_namespaced_stateful_set.side_effect = [desired_manifest, desired_manifest]
+        apps_api.api_client = Mock()
+        apps_api.api_client.select_header_accept.return_value = "application/json"
+
+        core_api = Mock()
+        core_api.read_namespaced_persistent_volume_claim.return_value = {
+            "spec": {"resources": {"requests": {"storage": "1Gi"}}}
+        }
+
+        with patch.object(operator_main.kubernetes.client, "AppsV1Api", return_value=apps_api, create=True), patch.object(
+            operator_main.kubernetes.client,
+            "CoreV1Api",
+            return_value=core_api,
+            create=True,
+        ):
+            operator_main.ensure_statefulset("default", desired_manifest)
+
+        apps_api.patch_namespaced_stateful_set.assert_called_once()
+        low_level_patch = apps_api.api_client.call_api.call_args
+        self.assertEqual(low_level_patch.args[0], "/apis/apps/v1/namespaces/{namespace}/statefulsets/{name}")
+        self.assertEqual(low_level_patch.args[1], "PATCH")
+        self.assertEqual(low_level_patch.args[2], {"name": "workspace-assistant-sandbox", "namespace": "default"})
+        self.assertEqual(low_level_patch.args[4]["Content-Type"], "application/merge-patch+json")
+        self.assertEqual(low_level_patch.kwargs["body"]["metadata"]["name"], "workspace-assistant-sandbox")
+
+    def test_ensure_statefulset_accepts_live_template_with_defaulted_tcp_protocols(self) -> None:
+        desired_manifest = operator_main.create_agent_statefulset_manifest(
+            "workspace-assistant",
+            "default",
+            {
+                "model": "gpt-4",
+                "runtime": {"kind": "codex", "codex": {}},
+                "storage": {"size": "1Gi"},
+                "systemPrompt": "Use codex.",
+                "mcpSidecars": [{"name": "browser", "image": "example/browser:latest", "port": 8081}],
+            },
+            None,
+            {},
+        )
+        current_manifest = copy.deepcopy(desired_manifest)
+        reconciled_manifest = copy.deepcopy(desired_manifest)
+
+        for container in reconciled_manifest["spec"]["template"]["spec"]["containers"]:
+            for port in container.get("ports") or []:
+                port.setdefault("protocol", "TCP")
+
+        apps_api = Mock()
+        apps_api.create_namespaced_stateful_set.side_effect = _api_exception(409)
+        apps_api.read_namespaced_stateful_set.side_effect = [current_manifest, reconciled_manifest]
+
+        core_api = Mock()
+        core_api.read_namespaced_persistent_volume_claim.return_value = {
+            "spec": {"resources": {"requests": {"storage": "1Gi"}}}
+        }
+
+        with patch.object(operator_main.kubernetes.client, "AppsV1Api", return_value=apps_api, create=True), patch.object(
+            operator_main.kubernetes.client,
+            "CoreV1Api",
+            return_value=core_api,
+            create=True,
+        ):
+            operator_main.ensure_statefulset("default", desired_manifest)
+
+        apps_api.patch_namespaced_stateful_set.assert_called_once()
+        core_api.patch_namespaced_persistent_volume_claim.assert_not_called()
+
+    def test_ensure_statefulset_raises_when_pvc_resize_is_forbidden(self) -> None:
         current_manifest = operator_main.create_agent_statefulset_manifest(
             "workspace-assistant",
             "default",
@@ -528,10 +701,12 @@ class StatefulSetReconcileTests(unittest.TestCase):
             None,
             {},
         )
+        reconciled_manifest = copy.deepcopy(desired_manifest)
+        reconciled_manifest["spec"]["volumeClaimTemplates"] = current_manifest["spec"]["volumeClaimTemplates"]
 
         apps_api = Mock()
         apps_api.create_namespaced_stateful_set.side_effect = _api_exception(409)
-        apps_api.read_namespaced_stateful_set.return_value = current_manifest
+        apps_api.read_namespaced_stateful_set.side_effect = [current_manifest, reconciled_manifest]
 
         core_api = Mock()
         core_api.read_namespaced_persistent_volume_claim.return_value = {
@@ -545,20 +720,64 @@ class StatefulSetReconcileTests(unittest.TestCase):
             return_value=core_api,
             create=True,
         ):
-            operator_main.ensure_statefulset("default", desired_manifest)
+            with self.assertRaises(operator_main.kopf.PermanentError):
+                operator_main.ensure_statefulset("default", desired_manifest)
 
         apps_api.patch_namespaced_stateful_set.assert_called_once()
-        patched_statefulset = apps_api.patch_namespaced_stateful_set.call_args.kwargs["body"]
-        self.assertEqual(
-            patched_statefulset["spec"]["volumeClaimTemplates"][0]["spec"]["resources"]["requests"]["storage"],
-            "1Gi",
-        )
-
         core_api.patch_namespaced_persistent_volume_claim.assert_called_once()
         pvc_patch = core_api.patch_namespaced_persistent_volume_claim.call_args.kwargs
         self.assertEqual(pvc_patch["name"], "state-volume-workspace-assistant-sandbox-0")
         self.assertEqual(pvc_patch["namespace"], "default")
         self.assertEqual(pvc_patch["body"]["spec"]["resources"]["requests"]["storage"], "4Gi")
+
+    def test_ensure_statefulset_raises_when_live_template_keeps_removed_sidecar(self) -> None:
+        current_manifest = operator_main.create_agent_statefulset_manifest(
+            "workspace-assistant",
+            "default",
+            {
+                "model": "gpt-4",
+                "runtime": {"kind": "codex", "codex": {}},
+                "storage": {"size": "1Gi"},
+                "systemPrompt": "Use codex.",
+                "mcpSidecars": [
+                    {"name": "browser", "image": "example/browser:latest", "port": 8081},
+                    {"name": "documents", "image": "example/documents:latest", "port": 8092},
+                ],
+            },
+            None,
+            {},
+        )
+        desired_manifest = operator_main.create_agent_statefulset_manifest(
+            "workspace-assistant",
+            "default",
+            {
+                "model": "gpt-4",
+                "runtime": {"kind": "codex", "codex": {}},
+                "storage": {"size": "1Gi"},
+                "systemPrompt": "Use codex.",
+                "mcpSidecars": [{"name": "browser", "image": "example/browser:latest", "port": 8081}],
+            },
+            None,
+            {},
+        )
+
+        apps_api = Mock()
+        apps_api.create_namespaced_stateful_set.side_effect = _api_exception(409)
+        apps_api.read_namespaced_stateful_set.side_effect = [current_manifest, current_manifest]
+
+        core_api = Mock()
+
+        with patch.object(operator_main.kubernetes.client, "AppsV1Api", return_value=apps_api, create=True), patch.object(
+            operator_main.kubernetes.client,
+            "CoreV1Api",
+            return_value=core_api,
+            create=True,
+        ):
+            with self.assertRaises(operator_main.kopf.TemporaryError):
+                operator_main.ensure_statefulset("default", desired_manifest)
+
+        apps_api.patch_namespaced_stateful_set.assert_called_once()
+        core_api.patch_namespaced_persistent_volume_claim.assert_not_called()
 
     def test_ensure_statefulset_skips_pvc_shrink_requests(self) -> None:
         current_manifest = operator_main.create_agent_statefulset_manifest(
@@ -585,10 +804,12 @@ class StatefulSetReconcileTests(unittest.TestCase):
             None,
             {},
         )
+        reconciled_manifest = copy.deepcopy(desired_manifest)
+        reconciled_manifest["spec"]["volumeClaimTemplates"] = current_manifest["spec"]["volumeClaimTemplates"]
 
         apps_api = Mock()
         apps_api.create_namespaced_stateful_set.side_effect = _api_exception(409)
-        apps_api.read_namespaced_stateful_set.return_value = current_manifest
+        apps_api.read_namespaced_stateful_set.side_effect = [current_manifest, reconciled_manifest]
 
         core_api = Mock()
         core_api.read_namespaced_persistent_volume_claim.return_value = {
