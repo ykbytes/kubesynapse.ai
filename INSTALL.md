@@ -77,9 +77,9 @@ Key capabilities:
                 │ HTTPS
                 ▼
 ┌───────────────────────────┐
-│  Ingress (nginx)          │
-│  agents.example.com/api   │
-│  agents.example.com/      │ ← Web UI
+│  Ingress / LB (optional)  │
+│  <host>/api or /api       │
+│  <host>/ or /             │ ← Web UI
 └───────────┬───────────────┘
             │
             ▼
@@ -167,7 +167,7 @@ Optional:
 | **Python 3.11+** | Installing the `agentctl` CLI |
 | **Node.js 18+** | Building the Web UI |
 | **External Secrets Operator** | Production secrets management (Vault, Azure KV, AWS SM) |
-| **nginx-ingress controller** | External access via Ingress |
+| **Ingress controller** | Optional external access via Ingress; any controller works |
 | **cert-manager** | Automatic TLS certificates |
 | **gVisor (runsc)** | Kernel-level sandbox isolation |
 
@@ -183,41 +183,49 @@ This guide uses a local Kubernetes cluster (Kind recommended) with images loaded
 kind create cluster --name ai-sandbox
 ```
 
-### 2. Build all container images
+### 2. Build the platform images
 
 ```bash
 # From the repository root
-make docker-build REGISTRY=ghcr.io/your-org
+make docker-build REGISTRY=localhost/kubeminionagents VERSION=dev
 # This builds:
-#   ghcr.io/your-org/ai-operator:latest
-#   ghcr.io/your-org/ai-agent-runtime:latest
-#   ghcr.io/your-org/ai-goose-runtime:latest
-#   ghcr.io/your-org/ai-api-gateway:latest
-#   ghcr.io/your-org/ai-agent-sandbox-web-ui:latest
+#   localhost/kubeminionagents/ai-operator:dev
+#   localhost/kubeminionagents/ai-agent-runtime:dev
+#   localhost/kubeminionagents/ai-goose-runtime:dev
+#   localhost/kubeminionagents/ai-codex-runtime:dev
+#   localhost/kubeminionagents/ai-api-gateway:dev
+#   localhost/kubeminionagents/ai-agent-sandbox-web-ui:dev
+#   and the bundled mcp-* sidecar images
 ```
 
 Or build individually:
 
 ```bash
-podman build -t ghcr.io/your-org/ai-operator:latest ./operator
-podman build -t ghcr.io/your-org/ai-agent-runtime:latest ./agent-runtime
-podman build -t ghcr.io/your-org/ai-goose-runtime:latest ./goose-runtime
-podman build -t ghcr.io/your-org/ai-api-gateway:latest ./api-gateway
-podman build -t ghcr.io/your-org/ai-agent-sandbox-web-ui:latest ./web-ui
+podman build -t localhost/kubeminionagents/ai-operator:dev ./operator
+podman build -t localhost/kubeminionagents/ai-agent-runtime:dev ./agent-runtime
+podman build -t localhost/kubeminionagents/ai-goose-runtime:dev ./goose-runtime
+podman build -t localhost/kubeminionagents/ai-codex-runtime:dev ./codex-runtime
+podman build -t localhost/kubeminionagents/ai-api-gateway:dev ./api-gateway
+podman build -t localhost/kubeminionagents/ai-agent-sandbox-web-ui:dev ./web-ui
 ```
+
+The bundled MCP sidecars build from the shared `./mcp-sidecars` context, so the
+Makefile is the easiest way to build those images consistently.
 
 ### 3. Load images into Kind
 
 ```bash
 mkdir -p dist
-podman save -o dist/ai-operator.tar ghcr.io/your-org/ai-operator:latest
-podman save -o dist/ai-agent-runtime.tar ghcr.io/your-org/ai-agent-runtime:latest
-podman save -o dist/ai-goose-runtime.tar ghcr.io/your-org/ai-goose-runtime:latest
-podman save -o dist/ai-api-gateway.tar ghcr.io/your-org/ai-api-gateway:latest
-podman save -o dist/ai-agent-sandbox-web-ui.tar ghcr.io/your-org/ai-agent-sandbox-web-ui:latest
+podman save -o dist/ai-operator.tar localhost/kubeminionagents/ai-operator:dev
+podman save -o dist/ai-agent-runtime.tar localhost/kubeminionagents/ai-agent-runtime:dev
+podman save -o dist/ai-goose-runtime.tar localhost/kubeminionagents/ai-goose-runtime:dev
+podman save -o dist/ai-codex-runtime.tar localhost/kubeminionagents/ai-codex-runtime:dev
+podman save -o dist/ai-api-gateway.tar localhost/kubeminionagents/ai-api-gateway:dev
+podman save -o dist/ai-agent-sandbox-web-ui.tar localhost/kubeminionagents/ai-agent-sandbox-web-ui:dev
 kind load image-archive dist/ai-operator.tar --name ai-sandbox
 kind load image-archive dist/ai-agent-runtime.tar --name ai-sandbox
 kind load image-archive dist/ai-goose-runtime.tar --name ai-sandbox
+kind load image-archive dist/ai-codex-runtime.tar --name ai-sandbox
 kind load image-archive dist/ai-api-gateway.tar --name ai-sandbox
 kind load image-archive dist/ai-agent-sandbox-web-ui.tar --name ai-sandbox
 ```
@@ -237,13 +245,18 @@ platformSecrets:
     apiGatewaySharedToken: "my-secret-bearer-token"    # replace with a strong random string
 ```
 
-### 5. Install the Helm chart
+  ### 5. Install the Helm chart with the local-image override
 
 ```bash
-helm install ai-sandbox ./charts/ai-agent-sandbox
+  helm install ai-sandbox ./charts/ai-agent-sandbox -f ./deploy/values.local-images.example.yaml
 ```
 
-### 6. Verify pods are running
+  `deploy/values.local-images.example.yaml` remaps the core platform images to the
+  `localhost/kubeminionagents:*:dev` tags shown above. Extend it with
+  `mcpToolSidecars` entries only if your agents use locally built sidecar images
+  instead of the default published ones.
+
+  ### 6. Verify pods are running
 
 ```bash
 kubectl get pods -w
@@ -306,6 +319,7 @@ export VERSION=1.0.0
 podman build -t $REGISTRY/ai-operator:$VERSION        ./operator
 podman build -t $REGISTRY/ai-agent-runtime:$VERSION    ./agent-runtime
 podman build -t $REGISTRY/ai-goose-runtime:$VERSION    ./goose-runtime
+podman build -t $REGISTRY/ai-codex-runtime:$VERSION    ./codex-runtime
 podman build -t $REGISTRY/ai-api-gateway:$VERSION      ./api-gateway
 podman build -t $REGISTRY/ai-agent-sandbox-web-ui:$VERSION ./web-ui
 ```
@@ -317,6 +331,7 @@ podman login ghcr.io
 podman push $REGISTRY/ai-operator:$VERSION
 podman push $REGISTRY/ai-agent-runtime:$VERSION
 podman push $REGISTRY/ai-goose-runtime:$VERSION
+podman push $REGISTRY/ai-codex-runtime:$VERSION
 podman push $REGISTRY/ai-api-gateway:$VERSION
 podman push $REGISTRY/ai-agent-sandbox-web-ui:$VERSION
 ```
@@ -327,6 +342,9 @@ Or use the Makefile:
 make docker-build docker-push REGISTRY=your-registry.example.com/ai-agents VERSION=1.0.0
 ```
 
+The Makefile publishes the six core platform images plus the bundled `mcp-*`
+sidecar images, using the shared `./mcp-sidecars` build context for sidecars.
+
 ### 3. Configure values.yaml
 
 Create a production values override file (`values-prod.yaml`):
@@ -335,6 +353,7 @@ Create a production values override file (`values-prod.yaml`):
 # -- Container images --------------------------------------------------------
 operator:
   replicaCount: 2
+  clusterSecretStoreName: "mycompany-vault-store"
   image:
     repository: ghcr.io/your-org/ai-operator
     tag: "1.0.0"
@@ -369,11 +388,20 @@ gooseRuntime:
       prompts/review.md: |
         Review code conservatively, explain risks first, and avoid destructive actions.
 
+codexRuntime:
+  image:
+    repository: ghcr.io/your-org/ai-codex-runtime
+    tag: "1.0.0"
+
 apiGateway:
   replicaCount: 2
   image:
     repository: ghcr.io/your-org/ai-api-gateway
     tag: "1.0.0"
+  ingress:
+    enabled: true
+    annotations: {}
+  ingressClassName: "nginx"               # set to your controller or leave empty for the default class
   ingressHost: "agents.mycompany.com"
   tls:
     enabled: true
@@ -412,9 +440,6 @@ platformSecrets:
     refreshInterval: 1h
     createClusterSecretStore: false          # You manage the ClusterSecretStore
 
-operator:
-  clusterSecretStoreName: "mycompany-vault-store"
-
 # -- MCP Hub ----------------------------------------------------------------
 mcpHub:
   auth:
@@ -429,12 +454,15 @@ mcpHub:
       port: 8082
       servicePort: 8000
 
-
-The chart intentionally deploys no shared MCP servers by default. The GitHub entry above is a real upstream image reference, but the current runtime still expects an internal `/tools/<tool>` HTTP bridge before agents can invoke a stock MCP server successfully.
 # -- Telemetry --------------------------------------------------------------
 telemetry:
   otlpEndpoint: "http://otel-collector.monitoring:4318"
 ```
+
+The chart intentionally deploys no shared MCP servers by default. The GitHub
+entry above is a real upstream image reference, but the current runtime still
+expects an internal `/tools/<tool>` HTTP bridge before agents can invoke a
+stock MCP server successfully.
 
 `GOOSE_RUNTIME_CONFIG_FILES_JSON` lets the Goose adapter write native Goose
 config files into `XDG_CONFIG_HOME/goose` before invoking `goose run`. That is
@@ -444,6 +472,11 @@ shared invoke API stays focused on per-request controls. Keep secrets in
 Kubernetes `Secret`-backed env vars instead of writing `secrets.yaml`, and do
 not preseed `permissions/tool_permissions.json` because Goose manages that file
 itself at runtime.
+
+If you publish the bundled sidecars to your own registry, override the
+`mcpToolSidecars` entries as well. The chart defaults now point those sidecars
+at published `latest` tags, so agents can use the bundled images without extra
+chart changes unless you want to pin or relocate them.
 
 ### 4. Install the Helm Chart
 
@@ -1151,10 +1184,20 @@ When the agent's LLM calls a code-execution tool, the runtime creates an ephemer
 
 ## TLS & Ingress
 
-### Enable TLS
+Ingress is enabled by default, but the chart now leaves the ingress class, host,
+and annotations empty so it can render on different clusters without assuming a
+specific controller. Set the fields below for your environment, use a hostless
+Ingress when that fits your cluster, or disable Ingress entirely and expose the
+gateway another way.
+
+### Enable ingress with TLS
 
 ```yaml
 apiGateway:
+  ingress:
+    enabled: true
+    annotations: {}
+  ingressClassName: "nginx"
   ingressHost: "agents.mycompany.com"
   tls:
     enabled: true
@@ -1164,16 +1207,42 @@ apiGateway:
 ### With cert-manager
 
 ```yaml
-# Add annotation to Ingress
 apiGateway:
+  ingress:
+    enabled: true
+    annotations:
+      cert-manager.io/cluster-issuer: letsencrypt-prod
+  ingressClassName: "nginx"
   ingressHost: "agents.mycompany.com"
   tls:
     enabled: true
     secretName: "agents-tls"
-# Then annotate the Ingress for cert-manager:
-# kubectl annotate ingress ai-sandbox-ai-agent-sandbox-ingress \
-#   cert-manager.io/cluster-issuer=letsencrypt-prod
 ```
+
+### Hostless ingress
+
+```yaml
+apiGateway:
+  ingress:
+    enabled: true
+    annotations: {}
+  ingressClassName: ""
+  ingressHost: ""
+```
+
+This renders an Ingress without a host, which is useful for local clusters or
+controllers that route by IP and path only.
+
+### Disable ingress
+
+```yaml
+apiGateway:
+  ingress:
+    enabled: false
+```
+
+Use this when you prefer `kubectl port-forward`, a separate `LoadBalancer`
+Service, or another exposure mechanism.
 
 ### Manual TLS
 
@@ -1422,8 +1491,8 @@ kubeminionagents/
 
 ```bash
 make all                  # lint + test + docker-build + helm-package
-make docker-build         # Build all 5 first-party container images
-make docker-push          # Push all images to REGISTRY
+make docker-build         # Build 6 core images + 9 bundled MCP sidecars
+make docker-push          # Push 6 core images + 9 bundled MCP sidecars to REGISTRY
 make lint                 # Run flake8 on all Python components
 make test                 # Run pytest on all components
 make test-goose-runtime-e2e # Build the Goose runtime image and run Docker-backed E2E coverage

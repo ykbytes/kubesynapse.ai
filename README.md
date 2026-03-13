@@ -54,11 +54,14 @@ Kubeminionagents is designed as a **shareable, end-to-end AI agent platform** fo
 
 ## ⚡ Quick start
 
-### 1) Build the first-party images
+### 1) Build the platform images
 
 ```powershell
 make docker-build REGISTRY=ghcr.io/your-org VERSION=latest
 ```
+
+This target builds the six core platform images plus the bundled MCP sidecar
+images from `./mcp-sidecars`.
 
 ### 2) Or package a self-contained chart bundle
 
@@ -72,10 +75,14 @@ make docker-build REGISTRY=ghcr.io/your-org VERSION=latest
 helm upgrade --install ai-agent-sandbox .\charts\ai-agent-sandbox -f .\deploy\values.cluster.example.yaml
 ```
 
-### 4) For local image testing, start here
+`deploy/values.cluster.example.yaml` is a portable starting point for generic
+clusters: it leaves ingress class, host, and annotations unset until you supply
+controller-specific values.
+
+### 4) For local image testing, use the local-image override
 
 ```powershell
-.\deploy\values.local-images.example.yaml
+helm upgrade --install ai-agent-sandbox .\charts\ai-agent-sandbox -f .\deploy\values.local-images.example.yaml
 ```
 
 ## 🧩 Deployment model
@@ -87,6 +94,7 @@ The default chart is intentionally **self-contained**:
 - LiteLLM reads provider keys and the master key from a shared chart-managed secret
 - tenant provisioning can mint runtime secrets without requiring External Secrets CRDs
 - Redis, Qdrant, NATS, LiteLLM, the API gateway, and the web UI deploy from the same chart
+- ingress defaults are portable across clusters: class name, host, and annotations are opt-in, and ingress can be disabled entirely
 
 If you want a managed secret backend instead, set `platformSecrets.mode=external-secrets` and provide a real `operator.clusterSecretStoreName`.
 
