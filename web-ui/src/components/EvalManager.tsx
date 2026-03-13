@@ -82,7 +82,8 @@ export function EvalManager({
     setTestSuite(defaultCases());
     setThresholds(thresholdsFromResource(null));
     setValidationError("");
-  }, [evalResource, agents]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [evalResource?.name]);
 
   function updateCase(index: number, updater: (current: EvalTestCase) => EvalTestCase) {
     setTestSuite((current) => current.map((item, itemIndex) => (itemIndex === index ? updater(item) : item)));

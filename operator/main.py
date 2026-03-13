@@ -1,3 +1,4 @@
+import copy
 import logging
 import os
 import re
@@ -5,6 +6,7 @@ import time
 import hashlib
 import json
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from typing import Any, Callable
 
 from croniter import CroniterBadCronError, croniter  # type: ignore[import-untyped]
@@ -34,6 +36,26 @@ logger = logging.getLogger("operator")
 PERMANENT_API_ERROR_STATUSES = {400, 401, 403, 404, 405, 422}
 HIGH_BACKOFF_API_ERROR_STATUSES = {429, 500, 502, 503, 504}
 MAX_LOG_FIELD_LENGTH = 400
+POD_TEMPLATE_REVISION_ANNOTATION = "sandbox.enterprise.ai/pod-template-revision"
+STORAGE_QUANTITY_MULTIPLIERS: dict[str, Decimal] = {
+    "": Decimal(1),
+    "n": Decimal("1e-9"),
+    "u": Decimal("1e-6"),
+    "m": Decimal("1e-3"),
+    "k": Decimal(1000),
+    "K": Decimal(1000),
+    "M": Decimal(1000**2),
+    "G": Decimal(1000**3),
+    "T": Decimal(1000**4),
+    "P": Decimal(1000**5),
+    "E": Decimal(1000**6),
+    "Ki": Decimal(1024),
+    "Mi": Decimal(1024**2),
+    "Gi": Decimal(1024**3),
+    "Ti": Decimal(1024**4),
+    "Pi": Decimal(1024**5),
+    "Ei": Decimal(1024**6),
+}
 
 
 def _serialize_log_field(value: Any) -> str:
@@ -313,6 +335,9 @@ RUNTIME_IMAGE_PULL_POLICY = get_string_env("AGENT_RUNTIME_IMAGE_PULL_POLICY", "I
 GOOSE_RUNTIME_IMAGE = os.getenv("GOOSE_RUNTIME_IMAGE", "ghcr.io/your-org/ai-goose-runtime:latest")
 GOOSE_RUNTIME_IMAGE_PULL_POLICY = get_string_env("GOOSE_RUNTIME_IMAGE_PULL_POLICY", "IfNotPresent")
 GOOSE_DEFAULT_PROVIDER = get_string_env("GOOSE_DEFAULT_PROVIDER", "litellm")
+CODEX_RUNTIME_IMAGE = os.getenv("CODEX_RUNTIME_IMAGE", "ghcr.io/your-org/ai-codex-runtime:latest")
+CODEX_RUNTIME_IMAGE_PULL_POLICY = get_string_env("CODEX_RUNTIME_IMAGE_PULL_POLICY", "IfNotPresent")
+CODEX_DEFAULT_PROVIDER = get_string_env("CODEX_DEFAULT_PROVIDER", "litellm")
 RUNTIME_SERVICE_ACCOUNT = os.getenv("RUNTIME_SERVICE_ACCOUNT", "ai-agent-runtime")
 RUNTIME_CLUSTER_ROLE = os.getenv("RUNTIME_CLUSTER_ROLE", "ai-agent-runtime-role")
 QDRANT_SVC = os.getenv("QDRANT_SVC_NAME", "ai-agent-sandbox-qdrant")
@@ -354,7 +379,7 @@ AGENT_CPU_LIMIT = os.getenv("AGENT_CPU_LIMIT", "1").strip() or "1"
 AGENT_MEMORY_LIMIT = os.getenv("AGENT_MEMORY_LIMIT", "1Gi").strip() or "1Gi"
 A2A_DEFAULT_TIMEOUT_SECONDS = get_float_env("A2A_DEFAULT_TIMEOUT_SECONDS", 60.0, minimum=1.0)
 IMAGE_PULL_SECRETS = get_csv_env("IMAGE_PULL_SECRETS")
-SUPPORTED_RUNTIME_KINDS = {"langgraph", "goose"}
+SUPPORTED_RUNTIME_KINDS = {"langgraph", "goose", "codex"}
 A2A_ALLOWED_CALLERS_ENV = "A2A_ALLOWED_CALLERS_JSON"
 A2A_ALLOWED_TARGETS_ENV = "A2A_ALLOWED_TARGETS_JSON"
 A2A_REQUIRE_HITL_ENV = "A2A_REQUIRE_HITL"
@@ -394,6 +419,9 @@ OPEN_SANDBOX_API_KEY_SECRET_KEY = os.getenv("OPEN_SANDBOX_API_KEY_SECRET_KEY", "
 AGENT_RUNTIME_EXTRA_ENV = get_json_env("AGENT_RUNTIME_EXTRA_ENV_JSON", {})
 GOOSE_RUNTIME_EXTRA_ENV = get_json_env("GOOSE_RUNTIME_EXTRA_ENV_JSON", {})
 GOOSE_RUNTIME_CONFIG_FILES_ENV = "GOOSE_RUNTIME_CONFIG_FILES_JSON"
+CODEX_RUNTIME_EXTRA_ENV = get_json_env("CODEX_RUNTIME_EXTRA_ENV_JSON", {})
+CODEX_RUNTIME_CONFIG_FILES_ENV = "CODEX_RUNTIME_CONFIG_FILES_JSON"
+CODEX_MCP_SIDECARS_ENV = "CODEX_MCP_SIDECARS_JSON"
 AGENT_SKILL_FILES_ENV = "AGENT_SKILL_FILES_JSON"
 
 # Mapping of MCP server names (as referenced in skill frontmatter) to sidecar images.
@@ -488,6 +516,31 @@ PLATFORM_MANAGED_GOOSE_ENV = {
     GOOSE_RUNTIME_CONFIG_FILES_ENV,
 }
 
+PLATFORM_MANAGED_CODEX_ENV = {
+    "AGENT_MODEL",
+    "AGENT_NAME",
+    "AGENT_NAMESPACE",
+    "AGENT_SYSTEM_PROMPT",
+    "CODEX_PROVIDER",
+    "CODEX_MODEL",
+    "CODEX_SYSTEM_PROMPT",
+    "LITELLM_HOST",
+    "LITELLM_BASE_PATH",
+    "LITELLM_API_KEY",
+    "HOME",
+    "CODEX_HOME",
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME",
+    "CODEX_BIN",
+    "CODEX_WORKDIR",
+    A2A_ALLOWED_CALLERS_ENV,
+    A2A_ALLOWED_TARGETS_ENV,
+    A2A_REQUIRE_HITL_ENV,
+    A2A_MAX_TIMEOUT_SECONDS_ENV,
+    CODEX_RUNTIME_CONFIG_FILES_ENV,
+    CODEX_MCP_SIDECARS_ENV,
+}
+
 PLATFORM_MANAGED_AGENT_ENV = {
     "AGENT_MODEL",
     "AGENT_NAME",
@@ -549,6 +602,15 @@ def goose_runtime_extra_env_items() -> list[dict[str, str]]:
     )
 
 
+def codex_runtime_extra_env_items() -> list[dict[str, str]]:
+    return runtime_extra_env_items(
+        CODEX_RUNTIME_EXTRA_ENV,
+        source_env_name="CODEX_RUNTIME_EXTRA_ENV_JSON",
+        runtime_name="codex runtime",
+        platform_managed_names=PLATFORM_MANAGED_CODEX_ENV,
+    )
+
+
 def agent_runtime_extra_env_items() -> list[dict[str, str]]:
     return runtime_extra_env_items(
         AGENT_RUNTIME_EXTRA_ENV,
@@ -578,6 +640,26 @@ def merged_goose_runtime_config_files(spec: dict[str, Any]) -> dict[str, Any]:
         )
     except ValueError as exc:
         raise kopf.PermanentError(str(exc)) from exc
+
+
+def merged_codex_runtime_config_files(spec: dict[str, Any]) -> dict[str, Any]:
+    runtime_spec = spec.get("runtime") or {}
+    codex_spec = runtime_spec.get("codex")
+    if codex_spec is None:
+        agent_config_files: Any = None
+    elif isinstance(codex_spec, dict):
+        agent_config_files = codex_spec.get("configFiles")
+    else:
+        raise kopf.PermanentError("AIAgent.spec.runtime.codex must be an object when provided.")
+
+    # Merge chart-wide defaults with agent-specific overrides
+    chart_files = CODEX_RUNTIME_EXTRA_ENV.get(CODEX_RUNTIME_CONFIG_FILES_ENV)
+    merged: dict[str, Any] = {}
+    if isinstance(chart_files, dict):
+        merged.update(chart_files)
+    if isinstance(agent_config_files, dict):
+        merged.update(agent_config_files)
+    return merged
 
 
 @kopf.on.startup()
@@ -853,6 +935,7 @@ def resolve_runtime_kind(spec: dict[str, Any]) -> str:
 def validate_runtime_configuration(runtime_kind: str, spec: dict[str, Any]) -> None:
     runtime_spec = spec.get("runtime") or {}
     goose_spec = runtime_spec.get("goose") if isinstance(runtime_spec, dict) else None
+    codex_spec = runtime_spec.get("codex") if isinstance(runtime_spec, dict) else None
     try:
         parse_agent_a2a_config(spec.get("a2a"), source="AIAgent.spec.a2a")
     except ValueError as exc:
@@ -862,30 +945,56 @@ def validate_runtime_configuration(runtime_kind: str, spec: dict[str, Any]) -> N
     except ValueError as exc:
         raise kopf.PermanentError(str(exc)) from exc
 
-    if runtime_kind != "goose":
+    if runtime_kind == "goose":
+        if codex_spec is not None:
+            raise kopf.PermanentError(
+                "AIAgent.spec.runtime.codex is only supported when spec.runtime.kind is 'codex'."
+            )
+        if goose_spec is not None and not isinstance(goose_spec, dict):
+            raise kopf.PermanentError("AIAgent.spec.runtime.goose must be an object when provided.")
+        try:
+            parse_goose_config_files(
+                (goose_spec or {}).get("configFiles") if isinstance(goose_spec, dict) else None,
+                source="AIAgent.spec.runtime.goose.configFiles",
+            )
+        except ValueError as exc:
+            raise kopf.PermanentError(str(exc)) from exc
+        if spec.get("mcpServers"):
+            raise kopf.PermanentError(
+                "Goose runtime integration does not yet support spec.mcpServers. Use the LangGraph runtime for MCP routing today."
+            )
+        if spec.get("mcpSidecars"):
+            raise kopf.PermanentError(
+                "Goose runtime integration does not yet support spec.mcpSidecars. Use the LangGraph runtime for sidecar-based MCP tools today."
+            )
+    elif runtime_kind == "codex":
         if goose_spec is not None:
             raise kopf.PermanentError(
                 "AIAgent.spec.runtime.goose is only supported when spec.runtime.kind is 'goose'."
             )
-        return
-
-    if goose_spec is not None and not isinstance(goose_spec, dict):
-        raise kopf.PermanentError("AIAgent.spec.runtime.goose must be an object when provided.")
-    try:
-        parse_goose_config_files(
-            (goose_spec or {}).get("configFiles") if isinstance(goose_spec, dict) else None,
-            source="AIAgent.spec.runtime.goose.configFiles",
-        )
-    except ValueError as exc:
-        raise kopf.PermanentError(str(exc)) from exc
-    if spec.get("mcpServers"):
-        raise kopf.PermanentError(
-            "Goose runtime integration does not yet support spec.mcpServers. Use the LangGraph runtime for MCP routing today."
-        )
-    if spec.get("mcpSidecars"):
-        raise kopf.PermanentError(
-            "Goose runtime integration does not yet support spec.mcpSidecars. Use the LangGraph runtime for sidecar-based MCP tools today."
-        )
+        if codex_spec is not None and not isinstance(codex_spec, dict):
+            raise kopf.PermanentError("AIAgent.spec.runtime.codex must be an object when provided.")
+        try:
+            parse_goose_config_files(
+                (codex_spec or {}).get("configFiles") if isinstance(codex_spec, dict) else None,
+                source="AIAgent.spec.runtime.codex.configFiles",
+            )
+        except ValueError as exc:
+            raise kopf.PermanentError(str(exc)) from exc
+        if spec.get("mcpServers"):
+            raise kopf.PermanentError(
+                "Codex runtime integration does not yet support spec.mcpServers. Use the LangGraph runtime for MCP routing today."
+            )
+    else:
+        # langgraph
+        if goose_spec is not None:
+            raise kopf.PermanentError(
+                "AIAgent.spec.runtime.goose is only supported when spec.runtime.kind is 'goose'."
+            )
+        if codex_spec is not None:
+            raise kopf.PermanentError(
+                "AIAgent.spec.runtime.codex is only supported when spec.runtime.kind is 'codex'."
+            )
 
 
 def ensure_runtime_access(namespace: str) -> None:
@@ -950,6 +1059,167 @@ def build_pvc_spec(storage_size: str, storage_class_name: str | None = None) -> 
     if storage_class_name:
         pvc_spec["storageClassName"] = storage_class_name
     return pvc_spec
+
+
+def _build_pod_template_revision(
+    spec: dict[str, Any],
+    runtime_kind: str,
+    policy_name: str | None,
+    policy_spec: dict[str, Any] | None,
+    mcp_sidecars: list[dict[str, Any]],
+) -> str:
+    revision_source = {
+        "spec": spec,
+        "runtimeKind": runtime_kind,
+        "policyName": policy_name,
+        "policySpec": policy_spec or {},
+        "mcpSidecars": mcp_sidecars,
+    }
+    serialized = json.dumps(revision_source, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()[:12]
+
+
+def _sanitize_kube_resource(resource: Any) -> Any:
+    if isinstance(resource, (dict, list, str, int, float, bool)) or resource is None:
+        return copy.deepcopy(resource)
+
+    api_client_cls = getattr(kubernetes.client, "ApiClient", None)
+    if api_client_cls is not None:
+        try:
+            return api_client_cls().sanitize_for_serialization(resource)
+        except Exception:
+            pass
+
+    if hasattr(resource, "to_dict"):
+        return resource.to_dict()
+    return resource
+
+
+def _extract_statefulset_storage_request(manifest: dict[str, Any], claim_name: str = "state-volume") -> str | None:
+    templates = (manifest.get("spec") or {}).get("volumeClaimTemplates") or []
+    for template in templates:
+        metadata = template.get("metadata") or {}
+        if metadata.get("name") != claim_name:
+            continue
+        requests = ((template.get("spec") or {}).get("resources") or {}).get("requests") or {}
+        storage = requests.get("storage")
+        if storage:
+            return str(storage)
+    return None
+
+
+def _parse_storage_quantity(value: str) -> Decimal:
+    normalized = str(value or "").strip()
+    match = re.fullmatch(r"([0-9]+(?:\.[0-9]+)?)([KMGTPE]i|[numkKMGTPE])?", normalized)
+    if not match:
+        raise ValueError(f"Unsupported storage quantity: {value!r}")
+
+    number_text, suffix = match.groups()
+    try:
+        number = Decimal(number_text)
+    except InvalidOperation as exc:
+        raise ValueError(f"Unsupported storage quantity: {value!r}") from exc
+    return number * STORAGE_QUANTITY_MULTIPLIERS[suffix or ""]
+
+
+def _preserve_statefulset_immutable_fields(
+    manifest: dict[str, Any],
+    current_statefulset: dict[str, Any],
+) -> dict[str, Any]:
+    patched_manifest = copy.deepcopy(manifest)
+    patched_spec = patched_manifest.setdefault("spec", {})
+    current_spec = (current_statefulset.get("spec") or {})
+
+    for field_name in ("volumeClaimTemplates", "selector", "serviceName"):
+        current_value = current_spec.get(field_name)
+        if current_value is not None:
+            patched_spec[field_name] = current_value
+
+    return patched_manifest
+
+
+def _resize_statefulset_persistent_volume_claims(
+    core_api: Any,
+    namespace: str,
+    statefulset_name: str,
+    current_statefulset: dict[str, Any],
+    desired_storage: str | None,
+) -> None:
+    if not desired_storage:
+        return
+
+    desired_quantity = _parse_storage_quantity(desired_storage)
+    current_spec = current_statefulset.get("spec") or {}
+    replicas = max(int(current_spec.get("replicas") or 1), 1)
+    claim_templates = current_spec.get("volumeClaimTemplates") or []
+
+    for template in claim_templates:
+        claim_name = str((template.get("metadata") or {}).get("name") or "").strip()
+        if claim_name != "state-volume":
+            continue
+
+        for ordinal in range(replicas):
+            pvc_name = f"{claim_name}-{statefulset_name}-{ordinal}"
+            try:
+                current_pvc = _sanitize_kube_resource(
+                    core_api.read_namespaced_persistent_volume_claim(name=pvc_name, namespace=namespace)
+                )
+            except ApiException as exc:
+                if exc.status == 404:
+                    continue
+                raise
+
+            current_requests = ((current_pvc.get("spec") or {}).get("resources") or {}).get("requests") or {}
+            current_storage = current_requests.get("storage")
+            if not current_storage:
+                logger.warning(
+                    "Skipping PVC resize because '%s' in namespace '%s' has no storage request.",
+                    pvc_name,
+                    namespace,
+                )
+                continue
+
+            try:
+                current_quantity = _parse_storage_quantity(str(current_storage))
+            except ValueError:
+                logger.warning(
+                    "Skipping PVC resize because '%s' in namespace '%s' has an unsupported storage request %r.",
+                    pvc_name,
+                    namespace,
+                    current_storage,
+                )
+                continue
+
+            if desired_quantity < current_quantity:
+                logger.warning(
+                    "Skipping PVC shrink request for '%s' in namespace '%s': current=%s desired=%s.",
+                    pvc_name,
+                    namespace,
+                    current_storage,
+                    desired_storage,
+                )
+                continue
+            if desired_quantity == current_quantity:
+                continue
+
+            try:
+                core_api.patch_namespaced_persistent_volume_claim(
+                    name=pvc_name,
+                    namespace=namespace,
+                    body={"spec": {"resources": {"requests": {"storage": desired_storage}}}},
+                )
+            except ApiException as exc:
+                if exc.status in (403, 422):
+                    outcome = "forbidden" if exc.status == 403 else "rejected"
+                    logger.warning(
+                        "PVC resize request was %s for '%s' in namespace '%s': %s",
+                        outcome,
+                        pvc_name,
+                        namespace,
+                        describe_api_exception(exc),
+                    )
+                    continue
+                raise
 
 
 def create_worker_artifact_pvc_manifest(kind: str, resource_namespace: str, resource_name: str) -> dict[str, Any]:
@@ -1145,6 +1415,46 @@ def create_agent_statefulset_manifest(
                 }
             )
         env.extend(goose_runtime_extra_env_items())
+    elif runtime_kind == "codex":
+        agent_image = CODEX_RUNTIME_IMAGE
+        agent_image_pull_policy = CODEX_RUNTIME_IMAGE_PULL_POLICY
+        codex_config_files = merged_codex_runtime_config_files(spec)
+        volume_mounts.append({"name": "workspace-volume", "mountPath": "/workspace"})
+        volumes.append({"name": "workspace-volume", "emptyDir": {}})
+        env.extend(
+            [
+                {"name": "CODEX_PROVIDER", "value": CODEX_DEFAULT_PROVIDER},
+                {"name": "CODEX_MODEL", "value": model},
+                {"name": "CODEX_SYSTEM_PROMPT", "value": system_prompt},
+                {"name": "LITELLM_HOST", "value": f"http://{LITELLM_SVC}:4000"},
+                {"name": "LITELLM_BASE_PATH", "value": "v1/chat/completions"},
+                {
+                    "name": "LITELLM_API_KEY",
+                    "valueFrom": {
+                        "secretKeyRef": {
+                            "name": SECRET_NAME,
+                            "key": "LITELLM_MASTER_KEY",
+                            "optional": True,
+                        }
+                    },
+                },
+            ]
+        )
+        if codex_config_files:
+            env.append(
+                {
+                    "name": CODEX_RUNTIME_CONFIG_FILES_ENV,
+                    "value": json.dumps(codex_config_files, ensure_ascii=False, sort_keys=True),
+                }
+            )
+        if mcp_sidecars:
+            env.append(
+                {
+                    "name": CODEX_MCP_SIDECARS_ENV,
+                    "value": json.dumps(mcp_sidecars, ensure_ascii=False, sort_keys=True),
+                }
+            )
+        env.extend(codex_runtime_extra_env_items())
     else:
         env.extend(
             [
@@ -1257,14 +1567,16 @@ def create_agent_statefulset_manifest(
     }
 
     containers = [agent_container]
-    if runtime_kind == "langgraph":
+    if runtime_kind in {"langgraph", "codex"}:
         for index, sidecar_spec in enumerate(mcp_sidecars):
             sidecar_name = sidecar_spec.get("name", f"tool-{index}")
+            sidecar_port = sidecar_spec.get("port", 8080)
             containers.append(
                 {
                     "name": f"mcp-{sidecar_name}",
                     "image": sidecar_spec.get("image", "busybox"),
-                    "ports": [{"containerPort": sidecar_spec.get("port", 8080)}],
+                    "ports": [{"containerPort": sidecar_port}],
+                    "env": [{"name": "MCP_LISTEN_PORT", "value": str(sidecar_port)}],
                     "securityContext": container_security_context,
                     "resources": {
                         "requests": {"cpu": "50m", "memory": "64Mi"},
@@ -1287,6 +1599,7 @@ def create_agent_statefulset_manifest(
         pod_spec["runtimeClassName"] = "runsc"
 
     storage_spec = spec.get("storage", {})
+    pod_template_revision = _build_pod_template_revision(spec, runtime_kind, policy_name, policy_spec, mcp_sidecars)
 
     return {
         "apiVersion": "apps/v1",
@@ -1306,7 +1619,10 @@ def create_agent_statefulset_manifest(
                 "whenScaled": "Retain",
             },
             "template": {
-                "metadata": {"labels": {"app": "ai-agent", "agent-name": name, "runtime-kind": runtime_kind}},
+                "metadata": {
+                    "labels": {"app": "ai-agent", "agent-name": name, "runtime-kind": runtime_kind},
+                    "annotations": {POD_TEMPLATE_REVISION_ANNOTATION: pod_template_revision},
+                },
                 "spec": pod_spec,
             },
             "volumeClaimTemplates": [
@@ -1345,12 +1661,29 @@ def ensure_service(namespace: str, manifest: dict[str, Any]) -> None:
 
 def ensure_statefulset(namespace: str, manifest: dict[str, Any]) -> None:
     apps_api = kubernetes.client.AppsV1Api()
+    core_api = kubernetes.client.CoreV1Api()
     statefulset_name = manifest["metadata"]["name"]
     try:
         apps_api.create_namespaced_stateful_set(namespace=namespace, body=manifest)
     except ApiException as exc:
         if exc.status == 409:
-            apps_api.patch_namespaced_stateful_set(name=statefulset_name, namespace=namespace, body=manifest)
+            current_statefulset = _sanitize_kube_resource(
+                apps_api.read_namespaced_stateful_set(name=statefulset_name, namespace=namespace)
+            )
+            desired_storage = _extract_statefulset_storage_request(manifest)
+            patched_manifest = _preserve_statefulset_immutable_fields(manifest, current_statefulset)
+            apps_api.patch_namespaced_stateful_set(
+                name=statefulset_name,
+                namespace=namespace,
+                body=patched_manifest,
+            )
+            _resize_statefulset_persistent_volume_claims(
+                core_api,
+                namespace,
+                statefulset_name,
+                current_statefulset,
+                desired_storage,
+            )
             return
         raise
 

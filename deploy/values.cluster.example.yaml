@@ -6,29 +6,35 @@ global:
 
 operator:
   image:
-    repository: ghcr.io/your-org/ai-operator
+    repository: docker.io/yakdhane/ai-operator
     tag: latest
     pullPolicy: Always
   workerImage:
-    repository: ghcr.io/your-org/ai-operator
+    repository: docker.io/yakdhane/ai-operator
     tag: latest
     pullPolicy: Always
 
 agentRuntime:
   image:
-    repository: ghcr.io/your-org/ai-agent-runtime
+    repository: docker.io/yakdhane/ai-agent-runtime
     tag: latest
     pullPolicy: Always
 
 gooseRuntime:
   image:
-    repository: ghcr.io/your-org/ai-goose-runtime
+    repository: docker.io/yakdhane/ai-goose-runtime
+    tag: latest
+    pullPolicy: Always
+
+codexRuntime:
+  image:
+    repository: docker.io/yakdhane/ai-codex-runtime
     tag: latest
     pullPolicy: Always
 
 apiGateway:
   image:
-    repository: ghcr.io/your-org/ai-api-gateway
+    repository: docker.io/yakdhane/ai-api-gateway
     tag: latest
     pullPolicy: Always
   ingressClassName: nginx
@@ -42,7 +48,7 @@ apiGateway:
 webUi:
   enabled: true
   image:
-    repository: ghcr.io/your-org/ai-agent-sandbox-web-ui
+    repository: docker.io/yakdhane/ai-agent-sandbox-web-ui
     tag: latest
     pullPolicy: Always
 

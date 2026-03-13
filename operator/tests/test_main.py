@@ -73,6 +73,12 @@ sys.modules.setdefault("kubernetes.client.rest", rest_module)
 import main as operator_main  # noqa: E402
 
 
+def _api_exception(status: int) -> Exception:
+    exc = operator_main.ApiException(f"status={status}")
+    exc.status = status
+    return exc
+
+
 class OperatorManifestTests(unittest.TestCase):
     def test_classify_reconcile_error_marks_4xx_api_failures_permanent(self) -> None:
         exc = operator_main.ApiException("invalid resource")
@@ -246,6 +252,98 @@ class OperatorManifestTests(unittest.TestCase):
             },
         )
 
+    def test_codex_runtime_extra_env_allows_auth_json_but_not_codex_home(self) -> None:
+        with patch.object(
+            operator_main,
+            "CODEX_RUNTIME_EXTRA_ENV",
+            {
+                "CODEX_AUTH_JSON": {"auth_mode": "apikey", "OPENAI_API_KEY": "sk-test-key"},
+                "CODEX_HOME": "/tmp/custom-codex-home",
+            },
+        ):
+            items = operator_main.codex_runtime_extra_env_items()
+
+        self.assertEqual(
+            items,
+            [
+                {
+                    "name": "CODEX_AUTH_JSON",
+                    "value": '{"auth_mode": "apikey", "OPENAI_API_KEY": "sk-test-key"}',
+                }
+            ],
+        )
+
+    def test_codex_statefulset_manifest_includes_sidecar_env_and_containers(self) -> None:
+        sidecars = [{"name": "browser", "image": "example/browser:latest", "port": 8081}]
+        manifest = operator_main.create_agent_statefulset_manifest(
+            "workspace-assistant",
+            "default",
+            {
+                "model": "gpt-4",
+                "runtime": {"kind": "codex", "codex": {"configFiles": {"config.toml": "model = \"gpt-4\""}}},
+                "storage": {"size": "1Gi"},
+                "systemPrompt": "Be precise.",
+                "mcpSidecars": sidecars,
+            },
+            None,
+            {},
+        )
+
+        pod_spec = manifest["spec"]["template"]["spec"]
+        env = {
+            item["name"]: item["value"]
+            for item in pod_spec["containers"][0]["env"]
+            if "value" in item
+        }
+
+        self.assertEqual(env[operator_main.CODEX_MCP_SIDECARS_ENV], json.dumps(sidecars, ensure_ascii=False, sort_keys=True))
+        self.assertEqual(json.loads(env[operator_main.CODEX_RUNTIME_CONFIG_FILES_ENV]), {"config.toml": 'model = "gpt-4"'})
+        self.assertEqual(pod_spec["containers"][1]["name"], "mcp-browser")
+        self.assertEqual(pod_spec["containers"][1]["ports"], [{"containerPort": 8081}])
+        self.assertEqual(
+            pod_spec["containers"][1]["env"],
+            [{"name": "MCP_LISTEN_PORT", "value": "8081"}],
+        )
+
+    def test_statefulset_manifest_sets_revision_hash_annotation_and_changes_with_storage(self) -> None:
+        base_spec = {
+            "model": "gpt-4",
+            "runtime": {"kind": "langgraph"},
+            "storage": {"size": "1Gi"},
+            "systemPrompt": "Be precise.",
+        }
+        updated_spec = {
+            "model": "gpt-4",
+            "runtime": {"kind": "langgraph"},
+            "storage": {"size": "2Gi"},
+            "systemPrompt": "Be precise.",
+        }
+
+        manifest = operator_main.create_agent_statefulset_manifest(
+            "workspace-assistant",
+            "default",
+            base_spec,
+            None,
+            {},
+        )
+        updated_manifest = operator_main.create_agent_statefulset_manifest(
+            "workspace-assistant",
+            "default",
+            updated_spec,
+            None,
+            {},
+        )
+
+        annotations = manifest["spec"]["template"]["metadata"]["annotations"]
+        revision = annotations[operator_main.POD_TEMPLATE_REVISION_ANNOTATION]
+        updated_revision = updated_manifest["spec"]["template"]["metadata"]["annotations"][
+            operator_main.POD_TEMPLATE_REVISION_ANNOTATION
+        ]
+
+        self.assertEqual(len(revision), 12)
+        self.assertTrue(all(character in "0123456789abcdef" for character in revision))
+        self.assertNotEqual(revision, updated_revision)
+
     def test_a2a_network_policy_manifests_scope_to_named_agents(self) -> None:
         ingress = operator_main.create_a2a_ingress_network_policy_manifest(
             "workspace-assistant",
@@ -333,6 +431,180 @@ class OperatorManifestTests(unittest.TestCase):
         manifest = ensure_secret.call_args.args[1]
         self.assertEqual(manifest["stringData"]["LITELLM_MASTER_KEY"], "litellm-secret")
         self.assertEqual(manifest["stringData"]["API_GATEWAY_SHARED_TOKEN"], "gateway-secret")
+
+
+class StatefulSetReconcileTests(unittest.TestCase):
+    def test_ensure_statefulset_preserves_immutable_fields_and_resizes_pvc(self) -> None:
+        current_manifest = operator_main.create_agent_statefulset_manifest(
+            "workspace-assistant",
+            "default",
+            {
+                "model": "gpt-4",
+                "runtime": {"kind": "langgraph"},
+                "storage": {"size": "1Gi"},
+                "systemPrompt": "Use langgraph.",
+            },
+            None,
+            {},
+        )
+        desired_manifest = operator_main.create_agent_statefulset_manifest(
+            "workspace-assistant",
+            "default",
+            {
+                "model": "gpt-4",
+                "runtime": {"kind": "codex", "codex": {"configFiles": {"config.toml": "model = \"gpt-4\""}}},
+                "storage": {"size": "4Gi"},
+                "systemPrompt": "Use codex.",
+                "mcpSidecars": [{"name": "browser", "image": "example/browser:latest", "port": 8081}],
+            },
+            None,
+            {},
+        )
+
+        apps_api = Mock()
+        apps_api.create_namespaced_stateful_set.side_effect = _api_exception(409)
+        apps_api.read_namespaced_stateful_set.return_value = current_manifest
+
+        core_api = Mock()
+        core_api.read_namespaced_persistent_volume_claim.return_value = {
+            "spec": {"resources": {"requests": {"storage": "1Gi"}}}
+        }
+
+        with patch.object(operator_main.kubernetes.client, "AppsV1Api", return_value=apps_api, create=True), patch.object(
+            operator_main.kubernetes.client,
+            "CoreV1Api",
+            return_value=core_api,
+            create=True,
+        ):
+            operator_main.ensure_statefulset("default", desired_manifest)
+
+        patched_statefulset = apps_api.patch_namespaced_stateful_set.call_args.kwargs["body"]
+        self.assertEqual(
+            patched_statefulset["spec"]["volumeClaimTemplates"][0]["spec"]["resources"]["requests"]["storage"],
+            "1Gi",
+        )
+        self.assertEqual(patched_statefulset["spec"]["template"]["metadata"]["labels"]["runtime-kind"], "codex")
+        self.assertEqual(
+            patched_statefulset["spec"]["template"]["metadata"]["annotations"][
+                operator_main.POD_TEMPLATE_REVISION_ANNOTATION
+            ],
+            desired_manifest["spec"]["template"]["metadata"]["annotations"][
+                operator_main.POD_TEMPLATE_REVISION_ANNOTATION
+            ],
+        )
+        self.assertEqual(
+            patched_statefulset["spec"]["template"]["spec"]["containers"][0]["image"],
+            operator_main.CODEX_RUNTIME_IMAGE,
+        )
+        self.assertEqual(patched_statefulset["spec"]["template"]["spec"]["containers"][1]["name"], "mcp-browser")
+
+        pvc_patch = core_api.patch_namespaced_persistent_volume_claim.call_args.kwargs
+        self.assertEqual(pvc_patch["name"], "state-volume-workspace-assistant-sandbox-0")
+        self.assertEqual(pvc_patch["namespace"], "default")
+        self.assertEqual(pvc_patch["body"]["spec"]["resources"]["requests"]["storage"], "4Gi")
+
+    def test_ensure_statefulset_continues_when_pvc_resize_is_forbidden(self) -> None:
+        current_manifest = operator_main.create_agent_statefulset_manifest(
+            "workspace-assistant",
+            "default",
+            {
+                "model": "gpt-4",
+                "runtime": {"kind": "langgraph"},
+                "storage": {"size": "1Gi"},
+                "systemPrompt": "Use langgraph.",
+            },
+            None,
+            {},
+        )
+        desired_manifest = operator_main.create_agent_statefulset_manifest(
+            "workspace-assistant",
+            "default",
+            {
+                "model": "gpt-4",
+                "runtime": {"kind": "codex", "codex": {"configFiles": {"config.toml": "model = \"gpt-4\""}}},
+                "storage": {"size": "4Gi"},
+                "systemPrompt": "Use codex.",
+            },
+            None,
+            {},
+        )
+
+        apps_api = Mock()
+        apps_api.create_namespaced_stateful_set.side_effect = _api_exception(409)
+        apps_api.read_namespaced_stateful_set.return_value = current_manifest
+
+        core_api = Mock()
+        core_api.read_namespaced_persistent_volume_claim.return_value = {
+            "spec": {"resources": {"requests": {"storage": "1Gi"}}}
+        }
+        core_api.patch_namespaced_persistent_volume_claim.side_effect = _api_exception(403)
+
+        with patch.object(operator_main.kubernetes.client, "AppsV1Api", return_value=apps_api, create=True), patch.object(
+            operator_main.kubernetes.client,
+            "CoreV1Api",
+            return_value=core_api,
+            create=True,
+        ):
+            operator_main.ensure_statefulset("default", desired_manifest)
+
+        apps_api.patch_namespaced_stateful_set.assert_called_once()
+        patched_statefulset = apps_api.patch_namespaced_stateful_set.call_args.kwargs["body"]
+        self.assertEqual(
+            patched_statefulset["spec"]["volumeClaimTemplates"][0]["spec"]["resources"]["requests"]["storage"],
+            "1Gi",
+        )
+
+        core_api.patch_namespaced_persistent_volume_claim.assert_called_once()
+        pvc_patch = core_api.patch_namespaced_persistent_volume_claim.call_args.kwargs
+        self.assertEqual(pvc_patch["name"], "state-volume-workspace-assistant-sandbox-0")
+        self.assertEqual(pvc_patch["namespace"], "default")
+        self.assertEqual(pvc_patch["body"]["spec"]["resources"]["requests"]["storage"], "4Gi")
+
+    def test_ensure_statefulset_skips_pvc_shrink_requests(self) -> None:
+        current_manifest = operator_main.create_agent_statefulset_manifest(
+            "workspace-assistant",
+            "default",
+            {
+                "model": "gpt-4",
+                "runtime": {"kind": "langgraph"},
+                "storage": {"size": "4Gi"},
+                "systemPrompt": "Original prompt.",
+            },
+            None,
+            {},
+        )
+        desired_manifest = operator_main.create_agent_statefulset_manifest(
+            "workspace-assistant",
+            "default",
+            {
+                "model": "gpt-4",
+                "runtime": {"kind": "langgraph"},
+                "storage": {"size": "1Gi"},
+                "systemPrompt": "Updated prompt.",
+            },
+            None,
+            {},
+        )
+
+        apps_api = Mock()
+        apps_api.create_namespaced_stateful_set.side_effect = _api_exception(409)
+        apps_api.read_namespaced_stateful_set.return_value = current_manifest
+
+        core_api = Mock()
+        core_api.read_namespaced_persistent_volume_claim.return_value = {
+            "spec": {"resources": {"requests": {"storage": "4Gi"}}}
+        }
+
+        with patch.object(operator_main.kubernetes.client, "AppsV1Api", return_value=apps_api, create=True), patch.object(
+            operator_main.kubernetes.client,
+            "CoreV1Api",
+            return_value=core_api,
+            create=True,
+        ):
+            operator_main.ensure_statefulset("default", desired_manifest)
+
+        apps_api.patch_namespaced_stateful_set.assert_called_once()
+        core_api.patch_namespaced_persistent_volume_claim.assert_not_called()
 
 
 if __name__ == "__main__":

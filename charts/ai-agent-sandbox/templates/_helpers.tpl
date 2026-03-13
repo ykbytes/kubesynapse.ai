@@ -56,7 +56,29 @@ Build a JSON object mapping MCP sidecar names to {image, port} for operator auto
 {{- define "ai-agent-sandbox.mcpSidecarCatalogJson" -}}
 {{- $catalog := dict }}
 {{- range $key, $val := .Values.mcpToolSidecars }}
-{{- $_ := set $catalog $key (dict "image" $val.image "port" $val.port) }}
+{{- $image := $val.image }}
+{{- $parts := splitList "/" $image }}
+{{- $lastPart := index $parts (sub (len $parts) 1) }}
+{{- if and $val.tag (not (contains "@" $image)) (not (contains ":" $lastPart)) }}
+{{- $image = printf "%s:%s" $val.image $val.tag }}
+{{- end }}
+{{- $_ := set $catalog $key (dict "image" $image "port" $val.port) }}
 {{- end }}
 {{- $catalog | toJson }}
+{{- end }}
+
+{{/*
+Reuse an existing Secret value when the provided value is empty or still set to the chart's placeholder.
+*/}}
+{{- define "ai-agent-sandbox.secretValue" -}}
+{{- $value := .value | default "" -}}
+{{- $defaultValue := .default | default "" -}}
+{{- $secretData := .secretData | default dict -}}
+{{- $key := .key -}}
+{{- $existingValue := (get $secretData $key | default "" | b64dec) -}}
+{{- if and $existingValue (or (eq $value "") (and $defaultValue (eq $value $defaultValue))) -}}
+{{- $existingValue -}}
+{{- else -}}
+{{- $value -}}
+{{- end -}}
 {{- end }}

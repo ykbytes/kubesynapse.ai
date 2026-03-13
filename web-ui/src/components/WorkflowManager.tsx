@@ -63,7 +63,8 @@ export function WorkflowManager({
     setInput("");
     setMessageBus("in-memory");
     setSteps(defaultStepsForAgent(agents[0]?.name));
-  }, [workflow, agents]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workflow?.name]);
 
   function updateStep(index: number, updater: (current: WorkflowStep) => WorkflowStep) {
     setSteps((current) => current.map((step, stepIndex) => (stepIndex === index ? updater(step) : step)));

@@ -1,4 +1,4 @@
-export type RuntimeKind = "langgraph" | "goose";
+export type RuntimeKind = "langgraph" | "goose" | "codex";
 
 export interface A2APeerRef {
   name: string;

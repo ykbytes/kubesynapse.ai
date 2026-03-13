@@ -77,6 +77,37 @@ function buildCredentialedInit(init: RequestInit = {}): RequestInit {
   };
 }
 
+function buildAuthenticatedInit(token?: string, requestId?: string, init: RequestInit = {}): RequestInit {
+  const headers = new Headers(init.headers ?? undefined);
+  if (!headers.has("Accept")) {
+    headers.set("Accept", "application/json");
+  }
+  if (token?.trim()) {
+    headers.set("Authorization", `Bearer ${token.trim()}`);
+  }
+  if (requestId) {
+    headers.set("X-Request-Id", requestId);
+  }
+  return buildCredentialedInit({
+    ...init,
+    headers,
+  });
+}
+
+async function fetchAuthenticated(
+  url: string,
+  token?: string,
+  init: RequestInit = {},
+  requestId?: string,
+): Promise<Response> {
+  const trimmedToken = token?.trim() || undefined;
+  let response = await fetch(url, buildAuthenticatedInit(trimmedToken, requestId, init));
+  if (response.status === 401 && trimmedToken) {
+    response = await fetch(url, buildAuthenticatedInit(undefined, requestId, init));
+  }
+  return response;
+}
+
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -203,8 +234,8 @@ function readRecord(record: JsonRecord, key: string, label: string, fallback: Js
 function readRuntimeKind(record: JsonRecord, key: string, label: string, fallback?: RuntimeKind): RuntimeKind {
   const value = record[key];
   const runtimeKind = value === undefined && fallback !== undefined ? fallback : value;
-  if (runtimeKind !== "langgraph" && runtimeKind !== "goose") {
-    throw new Error(`${label}.${key} must be 'langgraph' or 'goose'.`);
+  if (runtimeKind !== "langgraph" && runtimeKind !== "goose" && runtimeKind !== "codex") {
+    throw new Error(`${label}.${key} must be 'langgraph', 'goose', or 'codex'.`);
   }
   return runtimeKind;
 }
@@ -784,13 +815,9 @@ export async function refreshAuthSession(): Promise<AuthSession> {
 }
 
 export async function logoutSession(token?: string): Promise<void> {
-  const response = await fetch(
-    buildUrl("/api/auth/logout"),
-    buildCredentialedInit({
-      method: "POST",
-      headers: buildHeaders(token),
-    }),
-  );
+  const response = await fetchAuthenticated(buildUrl("/api/auth/logout"), token, {
+    method: "POST",
+  });
   if (!response.ok) {
     const text = await response.text();
     throw new Error(text || `Logout failed with status ${response.status}`);
@@ -808,10 +835,9 @@ export async function fetchCurrentUser(token: string): Promise<AuthenticatedUser
 }
 
 export async function changePassword(token: string, currentPassword: string, newPassword: string): Promise<AuthenticatedUser> {
-  const response = await fetch(buildUrl("/api/auth/change-password"), {
+  const response = await fetchAuthenticated(buildUrl("/api/auth/change-password"), token, {
     method: "POST",
     headers: {
-      ...buildHeaders(token),
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
@@ -826,9 +852,7 @@ export async function changePassword(token: string, currentPassword: string, new
 }
 
 export async function listUsers(token: string): Promise<AdminUser[]> {
-  const response = await fetch(buildUrl("/api/admin/users"), {
-    headers: buildHeaders(token),
-  });
+  const response = await fetchAuthenticated(buildUrl("/api/admin/users"), token);
   return parseJsonResponse(response, (payload) => {
     if (!Array.isArray(payload)) {
       throw new Error("Admin user list response must be an array.");
@@ -838,10 +862,9 @@ export async function listUsers(token: string): Promise<AdminUser[]> {
 }
 
 export async function createUser(token: string, payload: CreateUserPayload): Promise<AdminUser> {
-  const response = await fetch(buildUrl("/api/admin/users"), {
+  const response = await fetchAuthenticated(buildUrl("/api/admin/users"), token, {
     method: "POST",
     headers: {
-      ...buildHeaders(token),
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
@@ -857,10 +880,9 @@ export async function createUser(token: string, payload: CreateUserPayload): Pro
 }
 
 export async function updateUser(token: string, userId: number, payload: UpdateUserPayload): Promise<AdminUser> {
-  const response = await fetch(buildUrl(`/api/admin/users/${userId}`), {
+  const response = await fetchAuthenticated(buildUrl(`/api/admin/users/${userId}`), token, {
     method: "PATCH",
     headers: {
-      ...buildHeaders(token),
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
@@ -886,9 +908,7 @@ export function buildSamlLoginUrl(providerId: string, nextPath = window.location
 }
 
 export async function listAgents(token: string, namespace: string): Promise<AgentInfo[]> {
-  const response = await fetch(buildUrl("/api/agents", namespace), {
-    headers: buildHeaders(token),
-  });
+  const response = await fetchAuthenticated(buildUrl("/api/agents", namespace), token);
   return parseJsonResponse(response, (payload) => {
     if (!Array.isArray(payload)) {
       throw new Error("Agent list response must be an array.");
@@ -898,9 +918,7 @@ export async function listAgents(token: string, namespace: string): Promise<Agen
 }
 
 export async function listPolicies(token: string, namespace: string): Promise<PolicyInfo[]> {
-  const response = await fetch(buildUrl("/api/policies", namespace), {
-    headers: buildHeaders(token),
-  });
+  const response = await fetchAuthenticated(buildUrl("/api/policies", namespace), token);
   return parseJsonResponse(response, (payload) => {
     if (!Array.isArray(payload)) {
       throw new Error("Policy list response must be an array.");
@@ -914,10 +932,9 @@ export async function createAgent(
   namespace: string,
   payload: CreateAgentPayload,
 ): Promise<AgentDetail> {
-  const response = await fetch(buildUrl("/api/agents", namespace), {
+  const response = await fetchAuthenticated(buildUrl("/api/agents", namespace), token, {
     method: "POST",
     headers: {
-      ...buildHeaders(token),
       "Content-Type": "application/json",
     },
     body: JSON.stringify(payload),
@@ -926,9 +943,7 @@ export async function createAgent(
 }
 
 export async function fetchAgent(token: string, namespace: string, agentName: string): Promise<AgentDetail> {
-  const response = await fetch(buildUrl(`/api/agents/${agentName}`, namespace), {
-    headers: buildHeaders(token),
-  });
+  const response = await fetchAuthenticated(buildUrl(`/api/agents/${agentName}`, namespace), token);
   return parseJsonResponse(response, parseAgentDetailPayload);
 }
 
@@ -937,9 +952,7 @@ export async function discoverAgentPeers(
   namespace: string,
   agentName: string,
 ): Promise<AgentDiscoveryResponse> {
-  const response = await fetch(buildUrl(`/api/agents/${agentName}/discover`, namespace), {
-    headers: buildHeaders(token),
-  });
+  const response = await fetchAuthenticated(buildUrl(`/api/agents/${agentName}/discover`, namespace), token);
   return parseJsonResponse(response, parseAgentDiscoveryResponsePayload);
 }
 
@@ -949,10 +962,9 @@ export async function updateAgent(
   agentName: string,
   payload: UpdateAgentPayload,
 ): Promise<AgentDetail> {
-  const response = await fetch(buildUrl(`/api/agents/${agentName}`, namespace), {
+  const response = await fetchAuthenticated(buildUrl(`/api/agents/${agentName}`, namespace), token, {
     method: "PATCH",
     headers: {
-      ...buildHeaders(token),
       "Content-Type": "application/json",
     },
     body: JSON.stringify(payload),
@@ -961,9 +973,8 @@ export async function updateAgent(
 }
 
 export async function deleteAgent(token: string, namespace: string, agentName: string): Promise<DeleteResponse> {
-  const response = await fetch(buildUrl(`/api/agents/${agentName}`, namespace), {
+  const response = await fetchAuthenticated(buildUrl(`/api/agents/${agentName}`, namespace), token, {
     method: "DELETE",
-    headers: buildHeaders(token),
   });
   return parseJsonResponse(response, parseDeleteResponsePayload);
 }
@@ -975,14 +986,18 @@ export async function invokeAgent(
   payload: InvokePayload,
   requestId: string,
 ): Promise<InvokeResponse> {
-  const response = await fetch(buildUrl(`/api/agents/${agentName}/invoke`, namespace), {
-    method: "POST",
-    headers: {
-      ...buildHeaders(token, requestId),
-      "Content-Type": "application/json",
+  const response = await fetchAuthenticated(
+    buildUrl(`/api/agents/${agentName}/invoke`, namespace),
+    token,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
     },
-    body: JSON.stringify(payload),
-  });
+    requestId,
+  );
   return parseJsonResponse(response, parseInvokeResponsePayload);
 }
 
@@ -991,9 +1006,7 @@ export async function fetchAgentLogs(
   namespace: string,
   agentName: string,
 ): Promise<AgentLogsResponse> {
-  const response = await fetch(buildUrl(`/api/agents/${agentName}/logs`, namespace), {
-    headers: buildHeaders(token),
-  });
+  const response = await fetchAuthenticated(buildUrl(`/api/agents/${agentName}/logs`, namespace), token);
   return parseJsonResponse(response, parseAgentLogsResponsePayload);
 }
 
@@ -1004,10 +1017,9 @@ export async function decideApproval(
   decision: "approved" | "denied",
   reason?: string,
 ): Promise<ApprovalInfo> {
-  const response = await fetch(buildUrl(`/api/approvals/${approvalName}`, namespace), {
+  const response = await fetchAuthenticated(buildUrl(`/api/approvals/${approvalName}`, namespace), token, {
     method: "PATCH",
     headers: {
-      ...buildHeaders(token),
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
@@ -1019,9 +1031,7 @@ export async function decideApproval(
 }
 
 export async function listWorkflows(token: string, namespace: string): Promise<WorkflowInfo[]> {
-  const response = await fetch(buildUrl("/api/workflows", namespace), {
-    headers: buildHeaders(token),
-  });
+  const response = await fetchAuthenticated(buildUrl("/api/workflows", namespace), token);
   return parseJsonResponse(response, (payload) => {
     if (!Array.isArray(payload)) {
       throw new Error("Workflow list response must be an array.");
@@ -1035,10 +1045,9 @@ export async function createWorkflow(
   namespace: string,
   payload: WorkflowPayload,
 ): Promise<WorkflowInfo> {
-  const response = await fetch(buildUrl("/api/workflows", namespace), {
+  const response = await fetchAuthenticated(buildUrl("/api/workflows", namespace), token, {
     method: "POST",
     headers: {
-      ...buildHeaders(token),
       "Content-Type": "application/json",
     },
     body: JSON.stringify(payload),
@@ -1052,10 +1061,9 @@ export async function updateWorkflow(
   workflowName: string,
   payload: WorkflowUpdatePayload,
 ): Promise<WorkflowInfo> {
-  const response = await fetch(buildUrl(`/api/workflows/${workflowName}`, namespace), {
+  const response = await fetchAuthenticated(buildUrl(`/api/workflows/${workflowName}`, namespace), token, {
     method: "PATCH",
     headers: {
-      ...buildHeaders(token),
       "Content-Type": "application/json",
     },
     body: JSON.stringify(payload),
@@ -1068,17 +1076,14 @@ export async function deleteWorkflow(
   namespace: string,
   workflowName: string,
 ): Promise<DeleteResponse> {
-  const response = await fetch(buildUrl(`/api/workflows/${workflowName}`, namespace), {
+  const response = await fetchAuthenticated(buildUrl(`/api/workflows/${workflowName}`, namespace), token, {
     method: "DELETE",
-    headers: buildHeaders(token),
   });
   return parseJsonResponse(response, parseDeleteResponsePayload);
 }
 
 export async function listEvals(token: string, namespace: string): Promise<EvalInfo[]> {
-  const response = await fetch(buildUrl("/api/evals", namespace), {
-    headers: buildHeaders(token),
-  });
+  const response = await fetchAuthenticated(buildUrl("/api/evals", namespace), token);
   return parseJsonResponse(response, (payload) => {
     if (!Array.isArray(payload)) {
       throw new Error("Eval list response must be an array.");
@@ -1088,10 +1093,9 @@ export async function listEvals(token: string, namespace: string): Promise<EvalI
 }
 
 export async function createEval(token: string, namespace: string, payload: EvalPayload): Promise<EvalInfo> {
-  const response = await fetch(buildUrl("/api/evals", namespace), {
+  const response = await fetchAuthenticated(buildUrl("/api/evals", namespace), token, {
     method: "POST",
     headers: {
-      ...buildHeaders(token),
       "Content-Type": "application/json",
     },
     body: JSON.stringify(payload),
@@ -1105,10 +1109,9 @@ export async function updateEval(
   evalName: string,
   payload: EvalUpdatePayload,
 ): Promise<EvalInfo> {
-  const response = await fetch(buildUrl(`/api/evals/${evalName}`, namespace), {
+  const response = await fetchAuthenticated(buildUrl(`/api/evals/${evalName}`, namespace), token, {
     method: "PATCH",
     headers: {
-      ...buildHeaders(token),
       "Content-Type": "application/json",
     },
     body: JSON.stringify(payload),
@@ -1117,9 +1120,8 @@ export async function updateEval(
 }
 
 export async function deleteEval(token: string, namespace: string, evalName: string): Promise<DeleteResponse> {
-  const response = await fetch(buildUrl(`/api/evals/${evalName}`, namespace), {
+  const response = await fetchAuthenticated(buildUrl(`/api/evals/${evalName}`, namespace), token, {
     method: "DELETE",
-    headers: buildHeaders(token),
   });
   return parseJsonResponse(response, parseDeleteResponsePayload);
 }
@@ -1240,39 +1242,35 @@ export async function fetchSkillsCatalog(
   if (search) query.set("search", search);
   const baseUrl = buildUrl("/api/skills/catalog");
   const requestUrl = query.size > 0 ? `${baseUrl}${baseUrl.includes("?") ? "&" : "?"}${query.toString()}` : baseUrl;
-  const res = await fetch(requestUrl, { headers: buildHeaders(token) });
-  if (!res.ok) throw new Error(`Failed to fetch skills catalog: ${res.status}`);
-  const data = await res.json();
-  if (Array.isArray(data)) {
-    return data.map((item, index) => parseCatalogSkillPayload(item, `skills[${index}]`));
-  }
-  if (isRecord(data) && Array.isArray(data.skills)) {
-    return data.skills.map((item, index) => parseCatalogSkillPayload(item, `skills[${index}]`));
-  }
-  throw new Error("Invalid catalog response");
+  const response = await fetchAuthenticated(requestUrl, token);
+  return parseJsonResponse(response, (payload) => {
+    if (Array.isArray(payload)) {
+      return payload.map((item, index) => parseCatalogSkillPayload(item, `skills[${index}]`));
+    }
+    if (isRecord(payload) && Array.isArray(payload.skills)) {
+      return payload.skills.map((item, index) => parseCatalogSkillPayload(item, `skills[${index}]`));
+    }
+    throw new Error("Invalid catalog response");
+  });
 }
 
 export async function fetchCatalogSkillDetail(
   token: string,
   skillId: string,
 ): Promise<CatalogSkillDetail> {
-  const res = await fetch(buildUrl(`/api/skills/catalog/${skillId}`), {
-    headers: buildHeaders(token),
-  });
-  if (!res.ok) throw new Error(`Failed to fetch skill detail: ${res.status}`);
-  const data = await res.json();
-  return parseCatalogSkillDetailPayload(data, "skill_detail");
+  const response = await fetchAuthenticated(buildUrl(`/api/skills/catalog/${skillId}`), token);
+  return parseJsonResponse(response, (payload) => parseCatalogSkillDetailPayload(payload, "skill_detail"));
 }
 
 export async function fetchMcpToolCategories(token: string): Promise<McpToolCategory[]> {
-  const res = await fetch(buildUrl("/api/skills/tools"), { headers: buildHeaders(token) });
-  if (!res.ok) throw new Error(`Failed to fetch tool categories: ${res.status}`);
-  const data = await res.json();
-  if (Array.isArray(data)) {
-    return data.map((item, index) => parseMcpToolCategoryPayload(item, `categories[${index}]`));
-  }
-  if (isRecord(data) && Array.isArray(data.categories)) {
-    return data.categories.map((item, index) => parseMcpToolCategoryPayload(item, `categories[${index}]`));
-  }
-  throw new Error("Invalid tools response");
+  const response = await fetchAuthenticated(buildUrl("/api/skills/tools"), token);
+  return parseJsonResponse(response, (payload) => {
+    if (Array.isArray(payload)) {
+      return payload.map((item, index) => parseMcpToolCategoryPayload(item, `categories[${index}]`));
+    }
+    if (isRecord(payload) && Array.isArray(payload.categories)) {
+      return payload.categories.map((item, index) => parseMcpToolCategoryPayload(item, `categories[${index}]`));
+    }
+    throw new Error("Invalid tools response");
+  });
 }

@@ -471,7 +471,7 @@ class CreateAgentRequest(BaseModel):
     system_prompt: str = Field(default="", max_length=4000)
     policy_ref: str | None = Field(default=None, max_length=253)
     storage_size: str | None = Field(default="1Gi", max_length=32)
-    runtime_kind: str = Field(default="langgraph", pattern=r"^(langgraph|goose)$")
+    runtime_kind: str = Field(default="langgraph", pattern=r"^(langgraph|goose|codex)$")
     enable_gvisor: bool = False
     mcp_servers: list[str] = Field(default_factory=list)
     mcp_sidecars: list[dict[str, Any]] = Field(default_factory=list)
@@ -485,7 +485,7 @@ class UpdateAgentRequest(BaseModel):
     system_prompt: str = Field(default="", max_length=4000)
     policy_ref: str | None = Field(default=None, max_length=253)
     storage_size: str | None = Field(default="1Gi", max_length=32)
-    runtime_kind: str | None = Field(default=None, pattern=r"^(langgraph|goose)$")
+    runtime_kind: str | None = Field(default=None, pattern=r"^(langgraph|goose|codex)$")
     enable_gvisor: bool = False
     mcp_servers: list[str] = Field(default_factory=list)
     mcp_sidecars: list[dict[str, Any]] = Field(default_factory=list)
@@ -640,7 +640,7 @@ def agent_runtime_url(agent_name: str, namespace: str) -> str:
 
 def normalized_runtime_kind(raw_value: str | None) -> str:
     runtime_kind = (raw_value or "langgraph").strip().lower() or "langgraph"
-    if runtime_kind not in {"langgraph", "goose"}:
+    if runtime_kind not in {"langgraph", "goose", "codex"}:
         raise ValueError(f"Unsupported runtime kind '{runtime_kind}'")
     return runtime_kind
 
@@ -1123,24 +1123,31 @@ def runtime_kind_from_spec(spec: dict[str, Any] | None) -> str:
 
 
 def validate_agent_runtime_compatibility(spec: dict[str, Any]) -> None:
-    if runtime_kind_from_spec(spec) != "goose":
-        return
-
-    errors: list[str] = []
-    if spec.get("mcpServers"):
-        errors.append(
-            "Goose runtime does not support mcp_servers. Use the LangGraph runtime for MCP routing today."
-        )
-    if spec.get("mcpSidecars"):
-        errors.append(
-            "Goose runtime does not support mcp_sidecars. Use the LangGraph runtime for sidecar-based MCP tools today."
-        )
-    if errors:
-        raise HTTPException(status_code=400, detail=" ".join(errors))
+    runtime_kind = runtime_kind_from_spec(spec)
+    if runtime_kind == "goose":
+        errors: list[str] = []
+        if spec.get("mcpServers"):
+            errors.append(
+                "Goose runtime does not support mcp_servers. Use the LangGraph runtime for MCP routing today."
+            )
+        if spec.get("mcpSidecars"):
+            errors.append(
+                "Goose runtime does not support mcp_sidecars. Use the LangGraph runtime for sidecar-based MCP tools today."
+            )
+        if errors:
+            raise HTTPException(status_code=400, detail=" ".join(errors))
+    elif runtime_kind == "codex":
+        errors = []
+        if spec.get("mcpServers"):
+            errors.append(
+                "Codex runtime does not support mcp_servers. Use the LangGraph runtime for MCP routing today."
+            )
+        if errors:
+            raise HTTPException(status_code=400, detail=" ".join(errors))
 
 
 def validate_invoke_runtime_compatibility(runtime_kind: str, request: InvokeRequest) -> None:
-    if runtime_kind != "goose":
+    if runtime_kind not in {"goose", "codex"}:
         return
 
     unsupported_fields: list[str] = []
@@ -1161,11 +1168,12 @@ def validate_invoke_runtime_compatibility(runtime_kind: str, request: InvokeRequ
 
     if unsupported_fields:
         joined_fields = ", ".join(unsupported_fields)
+        runtime_label = "Goose" if runtime_kind == "goose" else "Codex"
         raise HTTPException(
             status_code=400,
             detail=(
-                "Goose runtime currently supports chat-style prompt invocation plus Goose-native run controls. "
-                f"Unsupported fields for goose agents: {joined_fields}."
+                f"{runtime_label} runtime currently supports chat-style prompt invocation. "
+                f"Unsupported fields for {runtime_kind} agents: {joined_fields}."
             ),
         )
 
@@ -3095,7 +3103,7 @@ def register_local_user(body: AuthRegisterRequest, raw_request: Request):
         raise HTTPException(status_code=403, detail="Self-registration is disabled")
 
     is_first_user = count_users() == 0
-    role = "admin" if is_first_user else "viewer"
+    role = "admin" if is_first_user else "operator"
     namespaces = ["*"] if is_first_user else ["default"]
     try:
         user = create_local_user(
@@ -3585,28 +3593,52 @@ def _load_mcp_sidecar_catalog() -> dict[str, dict[str, Any]]:
     return _MCP_SIDECAR_CATALOG_CACHE
 
 
-def _resolve_sidecar_image(tool_id: str) -> str | None:
+def _resolve_sidecar_catalog_entry(tool_id: str) -> dict[str, Any] | None:
     catalog = _load_mcp_sidecar_catalog()
     entry = catalog.get(tool_id)
     if not isinstance(entry, dict):
         mapped_key = MCP_TOOL_CATEGORY_KEY_MAP.get(tool_id, tool_id)
         entry = catalog.get(mapped_key)
-    if not isinstance(entry, dict):
+    return entry if isinstance(entry, dict) else None
+
+
+def _resolve_sidecar_image(tool_id: str) -> str | None:
+    entry = _resolve_sidecar_catalog_entry(tool_id)
+    if entry is None:
         return None
     image = entry.get("image")
     return image if isinstance(image, str) and image.strip() else None
 
 
+def _resolve_sidecar_port(tool_id: str, fallback_port: int) -> int:
+    entry = _resolve_sidecar_catalog_entry(tool_id)
+    if entry is None:
+        return fallback_port
+
+    port = entry.get("port")
+    if isinstance(port, bool):
+        return fallback_port
+    if isinstance(port, int) and 1 <= port <= 65535:
+        return port
+    if isinstance(port, str):
+        port_text = port.strip()
+        if port_text.isdigit():
+            normalized_port = int(port_text)
+            if 1 <= normalized_port <= 65535:
+                return normalized_port
+    return fallback_port
+
+
 MCP_TOOL_CATEGORIES: list[dict[str, Any]] = [
-    {"id": "code-exec", "name": "Code Execution", "description": "Run Python, Bash, and Node.js code in a sandboxed environment.", "icon": "terminal", "default_port": 8080},
-    {"id": "web-search", "name": "Web Search", "description": "Search the web, fetch URLs, and extract text content.", "icon": "globe", "default_port": 8081},
-    {"id": "documents", "name": "PDF & Office", "description": "Read, create, and manipulate PDF, DOCX, XLSX, and PPTX files.", "icon": "file-text", "default_port": 8082},
-    {"id": "browser", "name": "Browser Automation", "description": "Browse pages, take screenshots, click elements, and fill forms.", "icon": "monitor", "default_port": 8083},
-    {"id": "database", "name": "Database", "description": "Query SQL databases, list tables, and describe schemas.", "icon": "database", "default_port": 8084},
-    {"id": "git", "name": "Git & GitHub", "description": "Clone repos, view diffs, create commits, and interact with GitHub API.", "icon": "git-branch", "default_port": 8085},
-    {"id": "kubernetes", "name": "Kubernetes & Cloud", "description": "List pods, get logs, apply manifests, and manage cluster resources.", "icon": "server", "default_port": 8086},
-    {"id": "messaging", "name": "Email & Messaging", "description": "Send emails and Slack messages, list conversations.", "icon": "mail", "default_port": 8087},
-    {"id": "rag", "name": "RAG & Vector Search", "description": "Index documents, perform semantic search, and retrieve context.", "icon": "search", "default_port": 8088},
+    {"id": "code-exec", "name": "Code Execution", "description": "Run Python, Bash, and Node.js code in a sandboxed environment.", "icon": "terminal", "default_port": 8090},
+    {"id": "web-search", "name": "Web Search", "description": "Search the web, fetch URLs, and extract text content.", "icon": "globe", "default_port": 8091},
+    {"id": "documents", "name": "PDF & Office", "description": "Read, create, and manipulate PDF, DOCX, XLSX, and PPTX files.", "icon": "file-text", "default_port": 8092},
+    {"id": "browser", "name": "Browser Automation", "description": "Browse pages, take screenshots, click elements, and fill forms.", "icon": "monitor", "default_port": 8093},
+    {"id": "database", "name": "Database", "description": "Query SQL databases, list tables, and describe schemas.", "icon": "database", "default_port": 8094},
+    {"id": "git", "name": "Git & GitHub", "description": "Clone repos, view diffs, create commits, and interact with GitHub API.", "icon": "git-branch", "default_port": 8095},
+    {"id": "kubernetes", "name": "Kubernetes & Cloud", "description": "List pods, get logs, apply manifests, and manage cluster resources.", "icon": "server", "default_port": 8096},
+    {"id": "messaging", "name": "Email & Messaging", "description": "Send emails and Slack messages, list conversations.", "icon": "mail", "default_port": 8097},
+    {"id": "rag", "name": "RAG & Vector Search", "description": "Index documents, perform semantic search, and retrieve context.", "icon": "search", "default_port": 8098},
 ]
 
 
@@ -3671,6 +3703,7 @@ def get_tool_categories(
     return [
         {
             **tool,
+            "default_port": _resolve_sidecar_port(str(tool.get("id", "")), int(tool.get("default_port", 0))),
             "sidecar_image": _resolve_sidecar_image(str(tool.get("id", ""))),
         }
         for tool in MCP_TOOL_CATEGORIES

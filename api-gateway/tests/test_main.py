@@ -36,6 +36,28 @@ SPEC.loader.exec_module(api_gateway_main)
 
 
 class GatewayRuntimeValidationTests(unittest.TestCase):
+    def test_codex_agent_rejects_mcp_servers(self) -> None:
+        with self.assertRaises(HTTPException) as context:
+            api_gateway_main.validate_agent_runtime_compatibility(
+                {
+                    "runtime": {"kind": "codex"},
+                    "mcpServers": ["github"],
+                    "mcpSidecars": [],
+                }
+            )
+
+        self.assertEqual(context.exception.status_code, 400)
+        self.assertIn("mcp_servers", str(context.exception.detail))
+
+    def test_codex_agent_allows_mcp_sidecars(self) -> None:
+        api_gateway_main.validate_agent_runtime_compatibility(
+            {
+                "runtime": {"kind": "codex"},
+                "mcpServers": [],
+                "mcpSidecars": [{"name": "browser", "port": 8081}],
+            }
+        )
+
     def test_goose_agent_rejects_mcp_servers(self) -> None:
         with self.assertRaises(HTTPException) as context:
             api_gateway_main.validate_agent_runtime_compatibility(
@@ -480,6 +502,70 @@ class GatewayRuntimeValidationTests(unittest.TestCase):
             [{"name": "analysis-agent", "namespace": "team-b"}],
         )
         self.assertTrue(detail.skill_summaries[0]["allow_subagents"])
+
+
+class GatewayToolCatalogTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._original_sidecar_catalog_cache = api_gateway_main._MCP_SIDECAR_CATALOG_CACHE
+        api_gateway_main._MCP_SIDECAR_CATALOG_CACHE = None
+
+    def tearDown(self) -> None:
+        api_gateway_main._MCP_SIDECAR_CATALOG_CACHE = self._original_sidecar_catalog_cache
+
+    def test_catalog_image_resolution_uses_fully_qualified_image(self) -> None:
+        with patch.dict(
+            api_gateway_main.os.environ,
+            {
+                "MCP_SIDECAR_CATALOG_JSON": json.dumps(
+                    {"codeExec": {"image": "docker.io/yakdhane/mcp-code-exec:v2", "port": 8090}}
+                )
+            },
+            clear=False,
+        ):
+            api_gateway_main._MCP_SIDECAR_CATALOG_CACHE = None
+            self.assertEqual(
+                api_gateway_main._resolve_sidecar_image("code-exec"),
+                "docker.io/yakdhane/mcp-code-exec:v2",
+            )
+
+    def test_tool_categories_prefer_catalog_port_over_default_port(self) -> None:
+        with patch.dict(
+            api_gateway_main.os.environ,
+            {
+                "MCP_SIDECAR_CATALOG_JSON": json.dumps(
+                    {"codeExec": {"image": "docker.io/yakdhane/mcp-code-exec:v2", "port": 9012}}
+                )
+            },
+            clear=False,
+        ):
+            api_gateway_main._MCP_SIDECAR_CATALOG_CACHE = None
+            categories = api_gateway_main.get_tool_categories(user=None)
+
+        code_exec = next(tool for tool in categories if tool["id"] == "code-exec")
+        self.assertEqual(code_exec["default_port"], 9012)
+        self.assertEqual(code_exec["sidecar_image"], "docker.io/yakdhane/mcp-code-exec:v2")
+
+    def test_tool_categories_fallback_to_default_port_when_catalog_port_missing_or_invalid(self) -> None:
+        test_cases = [
+            {"name": "missing", "catalog": {"codeExec": {"image": "docker.io/yakdhane/mcp-code-exec:v2"}}},
+            {
+                "name": "invalid",
+                "catalog": {"codeExec": {"image": "docker.io/yakdhane/mcp-code-exec:v2", "port": "invalid"}},
+            },
+        ]
+
+        for test_case in test_cases:
+            with self.subTest(name=test_case["name"]), patch.dict(
+                api_gateway_main.os.environ,
+                {"MCP_SIDECAR_CATALOG_JSON": json.dumps(test_case["catalog"])},
+                clear=False,
+            ):
+                api_gateway_main._MCP_SIDECAR_CATALOG_CACHE = None
+                categories = api_gateway_main.get_tool_categories(user=None)
+
+            code_exec = next(tool for tool in categories if tool["id"] == "code-exec")
+            self.assertEqual(code_exec["default_port"], 8090)
+            self.assertEqual(code_exec["sidecar_image"], "docker.io/yakdhane/mcp-code-exec:v2")
 
 
 class GatewayAgentDiscoveryTests(unittest.TestCase):

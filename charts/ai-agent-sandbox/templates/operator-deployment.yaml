@@ -96,6 +96,14 @@ spec:
               value: {{ .Values.gooseRuntime.provider | default "litellm" | quote }}
             - name: GOOSE_RUNTIME_EXTRA_ENV_JSON
               value: {{ .Values.gooseRuntime.env | default dict | toJson | quote }}
+            - name: CODEX_RUNTIME_IMAGE
+              value: "{{ .Values.codexRuntime.image.repository }}:{{ .Values.codexRuntime.image.tag }}"
+            - name: CODEX_RUNTIME_IMAGE_PULL_POLICY
+              value: {{ .Values.codexRuntime.image.pullPolicy | default "IfNotPresent" | quote }}
+            - name: CODEX_DEFAULT_PROVIDER
+              value: {{ .Values.codexRuntime.provider | default "litellm" | quote }}
+            - name: CODEX_RUNTIME_EXTRA_ENV_JSON
+              value: {{ .Values.codexRuntime.env | default dict | toJson | quote }}
             - name: WORKER_IMAGE
               value: "{{ .Values.operator.workerImage.repository }}:{{ .Values.operator.workerImage.tag }}"
             - name: WORKER_IMAGE_PULL_POLICY

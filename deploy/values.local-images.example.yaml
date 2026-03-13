@@ -20,6 +20,12 @@ gooseRuntime:
     tag: dev
     pullPolicy: IfNotPresent
 
+codexRuntime:
+  image:
+    repository: localhost/kubeminionagents/ai-codex-runtime
+    tag: dev
+    pullPolicy: IfNotPresent
+
 apiGateway:
   image:
     repository: localhost/kubeminionagents/ai-api-gateway

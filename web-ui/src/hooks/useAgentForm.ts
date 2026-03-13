@@ -40,7 +40,7 @@ export function useAgentForm() {
     const allowedCallers = parseA2APeerRefsText(createAgentA2AAllowedCallersText);
     const skillFiles = buildSkillFiles(createAgentSkillFileDrafts);
     const mcpServers = createAgentRuntimeKind === "langgraph" ? parseMcpServersText(createAgentMcpServersText) : [];
-    const mcpSidecars = createAgentRuntimeKind === "langgraph" ? parseMcpSidecarsText(createAgentMcpSidecarsText) : [];
+    const mcpSidecars = createAgentRuntimeKind !== "goose" ? parseMcpSidecarsText(createAgentMcpSidecarsText) : [];
     const gooseConfigFiles = createAgentRuntimeKind === "goose" ? buildGooseConfigFiles(createAgentGooseConfigFileDrafts) : undefined;
 
     return {

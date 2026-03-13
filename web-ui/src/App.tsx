@@ -302,6 +302,20 @@ export default function App() {
   const [agentCreateMode, setAgentCreateMode] = useState(false);
   const [workflowCreateMode, setWorkflowCreateMode] = useState(false);
   const [evalCreateMode, setEvalCreateMode] = useState(false);
+
+  // Refs so the polling interval callback always reads current values
+  const selectedAgentNameRef = useRef(selectedAgentName);
+  selectedAgentNameRef.current = selectedAgentName;
+  const selectedWorkflowNameRef = useRef(selectedWorkflowName);
+  selectedWorkflowNameRef.current = selectedWorkflowName;
+  const selectedEvalNameRef = useRef(selectedEvalName);
+  selectedEvalNameRef.current = selectedEvalName;
+  const agentCreateModeRef = useRef(agentCreateMode);
+  agentCreateModeRef.current = agentCreateMode;
+  const workflowCreateModeRef = useRef(workflowCreateMode);
+  workflowCreateModeRef.current = workflowCreateMode;
+  const evalCreateModeRef = useRef(evalCreateMode);
+  evalCreateModeRef.current = evalCreateMode;
   const [selectedAgentDetail, setSelectedAgentDetail] = useState<AgentDetail | null>(null);
 
   const [messagesByAgent, setMessagesByAgent] = useState<Record<string, UiMessage[]>>({});
@@ -343,7 +357,7 @@ export default function App() {
   const [createAgentName, setCreateAgentName] = useState(DEFAULT_AGENT_NAME);
   const [createAgentModel, setCreateAgentModel] = useState(DEFAULT_AGENT_MODEL);
   const [createAgentSystemPrompt, setCreateAgentSystemPrompt] = useState(DEFAULT_SYSTEM_PROMPT);
-  const [createAgentRuntimeKind, setCreateAgentRuntimeKind] = useState<"langgraph" | "goose">("langgraph");
+  const [createAgentRuntimeKind, setCreateAgentRuntimeKind] = useState<RuntimeKind>("langgraph");
   const [createAgentMcpServersText, setCreateAgentMcpServersText] = useState("");
   const [createAgentMcpSidecarsText, setCreateAgentMcpSidecarsText] = useState("");
   const [createAgentA2AAllowedCallersText, setCreateAgentA2AAllowedCallersText] = useState("");
@@ -368,7 +382,7 @@ export default function App() {
   const selectedWorkflow = workflowCreateMode ? null : workflows.find((item) => item.name === selectedWorkflowName) ?? null;
   const selectedEval = evalCreateMode ? null : evals.find((item) => item.name === selectedEvalName) ?? null;
   const selectedRuntimeKind: RuntimeKind = selectedAgentDetail?.runtime_kind ?? "langgraph";
-  const approvalSupported = selectedRuntimeKind !== "goose";
+  const approvalSupported = selectedRuntimeKind === "langgraph";
 
   const messages = selectedAgentName ? messagesByAgent[selectedAgentName] ?? [] : [];
   const activity = selectedAgentName ? activityByAgent[selectedAgentName] ?? [] : [];
@@ -408,11 +422,10 @@ export default function App() {
             }
           }
         } catch {
-          if (nextConfig.browser_auth_enabled) {
-            const restored = await restoreBrowserSession({ silent: true });
-            if (!restored && !cancelled) {
-              setCurrentUser(null);
-            }
+          const restored = nextConfig.browser_auth_enabled ? await restoreBrowserSession({ silent: true }) : null;
+          if (!restored && !cancelled) {
+            setToken("");
+            setCurrentUser(null);
           }
         }
       } else if (nextConfig.browser_auth_enabled) {
@@ -636,23 +649,32 @@ export default function App() {
       setWorkflows(nextWorkflows);
       setEvals(nextEvals);
 
-      if (!agentCreateMode) {
-        const nextSelected = nextAgents.some((item) => item.name === selectedAgentName)
-          ? selectedAgentName
+      if (!agentCreateModeRef.current) {
+        const currentName = selectedAgentNameRef.current;
+        const nextSelected = nextAgents.some((item) => item.name === currentName)
+          ? currentName
           : nextAgents[0]?.name ?? "";
-        setSelectedAgentName(nextSelected);
+        if (nextSelected !== currentName) {
+          setSelectedAgentName(nextSelected);
+        }
       }
-      if (!workflowCreateMode) {
-        const nextSelected = nextWorkflows.some((item) => item.name === selectedWorkflowName)
-          ? selectedWorkflowName
+      if (!workflowCreateModeRef.current) {
+        const currentName = selectedWorkflowNameRef.current;
+        const nextSelected = nextWorkflows.some((item) => item.name === currentName)
+          ? currentName
           : nextWorkflows[0]?.name ?? "";
-        setSelectedWorkflowName(nextSelected);
+        if (nextSelected !== currentName) {
+          setSelectedWorkflowName(nextSelected);
+        }
       }
-      if (!evalCreateMode) {
-        const nextSelected = nextEvals.some((item) => item.name === selectedEvalName)
-          ? selectedEvalName
+      if (!evalCreateModeRef.current) {
+        const currentName = selectedEvalNameRef.current;
+        const nextSelected = nextEvals.some((item) => item.name === currentName)
+          ? currentName
           : nextEvals[0]?.name ?? "";
-        setSelectedEvalName(nextSelected);
+        if (nextSelected !== currentName) {
+          setSelectedEvalName(nextSelected);
+        }
       }
     } catch (nextError) {
       if (!silent) {
@@ -688,7 +710,8 @@ export default function App() {
       void refreshWorkspaceData({ silent: true });
     }, 10000);
     return () => window.clearInterval(timer);
-  }, [token, namespace, selectedAgentName, selectedWorkflowName, selectedEvalName, agentCreateMode, workflowCreateMode, evalCreateMode]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, namespace]);
 
   useEffect(() => {
     if (activeView === "agents" && !agentCreateMode && !selectedAgentName && agents.length > 0) {
@@ -889,7 +912,7 @@ export default function App() {
       const allowedCallers = parseA2APeerRefsText(createAgentA2AAllowedCallersText);
       const skillFiles = buildSkillFiles(createAgentSkillFileDrafts);
       const mcpServers = createAgentRuntimeKind === "langgraph" ? parseMcpServersText(createAgentMcpServersText) : [];
-      const mcpSidecars = createAgentRuntimeKind === "langgraph" ? parseMcpSidecarsText(createAgentMcpSidecarsText) : [];
+      const mcpSidecars = createAgentRuntimeKind !== "goose" ? parseMcpSidecarsText(createAgentMcpSidecarsText) : [];
       const gooseConfigFiles =
         createAgentRuntimeKind === "goose" ? buildGooseConfigFiles(createAgentGooseConfigFileDrafts) : undefined;
       const createdAgent = await createAgent(token, namespace, {

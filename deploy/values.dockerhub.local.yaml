@@ -28,8 +28,8 @@ gooseRuntime:
 apiGateway:
   image:
     repository: docker.io/yakdhane/ai-api-gateway
-    tag: registration-20260312-221904
-    pullPolicy: IfNotPresent
+    tag: fix-20260312-233109
+    pullPolicy: Always
   auth:
     mode: hybrid
     localAuthEnabled: true
@@ -39,7 +39,7 @@ webUi:
   enabled: true
   image:
     repository: docker.io/yakdhane/ai-agent-sandbox-web-ui
-    tag: mgmt-v2-20260312-231747
+    tag: polling-fix-20260313-091027
     pullPolicy: Always
 
 platformSecrets:
@@ -64,28 +64,28 @@ skillsCatalog:
 mcpToolSidecars:
   codeExec:
     image: docker.io/yakdhane/mcp-code-exec:catalog-20260312-135631
-    port: 8080
+    port: 8090
   webSearch:
     image: docker.io/yakdhane/mcp-web-search:catalog-20260312-135631
-    port: 8081
+    port: 8091
   documents:
     image: docker.io/yakdhane/mcp-documents:catalog-20260312-135631
-    port: 8082
+    port: 8092
   browser:
     image: docker.io/yakdhane/mcp-browser:catalog-20260312-135631
-    port: 8083
+    port: 8093
   database:
     image: docker.io/yakdhane/mcp-database:catalog-20260312-135631
-    port: 8084
+    port: 8094
   git:
     image: docker.io/yakdhane/mcp-git:catalog-20260312-135631
-    port: 8085
+    port: 8095
   kubernetes:
     image: docker.io/yakdhane/mcp-kubernetes:catalog-20260312-135631
-    port: 8086
+    port: 8096
   messaging:
     image: docker.io/yakdhane/mcp-messaging:catalog-20260312-135631
-    port: 8087
+    port: 8097
   rag:
     image: docker.io/yakdhane/mcp-rag:catalog-20260312-135631
-    port: 8088
+    port: 8098

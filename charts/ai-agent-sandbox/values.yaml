@@ -33,7 +33,7 @@ litellm:
 
 agentRuntime:
   image:
-    repository: ghcr.io/your-org/ai-agent-runtime
+    repository: docker.io/yakdhane/ai-agent-runtime
     tag: latest
     pullPolicy: IfNotPresent
   env: {}
@@ -74,7 +74,7 @@ agentRuntime:
 
 gooseRuntime:
   image:
-    repository: ghcr.io/your-org/ai-goose-runtime
+    repository: docker.io/yakdhane/ai-goose-runtime
     tag: latest
     pullPolicy: IfNotPresent
   provider: litellm
@@ -101,14 +101,33 @@ gooseRuntime:
   #     prompts/review.md: |
   #       Review changes conservatively and call out regression risks.
 
+codexRuntime:
+  image:
+    repository: docker.io/yakdhane/ai-codex-runtime
+    tag: latest
+    pullPolicy: IfNotPresent
+  provider: litellm
+  env: {}
+  # Example Codex settings:
+  # env:
+  #   CODEX_COMMAND_TIMEOUT_SECONDS: 600
+  #   CODEX_MAX_PROMPT_CHARS: 16000
+  # To use Codex-managed OpenAI or ChatGPT auth instead of LiteLLM, set:
+  # provider: openai
+  # env:
+  #   CODEX_AUTH_JSON: |
+  #     {"auth_mode":"apikey","OPENAI_API_KEY":"sk-..."}
+  # Or paste the contents of ~/.codex/auth.json from a supported Codex login.
+  # GitHub Copilot / VS Code Copilot credentials are not supported by upstream Codex auth.
+
 operator:
   replicaCount: 2
   image:
-    repository: ghcr.io/your-org/ai-operator
+    repository: docker.io/yakdhane/ai-operator
     tag: latest
     pullPolicy: IfNotPresent
   workerImage:
-    repository: ghcr.io/your-org/ai-operator
+    repository: docker.io/yakdhane/ai-operator
     tag: latest
     pullPolicy: IfNotPresent
   resources:
@@ -142,7 +161,7 @@ operator:
 apiGateway:
   replicaCount: 1
   image:
-    repository: ghcr.io/your-org/ai-api-gateway
+    repository: docker.io/yakdhane/ai-api-gateway
     tag: latest
     pullPolicy: IfNotPresent
   ingressClassName: nginx
@@ -210,7 +229,7 @@ webUi:
   enabled: true
   replicaCount: 1
   image:
-    repository: ghcr.io/your-org/ai-agent-sandbox-web-ui
+    repository: docker.io/yakdhane/ai-agent-sandbox-web-ui
     tag: latest
     pullPolicy: IfNotPresent
   service:
@@ -364,36 +383,36 @@ mcpToolSidecars:
   codeExec:
     image: docker.io/yakdhane/mcp-code-exec
     tag: v1
-    port: 8080
+    port: 8090
   webSearch:
     image: docker.io/yakdhane/mcp-web-search
     tag: v1
-    port: 8081
+    port: 8091
   documents:
     image: docker.io/yakdhane/mcp-documents
     tag: v1
-    port: 8082
+    port: 8092
   browser:
     image: docker.io/yakdhane/mcp-browser
     tag: v1
-    port: 8083
+    port: 8093
   database:
     image: docker.io/yakdhane/mcp-database
     tag: v1
-    port: 8084
+    port: 8094
   git:
     image: docker.io/yakdhane/mcp-git
     tag: v1
-    port: 8085
+    port: 8095
   kubernetes:
     image: docker.io/yakdhane/mcp-kubernetes
     tag: v1
-    port: 8086
+    port: 8096
   messaging:
     image: docker.io/yakdhane/mcp-messaging
     tag: v1
-    port: 8087
+    port: 8097
   rag:
     image: docker.io/yakdhane/mcp-rag
     tag: v1
-    port: 8088
+    port: 8098
