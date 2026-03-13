@@ -227,26 +227,31 @@ spec:
       targetPort: 8080
       name: http
 ---
+{{- if .Values.apiGateway.ingress.enabled }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: {{ include "ai-agent-sandbox.fullname" . }}-ingress
+{{- with .Values.apiGateway.ingress.annotations }}
   annotations:
-    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
-    nginx.ingress.kubernetes.io/enable-cors: "true"
-    nginx.ingress.kubernetes.io/proxy-buffering: "off"
-    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
-    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+{{ toYaml . | indent 4 }}
+{{- end }}
 spec:
-  ingressClassName: {{ .Values.apiGateway.ingressClassName | default "nginx" }}
+  {{- if .Values.apiGateway.ingressClassName }}
+  ingressClassName: {{ .Values.apiGateway.ingressClassName }}
+  {{- end }}
   {{- if and .Values.apiGateway.tls.enabled .Values.apiGateway.tls.secretName }}
   tls:
     - hosts:
-        - {{ .Values.apiGateway.ingressHost | default "agents.example.com" }}
+        {{- if .Values.apiGateway.ingressHost }}
+        - {{ .Values.apiGateway.ingressHost }}
+        {{- end }}
       secretName: {{ .Values.apiGateway.tls.secretName | quote }}
   {{- end }}
   rules:
-    - host: {{ .Values.apiGateway.ingressHost | default "agents.example.com" }}
+    - {{- if .Values.apiGateway.ingressHost }}
+      host: {{ .Values.apiGateway.ingressHost }}
+      {{- end }}
       http:
         paths:
           - path: /api
@@ -279,3 +284,4 @@ spec:
                 port:
                   number: {{ .Values.webUi.service.port }}
           {{- end }}
+{{- end }}

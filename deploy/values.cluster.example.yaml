@@ -37,8 +37,11 @@ apiGateway:
     repository: docker.io/yakdhane/ai-api-gateway
     tag: latest
     pullPolicy: Always
-  ingressClassName: nginx
-  ingressHost: agents.example.com
+  ingressClassName: ""
+  ingressHost: ""
+  ingress:
+    enabled: true
+    annotations: {}
   tls:
     enabled: false
     secretName: ""

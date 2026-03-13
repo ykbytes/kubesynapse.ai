@@ -164,8 +164,11 @@ apiGateway:
     repository: docker.io/yakdhane/ai-api-gateway
     tag: latest
     pullPolicy: IfNotPresent
-  ingressClassName: nginx
-  ingressHost: ""  # override e.g. "agents.mycompany.com"; defaults to agents.example.com
+  ingressClassName: ""
+  ingressHost: ""  # leave empty for a hostless ingress, or set e.g. "agents.mycompany.com"
+  ingress:
+    enabled: true
+    annotations: {}
   publicBaseUrl: ""
   corsOrigins: []
   tls:
@@ -382,37 +385,37 @@ skillsCatalog:
 mcpToolSidecars:
   codeExec:
     image: docker.io/yakdhane/mcp-code-exec
-    tag: v1
+    tag: latest
     port: 8090
   webSearch:
     image: docker.io/yakdhane/mcp-web-search
-    tag: v1
+    tag: latest
     port: 8091
   documents:
     image: docker.io/yakdhane/mcp-documents
-    tag: v1
+    tag: latest
     port: 8092
   browser:
     image: docker.io/yakdhane/mcp-browser
-    tag: v1
+    tag: latest
     port: 8093
   database:
     image: docker.io/yakdhane/mcp-database
-    tag: v1
+    tag: latest
     port: 8094
   git:
     image: docker.io/yakdhane/mcp-git
-    tag: v1
+    tag: latest
     port: 8095
   kubernetes:
     image: docker.io/yakdhane/mcp-kubernetes
-    tag: v1
+    tag: latest
     port: 8096
   messaging:
     image: docker.io/yakdhane/mcp-messaging
-    tag: v1
+    tag: latest
     port: 8097
   rag:
     image: docker.io/yakdhane/mcp-rag
-    tag: v1
+    tag: latest
     port: 8098
