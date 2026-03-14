@@ -44,7 +44,9 @@ metadata:
   labels:
     app: operator
 spec:
+{{- if not (and .Values.autoscaling (.Values.autoscaling.enabled)) }}
   replicas: {{ .Values.operator.replicaCount | default 2 }}
+{{- end }}
   selector:
     matchLabels:
       app: operator

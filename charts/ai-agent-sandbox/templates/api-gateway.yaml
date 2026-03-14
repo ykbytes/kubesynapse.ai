@@ -6,7 +6,9 @@ metadata:
   labels:
     app: api-gateway
 spec:
+{{- if not (and .Values.autoscaling (.Values.autoscaling.enabled)) }}
   replicas: {{ .Values.apiGateway.replicaCount | default 1 }}
+{{- end }}
   selector:
     matchLabels:
       app: api-gateway

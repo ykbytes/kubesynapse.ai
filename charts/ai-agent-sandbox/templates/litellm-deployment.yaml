@@ -5,7 +5,9 @@ metadata:
   labels:
     app: litellm
 spec:
+{{- if not (and .Values.autoscaling (.Values.autoscaling.enabled)) }}
   replicas: {{ .Values.litellm.replicaCount }}
+{{- end }}
   selector:
     matchLabels:
       app: litellm

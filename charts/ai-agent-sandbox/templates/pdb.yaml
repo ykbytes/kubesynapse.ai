@@ -1,6 +1,6 @@
 # PodDisruptionBudgets ensure at least one replica survives voluntary disruptions
 # (node drains, rolling upgrades) for the stateful critical components.
-{{- if or (gt (int (.Values.apiGateway.replicaCount | default 1)) 1) (.Values.autoscaling.enabled) }}
+{{- if or (gt (int (.Values.apiGateway.replicaCount | default 1)) 1) (and .Values.autoscaling (.Values.autoscaling.enabled)) }}
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
@@ -12,7 +12,7 @@ spec:
       app: api-gateway
 ---
 {{- end }}
-{{- if or (gt (int (.Values.litellm.replicaCount | default 1)) 1) (.Values.autoscaling.enabled) }}
+{{- if or (gt (int (.Values.litellm.replicaCount | default 1)) 1) (and .Values.autoscaling (.Values.autoscaling.enabled)) }}
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
