@@ -29,12 +29,61 @@ spec:
                       name:
                         type: string
                         description: "Step identifier"
+                      type:
+                        type: string
+                        enum:
+                          - agent
+                          - loop
+                        description: "Step type: 'agent' (default) runs once, 'loop' runs iterative dev-loop"
                       agentRef:
                         type: string
                         description: "Name of the AIAgent CRD to execute this step"
                       prompt:
                         type: string
                         description: "Prompt template for this step. Supports previous-step output interpolation"
+                      loopConfig:
+                        type: object
+                        description: "Configuration for loop-type steps (ignored for agent-type)"
+                        properties:
+                          maxIterations:
+                            type: integer
+                            minimum: 1
+                            description: "Maximum number of loop iterations before forced exit"
+                          planSource:
+                            type: string
+                            enum:
+                              - inline
+                              - prompt
+                            description: "Where the work plan comes from: 'inline' (provided in plan field) or 'prompt' (agent generates from PRD)"
+                          plan:
+                            type: string
+                            description: "Inline checklist of TODO items (one per line, markdown checkbox format)"
+                          commitAfterEachItem:
+                            type: boolean
+                            description: "If true, commit after completing each checklist item"
+                          circuitBreaker:
+                            type: object
+                            description: "Circuit breaker settings to detect stagnation"
+                            properties:
+                              noProgressThreshold:
+                                type: integer
+                                minimum: 1
+                                description: "Consecutive iterations with no progress before opening circuit"
+                              cooldownMinutes:
+                                type: integer
+                                minimum: 1
+                                description: "Minutes to wait in half-open state before retrying"
+                          exitConditions:
+                            type: object
+                            description: "Conditions that signal loop completion"
+                            properties:
+                              planComplete:
+                                type: boolean
+                                description: "Exit when all checklist items are done"
+                              completionSignalCount:
+                                type: integer
+                                minimum: 1
+                                description: "Number of consecutive completion signals from agent before exiting"
                       dependsOn:
                         type: array
                         items:
@@ -75,7 +124,7 @@ spec:
               properties:
                 phase:
                   type: string
-                  enum: ["pending", "queued", "running", "waiting-approval", "completed", "failed"]
+                  enum: ["pending", "queued", "running", "waiting-approval", "completed", "failed", "cancelled"]
                 runId:
                   type: string
                 currentStep:
@@ -119,6 +168,7 @@ spec:
                 stepStates:
                   type: object
                   x-kubernetes-preserve-unknown-fields: true
+                  description: "Per-step state including loopProgress for loop-type steps (iteration, completedItems, circuitBreakerState, featureBranch, lastCommitSha)"
                 workerJob:
                   type: object
                   properties:

@@ -340,7 +340,7 @@ export function AgentManagementPanel({
               Agent settings &middot; saving updates the spec and triggers an operator reconcile.
             </CardDescription>
           </div>
-          <div className="grid min-w-[240px] gap-2 rounded-2xl border border-border/60 bg-background/70 p-3 text-xs text-muted-foreground sm:grid-cols-3">
+          <div className="grid min-w-[240px] gap-2 rounded-2xl border border-border/60 bg-background/70 p-3 text-xs text-muted-foreground lg:grid-cols-3">
             <div>
               <p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground/70">Runtime</p>
               <p className="mt-1 font-medium text-foreground">{runtimeKind === "langgraph" ? "LangGraph" : runtimeKind === "goose" ? "Goose" : "Codex"}</p>
@@ -368,8 +368,8 @@ export function AgentManagementPanel({
 
           {/* ─── Basics ─── */}
           <TabsContent value="basics" className="space-y-5">
-            <div className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
-              <div className="grid gap-4 sm:grid-cols-2">
+            <div className="grid gap-4">
+              <div className="grid gap-4">
                 <Card className="shadow-none">
                   <CardHeader className="pb-3">
                     <CardTitle className="text-sm">Agent identity</CardTitle>
@@ -497,7 +497,7 @@ export function AgentManagementPanel({
           <TabsContent value="tools" className="space-y-4">
             {runtimeKind !== "goose" ? (
               <>
-                <div className="grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
+                <div className="grid gap-4 2xl:grid-cols-[1.15fr_0.85fr]">
                   <Card className="shadow-none">
                     <CardHeader className="pb-3">
                       <div className="flex items-center gap-2">
@@ -674,7 +674,7 @@ export function AgentManagementPanel({
 
           {/* ─── Skills & Files ─── */}
           <TabsContent value="files" className="space-y-4">
-            <div className="grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
+            <div className="grid gap-4 2xl:grid-cols-[1.15fr_0.85fr]">
               <Card className="shadow-none">
                 <CardHeader className="pb-3">
                   <div className="flex items-center gap-2">

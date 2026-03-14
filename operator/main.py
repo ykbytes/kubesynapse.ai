@@ -1511,6 +1511,48 @@ def create_agent_statefulset_manifest(
     mcp_sidecars = _auto_inject_mcp_sidecars(mcp_sidecars, skills_config)
     mcp_sidecars = _validate_mcp_sidecars(mcp_sidecars)
 
+    # Git configuration — auto-inject git sidecar and prepare credential env/volumes
+    git_config = spec.get("gitConfig") or {}
+    git_sidecar_env: list[dict[str, Any]] = []
+    git_volumes: list[dict[str, Any]] = []
+    git_volume_mounts: list[dict[str, Any]] = []
+    if git_config.get("repoUrl"):
+        # Auto-inject git sidecar if not already present
+        has_git_sidecar = any(s.get("name") == "git" for s in mcp_sidecars)
+        if not has_git_sidecar:
+            git_catalog_entry = MCP_SIDECAR_CATALOG.get("git", {})
+            mcp_sidecars.append({
+                "name": "git",
+                "image": git_catalog_entry.get("image", "docker.io/yakdhane/mcp-git:latest"),
+                "port": git_catalog_entry.get("port", 8095),
+            })
+            logger.info("Auto-injected git MCP sidecar for agent '%s' (gitConfig present)", name)
+
+        git_sidecar_env = [
+            {"name": "GIT_REPO_URL", "value": git_config.get("repoUrl", "")},
+            {"name": "GIT_AUTH_METHOD", "value": git_config.get("authMethod", "")},
+        ]
+        cred_secret = git_config.get("credentialSecretRef", "")
+        auth_method = git_config.get("authMethod", "")
+        if cred_secret and auth_method == "token":
+            git_sidecar_env.append({
+                "name": "GIT_TOKEN",
+                "valueFrom": {"secretKeyRef": {"name": cred_secret, "key": "token", "optional": True}},
+            })
+        elif cred_secret and auth_method == "basic":
+            git_sidecar_env.extend([
+                {"name": "GIT_USERNAME", "valueFrom": {"secretKeyRef": {"name": cred_secret, "key": "username", "optional": True}}},
+                {"name": "GIT_PASSWORD", "valueFrom": {"secretKeyRef": {"name": cred_secret, "key": "password", "optional": True}}},
+            ])
+        elif cred_secret and auth_method == "ssh":
+            ssh_vol_name = "git-ssh-key"
+            git_volumes.append({
+                "name": ssh_vol_name,
+                "secret": {"secretName": cred_secret, "items": [{"key": "ssh_private_key", "path": "id_rsa"}], "defaultMode": 0o400},
+            })
+            git_volume_mounts.append({"name": ssh_vol_name, "mountPath": "/home/mcpuser/.ssh", "readOnly": True})
+            git_sidecar_env.append({"name": "GIT_SSH_KEY_PATH", "value": "/home/mcpuser/.ssh/id_rsa"})
+
     pod_security_context = {
         "runAsNonRoot": True,
         "runAsUser": 1000,
@@ -1819,12 +1861,18 @@ def create_agent_statefulset_manifest(
         for index, sidecar_spec in enumerate(mcp_sidecars):
             sidecar_name = sidecar_spec.get("name", f"tool-{index}")
             sidecar_port = sidecar_spec.get("port", 8080)
+            sidecar_env = [{"name": "MCP_LISTEN_PORT", "value": str(sidecar_port)}]
+            sidecar_vol_mounts = [{"name": "tmp-volume", "mountPath": "/tmp"}]
+            # Inject git-specific env vars and volume mounts
+            if sidecar_name == "git" and git_sidecar_env:
+                sidecar_env.extend(git_sidecar_env)
+                sidecar_vol_mounts.extend(git_volume_mounts)
             containers.append(
                 {
                     "name": f"mcp-{sidecar_name}",
                     "image": sidecar_spec["image"],
                     "ports": [{"containerPort": sidecar_port, "protocol": "TCP"}],
-                    "env": [{"name": "MCP_LISTEN_PORT", "value": str(sidecar_port)}],
+                    "env": sidecar_env,
                     "readinessProbe": {
                         "tcpSocket": {"port": sidecar_port},
                         "initialDelaySeconds": 1,
@@ -1844,7 +1892,7 @@ def create_agent_statefulset_manifest(
                         "requests": {"cpu": "50m", "memory": "64Mi"},
                         "limits": {"cpu": "500m", "memory": "256Mi"},
                     },
-                    "volumeMounts": [{"name": "tmp-volume", "mountPath": "/tmp"}],
+                    "volumeMounts": sidecar_vol_mounts,
                 }
             )
 
@@ -1853,7 +1901,7 @@ def create_agent_statefulset_manifest(
         "securityContext": pod_security_context,
         "initContainers": init_containers,
         "containers": containers,
-        "volumes": volumes,
+        "volumes": volumes + git_volumes,
     }
     if IMAGE_PULL_SECRETS:
         pod_spec["imagePullSecrets"] = [{"name": secret_name} for secret_name in IMAGE_PULL_SECRETS]
@@ -3150,7 +3198,7 @@ def run_workflow(
     generation = int((meta or {}).get("generation", 1))
     observed_generation = int(current_status.get("observedGeneration", 0) or 0)
     phase = str(current_status.get("phase", ""))
-    if observed_generation == generation and phase in {"queued", "running", "waiting-approval", "completed", "failed"}:
+    if observed_generation == generation and phase in {"queued", "running", "waiting-approval", "completed", "failed", "cancelled"}:
         log_operator_event(
             logger,
             logging.INFO,
@@ -3402,6 +3450,34 @@ def run_workflow_watchdog(
         phase=str(current_status.get("phase", "") or ""),
         workerJob=current_status.get("workerJob", {}) or {},
         jobState=job_state,
+    )
+
+
+@kopf.on.field("sandbox.enterprise.ai", "v1alpha1", "agentworkflows", field="status.phase")  # type: ignore[arg-type]
+def on_workflow_phase_cancelled(
+    old: str | None,
+    new: str | None,
+    status: dict[str, Any],
+    name: str,
+    namespace: str,
+    logger: logging.Logger,
+    **kwargs: Any,
+) -> None:
+    """Kill the worker Job when a workflow is cancelled."""
+    del kwargs
+    if new != "cancelled":
+        return
+    worker_job = (status or {}).get("workerJob", {}) or {}
+    job_name = str(worker_job.get("name") or "")
+    job_namespace = str(worker_job.get("namespace") or OPERATOR_NAMESPACE)
+    cancelled = cancel_worker_job(job_name, job_namespace)
+    log_operator_event(
+        logger,
+        logging.INFO,
+        "Cancelled worker Job %s (deleted=%s)." % (job_name or "<none>", cancelled),
+        resource_kind="AgentWorkflow",
+        name=name,
+        namespace=namespace,
     )
 
 

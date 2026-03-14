@@ -102,6 +102,38 @@ spec:
                             Agent-specific entries override chart-wide CODEX_RUNTIME_CONFIG_FILES_JSON defaults by path.
                           additionalProperties:
                             x-kubernetes-preserve-unknown-fields: true
+                gitConfig:
+                  type: object
+                  description: "Git repository configuration for autonomous dev-loop workflows"
+                  properties:
+                    repoUrl:
+                      type: string
+                      description: "Git remote URL (HTTPS or SSH)"
+                    defaultBranch:
+                      type: string
+                      description: "Base branch to create feature branches from (default: main)"
+                    pushPolicy:
+                      type: string
+                      enum:
+                        - after-each-commit
+                        - end-of-session
+                        - on-approval
+                        - never
+                      description: "When to push commits to the remote"
+                    authMethod:
+                      type: string
+                      enum:
+                        - token
+                        - basic
+                        - ssh
+                      description: "Git authentication method"
+                    credentialSecretRef:
+                      type: string
+                      description: "Name of the K8s Secret holding git credentials"
+                  required:
+                    - repoUrl
+                    - authMethod
+                    - credentialSecretRef
                 mcpServers:
                   type: array
                   items:

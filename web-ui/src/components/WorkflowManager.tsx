@@ -6,12 +6,15 @@ import {
   Circle,
   Clock,
   LoaderCircle,
+  Pencil,
   Play,
   PlusCircle,
+  Repeat,
   Save,
   ShieldCheck,
   SkipForward,
   Sparkles,
+  Square,
   Timer,
   Trash2,
   Workflow,
@@ -28,6 +31,7 @@ import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import type {
   AgentInfo,
+  LoopProgress,
   WorkflowInfo,
   WorkflowPayload,
   WorkflowStep,
@@ -49,6 +53,8 @@ interface WorkflowManagerProps {
   onUpdate: (name: string, payload: WorkflowUpdatePayload) => void;
   onDelete: (name: string) => void;
   onTrigger: (name: string, input?: string) => void;
+  onCancel?: (name: string) => void;
+  isCancelling?: boolean;
   approvalReason: string;
   approvalBusy: boolean;
   onApprovalReasonChange: (value: string) => void;
@@ -119,6 +125,11 @@ function stepStatusIcon(status: string, isApprovalWaiting: boolean): { icon: Rea
         icon: <Clock className="h-4 w-4 text-blue-400" />,
         ring: "border-blue-500/30 bg-blue-500/10",
       };
+    case "cancelled":
+      return {
+        icon: <XCircle className="h-4 w-4 text-orange-400" />,
+        ring: "border-orange-500/30 bg-orange-500/10",
+      };
     default:
       return {
         icon: <Circle className="h-4 w-4 text-muted-foreground/50" />,
@@ -133,6 +144,7 @@ function statusBadgeVariant(status: string): "default" | "secondary" | "destruct
     case "completed":
       return "default";
     case "failed":
+    case "cancelled":
       return "destructive";
     case "running":
     case "queued":
@@ -223,6 +235,44 @@ function ProgressSummaryBar({ summary, phase }: { summary: WorkflowSummary; phas
   );
 }
 
+/* ────────── loop progress display ────────── */
+
+function LoopProgressDisplay({ progress }: { progress: LoopProgress }) {
+  const pct = progress.totalItems > 0 ? Math.round((progress.completedItems / progress.totalItems) * 100) : 0;
+  const cbState = progress.circuitBreakerState?.state ?? "closed";
+
+  return (
+    <div className="space-y-2 rounded-lg border border-violet-500/20 bg-violet-500/5 p-3">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2 text-xs font-medium text-violet-300">
+          <Repeat className="h-3.5 w-3.5" />
+          Loop progress — iteration {progress.iteration}/{progress.maxIterations} · {progress.completedItems}/{progress.totalItems} items done
+        </div>
+        <div className="flex items-center gap-2">
+          {cbState !== "closed" && (
+            <Badge variant="outline" className={`text-[10px] ${cbState === "open" ? "border-destructive/40 text-destructive" : "border-amber-500/40 text-amber-300"}`}>
+              CB: {cbState}
+            </Badge>
+          )}
+          <span className="text-[10px] tabular-nums text-muted-foreground">{pct}%</span>
+        </div>
+      </div>
+      <div className="h-1.5 w-full overflow-hidden rounded-full bg-violet-500/10">
+        <div className="h-full rounded-full bg-violet-500 transition-all" style={{ width: `${pct}%` }} />
+      </div>
+      {progress.featureBranch && (
+        <span className="text-[10px] text-muted-foreground">Branch: {progress.featureBranch}</span>
+      )}
+      {progress.lastCommitSha && (
+        <span className="ml-2 text-[10px] font-mono text-muted-foreground">Last commit: {progress.lastCommitSha.slice(0, 8)}</span>
+      )}
+      {progress.exitReason && (
+        <div className="text-[10px] text-amber-300">Exit: {progress.exitReason}</div>
+      )}
+    </div>
+  );
+}
+
 /* ────────── step detail card ────────── */
 
 function StepDetailCard({
@@ -275,9 +325,19 @@ function StepDetailCard({
           )}
           <span className="text-sm font-medium">{step.name}</span>
           <Badge variant={statusBadgeVariant(status)} className="text-[10px]">{status}</Badge>
+          {step.step_type === "loop" && (
+            <Badge variant="outline" className="border-violet-500/30 bg-violet-500/10 text-violet-300 text-[10px]">
+              <Repeat className="mr-1 h-3 w-3" />loop
+            </Badge>
+          )}
           <span className="text-xs text-muted-foreground">
             {step.agent_ref}{step.require_approval ? " · approval gate" : ""}
           </span>
+          {state?.loopProgress && (
+            <span className="text-[10px] tabular-nums text-violet-300">
+              {state.loopProgress.completedItems}/{state.loopProgress.totalItems} items
+            </span>
+          )}
           {state?.latencyMs != null && (
             <span className="ml-auto text-[10px] tabular-nums text-muted-foreground">{formatMs(state.latencyMs)}</span>
           )}
@@ -304,6 +364,11 @@ function StepDetailCard({
                 <span>Approval wait: {formatMs(state.approvalWaitMs)}</span>
               )}
             </div>
+
+            {/* loop progress */}
+            {state?.loopProgress && (
+              <LoopProgressDisplay progress={state.loopProgress} />
+            )}
 
             {/* error */}
             {state?.error && (
@@ -404,6 +469,8 @@ export function WorkflowManager({
   onUpdate,
   onDelete,
   onTrigger,
+  onCancel,
+  isCancelling,
   approvalReason,
   approvalBusy,
   onApprovalReasonChange,
@@ -503,11 +570,13 @@ export function WorkflowManager({
   const pendingApprovalStep = useMemo(() => {
     if (!workflow?.pending_approval) return null;
     const pa = workflow.pending_approval;
-    return typeof pa.step === "string" ? pa.step : (workflow.current_step || null);
+    return typeof pa.stepName === "string" ? pa.stepName : (workflow.current_step || null);
   }, [workflow?.pending_approval, workflow?.current_step]);
 
   const wfSummary: WorkflowSummary | undefined = workflow?.summary ?? undefined;
-  const isActive = workflow?.phase === "running" || workflow?.phase === "queued";
+  const isActive = workflow?.phase === "running" || workflow?.phase === "queued" || workflow?.phase === "waiting-approval";
+  const hasBeenTriggered = Boolean(workflow && workflow.phase !== "pending");
+  const [showEditor, setShowEditor] = useState(false);
 
   function handleTrigger() {
     if (!workflow) return;
@@ -530,7 +599,7 @@ export function WorkflowManager({
                 : "Compose a multi-step agent pipeline with clearer sequencing, dependencies, and review gates."}
             </CardDescription>
           </div>
-          <Badge variant={isActive ? "default" : workflow?.phase === "failed" ? "destructive" : "secondary"}>
+          <Badge variant={isActive ? "default" : (workflow?.phase === "failed" || workflow?.phase === "cancelled") ? "destructive" : "secondary"}>
             {workflow?.phase ?? "draft"}
           </Badge>
         </div>
@@ -585,18 +654,32 @@ export function WorkflowManager({
                     </Badge>
                   )}
                 </div>
-                <Button
-                  size="sm"
-                  className="h-8 rounded-xl text-xs"
-                  disabled={isRunning || isActive}
-                  onClick={() => {
-                    setTriggerInput(workflow.input ?? "");
-                    setShowTriggerConfirm(true);
-                  }}
-                >
-                  <Play className="mr-1.5 h-3.5 w-3.5" />
-                  Run workflow
-                </Button>
+                <div className="flex items-center gap-2">
+                  {isActive && onCancel && (
+                    <Button
+                      size="sm"
+                      variant="destructive"
+                      className="h-8 rounded-xl text-xs"
+                      disabled={isCancelling}
+                      onClick={() => onCancel(workflow.name)}
+                    >
+                      {isCancelling ? <LoaderCircle className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Square className="mr-1.5 h-3.5 w-3.5" />}
+                      {isCancelling ? "Cancelling…" : "Cancel"}
+                    </Button>
+                  )}
+                  <Button
+                    size="sm"
+                    className="h-8 rounded-xl text-xs"
+                    disabled={isRunning || isActive}
+                    onClick={() => {
+                      setTriggerInput(workflow.input ?? "");
+                      setShowTriggerConfirm(true);
+                    }}
+                  >
+                    <Play className="mr-1.5 h-3.5 w-3.5" />
+                    Run workflow
+                  </Button>
+                </div>
               </div>
             </CardHeader>
             <CardContent>
@@ -703,12 +786,31 @@ export function WorkflowManager({
                   <span>Workflow failed at step <strong>{workflow.current_step || "unknown"}</strong>.</span>
                 </div>
               )}
+              {workflow.phase === "cancelled" && (
+                <div className="mt-4 flex items-center gap-2 rounded-xl border border-orange-500/30 bg-orange-500/5 px-3 py-2 text-sm text-orange-400">
+                  <XCircle className="h-4 w-4 shrink-0" />
+                  <span>Workflow was cancelled{workflow.current_step ? ` at step ${workflow.current_step}` : ""}.</span>
+                </div>
+              )}
             </CardContent>
           </Card>
         )}
 
+        {/* ── Editor toggle for triggered workflows ── */}
+        {hasBeenTriggered && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-8 self-start rounded-xl text-xs text-muted-foreground"
+            onClick={() => setShowEditor((v) => !v)}
+          >
+            {showEditor ? <ChevronDown className="mr-1.5 h-3.5 w-3.5" /> : <Pencil className="mr-1.5 h-3.5 w-3.5" />}
+            {showEditor ? "Hide step editor" : "Edit workflow steps"}
+          </Button>
+        )}
+
         {/* ── Workflow details + execution profile (editor) ── */}
-        <div className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
+        {(!hasBeenTriggered || showEditor) && <div className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
           <Card className="shadow-none">
             <CardHeader className="pb-3">
               <CardTitle className="text-sm">Workflow details</CardTitle>
@@ -777,10 +879,10 @@ export function WorkflowManager({
               </div>
             </CardContent>
           </Card>
-        </div>
+        </div>}
 
         {/* ── Step editor ── */}
-        <div className="flex items-center justify-between border-t border-border pt-4">
+        {(!hasBeenTriggered || showEditor) && <div className="flex items-center justify-between border-t border-border pt-4">
           <div>
             <h3 className="text-sm font-medium text-foreground">Workflow steps</h3>
             <p className="text-xs text-muted-foreground">Model the sequence, assign each step to an agent, and toggle dependencies with buttons instead of comma parsing.</p>
@@ -805,9 +907,9 @@ export function WorkflowManager({
             <PlusCircle className="mr-1 h-3 w-3" />
             Add step
           </Button>
-        </div>
+        </div>}
 
-        <div className="space-y-3">
+        {(!hasBeenTriggered || showEditor) && <div className="space-y-3">
           {steps.map((step, index) => (
             <Card key={index} className="shadow-none">
               <CardContent className="space-y-4 p-4">
@@ -841,6 +943,28 @@ export function WorkflowManager({
                       onChange={(e) => renameStep(index, e.target.value)}
                     />
                   </div>
+                  <div className="space-y-1">
+                    <Label className="text-[11px]">Step type</Label>
+                    <select
+                      className="flex h-9 w-full rounded-xl border border-input bg-transparent px-3 text-xs shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      value={step.step_type ?? "agent"}
+                      onChange={(e) =>
+                        updateStep(index, (current) => ({
+                          ...current,
+                          step_type: e.target.value as "agent" | "loop",
+                          loop_config: e.target.value === "loop" && !current.loop_config
+                            ? { maxIterations: 20, planSource: "inline", plan: "", commitAfterEachItem: true, circuitBreaker: { noProgressThreshold: 3, cooldownMinutes: 2 } }
+                            : current.loop_config,
+                        }))
+                      }
+                    >
+                      <option value="agent">Agent (single run)</option>
+                      <option value="loop">Dev-loop (iterative)</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="grid gap-3 sm:grid-cols-2">
                   <div className="space-y-1">
                     <Label className="text-[11px]">Agent</Label>
                     <select
@@ -901,6 +1025,103 @@ export function WorkflowManager({
                   />
                 </div>
 
+                {step.step_type === "loop" && (
+                  <div className="space-y-3 rounded-2xl border border-violet-500/30 bg-violet-500/5 p-4">
+                    <div className="flex items-center gap-2 text-sm font-medium text-violet-300">
+                      <Repeat className="h-4 w-4" />
+                      Loop configuration
+                    </div>
+                    <div className="grid gap-3 sm:grid-cols-3">
+                      <div className="space-y-1">
+                        <Label className="text-[11px]">Max iterations</Label>
+                        <Input
+                          type="number"
+                          min={1}
+                          max={200}
+                          className="h-9 rounded-xl text-xs"
+                          value={step.loop_config?.maxIterations ?? 20}
+                          onChange={(e) =>
+                            updateStep(index, (current) => ({
+                              ...current,
+                              loop_config: { ...current.loop_config, maxIterations: parseInt(e.target.value) || 20 },
+                            }))
+                          }
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-[11px]">Plan source</Label>
+                        <select
+                          className="flex h-9 w-full rounded-xl border border-input bg-transparent px-3 text-xs shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                          value={step.loop_config?.planSource ?? "inline"}
+                          onChange={(e) =>
+                            updateStep(index, (current) => ({
+                              ...current,
+                              loop_config: { ...current.loop_config, planSource: e.target.value as "inline" | "prompt" },
+                            }))
+                          }
+                        >
+                          <option value="inline">Inline checklist</option>
+                          <option value="prompt">Agent generates plan</option>
+                        </select>
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-[11px]">No-progress threshold</Label>
+                        <Input
+                          type="number"
+                          min={1}
+                          max={10}
+                          className="h-9 rounded-xl text-xs"
+                          value={step.loop_config?.circuitBreaker?.noProgressThreshold ?? 3}
+                          onChange={(e) =>
+                            updateStep(index, (current) => ({
+                              ...current,
+                              loop_config: {
+                                ...current.loop_config,
+                                circuitBreaker: {
+                                  ...current.loop_config?.circuitBreaker,
+                                  noProgressThreshold: parseInt(e.target.value) || 3,
+                                },
+                              },
+                            }))
+                          }
+                        />
+                      </div>
+                    </div>
+                    {(step.loop_config?.planSource ?? "inline") === "inline" && (
+                      <div className="space-y-1">
+                        <Label className="text-[11px]">Plan checklist</Label>
+                        <Textarea
+                          rows={6}
+                          className="font-mono text-xs"
+                          value={step.loop_config?.plan ?? ""}
+                          onChange={(e) =>
+                            updateStep(index, (current) => ({
+                              ...current,
+                              loop_config: { ...current.loop_config, plan: e.target.value },
+                            }))
+                          }
+                          placeholder={"- [ ] Implement user authentication\n- [ ] Add unit tests for auth module\n- [ ] Update API documentation"}
+                        />
+                      </div>
+                    )}
+                    <div className="flex items-center gap-3">
+                      <input
+                        type="checkbox"
+                        id={`commit-after-${index}`}
+                        checked={step.loop_config?.commitAfterEachItem ?? true}
+                        onChange={(e) =>
+                          updateStep(index, (current) => ({
+                            ...current,
+                            loop_config: { ...current.loop_config, commitAfterEachItem: e.target.checked },
+                          }))
+                        }
+                        className="h-4 w-4 rounded border-border"
+                      />
+                      <Label htmlFor={`commit-after-${index}`} className="text-xs">Commit after each item</Label>
+                    </div>
+                  </div>
+                )}
+
                 <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border/60 bg-background/50 p-3">
                   <div>
                     <p className="text-sm font-medium text-foreground">Human approval</p>
@@ -924,7 +1145,7 @@ export function WorkflowManager({
               </CardContent>
             </Card>
           ))}
-        </div>
+        </div>}
 
         {error && (
           <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
@@ -934,18 +1155,29 @@ export function WorkflowManager({
 
         <div className="flex items-center justify-end gap-2 border-t border-border pt-4">
           {workflow && (
-            <Button
-              variant="outline"
-              onClick={() => {
-                setTriggerInput(workflow.input ?? "");
-                setShowTriggerConfirm(true);
-              }}
-              disabled={isRunning || isActive}
-              className="mr-auto"
-            >
-              {isRunning ? <LoaderCircle className="mr-1.5 h-4 w-4 animate-spin" /> : <Play className="mr-1.5 h-4 w-4" />}
-              {isRunning ? "Running…" : "Run"}
-            </Button>
+            <div className="mr-auto flex items-center gap-2">
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setTriggerInput(workflow.input ?? "");
+                  setShowTriggerConfirm(true);
+                }}
+                disabled={isRunning}
+              >
+                {isRunning ? <LoaderCircle className="mr-1.5 h-4 w-4 animate-spin" /> : <Play className="mr-1.5 h-4 w-4" />}
+                {isRunning ? "Running…" : "Run"}
+              </Button>
+              {isActive && onCancel && (
+                <Button
+                  variant="destructive"
+                  disabled={isCancelling}
+                  onClick={() => onCancel(workflow.name)}
+                >
+                  {isCancelling ? <LoaderCircle className="mr-1.5 h-4 w-4 animate-spin" /> : <Square className="mr-1.5 h-4 w-4" />}
+                  {isCancelling ? "Cancelling…" : "Cancel"}
+                </Button>
+              )}
+            </div>
           )}
           <Button
             onClick={() => {

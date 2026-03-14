@@ -45,6 +45,8 @@ import {
   registerWithPassword,
   streamAgentInvoke,
   triggerWorkflow,
+  cancelWorkflow,
+  createGitCredentials,
   updateAgent,
   updateEval,
   updateWorkflow,
@@ -63,6 +65,7 @@ import type {
   EvalPayload,
   EvalUpdatePayload,
   GatewayHealth,
+  GitFormState,
   InvocationSummary,
   InvokePayload,
   SpecialistSubagentDraft,
@@ -337,6 +340,7 @@ export default function App() {
   const [savingWorkflow, setSavingWorkflow] = useState(false);
   const [deletingWorkflow, setDeletingWorkflow] = useState(false);
   const [runningWorkflow, setRunningWorkflow] = useState(false);
+  const [cancellingWorkflow, setCancellingWorkflow] = useState(false);
   const [savingEval, setSavingEval] = useState(false);
   const [deletingEval, setDeletingEval] = useState(false);
 
@@ -366,6 +370,10 @@ export default function App() {
   const [createAgentA2AAllowedCallersText, setCreateAgentA2AAllowedCallersText] = useState("");
   const [createAgentSkillFileDrafts, setCreateAgentSkillFileDrafts] = useState<TextFileDraft[]>([]);
   const [createAgentGooseConfigFileDrafts, setCreateAgentGooseConfigFileDrafts] = useState<TextFileDraft[]>([]);
+  const [createAgentGitForm, setCreateAgentGitForm] = useState<GitFormState>({
+    enabled: false, repoUrl: "", authMethod: "token", pushPolicy: "after-each-commit",
+    defaultBranch: "main", token: "", username: "", password: "", sshPrivateKey: "",
+  });
   const [a2aTargetAgent, setA2ATargetAgent] = useState("");
   const [a2aTargetNamespace, setA2ATargetNamespace] = useState("");
   const [a2aTimeoutSeconds, setA2ATimeoutSeconds] = useState("");
@@ -929,13 +937,34 @@ export default function App() {
         a2a_config: allowedCallers.length > 0 ? { allowed_callers: allowedCallers } : undefined,
         skills: Object.keys(skillFiles).length > 0 ? { files: skillFiles } : undefined,
         goose_config_files: gooseConfigFiles,
+        git_config: createAgentGitForm.enabled
+          ? {
+              repo_url: createAgentGitForm.repoUrl,
+              default_branch: createAgentGitForm.defaultBranch || "main",
+              push_policy: createAgentGitForm.pushPolicy,
+              auth_method: createAgentGitForm.authMethod,
+            }
+          : undefined,
       });
+      if (createAgentGitForm.enabled && createAgentGitForm.repoUrl) {
+        await createGitCredentials(token, createdAgent.name, {
+          auth_method: createAgentGitForm.authMethod,
+          token: createAgentGitForm.authMethod === "token" ? createAgentGitForm.token : undefined,
+          username: createAgentGitForm.authMethod === "basic" ? createAgentGitForm.username : undefined,
+          password: createAgentGitForm.authMethod === "basic" ? createAgentGitForm.password : undefined,
+          ssh_private_key: createAgentGitForm.authMethod === "ssh" ? createAgentGitForm.sshPrivateKey : undefined,
+        });
+      }
       setAgentCreateMode(false);
       setCreateAgentMcpServersText("");
       setCreateAgentMcpSidecarsText("");
       setCreateAgentA2AAllowedCallersText("");
       setCreateAgentSkillFileDrafts([]);
       setCreateAgentGooseConfigFileDrafts([]);
+      setCreateAgentGitForm({
+        enabled: false, repoUrl: "", authMethod: "token", pushPolicy: "after-each-commit",
+        defaultBranch: "main", token: "", username: "", password: "", sshPrivateKey: "",
+      });
       setSelectedAgentName(createdAgent.name);
       setMessagesForAgent(createdAgent.name, (current) =>
         current.length > 0
@@ -1096,6 +1125,23 @@ export default function App() {
       toast.error("Failed to trigger workflow", { description: msg });
     } finally {
       setRunningWorkflow(false);
+    }
+  }
+
+  async function handleCancelWorkflow(name: string) {
+    if (!token.trim()) return;
+    setCancellingWorkflow(true);
+    setWorkflowError("");
+    try {
+      await cancelWorkflow(token, namespace, name);
+      toast.success("Workflow cancelled");
+      await refreshWorkspaceData({ silent: true });
+    } catch (nextError) {
+      const msg = nextError instanceof Error ? nextError.message : String(nextError);
+      setWorkflowError(msg);
+      toast.error("Failed to cancel workflow", { description: msg });
+    } finally {
+      setCancellingWorkflow(false);
     }
   }
 
@@ -1925,6 +1971,8 @@ export default function App() {
                 onA2AAllowedCallersTextChange={setCreateAgentA2AAllowedCallersText}
                 onSkillFileDraftsChange={setCreateAgentSkillFileDrafts}
                 onGooseConfigFileDraftsChange={setCreateAgentGooseConfigFileDrafts}
+                gitForm={createAgentGitForm}
+                onGitFormChange={setCreateAgentGitForm}
                 onCreate={() => void handleCreateAgent()}
               />
             ) : (
@@ -2073,6 +2121,8 @@ export default function App() {
               onUpdate={(name, payload) => void handleUpdateWorkflow(name, payload)}
               onDelete={(name) => void handleDeleteWorkflow(name)}
               onTrigger={(name, input) => void handleTriggerWorkflow(name, input)}
+              onCancel={(name) => void handleCancelWorkflow(name)}
+              isCancelling={cancellingWorkflow}
               approvalReason={approvalReason}
               approvalBusy={approvalBusy}
               onApprovalReasonChange={setApprovalReason}

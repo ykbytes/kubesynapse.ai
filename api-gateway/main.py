@@ -478,6 +478,7 @@ class CreateAgentRequest(BaseModel):
     a2a_config: dict[str, Any] | None = None
     skills: dict[str, Any] | None = None
     goose_config_files: dict[str, Any] = Field(default_factory=dict)
+    git_config: dict[str, Any] | None = Field(default=None, description="Git repo config for dev-loop workflows")
 
 
 class UpdateAgentRequest(BaseModel):
@@ -492,6 +493,26 @@ class UpdateAgentRequest(BaseModel):
     a2a_config: dict[str, Any] | None = None
     skills: dict[str, Any] | None = None
     goose_config_files: dict[str, Any] | None = None
+    git_config: dict[str, Any] | None = Field(default=None, description="Git repo config for dev-loop workflows")
+
+
+class GitCredentialRequest(BaseModel):
+    """Request body for creating git credentials as a K8s Secret."""
+    auth_method: str = Field(pattern=r"^(token|basic|ssh)$")
+    token: str | None = Field(default=None, max_length=1024)
+    username: str | None = Field(default=None, max_length=255)
+    password: str | None = Field(default=None, max_length=1024)
+    ssh_private_key: str | None = Field(default=None, max_length=16384)
+
+    @model_validator(mode="after")
+    def validate_credentials(self) -> "GitCredentialRequest":
+        if self.auth_method == "token" and not self.token:
+            raise ValueError("token is required when auth_method is 'token'")
+        if self.auth_method == "basic" and (not self.username or not self.password):
+            raise ValueError("username and password are required when auth_method is 'basic'")
+        if self.auth_method == "ssh" and not self.ssh_private_key:
+            raise ValueError("ssh_private_key is required when auth_method is 'ssh'")
+        return self
 
 
 class WorkflowStepRequest(BaseModel):
@@ -501,6 +522,8 @@ class WorkflowStepRequest(BaseModel):
     depends_on: list[str] = Field(default_factory=list)
     require_approval: bool = False
     execution: dict[str, Any] | None = None
+    step_type: str = Field(default="agent", pattern=r"^(agent|loop)$")
+    loop_config: dict[str, Any] | None = Field(default=None, description="Config for loop-type steps")
 
 
 class WorkflowRequest(BaseModel):
@@ -2206,6 +2229,26 @@ def build_agent_spec(
         spec["runtime"]["goose"] = {"configFiles": goose_config_files}
     if body.policy_ref and body.policy_ref.strip():
         spec["policyRef"] = body.policy_ref.strip()
+
+    # Git configuration
+    git_config = getattr(body, "git_config", None)
+    if git_config is None:
+        git_config = (existing_spec or {}).get("gitConfig")
+    if git_config and isinstance(git_config, dict):
+        gc: dict[str, Any] = {}
+        if git_config.get("repoUrl"):
+            gc["repoUrl"] = str(git_config["repoUrl"]).strip()
+        if git_config.get("defaultBranch"):
+            gc["defaultBranch"] = str(git_config["defaultBranch"]).strip()
+        if git_config.get("pushPolicy"):
+            gc["pushPolicy"] = str(git_config["pushPolicy"]).strip()
+        if git_config.get("authMethod"):
+            gc["authMethod"] = str(git_config["authMethod"]).strip()
+        if git_config.get("credentialSecretRef"):
+            gc["credentialSecretRef"] = str(git_config["credentialSecretRef"]).strip()
+        if gc:
+            spec["gitConfig"] = gc
+
     return spec
 
 
@@ -2230,6 +2273,10 @@ def build_workflow_spec(body: WorkflowRequest | WorkflowUpdateRequest) -> dict[s
             ],
             "requireApproval": step.require_approval,
         }
+        if step.step_type == "loop":
+            step_spec["type"] = "loop"
+            if isinstance(step.loop_config, dict) and step.loop_config:
+                step_spec["loopConfig"] = step.loop_config
         if isinstance(step.execution, dict) and step.execution:
             step_spec["execution"] = step.execution
         steps.append(step_spec)
@@ -4025,6 +4072,96 @@ def delete_agent(
     return DeleteResponse(status="deleted", kind="agent", name=agent_name, namespace=namespace)
 
 
+# ---- Git credential management ----
+
+def _git_secret_name(agent_name: str) -> str:
+    return f"{agent_name}-git-credentials"
+
+
+@app.post("/api/agents/{agent_name}/git-credentials", status_code=201)
+def create_git_credentials(
+    agent_name: str,
+    body: GitCredentialRequest,
+    namespace: str = "default",
+    user=Depends(verify_token),
+):
+    """Create a K8s Secret with git credentials for an agent."""
+    ensure_namespace_access(user, namespace, "operator")
+    from kubernetes import client
+
+    secret_name = _git_secret_name(agent_name)
+    string_data: dict[str, str] = {"auth_method": body.auth_method}
+    if body.auth_method == "token":
+        string_data["token"] = body.token or ""
+    elif body.auth_method == "basic":
+        string_data["username"] = body.username or ""
+        string_data["password"] = body.password or ""
+    elif body.auth_method == "ssh":
+        string_data["ssh_private_key"] = body.ssh_private_key or ""
+
+    secret = client.V1Secret(
+        metadata=client.V1ObjectMeta(
+            name=secret_name,
+            namespace=namespace,
+            labels={"app.kubernetes.io/managed-by": "kubemininions", "agent": agent_name},
+        ),
+        type="Opaque",
+        string_data=string_data,
+    )
+    try:
+        client.CoreV1Api().create_namespaced_secret(namespace=namespace, body=secret)
+    except client.exceptions.ApiException as e:
+        if e.status == 409:
+            client.CoreV1Api().replace_namespaced_secret(name=secret_name, namespace=namespace, body=secret)
+        else:
+            raise HTTPException(status_code=502, detail=f"Failed to create git credential secret: {e}") from e
+    return {"status": "created", "secret_name": secret_name, "auth_method": body.auth_method}
+
+
+@app.get("/api/agents/{agent_name}/git-credentials")
+def get_git_credentials(
+    agent_name: str,
+    namespace: str = "default",
+    user=Depends(verify_token),
+):
+    """Get git credential metadata (auth method only, never exposes secrets)."""
+    ensure_namespace_access(user, namespace)
+    from kubernetes import client
+
+    secret_name = _git_secret_name(agent_name)
+    try:
+        secret = client.CoreV1Api().read_namespaced_secret(name=secret_name, namespace=namespace)
+        data = secret.data or {}
+        # Only return auth_method, never actual credentials
+        import base64
+        auth_method = base64.b64decode(data.get("auth_method", "")).decode() if data.get("auth_method") else "unknown"
+        return {"exists": True, "secret_name": secret_name, "auth_method": auth_method}
+    except client.exceptions.ApiException as e:
+        if e.status == 404:
+            return {"exists": False, "secret_name": secret_name}
+        raise HTTPException(status_code=502, detail=f"Failed to read git credential secret: {e}") from e
+
+
+@app.delete("/api/agents/{agent_name}/git-credentials")
+def delete_git_credentials(
+    agent_name: str,
+    namespace: str = "default",
+    user=Depends(verify_token),
+):
+    """Delete git credential secret for an agent."""
+    ensure_namespace_access(user, namespace, "operator")
+    from kubernetes import client
+
+    secret_name = _git_secret_name(agent_name)
+    try:
+        client.CoreV1Api().delete_namespaced_secret(name=secret_name, namespace=namespace)
+        return {"status": "deleted", "secret_name": secret_name}
+    except client.exceptions.ApiException as e:
+        if e.status == 404:
+            raise HTTPException(status_code=404, detail=f"Git credentials not found for agent '{agent_name}'") from e
+        raise HTTPException(status_code=502, detail=f"Failed to delete git credential secret: {e}") from e
+
+
 @app.get("/api/workflows", response_model=list[WorkflowInfo])
 def list_workflows(namespace: str = "default", user=Depends(verify_token)):
     ensure_namespace_access(user, namespace)
@@ -4146,6 +4283,67 @@ def trigger_workflow(
             raise HTTPException(status_code=409, detail="Workflow was modified concurrently. Retry.") from exc
         raise HTTPException(status_code=502, detail=f"Failed to trigger workflow: {exc}") from exc
 
+    return workflow_info_from_resource(updated)
+
+
+@app.post("/api/workflows/{workflow_name}/cancel", response_model=WorkflowInfo)
+def cancel_workflow(
+    workflow_name: str,
+    namespace: str = "default",
+    user=Depends(verify_token),
+):
+    """Cancel a running, queued, or waiting-approval workflow by patching its status phase."""
+    ensure_namespace_access(user, namespace, "operator")
+    try:
+        from kubernetes import client
+
+        api = client.CustomObjectsApi()
+        current = api.get_namespaced_custom_object(
+            group=RESOURCE_GROUP,
+            version=RESOURCE_VERSION,
+            namespace=namespace,
+            plural="agentworkflows",
+            name=workflow_name,
+        )
+    except Exception as exc:
+        status_code = getattr(exc, "status", None)
+        if status_code == 404:
+            raise HTTPException(status_code=404, detail=f"Workflow '{workflow_name}' not found") from exc
+        raise HTTPException(status_code=502, detail=f"Failed to read workflow: {exc}") from exc
+
+    current_phase = (current.get("status") or {}).get("phase", "pending")
+    if current_phase not in ("queued", "running", "waiting-approval"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Workflow is in '{current_phase}' phase and cannot be cancelled",
+        )
+
+    try:
+        from kubernetes import client as k8s_client
+
+        k8s_client.CustomObjectsApi().patch_namespaced_custom_object_status(
+            group=RESOURCE_GROUP,
+            version=RESOURCE_VERSION,
+            namespace=namespace,
+            plural="agentworkflows",
+            name=workflow_name,
+            body={
+                "status": {
+                    "phase": "cancelled",
+                    "pendingApproval": None,
+                }
+            },
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to cancel workflow: {exc}") from exc
+
+    updated = api.get_namespaced_custom_object(
+        group=RESOURCE_GROUP,
+        version=RESOURCE_VERSION,
+        namespace=namespace,
+        plural="agentworkflows",
+        name=workflow_name,
+    )
     return workflow_info_from_resource(updated)
 
 

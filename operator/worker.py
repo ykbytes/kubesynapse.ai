@@ -621,6 +621,337 @@ def execute_workflow_step(
     )
 
 
+# ---- Loop step engine (Ralph-style dev-loop) ----
+
+
+class LoopCircuitBreaker:
+    """Three-state circuit breaker: CLOSED → HALF_OPEN → OPEN.
+
+    Tracks consecutive iterations with no progress. Opens when threshold is reached.
+    """
+
+    def __init__(self, no_progress_threshold: int = 3, cooldown_minutes: int = 30):
+        self.no_progress_threshold = no_progress_threshold
+        self.cooldown_minutes = cooldown_minutes
+        self.state = "closed"  # closed | half_open | open
+        self.consecutive_no_progress = 0
+
+    def record_progress(self, made_progress: bool) -> None:
+        if made_progress:
+            self.consecutive_no_progress = 0
+            self.state = "closed"
+        else:
+            self.consecutive_no_progress += 1
+            if self.consecutive_no_progress >= self.no_progress_threshold:
+                self.state = "open"
+            elif self.consecutive_no_progress >= max(1, self.no_progress_threshold - 1):
+                self.state = "half_open"
+
+    def is_open(self) -> bool:
+        return self.state == "open"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "state": self.state,
+            "consecutiveNoProgress": self.consecutive_no_progress,
+            "threshold": self.no_progress_threshold,
+        }
+
+
+def parse_plan_checklist(plan_text: str) -> list[dict[str, Any]]:
+    """Parse a markdown checklist into structured items.
+
+    Supports formats:
+      - [ ] Item description
+      - [x] Completed item
+      1. Item description
+      - Item description
+    """
+    items: list[dict[str, Any]] = []
+    for line in plan_text.strip().splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        # Checkbox format
+        if stripped.startswith("- ["):
+            done = stripped[3] == "x" or stripped[3] == "X"
+            text = stripped[5:].strip() if len(stripped) > 5 else ""
+            items.append({"text": text, "done": done})
+        # Numbered list
+        elif len(stripped) > 2 and stripped[0].isdigit() and "." in stripped[:4]:
+            text = stripped.split(".", 1)[1].strip()
+            items.append({"text": text, "done": False})
+        # Bullet list
+        elif stripped.startswith("- ") or stripped.startswith("* "):
+            items.append({"text": stripped[2:].strip(), "done": False})
+    return items
+
+
+def build_loop_iteration_prompt(
+    step: dict[str, Any],
+    iteration: int,
+    checklist: list[dict[str, Any]],
+    previous_response: str,
+    workflow_input: str,
+) -> str:
+    """Build the prompt for a single loop iteration."""
+    loop_config = step.get("loopConfig", {})
+    base_prompt = step.get("prompt", "")
+
+    # Find current TODO item
+    current_item = None
+    for idx, item in enumerate(checklist):
+        if not item.get("done"):
+            current_item = {"index": idx, **item}
+            break
+
+    # Build checklist status
+    checklist_status = []
+    for idx, item in enumerate(checklist):
+        marker = "[x]" if item.get("done") else "[ ]"
+        checklist_status.append(f"  {marker} {idx + 1}. {item['text']}")
+
+    parts = [
+        f"## Dev-Loop Iteration {iteration}",
+        "",
+        "### Work Plan Status:",
+        *checklist_status,
+        "",
+    ]
+    if current_item:
+        parts.extend([
+            f"### Current Task (Item {current_item['index'] + 1}):",
+            f"{current_item['text']}",
+            "",
+        ])
+    if previous_response:
+        parts.extend([
+            "### Previous Iteration Result:",
+            previous_response[:2000],
+            "",
+        ])
+    if base_prompt:
+        parts.extend([
+            "### Instructions:",
+            base_prompt,
+            "",
+        ])
+    commit_after = loop_config.get("commitAfterEachItem", True)
+    parts.extend([
+        "### Requirements:",
+        f"- Work on the current task item only",
+        f"- {'Commit your changes after completing the task' if commit_after else 'Do not commit yet'}",
+        "- When done with this item, respond with: ITEM_COMPLETE",
+        "- If all items are done, respond with: PLAN_COMPLETE",
+        "- If you are stuck and cannot make progress, respond with: NO_PROGRESS",
+    ])
+    return "\n".join(parts)
+
+
+def detect_iteration_signals(response_text: str) -> dict[str, bool]:
+    """Detect completion/progress signals from agent response."""
+    text_upper = response_text.upper()
+    return {
+        "item_complete": "ITEM_COMPLETE" in text_upper,
+        "plan_complete": "PLAN_COMPLETE" in text_upper or "ALL_ITEMS_DONE" in text_upper,
+        "no_progress": "NO_PROGRESS" in text_upper or "STUCK" in text_upper,
+    }
+
+
+def execute_loop_step(
+    step: dict[str, Any],
+    workflow_input: str,
+    step_results: dict[str, dict[str, Any]],
+    run_id: str,
+    worker_job: dict[str, Any],
+    *,
+    on_iteration_complete: Any = None,
+) -> dict[str, Any]:
+    """Execute a loop-type step: iterate over a work plan calling the agent per item."""
+    step_name = str(step.get("name", "")).strip()
+    loop_config = step.get("loopConfig", {})
+    max_iterations = int(loop_config.get("maxIterations", 20))
+    plan_source = loop_config.get("planSource", "inline")
+    plan_text = loop_config.get("plan", "")
+
+    cb_config = loop_config.get("circuitBreaker", {})
+    circuit_breaker = LoopCircuitBreaker(
+        no_progress_threshold=int(cb_config.get("noProgressThreshold", 3)),
+        cooldown_minutes=int(cb_config.get("cooldownMinutes", 30)),
+    )
+
+    exit_conditions = loop_config.get("exitConditions", {})
+    completion_signal_threshold = int(exit_conditions.get("completionSignalCount", 2))
+    plan_complete_exit = exit_conditions.get("planComplete", True)
+
+    started_at = now_iso()
+    execution_policy = normalize_step_execution(step)
+
+    # Parse or generate plan
+    if plan_source == "prompt" or not plan_text:
+        # Agent generates plan from first iteration
+        plan_prompt = f"Generate a numbered TODO checklist for the following work:\n\n{workflow_input}\n\n{step.get('prompt', '')}\n\nRespond with ONLY a markdown checklist (- [ ] item format), nothing else."
+        thread_id = build_thread_id("workflow", TARGET_NAME, run_id, f"{step_name}-plan")
+        try:
+            plan_result = invoke_agent_runtime(
+                str(step.get("agentRef", "")),
+                TARGET_NAMESPACE,
+                {"prompt": plan_prompt, "thread_id": thread_id},
+                timeout_seconds=120.0,
+            )
+            plan_text = str(plan_result.get("response", ""))
+        except Exception as exc:
+            logger.error("Failed to generate plan for loop step '%s': %s", step_name, exc)
+            return {
+                "state": "failed",
+                "stepName": step_name,
+                "stepResult": {"agentRef": step.get("agentRef", ""), "response": "", "status": "failed", "error": str(exc), "output": {"text": "", "json": None, "type": "empty"}, "attempts": 0},
+                "stepState": build_step_state(step_name=step_name, step=step, status_name="failed", attempts=0, started_at=started_at, completed_at=now_iso(), latency_ms=0, worker_job=worker_job, execution_policy=execution_policy, error=f"Plan generation failed: {exc}"),
+            }
+
+    checklist = parse_plan_checklist(plan_text)
+    if not checklist:
+        checklist = [{"text": "Complete the assigned work", "done": False}]
+
+    previous_response = ""
+    consecutive_completion_signals = 0
+    all_responses: list[str] = []
+    loop_progress: dict[str, Any] = {
+        "iteration": 0,
+        "maxIterations": max_iterations,
+        "completedItems": 0,
+        "totalItems": len(checklist),
+        "circuitBreakerState": circuit_breaker.to_dict(),
+        "exitReason": None,
+    }
+
+    append_journal_event(
+        "workflow.loop.started",
+        {"runId": run_id, "step": step_name, "totalItems": len(checklist), "maxIterations": max_iterations},
+    )
+
+    for iteration in range(1, max_iterations + 1):
+        loop_progress["iteration"] = iteration
+
+        # Check circuit breaker
+        if circuit_breaker.is_open():
+            loop_progress["exitReason"] = "circuit_breaker_open"
+            append_journal_event("workflow.loop.circuit_breaker_open", {"runId": run_id, "step": step_name, "iteration": iteration})
+            break
+
+        # Build iteration prompt
+        prompt = build_loop_iteration_prompt(step, iteration, checklist, previous_response, workflow_input)
+        thread_id = build_thread_id("workflow", TARGET_NAME, run_id, f"{step_name}-iter-{iteration}")
+
+        append_journal_event(
+            "workflow.loop.iteration.started",
+            {"runId": run_id, "step": step_name, "iteration": iteration, "completedItems": sum(1 for c in checklist if c.get("done"))},
+        )
+
+        try:
+            result = invoke_agent_runtime(
+                str(step.get("agentRef", "")),
+                TARGET_NAMESPACE,
+                {"prompt": prompt, "thread_id": thread_id},
+                timeout_seconds=float(execution_policy.get("timeoutSeconds", 300)),
+            )
+            response_text = str(result.get("response", ""))
+            all_responses.append(response_text)
+            previous_response = response_text
+        except Exception as exc:
+            logger.warning("Loop iteration %d failed for step '%s': %s", iteration, step_name, exc)
+            circuit_breaker.record_progress(False)
+            loop_progress["circuitBreakerState"] = circuit_breaker.to_dict()
+            append_journal_event("workflow.loop.iteration.failed", {"runId": run_id, "step": step_name, "iteration": iteration, "error": str(exc)})
+            continue
+
+        # Detect signals
+        signals = detect_iteration_signals(response_text)
+
+        if signals["no_progress"]:
+            circuit_breaker.record_progress(False)
+        elif signals["item_complete"]:
+            circuit_breaker.record_progress(True)
+            # Mark current incomplete item as done
+            for item in checklist:
+                if not item.get("done"):
+                    item["done"] = True
+                    break
+            consecutive_completion_signals = 0
+        elif signals["plan_complete"]:
+            consecutive_completion_signals += 1
+            circuit_breaker.record_progress(True)
+            # Mark all items done
+            for item in checklist:
+                item["done"] = True
+        else:
+            # Ambiguous — assume some progress
+            circuit_breaker.record_progress(True)
+
+        loop_progress["completedItems"] = sum(1 for c in checklist if c.get("done"))
+        loop_progress["circuitBreakerState"] = circuit_breaker.to_dict()
+
+        append_journal_event(
+            "workflow.loop.iteration.completed",
+            {"runId": run_id, "step": step_name, "iteration": iteration, "signals": signals, "completedItems": loop_progress["completedItems"]},
+        )
+
+        # Notify caller of iteration progress
+        if on_iteration_complete:
+            try:
+                on_iteration_complete(loop_progress)
+            except Exception:
+                pass
+
+        # Check exit conditions
+        all_done = all(c.get("done") for c in checklist)
+        if plan_complete_exit and all_done:
+            loop_progress["exitReason"] = "plan_complete"
+            break
+        if consecutive_completion_signals >= completion_signal_threshold:
+            loop_progress["exitReason"] = "completion_signal_threshold"
+            break
+    else:
+        loop_progress["exitReason"] = "max_iterations"
+
+    completed_at = now_iso()
+    latency_ms = int((datetime.fromisoformat(completed_at.replace("Z", "+00:00")).timestamp() - datetime.fromisoformat(started_at.replace("Z", "+00:00")).timestamp()) * 1000)
+    combined_response = "\n\n---\n\n".join(all_responses[-3:]) if all_responses else "(no iterations completed)"
+
+    append_journal_event(
+        "workflow.loop.completed",
+        {"runId": run_id, "step": step_name, "iterations": loop_progress["iteration"], "completedItems": loop_progress["completedItems"], "exitReason": loop_progress["exitReason"]},
+    )
+
+    step_result = {
+        "agentRef": step.get("agentRef", ""),
+        "response": combined_response,
+        "status": "completed",
+        "output": {"text": combined_response, "json": {"loopProgress": loop_progress, "checklist": checklist}, "type": "json"},
+        "attempts": loop_progress["iteration"],
+    }
+
+    step_state = build_step_state(
+        step_name=step_name,
+        step=step,
+        status_name="completed",
+        attempts=loop_progress["iteration"],
+        started_at=started_at,
+        completed_at=completed_at,
+        latency_ms=latency_ms,
+        worker_job=worker_job,
+        execution_policy=execution_policy,
+    )
+    step_state["loopProgress"] = loop_progress
+
+    return {
+        "state": "completed",
+        "stepName": step_name,
+        "stepResult": step_result,
+        "stepState": step_state,
+    }
+
+
 def run_workflow_worker() -> None:
     plural = resource_plural()
     resource = get_resource(plural)
@@ -759,14 +1090,31 @@ def run_workflow_worker() -> None:
 
             outcome_by_name: dict[str, dict[str, Any]] = {}
             if len(frontier) == 1:
-                outcome = execute_workflow_step(
-                    frontier[0],
-                    str(spec.get("input", "")),
-                    step_results,
-                    run_id,
-                    pending_approval or None,
-                    worker_job,
-                )
+                step = frontier[0]
+                step_type = str(step.get("type", "agent")).strip()
+                if step_type == "loop":
+                    def _on_iteration(progress: dict[str, Any], _step_name: str = str(step.get("name", ""))) -> None:
+                        step_states[_step_name] = step_states.get(_step_name, {})
+                        step_states[_step_name]["loopProgress"] = progress
+                        patch_workflow_status(
+                            plural=plural, phase="running", generation=generation,
+                            run_id=run_id, total_steps=len(steps), current_step=_step_name,
+                            started_at=started_at, step_states=step_states, worker_job=worker_job,
+                            pending_approval=None, extra_summary={"loopProgress": progress},
+                        )
+                    outcome = execute_loop_step(
+                        step, str(spec.get("input", "")), step_results, run_id, worker_job,
+                        on_iteration_complete=_on_iteration,
+                    )
+                else:
+                    outcome = execute_workflow_step(
+                        step,
+                        str(spec.get("input", "")),
+                        step_results,
+                        run_id,
+                        pending_approval or None,
+                        worker_job,
+                    )
                 outcome_by_name[outcome["stepName"]] = outcome
             else:
                 with ThreadPoolExecutor(max_workers=len(frontier)) as executor:

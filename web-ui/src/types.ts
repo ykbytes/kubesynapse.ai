@@ -19,6 +19,81 @@ export interface AgentSkillsConfig {
   files: Record<string, string>;
 }
 
+/* ── Git Config types ── */
+
+export type GitAuthMethod = "token" | "basic" | "ssh";
+export type GitPushPolicy = "after-each-commit" | "end-of-session" | "on-approval" | "never";
+
+export interface GitConfig {
+  repo_url: string;
+  default_branch?: string;
+  push_policy?: GitPushPolicy;
+  auth_method: GitAuthMethod;
+  credential_secret_ref?: string;
+}
+
+export interface GitCredentialRequest {
+  auth_method: GitAuthMethod;
+  token?: string;
+  username?: string;
+  password?: string;
+  ssh_private_key?: string;
+}
+
+export interface GitCredentialInfo {
+  exists: boolean;
+  secret_name: string;
+  auth_method?: string;
+}
+
+export interface GitFormState {
+  enabled: boolean;
+  repoUrl: string;
+  authMethod: GitAuthMethod;
+  pushPolicy: GitPushPolicy;
+  defaultBranch: string;
+  token: string;
+  username: string;
+  password: string;
+  sshPrivateKey: string;
+}
+
+/* ── Loop / Circuit Breaker types ── */
+
+export interface CircuitBreakerConfig {
+  noProgressThreshold?: number;
+  cooldownMinutes?: number;
+}
+
+export interface LoopExitConditions {
+  planComplete?: boolean;
+  completionSignalCount?: number;
+}
+
+export interface LoopConfig {
+  maxIterations?: number;
+  planSource?: "inline" | "prompt";
+  plan?: string;
+  commitAfterEachItem?: boolean;
+  circuitBreaker?: CircuitBreakerConfig;
+  exitConditions?: LoopExitConditions;
+}
+
+export interface LoopProgress {
+  iteration: number;
+  maxIterations: number;
+  completedItems: number;
+  totalItems: number;
+  circuitBreakerState?: {
+    state: string;
+    consecutiveNoProgress: number;
+    threshold: number;
+  };
+  exitReason?: string | null;
+  featureBranch?: string | null;
+  lastCommitSha?: string | null;
+}
+
 export interface AgentSkillSummary {
   path: string;
   name: string;
@@ -206,6 +281,7 @@ export interface CreateAgentPayload {
   a2a_config?: AgentA2AConfig;
   skills?: AgentSkillsConfig;
   goose_config_files?: Record<string, unknown>;
+  git_config?: GitConfig | null;
 }
 
 export interface UpdateAgentPayload {
@@ -374,6 +450,8 @@ export interface WorkflowStep {
   depends_on: string[];
   require_approval: boolean;
   execution?: Record<string, unknown> | null;
+  step_type?: "agent" | "loop";
+  loop_config?: LoopConfig | null;
 }
 
 export interface WorkflowPayload {
@@ -405,6 +483,7 @@ export interface WorkflowStepState {
   approvalWaitMs?: number | null;
   workerJob?: Record<string, unknown> | null;
   execution?: Record<string, unknown> | null;
+  loopProgress?: LoopProgress | null;
 }
 
 export interface WorkflowSummary {
@@ -423,7 +502,10 @@ export interface WorkflowSummary {
 
 export interface WorkflowPendingApproval {
   name: string;
-  step: string;
+  stepName: string;
+  requestedAt?: string | null;
+  runId?: string | null;
+  action?: string | null;
   reason?: string;
 }
 

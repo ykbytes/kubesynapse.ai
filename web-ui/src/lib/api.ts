@@ -27,6 +27,8 @@ import type {
   EvalTestCase,
   EvalUpdatePayload,
   GatewayHealth,
+  GitCredentialInfo,
+  GitCredentialRequest,
   InvocationSummary,
   InvokePayload,
   InvokeResponse,
@@ -1107,6 +1109,17 @@ export async function triggerWorkflow(
   return parseJsonResponse(response, parseWorkflowInfoPayload);
 }
 
+export async function cancelWorkflow(
+  token: string,
+  namespace: string,
+  workflowName: string,
+): Promise<WorkflowInfo> {
+  const response = await fetchAuthenticated(buildUrl(`/api/workflows/${workflowName}/cancel`, namespace), token, {
+    method: "POST",
+  });
+  return parseJsonResponse(response, parseWorkflowInfoPayload);
+}
+
 export async function deleteWorkflow(
   token: string,
   namespace: string,
@@ -1309,4 +1322,45 @@ export async function fetchMcpToolCategories(token: string): Promise<McpToolCate
     }
     throw new Error("Invalid tools response");
   });
+}
+
+/* ── Git Credential API ── */
+
+export async function createGitCredentials(
+  token: string,
+  agentName: string,
+  body: GitCredentialRequest,
+  namespace = "default",
+): Promise<Record<string, unknown>> {
+  const response = await fetchAuthenticated(
+    buildUrl(`/api/agents/${agentName}/git-credentials`, namespace),
+    token,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) },
+  );
+  return parseJsonResponse(response, (p) => p as Record<string, unknown>);
+}
+
+export async function getGitCredentials(
+  token: string,
+  agentName: string,
+  namespace = "default",
+): Promise<GitCredentialInfo> {
+  const response = await fetchAuthenticated(
+    buildUrl(`/api/agents/${agentName}/git-credentials`, namespace),
+    token,
+  );
+  return parseJsonResponse(response, (p) => p as GitCredentialInfo);
+}
+
+export async function deleteGitCredentials(
+  token: string,
+  agentName: string,
+  namespace = "default",
+): Promise<Record<string, unknown>> {
+  const response = await fetchAuthenticated(
+    buildUrl(`/api/agents/${agentName}/git-credentials`, namespace),
+    token,
+    { method: "DELETE" },
+  );
+  return parseJsonResponse(response, (p) => p as Record<string, unknown>);
 }

@@ -8,6 +8,7 @@ import {
   GitBranch,
   Globe,
   LoaderCircle,
+  Lock,
   Mail,
   Monitor,
   Package,
@@ -39,7 +40,7 @@ import {
   stringifyMcpSidecars,
 } from "../lib/mcp";
 import { createSkillFileDraft } from "../lib/skills";
-import type { CatalogSkill, CatalogSkillDetail, McpToolCategory, RuntimeKind, TextFileDraft } from "../types";
+import type { CatalogSkill, CatalogSkillDetail, GitFormState, McpToolCategory, RuntimeKind, TextFileDraft } from "../types";
 import { TextFileBundleEditor } from "./TextFileBundleEditor";
 
 const TOOL_ICONS: Record<string, typeof Code> = {
@@ -85,6 +86,8 @@ interface CreateAgentPanelProps {
   onA2AAllowedCallersTextChange: (value: string) => void;
   onSkillFileDraftsChange: (value: TextFileDraft[]) => void;
   onGooseConfigFileDraftsChange: (value: TextFileDraft[]) => void;
+  gitForm: GitFormState;
+  onGitFormChange: (value: GitFormState) => void;
   onCreate: () => void;
 }
 
@@ -157,6 +160,8 @@ export function CreateAgentPanel({
   onA2AAllowedCallersTextChange,
   onSkillFileDraftsChange,
   onGooseConfigFileDraftsChange,
+  gitForm,
+  onGitFormChange,
   onCreate,
 }: CreateAgentPanelProps) {
   const [catalogSkills, setCatalogSkills] = useState<CatalogSkill[]>([]);
@@ -354,6 +359,7 @@ export function CreateAgentPanel({
             <TabsTrigger value="behavior">Behavior</TabsTrigger>
             <TabsTrigger value="tools">Capabilities</TabsTrigger>
             <TabsTrigger value="files">Skills & Files</TabsTrigger>
+            <TabsTrigger value="repository">Repository</TabsTrigger>
           </TabsList>
 
           <TabsContent value="basics" className="space-y-5">
@@ -813,6 +819,151 @@ export function CreateAgentPanel({
                 </AccordionContent>
               </AccordionItem>
             </Accordion>
+          </TabsContent>
+
+          <TabsContent value="repository" className="space-y-4">
+            <Card className="shadow-none">
+              <CardHeader className="pb-3">
+                <div className="flex items-center gap-2">
+                  <div className="flex h-8 w-8 items-center justify-center rounded-xl border border-orange-500/20 bg-orange-500/10 text-orange-300">
+                    <GitBranch className="h-4 w-4" />
+                  </div>
+                  <div>
+                    <CardTitle className="text-sm">Git repository</CardTitle>
+                    <CardDescription>Connect a git repo so the agent can clone, commit, and push code changes autonomously.</CardDescription>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="flex items-center gap-3">
+                  <input
+                    type="checkbox"
+                    id="git-enabled"
+                    checked={gitForm.enabled}
+                    onChange={(e) => onGitFormChange({ ...gitForm, enabled: e.target.checked })}
+                    className="h-4 w-4 rounded border-border"
+                  />
+                  <Label htmlFor="git-enabled" className="text-sm font-medium">Enable git integration</Label>
+                </div>
+
+                {gitForm.enabled && (
+                  <div className="space-y-4">
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <div className="space-y-2">
+                        <Label htmlFor="git-repo-url">Repository URL</Label>
+                        <Input
+                          id="git-repo-url"
+                          placeholder="https://github.com/org/repo.git"
+                          value={gitForm.repoUrl}
+                          onChange={(e) => onGitFormChange({ ...gitForm, repoUrl: e.target.value })}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="git-default-branch">Default branch</Label>
+                        <Input
+                          id="git-default-branch"
+                          placeholder="main"
+                          value={gitForm.defaultBranch}
+                          onChange={(e) => onGitFormChange({ ...gitForm, defaultBranch: e.target.value })}
+                        />
+                      </div>
+                    </div>
+
+                    <Separator />
+
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <div className="space-y-2">
+                        <Label htmlFor="git-auth-method">Authentication method</Label>
+                        <select
+                          id="git-auth-method"
+                          className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                          value={gitForm.authMethod}
+                          onChange={(e) => onGitFormChange({ ...gitForm, authMethod: e.target.value as "token" | "basic" | "ssh" })}
+                        >
+                          <option value="token">Personal access token</option>
+                          <option value="basic">Username & password</option>
+                          <option value="ssh">SSH key</option>
+                        </select>
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="git-push-policy">Push policy</Label>
+                        <select
+                          id="git-push-policy"
+                          className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                          value={gitForm.pushPolicy}
+                          onChange={(e) => onGitFormChange({ ...gitForm, pushPolicy: e.target.value as "after-each-commit" | "end-of-session" | "on-approval" | "never" })}
+                        >
+                          <option value="after-each-commit">After each commit</option>
+                          <option value="end-of-session">End of session</option>
+                          <option value="on-approval">On approval</option>
+                          <option value="never">Never (local only)</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <Card className="border-border/60 shadow-none">
+                      <CardHeader className="pb-3">
+                        <div className="flex items-center gap-2">
+                          <Lock className="h-4 w-4 text-muted-foreground" />
+                          <CardTitle className="text-sm">Credentials</CardTitle>
+                        </div>
+                        <CardDescription>Credentials are stored as a Kubernetes Secret and never exposed after creation.</CardDescription>
+                      </CardHeader>
+                      <CardContent className="space-y-3">
+                        {gitForm.authMethod === "token" && (
+                          <div className="space-y-2">
+                            <Label htmlFor="git-token">Personal access token</Label>
+                            <Input
+                              id="git-token"
+                              type="password"
+                              placeholder="ghp_..."
+                              value={gitForm.token}
+                              onChange={(e) => onGitFormChange({ ...gitForm, token: e.target.value })}
+                            />
+                          </div>
+                        )}
+                        {gitForm.authMethod === "basic" && (
+                          <div className="grid gap-3 sm:grid-cols-2">
+                            <div className="space-y-2">
+                              <Label htmlFor="git-username">Username</Label>
+                              <Input
+                                id="git-username"
+                                placeholder="git-user"
+                                value={gitForm.username}
+                                onChange={(e) => onGitFormChange({ ...gitForm, username: e.target.value })}
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <Label htmlFor="git-password">Password</Label>
+                              <Input
+                                id="git-password"
+                                type="password"
+                                placeholder="••••••••"
+                                value={gitForm.password}
+                                onChange={(e) => onGitFormChange({ ...gitForm, password: e.target.value })}
+                              />
+                            </div>
+                          </div>
+                        )}
+                        {gitForm.authMethod === "ssh" && (
+                          <div className="space-y-2">
+                            <Label htmlFor="git-ssh-key">SSH private key</Label>
+                            <Textarea
+                              id="git-ssh-key"
+                              rows={5}
+                              placeholder={"-----BEGIN OPENSSH PRIVATE KEY-----\n...\n-----END OPENSSH PRIVATE KEY-----"}
+                              value={gitForm.sshPrivateKey}
+                              className="font-mono text-xs"
+                              onChange={(e) => onGitFormChange({ ...gitForm, sshPrivateKey: e.target.value })}
+                            />
+                          </div>
+                        )}
+                      </CardContent>
+                    </Card>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
           </TabsContent>
         </Tabs>
 
