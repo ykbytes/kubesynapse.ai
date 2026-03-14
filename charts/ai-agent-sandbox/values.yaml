@@ -35,7 +35,7 @@ agentRuntime:
   image:
     repository: docker.io/yakdhane/ai-agent-runtime
     tag: latest
-    pullPolicy: IfNotPresent
+    pullPolicy: Always
   env: {}
   allowedModels: []
   autonomy:
@@ -109,7 +109,7 @@ gooseRuntime:
   image:
     repository: docker.io/yakdhane/ai-goose-runtime
     tag: latest
-    pullPolicy: IfNotPresent
+    pullPolicy: Always
   provider: litellm
   env: {}
   # Example native Goose settings:
@@ -138,7 +138,7 @@ codexRuntime:
   image:
     repository: docker.io/yakdhane/ai-codex-runtime
     tag: latest
-    pullPolicy: IfNotPresent
+    pullPolicy: Always
   provider: litellm
   env: {}
   # Example Codex settings:
@@ -158,11 +158,11 @@ operator:
   image:
     repository: docker.io/yakdhane/ai-operator
     tag: latest
-    pullPolicy: IfNotPresent
+    pullPolicy: Always
   workerImage:
     repository: docker.io/yakdhane/ai-operator
     tag: latest
-    pullPolicy: IfNotPresent
+    pullPolicy: Always
   resources:
     requests:
       cpu: "50m"
@@ -205,7 +205,7 @@ apiGateway:
   image:
     repository: docker.io/yakdhane/ai-api-gateway
     tag: latest
-    pullPolicy: IfNotPresent
+    pullPolicy: Always
   ingressClassName: ""
   ingressHost: ""  # leave empty for a hostless ingress, or set e.g. "agents.mycompany.com"
   ingress:
@@ -283,7 +283,7 @@ webUi:
   image:
     repository: docker.io/yakdhane/ai-agent-sandbox-web-ui
     tag: latest
-    pullPolicy: IfNotPresent
+    pullPolicy: Always
   service:
     type: ClusterIP
     port: 80
