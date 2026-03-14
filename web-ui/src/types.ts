@@ -407,6 +407,26 @@ export interface WorkflowStepState {
   execution?: Record<string, unknown> | null;
 }
 
+export interface WorkflowSummary {
+  queuedAt?: string | null;
+  startedAt?: string | null;
+  updatedAt?: string | null;
+  completedSteps?: number;
+  failedSteps?: number;
+  continuedSteps?: number;
+  skippedSteps?: number;
+  waitingApprovalSteps?: number;
+  totalSteps?: number;
+  currentFrontier?: string[];
+  runId?: string | null;
+}
+
+export interface WorkflowPendingApproval {
+  name: string;
+  step: string;
+  reason?: string;
+}
+
 export interface WorkflowInfo {
   name: string;
   namespace: string;
@@ -417,10 +437,10 @@ export interface WorkflowInfo {
   phase: string;
   current_step: string;
   observed_generation?: number | null;
-  summary?: Record<string, unknown> | null;
+  summary?: WorkflowSummary | null;
   artifact_ref?: Record<string, unknown> | null;
   journal_ref?: Record<string, unknown> | null;
-  pending_approval?: Record<string, unknown> | null;
+  pending_approval?: WorkflowPendingApproval | null;
   run_id?: string | null;
   step_states?: Record<string, WorkflowStepState> | null;
   worker_job?: Record<string, unknown> | null;

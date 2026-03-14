@@ -41,8 +41,10 @@ import type {
   UpdateAgentPayload,
   WorkflowInfo,
   WorkflowPayload,
+  WorkflowPendingApproval,
   WorkflowStep,
   WorkflowStepState,
+  WorkflowSummary,
   WorkflowUpdatePayload,
 } from "../types";
 
@@ -607,10 +609,10 @@ function parseWorkflowInfoPayload(payload: unknown, label = "WorkflowInfo"): Wor
     phase: readString(record, "phase", label, "pending"),
     current_step: readString(record, "current_step", label, ""),
     observed_generation: readOptionalNumber(record, "observed_generation", label),
-    summary: readOptionalRecord(record, "summary", label),
+    summary: readOptionalRecord(record, "summary", label) as WorkflowSummary | null,
     artifact_ref: readOptionalRecord(record, "artifact_ref", label),
     journal_ref: readOptionalRecord(record, "journal_ref", label),
-    pending_approval: readOptionalRecord(record, "pending_approval", label),
+    pending_approval: readOptionalRecord(record, "pending_approval", label) as WorkflowPendingApproval | null,
     run_id: readOptionalString(record, "run_id", label),
     step_states: readOptionalRecord(record, "step_states", label) as Record<string, WorkflowStepState> | null,
     worker_job: readOptionalRecord(record, "worker_job", label),

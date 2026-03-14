@@ -1082,12 +1082,12 @@ export default function App() {
     }
   }
 
-  async function handleTriggerWorkflow(name: string) {
+  async function handleTriggerWorkflow(name: string, input?: string) {
     if (!token.trim()) return;
     setRunningWorkflow(true);
     setWorkflowError("");
     try {
-      await triggerWorkflow(token, namespace, name);
+      await triggerWorkflow(token, namespace, name, input);
       toast.success("Workflow triggered");
       await refreshWorkspaceData({ silent: true });
     } catch (nextError) {
@@ -2072,7 +2072,11 @@ export default function App() {
               onCreate={(payload) => void handleCreateWorkflow(payload)}
               onUpdate={(name, payload) => void handleUpdateWorkflow(name, payload)}
               onDelete={(name) => void handleDeleteWorkflow(name)}
-              onTrigger={(name) => void handleTriggerWorkflow(name)}
+              onTrigger={(name, input) => void handleTriggerWorkflow(name, input)}
+              approvalReason={approvalReason}
+              approvalBusy={approvalBusy}
+              onApprovalReasonChange={setApprovalReason}
+              onApprovalDecision={(decision) => void handleWorkflowApprovalDecision(decision)}
             />
           ) : activeView === "catalog" ? (
             <SkillsCatalogPanel token={token} />
@@ -2123,7 +2127,7 @@ export default function App() {
           title="Workflow Inspector"
           selectedName={selectedWorkflow?.name ?? ""}
           status={selectedWorkflow?.phase ?? (workflowCreateMode ? "draft" : "none")}
-          summary={selectedWorkflow?.summary}
+          summary={selectedWorkflow?.summary as Record<string, unknown> | null | undefined}
           spec={workflowSpecFromResource(selectedWorkflow)}
           details={workflowStatusFromResource(selectedWorkflow)}
           emptyMessage="Select a workflow or create a new one."
