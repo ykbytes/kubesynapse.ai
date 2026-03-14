@@ -305,6 +305,19 @@ def get_float_env(name: str, default: float, minimum: float = 0.0) -> float:
         return max(default, minimum)
 
 
+def get_bool_env(name: str, default: bool) -> bool:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+    normalized = raw_value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    logger.warning("Invalid boolean value for %s=%r. Falling back to %s.", name, raw_value, default)
+    return default
+
+
 def get_csv_env(name: str) -> list[str]:
     raw_value = os.getenv(name, "")
     return [item.strip() for item in raw_value.split(",") if item.strip()]
@@ -380,6 +393,31 @@ AGENT_CPU_REQUEST = os.getenv("AGENT_CPU_REQUEST", "100m").strip() or "100m"
 AGENT_MEMORY_REQUEST = os.getenv("AGENT_MEMORY_REQUEST", "256Mi").strip() or "256Mi"
 AGENT_CPU_LIMIT = os.getenv("AGENT_CPU_LIMIT", "1").strip() or "1"
 AGENT_MEMORY_LIMIT = os.getenv("AGENT_MEMORY_LIMIT", "1Gi").strip() or "1Gi"
+AGENT_ALLOWED_MODELS = get_csv_env("AGENT_ALLOWED_MODELS")
+AGENT_MAX_STEPS = str(get_int_env("AGENT_MAX_STEPS", 4, minimum=1))
+AGENT_MAX_STEPS_LIMIT = str(get_int_env("AGENT_MAX_STEPS_LIMIT", 12, minimum=1))
+AGENT_DOOM_LOOP_THRESHOLD = str(get_int_env("AGENT_DOOM_LOOP_THRESHOLD", 3, minimum=2))
+AGENT_SUPERVISOR_HISTORY_LIMIT = str(get_int_env("AGENT_SUPERVISOR_HISTORY_LIMIT", 8, minimum=1))
+AGENT_SUPERVISOR_RESPONSE_CHARS = str(get_int_env("AGENT_SUPERVISOR_RESPONSE_CHARS", 12000, minimum=256))
+AGENT_AUTONOMY_CONTINUE_ON_ACTION_ERROR = serialize_env_value(
+    get_bool_env("AGENT_AUTONOMY_CONTINUE_ON_ACTION_ERROR", True)
+)
+AGENT_AUTONOMY_ACTION_RETRY_LIMIT = str(get_int_env("AGENT_AUTONOMY_ACTION_RETRY_LIMIT", 2, minimum=0))
+AGENT_AUTONOMY_ACTION_RETRY_BACKOFF_SECONDS = str(
+    get_float_env("AGENT_AUTONOMY_ACTION_RETRY_BACKOFF_SECONDS", 1.0, minimum=0.0)
+)
+AGENT_AUTONOMY_FAILURE_HISTORY_LIMIT = str(get_int_env("AGENT_AUTONOMY_FAILURE_HISTORY_LIMIT", 6, minimum=1))
+DEFAULT_AGENT_LOCAL_TOOL_ALLOWLIST = "curl,wget,jq,git,rg,python,pip,tar,unzip,zip"
+DEFAULT_AGENT_LOCAL_TOOL_ALLOWED_ROOTS = "/app/state,/workspace"
+AGENT_LOCAL_TOOL_MOUNT_WORKSPACE = get_bool_env("AGENT_LOCAL_TOOL_MOUNT_WORKSPACE", True)
+AGENT_LOCAL_TOOL_DISCOVERY_ENABLED = serialize_env_value(get_bool_env("AGENT_LOCAL_TOOL_DISCOVERY_ENABLED", True))
+AGENT_LOCAL_TOOL_ALLOWLIST = os.getenv("AGENT_LOCAL_TOOL_ALLOWLIST", DEFAULT_AGENT_LOCAL_TOOL_ALLOWLIST).strip()
+AGENT_LOCAL_TOOL_TIMEOUT_SECONDS = str(get_float_env("AGENT_LOCAL_TOOL_TIMEOUT_SECONDS", 20.0, minimum=1.0))
+AGENT_LOCAL_TOOL_MAX_OUTPUT_CHARS = str(get_int_env("AGENT_LOCAL_TOOL_MAX_OUTPUT_CHARS", 12000, minimum=512))
+AGENT_LOCAL_TOOL_MAX_ARGS = str(get_int_env("AGENT_LOCAL_TOOL_MAX_ARGS", 32, minimum=1))
+AGENT_LOCAL_TOOL_MAX_ARG_CHARS = str(get_int_env("AGENT_LOCAL_TOOL_MAX_ARG_CHARS", 512, minimum=32))
+AGENT_LOCAL_TOOL_ALLOWED_ROOTS = os.getenv("AGENT_LOCAL_TOOL_ALLOWED_ROOTS", DEFAULT_AGENT_LOCAL_TOOL_ALLOWED_ROOTS).strip()
+AGENT_LOCAL_TOOL_LIST_LIMIT = str(get_int_env("AGENT_LOCAL_TOOL_LIST_LIMIT", 32, minimum=1))
 A2A_DEFAULT_TIMEOUT_SECONDS = get_float_env("A2A_DEFAULT_TIMEOUT_SECONDS", 60.0, minimum=1.0)
 IMAGE_PULL_SECRETS = get_csv_env("IMAGE_PULL_SECRETS")
 SUPPORTED_RUNTIME_KINDS = {"langgraph", "goose", "codex"}
@@ -545,7 +583,27 @@ PLATFORM_MANAGED_CODEX_ENV = {
 }
 
 PLATFORM_MANAGED_AGENT_ENV = {
+    "AGENT_DEFAULT_MODEL",
     "AGENT_MODEL",
+    "AGENT_ALLOWED_MODELS",
+    "AGENT_MAX_STEPS",
+    "AGENT_MAX_STEPS_LIMIT",
+    "AGENT_DOOM_LOOP_THRESHOLD",
+    "AGENT_SUPERVISOR_HISTORY_LIMIT",
+    "AGENT_SUPERVISOR_RESPONSE_CHARS",
+    "AGENT_AUTONOMY_CONTINUE_ON_ACTION_ERROR",
+    "AGENT_AUTONOMY_ACTION_RETRY_LIMIT",
+    "AGENT_AUTONOMY_ACTION_RETRY_BACKOFF_SECONDS",
+    "AGENT_AUTONOMY_FAILURE_HISTORY_LIMIT",
+    "AGENT_LOCAL_TOOL_MOUNT_WORKSPACE",
+    "AGENT_LOCAL_TOOL_DISCOVERY_ENABLED",
+    "AGENT_LOCAL_TOOL_ALLOWLIST",
+    "AGENT_LOCAL_TOOL_TIMEOUT_SECONDS",
+    "AGENT_LOCAL_TOOL_MAX_OUTPUT_CHARS",
+    "AGENT_LOCAL_TOOL_MAX_ARGS",
+    "AGENT_LOCAL_TOOL_MAX_ARG_CHARS",
+    "AGENT_LOCAL_TOOL_ALLOWED_ROOTS",
+    "AGENT_LOCAL_TOOL_LIST_LIMIT",
     "AGENT_NAME",
     "AGENT_NAMESPACE",
     "AGENT_SYSTEM_PROMPT",
@@ -845,6 +903,8 @@ def workflow_should_requeue(status: dict[str, Any], job_state: str) -> str | Non
     if updated_at is None:
         return None
     running_age_seconds = (now - updated_at).total_seconds()
+    if job_state == "succeeded":
+        return f"running workflow has succeeded worker job but phase is still '{phase}'"
     if job_state in {"active", "pending"} and running_age_seconds < WORKFLOW_RUNNING_STALE_SECONDS:
         return None
     if job_state in {"missing", "failed"}:
@@ -1466,6 +1526,7 @@ def create_agent_statefulset_manifest(
     }
 
     env = [
+        {"name": "AGENT_DEFAULT_MODEL", "value": model},
         {"name": "AGENT_MODEL", "value": model},
         {"name": "AGENT_NAME", "value": name},
         {"name": "AGENT_NAMESPACE", "value": namespace},
@@ -1595,9 +1656,57 @@ def create_agent_statefulset_manifest(
             )
         env.extend(codex_runtime_extra_env_items())
     else:
+        if AGENT_LOCAL_TOOL_MOUNT_WORKSPACE:
+            volume_mounts.append({"name": "workspace-volume", "mountPath": "/workspace"})
+            volumes.append({"name": "workspace-volume", "emptyDir": {}})
         env.extend(
             [
                 {"name": "LITELLM_API_BASE", "value": f"http://{LITELLM_SVC}:4000"},
+                {"name": "AGENT_ALLOWED_MODELS", "value": ",".join(AGENT_ALLOWED_MODELS)},
+                {"name": "AGENT_MAX_STEPS", "value": AGENT_MAX_STEPS},
+                {"name": "AGENT_MAX_STEPS_LIMIT", "value": AGENT_MAX_STEPS_LIMIT},
+                {"name": "AGENT_DOOM_LOOP_THRESHOLD", "value": AGENT_DOOM_LOOP_THRESHOLD},
+                {"name": "AGENT_SUPERVISOR_HISTORY_LIMIT", "value": AGENT_SUPERVISOR_HISTORY_LIMIT},
+                {"name": "AGENT_SUPERVISOR_RESPONSE_CHARS", "value": AGENT_SUPERVISOR_RESPONSE_CHARS},
+                {
+                    "name": "AGENT_AUTONOMY_CONTINUE_ON_ACTION_ERROR",
+                    "value": AGENT_AUTONOMY_CONTINUE_ON_ACTION_ERROR,
+                },
+                {
+                    "name": "AGENT_AUTONOMY_ACTION_RETRY_LIMIT",
+                    "value": AGENT_AUTONOMY_ACTION_RETRY_LIMIT,
+                },
+                {
+                    "name": "AGENT_AUTONOMY_ACTION_RETRY_BACKOFF_SECONDS",
+                    "value": AGENT_AUTONOMY_ACTION_RETRY_BACKOFF_SECONDS,
+                },
+                {
+                    "name": "AGENT_AUTONOMY_FAILURE_HISTORY_LIMIT",
+                    "value": AGENT_AUTONOMY_FAILURE_HISTORY_LIMIT,
+                },
+                {
+                    "name": "AGENT_LOCAL_TOOL_DISCOVERY_ENABLED",
+                    "value": AGENT_LOCAL_TOOL_DISCOVERY_ENABLED,
+                },
+                {"name": "AGENT_LOCAL_TOOL_ALLOWLIST", "value": AGENT_LOCAL_TOOL_ALLOWLIST},
+                {
+                    "name": "AGENT_LOCAL_TOOL_TIMEOUT_SECONDS",
+                    "value": AGENT_LOCAL_TOOL_TIMEOUT_SECONDS,
+                },
+                {
+                    "name": "AGENT_LOCAL_TOOL_MAX_OUTPUT_CHARS",
+                    "value": AGENT_LOCAL_TOOL_MAX_OUTPUT_CHARS,
+                },
+                {"name": "AGENT_LOCAL_TOOL_MAX_ARGS", "value": AGENT_LOCAL_TOOL_MAX_ARGS},
+                {
+                    "name": "AGENT_LOCAL_TOOL_MAX_ARG_CHARS",
+                    "value": AGENT_LOCAL_TOOL_MAX_ARG_CHARS,
+                },
+                {
+                    "name": "AGENT_LOCAL_TOOL_ALLOWED_ROOTS",
+                    "value": AGENT_LOCAL_TOOL_ALLOWED_ROOTS,
+                },
+                {"name": "AGENT_LOCAL_TOOL_LIST_LIMIT", "value": AGENT_LOCAL_TOOL_LIST_LIMIT},
                 {"name": "MCP_SERVERS", "value": ",".join(mcp_servers)},
                 {
                     "name": "MCP_SIDECARS",
@@ -2618,6 +2727,38 @@ def delete_tenant(spec: dict[str, Any], name: str, logger: logging.Logger, **kwa
     )
 
 
+@kopf.on.update("sandbox.enterprise.ai", "v1alpha1", "agenttenants")  # type: ignore[arg-type]
+def update_tenant(spec: dict[str, Any], name: str, logger: logging.Logger, **kwargs: Any) -> None:
+    del kwargs
+    execute_reconcile(
+        lambda: create_tenant(spec, name, logger),
+        logger=logger,
+        action="update-tenant",
+        resource_kind="AgentTenant",
+        name=name,
+        namespace=spec.get("namespace", f"agent-tenant-{spec.get('tenantName', name)}"),
+        default_delay=10,
+        start_message="Reconciling AgentTenant update event.",
+        success_message="AgentTenant update reconciled.",
+    )
+
+
+@kopf.on.resume("sandbox.enterprise.ai", "v1alpha1", "agenttenants")  # type: ignore[arg-type]
+def resume_tenant(spec: dict[str, Any], name: str, logger: logging.Logger, **kwargs: Any) -> None:
+    del kwargs
+    execute_reconcile(
+        lambda: create_tenant(spec, name, logger),
+        logger=logger,
+        action="resume-tenant",
+        resource_kind="AgentTenant",
+        name=name,
+        namespace=spec.get("namespace", f"agent-tenant-{spec.get('tenantName', name)}"),
+        default_delay=10,
+        start_message="Reconciling existing AgentTenant on operator startup.",
+        success_message="AgentTenant resume reconcile completed.",
+    )
+
+
 def patch_custom_status(plural: str, namespace: str, name: str, status: dict[str, Any]) -> None:
     kubernetes.client.CustomObjectsApi().patch_namespaced_custom_object_status(
         group="sandbox.enterprise.ai",
@@ -2779,6 +2920,24 @@ def read_job_state(name: str, namespace: str) -> str:
     return "pending"
 
 
+def cancel_worker_job(name: str, namespace: str) -> bool:
+    """Delete a worker Job and its pods. Returns True if a Job was deleted."""
+    if not name:
+        return False
+    batch_api = kubernetes.client.BatchV1Api()
+    try:
+        batch_api.delete_namespaced_job(
+            name=name,
+            namespace=namespace,
+            body=kubernetes.client.V1DeleteOptions(propagation_policy="Background"),
+        )
+        return True
+    except ApiException as exc:
+        if exc.status == 404:
+            return False
+        raise
+
+
 def enqueue_eval_job(
     spec: dict[str, Any],
     meta: dict[str, Any],
@@ -2864,6 +3023,13 @@ def enqueue_workflow_job(
     steps = spec.get("steps") or []
     generation = int((meta or {}).get("generation", 1))
     workflow_status = current_status or {}
+
+    # Cancel any stale worker job from a previous run before creating a new one.
+    previous_job = workflow_status.get("workerJob", {}) or {}
+    previous_job_name = str(previous_job.get("name") or "")
+    if previous_job_name:
+        cancel_worker_job(previous_job_name, str(previous_job.get("namespace") or OPERATOR_NAMESPACE))
+
     resolved_run_id = run_id or str(workflow_status.get("runId") or "") or build_workflow_run_id(
         namespace,
         name,
@@ -2984,7 +3150,7 @@ def run_workflow(
     generation = int((meta or {}).get("generation", 1))
     observed_generation = int(current_status.get("observedGeneration", 0) or 0)
     phase = str(current_status.get("phase", ""))
-    if observed_generation == generation and phase in {"queued", "running", "waiting-approval", "completed"}:
+    if observed_generation == generation and phase in {"queued", "running", "waiting-approval", "completed", "failed"}:
         log_operator_event(
             logger,
             logging.INFO,
@@ -3090,6 +3256,95 @@ def run_eval(
     )
 
 
+@kopf.on.resume("sandbox.enterprise.ai", "v1alpha1", "agentevals")  # type: ignore[arg-type]
+def resume_eval(
+    spec: dict[str, Any],
+    status: dict[str, Any],
+    meta: dict[str, Any],
+    name: str,
+    namespace: str,
+    logger: logging.Logger,
+    **kwargs: Any,
+) -> None:
+    del kwargs
+    current_status = status or {}
+    phase = str(current_status.get("phase", "") or "")
+    if phase not in {"queued", "running"}:
+        return
+    worker_job = current_status.get("workerJob", {}) or {}
+    job_state = read_job_state(
+        str(worker_job.get("name") or ""),
+        str(worker_job.get("namespace") or OPERATOR_NAMESPACE),
+    )
+    if job_state == "active":
+        log_operator_event(
+            logger,
+            logging.INFO,
+            "AgentEval resume: worker job still active, skipping re-enqueue.",
+            resource_kind="AgentEval",
+            name=name,
+            namespace=namespace,
+            action="resume-eval",
+            phase=phase,
+            jobState=job_state,
+        )
+        return
+    log_operator_event(
+        logger,
+        logging.WARNING,
+        "AgentEval resume: worker job not active, re-enqueueing.",
+        resource_kind="AgentEval",
+        name=name,
+        namespace=namespace,
+        action="resume-eval",
+        phase=phase,
+        jobState=job_state,
+    )
+    execute_reconcile(
+        lambda: enqueue_eval_job(spec, meta, name, namespace, logger),
+        logger=logger,
+        action="resume-eval",
+        resource_kind="AgentEval",
+        name=name,
+        namespace=namespace,
+        meta=meta,
+        default_delay=10,
+        start_message="Re-enqueueing AgentEval after operator restart.",
+        success_message="AgentEval re-enqueued after operator restart.",
+        phase=phase,
+        jobState=job_state,
+    )
+
+
+@kopf.on.delete("sandbox.enterprise.ai", "v1alpha1", "agentevals")  # type: ignore[arg-type]
+def delete_eval(
+    status: dict[str, Any],
+    name: str,
+    namespace: str,
+    logger: logging.Logger,
+    **kwargs: Any,
+) -> None:
+    del kwargs
+    current_status = status or {}
+    worker_job = current_status.get("workerJob", {}) or {}
+    job_name = str(worker_job.get("name") or "")
+    job_namespace = str(worker_job.get("namespace") or OPERATOR_NAMESPACE)
+    cancelled = cancel_worker_job(job_name, job_namespace)
+    log_operator_event(
+        logger,
+        logging.INFO,
+        "AgentEval deleted; worker job cancelled."
+        if cancelled
+        else "AgentEval deleted; no active worker job to cancel.",
+        resource_kind="AgentEval",
+        name=name,
+        namespace=namespace,
+        action="delete-eval",
+        workerJobCancelled=cancelled,
+        workerJobName=job_name,
+    )
+
+
 @kopf.timer(
     "sandbox.enterprise.ai",
     "v1alpha1",
@@ -3147,6 +3402,104 @@ def run_workflow_watchdog(
         phase=str(current_status.get("phase", "") or ""),
         workerJob=current_status.get("workerJob", {}) or {},
         jobState=job_state,
+    )
+
+
+@kopf.on.resume("sandbox.enterprise.ai", "v1alpha1", "agentworkflows")  # type: ignore[arg-type]
+def resume_workflow(
+    spec: dict[str, Any],
+    status: dict[str, Any],
+    meta: dict[str, Any],
+    name: str,
+    namespace: str,
+    logger: logging.Logger,
+    **kwargs: Any,
+) -> None:
+    del kwargs
+    current_status = status or {}
+    phase = str(current_status.get("phase", "") or "")
+    if phase not in {"queued", "running", "waiting-approval"}:
+        return
+    worker_job = current_status.get("workerJob", {}) or {}
+    job_state = read_job_state(
+        str(worker_job.get("name") or ""),
+        str(worker_job.get("namespace") or OPERATOR_NAMESPACE),
+    )
+    if job_state == "active":
+        log_operator_event(
+            logger,
+            logging.INFO,
+            "AgentWorkflow resume: worker job still active, skipping re-enqueue.",
+            resource_kind="AgentWorkflow",
+            name=name,
+            namespace=namespace,
+            action="resume-workflow",
+            phase=phase,
+            jobState=job_state,
+        )
+        return
+    log_operator_event(
+        logger,
+        logging.INFO,
+        "AgentWorkflow resume: re-enqueueing workflow whose worker job is no longer active.",
+        resource_kind="AgentWorkflow",
+        name=name,
+        namespace=namespace,
+        action="resume-workflow",
+        phase=phase,
+        jobState=job_state,
+    )
+    execute_reconcile(
+        lambda: enqueue_workflow_job(
+            spec,
+            meta,
+            name,
+            namespace,
+            logger,
+            current_status=current_status,
+            run_id=str(current_status.get("runId") or "") or None,
+            requeue_reason=f"operator restart (previous phase: {phase}, job state: {job_state})",
+        ),
+        logger=logger,
+        action="resume-workflow",
+        resource_kind="AgentWorkflow",
+        name=name,
+        namespace=namespace,
+        meta=meta,
+        default_delay=10,
+        start_message="Re-enqueueing AgentWorkflow after operator restart.",
+        success_message="AgentWorkflow re-enqueued after operator restart.",
+        phase=phase,
+        jobState=job_state,
+    )
+
+
+@kopf.on.delete("sandbox.enterprise.ai", "v1alpha1", "agentworkflows")  # type: ignore[arg-type]
+def delete_workflow(
+    status: dict[str, Any],
+    name: str,
+    namespace: str,
+    logger: logging.Logger,
+    **kwargs: Any,
+) -> None:
+    del kwargs
+    current_status = status or {}
+    worker_job = current_status.get("workerJob", {}) or {}
+    job_name = str(worker_job.get("name") or "")
+    job_namespace = str(worker_job.get("namespace") or OPERATOR_NAMESPACE)
+    cancelled = cancel_worker_job(job_name, job_namespace)
+    log_operator_event(
+        logger,
+        logging.INFO,
+        "AgentWorkflow deleted; worker job cancelled."
+        if cancelled
+        else "AgentWorkflow deleted; no active worker job to cancel.",
+        resource_kind="AgentWorkflow",
+        name=name,
+        namespace=namespace,
+        action="delete-workflow",
+        workerJobCancelled=cancelled,
+        workerJobName=job_name,
     )
 
 
@@ -3245,12 +3598,21 @@ def on_approval_decision(old: str, new: str, name: str, namespace: str, logger: 
             decision=new,
         )
         custom_api = kubernetes.client.CustomObjectsApi()
-        workflows = custom_api.list_namespaced_custom_object(
-            group="sandbox.enterprise.ai",
-            version="v1alpha1",
-            namespace=namespace,
-            plural="agentworkflows",
-        ).get("items", [])
+        try:
+            workflows = custom_api.list_namespaced_custom_object(
+                group="sandbox.enterprise.ai",
+                version="v1alpha1",
+                namespace=namespace,
+                plural="agentworkflows",
+                label_selector=f"sandbox.enterprise.ai/pending-approval={name}",
+            ).get("items", [])
+        except Exception:
+            workflows = custom_api.list_namespaced_custom_object(
+                group="sandbox.enterprise.ai",
+                version="v1alpha1",
+                namespace=namespace,
+                plural="agentworkflows",
+            ).get("items", [])
 
         for workflow in workflows:
             workflow_name = workflow.get("metadata", {}).get("name", "")
@@ -3268,14 +3630,14 @@ def on_approval_decision(old: str, new: str, name: str, namespace: str, logger: 
 
             if new == "approved":
                 job_name = execute_reconcile(
-                    lambda: enqueue_workflow_job(
-                        workflow_spec,
-                        workflow_meta,
-                        workflow_name,
+                    lambda _ws=workflow_spec, _wm=workflow_meta, _wn=workflow_name, _ws2=workflow_status, _rid=run_id: enqueue_workflow_job(
+                        _ws,
+                        _wm,
+                        _wn,
                         namespace,
                         logger,
-                        current_status=workflow_status,
-                        run_id=run_id,
+                        current_status=_ws2,
+                        run_id=_rid,
                         requeue_reason=f"approval '{name}' was approved",
                     ),
                     logger=logger,
@@ -3337,36 +3699,37 @@ def on_approval_decision(old: str, new: str, name: str, namespace: str, logger: 
                     artifact_ref.get("path")
                     or artifact_file_path("workflow", namespace, workflow_name, generation)
                 )
+                denial_status = {
+                    "phase": "failed",
+                    "runId": workflow_status.get("runId"),
+                    "currentStep": current_step,
+                    "observedGeneration": generation,
+                    "artifactRef": build_artifact_ref(
+                        artifact_pvc_name,
+                        artifact_path,
+                        generation,
+                        journal_path=journal_path,
+                    ),
+                    "journalRef": build_journal_ref(artifact_pvc_name, journal_path, generation),
+                    "summary": {
+                        **(workflow_status.get("summary", {}) or {}),
+                        "failedAt": now_iso(),
+                        "error": f"Approval '{name}' was denied",
+                        "updatedAt": now_iso(),
+                    },
+                    "pendingApproval": {
+                        "name": name,
+                        "namespace": namespace,
+                        "decision": new,
+                    },
+                    "stepStates": step_states,
+                }
                 execute_reconcile(
-                    lambda: patch_custom_status(
+                    lambda _wn=workflow_name, _ds=denial_status: patch_custom_status(
                         "agentworkflows",
                         namespace,
-                        workflow_name,
-                        {
-                            "phase": "failed",
-                            "runId": workflow_status.get("runId"),
-                            "currentStep": current_step,
-                            "observedGeneration": generation,
-                            "artifactRef": build_artifact_ref(
-                                artifact_pvc_name,
-                                artifact_path,
-                                generation,
-                                journal_path=journal_path,
-                            ),
-                            "journalRef": build_journal_ref(artifact_pvc_name, journal_path, generation),
-                            "summary": {
-                                **(workflow_status.get("summary", {}) or {}),
-                                "failedAt": now_iso(),
-                                "error": f"Approval '{name}' was denied",
-                                "updatedAt": now_iso(),
-                            },
-                            "pendingApproval": {
-                                "name": name,
-                                "namespace": namespace,
-                                "decision": new,
-                            },
-                            "stepStates": step_states,
-                        },
+                        _wn,
+                        _ds,
                     ),
                     logger=logger,
                     action="deny-workflow-after-approval",

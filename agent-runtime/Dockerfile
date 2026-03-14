@@ -3,6 +3,18 @@ FROM python:3.11-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
 	PYTHONUNBUFFERED=1
 
+RUN apt-get update \
+	&& apt-get install -y --no-install-recommends \
+		ca-certificates \
+		curl \
+		git \
+		jq \
+		ripgrep \
+		unzip \
+		wget \
+		zip \
+	&& rm -rf /var/lib/apt/lists/*
+
 RUN getent group agentgroup >/dev/null || groupadd -r agentgroup \
 	&& id -u agentuser >/dev/null 2>&1 || useradd -r -g agentgroup agentuser
 WORKDIR /app

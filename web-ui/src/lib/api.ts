@@ -42,6 +42,7 @@ import type {
   WorkflowInfo,
   WorkflowPayload,
   WorkflowStep,
+  WorkflowStepState,
   WorkflowUpdatePayload,
 } from "../types";
 
@@ -588,6 +589,7 @@ function parseWorkflowStepPayload(payload: unknown, label = "WorkflowStep"): Wor
     prompt: readString(record, "prompt", label, ""),
     depends_on: readStringArray(record, "depends_on", label),
     require_approval: readBoolean(record, "require_approval", label, false),
+    execution: readOptionalRecord(record, "execution", label),
   };
 }
 
@@ -607,7 +609,10 @@ function parseWorkflowInfoPayload(payload: unknown, label = "WorkflowInfo"): Wor
     observed_generation: readOptionalNumber(record, "observed_generation", label),
     summary: readOptionalRecord(record, "summary", label),
     artifact_ref: readOptionalRecord(record, "artifact_ref", label),
+    journal_ref: readOptionalRecord(record, "journal_ref", label),
     pending_approval: readOptionalRecord(record, "pending_approval", label),
+    run_id: readOptionalString(record, "run_id", label),
+    step_states: readOptionalRecord(record, "step_states", label) as Record<string, WorkflowStepState> | null,
     worker_job: readOptionalRecord(record, "worker_job", label),
     created_at: readOptionalString(record, "created_at", label),
   };
@@ -1063,6 +1068,35 @@ export async function updateWorkflow(
 ): Promise<WorkflowInfo> {
   const response = await fetchAuthenticated(buildUrl(`/api/workflows/${workflowName}`, namespace), token, {
     method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  return parseJsonResponse(response, parseWorkflowInfoPayload);
+}
+
+export async function fetchWorkflow(
+  token: string,
+  namespace: string,
+  workflowName: string,
+): Promise<WorkflowInfo> {
+  const response = await fetchAuthenticated(buildUrl(`/api/workflows/${workflowName}`, namespace), token);
+  return parseJsonResponse(response, parseWorkflowInfoPayload);
+}
+
+export async function triggerWorkflow(
+  token: string,
+  namespace: string,
+  workflowName: string,
+  input?: string,
+): Promise<WorkflowInfo> {
+  const payload: Record<string, unknown> = {};
+  if (input !== undefined) {
+    payload.input = input;
+  }
+  const response = await fetchAuthenticated(buildUrl(`/api/workflows/${workflowName}/trigger`, namespace), token, {
+    method: "POST",
     headers: {
       "Content-Type": "application/json",
     },

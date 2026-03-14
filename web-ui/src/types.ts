@@ -329,6 +329,8 @@ export interface InvokePayload {
   builtin_extensions?: string[];
   stdio_extensions?: string[];
   streamable_http_extensions?: string[];
+  sandbox_session?: Record<string, unknown>;
+  team_context?: string;
 }
 
 export interface InvokeResponse {
@@ -371,6 +373,7 @@ export interface WorkflowStep {
   prompt: string;
   depends_on: string[];
   require_approval: boolean;
+  execution?: Record<string, unknown> | null;
 }
 
 export interface WorkflowPayload {
@@ -388,6 +391,22 @@ export interface WorkflowUpdatePayload {
   steps: WorkflowStep[];
 }
 
+export interface WorkflowStepState {
+  stepName: string;
+  agentRef: string;
+  status: string;
+  attempts?: number;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  updatedAt?: string | null;
+  latencyMs?: number | null;
+  error?: string | null;
+  failureClass?: string | null;
+  approvalWaitMs?: number | null;
+  workerJob?: Record<string, unknown> | null;
+  execution?: Record<string, unknown> | null;
+}
+
 export interface WorkflowInfo {
   name: string;
   namespace: string;
@@ -400,7 +419,10 @@ export interface WorkflowInfo {
   observed_generation?: number | null;
   summary?: Record<string, unknown> | null;
   artifact_ref?: Record<string, unknown> | null;
+  journal_ref?: Record<string, unknown> | null;
   pending_approval?: Record<string, unknown> | null;
+  run_id?: string | null;
+  step_states?: Record<string, WorkflowStepState> | null;
   worker_job?: Record<string, unknown> | null;
   created_at?: string | null;
 }
@@ -465,6 +487,7 @@ export interface UiActivity {
   id: string;
   event: string;
   payload: Record<string, unknown>;
+  timestamp: string;
 }
 
 export interface InvocationSummary {

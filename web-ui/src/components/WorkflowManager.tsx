@@ -1,4 +1,4 @@
-import { LoaderCircle, PlusCircle, Save, ShieldCheck, Sparkles, Trash2, Workflow } from "lucide-react";
+import { CheckCircle2, Circle, Clock, LoaderCircle, Play, PlusCircle, Save, ShieldCheck, Sparkles, Trash2, Workflow, XCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
@@ -15,10 +15,12 @@ interface WorkflowManagerProps {
   agents: AgentInfo[];
   isSaving: boolean;
   isDeleting: boolean;
+  isRunning: boolean;
   error: string;
   onCreate: (payload: WorkflowPayload) => void;
   onUpdate: (name: string, payload: WorkflowUpdatePayload) => void;
   onDelete: (name: string) => void;
+  onTrigger: (name: string) => void;
 }
 
 function defaultStepsForAgent(agentName?: string): WorkflowStep[] {
@@ -38,10 +40,12 @@ export function WorkflowManager({
   agents,
   isSaving,
   isDeleting,
+  isRunning,
   error,
   onCreate,
   onUpdate,
   onDelete,
+  onTrigger,
 }: WorkflowManagerProps) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -64,7 +68,7 @@ export function WorkflowManager({
     setMessageBus("in-memory");
     setSteps(defaultStepsForAgent(agents[0]?.name));
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workflow?.name]);
+  }, [workflow?.name, workflow?.phase, workflow?.current_step]);
 
   function updateStep(index: number, updater: (current: WorkflowStep) => WorkflowStep) {
     setSteps((current) => current.map((step, stepIndex) => (stepIndex === index ? updater(step) : step)));
@@ -118,7 +122,9 @@ export function WorkflowManager({
     });
   }
 
-  const canSubmit = Boolean(name.trim()) && steps.length > 0 && steps.every((step) => step.name.trim() && step.agent_ref.trim());
+  const stepNames = steps.map((s) => s.name.trim()).filter(Boolean);
+  const hasUniqueStepNames = new Set(stepNames).size === stepNames.length;
+  const canSubmit = Boolean(name.trim()) && steps.length > 0 && hasUniqueStepNames && steps.every((step) => step.name.trim() && step.agent_ref.trim());
   const uniqueAgentCount = new Set(steps.map((step) => step.agent_ref).filter(Boolean)).size;
   const approvalStepCount = steps.filter((step) => step.require_approval).length;
 
@@ -161,6 +167,95 @@ export function WorkflowManager({
             <p className="mt-1 text-xl font-semibold text-foreground">{approvalStepCount}</p>
           </div>
         </div>
+
+        {/* ── Step progress pipeline ── */}
+        {workflow && steps.length > 0 && (
+          <Card className="shadow-none">
+            <CardHeader className="pb-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Clock className="h-4 w-4 text-muted-foreground" />
+                  <CardTitle className="text-sm">Step pipeline</CardTitle>
+                </div>
+                <Button
+                  size="sm"
+                  className="h-8 rounded-xl text-xs"
+                  disabled={isRunning || workflow.phase === "running" || workflow.phase === "queued"}
+                  onClick={() => onTrigger(workflow.name)}
+                >
+                  {isRunning ? (
+                    <LoaderCircle className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Play className="mr-1.5 h-3.5 w-3.5" />
+                  )}
+                  {isRunning || workflow.phase === "running" ? "Running…" : "Run workflow"}
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {workflow.pending_approval && (
+                <div className="mb-4 flex items-center gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-300">
+                  <ShieldCheck className="h-4 w-4 shrink-0" />
+                  <span>Waiting for approval at <strong>{workflow.current_step || "unknown step"}</strong></span>
+                </div>
+              )}
+              <div className="space-y-0">
+                {steps.map((step, idx) => {
+                  const currentIdx = workflow.current_step
+                    ? steps.findIndex((s) => s.name === workflow.current_step)
+                    : -1;
+                  const isFailed = workflow.phase === "failed";
+                  const isComplete =
+                    workflow.phase === "succeeded" ||
+                    workflow.phase === "completed" ||
+                    (currentIdx >= 0 && idx < currentIdx);
+                  const isCurrent = currentIdx >= 0 && idx === currentIdx;
+                  const isPending = !isComplete && !isCurrent;
+
+                  let statusIcon: React.ReactNode;
+                  let ringColor: string;
+                  if (isFailed && isCurrent) {
+                    statusIcon = <XCircle className="h-4 w-4 text-destructive" />;
+                    ringColor = "border-destructive/40 bg-destructive/10";
+                  } else if (isComplete) {
+                    statusIcon = <CheckCircle2 className="h-4 w-4 text-emerald-400" />;
+                    ringColor = "border-emerald-500/30 bg-emerald-500/10";
+                  } else if (isCurrent && workflow.pending_approval) {
+                    statusIcon = <ShieldCheck className="h-4 w-4 text-amber-400" />;
+                    ringColor = "border-amber-500/30 bg-amber-500/10";
+                  } else if (isCurrent) {
+                    statusIcon = <LoaderCircle className="h-4 w-4 animate-spin text-primary" />;
+                    ringColor = "border-primary/30 bg-primary/10";
+                  } else {
+                    statusIcon = <Circle className="h-4 w-4 text-muted-foreground/50" />;
+                    ringColor = "border-border/60 bg-background/60";
+                  }
+
+                  return (
+                    <div key={step.name} className="flex gap-3">
+                      {/* connector line + icon */}
+                      <div className="flex flex-col items-center">
+                        <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full border ${ringColor}`}>
+                          {statusIcon}
+                        </div>
+                        {idx < steps.length - 1 && (
+                          <div className={`w-px flex-1 min-h-4 ${isComplete ? "bg-emerald-500/40" : "bg-border/50"}`} />
+                        )}
+                      </div>
+                      {/* step label */}
+                      <div className={`pb-4 ${isPending ? "opacity-50" : ""}`}>
+                        <p className="text-sm font-medium leading-8">{step.name}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {step.agent_ref}{step.require_approval ? " · approval gate" : ""}
+                        </p>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         <div className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
           <Card className="shadow-none">
@@ -386,6 +481,17 @@ export function WorkflowManager({
         )}
 
         <div className="flex items-center justify-end gap-2 border-t border-border pt-4">
+          {workflow && (
+            <Button
+              variant="outline"
+              onClick={() => onTrigger(workflow.name)}
+              disabled={isRunning || workflow.phase === "running" || workflow.phase === "queued"}
+              className="mr-auto"
+            >
+              {isRunning ? <LoaderCircle className="mr-1.5 h-4 w-4 animate-spin" /> : <Play className="mr-1.5 h-4 w-4" />}
+              {isRunning || workflow.phase === "running" ? "Running…" : "Run"}
+            </Button>
+          )}
           <Button
             onClick={() => {
               const payload = { description, input, message_bus: messageBus, steps };

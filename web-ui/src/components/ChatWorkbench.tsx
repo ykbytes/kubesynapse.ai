@@ -18,13 +18,15 @@ import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
-import type { AgentDiscoveryPeer, RuntimeKind, SpecialistSubagentDraft, UiMessage } from "../types";
+import { ActivityTimeline } from "./ActivityTimeline";
+import type { AgentDiscoveryPeer, RuntimeKind, SpecialistSubagentDraft, UiActivity, UiMessage } from "../types";
 
 interface ChatWorkbenchProps {
   agentName: string;
   runtimeKind: RuntimeKind;
   prompt: string;
   messages: UiMessage[];
+  activity: UiActivity[];
   isSending: boolean;
   tokenReady: boolean;
   streamMode: boolean;
@@ -178,6 +180,49 @@ function ToolBubble({ message }: { message: UiMessage }) {
 }
 
 /* ------------------------------------------------------------------ */
+/*  Unified diff viewer                                               */
+/* ------------------------------------------------------------------ */
+// @ts-ignore - Component used conditionally
+function DiffViewer({ diff }: { diff: string }) {
+  const [expanded, setExpanded] = useState(false);
+  if (!diff) return null;
+  const lines = diff.split("\n");
+  const addCount = lines.filter((l) => l.startsWith("+") && !l.startsWith("+++")).length;
+  const removeCount = lines.filter((l) => l.startsWith("-") && !l.startsWith("---")).length;
+  return (
+    <div className="rounded-md border border-border/60 bg-muted/20 text-xs animate-slide-up my-1">
+      <button
+        type="button"
+        onClick={() => setExpanded((o) => !o)}
+        className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+      >
+        {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+        <span className="font-medium text-foreground">Diff</span>
+        <span className="text-emerald-500">+{addCount}</span>
+        <span className="text-red-500">-{removeCount}</span>
+      </button>
+      {expanded && (
+        <div className="border-t border-border/40 px-3 py-2 overflow-x-auto max-h-64 overflow-y-auto">
+          <pre className="font-mono text-[11px] leading-relaxed">
+            {lines.map((line, i) => {
+              let color = "text-muted-foreground";
+              if (line.startsWith("+")) color = "text-emerald-500";
+              else if (line.startsWith("-")) color = "text-red-500";
+              else if (line.startsWith("@@")) color = "text-blue-400";
+              return (
+                <div key={i} className={color}>
+                  {line}
+                </div>
+              );
+            })}
+          </pre>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /*  Main component                                                    */
 /* ------------------------------------------------------------------ */
 export function ChatWorkbench({
@@ -185,6 +230,7 @@ export function ChatWorkbench({
   runtimeKind,
   prompt,
   messages,
+  activity,
   isSending,
   tokenReady,
   streamMode,
@@ -270,6 +316,19 @@ export function ChatWorkbench({
           )}
         </div>
       </ScrollArea>
+
+      {/* Inline agent activity timeline */}
+      {activity.length > 0 && (
+        <div className="mx-3 mb-2">
+          <ActivityTimeline
+            activity={activity}
+            showSummary={true}
+            showFilters={false}
+            autoScroll={isSending}
+            heightClass="max-h-52"
+          />
+        </div>
+      )}
 
       {/* Composer */}
       <div className="border-t border-border p-3 space-y-3">

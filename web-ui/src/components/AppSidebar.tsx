@@ -1,4 +1,4 @@
-import { Bot, GitBranch, FlaskConical, Package, Plus, RefreshCw, PanelLeftClose, PanelLeft, Search } from "lucide-react";
+import { Bot, GitBranch, FlaskConical, Package, Play, Plus, RefreshCw, PanelLeftClose, PanelLeft, Search } from "lucide-react";
 import { useState } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -30,6 +30,7 @@ interface AppSidebarProps {
   onRefresh: () => void;
   onSelect: (id: string) => void;
   onCreateNew: () => void;
+  onQuickRun?: (id: string) => void;
 }
 
 const VIEW_META: Record<WorkspaceView, { label: string; icon: typeof Bot }> = {
@@ -70,6 +71,7 @@ export function AppSidebar({
   onRefresh,
   onSelect,
   onCreateNew,
+  onQuickRun,
 }: AppSidebarProps) {
   const [filter, setFilter] = useState("");
   const filteredItems = filter.trim()
@@ -208,7 +210,7 @@ export function AppSidebar({
               aria-selected={selectedId === item.id}
               onClick={() => onSelect(item.id)}
               className={cn(
-                "flex w-full items-start gap-2.5 rounded-md px-2.5 py-2 text-left text-sm transition-colors hover:bg-sidebar-accent animate-fade-in",
+                "group flex w-full items-start gap-2.5 rounded-md px-2.5 py-2 text-left text-sm transition-colors hover:bg-sidebar-accent animate-fade-in",
                 selectedId === item.id && "bg-sidebar-accent border-l-2 border-primary",
               )}
             >
@@ -217,6 +219,18 @@ export function AppSidebar({
                 <p className="truncate font-medium text-sidebar-foreground">{item.title}</p>
                 <p className="truncate text-xs text-muted-foreground">{item.subtitle}</p>
               </div>
+              {onQuickRun && (
+                <span
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`Run ${item.title}`}
+                  onClick={(e) => { e.stopPropagation(); onQuickRun(item.id); }}
+                  onKeyDown={(e) => { if (e.key === "Enter") { e.stopPropagation(); onQuickRun(item.id); } }}
+                  className="mt-0.5 hidden shrink-0 rounded-md p-1 text-muted-foreground hover:bg-primary/20 hover:text-primary group-hover:inline-flex"
+                >
+                  <Play className="h-3.5 w-3.5" />
+                </span>
+              )}
             </button>
           ))}
         </div>

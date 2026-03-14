@@ -33,6 +33,7 @@ import {
   fetchAuthConfig,
   fetchCurrentUser,
   fetchGatewayHealth,
+  fetchWorkflow,
   invokeAgent,
   loginWithPassword,
   listAgents,
@@ -43,6 +44,7 @@ import {
   refreshAuthSession,
   registerWithPassword,
   streamAgentInvoke,
+  triggerWorkflow,
   updateAgent,
   updateEval,
   updateWorkflow,
@@ -334,6 +336,7 @@ export default function App() {
   const [deletingAgent, setDeletingAgent] = useState(false);
   const [savingWorkflow, setSavingWorkflow] = useState(false);
   const [deletingWorkflow, setDeletingWorkflow] = useState(false);
+  const [runningWorkflow, setRunningWorkflow] = useState(false);
   const [savingEval, setSavingEval] = useState(false);
   const [deletingEval, setDeletingEval] = useState(false);
 
@@ -373,6 +376,7 @@ export default function App() {
   const [discoveryError, setDiscoveryError] = useState("");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [agentViewTab, setAgentViewTab] = useState<"config" | "chat">("chat");
 
   const threadIdsRef = useRef<Record<string, string>>({});
   const pendingRequestRef = useRef<Record<string, InvokePayload | null>>({});
@@ -789,7 +793,7 @@ export default function App() {
     if (event === "response.delta") {
       return;
     }
-    setActivityForAgent(agentName, (current) => [{ id: createId(), event, payload }, ...current].slice(0, 24));
+    setActivityForAgent(agentName, (current) => [{ id: createId(), event, payload, timestamp: new Date().toISOString() }, ...current].slice(0, 200));
   }
 
   function setPendingAssistantContent(
@@ -1077,6 +1081,64 @@ export default function App() {
       setDeletingWorkflow(false);
     }
   }
+
+  async function handleTriggerWorkflow(name: string) {
+    if (!token.trim()) return;
+    setRunningWorkflow(true);
+    setWorkflowError("");
+    try {
+      await triggerWorkflow(token, namespace, name);
+      toast.success("Workflow triggered");
+      await refreshWorkspaceData({ silent: true });
+    } catch (nextError) {
+      const msg = nextError instanceof Error ? nextError.message : String(nextError);
+      setWorkflowError(msg);
+      toast.error("Failed to trigger workflow", { description: msg });
+    } finally {
+      setRunningWorkflow(false);
+    }
+  }
+
+  // Poll the selected workflow while it is running/queued so the step pipeline updates live
+  const workflowPollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    if (workflowPollingRef.current) {
+      clearInterval(workflowPollingRef.current);
+      workflowPollingRef.current = null;
+    }
+
+    const wf = workflows.find((item) => item.name === selectedWorkflowName);
+    if (!wf || !token.trim()) return;
+    const isActive = wf.phase === "running" || wf.phase === "queued" || wf.phase === "waiting-approval";
+    if (!isActive) return;
+
+    workflowPollingRef.current = setInterval(async () => {
+      try {
+        const updated = await fetchWorkflow(token, namespace, wf.name);
+        setWorkflows((prev) =>
+          prev.map((item) => (item.name === updated.name ? updated : item)),
+        );
+        if (updated.phase !== "running" && updated.phase !== "queued" && updated.phase !== "waiting-approval") {
+          if (workflowPollingRef.current) {
+            clearInterval(workflowPollingRef.current);
+            workflowPollingRef.current = null;
+          }
+          toast.info(`Workflow ${updated.name} ${updated.phase}`);
+        }
+      } catch {
+        // silently ignore polling failures
+      }
+    }, 3000);
+
+    return () => {
+      if (workflowPollingRef.current) {
+        clearInterval(workflowPollingRef.current);
+        workflowPollingRef.current = null;
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedWorkflowName, token, namespace]);
 
   async function handleCreateEval(payload: EvalPayload) {
     if (!token.trim()) {
@@ -1371,7 +1433,7 @@ export default function App() {
             return;
           }
 
-          if (event === "response.error" || event === "message") {
+          if (event === "response.error") {
             if (typeof eventPayload.error !== "string" || !eventPayload.error.trim()) {
               throw new Error(`${event} events must include a non-empty string error field.`);
             }
@@ -1780,6 +1842,14 @@ export default function App() {
             onRefresh={() => void refreshWorkspaceData({ silent: false })}
             onSelect={handleSelectResource}
             onCreateNew={handleCreateNew}
+            onQuickRun={activeView === "agents" ? (id) => {
+              handleSelectResource(id);
+              setAgentViewTab("chat");
+            } : activeView === "workflows" ? (id) => {
+              handleSelectResource(id);
+              const wf = workflows.find((w) => w.name === id);
+              if (wf) void handleTriggerWorkflow(wf.name);
+            } : undefined}
           />
         </div>
 
@@ -1831,142 +1901,178 @@ export default function App() {
               </div>
             </div>
           ) : activeView === "agents" ? (
-            <>
-              {agentCreateMode || (!selectedAgentName && agents.length === 0) ? (
-                <CreateAgentPanel
-                  token={token}
-                  isEmptyWorkspace={agents.length === 0}
-                  name={createAgentName}
-                  model={createAgentModel}
-                  systemPrompt={createAgentSystemPrompt}
-                  runtimeKind={createAgentRuntimeKind}
-                  mcpServersText={createAgentMcpServersText}
-                  mcpSidecarsText={createAgentMcpSidecarsText}
-                  a2aAllowedCallersText={createAgentA2AAllowedCallersText}
-                  skillFileDrafts={createAgentSkillFileDrafts}
-                  gooseConfigFileDrafts={createAgentGooseConfigFileDrafts}
-                  isCreating={isCreatingAgent}
-                  error={createError}
-                  onMcpServersTextChange={setCreateAgentMcpServersText}
-                  onMcpSidecarsTextChange={setCreateAgentMcpSidecarsText}
-                  onNameChange={setCreateAgentName}
-                  onModelChange={setCreateAgentModel}
-                  onSystemPromptChange={setCreateAgentSystemPrompt}
-                  onRuntimeKindChange={setCreateAgentRuntimeKind}
-                  onA2AAllowedCallersTextChange={setCreateAgentA2AAllowedCallersText}
-                  onSkillFileDraftsChange={setCreateAgentSkillFileDrafts}
-                  onGooseConfigFileDraftsChange={setCreateAgentGooseConfigFileDrafts}
-                  onCreate={() => void handleCreateAgent()}
-                />
-              ) : selectedAgentDetail ? (
-                <AgentManagementPanel
-                  token={token}
-                  agent={selectedAgentDetail}
-                  policies={policies}
-                  isSaving={savingAgent}
-                  isDeleting={deletingAgent}
-                  error={agentManageError}
-                  onSave={(payload, a2aAllowedCallersText, skillFiles, gooseConfigFiles) =>
-                    void handleSaveAgent(payload, a2aAllowedCallersText, skillFiles, gooseConfigFiles)
-                  }
-                  onDelete={() => void handleDeleteAgent()}
-                />
-              ) : (
-                <div className="flex flex-1 items-center justify-center">
-                  <p className="text-sm text-muted-foreground">Loading the selected agent settings...</p>
-                </div>
-              )}
+            agentCreateMode || (!selectedAgentName && agents.length === 0) ? (
+              <CreateAgentPanel
+                token={token}
+                isEmptyWorkspace={agents.length === 0}
+                name={createAgentName}
+                model={createAgentModel}
+                systemPrompt={createAgentSystemPrompt}
+                runtimeKind={createAgentRuntimeKind}
+                mcpServersText={createAgentMcpServersText}
+                mcpSidecarsText={createAgentMcpSidecarsText}
+                a2aAllowedCallersText={createAgentA2AAllowedCallersText}
+                skillFileDrafts={createAgentSkillFileDrafts}
+                gooseConfigFileDrafts={createAgentGooseConfigFileDrafts}
+                isCreating={isCreatingAgent}
+                error={createError}
+                onMcpServersTextChange={setCreateAgentMcpServersText}
+                onMcpSidecarsTextChange={setCreateAgentMcpSidecarsText}
+                onNameChange={setCreateAgentName}
+                onModelChange={setCreateAgentModel}
+                onSystemPromptChange={setCreateAgentSystemPrompt}
+                onRuntimeKindChange={setCreateAgentRuntimeKind}
+                onA2AAllowedCallersTextChange={setCreateAgentA2AAllowedCallersText}
+                onSkillFileDraftsChange={setCreateAgentSkillFileDrafts}
+                onGooseConfigFileDraftsChange={setCreateAgentGooseConfigFileDrafts}
+                onCreate={() => void handleCreateAgent()}
+              />
+            ) : (
+              <>
+                {/* Mobile/tablet tab toggle — visible below lg */}
+                {selectedAgentName && (
+                  <div className="flex gap-1 lg:hidden mb-2">
+                    <Button
+                      variant={agentViewTab === "config" ? "secondary" : "ghost"}
+                      size="sm"
+                      className="h-7 text-xs"
+                      onClick={() => setAgentViewTab("config")}
+                    >
+                      Config
+                    </Button>
+                    <Button
+                      variant={agentViewTab === "chat" ? "secondary" : "ghost"}
+                      size="sm"
+                      className="h-7 text-xs"
+                      onClick={() => setAgentViewTab("chat")}
+                    >
+                      Chat
+                    </Button>
+                  </div>
+                )}
 
-              {!agentCreateMode && selectedAgentName ? (
-                <ChatWorkbench
-                  agentName={selectedAgentName}
-                  runtimeKind={selectedRuntimeKind}
-                  prompt={prompt}
-                  messages={messages}
-                  isSending={isSending}
-                  tokenReady={Boolean(token.trim())}
-                  streamMode={streamMode}
-                  requireApproval={requireApproval}
-                  approvalSupported={approvalSupported}
-                  a2aTargetAgent={a2aTargetAgent}
-                  a2aTargetNamespace={a2aTargetNamespace}
-                  a2aTimeoutSeconds={a2aTimeoutSeconds}
-                  specialistSubagents={specialistSubagents}
-                  specialistTeamConfigured={specialistTeamConfigured}
-                  subagentStrategy={subagentStrategy}
-                  discoveryPeers={discoverablePeers}
-                  discoveryLoading={discoveryLoading}
-                  discoveryError={discoveryError}
-                  gooseMaxTurns={selectedGooseChatSettings.maxTurns}
-                  gooseWorkingDirectory={selectedGooseChatSettings.workingDirectory}
-                  gooseSystemPrompt={gooseSystemPromptPreview}
-                  emptyMessage={chatEmptyMessage}
-                  error={chatError}
-                  onPromptChange={setPrompt}
-                  onToggleStreamMode={setStreamMode}
-                  onToggleRequireApproval={setRequireApproval}
-                  onA2ATargetAgentChange={(value) => {
-                    setChatError("");
-                    setA2ATargetAgent(value);
-                  }}
-                  onA2ATargetNamespaceChange={(value) => {
-                    setChatError("");
-                    setA2ATargetNamespace(value);
-                  }}
-                  onA2ATimeoutSecondsChange={(value) => {
-                    setChatError("");
-                    setA2ATimeoutSeconds(value);
-                  }}
-                  onSubagentStrategyChange={(value) => {
-                    setChatError("");
-                    setSubagentStrategy(value);
-                  }}
-                  onAddSpecialistSubagent={() => {
-                    setChatError("");
-                    setSpecialistSubagents((current) => [...current, createSpecialistSubagentDraft()]);
-                  }}
-                  onUpdateSpecialistSubagent={(id, patch) => {
-                    setChatError("");
-                    updateSpecialistSubagentDraft(id, patch);
-                  }}
-                  onRemoveSpecialistSubagent={(id) => {
-                    setChatError("");
-                    setSpecialistSubagents((current) => current.filter((item) => item.id !== id));
-                  }}
-                  onClearSpecialistTeam={() => {
-                    setChatError("");
-                    setSpecialistSubagents([]);
-                    setSubagentStrategy("sequential");
-                  }}
-                  onGooseMaxTurnsChange={(value) => {
-                    setChatError("");
-                    setGooseChatSettingsForAgent(selectedAgentName, (current) => ({
-                      ...current,
-                      maxTurns: value,
-                    }));
-                  }}
-                  onGooseWorkingDirectoryChange={(value) => {
-                    setChatError("");
-                    setGooseChatSettingsForAgent(selectedAgentName, (current) => ({
-                      ...current,
-                      workingDirectory: value,
-                    }));
-                  }}
-                  canSubmit={canSubmitChat}
-                  onSubmit={() => void handleSubmit()}
-                />
-              ) : null}
-            </>
+                {/* Side-by-side desktop layout */}
+                <div className="flex flex-1 gap-4 overflow-hidden min-h-0">
+                  {/* Left column — Agent config/management */}
+                  <div className={`${selectedAgentName ? "hidden lg:flex" : "flex"} ${agentViewTab === "config" ? "flex" : "hidden lg:flex"} w-full lg:w-[45%] flex-col overflow-auto`}>
+                    {selectedAgentDetail ? (
+                      <AgentManagementPanel
+                        token={token}
+                        agent={selectedAgentDetail}
+                        policies={policies}
+                        isSaving={savingAgent}
+                        isDeleting={deletingAgent}
+                        error={agentManageError}
+                        onSave={(payload, a2aAllowedCallersText, skillFiles, gooseConfigFiles) =>
+                          void handleSaveAgent(payload, a2aAllowedCallersText, skillFiles, gooseConfigFiles)
+                        }
+                        onDelete={() => void handleDeleteAgent()}
+                      />
+                    ) : (
+                      <div className="flex flex-1 items-center justify-center">
+                        <p className="text-sm text-muted-foreground">Loading the selected agent settings...</p>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Right column — Chat workbench */}
+                  {selectedAgentName && (
+                    <div className={`${agentViewTab === "chat" ? "flex" : "hidden lg:flex"} w-full lg:w-[55%] flex-col min-h-0`}>
+                      <ChatWorkbench
+                        agentName={selectedAgentName}
+                        runtimeKind={selectedRuntimeKind}
+                        prompt={prompt}
+                        messages={messages}
+                        activity={activity}
+                        isSending={isSending}
+                        tokenReady={Boolean(token.trim())}
+                        streamMode={streamMode}
+                        requireApproval={requireApproval}
+                        approvalSupported={approvalSupported}
+                        a2aTargetAgent={a2aTargetAgent}
+                        a2aTargetNamespace={a2aTargetNamespace}
+                        a2aTimeoutSeconds={a2aTimeoutSeconds}
+                        specialistSubagents={specialistSubagents}
+                        specialistTeamConfigured={specialistTeamConfigured}
+                        subagentStrategy={subagentStrategy}
+                        discoveryPeers={discoverablePeers}
+                        discoveryLoading={discoveryLoading}
+                        discoveryError={discoveryError}
+                        gooseMaxTurns={selectedGooseChatSettings.maxTurns}
+                        gooseWorkingDirectory={selectedGooseChatSettings.workingDirectory}
+                        gooseSystemPrompt={gooseSystemPromptPreview}
+                        emptyMessage={chatEmptyMessage}
+                        error={chatError}
+                        onPromptChange={setPrompt}
+                        onToggleStreamMode={setStreamMode}
+                        onToggleRequireApproval={setRequireApproval}
+                        onA2ATargetAgentChange={(value) => {
+                          setChatError("");
+                          setA2ATargetAgent(value);
+                        }}
+                        onA2ATargetNamespaceChange={(value) => {
+                          setChatError("");
+                          setA2ATargetNamespace(value);
+                        }}
+                        onA2ATimeoutSecondsChange={(value) => {
+                          setChatError("");
+                          setA2ATimeoutSeconds(value);
+                        }}
+                        onSubagentStrategyChange={(value) => {
+                          setChatError("");
+                          setSubagentStrategy(value);
+                        }}
+                        onAddSpecialistSubagent={() => {
+                          setChatError("");
+                          setSpecialistSubagents((current) => [...current, createSpecialistSubagentDraft()]);
+                        }}
+                        onUpdateSpecialistSubagent={(id, patch) => {
+                          setChatError("");
+                          updateSpecialistSubagentDraft(id, patch);
+                        }}
+                        onRemoveSpecialistSubagent={(id) => {
+                          setChatError("");
+                          setSpecialistSubagents((current) => current.filter((item) => item.id !== id));
+                        }}
+                        onClearSpecialistTeam={() => {
+                          setChatError("");
+                          setSpecialistSubagents([]);
+                          setSubagentStrategy("sequential");
+                        }}
+                        onGooseMaxTurnsChange={(value) => {
+                          setChatError("");
+                          setGooseChatSettingsForAgent(selectedAgentName, (current) => ({
+                            ...current,
+                            maxTurns: value,
+                          }));
+                        }}
+                        onGooseWorkingDirectoryChange={(value) => {
+                          setChatError("");
+                          setGooseChatSettingsForAgent(selectedAgentName, (current) => ({
+                            ...current,
+                            workingDirectory: value,
+                          }));
+                        }}
+                        canSubmit={canSubmitChat}
+                        onSubmit={() => void handleSubmit()}
+                      />
+                    </div>
+                  )}
+                </div>
+              </>
+            )
           ) : activeView === "workflows" ? (
             <WorkflowManager
               workflow={workflowCreateMode || workflows.length === 0 ? null : selectedWorkflow}
               agents={agents}
               isSaving={savingWorkflow}
               isDeleting={deletingWorkflow}
+              isRunning={runningWorkflow}
               error={workflowError}
               onCreate={(payload) => void handleCreateWorkflow(payload)}
               onUpdate={(name, payload) => void handleUpdateWorkflow(name, payload)}
               onDelete={(name) => void handleDeleteWorkflow(name)}
+              onTrigger={(name) => void handleTriggerWorkflow(name)}
             />
           ) : activeView === "catalog" ? (
             <SkillsCatalogPanel token={token} />

@@ -164,7 +164,7 @@ export function useChat({ token, namespace, selectedAgentName, runtimeKind }: Us
 
   function pushActivity(agentName: string, event: string, payload: Record<string, unknown>) {
     if (event === "response.delta") return;
-    setActivityForAgent(agentName, (cur) => [{ id: createId(), event, payload }, ...cur].slice(0, 24));
+    setActivityForAgent(agentName, (cur) => [{ id: createId(), event, payload, timestamp: new Date().toISOString() }, ...cur].slice(0, 24));
   }
 
   function setPendingAssistantContent(agentName: string, messageId: string, content: string, status: UiMessage["status"]) {

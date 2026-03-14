@@ -6,6 +6,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { ActivityTimeline } from "./ActivityTimeline";
 import type {
   AgentDetail,
   AgentDiscoveryPeer,
@@ -205,23 +206,22 @@ export function AgentInspectorDrawer({
 
           {/* Activity Tab */}
           <TabsContent value="activity" className="flex-1 overflow-hidden">
-            <ScrollArea className="h-full">
-              <div className="space-y-2 p-4">
-                {activity.length === 0 && (
-                  <p className="py-8 text-center text-xs text-muted-foreground">
-                    No activity events yet. Send a chat message to see events.
-                  </p>
-                )}
-                {activity.map((evt) => (
-                  <div key={evt.id} className="rounded-md border border-border p-2 space-y-1">
-                    <Badge variant="outline" className="text-[10px]">{evt.event}</Badge>
-                    <pre className="overflow-x-auto whitespace-pre-wrap text-[11px] text-muted-foreground font-mono">
-                      {JSON.stringify(evt.payload, null, 2)}
-                    </pre>
-                  </div>
-                ))}
-              </div>
-            </ScrollArea>
+            <div className="flex flex-col h-full p-4">
+              {activity.length === 0 ? (
+                <p className="py-8 text-center text-xs text-muted-foreground">
+                  No activity events yet. Send a chat message to see events.
+                </p>
+              ) : (
+                <ActivityTimeline
+                  activity={activity}
+                  showFilters={true}
+                  showSummary={true}
+                  autoScroll={false}
+                  heightClass="flex-1"
+                  className="flex-1 flex flex-col"
+                />
+              )}
+            </div>
           </TabsContent>
 
           {/* Logs Tab */}

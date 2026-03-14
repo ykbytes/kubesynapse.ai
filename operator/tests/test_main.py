@@ -204,6 +204,137 @@ class OperatorManifestTests(unittest.TestCase):
             "API_GATEWAY_SHARED_TOKEN",
         )
 
+    def test_statefulset_manifest_includes_autonomy_and_model_env(self) -> None:
+        with patch.object(
+            operator_main,
+            "AGENT_ALLOWED_MODELS",
+            ["gpt-4", "openrouter-gpt-4o-mini"],
+        ), patch.object(operator_main, "AGENT_MAX_STEPS", "6"), patch.object(
+            operator_main,
+            "AGENT_MAX_STEPS_LIMIT",
+            "16",
+        ), patch.object(operator_main, "AGENT_DOOM_LOOP_THRESHOLD", "4"), patch.object(
+            operator_main,
+            "AGENT_SUPERVISOR_HISTORY_LIMIT",
+            "10",
+        ), patch.object(operator_main, "AGENT_SUPERVISOR_RESPONSE_CHARS", "8000"), patch.object(
+            operator_main,
+            "AGENT_AUTONOMY_CONTINUE_ON_ACTION_ERROR",
+            "false",
+        ):
+            manifest = operator_main.create_agent_statefulset_manifest(
+                "workspace-assistant",
+                "default",
+                {
+                    "model": "gpt-4",
+                    "runtime": {"kind": "langgraph"},
+                    "storage": {"size": "1Gi"},
+                    "systemPrompt": "Be precise.",
+                },
+                "team-policy",
+                {},
+            )
+
+        env = {
+            item["name"]: item["value"]
+            for item in manifest["spec"]["template"]["spec"]["containers"][0]["env"]
+            if "value" in item
+        }
+
+        self.assertEqual(env["AGENT_MODEL"], "gpt-4")
+        self.assertEqual(env["AGENT_DEFAULT_MODEL"], "gpt-4")
+        self.assertEqual(env["AGENT_ALLOWED_MODELS"], "gpt-4,openrouter-gpt-4o-mini")
+        self.assertEqual(env["AGENT_MAX_STEPS"], "6")
+        self.assertEqual(env["AGENT_MAX_STEPS_LIMIT"], "16")
+        self.assertEqual(env["AGENT_DOOM_LOOP_THRESHOLD"], "4")
+        self.assertEqual(env["AGENT_SUPERVISOR_HISTORY_LIMIT"], "10")
+        self.assertEqual(env["AGENT_SUPERVISOR_RESPONSE_CHARS"], "8000")
+        self.assertEqual(env["AGENT_AUTONOMY_CONTINUE_ON_ACTION_ERROR"], "false")
+
+    def test_langgraph_manifest_includes_local_tool_env_and_workspace_mount(self) -> None:
+        with patch.object(operator_main, "AGENT_LOCAL_TOOL_MOUNT_WORKSPACE", True), patch.object(
+            operator_main,
+            "AGENT_LOCAL_TOOL_DISCOVERY_ENABLED",
+            "false",
+        ), patch.object(operator_main, "AGENT_LOCAL_TOOL_ALLOWLIST", "curl,rg"), patch.object(
+            operator_main,
+            "AGENT_LOCAL_TOOL_ALLOWED_ROOTS",
+            "/app/state,/workspace,/tmp",
+        ), patch.object(operator_main, "AGENT_LOCAL_TOOL_TIMEOUT_SECONDS", "45.0"), patch.object(
+            operator_main,
+            "AGENT_LOCAL_TOOL_MAX_OUTPUT_CHARS",
+            "20000",
+        ), patch.object(operator_main, "AGENT_LOCAL_TOOL_MAX_ARGS", "12"), patch.object(
+            operator_main,
+            "AGENT_LOCAL_TOOL_MAX_ARG_CHARS",
+            "1024",
+        ), patch.object(operator_main, "AGENT_LOCAL_TOOL_LIST_LIMIT", "18"), patch.object(
+            operator_main,
+            "AGENT_AUTONOMY_ACTION_RETRY_LIMIT",
+            "4",
+        ), patch.object(operator_main, "AGENT_AUTONOMY_ACTION_RETRY_BACKOFF_SECONDS", "2.5"), patch.object(
+            operator_main,
+            "AGENT_AUTONOMY_FAILURE_HISTORY_LIMIT",
+            "9",
+        ):
+            manifest = operator_main.create_agent_statefulset_manifest(
+                "workspace-assistant",
+                "default",
+                {
+                    "model": "gpt-4",
+                    "runtime": {"kind": "langgraph"},
+                    "storage": {"size": "1Gi"},
+                    "systemPrompt": "Be precise.",
+                },
+                None,
+                {},
+            )
+
+        pod_spec = manifest["spec"]["template"]["spec"]
+        env = {
+            item["name"]: item["value"]
+            for item in pod_spec["containers"][0]["env"]
+            if "value" in item
+        }
+        volume_mounts = pod_spec["containers"][0]["volumeMounts"]
+        volumes = pod_spec["volumes"]
+
+        self.assertIn({"name": "workspace-volume", "mountPath": "/workspace"}, volume_mounts)
+        self.assertIn({"name": "workspace-volume", "emptyDir": {}}, volumes)
+        self.assertEqual(env["AGENT_LOCAL_TOOL_DISCOVERY_ENABLED"], "false")
+        self.assertEqual(env["AGENT_LOCAL_TOOL_ALLOWLIST"], "curl,rg")
+        self.assertEqual(env["AGENT_LOCAL_TOOL_ALLOWED_ROOTS"], "/app/state,/workspace,/tmp")
+        self.assertEqual(env["AGENT_LOCAL_TOOL_TIMEOUT_SECONDS"], "45.0")
+        self.assertEqual(env["AGENT_LOCAL_TOOL_MAX_OUTPUT_CHARS"], "20000")
+        self.assertEqual(env["AGENT_LOCAL_TOOL_MAX_ARGS"], "12")
+        self.assertEqual(env["AGENT_LOCAL_TOOL_MAX_ARG_CHARS"], "1024")
+        self.assertEqual(env["AGENT_LOCAL_TOOL_LIST_LIMIT"], "18")
+        self.assertEqual(env["AGENT_AUTONOMY_ACTION_RETRY_LIMIT"], "4")
+        self.assertEqual(env["AGENT_AUTONOMY_ACTION_RETRY_BACKOFF_SECONDS"], "2.5")
+        self.assertEqual(env["AGENT_AUTONOMY_FAILURE_HISTORY_LIMIT"], "9")
+
+    def test_langgraph_manifest_skips_workspace_mount_when_disabled(self) -> None:
+        with patch.object(operator_main, "AGENT_LOCAL_TOOL_MOUNT_WORKSPACE", False):
+            manifest = operator_main.create_agent_statefulset_manifest(
+                "workspace-assistant",
+                "default",
+                {
+                    "model": "gpt-4",
+                    "runtime": {"kind": "langgraph"},
+                    "storage": {"size": "1Gi"},
+                    "systemPrompt": "Be precise.",
+                },
+                None,
+                {},
+            )
+
+        pod_spec = manifest["spec"]["template"]["spec"]
+        volume_mounts = pod_spec["containers"][0]["volumeMounts"]
+        volume_names = {item["name"] for item in pod_spec["volumes"]}
+
+        self.assertNotIn({"name": "workspace-volume", "mountPath": "/workspace"}, volume_mounts)
+        self.assertNotIn("workspace-volume", volume_names)
+
     def test_statefulset_manifest_includes_skill_files_env(self) -> None:
         manifest = operator_main.create_agent_statefulset_manifest(
             "workspace-assistant",

@@ -83,7 +83,7 @@ export function EvalManager({
     setThresholds(thresholdsFromResource(null));
     setValidationError("");
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [evalResource?.name]);
+  }, [evalResource?.name, evalResource?.phase]);
 
   function updateCase(index: number, updater: (current: EvalTestCase) => EvalTestCase) {
     setTestSuite((current) => current.map((item, itemIndex) => (itemIndex === index ? updater(item) : item)));
@@ -112,7 +112,7 @@ export function EvalManager({
     return { values: next, error: null };
   }
 
-  const canSubmit = Boolean(name.trim()) && Boolean(agentRef.trim()) && testSuite.every((item) => item.input.trim());
+  const canSubmit = Boolean(name.trim()) && Boolean(agentRef.trim()) && testSuite.every((item) => item.input.trim() && item.metrics.length > 0);
 
   return (
     <Card>

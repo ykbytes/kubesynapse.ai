@@ -511,13 +511,27 @@ def invoke_agent_runtime(
     timeout_seconds: float | None = None,
 ) -> dict[str, Any]:
     """POST an invoke request to the agent runtime and return the response body."""
+    effective_timeout = timeout_seconds or AGENT_RUNTIME_TIMEOUT_SECONDS
     with httpx.Client(
-        timeout=timeout_seconds or AGENT_RUNTIME_TIMEOUT_SECONDS,
+        timeout=effective_timeout,
         transport=httpx.HTTPTransport(retries=2),
     ) as client:
-        response = client.post(f"{runtime_url(agent_name, namespace)}/invoke", json=payload)
-        response.raise_for_status()
-        return response.json()  # type: ignore[no-any-return]
+        url = f"{runtime_url(agent_name, namespace)}/invoke"
+        last_exc: Exception | None = None
+        for attempt in range(3):
+            response = client.post(url, json=payload)
+            if response.status_code < 500:
+                response.raise_for_status()
+                return response.json()  # type: ignore[no-any-return]
+            last_exc = httpx.HTTPStatusError(
+                f"Server error {response.status_code}",
+                request=response.request,
+                response=response,
+            )
+            if attempt < 2:
+                import time
+                time.sleep(min(2 ** attempt, 4))
+        raise last_exc  # type: ignore[misc]
 
 
 def normalize_text(text: str) -> str:

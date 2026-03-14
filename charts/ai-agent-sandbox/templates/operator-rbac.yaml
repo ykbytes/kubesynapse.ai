@@ -20,7 +20,7 @@ rules:
     resources: [aiagents, agenttenants, agentpolicies, agentapprovals, agentworkflows, agentevals]
     verbs: [create, delete, get, list, patch, update, watch]
   - apiGroups: ["sandbox.enterprise.ai"]
-    resources: [aiagents/status, agentapprovals/status, agentworkflows/status, agentevals/status]
+    resources: [aiagents/status, agentapprovals/status, agentworkflows/status, agentevals/status, agenttenants/status]
     verbs: [get, patch, update]
   - apiGroups: ["apps"]
     resources: [statefulsets]

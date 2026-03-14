@@ -130,7 +130,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins(),
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "Accept", "X-Request-Id"],
 )
 
@@ -2211,9 +2211,16 @@ def build_agent_spec(
 
 def build_workflow_spec(body: WorkflowRequest | WorkflowUpdateRequest) -> dict[str, Any]:
     steps = []
+    step_names: set[str] = set()
     for step in body.steps:
+        trimmed_name = step.name.strip()
+        if not trimmed_name:
+            raise HTTPException(status_code=400, detail="All workflow steps must have a non-empty name.")
+        if trimmed_name in step_names:
+            raise HTTPException(status_code=400, detail=f"Duplicate step name: '{trimmed_name}'")
+        step_names.add(trimmed_name)
         step_spec: dict[str, Any] = {
-            "name": step.name.strip(),
+            "name": trimmed_name,
             "agentRef": step.agent_ref.strip(),
             "prompt": step.prompt,
             "dependsOn": [
@@ -2227,12 +2234,41 @@ def build_workflow_spec(body: WorkflowRequest | WorkflowUpdateRequest) -> dict[s
             step_spec["execution"] = step.execution
         steps.append(step_spec)
 
+    # Validate dependency references and detect cycles
+    for step_spec in steps:
+        for dep in step_spec.get("dependsOn", []):
+            if dep not in step_names:
+                raise HTTPException(status_code=400, detail=f"Step '{step_spec['name']}' depends on unknown step '{dep}'")
+    _detect_workflow_cycles(steps)
+
     return {
         "description": body.description.strip(),
         "input": body.input.strip(),
         "messageBus": body.message_bus,
         "steps": steps,
     }
+
+
+def _detect_workflow_cycles(steps: list[dict[str, Any]]) -> None:
+    """Detect dependency cycles in workflow steps using Kahn's algorithm."""
+    adj: dict[str, list[str]] = {s["name"]: list(s.get("dependsOn") or []) for s in steps}
+    in_degree: dict[str, int] = {name: 0 for name in adj}
+    for deps in adj.values():
+        for dep in deps:
+            if dep in in_degree:
+                in_degree[dep] += 1
+    queue = [name for name, degree in in_degree.items() if degree == 0]
+    visited = 0
+    while queue:
+        node = queue.pop(0)
+        visited += 1
+        for dep in adj.get(node, []):
+            if dep in in_degree:
+                in_degree[dep] -= 1
+                if in_degree[dep] == 0:
+                    queue.append(dep)
+    if visited != len(adj):
+        raise HTTPException(status_code=400, detail="Workflow steps contain a dependency cycle.")
 
 
 def build_eval_spec(body: EvalRequest | EvalUpdateRequest) -> dict[str, Any]:
@@ -4047,6 +4083,72 @@ def delete_workflow(
     return DeleteResponse(status="deleted", kind="workflow", name=workflow_name, namespace=namespace)
 
 
+class WorkflowTriggerRequest(BaseModel):
+    input: str = Field(default="", max_length=4000)
+
+
+@app.post("/api/workflows/{workflow_name}/trigger", response_model=WorkflowInfo)
+def trigger_workflow(
+    workflow_name: str,
+    body: WorkflowTriggerRequest | None = None,
+    namespace: str = "default",
+    user=Depends(verify_token),
+):
+    """Trigger a workflow run by updating only spec.input, preserving all other spec fields.
+
+    This bumps the resource generation, which causes the operator to re-reconcile.
+    """
+    ensure_namespace_access(user, namespace, "operator")
+    try:
+        from kubernetes import client
+
+        api = client.CustomObjectsApi()
+        current = api.get_namespaced_custom_object(
+            group=RESOURCE_GROUP,
+            version=RESOURCE_VERSION,
+            namespace=namespace,
+            plural="agentworkflows",
+            name=workflow_name,
+        )
+    except Exception as exc:
+        status = getattr(exc, "status", None)
+        if status == 404:
+            raise HTTPException(status_code=404, detail=f"Workflow '{workflow_name}' not found") from exc
+        raise HTTPException(status_code=502, detail=f"Failed to read workflow: {exc}") from exc
+
+    existing_spec = current.get("spec", {}) or {}
+    new_input = (body.input if body else "") or existing_spec.get("input", "")
+    updated_spec = {**existing_spec, "input": new_input}
+
+    try:
+        from kubernetes import client as k8s_client
+
+        updated = k8s_client.CustomObjectsApi().replace_namespaced_custom_object(
+            group=RESOURCE_GROUP,
+            version=RESOURCE_VERSION,
+            namespace=namespace,
+            plural="agentworkflows",
+            name=workflow_name,
+            body={
+                "apiVersion": f"{RESOURCE_GROUP}/{RESOURCE_VERSION}",
+                "kind": RESOURCE_KIND_BY_PLURAL["agentworkflows"],
+                "metadata": {
+                    "name": workflow_name,
+                    "namespace": namespace,
+                    "resourceVersion": current.get("metadata", {}).get("resourceVersion"),
+                },
+                "spec": updated_spec,
+            },
+        )
+    except Exception as exc:
+        status = getattr(exc, "status", None)
+        if status == 409:
+            raise HTTPException(status_code=409, detail="Workflow was modified concurrently. Retry.") from exc
+        raise HTTPException(status_code=502, detail=f"Failed to trigger workflow: {exc}") from exc
+
+    return workflow_info_from_resource(updated)
+
+
 @app.get("/api/evals", response_model=list[EvalInfo])
 def list_evals(namespace: str = "default", user=Depends(verify_token)):
     ensure_namespace_access(user, namespace)
@@ -4167,7 +4269,7 @@ async def invoke_agent_stream(
 
     async def event_generator():
         try:
-            async with httpx.AsyncClient(timeout=None, trust_env=False) as client:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=10.0), trust_env=False) as client:
                 async with client.stream(
                     "POST",
                     f"{agent_runtime_url(agent_name, namespace)}/invoke/stream",

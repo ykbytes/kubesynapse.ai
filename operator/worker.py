@@ -70,14 +70,55 @@ def load_kubernetes_config() -> None:
 
 
 def patch_custom_status(plural: str, status: dict[str, Any]) -> None:
-    kubernetes.client.CustomObjectsApi().patch_namespaced_custom_object_status(
-        group=GROUP,
-        version=VERSION,
-        namespace=TARGET_NAMESPACE,
-        plural=plural,
-        name=TARGET_NAME,
-        body={"status": status},
-    )
+    try:
+        kubernetes.client.CustomObjectsApi().patch_namespaced_custom_object_status(
+            group=GROUP,
+            version=VERSION,
+            namespace=TARGET_NAMESPACE,
+            plural=plural,
+            name=TARGET_NAME,
+            body={"status": status},
+        )
+    except kubernetes.client.ApiException as exc:
+        if exc.status == 409:
+            logging.getLogger(__name__).warning(
+                "Conflict patching %s/%s status (409), retrying once.",
+                plural, TARGET_NAME,
+            )
+            kubernetes.client.CustomObjectsApi().patch_namespaced_custom_object_status(
+                group=GROUP,
+                version=VERSION,
+                namespace=TARGET_NAMESPACE,
+                plural=plural,
+                name=TARGET_NAME,
+                body={"status": status},
+            )
+        else:
+            logging.getLogger(__name__).error(
+                "Failed to patch %s/%s status: %s",
+                plural, TARGET_NAME, exc,
+            )
+            raise
+
+
+def _patch_pending_approval_label(pending_approval_name: str | None) -> None:
+    """Set or clear the pending-approval label on the workflow resource."""
+    label_value = pending_approval_name if pending_approval_name else None
+    try:
+        kubernetes.client.CustomObjectsApi().patch_namespaced_custom_object(
+            group=GROUP,
+            version=VERSION,
+            namespace=TARGET_NAMESPACE,
+            plural="agentworkflows",
+            name=TARGET_NAME,
+            body={"metadata": {"labels": {"sandbox.enterprise.ai/pending-approval": label_value}}},
+        )
+    except Exception:
+        logging.getLogger(__name__).warning(
+            "Failed to patch pending-approval label on %s/%s, approval lookup will use full scan.",
+            "agentworkflows", TARGET_NAME,
+            exc_info=True,
+        )
 
 
 def get_resource(plural: str) -> dict[str, Any]:
@@ -164,6 +205,7 @@ def workflow_summary(
         "failed": 0,
         "waiting-approval": 0,
         "denied": 0,
+        "skipped": 0,
     }
     for state in step_states.values():
         status_name = str(state.get("status", "")).strip()
@@ -176,6 +218,7 @@ def workflow_summary(
         ),
         "continuedSteps": status_counts["continued"],
         "failedSteps": status_counts["failed"] + status_counts["denied"],
+        "skippedSteps": status_counts["skipped"],
         "waitingApprovalSteps": status_counts["waiting-approval"],
         "totalSteps": total_steps,
         "runId": run_id,
@@ -256,10 +299,20 @@ def previous_output_for_dependencies(
     dependencies: list[str],
     step_results: dict[str, dict[str, Any]],
 ) -> str:
-    return "\n\n".join(
-        str(step_results.get(dependency, {}).get("response", ""))
-        for dependency in dependencies
-    )
+    parts: list[str] = []
+    for dependency in dependencies:
+        result = step_results.get(dependency, {})
+        response_text = str(result.get("response", ""))
+        output_data = result.get("output", {})
+        structured_json = output_data.get("json") if isinstance(output_data, dict) else None
+        if structured_json is not None:
+            parts.append(
+                f"[Step: {dependency}]\n{response_text}\n[Structured Output]\n"
+                + json.dumps(structured_json, ensure_ascii=False, indent=2)
+            )
+        else:
+            parts.append(f"[Step: {dependency}]\n{response_text}")
+    return "\n\n".join(parts)
 
 
 def parse_iso_timestamp(value: Any) -> float | None:
@@ -502,9 +555,10 @@ def execute_workflow_step(
                 and attempt < int(execution_policy["maxAttempts"])
             )
             if should_retry:
-                backoff_seconds = float(
-                    execution_policy["backoffSeconds"]
-                ) * (2 ** (attempt - 1))
+                backoff_seconds = min(
+                    float(execution_policy["backoffSeconds"]) * (2 ** (attempt - 1)),
+                    300.0,
+                )
                 append_journal_event(
                     "workflow.step.retrying",
                     {
@@ -618,7 +672,7 @@ def run_workflow_worker() -> None:
     completed = {
         step_name
         for step_name, result in step_results.items()
-        if str(result.get("status", "")).strip() in {"completed", "continued"}
+        if str(result.get("status", "")).strip() in {"completed", "continued", "failed", "denied"}
     }
 
     append_journal_event(
@@ -634,6 +688,8 @@ def run_workflow_worker() -> None:
         },
     )
     current_step = str(status.get("currentStep", "") or "")
+    if str(status.get("phase", "") or "") == "waiting-approval":
+        _patch_pending_approval_label(None)
     workflow_status_payload = patch_workflow_status(
         plural=plural,
         phase="running",
@@ -772,6 +828,7 @@ def run_workflow_worker() -> None:
                         spec=spec,
                         status=workflow_status_payload,
                     )
+                    _patch_pending_approval_label(str(pending_approval.get("name") or ""))
                     return
 
                 step_results[step_name] = outcome["stepResult"]

@@ -48,13 +48,13 @@ spec:
                         description: "Per-step execution policy for retries, timeouts, and non-fatal failures"
                         properties:
                           timeoutSeconds:
-                            type: number
+                            type: integer
                             minimum: 1
                           maxAttempts:
                             type: integer
                             minimum: 1
                           backoffSeconds:
-                            type: number
+                            type: integer
                             minimum: 0
                           retryable:
                             type: boolean

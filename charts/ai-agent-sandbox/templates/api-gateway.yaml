@@ -194,12 +194,7 @@ spec:
               readOnly: true
 {{- end }}
           resources:
-            requests:
-              cpu: "50m"
-              memory: "128Mi"
-            limits:
-              cpu: "500m"
-              memory: "512Mi"
+            {{- toYaml .Values.apiGateway.resources | nindent 12 }}
           readinessProbe:
             httpGet:
               path: /api/health
@@ -227,30 +222,41 @@ spec:
       targetPort: 8080
       name: http
 ---
-{{- if .Values.apiGateway.ingress.enabled }}
+{{- $apiGateway := .Values.apiGateway | default dict -}}
+{{- $apiGatewayIngress := get $apiGateway "ingress" | default dict -}}
+{{- $apiGatewayTls := get $apiGateway "tls" | default dict -}}
+{{- $apiGatewayIngressEnabled := false -}}
+{{- if hasKey $apiGatewayIngress "enabled" }}{{- $apiGatewayIngressEnabled = get $apiGatewayIngress "enabled" -}}{{- end -}}
+{{- $apiGatewayIngressAnnotations := get $apiGatewayIngress "annotations" | default dict -}}
+{{- $apiGatewayIngressClassName := get $apiGateway "ingressClassName" | default "" -}}
+{{- $apiGatewayTlsEnabled := false -}}
+{{- if hasKey $apiGatewayTls "enabled" }}{{- $apiGatewayTlsEnabled = get $apiGatewayTls "enabled" -}}{{- end -}}
+{{- $apiGatewayTlsSecretName := get $apiGatewayTls "secretName" | default "" -}}
+{{- $apiGatewayIngressHost := get $apiGateway "ingressHost" | default "" -}}
+{{- if $apiGatewayIngressEnabled }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: {{ include "ai-agent-sandbox.fullname" . }}-ingress
-{{- with .Values.apiGateway.ingress.annotations }}
+{{- with $apiGatewayIngressAnnotations }}
   annotations:
 {{ toYaml . | indent 4 }}
 {{- end }}
 spec:
-  {{- if .Values.apiGateway.ingressClassName }}
-  ingressClassName: {{ .Values.apiGateway.ingressClassName }}
+  {{- if $apiGatewayIngressClassName }}
+  ingressClassName: {{ $apiGatewayIngressClassName }}
   {{- end }}
-  {{- if and .Values.apiGateway.tls.enabled .Values.apiGateway.tls.secretName }}
+  {{- if and $apiGatewayTlsEnabled $apiGatewayTlsSecretName }}
   tls:
     - hosts:
-        {{- if .Values.apiGateway.ingressHost }}
-        - {{ .Values.apiGateway.ingressHost }}
+        {{- if $apiGatewayIngressHost }}
+        - {{ $apiGatewayIngressHost }}
         {{- end }}
-      secretName: {{ .Values.apiGateway.tls.secretName | quote }}
+      secretName: {{ $apiGatewayTlsSecretName | quote }}
   {{- end }}
   rules:
-    - {{- if .Values.apiGateway.ingressHost }}
-      host: {{ .Values.apiGateway.ingressHost }}
+    - {{- if $apiGatewayIngressHost }}
+      host: {{ $apiGatewayIngressHost }}
       {{- end }}
       http:
         paths:

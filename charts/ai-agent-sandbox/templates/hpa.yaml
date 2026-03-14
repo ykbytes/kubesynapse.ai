@@ -1,4 +1,5 @@
 # HPA for agent pods based on custom metrics
+{{- if .Values.autoscaling.enabled }}
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
@@ -8,8 +9,8 @@ spec:
     apiVersion: apps/v1
     kind: Deployment
     name: {{ include "ai-agent-sandbox.fullname" . }}-api-gateway
-  minReplicas: 1
-  maxReplicas: 10
+  minReplicas: {{ .Values.autoscaling.apiGateway.minReplicas | default 1 }}
+  maxReplicas: {{ .Values.autoscaling.apiGateway.maxReplicas | default 10 }}
   metrics:
     - type: Resource
       resource:
@@ -34,8 +35,8 @@ spec:
     apiVersion: apps/v1
     kind: Deployment
     name: {{ include "ai-agent-sandbox.fullname" . }}-litellm
-  minReplicas: 1
-  maxReplicas: 5
+  minReplicas: {{ .Values.autoscaling.litellm.minReplicas | default 1 }}
+  maxReplicas: {{ .Values.autoscaling.litellm.maxReplicas | default 5 }}
   metrics:
     - type: Resource
       resource:
@@ -43,3 +44,4 @@ spec:
         target:
           type: Utilization
           averageUtilization: 75
+{{- end }}

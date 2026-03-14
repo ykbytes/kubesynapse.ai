@@ -37,6 +37,39 @@ agentRuntime:
     tag: latest
     pullPolicy: IfNotPresent
   env: {}
+  allowedModels: []
+  autonomy:
+    maxSteps: 4
+    maxStepsLimit: 12
+    doomLoopThreshold: 3
+    supervisorHistoryLimit: 8
+    supervisorResponseChars: 12000
+    continueOnActionError: true
+    retryLimit: 2
+    retryBackoffSeconds: 1.0
+    failureHistoryLimit: 6
+  localTools:
+    mountWorkspace: true
+    discoveryEnabled: true
+    allowlist:
+      - curl
+      - wget
+      - jq
+      - git
+      - rg
+      - python
+      - pip
+      - tar
+      - unzip
+      - zip
+    allowedRoots:
+      - /app/state
+      - /workspace
+    timeoutSeconds: 20
+    maxOutputChars: 12000
+    maxArgs: 32
+    maxArgChars: 512
+    listLimit: 32
   storage:
     size: 1Gi
   resources:
@@ -158,6 +191,15 @@ operator:
     storageClassName: ""
   stateDbEnabled: true
 
+autoscaling:
+  enabled: false
+  apiGateway:
+    minReplicas: 1
+    maxReplicas: 10
+  litellm:
+    minReplicas: 1
+    maxReplicas: 5
+
 apiGateway:
   replicaCount: 1
   image:
@@ -171,6 +213,13 @@ apiGateway:
     annotations: {}
   publicBaseUrl: ""
   corsOrigins: []
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
   tls:
     enabled: false
     secretName: ""  # TLS secret name in the Ingress namespace; create via cert-manager or manually

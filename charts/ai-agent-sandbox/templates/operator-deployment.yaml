@@ -1,3 +1,42 @@
+{{- $agentRuntime := .Values.agentRuntime | default dict -}}
+{{- $agentAutonomy := get $agentRuntime "autonomy" | default dict -}}
+{{- $agentLocalTools := get $agentRuntime "localTools" | default dict -}}
+{{- $agentMaxSteps := 4 -}}
+{{- if hasKey $agentAutonomy "maxSteps" }}{{- $agentMaxSteps = get $agentAutonomy "maxSteps" -}}{{- end -}}
+{{- $agentMaxStepsLimit := 12 -}}
+{{- if hasKey $agentAutonomy "maxStepsLimit" }}{{- $agentMaxStepsLimit = get $agentAutonomy "maxStepsLimit" -}}{{- end -}}
+{{- $agentDoomLoopThreshold := 3 -}}
+{{- if hasKey $agentAutonomy "doomLoopThreshold" }}{{- $agentDoomLoopThreshold = get $agentAutonomy "doomLoopThreshold" -}}{{- end -}}
+{{- $agentSupervisorHistoryLimit := 8 -}}
+{{- if hasKey $agentAutonomy "supervisorHistoryLimit" }}{{- $agentSupervisorHistoryLimit = get $agentAutonomy "supervisorHistoryLimit" -}}{{- end -}}
+{{- $agentSupervisorResponseChars := 12000 -}}
+{{- if hasKey $agentAutonomy "supervisorResponseChars" }}{{- $agentSupervisorResponseChars = get $agentAutonomy "supervisorResponseChars" -}}{{- end -}}
+{{- $agentContinueOnActionError := true -}}
+{{- if hasKey $agentAutonomy "continueOnActionError" }}{{- $agentContinueOnActionError = get $agentAutonomy "continueOnActionError" -}}{{- end -}}
+{{- $agentRetryLimit := 2 -}}
+{{- if hasKey $agentAutonomy "retryLimit" }}{{- $agentRetryLimit = get $agentAutonomy "retryLimit" -}}{{- end -}}
+{{- $agentRetryBackoffSeconds := 1.0 -}}
+{{- if hasKey $agentAutonomy "retryBackoffSeconds" }}{{- $agentRetryBackoffSeconds = get $agentAutonomy "retryBackoffSeconds" -}}{{- end -}}
+{{- $agentFailureHistoryLimit := 6 -}}
+{{- if hasKey $agentAutonomy "failureHistoryLimit" }}{{- $agentFailureHistoryLimit = get $agentAutonomy "failureHistoryLimit" -}}{{- end -}}
+{{- $agentMountWorkspace := true -}}
+{{- if hasKey $agentLocalTools "mountWorkspace" }}{{- $agentMountWorkspace = get $agentLocalTools "mountWorkspace" -}}{{- end -}}
+{{- $agentLocalDiscoveryEnabled := true -}}
+{{- if hasKey $agentLocalTools "discoveryEnabled" }}{{- $agentLocalDiscoveryEnabled = get $agentLocalTools "discoveryEnabled" -}}{{- end -}}
+{{- $agentLocalAllowlist := list "curl" "wget" "jq" "git" "rg" "python" "pip" "tar" "unzip" "zip" -}}
+{{- if hasKey $agentLocalTools "allowlist" }}{{- $agentLocalAllowlist = get $agentLocalTools "allowlist" -}}{{- end -}}
+{{- $agentLocalAllowedRoots := list "/app/state" "/workspace" -}}
+{{- if hasKey $agentLocalTools "allowedRoots" }}{{- $agentLocalAllowedRoots = get $agentLocalTools "allowedRoots" -}}{{- end -}}
+{{- $agentLocalTimeoutSeconds := 20 -}}
+{{- if hasKey $agentLocalTools "timeoutSeconds" }}{{- $agentLocalTimeoutSeconds = get $agentLocalTools "timeoutSeconds" -}}{{- end -}}
+{{- $agentLocalMaxOutputChars := 12000 -}}
+{{- if hasKey $agentLocalTools "maxOutputChars" }}{{- $agentLocalMaxOutputChars = get $agentLocalTools "maxOutputChars" -}}{{- end -}}
+{{- $agentLocalMaxArgs := 32 -}}
+{{- if hasKey $agentLocalTools "maxArgs" }}{{- $agentLocalMaxArgs = get $agentLocalTools "maxArgs" -}}{{- end -}}
+{{- $agentLocalMaxArgChars := 512 -}}
+{{- if hasKey $agentLocalTools "maxArgChars" }}{{- $agentLocalMaxArgChars = get $agentLocalTools "maxArgChars" -}}{{- end -}}
+{{- $agentLocalListLimit := 32 -}}
+{{- if hasKey $agentLocalTools "listLimit" }}{{- $agentLocalListLimit = get $agentLocalTools "listLimit" -}}{{- end -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -88,6 +127,44 @@ spec:
               value: {{ .Values.agentRuntime.image.pullPolicy | default "IfNotPresent" | quote }}
             - name: AGENT_RUNTIME_EXTRA_ENV_JSON
               value: {{ .Values.agentRuntime.env | default dict | toJson | quote }}
+            - name: AGENT_ALLOWED_MODELS
+              value: {{ join "," (.Values.agentRuntime.allowedModels | default (list)) | quote }}
+            - name: AGENT_MAX_STEPS
+              value: {{ $agentMaxSteps | quote }}
+            - name: AGENT_MAX_STEPS_LIMIT
+              value: {{ $agentMaxStepsLimit | quote }}
+            - name: AGENT_DOOM_LOOP_THRESHOLD
+              value: {{ $agentDoomLoopThreshold | quote }}
+            - name: AGENT_SUPERVISOR_HISTORY_LIMIT
+              value: {{ $agentSupervisorHistoryLimit | quote }}
+            - name: AGENT_SUPERVISOR_RESPONSE_CHARS
+              value: {{ $agentSupervisorResponseChars | quote }}
+            - name: AGENT_AUTONOMY_CONTINUE_ON_ACTION_ERROR
+              value: {{ $agentContinueOnActionError | quote }}
+            - name: AGENT_AUTONOMY_ACTION_RETRY_LIMIT
+              value: {{ $agentRetryLimit | quote }}
+            - name: AGENT_AUTONOMY_ACTION_RETRY_BACKOFF_SECONDS
+              value: {{ $agentRetryBackoffSeconds | quote }}
+            - name: AGENT_AUTONOMY_FAILURE_HISTORY_LIMIT
+              value: {{ $agentFailureHistoryLimit | quote }}
+            - name: AGENT_LOCAL_TOOL_MOUNT_WORKSPACE
+              value: {{ $agentMountWorkspace | quote }}
+            - name: AGENT_LOCAL_TOOL_DISCOVERY_ENABLED
+              value: {{ $agentLocalDiscoveryEnabled | quote }}
+            - name: AGENT_LOCAL_TOOL_ALLOWLIST
+              value: {{ join "," $agentLocalAllowlist | quote }}
+            - name: AGENT_LOCAL_TOOL_ALLOWED_ROOTS
+              value: {{ join "," $agentLocalAllowedRoots | quote }}
+            - name: AGENT_LOCAL_TOOL_TIMEOUT_SECONDS
+              value: {{ $agentLocalTimeoutSeconds | quote }}
+            - name: AGENT_LOCAL_TOOL_MAX_OUTPUT_CHARS
+              value: {{ $agentLocalMaxOutputChars | quote }}
+            - name: AGENT_LOCAL_TOOL_MAX_ARGS
+              value: {{ $agentLocalMaxArgs | quote }}
+            - name: AGENT_LOCAL_TOOL_MAX_ARG_CHARS
+              value: {{ $agentLocalMaxArgChars | quote }}
+            - name: AGENT_LOCAL_TOOL_LIST_LIMIT
+              value: {{ $agentLocalListLimit | quote }}
             - name: GOOSE_RUNTIME_IMAGE
               value: "{{ .Values.gooseRuntime.image.repository }}:{{ .Values.gooseRuntime.image.tag }}"
             - name: GOOSE_RUNTIME_IMAGE_PULL_POLICY
