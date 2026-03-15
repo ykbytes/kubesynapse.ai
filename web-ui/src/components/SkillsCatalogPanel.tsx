@@ -74,7 +74,11 @@ export function SkillsCatalogPanel({ token, onAttachSkill, onAttachTool }: Skill
   const [detailLoading, setDetailLoading] = useState(false);
 
   useEffect(() => {
-    if (!token) return;
+    if (!token) {
+      setSkills([]);
+      setTools([]);
+      return;
+    }
     setLoading(true);
     setError("");
     Promise.all([
@@ -219,7 +223,11 @@ export function SkillsCatalogPanel({ token, onAttachSkill, onAttachTool }: Skill
               </div>
             )}
 
-            {loading ? (
+            {!token ? (
+              <p className="text-sm text-muted-foreground text-center py-8">
+                Connect to a gateway to browse the skills catalog.
+              </p>
+            ) : loading ? (
               <div className="flex items-center justify-center py-8">
                 <LoaderCircle className="h-5 w-5 animate-spin text-muted-foreground" />
               </div>

@@ -20,6 +20,7 @@ import { Button } from "@/components/ui/button";
 import { ConnectionProvider, useConnection } from "./contexts/ConnectionContext";
 import { WorkspaceProvider, useWorkspace } from "./contexts/WorkspaceContext";
 import { ChatProvider, useChat } from "./contexts/ChatContext";
+import { ThemeProvider } from "./contexts/ThemeContext";
 
 import type { EvalInfo, UiMessage, WorkflowInfo } from "./types";
 
@@ -63,13 +64,15 @@ function evalStatusFromResource(resource: EvalInfo | null): Record<string, unkno
 
 export default function App() {
   return (
-    <ConnectionProvider>
-      <WorkspaceProvider>
-        <ChatProvider>
-          <AppLayout />
-        </ChatProvider>
-      </WorkspaceProvider>
-    </ConnectionProvider>
+    <ThemeProvider>
+      <ConnectionProvider>
+        <WorkspaceProvider>
+          <ChatProvider>
+            <AppLayout />
+          </ChatProvider>
+        </WorkspaceProvider>
+      </ConnectionProvider>
+    </ThemeProvider>
   );
 }
 

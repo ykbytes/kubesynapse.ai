@@ -2,7 +2,6 @@ import { Bot, GitBranch, FlaskConical, Inbox, Package, Play, Plus, RefreshCw, Pa
 import { useCallback, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -94,7 +93,7 @@ export function AppSidebar({
     : items;
   if (collapsed) {
     return (
-      <TooltipProvider delayDuration={0}>
+      <TooltipProvider delayDuration={100}>
         <aside className="flex w-12 flex-col items-center border-r border-border bg-sidebar py-2 gap-2">
           <Tooltip>
             <TooltipTrigger asChild>
@@ -140,30 +139,38 @@ export function AppSidebar({
   }
 
   return (
+    <TooltipProvider delayDuration={100}>
     <aside className="flex w-64 flex-col border-r border-border bg-sidebar">
       {/* View tabs */}
       <div className="flex items-center justify-between border-b border-border px-3 py-2">
-        <div className="flex gap-1">
+        <div className="flex items-center gap-0.5">
           {(Object.keys(VIEW_META) as WorkspaceView[]).map((view) => {
             const { icon: Icon, label } = VIEW_META[view];
+            const count = counts[view];
             return (
-              <Button
-                key={view}
-                variant={activeView === view ? "secondary" : "ghost"}
-                size="sm"
-                className="h-7 gap-1.5 px-2 text-xs"
-                onClick={() => onViewChange(view)}
-              >
-                <Icon className="h-3.5 w-3.5" />
-                <span>{label}</span>
-                <Badge variant="outline" className="ml-0.5 h-4 px-1 text-[10px]">
-                  {counts[view]}
-                </Badge>
-              </Button>
+              <Tooltip key={view}>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant={activeView === view ? "secondary" : "ghost"}
+                    size="sm"
+                    className="h-7 gap-1 px-2 text-xs"
+                    onClick={() => onViewChange(view)}
+                    aria-label={`${label} (${count})`}
+                    aria-pressed={activeView === view}
+                  >
+                    <Icon className="h-3.5 w-3.5" />
+                    <span className="truncate max-w-[3.5rem]">{label}</span>
+                    {count > 0 && (
+                      <span className="ml-0.5 text-[10px] tabular-nums text-muted-foreground">{count}</span>
+                    )}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">{label} ({count})</TooltipContent>
+              </Tooltip>
             );
           })}
         </div>
-        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onToggleCollapse} aria-label="Collapse sidebar">
+        <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={onToggleCollapse} aria-label="Collapse sidebar">
           <PanelLeftClose className="h-3.5 w-3.5" />
         </Button>
       </div>
@@ -254,5 +261,6 @@ export function AppSidebar({
         </div>
       </ScrollArea>
     </aside>
+    </TooltipProvider>
   );
 }

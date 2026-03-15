@@ -9,6 +9,7 @@ import {
   logoutSession,
   refreshAuthSession,
   registerWithPassword,
+  setOnTokenRefreshed,
 } from "@/lib/api";
 import type { AuthConfig, AuthenticatedUser, GatewayHealth } from "@/types";
 import { toast } from "sonner";
@@ -99,6 +100,12 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   // Persist token/namespace
   useEffect(() => { localStorage.setItem(TOKEN_STORAGE_KEY, token); }, [token]);
   useEffect(() => { localStorage.setItem(NAMESPACE_STORAGE_KEY, namespace); }, [namespace]);
+
+  // Keep React state in sync when fetchAuthenticated silently refreshes the token
+  useEffect(() => {
+    setOnTokenRefreshed((newToken) => setToken(newToken));
+    return () => setOnTokenRefreshed(null);
+  }, []);
 
   // ── Internal helpers ──
 

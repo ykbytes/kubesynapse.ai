@@ -1,8 +1,11 @@
-import { CheckCircle2, LayoutPanelTop, Loader2, XCircle } from "lucide-react";
+import { CheckCircle2, LayoutPanelTop, Loader2, Palette, XCircle } from "lucide-react";
+import { useRef, useState, useEffect } from "react";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { StatusBadge } from "./StatusBadge";
 import { ConnectionDialog } from "./ConnectionDialog";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { useTheme, THEMES } from "@/contexts/ThemeContext";
 import type { AuthConfig, AuthenticatedUser, GatewayHealth } from "@/types";
 
 interface TopBarProps {
@@ -38,6 +41,55 @@ interface TopBarProps {
   onStartSaml: (providerId: string) => void;
   onLogout: () => void;
   onRefreshCurrentUser: () => Promise<void>;
+}
+
+const THEME_SWATCHES: Record<string, string> = {
+  dark: "bg-zinc-700",
+  light: "bg-zinc-200",
+  midnight: "bg-blue-700",
+  forest: "bg-emerald-700",
+};
+
+function ThemePicker() {
+  const { theme, setTheme, labelFor } = useTheme();
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function handleClick(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [open]);
+
+  return (
+    <div ref={ref} className="relative">
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button variant="outline" size="icon" className="h-8 w-8 border-border/60 text-foreground hover:bg-accent" onClick={() => setOpen((v) => !v)} aria-label="Change theme">
+            <Palette className="h-4 w-4" />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">Theme</TooltipContent>
+      </Tooltip>
+      {open && (
+        <div className="absolute right-0 top-full mt-1 z-50 min-w-[160px] rounded-md border border-border bg-popover p-1 shadow-lg animate-fade-in">
+          {THEMES.map((t) => (
+            <button
+              key={t}
+              className={`flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-xs text-popover-foreground hover:bg-accent ${t === theme ? "bg-accent font-medium" : ""}`}
+              onClick={() => { setTheme(t); setOpen(false); }}
+            >
+              <span className={`inline-block h-3 w-3 rounded-full border border-border ${THEME_SWATCHES[t]}`} />
+              {labelFor(t)}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export function TopBar({
@@ -113,6 +165,7 @@ export function TopBar({
             </Badge>
           )}
           {currentUser ? <Badge variant="secondary">{currentUser.role}</Badge> : null}
+          <ThemePicker />
           <ConnectionDialog
           connectionError={connectionError}
           onClearConnectionError={onClearConnectionError}

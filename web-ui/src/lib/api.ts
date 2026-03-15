@@ -59,6 +59,19 @@ import type {
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL?.trim() ?? "";
 type JsonRecord = Record<string, unknown>;
 
+/**
+ * Global callback invoked when a silent token refresh succeeds.
+ * ConnectionContext registers this so the React state stays in sync.
+ */
+let _onTokenRefreshed: ((newToken: string) => void) | null = null;
+
+export function setOnTokenRefreshed(cb: ((newToken: string) => void) | null): void {
+  _onTokenRefreshed = cb;
+}
+
+/** Deduplicates concurrent refresh attempts. */
+let _refreshPromise: Promise<AuthSession> | null = null;
+
 function buildUrl(path: string, namespace?: string): string {
   const baseUrl = API_BASE_URL || window.location.origin;
   const url = new URL(path, baseUrl);
@@ -112,7 +125,31 @@ async function fetchAuthenticated(
   requestId?: string,
 ): Promise<Response> {
   const trimmedToken = token?.trim() || undefined;
-  return fetch(url, buildAuthenticatedInit(trimmedToken, requestId, init));
+  const response = await fetch(url, buildAuthenticatedInit(trimmedToken, requestId, init));
+
+  // On 401, attempt a silent token refresh and retry once
+  if (response.status === 401 && trimmedToken) {
+    try {
+      if (!_refreshPromise) {
+        _refreshPromise = refreshAuthSessionInternal();
+      }
+      const session = await _refreshPromise;
+      _refreshPromise = null;
+
+      // Notify React state
+      if (_onTokenRefreshed) _onTokenRefreshed(session.access_token);
+      localStorage.setItem("ai-agent-sandbox/token", session.access_token);
+
+      // Retry the original request with the new token
+      return fetch(url, buildAuthenticatedInit(session.access_token, requestId, init));
+    } catch {
+      _refreshPromise = null;
+      // Refresh failed — return the original 401 so the caller can handle it
+      return response;
+    }
+  }
+
+  return response;
 }
 
 function isRecord(value: unknown): value is JsonRecord {
@@ -842,7 +879,8 @@ export async function registerWithPassword(
   return parseJsonResponse(response, parseAuthSessionPayload);
 }
 
-export async function refreshAuthSession(): Promise<AuthSession> {
+/** Internal refresh used by the 401-retry logic in fetchAuthenticated. */
+async function refreshAuthSessionInternal(): Promise<AuthSession> {
   const response = await fetch(
     buildUrl("/api/auth/refresh"),
     buildCredentialedInit({
@@ -851,6 +889,10 @@ export async function refreshAuthSession(): Promise<AuthSession> {
     }),
   );
   return parseJsonResponse(response, parseAuthSessionPayload);
+}
+
+export async function refreshAuthSession(): Promise<AuthSession> {
+  return refreshAuthSessionInternal();
 }
 
 export async function logoutSession(token?: string): Promise<void> {

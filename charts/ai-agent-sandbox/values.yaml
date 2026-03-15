@@ -459,8 +459,9 @@ fullnameOverride: ""
 skillsCatalog:
   enabled: true
   # JSON catalog data. Generate with: python scripts/build-catalog-index.py
-  # Then paste the contents of catalog/skills-catalog.json here, or mount
-  # the ConfigMap in the api-gateway deployment.
+  # Then supply it at install time:
+  #   helm upgrade --install ... --set-file skillsCatalog.catalogJson=catalog/skills-catalog.json
+  # Defaults to empty; the UI catalog page will show nothing until populated.
   catalogJson: "[]"
 
 # ---------------------------------------------------------------------------
