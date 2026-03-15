@@ -1,4 +1,4 @@
-.PHONY: all build test test-goose-runtime-e2e lint docker-build docker-push helm-lint helm-package deploy clean ui-install ui-dev ui-build ui-preview docker-build-ui docker-push-ui docker-build-goose-runtime docker-push-goose-runtime docker-build-codex-runtime docker-push-codex-runtime docker-build-mcp-sidecars docker-push-mcp-sidecars docker-build-mcp-code-exec docker-push-mcp-code-exec docker-build-mcp-web-search docker-push-mcp-web-search docker-build-mcp-documents docker-push-mcp-documents docker-build-mcp-browser docker-push-mcp-browser docker-build-mcp-database docker-push-mcp-database docker-build-mcp-git docker-push-mcp-git docker-build-mcp-kubernetes docker-push-mcp-kubernetes docker-build-mcp-messaging docker-push-mcp-messaging docker-build-mcp-rag docker-push-mcp-rag
+.PHONY: all build test test-goose-runtime-e2e lint docker-build docker-push helm-lint helm-package deploy clean ui-install ui-dev ui-build ui-preview docker-build-ui docker-push-ui docker-build-goose-runtime docker-push-goose-runtime docker-build-codex-runtime docker-push-codex-runtime docker-build-mcp-sidecars docker-push-mcp-sidecars docker-build-mcp-code-exec docker-push-mcp-code-exec docker-build-mcp-web-search docker-push-mcp-web-search docker-build-mcp-documents docker-push-mcp-documents docker-build-mcp-browser docker-push-mcp-browser docker-build-mcp-database docker-push-mcp-database docker-build-mcp-git docker-push-mcp-git docker-build-mcp-github-adapter docker-push-mcp-github-adapter docker-build-mcp-kubernetes docker-push-mcp-kubernetes docker-build-mcp-messaging docker-push-mcp-messaging docker-build-mcp-rag docker-push-mcp-rag
 
 CONTAINER_CLI ?= podman
 CONTAINER_BUILD_FLAGS ?= --format docker
@@ -52,7 +52,7 @@ docker-build-gateway:
 docker-build-ui:
 	$(CONTAINER_CLI) build $(CONTAINER_BUILD_FLAGS) -t $(REGISTRY)/ai-agent-sandbox-web-ui:$(VERSION) ./web-ui
 
-docker-build-mcp-sidecars: docker-build-mcp-code-exec docker-build-mcp-web-search docker-build-mcp-documents docker-build-mcp-browser docker-build-mcp-database docker-build-mcp-git docker-build-mcp-kubernetes docker-build-mcp-messaging docker-build-mcp-rag
+docker-build-mcp-sidecars: docker-build-mcp-code-exec docker-build-mcp-web-search docker-build-mcp-documents docker-build-mcp-browser docker-build-mcp-database docker-build-mcp-git docker-build-mcp-github-adapter docker-build-mcp-kubernetes docker-build-mcp-messaging docker-build-mcp-rag
 
 docker-build-mcp-code-exec:
 	$(CONTAINER_CLI) build $(CONTAINER_BUILD_FLAGS) -f ./mcp-sidecars/code-exec/Dockerfile -t $(REGISTRY)/mcp-code-exec:$(VERSION) ./mcp-sidecars
@@ -71,6 +71,9 @@ docker-build-mcp-database:
 
 docker-build-mcp-git:
 	$(CONTAINER_CLI) build $(CONTAINER_BUILD_FLAGS) -f ./mcp-sidecars/git/Dockerfile -t $(REGISTRY)/mcp-git:$(VERSION) ./mcp-sidecars
+
+docker-build-mcp-github-adapter:
+	$(CONTAINER_CLI) build $(CONTAINER_BUILD_FLAGS) -f ./mcp-sidecars/github-adapter/Dockerfile -t $(REGISTRY)/mcp-github-adapter:$(VERSION) ./mcp-sidecars
 
 docker-build-mcp-kubernetes:
 	$(CONTAINER_CLI) build $(CONTAINER_BUILD_FLAGS) -f ./mcp-sidecars/kubernetes/Dockerfile -t $(REGISTRY)/mcp-kubernetes:$(VERSION) ./mcp-sidecars
@@ -101,7 +104,7 @@ docker-push-gateway:
 docker-push-ui:
 	$(CONTAINER_CLI) push $(REGISTRY)/ai-agent-sandbox-web-ui:$(VERSION)
 
-docker-push-mcp-sidecars: docker-push-mcp-code-exec docker-push-mcp-web-search docker-push-mcp-documents docker-push-mcp-browser docker-push-mcp-database docker-push-mcp-git docker-push-mcp-kubernetes docker-push-mcp-messaging docker-push-mcp-rag
+docker-push-mcp-sidecars: docker-push-mcp-code-exec docker-push-mcp-web-search docker-push-mcp-documents docker-push-mcp-browser docker-push-mcp-database docker-push-mcp-git docker-push-mcp-github-adapter docker-push-mcp-kubernetes docker-push-mcp-messaging docker-push-mcp-rag
 
 docker-push-mcp-code-exec:
 	$(CONTAINER_CLI) push $(REGISTRY)/mcp-code-exec:$(VERSION)
@@ -120,6 +123,9 @@ docker-push-mcp-database:
 
 docker-push-mcp-git:
 	$(CONTAINER_CLI) push $(REGISTRY)/mcp-git:$(VERSION)
+
+docker-push-mcp-github-adapter:
+	$(CONTAINER_CLI) push $(REGISTRY)/mcp-github-adapter:$(VERSION)
 
 docker-push-mcp-kubernetes:
 	$(CONTAINER_CLI) push $(REGISTRY)/mcp-kubernetes:$(VERSION)
@@ -140,6 +146,7 @@ test:
 	@if [ -d goose-runtime/tests ]; then cd goose-runtime && python -m pytest tests/ -v; else echo "No goose-runtime tests found"; fi
 	@if [ -d codex-runtime/tests ]; then cd codex-runtime && python -m pytest tests/ -v; else echo "No codex-runtime tests found"; fi
 	@if [ -d api-gateway/tests ]; then cd api-gateway && python -m pytest tests/ -v; else echo "No api-gateway tests found"; fi
+	@if [ -d mcp-sidecars/github-adapter/tests ]; then cd mcp-sidecars/github-adapter && python -m pytest tests/ -v; else echo "No github adapter tests found"; fi
 
 test-goose-runtime-e2e:
 	cd goose-runtime && CONTAINER_CLI=$(CONTAINER_CLI) python -m pytest tests/test_container_e2e.py -v
@@ -203,6 +210,7 @@ clean:
 	$(CONTAINER_CLI) rmi $(REGISTRY)/mcp-browser:$(VERSION) || true
 	$(CONTAINER_CLI) rmi $(REGISTRY)/mcp-database:$(VERSION) || true
 	$(CONTAINER_CLI) rmi $(REGISTRY)/mcp-git:$(VERSION) || true
+	$(CONTAINER_CLI) rmi $(REGISTRY)/mcp-github-adapter:$(VERSION) || true
 	$(CONTAINER_CLI) rmi $(REGISTRY)/mcp-kubernetes:$(VERSION) || true
 	$(CONTAINER_CLI) rmi $(REGISTRY)/mcp-messaging:$(VERSION) || true
 	$(CONTAINER_CLI) rmi $(REGISTRY)/mcp-rag:$(VERSION) || true

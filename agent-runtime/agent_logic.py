@@ -170,6 +170,7 @@ MAX_THREAD_ID_CHARS = get_int_env("AGENT_MAX_THREAD_ID_CHARS", 128, minimum=16)
 # the allow-list of server types the agent is permitted to invoke.  Both are
 # injected by the operator from the mcp-auth Secret and AgentPolicy.
 MCP_BEARER_TOKEN = os.getenv("MCP_BEARER_TOKEN", "").strip()
+GITHUB_MCP_TOKEN = os.getenv("GITHUB_MCP_TOKEN", "").strip()
 MCP_HUB_NAMESPACE = os.getenv("MCP_HUB_NAMESPACE", "mcp-hub").strip()
 _raw_allowed = os.getenv("ALLOWED_MCP_SERVERS", "").strip()
 ALLOWED_MCP_SERVERS: frozenset[str] = frozenset(s.strip() for s in _raw_allowed.split(",") if s.strip())
@@ -5652,6 +5653,13 @@ def mcp_call(
             "Ensure the MCP auth secret is mounted into the agent runtime."
         )
     headers["Authorization"] = f"Bearer {MCP_BEARER_TOKEN}"
+    if server_type == "github":
+        if not GITHUB_MCP_TOKEN:
+            raise PermissionError(
+                "GITHUB_MCP_TOKEN is not configured; refusing to call the shared GitHub MCP server. "
+                "Create the per-agent GitHub credentials secret and reference it from github_config."
+            )
+        headers["X-GitHub-Token"] = GITHUB_MCP_TOKEN
 
     with httpx.Client(
         timeout=timeout,

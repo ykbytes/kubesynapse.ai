@@ -134,6 +134,15 @@ spec:
                     - repoUrl
                     - authMethod
                     - credentialSecretRef
+                githubConfig:
+                  type: object
+                  description: "Per-agent secret reference used by the shared GitHub MCP adapter"
+                  properties:
+                    credentialSecretRef:
+                      type: string
+                      description: "Name of the K8s Secret holding the GitHub personal access token"
+                  required:
+                    - credentialSecretRef
                 mcpServers:
                   type: array
                   items:

@@ -389,23 +389,46 @@ mcpHub:
 
   # Per-server configuration. Set enabled: false to skip deploying a server.
   servers:
-    # Real upstream MCP images are opt-in only. The current runtime still
-    # targets an internal /tools/<tool> HTTP bridge, so stock MCP servers need
-    # either a compatible adapter layer or a runtime refactor to standard MCP
-    # transport before agents can invoke them successfully.
+    # Shared GitHub access now runs through a local adapter container that
+    # preserves the runtime's /tools/<tool> bridge and proxies to the upstream
+    # GitHub MCP server over streamable HTTP.
     github:
-      enabled: false
-      image: "ghcr.io/github/github-mcp-server:latest"
-      args:
-        - http
-      port: 8082
+      enabled: true
+      image: "docker.io/yakdhane/mcp-github-adapter:latest"
+      imagePullPolicy: IfNotPresent
+      port: 8000
       servicePort: 8000
       env:
-        - name: GITHUB_PERSONAL_ACCESS_TOKEN
-          valueFrom:
-            secretKeyRef:
-              name: github-mcp-auth
-              key: token
+        - name: GITHUB_UPSTREAM_URL
+          value: "http://127.0.0.1:8082"
+      extraContainers:
+        - name: github-upstream
+          image: "ghcr.io/github/github-mcp-server:latest"
+          imagePullPolicy: IfNotPresent
+          args:
+            - http
+            - --port
+            - "8082"
+          ports:
+            - containerPort: 8082
+              name: upstream
+              protocol: TCP
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "300m"
+              memory: "256Mi"
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
       replicas: 1
       resources:
         requests:
@@ -414,6 +437,18 @@ mcpHub:
         limits:
           cpu: "300m"
           memory: "256Mi"
+      livenessProbe:
+        httpGet:
+          path: /healthz
+          port: http
+        initialDelaySeconds: 5
+        periodSeconds: 10
+      readinessProbe:
+        httpGet:
+          path: /healthz
+          port: http
+        initialDelaySeconds: 2
+        periodSeconds: 5
 
 nameOverride: ""
 fullnameOverride: ""

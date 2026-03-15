@@ -17,7 +17,8 @@ $images = @(
     @{ Name = "ai-agent-runtime"; Context = "agent-runtime" },
   @{ Name = "ai-goose-runtime"; Context = "goose-runtime" },
     @{ Name = "ai-api-gateway"; Context = "api-gateway" },
-    @{ Name = "ai-agent-sandbox-web-ui"; Context = "web-ui" }
+    @{ Name = "ai-agent-sandbox-web-ui"; Context = "web-ui" },
+    @{ Name = "mcp-github-adapter"; Context = "mcp-sidecars"; Dockerfile = "mcp-sidecars/github-adapter/Dockerfile" }
 )
 
 New-Item -ItemType Directory -Force -Path $outputPath | Out-Null
@@ -29,6 +30,9 @@ try {
     $buildArgs = @("build")
     if ($ContainerCli -eq "podman") {
       $buildArgs += @("--format", "docker")
+    }
+    if ($image.ContainsKey("Dockerfile")) {
+      $buildArgs += @("-f", (Join-Path $repoRoot $image.Dockerfile))
     }
     $buildArgs += @("-t", $tag, (Join-Path $repoRoot $image.Context))
         Write-Host "Building $tag from $($image.Context)"
@@ -77,6 +81,11 @@ webUi:
   image:
     repository: "$Registry/ai-agent-sandbox-web-ui"
     tag: "$Version"
+
+mcpHub:
+  servers:
+    github:
+      image: "$Registry/mcp-github-adapter:$Version"
 
 platformSecrets:
   mode: native

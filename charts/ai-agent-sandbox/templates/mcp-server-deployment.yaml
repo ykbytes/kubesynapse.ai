@@ -151,6 +151,9 @@ spec:
 {{- with $server.volumeMounts }}
 {{ toYaml . | indent 12 }}
 {{- end }}
+{{- with $server.extraContainers }}
+{{ toYaml . | indent 8 }}
+{{- end }}
       volumes:
         - name: tmp
           emptyDir: {}

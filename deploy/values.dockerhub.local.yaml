@@ -57,6 +57,10 @@ platformSecrets:
 mcpHub:
   auth:
     bearerToken: "minikube-dev-mcp-token"
+  servers:
+    github:
+      image: docker.io/yakdhane/mcp-github-adapter:fix-20260312-233109
+      imagePullPolicy: IfNotPresent
 
 skillsCatalog:
   enabled: true

@@ -627,6 +627,7 @@ PLATFORM_MANAGED_AGENT_ENV = {
     "MCP_HUB_NAMESPACE",
     "ALLOWED_MCP_SERVERS",
     "MCP_BEARER_TOKEN",
+    "GITHUB_MCP_TOKEN",
     "OPEN_SANDBOX_API_KEY",
 } | set(OPEN_SANDBOX_RUNTIME_ENV)
 
@@ -1000,6 +1001,7 @@ def validate_runtime_configuration(runtime_kind: str, spec: dict[str, Any]) -> N
     goose_spec = runtime_spec.get("goose") if isinstance(runtime_spec, dict) else None
     codex_spec = runtime_spec.get("codex") if isinstance(runtime_spec, dict) else None
     explicit_sidecars = spec.get("mcpSidecars")
+    github_config = spec.get("githubConfig")
     try:
         parse_agent_a2a_config(spec.get("a2a"), source="AIAgent.spec.a2a")
     except ValueError as exc:
@@ -1010,6 +1012,12 @@ def validate_runtime_configuration(runtime_kind: str, spec: dict[str, Any]) -> N
         raise kopf.PermanentError(str(exc)) from exc
     if explicit_sidecars is not None and not isinstance(explicit_sidecars, list):
         raise kopf.PermanentError("AIAgent.spec.mcpSidecars must be an array when provided.")
+    if github_config is not None and not isinstance(github_config, dict):
+        raise kopf.PermanentError("AIAgent.spec.githubConfig must be an object when provided.")
+    if isinstance(github_config, dict) and github_config:
+        credential_secret_ref = str(github_config.get("credentialSecretRef") or "").strip()
+        if not credential_secret_ref:
+            raise kopf.PermanentError("AIAgent.spec.githubConfig.credentialSecretRef is required when githubConfig is provided.")
 
     if runtime_kind == "goose":
         if codex_spec is not None:
@@ -1033,6 +1041,10 @@ def validate_runtime_configuration(runtime_kind: str, spec: dict[str, Any]) -> N
             raise kopf.PermanentError(
                 "Goose runtime integration does not yet support spec.mcpSidecars. Use the LangGraph runtime for sidecar-based MCP tools today."
             )
+        if spec.get("githubConfig"):
+            raise kopf.PermanentError(
+                "Goose runtime integration does not yet support spec.githubConfig. Use the LangGraph runtime for shared GitHub MCP access today."
+            )
     elif runtime_kind == "codex":
         if goose_spec is not None:
             raise kopf.PermanentError(
@@ -1050,6 +1062,10 @@ def validate_runtime_configuration(runtime_kind: str, spec: dict[str, Any]) -> N
         if spec.get("mcpServers"):
             raise kopf.PermanentError(
                 "Codex runtime integration does not yet support spec.mcpServers. Use the LangGraph runtime for MCP routing today."
+            )
+        if spec.get("githubConfig"):
+            raise kopf.PermanentError(
+                "Codex runtime integration does not yet support spec.githubConfig. Use the LangGraph runtime for shared GitHub MCP access today."
             )
     else:
         # langgraph
@@ -1513,6 +1529,9 @@ def create_agent_statefulset_manifest(
 
     # Git configuration — auto-inject git sidecar and prepare credential env/volumes
     git_config = spec.get("gitConfig") or {}
+    github_config = spec.get("githubConfig") or {}
+    if github_config and "github" not in mcp_servers:
+        mcp_servers = [*mcp_servers, "github"]
     git_sidecar_env: list[dict[str, Any]] = []
     git_volumes: list[dict[str, Any]] = []
     git_volume_mounts: list[dict[str, Any]] = []
@@ -1790,6 +1809,20 @@ def create_agent_statefulset_manifest(
                 }
             },
         })
+        github_credential_secret = str(github_config.get("credentialSecretRef") or "").strip()
+        if github_credential_secret:
+            env.append(
+                {
+                    "name": "GITHUB_MCP_TOKEN",
+                    "valueFrom": {
+                        "secretKeyRef": {
+                            "name": github_credential_secret,
+                            "key": "token",
+                            "optional": True,
+                        }
+                    },
+                }
+            )
         for env_name, env_value in OPEN_SANDBOX_RUNTIME_ENV.items():
             if env_value:
                 env.append({"name": env_name, "value": env_value})
@@ -2387,7 +2420,6 @@ def create_agent_resources(spec: dict[str, Any], name: str, namespace: str, logg
         network_policy_manifest,
         a2a_egress_policy_manifest,
         a2a_ingress_policy_manifest,
-        mcp_auth_secret_manifest,
     ):
         if manifest is None:
             continue

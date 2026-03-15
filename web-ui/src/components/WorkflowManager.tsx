@@ -27,8 +27,10 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
+import { ConfirmDialog } from "./ConfirmDialog";
 import type {
   AgentInfo,
   LoopProgress,
@@ -577,6 +579,7 @@ export function WorkflowManager({
   const isActive = workflow?.phase === "running" || workflow?.phase === "queued" || workflow?.phase === "waiting-approval";
   const hasBeenTriggered = Boolean(workflow && workflow.phase !== "pending");
   const [showEditor, setShowEditor] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
 
   function handleTrigger() {
     if (!workflow) return;
@@ -863,13 +866,14 @@ export function WorkflowManager({
             <CardContent className="space-y-4">
               <div className="space-y-1.5">
                 <Label className="text-xs">Message bus</Label>
-                <select
-                  className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                  value={messageBus}
-                  onChange={(e) => setMessageBus(e.target.value)}
-                >
-                  <option value="in-memory">in-memory</option>
-                </select>
+                <Select value={messageBus} onValueChange={setMessageBus}>
+                  <SelectTrigger className="h-9 text-sm">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="in-memory">in-memory</SelectItem>
+                  </SelectContent>
+                </Select>
                 <p className="text-[11px] text-muted-foreground">The current gateway API supports the in-memory workflow bus only.</p>
               </div>
               <Separator />
@@ -945,42 +949,50 @@ export function WorkflowManager({
                   </div>
                   <div className="space-y-1">
                     <Label className="text-[11px]">Step type</Label>
-                    <select
-                      className="flex h-9 w-full rounded-xl border border-input bg-transparent px-3 text-xs shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    <Select
                       value={step.step_type ?? "agent"}
-                      onChange={(e) =>
+                      onValueChange={(v) =>
                         updateStep(index, (current) => ({
                           ...current,
-                          step_type: e.target.value as "agent" | "loop",
-                          loop_config: e.target.value === "loop" && !current.loop_config
+                          step_type: v as "agent" | "loop",
+                          loop_config: v === "loop" && !current.loop_config
                             ? { maxIterations: 20, planSource: "inline", plan: "", commitAfterEachItem: true, circuitBreaker: { noProgressThreshold: 3, cooldownMinutes: 2 } }
                             : current.loop_config,
                         }))
                       }
                     >
-                      <option value="agent">Agent (single run)</option>
-                      <option value="loop">Dev-loop (iterative)</option>
-                    </select>
+                      <SelectTrigger className="h-9 rounded-xl text-xs">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="agent">Agent (single run)</SelectItem>
+                        <SelectItem value="loop">Dev-loop (iterative)</SelectItem>
+                      </SelectContent>
+                    </Select>
                   </div>
                 </div>
 
                 <div className="grid gap-3 sm:grid-cols-2">
                   <div className="space-y-1">
                     <Label className="text-[11px]">Agent</Label>
-                    <select
-                      className="flex h-9 w-full rounded-xl border border-input bg-transparent px-3 text-xs shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                      value={step.agent_ref}
-                      onChange={(e) =>
-                        updateStep(index, (current) => ({ ...current, agent_ref: e.target.value }))
+                    <Select
+                      value={step.agent_ref || "__none__"}
+                      onValueChange={(v) =>
+                        updateStep(index, (current) => ({ ...current, agent_ref: v === "__none__" ? "" : v }))
                       }
                     >
-                      <option value="">Select agent</option>
-                      {agents.map((agent) => (
-                        <option key={agent.name} value={agent.name}>
-                          {agent.name} · {agent.model}
-                        </option>
-                      ))}
-                    </select>
+                      <SelectTrigger className="h-9 rounded-xl text-xs">
+                        <SelectValue placeholder="Select agent" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__none__">Select agent</SelectItem>
+                        {agents.map((agent) => (
+                          <SelectItem key={agent.name} value={agent.name}>
+                            {agent.name} · {agent.model}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </div>
                 </div>
 
@@ -1050,19 +1062,23 @@ export function WorkflowManager({
                       </div>
                       <div className="space-y-1">
                         <Label className="text-[11px]">Plan source</Label>
-                        <select
-                          className="flex h-9 w-full rounded-xl border border-input bg-transparent px-3 text-xs shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                        <Select
                           value={step.loop_config?.planSource ?? "inline"}
-                          onChange={(e) =>
+                          onValueChange={(v) =>
                             updateStep(index, (current) => ({
                               ...current,
-                              loop_config: { ...current.loop_config, planSource: e.target.value as "inline" | "prompt" },
+                              loop_config: { ...current.loop_config, planSource: v as "inline" | "prompt" },
                             }))
                           }
                         >
-                          <option value="inline">Inline checklist</option>
-                          <option value="prompt">Agent generates plan</option>
-                        </select>
+                          <SelectTrigger className="h-9 rounded-xl text-xs">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="inline">Inline checklist</SelectItem>
+                            <SelectItem value="prompt">Agent generates plan</SelectItem>
+                          </SelectContent>
+                        </Select>
                       </div>
                       <div className="space-y-1">
                         <Label className="text-[11px]">No-progress threshold</Label>
@@ -1196,7 +1212,7 @@ export function WorkflowManager({
           {workflow && (
             <Button
               variant="destructive"
-              onClick={() => onDelete(workflow.name)}
+              onClick={() => setDeleteDialogOpen(true)}
               disabled={isDeleting}
             >
               {isDeleting ? <LoaderCircle className="mr-1.5 h-4 w-4 animate-spin" /> : <Trash2 className="mr-1.5 h-4 w-4" />}
@@ -1204,6 +1220,17 @@ export function WorkflowManager({
             </Button>
           )}
         </div>
+
+        {workflow && (
+          <ConfirmDialog
+            open={deleteDialogOpen}
+            onOpenChange={setDeleteDialogOpen}
+            title="Delete workflow"
+            description={`This will permanently delete the workflow "${workflow.name}". This action cannot be undone.`}
+            confirmLabel="Delete"
+            onConfirm={() => onDelete(workflow.name)}
+          />
+        )}
       </CardContent>
     </Card>
   );

@@ -1,13 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  AlertTriangle,
+  CheckCircle2,
   ChevronDown,
   ChevronRight,
   Cog,
   LoaderCircle,
+  MessageSquare,
   Plus,
+  RotateCcw,
   Send,
-  Sparkles,
   X,
+  XCircle,
 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -16,8 +20,18 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
+import { CopyButton } from "./CopyButton";
+import { EmptyState } from "./EmptyState";
+import { StatusBadge } from "./StatusBadge";
 import { ActivityTimeline } from "./ActivityTimeline";
 import type { AgentDiscoveryPeer, RuntimeKind, SpecialistSubagentDraft, UiActivity, UiMessage } from "../types";
 
@@ -78,14 +92,18 @@ function Section({
   children: React.ReactNode;
 }) {
   const [open, setOpen] = useState(defaultOpen);
+  const contentRef = useRef<HTMLDivElement>(null);
   return (
     <div className="rounded-md border border-border">
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
         className="flex w-full items-center gap-2 px-3 py-2 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
       >
-        {open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+        <span className="transition-transform duration-200" style={{ transform: open ? "rotate(90deg)" : "rotate(0deg)" }}>
+          <ChevronRight className="h-3.5 w-3.5" />
+        </span>
         {title}
         {badge && (
           <Badge variant="outline" className="ml-auto text-[10px]">
@@ -93,7 +111,15 @@ function Section({
           </Badge>
         )}
       </button>
-      {open && <div className="border-t border-border px-3 py-3 space-y-3">{children}</div>}
+      <div
+        ref={contentRef}
+        className="grid transition-[grid-template-rows] duration-200 ease-out"
+        style={{ gridTemplateRows: open ? "1fr" : "0fr" }}
+      >
+        <div className="overflow-hidden">
+          <div className="border-t border-border px-3 py-3 space-y-3">{children}</div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -107,12 +133,14 @@ const roleBg: Record<string, string> = {
   system: "bg-amber-500/10 border-amber-500/20",
 };
 
-function MessageBubble({ message }: { message: UiMessage }) {
+function MessageBubble({ message, index }: { message: UiMessage; index: number }) {
   const bg = roleBg[message.role] ?? "bg-muted/30 border-border";
   const isStreaming = message.status === "streaming";
+  const isAssistant = message.role === "assistant";
   return (
     <div
-      className={`rounded-md border px-3 py-2 text-sm animate-slide-up ${bg}`}
+      className={`group relative rounded-md border px-3 py-2 text-sm animate-slide-up ${bg}`}
+      style={{ animationDelay: `${Math.min(index * 30, 300)}ms`, animationFillMode: "backwards" }}
       role={isStreaming ? "status" : undefined}
       aria-live={isStreaming ? "polite" : undefined}
     >
@@ -122,6 +150,11 @@ function MessageBubble({ message }: { message: UiMessage }) {
           <Badge variant="outline" className="text-[10px] px-1.5 py-0">
             {message.status}
           </Badge>
+        )}
+        {isAssistant && message.content && !isStreaming && (
+          <div className="ml-auto opacity-0 group-hover:opacity-100 transition-opacity">
+            <CopyButton value={message.content} />
+          </div>
         )}
       </div>
       {isStreaming && !message.content ? (
@@ -144,37 +177,47 @@ function ToolBubble({ message }: { message: UiMessage }) {
   const [expanded, setExpanded] = useState(false);
   const isRunning = message.status === "streaming";
   const isFailed = message.status === "error";
-  const statusColor = isFailed
-    ? "text-destructive"
-    : isRunning
-      ? "text-amber-500"
-      : "text-emerald-500";
+  const statusVariant = isFailed ? "error" : isRunning ? "warning" : "success";
+  const StatusIcon = isFailed ? XCircle : isRunning ? LoaderCircle : CheckCircle2;
   const statusLabel = isFailed ? "failed" : isRunning ? "running" : "done";
   return (
     <div className="rounded-md border border-border/60 bg-muted/20 text-sm animate-slide-up">
       <button
         type="button"
         onClick={() => setExpanded((o) => !o)}
+        aria-expanded={expanded}
         className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
       >
         <Cog className={`h-3.5 w-3.5 ${isRunning ? "animate-spin" : ""}`} />
         <span className="font-medium text-foreground">{message.toolName || message.toolNode || "tool"}</span>
-        <Badge variant="outline" className={`ml-auto text-[10px] px-1.5 py-0 ${statusColor}`}>
+        <StatusBadge icon={StatusIcon} status={statusVariant} className={`ml-auto ${isRunning ? "[&>svg]:animate-spin" : ""}`}>
           {statusLabel}
-        </Badge>
-        {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+        </StatusBadge>
+        <span className="transition-transform duration-200" style={{ transform: expanded ? "rotate(90deg)" : "rotate(0deg)" }}>
+          <ChevronRight className="h-3.5 w-3.5" />
+        </span>
       </button>
-      {expanded && (
-        <div className="border-t border-border/40 px-3 py-2">
-          {message.content ? (
-            <pre className="whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-muted-foreground max-h-48 overflow-auto">
-              {message.content}
-            </pre>
-          ) : (
-            <p className="text-[11px] text-muted-foreground italic">No detail available.</p>
-          )}
+      <div
+        className="grid transition-[grid-template-rows] duration-200 ease-out"
+        style={{ gridTemplateRows: expanded ? "1fr" : "0fr" }}
+      >
+        <div className="overflow-hidden">
+          <div className="border-t border-border/40 px-3 py-2">
+            {message.content ? (
+              <div className="relative group">
+                <pre className="whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-muted-foreground max-h-48 overflow-auto">
+                  {message.content}
+                </pre>
+                <div className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <CopyButton value={message.content} />
+                </div>
+              </div>
+            ) : (
+              <p className="text-[11px] text-muted-foreground italic">No detail available.</p>
+            )}
+          </div>
         </div>
-      )}
+      </div>
     </div>
   );
 }
@@ -302,16 +345,17 @@ export function ChatWorkbench({
       <ScrollArea className="flex-1 min-h-0" ref={scrollRef}>
         <div className="space-y-3 p-4" aria-label="Conversation history" aria-live="polite" aria-atomic="false">
           {messages.length === 0 && (
-            <div className="flex flex-col items-center justify-center gap-2 py-16 text-muted-foreground">
-              <Sparkles className="h-5 w-5" />
-              <p className="text-sm">{emptyMessage}</p>
-            </div>
+            <EmptyState
+              icon={MessageSquare}
+              title="No messages yet"
+              description={emptyMessage}
+            />
           )}
-          {messages.map((message) =>
+          {messages.map((message, i) =>
             message.role === "tool" ? (
               <ToolBubble key={message.id} message={message} />
             ) : (
-              <MessageBubble key={message.id} message={message} />
+              <MessageBubble key={message.id} message={message} index={i} />
             ),
           )}
         </div>
@@ -369,8 +413,7 @@ export function ChatWorkbench({
               )}
               <div className="space-y-1.5">
                 <Label className="text-xs">Discoverable peer</Label>
-                <select
-                  className="flex h-8 w-full rounded-md border border-input bg-transparent px-2 text-xs shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                <Select
                   disabled={specialistMode}
                   value={
                     reachablePeers.some(
@@ -378,11 +421,10 @@ export function ChatWorkbench({
                         `${peer.namespace}/${peer.name}` === activePeerValue,
                     )
                       ? activePeerValue
-                      : ""
+                      : "__direct__"
                   }
-                  onChange={(e) => {
-                    const nextValue = e.target.value;
-                    if (!nextValue) {
+                  onValueChange={(nextValue) => {
+                    if (!nextValue || nextValue === "__direct__") {
                       onA2ATargetNamespaceChange("");
                       onA2ATargetAgentChange("");
                       return;
@@ -392,16 +434,21 @@ export function ChatWorkbench({
                     onA2ATargetAgentChange(nextValue.slice(idx + 1));
                   }}
                 >
-                  <option value="">Direct reply from selected agent</option>
-                  {reachablePeers.map((peer) => {
-                    const value = `${peer.namespace}/${peer.name}`;
-                    return (
-                      <option key={value} value={value}>
-                        {value} · {peer.runtime_kind ?? "runtime"} · {peer.model ?? "model"}
-                      </option>
-                    );
-                  })}
-                </select>
+                  <SelectTrigger className="h-8 text-xs">
+                    <SelectValue placeholder="Direct reply from selected agent" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__direct__">Direct reply from selected agent</SelectItem>
+                    {reachablePeers.map((peer) => {
+                      const value = `${peer.namespace}/${peer.name}`;
+                      return (
+                        <SelectItem key={value} value={value}>
+                          {value} · {peer.runtime_kind ?? "runtime"} · {peer.model ?? "model"}
+                        </SelectItem>
+                      );
+                    })}
+                  </SelectContent>
+                </Select>
               </div>
               <div className="grid gap-2 sm:grid-cols-3">
                 <div className="space-y-1">
@@ -457,17 +504,21 @@ export function ChatWorkbench({
               <div className="flex items-center gap-2">
                 <div className="space-y-1 flex-1">
                   <Label className="text-[11px]">Strategy</Label>
-                  <select
-                    className="flex h-7 w-full rounded-md border border-input bg-transparent px-2 text-xs shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  <Select
                     disabled={a2aMode}
                     value={subagentStrategy}
-                    onChange={(e) =>
-                      onSubagentStrategyChange(e.target.value as "sequential" | "parallel")
+                    onValueChange={(v) =>
+                      onSubagentStrategyChange(v as "sequential" | "parallel")
                     }
                   >
-                    <option value="sequential">Sequential</option>
-                    <option value="parallel">Parallel</option>
-                  </select>
+                    <SelectTrigger className="h-7 text-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="sequential">Sequential</SelectItem>
+                      <SelectItem value="parallel">Parallel</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div className="flex gap-1.5 self-end">
                   <Button
@@ -506,12 +557,13 @@ export function ChatWorkbench({
                           </span>
                           <Button
                             variant="ghost"
-                            size="sm"
-                            className="h-5 w-5 p-0"
+                            size="icon"
+                            className="h-7 w-7"
                             disabled={a2aMode}
                             onClick={() => onRemoveSpecialistSubagent(subagent.id)}
+                            aria-label="Remove specialist"
                           >
-                            <X className="h-3 w-3" />
+                            <X className="h-3.5 w-3.5" />
                           </Button>
                         </div>
                         <div className="grid gap-2 sm:grid-cols-2">
@@ -693,9 +745,20 @@ export function ChatWorkbench({
         />
 
         {error && (
-          <p className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-1.5 text-xs text-destructive">
-            {error}
-          </p>
+          <div className="flex items-center gap-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-1.5 text-xs text-destructive">
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+            <span className="flex-1">{error}</span>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 px-2 text-[11px] text-destructive hover:text-destructive"
+              onClick={onSubmit}
+              disabled={!canSubmit || !tokenReady || isSending}
+            >
+              <RotateCcw className="mr-1 h-3 w-3" />
+              Retry
+            </Button>
+          </div>
         )}
 
         <div className="flex items-center justify-between gap-3">

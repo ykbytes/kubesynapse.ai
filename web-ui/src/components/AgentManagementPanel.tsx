@@ -13,6 +13,7 @@ import {
   Save,
   Search,
   Server,
+  Settings,
   Sparkles,
   Trash2,
   Wrench,
@@ -26,9 +27,17 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { A2A_ALLOWED_CALLERS_PLACEHOLDER, stringifyA2APeerRefs } from "../lib/a2a";
 import {
   buildGooseConfigFiles,
@@ -44,11 +53,14 @@ import {
   stringifyMcpSidecars,
 } from "../lib/mcp";
 import { buildSkillFiles, createSkillFileDraft, skillFileDraftsFromFiles } from "../lib/skills";
-import { fetchCatalogSkillDetail, fetchMcpToolCategories, fetchSkillsCatalog } from "../lib/api";
+import { fetchCatalogSkillDetail, fetchMcpToolCategories, fetchMcpHubServers, fetchSkillsCatalog } from "../lib/api";
 import type {
   AgentDetail,
   CatalogSkill,
   CatalogSkillDetail,
+  GitConfig,
+  GitHubConfig,
+  McpHubServer,
   McpToolCategory,
   PolicyInfo,
   RuntimeKind,
@@ -56,6 +68,7 @@ import type {
   UpdateAgentPayload,
 } from "../types";
 import { TextFileBundleEditor } from "./TextFileBundleEditor";
+import { ToolConfigDrawer } from "./ToolConfigDrawer";
 
 const TOOL_ICONS: Record<string, typeof Code> = {
   "code-exec": Code,
@@ -149,6 +162,26 @@ export function AgentManagementPanel({
   const [skillFileDrafts, setSkillFileDrafts] = useState(skillFileDraftsFromFiles(agent.skills.files));
   const [gooseConfigFileDrafts, setGooseConfigFileDrafts] = useState(gooseConfigFileDraftsFromFiles(agent.goose_config_files));
   const [localError, setLocalError] = useState("");
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+
+  // Track whether any field has been edited
+  const isDirty = useMemo(() => {
+    return (
+      model !== agent.model ||
+      systemPrompt !== agent.system_prompt ||
+      policyRef !== (agent.policy_ref ?? "") ||
+      storageSize !== (agent.storage_size ?? "1Gi") ||
+      runtimeKind !== (agent.runtime_kind ?? "langgraph") ||
+      enableGvisor !== agent.enable_gvisor ||
+      mcpServersText !== stringifyMcpServers(agent.mcp_servers) ||
+      mcpSidecarsText !== stringifyMcpSidecars(agent.mcp_sidecars) ||
+      a2aAllowedCallersText !== stringifyA2APeerRefs(agent.a2a_config.allowed_callers)
+    );
+  }, [
+    model, systemPrompt, policyRef, storageSize, runtimeKind, enableGvisor,
+    mcpServersText, mcpSidecarsText, a2aAllowedCallersText,
+    agent,
+  ]);
 
   // Catalog state
   const [catalogSkills, setCatalogSkills] = useState<CatalogSkill[]>([]);
@@ -159,6 +192,12 @@ export function AgentManagementPanel({
   const [skillCategory, setSkillCategory] = useState("");
   const [skillDetailsById, setSkillDetailsById] = useState<Record<string, CatalogSkillDetail>>({});
   const [skillBusyId, setSkillBusyId] = useState("");
+
+  // Tool config drawer state
+  const [configDrawerTool, setConfigDrawerTool] = useState<McpToolCategory | McpHubServer | null>(null);
+  const [mcpHubServers, setMcpHubServers] = useState<McpHubServer[]>([]);
+  const [gitConfig, setGitConfig] = useState<GitConfig | null>(agent.git_config ?? null);
+  const [githubConfig, setGithubConfig] = useState<GitHubConfig | null>(agent.github_config ?? null);
 
   useEffect(() => {
     setModel(agent.model);
@@ -187,11 +226,12 @@ export function AgentManagementPanel({
     let cancelled = false;
     setCatalogLoading(true);
     setCatalogError("");
-    Promise.all([fetchSkillsCatalog(token), fetchMcpToolCategories(token)])
-      .then(([skills, tools]) => {
+    Promise.all([fetchSkillsCatalog(token), fetchMcpToolCategories(token), fetchMcpHubServers(token)])
+      .then(([skills, tools, hubServers]) => {
         if (!cancelled) {
           setCatalogSkills(skills);
           setCatalogTools(tools);
+          setMcpHubServers(hubServers);
         }
       })
       .catch((nextError) => {
@@ -312,6 +352,8 @@ export function AgentManagementPanel({
           enable_gvisor: enableGvisor,
           mcp_servers: mcpServers,
           mcp_sidecars: mcpSidecars,
+          git_config: gitConfig,
+          github_config: githubConfig,
         },
         a2aAllowedCallersText,
         skillFiles,
@@ -320,6 +362,11 @@ export function AgentManagementPanel({
     } catch (nextError) {
       setLocalError(nextError instanceof Error ? nextError.message : String(nextError));
     }
+  }
+
+  function handleToolConfigSaved(specUpdates?: { git_config?: GitConfig | null; github_config?: GitHubConfig | null }) {
+    if (specUpdates?.git_config !== undefined) setGitConfig(specUpdates.git_config);
+    if (specUpdates?.github_config !== undefined) setGithubConfig(specUpdates.github_config);
   }
 
   const displayError = localError || error;
@@ -367,7 +414,7 @@ export function AgentManagementPanel({
           </TabsList>
 
           {/* ─── Basics ─── */}
-          <TabsContent value="basics" className="space-y-5">
+          <TabsContent value="basics" className="animate-fade-in space-y-5">
             <div className="grid gap-4">
               <div className="grid gap-4">
                 <Card className="shadow-none">
@@ -383,16 +430,17 @@ export function AgentManagementPanel({
                     </div>
                     <div className="space-y-1.5">
                       <Label className="text-xs">Policy</Label>
-                      <select
-                        className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                        value={policyRef}
-                        onChange={(e) => setPolicyRef(e.target.value)}
-                      >
-                        <option value="">No policy</option>
-                        {policies.map((policy) => (
-                          <option key={policy.name} value={policy.name}>{policy.name}</option>
-                        ))}
-                      </select>
+                      <Select value={policyRef || "__none__"} onValueChange={(v) => setPolicyRef(v === "__none__" ? "" : v)}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="No policy" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__none__">No policy</SelectItem>
+                          {policies.map((policy) => (
+                            <SelectItem key={policy.name} value={policy.name}>{policy.name}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
                     </div>
                   </CardContent>
                 </Card>
@@ -464,7 +512,7 @@ export function AgentManagementPanel({
           </TabsContent>
 
           {/* ─── Behavior ─── */}
-          <TabsContent value="behavior" className="space-y-4">
+          <TabsContent value="behavior" className="animate-fade-in space-y-4">
             <Card className="shadow-none">
               <CardHeader className="pb-3">
                 <CardTitle className="text-sm">System behavior</CardTitle>
@@ -494,7 +542,7 @@ export function AgentManagementPanel({
           </TabsContent>
 
           {/* ─── Capabilities (Tools) ─── */}
-          <TabsContent value="tools" className="space-y-4">
+          <TabsContent value="tools" className="animate-fade-in space-y-4">
             {runtimeKind !== "goose" ? (
               <>
                 <div className="grid gap-4 2xl:grid-cols-[1.15fr_0.85fr]">
@@ -546,14 +594,26 @@ export function AgentManagementPanel({
                               </div>
                               <div className="mt-4 flex items-center justify-between gap-3">
                                 <p className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground/70">{tool.id}</p>
-                                <Button
-                                  variant={selected ? "secondary" : "default"}
-                                  size="sm"
-                                  onClick={() => handleToggleTool(tool)}
-                                  disabled={!tool.sidecar_image || Boolean(sidecarState.error)}
-                                >
-                                  {selected ? "Remove" : "Add toolkit"}
-                                </Button>
+                                <div className="flex items-center gap-2">
+                                  {selected && (tool.config_schema?.length ?? 0) > 0 && (
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={() => setConfigDrawerTool(tool)}
+                                    >
+                                      <Settings className="mr-1 h-3 w-3" />
+                                      Configure
+                                    </Button>
+                                  )}
+                                  <Button
+                                    variant={selected ? "secondary" : "default"}
+                                    size="sm"
+                                    onClick={() => handleToggleTool(tool)}
+                                    disabled={!tool.sidecar_image || Boolean(sidecarState.error)}
+                                  >
+                                    {selected ? "Remove" : "Add toolkit"}
+                                  </Button>
+                                </div>
                               </div>
                             </div>
                           );
@@ -613,9 +673,21 @@ export function AgentManagementPanel({
                         <p className="text-xs font-medium text-foreground">Enterprise MCP endpoints</p>
                         {sharedMcpServers.length > 0 ? (
                           <div className="flex flex-wrap gap-2">
-                            {sharedMcpServers.map((serverName) => (
-                              <Badge key={serverName} variant="outline" className="rounded-full px-3 py-1">{serverName}</Badge>
-                            ))}
+                            {sharedMcpServers.map((serverName) => {
+                              const hubServer = mcpHubServers.find((s) => s.id === serverName);
+                              return (
+                                <Badge
+                                  key={serverName}
+                                  variant="outline"
+                                  className={`rounded-full px-3 py-1 ${hubServer ? "cursor-pointer hover:bg-accent" : ""}`}
+                                  onClick={hubServer ? () => setConfigDrawerTool(hubServer) : undefined}
+                                  {...(hubServer ? { role: "button" as const, tabIndex: 0, onKeyDown: (e: React.KeyboardEvent) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setConfigDrawerTool(hubServer); } } } : {})}
+                                >
+                                  {hubServer ? hubServer.name : serverName}
+                                  {hubServer && <Settings className="ml-1 h-3 w-3" />}
+                                </Badge>
+                              );
+                            })}
                           </div>
                         ) : (
                           <p className="text-sm text-muted-foreground">None configured. Use Advanced routing to add shared MCP endpoints.</p>
@@ -673,7 +745,7 @@ export function AgentManagementPanel({
           </TabsContent>
 
           {/* ─── Skills & Files ─── */}
-          <TabsContent value="files" className="space-y-4">
+          <TabsContent value="files" className="animate-fade-in space-y-4">
             <div className="grid gap-4 2xl:grid-cols-[1.15fr_0.85fr]">
               <Card className="shadow-none">
                 <CardHeader className="pb-3">
@@ -693,16 +765,17 @@ export function AgentManagementPanel({
                       <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                       <Input value={skillSearch} onChange={(e) => setSkillSearch(e.target.value)} placeholder="Search skills, behaviors, or capability tags" className="pl-9" />
                     </div>
-                    <select
-                      className="flex h-9 rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                      value={skillCategory}
-                      onChange={(e) => setSkillCategory(e.target.value)}
-                    >
-                      <option value="">All categories</option>
-                      {skillCategories.map((cat) => (
-                        <option key={cat} value={cat}>{cat}</option>
-                      ))}
-                    </select>
+                    <Select value={skillCategory || "__all__"} onValueChange={(v) => setSkillCategory(v === "__all__" ? "" : v)}>
+                      <SelectTrigger className="w-[180px]">
+                        <SelectValue placeholder="All categories" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__all__">All categories</SelectItem>
+                        {skillCategories.map((cat) => (
+                          <SelectItem key={cat} value={cat}>{cat}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </div>
                   <ScrollArea className="max-h-[430px] pr-3">
                     <div className="space-y-3">
@@ -832,7 +905,7 @@ export function AgentManagementPanel({
           </TabsContent>
 
           {/* ─── Advanced ─── */}
-          <TabsContent value="advanced" className="space-y-4">
+          <TabsContent value="advanced" className="animate-fade-in space-y-4">
             <Card className="shadow-none">
               <CardHeader className="pb-3">
                 <CardTitle className="text-sm">Infrastructure</CardTitle>
@@ -860,7 +933,7 @@ export function AgentManagementPanel({
         </Tabs>
 
         {displayError && (
-          <div className="mt-4 rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+          <div className="mt-4 rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive" role="alert">
             {displayError}
           </div>
         )}
@@ -870,17 +943,40 @@ export function AgentManagementPanel({
             Saving updates the spec and triggers an operator reconcile.
           </p>
           <div className="flex gap-2">
-            <Button onClick={handleSaveClick} disabled={!model.trim() || isSaving} className="min-w-[140px]">
+            <Button onClick={handleSaveClick} disabled={!model.trim() || isSaving} className="relative min-w-[140px]">
+              {isDirty && !isSaving && (
+                <span className="absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-amber-500 animate-[breathe-pulse_2s_ease-in-out_infinite]" />
+              )}
               {isSaving ? <LoaderCircle className="mr-1.5 h-4 w-4 animate-spin" /> : <Save className="mr-1.5 h-4 w-4" />}
               {isSaving ? "Saving..." : "Save changes"}
             </Button>
-            <Button variant="destructive" onClick={onDelete} disabled={isDeleting}>
+            <Button variant="destructive" onClick={() => setDeleteDialogOpen(true)} disabled={isDeleting}>
               {isDeleting ? <LoaderCircle className="mr-1.5 h-4 w-4 animate-spin" /> : <Trash2 className="mr-1.5 h-4 w-4" />}
               {isDeleting ? "Deleting..." : "Delete"}
             </Button>
           </div>
         </div>
       </CardContent>
+
+      <ConfirmDialog
+        open={deleteDialogOpen}
+        onOpenChange={setDeleteDialogOpen}
+        title={`Delete ${agent.name}?`}
+        description="This will permanently remove the agent, its runtime pod, and all attached resources. This action cannot be undone."
+        confirmLabel="Delete agent"
+        variant="destructive"
+        onConfirm={onDelete}
+      />
+
+      <ToolConfigDrawer
+        open={configDrawerTool !== null}
+        onOpenChange={(open) => { if (!open) setConfigDrawerTool(null); }}
+        tool={configDrawerTool}
+        agent={agent}
+        token={token}
+        namespace={agent.namespace}
+        onConfigSaved={handleToolConfigSaved}
+      />
     </Card>
   );
 }

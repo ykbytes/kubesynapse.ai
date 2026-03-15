@@ -6,7 +6,9 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { ConfirmDialog } from "./ConfirmDialog";
 import type { AgentInfo, EvalInfo, EvalPayload, EvalTestCase, EvalUpdatePayload } from "../types";
 
 interface EvalManagerProps {
@@ -65,6 +67,7 @@ export function EvalManager({
   const [testSuite, setTestSuite] = useState<EvalTestCase[]>(defaultCases());
   const [thresholds, setThresholds] = useState<ThresholdDraft>(thresholdsFromResource(null));
   const [validationError, setValidationError] = useState("");
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
 
   useEffect(() => {
     if (evalResource) {
@@ -145,18 +148,19 @@ export function EvalManager({
           </div>
           <div className="space-y-1.5">
             <Label className="text-xs">Agent</Label>
-            <select
-              className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              value={agentRef}
-              onChange={(e) => setAgentRef(e.target.value)}
-            >
-              <option value="">Select agent</option>
-              {agents.map((agent) => (
-                <option key={agent.name} value={agent.name}>
-                  {agent.name}
-                </option>
-              ))}
-            </select>
+            <Select value={agentRef || "__none__"} onValueChange={(v) => setAgentRef(v === "__none__" ? "" : v)}>
+              <SelectTrigger className="h-9 text-sm">
+                <SelectValue placeholder="Select agent" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none__">Select agent</SelectItem>
+                {agents.map((agent) => (
+                  <SelectItem key={agent.name} value={agent.name}>
+                    {agent.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
           <div className="space-y-1.5">
             <Label className="text-xs">Schedule (cron)</Label>
@@ -283,7 +287,7 @@ export function EvalManager({
                               : c.metrics.filter((m) => m !== metric),
                           }))
                         }
-                        className="h-3.5 w-3.5 rounded border-input"
+                        className="h-4 w-4 rounded border-input accent-primary"
                       />
                       {metric}
                     </label>
@@ -329,7 +333,7 @@ export function EvalManager({
           {evalResource && (
             <Button
               variant="destructive"
-              onClick={() => onDelete(evalResource.name)}
+              onClick={() => setDeleteDialogOpen(true)}
               disabled={isDeleting}
             >
               {isDeleting ? <LoaderCircle className="mr-1.5 h-4 w-4 animate-spin" /> : <Trash2 className="mr-1.5 h-4 w-4" />}
@@ -337,6 +341,17 @@ export function EvalManager({
             </Button>
           )}
         </div>
+
+        {evalResource && (
+          <ConfirmDialog
+            open={deleteDialogOpen}
+            onOpenChange={setDeleteDialogOpen}
+            title="Delete evaluation"
+            description={`This will permanently delete the evaluation "${evalResource.name}". This action cannot be undone.`}
+            confirmLabel="Delete"
+            onConfirm={() => onDelete(evalResource.name)}
+          />
+        )}
       </CardContent>
     </Card>
   );

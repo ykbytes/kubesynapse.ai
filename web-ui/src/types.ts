@@ -58,6 +58,24 @@ export interface GitFormState {
   sshPrivateKey: string;
 }
 
+export interface GitHubConfig {
+  credential_secret_ref?: string;
+}
+
+export interface GitHubCredentialRequest {
+  token: string;
+}
+
+export interface GitHubCredentialInfo {
+  exists: boolean;
+  secret_name: string;
+}
+
+export interface GitHubFormState {
+  enabled: boolean;
+  token: string;
+}
+
 /* ── Loop / Circuit Breaker types ── */
 
 export interface CircuitBreakerConfig {
@@ -237,6 +255,43 @@ export interface McpToolCategory {
   icon: string;
   default_port: number;
   sidecar_image?: string | null;
+  config_schema?: ConfigField[];
+  credential_type?: string | null;
+}
+
+/* ── Config field types for MCP tool drawers ── */
+
+export interface ConfigFieldOption {
+  value: string;
+  label: string;
+}
+
+export interface ConfigFieldVisibility {
+  field: string;
+  values: string[];
+}
+
+export interface ConfigField {
+  key: string;
+  label: string;
+  type: "text" | "password" | "select" | "textarea" | "toggle";
+  placeholder?: string;
+  required?: boolean;
+  group?: string;
+  help?: string;
+  default?: string;
+  is_credential?: boolean;
+  options?: ConfigFieldOption[];
+  visible_when?: ConfigFieldVisibility;
+}
+
+export interface McpHubServer {
+  id: string;
+  name: string;
+  description: string;
+  icon: string;
+  credential_type?: string | null;
+  config_schema?: ConfigField[];
 }
 
 export interface SkillsCatalogResponse {
@@ -265,6 +320,8 @@ export interface AgentDetail extends AgentInfo {
   skills: AgentSkillsConfig;
   skill_summaries: AgentSkillSummary[];
   goose_config_files: Record<string, unknown>;
+  git_config?: GitConfig | null;
+  github_config?: GitHubConfig | null;
   created_at?: string | null;
 }
 
@@ -282,6 +339,7 @@ export interface CreateAgentPayload {
   skills?: AgentSkillsConfig;
   goose_config_files?: Record<string, unknown>;
   git_config?: GitConfig | null;
+  github_config?: GitHubConfig | null;
 }
 
 export interface UpdateAgentPayload {
@@ -296,6 +354,8 @@ export interface UpdateAgentPayload {
   a2a_config?: AgentA2AConfig;
   skills?: AgentSkillsConfig;
   goose_config_files?: Record<string, unknown>;
+  git_config?: GitConfig | null;
+  github_config?: GitHubConfig | null;
 }
 
 export interface GatewayHealth {

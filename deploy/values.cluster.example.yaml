@@ -84,4 +84,5 @@ mcpHub:
     secretName: ""
   servers:
     github:
-      enabled: false
+      enabled: true
+      image: docker.io/yakdhane/mcp-github-adapter:latest

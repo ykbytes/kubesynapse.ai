@@ -1,6 +1,8 @@
-import { LayoutPanelTop } from "lucide-react";
+import { CheckCircle2, LayoutPanelTop, Loader2, XCircle } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { StatusBadge } from "./StatusBadge";
 import { ConnectionDialog } from "./ConnectionDialog";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import type { AuthConfig, AuthenticatedUser, GatewayHealth } from "@/types";
 
 interface TopBarProps {
@@ -28,8 +30,10 @@ interface TopBarProps {
   onAuthPasswordConfirmChange: (value: string) => void;
   onPasswordProviderChange: (value: "local" | "ldap") => void;
   onRegisterModeChange: (value: boolean) => void;
-  onConnect: () => void;
-  onPasswordSubmit: () => void;
+  connectionError: string;
+  onClearConnectionError: () => void;
+  onConnect: () => Promise<boolean>;
+  onPasswordSubmit: () => Promise<boolean>;
   onStartOidc: (providerId: string) => void;
   onStartSaml: (providerId: string) => void;
   onLogout: () => void;
@@ -61,6 +65,8 @@ export function TopBar({
   onAuthPasswordConfirmChange,
   onPasswordProviderChange,
   onRegisterModeChange,
+  connectionError,
+  onClearConnectionError,
   onConnect,
   onPasswordSubmit,
   onStartOidc,
@@ -70,34 +76,46 @@ export function TopBar({
 }: TopBarProps) {
   const gatewayStatus = gatewayError ? "offline" : health?.status ?? "loading";
   const isHealthy = gatewayStatus === "ok" || gatewayStatus === "healthy";
+  const isLoading = gatewayStatus === "loading";
+
+  const healthStatusVariant = isHealthy ? "success" : gatewayStatus === "offline" ? "error" : isLoading ? "neutral" : "warning";
+  const HealthIcon = isHealthy ? CheckCircle2 : gatewayStatus === "offline" ? XCircle : Loader2;
 
   return (
-    <header className="flex h-14 items-center justify-between border-b border-border bg-sidebar px-4">
-      <div className="flex items-center gap-3">
-        <div className="flex h-8 w-8 items-center justify-center rounded-md bg-primary/10 text-primary">
-          <LayoutPanelTop className="h-5 w-5" />
+    <TooltipProvider delayDuration={200}>
+      <header className="sticky top-0 z-50 flex h-14 items-center justify-between border-b border-border bg-sidebar px-4 shadow-sm animate-fade-in">
+        <div className="flex items-center gap-3">
+          <div className="flex h-8 w-8 items-center justify-center rounded-md bg-primary/10 text-primary">
+            <LayoutPanelTop className="h-5 w-5" />
+          </div>
+          <div className="flex flex-col">
+            <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+              Kubemininions
+            </span>
+            <span className="text-sm font-semibold text-foreground">Agent Sandbox</span>
+          </div>
         </div>
-        <div className="flex flex-col">
-          <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-            Kubemininions
-          </span>
-          <span className="text-sm font-semibold text-foreground">Agent Sandbox</span>
-        </div>
-      </div>
 
-      <div className="flex items-center gap-3">
-        <Badge
-          variant={isHealthy ? "default" : gatewayStatus === "offline" ? "destructive" : "secondary"}
-        >
-          {gatewayStatus}
-        </Badge>
-        {token.trim() && (
-          <Badge variant="outline" className="font-mono text-xs">
-            {namespace}
-          </Badge>
-        )}
-        {currentUser ? <Badge variant="secondary">{currentUser.role}</Badge> : null}
-        <ConnectionDialog
+        <div className="flex items-center gap-2.5">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span>
+                <StatusBadge icon={HealthIcon} status={healthStatusVariant} className={isLoading ? "[&>svg]:animate-spin" : ""}>
+                  {gatewayStatus}
+                </StatusBadge>
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Gateway health: {gatewayStatus}</TooltipContent>
+          </Tooltip>
+          {token.trim() && (
+            <Badge variant="outline" className="font-mono text-xs">
+              {namespace}
+            </Badge>
+          )}
+          {currentUser ? <Badge variant="secondary">{currentUser.role}</Badge> : null}
+          <ConnectionDialog
+          connectionError={connectionError}
+          onClearConnectionError={onClearConnectionError}
           token={token}
           namespace={namespace}
           isConnecting={isConnecting}
@@ -127,7 +145,8 @@ export function TopBar({
           onLogout={onLogout}
           onRefreshCurrentUser={onRefreshCurrentUser}
         />
-      </div>
-    </header>
+        </div>
+      </header>
+    </TooltipProvider>
   );
 }

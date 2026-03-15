@@ -1,11 +1,18 @@
 import { useEffect, useState } from "react";
-import { AlertCircle, RefreshCw, Shield, UserPlus } from "lucide-react";
+import { AlertCircle, Loader2, RefreshCw, Shield, UserPlus } from "lucide-react";
 import { toast } from "sonner";
 import { changePassword, createUser, listUsers, updateUser } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Dialog,
   DialogContent,
@@ -73,8 +80,10 @@ interface ConnectionDialogProps {
   onAuthPasswordConfirmChange: (value: string) => void;
   onPasswordProviderChange: (value: "local" | "ldap") => void;
   onRegisterModeChange: (value: boolean) => void;
-  onConnect: () => void;
-  onPasswordSubmit: () => void;
+  connectionError: string;
+  onClearConnectionError: () => void;
+  onConnect: () => Promise<boolean>;
+  onPasswordSubmit: () => Promise<boolean>;
   onStartOidc: (providerId: string) => void;
   onStartSaml: (providerId: string) => void;
   onLogout: () => void;
@@ -104,6 +113,8 @@ export function ConnectionDialog({
   onAuthPasswordConfirmChange,
   onPasswordProviderChange,
   onRegisterModeChange,
+  connectionError,
+  onClearConnectionError,
   onConnect,
   onPasswordSubmit,
   onStartOidc,
@@ -166,16 +177,16 @@ export function ConnectionDialog({
     };
   }, [open, token, isAdmin]);
 
-  function handleConnect() {
-    onConnect();
-    setOpen(false);
+  async function handleConnect() {
+    const ok = await onConnect();
+    if (ok) setOpen(false);
   }
 
   const [registerError, setRegisterError] = useState("");
 
   const isBootstrapping = authConfig != null && !authConfig.bootstrap_complete && authConfig.registration_enabled;
 
-  function handlePasswordSubmit() {
+  async function handlePasswordSubmit() {
     setRegisterError("");
     if (registerMode && passwordProvider === "local") {
       if (authUsername.trim().length < 3) {
@@ -191,8 +202,8 @@ export function ConnectionDialog({
         return;
       }
     }
-    onPasswordSubmit();
-    setOpen(false);
+    const ok = await onPasswordSubmit();
+    if (ok) setOpen(false);
   }
 
   function applyUserUpdate(user: AdminUser) {
@@ -313,7 +324,7 @@ export function ConnectionDialog({
   const samlProviders = authConfig?.saml_providers ?? [];
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog open={open} onOpenChange={(nextOpen) => { setOpen(nextOpen); if (nextOpen) onClearConnectionError(); }}>
       <DialogTrigger asChild>
         <Button variant="outline" size="sm">
           <Shield className="h-4 w-4" />
@@ -619,18 +630,18 @@ export function ConnectionDialog({
                       <div className="grid gap-3 sm:grid-cols-[minmax(0,160px)_minmax(0,1fr)]">
                         <div className="grid gap-2">
                           <Label htmlFor="create-role">Role</Label>
-                          <select
-                            id="create-role"
-                            value={createRole}
-                            onChange={(e) => setCreateRole(e.target.value as UserRole)}
-                            className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                          >
-                            {USER_ROLES.map((role) => (
-                              <option key={role} value={role}>
-                                {role}
-                              </option>
-                            ))}
-                          </select>
+                          <Select value={createRole} onValueChange={(v) => setCreateRole(v as UserRole)}>
+                            <SelectTrigger id="create-role" className="h-9">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {USER_ROLES.map((role) => (
+                                <SelectItem key={role} value={role}>
+                                  {role}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
                         </div>
                         <div className="grid gap-2">
                           <Label htmlFor="create-namespaces">Allowed namespaces</Label>
@@ -687,23 +698,26 @@ export function ConnectionDialog({
                                 </div>
                                 <div className="grid gap-2">
                                   <Label htmlFor={`user-role-${user.id}`}>Role</Label>
-                                  <select
-                                    id={`user-role-${user.id}`}
+                                  <Select
                                     value={draft.role}
-                                    onChange={(e) =>
+                                    onValueChange={(v) =>
                                       setAdminUserDrafts((current) => ({
                                         ...current,
-                                        [String(user.id)]: { ...draft, role: e.target.value as UserRole },
+                                        [String(user.id)]: { ...draft, role: v as UserRole },
                                       }))
                                     }
-                                    className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                                   >
-                                    {USER_ROLES.map((role) => (
-                                      <option key={role} value={role}>
-                                        {role}
-                                      </option>
-                                    ))}
-                                  </select>
+                                    <SelectTrigger id={`user-role-${user.id}`} className="h-9">
+                                      <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      {USER_ROLES.map((role) => (
+                                        <SelectItem key={role} value={role}>
+                                          {role}
+                                        </SelectItem>
+                                      ))}
+                                    </SelectContent>
+                                  </Select>
                                 </div>
                               </div>
 
@@ -755,8 +769,15 @@ export function ConnectionDialog({
             </>
           )}
         </div>
+        {connectionError && (
+          <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive flex items-center gap-2">
+            <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+            {connectionError}
+          </div>
+        )}
         <DialogFooter>
-          <Button onClick={handleConnect} disabled={isConnecting}>
+          <Button onClick={handleConnect} disabled={isConnecting} className="gap-2">
+            {isConnecting && <Loader2 className="h-4 w-4 animate-spin" />}
             {isConnecting ? "Connecting..." : currentUser ? "Refresh access" : "Connect"}
           </Button>
         </DialogFooter>

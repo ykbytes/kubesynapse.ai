@@ -19,6 +19,7 @@ import type {
   ApprovalInfo,
   CatalogSkill,
   CatalogSkillDetail,
+  ConfigField,
   CreateUserPayload,
   CreateAgentPayload,
   DeleteResponse,
@@ -29,9 +30,14 @@ import type {
   GatewayHealth,
   GitCredentialInfo,
   GitCredentialRequest,
+  GitConfig,
+  GitHubConfig,
+  GitHubCredentialInfo,
+  GitHubCredentialRequest,
   InvocationSummary,
   InvokePayload,
   InvokeResponse,
+  McpHubServer,
   McpToolCategory,
   PolicyInfo,
   RuntimeKind,
@@ -106,11 +112,7 @@ async function fetchAuthenticated(
   requestId?: string,
 ): Promise<Response> {
   const trimmedToken = token?.trim() || undefined;
-  let response = await fetch(url, buildAuthenticatedInit(trimmedToken, requestId, init));
-  if (response.status === 401 && trimmedToken) {
-    response = await fetch(url, buildAuthenticatedInit(undefined, requestId, init));
-  }
-  return response;
+  return fetch(url, buildAuthenticatedInit(trimmedToken, requestId, init));
 }
 
 function isRecord(value: unknown): value is JsonRecord {
@@ -305,6 +307,32 @@ function parseAgentSkillsConfigPayload(payload: unknown, label: string): AgentSk
   return { files: normalizedFiles };
 }
 
+function parseGitConfigPayload(payload: unknown, label: string): GitConfig | null {
+  if (payload === undefined || payload === null) {
+    return null;
+  }
+
+  const record = expectRecord(payload, label);
+  return {
+    repo_url: readString(record, "repo_url", label),
+    default_branch: readOptionalString(record, "default_branch", label) ?? undefined,
+    push_policy: (readOptionalString(record, "push_policy", label) ?? undefined) as GitConfig["push_policy"],
+    auth_method: readString(record, "auth_method", label) as GitConfig["auth_method"],
+    credential_secret_ref: readOptionalString(record, "credential_secret_ref", label) ?? undefined,
+  };
+}
+
+function parseGitHubConfigPayload(payload: unknown, label: string): GitHubConfig | null {
+  if (payload === undefined || payload === null) {
+    return null;
+  }
+
+  const record = expectRecord(payload, label);
+  return {
+    credential_secret_ref: readOptionalString(record, "credential_secret_ref", label) ?? undefined,
+  };
+}
+
 function parseAgentSkillSummaryPayload(payload: unknown, label: string): AgentSkillSummary {
   const record = expectRecord(payload, label);
   return {
@@ -459,6 +487,8 @@ function parseAgentDetailPayload(payload: unknown): AgentDetail {
       parseAgentSkillSummaryPayload(item, `AgentDetail.skill_summaries[${index}]`),
     ),
     goose_config_files: readRecord(record, "goose_config_files", "AgentDetail"),
+    git_config: parseGitConfigPayload(record.git_config, "AgentDetail.git_config"),
+    github_config: parseGitHubConfigPayload(record.github_config, "AgentDetail.github_config"),
     created_at: readOptionalString(record, "created_at", "AgentDetail"),
   };
 }
@@ -834,9 +864,7 @@ export async function logoutSession(token?: string): Promise<void> {
 }
 
 export async function fetchCurrentUser(token: string): Promise<AuthenticatedUser> {
-  const response = await fetch(buildUrl("/api/auth/me"), {
-    headers: buildHeaders(token),
-  });
+  const response = await fetchAuthenticated(buildUrl("/api/auth/me"), token);
   return parseJsonResponse(response, (payload) => {
     const record = expectRecord(payload, "CurrentUserResponse");
     return parseAuthenticatedUserPayload(record.user, "CurrentUserResponse.user");
@@ -1278,6 +1306,8 @@ function parseMcpToolCategoryPayload(payload: unknown, label: string): McpToolCa
     icon: readString(record, "icon", label),
     default_port: readOptionalNumber(record, "default_port", label) ?? 0,
     sidecar_image: readOptionalString(record, "sidecar_image", label),
+    config_schema: Array.isArray(record.config_schema) ? (record.config_schema as ConfigField[]) : [],
+    credential_type: readOptionalString(record, "credential_type", label),
   };
 }
 
@@ -1340,6 +1370,20 @@ export async function createGitCredentials(
   return parseJsonResponse(response, (p) => p as Record<string, unknown>);
 }
 
+export async function createGitHubCredentials(
+  token: string,
+  agentName: string,
+  body: GitHubCredentialRequest,
+  namespace = "default",
+): Promise<Record<string, unknown>> {
+  const response = await fetchAuthenticated(
+    buildUrl(`/api/agents/${agentName}/github-credentials`, namespace),
+    token,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) },
+  );
+  return parseJsonResponse(response, (p) => p as Record<string, unknown>);
+}
+
 export async function getGitCredentials(
   token: string,
   agentName: string,
@@ -1363,4 +1407,41 @@ export async function deleteGitCredentials(
     { method: "DELETE" },
   );
   return parseJsonResponse(response, (p) => p as Record<string, unknown>);
+}
+
+/* ── GitHub Credential API ── */
+
+export async function getGitHubCredentials(
+  token: string,
+  agentName: string,
+  namespace = "default",
+): Promise<GitHubCredentialInfo> {
+  const response = await fetchAuthenticated(
+    buildUrl(`/api/agents/${agentName}/github-credentials`, namespace),
+    token,
+  );
+  return parseJsonResponse(response, (p) => p as GitHubCredentialInfo);
+}
+
+export async function deleteGitHubCredentials(
+  token: string,
+  agentName: string,
+  namespace = "default",
+): Promise<Record<string, unknown>> {
+  const response = await fetchAuthenticated(
+    buildUrl(`/api/agents/${agentName}/github-credentials`, namespace),
+    token,
+    { method: "DELETE" },
+  );
+  return parseJsonResponse(response, (p) => p as Record<string, unknown>);
+}
+
+/* ── MCP Hub Servers API ── */
+
+export async function fetchMcpHubServers(token: string): Promise<McpHubServer[]> {
+  const response = await fetchAuthenticated(buildUrl("/api/mcp-hub/servers"), token);
+  return parseJsonResponse(response, (payload) => {
+    if (Array.isArray(payload)) return payload as McpHubServer[];
+    throw new Error("Invalid MCP hub servers response");
+  });
 }

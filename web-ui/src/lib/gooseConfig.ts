@@ -22,10 +22,6 @@ export function createGooseConfigFileDraft(initial?: Partial<TextFileDraft>): Te
   };
 }
 
-function isRecord(value: unknown): value is GooseConfigFiles {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function normalizeGooseConfigPath(rawPath: string): string {
   const normalizedPath = rawPath.replace(/\\+/g, "/").trim();
   if (!normalizedPath) {
@@ -84,40 +80,5 @@ export function buildGooseConfigFiles(drafts: TextFileDraft[]): GooseConfigFiles
     normalized[normalizedPath] = rawContent;
   }
 
-  return normalized;
-}
-
-export function stringifyGooseConfigFiles(value: GooseConfigFiles | null | undefined): string {
-  if (!value || Object.keys(value).length === 0) {
-    return "";
-  }
-  return JSON.stringify(value, null, 2);
-}
-
-export function parseGooseConfigFilesText(rawText: string): GooseConfigFiles {
-  const trimmed = rawText.trim();
-  if (!trimmed) {
-    return {};
-  }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(trimmed);
-  } catch {
-    throw new Error("Goose config files must be valid JSON keyed by relative config file paths.");
-  }
-
-  if (!isRecord(parsed)) {
-    throw new Error("Goose config files must be a JSON object keyed by relative config file paths.");
-  }
-
-  const normalized: GooseConfigFiles = {};
-  for (const [rawPath, rawContent] of Object.entries(parsed)) {
-    const normalizedPath = normalizeGooseConfigPath(rawPath);
-    if (rawContent === null) {
-      throw new Error(`Goose config file '${normalizedPath}' must not be null.`);
-    }
-    normalized[normalizedPath] = rawContent;
-  }
   return normalized;
 }

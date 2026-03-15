@@ -1,5 +1,5 @@
-import { Bot, GitBranch, FlaskConical, Package, Play, Plus, RefreshCw, PanelLeftClose, PanelLeft, Search } from "lucide-react";
-import { useState } from "react";
+import { Bot, GitBranch, FlaskConical, Inbox, Package, Play, Plus, RefreshCw, PanelLeftClose, PanelLeft, Search } from "lucide-react";
+import { useCallback, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { EmptyState } from "./EmptyState";
 import type { WorkspaceView } from "@/types";
 
 export interface SidebarResourceItem {
@@ -40,16 +41,17 @@ const VIEW_META: Record<WorkspaceView, { label: string; icon: typeof Bot }> = {
   catalog: { label: "Catalog", icon: Package },
 };
 
-function statusColor(status: string): string {
+function statusDotClasses(status: string): string {
   switch (status) {
     case "running":
+      return "bg-emerald-500 animate-[breathe-pulse_2s_ease-in-out_infinite]";
     case "succeeded":
     case "completed":
       return "bg-emerald-500";
     case "pending":
     case "queued":
     case "progressing":
-      return "bg-amber-500";
+      return "bg-amber-500 animate-[breathe-pulse_2s_ease-in-out_infinite]";
     case "failed":
     case "error":
       return "bg-red-500";
@@ -74,11 +76,20 @@ export function AppSidebar({
   onQuickRun,
 }: AppSidebarProps) {
   const [filter, setFilter] = useState("");
-  const filteredItems = filter.trim()
+  const [debouncedFilter, setDebouncedFilter] = useState("");
+  const debounceRef = useRef<ReturnType<typeof setTimeout>>();
+
+  const handleFilterChange = useCallback((value: string) => {
+    setFilter(value);
+    clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => setDebouncedFilter(value), 150);
+  }, []);
+
+  const filteredItems = debouncedFilter.trim()
     ? items.filter(
         (item) =>
-          item.title.toLowerCase().includes(filter.toLowerCase()) ||
-          item.subtitle.toLowerCase().includes(filter.toLowerCase()),
+          item.title.toLowerCase().includes(debouncedFilter.toLowerCase()) ||
+          item.subtitle.toLowerCase().includes(debouncedFilter.toLowerCase()),
       )
     : items;
   if (collapsed) {
@@ -152,7 +163,7 @@ export function AppSidebar({
             );
           })}
         </div>
-        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onToggleCollapse}>
+        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onToggleCollapse} aria-label="Collapse sidebar">
           <PanelLeftClose className="h-3.5 w-3.5" />
         </Button>
       </div>
@@ -174,9 +185,10 @@ export function AppSidebar({
           <Search className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
           <Input
             value={filter}
-            onChange={(e) => setFilter(e.target.value)}
+            onChange={(e) => handleFilterChange(e.target.value)}
             placeholder="Filter..."
             className="h-7 pl-7 text-xs"
+            aria-label="Filter resources"
           />
         </div>
       </div>
@@ -198,23 +210,29 @@ export function AppSidebar({
             </>
           )}
           {!loading && filteredItems.length === 0 && (
-            <p className="px-2 py-4 text-center text-xs text-muted-foreground">
-              {filter.trim() ? "No matches" : emptyMessage}
-            </p>
+            <EmptyState
+              icon={filter.trim() ? Search : Inbox}
+              title={filter.trim() ? "No matches" : emptyMessage}
+              description={filter.trim() ? `No items match "${debouncedFilter}"` : undefined}
+              className="py-8"
+            />
           )}
-          {filteredItems.map((item) => (
+          {filteredItems.map((item, index) => (
             <button
               key={item.id}
               type="button"
               role="option"
               aria-selected={selectedId === item.id}
               onClick={() => onSelect(item.id)}
+              style={{ animationDelay: `${index * 30}ms` }}
               className={cn(
-                "group flex w-full items-start gap-2.5 rounded-md px-2.5 py-2 text-left text-sm transition-colors hover:bg-sidebar-accent animate-fade-in",
+                "group flex w-full items-start gap-2.5 rounded-md px-2.5 py-2 text-left text-sm",
+                "transition-all duration-150 hover:bg-sidebar-accent/80 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+                "animate-fade-in opacity-0 [animation-fill-mode:forwards]",
                 selectedId === item.id && "bg-sidebar-accent border-l-2 border-primary",
               )}
             >
-              <span className={cn("mt-1.5 h-2 w-2 shrink-0 rounded-full", statusColor(item.status))} aria-hidden="true" />
+              <span className={cn("mt-1.5 h-2 w-2 shrink-0 rounded-full", statusDotClasses(item.status))} aria-hidden="true" />
               <div className="min-w-0 flex-1">
                 <p className="truncate font-medium text-sidebar-foreground">{item.title}</p>
                 <p className="truncate text-xs text-muted-foreground">{item.subtitle}</p>

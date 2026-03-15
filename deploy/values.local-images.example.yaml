@@ -37,3 +37,9 @@ webUi:
     repository: localhost/kubeminionagents/ai-agent-sandbox-web-ui
     tag: dev
     pullPolicy: IfNotPresent
+
+mcpHub:
+  servers:
+    github:
+      image: localhost/kubeminionagents/mcp-github-adapter
+      imagePullPolicy: IfNotPresent

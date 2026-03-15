@@ -48,3 +48,7 @@ platformSecrets:
 mcpHub:
   auth:
     bearerToken: "minikube-dev-mcp-token"
+  servers:
+    github:
+      image: localhost/kubeminionagents/mcp-github-adapter
+      imagePullPolicy: IfNotPresent

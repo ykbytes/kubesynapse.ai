@@ -89,6 +89,8 @@ except ModuleNotFoundError:  # pragma: no cover - covered by runtime packaging
 logger = logging.getLogger("api-gateway")
 K8S_NAME_PATTERN = r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
 K8S_NAME_RE = re.compile(K8S_NAME_PATTERN)
+GIT_AUTH_METHODS = {"token", "basic", "ssh"}
+GIT_PUSH_POLICIES = {"after-each-commit", "end-of-session", "on-approval", "never"}
 
 
 @contextlib.asynccontextmanager
@@ -104,11 +106,23 @@ async def lifespan(app: FastAPI):
             logger.info("Loaded local kubeconfig file.")
     except Exception as exc:
         logger.warning("Failed to load K8s config on startup (API might fail): %s", exc)
-    try:
-        init_database()
-        ensure_bootstrap_admin()
-    except Exception as exc:
-        logger.exception("Failed to initialize auth database: %s", exc)
+
+    max_db_retries = int(os.getenv("DATABASE_INIT_RETRIES", "10"))
+    for attempt in range(1, max_db_retries + 1):
+        try:
+            init_database()
+            ensure_bootstrap_admin()
+            logger.info("Auth database initialized successfully.")
+            break
+        except Exception as exc:
+            if attempt < max_db_retries:
+                logger.warning(
+                    "Database init attempt %d/%d failed (%s), retrying in %ds...",
+                    attempt, max_db_retries, exc, attempt * 2,
+                )
+                await asyncio.sleep(attempt * 2)
+            else:
+                logger.exception("Failed to initialize auth database after %d attempts: %s", max_db_retries, exc)
     yield
 
 app = FastAPI(
@@ -431,6 +445,8 @@ class AgentDetail(AgentInfo):
     skills: dict[str, Any] = Field(default_factory=dict)
     skill_summaries: list[dict[str, Any]] = Field(default_factory=list)
     goose_config_files: dict[str, Any] = Field(default_factory=dict)
+    git_config: dict[str, Any] | None = None
+    github_config: dict[str, Any] | None = None
     created_at: str | None = None
 
 
@@ -479,6 +495,7 @@ class CreateAgentRequest(BaseModel):
     skills: dict[str, Any] | None = None
     goose_config_files: dict[str, Any] = Field(default_factory=dict)
     git_config: dict[str, Any] | None = Field(default=None, description="Git repo config for dev-loop workflows")
+    github_config: dict[str, Any] | None = Field(default=None, description="Shared GitHub MCP credentials for this agent")
 
 
 class UpdateAgentRequest(BaseModel):
@@ -494,6 +511,7 @@ class UpdateAgentRequest(BaseModel):
     skills: dict[str, Any] | None = None
     goose_config_files: dict[str, Any] | None = None
     git_config: dict[str, Any] | None = Field(default=None, description="Git repo config for dev-loop workflows")
+    github_config: dict[str, Any] | None = Field(default=None, description="Shared GitHub MCP credentials for this agent")
 
 
 class GitCredentialRequest(BaseModel):
@@ -513,6 +531,12 @@ class GitCredentialRequest(BaseModel):
         if self.auth_method == "ssh" and not self.ssh_private_key:
             raise ValueError("ssh_private_key is required when auth_method is 'ssh'")
         return self
+
+
+class GitHubCredentialRequest(BaseModel):
+    """Request body for creating GitHub MCP credentials as a K8s Secret."""
+
+    token: str = Field(min_length=1, max_length=4096)
 
 
 class WorkflowStepRequest(BaseModel):
@@ -1157,6 +1181,10 @@ def validate_agent_runtime_compatibility(spec: dict[str, Any]) -> None:
             errors.append(
                 "Goose runtime does not support mcp_sidecars. Use the LangGraph runtime for sidecar-based MCP tools today."
             )
+        if spec.get("githubConfig"):
+            errors.append(
+                "Goose runtime does not support github_config. Use the LangGraph runtime for shared GitHub MCP access today."
+            )
         if errors:
             raise HTTPException(status_code=400, detail=" ".join(errors))
     elif runtime_kind == "codex":
@@ -1164,6 +1192,10 @@ def validate_agent_runtime_compatibility(spec: dict[str, Any]) -> None:
         if spec.get("mcpServers"):
             errors.append(
                 "Codex runtime does not support mcp_servers. Use the LangGraph runtime for MCP routing today."
+            )
+        if spec.get("githubConfig"):
+            errors.append(
+                "Codex runtime does not support github_config. Use the LangGraph runtime for shared GitHub MCP access today."
             )
         if errors:
             raise HTTPException(status_code=400, detail=" ".join(errors))
@@ -1258,6 +1290,91 @@ def dedupe_text_values(values: list[str]) -> list[str]:
         seen.add(value)
         deduped.append(value)
     return deduped
+
+
+def first_present(config: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        if key in config:
+            return config.get(key)
+    return None
+
+
+def parse_agent_git_config(config: Any, *, source: str) -> dict[str, Any]:
+    if config is None:
+        return {}
+    if not isinstance(config, dict):
+        raise HTTPException(status_code=400, detail=f"{source} must be an object")
+    if not config:
+        return {}
+
+    repo_url = str(first_present(config, "repoUrl", "repo_url") or "").strip()
+    default_branch = str(first_present(config, "defaultBranch", "default_branch") or "").strip()
+    push_policy = str(first_present(config, "pushPolicy", "push_policy") or "").strip()
+    auth_method = str(first_present(config, "authMethod", "auth_method") or "").strip()
+    credential_secret_ref = str(first_present(config, "credentialSecretRef", "credential_secret_ref") or "").strip()
+
+    if auth_method and auth_method not in GIT_AUTH_METHODS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{source}.auth_method must be one of {', '.join(sorted(GIT_AUTH_METHODS))}",
+        )
+    if push_policy and push_policy not in GIT_PUSH_POLICIES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{source}.push_policy must be one of {', '.join(sorted(GIT_PUSH_POLICIES))}",
+        )
+
+    normalized: dict[str, Any] = {}
+    if repo_url:
+        normalized["repoUrl"] = repo_url
+    if default_branch:
+        normalized["defaultBranch"] = default_branch
+    if push_policy:
+        normalized["pushPolicy"] = push_policy
+    if auth_method:
+        normalized["authMethod"] = auth_method
+    if credential_secret_ref:
+        normalized["credentialSecretRef"] = credential_secret_ref
+    return normalized
+
+
+def serialize_agent_git_config(config: Any) -> dict[str, Any] | None:
+    normalized = parse_agent_git_config(config, source="git_config")
+    if not normalized:
+        return None
+    serialized: dict[str, Any] = {}
+    if normalized.get("repoUrl"):
+        serialized["repo_url"] = normalized["repoUrl"]
+    if normalized.get("defaultBranch"):
+        serialized["default_branch"] = normalized["defaultBranch"]
+    if normalized.get("pushPolicy"):
+        serialized["push_policy"] = normalized["pushPolicy"]
+    if normalized.get("authMethod"):
+        serialized["auth_method"] = normalized["authMethod"]
+    if normalized.get("credentialSecretRef"):
+        serialized["credential_secret_ref"] = normalized["credentialSecretRef"]
+    return serialized or None
+
+
+def parse_agent_github_config(config: Any, *, source: str) -> dict[str, Any]:
+    if config is None:
+        return {}
+    if not isinstance(config, dict):
+        raise HTTPException(status_code=400, detail=f"{source} must be an object")
+    if not config:
+        return {}
+
+    credential_secret_ref = str(first_present(config, "credentialSecretRef", "credential_secret_ref") or "").strip()
+    if not credential_secret_ref:
+        raise HTTPException(status_code=400, detail=f"{source}.credential_secret_ref is required")
+    return {"credentialSecretRef": credential_secret_ref}
+
+
+def serialize_agent_github_config(config: Any) -> dict[str, Any] | None:
+    normalized = parse_agent_github_config(config, source="github_config")
+    if not normalized:
+        return None
+    return {"credential_secret_ref": normalized["credentialSecretRef"]}
 
 
 def jsonrpc_success_response(request_id: Any, result: dict[str, Any]) -> dict[str, Any]:
@@ -2212,12 +2329,28 @@ def build_agent_spec(
             detail="goose_config_files is only supported when runtime_kind is 'goose'",
         )
 
+    requested_git_config = getattr(body, "git_config", None)
+    if requested_git_config is None:
+        git_config = parse_agent_git_config((existing_spec or {}).get("gitConfig"), source="existing spec.gitConfig")
+    else:
+        git_config = parse_agent_git_config(requested_git_config, source="git_config")
+
+    requested_github_config = getattr(body, "github_config", None)
+    if requested_github_config is None:
+        github_config = parse_agent_github_config((existing_spec or {}).get("githubConfig"), source="existing spec.githubConfig")
+    else:
+        github_config = parse_agent_github_config(requested_github_config, source="github_config")
+
+    mcp_servers = dedupe_text_values([server.strip() for server in body.mcp_servers if server.strip()])
+    if github_config and "github" not in mcp_servers:
+        mcp_servers.append("github")
+
     spec: dict[str, Any] = {
         "model": body.model.strip(),
         "systemPrompt": body.system_prompt.strip(),
         "enableGVisor": body.enable_gvisor,
         "storage": {"size": (body.storage_size or "1Gi").strip() or "1Gi"},
-        "mcpServers": [server.strip() for server in body.mcp_servers if server.strip()],
+        "mcpServers": mcp_servers,
         "mcpSidecars": body.mcp_sidecars,
         "runtime": {"kind": runtime_kind},
     }
@@ -2229,25 +2362,10 @@ def build_agent_spec(
         spec["runtime"]["goose"] = {"configFiles": goose_config_files}
     if body.policy_ref and body.policy_ref.strip():
         spec["policyRef"] = body.policy_ref.strip()
-
-    # Git configuration
-    git_config = getattr(body, "git_config", None)
-    if git_config is None:
-        git_config = (existing_spec or {}).get("gitConfig")
-    if git_config and isinstance(git_config, dict):
-        gc: dict[str, Any] = {}
-        if git_config.get("repoUrl"):
-            gc["repoUrl"] = str(git_config["repoUrl"]).strip()
-        if git_config.get("defaultBranch"):
-            gc["defaultBranch"] = str(git_config["defaultBranch"]).strip()
-        if git_config.get("pushPolicy"):
-            gc["pushPolicy"] = str(git_config["pushPolicy"]).strip()
-        if git_config.get("authMethod"):
-            gc["authMethod"] = str(git_config["authMethod"]).strip()
-        if git_config.get("credentialSecretRef"):
-            gc["credentialSecretRef"] = str(git_config["credentialSecretRef"]).strip()
-        if gc:
-            spec["gitConfig"] = gc
+    if git_config:
+        spec["gitConfig"] = git_config
+    if github_config:
+        spec["githubConfig"] = github_config
 
     return spec
 
@@ -2500,6 +2618,8 @@ def agent_detail_from_resource(agent: dict[str, Any]) -> AgentDetail:
             goose_runtime.get("configFiles"),
             source="AIAgent.spec.runtime.goose.configFiles",
         ),
+        git_config=serialize_agent_git_config(spec.get("gitConfig")),
+        github_config=serialize_agent_github_config(spec.get("githubConfig")),
         created_at=metadata.get("creationTimestamp"),
     )
 
@@ -3713,15 +3833,40 @@ def _resolve_sidecar_port(tool_id: str, fallback_port: int) -> int:
 
 
 MCP_TOOL_CATEGORIES: list[dict[str, Any]] = [
-    {"id": "code-exec", "name": "Code Execution", "description": "Run Python, Bash, and Node.js code in a sandboxed environment.", "icon": "terminal", "default_port": 8090},
-    {"id": "web-search", "name": "Web Search", "description": "Search the web, fetch URLs, and extract text content.", "icon": "globe", "default_port": 8091},
-    {"id": "documents", "name": "PDF & Office", "description": "Read, create, and manipulate PDF, DOCX, XLSX, and PPTX files.", "icon": "file-text", "default_port": 8092},
-    {"id": "browser", "name": "Browser Automation", "description": "Browse pages, take screenshots, click elements, and fill forms.", "icon": "monitor", "default_port": 8093},
-    {"id": "database", "name": "Database", "description": "Query SQL databases, list tables, and describe schemas.", "icon": "database", "default_port": 8094},
-    {"id": "git", "name": "Git & GitHub", "description": "Clone repos, view diffs, create commits, and interact with GitHub API.", "icon": "git-branch", "default_port": 8095},
-    {"id": "kubernetes", "name": "Kubernetes & Cloud", "description": "List pods, get logs, apply manifests, and manage cluster resources.", "icon": "server", "default_port": 8096},
-    {"id": "messaging", "name": "Email & Messaging", "description": "Send emails and Slack messages, list conversations.", "icon": "mail", "default_port": 8097},
-    {"id": "rag", "name": "RAG & Vector Search", "description": "Index documents, perform semantic search, and retrieve context.", "icon": "search", "default_port": 8098},
+    {"id": "code-exec", "name": "Code Execution", "description": "Run Python, Bash, and Node.js code in a sandboxed environment.", "icon": "terminal", "default_port": 8090, "config_schema": [], "credential_type": None},
+    {"id": "web-search", "name": "Web Search", "description": "Search the web, fetch URLs, and extract text content.", "icon": "globe", "default_port": 8091, "config_schema": [], "credential_type": None},
+    {"id": "documents", "name": "PDF & Office", "description": "Read, create, and manipulate PDF, DOCX, XLSX, and PPTX files.", "icon": "file-text", "default_port": 8092, "config_schema": [], "credential_type": None},
+    {"id": "browser", "name": "Browser Automation", "description": "Browse pages, take screenshots, click elements, and fill forms.", "icon": "monitor", "default_port": 8093, "config_schema": [], "credential_type": None},
+    {"id": "database", "name": "Database", "description": "Query SQL databases, list tables, and describe schemas.", "icon": "database", "default_port": 8094, "config_schema": [], "credential_type": None},
+    {
+        "id": "git", "name": "Git & GitHub",
+        "description": "Clone repos, view diffs, create commits, and interact with GitHub API.",
+        "icon": "git-branch", "default_port": 8095, "credential_type": "git",
+        "config_schema": [
+            {"key": "repo_url", "label": "Repository URL", "type": "text", "placeholder": "https://github.com/org/repo.git", "required": True, "group": "repository", "help": "HTTPS or SSH URL of the Git repository to clone into the sandbox"},
+            {"key": "default_branch", "label": "Default Branch", "type": "text", "placeholder": "main", "group": "repository"},
+            {"key": "push_policy", "label": "Push Policy", "type": "select", "options": [{"value": "after-each-commit", "label": "After Each Commit"}, {"value": "end-of-session", "label": "End of Session"}, {"value": "on-approval", "label": "On Approval"}, {"value": "never", "label": "Never"}], "default": "end-of-session", "group": "repository"},
+            {"key": "auth_method", "label": "Authentication Method", "type": "select", "options": [{"value": "token", "label": "Personal Access Token"}, {"value": "basic", "label": "Username & Password"}, {"value": "ssh", "label": "SSH Key"}], "default": "token", "group": "credentials"},
+            {"key": "token", "label": "Access Token", "type": "password", "placeholder": "ghp_...", "group": "credentials", "is_credential": True, "visible_when": {"field": "auth_method", "values": ["token"]}},
+            {"key": "username", "label": "Username", "type": "text", "group": "credentials", "is_credential": True, "visible_when": {"field": "auth_method", "values": ["basic"]}},
+            {"key": "password", "label": "Password", "type": "password", "group": "credentials", "is_credential": True, "visible_when": {"field": "auth_method", "values": ["basic"]}},
+            {"key": "ssh_private_key", "label": "SSH Private Key", "type": "textarea", "placeholder": "-----BEGIN OPENSSH PRIVATE KEY-----", "group": "credentials", "is_credential": True, "visible_when": {"field": "auth_method", "values": ["ssh"]}},
+        ],
+    },
+    {"id": "kubernetes", "name": "Kubernetes & Cloud", "description": "List pods, get logs, apply manifests, and manage cluster resources.", "icon": "server", "default_port": 8096, "config_schema": [], "credential_type": None},
+    {"id": "messaging", "name": "Email & Messaging", "description": "Send emails and Slack messages, list conversations.", "icon": "mail", "default_port": 8097, "config_schema": [], "credential_type": None},
+    {"id": "rag", "name": "RAG & Vector Search", "description": "Index documents, perform semantic search, and retrieve context.", "icon": "search", "default_port": 8098, "config_schema": [], "credential_type": None},
+]
+
+MCP_HUB_SERVERS: list[dict[str, Any]] = [
+    {
+        "id": "github", "name": "GitHub",
+        "description": "Shared GitHub API access via the platform MCP hub.",
+        "icon": "git-branch", "credential_type": "github",
+        "config_schema": [
+            {"key": "token", "label": "GitHub Personal Access Token", "type": "password", "placeholder": "ghp_...", "required": True, "group": "credentials", "is_credential": True, "help": "A GitHub PAT with appropriate scopes for the repositories you want to access."},
+        ],
+    },
 ]
 
 
@@ -3791,6 +3936,15 @@ def get_tool_categories(
         }
         for tool in MCP_TOOL_CATEGORIES
     ]
+
+
+@app.get("/api/mcp-hub/servers")
+def get_mcp_hub_servers(
+    user=Depends(verify_token),
+) -> list[dict[str, Any]]:
+    """Return metadata about shared MCP hub servers available for agents."""
+    del user
+    return MCP_HUB_SERVERS
 
 
 @app.get("/api/health")
@@ -4078,6 +4232,10 @@ def _git_secret_name(agent_name: str) -> str:
     return f"{agent_name}-git-credentials"
 
 
+def _github_secret_name(agent_name: str) -> str:
+    return f"{agent_name}-github-credentials"
+
+
 @app.post("/api/agents/{agent_name}/git-credentials", status_code=201)
 def create_git_credentials(
     agent_name: str,
@@ -4160,6 +4318,77 @@ def delete_git_credentials(
         if e.status == 404:
             raise HTTPException(status_code=404, detail=f"Git credentials not found for agent '{agent_name}'") from e
         raise HTTPException(status_code=502, detail=f"Failed to delete git credential secret: {e}") from e
+
+
+@app.post("/api/agents/{agent_name}/github-credentials", status_code=201)
+def create_github_credentials(
+    agent_name: str,
+    body: GitHubCredentialRequest,
+    namespace: str = "default",
+    user=Depends(verify_token),
+):
+    """Create a K8s Secret with GitHub MCP credentials for an agent."""
+    ensure_namespace_access(user, namespace, "operator")
+    from kubernetes import client
+
+    secret_name = _github_secret_name(agent_name)
+    secret = client.V1Secret(
+        metadata=client.V1ObjectMeta(
+            name=secret_name,
+            namespace=namespace,
+            labels={"app.kubernetes.io/managed-by": "kubemininions", "agent": agent_name},
+        ),
+        type="Opaque",
+        string_data={"token": body.token},
+    )
+    try:
+        client.CoreV1Api().create_namespaced_secret(namespace=namespace, body=secret)
+    except client.exceptions.ApiException as e:
+        if e.status == 409:
+            client.CoreV1Api().replace_namespaced_secret(name=secret_name, namespace=namespace, body=secret)
+        else:
+            raise HTTPException(status_code=502, detail=f"Failed to create GitHub credential secret: {e}") from e
+    return {"status": "created", "secret_name": secret_name}
+
+
+@app.get("/api/agents/{agent_name}/github-credentials")
+def get_github_credentials(
+    agent_name: str,
+    namespace: str = "default",
+    user=Depends(verify_token),
+):
+    """Get GitHub credential metadata without exposing secrets."""
+    ensure_namespace_access(user, namespace)
+    from kubernetes import client
+
+    secret_name = _github_secret_name(agent_name)
+    try:
+        client.CoreV1Api().read_namespaced_secret(name=secret_name, namespace=namespace)
+        return {"exists": True, "secret_name": secret_name}
+    except client.exceptions.ApiException as e:
+        if e.status == 404:
+            return {"exists": False, "secret_name": secret_name}
+        raise HTTPException(status_code=502, detail=f"Failed to read GitHub credential secret: {e}") from e
+
+
+@app.delete("/api/agents/{agent_name}/github-credentials")
+def delete_github_credentials(
+    agent_name: str,
+    namespace: str = "default",
+    user=Depends(verify_token),
+):
+    """Delete GitHub credential secret for an agent."""
+    ensure_namespace_access(user, namespace, "operator")
+    from kubernetes import client
+
+    secret_name = _github_secret_name(agent_name)
+    try:
+        client.CoreV1Api().delete_namespaced_secret(name=secret_name, namespace=namespace)
+        return {"status": "deleted", "secret_name": secret_name}
+    except client.exceptions.ApiException as e:
+        if e.status == 404:
+            raise HTTPException(status_code=404, detail=f"GitHub credentials not found for agent '{agent_name}'") from e
+        raise HTTPException(status_code=502, detail=f"Failed to delete GitHub credential secret: {e}") from e
 
 
 @app.get("/api/workflows", response_model=list[WorkflowInfo])

@@ -1,6 +1,7 @@
 import { FileText, PlusCircle, Trash2 } from "lucide-react";
 
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -42,7 +43,14 @@ export function TextFileBundleEditor({
     <div className="space-y-3">
       <div className="flex items-center justify-between">
         <div className="space-y-0.5">
-          <h4 className="text-sm font-medium text-foreground">{title}</h4>
+          <div className="flex items-center gap-2">
+            <h4 className="text-sm font-medium text-foreground">{title}</h4>
+            {entries.length > 0 && (
+              <Badge variant="secondary" className="px-1.5 py-0 text-[10px]">
+                {entries.length}
+              </Badge>
+            )}
+          </div>
           <p className="text-xs text-muted-foreground">{description}</p>
         </div>
         <Button variant="outline" size="sm" className="h-7 gap-1.5 text-xs" onClick={onAdd}>
@@ -69,6 +77,7 @@ export function TextFileBundleEditor({
                   size="icon"
                   className="h-7 w-7 text-muted-foreground hover:text-destructive"
                   onClick={() => removeEntry(entry.id)}
+                  aria-label="Remove file entry"
                 >
                   <Trash2 className="h-3.5 w-3.5" />
                 </Button>

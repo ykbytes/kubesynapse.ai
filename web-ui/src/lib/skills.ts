@@ -26,10 +26,6 @@ export function createSkillFileDraft(initial?: Partial<TextFileDraft>): TextFile
   };
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function normalizeSkillPath(rawPath: string): string {
   const normalizedPath = rawPath.replace(/\\+/g, "/").trim();
   if (!normalizedPath) {
@@ -88,43 +84,5 @@ export function buildSkillFiles(drafts: TextFileDraft[]): SkillFiles {
     normalized[normalizedPath] = rawContent;
   }
 
-  return normalized;
-}
-
-export function stringifySkillFiles(value: SkillFiles | null | undefined): string {
-  if (!value || Object.keys(value).length === 0) {
-    return "";
-  }
-  return JSON.stringify(value, null, 2);
-}
-
-export function parseSkillFilesText(rawText: string): SkillFiles {
-  const trimmed = rawText.trim();
-  if (!trimmed) {
-    return {};
-  }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(trimmed);
-  } catch {
-    throw new Error("Skill files must be valid JSON keyed by relative Markdown file paths.");
-  }
-
-  if (!isRecord(parsed)) {
-    throw new Error("Skill files must be a JSON object keyed by relative Markdown file paths.");
-  }
-
-  const normalized: SkillFiles = {};
-  for (const [rawPath, rawContent] of Object.entries(parsed)) {
-    const normalizedPath = normalizeSkillPath(rawPath);
-    if (typeof rawContent !== "string") {
-      throw new Error(`Skill file '${normalizedPath}' must be a string.`);
-    }
-    if (!rawContent.trim()) {
-      throw new Error(`Skill file '${normalizedPath}' must not be blank.`);
-    }
-    normalized[normalizedPath] = rawContent.replace(/\r\n/g, "\n");
-  }
   return normalized;
 }
