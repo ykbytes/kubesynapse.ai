@@ -374,21 +374,22 @@ WORKER_SERVICE_ACCOUNT_NAME = os.getenv("WORKER_SERVICE_ACCOUNT_NAME", "default"
 WORKER_ARTIFACT_SIZE = os.getenv("WORKER_ARTIFACT_SIZE", "2Gi")
 WORKER_ARTIFACT_STORAGE_CLASS = os.getenv("WORKER_ARTIFACT_STORAGE_CLASS", "").strip()
 WORKER_TTL_SECONDS_AFTER_FINISHED = get_int_env("WORKER_TTL_SECONDS_AFTER_FINISHED", 3600, minimum=0)
-WORKER_ACTIVE_DEADLINE_SECONDS = get_int_env("WORKER_ACTIVE_DEADLINE_SECONDS", 1800, minimum=60)
+WORKER_ACTIVE_DEADLINE_SECONDS = get_int_env("WORKER_ACTIVE_DEADLINE_SECONDS", 3600, minimum=60)
 WORKER_IMAGE_PULL_POLICY = os.getenv("WORKER_IMAGE_PULL_POLICY", "IfNotPresent").strip() or "IfNotPresent"
 WORKER_CPU_REQUEST = os.getenv("WORKER_CPU_REQUEST", "100m").strip() or "100m"
 WORKER_MEMORY_REQUEST = os.getenv("WORKER_MEMORY_REQUEST", "128Mi").strip() or "128Mi"
 WORKER_CPU_LIMIT = os.getenv("WORKER_CPU_LIMIT", "500m").strip() or "500m"
 WORKER_MEMORY_LIMIT = os.getenv("WORKER_MEMORY_LIMIT", "512Mi").strip() or "512Mi"
-AGENT_RUNTIME_TIMEOUT_SECONDS = str(get_float_env("AGENT_RUNTIME_TIMEOUT_SECONDS", 360.0, minimum=1.0))
+AGENT_RUNTIME_TIMEOUT_SECONDS = str(get_float_env("AGENT_RUNTIME_TIMEOUT_SECONDS", 900.0, minimum=1.0))
 EVAL_SCHEDULE_POLL_SECONDS = get_int_env("EVAL_SCHEDULE_POLL_SECONDS", 60, minimum=15)
 SCHEDULED_EVAL_QUEUE_STALE_SECONDS = get_int_env("SCHEDULED_EVAL_QUEUE_STALE_SECONDS", 600, minimum=60)
 WORKFLOW_POLL_SECONDS = get_int_env("WORKFLOW_POLL_SECONDS", 30, minimum=15)
 WORKFLOW_QUEUE_STALE_SECONDS = get_int_env("WORKFLOW_QUEUE_STALE_SECONDS", 300, minimum=60)
-WORKFLOW_RUNNING_STALE_SECONDS = get_int_env("WORKFLOW_RUNNING_STALE_SECONDS", 900, minimum=60)
+WORKFLOW_RUNNING_STALE_SECONDS = get_int_env("WORKFLOW_RUNNING_STALE_SECONDS", 1800, minimum=60)
 ARTIFACT_MOUNT_PATH = "/artifacts"
 AGENT_HITL_MODE = os.getenv("AGENT_HITL_MODE", "enforce").strip().lower()
 HITL_NOTIFICATION_WEBHOOK_URL = os.getenv("HITL_NOTIFICATION_WEBHOOK_URL", "").strip()
+NETWORK_POLICY_ENABLED = get_bool_env("NETWORK_POLICY_ENABLED", True)
 AGENT_CPU_REQUEST = os.getenv("AGENT_CPU_REQUEST", "100m").strip() or "100m"
 AGENT_MEMORY_REQUEST = os.getenv("AGENT_MEMORY_REQUEST", "256Mi").strip() or "256Mi"
 AGENT_CPU_LIMIT = os.getenv("AGENT_CPU_LIMIT", "1").strip() or "1"
@@ -629,6 +630,7 @@ PLATFORM_MANAGED_AGENT_ENV = {
     "MCP_BEARER_TOKEN",
     "GITHUB_MCP_TOKEN",
     "OPEN_SANDBOX_API_KEY",
+    "OPENROUTER_API_KEY",
 } | set(OPEN_SANDBOX_RUNTIME_ENV)
 
 
@@ -1785,6 +1787,16 @@ def create_agent_statefulset_manifest(
                         }
                     },
                 },
+                {
+                    "name": "OPENROUTER_API_KEY",
+                    "valueFrom": {
+                        "secretKeyRef": {
+                            "name": SECRET_NAME,
+                            "key": "OPENROUTER_API_KEY",
+                            "optional": True,
+                        }
+                    },
+                },
             ]
         )
         if policy_name:
@@ -2429,9 +2441,10 @@ def create_agent_resources(spec: dict[str, Any], name: str, namespace: str, logg
     if mcp_auth_secret_manifest is not None:
         ensure_secret(namespace, mcp_auth_secret_manifest)
     ensure_statefulset(namespace, statefulset_manifest)
-    ensure_network_policy(namespace, network_policy_manifest)
-    ensure_network_policy(namespace, a2a_egress_policy_manifest)
-    ensure_network_policy(namespace, a2a_ingress_policy_manifest)
+    if NETWORK_POLICY_ENABLED:
+        ensure_network_policy(namespace, network_policy_manifest)
+        ensure_network_policy(namespace, a2a_egress_policy_manifest)
+        ensure_network_policy(namespace, a2a_ingress_policy_manifest)
 
 
 @kopf.on.create("sandbox.enterprise.ai", "v1alpha1", "aiagents")  # type: ignore[arg-type]

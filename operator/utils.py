@@ -525,7 +525,7 @@ def invoke_agent_runtime(
 
     effective_timeout = timeout_seconds or AGENT_RUNTIME_TIMEOUT_SECONDS
     with httpx.Client(
-        timeout=effective_timeout,
+        timeout=httpx.Timeout(connect=30.0, read=effective_timeout, write=30.0, pool=30.0),
     ) as client:
         url = f"{runtime_url(agent_name, namespace)}/invoke"
         last_exc: Exception | None = None
