@@ -40,9 +40,9 @@ def get_int_env(name: str, default: int, minimum: int = 0) -> int:
         return max(default, minimum)
 
 
-AGENT_RUNTIME_TIMEOUT_SECONDS = get_float_env("AGENT_RUNTIME_TIMEOUT_SECONDS", 360.0, minimum=1.0)
+AGENT_RUNTIME_TIMEOUT_SECONDS = get_float_env("AGENT_RUNTIME_TIMEOUT_SECONDS", 900.0, minimum=1.0)
 MAX_THREAD_ID_CHARS = get_int_env("AGENT_MAX_THREAD_ID_CHARS", 128, minimum=16)
-DEFAULT_WORKFLOW_STEP_MAX_ATTEMPTS = get_int_env("WORKFLOW_DEFAULT_MAX_ATTEMPTS", 1, minimum=1)
+DEFAULT_WORKFLOW_STEP_MAX_ATTEMPTS = get_int_env("WORKFLOW_DEFAULT_MAX_ATTEMPTS", 3, minimum=1)
 DEFAULT_WORKFLOW_STEP_BACKOFF_SECONDS = get_float_env("WORKFLOW_DEFAULT_BACKOFF_SECONDS", 2.0, minimum=0.0)
 UNSUPPORTED_POLICY_BUDGET_FIELDS = (
     "maxTokensPerHour",
@@ -238,8 +238,10 @@ def validate_workflow_graph(steps: Sequence[dict[str, Any]]) -> dict[str, Any]:
 
     if visited != set(ordered_names):
         disconnected = sorted(set(ordered_names) - visited)
-        raise ValueError(
-            f"Workflow must form a single connected DAG. Disconnected steps: {disconnected}"
+        logger.warning(
+            "Workflow graph is not fully connected. Disconnected steps %s "
+            "will run independently (no data flows between them).",
+            disconnected,
         )
 
     return {
@@ -511,15 +513,35 @@ def invoke_agent_runtime(
     timeout_seconds: float | None = None,
 ) -> dict[str, Any]:
     """POST an invoke request to the agent runtime and return the response body."""
+    # Truncate prompt to prevent 422 from agent runtime's max_length validation
+    MAX_INVOKE_PROMPT_CHARS = 47000
+    if "prompt" in payload and len(payload["prompt"]) > MAX_INVOKE_PROMPT_CHARS:
+        logger.warning(
+            "Truncating invoke prompt from %d to %d chars for agent '%s'",
+            len(payload["prompt"]), MAX_INVOKE_PROMPT_CHARS, agent_name,
+        )
+        payload = dict(payload)
+        payload["prompt"] = payload["prompt"][:MAX_INVOKE_PROMPT_CHARS] + "\n[truncated]"
+
     effective_timeout = timeout_seconds or AGENT_RUNTIME_TIMEOUT_SECONDS
     with httpx.Client(
         timeout=effective_timeout,
-        transport=httpx.HTTPTransport(retries=2),
     ) as client:
         url = f"{runtime_url(agent_name, namespace)}/invoke"
         last_exc: Exception | None = None
         for attempt in range(3):
             response = client.post(url, json=payload)
+            if response.status_code == 422:
+                # Log Pydantic validation errors for debugging
+                try:
+                    detail = response.json()
+                except Exception:
+                    detail = response.text[:500]
+                logger.error(
+                    "Agent '%s' returned 422 Unprocessable Entity: %s (prompt length: %d)",
+                    agent_name, detail, len(payload.get("prompt", "")),
+                )
+                response.raise_for_status()
             if response.status_code < 500:
                 response.raise_for_status()
                 return response.json()  # type: ignore[no-any-return]

@@ -1,3 +1,6 @@
+import { downloadAgentFile } from "@/lib/api";
+import { isValidK8sName } from "@/lib/a2a";
+import { toast } from "sonner";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -5,6 +8,7 @@ import {
   ChevronRight,
   Circle,
   Clock,
+  Download,
   LoaderCircle,
   Pencil,
   Play,
@@ -20,7 +24,7 @@ import {
   Workflow,
   XCircle,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -91,6 +95,21 @@ function formatElapsed(startedAt?: string | null): string {
   if (Number.isNaN(start)) return "—";
   const elapsed = Date.now() - start;
   return formatMs(Math.max(0, elapsed));
+}
+
+/** Ticks every second while `active` is true, returning the current elapsed string. */
+function useElapsedTicker(startedAt: string | null | undefined, active: boolean): string {
+  const [display, setDisplay] = useState(() => formatElapsed(startedAt));
+  useEffect(() => {
+    if (!active || !startedAt) {
+      setDisplay(formatElapsed(startedAt));
+      return;
+    }
+    setDisplay(formatElapsed(startedAt));
+    const id = setInterval(() => setDisplay(formatElapsed(startedAt)), 1000);
+    return () => clearInterval(id);
+  }, [startedAt, active]);
+  return display;
 }
 
 function stepStatusIcon(status: string, isApprovalWaiting: boolean): { icon: React.ReactNode; ring: string } {
@@ -168,6 +187,7 @@ function ProgressSummaryBar({ summary, phase }: { summary: WorkflowSummary; phas
   const pct = total > 0 ? Math.round((done / total) * 100) : 0;
 
   const isActive = phase === "running" || phase === "queued";
+  const elapsedDisplay = useElapsedTicker(summary.startedAt, isActive);
 
   return (
     <div className="space-y-3">
@@ -226,7 +246,7 @@ function ProgressSummaryBar({ summary, phase }: { summary: WorkflowSummary; phas
         {summary.startedAt && (
           <span className="flex items-center gap-1">
             <Timer className="h-3 w-3" />
-            {isActive ? `Elapsed: ${formatElapsed(summary.startedAt)}` : `Started: ${new Date(summary.startedAt).toLocaleTimeString()}`}
+            {isActive ? `Elapsed: ${elapsedDisplay}` : `Started: ${new Date(summary.startedAt).toLocaleTimeString()}`}
           </span>
         )}
         {summary.runId && (
@@ -390,6 +410,43 @@ function StepDetailCard({
                   {JSON.stringify(state.execution, null, 2)}
                 </pre>
               </details>
+            )}
+
+            {/* response preview */}
+            {state?.responsePreview && (
+              <details className="group">
+                <summary className="cursor-pointer text-xs font-medium text-muted-foreground hover:text-foreground">
+                  Agent response
+                </summary>
+                <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap rounded-lg bg-background p-2 text-[11px] leading-relaxed text-muted-foreground">
+                  {state.responsePreview}
+                </pre>
+              </details>
+            )}
+
+            {/* file downloads */}
+            {state?.outputFiles && state.outputFiles.length > 0 && (
+              <div className="space-y-1.5">
+                <span className="text-xs font-medium text-muted-foreground">Output files</span>
+                <div className="flex flex-wrap gap-2">
+                  {state.outputFiles.map((file) => (
+                    <button
+                      type="button"
+                      key={file.path}
+                      onClick={() => {
+                        const tk = localStorage.getItem("ai-agent-sandbox/token") || "";
+                        downloadAgentFile(tk, "default", file.agentRef, file.path).catch(() =>
+                          toast.error("Download failed", { description: file.path.split("/").pop() + " could not be retrieved from the agent pod." }),
+                        );
+                      }}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-primary/30 bg-primary/10 px-3 py-1.5 text-xs font-medium text-primary hover:bg-primary/20 transition-colors cursor-pointer"
+                    >
+                      <Download className="h-3.5 w-3.5" />
+                      {file.path.split("/").pop()}
+                    </button>
+                  ))}
+                </div>
+              </div>
             )}
 
             {/* step prompt */}
@@ -564,7 +621,9 @@ export function WorkflowManager({
 
   const stepNames = steps.map((s) => s.name.trim()).filter(Boolean);
   const hasUniqueStepNames = new Set(stepNames).size === stepNames.length;
-  const canSubmit = Boolean(name.trim()) && steps.length > 0 && hasUniqueStepNames && steps.every((step) => step.name.trim() && step.agent_ref.trim());
+  const trimmedWorkflowName = name.trim();
+  const isWorkflowNameValid = Boolean(trimmedWorkflowName) && isValidK8sName(trimmedWorkflowName);
+  const canSubmit = isWorkflowNameValid && steps.length > 0 && hasUniqueStepNames && steps.every((step) => step.name.trim() && step.agent_ref.trim());
   const uniqueAgentCount = new Set(steps.map((step) => step.agent_ref).filter(Boolean)).size;
   const approvalStepCount = steps.filter((step) => step.require_approval).length;
 
@@ -577,6 +636,7 @@ export function WorkflowManager({
 
   const wfSummary: WorkflowSummary | undefined = workflow?.summary ?? undefined;
   const isActive = workflow?.phase === "running" || workflow?.phase === "queued" || workflow?.phase === "waiting-approval";
+  const mainElapsed = useElapsedTicker(wfSummary?.startedAt, isActive);
   const hasBeenTriggered = Boolean(workflow && workflow.phase !== "pending");
   const [showEditor, setShowEditor] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
@@ -629,7 +689,7 @@ export function WorkflowManager({
               {isActive ? "Elapsed" : "Approvals"}
             </p>
             <p className="mt-1 text-xl font-semibold text-foreground">
-              {isActive && wfSummary?.startedAt ? formatElapsed(wfSummary.startedAt) : approvalStepCount}
+              {isActive && wfSummary?.startedAt ? mainElapsed : approvalStepCount}
             </p>
           </div>
         </div>
@@ -828,7 +888,11 @@ export function WorkflowManager({
                     onChange={(e) => setName(e.target.value)}
                     placeholder="research-report-pipeline"
                     disabled={Boolean(workflow)}
+                    aria-invalid={!workflow && Boolean(trimmedWorkflowName) && !isWorkflowNameValid}
                   />
+                  {!workflow && Boolean(trimmedWorkflowName) && !isWorkflowNameValid && (
+                    <p className="text-[11px] text-destructive">Use lowercase letters, numbers, and hyphens only.</p>
+                  )}
                 </div>
                 <div className="space-y-1.5">
                   <Label className="text-xs">Description</Label>
@@ -896,16 +960,19 @@ export function WorkflowManager({
             size="sm"
             className="h-8 rounded-xl text-xs"
             onClick={() =>
-              setSteps((current) => [
-                ...current,
-                {
-                  name: `step-${current.length + 1}`,
-                  agent_ref: agents[0]?.name ?? "",
-                  prompt: "",
-                  depends_on: [],
-                  require_approval: false,
-                },
-              ])
+              setSteps((current) => {
+                const prevStepName = current.length > 0 ? current[current.length - 1].name : "";
+                return [
+                  ...current,
+                  {
+                    name: `step-${current.length + 1}`,
+                    agent_ref: agents[0]?.name ?? "",
+                    prompt: "",
+                    depends_on: prevStepName ? [prevStepName] : [],
+                    require_approval: false,
+                  },
+                ];
+              })
             }
           >
             <PlusCircle className="mr-1 h-3 w-3" />
@@ -1033,7 +1100,7 @@ export function WorkflowManager({
                     onChange={(e) =>
                       updateStep(index, (current) => ({ ...current, prompt: e.target.value }))
                     }
-                    placeholder="Explain what this step should do, what context it receives, and what output it should pass to the next step."
+                    placeholder="Optional. Use {{ input }} for the workflow input and {{ previous_output }} for results from dependency steps. Leave blank to auto-pass workflow input and previous step output."
                   />
                 </div>
 

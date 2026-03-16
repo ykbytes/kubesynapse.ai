@@ -18,7 +18,7 @@ def get_int_env(name: str, default: int, minimum: int = 0) -> int:
     if raw_value is None:
         return max(default, minimum)
     try:
-        return max(int(raw_value), minimum)
+        return max(int(raw_value.strip()), minimum)
     except ValueError:
         logger.warning("Invalid integer value for %s=%r. Falling back to %s.", name, raw_value, default)
         return max(default, minimum)
@@ -29,7 +29,7 @@ def get_float_env(name: str, default: float, minimum: float = 0.0) -> float:
     if raw_value is None:
         return max(default, minimum)
     try:
-        return max(float(raw_value), minimum)
+        return max(float(raw_value.strip()), minimum)
     except ValueError:
         logger.warning("Invalid float value for %s=%r. Falling back to %s.", name, raw_value, default)
         return max(default, minimum)

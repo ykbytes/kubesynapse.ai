@@ -27,6 +27,8 @@ from utils import (
 )
 from state_store import init_database as init_state_database, safe_record_eval_state, safe_record_workflow_state
 
+import re
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("operator-worker")
 
@@ -39,13 +41,13 @@ OPERATOR_NAMESPACE = (
     os.getenv("OPERATOR_NAMESPACE", "default").strip() or "default"
 )
 WORKER_JOB_NAME = os.getenv("WORKER_JOB_NAME", "").strip()
-ARTIFACT_PATH = (
-    os.getenv("ARTIFACT_PATH", "/artifacts/run.json").strip()
-    or "/artifacts/run.json"
-)
+_raw_artifact_path = os.getenv("ARTIFACT_PATH", "/artifacts/run.json").strip() or "/artifacts/run.json"
+ARTIFACT_PATH = _raw_artifact_path if os.path.isabs(_raw_artifact_path) else f"/artifacts/{_raw_artifact_path}"
+_raw_journal_path = os.getenv("ARTIFACT_JOURNAL_PATH", "").strip()
 ARTIFACT_JOURNAL_PATH = (
-    os.getenv("ARTIFACT_JOURNAL_PATH", "").strip()
-    or workflow_journal_path(ARTIFACT_PATH)
+    (_raw_journal_path if os.path.isabs(_raw_journal_path) else f"/artifacts/{_raw_journal_path}")
+    if _raw_journal_path
+    else workflow_journal_path(ARTIFACT_PATH)
 )
 ARTIFACT_PVC_NAME = os.getenv("ARTIFACT_PVC_NAME", "").strip()
 WORKFLOW_RUN_ID = os.getenv("WORKFLOW_RUN_ID", "").strip()
@@ -70,21 +72,9 @@ def load_kubernetes_config() -> None:
 
 
 def patch_custom_status(plural: str, status: dict[str, Any]) -> None:
-    try:
-        kubernetes.client.CustomObjectsApi().patch_namespaced_custom_object_status(
-            group=GROUP,
-            version=VERSION,
-            namespace=TARGET_NAMESPACE,
-            plural=plural,
-            name=TARGET_NAME,
-            body={"status": status},
-        )
-    except kubernetes.client.ApiException as exc:
-        if exc.status == 409:
-            logging.getLogger(__name__).warning(
-                "Conflict patching %s/%s status (409), retrying once.",
-                plural, TARGET_NAME,
-            )
+    max_retries = 4
+    for attempt in range(max_retries):
+        try:
             kubernetes.client.CustomObjectsApi().patch_namespaced_custom_object_status(
                 group=GROUP,
                 version=VERSION,
@@ -93,7 +83,17 @@ def patch_custom_status(plural: str, status: dict[str, Any]) -> None:
                 name=TARGET_NAME,
                 body={"status": status},
             )
-        else:
+            return
+        except kubernetes.client.ApiException as exc:
+            if exc.status == 409 and attempt < max_retries - 1:
+                import time
+                delay = 0.5 * (2 ** attempt)
+                logging.getLogger(__name__).warning(
+                    "Conflict patching %s/%s status (409), retry %d/%d in %.1fs.",
+                    plural, TARGET_NAME, attempt + 1, max_retries, delay,
+                )
+                time.sleep(delay)
+                continue
             logging.getLogger(__name__).error(
                 "Failed to patch %s/%s status: %s",
                 plural, TARGET_NAME, exc,
@@ -129,6 +129,16 @@ def get_resource(plural: str) -> dict[str, Any]:
         plural=plural,
         name=TARGET_NAME,
     )
+
+
+def is_workflow_cancelled() -> bool:
+    """Check if the workflow has been cancelled by reading the CRD status."""
+    try:
+        resource = get_resource(resource_plural())
+        phase = str(resource.get("status", {}).get("phase", "") or "").lower()
+        return phase in ("cancelled", "cancelling")
+    except Exception:
+        return False
 
 
 def artifact_ref(generation: int) -> dict[str, Any]:
@@ -331,6 +341,32 @@ def parse_iso_timestamp(value: Any) -> float | None:
     return parsed.timestamp()
 
 
+_FILE_PATH_RE = re.compile(
+    r'(?:PDF created|File (?:saved|created|written)(?: to)?|Saved (?:to|as)|Output|Created|Wrote|Generated):?\s*'
+    r'[`"\']?(/[\w./_-]+\.(?:pdf|docx|xlsx|csv|txt|html|json|png|jpg|md|markdown|yaml|yml))[`"\']?',
+    re.IGNORECASE,
+)
+
+# Secondary pattern for bare file paths in code blocks or backtick-quoted paths
+_BARE_PATH_RE = re.compile(
+    r'`(/(?:tmp|app/state|workspace|artifacts)/[\w./_-]+\.(?:pdf|docx|xlsx|csv|txt|html|json|png|jpg|md))`',
+    re.IGNORECASE,
+)
+
+
+def extract_output_files(response_text: str, agent_ref: str) -> list[dict[str, str]]:
+    """Extract file paths from agent response text."""
+    files: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for pattern in (_FILE_PATH_RE, _BARE_PATH_RE):
+        for match in pattern.finditer(response_text):
+            fpath = match.group(1)
+            if fpath not in seen:
+                seen.add(fpath)
+                files.append({"path": fpath, "agentRef": agent_ref})
+    return files
+
+
 def build_step_state(
     *,
     step_name: str,
@@ -345,6 +381,8 @@ def build_step_state(
     error: str | None = None,
     failure_class: str | None = None,
     approval_wait_ms: int | None = None,
+    output_files: list[dict[str, str]] | None = None,
+    response_preview: str | None = None,
 ) -> dict[str, Any]:
     state = {
         "stepName": step_name,
@@ -364,6 +402,10 @@ def build_step_state(
         state["failureClass"] = failure_class
     if approval_wait_ms is not None:
         state["approvalWaitMs"] = approval_wait_ms
+    if output_files:
+        state["outputFiles"] = output_files
+    if response_preview:
+        state["responsePreview"] = response_preview
     return state
 
 
@@ -382,12 +424,25 @@ def execute_workflow_step(
         if str(dep).strip()
     ]
     execution_policy = normalize_step_execution(step)
+    previous_output = previous_output_for_dependencies(dependencies, step_results)
     prompt = render_prompt(
         str(step.get("prompt", "")),
         workflow_input,
-        previous_output_for_dependencies(dependencies, step_results),
+        previous_output,
         step_results,
     )
+    # When the step prompt template is empty (or renders to blank), auto-construct
+    # a prompt that feeds workflow input and/or previous step outputs to the agent.
+    if not prompt.strip():
+        parts: list[str] = []
+        if workflow_input.strip():
+            parts.append(workflow_input.strip())
+        if previous_output.strip():
+            parts.append(
+                "Use the following output from the previous step(s) as context "
+                "and build upon it:\n\n" + previous_output.strip()
+            )
+        prompt = "\n\n".join(parts) if parts else workflow_input
     thread_id = build_thread_id("workflow", TARGET_NAME, run_id, step_name)
     started_at = now_iso()
     approval_wait_ms: int | None = None
@@ -532,6 +587,8 @@ def execute_workflow_step(
                     worker_job=worker_job,
                     execution_policy=execution_policy,
                     approval_wait_ms=approval_wait_ms,
+                    output_files=extract_output_files(response_text, str(step.get("agentRef", ""))),
+                    response_preview=response_text[:500] if response_text else None,
                 ),
             }
         except Exception as exc:
@@ -832,6 +889,12 @@ def execute_loop_step(
 
     for iteration in range(1, max_iterations + 1):
         loop_progress["iteration"] = iteration
+
+        # Check if workflow was cancelled
+        if is_workflow_cancelled():
+            loop_progress["exitReason"] = "cancelled"
+            append_journal_event("workflow.loop.cancelled", {"runId": run_id, "step": step_name, "iteration": iteration})
+            break
 
         # Check circuit breaker
         if circuit_breaker.is_open():

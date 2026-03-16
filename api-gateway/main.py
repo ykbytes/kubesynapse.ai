@@ -19,12 +19,12 @@ from typing import Any
 from urllib.parse import urlencode
 
 import httpx
-from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Request, Response, status
+from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Query, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 from jose import jwk, jwt
 from jose.utils import base64url_decode
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 CURRENT_DIR = Path(__file__).resolve().parent
 if str(CURRENT_DIR) not in sys.path:
@@ -93,8 +93,12 @@ GIT_AUTH_METHODS = {"token", "basic", "ssh"}
 GIT_PUSH_POLICIES = {"after-each-commit", "end-of-session", "on-approval", "never"}
 
 
+_AUTH_DB_READY = False
+
+
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
+    global _AUTH_DB_READY
     try:
         from kubernetes import config
 
@@ -113,6 +117,7 @@ async def lifespan(app: FastAPI):
             init_database()
             ensure_bootstrap_admin()
             logger.info("Auth database initialized successfully.")
+            _AUTH_DB_READY = True
             break
         except Exception as exc:
             if attempt < max_db_retries:
@@ -150,6 +155,10 @@ app.add_middleware(
 
 NATS_URL = os.getenv("NATS_URL", "nats://ai-agent-sandbox-nats:4222")
 QDRANT_URL = os.getenv("QDRANT_URL", "http://ai-agent-sandbox-qdrant:6333")
+OPENROUTER_API_BASE = "https://openrouter.ai/api/v1"
+OPENROUTER_MODELS_CACHE: dict[str, Any] = {"models": [], "expires_at": 0.0}
+OPENROUTER_CACHE_TTL_SECONDS = max(float(os.getenv("OPENROUTER_CACHE_TTL_SECONDS", "300")), 30.0)
+LLM_SECRET_NAME = os.getenv("LLM_SECRET_NAME", "ai-agent-sandbox-llm-api-keys")
 AUTH_MODE = os.getenv("API_GATEWAY_AUTH_MODE", "shared_token").strip().lower()
 OIDC_JWKS_URL = os.getenv("OIDC_JWKS_URL", "").strip()
 OIDC_ISSUER = os.getenv("OIDC_ISSUER", "").strip()
@@ -497,6 +506,16 @@ class CreateAgentRequest(BaseModel):
     git_config: dict[str, Any] | None = Field(default=None, description="Git repo config for dev-loop workflows")
     github_config: dict[str, Any] | None = Field(default=None, description="Shared GitHub MCP credentials for this agent")
 
+    @field_validator("name", mode="before")
+    @classmethod
+    def validate_name(cls, value: Any) -> str:
+        normalized = str(value or "").strip()
+        if not normalized:
+            raise ValueError("name must not be blank")
+        if not K8S_NAME_RE.fullmatch(normalized):
+            raise ValueError("name must use lowercase letters, numbers, and hyphens only")
+        return normalized
+
 
 class UpdateAgentRequest(BaseModel):
     model: str = Field(min_length=1, max_length=255)
@@ -561,6 +580,16 @@ class WorkflowRequest(BaseModel):
     message_bus: str = Field(default="in-memory", pattern=r"^(in-memory)$")
     steps: list[WorkflowStepRequest] = Field(default_factory=list)
 
+    @field_validator("name", mode="before")
+    @classmethod
+    def validate_name(cls, value: Any) -> str:
+        normalized = str(value or "").strip()
+        if not normalized:
+            raise ValueError("name must not be blank")
+        if not K8S_NAME_RE.fullmatch(normalized):
+            raise ValueError("name must use lowercase letters, numbers, and hyphens only")
+        return normalized
+
 
 class WorkflowUpdateRequest(BaseModel):
     description: str = Field(default="", max_length=4000)
@@ -605,6 +634,16 @@ class EvalRequest(BaseModel):
     schedule: str | None = Field(default=None, max_length=128)
     test_suite: list[EvalTestCaseRequest] = Field(default_factory=list)
     failure_threshold: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def validate_name(cls, value: Any) -> str:
+        normalized = str(value or "").strip()
+        if not normalized:
+            raise ValueError("name must not be blank")
+        if not K8S_NAME_RE.fullmatch(normalized):
+            raise ValueError("name must use lowercase letters, numbers, and hyphens only")
+        return normalized
 
 
 class EvalUpdateRequest(BaseModel):
@@ -3953,6 +3992,7 @@ def health() -> dict[str, Any]:
         "status": "healthy",
         "gateway": "ai-agent-sandbox",
         "auth_mode": AUTH_MODE,
+        "auth_db_ready": _AUTH_DB_READY,
         "browser_auth_enabled": browser_auth_enabled(),
         "local_auth_enabled": local_access_enabled(),
         "shared_token_enabled": shared_token_enabled(),
@@ -3963,6 +4003,8 @@ def health() -> dict[str, Any]:
 
 @app.get("/api/ready")
 def ready() -> dict[str, Any]:
+    if not _AUTH_DB_READY:
+        raise HTTPException(status_code=503, detail="Auth database not initialized")
     return {"status": "ready", "gateway": "ai-agent-sandbox"}
 
 
@@ -4173,6 +4215,95 @@ def create_agent(
     ensure_namespace_access(user, namespace, "operator")
     agent = create_agent_resource(body, namespace)
     return agent_detail_from_resource(agent)
+
+
+async def _verify_token_or_query(
+    authorization: str | None = Header(default=None),
+    token: str | None = Query(default=None),
+) -> dict[str, Any]:
+    """Accept Bearer header OR ?token= query param for browser-initiated downloads."""
+    if authorization and authorization.startswith("Bearer "):
+        bearer = authorization[7:].strip()
+        if bearer:
+            return await authenticate_bearer_token(bearer)
+    if token and token.strip():
+        return await authenticate_bearer_token(token.strip())
+    raise HTTPException(status_code=401, detail="Missing authentication")
+
+
+@app.get("/api/agents/{agent_name}/files")
+def download_agent_file(
+    agent_name: str,
+    path: str,
+    namespace: str = "default",
+    container: str = "agent-runtime",
+    user=Depends(_verify_token_or_query),
+):
+    """Download a file from an agent's sandbox pod."""
+    ensure_namespace_access(user, namespace)
+
+    # Validate path to prevent traversal attacks
+    normalized = os.path.normpath(path)
+    if ".." in normalized.split(os.sep) or not normalized:
+        raise HTTPException(status_code=400, detail="Invalid file path")
+
+    pods = list_agent_pods(agent_name, namespace)
+    if not pods:
+        raise HTTPException(status_code=404, detail=f"No running pod found for agent '{agent_name}'")
+    pod = pods[0]
+    pod_name = pod.metadata.name or ""
+
+    try:
+        from kubernetes import client as k8s_client
+        from kubernetes.stream import stream as k8s_stream
+        import base64
+
+        exec_command = ["sh", "-c", f"if [ -f '{normalized}' ]; then cat '{normalized}' | base64; else echo '__FILE_NOT_FOUND__' >&2; exit 1; fi"]
+        kwargs: dict[str, Any] = {
+            "name": pod_name,
+            "namespace": namespace,
+            "command": exec_command,
+            "stderr": True,
+            "stdin": False,
+            "stdout": True,
+            "tty": False,
+        }
+        if container:
+            kwargs["container"] = container
+
+        resp = k8s_stream(
+            k8s_client.CoreV1Api().connect_get_namespaced_pod_exec,
+            **kwargs,
+        )
+        raw = resp.strip() if resp else ""
+        if not raw or "__FILE_NOT_FOUND__" in raw:
+            raise HTTPException(status_code=404, detail=f"File not found on pod: {normalized}")
+        file_bytes = base64.b64decode(raw)
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail=f"Failed to read file: {exc}") from exc
+
+    filename = os.path.basename(normalized)
+    ext = os.path.splitext(filename)[1].lower()
+    media_types = {
+        ".pdf": "application/pdf",
+        ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ".txt": "text/plain",
+        ".json": "application/json",
+        ".csv": "text/csv",
+        ".html": "text/html",
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+    }
+    content_type = media_types.get(ext, "application/octet-stream")
+
+    return Response(
+        content=file_bytes,
+        media_type=content_type,
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+        },
+    )
 
 
 @app.get("/api/agents/{agent_name}", response_model=AgentDetail)
@@ -4772,6 +4903,289 @@ def get_agent_logs(
         raise
     except Exception as exc:
         raise HTTPException(status_code=404, detail=f"Could not retrieve logs: {exc}") from exc
+
+
+# ---------------------------------------------------------------------------
+# OpenRouter – model discovery, search, and API key management
+# ---------------------------------------------------------------------------
+
+class OpenRouterApiKeyRequest(BaseModel):
+    """Request body for saving the OpenRouter API key as a K8s Secret."""
+    api_key: str = Field(min_length=1, max_length=256)
+
+
+class OpenRouterApiKeyStatus(BaseModel):
+    configured: bool
+    secret_name: str
+
+
+class OpenRouterModelInfo(BaseModel):
+    id: str
+    name: str
+    description: str = ""
+    context_length: int = 0
+    pricing_prompt: float = 0.0
+    pricing_completion: float = 0.0
+    top_provider: str = ""
+    architecture: str = ""
+    modality: str = ""
+
+
+async def _fetch_openrouter_models(api_key: str) -> list[dict[str, Any]]:
+    """Fetch the model list from OpenRouter's /models endpoint with caching."""
+    now = time.time()
+    if OPENROUTER_MODELS_CACHE["models"] and now < OPENROUTER_MODELS_CACHE["expires_at"]:
+        return OPENROUTER_MODELS_CACHE["models"]
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        headers = {"Authorization": f"Bearer {api_key}", "HTTP-Referer": "https://kubeminionagents.dev"}
+        resp = await client.get(f"{OPENROUTER_API_BASE}/models", headers=headers)
+        if resp.status_code != 200:
+            raise HTTPException(
+                status_code=resp.status_code,
+                detail=f"OpenRouter API error: {resp.text[:500]}",
+            )
+        data = resp.json()
+
+    models = data.get("data", [])
+    OPENROUTER_MODELS_CACHE["models"] = models
+    OPENROUTER_MODELS_CACHE["expires_at"] = now + OPENROUTER_CACHE_TTL_SECONDS
+    return models
+
+
+def _get_openrouter_key_from_secret(namespace: str = "default") -> str:
+    """Read the OpenRouter API key from the platform LLM secret."""
+    try:
+        from kubernetes import client as k8s_client
+        import base64
+
+        secret = k8s_client.CoreV1Api().read_namespaced_secret(
+            name=LLM_SECRET_NAME, namespace=namespace,
+        )
+        data = secret.data or {}
+        encoded = data.get("OPENROUTER_API_KEY", "")
+        if encoded:
+            return base64.b64decode(encoded).decode()
+    except Exception:
+        pass
+    return os.getenv("OPENROUTER_API_KEY", "")
+
+def _get_litellm_configmap_name() -> str:
+    return os.getenv("LITELLM_CONFIGMAP_NAME", "ai-agent-sandbox-litellm-config").strip() or "ai-agent-sandbox-litellm-config"
+
+def _get_routed_litellm_models(namespace: str) -> list[str]:
+    if yaml is None:
+        raise HTTPException(status_code=500, detail="PyYAML is required to inspect LiteLLM config")
+
+    try:
+        from kubernetes import client
+
+        config_map = client.CoreV1Api().read_namespaced_config_map(_get_litellm_configmap_name(), namespace)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to read LiteLLM config: {exc}") from exc
+
+    raw_config = (config_map.data or {}).get("config.yaml", "")
+    if not raw_config.strip():
+        return []
+
+    try:
+        parsed = yaml.safe_load(raw_config) or {}
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"LiteLLM config is invalid YAML: {exc}") from exc
+
+    model_list = parsed.get("model_list")
+    if not isinstance(model_list, list):
+        return []
+
+    routed_models: list[str] = []
+    for item in model_list:
+        if not isinstance(item, dict):
+            continue
+        model_name = item.get("model_name")
+        if isinstance(model_name, str) and model_name.strip():
+            routed_models.append(model_name.strip())
+    return sorted(set(routed_models))
+
+
+@app.get("/api/litellm/models")
+async def list_litellm_models(
+    namespace: str = "default",
+    user=Depends(verify_token),
+) -> dict[str, list[str]]:
+    del user
+    return {"models": _get_routed_litellm_models(namespace)}
+
+
+@app.get("/api/openrouter/models")
+async def list_openrouter_models(
+    search: str | None = None,
+    modality: str | None = None,
+    provider: str | None = None,
+    min_context: int | None = None,
+    max_price: float | None = None,
+    sort_by: str | None = None,
+    namespace: str = "default",
+    user=Depends(verify_token),
+) -> list[dict[str, Any]]:
+    """List available OpenRouter models with search, filter, and sort."""
+    del user
+    api_key = _get_openrouter_key_from_secret(namespace)
+    if not api_key:
+        raise HTTPException(status_code=400, detail="OpenRouter API key is not configured. Save it first via POST /api/openrouter/api-key.")
+
+    raw_models = await _fetch_openrouter_models(api_key)
+
+    results = []
+    for m in raw_models:
+        pricing = m.get("pricing", {})
+        prompt_price = float(pricing.get("prompt", 0) or 0)
+        completion_price = float(pricing.get("completion", 0) or 0)
+        arch = m.get("architecture", {})
+        modality_val = arch.get("modality", "text->text") if isinstance(arch, dict) else ""
+        arch_name = arch.get("tokenizer", "") if isinstance(arch, dict) else ""
+        top_prov = ""
+        top_provider_info = m.get("top_provider", {})
+        if isinstance(top_provider_info, dict):
+            top_prov = top_provider_info.get("context_length", "")
+
+        model_entry = {
+            "id": m.get("id", ""),
+            "name": m.get("name", m.get("id", "")),
+            "description": m.get("description", ""),
+            "context_length": int(m.get("context_length", 0) or 0),
+            "pricing_prompt": prompt_price,
+            "pricing_completion": completion_price,
+            "top_provider": str(top_prov),
+            "architecture": str(arch_name),
+            "modality": modality_val,
+        }
+        results.append(model_entry)
+
+    # Apply filters
+    if search:
+        search_lower = search.strip().lower()
+        results = [
+            m for m in results
+            if search_lower in m["id"].lower()
+            or search_lower in m["name"].lower()
+            or search_lower in m.get("description", "").lower()
+        ]
+
+    if modality:
+        modality_lower = modality.strip().lower()
+        results = [m for m in results if modality_lower in m.get("modality", "").lower()]
+
+    if provider:
+        provider_lower = provider.strip().lower()
+        results = [m for m in results if provider_lower in m["id"].lower()]
+
+    if min_context is not None:
+        results = [m for m in results if m["context_length"] >= min_context]
+
+    if max_price is not None:
+        results = [m for m in results if m["pricing_prompt"] <= max_price]
+
+    # Sort
+    if sort_by == "price_asc":
+        results.sort(key=lambda m: m["pricing_prompt"])
+    elif sort_by == "price_desc":
+        results.sort(key=lambda m: m["pricing_prompt"], reverse=True)
+    elif sort_by == "context_desc":
+        results.sort(key=lambda m: m["context_length"], reverse=True)
+    elif sort_by == "context_asc":
+        results.sort(key=lambda m: m["context_length"])
+    elif sort_by == "name":
+        results.sort(key=lambda m: m["name"].lower())
+    else:
+        results.sort(key=lambda m: m["name"].lower())
+
+    return results
+
+
+@app.post("/api/openrouter/api-key", status_code=201, response_model=OpenRouterApiKeyStatus)
+def save_openrouter_api_key(
+    body: OpenRouterApiKeyRequest,
+    namespace: str = "default",
+    user=Depends(verify_token),
+):
+    """Save the OpenRouter API key into the platform LLM K8s Secret."""
+    ensure_namespace_access(user, namespace, "operator")
+    from kubernetes import client as k8s_client
+
+    try:
+        secret = k8s_client.CoreV1Api().read_namespaced_secret(
+            name=LLM_SECRET_NAME, namespace=namespace,
+        )
+        # Patch existing secret with the new key
+        import base64
+        existing_data = secret.data or {}
+        existing_data["OPENROUTER_API_KEY"] = base64.b64encode(body.api_key.encode()).decode()
+        secret.data = existing_data
+        k8s_client.CoreV1Api().replace_namespaced_secret(
+            name=LLM_SECRET_NAME, namespace=namespace, body=secret,
+        )
+    except k8s_client.exceptions.ApiException as e:
+        if e.status == 404:
+            # Create new secret
+            secret = k8s_client.V1Secret(
+                metadata=k8s_client.V1ObjectMeta(
+                    name=LLM_SECRET_NAME,
+                    namespace=namespace,
+                    labels={"app.kubernetes.io/managed-by": "kubemininions"},
+                ),
+                type="Opaque",
+                string_data={"OPENROUTER_API_KEY": body.api_key},
+            )
+            k8s_client.CoreV1Api().create_namespaced_secret(namespace=namespace, body=secret)
+        else:
+            raise HTTPException(status_code=502, detail=f"Failed to save OpenRouter API key: {e}") from e
+
+    # Invalidate cached models so next fetch picks up the new key
+    OPENROUTER_MODELS_CACHE["models"] = []
+    OPENROUTER_MODELS_CACHE["expires_at"] = 0.0
+
+    return OpenRouterApiKeyStatus(configured=True, secret_name=LLM_SECRET_NAME)
+
+
+@app.get("/api/openrouter/api-key", response_model=OpenRouterApiKeyStatus)
+def get_openrouter_api_key_status(
+    namespace: str = "default",
+    user=Depends(verify_token),
+):
+    """Check whether an OpenRouter API key is configured (never exposes the key)."""
+    del user
+    api_key = _get_openrouter_key_from_secret(namespace)
+    return OpenRouterApiKeyStatus(configured=bool(api_key), secret_name=LLM_SECRET_NAME)
+
+
+@app.delete("/api/openrouter/api-key")
+def delete_openrouter_api_key(
+    namespace: str = "default",
+    user=Depends(verify_token),
+):
+    """Remove the OpenRouter API key from the platform LLM secret."""
+    ensure_namespace_access(user, namespace, "operator")
+    from kubernetes import client as k8s_client
+    import base64
+
+    try:
+        secret = k8s_client.CoreV1Api().read_namespaced_secret(
+            name=LLM_SECRET_NAME, namespace=namespace,
+        )
+        existing_data = secret.data or {}
+        if "OPENROUTER_API_KEY" in existing_data:
+            existing_data["OPENROUTER_API_KEY"] = base64.b64encode(b"").decode()
+            secret.data = existing_data
+            k8s_client.CoreV1Api().replace_namespaced_secret(
+                name=LLM_SECRET_NAME, namespace=namespace, body=secret,
+            )
+    except k8s_client.exceptions.ApiException as e:
+        if e.status != 404:
+            raise HTTPException(status_code=502, detail=f"Failed to delete OpenRouter API key: {e}") from e
+
+    OPENROUTER_MODELS_CACHE["models"] = []
+    OPENROUTER_MODELS_CACHE["expires_at"] = 0.0
+    return {"status": "deleted"}
 
 
 if __name__ == "__main__":
