@@ -39,6 +39,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { fetchCatalogSkillDetail, fetchMcpToolCategories, fetchSkillsCatalog } from "../lib/api";
 import { A2A_ALLOWED_CALLERS_PLACEHOLDER } from "../lib/a2a";
 import { createGooseConfigFileDraft } from "../lib/gooseConfig";
+import { createOpenCodeConfigFileDraft } from "../lib/opencodeConfig";
 import {
   MCP_SERVERS_PLACEHOLDER,
   MCP_SIDECARS_PLACEHOLDER,
@@ -82,6 +83,7 @@ interface CreateAgentPanelProps {
   a2aAllowedCallersText: string;
   skillFileDrafts: TextFileDraft[];
   gooseConfigFileDrafts: TextFileDraft[];
+  opencodeConfigFileDrafts: TextFileDraft[];
   isCreating: boolean;
   error: string;
   onMcpServersTextChange: (value: string) => void;
@@ -93,6 +95,7 @@ interface CreateAgentPanelProps {
   onA2AAllowedCallersTextChange: (value: string) => void;
   onSkillFileDraftsChange: (value: TextFileDraft[]) => void;
   onGooseConfigFileDraftsChange: (value: TextFileDraft[]) => void;
+  onOpenCodeConfigFileDraftsChange: (value: TextFileDraft[]) => void;
   gitForm: GitFormState;
   onGitFormChange: (value: GitFormState) => void;
   githubForm: GitHubFormState;
@@ -158,6 +161,7 @@ export function CreateAgentPanel({
   a2aAllowedCallersText,
   skillFileDrafts,
   gooseConfigFileDrafts,
+  opencodeConfigFileDrafts,
   isCreating,
   error,
   onMcpServersTextChange,
@@ -169,6 +173,7 @@ export function CreateAgentPanel({
   onA2AAllowedCallersTextChange,
   onSkillFileDraftsChange,
   onGooseConfigFileDraftsChange,
+  onOpenCodeConfigFileDraftsChange,
   gitForm,
   onGitFormChange,
   githubForm,
@@ -352,7 +357,7 @@ export function CreateAgentPanel({
           <div className="grid min-w-[240px] gap-2 rounded-2xl border border-border/60 bg-background/70 p-3 text-xs text-muted-foreground sm:grid-cols-3">
             <div>
               <p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground/70">Runtime</p>
-              <p className="mt-1 font-medium text-foreground">{runtimeKind === "langgraph" ? "LangGraph" : runtimeKind === "goose" ? "Goose" : "Codex"}</p>
+              <p className="mt-1 font-medium text-foreground">{runtimeKind === "langgraph" ? "LangGraph" : runtimeKind === "goose" ? "Goose" : runtimeKind === "opencode" ? "OpenCode" : "Codex"}</p>
             </div>
             <div>
               <p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground/70">Skills</p>
@@ -424,7 +429,7 @@ export function CreateAgentPanel({
                   </CardHeader>
                   <CardContent className="space-y-3">
                     <div className="grid gap-2">
-                      {(["langgraph", "goose", "codex"] as RuntimeKind[]).map((rt) => {
+                      {(["langgraph", "goose", "codex", "opencode"] as RuntimeKind[]).map((rt) => {
                         const active = runtimeKind === rt;
                         return (
                           <button
@@ -439,13 +444,15 @@ export function CreateAgentPanel({
                           >
                             <div className="flex items-center justify-between gap-3">
                               <div>
-                                <p className="font-medium text-sm">{rt === "langgraph" ? "LangGraph runtime" : rt === "goose" ? "Goose runtime" : "Codex runtime"}</p>
+                                <p className="font-medium text-sm">{rt === "langgraph" ? "LangGraph runtime" : rt === "goose" ? "Goose runtime" : rt === "opencode" ? "OpenCode runtime" : "Codex runtime"}</p>
                                 <p className="mt-1 text-xs leading-5">
                                   {rt === "langgraph"
                                     ? "Best for tool-rich agents, MCP routing, and sidecar-based capabilities."
                                     : rt === "goose"
                                       ? "Best for Goose-native workflows and config-driven conversational behavior."
-                                      : "Best for Codex-driven repository implementation workflows with structured stage prompts."}
+                                      : rt === "opencode"
+                                        ? "Best for autonomous multi-turn coding with structured output, session management, and context-overflow recovery."
+                                        : "Best for Codex-driven repository implementation workflows with structured stage prompts."}
                                 </p>
                               </div>
                               {active ? <Badge>Selected</Badge> : null}
@@ -849,6 +856,19 @@ export function CreateAgentPanel({
                       contentHint="YAML, Markdown, or plain text. Secrets stay in environment variables."
                       onAdd={() => onGooseConfigFileDraftsChange([...gooseConfigFileDrafts, createGooseConfigFileDraft()])}
                       onChange={onGooseConfigFileDraftsChange}
+                    />
+                  ) : null}
+                  {runtimeKind === "opencode" ? (
+                    <TextFileBundleEditor
+                      title="OpenCode config files"
+                      description="Preseed the OpenCode config root with provider settings or runtime configuration."
+                      entries={opencodeConfigFileDrafts}
+                      addLabel="Add OpenCode file"
+                      emptyMessage="No OpenCode config files attached. Add config.json or provider settings as needed."
+                      pathHint="Path relative to OpenCode config root, e.g. config.json"
+                      contentHint="JSON or plain text configuration. Secrets stay in environment variables."
+                      onAdd={() => onOpenCodeConfigFileDraftsChange([...opencodeConfigFileDrafts, createOpenCodeConfigFileDraft()])}
+                      onChange={onOpenCodeConfigFileDraftsChange}
                     />
                   ) : null}
                 </AccordionContent>

@@ -278,8 +278,8 @@ function readRecord(record: JsonRecord, key: string, label: string, fallback: Js
 function readRuntimeKind(record: JsonRecord, key: string, label: string, fallback?: RuntimeKind): RuntimeKind {
   const value = record[key];
   const runtimeKind = value === undefined && fallback !== undefined ? fallback : value;
-  if (runtimeKind !== "langgraph" && runtimeKind !== "goose" && runtimeKind !== "codex") {
-    throw new Error(`${label}.${key} must be 'langgraph', 'goose', or 'codex'.`);
+  if (runtimeKind !== "langgraph" && runtimeKind !== "goose" && runtimeKind !== "codex" && runtimeKind !== "opencode") {
+    throw new Error(`${label}.${key} must be 'langgraph', 'goose', 'codex', or 'opencode'.`);
   }
   return runtimeKind;
 }
@@ -524,6 +524,7 @@ function parseAgentDetailPayload(payload: unknown): AgentDetail {
       parseAgentSkillSummaryPayload(item, `AgentDetail.skill_summaries[${index}]`),
     ),
     goose_config_files: readRecord(record, "goose_config_files", "AgentDetail"),
+    opencode_config_files: readRecord(record, "opencode_config_files", "AgentDetail"),
     git_config: parseGitConfigPayload(record.git_config, "AgentDetail.git_config"),
     github_config: parseGitHubConfigPayload(record.github_config, "AgentDetail.github_config"),
     created_at: readOptionalString(record, "created_at", "AgentDetail"),
@@ -758,6 +759,9 @@ function parseInvokeResponsePayload(payload: unknown): InvokeResponse {
         ? null
         : parseSubagentInvocationMetadataPayload(record.subagents, "InvokeResponse.subagents"),
     warnings: record.warnings === undefined ? [] : readStringArray(record, "warnings", "InvokeResponse"),
+    artifacts: record.artifacts === undefined || record.artifacts === null ? null : readRecordArray(record, "artifacts", "InvokeResponse"),
+    tool_calls: record.tool_calls === undefined || record.tool_calls === null ? null : readRecordArray(record, "tool_calls", "InvokeResponse"),
+    metadata: readOptionalRecord(record, "metadata", "InvokeResponse") ?? null,
   };
 }
 

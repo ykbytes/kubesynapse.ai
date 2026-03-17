@@ -1,4 +1,4 @@
-export type RuntimeKind = "langgraph" | "goose" | "codex";
+export type RuntimeKind = "langgraph" | "goose" | "codex" | "opencode";
 
 export interface A2APeerRef {
   name: string;
@@ -320,6 +320,7 @@ export interface AgentDetail extends AgentInfo {
   skills: AgentSkillsConfig;
   skill_summaries: AgentSkillSummary[];
   goose_config_files: Record<string, unknown>;
+  opencode_config_files: Record<string, unknown>;
   git_config?: GitConfig | null;
   github_config?: GitHubConfig | null;
   created_at?: string | null;
@@ -338,6 +339,7 @@ export interface CreateAgentPayload {
   a2a_config?: AgentA2AConfig;
   skills?: AgentSkillsConfig;
   goose_config_files?: Record<string, unknown>;
+  opencode_config_files?: Record<string, unknown>;
   git_config?: GitConfig | null;
   github_config?: GitHubConfig | null;
 }
@@ -354,6 +356,7 @@ export interface UpdateAgentPayload {
   a2a_config?: AgentA2AConfig;
   skills?: AgentSkillsConfig;
   goose_config_files?: Record<string, unknown>;
+  opencode_config_files?: Record<string, unknown>;
   git_config?: GitConfig | null;
   github_config?: GitHubConfig | null;
 }
@@ -467,6 +470,10 @@ export interface InvokePayload {
   streamable_http_extensions?: string[];
   sandbox_session?: Record<string, unknown>;
   team_context?: string;
+  output_format?: string;
+  autonomous?: boolean;
+  max_retries?: number;
+  output_schema?: Record<string, unknown>;
 }
 
 export interface InvokeResponse {
@@ -484,6 +491,9 @@ export interface InvokeResponse {
   a2a?: A2AInvocationMetadata | null;
   subagents?: SubagentInvocationMetadata | null;
   warnings: string[];
+  artifacts?: Array<Record<string, unknown>> | null;
+  tool_calls?: Array<Record<string, unknown>> | null;
+  metadata?: Record<string, unknown> | null;
 }
 
 export interface AgentLogsResponse {

@@ -21,6 +21,12 @@ gooseRuntime:
     tag: dev
     pullPolicy: IfNotPresent
 
+opencodeRuntime:
+  image:
+    repository: localhost/kubeminionagents/ai-opencode-runtime
+    tag: dev
+    pullPolicy: IfNotPresent
+
 apiGateway:
   image:
     repository: localhost/kubeminionagents/ai-api-gateway

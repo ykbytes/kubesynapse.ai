@@ -110,12 +110,12 @@ class GuardrailsEngine:
             for pattern in self._injection_patterns:
                 if pattern.search(text):
                     logger.warning("BLOCKED: Prompt injection detected: %s", pattern.pattern)
-                    return False, "Prompt injection detected"
+                    return False, f"Prompt injection detected (pattern: {pattern.pattern})"
 
         for pattern in self._compiled_input:
             if pattern.search(text):
                 logger.warning("BLOCKED: Input matched blocked pattern: %s", pattern.pattern)
-                return False, "Input blocked by policy"
+                return False, f"Input blocked by policy (pattern: {pattern.pattern})"
 
         return True, "OK"
 

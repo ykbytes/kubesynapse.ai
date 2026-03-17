@@ -393,6 +393,23 @@ codexRuntime:
     repository: ghcr.io/your-org/ai-codex-runtime
     tag: "1.0.0"
 
+opencodeRuntime:
+  image:
+    repository: ghcr.io/your-org/ai-opencode-runtime
+    tag: "1.0.0"
+  env:
+    OPENCODE_RUNTIME_CONFIG_FILES_JSON:
+      opencode.json: |
+        {
+          "default_agent": "build"
+        }
+      agents/reviewer.md: |
+        ---
+        description: Review code conservatively
+        mode: subagent
+        ---
+        Focus on regressions, operational risk, and missing tests.
+
 apiGateway:
   replicaCount: 2
   image:
@@ -472,6 +489,11 @@ shared invoke API stays focused on per-request controls. Keep secrets in
 Kubernetes `Secret`-backed env vars instead of writing `secrets.yaml`, and do
 not preseed `permissions/tool_permissions.json` because Goose manages that file
 itself at runtime.
+
+`OPENCODE_RUNTIME_CONFIG_FILES_JSON` does the same for the OpenCode adapter. It
+lets the chart preseed native OpenCode files such as `opencode.json`, agent
+profiles under `agents/`, plugins under `plugins/`, and Markdown skills under
+`skills/` before `opencode serve` starts.
 
 If you publish the bundled sidecars to your own registry, override the
 `mcpToolSidecars` entries as well. The chart defaults now point those sidecars
@@ -735,6 +757,26 @@ runtime:
         GOOSE_AUTO_COMPACT_THRESHOLD: 0.8
       "prompts/review.md": |
         Review code conservatively and call out operational risks first.
+```
+
+OpenCode agents support the same per-agent pattern through
+`spec.runtime.opencode.configFiles`. Those files are merged over chart-wide
+`OPENCODE_RUNTIME_CONFIG_FILES_JSON` entries by relative path before the
+OpenCode runtime starts.
+
+```yaml
+runtime:
+  kind: opencode
+  opencode:
+    configFiles:
+      opencode.json:
+        default_agent: build
+      agents/reviewer.md: |
+        ---
+        description: Review code conservatively
+        mode: subagent
+        ---
+        Focus on regressions, operational risk, and missing tests.
 ```
 
 To inspect the effective Goose configuration for a running Goose agent without

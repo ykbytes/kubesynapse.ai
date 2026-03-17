@@ -45,6 +45,11 @@ import {
   gooseConfigFileDraftsFromFiles,
 } from "../lib/gooseConfig";
 import {
+  buildOpenCodeConfigFiles,
+  createOpenCodeConfigFileDraft,
+  opencodeConfigFileDraftsFromFiles,
+} from "../lib/opencodeConfig";
+import {
   MCP_SERVERS_PLACEHOLDER,
   MCP_SIDECARS_PLACEHOLDER,
   parseMcpServersText,
@@ -136,6 +141,7 @@ interface AgentManagementPanelProps {
     a2aAllowedCallersText: string,
     skillFiles: Record<string, string>,
     gooseConfigFiles: Record<string, unknown>,
+    opencodeConfigFiles: Record<string, unknown>,
   ) => void;
   onDelete: () => void;
 }
@@ -161,6 +167,7 @@ export function AgentManagementPanel({
   const [a2aAllowedCallersText, setA2aAllowedCallersText] = useState(stringifyA2APeerRefs(agent.a2a_config.allowed_callers));
   const [skillFileDrafts, setSkillFileDrafts] = useState(skillFileDraftsFromFiles(agent.skills.files));
   const [gooseConfigFileDrafts, setGooseConfigFileDrafts] = useState(gooseConfigFileDraftsFromFiles(agent.goose_config_files));
+  const [opencodeConfigFileDrafts, setOpenCodeConfigFileDrafts] = useState(opencodeConfigFileDraftsFromFiles(agent.opencode_config_files));
   const [localError, setLocalError] = useState("");
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
 
@@ -175,11 +182,15 @@ export function AgentManagementPanel({
       enableGvisor !== agent.enable_gvisor ||
       mcpServersText !== stringifyMcpServers(agent.mcp_servers) ||
       mcpSidecarsText !== stringifyMcpSidecars(agent.mcp_sidecars) ||
-      a2aAllowedCallersText !== stringifyA2APeerRefs(agent.a2a_config.allowed_callers)
+      a2aAllowedCallersText !== stringifyA2APeerRefs(agent.a2a_config.allowed_callers) ||
+      JSON.stringify(skillFileDrafts) !== JSON.stringify(skillFileDraftsFromFiles(agent.skills.files)) ||
+      JSON.stringify(gooseConfigFileDrafts) !== JSON.stringify(gooseConfigFileDraftsFromFiles(agent.goose_config_files)) ||
+      JSON.stringify(opencodeConfigFileDrafts) !== JSON.stringify(opencodeConfigFileDraftsFromFiles(agent.opencode_config_files))
     );
   }, [
     model, systemPrompt, policyRef, storageSize, runtimeKind, enableGvisor,
     mcpServersText, mcpSidecarsText, a2aAllowedCallersText,
+    skillFileDrafts, gooseConfigFileDrafts, opencodeConfigFileDrafts,
     agent,
   ]);
 
@@ -211,6 +222,7 @@ export function AgentManagementPanel({
     setA2aAllowedCallersText(stringifyA2APeerRefs(agent.a2a_config.allowed_callers));
     setSkillFileDrafts(skillFileDraftsFromFiles(agent.skills.files));
     setGooseConfigFileDrafts(gooseConfigFileDraftsFromFiles(agent.goose_config_files));
+    setOpenCodeConfigFileDrafts(opencodeConfigFileDraftsFromFiles(agent.opencode_config_files));
     setLocalError("");
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agent.name]);
@@ -247,7 +259,7 @@ export function AgentManagementPanel({
     setLocalError("");
   }, [
     model, systemPrompt, policyRef, storageSize, runtimeKind, enableGvisor,
-    mcpServersText, mcpSidecarsText, a2aAllowedCallersText, skillFileDrafts, gooseConfigFileDrafts,
+    mcpServersText, mcpSidecarsText, a2aAllowedCallersText, skillFileDrafts, gooseConfigFileDrafts, opencodeConfigFileDrafts,
   ]);
 
   // Sidecar parsing
@@ -340,6 +352,7 @@ export function AgentManagementPanel({
     try {
       const skillFiles = buildSkillFiles(skillFileDrafts);
       const gooseConfigFiles = runtimeKind === "goose" ? buildGooseConfigFiles(gooseConfigFileDrafts) : {};
+      const opencodeConfigFiles = runtimeKind === "opencode" ? buildOpenCodeConfigFiles(opencodeConfigFileDrafts) : {};
       const mcpServers = runtimeKind === "langgraph" ? parseMcpServersText(mcpServersText) : [];
       const mcpSidecars = runtimeKind !== "goose" ? parseMcpSidecarsText(mcpSidecarsText) : [];
       onSave(
@@ -358,6 +371,7 @@ export function AgentManagementPanel({
         a2aAllowedCallersText,
         skillFiles,
         gooseConfigFiles,
+        opencodeConfigFiles,
       );
     } catch (nextError) {
       setLocalError(nextError instanceof Error ? nextError.message : String(nextError));
@@ -390,7 +404,7 @@ export function AgentManagementPanel({
           <div className="grid min-w-[240px] gap-2 rounded-2xl border border-border/60 bg-background/70 p-3 text-xs text-muted-foreground lg:grid-cols-3">
             <div>
               <p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground/70">Runtime</p>
-              <p className="mt-1 font-medium text-foreground">{runtimeKind === "langgraph" ? "LangGraph" : runtimeKind === "goose" ? "Goose" : "Codex"}</p>
+              <p className="mt-1 font-medium text-foreground">{runtimeKind === "langgraph" ? "LangGraph" : runtimeKind === "goose" ? "Goose" : runtimeKind === "opencode" ? "OpenCode" : "Codex"}</p>
             </div>
             <div>
               <p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground/70">Skills</p>
@@ -452,7 +466,7 @@ export function AgentManagementPanel({
                   </CardHeader>
                   <CardContent className="space-y-3">
                     <div className="grid gap-2">
-                      {(["langgraph", "goose", "codex"] as RuntimeKind[]).map((rt) => {
+                      {(["langgraph", "goose", "codex", "opencode"] as RuntimeKind[]).map((rt) => {
                         const active = runtimeKind === rt;
                         return (
                           <button
@@ -467,13 +481,15 @@ export function AgentManagementPanel({
                           >
                             <div className="flex items-center justify-between gap-3">
                               <div>
-                                <p className="font-medium text-sm">{rt === "langgraph" ? "LangGraph runtime" : rt === "goose" ? "Goose runtime" : "Codex runtime"}</p>
+                                <p className="font-medium text-sm">{rt === "langgraph" ? "LangGraph runtime" : rt === "goose" ? "Goose runtime" : rt === "opencode" ? "OpenCode runtime" : "Codex runtime"}</p>
                                 <p className="mt-1 text-xs leading-5">
                                   {rt === "langgraph"
                                     ? "Best for tool-rich agents, MCP routing, and sidecar-based capabilities."
                                     : rt === "goose"
                                       ? "Best for Goose-native workflows and config-driven conversational behavior."
-                                      : "Best for Codex CLI orchestration and Spec Kit style multi-stage implementation pipelines."}
+                                      : rt === "opencode"
+                                        ? "Best for autonomous multi-turn coding with structured output, session management, and context-overflow recovery."
+                                        : "Best for Codex CLI orchestration and Spec Kit style multi-stage implementation pipelines."}
                                 </p>
                               </div>
                               {active ? <Badge>Selected</Badge> : null}
@@ -897,6 +913,19 @@ export function AgentManagementPanel({
                       contentHint="YAML, Markdown, or plain text."
                       onAdd={() => setGooseConfigFileDrafts((current) => [...current, createGooseConfigFileDraft()])}
                       onChange={setGooseConfigFileDrafts}
+                    />
+                  ) : null}
+                  {runtimeKind === "opencode" ? (
+                    <TextFileBundleEditor
+                      title="OpenCode config files"
+                      description="Preseed the OpenCode config root with provider settings or runtime configuration."
+                      entries={opencodeConfigFileDrafts}
+                      addLabel="Add OpenCode file"
+                      emptyMessage="No OpenCode config files attached."
+                      pathHint="Path relative to OpenCode config root, e.g. config.json"
+                      contentHint="JSON or plain text configuration."
+                      onAdd={() => setOpenCodeConfigFileDrafts((current) => [...current, createOpenCodeConfigFileDraft()])}
+                      onChange={setOpenCodeConfigFileDrafts}
                     />
                   ) : null}
                 </AccordionContent>

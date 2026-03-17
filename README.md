@@ -23,7 +23,7 @@
 
 Kubeminionagents is designed as a **shareable, end-to-end AI agent platform** for Kubernetes:
 
-- 🧠 **AI runtime ready** — supports LangGraph-based and Goose-based execution paths
+- 🧠 **AI runtime ready** — supports LangGraph-based, Goose-based, Codex-based, and OpenCode-based execution paths
 - 🗂️ **File-backed skills** — agent behavior and capability grants can be versioned as Markdown skill files inside the agent spec
 - 🤝 **Delegation built in** — explicit A2A routing and specialist-team orchestration are available through the gateway, CLI, and web UI
 - 🛡️ **Platform-first** — operator, policies, tenants, and approvals live with the app stack
@@ -38,6 +38,8 @@ Kubeminionagents is designed as a **shareable, end-to-end AI agent platform** fo
 | `operator/` | Reconciler and worker image | Manages agent lifecycle inside the cluster |
 | `agent-runtime/` | LangGraph-based runtime | Runs agent workflows and execution logic |
 | `goose-runtime/` | Goose HTTP adapter runtime | Supports an alternate runtime path |
+| `codex-runtime/` | Codex HTTP adapter runtime | Provides Codex-native execution for compatible agents |
+| `opencode-runtime/` | OpenCode HTTP adapter runtime | Provides OpenCode sessions, skills, plugins, and MCP-native workflows |
 | `api-gateway/` | CRUD, invoke, and streaming endpoints | Exposes the platform to users and clients |
 | `web-ui/` | React + TypeScript console | Gives operators and developers a visual control surface |
 | `charts/ai-agent-sandbox/` | Full Helm install | Packages the entire platform for deployment |
@@ -48,6 +50,7 @@ Kubeminionagents is designed as a **shareable, end-to-end AI agent platform** fo
 
 - Define `spec.skills.files` to steer runtimes with repo-tracked Markdown skills and scoped capability grants
 - Seed Goose agents with per-agent `runtime.goose.configFiles` instead of relying on chart-wide defaults only
+- Seed OpenCode agents with per-agent `runtime.opencode.configFiles` to materialize OpenCode agents, plugins, skills, and `opencode.json` fragments per agent
 - Route a request to an explicit peer over A2A or launch a sequential or parallel specialist team from the same invoke surface
 - Inspect approvals, runtime logs, peer reachability, and parsed skill summaries from the bundled web console
 - Manage agents, workflows, and evaluations through either Kubernetes manifests, the API gateway, the CLI, or the UI
@@ -60,7 +63,7 @@ Kubeminionagents is designed as a **shareable, end-to-end AI agent platform** fo
 make docker-build REGISTRY=ghcr.io/your-org VERSION=latest
 ```
 
-This target builds the six core platform images plus the bundled MCP sidecar
+This target builds the core platform images, including the OpenCode runtime, plus the bundled MCP sidecar
 images from `./mcp-sidecars`.
 
 ### 2) Or package a self-contained chart bundle

@@ -32,6 +32,12 @@ codexRuntime:
     tag: latest
     pullPolicy: Always
 
+opencodeRuntime:
+  image:
+    repository: docker.io/yakdhane/ai-opencode-runtime
+    tag: latest
+    pullPolicy: Always
+
 apiGateway:
   image:
     repository: docker.io/yakdhane/ai-api-gateway

@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import os
+from pathlib import PurePosixPath
 import re
 import time
 from typing import Any, Sequence
@@ -14,6 +15,7 @@ import httpx
 
 
 logger = logging.getLogger("operator-utils")
+
 PLACEHOLDER_RE = re.compile(r"{{\s*([^{}]+?)\s*}}")
 K8S_NAME_RE = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
 
@@ -40,9 +42,9 @@ def get_int_env(name: str, default: int, minimum: int = 0) -> int:
         return max(default, minimum)
 
 
-AGENT_RUNTIME_TIMEOUT_SECONDS = get_float_env("AGENT_RUNTIME_TIMEOUT_SECONDS", 900.0, minimum=1.0)
+AGENT_RUNTIME_TIMEOUT_SECONDS = get_float_env("AGENT_RUNTIME_TIMEOUT_SECONDS", 360.0, minimum=1.0)
 MAX_THREAD_ID_CHARS = get_int_env("AGENT_MAX_THREAD_ID_CHARS", 128, minimum=16)
-DEFAULT_WORKFLOW_STEP_MAX_ATTEMPTS = get_int_env("WORKFLOW_DEFAULT_MAX_ATTEMPTS", 3, minimum=1)
+DEFAULT_WORKFLOW_STEP_MAX_ATTEMPTS = get_int_env("WORKFLOW_DEFAULT_MAX_ATTEMPTS", 1, minimum=1)
 DEFAULT_WORKFLOW_STEP_BACKOFF_SECONDS = get_float_env("WORKFLOW_DEFAULT_BACKOFF_SECONDS", 2.0, minimum=0.0)
 UNSUPPORTED_POLICY_BUDGET_FIELDS = (
     "maxTokensPerHour",
@@ -54,6 +56,10 @@ MAX_AGENT_SKILL_FILES = get_int_env("AGENT_MAX_SKILL_FILES", 24, minimum=1)
 MAX_AGENT_SKILL_FILE_PATH_CHARS = get_int_env("AGENT_MAX_SKILL_FILE_PATH_CHARS", 256, minimum=32)
 MAX_AGENT_SKILL_FILE_CONTENT_CHARS = get_int_env("AGENT_MAX_SKILL_FILE_CONTENT_CHARS", 16000, minimum=512)
 MAX_AGENT_SKILL_TOTAL_CHARS = get_int_env("AGENT_MAX_SKILL_TOTAL_CHARS", 64000, minimum=4096)
+MAX_RUNTIME_CONFIG_FILES = get_int_env("RUNTIME_MAX_CONFIG_FILES", 64, minimum=1)
+MAX_RUNTIME_CONFIG_PATH_CHARS = get_int_env("RUNTIME_MAX_CONFIG_PATH_CHARS", 256, minimum=32)
+MAX_RUNTIME_CONFIG_CONTENT_CHARS = get_int_env("RUNTIME_MAX_CONFIG_CONTENT_CHARS", 64000, minimum=512)
+MAX_RUNTIME_CONFIG_TOTAL_CHARS = get_int_env("RUNTIME_MAX_CONFIG_TOTAL_CHARS", 256000, minimum=4096)
 
 
 def now_iso() -> str:
@@ -103,6 +109,59 @@ def workflow_journal_path(artifact_path: str) -> str:
     if artifact_path.endswith(".json"):
         return f"{artifact_path[:-5]}.journal.ndjson"
     return f"{artifact_path}.journal.ndjson"
+
+
+def _normalize_runtime_config_path(raw_path: Any, *, source: str) -> str:
+    candidate = str(raw_path or "").strip().replace("\\", "/")
+    if not candidate:
+        raise ValueError(f"{source} path must not be blank")
+    if len(candidate) > MAX_RUNTIME_CONFIG_PATH_CHARS:
+        raise ValueError(
+            f"{source} path '{candidate}' exceeds {MAX_RUNTIME_CONFIG_PATH_CHARS} characters"
+        )
+    if candidate.startswith("/") or re.match(r"^[a-zA-Z]:[/\\]", candidate):
+        raise ValueError(f"{source} path '{candidate}' must be relative")
+
+    normalized = PurePosixPath(candidate)
+    if normalized.is_absolute() or any(part in {"", ".", ".."} for part in normalized.parts):
+        raise ValueError(f"{source} path '{candidate}' must stay within the runtime config root")
+    return normalized.as_posix()
+
+
+def parse_runtime_config_files(raw_value: Any, *, source: str) -> dict[str, Any]:
+    if raw_value in (None, ""):
+        return {}
+    if not isinstance(raw_value, dict):
+        raise ValueError(f"{source} must be an object mapping relative file paths to content")
+    if len(raw_value) > MAX_RUNTIME_CONFIG_FILES:
+        raise ValueError(f"{source} cannot contain more than {MAX_RUNTIME_CONFIG_FILES} files")
+
+    normalized: dict[str, Any] = {}
+    total_chars = 0
+    for raw_path, raw_content in raw_value.items():
+        path = _normalize_runtime_config_path(raw_path, source=source)
+        if isinstance(raw_content, str):
+            serialized = raw_content
+            value: Any = raw_content
+        elif isinstance(raw_content, (dict, list)):
+            serialized = json.dumps(raw_content, ensure_ascii=False, sort_keys=True)
+            value = raw_content
+        else:
+            raise ValueError(
+                f"{source} path '{path}' must map to a string, object, or array"
+            )
+        if len(serialized) > MAX_RUNTIME_CONFIG_CONTENT_CHARS:
+            raise ValueError(
+                f"{source} path '{path}' exceeds {MAX_RUNTIME_CONFIG_CONTENT_CHARS} characters"
+            )
+        total_chars += len(serialized)
+        normalized[path] = value
+
+    if total_chars > MAX_RUNTIME_CONFIG_TOTAL_CHARS:
+        raise ValueError(
+            f"{source} exceeds the total content limit of {MAX_RUNTIME_CONFIG_TOTAL_CHARS} characters"
+        )
+    return normalized
 
 
 def parse_json_output(text: str) -> Any | None:
@@ -238,10 +297,8 @@ def validate_workflow_graph(steps: Sequence[dict[str, Any]]) -> dict[str, Any]:
 
     if visited != set(ordered_names):
         disconnected = sorted(set(ordered_names) - visited)
-        logger.warning(
-            "Workflow graph is not fully connected. Disconnected steps %s "
-            "will run independently (no data flows between them).",
-            disconnected,
+        raise ValueError(
+            f"Workflow must form a single connected DAG. Disconnected steps: {disconnected}"
         )
 
     return {
@@ -513,35 +570,15 @@ def invoke_agent_runtime(
     timeout_seconds: float | None = None,
 ) -> dict[str, Any]:
     """POST an invoke request to the agent runtime and return the response body."""
-    # Truncate prompt to prevent 422 from agent runtime's max_length validation
-    MAX_INVOKE_PROMPT_CHARS = 47000
-    if "prompt" in payload and len(payload["prompt"]) > MAX_INVOKE_PROMPT_CHARS:
-        logger.warning(
-            "Truncating invoke prompt from %d to %d chars for agent '%s'",
-            len(payload["prompt"]), MAX_INVOKE_PROMPT_CHARS, agent_name,
-        )
-        payload = dict(payload)
-        payload["prompt"] = payload["prompt"][:MAX_INVOKE_PROMPT_CHARS] + "\n[truncated]"
-
     effective_timeout = timeout_seconds or AGENT_RUNTIME_TIMEOUT_SECONDS
     with httpx.Client(
-        timeout=httpx.Timeout(connect=30.0, read=effective_timeout, write=30.0, pool=30.0),
+        timeout=effective_timeout,
+        transport=httpx.HTTPTransport(retries=2),
     ) as client:
         url = f"{runtime_url(agent_name, namespace)}/invoke"
         last_exc: Exception | None = None
         for attempt in range(3):
             response = client.post(url, json=payload)
-            if response.status_code == 422:
-                # Log Pydantic validation errors for debugging
-                try:
-                    detail = response.json()
-                except Exception:
-                    detail = response.text[:500]
-                logger.error(
-                    "Agent '%s' returned 422 Unprocessable Entity: %s (prompt length: %d)",
-                    agent_name, detail, len(payload.get("prompt", "")),
-                )
-                response.raise_for_status()
             if response.status_code < 500:
                 response.raise_for_status()
                 return response.json()  # type: ignore[no-any-return]

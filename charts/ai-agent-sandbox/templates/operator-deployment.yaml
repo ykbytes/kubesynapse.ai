@@ -183,6 +183,14 @@ spec:
               value: {{ .Values.codexRuntime.provider | default "litellm" | quote }}
             - name: CODEX_RUNTIME_EXTRA_ENV_JSON
               value: {{ .Values.codexRuntime.env | default dict | toJson | quote }}
+            - name: OPENCODE_RUNTIME_IMAGE
+              value: "{{ .Values.opencodeRuntime.image.repository }}:{{ .Values.opencodeRuntime.image.tag }}"
+            - name: OPENCODE_RUNTIME_IMAGE_PULL_POLICY
+              value: {{ .Values.opencodeRuntime.image.pullPolicy | default "IfNotPresent" | quote }}
+            - name: OPENCODE_DEFAULT_PROVIDER
+              value: {{ .Values.opencodeRuntime.provider | default "litellm" | quote }}
+            - name: OPENCODE_RUNTIME_EXTRA_ENV_JSON
+              value: {{ .Values.opencodeRuntime.env | default dict | toJson | quote }}
             - name: WORKER_IMAGE
               value: "{{ .Values.operator.workerImage.repository }}:{{ .Values.operator.workerImage.tag }}"
             - name: WORKER_IMAGE_PULL_POLICY
@@ -289,6 +297,8 @@ spec:
               value: {{ include "ai-agent-sandbox.fullname" . }}-runtime-role
             - name: MCP_HUB_NAMESPACE
               value: {{ .Values.mcpHub.namespace | default "mcp-hub" | quote }}
+            - name: HELM_RELEASE_NAME
+              value: {{ include "ai-agent-sandbox.fullname" . | quote }}
             - name: MCP_AUTH_SECRET_NAME
               value: {{ .Values.mcpHub.auth.secretName | default (printf "%s-mcp-auth" (include "ai-agent-sandbox.fullname" .)) | quote }}
             - name: AGENT_CPU_REQUEST

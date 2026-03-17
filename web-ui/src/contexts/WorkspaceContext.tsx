@@ -25,6 +25,7 @@ import { parseA2APeerRefsText } from "@/lib/a2a";
 import { parseMcpServersText, parseMcpSidecarsText } from "@/lib/mcp";
 import { buildSkillFiles } from "@/lib/skills";
 import { buildGooseConfigFiles } from "@/lib/gooseConfig";
+import { buildOpenCodeConfigFiles } from "@/lib/opencodeConfig";
 import { useConnection } from "./ConnectionContext";
 import { toast } from "sonner";
 import type {
@@ -115,6 +116,7 @@ export interface WorkspaceContextValue {
   createAgentA2AAllowedCallersText: string;
   createAgentSkillFileDrafts: TextFileDraft[];
   createAgentGooseConfigFileDrafts: TextFileDraft[];
+  createAgentOpenCodeConfigFileDrafts: TextFileDraft[];
   createAgentGitForm: GitFormState;
   createAgentGitHubForm: GitHubFormState;
   createError: string;
@@ -127,6 +129,7 @@ export interface WorkspaceContextValue {
   setCreateAgentA2AAllowedCallersText: (v: string) => void;
   setCreateAgentSkillFileDrafts: (v: TextFileDraft[]) => void;
   setCreateAgentGooseConfigFileDrafts: (v: TextFileDraft[]) => void;
+  setCreateAgentOpenCodeConfigFileDrafts: (v: TextFileDraft[]) => void;
   setCreateAgentGitForm: (v: GitFormState) => void;
   setCreateAgentGitHubForm: (v: GitHubFormState) => void;
 
@@ -142,7 +145,7 @@ export interface WorkspaceContextValue {
   // Actions
   refreshWorkspaceData: (options?: { silent?: boolean; token?: string; namespace?: string }) => Promise<void>;
   handleCreateAgent: () => Promise<AgentInfo | null>;
-  handleSaveAgent: (payload: UpdateAgentPayload, a2aAllowedCallersText: string, skillFiles: Record<string, string>, gooseConfigFiles: Record<string, unknown>) => Promise<void>;
+  handleSaveAgent: (payload: UpdateAgentPayload, a2aAllowedCallersText: string, skillFiles: Record<string, string>, gooseConfigFiles: Record<string, unknown>, opencodeConfigFiles: Record<string, unknown>) => Promise<void>;
   handleDeleteAgent: () => Promise<string | null>;
   handleCreateWorkflow: (payload: WorkflowPayload) => Promise<void>;
   handleUpdateWorkflow: (name: string, payload: WorkflowUpdatePayload) => Promise<void>;
@@ -217,6 +220,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [createAgentA2AAllowedCallersText, setCreateAgentA2AAllowedCallersText] = useState("");
   const [createAgentSkillFileDrafts, setCreateAgentSkillFileDrafts] = useState<TextFileDraft[]>([]);
   const [createAgentGooseConfigFileDrafts, setCreateAgentGooseConfigFileDrafts] = useState<TextFileDraft[]>([]);
+  const [createAgentOpenCodeConfigFileDrafts, setCreateAgentOpenCodeConfigFileDrafts] = useState<TextFileDraft[]>([]);
   const [createAgentGitForm, setCreateAgentGitForm] = useState<GitFormState>({
     enabled: false, repoUrl: "", authMethod: "token", pushPolicy: "after-each-commit",
     defaultBranch: "main", token: "", username: "", password: "", sshPrivateKey: "",
@@ -403,7 +407,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       const skillFiles = buildSkillFiles(createAgentSkillFileDrafts);
       const mcpServers = createAgentRuntimeKind === "langgraph" ? parseMcpServersText(createAgentMcpServersText) : [];
       const mcpSidecars = createAgentRuntimeKind !== "goose" ? parseMcpSidecarsText(createAgentMcpSidecarsText) : [];
-      const gooseConfigFiles = createAgentRuntimeKind === "goose" ? buildGooseConfigFiles(createAgentGooseConfigFileDrafts) : undefined;
+      const gooseConfigFiles = createAgentRuntimeKind === "goose" ? buildGooseConfigFiles(createAgentGooseConfigFileDrafts) : {};
+      const opencodeConfigFiles = createAgentRuntimeKind === "opencode" ? buildOpenCodeConfigFiles(createAgentOpenCodeConfigFileDrafts) : {};
 
       let gitCredentialSecretRef: string | undefined;
       if (createAgentGitForm.enabled) {
@@ -428,6 +433,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         a2a_config: allowedCallers.length > 0 ? { allowed_callers: allowedCallers } : undefined,
         skills: Object.keys(skillFiles).length > 0 ? { files: skillFiles } : undefined,
         goose_config_files: gooseConfigFiles,
+        opencode_config_files: opencodeConfigFiles,
         git_config: createAgentGitForm.enabled ? {
           repo_url: createAgentGitForm.repoUrl, default_branch: createAgentGitForm.defaultBranch || "main",
           push_policy: createAgentGitForm.pushPolicy, auth_method: createAgentGitForm.authMethod,
@@ -438,7 +444,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       const created = await createAgent(token, namespace, payload);
       setAgentCreateMode(false);
       setCreateAgentMcpServersText(""); setCreateAgentMcpSidecarsText(""); setCreateAgentA2AAllowedCallersText("");
-      setCreateAgentSkillFileDrafts([]); setCreateAgentGooseConfigFileDrafts([]);
+      setCreateAgentSkillFileDrafts([]); setCreateAgentGooseConfigFileDrafts([]); setCreateAgentOpenCodeConfigFileDrafts([]);
       setCreateAgentGitForm({ enabled: false, repoUrl: "", authMethod: "token", pushPolicy: "after-each-commit", defaultBranch: "main", token: "", username: "", password: "", sshPrivateKey: "" });
       setCreateAgentGitHubForm({ enabled: false, token: "" });
       setSelectedAgentName(created.name);
@@ -456,11 +462,12 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, namespace, createAgentName, createAgentModel, createAgentSystemPrompt, createAgentRuntimeKind,
     createAgentMcpServersText, createAgentMcpSidecarsText, createAgentA2AAllowedCallersText,
-    createAgentSkillFileDrafts, createAgentGooseConfigFileDrafts, createAgentGitForm, createAgentGitHubForm, refreshWorkspaceData]);
+    createAgentSkillFileDrafts, createAgentGooseConfigFileDrafts, createAgentOpenCodeConfigFileDrafts, createAgentGitForm, createAgentGitHubForm, refreshWorkspaceData]);
 
   const handleSaveAgent = useCallback(async (
     payload: UpdateAgentPayload, a2aAllowedCallersText: string,
     skillFiles: Record<string, string>, gooseConfigFiles: Record<string, unknown>,
+    opencodeConfigFiles: Record<string, unknown>,
   ) => {
     if (!token.trim() || !selectedAgentName) return;
     setSavingAgent(true); setAgentManageError("");
@@ -471,6 +478,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         a2a_config: { allowed_callers: allowedCallers },
         skills: { files: skillFiles },
         goose_config_files: payload.runtime_kind === "goose" ? gooseConfigFiles : {},
+        opencode_config_files: payload.runtime_kind === "opencode" ? opencodeConfigFiles : {},
       };
       const updated = await updateAgent(token, namespace, selectedAgentName, nextPayload);
       setSelectedAgentDetail(updated);
@@ -603,10 +611,10 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       sidebarCollapsed, setSidebarCollapsed, inspectorOpen, setInspectorOpen, agentViewTab, setAgentViewTab,
       createAgentName, createAgentModel, createAgentSystemPrompt, createAgentRuntimeKind,
       createAgentMcpServersText, createAgentMcpSidecarsText, createAgentA2AAllowedCallersText,
-      createAgentSkillFileDrafts, createAgentGooseConfigFileDrafts, createAgentGitForm, createAgentGitHubForm, createError,
+      createAgentSkillFileDrafts, createAgentGooseConfigFileDrafts, createAgentOpenCodeConfigFileDrafts, createAgentGitForm, createAgentGitHubForm, createError,
       setCreateAgentName, setCreateAgentModel, setCreateAgentSystemPrompt, setCreateAgentRuntimeKind,
       setCreateAgentMcpServersText, setCreateAgentMcpSidecarsText, setCreateAgentA2AAllowedCallersText,
-      setCreateAgentSkillFileDrafts, setCreateAgentGooseConfigFileDrafts, setCreateAgentGitForm, setCreateAgentGitHubForm,
+      setCreateAgentSkillFileDrafts, setCreateAgentGooseConfigFileDrafts, setCreateAgentOpenCodeConfigFileDrafts, setCreateAgentGitForm, setCreateAgentGitHubForm,
       sidebarCounts, sidebarItems, sidebarSelectedId, emptySidebarMessage, selectedAgent, selectedWorkflow, selectedEval,
       refreshWorkspaceData, handleCreateAgent, handleSaveAgent, handleDeleteAgent,
       handleCreateWorkflow, handleUpdateWorkflow, handleDeleteWorkflow, handleTriggerWorkflow, handleCancelWorkflow,

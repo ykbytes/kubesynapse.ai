@@ -20,6 +20,7 @@ from utils import (
     parse_agent_skills_config,
     parse_policy_a2a_config,
     parse_goose_config_files,
+    parse_runtime_config_files,
     validate_supported_policy_spec,
     validate_workflow_graph,
     workflow_journal_path,
@@ -43,7 +44,6 @@ KUBERNETES_RESOURCE_NAME_PATTERN = re.compile(r"^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?
 STORAGE_QUANTITY_MULTIPLIERS: dict[str, Decimal] = {
     "": Decimal(1),
     "n": Decimal("1e-9"),
-    "u": Decimal("1e-6"),
     "m": Decimal("1e-3"),
     "k": Decimal(1000),
     "K": Decimal(1000),
@@ -354,6 +354,9 @@ GOOSE_DEFAULT_PROVIDER = get_string_env("GOOSE_DEFAULT_PROVIDER", "litellm")
 CODEX_RUNTIME_IMAGE = os.getenv("CODEX_RUNTIME_IMAGE", "ghcr.io/your-org/ai-codex-runtime:latest")
 CODEX_RUNTIME_IMAGE_PULL_POLICY = get_string_env("CODEX_RUNTIME_IMAGE_PULL_POLICY", "IfNotPresent")
 CODEX_DEFAULT_PROVIDER = get_string_env("CODEX_DEFAULT_PROVIDER", "litellm")
+OPENCODE_RUNTIME_IMAGE = os.getenv("OPENCODE_RUNTIME_IMAGE", "yakdhane/ai-opencode-runtime:latest")
+OPENCODE_RUNTIME_IMAGE_PULL_POLICY = get_string_env("OPENCODE_RUNTIME_IMAGE_PULL_POLICY", "IfNotPresent")
+OPENCODE_DEFAULT_PROVIDER = get_string_env("OPENCODE_DEFAULT_PROVIDER", "litellm")
 RUNTIME_SERVICE_ACCOUNT = os.getenv("RUNTIME_SERVICE_ACCOUNT", "ai-agent-runtime")
 RUNTIME_CLUSTER_ROLE = os.getenv("RUNTIME_CLUSTER_ROLE", "ai-agent-runtime-role")
 QDRANT_SVC = os.getenv("QDRANT_SVC_NAME", "ai-agent-sandbox-qdrant")
@@ -374,22 +377,21 @@ WORKER_SERVICE_ACCOUNT_NAME = os.getenv("WORKER_SERVICE_ACCOUNT_NAME", "default"
 WORKER_ARTIFACT_SIZE = os.getenv("WORKER_ARTIFACT_SIZE", "2Gi")
 WORKER_ARTIFACT_STORAGE_CLASS = os.getenv("WORKER_ARTIFACT_STORAGE_CLASS", "").strip()
 WORKER_TTL_SECONDS_AFTER_FINISHED = get_int_env("WORKER_TTL_SECONDS_AFTER_FINISHED", 3600, minimum=0)
-WORKER_ACTIVE_DEADLINE_SECONDS = get_int_env("WORKER_ACTIVE_DEADLINE_SECONDS", 3600, minimum=60)
+WORKER_ACTIVE_DEADLINE_SECONDS = get_int_env("WORKER_ACTIVE_DEADLINE_SECONDS", 1800, minimum=60)
 WORKER_IMAGE_PULL_POLICY = os.getenv("WORKER_IMAGE_PULL_POLICY", "IfNotPresent").strip() or "IfNotPresent"
 WORKER_CPU_REQUEST = os.getenv("WORKER_CPU_REQUEST", "100m").strip() or "100m"
 WORKER_MEMORY_REQUEST = os.getenv("WORKER_MEMORY_REQUEST", "128Mi").strip() or "128Mi"
 WORKER_CPU_LIMIT = os.getenv("WORKER_CPU_LIMIT", "500m").strip() or "500m"
 WORKER_MEMORY_LIMIT = os.getenv("WORKER_MEMORY_LIMIT", "512Mi").strip() or "512Mi"
-AGENT_RUNTIME_TIMEOUT_SECONDS = str(get_float_env("AGENT_RUNTIME_TIMEOUT_SECONDS", 900.0, minimum=1.0))
+AGENT_RUNTIME_TIMEOUT_SECONDS = str(get_float_env("AGENT_RUNTIME_TIMEOUT_SECONDS", 360.0, minimum=1.0))
 EVAL_SCHEDULE_POLL_SECONDS = get_int_env("EVAL_SCHEDULE_POLL_SECONDS", 60, minimum=15)
 SCHEDULED_EVAL_QUEUE_STALE_SECONDS = get_int_env("SCHEDULED_EVAL_QUEUE_STALE_SECONDS", 600, minimum=60)
 WORKFLOW_POLL_SECONDS = get_int_env("WORKFLOW_POLL_SECONDS", 30, minimum=15)
 WORKFLOW_QUEUE_STALE_SECONDS = get_int_env("WORKFLOW_QUEUE_STALE_SECONDS", 300, minimum=60)
-WORKFLOW_RUNNING_STALE_SECONDS = get_int_env("WORKFLOW_RUNNING_STALE_SECONDS", 1800, minimum=60)
+WORKFLOW_RUNNING_STALE_SECONDS = get_int_env("WORKFLOW_RUNNING_STALE_SECONDS", 900, minimum=60)
 ARTIFACT_MOUNT_PATH = "/artifacts"
 AGENT_HITL_MODE = os.getenv("AGENT_HITL_MODE", "enforce").strip().lower()
 HITL_NOTIFICATION_WEBHOOK_URL = os.getenv("HITL_NOTIFICATION_WEBHOOK_URL", "").strip()
-NETWORK_POLICY_ENABLED = get_bool_env("NETWORK_POLICY_ENABLED", True)
 AGENT_CPU_REQUEST = os.getenv("AGENT_CPU_REQUEST", "100m").strip() or "100m"
 AGENT_MEMORY_REQUEST = os.getenv("AGENT_MEMORY_REQUEST", "256Mi").strip() or "256Mi"
 AGENT_CPU_LIMIT = os.getenv("AGENT_CPU_LIMIT", "1").strip() or "1"
@@ -421,7 +423,7 @@ AGENT_LOCAL_TOOL_ALLOWED_ROOTS = os.getenv("AGENT_LOCAL_TOOL_ALLOWED_ROOTS", DEF
 AGENT_LOCAL_TOOL_LIST_LIMIT = str(get_int_env("AGENT_LOCAL_TOOL_LIST_LIMIT", 32, minimum=1))
 A2A_DEFAULT_TIMEOUT_SECONDS = get_float_env("A2A_DEFAULT_TIMEOUT_SECONDS", 60.0, minimum=1.0)
 IMAGE_PULL_SECRETS = get_csv_env("IMAGE_PULL_SECRETS")
-SUPPORTED_RUNTIME_KINDS = {"langgraph", "goose", "codex"}
+SUPPORTED_RUNTIME_KINDS = {"langgraph", "goose", "codex", "opencode"}
 A2A_ALLOWED_CALLERS_ENV = "A2A_ALLOWED_CALLERS_JSON"
 A2A_ALLOWED_TARGETS_ENV = "A2A_ALLOWED_TARGETS_JSON"
 A2A_REQUIRE_HITL_ENV = "A2A_REQUIRE_HITL"
@@ -430,6 +432,7 @@ A2A_MAX_TIMEOUT_SECONDS_ENV = "A2A_MAX_TIMEOUT_SECONDS"
 # secret that agents must present as a bearer token on every MCP call.
 MCP_HUB_NAMESPACE = os.getenv("MCP_HUB_NAMESPACE", "mcp-hub").strip()
 MCP_AUTH_SECRET_NAME = os.getenv("MCP_AUTH_SECRET_NAME", "ai-agent-sandbox-mcp-auth").strip()
+HELM_RELEASE_NAME = os.getenv("HELM_RELEASE_NAME", "ai-agent-sandbox").strip() or "ai-agent-sandbox"
 OPEN_SANDBOX_RUNTIME_ENV: dict[str, str] = {
     "OPEN_SANDBOX_DOMAIN": os.getenv("OPEN_SANDBOX_DOMAIN", "").strip(),
     "OPEN_SANDBOX_PROTOCOL": os.getenv("OPEN_SANDBOX_PROTOCOL", "http").strip() or "http",
@@ -464,6 +467,9 @@ GOOSE_RUNTIME_CONFIG_FILES_ENV = "GOOSE_RUNTIME_CONFIG_FILES_JSON"
 CODEX_RUNTIME_EXTRA_ENV = get_json_env("CODEX_RUNTIME_EXTRA_ENV_JSON", {})
 CODEX_RUNTIME_CONFIG_FILES_ENV = "CODEX_RUNTIME_CONFIG_FILES_JSON"
 CODEX_MCP_SIDECARS_ENV = "CODEX_MCP_SIDECARS_JSON"
+OPENCODE_RUNTIME_EXTRA_ENV = get_json_env("OPENCODE_RUNTIME_EXTRA_ENV_JSON", {})
+OPENCODE_RUNTIME_CONFIG_FILES_ENV = "OPENCODE_RUNTIME_CONFIG_FILES_JSON"
+OPENCODE_MCP_SIDECARS_ENV = "OPENCODE_MCP_SIDECARS_JSON"
 AGENT_SKILL_FILES_ENV = "AGENT_SKILL_FILES_JSON"
 
 # Mapping of MCP server names (as referenced in skill frontmatter) to sidecar images.
@@ -583,6 +589,37 @@ PLATFORM_MANAGED_CODEX_ENV = {
     CODEX_MCP_SIDECARS_ENV,
 }
 
+PLATFORM_MANAGED_OPENCODE_ENV = {
+    "AGENT_MODEL",
+    "AGENT_NAME",
+    "AGENT_NAMESPACE",
+    "AGENT_SYSTEM_PROMPT",
+    "HELM_RELEASE_NAME",
+    "LITELLM_HOST",
+    "LITELLM_BASE_PATH",
+    "LITELLM_API_KEY",
+    "HOME",
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME",
+    "OPENCODE_CONFIG_DIR",
+    "OPENCODE_BIN",
+    "OPENCODE_WORKDIR",
+    "OPENCODE_PROVIDER",
+    "OPENCODE_MODEL",
+    "OPENCODE_SYSTEM_PROMPT",
+    "OPENCODE_DEFAULT_AGENT",
+    A2A_ALLOWED_CALLERS_ENV,
+    A2A_ALLOWED_TARGETS_ENV,
+    A2A_REQUIRE_HITL_ENV,
+    A2A_MAX_TIMEOUT_SECONDS_ENV,
+    OPENCODE_RUNTIME_CONFIG_FILES_ENV,
+    OPENCODE_MCP_SIDECARS_ENV,
+    "MCP_SERVERS",
+    "MCP_HUB_NAMESPACE",
+    "MCP_BEARER_TOKEN",
+    "GITHUB_MCP_TOKEN",
+} | set(OPEN_SANDBOX_RUNTIME_ENV)
+
 PLATFORM_MANAGED_AGENT_ENV = {
     "AGENT_DEFAULT_MODEL",
     "AGENT_MODEL",
@@ -630,7 +667,6 @@ PLATFORM_MANAGED_AGENT_ENV = {
     "MCP_BEARER_TOKEN",
     "GITHUB_MCP_TOKEN",
     "OPEN_SANDBOX_API_KEY",
-    "OPENROUTER_API_KEY",
 } | set(OPEN_SANDBOX_RUNTIME_ENV)
 
 
@@ -675,6 +711,15 @@ def codex_runtime_extra_env_items() -> list[dict[str, str]]:
     )
 
 
+def opencode_runtime_extra_env_items() -> list[dict[str, str]]:
+    return runtime_extra_env_items(
+        OPENCODE_RUNTIME_EXTRA_ENV,
+        source_env_name="OPENCODE_RUNTIME_EXTRA_ENV_JSON",
+        runtime_name="opencode runtime",
+        platform_managed_names=PLATFORM_MANAGED_OPENCODE_ENV,
+    )
+
+
 def agent_runtime_extra_env_items() -> list[dict[str, str]]:
     return runtime_extra_env_items(
         AGENT_RUNTIME_EXTRA_ENV,
@@ -716,13 +761,47 @@ def merged_codex_runtime_config_files(spec: dict[str, Any]) -> dict[str, Any]:
     else:
         raise kopf.PermanentError("AIAgent.spec.runtime.codex must be an object when provided.")
 
-    # Merge chart-wide defaults with agent-specific overrides
-    chart_files = CODEX_RUNTIME_EXTRA_ENV.get(CODEX_RUNTIME_CONFIG_FILES_ENV)
-    merged: dict[str, Any] = {}
-    if isinstance(chart_files, dict):
-        merged.update(chart_files)
-    if isinstance(agent_config_files, dict):
-        merged.update(agent_config_files)
+    try:
+        chart_files = parse_runtime_config_files(
+            CODEX_RUNTIME_EXTRA_ENV.get(CODEX_RUNTIME_CONFIG_FILES_ENV),
+            source=f"CODEX_RUNTIME_EXTRA_ENV_JSON.{CODEX_RUNTIME_CONFIG_FILES_ENV}",
+        )
+        agent_files = parse_runtime_config_files(
+            agent_config_files,
+            source="AIAgent.spec.runtime.codex.configFiles",
+        )
+    except ValueError as exc:
+        raise kopf.PermanentError(str(exc)) from exc
+
+    merged = dict(chart_files)
+    merged.update(agent_files)
+    return merged
+
+
+def merged_opencode_runtime_config_files(spec: dict[str, Any]) -> dict[str, Any]:
+    runtime_spec = spec.get("runtime") or {}
+    opencode_spec = runtime_spec.get("opencode")
+    if opencode_spec is None:
+        agent_config_files: Any = None
+    elif isinstance(opencode_spec, dict):
+        agent_config_files = opencode_spec.get("configFiles")
+    else:
+        raise kopf.PermanentError("AIAgent.spec.runtime.opencode must be an object when provided.")
+
+    try:
+        chart_files = parse_runtime_config_files(
+            OPENCODE_RUNTIME_EXTRA_ENV.get(OPENCODE_RUNTIME_CONFIG_FILES_ENV),
+            source=f"OPENCODE_RUNTIME_EXTRA_ENV_JSON.{OPENCODE_RUNTIME_CONFIG_FILES_ENV}",
+        )
+        agent_files = parse_runtime_config_files(
+            agent_config_files,
+            source="AIAgent.spec.runtime.opencode.configFiles",
+        )
+    except ValueError as exc:
+        raise kopf.PermanentError(str(exc)) from exc
+
+    merged = dict(chart_files)
+    merged.update(agent_files)
     return merged
 
 
@@ -1002,6 +1081,7 @@ def validate_runtime_configuration(runtime_kind: str, spec: dict[str, Any]) -> N
     runtime_spec = spec.get("runtime") or {}
     goose_spec = runtime_spec.get("goose") if isinstance(runtime_spec, dict) else None
     codex_spec = runtime_spec.get("codex") if isinstance(runtime_spec, dict) else None
+    opencode_spec = runtime_spec.get("opencode") if isinstance(runtime_spec, dict) else None
     explicit_sidecars = spec.get("mcpSidecars")
     github_config = spec.get("githubConfig")
     try:
@@ -1025,6 +1105,10 @@ def validate_runtime_configuration(runtime_kind: str, spec: dict[str, Any]) -> N
         if codex_spec is not None:
             raise kopf.PermanentError(
                 "AIAgent.spec.runtime.codex is only supported when spec.runtime.kind is 'codex'."
+            )
+        if opencode_spec is not None:
+            raise kopf.PermanentError(
+                "AIAgent.spec.runtime.opencode is only supported when spec.runtime.kind is 'opencode'."
             )
         if goose_spec is not None and not isinstance(goose_spec, dict):
             raise kopf.PermanentError("AIAgent.spec.runtime.goose must be an object when provided.")
@@ -1052,6 +1136,10 @@ def validate_runtime_configuration(runtime_kind: str, spec: dict[str, Any]) -> N
             raise kopf.PermanentError(
                 "AIAgent.spec.runtime.goose is only supported when spec.runtime.kind is 'goose'."
             )
+        if opencode_spec is not None:
+            raise kopf.PermanentError(
+                "AIAgent.spec.runtime.opencode is only supported when spec.runtime.kind is 'opencode'."
+            )
         if codex_spec is not None and not isinstance(codex_spec, dict):
             raise kopf.PermanentError("AIAgent.spec.runtime.codex must be an object when provided.")
         try:
@@ -1069,6 +1157,28 @@ def validate_runtime_configuration(runtime_kind: str, spec: dict[str, Any]) -> N
             raise kopf.PermanentError(
                 "Codex runtime integration does not yet support spec.githubConfig. Use the LangGraph runtime for shared GitHub MCP access today."
             )
+    elif runtime_kind == "opencode":
+        if goose_spec is not None:
+            raise kopf.PermanentError(
+                "AIAgent.spec.runtime.goose is only supported when spec.runtime.kind is 'goose'."
+            )
+        if codex_spec is not None:
+            raise kopf.PermanentError(
+                "AIAgent.spec.runtime.codex is only supported when spec.runtime.kind is 'codex'."
+            )
+        if opencode_spec is not None and not isinstance(opencode_spec, dict):
+            raise kopf.PermanentError("AIAgent.spec.runtime.opencode must be an object when provided.")
+        try:
+            parse_runtime_config_files(
+                (opencode_spec or {}).get("configFiles") if isinstance(opencode_spec, dict) else None,
+                source="AIAgent.spec.runtime.opencode.configFiles",
+            )
+        except ValueError as exc:
+            raise kopf.PermanentError(str(exc)) from exc
+        if spec.get("githubConfig"):
+            raise kopf.PermanentError(
+                "OpenCode runtime integration does not yet support spec.githubConfig because the shared GitHub hub service is exposed through an HTTP adapter rather than a native MCP endpoint. Use sidecar-based GitHub MCP or the LangGraph runtime for shared GitHub MCP access today."
+            )
     else:
         # langgraph
         if goose_spec is not None:
@@ -1078,6 +1188,10 @@ def validate_runtime_configuration(runtime_kind: str, spec: dict[str, Any]) -> N
         if codex_spec is not None:
             raise kopf.PermanentError(
                 "AIAgent.spec.runtime.codex is only supported when spec.runtime.kind is 'codex'."
+            )
+        if opencode_spec is not None:
+            raise kopf.PermanentError(
+                "AIAgent.spec.runtime.opencode is only supported when spec.runtime.kind is 'opencode'."
             )
 
 
@@ -1594,6 +1708,7 @@ def create_agent_statefulset_manifest(
         {"name": "AGENT_NAME", "value": name},
         {"name": "AGENT_NAMESPACE", "value": namespace},
         {"name": "AGENT_SYSTEM_PROMPT", "value": system_prompt},
+        {"name": "HELM_RELEASE_NAME", "value": HELM_RELEASE_NAME},
         {"name": "API_GATEWAY_INTERNAL_URL", "value": resolved_api_gateway_internal_url()},
         {
             "name": "API_GATEWAY_SHARED_TOKEN",
@@ -1718,6 +1833,59 @@ def create_agent_statefulset_manifest(
                 }
             )
         env.extend(codex_runtime_extra_env_items())
+    elif runtime_kind == "opencode":
+        agent_image = OPENCODE_RUNTIME_IMAGE
+        agent_image_pull_policy = OPENCODE_RUNTIME_IMAGE_PULL_POLICY
+        opencode_config_files = merged_opencode_runtime_config_files(spec)
+        volume_mounts.append({"name": "workspace-volume", "mountPath": "/workspace"})
+        volumes.append({"name": "workspace-volume", "emptyDir": {}})
+        env.extend(
+            [
+                {"name": "OPENCODE_PROVIDER", "value": OPENCODE_DEFAULT_PROVIDER},
+                {"name": "OPENCODE_MODEL", "value": model},
+                {"name": "OPENCODE_SYSTEM_PROMPT", "value": system_prompt},
+                {"name": "OPENCODE_DEFAULT_AGENT", "value": "build"},
+                {"name": "LITELLM_HOST", "value": f"http://{LITELLM_SVC}:4000"},
+                {"name": "LITELLM_BASE_PATH", "value": "v1/chat/completions"},
+                {"name": "MCP_SERVERS", "value": ",".join(mcp_servers)},
+                {"name": "MCP_HUB_NAMESPACE", "value": MCP_HUB_NAMESPACE},
+                {
+                    "name": "LITELLM_API_KEY",
+                    "valueFrom": {
+                        "secretKeyRef": {
+                            "name": SECRET_NAME,
+                            "key": "LITELLM_MASTER_KEY",
+                            "optional": True,
+                        }
+                    },
+                },
+                {
+                    "name": "MCP_BEARER_TOKEN",
+                    "valueFrom": {
+                        "secretKeyRef": {
+                            "name": MCP_AUTH_SECRET_NAME,
+                            "key": "bearer-token",
+                            "optional": not bool(mcp_servers),
+                        }
+                    },
+                },
+            ]
+        )
+        if opencode_config_files:
+            env.append(
+                {
+                    "name": OPENCODE_RUNTIME_CONFIG_FILES_ENV,
+                    "value": json.dumps(opencode_config_files, ensure_ascii=False, sort_keys=True),
+                }
+            )
+        if mcp_sidecars:
+            env.append(
+                {
+                    "name": OPENCODE_MCP_SIDECARS_ENV,
+                    "value": json.dumps(mcp_sidecars, ensure_ascii=False, sort_keys=True),
+                }
+            )
+        env.extend(opencode_runtime_extra_env_items())
     else:
         if AGENT_LOCAL_TOOL_MOUNT_WORKSPACE:
             volume_mounts.append({"name": "workspace-volume", "mountPath": "/workspace"})
@@ -1783,16 +1951,6 @@ def create_agent_statefulset_manifest(
                         "secretKeyRef": {
                             "name": SECRET_NAME,
                             "key": "LITELLM_MASTER_KEY",
-                            "optional": True,
-                        }
-                    },
-                },
-                {
-                    "name": "OPENROUTER_API_KEY",
-                    "valueFrom": {
-                        "secretKeyRef": {
-                            "name": SECRET_NAME,
-                            "key": "OPENROUTER_API_KEY",
                             "optional": True,
                         }
                     },
@@ -1902,7 +2060,7 @@ def create_agent_statefulset_manifest(
     }
 
     containers = [agent_container]
-    if runtime_kind in {"langgraph", "codex"}:
+    if runtime_kind in {"langgraph", "codex", "opencode"}:
         for index, sidecar_spec in enumerate(mcp_sidecars):
             sidecar_name = sidecar_spec.get("name", f"tool-{index}")
             sidecar_port = sidecar_spec.get("port", 8080)
@@ -2441,10 +2599,9 @@ def create_agent_resources(spec: dict[str, Any], name: str, namespace: str, logg
     if mcp_auth_secret_manifest is not None:
         ensure_secret(namespace, mcp_auth_secret_manifest)
     ensure_statefulset(namespace, statefulset_manifest)
-    if NETWORK_POLICY_ENABLED:
-        ensure_network_policy(namespace, network_policy_manifest)
-        ensure_network_policy(namespace, a2a_egress_policy_manifest)
-        ensure_network_policy(namespace, a2a_ingress_policy_manifest)
+    ensure_network_policy(namespace, network_policy_manifest)
+    ensure_network_policy(namespace, a2a_egress_policy_manifest)
+    ensure_network_policy(namespace, a2a_ingress_policy_manifest)
 
 
 @kopf.on.create("sandbox.enterprise.ai", "v1alpha1", "aiagents")  # type: ignore[arg-type]

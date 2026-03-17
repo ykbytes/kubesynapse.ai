@@ -20,6 +20,9 @@ agentctl agents discover workspace-assistant
 agentctl agents update goose-assistant --goose-config-file config.yaml=.goose/config.yaml
 agentctl agents update goose-assistant --goose-config-text prompts/review.md="Review changes conservatively."
 agentctl agents update goose-assistant --clear-goose-config-files
+agentctl agents update opencode-assistant --opencode-config-file opencode.json=.opencode/opencode.json
+agentctl agents update opencode-assistant --opencode-config-text agents/reviewer.md="---\ndescription: Review only\nmode: subagent\n---\nReview conservatively."
+agentctl agents update opencode-assistant --clear-opencode-config-files
 agentctl workflows update research-report-pipeline -f examples/sample-workflow.yaml
 agentctl evals delete --file examples/sample-eval.yaml --yes
 agentctl invoke research-assistant "Explain Kubernetes namespaces"
@@ -73,6 +76,14 @@ Goose-specific agent update flags:
 - `agentctl agents update NAME --clear-goose-config-files`
 
 The Goose config paths must stay relative to Goose's config root, for example `config.yaml` or `prompts/review.md`.
+
+OpenCode-specific agent update flags:
+
+- `agentctl agents update NAME --opencode-config-file RELATIVE_PATH=FILE`
+- `agentctl agents update NAME --opencode-config-text RELATIVE_PATH=TEXT`
+- `agentctl agents update NAME --clear-opencode-config-files`
+
+The OpenCode config paths must stay relative to the OpenCode config root, for example `opencode.json`, `agents/reviewer.md`, or `plugins/custom.ts`.
 
 Environment variables:
 

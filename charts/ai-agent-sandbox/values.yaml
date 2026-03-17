@@ -1,9 +1,6 @@
 global:
   imagePullSecrets: []
 
-networkPolicy:
-  enabled: true
-
 litellm:
   image:
     repository: ghcr.io/berriai/litellm
@@ -27,73 +24,9 @@ litellm:
         litellm_params:
           model: openai/gpt-4
           api_key: "os.environ/OPENAI_API_KEY"
-      - model_name: text-embedding-3-small
-        litellm_params:
-          model: openrouter/openai/text-embedding-3-small
-          api_key: "os.environ/OPENROUTER_API_KEY"
-      - model_name: openrouter/openai/gpt-4o-mini
+      - model_name: openrouter-gpt-4o-mini
         litellm_params:
           model: openrouter/openai/gpt-4o-mini
-          api_key: "os.environ/OPENROUTER_API_KEY"
-      - model_name: openrouter/openai/gpt-4o
-        litellm_params:
-          model: openrouter/openai/gpt-4o
-          api_key: "os.environ/OPENROUTER_API_KEY"
-      - model_name: openrouter/anthropic/claude-3.5-sonnet
-        litellm_params:
-          model: openrouter/anthropic/claude-3.5-sonnet
-          api_key: "os.environ/OPENROUTER_API_KEY"
-      - model_name: openrouter/anthropic/claude-3-haiku
-        litellm_params:
-          model: openrouter/anthropic/claude-3-haiku
-          api_key: "os.environ/OPENROUTER_API_KEY"
-      - model_name: openrouter/google/gemini-2.0-flash-001
-        litellm_params:
-          model: openrouter/google/gemini-2.0-flash-001
-          api_key: "os.environ/OPENROUTER_API_KEY"
-      - model_name: openrouter/google/gemini-pro-1.5
-        litellm_params:
-          model: openrouter/google/gemini-pro-1.5
-          api_key: "os.environ/OPENROUTER_API_KEY"
-      - model_name: openrouter/meta-llama/llama-3.1-70b-instruct
-        litellm_params:
-          model: openrouter/meta-llama/llama-3.1-70b-instruct
-          api_key: "os.environ/OPENROUTER_API_KEY"
-      - model_name: openrouter/meta-llama/llama-3.1-405b-instruct
-        litellm_params:
-          model: openrouter/meta-llama/llama-3.1-405b-instruct
-          api_key: "os.environ/OPENROUTER_API_KEY"
-      - model_name: openrouter/mistralai/mistral-large
-        litellm_params:
-          model: openrouter/mistralai/mistral-large
-          api_key: "os.environ/OPENROUTER_API_KEY"
-      - model_name: openrouter/deepseek/deepseek-chat
-        litellm_params:
-          model: openrouter/deepseek/deepseek-chat
-          api_key: "os.environ/OPENROUTER_API_KEY"
-      - model_name: openrouter/deepseek/deepseek-r1
-        litellm_params:
-          model: openrouter/deepseek/deepseek-r1
-          api_key: "os.environ/OPENROUTER_API_KEY"
-      - model_name: openrouter/qwen/qwen-2.5-72b-instruct
-        litellm_params:
-          model: openrouter/qwen/qwen-2.5-72b-instruct
-          api_key: "os.environ/OPENROUTER_API_KEY"
-      - model_name: openrouter/arcee-ai/trinity-large-preview:free
-        litellm_params:
-          model: openrouter/arcee-ai/trinity-large-preview:free
-          api_key: "os.environ/OPENROUTER_API_KEY"
-      - model_name: openrouter/z-ai/glm-4.5-air:free
-        litellm_params:
-          model: openrouter/z-ai/glm-4.5-air:free
-          api_key: "os.environ/OPENROUTER_API_KEY"
-      - model_name: openrouter/openrouter/hunter-alpha
-        litellm_params:
-          model: openrouter/openrouter/hunter-alpha
-          api_key: "os.environ/OPENROUTER_API_KEY"
-      - model_name: openrouter/nvidia/nemotron-3-super-120b-a12b:free
-        litellm_params:
-          model: openrouter/nvidia/nemotron-3-super-120b-a12b:free
           api_key: "os.environ/OPENROUTER_API_KEY"
     general_settings:
       master_key: "os.environ/LITELLM_MASTER_KEY"
@@ -106,8 +39,8 @@ agentRuntime:
   env: {}
   allowedModels: []
   autonomy:
-    maxSteps: 12
-    maxStepsLimit: 25
+    maxSteps: 4
+    maxStepsLimit: 12
     doomLoopThreshold: 3
     supervisorHistoryLimit: 8
     supervisorResponseChars: 12000
@@ -220,6 +153,34 @@ codexRuntime:
   # Or paste the contents of ~/.codex/auth.json from a supported Codex login.
   # GitHub Copilot / VS Code Copilot credentials are not supported by upstream Codex auth.
 
+opencodeRuntime:
+  image:
+    repository: docker.io/yakdhane/ai-opencode-runtime
+    tag: latest
+    pullPolicy: Always
+  provider: litellm
+  env: {}
+  # Example OpenCode settings:
+  # env:
+  #   OPENCODE_AGENT_STEPS: 24
+  #   OPENCODE_SESSION_INIT_ON_CREATE: "true"
+  #   OPENCODE_AUTONOMOUS_MAX_RETRIES: "4"
+  #   OPENCODE_AUTONOMOUS_MAX_TURNS: "14"
+  #   OPENCODE_COMPACTION_TOKEN_THRESHOLD: "0.75"
+  #   OPENCODE_PLAN_THRESHOLD_CHARS: "500"
+  #   OPENCODE_RUNTIME_CONFIG_FILES_JSON:
+  #     agents/reviewer.md: |
+  #       ---
+  #       description: Review code without editing it
+  #       mode: subagent
+  #       tools:
+  #         write: false
+  #         edit: false
+  #       ---
+  #       Focus on regressions, operational risk, and missing tests.
+  #     plugins/notify.ts: |
+  #       export const NotifyPlugin = async () => ({})
+
 operator:
   replicaCount: 2
   image:
@@ -238,8 +199,8 @@ operator:
       cpu: "500m"
       memory: "512Mi"
   clusterSecretStoreName: ""
-  runtimeTimeoutSeconds: 900
-  workerActiveDeadlineSeconds: 3600
+  runtimeTimeoutSeconds: 360
+  workerActiveDeadlineSeconds: 1800
   workerTtlSecondsAfterFinished: 3600
   evalSchedulePollSeconds: 60
   evalQueueStaleSeconds: 600

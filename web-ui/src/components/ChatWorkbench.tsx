@@ -58,6 +58,10 @@ interface ChatWorkbenchProps {
   gooseMaxTurns: string;
   gooseWorkingDirectory: string;
   gooseSystemPrompt: string;
+  opencodeOutputFormat: string;
+  opencodeAutonomous: boolean;
+  opencodeMaxTurns: string;
+  opencodeWorkingDirectory: string;
   emptyMessage: string;
   error: string;
   onPromptChange: (value: string) => void;
@@ -73,6 +77,10 @@ interface ChatWorkbenchProps {
   onClearSpecialistTeam: () => void;
   onGooseMaxTurnsChange: (value: string) => void;
   onGooseWorkingDirectoryChange: (value: string) => void;
+  onOpenCodeOutputFormatChange: (value: string) => void;
+  onOpenCodeAutonomousChange: (value: boolean) => void;
+  onOpenCodeMaxTurnsChange: (value: string) => void;
+  onOpenCodeWorkingDirectoryChange: (value: string) => void;
   canSubmit: boolean;
   onSubmit: () => void;
 }
@@ -291,6 +299,10 @@ export function ChatWorkbench({
   gooseMaxTurns,
   gooseWorkingDirectory,
   gooseSystemPrompt,
+  opencodeOutputFormat,
+  opencodeAutonomous,
+  opencodeMaxTurns,
+  opencodeWorkingDirectory,
   emptyMessage,
   error,
   onPromptChange,
@@ -306,6 +318,10 @@ export function ChatWorkbench({
   onClearSpecialistTeam,
   onGooseMaxTurnsChange,
   onGooseWorkingDirectoryChange,
+  onOpenCodeOutputFormatChange,
+  onOpenCodeAutonomousChange,
+  onOpenCodeMaxTurnsChange,
+  onOpenCodeWorkingDirectoryChange,
   canSubmit,
   onSubmit,
 }: ChatWorkbenchProps) {
@@ -722,6 +738,62 @@ export function ChatWorkbench({
             </div>
             <p className="text-[11px] text-amber-400">
               Goose system overrides are locked. Edit the agent definition to change this prompt.
+            </p>
+          </Section>
+        )}
+
+        {runtimeKind === "opencode" && (
+          <Section title="OpenCode run controls" badge="autonomous">
+            <div className="grid gap-2 sm:grid-cols-2">
+              <div className="space-y-1">
+                <Label className="text-[11px]">Output format</Label>
+                <Select value={opencodeOutputFormat} onValueChange={onOpenCodeOutputFormatChange}>
+                  <SelectTrigger className="h-7 text-xs">
+                    <SelectValue placeholder="text (default)" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="text">text</SelectItem>
+                    <SelectItem value="json">json</SelectItem>
+                    <SelectItem value="stream-json">stream-json</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1">
+                <Label className="text-[11px]">Max turns</Label>
+                <Input
+                  className="h-7 text-xs"
+                  type="number"
+                  min="1"
+                  placeholder="runtime default"
+                  value={opencodeMaxTurns}
+                  onChange={(e) => onOpenCodeMaxTurnsChange(e.target.value)}
+                />
+              </div>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <div className="space-y-1">
+                <Label className="text-[11px]">Working directory</Label>
+                <Input
+                  className="h-7 text-xs font-mono"
+                  placeholder="workspace/subdir"
+                  value={opencodeWorkingDirectory}
+                  onChange={(e) => onOpenCodeWorkingDirectoryChange(e.target.value)}
+                />
+              </div>
+              <div className="flex items-center gap-2 pt-4">
+                <label className="flex items-center gap-1.5 cursor-pointer text-xs">
+                  <input
+                    type="checkbox"
+                    checked={opencodeAutonomous}
+                    onChange={(e) => onOpenCodeAutonomousChange(e.target.checked)}
+                    className="h-3.5 w-3.5 rounded border-input"
+                  />
+                  Autonomous mode
+                </label>
+              </div>
+            </div>
+            <p className="text-[11px] text-amber-400">
+              Autonomous mode enables multi-turn execution with context-overflow recovery and automatic agent selection.
             </p>
           </Section>
         )}

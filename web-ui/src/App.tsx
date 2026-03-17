@@ -268,6 +268,7 @@ function AppLayout() {
                 a2aAllowedCallersText={ws.createAgentA2AAllowedCallersText}
                 skillFileDrafts={ws.createAgentSkillFileDrafts}
                 gooseConfigFileDrafts={ws.createAgentGooseConfigFileDrafts}
+                opencodeConfigFileDrafts={ws.createAgentOpenCodeConfigFileDrafts}
                 isCreating={ws.isCreatingAgent}
                 error={ws.createError}
                 onMcpServersTextChange={ws.setCreateAgentMcpServersText}
@@ -279,6 +280,7 @@ function AppLayout() {
                 onA2AAllowedCallersTextChange={ws.setCreateAgentA2AAllowedCallersText}
                 onSkillFileDraftsChange={ws.setCreateAgentSkillFileDrafts}
                 onGooseConfigFileDraftsChange={ws.setCreateAgentGooseConfigFileDrafts}
+                onOpenCodeConfigFileDraftsChange={ws.setCreateAgentOpenCodeConfigFileDrafts}
                 gitForm={ws.createAgentGitForm}
                 onGitFormChange={ws.setCreateAgentGitForm}
                 githubForm={ws.createAgentGitHubForm}
@@ -312,7 +314,7 @@ function AppLayout() {
                         isSaving={ws.savingAgent}
                         isDeleting={ws.deletingAgent}
                         error={ws.agentManageError}
-                        onSave={(payload, a2aText, skills, gooseFiles) => void ws.handleSaveAgent(payload, a2aText, skills, gooseFiles)}
+                        onSave={(payload, a2aText, skills, gooseFiles, opencodeFiles) => void ws.handleSaveAgent(payload, a2aText, skills, gooseFiles, opencodeFiles)}
                         onDelete={() => void handleDeleteAgentFull()}
                       />
                     ) : (
@@ -362,6 +364,14 @@ function AppLayout() {
                         onClearSpecialistTeam={chat.clearSpecialistTeam}
                         onGooseMaxTurnsChange={chat.setGooseMaxTurns}
                         onGooseWorkingDirectoryChange={chat.setGooseWorkingDirectory}
+                        opencodeOutputFormat={chat.selectedOpenCodeChatSettings.outputFormat}
+                        opencodeAutonomous={chat.selectedOpenCodeChatSettings.autonomous}
+                        opencodeMaxTurns={chat.selectedOpenCodeChatSettings.maxTurns}
+                        opencodeWorkingDirectory={chat.selectedOpenCodeChatSettings.workingDirectory}
+                        onOpenCodeOutputFormatChange={chat.setOpenCodeOutputFormat}
+                        onOpenCodeAutonomousChange={chat.setOpenCodeAutonomous}
+                        onOpenCodeMaxTurnsChange={chat.setOpenCodeMaxTurns}
+                        onOpenCodeWorkingDirectoryChange={chat.setOpenCodeWorkingDirectory}
                         canSubmit={chat.canSubmitChat}
                         onSubmit={() => void chat.handleSubmit()}
                       />

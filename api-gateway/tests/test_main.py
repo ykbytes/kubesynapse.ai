@@ -155,6 +155,45 @@ class GatewayRuntimeValidationTests(unittest.TestCase):
 
         api_gateway_main.validate_invoke_runtime_compatibility("goose", request)
 
+    def test_goose_invoke_rejects_opencode_only_fields(self) -> None:
+        request = api_gateway_main.InvokeRequest(
+            prompt="hello",
+            output_format="json",
+            output_schema={"type": "object"},
+            max_retries=2,
+            autonomous=False,
+        )
+
+        with self.assertRaises(HTTPException) as context:
+            api_gateway_main.validate_invoke_runtime_compatibility("goose", request)
+
+        self.assertIn("output_format", str(context.exception.detail))
+        self.assertIn("output_schema", str(context.exception.detail))
+        self.assertIn("max_retries", str(context.exception.detail))
+        self.assertIn("autonomous", str(context.exception.detail))
+
+    def test_opencode_invoke_allows_opencode_only_fields(self) -> None:
+        request = api_gateway_main.InvokeRequest(
+            prompt="hello",
+            output_format="json",
+            output_schema={"type": "object", "properties": {"ok": {"type": "boolean"}}},
+            max_retries=2,
+            structured_output_retry_count=3,
+            autonomous=False,
+        )
+
+        api_gateway_main.validate_invoke_runtime_compatibility("opencode", request)
+
+    def test_goose_invoke_rejects_structured_output_retry_count(self) -> None:
+        request = api_gateway_main.InvokeRequest(
+            prompt="hello",
+            structured_output_retry_count=3,
+        )
+        with self.assertRaises(HTTPException) as ctx:
+            api_gateway_main.validate_invoke_runtime_compatibility("goose", request)
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertIn("structured_output_retry_count", ctx.exception.detail)
+
     def test_delete_is_allowed_for_cors(self) -> None:
         cors_middleware = next(
             middleware
@@ -254,6 +293,23 @@ class GatewayRuntimeValidationTests(unittest.TestCase):
         self.assertEqual(context.exception.status_code, 400)
         self.assertIn("permissions", str(context.exception.detail))
 
+    def test_parse_opencode_config_files_normalizes_relative_paths(self) -> None:
+        parsed = api_gateway_main.parse_opencode_config_files(
+            {
+                " opencode.json ": {"default_agent": "build"},
+                "plugins\\notify.ts": "export const NotifyPlugin = async () => ({})",
+            },
+            source="opencode_config_files",
+        )
+
+        self.assertEqual(
+            parsed,
+            {
+                "opencode.json": {"default_agent": "build"},
+                "plugins/notify.ts": "export const NotifyPlugin = async () => ({})",
+            },
+        )
+
     def test_parse_agent_skills_config_normalizes_markdown_paths(self) -> None:
         parsed = api_gateway_main.parse_agent_skills_config(
             {
@@ -299,6 +355,22 @@ class GatewayRuntimeValidationTests(unittest.TestCase):
         self.assertEqual(
             spec["runtime"]["goose"]["configFiles"],
             {"config.yaml": {"GOOSE_MODE": "smart_approve"}},
+        )
+
+    def test_build_agent_spec_includes_opencode_config_files(self) -> None:
+        request = api_gateway_main.CreateAgentRequest(
+            name="opencode-agent",
+            model="gpt-4",
+            runtime_kind="opencode",
+            opencode_config_files={"opencode.json": {"default_agent": "build"}},
+        )
+
+        spec = api_gateway_main.build_agent_spec(request)
+
+        self.assertEqual(spec["runtime"]["kind"], "opencode")
+        self.assertEqual(
+            spec["runtime"]["opencode"]["configFiles"],
+            {"opencode.json": {"default_agent": "build"}},
         )
 
     def test_build_agent_spec_includes_a2a_config(self) -> None:
@@ -380,6 +452,26 @@ class GatewayRuntimeValidationTests(unittest.TestCase):
             {"config.yaml": {"GOOSE_MODE": "smart_approve"}},
         )
 
+    def test_build_agent_spec_preserves_existing_opencode_config_files_on_update(self) -> None:
+        request = api_gateway_main.UpdateAgentRequest(model="gpt-4")
+
+        spec = api_gateway_main.build_agent_spec(
+            request,
+            existing_spec={
+                "model": "gpt-4",
+                "runtime": {
+                    "kind": "opencode",
+                    "opencode": {"configFiles": {"opencode.json": {"default_agent": "build"}}},
+                },
+            },
+        )
+
+        self.assertEqual(spec["runtime"]["kind"], "opencode")
+        self.assertEqual(
+            spec["runtime"]["opencode"]["configFiles"],
+            {"opencode.json": {"default_agent": "build"}},
+        )
+
     def test_build_agent_spec_preserves_existing_skills_on_update(self) -> None:
         request = api_gateway_main.UpdateAgentRequest(model="gpt-4")
 
@@ -419,6 +511,20 @@ class GatewayRuntimeValidationTests(unittest.TestCase):
         self.assertEqual(context.exception.status_code, 400)
         self.assertIn("runtime_kind", str(context.exception.detail))
 
+    def test_build_agent_spec_rejects_opencode_config_files_for_langgraph(self) -> None:
+        request = api_gateway_main.CreateAgentRequest(
+            name="langgraph-agent",
+            model="gpt-4",
+            runtime_kind="langgraph",
+            opencode_config_files={"opencode.json": {"default_agent": "build"}},
+        )
+
+        with self.assertRaises(HTTPException) as context:
+            api_gateway_main.build_agent_spec(request)
+
+        self.assertEqual(context.exception.status_code, 400)
+        self.assertIn("runtime_kind", str(context.exception.detail))
+
     def test_agent_detail_from_resource_exposes_goose_config_files(self) -> None:
         detail = api_gateway_main.agent_detail_from_resource(
             {
@@ -439,6 +545,27 @@ class GatewayRuntimeValidationTests(unittest.TestCase):
         )
 
         self.assertEqual(detail.goose_config_files, {"config.yaml": {"GOOSE_MODE": "smart_approve"}})
+
+    def test_agent_detail_from_resource_exposes_opencode_config_files(self) -> None:
+        detail = api_gateway_main.agent_detail_from_resource(
+            {
+                "metadata": {
+                    "name": "opencode-agent",
+                    "namespace": "default",
+                    "creationTimestamp": "2026-03-11T00:00:00Z",
+                },
+                "spec": {
+                    "model": "gpt-4",
+                    "systemPrompt": "stay precise",
+                    "runtime": {
+                        "kind": "opencode",
+                        "opencode": {"configFiles": {"opencode.json": {"default_agent": "build"}}},
+                    },
+                },
+            }
+        )
+
+        self.assertEqual(detail.opencode_config_files, {"opencode.json": {"default_agent": "build"}})
 
     def test_agent_detail_from_resource_exposes_a2a_config(self) -> None:
         detail = api_gateway_main.agent_detail_from_resource(

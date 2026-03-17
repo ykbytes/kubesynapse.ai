@@ -719,6 +719,14 @@ def normalize_goose_config_files_value(value: Any, field_name: str) -> dict[str,
     return dict(value)
 
 
+def normalize_opencode_config_files_value(value: Any, field_name: str) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(f"{field_name} must be an object keyed by relative OpenCode config file paths.")
+    return dict(value)
+
+
 def normalize_agent_skills_value(value: Any, field_name: str) -> dict[str, Any]:
     if value is None:
         return {}
@@ -827,6 +835,36 @@ def build_goose_config_files_payload(
     return merged
 
 
+def build_opencode_config_files_payload(
+    current: Any,
+    *,
+    clear_existing: bool = False,
+    file_assignments: list[str] | None = None,
+    text_assignments: list[str] | None = None,
+) -> dict[str, Any]:
+    merged = {} if clear_existing else normalize_opencode_config_files_value(current, "opencode_config_files")
+
+    for assignment in file_assignments or []:
+        relative_path, source_path_text = parse_goose_config_assignment(
+            assignment,
+            field_name="--opencode-config-file",
+        )
+        source_path = Path(source_path_text)
+        try:
+            merged[relative_path] = source_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise ValueError(f"Failed to read OpenCode config source file {source_path}: {exc}") from exc
+
+    for assignment in text_assignments or []:
+        relative_path, inline_text = parse_goose_config_assignment(
+            assignment,
+            field_name="--opencode-config-text",
+        )
+        merged[relative_path] = inline_text
+
+    return merged
+
+
 def agent_payload_from_detail(detail: dict[str, Any]) -> dict[str, Any]:
     return {
         "model": str(detail.get("model", "")),
@@ -843,6 +881,10 @@ def agent_payload_from_detail(detail: dict[str, Any]) -> dict[str, Any]:
             detail.get("goose_config_files"),
             "goose_config_files",
         ),
+        "opencode_config_files": normalize_opencode_config_files_value(
+            detail.get("opencode_config_files"),
+            "opencode_config_files",
+        ),
     }
 
 
@@ -853,6 +895,7 @@ def coerce_agent_payload(document: dict[str, Any], *, for_update: bool) -> tuple
         storage = spec.get("storage") if isinstance(spec.get("storage"), dict) else {}
         runtime = spec.get("runtime") if isinstance(spec.get("runtime"), dict) else {}
         goose_runtime = runtime.get("goose") if isinstance(runtime.get("goose"), dict) else {}
+        opencode_runtime = runtime.get("opencode") if isinstance(runtime.get("opencode"), dict) else {}
         payload: dict[str, Any] = {
             "model": str(spec.get("model", "")),
             "system_prompt": str(spec.get("systemPrompt", "")),
@@ -867,6 +910,10 @@ def coerce_agent_payload(document: dict[str, Any], *, for_update: bool) -> tuple
             "goose_config_files": normalize_goose_config_files_value(
                 goose_runtime.get("configFiles"),
                 "runtime.goose.configFiles",
+            ),
+            "opencode_config_files": normalize_opencode_config_files_value(
+                opencode_runtime.get("configFiles"),
+                "runtime.opencode.configFiles",
             ),
         }
         if not for_update:
@@ -897,6 +944,10 @@ def coerce_agent_payload(document: dict[str, Any], *, for_update: bool) -> tuple
         "goose_config_files": normalize_goose_config_files_value(
             snake_or_camel(payload, "goose_config_files", "gooseConfigFiles", {}),
             "goose_config_files",
+        ),
+        "opencode_config_files": normalize_opencode_config_files_value(
+            snake_or_camel(payload, "opencode_config_files", "opencodeConfigFiles", {}),
+            "opencode_config_files",
         ),
     }
     resource_name = str(snake_or_camel(payload, "name", "name", metadata.get("name", "")) or "")
@@ -1193,7 +1244,26 @@ def invoke(
     approval_action: str | None = typer.Option(None, "--approval-action", help="Approval action label."),
     no_session: bool = typer.Option(False, "--no-session", help="Disable Goose session persistence for this invoke."),
     max_turns: int | None = typer.Option(None, "--max-turns", min=1, help="Limit Goose autonomous turns for this invoke."),
+    max_retries: int | None = typer.Option(None, "--max-retries", min=0, help="Limit OpenCode autonomous retries for this invoke."),
     debug: bool = typer.Option(False, "--debug", help="Enable Goose debug output for this invoke."),
+    output_format: str | None = typer.Option(
+        None,
+        "--output-format",
+        help="Preferred final output format for runtimes that support it: json, code, markdown, or text.",
+    ),
+    output_schema_file: Path | None = typer.Option(
+        None,
+        "--output-schema-file",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        help="JSON or YAML schema file used for OpenCode structured JSON output.",
+    ),
+    no_autonomous: bool = typer.Option(
+        False,
+        "--no-autonomous",
+        help="Disable OpenCode's autonomous completion prompt and retry flow for this invoke.",
+    ),
     working_directory: str | None = typer.Option(
         None,
         "--working-directory",
@@ -1270,6 +1340,10 @@ def invoke(
         fatal("Provide a prompt or set at least one specialist task when using specialist teams.")
     if no_session and thread_id:
         fatal("--thread-id cannot be combined with --no-session.")
+    if output_format and output_format.strip().lower() not in {"json", "code", "markdown", "text"}:
+        fatal("--output-format must be one of: json, code, markdown, text.")
+    if output_schema_file is not None and (output_format or "").strip().lower() not in {"", "json"}:
+        fatal("--output-schema-file can only be used with --output-format json.")
     if bool(a2a_target_agent) != bool(a2a_target_namespace):
         fatal("Pass both --a2a-target-agent and --a2a-target-namespace together.")
     if subagent_payloads and a2a_target_agent:
@@ -1294,8 +1368,23 @@ def invoke(
         payload["no_session"] = True
     if max_turns is not None:
         payload["max_turns"] = max_turns
+    if max_retries is not None:
+        payload["max_retries"] = max_retries
     if debug:
         payload["debug"] = True
+    if output_format:
+        payload["output_format"] = output_format.strip().lower()
+    if output_schema_file is not None:
+        try:
+            schema_payload = read_any_structured_file(output_schema_file)
+        except OSError as exc:
+            fatal(f"Failed to read output schema file: {exc}")
+        if not isinstance(schema_payload, dict):
+            fatal("--output-schema-file must contain a JSON or YAML object.")
+        payload["output_schema"] = schema_payload
+        payload.setdefault("output_format", "json")
+    if no_autonomous:
+        payload["autonomous"] = False
     if working_directory:
         payload["working_directory"] = working_directory
     if builtin:
@@ -1510,13 +1599,33 @@ def agents_update(
         "--clear-goose-config-files",
         help="Remove all existing agent-specific Goose config files before applying overrides.",
     ),
+    opencode_config_file: list[str] | None = typer.Option(
+        None,
+        "--opencode-config-file",
+        help="Map an OpenCode config-root path to a local file using RELATIVE_PATH=FILE. Can be repeated.",
+    ),
+    opencode_config_text: list[str] | None = typer.Option(
+        None,
+        "--opencode-config-text",
+        help="Set an OpenCode config-root file from inline text using RELATIVE_PATH=TEXT. Can be repeated.",
+    ),
+    clear_opencode_config_files: bool = typer.Option(
+        False,
+        "--clear-opencode-config-files",
+        help="Remove all existing agent-specific OpenCode config files before applying overrides.",
+    ),
 ) -> None:
-    """Update an agent from a file or patch Goose config files directly."""
+    """Update an agent from a file or patch runtime config files directly."""
     settings = ctx_settings(ctx)
     document: dict[str, Any] = {}
     inferred_name: str | None = None
     namespace = settings.namespace
-    override_requested = clear_goose_config_files or bool(goose_config_file) or bool(goose_config_text)
+    goose_override_requested = clear_goose_config_files or bool(goose_config_file) or bool(goose_config_text)
+    opencode_override_requested = clear_opencode_config_files or bool(opencode_config_file) or bool(opencode_config_text)
+    override_requested = goose_override_requested or opencode_override_requested
+
+    if goose_override_requested and opencode_override_requested:
+        fatal("Choose either Goose or OpenCode config override flags in a single update command, not both.")
 
     if file_path is not None:
         document = read_structured_file(file_path)
@@ -1524,7 +1633,7 @@ def agents_update(
         namespace = resolve_namespace(settings, document)
     else:
         if not override_requested:
-            fatal("Pass --file or at least one Goose config override flag.")
+            fatal("Pass --file or at least one runtime config override flag.")
         if not agent_name or not agent_name.strip():
             fatal("Agent name is required when updating without --file.")
         resolved_name = resolve_resource_name(agent_name, None, None, "agent")
@@ -1546,7 +1655,7 @@ def agents_update(
     resolved_name = resolve_resource_name(agent_name, file_path, inferred_name, "agent")
 
     try:
-        if override_requested:
+        if goose_override_requested:
             runtime_kind = str(payload.get("runtime_kind", "langgraph") or "langgraph").strip().lower() or "langgraph"
             if runtime_kind != "goose":
                 fatal(
@@ -1557,6 +1666,18 @@ def agents_update(
                 clear_existing=clear_goose_config_files,
                 file_assignments=goose_config_file,
                 text_assignments=goose_config_text,
+            )
+        if opencode_override_requested:
+            runtime_kind = str(payload.get("runtime_kind", "langgraph") or "langgraph").strip().lower() or "langgraph"
+            if runtime_kind != "opencode":
+                fatal(
+                    "OpenCode config overrides require an OpenCode agent/runtime. Switch the agent to runtime_kind=opencode first or update from a file that sets it."
+                )
+            payload["opencode_config_files"] = build_opencode_config_files_payload(
+                payload.get("opencode_config_files"),
+                clear_existing=clear_opencode_config_files,
+                file_assignments=opencode_config_file,
+                text_assignments=opencode_config_text,
             )
     except ValueError as exc:
         fatal(str(exc))

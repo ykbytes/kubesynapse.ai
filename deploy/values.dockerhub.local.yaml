@@ -2,45 +2,46 @@ global:
   imagePullSecrets:
     - dockerhub-regcred
 
-networkPolicy:
-  enabled: false
-
 agentRuntime:
   image:
-    repository: docker.io/yakdhane/ai-agent-sandbox-agent-runtime
-    tag: mcpfix9
-    pullPolicy: Never
-  env:
-    AGENT_USE_TOOL_CALLING: "false"
+    repository: docker.io/yakdhane/ai-agent-runtime
+    tag: registration-20260312-221904
+    pullPolicy: IfNotPresent
 
 operator:
   replicaCount: 1
   image:
     repository: docker.io/yakdhane/ai-operator
-    tag: wffix7
-    pullPolicy: Never
+    tag: registration-20260312-221904
+    pullPolicy: IfNotPresent
   workerImage:
     repository: docker.io/yakdhane/ai-operator
-    tag: wffix7
-    pullPolicy: Never
+    tag: registration-20260312-221904
+    pullPolicy: IfNotPresent
 
 gooseRuntime:
   image:
     repository: docker.io/yakdhane/ai-goose-runtime
-    tag: openrouter-20260315-123415
+    tag: registration-20260312-221904
     pullPolicy: IfNotPresent
 
-codexRuntime:
+opencodeRuntime:
   image:
-    repository: docker.io/yakdhane/ai-codex-runtime
-    tag: openrouter-20260315-123415
+    repository: docker.io/yakdhane/ai-opencode-runtime
+    tag: opencode-20260317-141603
     pullPolicy: IfNotPresent
+  env:
+    OPENCODE_SESSION_INIT_ON_CREATE: "true"
+    OPENCODE_AUTONOMOUS_MAX_RETRIES: "4"
+    OPENCODE_AUTONOMOUS_MAX_TURNS: "14"
+    OPENCODE_COMPACTION_TOKEN_THRESHOLD: "0.75"
+    OPENCODE_PLAN_THRESHOLD_CHARS: "500"
 
 apiGateway:
   image:
     repository: docker.io/yakdhane/ai-api-gateway
-    tag: dlfix4
-    pullPolicy: IfNotPresent
+    tag: fix-20260312-233109
+    pullPolicy: Always
   auth:
     mode: hybrid
     localAuthEnabled: true
@@ -50,14 +51,14 @@ webUi:
   enabled: true
   image:
     repository: docker.io/yakdhane/ai-agent-sandbox-web-ui
-    tag: dlfix
-    pullPolicy: IfNotPresent
+    tag: opencode-20260317-141603
+    pullPolicy: Always
 
 platformSecrets:
   mode: native
   native:
     openaiApiKey: ""
-    openrouterApiKey: "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"
+    openrouterApiKey: ""
     anthropicApiKey: ""
     litellmMasterKey: "minikube-dev-master-key"
     apiGatewaySharedToken: "minikube-dev-shared-token"
@@ -70,7 +71,7 @@ mcpHub:
     bearerToken: "minikube-dev-mcp-token"
   servers:
     github:
-      image: docker.io/yakdhane/mcp-github-adapter:openrouter-20260315-123415
+      image: docker.io/yakdhane/mcp-github-adapter:fix-20260312-233109
       imagePullPolicy: IfNotPresent
 
 skillsCatalog:
@@ -78,29 +79,29 @@ skillsCatalog:
 
 mcpToolSidecars:
   codeExec:
-    image: docker.io/yakdhane/mcp-code-exec:openrouter-20260315-123415
+    image: docker.io/yakdhane/mcp-code-exec:catalog-20260312-135631
     port: 8090
   webSearch:
-    image: docker.io/yakdhane/mcp-web-search:openrouter-20260315-123415
+    image: docker.io/yakdhane/mcp-web-search:catalog-20260312-135631
     port: 8091
   documents:
-    image: docker.io/yakdhane/mcp-documents:openrouter-20260315-123415
+    image: docker.io/yakdhane/mcp-documents:catalog-20260312-135631
     port: 8092
   browser:
-    image: docker.io/yakdhane/mcp-browser:openrouter-20260315-123415
+    image: docker.io/yakdhane/mcp-browser:catalog-20260312-135631
     port: 8093
   database:
-    image: docker.io/yakdhane/mcp-database:openrouter-20260315-123415
+    image: docker.io/yakdhane/mcp-database:catalog-20260312-135631
     port: 8094
   git:
-    image: docker.io/yakdhane/mcp-git:openrouter-20260315-123415
+    image: docker.io/yakdhane/mcp-git:catalog-20260312-135631
     port: 8095
   kubernetes:
-    image: docker.io/yakdhane/mcp-kubernetes:openrouter-20260315-123415
+    image: docker.io/yakdhane/mcp-kubernetes:catalog-20260312-135631
     port: 8096
   messaging:
-    image: docker.io/yakdhane/mcp-messaging:openrouter-20260315-123415
+    image: docker.io/yakdhane/mcp-messaging:catalog-20260312-135631
     port: 8097
   rag:
-    image: docker.io/yakdhane/mcp-rag:openrouter-20260315-123415
+    image: docker.io/yakdhane/mcp-rag:catalog-20260312-135631
     port: 8098

@@ -34,6 +34,15 @@ type GooseChatSettings = {
 
 const DEFAULT_GOOSE_CHAT_SETTINGS: GooseChatSettings = { maxTurns: "", workingDirectory: "" };
 
+type OpenCodeChatSettings = {
+  outputFormat: string;
+  autonomous: boolean;
+  maxTurns: string;
+  workingDirectory: string;
+};
+
+const DEFAULT_OPENCODE_CHAT_SETTINGS: OpenCodeChatSettings = { outputFormat: "text", autonomous: true, maxTurns: "", workingDirectory: "" };
+
 // ── Utility functions ──
 
 function createId(): string {
@@ -103,6 +112,25 @@ function normalizeGooseWorkingDirectory(value: string): string | undefined {
   return segments.join("/");
 }
 
+function parseOpenCodeMaxTurns(value: string): number | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  if (!/^\d+$/.test(trimmed)) throw new Error("OpenCode max turns must be a positive integer.");
+  const parsed = Number.parseInt(trimmed, 10);
+  if (parsed < 1) throw new Error("OpenCode max turns must be at least 1.");
+  return parsed;
+}
+
+function normalizeOpenCodeWorkingDirectory(value: string): string | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  if (/^(?:[A-Za-z]:[\\/]|\/)/.test(trimmed)) throw new Error("OpenCode working directory must stay inside the mounted workspace. Use a relative subdirectory.");
+  const segments = trimmed.replace(/\\+/g, "/").split("/").filter((s) => s.length > 0);
+  if (segments.length === 0) return undefined;
+  if (segments.some((s) => s === "." || s === "..")) throw new Error("OpenCode working directory must use a workspace-relative path without '.' or '..' segments.");
+  return segments.join("/");
+}
+
 // ── Context value type ──
 
 export interface ChatContextValue {
@@ -112,6 +140,7 @@ export interface ChatContextValue {
   summary: InvocationSummary | null;
   logs: string;
   selectedGooseChatSettings: GooseChatSettings;
+  selectedOpenCodeChatSettings: OpenCodeChatSettings;
   gooseSystemPromptPreview: string;
 
   // Chat UI state
@@ -161,6 +190,12 @@ export interface ChatContextValue {
   setGooseMaxTurns: (value: string) => void;
   setGooseWorkingDirectory: (value: string) => void;
 
+  // OpenCode settings
+  setOpenCodeOutputFormat: (value: string) => void;
+  setOpenCodeAutonomous: (value: boolean) => void;
+  setOpenCodeMaxTurns: (value: string) => void;
+  setOpenCodeWorkingDirectory: (value: string) => void;
+
   // Actions
   handleSubmit: () => Promise<void>;
   handleLoadLogs: () => Promise<void>;
@@ -192,6 +227,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const [summaryByAgent, setSummaryByAgent] = useState<Record<string, InvocationSummary | null>>({});
   const [logsByAgent, setLogsByAgent] = useState<Record<string, string>>({});
   const [gooseChatSettingsByAgent, setGooseChatSettingsByAgent] = useState<Record<string, GooseChatSettings>>({});
+  const [opencodeChatSettingsByAgent, setOpenCodeChatSettingsByAgent] = useState<Record<string, OpenCodeChatSettings>>({});
 
   const [prompt, setPrompt] = useState("");
   const [streamMode, setStreamMode] = useState(true);
@@ -222,7 +258,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const selectedGooseChatSettings = selectedAgentName
     ? gooseChatSettingsByAgent[selectedAgentName] ?? DEFAULT_GOOSE_CHAT_SETTINGS
     : DEFAULT_GOOSE_CHAT_SETTINGS;
-  const approvalSupported = selectedRuntimeKind === "langgraph";
+  const selectedOpenCodeChatSettings = selectedAgentName
+    ? opencodeChatSettingsByAgent[selectedAgentName] ?? DEFAULT_OPENCODE_CHAT_SETTINGS
+    : DEFAULT_OPENCODE_CHAT_SETTINGS;
+  const approvalSupported = selectedRuntimeKind === "langgraph" || selectedRuntimeKind === "opencode";
   const specialistTeamConfigured = hasSpecialistTeamEntries(specialistSubagents);
   const canSubmitChat = Boolean(prompt.trim() || specialistSubagents.some((i) => i.task.trim()));
   const gooseSystemPromptPreview = selectedAgentDetail?.system_prompt.trim()
@@ -268,11 +307,17 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     setGooseChatSettingsByAgent((prev) => ({ ...prev, [agentName]: updater(prev[agentName] ?? DEFAULT_GOOSE_CHAT_SETTINGS) }));
   }
 
+  function setOpenCodeChatSettingsForAgent(agentName: string, updater: (current: OpenCodeChatSettings) => OpenCodeChatSettings) {
+    setOpenCodeChatSettingsByAgent((prev) => ({ ...prev, [agentName]: updater(prev[agentName] ?? DEFAULT_OPENCODE_CHAT_SETTINGS) }));
+  }
+
   const removeAgentChatState = useCallback((agentName: string) => {
     setMessagesByAgent((prev) => { const n = { ...prev }; delete n[agentName]; return n; });
     setActivityByAgent((prev) => { const n = { ...prev }; delete n[agentName]; return n; });
     setSummaryByAgent((prev) => { const n = { ...prev }; delete n[agentName]; return n; });
     setLogsByAgent((prev) => { const n = { ...prev }; delete n[agentName]; return n; });
+    setGooseChatSettingsByAgent((prev) => { const n = { ...prev }; delete n[agentName]; return n; });
+    setOpenCodeChatSettingsByAgent((prev) => { const n = { ...prev }; delete n[agentName]; return n; });
     delete threadIdsRef.current[agentName];
     delete pendingRequestRef.current[agentName];
   }, []);
@@ -439,6 +484,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     const nextPrompt = prompt.trim();
     let gooseMaxTurns: number | undefined;
     let gooseWorkingDirectory: string | undefined;
+    let opencodeMaxTurns: number | undefined;
+    let opencodeWorkingDirectory: string | undefined;
     let explicitA2ATimeoutSeconds: number | undefined;
     let specialistPayload: InvokePayload["subagents"];
 
@@ -446,6 +493,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       try {
         gooseMaxTurns = parseGooseMaxTurns(selectedGooseChatSettings.maxTurns);
         gooseWorkingDirectory = normalizeGooseWorkingDirectory(selectedGooseChatSettings.workingDirectory);
+      } catch (err) { setChatError(err instanceof Error ? err.message : String(err)); return; }
+    }
+    if (selectedRuntimeKind === "opencode") {
+      try {
+        opencodeMaxTurns = parseOpenCodeMaxTurns(selectedOpenCodeChatSettings.maxTurns);
+        opencodeWorkingDirectory = normalizeOpenCodeWorkingDirectory(selectedOpenCodeChatSettings.workingDirectory);
       } catch (err) { setChatError(err instanceof Error ? err.message : String(err)); return; }
     }
     try { explicitA2ATimeoutSeconds = parseA2ATimeoutSeconds(a2aTimeoutSeconds); }
@@ -487,14 +540,17 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       a2a_target_agent: hasExplicitA2A ? normA2AAgent : undefined, a2a_target_namespace: hasExplicitA2A ? normA2ANs : undefined,
       a2a_timeout_seconds: explicitA2ATimeoutSeconds, subagents: specialistPayload,
       subagent_strategy: specialistPayload && specialistPayload.length > 0 ? subagentStrategy : undefined,
-      max_turns: gooseMaxTurns, working_directory: gooseWorkingDirectory,
+      max_turns: gooseMaxTurns ?? opencodeMaxTurns,
+      working_directory: gooseWorkingDirectory ?? opencodeWorkingDirectory,
+      output_format: selectedRuntimeKind === "opencode" ? selectedOpenCodeChatSettings.outputFormat || undefined : undefined,
+      autonomous: selectedRuntimeKind === "opencode" ? selectedOpenCodeChatSettings.autonomous : undefined,
     };
 
     setPrompt("");
     await runInvocation({ agentName, payload, userPrompt: nextPrompt, appendUserMessage: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, namespace, selectedAgentName, selectedRuntimeKind, prompt, canSubmitChat, streamMode, requireApproval,
-    a2aTargetAgent, a2aTargetNamespace, a2aTimeoutSeconds, specialistSubagents, subagentStrategy, selectedGooseChatSettings]);
+    a2aTargetAgent, a2aTargetNamespace, a2aTimeoutSeconds, specialistSubagents, subagentStrategy, selectedGooseChatSettings, selectedOpenCodeChatSettings]);
 
   // ── handleLoadLogs ──
 
@@ -582,9 +638,28 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedAgentName]);
 
+  // ── OpenCode settings ──
+
+  const setOpenCodeOutputFormat = useCallback((value: string) => {
+    setChatError(""); setOpenCodeChatSettingsForAgent(selectedAgentName, (cur) => ({ ...cur, outputFormat: value }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedAgentName]);
+  const setOpenCodeAutonomous = useCallback((value: boolean) => {
+    setChatError(""); setOpenCodeChatSettingsForAgent(selectedAgentName, (cur) => ({ ...cur, autonomous: value }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedAgentName]);
+  const setOpenCodeMaxTurns = useCallback((value: string) => {
+    setChatError(""); setOpenCodeChatSettingsForAgent(selectedAgentName, (cur) => ({ ...cur, maxTurns: value }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedAgentName]);
+  const setOpenCodeWorkingDirectory = useCallback((value: string) => {
+    setChatError(""); setOpenCodeChatSettingsForAgent(selectedAgentName, (cur) => ({ ...cur, workingDirectory: value }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedAgentName]);
+
   return (
     <ChatContext.Provider value={{
-      messages, activity, summary, logs, selectedGooseChatSettings, gooseSystemPromptPreview,
+      messages, activity, summary, logs, selectedGooseChatSettings, selectedOpenCodeChatSettings, gooseSystemPromptPreview,
       prompt, streamMode, requireApproval, approvalSupported, chatError, isSending, logsLoading, canSubmitChat, chatEmptyMessage,
       a2aTargetAgent, a2aTargetNamespace, a2aTimeoutSeconds,
       specialistSubagents, specialistTeamConfigured, subagentStrategy,
@@ -593,6 +668,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       setA2ATargetAgent, setA2ATargetNamespace, setA2ATimeoutSeconds, setSubagentStrategy,
       addSpecialistSubagent, updateSpecialistSubagent, removeSpecialistSubagent, clearSpecialistTeam,
       setGooseMaxTurns, setGooseWorkingDirectory,
+      setOpenCodeOutputFormat, setOpenCodeAutonomous, setOpenCodeMaxTurns, setOpenCodeWorkingDirectory,
       handleSubmit, handleLoadLogs, handleAgentApprovalDecision, handleWorkflowApprovalDecision,
       setMessagesForAgent, removeAgentChatState,
     }}>

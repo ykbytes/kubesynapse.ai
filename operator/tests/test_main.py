@@ -958,6 +958,74 @@ class StatefulSetReconcileTests(unittest.TestCase):
         apps_api.patch_namespaced_stateful_set.assert_called_once()
         core_api.patch_namespaced_persistent_volume_claim.assert_not_called()
 
+    def test_opencode_statefulset_manifest_includes_runtime_env_and_sidecars(self) -> None:
+        sidecars = [{"name": "browser", "image": "example/browser:latest", "port": 8081}]
+        manifest = operator_main.create_agent_statefulset_manifest(
+            "workspace-assistant",
+            "default",
+            {
+                "model": "gpt-4",
+                "runtime": {
+                    "kind": "opencode",
+                    "opencode": {
+                        "configFiles": {
+                            "agents/reviewer.md": "---\ndescription: Review only\nmode: subagent\n---\nReview conservatively."
+                        }
+                    },
+                },
+                "storage": {"size": "1Gi"},
+                "systemPrompt": "Be precise.",
+                "mcpServers": ["documents"],
+                "mcpSidecars": sidecars,
+            },
+            None,
+            {},
+        )
+
+        pod_spec = manifest["spec"]["template"]["spec"]
+        env = {
+            item["name"]: item.get("value")
+            for item in pod_spec["containers"][0]["env"]
+            if "value" in item
+        }
+        env_refs = {
+            item["name"]: item.get("valueFrom")
+            for item in pod_spec["containers"][0]["env"]
+            if "valueFrom" in item
+        }
+        container_names = [item["name"] for item in pod_spec["containers"]]
+
+        self.assertEqual(pod_spec["containers"][0]["image"], operator_main.OPENCODE_RUNTIME_IMAGE)
+        self.assertEqual(env["OPENCODE_PROVIDER"], operator_main.OPENCODE_DEFAULT_PROVIDER)
+        self.assertEqual(env["OPENCODE_MODEL"], "gpt-4")
+        self.assertEqual(env["MCP_SERVERS"], "documents")
+        self.assertEqual(env["HELM_RELEASE_NAME"], operator_main.HELM_RELEASE_NAME)
+        self.assertIn("agents/reviewer.md", json.loads(env[operator_main.OPENCODE_RUNTIME_CONFIG_FILES_ENV]))
+        self.assertEqual(json.loads(env[operator_main.OPENCODE_MCP_SIDECARS_ENV]), sidecars)
+        self.assertEqual(
+            env_refs["MCP_BEARER_TOKEN"]["secretKeyRef"]["key"],
+            "bearer-token",
+        )
+        self.assertIn("mcp-browser", container_names)
+
+    def test_opencode_runtime_rejects_shared_github_adapter_config(self) -> None:
+        with self.assertRaises(operator_main.kopf.PermanentError) as context:
+            operator_main.create_agent_statefulset_manifest(
+                "workspace-assistant",
+                "default",
+                {
+                    "model": "gpt-4",
+                    "runtime": {"kind": "opencode"},
+                    "storage": {"size": "1Gi"},
+                    "systemPrompt": "Be precise.",
+                    "githubConfig": {"credentialSecretRef": "github-creds"},
+                },
+                None,
+                {},
+            )
+
+        self.assertIn("shared GitHub hub service", str(context.exception))
+
 
 if __name__ == "__main__":
     unittest.main()

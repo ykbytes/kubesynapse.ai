@@ -1,4 +1,4 @@
-.PHONY: all build test test-goose-runtime-e2e lint docker-build docker-push helm-lint helm-package deploy clean ui-install ui-dev ui-build ui-preview docker-build-ui docker-push-ui docker-build-goose-runtime docker-push-goose-runtime docker-build-codex-runtime docker-push-codex-runtime docker-build-mcp-sidecars docker-push-mcp-sidecars docker-build-mcp-code-exec docker-push-mcp-code-exec docker-build-mcp-web-search docker-push-mcp-web-search docker-build-mcp-documents docker-push-mcp-documents docker-build-mcp-browser docker-push-mcp-browser docker-build-mcp-database docker-push-mcp-database docker-build-mcp-git docker-push-mcp-git docker-build-mcp-github-adapter docker-push-mcp-github-adapter docker-build-mcp-kubernetes docker-push-mcp-kubernetes docker-build-mcp-messaging docker-push-mcp-messaging docker-build-mcp-rag docker-push-mcp-rag
+.PHONY: all build test test-goose-runtime-e2e lint docker-build docker-push helm-lint helm-package deploy clean ui-install ui-dev ui-build ui-preview docker-build-ui docker-push-ui docker-build-goose-runtime docker-push-goose-runtime docker-build-codex-runtime docker-push-codex-runtime docker-build-opencode-runtime docker-push-opencode-runtime docker-build-mcp-sidecars docker-push-mcp-sidecars docker-build-mcp-code-exec docker-push-mcp-code-exec docker-build-mcp-web-search docker-push-mcp-web-search docker-build-mcp-documents docker-push-mcp-documents docker-build-mcp-browser docker-push-mcp-browser docker-build-mcp-database docker-push-mcp-database docker-build-mcp-git docker-push-mcp-git docker-build-mcp-github-adapter docker-push-mcp-github-adapter docker-build-mcp-kubernetes docker-push-mcp-kubernetes docker-build-mcp-messaging docker-push-mcp-messaging docker-build-mcp-rag docker-push-mcp-rag
 
 CONTAINER_CLI ?= podman
 CONTAINER_BUILD_FLAGS ?= --format docker
@@ -32,7 +32,7 @@ ui-preview:
 # Container images
 # ===========================
 
-docker-build: docker-build-operator docker-build-runtime docker-build-goose-runtime docker-build-codex-runtime docker-build-gateway docker-build-ui docker-build-mcp-sidecars
+docker-build: docker-build-operator docker-build-runtime docker-build-goose-runtime docker-build-codex-runtime docker-build-opencode-runtime docker-build-gateway docker-build-ui docker-build-mcp-sidecars
 
 docker-build-operator:
 	$(CONTAINER_CLI) build $(CONTAINER_BUILD_FLAGS) -t $(REGISTRY)/ai-operator:$(VERSION) ./operator
@@ -45,6 +45,9 @@ docker-build-goose-runtime:
 
 docker-build-codex-runtime:
 	$(CONTAINER_CLI) build $(CONTAINER_BUILD_FLAGS) -t $(REGISTRY)/ai-codex-runtime:$(VERSION) ./codex-runtime
+
+docker-build-opencode-runtime:
+	$(CONTAINER_CLI) build $(CONTAINER_BUILD_FLAGS) -t $(REGISTRY)/ai-opencode-runtime:$(VERSION) ./opencode-runtime
 
 docker-build-gateway:
 	$(CONTAINER_CLI) build $(CONTAINER_BUILD_FLAGS) -t $(REGISTRY)/ai-api-gateway:$(VERSION) ./api-gateway
@@ -84,7 +87,7 @@ docker-build-mcp-messaging:
 docker-build-mcp-rag:
 	$(CONTAINER_CLI) build $(CONTAINER_BUILD_FLAGS) -f ./mcp-sidecars/rag/Dockerfile -t $(REGISTRY)/mcp-rag:$(VERSION) ./mcp-sidecars
 
-docker-push: docker-push-operator docker-push-runtime docker-push-goose-runtime docker-push-codex-runtime docker-push-gateway docker-push-ui docker-push-mcp-sidecars
+docker-push: docker-push-operator docker-push-runtime docker-push-goose-runtime docker-push-codex-runtime docker-push-opencode-runtime docker-push-gateway docker-push-ui docker-push-mcp-sidecars
 
 docker-push-operator:
 	$(CONTAINER_CLI) push $(REGISTRY)/ai-operator:$(VERSION)
@@ -97,6 +100,9 @@ docker-push-goose-runtime:
 
 docker-push-codex-runtime:
 	$(CONTAINER_CLI) push $(REGISTRY)/ai-codex-runtime:$(VERSION)
+
+docker-push-opencode-runtime:
+	$(CONTAINER_CLI) push $(REGISTRY)/ai-opencode-runtime:$(VERSION)
 
 docker-push-gateway:
 	$(CONTAINER_CLI) push $(REGISTRY)/ai-api-gateway:$(VERSION)
@@ -145,6 +151,7 @@ test:
 	@if [ -d agent-runtime/tests ]; then cd agent-runtime && python -m pytest tests/ -v; else echo "No agent-runtime tests found"; fi
 	@if [ -d goose-runtime/tests ]; then cd goose-runtime && python -m pytest tests/ -v; else echo "No goose-runtime tests found"; fi
 	@if [ -d codex-runtime/tests ]; then cd codex-runtime && python -m pytest tests/ -v; else echo "No codex-runtime tests found"; fi
+	@if [ -d opencode-runtime/tests ]; then cd opencode-runtime && python -m pytest tests/ -v; else echo "No opencode-runtime tests found"; fi
 	@if [ -d api-gateway/tests ]; then cd api-gateway && python -m pytest tests/ -v; else echo "No api-gateway tests found"; fi
 	@if [ -d mcp-sidecars/github-adapter/tests ]; then cd mcp-sidecars/github-adapter && python -m pytest tests/ -v; else echo "No github adapter tests found"; fi
 
@@ -156,6 +163,7 @@ lint:
 	cd agent-runtime && python -m flake8 . --max-line-length=120
 	cd goose-runtime && python -m flake8 . --max-line-length=120
 	cd codex-runtime && python -m flake8 . --max-line-length=120
+	cd opencode-runtime && python -m flake8 . --max-line-length=120
 	cd api-gateway && python -m flake8 . --max-line-length=120
 
 # ===========================

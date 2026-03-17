@@ -78,6 +78,7 @@ spec:
                         - langgraph
                         - goose
                         - codex
+                        - opencode
                       description: "Runtime implementation to provision for this agent"
                     goose:
                       type: object
@@ -100,6 +101,19 @@ spec:
                           description: |
                             Optional map of relative Codex config paths to file contents.
                             Agent-specific entries override chart-wide CODEX_RUNTIME_CONFIG_FILES_JSON defaults by path.
+                          additionalProperties:
+                            x-kubernetes-preserve-unknown-fields: true
+                    opencode:
+                      type: object
+                      description: "OpenCode-specific configuration used when runtime.kind=opencode"
+                      properties:
+                        configFiles:
+                          type: object
+                          description: |
+                            Optional map of relative OpenCode config-root paths to file contents,
+                            for example agents/reviewer.md, plugins/custom.ts, skills/foo/SKILL.md,
+                            or opencode.json. Agent-specific entries override chart-wide
+                            OPENCODE_RUNTIME_CONFIG_FILES_JSON defaults by path.
                           additionalProperties:
                             x-kubernetes-preserve-unknown-fields: true
                 gitConfig:

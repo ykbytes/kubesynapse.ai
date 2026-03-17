@@ -16,6 +16,7 @@ $images = @(
     @{ Name = "ai-operator"; Context = "operator" },
     @{ Name = "ai-agent-runtime"; Context = "agent-runtime" },
   @{ Name = "ai-goose-runtime"; Context = "goose-runtime" },
+    @{ Name = "ai-opencode-runtime"; Context = "opencode-runtime" },
     @{ Name = "ai-api-gateway"; Context = "api-gateway" },
     @{ Name = "ai-agent-sandbox-web-ui"; Context = "web-ui" },
     @{ Name = "mcp-github-adapter"; Context = "mcp-sidecars"; Dockerfile = "mcp-sidecars/github-adapter/Dockerfile" }
@@ -69,6 +70,11 @@ agentRuntime:
 gooseRuntime:
   image:
     repository: "$Registry/ai-goose-runtime"
+    tag: "$Version"
+
+opencodeRuntime:
+  image:
+    repository: "$Registry/ai-opencode-runtime"
     tag: "$Version"
 
 apiGateway:

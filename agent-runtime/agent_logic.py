@@ -163,7 +163,7 @@ QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "").strip()
 EMBEDDING_MODEL = os.getenv("AGENT_EMBEDDING_MODEL", "text-embedding-3-small")
 RAG_TOP_K = get_int_env("RAG_TOP_K", 3, minimum=1)
 POLICY_CACHE_TTL_SECONDS = get_int_env("AGENT_POLICY_CACHE_TTL_SECONDS", 30, minimum=0)
-MAX_PROMPT_CHARS = get_int_env("AGENT_MAX_PROMPT_CHARS", 48000, minimum=1)
+MAX_PROMPT_CHARS = get_int_env("AGENT_MAX_PROMPT_CHARS", 12000, minimum=1)
 MAX_CONTEXT_CHARS = get_int_env("AGENT_MAX_CONTEXT_CHARS", 6000, minimum=512)
 MAX_THREAD_ID_CHARS = get_int_env("AGENT_MAX_THREAD_ID_CHARS", 128, minimum=16)
 # MCP security: bearer token presented on every outbound MCP HTTP call and
@@ -174,179 +174,6 @@ GITHUB_MCP_TOKEN = os.getenv("GITHUB_MCP_TOKEN", "").strip()
 MCP_HUB_NAMESPACE = os.getenv("MCP_HUB_NAMESPACE", "mcp-hub").strip()
 _raw_allowed = os.getenv("ALLOWED_MCP_SERVERS", "").strip()
 ALLOWED_MCP_SERVERS: frozenset[str] = frozenset(s.strip() for s in _raw_allowed.split(",") if s.strip())
-
-# ---------------------------------------------------------------------------
-# MCP sidecar discovery — read MCP_SIDECARS URLs and discover tools at startup
-# ---------------------------------------------------------------------------
-_MCP_SIDECAR_URLS: list[str] = [
-    u.strip() for u in os.getenv("MCP_SIDECARS", "").split(",") if u.strip()
-]
-MCP_SIDECAR_REGISTRY: dict[str, dict[str, Any]] = {}  # server_name -> {url, tools: [...]}
-_MCP_SIDECAR_DISCOVERED = False  # True once discovery has succeeded at least once
-_MCP_SIDECAR_LOCK = threading.Lock()
-
-
-def _discover_mcp_sidecars(*, force: bool = False) -> None:
-    """Connect to each MCP sidecar URL and discover its server name and tools.
-
-    Called lazily on first tool call or /discover request.  If *force* is True
-    the cached discovery is cleared and re-run (useful when sidecars restart).
-    """
-    global _MCP_SIDECAR_DISCOVERED
-    with _MCP_SIDECAR_LOCK:
-        if _MCP_SIDECAR_DISCOVERED and not force:
-            return
-        for base_url in _MCP_SIDECAR_URLS:
-            mcp_url = f"{base_url.rstrip('/')}/mcp"
-            if not force:
-                # Skip URLs already discovered
-                if any(e["url"] == mcp_url for e in MCP_SIDECAR_REGISTRY.values()):
-                    continue
-            try:
-                headers = {
-                    "Content-Type": "application/json",
-                    "Accept": "application/json, text/event-stream",
-                }
-                init_req = {
-                    "jsonrpc": "2.0", "id": 1, "method": "initialize",
-                    "params": {
-                        "protocolVersion": "2024-11-05",
-                        "capabilities": {},
-                        "clientInfo": {"name": "agent-runtime", "version": "1.0"},
-                    },
-                }
-                with httpx.Client(timeout=10, trust_env=False) as client:
-                    r = client.post(mcp_url, json=init_req, headers=headers)
-                    session_id = r.headers.get("mcp-session-id", "")
-                    # Parse SSE response
-                    init_data = _parse_sse_data(r.text)
-                    server_name = (
-                        init_data.get("result", {}).get("serverInfo", {}).get("name", "")
-                        if init_data else ""
-                    )
-                    if not server_name:
-                        logger.warning("MCP sidecar at %s returned no server name, skipping", base_url)
-                        continue
-                    # List tools
-                    headers["Mcp-Session-Id"] = session_id
-                    r2 = client.post(
-                        mcp_url,
-                        json={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
-                        headers=headers,
-                    )
-                    tools_data = _parse_sse_data(r2.text)
-                    tools = tools_data.get("result", {}).get("tools", []) if tools_data else []
-                    MCP_SIDECAR_REGISTRY[server_name] = {
-                        "url": mcp_url,
-                        "tools": tools,
-                        "session_id": session_id,
-                    }
-                    logger.info(
-                        "Discovered MCP sidecar '%s' at %s with %d tools: %s",
-                        server_name, base_url, len(tools),
-                        ", ".join(t.get("name", "?") for t in tools),
-                    )
-            except Exception as exc:
-                logger.warning("Failed to discover MCP sidecar at %s: %s", base_url, exc)
-        # Mark as discovered if ALL sidecar URLs have been found
-        if len(MCP_SIDECAR_REGISTRY) >= len(_MCP_SIDECAR_URLS):
-            _MCP_SIDECAR_DISCOVERED = True
-
-
-def ensure_mcp_sidecars_discovered() -> None:
-    """Ensure MCP sidecars are discovered (lazy init, safe to call repeatedly)."""
-    if _MCP_SIDECAR_URLS and not _MCP_SIDECAR_DISCOVERED:
-        _discover_mcp_sidecars()
-
-
-def _parse_sse_data(text: str) -> dict[str, Any] | None:
-    """Extract JSON from an SSE 'data:' line."""
-    for line in text.splitlines():
-        if line.startswith("data: "):
-            try:
-                return json.loads(line[6:])
-            except (json.JSONDecodeError, ValueError):
-                pass
-    # Try parsing as plain JSON
-    try:
-        return json.loads(text)
-    except (json.JSONDecodeError, ValueError):
-        return None
-
-
-MCP_SIDECAR_MAX_RESPONSE_CHARS = get_int_env("AGENT_MCP_SIDECAR_MAX_RESPONSE_CHARS", 50000, minimum=1000)
-
-
-def mcp_sidecar_call(
-    server_name: str,
-    tool_name: str,
-    tool_args: dict[str, Any],
-    *,
-    timeout: float = 30.0,
-) -> dict[str, Any]:
-    """Call a tool on an MCP sidecar and return the result."""
-    entry = MCP_SIDECAR_REGISTRY.get(server_name)
-    if not entry:
-        _discover_mcp_sidecars(force=True)
-        entry = MCP_SIDECAR_REGISTRY.get(server_name)
-        if not entry:
-            return {"error": f"MCP sidecar '{server_name}' not found in registry"}
-    mcp_url = entry["url"]
-    call_req = {
-        "jsonrpc": "2.0", "id": 3, "method": "tools/call",
-        "params": {"name": tool_name, "arguments": tool_args},
-    }
-    headers = {
-        "Content-Type": "application/json",
-        "Accept": "application/json, text/event-stream",
-    }
-    if entry.get("session_id"):
-        headers["Mcp-Session-Id"] = entry["session_id"]
-    try:
-        with httpx.Client(timeout=timeout, trust_env=False) as client:
-            resp = client.post(mcp_url, json=call_req, headers=headers)
-            # If session expired, re-discover and retry once
-            if resp.status_code in (404, 400):
-                logger.info("MCP sidecar '%s' session may have expired, re-discovering", server_name)
-                _discover_mcp_sidecars(force=True)
-                entry = MCP_SIDECAR_REGISTRY.get(server_name)
-                if not entry:
-                    return {"error": f"MCP sidecar '{server_name}' not found after re-discovery"}
-                headers["Mcp-Session-Id"] = entry.get("session_id", "")
-                resp = client.post(entry["url"], json=call_req, headers=headers)
-            resp.raise_for_status()
-            raw_text = resp.text[:MCP_SIDECAR_MAX_RESPONSE_CHARS]
-            data = _parse_sse_data(raw_text)
-            if not data:
-                return {"error": "No parseable response from MCP sidecar"}
-            # Check for JSON-RPC error
-            if "error" in data:
-                err = data["error"]
-                err_msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
-                return {"error": f"MCP sidecar error: {err_msg}"}
-            if "result" not in data:
-                return {"error": "No result from MCP sidecar"}
-            result = data["result"]
-            contents = result.get("content", [])
-            text_parts = [c.get("text", "") for c in contents if c.get("type") == "text"]
-            combined = "\n".join(text_parts) if text_parts else str(result)
-            if len(combined) > MCP_SIDECAR_MAX_RESPONSE_CHARS:
-                combined = combined[:MCP_SIDECAR_MAX_RESPONSE_CHARS] + "\n[truncated]"
-            return {"result": combined}
-    except httpx.TimeoutException:
-        logger.warning("MCP sidecar '%s' tool '%s' timed out after %.1fs", server_name, tool_name, timeout)
-        return {"error": f"MCP tool '{tool_name}' timed out after {timeout}s"}
-    except httpx.ConnectError as exc:
-        logger.warning("MCP sidecar '%s' connection error: %s", server_name, exc)
-        return {"error": f"Cannot connect to MCP sidecar '{server_name}': {exc}"}
-    except httpx.HTTPStatusError as exc:
-        logger.warning("MCP sidecar '%s' HTTP error: %s", server_name, exc.response.status_code)
-        return {"error": f"MCP sidecar HTTP error {exc.response.status_code}"}
-    except Exception as exc:
-        logger.warning("MCP sidecar '%s' unexpected error: %s", server_name, exc, exc_info=True)
-        return {"error": f"MCP sidecar error: {type(exc).__name__}: {exc}"}
-
-
 A2A_ALLOWED_CALLERS = parse_a2a_peer_refs_env("A2A_ALLOWED_CALLERS_JSON")
 A2A_ALLOWED_TARGETS_SNAPSHOT = parse_a2a_peer_refs_env("A2A_ALLOWED_TARGETS_JSON")
 A2A_REQUIRE_HITL_DEFAULT = get_bool_env("A2A_REQUIRE_HITL", False)
@@ -364,13 +191,11 @@ MAX_SUBAGENTS = get_int_env("AGENT_MAX_SUBAGENTS", 6, minimum=1)
 MAX_SUBAGENT_FILE_CHARS = get_int_env("AGENT_MAX_SUBAGENT_FILE_CHARS", 4000, minimum=256)
 MAX_SUBAGENT_METADATA_CHARS = get_int_env("AGENT_MAX_SUBAGENT_METADATA_CHARS", 2048, minimum=256)
 SUBAGENT_STRATEGIES = frozenset({"sequential", "parallel"})
-MAX_TOOL_ARGS_BYTES = get_int_env("AGENT_MAX_TOOL_ARGS_BYTES", 131072, minimum=512)
+MAX_TOOL_ARGS_BYTES = get_int_env("AGENT_MAX_TOOL_ARGS_BYTES", 16384, minimum=512)
 MAX_CONCURRENT_REQUESTS = get_int_env("AGENT_MAX_CONCURRENT_REQUESTS", 4, minimum=1)
 REQUEST_QUEUE_TIMEOUT_SECONDS = get_float_env("AGENT_REQUEST_QUEUE_TIMEOUT_SECONDS", 5.0, minimum=0.1)
 STREAM_EVENT_QUEUE_SIZE = get_int_env("AGENT_STREAM_EVENT_QUEUE_SIZE", 256, minimum=32)
-LITELLM_TIMEOUT_SECONDS = get_float_env("AGENT_LITELLM_TIMEOUT_SECONDS", 180.0, minimum=1.0)
-LLM_MAX_OUTPUT_TOKENS = get_int_env("AGENT_LLM_MAX_OUTPUT_TOKENS", 32768, minimum=256)
-LLM_PLAN_INVOKE_RETRIES = get_int_env("AGENT_LLM_PLAN_INVOKE_RETRIES", 2, minimum=0)
+LITELLM_TIMEOUT_SECONDS = get_float_env("AGENT_LITELLM_TIMEOUT_SECONDS", 60.0, minimum=1.0)
 EMBEDDING_TIMEOUT_SECONDS = get_float_env("AGENT_EMBEDDING_TIMEOUT_SECONDS", 30.0, minimum=1.0)
 RAG_REQUEST_TIMEOUT_SECONDS = get_float_env("AGENT_RAG_TIMEOUT_SECONDS", 10.0, minimum=1.0)
 SQLITE_TIMEOUT_SECONDS = get_float_env("AGENT_SQLITE_TIMEOUT_SECONDS", 30.0, minimum=1.0)
@@ -424,20 +249,6 @@ _MODEL_COST_PER_MILLION: dict[str, tuple[float, float]] = {
     "o3": (2.0, 8.0),
     "o3-mini": (1.10, 4.40),
     "o4-mini": (1.10, 4.40),
-    # OpenRouter model aliases (openrouter/ prefix routes through LiteLLM)
-    "openrouter/openai/gpt-4o": (2.5, 10.0),
-    "openrouter/openai/gpt-4o-mini": (0.15, 0.60),
-    "openrouter/openai/gpt-4-turbo": (10.0, 30.0),
-    "openrouter/anthropic/claude-3.5-sonnet": (3.0, 15.0),
-    "openrouter/anthropic/claude-3-haiku": (0.25, 1.25),
-    "openrouter/google/gemini-pro-1.5": (1.25, 5.0),
-    "openrouter/google/gemini-2.0-flash-001": (0.10, 0.40),
-    "openrouter/meta-llama/llama-3.1-70b-instruct": (0.52, 0.75),
-    "openrouter/meta-llama/llama-3.1-405b-instruct": (2.0, 2.0),
-    "openrouter/mistralai/mistral-large": (2.0, 6.0),
-    "openrouter/deepseek/deepseek-chat": (0.14, 0.28),
-    "openrouter/deepseek/deepseek-r1": (0.55, 2.19),
-    "openrouter/qwen/qwen-2.5-72b-instruct": (0.36, 0.36),
 }
 
 
@@ -1890,7 +1701,6 @@ def build_litellm_client(model_name: str) -> ChatOpenAI:
         api_key=SecretStr(litellm_api_key),
         timeout=LITELLM_TIMEOUT_SECONDS,
         max_retries=2,
-        max_tokens=LLM_MAX_OUTPUT_TOKENS,
     )
 
 
@@ -2765,10 +2575,6 @@ or have gathered sufficient context, respond immediately.
 Return exactly ONE JSON object (no markdown fences). Every response MUST include a \
 "thinking" field explaining your reasoning.
 
-**CRITICAL: Keep the "thinking" field SHORT — 1-3 sentences maximum. Put the action \
-fields IMMEDIATELY after thinking. The action fields are mandatory and must appear \
-in the JSON output. Do NOT write long reasoning in the thinking field.**
-
 ### Action Schemas
 
 **Respond with final answer:**
@@ -2878,16 +2684,6 @@ When crafting your final `respond` answer:
 - If the step budget is nearly exhausted, prioritize responding with what you have over starting new operations.
 - When a plan is active, follow the plan steps in order. Update the plan if you discover the approach needs to change.
 - After editing a file, always verify the change was applied correctly.
-
-## CRITICAL: tool_args Size Limit
-Your JSON response MUST be compact. The output will be TRUNCATED if it is too long, \
-causing tool_args to be lost. Follow these rules strictly:
-- **NEVER embed more than 200 lines of code** in a single tool_args field.
-- For writing large files: use **multiple** run_bash steps with `cat >> file << 'EOF'` to \
-append content incrementally in separate steps.
-- For code execution: write a small script that does ONE task, not a monolithic program.
-- If you need to generate a large file (PDF, report, etc.), first write the file content \
-to disk in parts using run_bash, then run a separate script to process it.
 """
 
 
@@ -3209,12 +3005,10 @@ def parse_tool_call_to_action(tool_call: dict[str, Any]) -> dict[str, Any] | Non
 
 
 def build_supervisor_messages(state: State) -> list[Any]:
-    ensure_mcp_sidecars_discovered()
-    _sidecar_names = set(MCP_SIDECAR_REGISTRY.keys())
     capabilities = {
         "sandboxTools": supervisor_visible_sandbox_tools(),
         "localRuntime": supervisor_visible_local_runtime(),
-        "mcpServers": sorted(set(SKILL_RUNTIME_CONFIG.get("allowedMcpServers") or []) | _sidecar_names),
+        "mcpServers": sorted(SKILL_RUNTIME_CONFIG.get("allowedMcpServers") or []),
         "a2aTargets": [
             {"namespace": namespace, "name": name}
             for namespace, name in sorted(SKILL_RUNTIME_CONFIG.get("allowedA2ATargets") or [])
@@ -3222,22 +3016,12 @@ def build_supervisor_messages(state: State) -> list[Any]:
         "allowSubagents": bool(SKILL_RUNTIME_CONFIG.get("allowSubagents")),
     }
     if not SKILL_RUNTIME_CONFIG.get("skills"):
-        capabilities["mcpServers"] = sorted(set(ALLOWED_MCP_SERVERS) | _sidecar_names)
+        capabilities["mcpServers"] = sorted(ALLOWED_MCP_SERVERS)
         capabilities["a2aTargets"] = [
             {"namespace": namespace, "name": name}
             for namespace, name in sorted(A2A_ALLOWED_TARGETS_SNAPSHOT)
         ]
         capabilities["allowSubagents"] = bool(A2A_ALLOWED_TARGETS_SNAPSHOT)
-
-    # Include sidecar tool descriptions so the model knows what MCP tools are available
-    if MCP_SIDECAR_REGISTRY:
-        sidecar_tool_info: dict[str, list[dict[str, str]]] = {}
-        for sname, sinfo in MCP_SIDECAR_REGISTRY.items():
-            sidecar_tool_info[sname] = [
-                {"name": t.get("name", ""), "description": t.get("description", "")}
-                for t in sinfo.get("tools", [])
-            ]
-        capabilities["mcpServerTools"] = sidecar_tool_info
 
     current_step = int(state.get("step_count") or 0) + 1
     max_steps = int(state.get("max_steps") or DEFAULT_MAX_AUTONOMY_STEPS)
@@ -3324,99 +3108,6 @@ def build_supervisor_messages(state: State) -> list[Any]:
     return system_messages
 
 
-def _regex_extract_action(text: str) -> dict[str, Any] | None:
-    """Last-resort regex extraction for truncated JSON from LLM responses."""
-    action_m = re.search(r'"action"\s*:\s*"([^"]+)"', text)
-    if not action_m:
-        return None
-    result: dict[str, Any] = {"action": action_m.group(1)}
-
-    thinking_m = re.search(r'"thinking"\s*:\s*"((?:[^"\\]|\\.)*)"', text, flags=re.DOTALL)
-    if thinking_m:
-        result["thinking"] = thinking_m.group(1)[:2000]
-
-    response_m = re.search(r'"response"\s*:\s*"((?:[^"\\]|\\.)*)"', text, flags=re.DOTALL)
-    if response_m:
-        result["response"] = response_m.group(1)
-
-    for field in ("tool_name", "mcp_server", "command", "path", "pattern", "message", "note"):
-        fm = re.search(rf'"{field}"\s*:\s*"((?:[^"\\]|\\.)*)"', text)
-        if fm:
-            result[field] = fm.group(1)
-
-    # Extract tool_args using brace-depth counting (handles nested braces)
-    args_pos = re.search(r'"tool_args"\s*:\s*\{', text)
-    if args_pos:
-        brace_start = args_pos.end() - 1
-        depth = 0
-        in_string = False
-        escape_next = False
-        end_pos = brace_start
-        for i in range(brace_start, len(text)):
-            ch = text[i]
-            if escape_next:
-                escape_next = False
-                continue
-            if ch == '\\':
-                if in_string:
-                    escape_next = True
-                continue
-            if ch == '"':
-                in_string = not in_string
-                continue
-            if not in_string:
-                if ch == '{':
-                    depth += 1
-                elif ch == '}':
-                    depth -= 1
-                    if depth == 0:
-                        end_pos = i
-                        break
-        if depth == 0 and end_pos > brace_start:
-            try:
-                result["tool_args"] = json.loads(text[brace_start : end_pos + 1])
-            except ValueError:
-                pass
-
-    # Extract steps array using bracket-depth counting
-    steps_pos = re.search(r'"steps"\s*:\s*\[', text)
-    if steps_pos:
-        bracket_start = steps_pos.end() - 1
-        depth = 0
-        in_string = False
-        escape_next = False
-        end_pos = bracket_start
-        for i in range(bracket_start, len(text)):
-            ch = text[i]
-            if escape_next:
-                escape_next = False
-                continue
-            if ch == '\\':
-                if in_string:
-                    escape_next = True
-                continue
-            if ch == '"':
-                in_string = not in_string
-                continue
-            if not in_string:
-                if ch == '[':
-                    depth += 1
-                elif ch == ']':
-                    depth -= 1
-                    if depth == 0:
-                        end_pos = i
-                        break
-        if depth == 0 and end_pos > bracket_start:
-            try:
-                result["steps"] = json.loads(text[bracket_start : end_pos + 1])
-            except ValueError:
-                pass
-
-    result["_truncated"] = True
-    logger.info("_regex_extract_action recovered action=%r from truncated JSON", result.get("action"))
-    return result
-
-
 def extract_json_object(text: str) -> dict[str, Any] | None:
     candidate = str(text or "").strip()
     if not candidate:
@@ -3429,17 +3120,13 @@ def extract_json_object(text: str) -> dict[str, Any] | None:
     start = candidate.find("{")
     end = candidate.rfind("}")
     if start == -1 or end == -1 or end < start:
-        # No matching braces — try regex fallback for truncated JSON
-        if start != -1:
-            logger.info("extract_json_object: JSON truncated (no closing brace), trying regex fallback, len=%d", len(candidate))
-            return _regex_extract_action(candidate[start:])
         return None
 
     try:
         parsed = json.loads(candidate[start : end + 1])
     except ValueError:
-        logger.info("extract_json_object: JSON parse failed (len=%d), trying regex fallback", end - start + 1)
-        return _regex_extract_action(candidate[start : end + 1])
+        logger.debug("extract_json_object: JSON parse failed for: %.200s", candidate[start : end + 1])
+        return None
     return parsed if isinstance(parsed, dict) else None
 
 
@@ -3572,12 +3259,7 @@ def normalize_supervisor_action(value: Any) -> dict[str, Any] | None:
     tool_name = str(value.get("tool_name") or "").strip()
     tool_args = value.get("tool_args") if isinstance(value.get("tool_args"), dict) else {}
     encoded_args = json.dumps(tool_args, default=str)
-    args_size = len(encoded_args.encode("utf-8"))
-    if args_size > MAX_TOOL_ARGS_BYTES:
-        logger.warning(
-            "normalize_supervisor_action: tool_args too large (%d > %d bytes) for action=%r tool=%r, truncating",
-            args_size, MAX_TOOL_ARGS_BYTES, action, tool_name,
-        )
+    if len(encoded_args.encode("utf-8")) > MAX_TOOL_ARGS_BYTES:
         return None
 
     if action == "sandbox_tool":
@@ -4213,7 +3895,6 @@ def run_autonomous_session(
     *,
     plan_invoke: Callable[[list[Any]], Any],
     execute_action: Callable[[dict[str, Any], State], dict[str, Any]],
-    fallback_invoke: Callable[[list[Any]], Any] | None = None,
 ) -> dict[str, Any]:
     local_state: State = dict(state)
     step_count = int(local_state.get("step_count") or 0)
@@ -4228,10 +3909,6 @@ def run_autonomous_session(
     consecutive_failures: int = int(local_state.get("consecutive_failures") or 0)
     replan_count: int = int(local_state.get("replan_count") or 0)
     edit_history: list[dict[str, str]] = list(local_state.get("edit_history") or [])
-    # Track consecutive calls to the same tool_name (ignoring args) for stuck detection
-    _last_tool_name: str = ""
-    _consecutive_same_tool: int = 0
-    _last_successful_tool_result: str = ""
 
     # Per-session tool result cache for idempotent reads
     _CACHEABLE_TOOLS = frozenset({"filesystem.read", "filesystem.ls", "filesystem.list"})
@@ -4281,20 +3958,6 @@ def run_autonomous_session(
     while True:
         max_steps = int(local_state.get("max_steps") or DEFAULT_MAX_AUTONOMY_STEPS)
         if step_count >= max_steps:
-            # Graceful exit: if we had successful tool calls, produce a response
-            # instead of returning "blocked" so the workflow can continue.
-            if _last_successful_tool_result:
-                _graceful_response = (
-                    f"Task completed. Last tool result: {_last_successful_tool_result}"
-                )
-                logger.info("Max steps reached (%d) — producing graceful response from last tool result", max_steps)
-                return autonomous_terminal_state(
-                    local_state,
-                    messages=[AIMessage(content=_graceful_response)],
-                    invoke_status="completed",
-                    step_count=step_count,
-                    stop_reason="max_steps_graceful",
-                )
             return autonomous_terminal_state(
                 local_state,
                 messages=[
@@ -4320,42 +3983,7 @@ def run_autonomous_session(
         local_state["replan_count"] = replan_count
         local_state["edit_history"] = edit_history
 
-        # LLM call with retry for transient errors (timeouts, connection issues)
-        _plan_msgs = build_supervisor_messages(local_state)
-        llm_response = None
-        for _llm_attempt in range(1 + LLM_PLAN_INVOKE_RETRIES):
-            try:
-                llm_response = plan_invoke(_plan_msgs)
-                break
-            except Exception as _llm_exc:
-                _exc_name = type(_llm_exc).__name__
-                _is_transient = any(kw in _exc_name.lower() for kw in ("timeout", "connection", "network", "readtimeout"))
-                if not _is_transient:
-                    _is_transient = "timed out" in str(_llm_exc).lower() or "connection" in str(_llm_exc).lower()
-                if _is_transient and _llm_attempt < LLM_PLAN_INVOKE_RETRIES:
-                    _backoff = min(2 ** _llm_attempt * 5, 30)
-                    logger.warning(
-                        "Autonomy step %d: LLM call failed (attempt %d/%d): %s — retrying in %ds",
-                        step_count, _llm_attempt + 1, 1 + LLM_PLAN_INVOKE_RETRIES, _exc_name, _backoff,
-                    )
-                    time.sleep(_backoff)
-                    continue
-                logger.error("Autonomy step %d: LLM call failed permanently: %s", step_count, _llm_exc)
-                return autonomous_terminal_state(
-                    local_state,
-                    messages=[AIMessage(content=blocked_response(f"LLM call failed: {_exc_name}"))],
-                    invoke_status="blocked",
-                    step_count=step_count,
-                    stop_reason="llm_error",
-                )
-        if llm_response is None:
-            return autonomous_terminal_state(
-                local_state,
-                messages=[AIMessage(content=blocked_response("LLM call failed after retries"))],
-                invoke_status="blocked",
-                step_count=step_count,
-                stop_reason="llm_error",
-            )
+        llm_response = plan_invoke(build_supervisor_messages(local_state))
         raw_decision = get_message_content(llm_response).strip()
 
         # Accumulate token usage from LLM response
@@ -4396,47 +4024,15 @@ def run_autonomous_session(
         # Native tool calling: parse tool_calls from response if available
         _tool_calls = getattr(llm_response, "tool_calls", None) or []
         decision = None
-        logger.info("Autonomy step %d: raw_decision=%r, tool_calls_count=%d", step_count, raw_decision[:200] if raw_decision else "", len(_tool_calls))
         if _tool_calls and isinstance(_tool_calls, list):
-            logger.info("Autonomy step %d: first tool_call=%r", step_count, _tool_calls[0])
             try:
                 decision = parse_tool_call_to_action(_tool_calls[0])
-                logger.info("Autonomy step %d: parsed decision=%r", step_count, decision)
             except Exception as exc:
-                logger.info("Failed to parse tool_call, falling back to text: %s", exc)
+                logger.debug("Failed to parse tool_call, falling back to text: %s", exc)
 
         # Fall back to text JSON parsing
         if decision is None:
-            logger.info("Autonomy step %d: decision is None, raw_decision empty=%s", step_count, not raw_decision)
             if not raw_decision:
-                # Supervisor returned empty – attempt a direct LLM call WITHOUT
-                # tools so the model is forced to produce text content.
-                logger.info("Autonomy step %d: attempting no-tools fallback LLM call", step_count)
-                try:
-                    user_prompt = local_state.get("request_prompt", "")
-                    system_prompt = str(local_state.get("system_prompt") or "").strip()
-                    direct_msgs: list[Any] = []
-                    if system_prompt:
-                        direct_msgs.append(SystemMessage(content=system_prompt))
-                    direct_msgs.append(HumanMessage(content=user_prompt))
-                    direct_resp = fallback_invoke(direct_msgs) if fallback_invoke else plan_invoke(direct_msgs)
-                    fallback_text = get_message_content(direct_resp).strip()
-                    logger.info("Autonomy step %d: fallback_text length=%d, first100=%r", step_count, len(fallback_text), fallback_text[:100] if fallback_text else "")
-                except Exception as fb_exc:
-                    logger.info("Autonomy step %d: fallback LLM call failed: %s", step_count, fb_exc)
-                    fallback_text = ""
-                if fallback_text:
-                    publish_runtime_event(
-                        "agent.step",
-                        {"mode": "autonomy", "step": step_count + 1, "action": "respond", "fallback": True},
-                    )
-                    return autonomous_terminal_state(
-                        local_state,
-                        messages=[AIMessage(content=fallback_text)],
-                        invoke_status="completed",
-                        step_count=step_count,
-                        stop_reason="fallback_response",
-                    )
                 return autonomous_terminal_state(
                     local_state,
                     messages=[AIMessage(content=blocked_response("autonomy supervisor returned an empty decision"))],
@@ -4445,102 +4041,12 @@ def run_autonomous_session(
                     stop_reason="empty_decision",
                 )
 
-            extracted_json = extract_json_object(raw_decision)
-            logger.info(
-                "Autonomy step %d: extracted_json keys=%s action=%r",
-                step_count,
-                sorted(extracted_json.keys()) if extracted_json else None,
-                extracted_json.get("action") if extracted_json else None,
-            )
-            decision = normalize_supervisor_action(extracted_json)
-            # If the extraction came from truncated JSON and the action needs
-            # tool_args that were lost, reject early instead of calling MCP
-            # with empty args (wastes a step).
-            if (
-                decision is not None
-                and extracted_json
-                and extracted_json.get("_truncated")
-                and decision["action"] in ("mcp_tool", "sandbox_tool")
-                and not decision.get("tool_args")
-            ):
-                logger.warning(
-                    "Autonomy step %d: truncated JSON lost tool_args for %s/%s — sending recovery feedback",
-                    step_count, decision["action"], decision.get("tool_name", ""),
-                )
-                feedback_msg = (
-                    f"Your {decision['action']} call to '{decision.get('tool_name', '')}' was rejected because "
-                    "the response was too long and got truncated before tool_args could be included. "
-                    "You MUST keep your tool_args MUCH shorter. For code execution, write small scripts "
-                    "that do ONE thing. For writing files, use run_bash with 'cat << 'EOF' > file' to write "
-                    "content in smaller chunks across multiple steps."
-                )
-                local_state["messages"] = list(local_state.get("messages", [])) + [
-                    AIMessage(content=raw_decision[:2000]),
-                    HumanMessage(content=f"[SYSTEM] {feedback_msg}"),
-                ]
-                consecutive_failures += 1
-                if consecutive_failures >= 3:
-                    logger.warning("Autonomy step %d: too many truncation failures, terminating", step_count)
-                    decision = None
-                else:
-                    step_count += 1
-                    continue
-            if decision is None and extracted_json:
-                logger.info(
-                    "Autonomy step %d: normalize rejected extracted action=%r, keys=%s",
-                    step_count,
-                    extracted_json.get("action"),
-                    sorted(extracted_json.keys()),
-                )
-                # Instead of terminating, give the LLM feedback and continue the loop
-                reject_action = extracted_json.get("action", "unknown")
-                reject_tool = extracted_json.get("tool_name", "")
-                reject_tool_args = extracted_json.get("tool_args")
-                args_size = 0
-                if isinstance(reject_tool_args, dict):
-                    args_size = len(json.dumps(reject_tool_args, default=str).encode("utf-8"))
-                if args_size > MAX_TOOL_ARGS_BYTES:
-                    feedback_msg = (
-                        f"Your {reject_action} call with tool '{reject_tool}' was rejected because "
-                        f"tool_args is too large ({args_size} bytes, max {MAX_TOOL_ARGS_BYTES}). "
-                        "Break the task into smaller steps — write content in multiple smaller chunks, "
-                        "or use run_bash with a heredoc/echo approach to write files incrementally."
-                    )
-                else:
-                    feedback_msg = (
-                        f"Your {reject_action} action could not be parsed correctly. "
-                        "Please try again with a valid JSON response."
-                    )
-                local_state["messages"] = list(local_state.get("messages", [])) + [
-                    AIMessage(content=raw_decision),
-                    HumanMessage(content=f"[SYSTEM] {feedback_msg}"),
-                ]
-                consecutive_failures += 1
-                if consecutive_failures >= 3:
-                    logger.warning("Autonomy step %d: too many consecutive normalize failures, terminating", step_count)
-                else:
-                    step_count += 1
-                    continue
+            decision = normalize_supervisor_action(extract_json_object(raw_decision))
             if decision is None:
                 publish_runtime_event(
                     "agent.step",
                     {"mode": "autonomy", "step": step_count + 1, "action": "respond", "fallback": True},
                 )
-                # Use fallback_invoke to generate a clean response if available
-                if fallback_invoke is not None and extracted_json is None:
-                    try:
-                        fallback_result = fallback_invoke(local_state.get("messages", []))
-                        fallback_text = get_message_content(fallback_result)
-                        if fallback_text.strip():
-                            return autonomous_terminal_state(
-                                local_state,
-                                messages=[AIMessage(content=fallback_text)],
-                                invoke_status="completed",
-                                step_count=step_count,
-                                stop_reason="fallback_response",
-                            )
-                    except Exception:
-                        logger.warning("fallback_invoke failed, using raw_decision", exc_info=True)
                 return autonomous_terminal_state(
                     local_state,
                     messages=[AIMessage(content=raw_decision)],
@@ -4633,19 +4139,7 @@ def run_autonomous_session(
 
         if cycle_detected:
             if doom_loop_warned:
-                # Second detection — hard stop, but produce graceful response if possible
-                if _last_successful_tool_result:
-                    _graceful_response = (
-                        f"Task completed. Last tool result: {_last_successful_tool_result}"
-                    )
-                    logger.info("Doom loop hard stop — producing graceful response from last tool result")
-                    return autonomous_terminal_state(
-                        local_state,
-                        messages=[AIMessage(content=_graceful_response)],
-                        invoke_status="completed",
-                        step_count=step_count,
-                        stop_reason="doom_loop_graceful",
-                    )
+                # Second detection — hard stop
                 return autonomous_terminal_state(
                     local_state,
                     messages=[
@@ -4772,36 +4266,6 @@ def run_autonomous_session(
             "status": action_status,
             "thinking": thinking[:120] if thinking else "",
         })
-
-        # Track consecutive same-tool calls for stuck detection
-        _current_tool = str(decision.get("tool_name") or "")
-        if action_status in ("completed", "continue") and _current_tool:
-            # Capture last successful tool result text
-            _result_msgs = result.get("messages") or []
-            if _result_msgs:
-                _last_successful_tool_result = get_message_content(_result_msgs[-1]).strip()[:500]
-            if _current_tool == _last_tool_name:
-                _consecutive_same_tool += 1
-            else:
-                _consecutive_same_tool = 1
-                _last_tool_name = _current_tool
-            # After 2+ consecutive calls to the same tool, remind to respond
-            if _consecutive_same_tool >= 2:
-                _remind_msg = SystemMessage(
-                    content=(
-                        f"NOTE: You have called '{_current_tool}' {_consecutive_same_tool} times consecutively "
-                        f"and it succeeded each time. You have {max(max_steps - step_count, 0)} steps remaining. "
-                        "If your task is complete, you MUST use action='respond' to deliver the final answer now. "
-                        "Do NOT call the same tool again unless the previous call truly failed."
-                    )
-                )
-                _result_msgs_list = list(result.get("messages") or [])
-                _result_msgs_list.append(_remind_msg)
-                result = {**result, "messages": _result_msgs_list}
-                logger.info("Same-tool reminder injected: tool=%s count=%d step=%d", _current_tool, _consecutive_same_tool, step_count)
-        elif _current_tool != _last_tool_name:
-            _consecutive_same_tool = 0
-            _last_tool_name = _current_tool
 
         # Track file modifications for change summary
         if action_status in ("completed", "continue"):
@@ -6001,7 +5465,6 @@ def load_active_policy(force_refresh: bool = False) -> tuple[str | None, dict[st
 
     policy_name = os.getenv("AGENT_POLICY_NAME", "").strip()
     custom_api = k8s_client.CustomObjectsApi()
-    _k8s_timeout = (3, 5)  # (connect, read) seconds
     try:
         if policy_name:
             policy = custom_api.get_namespaced_custom_object(
@@ -6010,7 +5473,6 @@ def load_active_policy(force_refresh: bool = False) -> tuple[str | None, dict[st
                 namespace=SERVICE_NAMESPACE,
                 plural="agentpolicies",
                 name=policy_name,
-                _request_timeout=_k8s_timeout,
             )
         else:
             policies = custom_api.list_namespaced_custom_object(
@@ -6018,7 +5480,6 @@ def load_active_policy(force_refresh: bool = False) -> tuple[str | None, dict[st
                 version="v1alpha1",
                 namespace=SERVICE_NAMESPACE,
                 plural="agentpolicies",
-                _request_timeout=_k8s_timeout,
             ).get("items", [])
             policies.sort(key=lambda item: item.get("metadata", {}).get("name", ""))
             policy = policies[0] if policies else None
@@ -6048,8 +5509,8 @@ def build_guardrails(policy_spec: dict[str, Any]) -> GuardrailsEngine:
         mask_pii=output_cfg.get("maskPII", True),
         blocked_input_patterns=input_cfg.get("blockedPatterns", []),
         blocked_output_patterns=output_cfg.get("blockedOutputPatterns", []),
-        max_input_tokens=input_cfg.get("maxInputTokens", 16384),
-        max_output_tokens=output_cfg.get("maxOutputTokens", 16384),
+        max_input_tokens=input_cfg.get("maxInputTokens", 4096),
+        max_output_tokens=output_cfg.get("maxOutputTokens", 4096),
     )
 
 
@@ -6141,9 +5602,6 @@ def mcp_call(
 ) -> dict[str, Any]:
     """Call a tool on an MCP server with bearer-token auth.
 
-    If *server_type* matches a discovered MCP sidecar, the call is routed
-    to the local sidecar instead of the centralised mcp-hub.
-
     Security enforcements (both layers must pass):
       1. Runtime allow-list: ``server_type`` must be in ALLOWED_MCP_SERVERS
          (set from the AgentPolicy via the ALLOWED_MCP_SERVERS env var).
@@ -6169,12 +5627,6 @@ def mcp_call(
         PermissionError: If server_type is not in the allow-list.
         httpx.HTTPStatusError: On non-2xx MCP responses.
     """
-    # Route to local MCP sidecar if server_type matches a discovered sidecar
-    ensure_mcp_sidecars_discovered()
-    if server_type in MCP_SIDECAR_REGISTRY:
-        logger.info("Routing MCP call to local sidecar '%s' tool='%s'", server_type, tool_name)
-        return mcp_sidecar_call(server_type, tool_name, tool_args, timeout=timeout)
-
     skill_allowed_servers = SKILL_RUNTIME_CONFIG.get("allowedMcpServers") or frozenset()
     if SKILL_RUNTIME_CONFIG.get("skills") and (not skill_allowed_servers or server_type not in skill_allowed_servers):
         raise PermissionError(
@@ -6541,11 +5993,10 @@ def create_agent():
             # Build tool schemas for native function calling if enabled
             _tool_schemas: list[dict] | None = None
             if USE_TOOL_CALLING:
-                ensure_mcp_sidecars_discovered()
                 _capabilities = {
                     "sandboxTools": supervisor_visible_sandbox_tools(),
                     "localRuntime": supervisor_visible_local_runtime(),
-                    "mcpServers": sorted(set(SKILL_RUNTIME_CONFIG.get("allowedMcpServers") or ALLOWED_MCP_SERVERS) | set(MCP_SIDECAR_REGISTRY.keys())),
+                    "mcpServers": sorted(SKILL_RUNTIME_CONFIG.get("allowedMcpServers") or ALLOWED_MCP_SERVERS),
                     "a2aTargets": sorted(SKILL_RUNTIME_CONFIG.get("allowedA2ATargets") or A2A_ALLOWED_TARGETS_SNAPSHOT),
                     "allowSubagents": bool(SKILL_RUNTIME_CONFIG.get("allowSubagents") or A2A_ALLOWED_TARGETS_SNAPSHOT),
                 }
@@ -6555,7 +6006,6 @@ def create_agent():
                 state,
                 plan_invoke=lambda messages: invoke_messages(messages, stream=False, tools=_tool_schemas),
                 execute_action=execute_action,
-                fallback_invoke=lambda messages: invoke_messages(messages, stream=False, tools=None),
             )
 
         return run_graph_node("chatbot", _run)
@@ -7311,7 +6761,7 @@ class StreamEventPublisher:
     @staticmethod
     def _sanitize_event_payload(event: str, payload: dict[str, Any]) -> dict[str, Any] | None:
         if event == "response.delta":
-            return dict(payload)
+            return None
 
         if event.endswith(SENSITIVE_STREAM_EVENT_SUFFIXES):
             text = str(payload.get("text", ""))
@@ -7409,7 +6859,6 @@ async def ready() -> dict[str, Any]:
 @app.get("/discover")
 async def discover() -> dict[str, Any]:
     """Return this agent's identity, capabilities, and A2A configuration for peer discovery."""
-    ensure_mcp_sidecars_discovered()
     return {
         "agent": SERVICE_NAME,
         "namespace": SERVICE_NAMESPACE,
@@ -7424,10 +6873,6 @@ async def discover() -> dict[str, Any]:
         ),
         "skills": {
             "count": len(SKILL_RUNTIME_CONFIG.get("skills") or []),
-        },
-        "mcpSidecars": {
-            name: {"tools": [t.get("name", "") for t in info.get("tools", [])]}
-            for name, info in MCP_SIDECAR_REGISTRY.items()
         },
         "endpoints": {
             "invoke": "/invoke",
