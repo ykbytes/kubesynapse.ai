@@ -249,25 +249,25 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const selectedRuntimeKind: RuntimeKind = selectedAgentDetail?.runtime_kind ?? "langgraph";
 
   const sidebarCounts: Record<WorkspaceView, number> = {
-    agents: agents.length, workflows: workflows.length, evals: evals.length, catalog: 0,
+    agents: agents.length, workflows: workflows.length, composer: workflows.length, evals: evals.length, catalog: 0,
   };
 
   const sidebarItems: SidebarResourceItem[] =
     activeView === "agents"
       ? agents.map((a) => ({ id: a.name, title: a.name, subtitle: a.model, status: a.status, note: a.namespace }))
-      : activeView === "workflows"
+      : activeView === "workflows" || activeView === "composer"
         ? workflows.map((w) => ({ id: w.name, title: w.name, subtitle: w.description || `${w.steps.length} step${w.steps.length === 1 ? "" : "s"}`, status: w.phase, note: w.current_step ? `Current step: ${w.current_step}` : `${w.steps.length} steps` }))
         : activeView === "evals"
           ? evals.map((e) => ({ id: e.name, title: e.name, subtitle: e.agent_ref, status: e.phase, note: `${e.test_suite.length} case${e.test_suite.length === 1 ? "" : "s"}` }))
           : [];
 
-  const sidebarSelectedId = activeView === "agents" ? selectedAgentName : activeView === "workflows" ? selectedWorkflowName : selectedEvalName;
+  const sidebarSelectedId = activeView === "agents" ? selectedAgentName : (activeView === "workflows" || activeView === "composer") ? selectedWorkflowName : selectedEvalName;
 
   const emptySidebarMessage = !token.trim()
     ? "Authenticate with a gateway token and load the namespace catalog."
     : activeView === "agents"
       ? `No agents are provisioned in namespace '${namespace}'. Create an agent to start a runtime.`
-      : activeView === "workflows"
+      : activeView === "workflows" || activeView === "composer"
         ? `No workflows are defined in namespace '${namespace}'. Create one to orchestrate agent steps.`
         : activeView === "catalog"
           ? "Browse the catalog in the main panel."
@@ -335,7 +335,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   // Auto-select first resource
   useEffect(() => {
     if (activeView === "agents" && !agentCreateMode && !selectedAgentName && agents.length > 0) setSelectedAgentName(agents[0].name);
-    if (activeView === "workflows" && !workflowCreateMode && !selectedWorkflowName && workflows.length > 0) setSelectedWorkflowName(workflows[0].name);
+    if ((activeView === "workflows" || activeView === "composer") && !workflowCreateMode && !selectedWorkflowName && workflows.length > 0) setSelectedWorkflowName(workflows[0].name);
     if (activeView === "evals" && !evalCreateMode && !selectedEvalName && evals.length > 0) setSelectedEvalName(evals[0].name);
   }, [activeView, agents, workflows, evals, agentCreateMode, workflowCreateMode, evalCreateMode, selectedAgentName, selectedWorkflowName, selectedEvalName]);
 
@@ -588,14 +588,14 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
 
   const handleSelectResource = useCallback((name: string) => {
     if (activeView === "agents") { setAgentCreateMode(false); setSelectedAgentName(name); }
-    else if (activeView === "workflows") { setWorkflowCreateMode(false); setSelectedWorkflowName(name); }
+    else if (activeView === "workflows" || activeView === "composer") { setWorkflowCreateMode(false); setSelectedWorkflowName(name); }
     else { setEvalCreateMode(false); setSelectedEvalName(name); }
   }, [activeView]);
 
   const handleCreateNew = useCallback(() => {
     setWorkspaceError(""); setCreateError(""); setAgentManageError(""); setWorkflowError(""); setEvalError("");
     if (activeView === "agents") { setAgentCreateMode(true); setSelectedAgentName(""); }
-    else if (activeView === "workflows") { setWorkflowCreateMode(true); setSelectedWorkflowName(""); }
+    else if (activeView === "workflows" || activeView === "composer") { setWorkflowCreateMode(true); setSelectedWorkflowName(""); }
     else { setEvalCreateMode(true); setSelectedEvalName(""); }
   }, [activeView]);
 

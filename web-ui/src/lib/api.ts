@@ -37,6 +37,7 @@ import type {
   InvocationSummary,
   InvokePayload,
   InvokeResponse,
+  LoopConfig,
   McpHubServer,
   McpToolCategory,
   PolicyInfo,
@@ -662,6 +663,8 @@ function parseWorkflowStepPayload(payload: unknown, label = "WorkflowStep"): Wor
     depends_on: readStringArray(record, "depends_on", label),
     require_approval: readBoolean(record, "require_approval", label, false),
     execution: readOptionalRecord(record, "execution", label),
+    step_type: (readOptionalString(record, "step_type", label) as "agent" | "loop" | undefined) ?? "agent",
+    loop_config: (readOptionalRecord(record, "loop_config", label) as LoopConfig | null) ?? null,
   };
 }
 
@@ -1092,9 +1095,72 @@ export async function fetchAgentLogs(
   token: string,
   namespace: string,
   agentName: string,
+  tail?: number,
 ): Promise<AgentLogsResponse> {
-  const response = await fetchAuthenticated(buildUrl(`/api/agents/${agentName}/logs`, namespace), token);
+  const url = buildUrl(`/api/agents/${agentName}/logs`, namespace);
+  const fullUrl = tail ? `${url}${url.includes("?") ? "&" : "?"}tail=${tail}` : url;
+  const response = await fetchAuthenticated(fullUrl, token);
   return parseJsonResponse(response, parseAgentLogsResponsePayload);
+}
+
+export interface LogStreamHandlers {
+  signal: AbortSignal;
+  token: string;
+  namespace: string;
+  agentName: string;
+  tail?: number;
+  onLine: (line: string) => void;
+  onStarted: (info: { agent_name: string; pod_name: string }) => void;
+  onError: (error: Error) => void;
+  onStopped: () => void;
+}
+
+export async function streamAgentLogs(options: LogStreamHandlers): Promise<void> {
+  const url = buildUrl(`/api/agents/${options.agentName}/logs/stream`, options.namespace);
+  const fullUrl = options.tail ? `${url}${url.includes("?") ? "&" : "?"}tail=${options.tail}` : url;
+
+  await fetchEventSource(fullUrl, {
+    headers: {
+      ...buildHeaders(options.token),
+      Accept: "text/event-stream",
+    },
+    signal: options.signal,
+    openWhenHidden: true,
+    async onopen(response) {
+      if (!response.ok) {
+        throw new Error(`Log stream failed with status ${response.status}`);
+      }
+    },
+    onmessage(message) {
+      if (!message.event || !message.data) return;
+      try {
+        const data = JSON.parse(message.data);
+        switch (message.event) {
+          case "log.line":
+            if (typeof data.line === "string") options.onLine(data.line);
+            break;
+          case "log.started":
+            options.onStarted(data);
+            break;
+          case "log.error":
+            options.onError(new Error(data.error ?? "Unknown log stream error"));
+            break;
+          case "log.stopped":
+            options.onStopped();
+            break;
+        }
+      } catch {
+        // skip unparseable messages
+      }
+    },
+    onerror(error) {
+      options.onError(error instanceof Error ? error : new Error(String(error)));
+      throw error; // stop reconnection
+    },
+    onclose() {
+      options.onStopped();
+    },
+  });
 }
 
 export async function decideApproval(

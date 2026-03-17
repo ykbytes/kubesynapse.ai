@@ -1,4 +1,4 @@
-import { Bot, GitBranch, FlaskConical, Inbox, Package, Play, Plus, RefreshCw, PanelLeftClose, PanelLeft, Search } from "lucide-react";
+import { Bot, GitBranch, FlaskConical, Inbox, Package, Play, Plus, RefreshCw, PanelLeftClose, PanelLeft, Search, Blocks } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -36,6 +36,7 @@ interface AppSidebarProps {
 const VIEW_META: Record<WorkspaceView, { label: string; icon: typeof Bot }> = {
   agents: { label: "Agents", icon: Bot },
   workflows: { label: "Workflows", icon: GitBranch },
+  composer: { label: "Composer", icon: Blocks },
   evals: { label: "Evals", icon: FlaskConical },
   catalog: { label: "Catalog", icon: Package },
 };

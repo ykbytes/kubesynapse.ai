@@ -1,4 +1,5 @@
-import { AlertTriangle, CheckCircle, Loader2, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle, Loader2, XCircle, Play, Square, RefreshCw, Terminal } from "lucide-react";
+import { useEffect, useRef } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -31,6 +32,7 @@ interface AgentInspectorDrawerProps {
   namespace: string;
   logs: string;
   logsLoading: boolean;
+  logsStreaming: boolean;
   activity: UiActivity[];
   summary: InvocationSummary | null;
   approvalReason: string;
@@ -39,6 +41,8 @@ interface AgentInspectorDrawerProps {
   onApprove: () => void;
   onDeny: () => void;
   onLoadLogs: () => void;
+  onStreamLogs: () => void;
+  onStopLogStream: () => void;
 }
 
 export function AgentInspectorDrawer({
@@ -55,6 +59,7 @@ export function AgentInspectorDrawer({
   namespace,
   logs,
   logsLoading,
+  logsStreaming,
   activity,
   summary,
   approvalReason,
@@ -63,6 +68,8 @@ export function AgentInspectorDrawer({
   onApprove,
   onDeny,
   onLoadLogs,
+  onStreamLogs,
+  onStopLogStream,
 }: AgentInspectorDrawerProps) {
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -226,22 +233,15 @@ export function AgentInspectorDrawer({
 
           {/* Logs Tab */}
           <TabsContent value="logs" className="flex-1 overflow-hidden">
-            <div className="flex flex-col h-full">
-              <div className="flex items-center gap-2 border-b border-border px-4 py-2">
-                <Button size="sm" variant="outline" className="h-7 text-xs" onClick={onLoadLogs} disabled={logsLoading}>
-                  {logsLoading ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : null}
-                  {logsLoading ? "Loading..." : "Load Logs"}
-                </Button>
-                {selectedAgentName && (
-                  <span className="text-xs text-muted-foreground">for {selectedAgentName}</span>
-                )}
-              </div>
-              <ScrollArea className="flex-1">
-                <pre className="p-4 text-[11px] font-mono text-muted-foreground whitespace-pre-wrap">
-                  {logs || "No logs loaded. Click 'Load Logs' above."}
-                </pre>
-              </ScrollArea>
-            </div>
+            <LogsPanel
+              logs={logs}
+              logsLoading={logsLoading}
+              logsStreaming={logsStreaming}
+              selectedAgentName={selectedAgentName}
+              onLoadLogs={onLoadLogs}
+              onStreamLogs={onStreamLogs}
+              onStopLogStream={onStopLogStream}
+            />
           </TabsContent>
 
           {/* Raw Tab */}
@@ -379,6 +379,100 @@ export function ResourceInspectorDrawer({
 }
 
 // ── Shared sub-components ──
+
+// ── Log Viewer Panel (extracted for clarity) ──
+
+interface LogsPanelProps {
+  logs: string;
+  logsLoading: boolean;
+  logsStreaming: boolean;
+  selectedAgentName: string;
+  onLoadLogs: () => void;
+  onStreamLogs: () => void;
+  onStopLogStream: () => void;
+}
+
+function LogsPanel({
+  logs,
+  logsLoading,
+  logsStreaming,
+  selectedAgentName,
+  onLoadLogs,
+  onStreamLogs,
+  onStopLogStream,
+}: LogsPanelProps) {
+  const logEndRef = useRef<HTMLDivElement>(null);
+  const autoScrollRef = useRef(true);
+
+  // Auto-scroll to bottom when streaming and new content arrives
+  useEffect(() => {
+    if (logsStreaming && autoScrollRef.current && logEndRef.current) {
+      logEndRef.current.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [logs, logsStreaming]);
+
+  const lineCount = logs ? logs.split("\n").filter(Boolean).length : 0;
+
+  return (
+    <div className="flex flex-col h-full">
+      <div className="flex items-center gap-2 border-b border-border px-4 py-2 flex-wrap">
+        {logsStreaming ? (
+          <Button size="sm" variant="destructive" className="h-7 text-xs gap-1" onClick={onStopLogStream}>
+            <Square className="h-3 w-3" /> Stop
+          </Button>
+        ) : (
+          <>
+            <Button size="sm" variant="outline" className="h-7 text-xs gap-1" onClick={onStreamLogs} disabled={logsLoading || !selectedAgentName} title="Stream live logs from the agent pod">
+              <Play className="h-3 w-3" /> Stream
+            </Button>
+            <Button size="sm" variant="outline" className="h-7 text-xs gap-1" onClick={onLoadLogs} disabled={logsLoading || logsStreaming || !selectedAgentName} title="Fetch recent log snapshot (500 lines)">
+              {logsLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+              {logsLoading ? "Loading…" : "Snapshot"}
+            </Button>
+          </>
+        )}
+
+        {logsStreaming && (
+          <span className="flex items-center gap-1.5 text-[10px] text-green-500">
+            <span className="relative flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500" />
+            </span>
+            Live
+          </span>
+        )}
+
+        {selectedAgentName && (
+          <span className="text-[10px] text-muted-foreground ml-auto">
+            {selectedAgentName} · {lineCount} lines
+          </span>
+        )}
+      </div>
+
+      <div className="flex-1 overflow-auto bg-black/5 dark:bg-black/20"
+        onScroll={(e) => {
+          const el = e.currentTarget;
+          const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+          autoScrollRef.current = atBottom;
+        }}
+      >
+        {logs ? (
+          <pre className="p-4 text-[11px] leading-relaxed font-mono text-muted-foreground whitespace-pre-wrap break-all select-text">
+            {logs}
+            <div ref={logEndRef} />
+          </pre>
+        ) : (
+          <div className="flex flex-col items-center justify-center h-full gap-2 py-12">
+            <Terminal className="h-8 w-8 text-muted-foreground/30" />
+            <p className="text-xs text-muted-foreground text-center max-w-[200px]">
+              Click <strong>Stream</strong> to tail live logs or <strong>Snapshot</strong> to fetch recent output.
+            </p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (

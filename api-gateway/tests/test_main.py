@@ -1305,5 +1305,93 @@ class GatewayInvokeProxyTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("event: response.completed", payload)
 
 
+class LogStreamTests(unittest.TestCase):
+    """Tests for the agent log endpoints including the new SSE streaming endpoint."""
+
+    @classmethod
+    def _ensure_k8s_mock(cls):
+        """Ensure a mock kubernetes module exists in sys.modules for local imports."""
+        if "kubernetes" not in sys.modules:
+            k8s_mod = types.ModuleType("kubernetes")
+            k8s_client_mod = types.ModuleType("kubernetes.client")
+            k8s_watch_mod = types.ModuleType("kubernetes.watch")
+            k8s_mod.client = k8s_client_mod
+            k8s_mod.watch = k8s_watch_mod
+            sys.modules["kubernetes"] = k8s_mod
+            sys.modules["kubernetes.client"] = k8s_client_mod
+            sys.modules["kubernetes.watch"] = k8s_watch_mod
+
+    def setUp(self):
+        self._ensure_k8s_mock()
+        from unittest.mock import MagicMock
+        self._mock_core = MagicMock()
+        self._core_patcher = patch.object(
+            sys.modules["kubernetes.client"], "CoreV1Api", return_value=self._mock_core,
+            create=True,
+        )
+        self._core_patcher.start()
+
+    def tearDown(self):
+        self._core_patcher.stop()
+
+    def test_get_agent_logs_returns_pod_log_with_timestamps(self) -> None:
+        fake_pod = types.SimpleNamespace(
+            metadata=types.SimpleNamespace(name="my-pod-0")
+        )
+        fake_log_text = "2026-03-17T10:00:00Z INFO starting\n2026-03-17T10:00:01Z INFO ready"
+        self._mock_core.read_namespaced_pod_log.return_value = fake_log_text
+
+        with patch.object(api_gateway_main, "verify_token", return_value={"sub": "u1", "namespaces": ["ns1"]}), \
+             patch.object(api_gateway_main, "read_agent", return_value={}), \
+             patch.object(api_gateway_main, "list_agent_pods", return_value=[fake_pod]):
+            result = api_gateway_main.get_agent_logs(
+                agent_name="myagent", namespace="ns1", tail=200,
+                user={"sub": "u1", "namespaces": ["ns1"]},
+            )
+            self.assertEqual(result["agent_name"], "myagent")
+            self.assertEqual(result["pod_name"], "my-pod-0")
+            self.assertIn("starting", result["logs"])
+            call_kwargs = self._mock_core.read_namespaced_pod_log.call_args
+            self.assertTrue(call_kwargs.kwargs.get("timestamps", False))
+
+    def test_get_agent_logs_clamps_tail_parameter(self) -> None:
+        """Tail parameter should be clamped between 1 and 5000."""
+        fake_pod = types.SimpleNamespace(
+            metadata=types.SimpleNamespace(name="pod-0")
+        )
+        self._mock_core.read_namespaced_pod_log.return_value = ""
+
+        with patch.object(api_gateway_main, "verify_token", return_value={"sub": "u1", "namespaces": ["ns1"]}), \
+             patch.object(api_gateway_main, "read_agent", return_value={}), \
+             patch.object(api_gateway_main, "list_agent_pods", return_value=[fake_pod]):
+            api_gateway_main.get_agent_logs(
+                agent_name="myagent", namespace="ns1", tail=99999,
+                user={"sub": "u1", "namespaces": ["ns1"]},
+            )
+            call_kwargs = self._mock_core.read_namespaced_pod_log.call_args
+            self.assertEqual(call_kwargs.kwargs.get("tail_lines"), 5000)
+
+    def test_sse_event_format(self) -> None:
+        """sse_event produces valid SSE with proper termination."""
+        result = api_gateway_main.sse_event("log.line", {"line": "hello world"})
+        self.assertTrue(result.startswith("event: log.line\ndata: "))
+        self.assertTrue(result.endswith("\n\n"))
+        data_line = result.split("\n")[1]
+        payload = json.loads(data_line.removeprefix("data: "))
+        self.assertEqual(payload["line"], "hello world")
+
+    def test_get_agent_logs_404_no_pods(self) -> None:
+        """Should 404 when no runtime pods exist."""
+        with patch.object(api_gateway_main, "verify_token", return_value={"sub": "u1", "namespaces": ["ns1"]}), \
+             patch.object(api_gateway_main, "read_agent", return_value={}), \
+             patch.object(api_gateway_main, "list_agent_pods", return_value=[]):
+            with self.assertRaises(HTTPException) as ctx:
+                api_gateway_main.get_agent_logs(
+                    agent_name="myagent", namespace="ns1",
+                    user={"sub": "u1", "namespaces": ["ns1"]},
+                )
+            self.assertEqual(ctx.exception.status_code, 404)
+
+
 if __name__ == "__main__":
     unittest.main()

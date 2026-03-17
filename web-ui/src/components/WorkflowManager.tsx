@@ -1,5 +1,6 @@
 import {
   AlertTriangle,
+  Blocks,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
@@ -61,6 +62,7 @@ interface WorkflowManagerProps {
   approvalBusy: boolean;
   onApprovalReasonChange: (value: string) => void;
   onApprovalDecision: (decision: "approved" | "denied") => void;
+  onOpenComposer?: () => void;
 }
 
 /* ───────────── helpers ───────────── */
@@ -477,6 +479,7 @@ export function WorkflowManager({
   approvalBusy,
   onApprovalReasonChange,
   onApprovalDecision,
+  onOpenComposer,
 }: WorkflowManagerProps) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -1209,6 +1212,15 @@ export function WorkflowManager({
             {isSaving ? <LoaderCircle className="mr-1.5 h-4 w-4 animate-spin" /> : <Save className="mr-1.5 h-4 w-4" />}
             {isSaving ? "Saving..." : workflow ? "Save workflow" : "Create workflow"}
           </Button>
+          {workflow && onOpenComposer && (
+            <Button
+              variant="outline"
+              onClick={onOpenComposer}
+            >
+              <Blocks className="mr-1.5 h-4 w-4" />
+              Edit in Composer
+            </Button>
+          )}
           {workflow && (
             <Button
               variant="destructive"

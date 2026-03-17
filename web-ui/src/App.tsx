@@ -15,6 +15,7 @@ import { AgentInspectorDrawer, ResourceInspectorDrawer } from "./components/Insp
 import { SkillsCatalogPanel } from "./components/SkillsCatalogPanel";
 import { TopBar } from "./components/TopBar";
 import { WorkflowManager } from "./components/WorkflowManager";
+import { WorkflowComposer } from "./components/WorkflowComposer";
 import { Button } from "@/components/ui/button";
 
 import { ConnectionProvider, useConnection } from "./contexts/ConnectionContext";
@@ -135,7 +136,7 @@ function AppLayout() {
         : ws.agentCreateMode
           ? "Create and provision a new agent."
           : "Connect, create, and manage your agents."
-      : ws.activeView === "workflows"
+      : ws.activeView === "workflows" || ws.activeView === "composer"
         ? ws.selectedWorkflow
           ? `${ws.selectedWorkflow.name} workflow orchestration.`
           : ws.workflowCreateMode || ws.workflows.length === 0
@@ -152,7 +153,7 @@ function AppLayout() {
   const selectedResourceStatus =
     ws.activeView === "agents"
       ? ws.selectedAgent?.status ?? (ws.agentCreateMode ? "draft" : "none")
-      : ws.activeView === "workflows"
+      : ws.activeView === "workflows" || ws.activeView === "composer"
         ? ws.selectedWorkflow?.phase ?? (ws.workflowCreateMode ? "draft" : "none")
         : ws.activeView === "catalog"
           ? "browse"
@@ -217,7 +218,7 @@ function AppLayout() {
             onQuickRun={
               ws.activeView === "agents"
                 ? (id) => { ws.handleSelectResource(id); ws.setAgentViewTab("chat"); }
-                : ws.activeView === "workflows"
+                : ws.activeView === "workflows" || ws.activeView === "composer"
                   ? (id) => {
                       ws.handleSelectResource(id);
                       const wf = ws.workflows.find((w) => w.name === id);
@@ -408,7 +409,10 @@ function AppLayout() {
               approvalBusy={chat.approvalBusy}
               onApprovalReasonChange={chat.setApprovalReason}
               onApprovalDecision={(decision) => void chat.handleWorkflowApprovalDecision(decision)}
+              onOpenComposer={() => ws.setActiveView("composer")}
             />
+          ) : ws.activeView === "composer" ? (
+            <WorkflowComposer />
           ) : ws.activeView === "catalog" ? (
             <SkillsCatalogPanel token={conn.token} />
           ) : (
@@ -442,6 +446,7 @@ function AppLayout() {
           namespace={conn.namespace}
           logs={chat.logs}
           logsLoading={chat.logsLoading}
+          logsStreaming={chat.logsStreaming}
           activity={chat.activity}
           summary={chat.summary}
           approvalReason={chat.approvalReason}
@@ -450,8 +455,10 @@ function AppLayout() {
           onApprove={() => void chat.handleAgentApprovalDecision("approved")}
           onDeny={() => void chat.handleAgentApprovalDecision("denied")}
           onLoadLogs={() => void chat.handleLoadLogs()}
+          onStreamLogs={() => chat.handleStreamLogs()}
+          onStopLogStream={() => chat.handleStopLogStream()}
         />
-      ) : ws.activeView === "workflows" ? (
+      ) : ws.activeView === "workflows" || ws.activeView === "composer" ? (
         <ResourceInspectorDrawer
           open={ws.inspectorOpen}
           onOpenChange={ws.setInspectorOpen}

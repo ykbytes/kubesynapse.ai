@@ -5,6 +5,7 @@ import {
   fetchAgentLogs,
   invokeAgent,
   streamAgentInvoke,
+  streamAgentLogs,
 } from "@/lib/api";
 import { isValidK8sName } from "@/lib/a2a";
 import { useConnection } from "./ConnectionContext";
@@ -151,6 +152,7 @@ export interface ChatContextValue {
   chatError: string;
   isSending: boolean;
   logsLoading: boolean;
+  logsStreaming: boolean;
   canSubmitChat: boolean;
   chatEmptyMessage: string;
 
@@ -199,6 +201,8 @@ export interface ChatContextValue {
   // Actions
   handleSubmit: () => Promise<void>;
   handleLoadLogs: () => Promise<void>;
+  handleStreamLogs: () => void;
+  handleStopLogStream: () => void;
   handleAgentApprovalDecision: (decision: "approved" | "denied") => Promise<void>;
   handleWorkflowApprovalDecision: (decision: "approved" | "denied") => Promise<void>;
   cancelStream: () => void;
@@ -236,6 +240,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const [chatError, setChatError] = useState("");
   const [isSending, setIsSending] = useState(false);
   const [logsLoading, setLogsLoading] = useState(false);
+  const [logsStreaming, setLogsStreaming] = useState(false);
+  const logStreamAbortRef = useRef<AbortController | null>(null);
 
   const [a2aTargetAgent, setA2ATargetAgent] = useState("");
   const [a2aTargetNamespace, setA2ATargetNamespace] = useState("");
@@ -300,8 +306,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     setSummaryByAgent((prev) => ({ ...prev, [agentName]: updater(prev[agentName] ?? null) }));
   }
 
-  function setLogsForAgent(agentName: string, value: string) {
-    setLogsByAgent((prev) => ({ ...prev, [agentName]: value }));
+  function setLogsForAgent(agentName: string, value: string | ((prev: string) => string)) {
+    setLogsByAgent((prev) => {
+      const current = prev[agentName] ?? "";
+      const next = typeof value === "function" ? value(current) : value;
+      return { ...prev, [agentName]: next };
+    });
   }
 
   function setGooseChatSettingsForAgent(agentName: string, updater: (current: GooseChatSettings) => GooseChatSettings) {
@@ -563,11 +573,74 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     if (!token.trim() || !selectedAgentName) return;
     setLogsLoading(true); setWorkspaceError("");
     try {
-      const result = await fetchAgentLogs(token, namespace, selectedAgentName);
+      const result = await fetchAgentLogs(token, namespace, selectedAgentName, 500);
       setLogsForAgent(selectedAgentName, result.logs);
     } catch (err) { setWorkspaceError(err instanceof Error ? err.message : String(err)); }
     finally { setLogsLoading(false); }
   }, [token, namespace, selectedAgentName, setWorkspaceError]);
+
+  // ── handleStreamLogs / handleStopLogStream ──
+
+  const handleStopLogStream = useCallback(() => {
+    if (logStreamAbortRef.current) {
+      logStreamAbortRef.current.abort();
+      logStreamAbortRef.current = null;
+    }
+    setLogsStreaming(false);
+  }, []);
+
+  const handleStreamLogs = useCallback(() => {
+    if (!token.trim() || !selectedAgentName) return;
+    // Stop any existing stream first
+    if (logStreamAbortRef.current) logStreamAbortRef.current.abort();
+
+    const abortController = new AbortController();
+    logStreamAbortRef.current = abortController;
+    const agentName = selectedAgentName;
+
+    setLogsStreaming(true);
+    setLogsForAgent(agentName, "");
+    setWorkspaceError("");
+
+    streamAgentLogs({
+      signal: abortController.signal,
+      token,
+      namespace,
+      agentName,
+      tail: 100,
+      onStarted: (info) => {
+        setLogsForAgent(agentName, (prev) => prev + `── streaming logs from pod ${info.pod_name} ──\n`);
+      },
+      onLine: (line) => {
+        setLogsForAgent(agentName, (prev) => prev + line + "\n");
+      },
+      onError: (error) => {
+        if (!abortController.signal.aborted) {
+          setWorkspaceError(`Log stream error: ${error.message}`);
+        }
+        setLogsStreaming(false);
+        logStreamAbortRef.current = null;
+      },
+      onStopped: () => {
+        setLogsStreaming(false);
+        logStreamAbortRef.current = null;
+      },
+    }).catch(() => {
+      // handled by onError/onStopped
+      setLogsStreaming(false);
+      logStreamAbortRef.current = null;
+    });
+  }, [token, namespace, selectedAgentName, setWorkspaceError]);
+
+  // Stop log stream when agent selection changes
+  useEffect(() => {
+    return () => {
+      if (logStreamAbortRef.current) {
+        logStreamAbortRef.current.abort();
+        logStreamAbortRef.current = null;
+      }
+    };
+  }, [selectedAgentName]);
 
   // ── handleAgentApprovalDecision ──
 
@@ -681,7 +754,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   return (
     <ChatContext.Provider value={{
       messages, activity, summary, logs, selectedGooseChatSettings, selectedOpenCodeChatSettings, gooseSystemPromptPreview,
-      prompt, streamMode, requireApproval, approvalSupported, chatError, isSending, logsLoading, canSubmitChat, chatEmptyMessage,
+      prompt, streamMode, requireApproval, approvalSupported, chatError, isSending, logsLoading, logsStreaming, canSubmitChat, chatEmptyMessage,
       a2aTargetAgent, a2aTargetNamespace, a2aTimeoutSeconds,
       specialistSubagents, specialistTeamConfigured, subagentStrategy,
       approvalReason, approvalBusy, selectedWorkflowApprovalName,
@@ -690,7 +763,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       addSpecialistSubagent, updateSpecialistSubagent, removeSpecialistSubagent, clearSpecialistTeam,
       setGooseMaxTurns, setGooseWorkingDirectory,
       setOpenCodeOutputFormat, setOpenCodeAutonomous, setOpenCodeMaxTurns, setOpenCodeWorkingDirectory,
-      handleSubmit, handleLoadLogs, handleAgentApprovalDecision, handleWorkflowApprovalDecision, cancelStream,
+      handleSubmit, handleLoadLogs, handleStreamLogs, handleStopLogStream, handleAgentApprovalDecision, handleWorkflowApprovalDecision, cancelStream,
       setMessagesForAgent, removeAgentChatState,
     }}>
       {children}

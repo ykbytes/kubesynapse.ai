@@ -2820,6 +2820,8 @@ def workflow_info_from_resource(workflow: dict[str, Any]) -> WorkflowInfo:
                 depends_on=step.get("dependsOn") or [],
                 require_approval=bool(step.get("requireApproval", False)),
                 execution=step.get("execution") or None,
+                step_type=step.get("type", "agent") or "agent",
+                loop_config=step.get("loopConfig") or None,
             )
             for step in spec.get("steps") or []
         ],
@@ -4849,10 +4851,12 @@ async def invoke_agent_stream(
 def get_agent_logs(
     agent_name: str,
     namespace: str = "default",
+    tail: int = 200,
     user=Depends(verify_token),
 ):
     ensure_namespace_access(user, namespace)
     read_agent(agent_name, namespace)
+    tail = max(1, min(tail, 5000))
     try:
         pods = list_agent_pods(agent_name, namespace)
         if not pods:
@@ -4868,13 +4872,66 @@ def get_agent_logs(
             name=pod_name,
             namespace=namespace,
             container="agent-runtime",
-            tail_lines=100,
+            tail_lines=tail,
+            timestamps=True,
         )
-        return {"agent_name": agent_name, "logs": logs}
+        return {"agent_name": agent_name, "pod_name": pod_name, "logs": logs}
     except HTTPException:
         raise
     except Exception as exc:
         raise HTTPException(status_code=404, detail=f"Could not retrieve logs: {exc}") from exc
+
+
+@app.get("/api/agents/{agent_name}/logs/stream")
+async def stream_agent_logs(
+    agent_name: str,
+    request: Request,
+    namespace: str = "default",
+    tail: int = 50,
+    user=Depends(verify_token),
+):
+    """Stream pod logs via SSE using Kubernetes follow=True."""
+    ensure_namespace_access(user, namespace)
+    read_agent(agent_name, namespace)
+    tail = max(1, min(tail, 5000))
+
+    pods = list_agent_pods(agent_name, namespace)
+    if not pods:
+        raise HTTPException(status_code=404, detail=f"No runtime pod found for agent '{agent_name}'")
+
+    pod_name = str(getattr(pods[0].metadata, "name", "") or "")
+    if not pod_name:
+        raise HTTPException(status_code=404, detail=f"No runtime pod found for agent '{agent_name}'")
+
+    async def log_event_generator():
+        from kubernetes import client as k8s_client, watch as k8s_watch
+
+        yield sse_event("log.started", {"agent_name": agent_name, "pod_name": pod_name})
+
+        w = k8s_watch.Watch()
+        try:
+            log_stream = w.stream(
+                k8s_client.CoreV1Api().read_namespaced_pod_log,
+                name=pod_name,
+                namespace=namespace,
+                container="agent-runtime",
+                follow=True,
+                tail_lines=tail,
+                timestamps=True,
+                _request_timeout=0,
+            )
+            for line in log_stream:
+                if await request.is_disconnected():
+                    break
+                yield sse_event("log.line", {"line": line})
+                await asyncio.sleep(0)  # yield control so disconnect check works
+        except Exception as exc:
+            yield sse_event("log.error", {"error": str(exc)})
+        finally:
+            w.stop()
+            yield sse_event("log.stopped", {"agent_name": agent_name})
+
+    return StreamingResponse(log_event_generator(), media_type="text/event-stream")
 
 
 if __name__ == "__main__":

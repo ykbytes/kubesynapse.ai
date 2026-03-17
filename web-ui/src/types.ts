@@ -230,7 +230,7 @@ export interface AgentInfo {
   runtime_kind?: RuntimeKind;
 }
 
-export type WorkspaceView = "agents" | "workflows" | "evals" | "catalog";
+export type WorkspaceView = "agents" | "workflows" | "evals" | "catalog" | "composer";
 
 /* ── Skills Catalog types ── */
 
