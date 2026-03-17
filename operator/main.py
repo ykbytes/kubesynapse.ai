@@ -3884,7 +3884,7 @@ def on_approval_decision(old: str, new: str, name: str, namespace: str, logger: 
                 plural="agentworkflows",
                 label_selector=f"sandbox.enterprise.ai/pending-approval={name}",
             ).get("items", [])
-        except Exception:
+        except kubernetes.client.rest.ApiException:
             workflows = custom_api.list_namespaced_custom_object(
                 group="sandbox.enterprise.ai",
                 version="v1alpha1",

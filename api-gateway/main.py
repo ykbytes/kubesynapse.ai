@@ -2343,6 +2343,7 @@ def handle_a2a_get_task(agent_name: str, namespace: str, params: dict[str, Any],
     task_id = str(params.get("id") or "").strip()
     if not task_id:
         raise A2AJSONRPCError(JSONRPC_INVALID_PARAMS, "params.id is required")
+    purge_expired_a2a_tasks()
     history_length = parse_history_length(params.get("historyLength"), field_name="historyLength")
     record = get_a2a_task_record(namespace, agent_name, task_id)
     if record is None:

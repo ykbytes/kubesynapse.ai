@@ -335,7 +335,7 @@ export function ChatWorkbench({
   const specialistMode = specialistTeamConfigured;
 
   useEffect(() => {
-    if (!scrollRef.current) return;
+    if (!scrollRef.current || messages.length === 0) return;
     const latestMessage = messages[messages.length - 1];
     scrollRef.current.scrollTo({
       top: scrollRef.current.scrollHeight,

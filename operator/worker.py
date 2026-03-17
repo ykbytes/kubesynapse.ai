@@ -476,6 +476,9 @@ def execute_workflow_step(
                     "approval_action": (
                         f"Workflow '{TARGET_NAME}' step '{step_name}'"
                     ),
+                    "caller_agent_name": TARGET_NAME,
+                    "caller_agent_namespace": TARGET_NAMESPACE,
+                    "parent_thread_id": run_id,
                 },
                 timeout_seconds=float(execution_policy["timeoutSeconds"]),
             )
@@ -862,6 +865,7 @@ def execute_loop_step(
     completion_signal_threshold = int(exit_conditions.get("completionSignalCount", 2))
     plan_complete_exit = exit_conditions.get("planComplete", True)
 
+    started_perf = time.perf_counter()
     started_at = now_iso()
     execution_policy = normalize_step_execution(step)
 
@@ -874,7 +878,13 @@ def execute_loop_step(
             plan_result = invoke_agent_runtime(
                 str(step.get("agentRef", "")),
                 TARGET_NAMESPACE,
-                {"prompt": plan_prompt, "thread_id": thread_id},
+                {
+                    "prompt": plan_prompt,
+                    "thread_id": thread_id,
+                    "caller_agent_name": TARGET_NAME,
+                    "caller_agent_namespace": TARGET_NAMESPACE,
+                    "parent_thread_id": run_id,
+                },
                 timeout_seconds=120.0,
             )
             plan_text = str(plan_result.get("response", ""))
@@ -937,7 +947,13 @@ def execute_loop_step(
             result = invoke_agent_runtime(
                 str(step.get("agentRef", "")),
                 TARGET_NAMESPACE,
-                {"prompt": prompt, "thread_id": thread_id},
+                {
+                    "prompt": prompt,
+                    "thread_id": thread_id,
+                    "caller_agent_name": TARGET_NAME,
+                    "caller_agent_namespace": TARGET_NAMESPACE,
+                    "parent_thread_id": run_id,
+                },
                 timeout_seconds=float(execution_policy.get("timeoutSeconds", 300)),
             )
             response_text = str(result.get("response", ""))
@@ -1006,7 +1022,7 @@ def execute_loop_step(
         loop_progress["exitReason"] = "max_iterations"
 
     completed_at = now_iso()
-    latency_ms = int((datetime.fromisoformat(completed_at.replace("Z", "+00:00")).timestamp() - datetime.fromisoformat(started_at.replace("Z", "+00:00")).timestamp()) * 1000)
+    latency_ms = int((time.perf_counter() - started_perf) * 1000)
     combined_response = "\n\n---\n\n".join(all_responses[-3:]) if all_responses else "(no iterations completed)"
 
     append_journal_event(
@@ -1098,7 +1114,7 @@ def run_workflow_worker() -> None:
     completed = {
         step_name
         for step_name, result in step_results.items()
-        if str(result.get("status", "")).strip() in {"completed", "continued", "failed", "denied"}
+        if str(result.get("status", "")).strip() in {"completed", "continued"}
     }
 
     append_journal_event(
@@ -1239,6 +1255,8 @@ def run_workflow_worker() -> None:
                 if outcome["state"] == "approval_pending":
                     pending_approval = outcome["pendingApproval"]
                     current_step = step_name
+                    if "stepResult" in outcome:
+                        step_results[step_name] = outcome["stepResult"]
                     snapshot = workflow_snapshot(
                         generation=generation,
                         run_id=run_id,

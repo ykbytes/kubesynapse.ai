@@ -101,20 +101,28 @@ function AppLayout() {
 
   // Cross-cutting: create agent → init chat message
   async function handleCreateAgentFull() {
-    const created = await ws.handleCreateAgent();
-    if (created) {
-      chat.setMessagesForAgent(created.name, (current: UiMessage[]) =>
-        current.length > 0
-          ? current
-          : [{ id: createId(), role: "system" as const, content: "Agent created. Wait until the runtime status turns running, then start chatting.", status: "complete" as const }],
-      );
+    try {
+      const created = await ws.handleCreateAgent();
+      if (created) {
+        chat.setMessagesForAgent(created.name, (current: UiMessage[]) =>
+          current.length > 0
+            ? current
+            : [{ id: createId(), role: "system" as const, content: "Agent created. Wait until the runtime status turns running, then start chatting.", status: "complete" as const }],
+        );
+      }
+    } catch (err) {
+      ws.setWorkspaceError(err instanceof Error ? err.message : String(err));
     }
   }
 
   // Cross-cutting: delete agent → clear chat state
   async function handleDeleteAgentFull() {
-    const deletedName = await ws.handleDeleteAgent();
-    if (deletedName) chat.removeAgentChatState(deletedName);
+    try {
+      const deletedName = await ws.handleDeleteAgent();
+      if (deletedName) chat.removeAgentChatState(deletedName);
+    } catch (err) {
+      ws.setWorkspaceError(err instanceof Error ? err.message : String(err));
+    }
   }
 
   // Derived display values

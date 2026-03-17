@@ -47,7 +47,10 @@ const KIND_STYLES: Record<OpKind, { icon: typeof Cog; text: string; bg: string }
 function extractPath(input: unknown): string {
   if (!input || typeof input !== "object") return "";
   const rec = input as Record<string, unknown>;
-  return String(rec.filePath ?? rec.file ?? rec.path ?? "").trim();
+  if (typeof rec.filePath === "string") return rec.filePath.trim();
+  if (typeof rec.file === "string") return rec.file.trim();
+  if (typeof rec.path === "string") return rec.path.trim();
+  return "";
 }
 
 function extractCommand(input: unknown): string {

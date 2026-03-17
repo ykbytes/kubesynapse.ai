@@ -192,6 +192,8 @@ def dedupe_items(values: list[str]) -> list[str]:
 def truncate_text(text: str, limit: int = 4000) -> str:
     if len(text) <= limit:
         return text
+    if limit <= 3:
+        return text[:limit]
     return f"{text[: limit - 3]}..."
 
 
@@ -1325,6 +1327,7 @@ def invoke_opencode(request: InvokeRequest) -> InvokeResponse:
             is_permanent = (
                 isinstance(exc, httpx.HTTPStatusError)
                 and exc.response.status_code < 500
+                and exc.response.status_code not in (408, 429)
             )
             if is_permanent or retries_used >= max_retries:
                 raise HTTPException(
@@ -1337,9 +1340,12 @@ def invoke_opencode(request: InvokeRequest) -> InvokeResponse:
             )
             # Preserve the original prompt so the retry does not lose
             # context; only prepend a short recovery note.
-            current_prompt = (
+            recovery_note = (
                 f"[Note: the previous request encountered a transient error ({type(exc).__name__}). "
-                f"Continue from where you left off.]\n\n{current_prompt}"
+                f"Continue from where you left off.]\n\n"
+            )
+            current_prompt = truncate_text(
+                f"{recovery_note}{current_prompt}", MAX_PROMPT_CHARS
             )
             continue
 
@@ -1378,6 +1384,11 @@ def invoke_opencode(request: InvokeRequest) -> InvokeResponse:
             if summarize_session(session_id):
                 all_warnings.append(f"Turn {turn + 1}: proactively triggered compaction (token usage high).")
                 wait_for_session_idle(session_id, timeout_seconds=SESSION_ABORT_TIMEOUT_SECONDS)
+                current_prompt = (
+                    "Context was proactively compacted to free space. "
+                    "Continue working on your task from where you left off."
+                )
+                continue
 
         if completion == "completed":
             break
@@ -1574,7 +1585,10 @@ def health() -> dict[str, Any]:
 @app.get("/ready")
 def ready() -> dict[str, Any]:
     ensure_runtime_directories()
-    resolved_binary = shutil.which(OPENCODE_BIN) if not Path(OPENCODE_BIN).is_absolute() else OPENCODE_BIN
+    if Path(OPENCODE_BIN).is_absolute():
+        resolved_binary = OPENCODE_BIN if Path(OPENCODE_BIN).exists() else None
+    else:
+        resolved_binary = shutil.which(OPENCODE_BIN)
     if not resolved_binary:
         raise HTTPException(status_code=503, detail=f"opencode binary '{OPENCODE_BIN}' is not available on PATH")
     ensure_server_running()

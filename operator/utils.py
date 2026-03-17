@@ -85,8 +85,9 @@ def build_thread_id(prefix: str, *parts: object, max_length: int = MAX_THREAD_ID
 
     digest = hashlib.sha1(base.encode("utf-8")).hexdigest()[:10]
     keep_length = max(max_length - len(digest) - 1, 1)
-    truncated = base[:keep_length].rstrip("-_") or prefix
-    return f"{truncated}-{digest}"
+    truncated = base[:keep_length].rstrip("-_") or "item"
+    result = f"{truncated}-{digest}"
+    return result[:max_length] if len(result) > max_length else result
 
 
 def build_workflow_run_id(namespace: str, workflow_name: str, generation: int) -> str:

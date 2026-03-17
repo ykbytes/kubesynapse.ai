@@ -1600,6 +1600,9 @@ class InvokeResponse(BaseModel):
     a2a: dict[str, Any] | None = None
     subagents: dict[str, Any] | None = None
     warnings: list[str] = Field(default_factory=list)
+    artifacts: list[dict[str, Any]] = Field(default_factory=list)
+    tool_calls: list[dict[str, Any]] = Field(default_factory=list)
+    metadata: dict[str, Any] | None = None
     token_usage: dict[str, int] | None = None
 
 
@@ -6946,6 +6949,9 @@ async def invoke_stream(request: InvokeRequest) -> StreamingResponse:
                     "a2a": response.a2a,
                     "subagents": response.subagents,
                     "warnings": response.warnings,
+                    "artifacts": response.artifacts,
+                    "tool_calls": response.tool_calls,
+                    "metadata": response.metadata,
                 },
             )
         except asyncio.CancelledError:

@@ -377,8 +377,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     }
 
     const abortController = new AbortController();
-    streamAbortRef.current?.abort();
+    const previousController = streamAbortRef.current;
     streamAbortRef.current = abortController;
+    previousController?.abort();
     let streamErrorHandled = false;
 
     try {
@@ -470,7 +471,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       }
     } finally {
       setIsSending(false);
-      streamAbortRef.current = null;
+      if (streamAbortRef.current === abortController) {
+        streamAbortRef.current = null;
+      }
     }
   }
 
