@@ -1149,8 +1149,8 @@ export async function streamAgentLogs(options: LogStreamHandlers): Promise<void>
             options.onStopped();
             break;
         }
-      } catch {
-        // skip unparseable messages
+      } catch (parseErr) {
+        options.onError(new Error(`Failed to parse log event: ${parseErr instanceof Error ? parseErr.message : String(parseErr)}`));
       }
     },
     onerror(error) {

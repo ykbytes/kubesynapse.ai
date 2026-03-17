@@ -422,7 +422,7 @@ function StepDetailCard({
           <div className="mt-2 rounded-xl border border-amber-500/30 bg-amber-500/5 p-3 space-y-2">
             <div className="flex items-center gap-2 text-sm text-amber-300">
               <ShieldCheck className="h-4 w-4" />
-              <span className="font-medium">Approval required for this step</span>
+              <span className="font-medium">Approval required for step “{step.name}”</span>
             </div>
             <Textarea
               rows={2}
@@ -741,7 +741,7 @@ export function WorkflowManager({
               )}
 
               {/* pending approval banner (global) */}
-              {workflow.pending_approval && !pendingApprovalStep && (
+              {isActive && workflow.pending_approval && !pendingApprovalStep && (
                 <div className="mb-4 flex items-center gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-300">
                   <ShieldCheck className="h-4 w-4 shrink-0" />
                   <span>Waiting for approval at <strong>{workflow.current_step || "unknown step"}</strong></span>

@@ -290,6 +290,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     setA2ATargetAgent(""); setA2ATargetNamespace(""); setA2ATimeoutSeconds("");
     setSpecialistSubagents([]); setSubagentStrategy("sequential");
+    setApprovalReason("");
   }, [selectedAgentName, selectedRuntimeKind]);
 
   // ── Per-agent state helpers ──
@@ -597,8 +598,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     const abortController = new AbortController();
     logStreamAbortRef.current = abortController;
     const agentName = selectedAgentName;
+    let errorHandled = false;
 
-    setLogsStreaming(true);
     setWorkspaceError("");
 
     streamAgentLogs({
@@ -608,13 +609,15 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       agentName,
       tail: 100,
       onStarted: (info) => {
-        // Clear logs only after connection succeeds (not before)
+        // Mark streaming only after connection succeeds
+        setLogsStreaming(true);
         setLogsForAgent(agentName, `── streaming logs from pod ${info.pod_name} ──\n`);
       },
       onLine: (line) => {
         setLogsForAgent(agentName, (prev) => prev + line + "\n");
       },
       onError: (error) => {
+        errorHandled = true;
         if (!abortController.signal.aborted) {
           setWorkspaceError(`Log stream error: ${error.message}`);
         }
@@ -622,8 +625,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         logStreamAbortRef.current = null;
       },
       onStopped: () => {
-        setLogsStreaming(false);
-        logStreamAbortRef.current = null;
+        if (!errorHandled) {
+          setLogsStreaming(false);
+          logStreamAbortRef.current = null;
+        }
       },
     }).catch(() => {
       // handled by onError/onStopped
@@ -701,7 +706,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     setIsSending(false);
     if (selectedAgentName) {
       setMessagesForAgent(selectedAgentName, (cur) =>
-        cur.map((m) => m.status === "streaming" ? { ...m, status: "complete" as const, content: m.content || "(cancelled)" } : m)
+        cur.map((m) => m.status === "streaming" ? { ...m, status: "complete" as const, content: m.content || (m.role === "tool" ? "(cancelled)" : "(cancelled)") } : m)
       );
     }
   }, [selectedAgentName, setMessagesForAgent]);
