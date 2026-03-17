@@ -414,10 +414,13 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                   return [...cur, toolMsg];
                 });
               } else if (nodeStatus === "completed" || nodeStatus === "failed") {
-                setMessagesForAgent(agentName, (cur) => cur.map((m) =>
-                  m.role === "tool" && m.toolNode === nodeName && m.status === "streaming"
-                    ? { ...m, status: nodeStatus === "failed" ? "error" : "complete", content: nodeStatus === "failed" ? String(ep.error ?? "Tool call failed") : m.content || "Completed" }
-                    : m));
+                setMessagesForAgent(agentName, (cur) => {
+                  const idx = cur.findIndex((m) => m.role === "tool" && m.toolNode === nodeName && m.status === "streaming");
+                  if (idx < 0) return cur;
+                  const n = [...cur];
+                  n[idx] = { ...n[idx], status: nodeStatus === "failed" ? "error" : "complete", content: nodeStatus === "failed" ? String(ep.error ?? "Tool call failed") : n[idx].content || "Completed" };
+                  return n;
+                });
               }
             }
             return;
@@ -427,10 +430,13 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             const serverType = String(ep.serverType ?? "");
             const toolName = String(ep.toolName ?? "");
             const label = serverType ? `${serverType}/${toolName}` : toolName;
-            setMessagesForAgent(agentName, (cur) => cur.map((m) =>
-              m.role === "tool" && m.toolNode === "mcp_tool" && m.status === "streaming"
-                ? { ...m, toolName: label, content: `${label} → ${ep.bytes ?? "?"} bytes` }
-                : m));
+            setMessagesForAgent(agentName, (cur) => {
+              const idx = cur.findIndex((m) => m.role === "tool" && m.toolNode === "mcp_tool" && m.status === "streaming");
+              if (idx < 0) return cur;
+              const n = [...cur];
+              n[idx] = { ...n[idx], toolName: label, content: `${label} → ${ep.bytes ?? "?"} bytes` };
+              return n;
+            });
             return;
           }
 
@@ -445,10 +451,13 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                 return [...cur, toolMsg];
               });
             } else if (status === "completed" || status === "failed") {
-              setMessagesForAgent(agentName, (cur) => cur.map((m) =>
-                m.role === "tool" && m.toolNode === "subagent" && m.status === "streaming"
-                  ? { ...m, status: status === "failed" ? "error" : "complete", content: m.content || "Completed" }
-                  : m));
+              setMessagesForAgent(agentName, (cur) => {
+                const idx = cur.findIndex((m) => m.role === "tool" && m.toolNode === "subagent" && m.status === "streaming");
+                if (idx < 0) return cur;
+                const n = [...cur];
+                n[idx] = { ...n[idx], status: status === "failed" ? "error" : "complete", content: n[idx].content || "Completed" };
+                return n;
+              });
             }
             return;
           }
@@ -460,7 +469,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           }
 
           if (event === "response.completed") {
-            const nextSummary = updateSummary(agentName, threadIdsRef.current[agentName] ?? "", ep);
+            const fallbackThread = threadIdsRef.current[agentName] || `thread-${agentName}-${createId()}`;
+            const nextSummary = updateSummary(agentName, fallbackThread, ep);
             threadIdsRef.current[agentName] = nextSummary.threadId;
             pendingRequestRef.current[agentName] = nextSummary.status === "approval_pending" ? { ...payload, thread_id: nextSummary.threadId } : null;
             setMessagesForAgent(agentName, (cur) => cur.map((m) => m.id === assistantMessageId

@@ -4614,6 +4614,36 @@ def trigger_workflow(
             raise HTTPException(status_code=409, detail="Workflow was modified concurrently. Retry.") from exc
         raise HTTPException(status_code=502, detail=f"Failed to trigger workflow: {exc}") from exc
 
+    # Reset status so the operator re-reconciles even when the spec
+    # (and therefore metadata.generation) did not change.
+    try:
+        from kubernetes import client as k8s_reset
+
+        k8s_reset.CustomObjectsApi().patch_namespaced_custom_object_status(
+            group=RESOURCE_GROUP,
+            version=RESOURCE_VERSION,
+            namespace=namespace,
+            plural="agentworkflows",
+            name=workflow_name,
+            body={
+                "status": {
+                    "phase": "pending",
+                    "observedGeneration": None,
+                    "pendingApproval": None,
+                }
+            },
+        )
+        # Re-read to return the freshest state
+        updated = k8s_client.CustomObjectsApi().get_namespaced_custom_object(
+            group=RESOURCE_GROUP,
+            version=RESOURCE_VERSION,
+            namespace=namespace,
+            plural="agentworkflows",
+            name=workflow_name,
+        )
+    except Exception:
+        pass  # spec replace already succeeded; status reset is best-effort
+
     return workflow_info_from_resource(updated)
 
 

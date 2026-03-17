@@ -369,13 +369,13 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (workflowPollingRef.current) { clearInterval(workflowPollingRef.current); workflowPollingRef.current = null; }
     if (!selectedWorkflowName || !token.trim()) return;
-    const isActive = selectedWorkflowPhase === "running" || selectedWorkflowPhase === "queued" || selectedWorkflowPhase === "waiting-approval";
+    const isActive = selectedWorkflowPhase === "running" || selectedWorkflowPhase === "queued" || selectedWorkflowPhase === "waiting-approval" || selectedWorkflowPhase === "pending";
     if (!isActive) return;
     workflowPollingRef.current = setInterval(async () => {
       try {
         const updated = await fetchWorkflow(token, namespace, selectedWorkflowName);
         setWorkflows((prev) => prev.map((w) => (w.name === updated.name ? updated : w)));
-        if (updated.phase !== "running" && updated.phase !== "queued" && updated.phase !== "waiting-approval") {
+        if (updated.phase !== "running" && updated.phase !== "queued" && updated.phase !== "waiting-approval" && updated.phase !== "pending") {
           if (workflowPollingRef.current) { clearInterval(workflowPollingRef.current); workflowPollingRef.current = null; }
           toast.info(`Workflow ${updated.name} ${updated.phase}`);
         }

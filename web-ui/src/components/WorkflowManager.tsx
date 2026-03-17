@@ -585,7 +585,7 @@ export function WorkflowManager({
 
   const wfSummary: WorkflowSummary | undefined = workflow?.summary ?? undefined;
   const isActive = workflow?.phase === "running" || workflow?.phase === "queued" || workflow?.phase === "waiting-approval";
-  const hasBeenTriggered = Boolean(workflow && workflow.phase !== "pending");
+  const hasBeenTriggered = Boolean(workflow && (workflow.phase !== "pending" || workflow.run_id || workflow.summary));
   const [showEditor, setShowEditor] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
 
