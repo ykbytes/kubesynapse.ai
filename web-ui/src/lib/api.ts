@@ -800,6 +800,10 @@ export function buildInvocationSummary(fallbackThreadId: string, payload: unknow
         ? null
         : parseSubagentInvocationMetadataPayload(record.subagents, "Invocation summary payload.subagents"),
     warnings: record.warnings === undefined ? [] : readStringArray(record, "warnings", "Invocation summary payload"),
+    artifacts: Array.isArray(record.artifacts) ? (record.artifacts as Array<Record<string, unknown>>) : null,
+    toolCalls: Array.isArray(record.tool_calls) ? (record.tool_calls as Array<Record<string, unknown>>) : null,
+    metadata: record.metadata !== undefined && record.metadata !== null
+      ? expectRecord(record.metadata, "Invocation summary payload.metadata") : null,
   };
 }
 

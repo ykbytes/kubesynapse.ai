@@ -674,6 +674,9 @@ export interface InvocationSummary {
   a2a?: A2AInvocationMetadata | null;
   subagents?: SubagentInvocationMetadata | null;
   warnings: string[];
+  artifacts?: Array<Record<string, unknown>> | null;
+  toolCalls?: Array<Record<string, unknown>> | null;
+  metadata?: Record<string, unknown> | null;
 }
 
 export interface StreamEvent {

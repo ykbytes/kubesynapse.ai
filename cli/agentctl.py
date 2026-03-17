@@ -444,6 +444,12 @@ def render_invoke_result(data: dict[str, Any], json_output: bool) -> None:
         console.print(Panel(Pretty(sandbox_session), title="Sandbox Session", border_style="accent"))
     render_a2a_metadata(data.get("a2a"))
     render_subagent_metadata(data.get("subagents"))
+    artifacts = data.get("artifacts")
+    if artifacts:
+        console.print(Panel(Pretty(artifacts), title="Artifacts", border_style="accent"))
+    metadata = data.get("metadata")
+    if metadata:
+        console.print(Panel(Pretty(metadata), title="Metadata", border_style="accent"))
     render_warnings(list(data.get("warnings") or []))
 
 

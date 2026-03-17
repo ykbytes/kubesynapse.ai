@@ -509,6 +509,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     const hasExplicitA2A = normA2AAgent.length > 0 || normA2ANs.length > 0;
     if (specialistTeamConfigured && selectedRuntimeKind !== "langgraph") { setChatError("Specialist-team orchestration is currently available for LangGraph agents only."); return; }
     if (hasExplicitA2A) {
+      if (selectedRuntimeKind !== "langgraph") { setChatError("Explicit A2A routing is only supported for LangGraph agents."); return; }
       if (!normA2AAgent || !normA2ANs) { setChatError("Provide both an A2A target namespace and an A2A target agent."); return; }
       if (!isValidK8sName(normA2AAgent)) { setChatError("A2A target agent must be a valid lowercase Kubernetes name."); return; }
       if (!isValidK8sName(normA2ANs)) { setChatError("A2A target namespace must be a valid lowercase Kubernetes name."); return; }

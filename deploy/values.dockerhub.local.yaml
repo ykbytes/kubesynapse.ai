@@ -40,7 +40,7 @@ opencodeRuntime:
 apiGateway:
   image:
     repository: docker.io/yakdhane/ai-api-gateway
-    tag: fix-20260312-233109
+    tag: bugfix4-20260317-161714
     pullPolicy: Always
   auth:
     mode: hybrid
@@ -51,7 +51,7 @@ webUi:
   enabled: true
   image:
     repository: docker.io/yakdhane/ai-agent-sandbox-web-ui
-    tag: opencode-20260317-141603
+    tag: bugfix4-20260317-161714
     pullPolicy: Always
 
 platformSecrets:

@@ -11,13 +11,12 @@ function createDraftId(): string {
 export function createOpenCodeConfigFileDraft(initial?: Partial<TextFileDraft>): TextFileDraft {
   return {
     id: initial?.id ?? createDraftId(),
-    path: initial?.path ?? "config.json",
+    path: initial?.path ?? "opencode.json",
     content:
       initial?.content ??
       [
         "{",
-        '  "provider": "openai",',
-        '  "model": "gpt-4"',
+        '  "default_agent": "build"',
         "}",
         "",
       ].join("\n"),

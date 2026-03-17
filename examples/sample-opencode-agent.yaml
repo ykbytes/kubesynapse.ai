@@ -4,7 +4,13 @@ metadata:
   name: opencode-builder
   namespace: default
 spec:
-  runtimeKind: opencode
+  runtime:
+    kind: opencode
+    opencode:
+      configFiles:
+        opencode.json:
+          default_agent: build
+          permission: allow
   model: gpt-4
   policyRef: strict-enterprise-policy
   systemPrompt: >
@@ -20,14 +26,9 @@ spec:
         ---
         Review the code change, focusing on correctness, security,
         and adherence to the project's style guidelines.
-  opencode:
-    configFiles:
-      opencode.json:
-        default_agent: build
-        permission: allow
-    mcpSidecars:
-      - name: browser
-        port: 8081
+  mcpSidecars:
+    - name: browser
+      port: 8081
   storage:
     size: 2Gi
   enableGVisor: true

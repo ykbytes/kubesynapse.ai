@@ -401,6 +401,9 @@ class InvokeResponse(BaseModel):
     a2a: dict[str, Any] | None = None
     subagents: dict[str, Any] | None = None
     warnings: list[str] = Field(default_factory=list)
+    artifacts: list[dict[str, Any]] = Field(default_factory=list)
+    tool_calls: list[dict[str, Any]] = Field(default_factory=list)
+    metadata: dict[str, Any] | None = None
 
 
 class ApprovalInfo(BaseModel):
@@ -4767,6 +4770,9 @@ async def invoke_agent(
         a2a=data.get("a2a"),
         subagents=data.get("subagents"),
         warnings=data.get("warnings") or [],
+        artifacts=data.get("artifacts") or [],
+        tool_calls=data.get("tool_calls") or [],
+        metadata=data.get("metadata"),
     )
 
 
