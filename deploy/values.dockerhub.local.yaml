@@ -5,7 +5,7 @@ global:
 agentRuntime:
   image:
     repository: docker.io/yakdhane/ai-agent-runtime
-    tag: audit5-20260317-180826
+    tag: a2a-fix-20260317-185230
     pullPolicy: IfNotPresent
 
 operator:

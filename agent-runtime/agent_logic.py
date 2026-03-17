@@ -1467,6 +1467,9 @@ class State(TypedDict, total=False):
     mcp_server: str
     mcp_tool_name: str
     mcp_tool_args: dict[str, Any]
+    # Artifacts and tool call records collected during invocation
+    artifacts: list[dict[str, Any]]
+    tool_call_records: list[dict[str, Any]]
 
 
 class InvokeRequest(BaseModel):
@@ -4991,6 +4994,10 @@ def coordinate_specialized_subagents(
                 "error": reason,
             }
 
+        if target_agent == SERVICE_NAME and target_namespace == SERVICE_NAMESPACE:
+            reason = "Subagent cannot target itself: self-referential call detected."
+            return None, blocked_entry(reason), working_session, []
+
         if (target_namespace, target_agent) not in allowed_targets:
             reason = (
                 f"Subagent target '{target_agent}' in namespace '{target_namespace}' is not allowed. "
@@ -6081,6 +6088,7 @@ def create_agent():
                     "invoke_status": "completed",
                     "tool_result": result,
                     "sandbox_session": next_session,
+                    "tool_call_records": [{"tool_name": tool_nm, "tool_args": tool_arguments, "status": "completed"}],
                 }
 
         return run_graph_node("sandbox_tool", _run)
@@ -6118,6 +6126,7 @@ def create_agent():
                         "messages": [AIMessage(content=result_text)],
                         "invoke_status": "completed",
                         "tool_result": result,
+                        "tool_call_records": [{"tool_name": f"{server_type}/{tool_nm}", "tool_args": tool_arguments, "status": "completed"}],
                     }
                 except PermissionError as exc:
                     logger.warning("MCP call blocked by policy allow-list: %s", exc)
@@ -6167,6 +6176,13 @@ def create_agent():
                 if not target_agent or not target_namespace:
                     return {
                         "messages": [AIMessage(content=blocked_response("A2A target agent and namespace are required"))],
+                        "invoke_status": "blocked",
+                        "a2a": None,
+                    }
+
+                if target_agent == SERVICE_NAME and target_namespace == SERVICE_NAMESPACE:
+                    return {
+                        "messages": [AIMessage(content=blocked_response("A2A self-referential call detected: an agent cannot invoke itself"))],
                         "invoke_status": "blocked",
                         "a2a": None,
                     }
@@ -6274,6 +6290,42 @@ def create_agent():
                         "invoke_status": "blocked",
                         "a2a": None,
                     }
+                except httpx.TimeoutException:
+                    publish_runtime_event(
+                        "a2a.call",
+                        {
+                            "status": "failed",
+                            "targetAgent": target_agent,
+                            "targetNamespace": target_namespace,
+                            "transport": "gateway" if gateway_fallback_available() else "direct",
+                            "error": "timeout",
+                        },
+                    )
+                    return {
+                        "messages": [AIMessage(content=blocked_response(
+                            f"A2A call to '{target_agent}' in '{target_namespace}' timed out after {timeout_seconds}s"
+                        ))],
+                        "invoke_status": "blocked",
+                        "a2a": None,
+                    }
+                except httpx.ConnectError as exc:
+                    publish_runtime_event(
+                        "a2a.call",
+                        {
+                            "status": "failed",
+                            "targetAgent": target_agent,
+                            "targetNamespace": target_namespace,
+                            "transport": "gateway" if gateway_fallback_available() else "direct",
+                            "error": "connect_error",
+                        },
+                    )
+                    return {
+                        "messages": [AIMessage(content=blocked_response(
+                            f"A2A call could not connect to '{target_agent}' in '{target_namespace}': {exc}"
+                        ))],
+                        "invoke_status": "blocked",
+                        "a2a": None,
+                    }
                 except Exception as exc:
                     publish_runtime_event(
                         "a2a.call",
@@ -6326,6 +6378,7 @@ def create_agent():
                 span.set_attribute("a2a.target_namespace", target_namespace)
                 span.set_attribute("a2a.timeout_seconds", timeout_seconds)
                 span.set_attribute("a2a.transport", transport)
+                callee_artifacts = result.get("artifacts") if isinstance(result.get("artifacts"), list) else []
                 return {
                     "messages": [AIMessage(content=response_text)],
                     "invoke_status": response_status,
@@ -6337,6 +6390,7 @@ def create_agent():
                     ),
                     "warnings": warnings,
                     "a2a": a2a_payload,
+                    "artifacts": callee_artifacts,
                 }
 
         return run_graph_node("a2a_call", _run)
@@ -6668,6 +6722,8 @@ def invoke_graph(
                 "mcp_server": mcp_server,
                 "mcp_tool_name": tool_name,
                 "mcp_tool_args": request.tool_args,
+                "artifacts": [],
+                "tool_call_records": [],
             }
 
             result = get_runtime()["graph"].invoke(
@@ -6735,6 +6791,8 @@ def invoke_graph(
         a2a=sanitized_a2a,
         subagents=sanitized_subagents,
         warnings=warnings,
+        artifacts=result.get("artifacts") or [],
+        tool_calls=result.get("tool_call_records") or [],
     )
 
 
