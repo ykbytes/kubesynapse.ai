@@ -32,6 +32,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { CopyButton } from "./CopyButton";
+import { JsonBlock } from "./JsonBlock";
 import type {
   AgentInfo,
   LoopProgress,
@@ -376,7 +378,10 @@ function StepDetailCard({
 
             {/* error */}
             {state?.error && (
-              <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-destructive">
+              <div className="group relative rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-destructive">
+                <div className="absolute top-1.5 right-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <CopyButton value={state.error} />
+                </div>
                 <span className="font-medium">Error{state.failureClass ? ` (${state.failureClass})` : ""}:</span>{" "}
                 {state.error}
               </div>
@@ -384,13 +389,13 @@ function StepDetailCard({
 
             {/* execution output */}
             {state?.execution && Object.keys(state.execution).length > 0 && (
-              <details className="group">
+              <details>
                 <summary className="cursor-pointer text-xs font-medium text-muted-foreground hover:text-foreground">
                   Execution output
                 </summary>
-                <pre className="mt-1 max-h-48 overflow-auto rounded-lg bg-background p-2 text-[11px] leading-relaxed text-muted-foreground">
-                  {JSON.stringify(state.execution, null, 2)}
-                </pre>
+                <div className="mt-1">
+                  <JsonBlock data={state.execution} maxHeight="max-h-48" />
+                </div>
               </details>
             )}
 

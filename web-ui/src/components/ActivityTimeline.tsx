@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { JsonBlock } from "./JsonBlock";
 import type { UiActivity } from "@/types";
 
 /* ------------------------------------------------------------------ */
@@ -135,6 +136,7 @@ function EventRow({ item }: { item: UiActivity }) {
   const style = CATEGORY_STYLES[cat];
   const Icon = style.icon;
   const diff = cat === "diff" ? (item.payload.diff as string | undefined) : undefined;
+  const summaryText = summarize(item.event, item.payload);
 
   return (
     <div className={`rounded-md border ${style.bg} text-xs animate-slide-up`}>
@@ -147,7 +149,7 @@ function EventRow({ item }: { item: UiActivity }) {
         <Badge variant="outline" className={`text-[9px] px-1 py-0 shrink-0 ${style.text}`}>
           {item.event.replace("agent.", "").replace("step.", "")}
         </Badge>
-        <span className="flex-1 truncate text-muted-foreground">{summarize(item.event, item.payload)}</span>
+        <span className="flex-1 truncate text-muted-foreground" title={summaryText}>{summaryText}</span>
         <span className="shrink-0 text-[10px] text-muted-foreground/60 tabular-nums">
           <Clock className="mr-0.5 inline h-2.5 w-2.5" />
           {formatTs(item.timestamp)}
@@ -157,9 +159,7 @@ function EventRow({ item }: { item: UiActivity }) {
       {expanded && (
         <div className="border-t border-border/40 px-2.5 py-2 space-y-1">
           {diff && <InlineDiff diff={diff} />}
-          <pre className="whitespace-pre-wrap break-words font-mono text-[11px] text-muted-foreground max-h-48 overflow-auto">
-            {JSON.stringify(item.payload, null, 2)}
-          </pre>
+          <JsonBlock data={item.payload} maxHeight="max-h-48" />
         </div>
       )}
     </div>

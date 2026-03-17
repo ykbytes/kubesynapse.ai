@@ -8,6 +8,7 @@ import { Separator } from "@/components/ui/separator";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ActivityTimeline } from "./ActivityTimeline";
+import { JsonBlock } from "./JsonBlock";
 import type {
   AgentDetail,
   AgentDiscoveryPeer,
@@ -208,9 +209,12 @@ export function AgentInspectorDrawer({
                     {summary.toolName && <KV label="Tool" value={summary.toolName} />}
                     {summary.approvalName && <KV label="Approval" value={summary.approvalName} />}
                     {summary.warnings.length > 0 && (
-                      <div className="text-xs text-amber-400">
+                      <div className="space-y-1">
                         {summary.warnings.map((w, i) => (
-                          <p key={i}>{w}</p>
+                          <div key={i} className="flex items-start gap-1.5 text-xs text-amber-400">
+                            <AlertTriangle className="h-3 w-3 mt-0.5 shrink-0" />
+                            <span>{w}</span>
+                          </div>
                         ))}
                       </div>
                     )}
@@ -259,16 +263,12 @@ export function AgentInspectorDrawer({
               <div className="space-y-4 p-4">
                 {selectedAgentDetail && (
                   <Section title="Agent Detail (JSON)">
-                    <pre className="overflow-x-auto text-[11px] font-mono text-muted-foreground whitespace-pre-wrap">
-                      {JSON.stringify(selectedAgentDetail, null, 2)}
-                    </pre>
+                    <JsonBlock data={selectedAgentDetail} />
                   </Section>
                 )}
                 {summary && (
                   <Section title="Invocation Summary (JSON)">
-                    <pre className="overflow-x-auto text-[11px] font-mono text-muted-foreground whitespace-pre-wrap">
-                      {JSON.stringify(summary, null, 2)}
-                    </pre>
+                    <JsonBlock data={summary} />
                   </Section>
                 )}
               </div>
@@ -358,25 +358,19 @@ export function ResourceInspectorDrawer({
 
                 {summary && (
                   <Section title="Summary">
-                    <pre className="overflow-x-auto text-[11px] font-mono text-muted-foreground whitespace-pre-wrap">
-                      {JSON.stringify(summary, null, 2)}
-                    </pre>
+                    <JsonBlock data={summary} />
                   </Section>
                 )}
 
                 {spec && (
                   <Section title="Spec">
-                    <pre className="overflow-x-auto text-[11px] font-mono text-muted-foreground whitespace-pre-wrap">
-                      {JSON.stringify(spec, null, 2)}
-                    </pre>
+                    <JsonBlock data={spec} />
                   </Section>
                 )}
 
                 {details && (
                   <Section title="Status Details">
-                    <pre className="overflow-x-auto text-[11px] font-mono text-muted-foreground whitespace-pre-wrap">
-                      {JSON.stringify(details, null, 2)}
-                    </pre>
+                    <JsonBlock data={details} />
                   </Section>
                 )}
               </>
