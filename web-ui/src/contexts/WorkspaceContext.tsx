@@ -551,11 +551,10 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       // next 10-second workspace refresh.
       setWorkflows((prev) => prev.map((w) => (w.name === updated.name ? updated : w)));
       toast.success("Workflow triggered");
-      await refreshWorkspaceData({ silent: true });
     }
     catch (err) { const msg = err instanceof Error ? err.message : String(err); setWorkflowError(msg); toast.error("Failed to trigger workflow", { description: msg }); }
     finally { setRunningWorkflow(false); }
-  }, [token, namespace, refreshWorkspaceData]);
+  }, [token, namespace]);
 
   const handleCancelWorkflow = useCallback(async (name: string) => {
     if (!token.trim()) return;
@@ -564,11 +563,10 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       const updated = await cancelWorkflow(token, namespace, name);
       setWorkflows((prev) => prev.map((w) => (w.name === updated.name ? updated : w)));
       toast.success("Workflow cancelled");
-      await refreshWorkspaceData({ silent: true });
     }
     catch (err) { const msg = err instanceof Error ? err.message : String(err); setWorkflowError(msg); toast.error("Failed to cancel workflow", { description: msg }); }
     finally { setCancellingWorkflow(false); }
-  }, [token, namespace, refreshWorkspaceData]);
+  }, [token, namespace]);
 
   const handleCreateEval = useCallback(async (payload: EvalPayload) => {
     if (!token.trim()) return;

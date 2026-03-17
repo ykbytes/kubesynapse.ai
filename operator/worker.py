@@ -1030,10 +1030,14 @@ def execute_loop_step(
         {"runId": run_id, "step": step_name, "iterations": loop_progress["iteration"], "completedItems": loop_progress["completedItems"], "exitReason": loop_progress["exitReason"]},
     )
 
+    exit_reason = loop_progress.get("exitReason", "")
+    result_status = "continued" if exit_reason in ("max_iterations", "circuit_breaker_open") else "completed"
+    result_state = result_status
+
     step_result = {
         "agentRef": step.get("agentRef", ""),
         "response": combined_response,
-        "status": "completed",
+        "status": result_status,
         "output": {"text": combined_response, "json": {"loopProgress": loop_progress, "checklist": checklist}, "type": "json"},
         "attempts": loop_progress["iteration"],
         "artifacts": all_artifacts,
@@ -1045,7 +1049,7 @@ def execute_loop_step(
     step_state = build_step_state(
         step_name=step_name,
         step=step,
-        status_name="completed",
+        status_name=result_status,
         attempts=loop_progress["iteration"],
         started_at=started_at,
         completed_at=completed_at,
@@ -1056,7 +1060,7 @@ def execute_loop_step(
     step_state["loopProgress"] = loop_progress
 
     return {
-        "state": "completed",
+        "state": result_state,
         "stepName": step_name,
         "stepResult": step_result,
         "stepState": step_state,
@@ -1384,6 +1388,7 @@ def run_workflow_worker() -> None:
             status=workflow_status_payload,
         )
     except Exception as exc:
+        _patch_pending_approval_label(None)
         failed_at = now_iso()
         failure_payload = workflow_snapshot(
             generation=generation,

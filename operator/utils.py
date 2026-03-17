@@ -222,14 +222,16 @@ def render_prompt(
 
         root, _, remainder = expression.partition(".")
         if root not in step_results:
-            return match.group(0)
+            logger.warning("render_prompt: unresolvable placeholder '{{%s}}' — step '%s' has no result", expression, root)
+            return ""
 
         if not remainder:
             return _resolve_template_value(step_results[root])
 
         value = _lookup_path(step_results[root], remainder.split("."))
         if value is None:
-            return match.group(0)
+            logger.warning("render_prompt: unresolvable placeholder '{{%s}}' — path not found", expression)
+            return ""
         return _resolve_template_value(value)
 
     return PLACEHOLDER_RE.sub(replacer, template)
@@ -322,7 +324,7 @@ def ready_workflow_steps(
         if not step_name or step_name in completed_steps or step_name in ignored:
             continue
         dependencies = {str(dep).strip() for dep in step.get("dependsOn") or [] if str(dep).strip()}
-        if dependencies.issubset(completed_steps):
+        if dependencies.issubset(completed_steps | ignored):
             ready.append(step)
     return ready
 

@@ -174,10 +174,10 @@ class SpecKitPromptRenderingTests(unittest.TestCase):
         )
         self.assertIn("Add OAuth2 login", rendered)
 
-    def test_unresolved_placeholder_preserved(self) -> None:
+    def test_unresolved_placeholder_cleared(self) -> None:
         template = "Value: {{nonexistent-step.output.json.field}}"
         rendered = render_prompt(template, "", "", self.MOCK_STEP_RESULTS)
-        self.assertIn("{{nonexistent-step.output.json.field}}", rendered)
+        self.assertEqual(rendered, "Value: ")
 
 
 if __name__ == "__main__":
