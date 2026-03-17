@@ -51,7 +51,7 @@ webUi:
   enabled: true
   image:
     repository: docker.io/yakdhane/ai-agent-sandbox-web-ui
-    tag: audit5-20260317-180826
+    tag: ux-audit-20260317-183315
     pullPolicy: Always
 
 platformSecrets:

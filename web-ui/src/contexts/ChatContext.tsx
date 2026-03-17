@@ -201,6 +201,7 @@ export interface ChatContextValue {
   handleLoadLogs: () => Promise<void>;
   handleAgentApprovalDecision: (decision: "approved" | "denied") => Promise<void>;
   handleWorkflowApprovalDecision: (decision: "approved" | "denied") => Promise<void>;
+  cancelStream: () => void;
 
   // Cross-cutting helpers (for AppLayout use)
   setMessagesForAgent: (agentName: string, updater: (current: UiMessage[]) => UiMessage[]) => void;
@@ -616,6 +617,22 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     finally { setApprovalBusy(false); }
   }, [token, namespace, selectedWorkflowApprovalName, approvalReason, refreshWorkspaceData, setWorkspaceError]);
 
+  // ── cancelStream ──
+
+  const cancelStream = useCallback(() => {
+    const controller = streamAbortRef.current;
+    if (controller) {
+      controller.abort();
+      streamAbortRef.current = null;
+    }
+    setIsSending(false);
+    if (selectedAgentName) {
+      setMessagesForAgent(selectedAgentName, (cur) =>
+        cur.map((m) => m.status === "streaming" ? { ...m, status: "complete" as const, content: m.content || "(cancelled)" } : m)
+      );
+    }
+  }, [selectedAgentName, setMessagesForAgent]);
+
   // ── Specialist helpers ──
 
   const addSpecialistSubagent = useCallback(() => {
@@ -673,7 +690,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       addSpecialistSubagent, updateSpecialistSubagent, removeSpecialistSubagent, clearSpecialistTeam,
       setGooseMaxTurns, setGooseWorkingDirectory,
       setOpenCodeOutputFormat, setOpenCodeAutonomous, setOpenCodeMaxTurns, setOpenCodeWorkingDirectory,
-      handleSubmit, handleLoadLogs, handleAgentApprovalDecision, handleWorkflowApprovalDecision,
+      handleSubmit, handleLoadLogs, handleAgentApprovalDecision, handleWorkflowApprovalDecision, cancelStream,
       setMessagesForAgent, removeAgentChatState,
     }}>
       {children}

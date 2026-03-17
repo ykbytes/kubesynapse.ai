@@ -383,6 +383,7 @@ function AppLayout() {
                         onOpenCodeWorkingDirectoryChange={chat.setOpenCodeWorkingDirectory}
                         canSubmit={chat.canSubmitChat}
                         onSubmit={() => void chat.handleSubmit()}
+                        onCancel={chat.cancelStream}
                       />
                     </div>
                   )}

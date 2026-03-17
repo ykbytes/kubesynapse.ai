@@ -214,8 +214,8 @@ function OpRow({ op }: { op: ClassifiedOp }) {
 /* ------------------------------------------------------------------ */
 
 function MetadataFooter({ metadata }: { metadata: Record<string, unknown> }) {
-  const tokens = metadata.total_tokens as number | undefined ?? metadata.token_count as number | undefined;
-  const cost = metadata.cost_usd as number | undefined ?? metadata.cost as number | undefined;
+  const tokens = (metadata.total_tokens ?? metadata.token_count) as number | undefined;
+  const cost = (metadata.cost_usd ?? metadata.cost) as number | undefined;
   const model = metadata.model as string | undefined;
   if (!tokens && !cost && !model) return null;
   return (
@@ -278,7 +278,7 @@ export function OperationLog({ summary }: OperationLogProps) {
       </button>
 
       {!collapsed && (
-        <div className="border-t border-border/40 px-2 py-1.5 space-y-1 max-h-64 overflow-y-auto">
+        <div className="border-t border-border/40 px-2 py-1.5 space-y-1 max-h-96 overflow-y-auto">
           {/* File write/edit operations first */}
           {fileOps.map((op, i) => (
             <OpRow key={`file-${i}-${op.kind}-${op.detail}`} op={op} />

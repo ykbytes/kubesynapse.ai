@@ -10,6 +10,7 @@ import {
   Plus,
   RotateCcw,
   Send,
+  Square,
   X,
   XCircle,
 } from "lucide-react";
@@ -85,6 +86,7 @@ interface ChatWorkbenchProps {
   onOpenCodeWorkingDirectoryChange: (value: string) => void;
   canSubmit: boolean;
   onSubmit: () => void;
+  onCancel: () => void;
 }
 
 /* ------------------------------------------------------------------ */
@@ -162,14 +164,15 @@ function MessageBubble({ message, index }: { message: UiMessage; index: number }
           </Badge>
         )}
         {isAssistant && message.content && !isStreaming && (
-          <div className="ml-auto opacity-0 group-hover:opacity-100 transition-opacity">
+          <div className="ml-auto opacity-60 hover:opacity-100 transition-opacity">
             <CopyButton value={message.content} />
           </div>
         )}
       </div>
       {isStreaming && !message.content ? (
-        <div className="streaming-dots flex items-center gap-1 py-1 text-muted-foreground" aria-label="Waiting for model output">
+        <div className="streaming-dots flex items-center gap-1.5 py-1 text-muted-foreground" aria-label="Thinking">
           <span /><span /><span />
+          <span className="text-[11px] ml-1">Thinking...</span>
         </div>
       ) : (
         <pre className="whitespace-pre-wrap break-words font-sans text-sm leading-relaxed">
@@ -223,7 +226,9 @@ function ToolBubble({ message }: { message: UiMessage }) {
                 </div>
               </div>
             ) : (
-              <p className="text-[11px] text-muted-foreground italic">No detail available.</p>
+              <p className="text-[11px] text-muted-foreground italic">
+                {isFailed ? "Tool failed with no error details." : "Tool executed but produced no output."}
+              </p>
             )}
           </div>
         </div>
@@ -255,7 +260,7 @@ function DiffViewer({ diff }: { diff: string }) {
         <span className="text-red-500">-{removeCount}</span>
       </button>
       {expanded && (
-        <div className="border-t border-border/40 px-3 py-2 overflow-x-auto max-h-64 overflow-y-auto">
+        <div className="border-t border-border/40 px-3 py-2 overflow-x-auto max-h-[40vh] md:max-h-64 overflow-y-auto">
           <pre className="font-mono text-[11px] leading-relaxed">
             {lines.map((line, i) => {
               let color = "text-muted-foreground";
@@ -327,6 +332,7 @@ export function ChatWorkbench({
   onOpenCodeWorkingDirectoryChange,
   canSubmit,
   onSubmit,
+  onCancel,
 }: ChatWorkbenchProps) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const reachablePeers = discoveryPeers.filter((peer) => peer.reachable);
@@ -341,7 +347,8 @@ export function ChatWorkbench({
       top: scrollRef.current.scrollHeight,
       behavior: latestMessage?.status === "streaming" ? "auto" : "smooth",
     });
-  }, [messages]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages.length, messages[messages.length - 1]?.status]);
 
   return (
     <div className="flex h-full flex-col gap-0">
@@ -417,7 +424,10 @@ export function ChatWorkbench({
               onChange={(e) => onToggleRequireApproval(e.target.checked)}
               className="h-3.5 w-3.5 rounded border-input"
             />
-            {approvalSupported ? "Require approval" : "Approval (LangGraph only)"}
+            {approvalSupported
+              ? "Require approval"
+              : <span className="opacity-60">Approval (LangGraph / OpenCode)</span>
+            }
           </label>
         </div>
 
@@ -580,7 +590,7 @@ export function ChatWorkbench({
                           <Button
                             variant="ghost"
                             size="icon"
-                            className="h-7 w-7"
+                            className="h-7 w-7 hover:bg-destructive/20 hover:text-destructive"
                             disabled={a2aMode}
                             onClick={() => onRemoveSpecialistSubagent(subagent.id)}
                             aria-label="Remove specialist"
@@ -808,6 +818,7 @@ export function ChatWorkbench({
 
         {/* Prompt input */}
         <Textarea
+          autoFocus
           placeholder="Ask the agent to plan, invoke tools, or reason over retrieved context..."
           value={prompt}
           onChange={(e) => onPromptChange(e.target.value)}
@@ -816,6 +827,10 @@ export function ChatWorkbench({
               e.preventDefault();
               onSubmit();
             }
+            if (e.key === "Escape" && prompt.trim()) {
+              e.preventDefault();
+              onPromptChange("");
+            }
           }}
           rows={3}
           className="resize-none"
@@ -823,14 +838,14 @@ export function ChatWorkbench({
         />
 
         {error && (
-          <div className="flex items-center gap-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-1.5 text-xs text-destructive">
+          <div role="alert" className="flex items-center gap-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-1.5 text-xs text-destructive">
             <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
             <span className="flex-1">{error}</span>
             <Button
               variant="ghost"
               size="sm"
               className="h-6 px-2 text-[11px] text-destructive hover:text-destructive"
-              onClick={onSubmit}
+              onClick={() => { onSubmit(); }}
               disabled={!canSubmit || !tokenReady || isSending}
             >
               <RotateCcw className="mr-1 h-3 w-3" />
@@ -849,18 +864,26 @@ export function ChatWorkbench({
                   ? "Request routes through the configured A2A target."
                   : "Authenticated requests via the API gateway."}
           </p>
-          <Button
-            onClick={onSubmit}
-            disabled={!agentName || !canSubmit || !tokenReady || isSending}
-            aria-label={isSending ? "Working, please wait" : "Send message (Cmd+Enter)"}
-          >
-            {isSending ? (
-              <LoaderCircle className="mr-1.5 h-4 w-4 animate-spin" />
-            ) : (
+          {isSending ? (
+            <Button
+              variant="destructive"
+              onClick={onCancel}
+              aria-label="Stop request"
+            >
+              <Square className="mr-1.5 h-4 w-4" />
+              Stop
+            </Button>
+          ) : (
+            <Button
+              onClick={onSubmit}
+              disabled={!agentName || !canSubmit || !tokenReady}
+              aria-label="Send message (Cmd+Enter)"
+            >
               <Send className="mr-1.5 h-4 w-4" />
-            )}
-            {isSending ? "Working..." : "Send"}
-          </Button>
+              Send
+              <kbd className="ml-2 text-[10px] rounded px-1 py-0.5 bg-primary-foreground/20 hidden sm:inline">⌘↵</kbd>
+            </Button>
+          )}
         </div>
       </div>
     </div>
