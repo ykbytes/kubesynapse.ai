@@ -2294,6 +2294,12 @@ async def handle_a2a_stream_message(
                     warnings = payload.get("warnings")
                     if isinstance(warnings, list) and warnings:
                         metadata_updates["warnings"] = warnings
+                    if payload.get("artifacts"):
+                        metadata_updates["artifacts"] = payload.get("artifacts")
+                    if payload.get("tool_calls"):
+                        metadata_updates["toolCalls"] = payload.get("tool_calls")
+                    if payload.get("metadata") is not None:
+                        metadata_updates["metadata"] = payload.get("metadata")
 
                     final_text = str(record.get("artifactText") or "")
                     task_state = a2a_task_state_from_invoke_status(response_status)

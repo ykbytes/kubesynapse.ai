@@ -317,12 +317,46 @@ def previous_output_for_dependencies(
         if artifacts:
             artifact_lines = []
             for art in artifacts[:50]:
+                if not isinstance(art, dict):
+                    continue
                 art_path = str(art.get("path") or art.get("name") or "")
+                art_tool = str(art.get("tool") or "")
+                art_status = str(art.get("status") or "")
                 if art_path:
-                    artifact_lines.append(f"  - {art_path}")
+                    detail = art_path
+                    if art_tool:
+                        detail = f"{art_path} ({art_tool})"
+                    if art_status and art_status != "completed":
+                        detail += f" [{art_status}]"
+                    artifact_lines.append(f"  - {detail}")
             if artifact_lines:
                 parts.append(
                     f"[Step: {dependency} — Artifacts]\n" + "\n".join(artifact_lines)
+                )
+        # Include tool call summaries so downstream agents know what operations ran
+        tool_calls = result.get("tool_calls") or []
+        if tool_calls:
+            tc_lines = []
+            for tc in tool_calls[:30]:
+                if not isinstance(tc, dict):
+                    continue
+                tc_tool = str(tc.get("tool") or "unknown")
+                tc_status = str(tc.get("status") or "")
+                tc_input = tc.get("input")
+                summary_text = tc_tool
+                if isinstance(tc_input, dict):
+                    path = str(tc_input.get("filePath") or tc_input.get("file") or tc_input.get("path") or "")
+                    cmd = str(tc_input.get("command") or tc_input.get("cmd") or "")
+                    if path:
+                        summary_text = f"{tc_tool}: {path}"
+                    elif cmd:
+                        summary_text = f"{tc_tool}: {cmd[:120]}"
+                if tc_status and tc_status not in ("completed", "unknown"):
+                    summary_text += f" [{tc_status}]"
+                tc_lines.append(f"  - {summary_text}")
+            if tc_lines:
+                parts.append(
+                    f"[Step: {dependency} — Tool Calls]\n" + "\n".join(tc_lines)
                 )
     return "\n\n".join(parts)
 

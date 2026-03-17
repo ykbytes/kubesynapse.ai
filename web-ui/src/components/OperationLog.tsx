@@ -136,6 +136,7 @@ function buildOperations(summary: InvocationSummary): ClassifiedOp[] {
 
   // Artifacts first (higher fidelity for file ops)
   for (const art of summary.artifacts ?? []) {
+    if (!art || typeof art !== "object") continue;
     const op = classifyArtifact(art);
     ops.push(op);
     if (op.detail) artifactPaths.add(op.detail);
@@ -143,6 +144,7 @@ function buildOperations(summary: InvocationSummary): ClassifiedOp[] {
 
   // Tool calls, dedup file-create/file-edit if already covered by artifacts
   for (const tc of summary.toolCalls ?? []) {
+    if (!tc || typeof tc !== "object") continue;
     const op = classifyToolCall(tc);
     if ((op.kind === "file-create" || op.kind === "file-edit") && op.detail && artifactPaths.has(op.detail)) continue;
     ops.push(op);
@@ -276,11 +278,11 @@ export function OperationLog({ summary }: OperationLogProps) {
         <div className="border-t border-border/40 px-2 py-1.5 space-y-1 max-h-64 overflow-y-auto">
           {/* File write/edit operations first */}
           {fileOps.map((op, i) => (
-            <OpRow key={`file-${i}`} op={op} />
+            <OpRow key={`file-${i}-${op.kind}-${op.detail}`} op={op} />
           ))}
           {/* Other significant operations */}
           {otherOps.map((op, i) => (
-            <OpRow key={`other-${i}`} op={op} />
+            <OpRow key={`other-${i}-${op.kind}-${op.detail}`} op={op} />
           ))}
           {/* Read operations (less prominent) */}
           {readOps.length > 0 && (
@@ -315,7 +317,7 @@ function ReadOpsCollapsed({ readOps }: { readOps: ClassifiedOp[] }) {
       {expanded && (
         <div className="border-t border-border/20 px-2 py-1 space-y-0.5">
           {readOps.map((op, i) => (
-            <OpRow key={`read-${i}`} op={op} />
+            <OpRow key={`read-${i}-${op.kind}-${op.detail}`} op={op} />
           ))}
         </div>
       )}

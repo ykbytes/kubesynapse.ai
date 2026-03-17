@@ -88,6 +88,70 @@ class PreviousOutputForDependenciesTests(unittest.TestCase):
         )
         self.assertNotIn("Artifacts", result)
 
+    def test_includes_tool_calls_summary(self) -> None:
+        """tool_calls from prior step are included for downstream context."""
+        result = self._call(
+            ["code-step"],
+            {
+                "code-step": {
+                    "response": "Done.",
+                    "output": {"json": None},
+                    "artifacts": [],
+                    "tool_calls": [
+                        {"tool": "write", "status": "completed", "input": {"filePath": "src/app.py"}},
+                        {"tool": "bash", "status": "completed", "input": {"command": "git commit -m 'init'"}},
+                        {"tool": "edit", "status": "error", "input": {"filePath": "bad.py"}},
+                    ],
+                }
+            },
+        )
+        self.assertIn("Tool Calls", result)
+        self.assertIn("write: src/app.py", result)
+        self.assertIn("bash: git commit -m 'init'", result)
+        self.assertIn("bad.py", result)
+        self.assertIn("[error]", result)
+
+    def test_artifact_includes_tool_type(self) -> None:
+        """Artifact summaries include the operation type (write/edit/patch)."""
+        result = self._call(
+            ["code-step"],
+            {
+                "code-step": {
+                    "response": "Created files.",
+                    "output": {"json": None},
+                    "artifacts": [
+                        {"path": "src/main.py", "tool": "write", "status": "completed"},
+                        {"path": "src/utils.py", "tool": "edit", "status": "completed"},
+                    ],
+                }
+            },
+        )
+        self.assertIn("src/main.py (write)", result)
+        self.assertIn("src/utils.py (edit)", result)
+
+    def test_null_items_in_tool_calls_and_artifacts(self) -> None:
+        """Null items in tool_calls or artifacts arrays don't crash."""
+        result = self._call(
+            ["step"],
+            {
+                "step": {
+                    "response": "Done.",
+                    "output": {"json": None},
+                    "artifacts": [None, {"path": "ok.py", "tool": "write", "status": "completed"}, "bad"],
+                    "tool_calls": [None, {"tool": "bash", "status": "completed", "input": {"command": "ls"}}, 42],
+                }
+            },
+        )
+        self.assertIn("ok.py", result)
+        self.assertIn("bash: ls", result)
+
+    def test_no_tool_calls_section_when_empty(self) -> None:
+        result = self._call(
+            ["step"],
+            {"step": {"response": "ok", "output": {"json": None}, "tool_calls": []}},
+        )
+        self.assertNotIn("Tool Calls", result)
+
 
 class ExecuteWorkflowStepOpenCodeTests(unittest.TestCase):
     """Bugs 1-3, 6: execute_workflow_step handles OpenCode fields."""

@@ -12,11 +12,11 @@ operator:
   replicaCount: 1
   image:
     repository: docker.io/yakdhane/ai-operator
-    tag: bugfix3-20260317-155626
+    tag: multiagent-fix-20260317-172635
     pullPolicy: IfNotPresent
   workerImage:
     repository: docker.io/yakdhane/ai-operator
-    tag: bugfix3-20260317-155626
+    tag: multiagent-fix-20260317-172635
     pullPolicy: IfNotPresent
 
 gooseRuntime:
@@ -40,7 +40,7 @@ opencodeRuntime:
 apiGateway:
   image:
     repository: docker.io/yakdhane/ai-api-gateway
-    tag: bugfix4-20260317-161714
+    tag: multiagent-fix-20260317-172635
     pullPolicy: Always
   auth:
     mode: hybrid
@@ -51,7 +51,7 @@ webUi:
   enabled: true
   image:
     repository: docker.io/yakdhane/ai-agent-sandbox-web-ui
-    tag: oplog-20260317-170357
+    tag: multiagent-fix-20260317-172635
     pullPolicy: Always
 
 platformSecrets:

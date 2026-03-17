@@ -351,7 +351,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     const requestId = createId();
     const assistantMessageId = createId();
 
-    setChatError(""); setWorkspaceError(""); setLogsForAgent(agentName, ""); setActivityForAgent(agentName, () => []);
+    setChatError(""); setWorkspaceError(""); setLogsForAgent(agentName, ""); setActivityForAgent(agentName, () => []); setSummaryForAgent(agentName, () => null);
     setMessagesForAgent(agentName, (cur) => {
       const next = [...cur];
       if (systemNotice) next.push({ id: createId(), role: "system", content: systemNotice, status: "complete" });
