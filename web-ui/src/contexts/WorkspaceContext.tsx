@@ -361,7 +361,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       .catch((err) => { if (!cancelled) { setDiscoverablePeers([]); setDiscoveryError(err instanceof Error ? err.message : String(err)); } })
       .finally(() => { if (!cancelled) setDiscoveryLoading(false); });
     return () => { cancelled = true; };
-  }, [token, namespace, selectedAgentName, agentCreateMode, selectedAgentDetail?.policy_ref, agents]);
+  }, [token, namespace, selectedAgentName, agentCreateMode, selectedAgentDetail?.policy_ref, agents.length]);
 
   // Workflow polling — restart when the selected workflow's phase changes
   const selectedWorkflowPhase = selectedWorkflow?.phase ?? "";

@@ -176,22 +176,29 @@ def write_artifact(payload: dict[str, Any]) -> None:
 
 
 def append_journal_event(event_type: str, payload: dict[str, Any]) -> None:
-    path = Path(ARTIFACT_JOURNAL_PATH)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    record = {
-        "timestamp": now_iso(),
-        "event": event_type,
-        "kind": WORKER_KIND,
-        "resource": {
-            "namespace": TARGET_NAMESPACE,
-            "name": TARGET_NAME,
-            "workerJob": WORKER_JOB_NAME,
-        },
-        **payload,
-    }
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True))
-        handle.write("\n")
+    try:
+        path = Path(ARTIFACT_JOURNAL_PATH)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        record = {
+            "timestamp": now_iso(),
+            "event": event_type,
+            "kind": WORKER_KIND,
+            "resource": {
+                "namespace": TARGET_NAMESPACE,
+                "name": TARGET_NAME,
+                "workerJob": WORKER_JOB_NAME,
+            },
+            **payload,
+        }
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True))
+            handle.write("\n")
+    except Exception:
+        logging.getLogger(__name__).warning(
+            "Failed to write journal event '%s' for %s/%s",
+            event_type, TARGET_NAMESPACE, TARGET_NAME,
+            exc_info=True,
+        )
 
 
 def workflow_summary(

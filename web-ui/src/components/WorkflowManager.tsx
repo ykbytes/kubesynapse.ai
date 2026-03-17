@@ -779,7 +779,7 @@ export function WorkflowManager({
                 <div className="mt-4 flex items-center gap-2 rounded-xl border border-emerald-500/30 bg-emerald-500/5 px-3 py-2 text-sm text-emerald-400">
                   <CheckCircle2 className="h-4 w-4 shrink-0" />
                   <span>Workflow completed successfully.</span>
-                  {wfSummary?.startedAt && wfSummary?.updatedAt && (
+                  {wfSummary?.startedAt && wfSummary?.updatedAt && !Number.isNaN(new Date(wfSummary.startedAt).getTime()) && !Number.isNaN(new Date(wfSummary.updatedAt).getTime()) && (
                     <span className="ml-auto text-xs text-muted-foreground">
                       Total: {formatMs(new Date(wfSummary.updatedAt).getTime() - new Date(wfSummary.startedAt).getTime())}
                     </span>
