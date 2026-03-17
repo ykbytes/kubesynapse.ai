@@ -37,7 +37,7 @@ export function ConfirmDialog({
       <DialogContent className="sm:max-w-[400px]">
         <DialogHeader>
           <div className="flex items-center gap-2.5">
-            <div className={`rounded-lg p-2 ${isDestructive ? "bg-destructive/10" : "bg-primary/10"} animate-bounce-in`}>
+            <div className={`rounded-xl p-2.5 ring-1 shadow-md animate-bounce-in ${isDestructive ? "bg-destructive/15 ring-destructive/30 shadow-destructive/15" : "bg-primary/15 ring-primary/30 shadow-primary/15"}`}>
               <Icon className={`h-4 w-4 ${isDestructive ? "text-destructive" : "text-primary"}`} />
             </div>
             <DialogTitle>{title}</DialogTitle>

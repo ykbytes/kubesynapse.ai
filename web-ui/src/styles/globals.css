@@ -197,6 +197,37 @@
   box-shadow: 0 4px 12px oklch(0 0 0 / 0.12);
 }
 
+/* ── Glass-morphism utilities ── */
+.glass-soft {
+  backdrop-filter: blur(6px);
+  background: oklch(1 0 0 / 0.04);
+  border: 1px solid oklch(1 0 0 / 0.08);
+}
+.glass-medium {
+  backdrop-filter: blur(12px);
+  background: oklch(1 0 0 / 0.07);
+  border: 1px solid oklch(1 0 0 / 0.12);
+}
+[data-theme="light"] .glass-soft {
+  background: oklch(1 0 0 / 0.55);
+  border-color: oklch(0 0 0 / 0.06);
+}
+[data-theme="light"] .glass-medium {
+  background: oklch(1 0 0 / 0.7);
+  border-color: oklch(0 0 0 / 0.08);
+}
+
+/* ── Subtle noise texture on body ── */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  opacity: 0.025;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  pointer-events: none;
+}
+
 /* Gradient accent border for active/selected items */
 .gradient-border-accent {
   border-image: linear-gradient(to bottom, oklch(0.65 0.13 175), oklch(0.65 0.16 250)) 1;

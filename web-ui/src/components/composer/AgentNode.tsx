@@ -6,15 +6,15 @@ import { UserCheck, Repeat, CheckCircle2, XCircle, LoaderCircle } from "lucide-r
 function stepStatusColor(status?: string | null): string {
   switch (status) {
     case "completed":
-      return "border-green-500 bg-green-500/10";
+      return "border-emerald-500/60 bg-emerald-500/10 shadow-emerald-500/15";
     case "running":
-      return "border-yellow-500 bg-yellow-500/10";
+      return "border-amber-500/60 bg-amber-500/10 shadow-amber-500/15";
     case "failed":
-      return "border-red-500 bg-red-500/10";
+      return "border-red-500/60 bg-red-500/10 shadow-red-500/15";
     case "waiting_approval":
-      return "border-orange-500 bg-orange-500/10";
+      return "border-orange-500/60 bg-orange-500/10 shadow-orange-500/15";
     default:
-      return "border-border bg-card";
+      return "border-border/60 bg-card shadow-black/5";
   }
 }
 
@@ -36,9 +36,9 @@ export function AgentNode({ data, selected }: NodeProps<AgentStepNode>) {
     <div
       aria-label={`${data.stepName} step${data.agentRef ? `, agent ${data.agentRef}` : ""}${data.requireApproval ? ", requires approval" : ""}`}
       className={cn(
-        "rounded-lg border-2 px-3 py-2 shadow-sm w-[240px] transition-all duration-200 hover:shadow-md",
+        "rounded-xl border-2 px-3 py-2 shadow-md w-[240px] transition-all duration-200 hover:shadow-lg",
         stepStatusColor(data.stepState?.status),
-        selected && "ring-2 ring-primary shadow-md",
+        selected && "ring-2 ring-primary ring-offset-2 ring-offset-background shadow-lg",
       )}
     >
       <Handle type="target" position={Position.Top} className="!bg-primary !w-3 !h-3" />

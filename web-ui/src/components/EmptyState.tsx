@@ -18,8 +18,8 @@ export function EmptyState({ icon: Icon, title, description, action, className }
         className
       )}
     >
-      <div className="rounded-xl bg-muted/50 p-3.5 animate-icon-float">
-        <Icon className="h-6 w-6 text-muted-foreground" aria-hidden="true" />
+      <div className="rounded-2xl bg-gradient-to-br from-primary/15 to-primary/5 p-4 animate-icon-float shadow-md shadow-primary/10 border border-primary/10">
+        <Icon className="h-6 w-6 text-primary/70" aria-hidden="true" />
       </div>
       <div className="space-y-1">
         <h3 className="text-sm font-medium text-foreground">{title}</h3>

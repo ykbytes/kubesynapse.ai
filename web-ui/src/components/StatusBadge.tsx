@@ -3,16 +3,16 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 
 const statusBadgeVariants = cva(
-  "inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-xs font-medium transition-colors duration-200",
+  "inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium transition-all duration-200",
   {
     variants: {
       status: {
-        success: "bg-emerald-500/10 text-emerald-400",
-        warning: "bg-amber-500/10 text-amber-400",
-        error: "bg-red-500/10 text-red-400",
-        info: "bg-blue-500/10 text-blue-400",
-        neutral: "bg-muted text-muted-foreground",
-        running: "bg-primary/10 text-primary animate-glow-pulse",
+        success: "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 shadow-sm shadow-emerald-500/10",
+        warning: "bg-amber-500/10 text-amber-400 border border-amber-500/20 shadow-sm shadow-amber-500/10",
+        error: "bg-red-500/10 text-red-400 border border-red-500/20 shadow-sm shadow-red-500/10",
+        info: "bg-blue-500/10 text-blue-400 border border-blue-500/20 shadow-sm shadow-blue-500/10",
+        neutral: "bg-muted text-muted-foreground border border-border/40",
+        running: "bg-primary/10 text-primary border border-primary/20 animate-glow-pulse shadow-md shadow-primary/15",
       },
     },
     defaultVariants: {
