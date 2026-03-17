@@ -24,7 +24,7 @@ from rich.text import Text
 from rich.theme import Theme
 
 APP_NAME = "agentctl"
-APP_VERSION = "0.1.0"
+APP_VERSION = "0.2.0"
 DEFAULT_GATEWAY_URL = "http://localhost:8080"
 DEFAULT_NAMESPACE = "default"
 K8S_NAME_RE = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
@@ -54,6 +54,9 @@ workflows_app = typer.Typer(no_args_is_help=True, help="Manage and inspect workf
 evals_app = typer.Typer(no_args_is_help=True, help="Manage and inspect eval suites.")
 approvals_app = typer.Typer(no_args_is_help=True, help="Review and decide approvals.")
 policies_app = typer.Typer(no_args_is_help=True, help="List policies.")
+auth_app = typer.Typer(no_args_is_help=True, help="Authentication and user session management.")
+admin_app = typer.Typer(no_args_is_help=True, help="Admin operations (requires admin role).")
+credentials_app = typer.Typer(no_args_is_help=True, help="Manage agent git and GitHub credentials.")
 get_app = typer.Typer(no_args_is_help=True, hidden=True)
 
 app.add_typer(agents_app, name="agents")
@@ -61,6 +64,9 @@ app.add_typer(workflows_app, name="workflows")
 app.add_typer(evals_app, name="evals")
 app.add_typer(approvals_app, name="approvals")
 app.add_typer(policies_app, name="policies")
+app.add_typer(auth_app, name="auth")
+app.add_typer(admin_app, name="admin")
+app.add_typer(credentials_app, name="credentials")
 app.add_typer(get_app, name="get")
 
 
@@ -1491,16 +1497,54 @@ def invoke(
 
 
 @app.command("logs")
-def logs(ctx: typer.Context, agent_name: str = typer.Argument(..., help="Agent name.")) -> None:
-    """Fetch the last 100 log lines for an agent runtime."""
+def logs(
+    ctx: typer.Context,
+    agent_name: str = typer.Argument(..., help="Agent name."),
+    tail: int = typer.Option(200, "--tail", "-t", min=1, max=5000, help="Number of log lines to retrieve."),
+    follow: bool = typer.Option(False, "--follow", "-f", help="Stream logs in real-time via SSE."),
+) -> None:
+    """Fetch logs for an agent runtime. Use --follow for live streaming."""
     settings = ctx_settings(ctx)
+
+    if follow:
+        try:
+            with ApiClient(settings) as client:
+                with client.stream(
+                    "GET",
+                    f"/api/agents/{agent_name}/logs/stream",
+                    params={**namespace_params(settings), "tail": tail},
+                ) as response:
+                    ApiClient._raise_for_status(response)
+                    console.print(Panel(
+                        f"Streaming logs for [bold]{agent_name}[/bold] (Ctrl+C to stop)",
+                        title="Live Logs",
+                        border_style="accent",
+                    ))
+                    for event_name, data in iter_sse(response):
+                        if event_name == "log.line":
+                            try:
+                                payload = json.loads(data) if data else {}
+                                line = str(payload.get("line", data))
+                            except (json.JSONDecodeError, ValueError):
+                                line = data
+                            console.print(line, highlight=False)
+                        elif event_name == "log.started":
+                            pass
+                        elif event_name == "log.ended":
+                            break
+        except KeyboardInterrupt:
+            console.print("\n[muted]Log stream stopped.[/muted]")
+        except ApiError as exc:
+            fatal(str(exc), status_code=exc.status_code)
+        return
+
     try:
         with console.status(f"[accent]Fetching logs for {agent_name}...[/accent]"):
             with ApiClient(settings) as client:
                 data = client.json(
                     "GET",
                     f"/api/agents/{agent_name}/logs",
-                    params=namespace_params(settings),
+                    params={**namespace_params(settings), "tail": tail},
                 )
     except ApiError as exc:
         fatal(str(exc), status_code=exc.status_code)
@@ -2203,6 +2247,767 @@ def get_skills(ctx: typer.Context) -> None:
 def get_tools(ctx: typer.Context) -> None:
     """Compatibility alias for `agentctl tools list`."""
     tools_list(ctx)
+
+
+# ── Auth Commands ─────────────────────────────────────────────────────────────
+
+
+@auth_app.command("login")
+def auth_login(
+    ctx: typer.Context,
+    username: str = typer.Option(..., "--username", "-u", prompt=True, help="Username."),
+    password: str = typer.Option(..., "--password", "-p", prompt=True, hide_input=True, help="Password."),
+    provider: str = typer.Option("local", "--provider", help="Auth provider: local or ldap."),
+) -> None:
+    """Login and obtain an access token."""
+    settings = ctx_settings(ctx)
+    payload: dict[str, Any] = {"username": username, "password": password, "provider": provider}
+    try:
+        with console.status("[accent]Logging in...[/accent]"):
+            with ApiClient(settings) as client:
+                data = client.json("POST", "/api/auth/login", payload=payload)
+    except ApiError as exc:
+        fatal(str(exc), status_code=exc.status_code)
+
+    if settings.json_output:
+        print_json(data)
+        return
+
+    token = data.get("access_token") or data.get("token", "")
+    console.print(Panel(
+        f"Logged in as [bold]{data.get('username', username)}[/bold] "
+        f"(role: [accent]{data.get('role', '-')}[/accent])\n\n"
+        f"[muted]Export this token to use authenticated commands:[/muted]\n"
+        f"  [bold]export AGENT_GATEWAY_TOKEN={token}[/bold]",
+        title="Login Successful",
+        border_style="ok",
+    ))
+
+
+@auth_app.command("logout")
+def auth_logout(ctx: typer.Context) -> None:
+    """Logout and revoke the current session."""
+    settings = ctx_settings(ctx)
+    try:
+        with console.status("[accent]Logging out...[/accent]"):
+            with ApiClient(settings) as client:
+                data = client.json("POST", "/api/auth/logout")
+    except ApiError as exc:
+        fatal(str(exc), status_code=exc.status_code)
+    if settings.json_output:
+        print_json(data)
+        return
+    console.print(Panel("Session revoked.", title="Logged Out", border_style="ok"))
+
+
+@auth_app.command("register")
+def auth_register(
+    ctx: typer.Context,
+    username: str = typer.Option(..., "--username", "-u", prompt=True, help="Username (3-128 chars)."),
+    password: str = typer.Option(..., "--password", "-p", prompt=True, hide_input=True, confirmation_prompt=True, help="Password (8+ chars)."),
+    email: str | None = typer.Option(None, "--email", help="Email address."),
+    display_name: str | None = typer.Option(None, "--display-name", help="Display name."),
+) -> None:
+    """Register a new local user account."""
+    settings = ctx_settings(ctx)
+    payload: dict[str, Any] = {"username": username, "password": password}
+    if email:
+        payload["email"] = email
+    if display_name:
+        payload["display_name"] = display_name
+    try:
+        with console.status("[accent]Registering...[/accent]"):
+            with ApiClient(settings) as client:
+                data = client.json("POST", "/api/auth/register", payload=payload)
+    except ApiError as exc:
+        fatal(str(exc), status_code=exc.status_code)
+
+    if settings.json_output:
+        print_json(data)
+        return
+    console.print(Panel(
+        f"Registered [bold]{data.get('username', username)}[/bold] "
+        f"(role: [accent]{data.get('role', '-')}[/accent])",
+        title="Registration Successful",
+        border_style="ok",
+    ))
+
+
+@auth_app.command("me")
+def auth_me(ctx: typer.Context) -> None:
+    """Show the current authenticated user."""
+    settings = ctx_settings(ctx)
+    try:
+        with console.status("[accent]Loading user context...[/accent]"):
+            with ApiClient(settings) as client:
+                data = client.json("GET", "/api/auth/me")
+    except ApiError as exc:
+        fatal(str(exc), status_code=exc.status_code)
+    if settings.json_output:
+        print_json(data)
+        return
+    user = data.get("user", data) if isinstance(data, dict) else data
+    if isinstance(user, dict):
+        rows = [
+            ("Username", str(user.get("username") or user.get("preferred_username", "-"))),
+            ("Role", str(user.get("role", "-"))),
+            ("Auth Provider", str(user.get("auth_provider", "-"))),
+            ("Namespaces", ", ".join(user.get("allowed_namespaces", []))),
+        ]
+        email = user.get("email")
+        if email:
+            rows.append(("Email", str(email)))
+        render_info_table("Current User", rows)
+    else:
+        console.print(Panel(Pretty(data), title="Current User", border_style="accent"))
+
+
+@auth_app.command("change-password")
+def auth_change_password(
+    ctx: typer.Context,
+    current_password: str = typer.Option(..., "--current", prompt=True, hide_input=True, help="Current password."),
+    new_password: str = typer.Option(..., "--new", prompt=True, hide_input=True, confirmation_prompt=True, help="New password (8+ chars)."),
+) -> None:
+    """Change your password (local users only)."""
+    settings = ctx_settings(ctx)
+    try:
+        with console.status("[accent]Updating password...[/accent]"):
+            with ApiClient(settings) as client:
+                data = client.json("POST", "/api/auth/change-password", payload={
+                    "current_password": current_password,
+                    "new_password": new_password,
+                })
+    except ApiError as exc:
+        fatal(str(exc), status_code=exc.status_code)
+    if settings.json_output:
+        print_json(data)
+        return
+    console.print(Panel("Password updated successfully.", title="Password Changed", border_style="ok"))
+
+
+@auth_app.command("config")
+def auth_config(ctx: typer.Context) -> None:
+    """Show the gateway authentication configuration."""
+    settings = ctx_settings(ctx)
+    try:
+        with console.status("[accent]Loading auth config...[/accent]"):
+            with ApiClient(settings) as client:
+                data = client.json("GET", "/api/auth/config")
+    except ApiError as exc:
+        fatal(str(exc), status_code=exc.status_code)
+    if settings.json_output:
+        print_json(data)
+        return
+    render_generic_detail("Authentication Configuration", data, False)
+
+
+# ── Admin Commands ────────────────────────────────────────────────────────────
+
+
+@admin_app.command("users-list")
+def admin_users_list(ctx: typer.Context) -> None:
+    """List all local users (admin only)."""
+    settings = ctx_settings(ctx)
+    try:
+        with console.status("[accent]Loading users...[/accent]"):
+            with ApiClient(settings) as client:
+                data = client.json("GET", "/api/admin/users")
+    except ApiError as exc:
+        fatal(str(exc), status_code=exc.status_code)
+    if settings.json_output:
+        print_json(data)
+        return
+    if not isinstance(data, list) or not data:
+        console.print(Panel("No users found.", title="Users", border_style="warn"))
+        return
+    table = Table(title="Users", box=box.ROUNDED)
+    table.add_column("ID", style="muted", justify="right")
+    table.add_column("Username", style="title")
+    table.add_column("Role", style="accent")
+    table.add_column("Active")
+    table.add_column("Provider", style="muted")
+    table.add_column("Namespaces")
+    for user in data:
+        active = bool(user.get("is_active", True))
+        ns_list = user.get("allowed_namespaces") or []
+        table.add_row(
+            str(user.get("id", "")),
+            str(user.get("username", "")),
+            str(user.get("role", "")),
+            Text("YES", style="ok") if active else Text("NO", style="error"),
+            str(user.get("auth_provider", "local")),
+            ", ".join(str(n) for n in ns_list) if ns_list else "-",
+        )
+    console.print(table)
+
+
+@admin_app.command("users-create")
+def admin_users_create(
+    ctx: typer.Context,
+    username: str = typer.Option(..., "--username", "-u", prompt=True, help="Username (3-128 chars)."),
+    password: str = typer.Option(..., "--password", "-p", prompt=True, hide_input=True, confirmation_prompt=True, help="Password (8+ chars)."),
+    role: str = typer.Option("viewer", "--role", help="Role: viewer, operator, or admin."),
+    email: str | None = typer.Option(None, "--email", help="Email address."),
+    display_name: str | None = typer.Option(None, "--display-name", help="Display name."),
+    allowed_namespaces: list[str] | None = typer.Option(None, "--namespace", help="Allowed namespaces. Can be repeated."),
+) -> None:
+    """Create a new local user (admin only)."""
+    settings = ctx_settings(ctx)
+    if role not in {"viewer", "operator", "admin"}:
+        fatal("--role must be viewer, operator, or admin.")
+    payload: dict[str, Any] = {"username": username, "password": password, "role": role}
+    if email:
+        payload["email"] = email
+    if display_name:
+        payload["display_name"] = display_name
+    if allowed_namespaces:
+        payload["allowed_namespaces"] = allowed_namespaces
+    try:
+        with console.status(f"[accent]Creating user {username}...[/accent]"):
+            with ApiClient(settings) as client:
+                data = client.json("POST", "/api/admin/users", payload=payload)
+    except ApiError as exc:
+        fatal(str(exc), status_code=exc.status_code)
+    if settings.json_output:
+        print_json(data)
+        return
+    render_generic_detail(f"User Created: {username}", data, False)
+
+
+@admin_app.command("users-update")
+def admin_users_update(
+    ctx: typer.Context,
+    user_id: int = typer.Argument(..., help="User ID to update."),
+    role: str | None = typer.Option(None, "--role", help="New role: viewer, operator, or admin."),
+    display_name: str | None = typer.Option(None, "--display-name", help="New display name."),
+    active: bool | None = typer.Option(None, "--active/--inactive", help="Enable or disable the user."),
+    allowed_namespaces: list[str] | None = typer.Option(None, "--namespace", help="Allowed namespaces. Can be repeated."),
+) -> None:
+    """Update a local user (admin only)."""
+    settings = ctx_settings(ctx)
+    if role is not None and role not in {"viewer", "operator", "admin"}:
+        fatal("--role must be viewer, operator, or admin.")
+    payload: dict[str, Any] = {}
+    if role is not None:
+        payload["role"] = role
+    if display_name is not None:
+        payload["display_name"] = display_name
+    if active is not None:
+        payload["is_active"] = active
+    if allowed_namespaces is not None:
+        payload["allowed_namespaces"] = allowed_namespaces
+    if not payload:
+        fatal("Provide at least one field to update (--role, --display-name, --active/--inactive, --namespace).")
+    try:
+        with console.status(f"[accent]Updating user {user_id}...[/accent]"):
+            with ApiClient(settings) as client:
+                data = client.json("PATCH", f"/api/admin/users/{user_id}", payload=payload)
+    except ApiError as exc:
+        fatal(str(exc), status_code=exc.status_code)
+    if settings.json_output:
+        print_json(data)
+        return
+    render_generic_detail(f"User Updated: {user_id}", data, False)
+
+
+# ── Credential Commands ──────────────────────────────────────────────────────
+
+
+@credentials_app.command("git-set")
+def credentials_git_set(
+    ctx: typer.Context,
+    agent_name: str = typer.Argument(..., help="Agent name."),
+    auth_method: str = typer.Option(..., "--method", help="Auth method: token, basic, or ssh."),
+    token: str | None = typer.Option(None, "--token", help="Personal access token (method=token)."),
+    username: str | None = typer.Option(None, "--username", help="Username (method=basic)."),
+    password: str | None = typer.Option(None, "--password", help="Password (method=basic)."),
+    ssh_key_file: Path | None = typer.Option(None, "--ssh-key-file", exists=True, file_okay=True, dir_okay=False, help="SSH private key file (method=ssh)."),
+) -> None:
+    """Create or replace git credentials for an agent."""
+    settings = ctx_settings(ctx)
+    if auth_method not in {"token", "basic", "ssh"}:
+        fatal("--method must be token, basic, or ssh.")
+    payload: dict[str, Any] = {"auth_method": auth_method}
+    if auth_method == "token":
+        if not token:
+            token = typer.prompt("Git token", hide_input=True)
+        payload["token"] = token
+    elif auth_method == "basic":
+        if not username:
+            username = typer.prompt("Git username")
+        if not password:
+            password = typer.prompt("Git password", hide_input=True)
+        payload["username"] = username
+        payload["password"] = password
+    elif auth_method == "ssh":
+        if not ssh_key_file:
+            fatal("--ssh-key-file is required for ssh auth method.")
+        payload["ssh_private_key"] = ssh_key_file.read_text(encoding="utf-8")
+    try:
+        with console.status(f"[accent]Setting git credentials for {agent_name}...[/accent]"):
+            with ApiClient(settings) as client:
+                data = client.json(
+                    "POST",
+                    f"/api/agents/{agent_name}/git-credentials",
+                    params=namespace_params(settings),
+                    payload=payload,
+                )
+    except ApiError as exc:
+        fatal(str(exc), status_code=exc.status_code)
+    if settings.json_output:
+        print_json(data)
+        return
+    console.print(Panel(
+        f"Git credentials ({auth_method}) configured for [bold]{agent_name}[/bold].",
+        title="Credentials Set",
+        border_style="ok",
+    ))
+
+
+@credentials_app.command("git-show")
+def credentials_git_show(
+    ctx: typer.Context,
+    agent_name: str = typer.Argument(..., help="Agent name."),
+) -> None:
+    """Show git credential metadata for an agent."""
+    settings = ctx_settings(ctx)
+    try:
+        with console.status(f"[accent]Loading git credentials for {agent_name}...[/accent]"):
+            with ApiClient(settings) as client:
+                data = client.json(
+                    "GET",
+                    f"/api/agents/{agent_name}/git-credentials",
+                    params=namespace_params(settings),
+                )
+    except ApiError as exc:
+        fatal(str(exc), status_code=exc.status_code)
+    render_generic_detail(f"Git Credentials: {agent_name}", data, settings.json_output)
+
+
+@credentials_app.command("git-delete")
+def credentials_git_delete(
+    ctx: typer.Context,
+    agent_name: str = typer.Argument(..., help="Agent name."),
+    assume_yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation."),
+) -> None:
+    """Delete git credentials for an agent."""
+    settings = ctx_settings(ctx)
+    if not assume_yes:
+        confirmed = typer.confirm(f"Delete git credentials for agent '{agent_name}'?", default=False)
+        if not confirmed:
+            raise typer.Exit(0)
+    try:
+        with console.status(f"[accent]Deleting git credentials for {agent_name}...[/accent]"):
+            with ApiClient(settings) as client:
+                data = client.json(
+                    "DELETE",
+                    f"/api/agents/{agent_name}/git-credentials",
+                    params=namespace_params(settings),
+                )
+    except ApiError as exc:
+        fatal(str(exc), status_code=exc.status_code)
+    if settings.json_output:
+        print_json(data)
+        return
+    console.print(Panel(
+        f"Git credentials removed for [bold]{agent_name}[/bold].",
+        title="Credentials Deleted",
+        border_style="ok",
+    ))
+
+
+@credentials_app.command("github-set")
+def credentials_github_set(
+    ctx: typer.Context,
+    agent_name: str = typer.Argument(..., help="Agent name."),
+    token: str = typer.Option("", "--token", help="GitHub personal access token."),
+) -> None:
+    """Create or replace GitHub MCP credentials for an agent."""
+    settings = ctx_settings(ctx)
+    if not token:
+        token = typer.prompt("GitHub token", hide_input=True)
+    try:
+        with console.status(f"[accent]Setting GitHub credentials for {agent_name}...[/accent]"):
+            with ApiClient(settings) as client:
+                data = client.json(
+                    "POST",
+                    f"/api/agents/{agent_name}/github-credentials",
+                    params=namespace_params(settings),
+                    payload={"token": token},
+                )
+    except ApiError as exc:
+        fatal(str(exc), status_code=exc.status_code)
+    if settings.json_output:
+        print_json(data)
+        return
+    console.print(Panel(
+        f"GitHub credentials configured for [bold]{agent_name}[/bold].",
+        title="Credentials Set",
+        border_style="ok",
+    ))
+
+
+@credentials_app.command("github-show")
+def credentials_github_show(
+    ctx: typer.Context,
+    agent_name: str = typer.Argument(..., help="Agent name."),
+) -> None:
+    """Show GitHub credential metadata for an agent."""
+    settings = ctx_settings(ctx)
+    try:
+        with console.status(f"[accent]Loading GitHub credentials for {agent_name}...[/accent]"):
+            with ApiClient(settings) as client:
+                data = client.json(
+                    "GET",
+                    f"/api/agents/{agent_name}/github-credentials",
+                    params=namespace_params(settings),
+                )
+    except ApiError as exc:
+        fatal(str(exc), status_code=exc.status_code)
+    render_generic_detail(f"GitHub Credentials: {agent_name}", data, settings.json_output)
+
+
+@credentials_app.command("github-delete")
+def credentials_github_delete(
+    ctx: typer.Context,
+    agent_name: str = typer.Argument(..., help="Agent name."),
+    assume_yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation."),
+) -> None:
+    """Delete GitHub MCP credentials for an agent."""
+    settings = ctx_settings(ctx)
+    if not assume_yes:
+        confirmed = typer.confirm(f"Delete GitHub credentials for agent '{agent_name}'?", default=False)
+        if not confirmed:
+            raise typer.Exit(0)
+    try:
+        with console.status(f"[accent]Deleting GitHub credentials for {agent_name}...[/accent]"):
+            with ApiClient(settings) as client:
+                data = client.json(
+                    "DELETE",
+                    f"/api/agents/{agent_name}/github-credentials",
+                    params=namespace_params(settings),
+                )
+    except ApiError as exc:
+        fatal(str(exc), status_code=exc.status_code)
+    if settings.json_output:
+        print_json(data)
+        return
+    console.print(Panel(
+        f"GitHub credentials removed for [bold]{agent_name}[/bold].",
+        title="Credentials Deleted",
+        border_style="ok",
+    ))
+
+
+# ── Workflow Trigger & Cancel ─────────────────────────────────────────────────
+
+
+@workflows_app.command("trigger")
+def workflows_trigger(
+    ctx: typer.Context,
+    workflow_name: str = typer.Argument(..., help="Workflow name."),
+    input_parts: list[str] = typer.Argument(None, help="Optional new input to trigger with."),
+    input_file: Path | None = typer.Option(None, "--file", "-f", exists=True, file_okay=True, dir_okay=False, help="Read input from a file."),
+) -> None:
+    """Trigger (re-)execution of a workflow."""
+    settings = ctx_settings(ctx)
+    input_text = ""
+    if input_file:
+        input_text = input_file.read_text(encoding="utf-8").strip()
+    elif input_parts:
+        input_text = " ".join(input_parts).strip()
+    payload: dict[str, Any] | None = {"input": input_text} if input_text else None
+    try:
+        with console.status(f"[accent]Triggering workflow {workflow_name}...[/accent]"):
+            with ApiClient(settings) as client:
+                data = client.json(
+                    "POST",
+                    f"/api/workflows/{workflow_name}/trigger",
+                    params=namespace_params(settings),
+                    payload=payload,
+                )
+    except ApiError as exc:
+        fatal(str(exc), status_code=exc.status_code)
+    if settings.json_output:
+        print_json(data)
+        return
+    console.print(Panel(
+        f"Workflow [bold]{workflow_name}[/bold] triggered in namespace [bold]{settings.namespace}[/bold].",
+        title="Workflow Triggered",
+        border_style="ok",
+    ))
+    if isinstance(data, dict):
+        render_info_table(
+            "Status",
+            [
+                ("Phase", str(data.get("phase", "pending"))),
+                ("Current Step", str(data.get("current_step", "") or "-")),
+                ("Input", textwrap.shorten(str(data.get("input", "")), width=80, placeholder="...")),
+            ],
+        )
+
+
+@workflows_app.command("cancel")
+def workflows_cancel(
+    ctx: typer.Context,
+    workflow_name: str = typer.Argument(..., help="Workflow name."),
+    assume_yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation."),
+) -> None:
+    """Cancel a running or queued workflow."""
+    settings = ctx_settings(ctx)
+    if not assume_yes:
+        confirmed = typer.confirm(f"Cancel workflow '{workflow_name}'?", default=False)
+        if not confirmed:
+            raise typer.Exit(0)
+    try:
+        with console.status(f"[accent]Cancelling workflow {workflow_name}...[/accent]"):
+            with ApiClient(settings) as client:
+                data = client.json(
+                    "POST",
+                    f"/api/workflows/{workflow_name}/cancel",
+                    params=namespace_params(settings),
+                )
+    except ApiError as exc:
+        fatal(str(exc), status_code=exc.status_code)
+    if settings.json_output:
+        print_json(data)
+        return
+    console.print(Panel(
+        f"Workflow [bold]{workflow_name}[/bold] cancelled.",
+        title="Workflow Cancelled",
+        border_style="ok",
+    ))
+
+
+@workflows_app.command("status")
+def workflows_status(ctx: typer.Context, workflow_name: str = typer.Argument(..., help="Workflow name.")) -> None:
+    """Show focused run status of a workflow."""
+    settings = ctx_settings(ctx)
+    try:
+        with console.status(f"[accent]Loading status for {workflow_name}...[/accent]"):
+            with ApiClient(settings) as client:
+                data = client.json(
+                    "GET",
+                    f"/api/workflows/{workflow_name}",
+                    params=namespace_params(settings),
+                )
+    except ApiError as exc:
+        fatal(str(exc), status_code=exc.status_code)
+    if settings.json_output:
+        print_json(data)
+        return
+    if not isinstance(data, dict):
+        fatal("Unexpected workflow response.")
+
+    rows: list[tuple[str, str]] = [
+        ("Name", str(data.get("name", workflow_name))),
+        ("Namespace", str(data.get("namespace", settings.namespace))),
+        ("Phase", str(data.get("phase", "pending"))),
+        ("Current Step", str(data.get("current_step", "") or "-")),
+        ("Run ID", str(data.get("run_id", "") or "-")),
+    ]
+
+    pending = data.get("pending_approval")
+    if isinstance(pending, dict) and pending.get("name"):
+        rows.append(("Pending Approval", str(pending["name"])))
+
+    summary = data.get("summary")
+    if isinstance(summary, dict):
+        for key in ("completed_steps", "total_steps", "failed_steps"):
+            if key in summary:
+                rows.append((key.replace("_", " ").title(), str(summary[key])))
+
+    render_info_table(f"Workflow Status: {workflow_name}", rows)
+
+    step_states = data.get("step_states")
+    if isinstance(step_states, dict) and step_states:
+        table = Table(title="Step States", box=box.ROUNDED)
+        table.add_column("Step", style="title")
+        table.add_column("Phase")
+        table.add_column("Agent", style="accent")
+        for step_name, state_data in step_states.items():
+            phase = str(state_data.get("phase", "pending")) if isinstance(state_data, dict) else str(state_data)
+            agent = str(state_data.get("agent_ref", "-")) if isinstance(state_data, dict) else "-"
+            table.add_row(str(step_name), styled_status(phase), agent)
+        console.print(table)
+
+
+# ── Approvals List ────────────────────────────────────────────────────────────
+
+
+@approvals_app.command("list")
+def approvals_list(ctx: typer.Context) -> None:
+    """List pending approvals. Retrieves all workflows and shows any pending approvals."""
+    settings = ctx_settings(ctx)
+    try:
+        with console.status("[accent]Loading approvals...[/accent]"):
+            with ApiClient(settings) as client:
+                workflows = client.json("GET", "/api/workflows", params=namespace_params(settings))
+    except ApiError as exc:
+        fatal(str(exc), status_code=exc.status_code)
+    if settings.json_output:
+        pending = []
+        for wf in (workflows or []):
+            approval = wf.get("pending_approval")
+            if isinstance(approval, dict) and approval.get("name"):
+                pending.append({
+                    "workflow": wf.get("name", ""),
+                    "namespace": wf.get("namespace", ""),
+                    "approval_name": approval["name"],
+                    "step": approval.get("step", ""),
+                    "phase": wf.get("phase", ""),
+                })
+        print_json(pending)
+        return
+
+    table = Table(title="Pending Approvals", box=box.ROUNDED)
+    table.add_column("Approval", style="title")
+    table.add_column("Workflow", style="accent")
+    table.add_column("Step", style="muted")
+    table.add_column("Phase")
+    found = False
+    for wf in (workflows or []):
+        approval = wf.get("pending_approval")
+        if isinstance(approval, dict) and approval.get("name"):
+            found = True
+            table.add_row(
+                str(approval["name"]),
+                str(wf.get("name", "")),
+                str(approval.get("step", "-")),
+                styled_status(str(wf.get("phase", "waiting-approval"))),
+            )
+    if not found:
+        console.print(Panel("No pending approvals.", title="Approvals", border_style="ok"))
+        return
+    console.print(table)
+
+
+# ── Enhanced Logs with Follow and Tail ────────────────────────────────────────
+
+
+# ── MCP Hub Servers ───────────────────────────────────────────────────────────
+
+
+@tools_app.command("hub")
+def tools_hub(ctx: typer.Context) -> None:
+    """List shared MCP hub servers available for agents."""
+    settings = ctx_settings(ctx)
+    with ApiClient(settings) as api:
+        try:
+            data = api.json("GET", "/api/mcp-hub/servers")
+        except ApiError as exc:
+            fatal(str(exc), status_code=exc.status_code)
+    if settings.json_output:
+        print_json(data)
+        return
+    if not isinstance(data, list) or not data:
+        console.print("[muted]No shared MCP hub servers configured.[/muted]")
+        return
+    table = Table(title="MCP Hub Servers", box=box.SIMPLE_HEAVY, border_style="accent")
+    table.add_column("Name", style="title")
+    table.add_column("Transport", style="accent")
+    table.add_column("URL / Command")
+    table.add_column("Description")
+    for srv in data:
+        name = str(srv.get("name") or srv.get("id", ""))
+        transport = str(srv.get("transport", "stdio"))
+        url = str(srv.get("url") or srv.get("command", "-"))
+        desc = str(srv.get("description", ""))[:60]
+        table.add_row(name, transport, url, desc)
+    console.print(table)
+
+
+# ── Apply (generic resource create/update from file) ─────────────────────────
+
+
+@app.command("apply")
+def apply(
+    ctx: typer.Context,
+    file_path: Path = typer.Argument(..., exists=True, file_okay=True, dir_okay=False, help="JSON or YAML resource file."),
+) -> None:
+    """Create or update a resource from a file (auto-detects kind)."""
+    settings = ctx_settings(ctx)
+    document = read_structured_file(file_path)
+    kind = str(document.get("kind", "")).strip()
+    namespace = resolve_namespace(settings, document)
+
+    if kind == "AIAgent" or (not kind and "model" in document):
+        payload, inferred_name = coerce_agent_payload(document, for_update=False)
+        name = resolve_resource_name(None, file_path, inferred_name, "agent")
+        payload["name"] = name
+        try:
+            with console.status(f"[accent]Applying agent {name}...[/accent]"):
+                with ApiClient(settings) as client:
+                    try:
+                        data = client.json("POST", "/api/agents", params={"namespace": namespace}, payload=payload)
+                        action = "created"
+                    except ApiError as create_exc:
+                        if create_exc.status_code == 409:
+                            update_payload, _ = coerce_agent_payload(document, for_update=True)
+                            data = client.json("PATCH", f"/api/agents/{name}", params={"namespace": namespace}, payload=update_payload)
+                            action = "updated"
+                        else:
+                            raise
+        except ApiError as exc:
+            fatal(str(exc), status_code=exc.status_code)
+        console.print(Panel(f"Agent [bold]{name}[/bold] {action}.", title=f"Agent {action.title()}", border_style="ok"))
+
+    elif kind == "AgentWorkflow" or (not kind and "steps" in document):
+        payload, inferred_name = coerce_workflow_payload(document, for_update=False)
+        name = resolve_resource_name(None, file_path, inferred_name, "workflow")
+        payload["name"] = name
+        try:
+            with console.status(f"[accent]Applying workflow {name}...[/accent]"):
+                with ApiClient(settings) as client:
+                    try:
+                        data = client.json("POST", "/api/workflows", params={"namespace": namespace}, payload=payload)
+                        action = "created"
+                    except ApiError as create_exc:
+                        if create_exc.status_code == 409:
+                            update_payload, _ = coerce_workflow_payload(document, for_update=True)
+                            data = client.json("PATCH", f"/api/workflows/{name}", params={"namespace": namespace}, payload=update_payload)
+                            action = "updated"
+                        else:
+                            raise
+        except ApiError as exc:
+            fatal(str(exc), status_code=exc.status_code)
+        console.print(Panel(f"Workflow [bold]{name}[/bold] {action}.", title=f"Workflow {action.title()}", border_style="ok"))
+
+    elif kind == "AgentEval" or (not kind and "test_suite" in document):
+        payload, inferred_name = coerce_eval_payload(document, for_update=False)
+        name = resolve_resource_name(None, file_path, inferred_name, "eval")
+        payload["name"] = name
+        try:
+            with console.status(f"[accent]Applying eval {name}...[/accent]"):
+                with ApiClient(settings) as client:
+                    try:
+                        data = client.json("POST", "/api/evals", params={"namespace": namespace}, payload=payload)
+                        action = "created"
+                    except ApiError as create_exc:
+                        if create_exc.status_code == 409:
+                            update_payload, _ = coerce_eval_payload(document, for_update=True)
+                            data = client.json("PATCH", f"/api/evals/{name}", params={"namespace": namespace}, payload=update_payload)
+                            action = "updated"
+                        else:
+                            raise
+        except ApiError as exc:
+            fatal(str(exc), status_code=exc.status_code)
+        console.print(Panel(f"Eval [bold]{name}[/bold] {action}.", title=f"Eval {action.title()}", border_style="ok"))
+
+    else:
+        fatal(
+            f"Unsupported or unrecognized resource kind '{kind or '(none)'}'. "
+            "Supported: AIAgent, AgentWorkflow, AgentEval."
+        )
+
+
+# ── Compatibility Aliases ─────────────────────────────────────────────────────
+
+
+@get_app.command("approvals")
+def get_approvals(ctx: typer.Context) -> None:
+    """Compatibility alias for `agentctl approvals list`."""
+    approvals_list(ctx)
 
 
 def main() -> None:
