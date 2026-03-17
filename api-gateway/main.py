@@ -4668,13 +4668,19 @@ def cancel_workflow(
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Failed to cancel workflow: {exc}") from exc
 
-    updated = api.get_namespaced_custom_object(
-        group=RESOURCE_GROUP,
-        version=RESOURCE_VERSION,
-        namespace=namespace,
-        plural="agentworkflows",
-        name=workflow_name,
-    )
+    try:
+        updated = api.get_namespaced_custom_object(
+            group=RESOURCE_GROUP,
+            version=RESOURCE_VERSION,
+            namespace=namespace,
+            plural="agentworkflows",
+            name=workflow_name,
+        )
+    except Exception:
+        # Status was already patched successfully — return a minimal response
+        # rather than failing the entire cancel operation.
+        current["status"] = {**(current.get("status") or {}), "phase": "cancelled", "pendingApproval": None}
+        return workflow_info_from_resource(current)
     return workflow_info_from_resource(updated)
 
 

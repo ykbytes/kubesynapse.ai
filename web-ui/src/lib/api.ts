@@ -685,7 +685,14 @@ function parseWorkflowInfoPayload(payload: unknown, label = "WorkflowInfo"): Wor
     summary: readOptionalRecord(record, "summary", label) as WorkflowSummary | null,
     artifact_ref: readOptionalRecord(record, "artifact_ref", label),
     journal_ref: readOptionalRecord(record, "journal_ref", label),
-    pending_approval: readOptionalRecord(record, "pending_approval", label) as WorkflowPendingApproval | null,
+    pending_approval: (() => {
+      const pa = readOptionalRecord(record, "pending_approval", label);
+      // Validate required fields before casting — {} from the API should be treated as null
+      if (pa && typeof (pa as Record<string, unknown>).name === "string" && typeof (pa as Record<string, unknown>).stepName === "string") {
+        return pa as WorkflowPendingApproval;
+      }
+      return null;
+    })(),
     run_id: readOptionalString(record, "run_id", label),
     step_states: readOptionalRecord(record, "step_states", label) as Record<string, WorkflowStepState> | null,
     worker_job: readOptionalRecord(record, "worker_job", label),

@@ -979,6 +979,8 @@ def workflow_should_requeue(status: dict[str, Any], job_state: str) -> str | Non
             return f"queued workflow exceeded {WORKFLOW_QUEUE_STALE_SECONDS}s with worker job state '{job_state}'"
         if job_state in {"missing", "failed"}:
             return f"queued workflow lost worker job with state '{job_state}'"
+        if job_state == "succeeded":
+            return f"queued workflow has succeeded worker job but phase is still 'queued'"
         return None
 
     updated_at = parse_iso_datetime(str(summary.get("updatedAt") or summary.get("startedAt") or ""))

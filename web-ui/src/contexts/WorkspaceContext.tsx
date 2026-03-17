@@ -363,17 +363,17 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     return () => { cancelled = true; };
   }, [token, namespace, selectedAgentName, agentCreateMode, selectedAgentDetail?.policy_ref, agents]);
 
-  // Workflow polling
+  // Workflow polling — restart when the selected workflow's phase changes
+  const selectedWorkflowPhase = selectedWorkflow?.phase ?? "";
   const workflowPollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   useEffect(() => {
     if (workflowPollingRef.current) { clearInterval(workflowPollingRef.current); workflowPollingRef.current = null; }
-    const wf = workflows.find((w) => w.name === selectedWorkflowName);
-    if (!wf || !token.trim()) return;
-    const isActive = wf.phase === "running" || wf.phase === "queued" || wf.phase === "waiting-approval";
+    if (!selectedWorkflowName || !token.trim()) return;
+    const isActive = selectedWorkflowPhase === "running" || selectedWorkflowPhase === "queued" || selectedWorkflowPhase === "waiting-approval";
     if (!isActive) return;
     workflowPollingRef.current = setInterval(async () => {
       try {
-        const updated = await fetchWorkflow(token, namespace, wf.name);
+        const updated = await fetchWorkflow(token, namespace, selectedWorkflowName);
         setWorkflows((prev) => prev.map((w) => (w.name === updated.name ? updated : w)));
         if (updated.phase !== "running" && updated.phase !== "queued" && updated.phase !== "waiting-approval") {
           if (workflowPollingRef.current) { clearInterval(workflowPollingRef.current); workflowPollingRef.current = null; }
@@ -384,8 +384,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         }
     }, 3000);
     return () => { if (workflowPollingRef.current) { clearInterval(workflowPollingRef.current); workflowPollingRef.current = null; } };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedWorkflowName, token, namespace]);
+  }, [selectedWorkflowName, selectedWorkflowPhase, token, namespace]);
 
   // ── Handlers ──
 
@@ -545,7 +544,15 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const handleTriggerWorkflow = useCallback(async (name: string, input?: string) => {
     if (!token.trim()) return;
     setRunningWorkflow(true); setWorkflowError("");
-    try { await triggerWorkflow(token, namespace, name, input); toast.success("Workflow triggered"); await refreshWorkspaceData({ silent: true }); }
+    try {
+      const updated = await triggerWorkflow(token, namespace, name, input);
+      // Optimistically merge the returned resource so the polling effect
+      // can detect the phase change immediately instead of waiting for the
+      // next 10-second workspace refresh.
+      setWorkflows((prev) => prev.map((w) => (w.name === updated.name ? updated : w)));
+      toast.success("Workflow triggered");
+      await refreshWorkspaceData({ silent: true });
+    }
     catch (err) { const msg = err instanceof Error ? err.message : String(err); setWorkflowError(msg); toast.error("Failed to trigger workflow", { description: msg }); }
     finally { setRunningWorkflow(false); }
   }, [token, namespace, refreshWorkspaceData]);
@@ -553,7 +560,12 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const handleCancelWorkflow = useCallback(async (name: string) => {
     if (!token.trim()) return;
     setCancellingWorkflow(true); setWorkflowError("");
-    try { await cancelWorkflow(token, namespace, name); toast.success("Workflow cancelled"); await refreshWorkspaceData({ silent: true }); }
+    try {
+      const updated = await cancelWorkflow(token, namespace, name);
+      setWorkflows((prev) => prev.map((w) => (w.name === updated.name ? updated : w)));
+      toast.success("Workflow cancelled");
+      await refreshWorkspaceData({ silent: true });
+    }
     catch (err) { const msg = err instanceof Error ? err.message : String(err); setWorkflowError(msg); toast.error("Failed to cancel workflow", { description: msg }); }
     finally { setCancellingWorkflow(false); }
   }, [token, namespace, refreshWorkspaceData]);
