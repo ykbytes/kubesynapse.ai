@@ -92,7 +92,8 @@ export function AgentInspectorDrawer({
                 placeholder="Reason (optional)"
                 value={approvalReason}
                 onChange={(e) => onApprovalReasonChange(e.target.value)}
-                className="h-8 text-xs"
+                className="h-9 text-xs"
+                aria-label="Approval reason"
               />
               <Button size="sm" className="h-8" onClick={onApprove} disabled={approvalBusy}>
                 Approve
@@ -106,10 +107,10 @@ export function AgentInspectorDrawer({
 
         <Tabs defaultValue="overview" className="flex flex-1 flex-col overflow-hidden">
           <TabsList className="mx-4 mt-2 w-auto">
-            <TabsTrigger value="overview">Overview</TabsTrigger>
-            <TabsTrigger value="activity">Activity</TabsTrigger>
-            <TabsTrigger value="logs">Logs</TabsTrigger>
-            <TabsTrigger value="raw">Raw</TabsTrigger>
+            <TabsTrigger value="overview" aria-label="Agent overview">Overview</TabsTrigger>
+            <TabsTrigger value="activity" aria-label="Activity log">Activity</TabsTrigger>
+            <TabsTrigger value="logs" aria-label="Pod logs">Logs</TabsTrigger>
+            <TabsTrigger value="raw" aria-label="Raw JSON">Raw</TabsTrigger>
           </TabsList>
 
           {/* Overview Tab */}
@@ -327,7 +328,8 @@ export function ResourceInspectorDrawer({
                 placeholder="Reason (optional)"
                 value={approvalReason}
                 onChange={(e) => onApprovalReasonChange(e.target.value)}
-                className="h-8 text-xs"
+                className="h-9 text-xs"
+                aria-label="Approval reason"
               />
               <Button size="sm" className="h-8" onClick={onApprove} disabled={approvalBusy}>Approve</Button>
               <Button size="sm" variant="destructive" className="h-8" onClick={onDeny} disabled={approvalBusy}>Deny</Button>
@@ -450,6 +452,8 @@ function LogsPanel({
       </div>
 
       <div className="flex-1 overflow-auto bg-black/5 dark:bg-black/20"
+        aria-label="Log output"
+        role="log"
         onScroll={(e) => {
           const el = e.currentTarget;
           const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;

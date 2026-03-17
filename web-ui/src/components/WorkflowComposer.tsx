@@ -161,22 +161,25 @@ function ComposerCanvas({
   const handleNodeDataChange = useCallback(
     (nodeId: string, patch: Partial<AgentStepNodeData>) => {
       setNodes((nds) => {
-        const updated = nds.map((n) => {
-          if (n.id !== nodeId) return n;
-          const oldName = (n.data as AgentStepNodeData).stepName;
+        // If renaming, validate FIRST before any state mutation
+        const target = nds.find((n) => n.id === nodeId);
+        if (target && patch.stepName !== undefined) {
+          const oldName = (target.data as AgentStepNodeData).stepName;
           const newName = patch.stepName;
-          if (newName && newName !== oldName) {
-            // Validate uniqueness
-            if (!newName.trim() || nds.some((other) => other.id !== n.id && other.id === newName)) {
-              toast.error("Step name must be unique and non-empty");
-              return { ...n, data: { ...n.data, ...patch, stepName: oldName } };
+          if (newName !== oldName) {
+            if (!newName.trim()) {
+              toast.error("Step name cannot be empty");
+              return nds; // no change
             }
-            const oldNodeId = n.id;
-            // Update edges to reference the new node id
+            if (nds.some((other) => other.id !== nodeId && other.id === newName)) {
+              toast.error("Step name must be unique");
+              return nds; // no change
+            }
+            // Validation passed — update node AND edges atomically
             setEdges((eds) =>
               eds.map((e) => {
-                const newSource = e.source === oldNodeId ? newName : e.source;
-                const newTarget = e.target === oldNodeId ? newName : e.target;
+                const newSource = e.source === nodeId ? newName : e.source;
+                const newTarget = e.target === nodeId ? newName : e.target;
                 return {
                   ...e,
                   id: `e-${newSource}-${newTarget}`,
@@ -185,11 +188,17 @@ function ComposerCanvas({
                 };
               }),
             );
-            return { ...n, id: newName, data: { ...n.data, ...patch } };
+            return nds.map((n) =>
+              n.id === nodeId
+                ? { ...n, id: newName, data: { ...n.data, ...patch } }
+                : n,
+            );
           }
-          return { ...n, data: { ...n.data, ...patch } };
-        });
-        return updated;
+        }
+        // Non-rename property change
+        return nds.map((n) =>
+          n.id === nodeId ? { ...n, data: { ...n.data, ...patch } } : n,
+        );
       });
       setIsDirty(true);
     },

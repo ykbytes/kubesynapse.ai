@@ -1,5 +1,5 @@
 import { Bot, GitBranch, FlaskConical, Inbox, Package, Play, Plus, RefreshCw, PanelLeftClose, PanelLeft, Search, Blocks } from "lucide-react";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -83,6 +83,11 @@ export function AppSidebar({
     setFilter(value);
     clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => setDebouncedFilter(value), 150);
+  }, []);
+
+  // Cleanup debounce timer on unmount to prevent memory leak
+  useEffect(() => {
+    return () => { clearTimeout(debounceRef.current); };
   }, []);
 
   const filteredItems = debouncedFilter.trim()

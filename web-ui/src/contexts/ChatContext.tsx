@@ -599,7 +599,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     const agentName = selectedAgentName;
 
     setLogsStreaming(true);
-    setLogsForAgent(agentName, "");
     setWorkspaceError("");
 
     streamAgentLogs({
@@ -609,7 +608,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       agentName,
       tail: 100,
       onStarted: (info) => {
-        setLogsForAgent(agentName, (prev) => prev + `── streaming logs from pod ${info.pod_name} ──\n`);
+        // Clear logs only after connection succeeds (not before)
+        setLogsForAgent(agentName, `── streaming logs from pod ${info.pod_name} ──\n`);
       },
       onLine: (line) => {
         setLogsForAgent(agentName, (prev) => prev + line + "\n");

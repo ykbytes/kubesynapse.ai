@@ -124,18 +124,27 @@ export function PropertiesPanel({ selectedNode, agents, onNodeDataChange }: Prop
 
           {/* Loop Configuration (only visible for loop steps) */}
           {d.stepType === "loop" && (
-            <div className="space-y-2 border rounded-md p-2 bg-blue-500/5">
+            <div className="space-y-2 border rounded-md p-2 bg-blue-500/10">
               <Label className="text-[10px] text-blue-500 font-semibold">Loop Config</Label>
               <div className="space-y-1">
                 <Label className="text-[10px]">Max Iterations</Label>
                 <Input
                   type="number"
                   min={1}
+                  max={10000}
                   value={d.loopConfig?.maxIterations ?? ""}
                   onChange={(e) => {
-                    const val = e.target.value ? parseInt(e.target.value, 10) : undefined;
+                    const raw = e.target.value;
+                    if (!raw) {
+                      onNodeDataChange(selectedNode.id, {
+                        loopConfig: { ...d.loopConfig, maxIterations: undefined },
+                      });
+                      return;
+                    }
+                    const val = parseInt(raw, 10);
+                    if (isNaN(val) || val < 1) return;
                     onNodeDataChange(selectedNode.id, {
-                      loopConfig: { ...d.loopConfig, maxIterations: val },
+                      loopConfig: { ...d.loopConfig, maxIterations: Math.min(val, 10000) },
                     });
                   }}
                   placeholder="e.g. 10"

@@ -95,8 +95,8 @@ export function ComposerToolbar({
         size="sm"
         className="h-7 text-xs gap-1 shrink-0"
         onClick={onRun}
-        disabled={isRunning || !workflowName.trim() || isNew}
-        title={isNew ? "Save the workflow first" : "Trigger workflow run"}
+        disabled={isRunning || !workflowName.trim() || isNew || isDirty}
+        title={isNew ? "Save the workflow first" : isDirty ? "Save changes before running" : "Trigger workflow run"}
       >
         <Play className="h-3 w-3" /> {isRunning ? "Running…" : "Run"}
       </Button>

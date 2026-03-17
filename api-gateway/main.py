@@ -4905,6 +4905,7 @@ async def stream_agent_logs(
 
     async def log_event_generator():
         from kubernetes import client as k8s_client, watch as k8s_watch
+        import time
 
         yield sse_event("log.started", {"agent_name": agent_name, "pod_name": pod_name})
 
@@ -4920,11 +4921,17 @@ async def stream_agent_logs(
                 timestamps=True,
                 _request_timeout=0,
             )
+            last_event_time = time.monotonic()
             for line in log_stream:
                 if await request.is_disconnected():
                     break
                 yield sse_event("log.line", {"line": line})
+                last_event_time = time.monotonic()
                 await asyncio.sleep(0)  # yield control so disconnect check works
+                # Send keepalive if idle for too long (prevents proxy timeouts)
+                if time.monotonic() - last_event_time > STREAM_KEEPALIVE_SECONDS:
+                    yield sse_keepalive_comment()
+                    last_event_time = time.monotonic()
         except Exception as exc:
             yield sse_event("log.error", {"error": str(exc)})
         finally:

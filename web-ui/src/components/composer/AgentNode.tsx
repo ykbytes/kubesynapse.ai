@@ -21,27 +21,28 @@ function stepStatusColor(status?: string | null): string {
 export function AgentNode({ data, selected }: NodeProps<AgentStepNode>) {
   return (
     <div
+      aria-label={`${data.stepName} step${data.agentRef ? `, agent ${data.agentRef}` : ""}${data.requireApproval ? ", requires approval" : ""}`}
       className={cn(
         "rounded-lg border-2 px-3 py-2 shadow-sm w-[240px] transition-colors",
         stepStatusColor(data.stepState?.status),
         selected && "ring-2 ring-primary",
       )}
     >
-      <Handle type="target" position={Position.Top} className="!bg-primary !w-2.5 !h-2.5" />
+      <Handle type="target" position={Position.Top} className="!bg-primary !w-3 !h-3" />
       <div className="flex items-center gap-1.5 text-xs font-semibold truncate">
         {data.stepName}
         {data.requireApproval && <UserCheck className="h-3 w-3 text-orange-500 shrink-0" />}
         {data.stepType === "loop" && <Repeat className="h-3 w-3 text-blue-500 shrink-0" />}
       </div>
-      <div className="text-[10px] text-muted-foreground truncate">
+      <div className="text-[10px] text-muted-foreground truncate" title={data.agentRef || "Agent not yet assigned"}>
         {data.agentRef || "no agent assigned"}
       </div>
       {data.prompt && (
-        <div className="text-[10px] text-muted-foreground/70 truncate mt-0.5">
+        <div className="text-[10px] text-muted-foreground/70 truncate mt-0.5" title={data.prompt}>
           {data.prompt.slice(0, 80)}
         </div>
       )}
-      <Handle type="source" position={Position.Bottom} className="!bg-primary !w-2.5 !h-2.5" />
+      <Handle type="source" position={Position.Bottom} className="!bg-primary !w-3 !h-3" />
     </div>
   );
 }

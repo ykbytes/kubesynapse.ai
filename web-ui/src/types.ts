@@ -498,6 +498,7 @@ export interface InvokeResponse {
 
 export interface AgentLogsResponse {
   agent_name: string;
+  pod_name?: string;
   logs: string;
 }
 
