@@ -312,6 +312,18 @@ def previous_output_for_dependencies(
             )
         else:
             parts.append(f"[Step: {dependency}]\n{response_text}")
+        # Include artifact summaries from runtimes that produce them (e.g. opencode)
+        artifacts = result.get("artifacts") or []
+        if artifacts:
+            artifact_lines = []
+            for art in artifacts[:50]:
+                art_path = str(art.get("path") or art.get("name") or "")
+                if art_path:
+                    artifact_lines.append(f"  - {art_path}")
+            if artifact_lines:
+                parts.append(
+                    f"[Step: {dependency} — Artifacts]\n" + "\n".join(artifact_lines)
+                )
     return "\n\n".join(parts)
 
 
@@ -479,6 +491,16 @@ def execute_workflow_step(
                     ),
                 }
 
+            # Treat "incomplete" as usable partial output (e.g. opencode
+            # context overflow that still produced a response).
+            step_warnings: list[str] = list(result.get("warnings") or [])
+            if result_status == "incomplete":
+                step_warnings.append(
+                    f"Step '{step_name}' returned status 'incomplete'; "
+                    "partial output accepted."
+                )
+                result_status = "completed"
+
             if (
                 result_status != "completed"
                 or response_text.startswith("Request blocked")
@@ -489,7 +511,17 @@ def execute_workflow_step(
                     f"{response_text}"
                 )
 
-            structured_output = parse_json_output(response_text)
+            # Extract structured output: prefer metadata.structured_output
+            # (populated by runtimes like opencode when output_format is
+            # set), then fall back to parsing the raw response text.
+            result_metadata = result.get("metadata") or {}
+            structured_output = (
+                result_metadata.get("structured_output")
+                if isinstance(result_metadata, dict)
+                else None
+            )
+            if structured_output is None:
+                structured_output = parse_json_output(response_text)
             step_result = {
                 "agentRef": step.get("agentRef", ""),
                 "response": response_text,
@@ -505,6 +537,10 @@ def execute_workflow_step(
                     ),
                 },
                 "attempts": attempt,
+                "artifacts": list(result.get("artifacts") or []),
+                "tool_calls": list(result.get("tool_calls") or []),
+                "metadata": result.get("metadata"),
+                "warnings": step_warnings,
             }
             append_journal_event(
                 "workflow.step.completed",
@@ -515,6 +551,9 @@ def execute_workflow_step(
                     "latencyMs": latency_ms,
                     "threadId": thread_id,
                     "structuredOutput": structured_output is not None,
+                    "artifactCount": len(step_result["artifacts"]),
+                    "toolCallCount": len(step_result["tool_calls"]),
+                    "warnings": step_warnings,
                 },
             )
             return {
@@ -749,12 +788,17 @@ def build_loop_iteration_prompt(
 
 
 def detect_iteration_signals(response_text: str) -> dict[str, bool]:
-    """Detect completion/progress signals from agent response."""
-    text_upper = response_text.upper()
+    """Detect completion/progress signals from agent response.
+
+    Signals are only recognised near the end of the response (last 500
+    characters) to avoid false positives from casual mentions of these
+    keywords in reasoning, comments, or error messages.
+    """
+    tail = response_text[-500:].upper() if len(response_text) > 500 else response_text.upper()
     return {
-        "item_complete": "ITEM_COMPLETE" in text_upper,
-        "plan_complete": "PLAN_COMPLETE" in text_upper or "ALL_ITEMS_DONE" in text_upper,
-        "no_progress": "NO_PROGRESS" in text_upper or "STUCK" in text_upper,
+        "item_complete": "ITEM_COMPLETE" in tail,
+        "plan_complete": "PLAN_COMPLETE" in tail or "ALL_ITEMS_DONE" in tail,
+        "no_progress": "NO_PROGRESS" in tail or "STUCK" in tail,
     }
 
 
@@ -813,9 +857,16 @@ def execute_loop_step(
     if not checklist:
         checklist = [{"text": "Complete the assigned work", "done": False}]
 
+    # Use a single thread_id across all loop iterations so runtimes with
+    # session persistence (e.g. opencode) maintain context between iterations.
+    loop_thread_id = build_thread_id("workflow", TARGET_NAME, run_id, f"{step_name}-loop")
+
     previous_response = ""
     consecutive_completion_signals = 0
     all_responses: list[str] = []
+    all_artifacts: list[dict[str, Any]] = []
+    all_tool_calls: list[dict[str, Any]] = []
+    all_loop_warnings: list[str] = []
     loop_progress: dict[str, Any] = {
         "iteration": 0,
         "maxIterations": max_iterations,
@@ -841,7 +892,7 @@ def execute_loop_step(
 
         # Build iteration prompt
         prompt = build_loop_iteration_prompt(step, iteration, checklist, previous_response, workflow_input)
-        thread_id = build_thread_id("workflow", TARGET_NAME, run_id, f"{step_name}-iter-{iteration}")
+        thread_id = loop_thread_id
 
         append_journal_event(
             "workflow.loop.iteration.started",
@@ -858,6 +909,10 @@ def execute_loop_step(
             response_text = str(result.get("response", ""))
             all_responses.append(response_text)
             previous_response = response_text
+            # Collect rich response fields from runtimes that provide them
+            all_artifacts.extend(result.get("artifacts") or [])
+            all_tool_calls.extend(result.get("tool_calls") or [])
+            all_loop_warnings.extend(result.get("warnings") or [])
         except Exception as exc:
             logger.warning("Loop iteration %d failed for step '%s': %s", iteration, step_name, exc)
             circuit_breaker.record_progress(False)
@@ -870,6 +925,7 @@ def execute_loop_step(
 
         if signals["no_progress"]:
             circuit_breaker.record_progress(False)
+            consecutive_completion_signals = 0
         elif signals["item_complete"]:
             circuit_breaker.record_progress(True)
             # Mark current incomplete item as done
@@ -887,6 +943,7 @@ def execute_loop_step(
         else:
             # Ambiguous — assume some progress
             circuit_breaker.record_progress(True)
+            consecutive_completion_signals = 0
 
         loop_progress["completedItems"] = sum(1 for c in checklist if c.get("done"))
         loop_progress["circuitBreakerState"] = circuit_breaker.to_dict()
@@ -929,6 +986,10 @@ def execute_loop_step(
         "status": "completed",
         "output": {"text": combined_response, "json": {"loopProgress": loop_progress, "checklist": checklist}, "type": "json"},
         "attempts": loop_progress["iteration"],
+        "artifacts": all_artifacts,
+        "tool_calls": all_tool_calls,
+        "metadata": {"loopProgress": loop_progress},
+        "warnings": all_loop_warnings,
     }
 
     step_state = build_step_state(
@@ -1381,6 +1442,16 @@ def run_eval_worker() -> None:
                 result_status = str(
                     response.get("status", "completed") or "completed"
                 )
+                # Accept "incomplete" as usable partial output (e.g. opencode
+                # context overflow that still produced a response).
+                if result_status == "incomplete":
+                    result_status = "completed"
+                # Prefer structured output from metadata when available
+                eval_metadata = response.get("metadata") or {}
+                if isinstance(eval_metadata, dict) and eval_metadata.get("structured_output"):
+                    response_text = json.dumps(
+                        eval_metadata["structured_output"], ensure_ascii=False
+                    )
                 if result_status != "completed":
                     error_msg = (
                         f"Runtime returned status '{result_status}': "

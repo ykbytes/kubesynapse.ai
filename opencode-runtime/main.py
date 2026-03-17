@@ -480,6 +480,24 @@ class SessionRegistry:
             self.path.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2), encoding="utf-8")
             self._cache = payload
 
+    def get_or_set(self, thread_id: str, session_id: str) -> str:
+        """Atomically return an existing session or register *session_id*.
+
+        If another thread registered a session between the caller's
+        ``get()`` and ``set()`` calls, the already-registered session
+        wins and the caller's *session_id* is discarded.
+        """
+        with self._lock:
+            payload = self._load()
+            existing = payload.get(thread_id)
+            if existing:
+                return existing
+            payload[thread_id] = session_id
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self.path.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2), encoding="utf-8")
+            self._cache = payload
+            return session_id
+
 
 SESSION_REGISTRY = SessionRegistry(SESSION_MAP_PATH)
 
@@ -1181,7 +1199,7 @@ def _send_prompt_with_session_recovery(
     except HTTPException as exc:
         if exc.status_code == 404 and allow_session_recovery:
             session_id = create_remote_session(working_directory)
-            SESSION_REGISTRY.set(logical_thread_id, session_id)
+            SESSION_REGISTRY.get_or_set(logical_thread_id, session_id)
             payload = send_prompt(
                 session_id=session_id,
                 prompt=prompt,
@@ -1252,7 +1270,9 @@ def invoke_opencode(request: InvokeRequest) -> InvokeResponse:
             session_id = existing_session
         else:
             session_id = create_remote_session(working_directory)
-            SESSION_REGISTRY.set(logical_thread_id, session_id)
+            # Atomic register: if another thread raced us, use the winner's
+            # session and discard ours (avoids orphaned sessions).
+            session_id = SESSION_REGISTRY.get_or_set(logical_thread_id, session_id)
             created_new_session = True
 
     # New sessions benefit from init analysis to improve planning quality and
@@ -1301,19 +1321,27 @@ def invoke_opencode(request: InvokeRequest) -> InvokeResponse:
                 allow_session_recovery=(not request.no_session),
             )
         except httpx.HTTPError as exc:
-            if retries_used < max_retries:
-                retries_used += 1
-                all_warnings.append(
-                    f"Turn {turn + 1}: HTTP error '{exc}', retrying ({retries_used}/{max_retries})"
-                )
-                current_prompt = (
-                    f"The previous request failed with a network error. "
-                    f"Please retry and complete the task."
-                )
-                continue
-            raise HTTPException(
-                status_code=502, detail=f"OpenCode invocation failed after {retries_used} retries: {exc}"
-            ) from exc
+            # Permanent client errors (4xx) should not be retried.
+            is_permanent = (
+                isinstance(exc, httpx.HTTPStatusError)
+                and exc.response.status_code < 500
+            )
+            if is_permanent or retries_used >= max_retries:
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"OpenCode invocation failed after {retries_used} retries: {exc}",
+                ) from exc
+            retries_used += 1
+            all_warnings.append(
+                f"Turn {turn + 1}: HTTP error '{exc}', retrying ({retries_used}/{max_retries})"
+            )
+            # Preserve the original prompt so the retry does not lose
+            # context; only prepend a short recovery note.
+            current_prompt = (
+                f"[Note: the previous request encountered a transient error ({type(exc).__name__}). "
+                f"Continue from where you left off.]\n\n{current_prompt}"
+            )
+            continue
 
         last_payload = payload
         completion = detect_completion_status(payload)
@@ -1444,7 +1472,7 @@ def invoke_opencode(request: InvokeRequest) -> InvokeResponse:
         response_status = "error"
     elif final_status == "unknown":
         response_status = "incomplete"
-    if response_metadata is not None and response_status != final_status:
+    if response_status != final_status:
         response_metadata["raw_status"] = final_status
 
     return InvokeResponse(

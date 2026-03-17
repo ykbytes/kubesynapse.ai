@@ -12,11 +12,11 @@ operator:
   replicaCount: 1
   image:
     repository: docker.io/yakdhane/ai-operator
-    tag: registration-20260312-221904
+    tag: bugfix3-20260317-155626
     pullPolicy: IfNotPresent
   workerImage:
     repository: docker.io/yakdhane/ai-operator
-    tag: registration-20260312-221904
+    tag: bugfix3-20260317-155626
     pullPolicy: IfNotPresent
 
 gooseRuntime:
@@ -28,7 +28,7 @@ gooseRuntime:
 opencodeRuntime:
   image:
     repository: docker.io/yakdhane/ai-opencode-runtime
-    tag: opencode-20260317-141603
+    tag: bugfix3-20260317-155626
     pullPolicy: IfNotPresent
   env:
     OPENCODE_SESSION_INIT_ON_CREATE: "true"
