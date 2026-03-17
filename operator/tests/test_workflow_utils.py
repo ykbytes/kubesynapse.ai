@@ -14,6 +14,7 @@ from utils import (  # noqa: E402
     render_prompt,
     validate_supported_policy_spec,
     validate_workflow_graph,
+    invoke_agent_runtime,
 )
 
 
@@ -233,6 +234,30 @@ class WorkflowUtilsTests(unittest.TestCase):
                 "prompts/review.md": "Base review prompt.",
             },
         )
+
+
+    def test_validate_workflow_graph_rejects_too_many_steps(self) -> None:
+        import utils
+        original = utils.MAX_WORKFLOW_STEPS
+        utils.MAX_WORKFLOW_STEPS = 2
+        try:
+            steps = [
+                {"name": "a", "agentRef": "agent"},
+                {"name": "b", "agentRef": "agent", "dependsOn": ["a"]},
+                {"name": "c", "agentRef": "agent", "dependsOn": ["b"]},
+            ]
+            with self.assertRaisesRegex(ValueError, "exceeding the limit"):
+                validate_workflow_graph(steps)
+        finally:
+            utils.MAX_WORKFLOW_STEPS = original
+
+    def test_invoke_agent_runtime_rejects_invalid_names(self) -> None:
+        with self.assertRaises(ValueError):
+            invoke_agent_runtime("INVALID NAME", "ns", {"prompt": "hi"})
+        with self.assertRaises(ValueError):
+            invoke_agent_runtime("agent", "BAD NS!", {"prompt": "hi"})
+        with self.assertRaises(ValueError):
+            invoke_agent_runtime("", "ns", {"prompt": "hi"})
 
 
 if __name__ == "__main__":

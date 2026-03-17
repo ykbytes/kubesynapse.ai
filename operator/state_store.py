@@ -59,7 +59,17 @@ def _build_database_url() -> str:
 
     host = os.getenv("DATABASE_HOST", "").strip()
     if host:
+        _ALLOWED_DRIVERS = {
+            "postgresql+psycopg", "postgresql+psycopg2", "postgresql+asyncpg",
+            "postgresql", "postgres",
+            "mysql+pymysql", "mysql+mysqlconnector",
+            "sqlite",
+        }
         driver = os.getenv("DATABASE_DRIVER", "postgresql+psycopg").strip() or "postgresql+psycopg"
+        if driver not in _ALLOWED_DRIVERS:
+            raise ValueError(
+                f"Unsupported DATABASE_DRIVER '{driver}'. Allowed: {sorted(_ALLOWED_DRIVERS)}"
+            )
         port = int(os.getenv("DATABASE_PORT", "5432").strip() or "5432")
         username = os.getenv("DATABASE_USER", "ai_agent_sandbox").strip() or "ai_agent_sandbox"
         password = os.getenv("DATABASE_PASSWORD", "").strip()

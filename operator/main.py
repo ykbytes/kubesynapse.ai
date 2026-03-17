@@ -1350,6 +1350,8 @@ def _parse_storage_quantity(value: str) -> Decimal:
 
 
 def _validate_mcp_sidecars(sidecars: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    # Ports used by the agent runtime container and other system components.
+    _RESERVED_PORTS = {8080, 6333}
     normalized_sidecars: list[dict[str, Any]] = []
     seen_names: dict[str, int] = {}
     seen_ports: dict[int, int] = {}
@@ -1380,6 +1382,11 @@ def _validate_mcp_sidecars(sidecars: list[dict[str, Any]]) -> list[dict[str, Any
             raise kopf.PermanentError(
                 f"AIAgent.spec.mcpSidecars[{index}].image is required for sidecar '{raw_name}'."
             )
+        # Reject images with embedded credentials or shell metacharacters
+        if "@" in raw_image.split("/")[0] or any(ch in raw_image for ch in (";", "&", "|", "$", "`", "\n")):
+            raise kopf.PermanentError(
+                f"AIAgent.spec.mcpSidecars[{index}].image contains invalid characters for sidecar '{raw_name}'."
+            )
 
         raw_port = sidecar.get("port", 8080)
         try:
@@ -1391,6 +1398,10 @@ def _validate_mcp_sidecars(sidecars: list[dict[str, Any]]) -> list[dict[str, Any
         if port < 1 or port > 65535:
             raise kopf.PermanentError(
                 f"AIAgent.spec.mcpSidecars[{index}].port must be between 1 and 65535 for sidecar '{raw_name}'."
+            )
+        if port in _RESERVED_PORTS:
+            raise kopf.PermanentError(
+                f"AIAgent.spec.mcpSidecars[{index}].port {port} is reserved for system use (sidecar '{raw_name}')."
             )
 
         previous_name_index = seen_names.get(raw_name)
@@ -2600,7 +2611,17 @@ def create_agent_resources(spec: dict[str, Any], name: str, namespace: str, logg
     ensure_service(namespace, service_manifest)
     if mcp_auth_secret_manifest is not None:
         ensure_secret(namespace, mcp_auth_secret_manifest)
-    ensure_statefulset(namespace, statefulset_manifest)
+    try:
+        ensure_statefulset(namespace, statefulset_manifest)
+    except Exception:
+        # Best-effort cleanup of the Service created above before re-raising
+        try:
+            kubernetes.client.CoreV1Api().delete_namespaced_service(
+                name=name + "-sandbox", namespace=namespace
+            )
+        except Exception:
+            pass
+        raise
     ensure_network_policy(namespace, network_policy_manifest)
     ensure_network_policy(namespace, a2a_egress_policy_manifest)
     ensure_network_policy(namespace, a2a_ingress_policy_manifest)

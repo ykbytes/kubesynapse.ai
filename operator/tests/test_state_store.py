@@ -134,3 +134,26 @@ class StateStoreTests(unittest.TestCase):
         self.assertEqual(records[0].artifact_path, "/tmp/eval.json")
         self.assertEqual(records[0].worker_job_name, "eval-worker")
         self.assertIsNotNone(records[0].completed_at)
+
+
+class DatabaseDriverValidationTests(unittest.TestCase):
+    """state_store rejects unsupported DATABASE_DRIVER values."""
+
+    def test_rejects_invalid_driver(self) -> None:
+        module_name = f"operator_state_store_driver_test_{uuid.uuid4().hex}"
+        spec = importlib.util.spec_from_file_location(module_name, MODULE_PATH)
+        if spec is None or spec.loader is None:
+            self.skipTest("Could not load state_store module")
+        module = importlib.util.module_from_spec(spec)
+        with patch.dict(
+            os.environ,
+            {
+                "DATABASE_URL": "",
+                "DATABASE_HOST": "localhost",
+                "DATABASE_DRIVER": "sqlite3; DROP TABLE x; --",
+                "STATE_DB_ENABLED": "false",
+            },
+            clear=False,
+        ):
+            with self.assertRaises(ValueError):
+                spec.loader.exec_module(module)

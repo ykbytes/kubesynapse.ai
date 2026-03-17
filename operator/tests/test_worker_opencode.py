@@ -605,5 +605,119 @@ class ConsecutiveCompletionSignalsResetTests(unittest.TestCase):
         self.assertEqual(sr["attempts"], 4)
 
 
+class DetectSignalWordBoundaryTests(unittest.TestCase):
+    """Signal detection should use word boundaries to avoid false positives."""
+
+    def test_no_progress_report_is_not_false_positive(self) -> None:
+        from worker import detect_iteration_signals
+
+        text = "Checking NO_PROGRESS_REPORT for metrics."
+        signals = detect_iteration_signals(text)
+        self.assertFalse(signals["no_progress"])
+
+    def test_item_completed_is_not_false_positive(self) -> None:
+        from worker import detect_iteration_signals
+
+        text = "Status: ITEM_COMPLETED successfully."
+        signals = detect_iteration_signals(text)
+        self.assertFalse(signals["item_complete"])
+
+    def test_exact_signal_still_detected(self) -> None:
+        from worker import detect_iteration_signals
+
+        text = "Done. ITEM_COMPLETE\nNO_PROGRESS\nPLAN_COMPLETE"
+        signals = detect_iteration_signals(text)
+        self.assertTrue(signals["item_complete"])
+        self.assertTrue(signals["no_progress"])
+        self.assertTrue(signals["plan_complete"])
+
+
+class WriteArtifactSerializationTests(unittest.TestCase):
+    """write_artifact should handle non-serializable values via default=str."""
+
+    def test_datetime_in_payload_does_not_crash(self) -> None:
+        from datetime import datetime, timezone
+        import json
+        import tempfile, os
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "run.json")
+            # Temporarily override ARTIFACT_PATH
+            import worker
+            original = worker.ARTIFACT_PATH
+            worker.ARTIFACT_PATH = path
+            try:
+                worker.write_artifact({"ts": datetime.now(timezone.utc), "val": 42})
+                data = json.loads(Path(path).read_text(encoding="utf-8"))
+                self.assertEqual(data["val"], 42)
+                self.assertIsInstance(data["ts"], str)
+            finally:
+                worker.ARTIFACT_PATH = original
+
+
+class LoadArtifactCorruptTests(unittest.TestCase):
+    """load_artifact should raise on corrupt data instead of silently returning {}."""
+
+    def test_corrupt_json_raises(self) -> None:
+        import tempfile, os
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "run.json")
+            Path(path).write_text("NOT JSON", encoding="utf-8")
+            import worker
+            original = worker.ARTIFACT_PATH
+            worker.ARTIFACT_PATH = path
+            try:
+                with self.assertRaises(RuntimeError):
+                    worker.load_artifact()
+            finally:
+                worker.ARTIFACT_PATH = original
+
+    def test_missing_artifact_returns_empty(self) -> None:
+        import worker
+        original = worker.ARTIFACT_PATH
+        worker.ARTIFACT_PATH = "/nonexistent/path/run.json"
+        try:
+            result = worker.load_artifact()
+            self.assertEqual(result, {})
+        finally:
+            worker.ARTIFACT_PATH = original
+
+
+class InvokeAgentRuntimeValidationTests(unittest.TestCase):
+    """invoke_agent_runtime should reject invalid agent names and namespaces."""
+
+    def test_rejects_invalid_agent_name(self) -> None:
+        from utils import invoke_agent_runtime
+
+        with self.assertRaises(ValueError):
+            invoke_agent_runtime("agent name with spaces", "ns", {"prompt": "hi"})
+
+    def test_rejects_empty_namespace(self) -> None:
+        from utils import invoke_agent_runtime
+
+        with self.assertRaises(ValueError):
+            invoke_agent_runtime("agent", "", {"prompt": "hi"})
+
+
+class ValidateWorkflowStepLimitTests(unittest.TestCase):
+    """validate_workflow_graph should reject workflows exceeding step limit."""
+
+    def test_rejects_too_many_steps(self) -> None:
+        from utils import validate_workflow_graph
+        import utils
+        original = utils.MAX_WORKFLOW_STEPS
+        utils.MAX_WORKFLOW_STEPS = 3
+        try:
+            steps = [
+                {"name": f"step-{i}", "agentRef": "agent", "dependsOn": [f"step-{i-1}"] if i > 0 else []}
+                for i in range(5)
+            ]
+            with self.assertRaisesRegex(ValueError, "exceeding the limit"):
+                validate_workflow_graph(steps)
+        finally:
+            utils.MAX_WORKFLOW_STEPS = original
+
+
 if __name__ == "__main__":
     unittest.main()

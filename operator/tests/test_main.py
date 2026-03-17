@@ -476,6 +476,42 @@ class OperatorManifestTests(unittest.TestCase):
                 {},
             )
 
+    def test_statefulset_manifest_rejects_reserved_sidecar_port(self) -> None:
+        with self.assertRaisesRegex(operator_main.kopf.PermanentError, "reserved"):
+            operator_main.create_agent_statefulset_manifest(
+                "workspace-assistant",
+                "default",
+                {
+                    "model": "gpt-4",
+                    "runtime": {"kind": "codex", "codex": {}},
+                    "storage": {"size": "1Gi"},
+                    "systemPrompt": "Be precise.",
+                    "mcpSidecars": [
+                        {"name": "browser", "image": "example/browser:latest", "port": 8080},
+                    ],
+                },
+                None,
+                {},
+            )
+
+    def test_statefulset_manifest_rejects_sidecar_image_with_metacharacters(self) -> None:
+        with self.assertRaisesRegex(operator_main.kopf.PermanentError, "invalid characters"):
+            operator_main.create_agent_statefulset_manifest(
+                "workspace-assistant",
+                "default",
+                {
+                    "model": "gpt-4",
+                    "runtime": {"kind": "codex", "codex": {}},
+                    "storage": {"size": "1Gi"},
+                    "systemPrompt": "Be precise.",
+                    "mcpSidecars": [
+                        {"name": "evil", "image": "example/evil;rm -rf /", "port": 8081},
+                    ],
+                },
+                None,
+                {},
+            )
+
     def test_statefulset_manifest_rejects_missing_sidecar_image(self) -> None:
         with self.assertRaises(operator_main.kopf.PermanentError):
             operator_main.create_agent_statefulset_manifest(

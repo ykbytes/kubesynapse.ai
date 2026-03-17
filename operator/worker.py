@@ -1,6 +1,9 @@
+import concurrent.futures
 import json
 import logging
 import os
+import random
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -39,10 +42,15 @@ OPERATOR_NAMESPACE = (
     os.getenv("OPERATOR_NAMESPACE", "default").strip() or "default"
 )
 WORKER_JOB_NAME = os.getenv("WORKER_JOB_NAME", "").strip()
-ARTIFACT_PATH = (
+_RAW_ARTIFACT_PATH = (
     os.getenv("ARTIFACT_PATH", "/artifacts/run.json").strip()
     or "/artifacts/run.json"
 )
+if ".." in _RAW_ARTIFACT_PATH or not _RAW_ARTIFACT_PATH.startswith("/artifacts/"):
+    raise ValueError(
+        f"ARTIFACT_PATH must start with /artifacts/ and contain no '..': {_RAW_ARTIFACT_PATH!r}"
+    )
+ARTIFACT_PATH = _RAW_ARTIFACT_PATH
 ARTIFACT_JOURNAL_PATH = (
     os.getenv("ARTIFACT_JOURNAL_PATH", "").strip()
     or workflow_journal_path(ARTIFACT_PATH)
@@ -70,21 +78,9 @@ def load_kubernetes_config() -> None:
 
 
 def patch_custom_status(plural: str, status: dict[str, Any]) -> None:
-    try:
-        kubernetes.client.CustomObjectsApi().patch_namespaced_custom_object_status(
-            group=GROUP,
-            version=VERSION,
-            namespace=TARGET_NAMESPACE,
-            plural=plural,
-            name=TARGET_NAME,
-            body={"status": status},
-        )
-    except kubernetes.client.ApiException as exc:
-        if exc.status == 409:
-            logging.getLogger(__name__).warning(
-                "Conflict patching %s/%s status (409), retrying once.",
-                plural, TARGET_NAME,
-            )
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
             kubernetes.client.CustomObjectsApi().patch_namespaced_custom_object_status(
                 group=GROUP,
                 version=VERSION,
@@ -93,7 +89,16 @@ def patch_custom_status(plural: str, status: dict[str, Any]) -> None:
                 name=TARGET_NAME,
                 body={"status": status},
             )
-        else:
+            return
+        except kubernetes.client.ApiException as exc:
+            if exc.status == 409 and attempt < max_retries - 1:
+                backoff = (2 ** attempt) + random.uniform(0, 1)
+                logging.getLogger(__name__).warning(
+                    "Conflict patching %s/%s status (409), retry %d/%d in %.1fs.",
+                    plural, TARGET_NAME, attempt + 1, max_retries, backoff,
+                )
+                time.sleep(backoff)
+                continue
             logging.getLogger(__name__).error(
                 "Failed to patch %s/%s status: %s",
                 plural, TARGET_NAME, exc,
@@ -113,6 +118,18 @@ def _patch_pending_approval_label(pending_approval_name: str | None) -> None:
             name=TARGET_NAME,
             body={"metadata": {"labels": {"sandbox.enterprise.ai/pending-approval": label_value}}},
         )
+    except kubernetes.client.ApiException as exc:
+        if exc.status == 404:
+            logging.getLogger(__name__).warning(
+                "Workflow %s/%s not found when patching pending-approval label.",
+                "agentworkflows", TARGET_NAME,
+            )
+            return
+        logging.getLogger(__name__).error(
+            "Failed to patch pending-approval label on %s/%s: %s",
+            "agentworkflows", TARGET_NAME, exc,
+        )
+        raise
     except Exception:
         logging.getLogger(__name__).warning(
             "Failed to patch pending-approval label on %s/%s, approval lookup will use full scan.",
@@ -155,23 +172,29 @@ def journal_ref(generation: int) -> dict[str, Any]:
 def load_artifact() -> dict[str, Any]:
     path = Path(ARTIFACT_PATH)
     if not path.exists():
+        logger.info("Artifact path '%s' does not exist yet; starting fresh.", path)
         return {}
 
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError(f"Expected JSON object, got {type(data).__name__}")
+        return data
     except Exception as exc:
-        logger.warning("Failed to read artifact '%s': %s", path, exc)
-        return {}
+        logger.error("Failed to read artifact '%s': %s", path, exc)
+        raise RuntimeError(f"Corrupt or unreadable artifact at {path}: {exc}") from exc
 
 
 def write_artifact(payload: dict[str, Any]) -> None:
     path = Path(ARTIFACT_PATH)
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = path.with_suffix(path.suffix + ".tmp")
-    temp_path.write_text(
-        json.dumps(payload, indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
+    try:
+        serialized = json.dumps(payload, indent=2, sort_keys=True, default=str)
+    except (TypeError, ValueError) as exc:
+        logger.error("Failed to serialize artifact payload: %s", exc)
+        raise RuntimeError(f"Artifact serialization failed: {exc}") from exc
+    temp_path.write_text(serialized, encoding="utf-8")
     temp_path.replace(path)
 
 
@@ -831,6 +854,13 @@ def build_loop_iteration_prompt(
     return "\n".join(parts)
 
 
+# Word-boundary patterns for loop signal detection to avoid false positives
+# from e.g. "NO_PROGRESS_REPORT" or "ITEM_COMPLETED".
+_SIGNAL_ITEM_COMPLETE = re.compile(r"\bITEM_COMPLETE\b")
+_SIGNAL_PLAN_COMPLETE = re.compile(r"\b(?:PLAN_COMPLETE|ALL_ITEMS_DONE)\b")
+_SIGNAL_NO_PROGRESS = re.compile(r"\b(?:NO_PROGRESS|STUCK)\b")
+
+
 def detect_iteration_signals(response_text: str) -> dict[str, bool]:
     """Detect completion/progress signals from agent response.
 
@@ -840,9 +870,9 @@ def detect_iteration_signals(response_text: str) -> dict[str, bool]:
     """
     tail = response_text[-500:].upper() if len(response_text) > 500 else response_text.upper()
     return {
-        "item_complete": "ITEM_COMPLETE" in tail,
-        "plan_complete": "PLAN_COMPLETE" in tail or "ALL_ITEMS_DONE" in tail,
-        "no_progress": "NO_PROGRESS" in tail or "STUCK" in tail,
+        "item_complete": _SIGNAL_ITEM_COMPLETE.search(tail) is not None,
+        "plan_complete": _SIGNAL_PLAN_COMPLETE.search(tail) is not None,
+        "no_progress": _SIGNAL_NO_PROGRESS.search(tail) is not None,
     }
 
 
@@ -1239,6 +1269,10 @@ def run_workflow_worker() -> None:
                     )
                 outcome_by_name[outcome["stepName"]] = outcome
             else:
+                frontier_timeout = max(
+                    float(normalize_step_execution(frontier[0]).get("timeoutSeconds", 600))
+                    for f_step in frontier
+                ) + 120  # step timeout + buffer
                 with ThreadPoolExecutor(max_workers=len(frontier)) as executor:
                     future_map = {
                         executor.submit(
@@ -1252,9 +1286,16 @@ def run_workflow_worker() -> None:
                         ): str(step.get("name", ""))
                         for step in frontier
                     }
-                    for future in future_map:
-                        outcome = future.result()
-                        outcome_by_name[outcome["stepName"]] = outcome
+                    try:
+                        for future in concurrent.futures.as_completed(future_map, timeout=frontier_timeout):
+                            outcome = future.result()
+                            outcome_by_name[outcome["stepName"]] = outcome
+                    except concurrent.futures.TimeoutError:
+                        for f in future_map:
+                            f.cancel()
+                        raise RuntimeError(
+                            f"Parallel frontier [{frontier_label}] timed out after {frontier_timeout:.0f}s"
+                        )
 
             pending_approval = {}
             fatal_failures: list[dict[str, Any]] = []

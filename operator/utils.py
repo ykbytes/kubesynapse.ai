@@ -60,6 +60,7 @@ MAX_RUNTIME_CONFIG_FILES = get_int_env("RUNTIME_MAX_CONFIG_FILES", 64, minimum=1
 MAX_RUNTIME_CONFIG_PATH_CHARS = get_int_env("RUNTIME_MAX_CONFIG_PATH_CHARS", 256, minimum=32)
 MAX_RUNTIME_CONFIG_CONTENT_CHARS = get_int_env("RUNTIME_MAX_CONFIG_CONTENT_CHARS", 64000, minimum=512)
 MAX_RUNTIME_CONFIG_TOTAL_CHARS = get_int_env("RUNTIME_MAX_CONFIG_TOTAL_CHARS", 256000, minimum=4096)
+MAX_WORKFLOW_STEPS = get_int_env("MAX_WORKFLOW_STEPS", 100, minimum=1)
 
 
 def now_iso() -> str:
@@ -240,6 +241,10 @@ def render_prompt(
 def validate_workflow_graph(steps: Sequence[dict[str, Any]]) -> dict[str, Any]:
     if not steps:
         raise ValueError("AgentWorkflow must contain at least one step")
+    if len(steps) > MAX_WORKFLOW_STEPS:
+        raise ValueError(
+            f"AgentWorkflow contains {len(steps)} steps, exceeding the limit of {MAX_WORKFLOW_STEPS}"
+        )
 
     ordered_names: list[str] = []
     step_map: dict[str, dict[str, Any]] = {}
@@ -573,6 +578,10 @@ def invoke_agent_runtime(
     timeout_seconds: float | None = None,
 ) -> dict[str, Any]:
     """POST an invoke request to the agent runtime and return the response body."""
+    if not agent_name or not K8S_NAME_RE.fullmatch(agent_name):
+        raise ValueError(f"Invalid agent name for runtime invocation: {agent_name!r}")
+    if not namespace or not K8S_NAME_RE.fullmatch(namespace):
+        raise ValueError(f"Invalid namespace for runtime invocation: {namespace!r}")
     effective_timeout = timeout_seconds or AGENT_RUNTIME_TIMEOUT_SECONDS
     url = f"{runtime_url(agent_name, namespace)}/invoke"
     last_exc: Exception | None = None
