@@ -368,6 +368,7 @@ function AppLayout() {
                         opencodeAutonomous={chat.selectedOpenCodeChatSettings.autonomous}
                         opencodeMaxTurns={chat.selectedOpenCodeChatSettings.maxTurns}
                         opencodeWorkingDirectory={chat.selectedOpenCodeChatSettings.workingDirectory}
+                        summary={chat.summary}
                         onOpenCodeOutputFormatChange={chat.setOpenCodeOutputFormat}
                         onOpenCodeAutonomousChange={chat.setOpenCodeAutonomous}
                         onOpenCodeMaxTurnsChange={chat.setOpenCodeMaxTurns}

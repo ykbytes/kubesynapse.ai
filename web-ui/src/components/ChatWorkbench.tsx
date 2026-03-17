@@ -33,7 +33,8 @@ import { CopyButton } from "./CopyButton";
 import { EmptyState } from "./EmptyState";
 import { StatusBadge } from "./StatusBadge";
 import { ActivityTimeline } from "./ActivityTimeline";
-import type { AgentDiscoveryPeer, RuntimeKind, SpecialistSubagentDraft, UiActivity, UiMessage } from "../types";
+import type { AgentDiscoveryPeer, InvocationSummary, RuntimeKind, SpecialistSubagentDraft, UiActivity, UiMessage } from "../types";
+import { OperationLog } from "./OperationLog";
 
 interface ChatWorkbenchProps {
   agentName: string;
@@ -62,6 +63,7 @@ interface ChatWorkbenchProps {
   opencodeAutonomous: boolean;
   opencodeMaxTurns: string;
   opencodeWorkingDirectory: string;
+  summary: InvocationSummary | null;
   emptyMessage: string;
   error: string;
   onPromptChange: (value: string) => void;
@@ -303,6 +305,7 @@ export function ChatWorkbench({
   opencodeAutonomous,
   opencodeMaxTurns,
   opencodeWorkingDirectory,
+  summary,
   emptyMessage,
   error,
   onPromptChange,
@@ -376,6 +379,9 @@ export function ChatWorkbench({
           )}
         </div>
       </ScrollArea>
+
+      {/* Operation log — surfaces file ops, git, deploys, etc. */}
+      <OperationLog summary={summary} />
 
       {/* Inline agent activity timeline */}
       {activity.length > 0 && (
