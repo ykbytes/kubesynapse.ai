@@ -3,6 +3,7 @@ import "@fontsource/space-grotesk/500.css";
 import "@fontsource/space-grotesk/700.css";
 
 import { PanelRightOpen } from "lucide-react";
+import { lazy, Suspense } from "react";
 import { Toaster } from "sonner";
 
 import { AgentManagementPanel } from "./components/AgentManagementPanel";
@@ -15,8 +16,11 @@ import { AgentInspectorDrawer, ResourceInspectorDrawer } from "./components/Insp
 import { SkillsCatalogPanel } from "./components/SkillsCatalogPanel";
 import { TopBar } from "./components/TopBar";
 import { WorkflowManager } from "./components/WorkflowManager";
-import { WorkflowComposer } from "./components/WorkflowComposer";
 import { Button } from "@/components/ui/button";
+
+const WorkflowComposer = lazy(() =>
+  import("./components/WorkflowComposer").then((m) => ({ default: m.WorkflowComposer })),
+);
 
 import { ConnectionProvider, useConnection } from "./contexts/ConnectionContext";
 import { WorkspaceProvider, useWorkspace } from "./contexts/WorkspaceContext";
@@ -412,7 +416,13 @@ function AppLayout() {
               onOpenComposer={() => ws.setActiveView("composer")}
             />
           ) : ws.activeView === "composer" ? (
-            <WorkflowComposer />
+            <Suspense fallback={
+              <div className="flex flex-1 items-center justify-center">
+                <div className="h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+              </div>
+            }>
+              <WorkflowComposer />
+            </Suspense>
           ) : ws.activeView === "catalog" ? (
             <SkillsCatalogPanel token={conn.token} />
           ) : (

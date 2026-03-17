@@ -1,5 +1,5 @@
 import { Bot, GitBranch, FlaskConical, Inbox, Package, Play, Plus, RefreshCw, PanelLeftClose, PanelLeft, Search, Blocks } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -90,13 +90,15 @@ export function AppSidebar({
     return () => { clearTimeout(debounceRef.current); };
   }, []);
 
-  const filteredItems = debouncedFilter.trim()
-    ? items.filter(
-        (item) =>
-          item.title.toLowerCase().includes(debouncedFilter.toLowerCase()) ||
-          item.subtitle.toLowerCase().includes(debouncedFilter.toLowerCase()),
-      )
-    : items;
+  const filteredItems = useMemo(() => {
+    if (!debouncedFilter.trim()) return items;
+    const lower = debouncedFilter.toLowerCase();
+    return items.filter(
+      (item) =>
+        item.title.toLowerCase().includes(lower) ||
+        item.subtitle.toLowerCase().includes(lower),
+    );
+  }, [items, debouncedFilter]);
   if (collapsed) {
     return (
       <TooltipProvider delayDuration={100}>
@@ -231,38 +233,14 @@ export function AppSidebar({
             />
           )}
           {filteredItems.map((item, index) => (
-            <button
+            <SidebarItem
               key={item.id}
-              type="button"
-              role="option"
-              aria-selected={selectedId === item.id}
-              onClick={() => onSelect(item.id)}
-              style={{ animationDelay: `${index * 30}ms` }}
-              className={cn(
-                "group flex w-full items-start gap-2.5 rounded-xl px-2.5 py-2 text-left text-sm",
-                "transition-all duration-150 hover:bg-sidebar-accent/80 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
-                "animate-slide-up opacity-0 [animation-fill-mode:forwards]",
-                selectedId === item.id && "bg-sidebar-accent border-l-2 border-primary shadow-md shadow-primary/10",
-              )}
-            >
-              <span className={cn("mt-1.5 h-2 w-2 shrink-0 rounded-full", statusDotClasses(item.status))} aria-hidden="true" />
-              <div className="min-w-0 flex-1">
-                <p className="truncate font-medium text-sidebar-foreground">{item.title}</p>
-                <p className="truncate text-xs text-muted-foreground">{item.subtitle}</p>
-              </div>
-              {onQuickRun && (
-                <span
-                  role="button"
-                  tabIndex={0}
-                  aria-label={`Run ${item.title}`}
-                  onClick={(e) => { e.stopPropagation(); onQuickRun(item.id); }}
-                  onKeyDown={(e) => { if (e.key === "Enter") { e.stopPropagation(); onQuickRun(item.id); } }}
-                  className="mt-0.5 hidden shrink-0 rounded-md p-1 text-muted-foreground hover:bg-primary/20 hover:text-primary group-hover:inline-flex"
-                >
-                  <Play className="h-3.5 w-3.5" />
-                </span>
-              )}
-            </button>
+              item={item}
+              index={index}
+              isSelected={selectedId === item.id}
+              onSelect={onSelect}
+              onQuickRun={onQuickRun}
+            />
           ))}
         </div>
       </ScrollArea>
@@ -270,3 +248,51 @@ export function AppSidebar({
     </TooltipProvider>
   );
 }
+
+const SidebarItem = memo(function SidebarItem({
+  item,
+  index,
+  isSelected,
+  onSelect,
+  onQuickRun,
+}: {
+  item: SidebarResourceItem;
+  index: number;
+  isSelected: boolean;
+  onSelect: (id: string) => void;
+  onQuickRun?: (id: string) => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="option"
+      aria-selected={isSelected}
+      onClick={() => onSelect(item.id)}
+      style={{ animationDelay: `${index * 30}ms` }}
+      className={cn(
+        "group flex w-full items-start gap-2.5 rounded-xl px-2.5 py-2 text-left text-sm",
+        "transition-all duration-150 hover:bg-sidebar-accent/80 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
+        "animate-slide-up opacity-0 [animation-fill-mode:forwards]",
+        isSelected && "bg-sidebar-accent border-l-2 border-primary shadow-md shadow-primary/10",
+      )}
+    >
+      <span className={cn("mt-1.5 h-2 w-2 shrink-0 rounded-full", statusDotClasses(item.status))} aria-hidden="true" />
+      <div className="min-w-0 flex-1">
+        <p className="truncate font-medium text-sidebar-foreground">{item.title}</p>
+        <p className="truncate text-xs text-muted-foreground">{item.subtitle}</p>
+      </div>
+      {onQuickRun && (
+        <span
+          role="button"
+          tabIndex={0}
+          aria-label={`Run ${item.title}`}
+          onClick={(e) => { e.stopPropagation(); onQuickRun(item.id); }}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.stopPropagation(); onQuickRun(item.id); } }}
+          className="mt-0.5 hidden shrink-0 rounded-md p-1 text-muted-foreground hover:bg-primary/20 hover:text-primary group-hover:inline-flex"
+        >
+          <Play className="h-3.5 w-3.5" />
+        </span>
+      )}
+    </button>
+  );
+});

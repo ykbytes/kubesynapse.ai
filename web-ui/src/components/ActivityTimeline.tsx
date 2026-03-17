@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   Brain,
@@ -243,9 +243,11 @@ export function ActivityTimeline({
   const endRef = useRef<HTMLDivElement | null>(null);
 
   // Activity is stored newest-first; display oldest-first (chronological)
-  const chronological = [...activity].reverse();
-  const filtered =
-    filter === "all" ? chronological : chronological.filter((item) => categorize(item.event) === filter);
+  const chronological = useMemo(() => [...activity].reverse(), [activity]);
+  const filtered = useMemo(
+    () => (filter === "all" ? chronological : chronological.filter((item) => categorize(item.event) === filter)),
+    [chronological, filter],
+  );
 
   useEffect(() => {
     if (autoScroll && endRef.current) {

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   CheckCircle2,
   ChevronDown,
@@ -243,21 +243,22 @@ interface OperationLogProps {
 export function OperationLog({ summary }: OperationLogProps) {
   if (!summary) return null;
 
-  const ops = buildOperations(summary);
+  const ops = useMemo(() => buildOperations(summary), [summary]);
   if (ops.length === 0) return null;
 
   const defaultOpen = ops.length <= 10;
   const [collapsed, setCollapsed] = useState(!defaultOpen);
 
-  const fileOps = ops.filter((o) => o.kind === "file-create" || o.kind === "file-edit");
-  const otherOps = ops.filter((o) => o.kind !== "file-create" && o.kind !== "file-edit" && o.kind !== "file-read");
-  const readOps = ops.filter((o) => o.kind === "file-read");
-
-  const badgeParts: string[] = [];
-  if (fileOps.length > 0) badgeParts.push(`${fileOps.length} file${fileOps.length > 1 ? "s" : ""}`);
-  if (otherOps.length > 0) badgeParts.push(`${otherOps.length} action${otherOps.length > 1 ? "s" : ""}`);
-  if (readOps.length > 0) badgeParts.push(`${readOps.length} read${readOps.length > 1 ? "s" : ""}`);
-
+  const { fileOps, otherOps, readOps, badgeParts } = useMemo(() => {
+    const f = ops.filter((o) => o.kind === "file-create" || o.kind === "file-edit");
+    const other = ops.filter((o) => o.kind !== "file-create" && o.kind !== "file-edit" && o.kind !== "file-read");
+    const reads = ops.filter((o) => o.kind === "file-read");
+    const parts: string[] = [];
+    if (f.length > 0) parts.push(`${f.length} file${f.length > 1 ? "s" : ""}`);
+    if (other.length > 0) parts.push(`${other.length} action${other.length > 1 ? "s" : ""}`);
+    if (reads.length > 0) parts.push(`${reads.length} read${reads.length > 1 ? "s" : ""}`);
+    return { fileOps: f, otherOps: other, readOps: reads, badgeParts: parts };
+  }, [ops]);
   return (
     <div className="mx-3 mb-2 rounded-md border border-border/60 bg-muted/20 overflow-hidden animate-slide-up">
       {/* Header */}

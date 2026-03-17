@@ -28,5 +28,30 @@ export default defineConfig(({ mode }) => {
       host: "0.0.0.0",
       port: 4173,
     },
+    build: {
+      rollupOptions: {
+        output: {
+          manualChunks: {
+            vendor: ["react", "react-dom"],
+            "radix-ui": [
+              "@radix-ui/react-dialog",
+              "@radix-ui/react-tabs",
+              "@radix-ui/react-select",
+              "@radix-ui/react-tooltip",
+              "@radix-ui/react-scroll-area",
+              "@radix-ui/react-popover",
+              "@radix-ui/react-dropdown-menu",
+              "@radix-ui/react-accordion",
+              "@radix-ui/react-collapsible",
+              "@radix-ui/react-separator",
+              "@radix-ui/react-label",
+              "@radix-ui/react-slot",
+              "@radix-ui/react-toggle",
+            ],
+            composer: ["@xyflow/react"],
+          },
+        },
+      },
+    },
   };
 });

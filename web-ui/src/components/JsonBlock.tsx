@@ -1,3 +1,4 @@
+import { memo, useMemo } from "react";
 import { CopyButton } from "./CopyButton";
 
 interface JsonBlockProps {
@@ -9,8 +10,12 @@ interface JsonBlockProps {
 /**
  * Formatted JSON display with syntax colouring, copy button, and scroll overflow.
  */
-export function JsonBlock({ data, maxHeight = "max-h-64", className }: JsonBlockProps) {
-  const raw = typeof data === "string" ? data : JSON.stringify(data, null, 2);
+export const JsonBlock = memo(function JsonBlock({ data, maxHeight = "max-h-64", className }: JsonBlockProps) {
+  const raw = useMemo(
+    () => (typeof data === "string" ? data : JSON.stringify(data, null, 2)),
+    [data],
+  );
+  const colored = useMemo(() => colorize(raw), [raw]);
   return (
     <div className={`group relative rounded-lg border border-border/50 bg-background/60 ${className ?? ""}`}>
       <div className="absolute top-1.5 right-1.5 opacity-0 group-hover:opacity-100 transition-opacity z-10">
@@ -19,11 +24,11 @@ export function JsonBlock({ data, maxHeight = "max-h-64", className }: JsonBlock
       <pre
         className={`overflow-auto whitespace-pre-wrap break-words p-3 font-mono text-[11px] leading-relaxed text-muted-foreground ${maxHeight}`}
       >
-        {colorize(raw)}
+        {colored}
       </pre>
     </div>
   );
-}
+});
 
 /* Lightweight JSON syntax colouring via spans */
 function colorize(json: string): (string | JSX.Element)[] {

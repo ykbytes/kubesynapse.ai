@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   Bot,
@@ -154,7 +154,7 @@ const roleIcon: Record<string, typeof User> = {
   system: Zap,
 };
 
-function MessageBubble({ message, index }: { message: UiMessage; index: number }) {
+const MessageBubble = memo(function MessageBubble({ message, index }: { message: UiMessage; index: number }) {
   const bg = roleBg[message.role] ?? "bg-muted/30 border-border";
   const RoleIcon = roleIcon[message.role] ?? MessageSquare;
   const isStreaming = message.status === "streaming";
@@ -192,12 +192,12 @@ function MessageBubble({ message, index }: { message: UiMessage; index: number }
       )}
     </div>
   );
-}
+});
 
 /* ------------------------------------------------------------------ */
 /*  Tool call bubble                                                  */
 /* ------------------------------------------------------------------ */
-function ToolBubble({ message }: { message: UiMessage }) {
+const ToolBubble = memo(function ToolBubble({ message }: { message: UiMessage }) {
   const [expanded, setExpanded] = useState(false);
   const isRunning = message.status === "streaming";
   const isFailed = message.status === "error";
@@ -246,17 +246,23 @@ function ToolBubble({ message }: { message: UiMessage }) {
       </div>
     </div>
   );
-}
+});
 
 /* ------------------------------------------------------------------ */
 /*  Unified diff viewer                                               */
 /* ------------------------------------------------------------------ */
-export function DiffViewer({ diff }: { diff: string }) {
+export const DiffViewer = memo(function DiffViewer({ diff }: { diff: string }) {
   const [expanded, setExpanded] = useState(false);
+  const { lines, addCount, removeCount } = useMemo(() => {
+    if (!diff) return { lines: [], addCount: 0, removeCount: 0 };
+    const l = diff.split("\n");
+    return {
+      lines: l,
+      addCount: l.filter((s) => s.startsWith("+") && !s.startsWith("+++")).length,
+      removeCount: l.filter((s) => s.startsWith("-") && !s.startsWith("---")).length,
+    };
+  }, [diff]);
   if (!diff) return null;
-  const lines = diff.split("\n");
-  const addCount = lines.filter((l) => l.startsWith("+") && !l.startsWith("+++")).length;
-  const removeCount = lines.filter((l) => l.startsWith("-") && !l.startsWith("---")).length;
   return (
     <div className="rounded-md border border-border/60 bg-muted/20 text-xs animate-slide-up my-1">
       <button
@@ -288,7 +294,7 @@ export function DiffViewer({ diff }: { diff: string }) {
       )}
     </div>
   );
-}
+});
 
 /* ------------------------------------------------------------------ */
 /*  Main component                                                    */
@@ -347,7 +353,7 @@ export function ChatWorkbench({
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const isAtBottomRef = useRef(true);
   const scrollContainerRef = useRef<HTMLElement | null>(null);
-  const reachablePeers = discoveryPeers.filter((peer) => peer.reachable);
+  const reachablePeers = useMemo(() => discoveryPeers.filter((peer) => peer.reachable), [discoveryPeers]);
   const activePeerValue = a2aTargetAgent && a2aTargetNamespace ? `${a2aTargetNamespace}/${a2aTargetAgent}` : "";
   const a2aMode = Boolean(a2aTargetAgent && a2aTargetNamespace);
   const specialistMode = specialistTeamConfigured;
