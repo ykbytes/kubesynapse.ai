@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
+  Bot,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
@@ -11,8 +12,10 @@ import {
   RotateCcw,
   Send,
   Square,
+  User,
   X,
   XCircle,
+  Zap,
 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -145,18 +148,26 @@ const roleBg: Record<string, string> = {
   system: "bg-amber-500/10 border-amber-500/20",
 };
 
+const roleIcon: Record<string, typeof User> = {
+  user: User,
+  assistant: Bot,
+  system: Zap,
+};
+
 function MessageBubble({ message, index }: { message: UiMessage; index: number }) {
   const bg = roleBg[message.role] ?? "bg-muted/30 border-border";
+  const RoleIcon = roleIcon[message.role] ?? MessageSquare;
   const isStreaming = message.status === "streaming";
   const isAssistant = message.role === "assistant";
   return (
     <div
-      className={`group relative rounded-md border px-3 py-2 text-sm animate-slide-up ${bg}`}
+      className={`group relative rounded-lg border px-3.5 py-2.5 text-sm animate-slide-up transition-shadow duration-200 hover:shadow-md ${bg}`}
       style={{ animationDelay: `${Math.min(index * 30, 300)}ms`, animationFillMode: "backwards" }}
       role={isStreaming ? "status" : undefined}
       aria-live={isStreaming ? "polite" : undefined}
     >
-      <div className="mb-1 flex items-center gap-2 text-[11px] text-muted-foreground">
+      <div className="mb-1.5 flex items-center gap-2 text-[11px] text-muted-foreground">
+        <RoleIcon className="h-3.5 w-3.5" aria-hidden="true" />
         <span className="font-medium capitalize">{message.role}</span>
         {message.status && message.status !== "complete" && (
           <Badge variant="outline" className="text-[10px] px-1.5 py-0">
@@ -164,7 +175,7 @@ function MessageBubble({ message, index }: { message: UiMessage; index: number }
           </Badge>
         )}
         {isAssistant && message.content && !isStreaming && (
-          <div className="ml-auto opacity-60 hover:opacity-100 transition-opacity">
+          <div className="ml-auto opacity-0 group-hover:opacity-100 transition-opacity duration-200">
             <CopyButton value={message.content} />
           </div>
         )}
@@ -194,16 +205,16 @@ function ToolBubble({ message }: { message: UiMessage }) {
   const StatusIcon = isFailed ? XCircle : isRunning ? LoaderCircle : CheckCircle2;
   const statusLabel = isFailed ? "failed" : isRunning ? "running" : "done";
   return (
-    <div className="rounded-md border border-border/60 bg-muted/20 text-sm animate-slide-up">
+    <div className="rounded-lg border border-border/60 bg-muted/20 text-sm animate-slide-up transition-shadow duration-200 hover:shadow-sm">
       <button
         type="button"
         onClick={() => setExpanded((o) => !o)}
         aria-expanded={expanded}
-        className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+        className="flex w-full items-center gap-2 px-3 py-2 text-xs text-muted-foreground hover:text-foreground transition-colors"
       >
-        <Cog className={`h-3.5 w-3.5 ${isRunning ? "animate-spin" : ""}`} />
+        <Cog className={`h-3.5 w-3.5 transition-transform duration-300 ${isRunning ? "animate-[spin-slow_2s_linear_infinite]" : ""}`} />
         <span className="font-medium text-foreground">{message.toolName || message.toolNode || "tool"}</span>
-        <StatusBadge icon={StatusIcon} status={statusVariant} className={`ml-auto ${isRunning ? "[&>svg]:animate-spin" : ""}`}>
+        <StatusBadge icon={StatusIcon} status={statusVariant} className="ml-auto">
           {statusLabel}
         </StatusBadge>
         <span className="transition-transform duration-200" style={{ transform: expanded ? "rotate(90deg)" : "rotate(0deg)" }}>
@@ -240,8 +251,7 @@ function ToolBubble({ message }: { message: UiMessage }) {
 /* ------------------------------------------------------------------ */
 /*  Unified diff viewer                                               */
 /* ------------------------------------------------------------------ */
-// @ts-ignore - Component used conditionally
-function DiffViewer({ diff }: { diff: string }) {
+export function DiffViewer({ diff }: { diff: string }) {
   const [expanded, setExpanded] = useState(false);
   if (!diff) return null;
   const lines = diff.split("\n");
@@ -884,6 +894,7 @@ export function ChatWorkbench({
               variant="destructive"
               onClick={onCancel}
               aria-label="Stop request"
+              className="animate-scale-in transition-transform duration-150 active:scale-95"
             >
               <Square className="mr-1.5 h-4 w-4" />
               Stop
@@ -893,6 +904,7 @@ export function ChatWorkbench({
               onClick={onSubmit}
               disabled={!agentName || !canSubmit || !tokenReady}
               aria-label="Send message (Cmd+Enter)"
+              className="transition-transform duration-150 active:scale-95"
             >
               <Send className="mr-1.5 h-4 w-4" />
               Send

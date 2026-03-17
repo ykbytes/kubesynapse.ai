@@ -35,8 +35,8 @@ export class ErrorBoundary extends Component<Props, State> {
       if (this.props.fallback) return this.props.fallback;
 
       return (
-        <div className="flex min-h-[50dvh] flex-col items-center justify-center gap-4 p-8 text-center">
-          <div className="rounded-xl bg-destructive/10 p-3">
+        <div className="flex min-h-[50dvh] flex-col items-center justify-center gap-4 p-8 text-center animate-scale-in">
+          <div className="rounded-xl bg-destructive/10 p-3.5 animate-bounce-in">
             <AlertTriangle className="h-6 w-6 text-destructive" aria-hidden="true" />
           </div>
           <div className="space-y-1">
@@ -45,7 +45,7 @@ export class ErrorBoundary extends Component<Props, State> {
               {this.state.error?.message || "An unexpected error occurred."}
             </p>
           </div>
-          <Button variant="outline" size="sm" onClick={this.handleReset}>
+          <Button variant="outline" size="sm" className="hover-lift" onClick={this.handleReset}>
             <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
             Try again
           </Button>

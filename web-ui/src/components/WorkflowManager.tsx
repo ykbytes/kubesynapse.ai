@@ -307,7 +307,7 @@ function StepDetailCard({
         <button
           type="button"
           onClick={() => setExpanded((v) => !v)}
-          className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full border transition-colors ${ring} hover:brightness-110`}
+          className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full border transition-all duration-200 ${ring} hover:brightness-110 hover:scale-105 active:scale-95`}
           title={expanded ? "Collapse" : "Expand"}
         >
           {icon}
@@ -675,7 +675,7 @@ export function WorkflowManager({
                   )}
                   <Button
                     size="sm"
-                    className="h-8 rounded-xl text-xs"
+                    className="h-8 rounded-xl text-xs transition-transform duration-150 active:scale-95"
                     disabled={isRunning || isActive}
                     onClick={() => {
                       setTriggerInput(workflow.input ?? "");

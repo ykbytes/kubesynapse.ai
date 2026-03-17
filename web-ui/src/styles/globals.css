@@ -8,13 +8,29 @@
 }
 
 @keyframes slide-up {
-  from { opacity: 0; transform: translateY(6px); }
+  from { opacity: 0; transform: translateY(8px); }
   to   { opacity: 1; transform: translateY(0); }
 }
 
 @keyframes slide-from-right {
   from { opacity: 0; transform: translateX(8px); }
   to   { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes slide-from-left {
+  from { opacity: 0; transform: translateX(-8px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes scale-in {
+  from { opacity: 0; transform: scale(0.92); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+@keyframes bounce-in {
+  0%   { opacity: 0; transform: scale(0.8); }
+  60%  { opacity: 1; transform: scale(1.04); }
+  100% { opacity: 1; transform: scale(1); }
 }
 
 @keyframes streaming-dot {
@@ -30,6 +46,33 @@
 @keyframes breathe-pulse {
   0%, 100% { opacity: 0.4; }
   50%      { opacity: 1; }
+}
+
+@keyframes glow-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 transparent; }
+  50%      { box-shadow: 0 0 8px 2px oklch(0.65 0.13 175 / 0.25); }
+}
+
+@keyframes icon-float {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-3px); }
+}
+
+@keyframes spin-slow {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+@keyframes gradient-x {
+  0%   { background-position: 0% 50%; }
+  50%  { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+@keyframes checkmark-pop {
+  0%   { transform: scale(0); opacity: 0; }
+  50%  { transform: scale(1.2); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
 }
 
 /* ── Respect reduced motion ── */
@@ -77,10 +120,16 @@
   --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
 
   --animate-fade-in: fade-in 0.18s ease-out both;
-  --animate-slide-up: slide-up 0.2s ease-out both;
-  --animate-slide-from-right: slide-from-right 0.2s ease-out both;
+  --animate-slide-up: slide-up 0.22s ease-out both;
+  --animate-slide-from-right: slide-from-right 0.22s ease-out both;
+  --animate-slide-from-left: slide-from-left 0.22s ease-out both;
+  --animate-scale-in: scale-in 0.2s ease-out both;
+  --animate-bounce-in: bounce-in 0.35s ease-out both;
   --animate-shimmer: shimmer 1.5s ease-in-out infinite;
   --animate-breathe-pulse: breathe-pulse 2s ease-in-out infinite;
+  --animate-glow-pulse: glow-pulse 2s ease-in-out infinite;
+  --animate-icon-float: icon-float 3s ease-in-out infinite;
+  --animate-checkmark-pop: checkmark-pop 0.3s ease-out both;
 }
 
 @layer base {
@@ -138,6 +187,50 @@
 }
 .streaming-dots span:nth-child(2) { animation-delay: 0.16s; }
 .streaming-dots span:nth-child(3) { animation-delay: 0.32s; }
+
+/* Modern hover lift effect — add .hover-lift to any card / button */
+.hover-lift {
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
+}
+.hover-lift:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px oklch(0 0 0 / 0.12);
+}
+
+/* Gradient accent border for active/selected items */
+.gradient-border-accent {
+  border-image: linear-gradient(to bottom, oklch(0.65 0.13 175), oklch(0.65 0.16 250)) 1;
+}
+
+/* Status indicator dot with ring animation */
+.status-ring-active {
+  position: relative;
+}
+.status-ring-active::after {
+  content: "";
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  border: 1.5px solid currentColor;
+  opacity: 0;
+  animation: breathe-pulse 2s ease-in-out infinite;
+}
+
+/* Smooth tab indicator transition */
+.tab-indicator-active {
+  position: relative;
+}
+.tab-indicator-active::after {
+  content: "";
+  position: absolute;
+  bottom: -1px;
+  left: 25%;
+  right: 25%;
+  height: 2px;
+  background: oklch(0.65 0.13 175);
+  border-radius: 1px;
+  animation: scale-in 0.2s ease-out both;
+}
 
 /* ── Theme overrides ── */
 

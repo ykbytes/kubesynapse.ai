@@ -14,11 +14,11 @@ export function EmptyState({ icon: Icon, title, description, action, className }
   return (
     <div
       className={cn(
-        "flex flex-col items-center justify-center gap-3 py-12 text-center animate-fade-in",
+        "flex flex-col items-center justify-center gap-3 py-12 text-center animate-scale-in",
         className
       )}
     >
-      <div className="rounded-xl bg-muted/50 p-3">
+      <div className="rounded-xl bg-muted/50 p-3.5 animate-icon-float">
         <Icon className="h-6 w-6 text-muted-foreground" aria-hidden="true" />
       </div>
       <div className="space-y-1">
@@ -28,7 +28,7 @@ export function EmptyState({ icon: Icon, title, description, action, className }
         )}
       </div>
       {action && (
-        <Button variant="outline" size="sm" onClick={action.onClick}>
+        <Button variant="outline" size="sm" className="hover-lift" onClick={action.onClick}>
           {action.label}
         </Button>
       )}

@@ -75,14 +75,14 @@ function ThemePicker() {
         <TooltipContent side="bottom">Theme</TooltipContent>
       </Tooltip>
       {open && (
-        <div className="absolute right-0 top-full mt-1 z-50 min-w-[160px] rounded-md border border-border bg-popover p-1 shadow-lg animate-fade-in">
+        <div className="absolute right-0 top-full mt-1 z-50 min-w-[160px] rounded-md border border-border bg-popover p-1 shadow-lg animate-scale-in">
           {THEMES.map((t) => (
             <button
               key={t}
-              className={`flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-xs text-popover-foreground hover:bg-accent ${t === theme ? "bg-accent font-medium" : ""}`}
+              className={`flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-xs text-popover-foreground transition-colors duration-150 hover:bg-accent ${t === theme ? "bg-accent font-medium" : ""}`}
               onClick={() => { setTheme(t); setOpen(false); }}
             >
-              <span className={`inline-block h-3 w-3 rounded-full border border-border ${THEME_SWATCHES[t]}`} />
+              <span className={`inline-block h-3 w-3 rounded-full border border-border transition-transform duration-200 hover:scale-110 ${THEME_SWATCHES[t]}`} />
               {labelFor(t)}
             </button>
           ))}
@@ -135,9 +135,9 @@ export function TopBar({
 
   return (
     <TooltipProvider delayDuration={200}>
-      <header className="sticky top-0 z-50 flex h-14 items-center justify-between border-b border-border bg-sidebar px-4 shadow-sm animate-fade-in">
+      <header className="sticky top-0 z-50 flex h-14 items-center justify-between border-b border-border bg-sidebar px-4 shadow-sm animate-slide-from-left">
         <div className="flex items-center gap-3">
-          <div className="flex h-8 w-8 items-center justify-center rounded-md bg-primary/10 text-primary">
+          <div className="flex h-8 w-8 items-center justify-center rounded-md bg-primary/10 text-primary transition-transform duration-300 hover:scale-110 hover:rotate-3">
             <LayoutPanelTop className="h-5 w-5" />
           </div>
           <div className="flex flex-col">

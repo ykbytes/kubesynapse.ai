@@ -7,6 +7,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { AlertTriangle, Info } from "lucide-react";
 
 interface ConfirmDialogProps {
   open: boolean;
@@ -29,12 +30,19 @@ export function ConfirmDialog({
   variant = "default",
   onConfirm,
 }: ConfirmDialogProps) {
+  const isDestructive = variant === "destructive";
+  const Icon = isDestructive ? AlertTriangle : Info;
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[400px]">
         <DialogHeader>
-          <DialogTitle>{title}</DialogTitle>
-          <DialogDescription>{description}</DialogDescription>
+          <div className="flex items-center gap-2.5">
+            <div className={`rounded-lg p-2 ${isDestructive ? "bg-destructive/10" : "bg-primary/10"} animate-bounce-in`}>
+              <Icon className={`h-4 w-4 ${isDestructive ? "text-destructive" : "text-primary"}`} />
+            </div>
+            <DialogTitle>{title}</DialogTitle>
+          </div>
+          <DialogDescription className="pt-1">{description}</DialogDescription>
         </DialogHeader>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>

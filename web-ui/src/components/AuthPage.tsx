@@ -56,7 +56,7 @@ export function AuthPage() {
     <div className="flex min-h-screen flex-col items-center justify-center bg-background p-4">
       {/* Logo + title */}
       <div className="mb-8 flex flex-col items-center gap-3 animate-fade-in">
-        <div className="flex h-14 w-14 items-center justify-center rounded-xl bg-primary/10 text-primary">
+        <div className="flex h-14 w-14 items-center justify-center rounded-xl bg-primary/10 text-primary animate-bounce-in">
           <LayoutPanelTop className="h-8 w-8" />
         </div>
         <div className="text-center">
@@ -66,7 +66,7 @@ export function AuthPage() {
       </div>
 
       {/* Auth card */}
-      <div className="w-full max-w-md animate-slide-up">
+      <div className="w-full max-w-md animate-scale-in" style={{ animationDelay: "0.1s" }}>
         <div className="rounded-xl border border-border bg-card p-6 shadow-lg">
           {/* Bootstrapping banner */}
           {isBootstrapping && (

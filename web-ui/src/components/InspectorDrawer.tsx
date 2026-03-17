@@ -1,4 +1,4 @@
-import { AlertTriangle, CheckCircle, Loader2, XCircle, Play, Square, RefreshCw, Terminal } from "lucide-react";
+import { AlertTriangle, CheckCircle, Loader2, XCircle, Play, Square, RefreshCw, Terminal, Activity, Eye, FileJson } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -107,10 +107,18 @@ export function AgentInspectorDrawer({
 
         <Tabs defaultValue="overview" className="flex flex-1 flex-col overflow-hidden">
           <TabsList className="mx-4 mt-2 w-auto">
-            <TabsTrigger value="overview" aria-label="Agent overview">Overview</TabsTrigger>
-            <TabsTrigger value="activity" aria-label="Activity log">Activity</TabsTrigger>
-            <TabsTrigger value="logs" aria-label="Pod logs">Logs</TabsTrigger>
-            <TabsTrigger value="raw" aria-label="Raw JSON">Raw</TabsTrigger>
+            <TabsTrigger value="overview" aria-label="Agent overview" className="gap-1.5">
+              <Eye className="h-3 w-3" />Overview
+            </TabsTrigger>
+            <TabsTrigger value="activity" aria-label="Activity log" className="gap-1.5">
+              <Activity className="h-3 w-3" />Activity
+            </TabsTrigger>
+            <TabsTrigger value="logs" aria-label="Pod logs" className="gap-1.5">
+              <Terminal className="h-3 w-3" />Logs
+            </TabsTrigger>
+            <TabsTrigger value="raw" aria-label="Raw JSON" className="gap-1.5">
+              <FileJson className="h-3 w-3" />Raw
+            </TabsTrigger>
           </TabsList>
 
           {/* Overview Tab */}

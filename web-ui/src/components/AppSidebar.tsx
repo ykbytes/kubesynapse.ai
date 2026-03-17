@@ -239,10 +239,10 @@ export function AppSidebar({
               onClick={() => onSelect(item.id)}
               style={{ animationDelay: `${index * 30}ms` }}
               className={cn(
-                "group flex w-full items-start gap-2.5 rounded-md px-2.5 py-2 text-left text-sm",
-                "transition-all duration-150 hover:bg-sidebar-accent/80 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
-                "animate-fade-in opacity-0 [animation-fill-mode:forwards]",
-                selectedId === item.id && "bg-sidebar-accent border-l-2 border-primary",
+                "group flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm",
+                "transition-all duration-150 hover:bg-sidebar-accent/80 hover:shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+                "animate-slide-up opacity-0 [animation-fill-mode:forwards]",
+                selectedId === item.id && "bg-sidebar-accent border-l-2 border-primary shadow-sm",
               )}
             >
               <span className={cn("mt-1.5 h-2 w-2 shrink-0 rounded-full", statusDotClasses(item.status))} aria-hidden="true" />
