@@ -379,7 +379,9 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
           if (workflowPollingRef.current) { clearInterval(workflowPollingRef.current); workflowPollingRef.current = null; }
           toast.info(`Workflow ${updated.name} ${updated.phase}`);
         }
-      } catch { /* silently ignore */ }
+      } catch (err) {
+          console.warn("[workflow-poll]", err instanceof Error ? err.message : String(err));
+        }
     }, 3000);
     return () => { if (workflowPollingRef.current) { clearInterval(workflowPollingRef.current); workflowPollingRef.current = null; } };
     // eslint-disable-next-line react-hooks/exhaustive-deps

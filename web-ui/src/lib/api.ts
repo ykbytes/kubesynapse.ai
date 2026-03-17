@@ -1359,8 +1359,9 @@ export async function streamAgentInvoke(options: StreamHandlers): Promise<void> 
       }
     },
     onerror(error) {
-      options.onError(error instanceof Error ? error : new Error(String(error)));
-      throw error;
+      const normalized = error instanceof Error ? error : new Error(String(error));
+      try { options.onError(normalized); } catch { /* prevent double-throw */ }
+      throw normalized; // stop reconnection
     },
     onclose() {
       options.onClose();

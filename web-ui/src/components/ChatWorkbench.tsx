@@ -334,21 +334,28 @@ export function ChatWorkbench({
   onSubmit,
   onCancel,
 }: ChatWorkbenchProps) {
-  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const isAtBottomRef = useRef(true);
+  const scrollContainerRef = useRef<HTMLElement | null>(null);
   const reachablePeers = discoveryPeers.filter((peer) => peer.reachable);
   const activePeerValue = a2aTargetAgent && a2aTargetNamespace ? `${a2aTargetNamespace}/${a2aTargetAgent}` : "";
   const a2aMode = Boolean(a2aTargetAgent && a2aTargetNamespace);
   const specialistMode = specialistTeamConfigured;
 
+  // Resolve the Radix ScrollArea Viewport (the actual scrollable container)
+  const scrollAreaRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
-    if (!scrollRef.current || messages.length === 0) return;
-    const latestMessage = messages[messages.length - 1];
-    scrollRef.current.scrollTo({
-      top: scrollRef.current.scrollHeight,
-      behavior: latestMessage?.status === "streaming" ? "auto" : "smooth",
-    });
+    if (scrollAreaRef.current) {
+      scrollContainerRef.current =
+        scrollAreaRef.current.querySelector("[data-radix-scroll-area-viewport]") ?? scrollAreaRef.current;
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isAtBottomRef.current || messages.length === 0) return;
+    messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [messages.length, messages[messages.length - 1]?.status]);
+  }, [messages.length, messages[messages.length - 1]?.status, messages[messages.length - 1]?.content?.length]);
 
   return (
     <div className="flex h-full flex-col gap-0">
@@ -368,7 +375,14 @@ export function ChatWorkbench({
       </div>
 
       {/* Messages */}
-      <ScrollArea className="flex-1 min-h-0" ref={scrollRef}>
+      <ScrollArea className="flex-1 min-h-0" ref={scrollAreaRef}
+        onScrollCapture={(e) => {
+          const el = e.currentTarget.querySelector("[data-radix-scroll-area-viewport]") as HTMLElement | null;
+          if (el) {
+            isAtBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+          }
+        }}
+      >
         <div className="space-y-3 p-4" aria-label="Conversation history" aria-live="polite" aria-atomic="false">
           {messages.length === 0 && (
             <EmptyState
@@ -384,6 +398,7 @@ export function ChatWorkbench({
               <MessageBubble key={message.id} message={message} index={i} />
             ),
           )}
+          <div ref={messagesEndRef} />
         </div>
       </ScrollArea>
 
