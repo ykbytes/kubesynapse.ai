@@ -87,7 +87,30 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - covered by runtime packaging
     yaml = None
 
+try:
+    from pythonjsonlogger import jsonlogger as _jsonlogger  # type: ignore[import-untyped]
+except ModuleNotFoundError:  # pragma: no cover
+    _jsonlogger = None
+
+try:
+    from prometheus_fastapi_instrumentator import Instrumentator as _Instrumentator  # type: ignore[import-untyped]
+except ModuleNotFoundError:  # pragma: no cover
+    _Instrumentator = None
+
+
+def _configure_logging() -> None:
+    log_level = os.getenv("API_GATEWAY_LOG_LEVEL", "INFO").upper()
+    handler = logging.StreamHandler()
+    if os.getenv("JSON_LOGS", "true").lower() in {"1", "true"} and _jsonlogger is not None:
+        handler.setFormatter(_jsonlogger.JsonFormatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+    else:
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+    logging.basicConfig(level=log_level, handlers=[handler], force=True)
+
+
+_configure_logging()
 logger = logging.getLogger("api-gateway")
+_SHUTDOWN = threading.Event()
 K8S_NAME_PATTERN = r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
 K8S_NAME_RE = re.compile(K8S_NAME_PATTERN)
 GIT_AUTH_METHODS = {"token", "basic", "ssh"}
@@ -124,7 +147,11 @@ async def lifespan(app: FastAPI):
                 await asyncio.sleep(attempt * 2)
             else:
                 logger.exception("Failed to initialize auth database after %d attempts: %s", max_db_retries, exc)
-    yield
+    try:
+        yield
+    finally:
+        _SHUTDOWN.set()
+        logger.info("API gateway shutting down.")
 
 app = FastAPI(
     title="AI Agent Sandbox API",
@@ -132,6 +159,9 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+
+if _Instrumentator is not None:
+    _Instrumentator().instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
 
 
 def cors_origins() -> list[str]:
@@ -4075,6 +4105,8 @@ def get_mcp_hub_servers(
 
 @app.get("/api/health")
 def health() -> dict[str, Any]:
+    if _SHUTDOWN.is_set():
+        return {"status": "shutting-down", "gateway": "ai-agent-sandbox"}
     return {
         "status": "healthy",
         "gateway": "ai-agent-sandbox",
@@ -4088,8 +4120,23 @@ def health() -> dict[str, Any]:
 
 
 @app.get("/api/ready")
-def ready() -> dict[str, Any]:
-    return {"status": "ready", "gateway": "ai-agent-sandbox"}
+def ready(response: Response) -> dict[str, Any]:
+    if _SHUTDOWN.is_set():
+        response.status_code = 503
+        return {"status": "shutting-down", "gateway": "ai-agent-sandbox"}
+    checks: dict[str, str] = {}
+    try:
+        from auth_store import ENGINE
+        from sqlalchemy import text as _sa_text
+        with ENGINE.connect() as conn:
+            conn.execute(_sa_text("select 1"))
+        checks["database"] = "ok"
+    except Exception:
+        checks["database"] = "error"
+    all_ok = all(v == "ok" for v in checks.values())
+    if not all_ok:
+        response.status_code = 503
+    return {"status": "ready" if all_ok else "degraded", "gateway": "ai-agent-sandbox", "checks": checks}
 
 
 @app.get("/.well-known/agent-card.json")

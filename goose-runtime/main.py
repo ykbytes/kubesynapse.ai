@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import subprocess
+import threading
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -22,6 +23,16 @@ try:
     import yaml
 except ModuleNotFoundError:  # pragma: no cover - covered by runtime packaging
     yaml = None
+
+try:
+    from pythonjsonlogger import jsonlogger as _jsonlogger  # type: ignore[import-untyped]
+except ModuleNotFoundError:  # pragma: no cover
+    _jsonlogger = None
+
+try:
+    from prometheus_fastapi_instrumentator import Instrumentator as _Instrumentator  # type: ignore[import-untyped]
+except ModuleNotFoundError:  # pragma: no cover
+    _Instrumentator = None
 
 
 def get_int_env(name: str, default: int, *, minimum: int = 1) -> int:
@@ -48,7 +59,21 @@ logging.basicConfig(
     level=os.getenv("GOOSE_RUNTIME_LOG_LEVEL", "INFO").upper(),
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
+
+
+def _configure_logging() -> None:
+    log_level = os.getenv("GOOSE_RUNTIME_LOG_LEVEL", "INFO").upper()
+    handler = logging.StreamHandler()
+    if os.getenv("JSON_LOGS", "true").lower() in {"1", "true"} and _jsonlogger is not None:
+        handler.setFormatter(_jsonlogger.JsonFormatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+    else:
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+    logging.basicConfig(level=log_level, handlers=[handler], force=True)
+
+
+_configure_logging()
 logger = logging.getLogger("goose-runtime")
+_SHUTDOWN = threading.Event()
 K8S_NAME_RE = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
 
 
@@ -763,7 +788,11 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     materialize_goose_config_files()
     if shutil.which(GOOSE_BINARY) is None:
         raise RuntimeError(f"goose binary '{GOOSE_BINARY}' is not available on PATH")
-    yield
+    try:
+        yield
+    finally:
+        _SHUTDOWN.set()
+        logger.info("Goose runtime shutting down.")
 
 
 app = FastAPI(
@@ -772,6 +801,9 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+if _Instrumentator is not None:
+    _Instrumentator().instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
 
 
 def ensure_runtime_directories() -> None:
@@ -1281,7 +1313,7 @@ async def stream_goose_events(
 @app.get("/health")
 def health() -> dict[str, Any]:
     return {
-        "status": "healthy",
+        "status": "shutting-down" if _SHUTDOWN.is_set() else "healthy",
         "runtime": "goose",
         "service": SERVICE_NAME,
         "namespace": SERVICE_NAMESPACE,
@@ -1296,6 +1328,8 @@ def health() -> dict[str, Any]:
 
 @app.get("/ready")
 def ready() -> dict[str, Any]:
+    if _SHUTDOWN.is_set():
+        raise HTTPException(status_code=503, detail="Runtime is shutting down")
     ensure_runtime_directories()
     resolved_goose_binary = shutil.which(GOOSE_BINARY)
     if resolved_goose_binary is None:
@@ -1320,6 +1354,8 @@ def debug_goose_info() -> dict[str, Any]:
 
 @app.post("/invoke", response_model=InvokeResponse)
 async def invoke(request: InvokeRequest) -> InvokeResponse:
+    if _SHUTDOWN.is_set():
+        raise HTTPException(status_code=503, detail="Runtime is shutting down. Retry on another pod.")
     validate_inbound_a2a_request(request)
     validate_skill_extension_request(request)
     model = (request.model or DEFAULT_MODEL).strip() or DEFAULT_MODEL
@@ -1374,6 +1410,8 @@ async def invoke(request: InvokeRequest) -> InvokeResponse:
 
 @app.post("/invoke/stream")
 async def invoke_stream(request: InvokeRequest) -> StreamingResponse:
+    if _SHUTDOWN.is_set():
+        raise HTTPException(status_code=503, detail="Runtime is shutting down. Retry on another pod.")
     validate_inbound_a2a_request(request)
     validate_skill_extension_request(request)
     model = (request.model or DEFAULT_MODEL).strip() or DEFAULT_MODEL

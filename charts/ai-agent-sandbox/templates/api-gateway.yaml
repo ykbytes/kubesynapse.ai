@@ -16,6 +16,9 @@ spec:
     metadata:
       annotations:
         checksum/secrets: {{ include (print $.Template.BasePath "/external-secrets.yaml") . | sha256sum }}
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
 {{- if .Values.skillsCatalog.enabled }}
         checksum/skills-catalog: {{ include (print $.Template.BasePath "/skills-catalog-configmap.yaml") . | sha256sum }}
 {{- end }}
@@ -27,6 +30,7 @@ spec:
 {{- end }}
       serviceAccountName: {{ include "ai-agent-sandbox.fullname" . }}-api-gateway-sa
       automountServiceAccountToken: true
+      terminationGracePeriodSeconds: 60
       securityContext:
         runAsNonRoot: true
         runAsUser: 999
@@ -197,9 +201,15 @@ spec:
 {{- end }}
           resources:
             {{- toYaml .Values.apiGateway.resources | nindent 12 }}
-          readinessProbe:
+          startupProbe:
             httpGet:
               path: /api/health
+              port: 8080
+            failureThreshold: 30
+            periodSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /api/ready
               port: 8080
             initialDelaySeconds: 5
             periodSeconds: 10
@@ -209,6 +219,10 @@ spec:
               port: 8080
             initialDelaySeconds: 15
             periodSeconds: 20
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "sleep 15"]
 ---
 apiVersion: v1
 kind: Service

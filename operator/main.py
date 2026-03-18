@@ -32,6 +32,23 @@ import kubernetes.client  # type: ignore[import-untyped]
 import kubernetes.config  # type: ignore[import-untyped]
 from kubernetes.client.rest import ApiException  # type: ignore[import-untyped]
 
+try:
+    from pythonjsonlogger import jsonlogger as _jsonlogger  # type: ignore[import-untyped]
+except ModuleNotFoundError:  # pragma: no cover
+    _jsonlogger = None
+
+
+def _configure_logging() -> None:
+    log_level = os.getenv("OPERATOR_LOG_LEVEL", "INFO").upper()
+    handler = logging.StreamHandler()
+    if os.getenv("JSON_LOGS", "true").lower() in {"1", "true"} and _jsonlogger is not None:
+        handler.setFormatter(_jsonlogger.JsonFormatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+    else:
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+    logging.basicConfig(level=log_level, handlers=[handler], force=True)
+
+
+_configure_logging()
 logger = logging.getLogger("operator")
 
 ApiTypeError = getattr(kubernetes.client, "ApiTypeError", TypeError)
@@ -2054,6 +2071,13 @@ def create_agent_statefulset_manifest(
             "requests": {"cpu": AGENT_CPU_REQUEST, "memory": AGENT_MEMORY_REQUEST},
             "limits": {"cpu": AGENT_CPU_LIMIT, "memory": AGENT_MEMORY_LIMIT},
         },
+        "startupProbe": {
+            "httpGet": {"path": "/health", "port": "http"},
+            "initialDelaySeconds": 0,
+            "periodSeconds": 5,
+            "timeoutSeconds": 3,
+            "failureThreshold": 60,
+        },
         "readinessProbe": {
             "httpGet": {"path": "/ready", "port": "http"},
             "initialDelaySeconds": 5,
@@ -2067,6 +2091,11 @@ def create_agent_statefulset_manifest(
             "periodSeconds": 20,
             "timeoutSeconds": 5,
             "failureThreshold": 6,
+        },
+        "lifecycle": {
+            "preStop": {
+                "exec": {"command": ["/bin/sh", "-c", "sleep 15"]},
+            },
         },
         "volumeMounts": volume_mounts,
         "env": env,
@@ -2114,6 +2143,7 @@ def create_agent_statefulset_manifest(
 
     pod_spec: dict[str, Any] = {
         "serviceAccountName": RUNTIME_SERVICE_ACCOUNT,
+        "terminationGracePeriodSeconds": 60,
         "securityContext": pod_security_context,
         "initContainers": init_containers,
         "containers": containers,

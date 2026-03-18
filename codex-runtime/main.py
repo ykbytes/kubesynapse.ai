@@ -18,6 +18,7 @@ import logging
 import os
 import re
 import shutil
+import threading
 import tomllib
 import uuid
 from collections.abc import AsyncIterator
@@ -55,6 +56,16 @@ except ModuleNotFoundError:  # pragma: no cover
     yaml = None
 
 try:
+    from pythonjsonlogger import jsonlogger as _jsonlogger  # type: ignore[import-untyped]
+except ModuleNotFoundError:  # pragma: no cover
+    _jsonlogger = None
+
+try:
+    from prometheus_fastapi_instrumentator import Instrumentator as _Instrumentator  # type: ignore[import-untyped]
+except ModuleNotFoundError:  # pragma: no cover
+    _Instrumentator = None
+
+try:
     import tomli_w
 except ModuleNotFoundError:  # pragma: no cover
     tomli_w = None
@@ -88,11 +99,20 @@ def get_float_env(name: str, default: float, *, minimum: float = 0.1) -> float:
 # Logging
 # ---------------------------------------------------------------------------
 
-logging.basicConfig(
-    level=os.getenv("CODEX_RUNTIME_LOG_LEVEL", "INFO").upper(),
-    format="%(asctime)s %(levelname)s %(name)s %(message)s",
-)
+
+def _configure_logging() -> None:
+    log_level = os.getenv("CODEX_RUNTIME_LOG_LEVEL", "INFO").upper()
+    handler = logging.StreamHandler()
+    if os.getenv("JSON_LOGS", "true").lower() in {"1", "true"} and _jsonlogger is not None:
+        handler.setFormatter(_jsonlogger.JsonFormatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+    else:
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+    logging.basicConfig(level=log_level, handlers=[handler], force=True)
+
+
+_configure_logging()
 logger = logging.getLogger("codex-runtime")
+_SHUTDOWN = threading.Event()
 
 # ---------------------------------------------------------------------------
 # A2A helpers (shared with goose-runtime pattern)
@@ -767,7 +787,9 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
+        _SHUTDOWN.set()
         _runtime_ready = False
+        logger.info("Codex runtime shutting down.")
 
 
 app = FastAPI(
@@ -777,6 +799,9 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+if _Instrumentator is not None:
+    _Instrumentator().instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
+
 
 # ---------------------------------------------------------------------------
 # Endpoints
@@ -784,11 +809,13 @@ app = FastAPI(
 
 @app.get("/health")
 async def health() -> dict[str, str]:
-    return {"status": "ok"}
+    return {"status": "shutting-down" if _SHUTDOWN.is_set() else "ok"}
 
 
 @app.get("/ready")
 async def ready() -> dict[str, str]:
+    if _SHUTDOWN.is_set():
+        raise HTTPException(status_code=503, detail="Runtime is shutting down")
     if not _runtime_ready:
         raise HTTPException(status_code=503, detail="Runtime not yet initialized")
     return {"status": "ready"}
@@ -796,6 +823,8 @@ async def ready() -> dict[str, str]:
 
 @app.post("/invoke", response_model=InvokeResponse)
 async def invoke(request: InvokeRequest) -> InvokeResponse:
+    if _SHUTDOWN.is_set():
+        raise HTTPException(status_code=503, detail="Runtime is shutting down. Retry on another pod.")
     model = request.model or DEFAULT_MODEL
     system_prompt = build_system_prompt(request, SKILL_RUNTIME_CONFIG.get("prompt", ""))
     working_directory = request.working_directory or CODEX_WORKDIR
@@ -821,6 +850,8 @@ async def invoke(request: InvokeRequest) -> InvokeResponse:
 
 @app.post("/invoke/stream")
 async def invoke_stream(request: InvokeRequest) -> StreamingResponse:
+    if _SHUTDOWN.is_set():
+        raise HTTPException(status_code=503, detail="Runtime is shutting down. Retry on another pod.")
     model = request.model or DEFAULT_MODEL
     system_prompt = build_system_prompt(request, SKILL_RUNTIME_CONFIG.get("prompt", ""))
     working_directory = request.working_directory or CODEX_WORKDIR
