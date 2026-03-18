@@ -702,7 +702,7 @@ kubectl get crds | grep sandbox.enterprise.ai
 kubectl logs -n ai-platform -l app=operator --tail=50
 
 # API Gateway reachable
-kubectl port-forward -n ai-platform svc/ai-sandbox-ai-agent-sandbox-api-gateway 8080:8080
+kubectl port-forward -n ai-platform svc/ai-agent-sandbox-api-gateway 8080:8080
 curl http://localhost:8080/api/health
 ```
 
@@ -957,9 +957,16 @@ Response:
 
 ```json
 {
-  "response": "Kubernetes namespaces are like virtual clusters inside...",
-  "thread_id": "my-assistant-abc123",
-  "status": "completed"
+  "status": "ok",
+  "command": ["goose", "info", "-v"],
+  "returncode": 0,
+  "stdout": "Goose version 0.x.y\nProvider: openai ...",
+  "stderr": "",
+  "goose_binary": "goose",
+  "goose_binary_path": "/usr/local/bin/goose",
+  "goose_config_root": "/home/agentuser/.config/goose",
+  "config_files": {},
+  "workspace_root": "/workspace"
 }
 ```
 
@@ -1225,7 +1232,7 @@ Access it:
 
 ```bash
 # Port-forward (local dev)
-kubectl port-forward svc/ai-sandbox-ai-agent-sandbox-web-ui 3000:80
+kubectl port-forward svc/ai-agent-sandbox-web-ui 3000:80
 # Open http://localhost:3000
 
 # Or via Ingress at the root path (production)
@@ -1518,7 +1525,7 @@ Each agent runs as a singleton StatefulSet (1 replica) with its own PVC for dura
 
 ```bash
 # Remove the Helm release
-helm uninstall ai-sandbox -n ai-platform
+helm uninstall ai-agent-sandbox -n ai-platform
 
 # Remove CRDs (Helm does not delete CRDs on uninstall)
 kubectl delete crd aiagents.sandbox.enterprise.ai
@@ -1550,7 +1557,7 @@ kubectl logs -l app=operator -n ai-platform --tail=100
 kubectl get crds | grep sandbox.enterprise.ai
 
 # Verify RBAC
-kubectl auth can-i create statefulsets --as=system:serviceaccount:ai-platform:ai-sandbox-ai-agent-sandbox-operator-sa
+kubectl auth can-i create statefulsets --as=system:serviceaccount:ai-platform:ai-agent-sandbox-operator-sa
 ```
 
 ### Agent pod not starting
@@ -1601,7 +1608,7 @@ kubectl get agentapprovals -n <tenant-ns>
 kubectl logs -l app=litellm -n ai-platform --tail=50
 
 # Verify the LLM API key secret
-kubectl get secret ai-sandbox-ai-agent-sandbox-llm-api-keys -n ai-platform -o yaml
+kubectl get secret ai-agent-sandbox-llm-api-keys -n ai-platform -o yaml
 ```
 
 ### Helm install fails
@@ -1611,10 +1618,10 @@ kubectl get secret ai-sandbox-ai-agent-sandbox-llm-api-keys -n ai-platform -o ya
 helm lint ./charts/ai-agent-sandbox -f values-prod.yaml
 
 # Dry-run to see rendered templates
-helm template ai-sandbox ./charts/ai-agent-sandbox -f values-prod.yaml | less
+helm template ai-agent-sandbox ./charts/ai-agent-sandbox -f values-prod.yaml | less
 
 # Debug install
-helm install ai-sandbox ./charts/ai-agent-sandbox -f values-prod.yaml --debug --dry-run
+helm install ai-agent-sandbox ./charts/ai-agent-sandbox -f values-prod.yaml --debug --dry-run
 ```
 
 ---
