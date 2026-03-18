@@ -134,58 +134,70 @@ def authenticate_ldap_user(username: str, password: str) -> dict[str, Any]:
         raise RuntimeError("python-ldap is not installed in this environment.") from exc
 
     connection = ldap.initialize(LDAP_SERVER_URL)
-    connection.set_option(ldap.OPT_PROTOCOL_VERSION, 3)
-    if LDAP_USE_STARTTLS:
-        connection.start_tls_s()
-    if LDAP_BIND_DN:
-        connection.simple_bind_s(LDAP_BIND_DN, LDAP_BIND_PASSWORD)
+    user_connection = None
+    try:
+        connection.set_option(ldap.OPT_PROTOCOL_VERSION, 3)
+        if LDAP_USE_STARTTLS:
+            connection.start_tls_s()
+        if LDAP_BIND_DN:
+            connection.simple_bind_s(LDAP_BIND_DN, LDAP_BIND_PASSWORD)
 
-    search_filter = LDAP_USER_SEARCH_FILTER.format(username=_ldap_escape(username.strip()))
-    results = connection.search_s(
-        LDAP_USER_SEARCH_BASE,
-        ldap.SCOPE_SUBTREE,
-        search_filter,
-        [LDAP_USERNAME_ATTRIBUTE, LDAP_EMAIL_ATTRIBUTE, LDAP_DISPLAY_NAME_ATTRIBUTE, LDAP_GROUP_ATTRIBUTE],
-    )
-    if not results:
-        raise ValueError("User was not found in LDAP.")
-
-    user_dn, attributes = results[0]
-    user_connection = ldap.initialize(LDAP_SERVER_URL)
-    user_connection.set_option(ldap.OPT_PROTOCOL_VERSION, 3)
-    if LDAP_USE_STARTTLS:
-        user_connection.start_tls_s()
-    user_connection.simple_bind_s(user_dn, password)
-
-    group_values = _normalize_group_values(attributes.get(LDAP_GROUP_ATTRIBUTE, []))
-    if LDAP_GROUP_SEARCH_BASE:
-        group_results = connection.search_s(
-            LDAP_GROUP_SEARCH_BASE,
+        search_filter = LDAP_USER_SEARCH_FILTER.format(username=_ldap_escape(username.strip()))
+        results = connection.search_s(
+            LDAP_USER_SEARCH_BASE,
             ldap.SCOPE_SUBTREE,
-            LDAP_GROUP_SEARCH_FILTER.format(user_dn=_ldap_escape(user_dn), username=_ldap_escape(username.strip())),
-            ["cn", "distinguishedName"],
+            search_filter,
+            [LDAP_USERNAME_ATTRIBUTE, LDAP_EMAIL_ATTRIBUTE, LDAP_DISPLAY_NAME_ATTRIBUTE, LDAP_GROUP_ATTRIBUTE],
         )
-        for group_dn, group_attrs in group_results:
-            if group_dn:
-                group_values.append(str(group_dn))
-            group_values.extend(_normalize_group_values(group_attrs.get("cn", [])))
+        if not results:
+            raise ValueError("User was not found in LDAP.")
 
-    role, allowed_namespaces = resolve_role_mapping(group_values, LDAP_GROUP_ROLE_MAPPING)
+        user_dn, attributes = results[0]
+        user_connection = ldap.initialize(LDAP_SERVER_URL)
+        user_connection.set_option(ldap.OPT_PROTOCOL_VERSION, 3)
+        if LDAP_USE_STARTTLS:
+            user_connection.start_tls_s()
+        user_connection.simple_bind_s(user_dn, password)
 
-    username_values = _normalize_group_values(attributes.get(LDAP_USERNAME_ATTRIBUTE, []))
-    email_values = _normalize_group_values(attributes.get(LDAP_EMAIL_ATTRIBUTE, []))
-    display_name_values = _normalize_group_values(attributes.get(LDAP_DISPLAY_NAME_ATTRIBUTE, []))
+        group_values = _normalize_group_values(attributes.get(LDAP_GROUP_ATTRIBUTE, []))
+        if LDAP_GROUP_SEARCH_BASE:
+            group_results = connection.search_s(
+                LDAP_GROUP_SEARCH_BASE,
+                ldap.SCOPE_SUBTREE,
+                LDAP_GROUP_SEARCH_FILTER.format(user_dn=_ldap_escape(user_dn), username=_ldap_escape(username.strip())),
+                ["cn", "distinguishedName"],
+            )
+            for group_dn, group_attrs in group_results:
+                if group_dn:
+                    group_values.append(str(group_dn))
+                group_values.extend(_normalize_group_values(group_attrs.get("cn", [])))
 
-    return {
-        "username": (username_values[0] if username_values else username).strip().lower(),
-        "email": email_values[0] if email_values else None,
-        "display_name": display_name_values[0] if display_name_values else username.strip(),
-        "external_id": str(user_dn),
-        "auth_provider": "ldap",
-        "role": role,
-        "allowed_namespaces": allowed_namespaces,
-        "groups": sorted(set(group_values)),
-    }
+        role, allowed_namespaces = resolve_role_mapping(group_values, LDAP_GROUP_ROLE_MAPPING)
+
+        username_values = _normalize_group_values(attributes.get(LDAP_USERNAME_ATTRIBUTE, []))
+        email_values = _normalize_group_values(attributes.get(LDAP_EMAIL_ATTRIBUTE, []))
+        display_name_values = _normalize_group_values(attributes.get(LDAP_DISPLAY_NAME_ATTRIBUTE, []))
+
+        return {
+            "username": (username_values[0] if username_values else username).strip().lower(),
+            "email": email_values[0] if email_values else None,
+            "display_name": display_name_values[0] if display_name_values else username.strip(),
+            "external_id": str(user_dn),
+            "auth_provider": "ldap",
+            "role": role,
+            "allowed_namespaces": allowed_namespaces,
+            "groups": sorted(set(group_values)),
+        }
+    finally:
+        try:
+            connection.unbind_s()
+        except Exception:
+            pass
+        if user_connection is not None:
+            try:
+                user_connection.unbind_s()
+            except Exception:
+                pass
 
 
 def oidc_providers() -> list[dict[str, Any]]:
@@ -519,8 +531,11 @@ def _load_oidc_discovery(provider: dict[str, Any]) -> dict[str, Any]:
     discovered = dict(provider)
     issuer = str(provider.get("issuer") or "").rstrip("/")
     if issuer and (not provider.get("authorization_endpoint") or not provider.get("token_endpoint")):
-        response = httpx.get(f"{issuer}/.well-known/openid-configuration", timeout=10.0)
-        response.raise_for_status()
+        try:
+            response = httpx.get(f"{issuer}/.well-known/openid-configuration", timeout=10.0)
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise ValueError(f"Failed to fetch OIDC discovery from {issuer}: {exc}") from exc
         payload = response.json()
         discovered["authorization_endpoint"] = discovered.get("authorization_endpoint") or payload.get("authorization_endpoint", "")
         discovered["token_endpoint"] = discovered.get("token_endpoint") or payload.get("token_endpoint", "")
@@ -612,20 +627,23 @@ def exchange_oidc_code(provider_id: str, code: str, state: str, cookie_value: st
         raise ValueError("OIDC state validation failed.")
 
     redirect_uri = str(discovered.get("redirect_uri") or f"{base_url}/api/auth/oidc/callback/{provider_id}").strip()
-    token_response = httpx.post(
-        token_endpoint,
-        timeout=10.0,
-        data={
-            "grant_type": "authorization_code",
-            "code": code,
-            "redirect_uri": redirect_uri,
-            "client_id": client_id,
-            "client_secret": discovered.get("client_secret") or "",
-            "code_verifier": cookie_payload.get("code_verifier") or "",
-        },
-        headers={"Accept": "application/json"},
-    )
-    token_response.raise_for_status()
+    try:
+        token_response = httpx.post(
+            token_endpoint,
+            timeout=10.0,
+            data={
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": redirect_uri,
+                "client_id": client_id,
+                "client_secret": discovered.get("client_secret") or "",
+                "code_verifier": cookie_payload.get("code_verifier") or "",
+            },
+            headers={"Accept": "application/json"},
+        )
+        token_response.raise_for_status()
+    except httpx.HTTPError as exc:
+        raise ValueError(f"OIDC token exchange failed for provider '{provider_id}': {exc}") from exc
     token_payload = token_response.json()
 
     claims: dict[str, Any] = {}
@@ -633,12 +651,15 @@ def exchange_oidc_code(provider_id: str, code: str, state: str, cookie_value: st
     if id_token:
         claims = jwt.get_unverified_claims(id_token)
     elif discovered.get("userinfo_endpoint"):
-        userinfo_response = httpx.get(
-            str(discovered["userinfo_endpoint"]),
-            timeout=10.0,
-            headers={"Authorization": f"Bearer {token_payload.get('access_token', '')}"},
-        )
-        userinfo_response.raise_for_status()
+        try:
+            userinfo_response = httpx.get(
+                str(discovered["userinfo_endpoint"]),
+                timeout=10.0,
+                headers={"Authorization": f"Bearer {token_payload.get('access_token', '')}"},
+            )
+            userinfo_response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise ValueError(f"OIDC userinfo request failed for provider '{provider_id}': {exc}") from exc
         claims = userinfo_response.json()
 
     if not isinstance(claims, dict) or not claims.get("sub"):
