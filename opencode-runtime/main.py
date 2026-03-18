@@ -463,7 +463,8 @@ class SessionRegistry:
             return {}
         try:
             payload = json.loads(self.path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except (OSError, json.JSONDecodeError) as _exc:
+            logger.warning("Failed to load session registry from %s: %s — treating as empty.", self.path, _exc)
             payload = {}
         if not isinstance(payload, dict):
             payload = {}
@@ -606,13 +607,17 @@ def get_session_messages(session_id: str) -> list[dict[str, Any]]:
 
 def get_session_status(session_id: str) -> dict[str, Any]:
     """Check the current status (idle/busy/retry) of a session."""
-    with runtime_http_client() as hclient:
-        response = hclient.get("/session/status")
-        response.raise_for_status()
-        statuses = response.json()
-    if not isinstance(statuses, dict):
+    try:
+        with runtime_http_client() as hclient:
+            response = hclient.get("/session/status")
+            response.raise_for_status()
+            statuses = response.json()
+        if not isinstance(statuses, dict):
+            return {"type": "idle"}
+        return statuses.get(session_id, {"type": "idle"})
+    except (httpx.HTTPError, ValueError):
+        logger.warning("Failed to get session status for %s; assuming idle.", session_id)
         return {"type": "idle"}
-    return statuses.get(session_id, {"type": "idle"})
 
 
 def wait_for_session_idle(session_id: str, timeout_seconds: float = SESSION_IDLE_TIMEOUT_SECONDS) -> dict[str, Any]:
@@ -677,7 +682,7 @@ def get_session_todos(session_id: str) -> list[dict[str, Any]]:
             payload = response.json()
             if isinstance(payload, list):
                 return [item for item in payload if isinstance(item, dict)]
-    except httpx.HTTPError:
+    except (httpx.HTTPError, ValueError):
         pass
     return []
 
@@ -1616,7 +1621,7 @@ def capabilities() -> dict[str, Any]:
 
 
 @app.post("/invoke", response_model=InvokeResponse)
-async def invoke(request: InvokeRequest) -> InvokeResponse:
+def invoke(request: InvokeRequest) -> InvokeResponse:
     return invoke_opencode(request)
 
 
@@ -1626,7 +1631,7 @@ async def invoke_stream(request: InvokeRequest) -> StreamingResponse:
         thread_id = request.thread_id or str(uuid.uuid4())
         yield sse_event("response.started", {"thread_id": thread_id, "source": "opencode"})
         try:
-            response = invoke_opencode(request)
+            response = await asyncio.to_thread(invoke_opencode, request)
         except HTTPException as exc:
             yield sse_event("response.error", {"thread_id": thread_id, "error": str(exc.detail)})
             return

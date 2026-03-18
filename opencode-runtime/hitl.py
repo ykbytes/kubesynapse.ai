@@ -144,12 +144,7 @@ def request_approval(
     tool_args: Optional[dict[str, Any]] = None,
     request_id: str = "",
     namespace: Optional[str] = None,
-    timeout_seconds: int = 300,
-    poll_interval: int = 5,
 ) -> ApprovalResult:
-    del timeout_seconds
-    del poll_interval
-
     if not request_id.strip():
         raise ValueError("request_id must not be empty")
 
