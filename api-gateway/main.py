@@ -55,6 +55,7 @@ from auth_store import (
     serialize_user,
     update_user_fields,
     upsert_external_user,
+    validate_email,
     verify_password,
 )
 from enterprise_auth import (
@@ -653,7 +654,7 @@ class DeleteResponse(BaseModel):
 
 
 class AuthRegisterRequest(BaseModel):
-    username: str = Field(min_length=3, max_length=128)
+    username: str = Field(min_length=3, max_length=128, pattern=r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$")
     password: str = Field(min_length=8, max_length=256)
     email: str | None = Field(default=None, max_length=320)
     display_name: str | None = Field(default=None, max_length=255)
@@ -671,7 +672,7 @@ class ChangePasswordRequest(BaseModel):
 
 
 class CreateUserRequest(BaseModel):
-    username: str = Field(min_length=3, max_length=128)
+    username: str = Field(min_length=3, max_length=128, pattern=r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$")
     password: str = Field(min_length=8, max_length=256)
     email: str | None = Field(default=None, max_length=320)
     display_name: str | None = Field(default=None, max_length=255)
@@ -3407,19 +3408,33 @@ def register_local_user(body: AuthRegisterRequest, raw_request: Request):
     if not registration_allowed():
         raise HTTPException(status_code=403, detail="Self-registration is disabled")
 
-    is_first_user = count_users() == 0
+    # Rate-limit registration using the same mechanism as login
+    rate_limit_key = login_rate_limit_key(request_client_ip(raw_request), body.username.strip().lower())
+    if login_rate_limited(rate_limit_key):
+        raise HTTPException(status_code=429, detail="Too many registration attempts. Try again shortly.")
+
+    # Validate email early before DB operations
+    try:
+        validated_email = validate_email(body.email)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # Atomic first-user check: count once and use that value
+    user_count = count_users()
+    is_first_user = user_count == 0
     role = "admin" if is_first_user else "operator"
     namespaces = ["*"] if is_first_user else ["default"]
     try:
         user = create_local_user(
             username=body.username,
             password=body.password,
-            email=body.email,
+            email=validated_email,
             display_name=body.display_name,
             role=role,
             allowed_namespaces=namespaces,
         )
     except ValueError as exc:
+        note_login_attempt(rate_limit_key, success=False)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     session_record, refresh_token = create_session_for_user(
@@ -3436,6 +3451,7 @@ def register_local_user(body: AuthRegisterRequest, raw_request: Request):
         detail={"role": role},
         ip_address=request_client_ip(raw_request),
     )
+    note_login_attempt(rate_limit_key, success=True)
     return issue_session_response(user, session_record, refresh_token, status_code=201)
 
 
@@ -3623,6 +3639,14 @@ def admin_update_user(
     user=Depends(verify_token),
 ) -> dict[str, Any]:
     ensure_role(user, "admin")
+
+    # Prevent admin from demoting themselves
+    acting_user_id = int(str(user.get("sub") or "0"))
+    if acting_user_id == user_id and body.role is not None and body.role != "admin":
+        raise HTTPException(status_code=400, detail="Cannot change your own admin role")
+    if acting_user_id == user_id and body.is_active is False:
+        raise HTTPException(status_code=400, detail="Cannot deactivate your own account")
+
     try:
         updated = update_user_fields(
             user_id,

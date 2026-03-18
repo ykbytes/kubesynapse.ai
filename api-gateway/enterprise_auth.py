@@ -103,6 +103,25 @@ def ldap_enabled() -> bool:
     return LDAP_ENABLED and bool(LDAP_SERVER_URL and LDAP_USER_SEARCH_BASE)
 
 
+def _ldap_escape(value: str) -> str:
+    """Escape special characters for safe LDAP filter interpolation (RFC 4515)."""
+    result: list[str] = []
+    for ch in value:
+        if ch == '\\':
+            result.append('\\5c')
+        elif ch == '*':
+            result.append('\\2a')
+        elif ch == '(':
+            result.append('\\28')
+        elif ch == ')':
+            result.append('\\29')
+        elif ch == '\x00':
+            result.append('\\00')
+        else:
+            result.append(ch)
+    return ''.join(result)
+
+
 def authenticate_ldap_user(username: str, password: str) -> dict[str, Any]:
     if not ldap_enabled():
         raise ValueError("LDAP authentication is not configured.")
@@ -121,7 +140,7 @@ def authenticate_ldap_user(username: str, password: str) -> dict[str, Any]:
     if LDAP_BIND_DN:
         connection.simple_bind_s(LDAP_BIND_DN, LDAP_BIND_PASSWORD)
 
-    search_filter = LDAP_USER_SEARCH_FILTER.format(username=username.strip())
+    search_filter = LDAP_USER_SEARCH_FILTER.format(username=_ldap_escape(username.strip()))
     results = connection.search_s(
         LDAP_USER_SEARCH_BASE,
         ldap.SCOPE_SUBTREE,
@@ -143,7 +162,7 @@ def authenticate_ldap_user(username: str, password: str) -> dict[str, Any]:
         group_results = connection.search_s(
             LDAP_GROUP_SEARCH_BASE,
             ldap.SCOPE_SUBTREE,
-            LDAP_GROUP_SEARCH_FILTER.format(user_dn=user_dn, username=username.strip()),
+            LDAP_GROUP_SEARCH_FILTER.format(user_dn=_ldap_escape(user_dn), username=_ldap_escape(username.strip())),
             ["cn", "distinguishedName"],
         )
         for group_dn, group_attrs in group_results:

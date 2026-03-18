@@ -74,6 +74,7 @@ import type {
 } from "../types";
 import { TextFileBundleEditor } from "./TextFileBundleEditor";
 import { ToolConfigDrawer } from "./ToolConfigDrawer";
+import { useConnection } from "@/contexts/ConnectionContext";
 
 const TOOL_ICONS: Record<string, typeof Code> = {
   "code-exec": Code,
@@ -156,6 +157,7 @@ export function AgentManagementPanel({
   onSave,
   onDelete,
 }: AgentManagementPanelProps) {
+  const { canMutate } = useConnection();
   const [model, setModel] = useState(agent.model);
   const [systemPrompt, setSystemPrompt] = useState(agent.system_prompt);
   const [policyRef, setPolicyRef] = useState(agent.policy_ref ?? "");
@@ -972,17 +974,24 @@ export function AgentManagementPanel({
             Saving updates the spec and triggers an operator reconcile.
           </p>
           <div className="flex gap-2">
-            <Button onClick={handleSaveClick} disabled={!model.trim() || isSaving} className="relative min-w-[140px]">
-              {isDirty && !isSaving && (
-                <span className="absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-amber-500 animate-[breathe-pulse_2s_ease-in-out_infinite]" />
-              )}
-              {isSaving ? <LoaderCircle className="mr-1.5 h-4 w-4 animate-spin" /> : <Save className="mr-1.5 h-4 w-4" />}
-              {isSaving ? "Saving..." : "Save changes"}
-            </Button>
-            <Button variant="destructive" onClick={() => setDeleteDialogOpen(true)} disabled={isDeleting}>
-              {isDeleting ? <LoaderCircle className="mr-1.5 h-4 w-4 animate-spin" /> : <Trash2 className="mr-1.5 h-4 w-4" />}
-              {isDeleting ? "Deleting..." : "Delete"}
-            </Button>
+            {canMutate && (
+              <>
+                <Button onClick={handleSaveClick} disabled={!model.trim() || isSaving} className="relative min-w-[140px]">
+                  {isDirty && !isSaving && (
+                    <span className="absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-amber-500 animate-[breathe-pulse_2s_ease-in-out_infinite]" />
+                  )}
+                  {isSaving ? <LoaderCircle className="mr-1.5 h-4 w-4 animate-spin" /> : <Save className="mr-1.5 h-4 w-4" />}
+                  {isSaving ? "Saving..." : "Save changes"}
+                </Button>
+                <Button variant="destructive" onClick={() => setDeleteDialogOpen(true)} disabled={isDeleting}>
+                  {isDeleting ? <LoaderCircle className="mr-1.5 h-4 w-4 animate-spin" /> : <Trash2 className="mr-1.5 h-4 w-4" />}
+                  {isDeleting ? "Deleting..." : "Delete"}
+                </Button>
+              </>
+            )}
+            {!canMutate && (
+              <p className="text-xs text-muted-foreground italic">Read-only — operator role required to edit</p>
+            )}
           </div>
         </div>
       </CardContent>

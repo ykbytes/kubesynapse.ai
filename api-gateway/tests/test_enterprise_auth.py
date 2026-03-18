@@ -161,3 +161,32 @@ class EnterpriseAuthSamlTests(unittest.TestCase):
         self.assertEqual(identity["role"], "operator")
         self.assertEqual(identity["allowed_namespaces"], ["team-a", "team-b"])
         self.assertEqual(identity["next"], "/team-a")
+
+
+class LdapEscapeTests(unittest.TestCase):
+    """Tests for the _ldap_escape helper (RFC 4515 special characters)."""
+
+    def setUp(self) -> None:
+        self.module_name, self.ea = load_enterprise_auth()
+        self.addCleanup(lambda: sys.modules.pop(self.module_name, None))
+
+    def test_plain_value_unchanged(self) -> None:
+        self.assertEqual(self.ea._ldap_escape("alice"), "alice")
+
+    def test_escapes_backslash(self) -> None:
+        self.assertEqual(self.ea._ldap_escape("a\\b"), "a\\5cb")
+
+    def test_escapes_asterisk(self) -> None:
+        self.assertEqual(self.ea._ldap_escape("user*"), "user\\2a")
+
+    def test_escapes_parentheses(self) -> None:
+        self.assertEqual(self.ea._ldap_escape("(admin)"), "\\28admin\\29")
+
+    def test_escapes_null_byte(self) -> None:
+        self.assertEqual(self.ea._ldap_escape("a\x00b"), "a\\00b")
+
+    def test_escapes_combined(self) -> None:
+        self.assertEqual(
+            self.ea._ldap_escape("user\\*(name)"),
+            "user\\5c\\2a\\28name\\29",
+        )

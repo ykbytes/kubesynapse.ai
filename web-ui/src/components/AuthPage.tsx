@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { AlertCircle, KeyRound, LayoutPanelTop, Loader2, UserPlus } from "lucide-react";
+import { useState, useMemo } from "react";
+import { AlertCircle, Check, KeyRound, LayoutPanelTop, Loader2, UserPlus, X } from "lucide-react";
 import { useConnection } from "@/contexts/ConnectionContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -7,6 +7,8 @@ import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 
 type AuthTab = "password" | "token";
+
+const EMAIL_RE = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
 
 export function AuthPage() {
   const conn = useConnection();
@@ -24,6 +26,21 @@ export function AuthPage() {
     !conn.authConfig.bootstrap_complete &&
     conn.authConfig.registration_enabled;
 
+  // Inline password strength checks
+  const passwordChecks = useMemo(() => {
+    const p = conn.authPassword;
+    return {
+      length: p.length >= 8,
+      upper: /[A-Z]/.test(p),
+      lower: /[a-z]/.test(p),
+      digit: /\d/.test(p),
+      get valid() { return this.length && this.upper && this.lower && this.digit; },
+    };
+  }, [conn.authPassword]);
+
+  const passwordsMatch = conn.authPassword === conn.authPasswordConfirm;
+  const emailValid = !conn.authEmail || EMAIL_RE.test(conn.authEmail);
+
   async function handlePasswordSubmit() {
     setRegisterError("");
     conn.setConnectionError("");
@@ -33,12 +50,16 @@ export function AuthPage() {
         setRegisterError("Username must be at least 3 characters.");
         return;
       }
-      if (conn.authPassword.length < 8) {
-        setRegisterError("Password must be at least 8 characters.");
+      if (!passwordChecks.valid) {
+        setRegisterError("Password must be at least 8 characters with an uppercase letter, a lowercase letter, and a digit.");
         return;
       }
-      if (conn.authPassword !== conn.authPasswordConfirm) {
+      if (!passwordsMatch) {
         setRegisterError("Passwords do not match.");
+        return;
+      }
+      if (conn.authEmail && !emailValid) {
+        setRegisterError("Please enter a valid email address.");
         return;
       }
     }
@@ -170,6 +191,9 @@ export function AuthPage() {
                         placeholder="name@example.com"
                         autoComplete="email"
                       />
+                      {conn.authEmail && !emailValid && (
+                        <p className="text-xs text-destructive">Please enter a valid email address.</p>
+                      )}
                     </div>
                   )}
 
@@ -194,10 +218,24 @@ export function AuthPage() {
                       type="password"
                       value={conn.authPassword}
                       onChange={(e) => conn.setAuthPassword(e.target.value)}
-                      placeholder={conn.registerMode ? "Create a password (min 8 chars)" : "Enter password"}
+                      placeholder={conn.registerMode ? "Min 8 chars, upper, lower, digit" : "Enter password"}
                       autoComplete={conn.registerMode ? "new-password" : "current-password"}
                       onKeyDown={(e) => { if (e.key === "Enter" && !conn.registerMode) void handlePasswordSubmit(); }}
                     />
+                    {conn.registerMode && conn.passwordProvider === "local" && conn.authPassword.length > 0 && (
+                      <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs">
+                        {(["length", "upper", "lower", "digit"] as const).map((k) => {
+                          const ok = passwordChecks[k];
+                          const label = { length: "8+ chars", upper: "Uppercase", lower: "Lowercase", digit: "Digit" }[k];
+                          return (
+                            <span key={k} className={`flex items-center gap-0.5 ${ok ? "text-emerald-600" : "text-muted-foreground"}`}>
+                              {ok ? <Check className="h-3 w-3" /> : <X className="h-3 w-3" />}
+                              {label}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
 
                   {/* Confirm password (register only) */}
@@ -213,6 +251,9 @@ export function AuthPage() {
                         autoComplete="new-password"
                         onKeyDown={(e) => { if (e.key === "Enter") void handlePasswordSubmit(); }}
                       />
+                      {conn.authPasswordConfirm && !passwordsMatch && (
+                        <p className="text-xs text-destructive">Passwords do not match.</p>
+                      )}
                     </div>
                   )}
 

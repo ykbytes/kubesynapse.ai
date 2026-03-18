@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { useConnection } from "@/contexts/ConnectionContext";
 import type { AgentInfo, EvalInfo, EvalPayload, EvalTestCase, EvalUpdatePayload } from "../types";
 
 interface EvalManagerProps {
@@ -61,6 +62,7 @@ export function EvalManager({
   onUpdate,
   onDelete,
 }: EvalManagerProps) {
+  const { canMutate } = useConnection();
   const [name, setName] = useState("");
   const [agentRef, setAgentRef] = useState("");
   const [schedule, setSchedule] = useState("");
@@ -305,32 +307,34 @@ export function EvalManager({
         )}
 
         <div className="flex items-center justify-end gap-2 border-t border-border pt-4">
-          <Button
-            onClick={() => {
-              const thresholdResult = buildFailureThreshold();
-              if (thresholdResult.error) {
-                setValidationError(thresholdResult.error);
-                return;
-              }
-              setValidationError("");
-              const payload = {
-                agent_ref: agentRef,
-                schedule: schedule.trim() || undefined,
-                test_suite: testSuite,
-                failure_threshold: thresholdResult.values,
-              };
-              if (evalResource) {
-                onUpdate(evalResource.name, payload as EvalUpdatePayload);
-                return;
-              }
-              onCreate({ name, ...payload });
-            }}
-            disabled={!canSubmit || isSaving}
-          >
-            {isSaving ? <LoaderCircle className="mr-1.5 h-4 w-4 animate-spin" /> : <Save className="mr-1.5 h-4 w-4" />}
-            {isSaving ? "Saving..." : evalResource ? "Save evaluation" : "Create evaluation"}
-          </Button>
-          {evalResource && (
+          {canMutate && (
+            <Button
+              onClick={() => {
+                const thresholdResult = buildFailureThreshold();
+                if (thresholdResult.error) {
+                  setValidationError(thresholdResult.error);
+                  return;
+                }
+                setValidationError("");
+                const payload = {
+                  agent_ref: agentRef,
+                  schedule: schedule.trim() || undefined,
+                  test_suite: testSuite,
+                  failure_threshold: thresholdResult.values,
+                };
+                if (evalResource) {
+                  onUpdate(evalResource.name, payload as EvalUpdatePayload);
+                  return;
+                }
+                onCreate({ name, ...payload });
+              }}
+              disabled={!canSubmit || isSaving}
+            >
+              {isSaving ? <LoaderCircle className="mr-1.5 h-4 w-4 animate-spin" /> : <Save className="mr-1.5 h-4 w-4" />}
+              {isSaving ? "Saving..." : evalResource ? "Save evaluation" : "Create evaluation"}
+            </Button>
+          )}
+          {evalResource && canMutate && (
             <Button
               variant="destructive"
               onClick={() => setDeleteDialogOpen(true)}
@@ -339,6 +343,9 @@ export function EvalManager({
               {isDeleting ? <LoaderCircle className="mr-1.5 h-4 w-4 animate-spin" /> : <Trash2 className="mr-1.5 h-4 w-4" />}
               {isDeleting ? "Deleting..." : "Delete"}
             </Button>
+          )}
+          {!canMutate && (
+            <p className="text-xs text-muted-foreground italic">Read-only — operator role required to edit</p>
           )}
         </div>
 

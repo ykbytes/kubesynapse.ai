@@ -145,7 +145,8 @@ async function fetchAuthenticated(
       return fetch(url, buildAuthenticatedInit(session.access_token, requestId, init));
     } catch {
       _refreshPromise = null;
-      // Refresh failed — return the original 401 so the caller can handle it
+      // Refresh truly failed — clear stale token so the UI re-shows login
+      localStorage.removeItem("ai-agent-sandbox/token");
       return response;
     }
   }

@@ -7,6 +7,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { EmptyState } from "./EmptyState";
+import { useConnection } from "@/contexts/ConnectionContext";
 import type { WorkspaceView } from "@/types";
 
 export interface SidebarResourceItem {
@@ -75,6 +76,7 @@ export function AppSidebar({
   onCreateNew,
   onQuickRun,
 }: AppSidebarProps) {
+  const { canMutate } = useConnection();
   const [filter, setFilter] = useState("");
   const [debouncedFilter, setDebouncedFilter] = useState("");
   const debounceRef = useRef<ReturnType<typeof setTimeout>>();
@@ -133,6 +135,7 @@ export function AppSidebar({
               </Tooltip>
             );
           })}
+          {canMutate && (
           <Tooltip>
             <TooltipTrigger asChild>
               <Button variant="ghost" size="icon" className="h-8 w-8" onClick={onCreateNew} aria-label="Create new">
@@ -141,6 +144,7 @@ export function AppSidebar({
             </TooltipTrigger>
             <TooltipContent side="right">Create new</TooltipContent>
           </Tooltip>
+          )}
         </aside>
       </TooltipProvider>
     );
@@ -185,10 +189,12 @@ export function AppSidebar({
 
       {/* Actions */}
       <div className="flex gap-1.5 border-b border-border px-3 py-2">
+{canMutate && (
         <Button size="sm" className="h-7 flex-1 gap-1.5 text-xs" onClick={onCreateNew}>
           <Plus className="h-3.5 w-3.5" />
           New
         </Button>
+)}
         <Button variant="outline" size="icon" className="h-7 w-7" onClick={onRefresh} disabled={loading} aria-label="Refresh list">
           <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
         </Button>

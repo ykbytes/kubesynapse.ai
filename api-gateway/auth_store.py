@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import re
 import secrets
 import threading
 import time
@@ -15,6 +16,7 @@ from urllib.parse import quote_plus
 
 from passlib.context import CryptContext
 from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, JSON, String, UniqueConstraint, create_engine
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, declarative_base, relationship, sessionmaker
 
 logger = logging.getLogger("api-gateway.auth-store")
@@ -227,8 +229,28 @@ def hash_refresh_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+_EMAIL_RE = re.compile(r"^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$")
+
+
+def validate_email(email: str | None) -> str | None:
+    """Return the trimmed email if valid, or raise ValueError."""
+    if email is None:
+        return None
+    email = email.strip()
+    if not email:
+        return None
+    if not _EMAIL_RE.match(email) or len(email) > 320:
+        raise ValueError("Email address is not valid.")
+    return email
+
+
 def password_meets_policy(password: str) -> bool:
-    return len(password) >= 8
+    if len(password) < 8:
+        return False
+    has_upper = any(c.isupper() for c in password)
+    has_lower = any(c.islower() for c in password)
+    has_digit = any(c.isdigit() for c in password)
+    return has_upper and has_lower and has_digit
 
 
 def serialize_user(user: User) -> dict[str, Any]:
@@ -312,19 +334,23 @@ def create_local_user(
     if not normalized_username:
         raise ValueError("Username is required.")
     if not password_meets_policy(password):
-        raise ValueError("Password must be at least 8 characters long.")
+        raise ValueError(
+            "Password must be at least 8 characters and include an uppercase letter, "
+            "a lowercase letter, and a digit."
+        )
     if role not in ROLE_PRIORITY:
         raise ValueError(f"Unsupported role '{role}'.")
+    validated_email = validate_email(email)
 
     with db_session() as session:
         if session.query(User).filter(User.username == normalized_username).one_or_none() is not None:
             raise ValueError(f"User '{normalized_username}' already exists.")
-        if email and session.query(User).filter(User.email == email).one_or_none() is not None:
-            raise ValueError(f"Email '{email}' is already in use.")
+        if validated_email and session.query(User).filter(User.email == validated_email).one_or_none() is not None:
+            raise ValueError(f"Email '{validated_email}' is already in use.")
 
         user = User(
             username=normalized_username,
-            email=email,
+            email=validated_email,
             display_name=display_name or normalized_username,
             password_hash=hash_password(password),
             role=role,
@@ -334,7 +360,16 @@ def create_local_user(
             is_active=True,
         )
         session.add(user)
-        session.flush()
+        try:
+            session.flush()
+        except IntegrityError as exc:
+            session.rollback()
+            detail = str(exc).lower()
+            if "username" in detail:
+                raise ValueError(f"User '{normalized_username}' already exists.") from exc
+            if "email" in detail:
+                raise ValueError(f"Email '{validated_email}' is already in use.") from exc
+            raise ValueError("A user with these details already exists.") from exc
         session.refresh(user)
         return serialize_user(user)
 
@@ -413,7 +448,10 @@ def update_user_fields(
 
 def change_user_password(user_id: int, current_password: str, new_password: str) -> dict[str, Any]:
     if not password_meets_policy(new_password):
-        raise ValueError("Password must be at least 8 characters long.")
+        raise ValueError(
+            "Password must be at least 8 characters and include an uppercase letter, "
+            "a lowercase letter, and a digit."
+        )
     with db_session() as session:
         user = session.get(User, user_id)
         if user is None:

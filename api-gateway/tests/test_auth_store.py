@@ -52,7 +52,7 @@ class AuthStoreTests(unittest.TestCase):
     def test_create_local_user_and_rotate_refresh_session(self) -> None:
         user = self.auth_store.create_local_user(
             username="Alice",
-            password="correct-horse-battery",
+            password="CorrectH0rse!",
             email="alice@example.com",
             display_name="Alice Operator",
             role="operator",
@@ -92,7 +92,7 @@ class AuthStoreTests(unittest.TestCase):
     def test_change_user_password_updates_stored_hash(self) -> None:
         user = self.auth_store.create_local_user(
             username="Bob",
-            password="old-password-123",
+            password="OldPassw0rd",
             email="bob@example.com",
             display_name="Bob Viewer",
             role="viewer",
@@ -100,16 +100,95 @@ class AuthStoreTests(unittest.TestCase):
         )
 
         with self.assertRaises(ValueError):
-            self.auth_store.change_user_password(int(user["id"]), "wrong-password", "new-password-456")
+            self.auth_store.change_user_password(int(user["id"]), "WrongPw1", "NewPassw0rd")
 
         updated_user = self.auth_store.change_user_password(
             int(user["id"]),
-            "old-password-123",
-            "new-password-456",
+            "OldPassw0rd",
+            "NewPassw0rd",
         )
         stored_user = self.auth_store.get_user_by_id(int(user["id"]))
 
         self.assertEqual(updated_user["id"], user["id"])
         self.assertIsNotNone(stored_user)
-        self.assertTrue(self.auth_store.verify_password("new-password-456", stored_user.password_hash))
-        self.assertFalse(self.auth_store.verify_password("old-password-123", stored_user.password_hash))
+        self.assertTrue(self.auth_store.verify_password("NewPassw0rd", stored_user.password_hash))
+        self.assertFalse(self.auth_store.verify_password("OldPassw0rd", stored_user.password_hash))
+
+    # -- Password policy tests ------------------------------------------------
+
+    def test_password_meets_policy_accepts_strong_password(self) -> None:
+        self.assertTrue(self.auth_store.password_meets_policy("Passw0rd"))
+
+    def test_password_meets_policy_rejects_too_short(self) -> None:
+        self.assertFalse(self.auth_store.password_meets_policy("Ab1"))
+
+    def test_password_meets_policy_rejects_no_uppercase(self) -> None:
+        self.assertFalse(self.auth_store.password_meets_policy("password1"))
+
+    def test_password_meets_policy_rejects_no_lowercase(self) -> None:
+        self.assertFalse(self.auth_store.password_meets_policy("PASSWORD1"))
+
+    def test_password_meets_policy_rejects_no_digit(self) -> None:
+        self.assertFalse(self.auth_store.password_meets_policy("Password"))
+
+    def test_create_user_rejects_weak_password(self) -> None:
+        with self.assertRaises(ValueError):
+            self.auth_store.create_local_user(
+                username="weakpw",
+                password="short",
+                email="weak@example.com",
+                display_name="Weak",
+                role="viewer",
+                allowed_namespaces=["default"],
+            )
+
+    # -- Email validation tests -----------------------------------------------
+
+    def test_validate_email_accepts_valid(self) -> None:
+        self.assertEqual(self.auth_store.validate_email("user@example.com"), "user@example.com")
+
+    def test_validate_email_strips_whitespace(self) -> None:
+        self.assertEqual(self.auth_store.validate_email("  user@example.com  "), "user@example.com")
+
+    def test_validate_email_returns_none_for_none(self) -> None:
+        self.assertIsNone(self.auth_store.validate_email(None))
+
+    def test_validate_email_returns_none_for_empty(self) -> None:
+        self.assertIsNone(self.auth_store.validate_email("  "))
+
+    def test_validate_email_rejects_invalid(self) -> None:
+        for bad in ["not-an-email", "@nope.com", "user@", "user@.com", "a" * 321 + "@example.com"]:
+            with self.assertRaises(ValueError, msg=f"Expected ValueError for '{bad}'"):
+                self.auth_store.validate_email(bad)
+
+    def test_create_user_rejects_invalid_email(self) -> None:
+        with self.assertRaises(ValueError):
+            self.auth_store.create_local_user(
+                username="bademail",
+                password="Passw0rd1",
+                email="not-valid",
+                display_name="Bad Email",
+                role="viewer",
+                allowed_namespaces=["default"],
+            )
+
+    # -- Duplicate user tests -------------------------------------------------
+
+    def test_create_user_rejects_duplicate_username(self) -> None:
+        self.auth_store.create_local_user(
+            username="dupuser",
+            password="Passw0rd1",
+            email="dup1@example.com",
+            display_name="Dup User",
+            role="viewer",
+            allowed_namespaces=["default"],
+        )
+        with self.assertRaises(ValueError):
+            self.auth_store.create_local_user(
+                username="dupuser",
+                password="Passw0rd2",
+                email="dup2@example.com",
+                display_name="Dup User 2",
+                role="viewer",
+                allowed_namespaces=["default"],
+            )

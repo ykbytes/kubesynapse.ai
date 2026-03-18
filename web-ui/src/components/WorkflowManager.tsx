@@ -34,6 +34,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { CopyButton } from "./CopyButton";
 import { JsonBlock } from "./JsonBlock";
+import { useConnection } from "@/contexts/ConnectionContext";
 import type {
   AgentInfo,
   LoopProgress,
@@ -486,6 +487,7 @@ export function WorkflowManager({
   onApprovalDecision,
   onOpenComposer,
 }: WorkflowManagerProps) {
+  const { canMutate } = useConnection();
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [input, setInput] = useState("");
@@ -1203,20 +1205,22 @@ export function WorkflowManager({
               )}
             </div>
           )}
-          <Button
-            onClick={() => {
-              const payload = { description, input, message_bus: messageBus, steps };
-              if (workflow) {
-                onUpdate(workflow.name, payload as WorkflowUpdatePayload);
-                return;
-              }
-              onCreate({ name, ...payload });
-            }}
-            disabled={!canSubmit || isSaving}
-          >
-            {isSaving ? <LoaderCircle className="mr-1.5 h-4 w-4 animate-spin" /> : <Save className="mr-1.5 h-4 w-4" />}
-            {isSaving ? "Saving..." : workflow ? "Save workflow" : "Create workflow"}
-          </Button>
+          {canMutate && (
+            <Button
+              onClick={() => {
+                const payload = { description, input, message_bus: messageBus, steps };
+                if (workflow) {
+                  onUpdate(workflow.name, payload as WorkflowUpdatePayload);
+                  return;
+                }
+                onCreate({ name, ...payload });
+              }}
+              disabled={!canSubmit || isSaving}
+            >
+              {isSaving ? <LoaderCircle className="mr-1.5 h-4 w-4 animate-spin" /> : <Save className="mr-1.5 h-4 w-4" />}
+              {isSaving ? "Saving..." : workflow ? "Save workflow" : "Create workflow"}
+            </Button>
+          )}
           {workflow && onOpenComposer && (
             <Button
               variant="outline"
@@ -1226,7 +1230,7 @@ export function WorkflowManager({
               Edit in Composer
             </Button>
           )}
-          {workflow && (
+          {workflow && canMutate && (
             <Button
               variant="destructive"
               onClick={() => setDeleteDialogOpen(true)}
@@ -1235,6 +1239,9 @@ export function WorkflowManager({
               {isDeleting ? <LoaderCircle className="mr-1.5 h-4 w-4 animate-spin" /> : <Trash2 className="mr-1.5 h-4 w-4" />}
               {isDeleting ? "Deleting..." : "Delete"}
             </Button>
+          )}
+          {!canMutate && (
+            <p className="text-xs text-muted-foreground italic">Read-only — operator role required to edit</p>
           )}
         </div>
 

@@ -11,17 +11,25 @@ import {
   registerWithPassword,
   setOnTokenRefreshed,
 } from "@/lib/api";
-import type { AuthConfig, AuthenticatedUser, GatewayHealth } from "@/types";
+import type { AuthConfig, AuthenticatedUser, GatewayHealth, UserRole } from "@/types";
 import { toast } from "sonner";
 
 const TOKEN_STORAGE_KEY = "ai-agent-sandbox/token";
 const NAMESPACE_STORAGE_KEY = "ai-agent-sandbox/namespace";
+
+const ROLE_PRIORITY: Record<UserRole, number> = { viewer: 1, operator: 2, admin: 3 };
 
 function resolveNamespaceForUser(user: AuthenticatedUser | null, currentNamespace: string): string {
   if (!user) return currentNamespace || "default";
   const namespaces = user.allowed_namespaces ?? [];
   if (namespaces.includes("*") || namespaces.includes(currentNamespace)) return currentNamespace || "default";
   return namespaces[0] ?? "default";
+}
+
+function isNamespaceAllowed(user: AuthenticatedUser | null, ns: string): boolean {
+  if (!user) return true;
+  const namespaces = user.allowed_namespaces ?? [];
+  return namespaces.includes("*") || namespaces.includes(ns);
 }
 
 // ── Context value type ──
@@ -50,6 +58,11 @@ export interface ConnectionContextValue {
 
   // True once initializeAuth has finished (prevents flash of login page)
   authReady: boolean;
+
+  // RBAC helpers
+  hasRole: (minimumRole: UserRole) => boolean;
+  canMutate: boolean;
+  isAdmin: boolean;
 
   // Setters
   setToken: (value: string) => void;
@@ -99,7 +112,12 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
 
   // Persist token/namespace
   useEffect(() => { localStorage.setItem(TOKEN_STORAGE_KEY, token); }, [token]);
-  useEffect(() => { localStorage.setItem(NAMESPACE_STORAGE_KEY, namespace); }, [namespace]);
+  useEffect(() => {
+    // Only persist namespace if it's allowed for the current user
+    if (isNamespaceAllowed(currentUser, namespace)) {
+      localStorage.setItem(NAMESPACE_STORAGE_KEY, namespace);
+    }
+  }, [namespace, currentUser]);
 
   // Keep React state in sync when fetchAuthenticated silently refreshes the token
   useEffect(() => {
@@ -293,6 +311,29 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     window.location.assign(buildSamlLoginUrl(providerId, window.location.pathname));
   }, []);
 
+  // RBAC helpers
+  const hasRole = useCallback(
+    (minimumRole: UserRole) => {
+      if (!currentUser) return false;
+      return (ROLE_PRIORITY[currentUser.role] ?? 0) >= (ROLE_PRIORITY[minimumRole] ?? 0);
+    },
+    [currentUser],
+  );
+  const canMutate = hasRole("operator");
+  const isAdmin = hasRole("admin");
+
+  // Namespace setter with validation
+  const setNamespaceSafe = useCallback(
+    (value: string) => {
+      if (isNamespaceAllowed(currentUser, value)) {
+        setNamespace(value);
+      } else {
+        toast.error(`Access to namespace '${value}' is not permitted.`);
+      }
+    },
+    [currentUser],
+  );
+
   return (
     <ConnectionContext.Provider
       value={{
@@ -300,7 +341,8 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
         authConfig, currentUser, authBusy, connectionError, authReady,
         authUsername, authPassword, authEmail, authDisplayName, authPasswordConfirm,
         passwordProvider, registerMode,
-        setToken, setNamespace,
+        hasRole, canMutate, isAdmin,
+        setToken, setNamespace: setNamespaceSafe,
         setAuthUsername, setAuthPassword, setAuthEmail, setAuthDisplayName, setAuthPasswordConfirm,
         setPasswordProvider, setRegisterMode, setConnectionError,
         handleConnect, handlePasswordAuth, handleLogout,
