@@ -57,36 +57,78 @@ Kubeminionagents is designed as a **shareable, end-to-end AI agent platform** fo
 
 ## ⚡ Quick start
 
-### 1) Build the platform images
+### Option A — Deploy from pre-built DockerHub images (fastest)
+
+No build step needed. Pull the published images and deploy with a single Helm command.
+
+**1. Set your LLM API key**
+
+Edit `deploy/values.dockerhub.local.yaml` (or pass `--set`):
+
+```yaml
+platformSecrets:
+  native:
+    openaiApiKey: "sk-your-key"
+    apiGatewaySharedToken: "my-secret-bearer-token"
+```
+
+**2. Create an image-pull secret (DockerHub rate limits)**
+
+```powershell
+kubectl create secret docker-registry dockerhub-regcred `
+  --docker-username=YOUR_DOCKERHUB_USERNAME `
+  --docker-password=YOUR_DOCKERHUB_TOKEN `
+  --docker-email=you@example.com
+```
+
+**3. Deploy**
+
+```powershell
+helm upgrade --install ai-agent-sandbox .\charts\ai-agent-sandbox `
+  -f .\deploy\values.dockerhub.local.yaml
+```
+
+**4. Test**
+
+```powershell
+kubectl port-forward svc/ai-agent-sandbox-api-gateway 8080:8080
+curl http://localhost:8080/api/health
+```
+
+---
+
+### Option B — Build and deploy your own images
+
+**1. Build all platform and sidecar images**
 
 ```powershell
 make docker-build REGISTRY=ghcr.io/your-org VERSION=latest CONTAINER_CLI=docker
 ```
 
-This target builds the core platform images, including the OpenCode runtime, plus the bundled MCP sidecar
-images from `./mcp-sidecars`.
+This target builds the core platform images (operator, agent-runtime, goose-runtime, codex-runtime,
+opencode-runtime, api-gateway, web-ui) plus all MCP sidecar images from `./mcp-sidecars`.
 
-### 2) Or package a self-contained chart bundle
+**2. Or use the packaging script (builds, tags, and optionally pushes)**
 
 ```powershell
-.\scripts\package-self-contained.ps1 -Registry ghcr.io/your-org -ContainerCli docker -Version 0.1.0
+.\scripts\package-self-contained.ps1 -Registry ghcr.io/your-org -Version 0.1.0 -ContainerCli docker -Push
 ```
 
-### 3) Deploy with a cluster override
+The script builds every platform image and all 10 bundled MCP sidecars in one pass, generates a
+matching `values-generated.yaml` with pinned image references, and optionally pushes everything.
+
+**3. Deploy with a cluster override**
 
 ```powershell
+# Generic cluster (ingress off, portable defaults)
 helm upgrade --install ai-agent-sandbox .\charts\ai-agent-sandbox -f .\deploy\values.cluster.example.yaml
-```
 
-`deploy/values.cluster.example.yaml` is a portable starting point for generic
-clusters: ingress is off by default, and class name, host, and annotations stay
-unset until you supply controller-specific values.
-
-### 4) For local image testing, use the local-image override
-
-```powershell
+# Local images loaded into Kind/Minikube
 helm upgrade --install ai-agent-sandbox .\charts\ai-agent-sandbox -f .\deploy\values.local-images.example.yaml
 ```
+
+`deploy/values.cluster.example.yaml` is a portable starting point: ingress is off by default, and
+class name, host, and annotations stay unset until you supply controller-specific values.
 
 ## 🧩 Deployment model
 
@@ -105,11 +147,14 @@ If you want a managed secret backend instead, set `platformSecrets.mode=external
 
 Jump straight to the guide you need:
 
-- **`INSTALL.md`** — install steps, operations, and usage
-- **`architecture-overview.md`** — system architecture and design decisions
-- **`walkthrough.md`** — implementation narrative and flow
-- **`web-ui/README.md`** — local frontend workflow and console feature coverage
-- **`docs/upstream-reference-repos.md`** — optional local research checkouts
+| Document | Content |
+|---|---|
+| **`INSTALL.md`** | Full install guide: DockerHub quick-start, Kind/Minikube dev setup, production deployment, secrets config, first agent, CLI, API reference, observability, troubleshooting |
+| **`architecture-overview.md`** | System architecture, CRD model, control/data plane design, security model, MCP execution architecture |
+| **`walkthrough.md`** | Implementation narrative: Helm chart foundations, operator reconciliation loop, runtime pipeline, enterprise features |
+| **`web-ui/README.md`** | Frontend local dev workflow and console feature coverage |
+| **`cli/README.md`** | Full `agentctl` command reference with examples |
+| **`docs/upstream-reference-repos.md`** | Optional local research checkouts for Goose, OpenSandbox, and MCP catalog |
 
 ## 🧱 Repository boundaries
 
@@ -131,7 +176,10 @@ The platform builds and deploys without those local reference clones. See `docs/
 
 - OpenSandbox integration is optional and configured through `agentRuntime.openSandbox.*`
 - Shared MCP servers are opt-in by default
-- The packaging script assumes `helm` plus either `podman` or another compatible container CLI are available
+- The packaging script defaults to `docker`. Pass `-ContainerCli podman` if you prefer Podman
+- Pre-built images are published to `docker.io/yakdhane` and can be used with `deploy/values.dockerhub.local.yaml`
+- All chart image defaults use `pullPolicy: IfNotPresent` — images are not re-pulled on every pod restart
+- Ingress is disabled by default in the Helm chart. Enable it per-environment with a values override
 
 ---
 

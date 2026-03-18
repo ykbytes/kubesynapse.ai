@@ -10,7 +10,8 @@
   - [Custom Resources](#custom-resources)
   - [Request Flow](#request-flow)
 - [Prerequisites](#prerequisites)
-- [Quick Start (Local Development)](#quick-start-local-development)
+- [Quick Start — DockerHub Images](#quick-start--dockerhub-images)
+- [Quick Start — Local Development (Kind)](#quick-start--local-development-kind)
 - [Production Deployment](#production-deployment)
   - [1. Build Container Images](#1-build-container-images)
   - [2. Push to Registry](#2-push-to-registry)
@@ -149,6 +150,124 @@ Key capabilities:
 
 ---
 
+## Quick Start — DockerHub Images
+
+The fastest way to get running. Pre-built platform and sidecar images are published to `docker.io/yakdhane`. No build step required.
+
+### Prerequisites
+
+- Kubernetes 1.25+ cluster (Kind, Minikube, Docker Desktop, managed cloud)
+- `helm` 3.12+
+- `kubectl` configured for your cluster
+- An LLM API key (OpenAI, Anthropic, or any LiteLLM-supported provider)
+
+### 1. Create an image-pull secret
+
+DockerHub rate-limits unauthenticated pulls. Create a pull secret first:
+
+```bash
+kubectl create secret docker-registry dockerhub-regcred \
+  --docker-username=YOUR_DOCKERHUB_USERNAME \
+  --docker-password=YOUR_DOCKERHUB_TOKEN \
+  --docker-email=you@example.com
+```
+
+### 2. Set your LLM API key
+
+Edit `deploy/values.dockerhub.local.yaml` and fill in your keys under `platformSecrets.native`:
+
+```yaml
+platformSecrets:
+  mode: native
+  native:
+    openaiApiKey: "sk-your-openai-key"
+    anthropicApiKey: ""                  # optional
+    litellmMasterKey: "replace-with-a-strong-random-string"
+    apiGatewaySharedToken: "my-secure-bearer-token"
+```
+
+> **Never commit real keys.** Use a local gitignored copy of the values file, or pass `--set platformSecrets.native.openaiApiKey=sk-...` on the Helm command line.
+
+### 3. Deploy
+
+```bash
+helm upgrade --install ai-agent-sandbox ./charts/ai-agent-sandbox \
+  -f ./deploy/values.dockerhub.local.yaml
+```
+
+### 4. Verify pods
+
+```bash
+kubectl get pods -w
+```
+
+Expected pods once everything is ready:
+
+| Pod prefix | Description |
+|---|---|
+| `ai-agent-sandbox-operator-*` | Operator (2 replicas for HA) |
+| `ai-agent-sandbox-api-gateway-*` | API Gateway |
+| `ai-agent-sandbox-litellm-*` | LiteLLM model proxy |
+| `ai-agent-sandbox-redis-*` | Redis cache |
+| `ai-agent-sandbox-qdrant-*` | Qdrant vector database |
+| `ai-agent-sandbox-nats-*` | NATS message bus |
+| `ai-agent-sandbox-web-ui-*` | Web dashboard |
+
+### 5. Port-forward and test
+
+```bash
+# API Gateway
+kubectl port-forward svc/ai-agent-sandbox-api-gateway 8080:8080
+curl http://localhost:8080/api/health
+
+# Web UI (open in browser)
+kubectl port-forward svc/ai-agent-sandbox-web-ui 3000:80
+# Visit http://localhost:3000
+```
+
+### 6. Apply a sample agent
+
+```bash
+kubectl apply -f examples/sample-policy.yaml
+kubectl apply -f examples/sample-agent.yaml
+
+# Watch operator reconcile it
+kubectl logs -l app=operator -f
+
+# Once "research-assistant" StatefulSet is running:
+curl -X POST http://localhost:8080/api/agents/research-assistant/invoke \
+  -H "Authorization: Bearer my-secure-bearer-token" \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "What is Kubernetes?"}'
+```
+
+#### Image tag and registry reference
+
+The `deploy/values.dockerhub.local.yaml` file pins all components to a specific tested tag (`deploy-YYYYMMDD-HHMMSS`).
+All images live under `docker.io/yakdhane`:
+
+| Image | Description |
+|---|---|
+| `yakdhane/ai-operator` | Kopf-based operator + worker |
+| `yakdhane/ai-agent-runtime` | LangGraph agent runtime |
+| `yakdhane/ai-goose-runtime` | Goose HTTP adapter |
+| `yakdhane/ai-codex-runtime` | Codex HTTP adapter |
+| `yakdhane/ai-opencode-runtime` | OpenCode HTTP adapter |
+| `yakdhane/ai-api-gateway` | FastAPI gateway |
+| `yakdhane/ai-agent-sandbox-web-ui` | React web console |
+| `yakdhane/mcp-code-exec` | Code execution MCP sidecar |
+| `yakdhane/mcp-web-search` | Web search MCP sidecar |
+| `yakdhane/mcp-documents` | Document processing MCP sidecar |
+| `yakdhane/mcp-browser` | Browser automation MCP sidecar |
+| `yakdhane/mcp-database` | Database query MCP sidecar |
+| `yakdhane/mcp-git` | Git operations MCP sidecar |
+| `yakdhane/mcp-kubernetes` | Kubernetes ops MCP sidecar |
+| `yakdhane/mcp-messaging` | Messaging/NATS MCP sidecar |
+| `yakdhane/mcp-rag` | RAG/Qdrant MCP sidecar |
+| `yakdhane/mcp-github-adapter` | GitHub MCP hub adapter |
+
+---
+
 ## Prerequisites
 
 | Requirement | Minimum version | Notes |
@@ -173,9 +292,10 @@ Optional:
 
 ---
 
-## Quick Start (Local Development)
+## Quick Start — Local Development (Kind)
 
-This guide uses a local Kubernetes cluster (Kind recommended) with images loaded directly.
+This guide builds images locally and loads them directly into a Kind cluster (no registry needed).
+To skip the build step entirely, see [Quick Start — DockerHub Images](#quick-start--dockerhub-images) above.
 
 ### 1. Create a Kind cluster
 
@@ -186,46 +306,53 @@ kind create cluster --name ai-sandbox
 ### 2. Build the platform images
 
 ```bash
-# From the repository root
-make docker-build REGISTRY=localhost/kubeminionagents VERSION=dev
-# This builds:
+# From the repository root (builds all platform + sidecar images)
+make docker-build REGISTRY=localhost/kubeminionagents VERSION=dev CONTAINER_CLI=docker
+# Produces:
 #   localhost/kubeminionagents/ai-operator:dev
 #   localhost/kubeminionagents/ai-agent-runtime:dev
 #   localhost/kubeminionagents/ai-goose-runtime:dev
 #   localhost/kubeminionagents/ai-codex-runtime:dev
+#   localhost/kubeminionagents/ai-opencode-runtime:dev
 #   localhost/kubeminionagents/ai-api-gateway:dev
 #   localhost/kubeminionagents/ai-agent-sandbox-web-ui:dev
-#   and the bundled mcp-* sidecar images
+#   localhost/kubeminionagents/mcp-code-exec:dev
+#   localhost/kubeminionagents/mcp-web-search:dev
+#   localhost/kubeminionagents/mcp-documents:dev
+#   ... (all 10 mcp-* sidecars)
 ```
 
-Or build individually:
+Or build individual components with Docker:
 
 ```bash
-podman build -t localhost/kubeminionagents/ai-operator:dev ./operator
-podman build -t localhost/kubeminionagents/ai-agent-runtime:dev ./agent-runtime
-podman build -t localhost/kubeminionagents/ai-goose-runtime:dev ./goose-runtime
-podman build -t localhost/kubeminionagents/ai-codex-runtime:dev ./codex-runtime
-podman build -t localhost/kubeminionagents/ai-api-gateway:dev ./api-gateway
-podman build -t localhost/kubeminionagents/ai-agent-sandbox-web-ui:dev ./web-ui
+docker build -t localhost/kubeminionagents/ai-operator:dev ./operator
+docker build -t localhost/kubeminionagents/ai-agent-runtime:dev ./agent-runtime
+docker build -t localhost/kubeminionagents/ai-goose-runtime:dev ./goose-runtime
+docker build -t localhost/kubeminionagents/ai-codex-runtime:dev ./codex-runtime
+docker build -t localhost/kubeminionagents/ai-opencode-runtime:dev ./opencode-runtime
+docker build -t localhost/kubeminionagents/ai-api-gateway:dev ./api-gateway
+docker build -t localhost/kubeminionagents/ai-agent-sandbox-web-ui:dev ./web-ui
 ```
 
-The bundled MCP sidecars build from the shared `./mcp-sidecars` context, so the
-Makefile is the easiest way to build those images consistently.
+The bundled MCP sidecars build from sub-directories under `./mcp-sidecars/`, one Dockerfile each.
+The Makefile builds all of them in one pass and is the recommended approach.
 
 ### 3. Load images into Kind
 
 ```bash
 mkdir -p dist
-podman save -o dist/ai-operator.tar localhost/kubeminionagents/ai-operator:dev
-podman save -o dist/ai-agent-runtime.tar localhost/kubeminionagents/ai-agent-runtime:dev
-podman save -o dist/ai-goose-runtime.tar localhost/kubeminionagents/ai-goose-runtime:dev
-podman save -o dist/ai-codex-runtime.tar localhost/kubeminionagents/ai-codex-runtime:dev
-podman save -o dist/ai-api-gateway.tar localhost/kubeminionagents/ai-api-gateway:dev
-podman save -o dist/ai-agent-sandbox-web-ui.tar localhost/kubeminionagents/ai-agent-sandbox-web-ui:dev
+docker save -o dist/ai-operator.tar localhost/kubeminionagents/ai-operator:dev
+docker save -o dist/ai-agent-runtime.tar localhost/kubeminionagents/ai-agent-runtime:dev
+docker save -o dist/ai-goose-runtime.tar localhost/kubeminionagents/ai-goose-runtime:dev
+docker save -o dist/ai-codex-runtime.tar localhost/kubeminionagents/ai-codex-runtime:dev
+docker save -o dist/ai-opencode-runtime.tar localhost/kubeminionagents/ai-opencode-runtime:dev
+docker save -o dist/ai-api-gateway.tar localhost/kubeminionagents/ai-api-gateway:dev
+docker save -o dist/ai-agent-sandbox-web-ui.tar localhost/kubeminionagents/ai-agent-sandbox-web-ui:dev
 kind load image-archive dist/ai-operator.tar --name ai-sandbox
 kind load image-archive dist/ai-agent-runtime.tar --name ai-sandbox
 kind load image-archive dist/ai-goose-runtime.tar --name ai-sandbox
 kind load image-archive dist/ai-codex-runtime.tar --name ai-sandbox
+kind load image-archive dist/ai-opencode-runtime.tar --name ai-sandbox
 kind load image-archive dist/ai-api-gateway.tar --name ai-sandbox
 kind load image-archive dist/ai-agent-sandbox-web-ui.tar --name ai-sandbox
 ```
@@ -256,6 +383,14 @@ platformSecrets:
   `mcpToolSidecars` entries only if your agents use locally built sidecar images
   instead of the default published ones.
 
+  **Minikube alternative:** if you use Minikube instead of Kind, use the matching override:
+
+  ```bash
+  eval $(minikube docker-env)   # build directly into Minikube's Docker daemon
+  make docker-build REGISTRY=localhost/kubeminionagents VERSION=dev CONTAINER_CLI=docker
+  helm install ai-sandbox ./charts/ai-agent-sandbox -f ./deploy/values.minikube.local.yaml
+  ```
+
   ### 6. Verify pods are running
 
 ```bash
@@ -264,24 +399,28 @@ kubectl get pods -w
 
 Expected pods:
 
-| Pod | Count | Description |
-|-----|-------|-------------|
-| `ai-sandbox-ai-agent-sandbox-operator-*` | 2 | Operator (HA pair) |
-| `ai-sandbox-ai-agent-sandbox-api-gateway-*` | 1 | API Gateway |
-| `ai-sandbox-ai-agent-sandbox-litellm-*` | 1 | LiteLLM model proxy |
-| `ai-sandbox-ai-agent-sandbox-redis-*` | 1 | Redis cache |
-| `ai-sandbox-ai-agent-sandbox-qdrant-*` | 1 | Vector database |
-| `ai-sandbox-ai-agent-sandbox-nats-*` | 1 | Message bus |
-| `ai-sandbox-ai-agent-sandbox-web-ui-*` | 1 | Web dashboard |
+| Pod prefix | Description |
+|---|---|
+| `ai-agent-sandbox-operator-*` | Operator (HA pair) |
+| `ai-agent-sandbox-api-gateway-*` | API Gateway |
+| `ai-agent-sandbox-litellm-*` | LiteLLM model proxy |
+| `ai-agent-sandbox-redis-*` | Redis cache |
+| `ai-agent-sandbox-qdrant-*` | Qdrant vector database |
+| `ai-agent-sandbox-nats-*` | NATS message bus |
+| `ai-agent-sandbox-web-ui-*` | Web dashboard |
 
 ### 7. Port-forward and test
 
 ```bash
 # API Gateway
-kubectl port-forward svc/ai-sandbox-ai-agent-sandbox-api-gateway 8080:8080
+kubectl port-forward svc/ai-agent-sandbox-api-gateway 8080:8080
 
 # Health check
 curl http://localhost:8080/api/health
+
+# Web UI
+kubectl port-forward svc/ai-agent-sandbox-web-ui 3000:80
+# Visit http://localhost:3000
 ```
 
 ### 8. Deploy a sample agent
@@ -291,13 +430,13 @@ kubectl apply -f examples/sample-policy.yaml
 kubectl apply -f examples/sample-agent.yaml
 ```
 
-Wait for the operator to reconcile (watch operator logs):
+Watch the operator reconcile it:
 
 ```bash
 kubectl logs -l app=operator -f
 ```
 
-Once the agent StatefulSet is running, invoke it:
+Once the `research-assistant` StatefulSet is running, invoke it:
 
 ```bash
 curl -X POST http://localhost:8080/api/agents/research-assistant/invoke \
@@ -316,34 +455,60 @@ curl -X POST http://localhost:8080/api/agents/research-assistant/invoke \
 export REGISTRY=ghcr.io/your-org
 export VERSION=1.0.0
 
-podman build -t $REGISTRY/ai-operator:$VERSION        ./operator
-podman build -t $REGISTRY/ai-agent-runtime:$VERSION    ./agent-runtime
-podman build -t $REGISTRY/ai-goose-runtime:$VERSION    ./goose-runtime
-podman build -t $REGISTRY/ai-codex-runtime:$VERSION    ./codex-runtime
-podman build -t $REGISTRY/ai-api-gateway:$VERSION      ./api-gateway
-podman build -t $REGISTRY/ai-agent-sandbox-web-ui:$VERSION ./web-ui
+docker build -t $REGISTRY/ai-operator:$VERSION           ./operator
+docker build -t $REGISTRY/ai-agent-runtime:$VERSION      ./agent-runtime
+docker build -t $REGISTRY/ai-goose-runtime:$VERSION      ./goose-runtime
+docker build -t $REGISTRY/ai-codex-runtime:$VERSION      ./codex-runtime
+docker build -t $REGISTRY/ai-opencode-runtime:$VERSION   ./opencode-runtime
+docker build -t $REGISTRY/ai-api-gateway:$VERSION        ./api-gateway
+docker build -t $REGISTRY/ai-agent-sandbox-web-ui:$VERSION ./web-ui
+
+# MCP sidecars (one Dockerfile per sidecar under ./mcp-sidecars/)
+docker build -t $REGISTRY/mcp-code-exec:$VERSION   -f mcp-sidecars/code-exec/Dockerfile   mcp-sidecars
+docker build -t $REGISTRY/mcp-web-search:$VERSION  -f mcp-sidecars/web-search/Dockerfile  mcp-sidecars
+docker build -t $REGISTRY/mcp-documents:$VERSION   -f mcp-sidecars/documents/Dockerfile   mcp-sidecars
+docker build -t $REGISTRY/mcp-browser:$VERSION     -f mcp-sidecars/browser/Dockerfile     mcp-sidecars
+docker build -t $REGISTRY/mcp-database:$VERSION    -f mcp-sidecars/database/Dockerfile    mcp-sidecars
+docker build -t $REGISTRY/mcp-git:$VERSION         -f mcp-sidecars/git/Dockerfile         mcp-sidecars
+docker build -t $REGISTRY/mcp-kubernetes:$VERSION  -f mcp-sidecars/kubernetes/Dockerfile  mcp-sidecars
+docker build -t $REGISTRY/mcp-messaging:$VERSION   -f mcp-sidecars/messaging/Dockerfile   mcp-sidecars
+docker build -t $REGISTRY/mcp-rag:$VERSION         -f mcp-sidecars/rag/Dockerfile         mcp-sidecars
+docker build -t $REGISTRY/mcp-github-adapter:$VERSION -f mcp-sidecars/github-adapter/Dockerfile mcp-sidecars
 ```
+
+**Recommended:** Use the packaging script to build all images in one pass:
+
+```bash
+# PowerShell (Windows / cross-platform)
+.\scripts\package-self-contained.ps1 \
+  -Registry $REGISTRY \
+  -Version $VERSION \
+  -ContainerCli docker \
+  -Push
+```
+
+This builds all 17 images (7 platform + 10 MCP sidecars), generates a `values-generated.yaml` with pinned
+image references, and optionally pushes everything to the registry.
 
 ### 2. Push to Registry
 
 ```bash
-podman login ghcr.io
-podman push $REGISTRY/ai-operator:$VERSION
-podman push $REGISTRY/ai-agent-runtime:$VERSION
-podman push $REGISTRY/ai-goose-runtime:$VERSION
-podman push $REGISTRY/ai-codex-runtime:$VERSION
-podman push $REGISTRY/ai-api-gateway:$VERSION
-podman push $REGISTRY/ai-agent-sandbox-web-ui:$VERSION
+docker login ghcr.io
+docker push $REGISTRY/ai-operator:$VERSION
+docker push $REGISTRY/ai-agent-runtime:$VERSION
+docker push $REGISTRY/ai-goose-runtime:$VERSION
+docker push $REGISTRY/ai-codex-runtime:$VERSION
+docker push $REGISTRY/ai-opencode-runtime:$VERSION
+docker push $REGISTRY/ai-api-gateway:$VERSION
+docker push $REGISTRY/ai-agent-sandbox-web-ui:$VERSION
+# Push all mcp-* images the same way, or use the -Push flag on the packaging script above
 ```
 
-Or use the Makefile:
+Or use the Makefile (builds all platform images + all MCP sidecars and pushes in one call):
 
 ```bash
-make docker-build docker-push REGISTRY=your-registry.example.com/ai-agents VERSION=1.0.0
+make docker-build docker-push REGISTRY=your-registry.example.com/ai-agents VERSION=1.0.0 CONTAINER_CLI=docker
 ```
-
-The Makefile publishes the six core platform images plus the bundled `mcp-*`
-sidecar images, using the shared `./mcp-sidecars` build context for sidecars.
 
 ### 3. Configure values.yaml
 
