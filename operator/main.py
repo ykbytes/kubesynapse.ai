@@ -988,7 +988,8 @@ def workflow_should_requeue(status: dict[str, Any], job_state: str) -> str | Non
     if phase == "queued":
         queued_at = parse_iso_datetime(str(summary.get("queuedAt") or ""))
         if queued_at is None:
-            return None
+            logger.warning("Workflow stuck in 'queued' with no queuedAt timestamp (job_state=%s)", job_state)
+            return f"queued workflow missing queuedAt timestamp with worker job state '{job_state}'"
         queue_age_seconds = (now - queued_at).total_seconds()
         if job_state in {"active", "pending"} and queue_age_seconds < WORKFLOW_QUEUE_STALE_SECONDS:
             return None
@@ -1002,7 +1003,8 @@ def workflow_should_requeue(status: dict[str, Any], job_state: str) -> str | Non
 
     updated_at = parse_iso_datetime(str(summary.get("updatedAt") or summary.get("startedAt") or ""))
     if updated_at is None:
-        return None
+        logger.warning("Workflow stuck in '%s' with no updatedAt/startedAt timestamp (job_state=%s)", phase, job_state)
+        return f"running workflow missing updatedAt/startedAt timestamp with worker job state '{job_state}'"
     running_age_seconds = (now - updated_at).total_seconds()
     if job_state == "succeeded":
         return f"running workflow has succeeded worker job but phase is still '{phase}'"

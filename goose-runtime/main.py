@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -1078,7 +1079,7 @@ async def execute_goose_json(
             )
         except TimeoutError as exc:
             process.kill()
-            await process.communicate()
+            await process.wait()
             raise HTTPException(status_code=504, detail="Goose runtime timed out") from exc
 
         stdout_text = stdout_bytes.decode("utf-8", errors="replace")
@@ -1276,10 +1277,20 @@ async def stream_goose_events(
             return
         except asyncio.CancelledError:
             process.kill()
+            stderr_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await stderr_task
             raise
         finally:
-            await process.wait()
-            stderr_bytes = await stderr_task
+            if process.returncode is None:
+                await process.wait()
+            if not stderr_task.done():
+                stderr_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await stderr_task
+                stderr_bytes = b""
+            else:
+                stderr_bytes = await stderr_task
 
         stderr_text = stderr_bytes.decode("utf-8", errors="replace")
         if process.returncode == 0:

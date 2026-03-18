@@ -148,8 +148,11 @@ def request_approval(
     poll_interval: int = 5,
 ) -> ApprovalResult:
     """
-    Create an AgentApproval CRD and poll until a human approves or denies.
-    Returns True if approved, False if denied or timed out.
+    Create an AgentApproval CRD and return immediately with current status.
+
+    This is a non-blocking call: it creates the approval request and returns
+    the current decision (typically ``"pending"``).  The caller is responsible
+    for re-checking the approval status on subsequent invocations.
     """
     del timeout_seconds
     del poll_interval

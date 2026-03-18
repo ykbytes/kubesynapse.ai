@@ -147,6 +147,7 @@ async def lifespan(app: FastAPI):
                 await asyncio.sleep(attempt * 2)
             else:
                 logger.exception("Failed to initialize auth database after %d attempts: %s", max_db_retries, exc)
+                raise RuntimeError("Auth database initialization failed") from exc
     try:
         yield
     finally:
@@ -199,6 +200,7 @@ OIDC_TRANSACTION_COOKIE_TTL_SECONDS = max(int(os.getenv("AUTH_OIDC_TRANSACTION_T
 AGENT_RUNTIME_TIMEOUT_SECONDS = max(float(os.getenv("AGENT_RUNTIME_TIMEOUT_SECONDS", "360")), 1.0)
 OIDC_JWKS_TIMEOUT_SECONDS = max(float(os.getenv("OIDC_JWKS_TIMEOUT_SECONDS", "10")), 1.0)
 JWKS_CACHE: dict[str, Any] = {"keys": [], "expires_at": 0.0}
+_JWKS_LOCK = asyncio.Lock()
 STREAM_KEEPALIVE_SECONDS = max(float(os.getenv("API_GATEWAY_STREAM_KEEPALIVE_SECONDS", "15")), 5.0)
 A2A_PROTOCOL_VERSION = "1.0"
 A2A_TASK_RETENTION_SECONDS = max(int(os.getenv("A2A_TASK_RETENTION_SECONDS", "3600")), 60)
@@ -2366,6 +2368,9 @@ async def handle_a2a_stream_message(
             mark_a2a_task_failed(record, f"Agent invocation failed: {exc}")
             store_a2a_task_record(record)
             yield jsonrpc_sse_message(jsonrpc_success_response(request_id, {"statusUpdate": task_status_update_event(record)}))
+        finally:
+            if hasattr(upstream_response.body_iterator, "aclose"):
+                await upstream_response.body_iterator.aclose()
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
@@ -3030,16 +3035,20 @@ async def load_jwks() -> list[dict[str, Any]]:
     if JWKS_CACHE["expires_at"] > time.time():
         return JWKS_CACHE["keys"]
 
-    if not OIDC_JWKS_URL:
-        raise HTTPException(status_code=503, detail="OIDC JWKS URL is not configured")
+    async with _JWKS_LOCK:
+        if JWKS_CACHE["expires_at"] > time.time():
+            return JWKS_CACHE["keys"]
 
-    async with httpx.AsyncClient(timeout=OIDC_JWKS_TIMEOUT_SECONDS) as client:
-        response = await client.get(OIDC_JWKS_URL)
-        response.raise_for_status()
-        keys = response.json().get("keys", [])
+        if not OIDC_JWKS_URL:
+            raise HTTPException(status_code=503, detail="OIDC JWKS URL is not configured")
 
-    JWKS_CACHE.update({"keys": keys, "expires_at": time.time() + 300})
-    return keys
+        async with httpx.AsyncClient(timeout=OIDC_JWKS_TIMEOUT_SECONDS) as client:
+            response = await client.get(OIDC_JWKS_URL)
+            response.raise_for_status()
+            keys = response.json().get("keys", [])
+
+        JWKS_CACHE.update({"keys": keys, "expires_at": time.time() + 300})
+        return keys
 
 
 def request_client_ip(request: Request) -> str | None:
