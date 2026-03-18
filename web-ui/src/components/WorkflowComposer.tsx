@@ -188,17 +188,28 @@ function ComposerCanvas({
                 };
               }),
             );
-            return nds.map((n) =>
-              n.id === nodeId
-                ? { ...n, id: newName, data: { ...n.data, ...patch } }
-                : n,
-            );
+            return nds.map((n): ComposerNode => {
+              if (n.id !== nodeId || n.type !== "agentStep") {
+                return n as ComposerNode;
+              }
+              return {
+                ...n,
+                id: newName,
+                data: { ...(n.data as AgentStepNodeData), ...patch },
+              };
+            });
           }
         }
         // Non-rename property change
-        return nds.map((n) =>
-          n.id === nodeId ? { ...n, data: { ...n.data, ...patch } } : n,
-        );
+        return nds.map((n): ComposerNode => {
+          if (n.id !== nodeId || n.type !== "agentStep") {
+            return n as ComposerNode;
+          }
+          return {
+            ...n,
+            data: { ...(n.data as AgentStepNodeData), ...patch },
+          };
+        });
       });
       setIsDirty(true);
     },

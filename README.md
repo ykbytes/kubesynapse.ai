@@ -60,7 +60,7 @@ Kubeminionagents is designed as a **shareable, end-to-end AI agent platform** fo
 ### 1) Build the platform images
 
 ```powershell
-make docker-build REGISTRY=ghcr.io/your-org VERSION=latest
+make docker-build REGISTRY=ghcr.io/your-org VERSION=latest CONTAINER_CLI=docker
 ```
 
 This target builds the core platform images, including the OpenCode runtime, plus the bundled MCP sidecar
@@ -69,7 +69,7 @@ images from `./mcp-sidecars`.
 ### 2) Or package a self-contained chart bundle
 
 ```powershell
-.\scripts\package-self-contained.ps1 -Registry ghcr.io/your-org -ContainerCli podman -Version 0.1.0
+.\scripts\package-self-contained.ps1 -Registry ghcr.io/your-org -ContainerCli docker -Version 0.1.0
 ```
 
 ### 3) Deploy with a cluster override
@@ -79,8 +79,8 @@ helm upgrade --install ai-agent-sandbox .\charts\ai-agent-sandbox -f .\deploy\va
 ```
 
 `deploy/values.cluster.example.yaml` is a portable starting point for generic
-clusters: it leaves ingress class, host, and annotations unset until you supply
-controller-specific values.
+clusters: ingress is off by default, and class name, host, and annotations stay
+unset until you supply controller-specific values.
 
 ### 4) For local image testing, use the local-image override
 

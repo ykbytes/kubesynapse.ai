@@ -688,9 +688,18 @@ function parseWorkflowInfoPayload(payload: unknown, label = "WorkflowInfo"): Wor
     journal_ref: readOptionalRecord(record, "journal_ref", label),
     pending_approval: (() => {
       const pa = readOptionalRecord(record, "pending_approval", label);
-      // Validate required fields before casting — {} from the API should be treated as null
-      if (pa && typeof (pa as Record<string, unknown>).name === "string" && typeof (pa as Record<string, unknown>).stepName === "string") {
-        return pa as WorkflowPendingApproval;
+      if (pa) {
+        const paRecord = pa as Record<string, unknown>;
+        if (typeof paRecord.name === "string" && typeof paRecord.stepName === "string") {
+          return {
+            name: paRecord.name,
+            stepName: paRecord.stepName,
+            requestedAt: typeof paRecord.requestedAt === "string" ? paRecord.requestedAt : null,
+            runId: typeof paRecord.runId === "string" ? paRecord.runId : null,
+            action: typeof paRecord.action === "string" ? paRecord.action : null,
+            reason: typeof paRecord.reason === "string" ? paRecord.reason : undefined,
+          } satisfies WorkflowPendingApproval;
+        }
       }
       return null;
     })(),

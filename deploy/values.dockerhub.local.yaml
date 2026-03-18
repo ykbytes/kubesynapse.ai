@@ -5,30 +5,36 @@ global:
 agentRuntime:
   image:
     repository: docker.io/yakdhane/ai-agent-runtime
-    tag: a2a-fix-20260317-185230
+    tag: deploy-20260318-094552
     pullPolicy: IfNotPresent
 
 operator:
   replicaCount: 1
   image:
     repository: docker.io/yakdhane/ai-operator
-    tag: audit5-20260317-180826
+    tag: deploy-20260318-094552
     pullPolicy: IfNotPresent
   workerImage:
     repository: docker.io/yakdhane/ai-operator
-    tag: audit5-20260317-180826
+    tag: deploy-20260318-094552
     pullPolicy: IfNotPresent
 
 gooseRuntime:
   image:
     repository: docker.io/yakdhane/ai-goose-runtime
-    tag: registration-20260312-221904
+    tag: deploy-20260318-094552
+    pullPolicy: IfNotPresent
+
+codexRuntime:
+  image:
+    repository: docker.io/yakdhane/ai-codex-runtime
+    tag: deploy-20260318-094552
     pullPolicy: IfNotPresent
 
 opencodeRuntime:
   image:
     repository: docker.io/yakdhane/ai-opencode-runtime
-    tag: audit5-20260317-180826
+    tag: deploy-20260318-094552
     pullPolicy: IfNotPresent
   env:
     OPENCODE_SESSION_INIT_ON_CREATE: "true"
@@ -40,8 +46,8 @@ opencodeRuntime:
 apiGateway:
   image:
     repository: docker.io/yakdhane/ai-api-gateway
-    tag: audit5-20260317-180826
-    pullPolicy: Always
+    tag: deploy-20260318-094552
+    pullPolicy: IfNotPresent
   auth:
     mode: hybrid
     localAuthEnabled: true
@@ -51,8 +57,8 @@ webUi:
   enabled: true
   image:
     repository: docker.io/yakdhane/ai-agent-sandbox-web-ui
-    tag: ux-audit-20260317-183315
-    pullPolicy: Always
+    tag: deploy-20260318-094552
+    pullPolicy: IfNotPresent
 
 platformSecrets:
   mode: native
@@ -71,7 +77,7 @@ mcpHub:
     bearerToken: "minikube-dev-mcp-token"
   servers:
     github:
-      image: docker.io/yakdhane/mcp-github-adapter:fix-20260312-233109
+      image: docker.io/yakdhane/mcp-github-adapter:deploy-20260318-094552
       imagePullPolicy: IfNotPresent
 
 skillsCatalog:
@@ -79,29 +85,29 @@ skillsCatalog:
 
 mcpToolSidecars:
   codeExec:
-    image: docker.io/yakdhane/mcp-code-exec:catalog-20260312-135631
+    image: docker.io/yakdhane/mcp-code-exec:deploy-20260318-094552
     port: 8090
   webSearch:
-    image: docker.io/yakdhane/mcp-web-search:catalog-20260312-135631
+    image: docker.io/yakdhane/mcp-web-search:deploy-20260318-094552
     port: 8091
   documents:
-    image: docker.io/yakdhane/mcp-documents:catalog-20260312-135631
+    image: docker.io/yakdhane/mcp-documents:deploy-20260318-094552
     port: 8092
   browser:
-    image: docker.io/yakdhane/mcp-browser:catalog-20260312-135631
+    image: docker.io/yakdhane/mcp-browser:deploy-20260318-094552
     port: 8093
   database:
-    image: docker.io/yakdhane/mcp-database:catalog-20260312-135631
+    image: docker.io/yakdhane/mcp-database:deploy-20260318-094552
     port: 8094
   git:
-    image: docker.io/yakdhane/mcp-git:catalog-20260312-135631
+    image: docker.io/yakdhane/mcp-git:deploy-20260318-094552
     port: 8095
   kubernetes:
-    image: docker.io/yakdhane/mcp-kubernetes:catalog-20260312-135631
+    image: docker.io/yakdhane/mcp-kubernetes:deploy-20260318-094552
     port: 8096
   messaging:
-    image: docker.io/yakdhane/mcp-messaging:catalog-20260312-135631
+    image: docker.io/yakdhane/mcp-messaging:deploy-20260318-094552
     port: 8097
   rag:
-    image: docker.io/yakdhane/mcp-rag:catalog-20260312-135631
+    image: docker.io/yakdhane/mcp-rag:deploy-20260318-094552
     port: 8098

@@ -7,46 +7,46 @@ global:
 operator:
   image:
     repository: docker.io/yakdhane/ai-operator
-    tag: latest
-    pullPolicy: Always
+    tag: deploy-20260318-094552
+    pullPolicy: IfNotPresent
   workerImage:
     repository: docker.io/yakdhane/ai-operator
-    tag: latest
-    pullPolicy: Always
+    tag: deploy-20260318-094552
+    pullPolicy: IfNotPresent
 
 agentRuntime:
   image:
     repository: docker.io/yakdhane/ai-agent-runtime
-    tag: latest
-    pullPolicy: Always
+    tag: deploy-20260318-094552
+    pullPolicy: IfNotPresent
 
 gooseRuntime:
   image:
     repository: docker.io/yakdhane/ai-goose-runtime
-    tag: latest
-    pullPolicy: Always
+    tag: deploy-20260318-094552
+    pullPolicy: IfNotPresent
 
 codexRuntime:
   image:
     repository: docker.io/yakdhane/ai-codex-runtime
-    tag: latest
-    pullPolicy: Always
+    tag: deploy-20260318-094552
+    pullPolicy: IfNotPresent
 
 opencodeRuntime:
   image:
     repository: docker.io/yakdhane/ai-opencode-runtime
-    tag: latest
-    pullPolicy: Always
+    tag: deploy-20260318-094552
+    pullPolicy: IfNotPresent
 
 apiGateway:
   image:
     repository: docker.io/yakdhane/ai-api-gateway
-    tag: latest
-    pullPolicy: Always
+    tag: deploy-20260318-094552
+    pullPolicy: IfNotPresent
   ingressClassName: ""
   ingressHost: ""
   ingress:
-    enabled: true
+    enabled: false
     annotations: {}
   tls:
     enabled: false
@@ -58,8 +58,8 @@ webUi:
   enabled: true
   image:
     repository: docker.io/yakdhane/ai-agent-sandbox-web-ui
-    tag: latest
-    pullPolicy: Always
+    tag: deploy-20260318-094552
+    pullPolicy: IfNotPresent
 
 litellm:
   config:
@@ -91,4 +91,33 @@ mcpHub:
   servers:
     github:
       enabled: true
-      image: docker.io/yakdhane/mcp-github-adapter:latest
+      image: docker.io/yakdhane/mcp-github-adapter:deploy-20260318-094552
+
+mcpToolSidecars:
+  codeExec:
+    image: docker.io/yakdhane/mcp-code-exec
+    tag: deploy-20260318-094552
+  webSearch:
+    image: docker.io/yakdhane/mcp-web-search
+    tag: deploy-20260318-094552
+  documents:
+    image: docker.io/yakdhane/mcp-documents
+    tag: deploy-20260318-094552
+  browser:
+    image: docker.io/yakdhane/mcp-browser
+    tag: deploy-20260318-094552
+  database:
+    image: docker.io/yakdhane/mcp-database
+    tag: deploy-20260318-094552
+  git:
+    image: docker.io/yakdhane/mcp-git
+    tag: deploy-20260318-094552
+  kubernetes:
+    image: docker.io/yakdhane/mcp-kubernetes
+    tag: deploy-20260318-094552
+  messaging:
+    image: docker.io/yakdhane/mcp-messaging
+    tag: deploy-20260318-094552
+  rag:
+    image: docker.io/yakdhane/mcp-rag
+    tag: deploy-20260318-094552
