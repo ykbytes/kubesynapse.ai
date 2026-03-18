@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -15,10 +16,10 @@ ACCESS_TOKEN_TTL_SECONDS = max(int(os.getenv("AUTH_ACCESS_TOKEN_TTL_SECONDS", "9
 REFRESH_TOKEN_TTL_SECONDS = max(int(os.getenv("AUTH_REFRESH_TOKEN_TTL_SECONDS", str(7 * 24 * 3600))), 300)
 JWT_ISSUER = os.getenv("JWT_ISSUER", "ai-agent-sandbox").strip() or "ai-agent-sandbox"
 _JWT_SECRET_EXPLICIT = os.getenv("JWT_SECRET", "").strip() or os.getenv("API_GATEWAY_SHARED_TOKEN", "").strip()
-JWT_SECRET = _JWT_SECRET_EXPLICIT or "dev-insecure-jwt-secret"
+JWT_SECRET = _JWT_SECRET_EXPLICIT or secrets.token_urlsafe(32)
 if not _JWT_SECRET_EXPLICIT:
     _logger.warning(
-        "JWT_SECRET is not configured — using an insecure default. "
+        "JWT_SECRET is not configured — using a random ephemeral secret (tokens will not survive restarts). "
         "Set JWT_SECRET or API_GATEWAY_SHARED_TOKEN before deploying to production."
     )
 REFRESH_COOKIE_NAME = os.getenv("AUTH_REFRESH_COOKIE_NAME", "ai-agent-refresh").strip() or "ai-agent-refresh"

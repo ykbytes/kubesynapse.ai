@@ -366,7 +366,11 @@ def _build_volumes(value: Any) -> list[Any] | None:
             continue
         backend: dict[str, Any] = {}
         if isinstance(item.get("host"), dict) and item["host"].get("path"):
-            backend["host"] = Host(path=str(item["host"]["path"]))
+            host_path = str(item["host"]["path"])
+            resolved = os.path.normpath(host_path)
+            if ".." in resolved.split(os.sep) or ".." in resolved.split("/"):
+                raise ValueError(f"Invalid host path (directory traversal): {host_path}")
+            backend["host"] = Host(path=host_path)
         if isinstance(item.get("pvc"), dict) and item["pvc"].get("claimName"):
             backend["pvc"] = PVC(claimName=str(item["pvc"]["claimName"]))
         volumes.append(
@@ -461,7 +465,7 @@ async def _connect_existing_sandbox(
         session = _session_from_info(
             sandbox.id,
             str((current_session or {}).get("profile") or tool_args.get("profile") or "generic"),
-            str((current_session or {}).get("image") or info.image.image if info.image else SETTINGS.default_image),
+            str((current_session or {}).get("image") or (info.image.image if info.image else SETTINGS.default_image)),
             info,
             current_session=current_session,
         )
@@ -859,7 +863,7 @@ async def execute_sandbox_tool(
             session = _session_from_info(
                 sandbox.id,
                 str((current_session or {}).get("profile") or "generic"),
-                str((current_session or {}).get("image") or info.image.image if info.image else SETTINGS.default_image),
+                str((current_session or {}).get("image") or (info.image.image if info.image else SETTINGS.default_image)),
                 info,
                 current_session=current_session,
             )
