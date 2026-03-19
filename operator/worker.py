@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import httpx
 import kubernetes.client  # type: ignore[import-untyped]
 import kubernetes.config  # type: ignore[import-untyped]
 
@@ -17,6 +18,8 @@ from utils import (
     build_eval_run_id,
     build_thread_id,
     build_workflow_run_id,
+    cancel_agent_session,
+    compute_execution_waves,
     estimate_toxicity,
     exact_match_score,
     invoke_agent_runtime,
@@ -25,6 +28,7 @@ from utils import (
     parse_json_output,
     ready_workflow_steps,
     render_prompt,
+    runtime_url,
     validate_workflow_graph,
     workflow_journal_path,
 )
@@ -58,6 +62,10 @@ ARTIFACT_JOURNAL_PATH = (
 ARTIFACT_PVC_NAME = os.getenv("ARTIFACT_PVC_NAME", "").strip()
 WORKFLOW_RUN_ID = os.getenv("WORKFLOW_RUN_ID", "").strip()
 EVAL_RUN_ID = os.getenv("EVAL_RUN_ID", "").strip()
+AGENT_RUNTIME_READY_TIMEOUT_SECONDS = max(
+    float(os.getenv("AGENT_RUNTIME_READY_TIMEOUT_SECONDS", "180")),
+    5.0,
+)
 
 
 def resource_plural() -> str:
@@ -75,6 +83,36 @@ def load_kubernetes_config() -> None:
     except kubernetes.config.ConfigException:
         kubernetes.config.load_kube_config()
         logger.info("Loaded local kubeconfig for worker.")
+
+
+def wait_for_agent_runtime_ready(
+    agent_name: str,
+    namespace: str,
+    *,
+    timeout_seconds: float = AGENT_RUNTIME_READY_TIMEOUT_SECONDS,
+    poll_interval_seconds: float = 2.0,
+) -> None:
+    """Wait for an agent runtime /ready endpoint before first invoke.
+
+    This avoids burning a full workflow attempt on cold-starting pods.
+    """
+    deadline = time.time() + timeout_seconds
+    url = f"{runtime_url(agent_name, namespace)}/ready"
+    last_error = "runtime not ready"
+    while time.time() < deadline:
+        try:
+            with httpx.Client(timeout=min(poll_interval_seconds, 5.0)) as client:
+                response = client.get(url)
+            if response.status_code == 200:
+                return
+            last_error = f"HTTP {response.status_code}"
+        except Exception as exc:
+            last_error = str(exc)
+        time.sleep(min(poll_interval_seconds, max(deadline - time.time(), 0.1)))
+    raise RuntimeError(
+        f"Agent runtime '{agent_name}' in namespace '{namespace}' did not become ready within "
+        f"{timeout_seconds:.0f}s: {last_error}"
+    )
 
 
 def patch_custom_status(plural: str, status: dict[str, Any]) -> None:
@@ -329,6 +367,7 @@ def previous_output_for_dependencies(
     dependencies: list[str],
     step_results: dict[str, dict[str, Any]],
 ) -> str:
+    MAX_RESPONSE_TEXT_CHARS = 8000  # limit raw response to avoid prompt bloat
     parts: list[str] = []
     for dependency in dependencies:
         result = step_results.get(dependency, {})
@@ -336,11 +375,17 @@ def previous_output_for_dependencies(
         output_data = result.get("output", {})
         structured_json = output_data.get("json") if isinstance(output_data, dict) else None
         if structured_json is not None:
+            # Prefer structured output; truncate raw response since JSON has the data
+            truncated_response = response_text[:2000]
+            if len(response_text) > 2000:
+                truncated_response += f"\n... (truncated {len(response_text) - 2000} chars; see Structured Output below)"
             parts.append(
-                f"[Step: {dependency}]\n{response_text}\n[Structured Output]\n"
+                f"[Step: {dependency}]\n{truncated_response}\n[Structured Output]\n"
                 + json.dumps(structured_json, ensure_ascii=False, indent=2)
             )
         else:
+            if len(response_text) > MAX_RESPONSE_TEXT_CHARS:
+                response_text = response_text[:MAX_RESPONSE_TEXT_CHARS] + f"\n... (truncated, {len(response_text)} total chars)"
             parts.append(f"[Step: {dependency}]\n{response_text}")
         # Include artifact summaries from runtimes that produce them (e.g. opencode)
         artifacts = result.get("artifacts") or []
@@ -450,6 +495,7 @@ def execute_workflow_step(
     run_id: str,
     pending_approval: dict[str, Any] | None,
     worker_job: dict[str, Any],
+    project_context: str = "",
 ) -> dict[str, Any]:
     step_name = str(step.get("name", "")).strip()
     dependencies = [
@@ -463,10 +509,19 @@ def execute_workflow_step(
         workflow_input,
         previous_output_for_dependencies(dependencies, step_results),
         step_results,
+        project_context=project_context,
     )
-    thread_id = build_thread_id("workflow", TARGET_NAME, run_id, step_name)
+    # Share session with dependency steps when shareSession is set,
+    # so that runtimes with session persistence (e.g. opencode) maintain
+    # workspace context across sequential steps.
+    session_group = str(execution_policy.get("sessionGroup") or "").strip()
+    if session_group:
+        thread_id = build_thread_id("workflow", TARGET_NAME, run_id, session_group)
+    else:
+        thread_id = build_thread_id("workflow", TARGET_NAME, run_id, step_name)
     started_at = now_iso()
     approval_wait_ms: int | None = None
+    agent_ref = str(step.get("agentRef", ""))
 
     if (
         pending_approval
@@ -483,6 +538,18 @@ def execute_workflow_step(
 
     for attempt in range(1, int(execution_policy["maxAttempts"]) + 1):
         started = time.perf_counter()
+        # On retry attempts, prepend context about the previous failure
+        # so the agent can resume rather than restart from scratch.
+        effective_prompt = prompt
+        if attempt > 1:
+            effective_prompt = (
+                f"[RETRY ATTEMPT {attempt}] The previous attempt failed. "
+                "Before restarting, check what was already accomplished:\n"
+                "1. List files/changes from the previous attempt.\n"
+                "2. Identify what failed and why.\n"
+                "3. Continue from where you left off rather than starting over.\n\n"
+                + prompt
+            )
         append_journal_event(
             "workflow.step.attempt.started",
             {
@@ -490,15 +557,13 @@ def execute_workflow_step(
                 "step": step_name,
                 "attempt": attempt,
                 "threadId": thread_id,
-                "agentRef": step.get("agentRef", ""),
+                "agentRef": agent_ref,
             },
         )
         try:
-            result = invoke_agent_runtime(
-                str(step.get("agentRef", "")),
-                TARGET_NAMESPACE,
-                {
-                    "prompt": prompt,
+            wait_for_agent_runtime_ready(agent_ref, TARGET_NAMESPACE)
+            invoke_payload: dict[str, Any] = {
+                    "prompt": effective_prompt,
                     "thread_id": thread_id,
                     "require_approval": bool(
                         step.get("requireApproval", False)
@@ -509,7 +574,16 @@ def execute_workflow_step(
                     "caller_agent_name": TARGET_NAME,
                     "caller_agent_namespace": TARGET_NAMESPACE,
                     "parent_thread_id": run_id,
-                },
+                    "pre_authorized_actions": list(
+                        execution_policy.get("preAuthorizedActions") or []
+                    ),
+            }
+            if int(execution_policy.get("maxTurns", 0)):
+                invoke_payload["max_turns"] = int(execution_policy["maxTurns"])
+            result = invoke_agent_runtime(
+                agent_ref,
+                TARGET_NAMESPACE,
+                invoke_payload,
                 timeout_seconds=float(execution_policy["timeoutSeconds"]),
             )
             latency_ms = int((time.perf_counter() - started) * 1000)
@@ -609,6 +683,91 @@ def execute_workflow_step(
                 "metadata": result.get("metadata"),
                 "warnings": step_warnings,
             }
+            # --- Verification gate ---
+            verify_prompt_template = str(step.get("verify", "") or "").strip()
+            verification_result: dict[str, Any] | None = None
+            if verify_prompt_template:
+                # Truncate long output to avoid overloading the verifier's context
+                verify_output = response_text
+                if len(verify_output) > 6000:
+                    verify_output = (
+                        response_text[:3000]
+                        + f"\n\n... ({len(response_text) - 6000} chars omitted) ...\n\n"
+                        + response_text[-3000:]
+                    )
+                verify_prompt = (
+                    f"Verify the following output using goal-backward analysis.\n\n"
+                    f"Verification criteria: {verify_prompt_template}\n\n"
+                    f"Output to verify:\n{verify_output}\n\n"
+                    f"Work backwards from the goal:\n"
+                    f"1. What must be TRUE for the criteria to be satisfied?\n"
+                    f"2. Is each condition actually met by the output — not just claimed?\n"
+                    f"3. Are there gaps between what was delivered and what was required?\n"
+                    f"4. Ignore deprecation warnings, linting notices, and informational output "
+                    f"that do not affect functional correctness.\n\n"
+                    f"Respond with exactly PASS or FAIL on the first line, "
+                    f"followed by a brief explanation covering each condition checked."
+                )
+                append_journal_event(
+                    "workflow.step.verify.started",
+                    {"runId": run_id, "step": step_name, "attempt": attempt},
+                )
+                try:
+                    verify_max_attempts = 1 + int(execution_policy.get("verifyRetries", 0))
+                    for verify_attempt in range(verify_max_attempts):
+                        verify_result_raw = invoke_agent_runtime(
+                            str(step.get("agentRef", "")),
+                            TARGET_NAMESPACE,
+                            {
+                                "prompt": verify_prompt,
+                                "thread_id": build_thread_id("verify", TARGET_NAME, run_id, step_name),
+                                "caller_agent_name": TARGET_NAME,
+                                "caller_agent_namespace": TARGET_NAMESPACE,
+                                "parent_thread_id": run_id,
+                            },
+                            timeout_seconds=float(execution_policy["timeoutSeconds"]),
+                        )
+                        verify_response = str(verify_result_raw.get("response", "")).strip()
+                        verify_first_line = verify_response.split("\n", 1)[0].strip().upper()
+                        verify_passed = verify_first_line.startswith("PASS")
+                        verification_result = {
+                            "passed": verify_passed,
+                            "response": verify_response,
+                            "criteria": verify_prompt_template,
+                            "verifyAttempt": verify_attempt + 1,
+                        }
+                        step_result["verificationResult"] = verification_result
+                        append_journal_event(
+                            "workflow.step.verify.completed",
+                            {
+                                "runId": run_id,
+                                "step": step_name,
+                                "passed": verify_passed,
+                                "verifyAttempt": verify_attempt + 1,
+                            },
+                        )
+                        if verify_passed:
+                            break
+                        if verify_attempt < verify_max_attempts - 1:
+                            append_journal_event(
+                                "workflow.step.verify.retry",
+                                {"runId": run_id, "step": step_name, "verifyAttempt": verify_attempt + 1},
+                            )
+                            continue
+                        raise RuntimeError(
+                            f"Verification failed for step '{step_name}' after {verify_max_attempts} attempt(s): {verify_response[:500]}"
+                        )
+                except RuntimeError:
+                    raise
+                except Exception as verify_exc:
+                    append_journal_event(
+                        "workflow.step.verify.error",
+                        {"runId": run_id, "step": step_name, "error": str(verify_exc)},
+                    )
+                    raise RuntimeError(
+                        f"Verification invocation failed for step '{step_name}': {verify_exc}"
+                    ) from verify_exc
+
             append_journal_event(
                 "workflow.step.completed",
                 {
@@ -621,30 +780,46 @@ def execute_workflow_step(
                     "artifactCount": len(step_result["artifacts"]),
                     "toolCallCount": len(step_result["tool_calls"]),
                     "warnings": step_warnings,
+                    "verified": verification_result["passed"] if verification_result else None,
                 },
             )
+            completed_step_state = build_step_state(
+                step_name=step_name,
+                step=step,
+                status_name="completed",
+                attempts=attempt,
+                started_at=started_at,
+                completed_at=completed_at,
+                latency_ms=latency_ms,
+                worker_job=worker_job,
+                execution_policy=execution_policy,
+                approval_wait_ms=approval_wait_ms,
+            )
+            if verification_result:
+                completed_step_state["verificationResult"] = verification_result
             return {
                 "state": "completed",
                 "stepName": step_name,
                 "stepResult": step_result,
-                "stepState": build_step_state(
-                    step_name=step_name,
-                    step=step,
-                    status_name="completed",
-                    attempts=attempt,
-                    started_at=started_at,
-                    completed_at=completed_at,
-                    latency_ms=latency_ms,
-                    worker_job=worker_job,
-                    execution_policy=execution_policy,
-                    approval_wait_ms=approval_wait_ms,
-                ),
+                "stepState": completed_step_state,
             }
         except Exception as exc:
             latency_ms = int((time.perf_counter() - started) * 1000)
             completed_at = now_iso()
             error_text = str(exc)
             failure_class = type(exc).__name__
+
+            # Attempt to cancel the running session to prevent orphaned
+            # agent processes from consuming resources after a timeout.
+            try:
+                cancel_agent_session(
+                    str(step.get("agentRef", "")),
+                    TARGET_NAMESPACE,
+                    thread_id,
+                )
+            except Exception:
+                pass
+
             append_journal_event(
                 "workflow.step.attempt.failed",
                 {
@@ -799,6 +974,7 @@ def build_loop_iteration_prompt(
     checklist: list[dict[str, Any]],
     previous_response: str,
     workflow_input: str,
+    project_context: str = "",
 ) -> str:
     """Build the prompt for a single loop iteration."""
     loop_config = step.get("loopConfig", {})
@@ -833,7 +1009,7 @@ def build_loop_iteration_prompt(
     if previous_response:
         parts.extend([
             "### Previous Iteration Result:",
-            previous_response[:2000],
+            previous_response[:4000],
             "",
         ])
     if base_prompt:
@@ -842,11 +1018,20 @@ def build_loop_iteration_prompt(
             base_prompt,
             "",
         ])
+    if project_context:
+        parts.extend([
+            "### Project Context:",
+            project_context,
+            "",
+        ])
     commit_after = loop_config.get("commitAfterEachItem", True)
     parts.extend([
         "### Requirements:",
-        f"- Work on the current task item only",
+        f"- Work on the current task item only — complete it fully before moving on",
         f"- {'Commit your changes after completing the task' if commit_after else 'Do not commit yet'}",
+        "- Before marking done: verify the change actually works (run it, test it, read it back)",
+        "- If the task cannot be completed as planned, explain what changed and how you are adapting",
+        "- If you have been stuck on this same item for 2+ iterations, try a fundamentally different approach",
         "- When done with this item, respond with: ITEM_COMPLETE",
         "- If all items are done, respond with: PLAN_COMPLETE",
         "- If you are stuck and cannot make progress, respond with: NO_PROGRESS",
@@ -884,6 +1069,7 @@ def execute_loop_step(
     worker_job: dict[str, Any],
     *,
     on_iteration_complete: Any = None,
+    project_context: str = "",
 ) -> dict[str, Any]:
     """Execute a loop-type step: iterate over a work plan calling the agent per item."""
     step_name = str(step.get("name", "")).strip()
@@ -905,15 +1091,35 @@ def execute_loop_step(
     started_perf = time.perf_counter()
     started_at = now_iso()
     execution_policy = normalize_step_execution(step)
+    agent_ref = str(step.get("agentRef", ""))
 
     # Parse or generate plan
     if plan_source == "prompt" or not plan_text:
         # Agent generates plan from first iteration
-        plan_prompt = f"Generate a numbered TODO checklist for the following work:\n\n{workflow_input}\n\n{step.get('prompt', '')}\n\nRespond with ONLY a markdown checklist (- [ ] item format), nothing else."
+        context_block = f"[Project Context]\n{project_context}\n\n" if project_context else ""
+        dependencies = [str(dep).strip() for dep in step.get("dependsOn") or [] if str(dep).strip()]
+        dependency_block = ""
+        if dependencies:
+            prev_output = previous_output_for_dependencies(dependencies, step_results)
+            if prev_output:
+                dependency_block = f"[Previous Step Output]\n{prev_output}\n\n"
+        plan_prompt = (
+            f"{context_block}"
+            f"{dependency_block}"
+            f"Generate a numbered TODO checklist for the following work:\n\n"
+            f"{workflow_input}\n\n"
+            f"{step.get('prompt', '')}\n\n"
+            f"Requirements for the checklist:\n"
+            f"- Order items by dependency — prerequisites before the steps that need them.\n"
+            f"- Each item must be a single, verifiable unit of work (not 'implement everything').\n"
+            f"- Include a final item that verifies the overall result meets the objective.\n"
+            f"- Respond with ONLY a markdown checklist (- [ ] item format), nothing else."
+        )
         thread_id = build_thread_id("workflow", TARGET_NAME, run_id, f"{step_name}-plan")
         try:
+            wait_for_agent_runtime_ready(agent_ref, TARGET_NAMESPACE)
             plan_result = invoke_agent_runtime(
-                str(step.get("agentRef", "")),
+                agent_ref,
                 TARGET_NAMESPACE,
                 {
                     "prompt": plan_prompt,
@@ -944,10 +1150,12 @@ def execute_loop_step(
 
     previous_response = ""
     consecutive_completion_signals = 0
+    successful_iterations = 0
     all_responses: list[str] = []
     all_artifacts: list[dict[str, Any]] = []
     all_tool_calls: list[dict[str, Any]] = []
     all_loop_warnings: list[str] = []
+    iteration_failures: list[dict[str, Any]] = []
     loop_progress: dict[str, Any] = {
         "iteration": 0,
         "maxIterations": max_iterations,
@@ -961,6 +1169,35 @@ def execute_loop_step(
         "workflow.loop.started",
         {"runId": run_id, "step": step_name, "totalItems": len(checklist), "maxIterations": max_iterations},
     )
+    try:
+        wait_for_agent_runtime_ready(agent_ref, TARGET_NAMESPACE)
+    except Exception as exc:
+        logger.error("Agent runtime not ready for loop step '%s': %s", step_name, exc)
+        return {
+            "state": "failed",
+            "stepName": step_name,
+            "stepResult": {
+                "agentRef": agent_ref,
+                "response": "",
+                "status": "failed",
+                "error": str(exc),
+                "output": {"text": "", "json": None, "type": "empty"},
+                "attempts": 0,
+            },
+            "stepState": build_step_state(
+                step_name=step_name,
+                step=step,
+                status_name="failed",
+                attempts=0,
+                started_at=started_at,
+                completed_at=now_iso(),
+                latency_ms=0,
+                worker_job=worker_job,
+                execution_policy=execution_policy,
+                error=str(exc),
+                failure_class=type(exc).__name__,
+            ),
+        }
 
     for iteration in range(1, max_iterations + 1):
         loop_progress["iteration"] = iteration
@@ -972,7 +1209,7 @@ def execute_loop_step(
             break
 
         # Build iteration prompt
-        prompt = build_loop_iteration_prompt(step, iteration, checklist, previous_response, workflow_input)
+        prompt = build_loop_iteration_prompt(step, iteration, checklist, previous_response, workflow_input, project_context=project_context)
         thread_id = loop_thread_id
 
         append_journal_event(
@@ -981,19 +1218,26 @@ def execute_loop_step(
         )
 
         try:
-            result = invoke_agent_runtime(
-                str(step.get("agentRef", "")),
-                TARGET_NAMESPACE,
-                {
+            loop_invoke_payload: dict[str, Any] = {
                     "prompt": prompt,
                     "thread_id": thread_id,
                     "caller_agent_name": TARGET_NAME,
                     "caller_agent_namespace": TARGET_NAMESPACE,
                     "parent_thread_id": run_id,
-                },
+                    "pre_authorized_actions": list(
+                        execution_policy.get("preAuthorizedActions") or []
+                    ),
+            }
+            if int(execution_policy.get("maxTurns", 0)):
+                loop_invoke_payload["max_turns"] = int(execution_policy["maxTurns"])
+            result = invoke_agent_runtime(
+                agent_ref,
+                TARGET_NAMESPACE,
+                loop_invoke_payload,
                 timeout_seconds=float(execution_policy.get("timeoutSeconds", 300)),
             )
             response_text = str(result.get("response", ""))
+            successful_iterations += 1
             all_responses.append(response_text)
             previous_response = response_text
             # Collect rich response fields from runtimes that provide them
@@ -1004,7 +1248,22 @@ def execute_loop_step(
             logger.warning("Loop iteration %d failed for step '%s': %s", iteration, step_name, exc)
             circuit_breaker.record_progress(False)
             loop_progress["circuitBreakerState"] = circuit_breaker.to_dict()
-            append_journal_event("workflow.loop.iteration.failed", {"runId": run_id, "step": step_name, "iteration": iteration, "error": str(exc)})
+            failure_entry = {
+                "iteration": iteration,
+                "error": str(exc),
+                "failureClass": type(exc).__name__,
+            }
+            iteration_failures.append(failure_entry)
+            append_journal_event(
+                "workflow.loop.iteration.failed",
+                {
+                    "runId": run_id,
+                    "step": step_name,
+                    "iteration": iteration,
+                    "error": str(exc),
+                    "failureClass": type(exc).__name__,
+                },
+            )
             continue
 
         # Detect signals
@@ -1062,26 +1321,83 @@ def execute_loop_step(
     latency_ms = int((time.perf_counter() - started_perf) * 1000)
     combined_response = "\n\n---\n\n".join(all_responses[-3:]) if all_responses else "(no iterations completed)"
 
+    # When the loop had many iterations, the last-3 tail loses important
+    # context for downstream agents.  Ask the agent (which still has its
+    # full session) to produce a comprehensive handoff summary.
+    if successful_iterations > 3 and all_responses:
+        try:
+            summary_prompt = (
+                "Summarize ALL work completed across every iteration of this task. "
+                "List every file created or modified with a one-line description of its purpose. "
+                "List all TypeScript/code interfaces and types you defined. "
+                "List all key architecture or configuration decisions. "
+                "Be comprehensive — this summary is the ONLY context downstream agents will receive."
+            )
+            summary_result = invoke_agent_runtime(
+                agent_ref,
+                TARGET_NAMESPACE,
+                {
+                    "prompt": summary_prompt,
+                    "thread_id": loop_thread_id,
+                    "caller_agent_name": TARGET_NAME,
+                    "caller_agent_namespace": TARGET_NAMESPACE,
+                    "parent_thread_id": run_id,
+                },
+                timeout_seconds=float(execution_policy.get("timeoutSeconds", 300)),
+            )
+            summary_text = str(summary_result.get("response", "")).strip()
+            if summary_text:
+                combined_response = summary_text
+                logger.info("Loop '%s': generated handoff summary (%d chars)", step_name, len(summary_text))
+        except Exception as summary_exc:
+            logger.warning("Loop '%s': handoff summary failed, using last-3 tail: %s", step_name, summary_exc)
+
     append_journal_event(
         "workflow.loop.completed",
-        {"runId": run_id, "step": step_name, "iterations": loop_progress["iteration"], "completedItems": loop_progress["completedItems"], "exitReason": loop_progress["exitReason"]},
+        {
+            "runId": run_id,
+            "step": step_name,
+            "iterations": loop_progress["iteration"],
+            "completedItems": loop_progress["completedItems"],
+            "exitReason": loop_progress["exitReason"],
+            "successfulIterations": successful_iterations,
+            "failedIterations": len(iteration_failures),
+        },
     )
 
     exit_reason = loop_progress.get("exitReason", "")
-    result_status = "continued" if exit_reason in ("max_iterations", "circuit_breaker_open") else "completed"
+    if successful_iterations == 0:
+        result_status = "failed"
+        loop_progress["exitReason"] = "all_iterations_failed"
+    else:
+        result_status = "continued" if exit_reason in ("max_iterations", "circuit_breaker_open") else "completed"
     result_state = result_status
 
     step_result = {
-        "agentRef": step.get("agentRef", ""),
+        "agentRef": agent_ref,
         "response": combined_response,
         "status": result_status,
-        "output": {"text": combined_response, "json": {"loopProgress": loop_progress, "checklist": checklist}, "type": "json"},
+        "output": {
+            "text": combined_response,
+            "json": {
+                "loopProgress": loop_progress,
+                "checklist": checklist,
+                "iterationFailures": iteration_failures[-10:],
+            },
+            "type": "json",
+        },
         "attempts": loop_progress["iteration"],
         "artifacts": all_artifacts,
         "tool_calls": all_tool_calls,
-        "metadata": {"loopProgress": loop_progress},
+        "metadata": {"loopProgress": loop_progress, "iterationFailures": iteration_failures[-10:]},
         "warnings": all_loop_warnings,
     }
+    if iteration_failures:
+        step_result["warnings"].append(
+            f"{len(iteration_failures)} loop iteration(s) failed; see iterationFailures for details."
+        )
+    if successful_iterations == 0 and iteration_failures:
+        step_result["error"] = iteration_failures[-1]["error"]
 
     step_state = build_step_state(
         step_name=step_name,
@@ -1093,8 +1409,12 @@ def execute_loop_step(
         latency_ms=latency_ms,
         worker_job=worker_job,
         execution_policy=execution_policy,
+        error=(iteration_failures[-1]["error"] if successful_iterations == 0 and iteration_failures else None),
+        failure_class=(iteration_failures[-1]["failureClass"] if successful_iterations == 0 and iteration_failures else None),
     )
     step_state["loopProgress"] = loop_progress
+    if iteration_failures:
+        step_state["iterationFailures"] = iteration_failures[-10:]
 
     return {
         "state": result_state,
@@ -1339,6 +1659,187 @@ def execute_conditional_step(
     }
 
 
+class ReviewRejectedError(RuntimeError):
+    def __init__(self, message: str, review_result: dict[str, Any]):
+        super().__init__(message)
+        self.review_result = review_result
+
+
+def execute_review_step(
+    step: dict[str, Any],
+    workflow_input: str,
+    step_results: dict[str, dict[str, Any]],
+    run_id: str,
+    worker_job: dict[str, Any],
+    project_context: str = "",
+) -> dict[str, Any]:
+    """Execute a review-type workflow step.
+
+    Constructs a review prompt from ``reviewCriteria`` + dependency outputs,
+    invokes the agent, and parses the response for APPROVED / REJECTED with
+    structured findings.
+    """
+    step_name = str(step.get("name", "")).strip()
+    review_criteria = str(step.get("reviewCriteria", "") or "").strip()
+    dependencies = [
+        str(dep).strip()
+        for dep in step.get("dependsOn") or []
+        if str(dep).strip()
+    ]
+    previous_output = previous_output_for_dependencies(dependencies, step_results)
+    execution_policy = normalize_step_execution(step)
+    started_at = now_iso()
+    agent_ref = str(step.get("agentRef", ""))
+
+    review_prompt_body = (
+        "You are a reviewer. Evaluate the following output against the review criteria.\n\n"
+        f"## Review Criteria\n{review_criteria}\n\n"
+        f"## Output to Review\n{previous_output}\n\n"
+        "## Instructions\n"
+        "Respond with exactly APPROVED or REJECTED on the first line.\n"
+        "Then provide specific findings as a numbered list."
+    )
+    review_prompt = f"[Project Context]\n{project_context}\n\n{review_prompt_body}" if project_context else review_prompt_body
+
+    append_journal_event(
+        "workflow.review.started",
+        {"runId": run_id, "step": step_name, "criteria": review_criteria},
+    )
+
+    for attempt in range(1, int(execution_policy["maxAttempts"]) + 1):
+        started_perf = time.perf_counter()
+        try:
+            wait_for_agent_runtime_ready(agent_ref, TARGET_NAMESPACE)
+            thread_id = build_thread_id("review", TARGET_NAME, run_id, step_name)
+            review_invoke_payload: dict[str, Any] = {
+                    "prompt": review_prompt,
+                    "thread_id": thread_id,
+                    "caller_agent_name": TARGET_NAME,
+                    "caller_agent_namespace": TARGET_NAMESPACE,
+                    "parent_thread_id": run_id,
+            }
+            if int(execution_policy.get("maxTurns", 0)):
+                review_invoke_payload["max_turns"] = int(execution_policy["maxTurns"])
+            result = invoke_agent_runtime(
+                agent_ref,
+                TARGET_NAMESPACE,
+                review_invoke_payload,
+                timeout_seconds=float(execution_policy["timeoutSeconds"]),
+            )
+            latency_ms = int((time.perf_counter() - started_perf) * 1000)
+            response_text = str(result.get("response", "")).strip()
+            first_line = response_text.split("\n", 1)[0].strip().upper()
+            approved = first_line.startswith("APPROVED")
+
+            review_result = {
+                "approved": approved,
+                "verdict": "APPROVED" if approved else "REJECTED",
+                "response": response_text,
+                "criteria": review_criteria,
+            }
+
+            if not approved:
+                raise ReviewRejectedError(
+                    f"Review rejected for step '{step_name}': {response_text[:500]}",
+                    review_result,
+                )
+
+            completed_at = now_iso()
+            append_journal_event(
+                "workflow.review.completed",
+                {
+                    "runId": run_id,
+                    "step": step_name,
+                    "approved": approved,
+                    "latencyMs": latency_ms,
+                },
+            )
+
+            step_state = build_step_state(
+                step_name=step_name,
+                step=step,
+                status_name="completed",
+                attempts=attempt,
+                started_at=started_at,
+                completed_at=completed_at,
+                latency_ms=latency_ms,
+                worker_job=worker_job,
+                execution_policy=execution_policy,
+            )
+            step_state["reviewResult"] = review_result
+
+            return {
+                "state": "completed",
+                "stepName": step_name,
+                "stepResult": {
+                    "agentRef": step.get("agentRef", ""),
+                    "response": response_text,
+                    "thread_id": result.get("thread_id", thread_id),
+                    "status": "completed",
+                    "reviewResult": review_result,
+                    "output": {"text": response_text, "json": None, "type": "text"},
+                    "attempts": attempt,
+                },
+                "stepState": step_state,
+            }
+        except Exception as exc:
+            latency_ms = int((time.perf_counter() - started_perf) * 1000)
+            completed_at = now_iso()
+            thread_id = build_thread_id("review", TARGET_NAME, run_id, step_name)
+            should_retry = (
+                bool(execution_policy["retryable"])
+                and attempt < int(execution_policy["maxAttempts"])
+            )
+            if should_retry:
+                backoff = min(
+                    float(execution_policy["backoffSeconds"]) * (2 ** (attempt - 1)),
+                    300.0,
+                )
+                if backoff > 0:
+                    time.sleep(backoff)
+                continue
+
+            append_journal_event(
+                "workflow.review.failed",
+                {"runId": run_id, "step": step_name, "error": str(exc)},
+            )
+            terminal_state = "continued" if bool(execution_policy["continueOnError"]) else "failed"
+            review_result = exc.review_result if isinstance(exc, ReviewRejectedError) else None
+            step_state = build_step_state(
+                step_name=step_name,
+                step=step,
+                status_name=terminal_state,
+                attempts=attempt,
+                started_at=started_at,
+                completed_at=completed_at,
+                latency_ms=latency_ms,
+                worker_job=worker_job,
+                execution_policy=execution_policy,
+                error=str(exc),
+                failure_class=type(exc).__name__,
+            )
+            if review_result:
+                step_state["reviewResult"] = review_result
+            return {
+                "state": terminal_state,
+                "stepName": step_name,
+                "stepResult": {
+                    "agentRef": step.get("agentRef", ""),
+                    "response": "",
+                    "thread_id": thread_id,
+                    "status": terminal_state,
+                    "error": str(exc),
+                    "reviewResult": review_result,
+                    "output": {"text": "", "json": None, "type": "empty"},
+                    "attempts": attempt,
+                },
+                "stepState": step_state,
+            }
+
+    # Should not reach here but satisfy type checker
+    raise RuntimeError(f"Review step '{step_name}' exhausted all attempts")
+
+
 def run_workflow_worker() -> None:
     plural = resource_plural()
     resource = get_resource(plural)
@@ -1406,6 +1907,44 @@ def run_workflow_worker() -> None:
             "topology": graph.get("topologicalOrder") or [],
         },
     )
+
+    # Load project context from ConfigMap if contextRef is set
+    project_context = ""
+    context_ref = str(spec.get("contextRef", "") or "").strip()
+    if context_ref:
+        try:
+            cm = kubernetes.client.CoreV1Api().read_namespaced_config_map(
+                name=context_ref, namespace=TARGET_NAMESPACE,
+            )
+            cm_data = cm.data or {}
+            project_context = "\n\n".join(
+                f"## {key}\n{value}" for key, value in sorted(cm_data.items())
+            )
+            append_journal_event(
+                "workflow.context.loaded",
+                {"runId": run_id, "contextRef": context_ref, "keys": sorted(cm_data.keys())},
+            )
+            logger.info("Loaded project context from ConfigMap '%s' (%d keys)", context_ref, len(cm_data))
+        except Exception as ctx_exc:
+            logger.warning("Failed to load contextRef ConfigMap '%s': %s", context_ref, ctx_exc)
+            append_journal_event(
+                "workflow.context.error",
+                {"runId": run_id, "contextRef": context_ref, "error": str(ctx_exc)},
+            )
+
+    # Inject git repository context so agents know the repo URL and workspace setup
+    git_repo_url = os.getenv("GIT_REPO_URL", "").strip()
+    if git_repo_url:
+        git_context = (
+            "## Git Repository\n"
+            f"Target repository: {git_repo_url}\n"
+            "The workspace directory is /workspace. "
+            "If /workspace is not already a git repo, clone the repository into /workspace "
+            "using `git_clone` with target_dir='/workspace' before creating files. "
+            "After making changes, commit and push to the repository."
+        )
+        project_context = f"{project_context}\n\n{git_context}" if project_context else git_context
+
     current_step = str(status.get("currentStep", "") or "")
     if str(status.get("phase", "") or "") == "waiting-approval":
         _patch_pending_approval_label(None)
@@ -1432,6 +1971,59 @@ def run_workflow_worker() -> None:
     )
 
     try:
+        # Compute execution waves for logging and progress visibility
+        waves = compute_execution_waves(steps, completed, skipped)
+        wave_names = [
+            [str(s.get("name", "")) for s in w] for w in waves
+        ]
+        append_journal_event(
+            "workflow.waves.computed",
+            {"runId": run_id, "waveCount": len(waves), "waves": wave_names},
+        )
+        logger.info("Computed %d execution waves for workflow '%s'", len(waves), TARGET_NAME)
+        current_wave_index = 0
+
+        def _execute_frontier_step(
+            step: dict[str, Any],
+            pending: dict[str, Any] | None,
+        ) -> dict[str, Any]:
+            step_type = str(step.get("type", "agent")).strip()
+            if step_type == "loop":
+                return execute_loop_step(
+                    step,
+                    str(spec.get("input", "")),
+                    step_results,
+                    run_id,
+                    worker_job,
+                    project_context=project_context,
+                )
+            if step_type == "review":
+                return execute_review_step(
+                    step,
+                    str(spec.get("input", "")),
+                    step_results,
+                    run_id,
+                    worker_job,
+                    project_context=project_context,
+                )
+            if step_type == "conditional":
+                return execute_conditional_step(
+                    step,
+                    str(spec.get("input", "")),
+                    step_results,
+                    run_id,
+                    worker_job,
+                )
+            return execute_workflow_step(
+                step,
+                str(spec.get("input", "")),
+                step_results,
+                run_id,
+                pending,
+                worker_job,
+                project_context=project_context,
+            )
+
         while len(completed) + len(skipped) < len(steps):
             ready = ready_workflow_steps(steps, completed, skipped_steps=skipped)
             if not ready:
@@ -1439,6 +2031,18 @@ def run_workflow_worker() -> None:
                     "Workflow contains a dependency cycle "
                     "or unresolved dependency"
                 )
+
+            # Track wave transitions
+            ready_names_set = {str(s.get("name", "")) for s in ready}
+            if current_wave_index < len(waves):
+                wave_step_names = {str(s.get("name", "")) for s in waves[current_wave_index]}
+                if not wave_step_names & ready_names_set:
+                    current_wave_index += 1
+                    if current_wave_index < len(waves):
+                        append_journal_event(
+                            "workflow.wave.started",
+                            {"runId": run_id, "wave": current_wave_index, "steps": sorted(ready_names_set)},
+                        )
 
             non_approval_frontier = [
                 step
@@ -1493,10 +2097,16 @@ def run_workflow_worker() -> None:
                     outcome = execute_loop_step(
                         step, str(spec.get("input", "")), step_results, run_id, worker_job,
                         on_iteration_complete=_on_iteration,
+                        project_context=project_context,
                     )
                 elif step_type == "conditional":
                     outcome = execute_conditional_step(
                         step, str(spec.get("input", "")), step_results, run_id, worker_job,
+                    )
+                elif step_type == "review":
+                    outcome = execute_review_step(
+                        step, str(spec.get("input", "")), step_results, run_id, worker_job,
+                        project_context=project_context,
                     )
                 else:
                     outcome = execute_workflow_step(
@@ -1506,23 +2116,20 @@ def run_workflow_worker() -> None:
                         run_id,
                         pending_approval or None,
                         worker_job,
+                        project_context=project_context,
                     )
                 outcome_by_name[outcome["stepName"]] = outcome
             else:
                 frontier_timeout = max(
-                    float(normalize_step_execution(frontier[0]).get("timeoutSeconds", 600))
+                    float(normalize_step_execution(f_step).get("timeoutSeconds", 600))
                     for f_step in frontier
                 ) + 120  # step timeout + buffer
                 with ThreadPoolExecutor(max_workers=len(frontier)) as executor:
                     future_map = {
                         executor.submit(
-                            execute_workflow_step,
+                            _execute_frontier_step,
                             step,
-                            str(spec.get("input", "")),
-                            step_results,
-                            run_id,
                             None,
-                            worker_job,
                         ): str(step.get("name", ""))
                         for step in frontier
                     }

@@ -240,7 +240,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [createAgentOpenCodeConfigFileDrafts, setCreateAgentOpenCodeConfigFileDrafts] = useState<TextFileDraft[]>([]);
   const [createAgentGitForm, setCreateAgentGitForm] = useState<GitFormState>({
     enabled: false, repoUrl: "", authMethod: "token", pushPolicy: "after-each-commit",
-    defaultBranch: "main", token: "", username: "", password: "", sshPrivateKey: "",
+    defaultBranch: "main", branch: "", token: "", username: "", password: "", sshPrivateKey: "",
   });
   const [createAgentGitHubForm, setCreateAgentGitHubForm] = useState<GitHubFormState>({ enabled: false, token: "" });
 
@@ -485,6 +485,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         opencode_config_files: opencodeConfigFiles,
         git_config: createAgentGitForm.enabled ? {
           repo_url: createAgentGitForm.repoUrl, default_branch: createAgentGitForm.defaultBranch || "main",
+          branch: createAgentGitForm.branch || undefined,
           push_policy: createAgentGitForm.pushPolicy, auth_method: createAgentGitForm.authMethod,
           credential_secret_ref: gitCredentialSecretRef,
         } : undefined,
@@ -494,7 +495,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       setAgentCreateMode(false);
       setCreateAgentMcpServersText(""); setCreateAgentMcpSidecarsText(""); setCreateAgentA2AAllowedCallersText("");
       setCreateAgentSkillFileDrafts([]); setCreateAgentGooseConfigFileDrafts([]); setCreateAgentOpenCodeConfigFileDrafts([]);
-      setCreateAgentGitForm({ enabled: false, repoUrl: "", authMethod: "token", pushPolicy: "after-each-commit", defaultBranch: "main", token: "", username: "", password: "", sshPrivateKey: "" });
+      setCreateAgentGitForm({ enabled: false, repoUrl: "", authMethod: "token", pushPolicy: "after-each-commit", defaultBranch: "main", branch: "", token: "", username: "", password: "", sshPrivateKey: "" });
       setCreateAgentGitHubForm({ enabled: false, token: "" });
       setSelectedAgentName(created.name);
       await refreshWorkspaceData({ silent: false });

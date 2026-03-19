@@ -186,6 +186,8 @@ TEAMWORK_WORKING_AGREEMENT = (
     "Treat this request as one delegated step in a multi-agent workflow.",
     "Do the subtask directly and return concrete findings or next actions.",
     "Call out blockers, uncertainties, or missing inputs explicitly instead of guessing.",
+    "Verify your work before returning results — the caller cannot easily re-check your output.",
+    "Stay focused on the delegated objective — do not expand scope or pursue tangential tasks.",
 )
 MAX_SUBAGENTS = get_int_env("AGENT_MAX_SUBAGENTS", 6, minimum=1)
 MAX_SUBAGENT_FILE_CHARS = get_int_env("AGENT_MAX_SUBAGENT_FILE_CHARS", 4000, minimum=256)
@@ -1464,6 +1466,8 @@ class State(TypedDict, total=False):
     edit_history: list[dict[str, str]]
     # MCP tool invocation fields – populated by invoke_graph when the caller
     # sets mcp_server on InvokeRequest.  The mcp_tool graph node reads these.
+    # Pre-authorized destructive actions (e.g. ['git push']) — bypasses HITL gate
+    pre_authorized_actions: list[str]
     mcp_server: str
     mcp_tool_name: str
     mcp_tool_args: dict[str, Any]
@@ -1500,6 +1504,14 @@ class InvokeRequest(BaseModel):
             "MCP server type to call (e.g. 'github', 'prometheus'). "
             "When set, the request is routed to the mcp_tool graph node "
             "instead of the normal chat/RAG path."
+        ),
+    )
+    pre_authorized_actions: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Shell command prefixes pre-authorized to bypass the destructive "
+            "action gate (e.g. ['git push']). Used by workflow orchestrators "
+            "to allow specific destructive operations without HITL approval."
         ),
     )
 
@@ -2087,20 +2099,21 @@ def execute_git_commit(
 ) -> dict[str, Any]:
     """Execute a git commit with the given message.
 
-    When *commit_all* is True, stages all tracked modified files first (``git add -u``).
+    When *commit_all* is True, stages **all** files (including new/untracked)
+    via ``git add -A`` before committing.
     """
     steps: list[str] = []
     try:
-        # Stage changes
+        # Stage changes — use -A to include new/untracked files, not just modified
         if commit_all:
-            add_result = execute_local_tool("git", ["add", "-u"])
+            add_result = execute_local_tool("git", ["add", "-A"])
             add_status = str(add_result.get("invoke_status") or "")
             if add_status not in ("completed", "continue"):
                 return {
-                    "messages": [AIMessage(content=blocked_response("git add -u failed"))],
+                    "messages": [AIMessage(content=blocked_response("git add -A failed"))],
                     "invoke_status": "blocked",
                     "error_type": "git_error",
-                    "error": "git add -u failed",
+                    "error": "git add -A failed",
                     "stop_reason": "git_error",
                 }
             steps.append("staged modified files")
@@ -2569,6 +2582,13 @@ by reading the output, running tests, or checking file contents.
 Don't try to accomplish everything in one step.
 6. **Prefer respond when you have enough information.** If you already know the answer \
 or have gathered sufficient context, respond immediately.
+7. **Verify before claiming done.** Task completion \u2260 goal achievement. Before your \
+final response, verify the actual goal was achieved: re-read modified files, re-run tests, \
+or re-check output. Work backwards from the goal \u2014 what must be TRUE, what must EXIST, \
+what must be WIRED \u2014 and confirm each condition.
+8. **Diagnose before fixing.** When something fails, understand WHY before applying \
+any fix. Read the full error message, identify the root cause, and only then act. \
+Never apply speculative patches.
 
 ## Anti-Patterns (AVOID)
 - Repeating the same action with identical arguments — it won't produce different results.
@@ -2576,6 +2596,8 @@ or have gathered sufficient context, respond immediately.
 - Making changes without verifying them afterward.
 - Issuing overly broad commands that produce too much output; be specific.
 - Skipping error analysis — when something fails, reason about WHY before retrying.
+- Claiming completion without fresh verification evidence — always re-read/re-run before responding.
+- Applying fixes without understanding root cause — diagnose the failure before patching.
 
 ## Response Format
 Return exactly ONE JSON object (no markdown fences). Every response MUST include a \
@@ -2658,11 +2680,13 @@ Return exactly ONE JSON object (no markdown fences). Every response MUST include
 ## Strategy Heuristics
 - For code exploration tasks: ls -> search/grep -> read specific files -> respond
 - For code modification: read target file -> edit_file -> verify change -> run tests
-- For debugging: read error context -> search for relevant code -> analyze -> fix -> verify
+- For debugging: read error context -> identify root cause FIRST -> search for relevant code -> analyze -> fix -> verify
+- For task completion: re-read the original objective -> verify each requirement is met with evidence -> then respond
 - When stuck after a failure: re-read the error, consider alternative approaches, try a different tool
 - Use `note` to save important findings, decisions, and context you'll need later — it's free
 - When your plan has failed multiple times, issue a new `plan` action to revise your approach
 - For destructive operations (file delete, git push): be cautious and verify before acting
+- For git operations (clone, commit, push, pull): prefer MCP sidecar tools (git_clone, git_commit, git_push) when available — they have authentication pre-configured. Fall back to local_shell git only if no git MCP tools are present
 
 ## Response Formatting
 When crafting your final `respond` answer:
@@ -3382,7 +3406,10 @@ def build_reflection_prompt(
             f"Recovery hint: {recovery_hint}\n"
             f"Objective: {objective}\n"
             f"{tried_text}\n\n"
-            "Analyze what went wrong and consider alternative approaches. "
+            "Before proposing a fix, answer these questions in your thinking:\n"
+            "1. What assumption was wrong? What condition did you miss?\n"
+            "2. Is this the same root cause as a previous failure, or a new one?\n"
+            "3. How will your next attempt differ FUNDAMENTALLY from what already failed?\n\n"
             "Do NOT repeat the same action with the same arguments."
         )
     )
@@ -4167,7 +4194,10 @@ def run_autonomous_session(
                 reflection = build_reflection_prompt(
                     objective,
                     action_label,
-                    "You are repeating the same sequence of actions. This is not making progress.",
+                    "You are repeating the same sequence of actions. This is not making progress. "
+                    "STOP and reconsider: (1) Is the goal achievable with your current tools? "
+                    "(2) Is there a prerequisite you missed? (3) Try a completely different approach "
+                    "rather than variations of the same strategy.",
                     attempted_actions,
                 )
                 local_state["messages"] = [*(local_state.get("messages") or []), reflection]
@@ -4184,7 +4214,18 @@ def run_autonomous_session(
                 "agent.step.destructive",
                 {"mode": "autonomy", "step": step_count, "action": action_label},
             )
-            if DESTRUCTIVE_ACTION_GATE:
+            # Check if this action is pre-authorized (e.g. by a workflow orchestrator)
+            _pre_auth = list(local_state.get("pre_authorized_actions") or [])
+            _action_pre_authorized = False
+            if _pre_auth:
+                cmd = str(decision.get("command") or "").strip()
+                args = decision.get("args") or []
+                full_cmd = f"{cmd} {' '.join(str(a) for a in args)}".strip()
+                for allowed in _pre_auth:
+                    if full_cmd.startswith(allowed):
+                        _action_pre_authorized = True
+                        break
+            if DESTRUCTIVE_ACTION_GATE and not _action_pre_authorized:
                 # Check if we have HITL approval flow available
                 require_approval = bool(local_state.get("require_approval"))
                 if require_approval:
@@ -4351,9 +4392,13 @@ def run_autonomous_session(
                     content=(
                         f"REPLAN: Steps {plan_step_index}-{plan_step_index + 1} have failed "
                         f"{consecutive_failures} times consecutively. Your current plan approach "
-                        "is not working. Consider issuing a new `plan` action to revise your "
-                        "strategy. Explain in your thinking what went wrong and how the new "
-                        "approach differs."
+                        "is not working.\n\n"
+                        "Diagnose the failure pattern before re-planning:\n"
+                        "- Are you hitting the same error each time? \u2192 The approach itself is flawed.\n"
+                        "- Different errors each time? \u2192 You may be missing a prerequisite.\n"
+                        "- Permissions or environment issue? \u2192 Work around it, don't retry through it.\n\n"
+                        "Issue a new `plan` action with a FUNDAMENTALLY different strategy. "
+                        "Explain in your thinking what went wrong and how the new approach differs."
                     )
                 )
                 result_messages.append(replan_hint)
@@ -4458,8 +4503,10 @@ def run_autonomous_session(
                                         f"AUTO-TEST FAILED (attempt {_test_fix_attempts + 1}/{AUTO_TEST_FIX_RETRIES}) "
                                         f"after editing '{verify_path}':\n"
                                         f"{truncated_output}\n\n"
-                                        "YOU MUST fix this test failure NOW before moving on. "
-                                        "Read the error carefully and apply the fix with edit_file."
+                                        "YOU MUST fix this test failure NOW before moving on.\n"
+                                        "1. Read the full error trace — which assertion failed and why?\n"
+                                        "2. Is the test expectation correct, or is the implementation wrong?\n"
+                                        "3. Apply a targeted fix with edit_file based on the root cause."
                                     )
                                 ))
                             else:
@@ -4467,8 +4514,10 @@ def run_autonomous_session(
                                     content=(
                                         f"AUTO-TEST FAILED after editing '{verify_path}' "
                                         f"(exhausted {AUTO_TEST_FIX_RETRIES} auto-fix retries):\n"
-                                        f"{truncated_output}\n"
-                                        "Fix the failing test(s) before proceeding."
+                                        f"{truncated_output}\n\n"
+                                        "Auto-fix retries are exhausted. Read the failure carefully "
+                                        "and fix the root cause before proceeding — do not ignore "
+                                        "failing tests."
                                     )
                                 ))
                                 local_state["_test_fix_attempts"] = 0
@@ -6719,6 +6768,7 @@ def invoke_graph(
                 "parent_thread_id": request.parent_thread_id or "",
                 "caller_request_id": request.caller_request_id or "",
                 "delegation_depth": request.delegation_depth,
+                "pre_authorized_actions": list(request.pre_authorized_actions or []),
                 "mcp_server": mcp_server,
                 "mcp_tool_name": tool_name,
                 "mcp_tool_args": request.tool_args,

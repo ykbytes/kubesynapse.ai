@@ -404,7 +404,7 @@ export function ChatWorkbench({
             <EmptyState
               icon={MessageSquare}
               title="No messages yet"
-              description={emptyMessage}
+              description={emptyMessage || "Send your first message to start a conversation. Try asking the agent to analyze code, fix a bug, or build a new feature."}
             />
           )}
           {messages.map((message, i) =>
@@ -850,7 +850,7 @@ export function ChatWorkbench({
         {/* Prompt input */}
         <Textarea
           autoFocus
-          placeholder="Ask the agent to plan, invoke tools, or reason over retrieved context..."
+          placeholder="Describe what you want the agent to do — e.g. 'Refactor the auth module to use JWT tokens' or 'Write unit tests for the payment service'..."
           value={prompt}
           onChange={(e) => onPromptChange(e.target.value)}
           onKeyDown={(e) => {

@@ -614,11 +614,13 @@ class WorkflowStepRequest(BaseModel):
     depends_on: list[str] = Field(default_factory=list)
     require_approval: bool = False
     execution: dict[str, Any] | None = None
-    step_type: str = Field(default="agent", pattern=r"^(agent|loop|conditional)$")
+    step_type: str = Field(default="agent", pattern=r"^(agent|loop|conditional|review)$")
     loop_config: dict[str, Any] | None = Field(default=None, description="Config for loop-type steps")
     condition_expr: str | None = Field(default=None, max_length=2000, description="Condition expression for conditional steps")
     then_steps: list[str] | None = Field(default=None, description="Steps to activate when condition is true")
     else_steps: list[str] | None = Field(default=None, description="Steps to activate when condition is false")
+    verify: str | None = Field(default=None, max_length=4000)
+    review_criteria: str | None = Field(default=None, max_length=4000)
 
 
 class WorkflowRequest(BaseModel):
@@ -629,6 +631,7 @@ class WorkflowRequest(BaseModel):
     )
     description: str = Field(default="", max_length=4000)
     input: str = Field(default="", max_length=4000)
+    context_ref: str | None = Field(default=None, max_length=253)
     message_bus: str = Field(default="in-memory", pattern=r"^(in-memory)$")
     steps: list[WorkflowStepRequest] = Field(default_factory=list)
 
@@ -636,6 +639,7 @@ class WorkflowRequest(BaseModel):
 class WorkflowUpdateRequest(BaseModel):
     description: str = Field(default="", max_length=4000)
     input: str = Field(default="", max_length=4000)
+    context_ref: str | None = Field(default=None, max_length=253)
     message_bus: str = Field(default="in-memory", pattern=r"^(in-memory)$")
     steps: list[WorkflowStepRequest] = Field(default_factory=list)
 
@@ -645,6 +649,7 @@ class WorkflowInfo(BaseModel):
     namespace: str
     description: str = ""
     input: str = ""
+    context_ref: str | None = None
     message_bus: str = "in-memory"
     steps: list[WorkflowStepRequest] = Field(default_factory=list)
     phase: str = "pending"
@@ -1432,6 +1437,7 @@ def parse_agent_git_config(config: Any, *, source: str) -> dict[str, Any]:
 
     repo_url = str(first_present(config, "repoUrl", "repo_url") or "").strip()
     default_branch = str(first_present(config, "defaultBranch", "default_branch") or "").strip()
+    branch = str(first_present(config, "branch") or "").strip()
     push_policy = str(first_present(config, "pushPolicy", "push_policy") or "").strip()
     auth_method = str(first_present(config, "authMethod", "auth_method") or "").strip()
     credential_secret_ref = str(first_present(config, "credentialSecretRef", "credential_secret_ref") or "").strip()
@@ -1452,6 +1458,8 @@ def parse_agent_git_config(config: Any, *, source: str) -> dict[str, Any]:
         normalized["repoUrl"] = repo_url
     if default_branch:
         normalized["defaultBranch"] = default_branch
+    if branch:
+        normalized["branch"] = branch
     if push_policy:
         normalized["pushPolicy"] = push_policy
     if auth_method:
@@ -1470,6 +1478,8 @@ def serialize_agent_git_config(config: Any) -> dict[str, Any] | None:
         serialized["repo_url"] = normalized["repoUrl"]
     if normalized.get("defaultBranch"):
         serialized["default_branch"] = normalized["defaultBranch"]
+    if normalized.get("branch"):
+        serialized["branch"] = normalized["branch"]
     if normalized.get("pushPolicy"):
         serialized["push_policy"] = normalized["pushPolicy"]
     if normalized.get("authMethod"):
@@ -2559,6 +2569,12 @@ def build_workflow_spec(body: WorkflowRequest | WorkflowUpdateRequest) -> dict[s
                 step_spec["thenSteps"] = [s.strip() for s in step.then_steps if s.strip()]
             if step.else_steps:
                 step_spec["elseSteps"] = [s.strip() for s in step.else_steps if s.strip()]
+        if step.step_type == "review":
+            step_spec["type"] = "review"
+            if step.review_criteria and step.review_criteria.strip():
+                step_spec["reviewCriteria"] = step.review_criteria.strip()
+        if step.verify and step.verify.strip():
+            step_spec["verify"] = step.verify.strip()
         if isinstance(step.execution, dict) and step.execution:
             step_spec["execution"] = step.execution
         steps.append(step_spec)
@@ -2570,12 +2586,15 @@ def build_workflow_spec(body: WorkflowRequest | WorkflowUpdateRequest) -> dict[s
                 raise HTTPException(status_code=400, detail=f"Step '{step_spec['name']}' depends on unknown step '{dep}'")
     _detect_workflow_cycles(steps)
 
-    return {
+    workflow_spec = {
         "description": body.description.strip(),
         "input": body.input.strip(),
         "messageBus": body.message_bus,
         "steps": steps,
     }
+    if getattr(body, "context_ref", None) and str(body.context_ref).strip():
+        workflow_spec["contextRef"] = str(body.context_ref).strip()
+    return workflow_spec
 
 
 def _detect_workflow_cycles(steps: list[dict[str, Any]]) -> None:
@@ -2890,6 +2909,7 @@ def workflow_info_from_resource(workflow: dict[str, Any]) -> WorkflowInfo:
         namespace=metadata.get("namespace", "default"),
         description=spec.get("description", "") or "",
         input=spec.get("input", "") or "",
+        context_ref=spec.get("contextRef"),
         message_bus=spec.get("messageBus", "in-memory") or "in-memory",
         steps=[
             WorkflowStepRequest(
@@ -2904,6 +2924,8 @@ def workflow_info_from_resource(workflow: dict[str, Any]) -> WorkflowInfo:
                 condition_expr=step.get("conditionExpr") or None,
                 then_steps=step.get("thenSteps") or None,
                 else_steps=step.get("elseSteps") or None,
+                verify=step.get("verify") or None,
+                review_criteria=step.get("reviewCriteria") or None,
             )
             for step in spec.get("steps") or []
         ],
@@ -3054,6 +3076,31 @@ def list_agent_pods(agent_name: str, namespace: str) -> list[Any]:
         pods = client.CoreV1Api().list_namespaced_pod(
             namespace=namespace,
             label_selector=f"app=ai-agent,agent-name={agent_name}",
+        )
+
+        def pod_sort_key(item: Any) -> float:
+            metadata = getattr(item, "metadata", None)
+            creation_timestamp = getattr(metadata, "creation_timestamp", None)
+            if creation_timestamp is None:
+                return 0.0
+            return creation_timestamp.timestamp()
+
+        return sorted(
+            pods.items,
+            key=pod_sort_key,
+            reverse=True,
+        )
+    except Exception:
+        return []
+
+
+def list_job_pods(job_name: str, namespace: str) -> list[Any]:
+    try:
+        from kubernetes import client
+
+        pods = client.CoreV1Api().list_namespaced_pod(
+            namespace=namespace,
+            label_selector=f"job-name={job_name}",
         )
 
         def pod_sort_key(item: Any) -> float:
@@ -5202,6 +5249,212 @@ def get_workflow_runs(
     """Return the recent run history for a workflow."""
     ensure_namespace_access(user, namespace)
     return list_workflow_runs(workflow_name, namespace, limit=limit)
+
+
+@app.get("/api/workflows/{workflow_name}/logs")
+def get_workflow_logs(
+    workflow_name: str,
+    namespace: str = "default",
+    tail: int = 200,
+    user=Depends(verify_token),
+):
+    ensure_namespace_access(user, namespace)
+    tail = max(1, min(tail, 5000))
+    resource = read_custom_resource("agentworkflows", workflow_name, namespace, "Workflow")
+    status = (resource.get("status") or {}) if isinstance(resource, dict) else {}
+    worker_job = status.get("workerJob") or {}
+    job_name = str(worker_job.get("name") or "")
+    job_namespace = str(worker_job.get("namespace") or namespace)
+    if not job_name:
+        raise HTTPException(status_code=404, detail=f"No worker job found for workflow '{workflow_name}'")
+
+    pods = list_job_pods(job_name, job_namespace)
+    if not pods:
+        raise HTTPException(status_code=404, detail=f"No worker pod found for workflow '{workflow_name}'")
+
+    pod_name = str(getattr(pods[0].metadata, "name", "") or "")
+    if not pod_name:
+        raise HTTPException(status_code=404, detail=f"No worker pod found for workflow '{workflow_name}'")
+
+    try:
+        from kubernetes import client
+
+        logs = client.CoreV1Api().read_namespaced_pod_log(
+            name=pod_name,
+            namespace=job_namespace,
+            container="worker",
+            tail_lines=tail,
+            timestamps=True,
+        )
+        return {
+            "workflow_name": workflow_name,
+            "job_name": job_name,
+            "pod_name": pod_name,
+            "logs": logs,
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("Could not retrieve workflow logs for %s: %s", workflow_name, exc)
+        raise HTTPException(status_code=404, detail="Could not retrieve workflow logs") from exc
+
+
+@app.get("/api/workflows/{workflow_name}/logs/stream")
+async def stream_workflow_logs(
+    workflow_name: str,
+    request: Request,
+    namespace: str = "default",
+    tail: int = 50,
+    user=Depends(verify_token),
+):
+    ensure_namespace_access(user, namespace)
+    tail = max(1, min(tail, 5000))
+    resource = read_custom_resource("agentworkflows", workflow_name, namespace, "Workflow")
+    status = (resource.get("status") or {}) if isinstance(resource, dict) else {}
+    worker_job = status.get("workerJob") or {}
+    job_name = str(worker_job.get("name") or "")
+    job_namespace = str(worker_job.get("namespace") or namespace)
+    if not job_name:
+        raise HTTPException(status_code=404, detail=f"No worker job found for workflow '{workflow_name}'")
+
+    pods = list_job_pods(job_name, job_namespace)
+    if not pods:
+        raise HTTPException(status_code=404, detail=f"No worker pod found for workflow '{workflow_name}'")
+
+    pod_name = str(getattr(pods[0].metadata, "name", "") or "")
+    if not pod_name:
+        raise HTTPException(status_code=404, detail=f"No worker pod found for workflow '{workflow_name}'")
+
+    async def log_event_generator():
+        from kubernetes import client as k8s_client, watch as k8s_watch
+        import time
+
+        yield sse_event("log.started", {"workflow_name": workflow_name, "job_name": job_name, "pod_name": pod_name})
+
+        w = k8s_watch.Watch()
+        try:
+            log_stream = w.stream(
+                k8s_client.CoreV1Api().read_namespaced_pod_log,
+                name=pod_name,
+                namespace=job_namespace,
+                container="worker",
+                follow=True,
+                tail_lines=tail,
+                timestamps=True,
+                _request_timeout=0,
+            )
+            last_event_time = time.monotonic()
+            for line in log_stream:
+                if await request.is_disconnected():
+                    break
+                yield sse_event("log.line", {"line": line})
+                last_event_time = time.monotonic()
+                await asyncio.sleep(0)
+                if time.monotonic() - last_event_time > STREAM_KEEPALIVE_SECONDS:
+                    yield sse_keepalive_comment()
+                    last_event_time = time.monotonic()
+        except Exception as exc:
+            yield sse_event("log.error", {"error": str(exc)})
+        finally:
+            w.stop()
+            yield sse_event("log.stopped", {"workflow_name": workflow_name, "job_name": job_name})
+
+    return StreamingResponse(log_event_generator(), media_type="text/event-stream")
+
+
+@app.get("/api/workflows/{workflow_name}/next-action")
+def get_workflow_next_action(
+    workflow_name: str,
+    namespace: str = "default",
+    user=Depends(verify_token),
+):
+    """Return a suggested next action based on the workflow's current state."""
+    ensure_namespace_access(user, namespace)
+    try:
+        resource = read_custom_resource("agentworkflows", workflow_name, namespace, "Workflow")
+    except Exception:
+        return {"action": "Create a workflow", "reason": "Workflow not found."}
+
+    status = (resource.get("status") or {}) if isinstance(resource, dict) else {}
+    phase = str(status.get("phase", "") or "").strip()
+    step_states = status.get("stepStates") or {}
+
+    # Determine failed steps
+    failed_steps = [
+        name for name, state in step_states.items()
+        if isinstance(state, dict) and str(state.get("status", "")).strip() == "failed"
+    ]
+    # Determine review results
+    rejected_reviews = [
+        name for name, state in step_states.items()
+        if isinstance(state, dict) and isinstance(state.get("reviewResult"), dict)
+        and not state["reviewResult"].get("approved", True)
+    ]
+    # Determine verification failures
+    verify_failures = [
+        name for name, state in step_states.items()
+        if isinstance(state, dict) and isinstance(state.get("verificationResult"), dict)
+        and not state["verificationResult"].get("passed", True)
+    ]
+
+    if phase == "failed":
+        if failed_steps:
+            return {
+                "action": f"Review step '{failed_steps[0]}' failure and retry",
+                "reason": f"Workflow failed at step(s): {', '.join(failed_steps)}",
+                "failedSteps": failed_steps,
+            }
+        return {"action": "Inspect workflow failure and retry", "reason": "Workflow is in failed state."}
+
+    if phase == "waiting-approval":
+        pending = status.get("pendingApproval") or {}
+        step_name = pending.get("stepName", "unknown")
+        return {
+            "action": f"Approve or reject step '{step_name}'",
+            "reason": "Workflow is waiting for human approval.",
+        }
+
+    if phase == "completed":
+        if rejected_reviews:
+            return {
+                "action": f"Address review findings in step(s): {', '.join(rejected_reviews)}",
+                "reason": "One or more review steps were rejected.",
+                "rejectedReviews": rejected_reviews,
+            }
+        if verify_failures:
+            return {
+                "action": f"Fix verification failures in step(s): {', '.join(verify_failures)}",
+                "reason": "One or more steps failed verification.",
+                "verifyFailures": verify_failures,
+            }
+        # Check if there's a matching eval
+        try:
+            evals = list_custom_resources("agentevals", namespace)
+            matching_evals = [
+                e for e in evals
+                if isinstance(e, dict)
+                and str((e.get("spec") or {}).get("workflowRef", "")) == workflow_name
+            ]
+            if not matching_evals:
+                return {"action": "Run evaluation", "reason": "Workflow completed successfully but has no evaluation."}
+            # Check eval status
+            for ev in matching_evals:
+                ev_status = (ev.get("status") or {})
+                ev_phase = str(ev_status.get("phase", "")).strip()
+                if ev_phase == "failed":
+                    return {
+                        "action": "Check failing eval test cases",
+                        "reason": f"Eval '{ev.get('metadata', {}).get('name', '')}' has failures.",
+                    }
+        except Exception:
+            pass
+        return {"action": "Deploy or promote", "reason": "All steps completed and verified successfully."}
+
+    if phase == "running":
+        current = str(status.get("currentStep", "") or "")
+        return {"action": "Wait for completion", "reason": f"Workflow is running (current: {current})."}
+
+    return {"action": "Trigger workflow", "reason": "Workflow has not been started."}
 
 
 @app.get("/api/evals", response_model=list[EvalInfo])

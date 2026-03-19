@@ -1,0 +1,69 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ableton-live-web-context
+  namespace: default
+data:
+  context: |
+    # Ableton Live Web — Project Context
+
+    ## Product Description
+    Build a browser-based Digital Audio Workstation (DAW) inspired by Ableton Live.
+    The application lets users create, arrange, and mix music entirely in the browser
+    using the Web Audio API. It supports multi-track arrangement, a channel mixer,
+    transport controls (play/pause/stop/record/loop), a clip launcher, and a
+    real-time audio effects rack.
+
+    ## Tech Stack
+    - Language: TypeScript (strict mode)
+    - Framework: React 18 with functional components and hooks
+    - Audio Engine: Web Audio API + Tone.js for scheduling and synthesis
+    - Build Tool: Vite 5
+    - Styling: Tailwind CSS 3 with a dark theme (Ableton-inspired palette)
+    - State Management: Zustand for global DAW state (transport, tracks, mixer)
+    - Testing: Vitest + React Testing Library
+    - Package Manager: pnpm
+
+    ## Architecture Conventions
+    - Project root at `/workspace/` (git repository root):
+      - `src/engine/` — Web Audio graph, scheduling, transport clock
+      - `src/components/` — React UI components (track lanes, mixer, effects, transport)
+      - `src/stores/` — Zustand stores for DAW state
+      - `src/types/` — Shared TypeScript interfaces
+      - `src/utils/` — Helper utilities
+      - `public/` — Static assets (samples, icons)
+    - All audio processing runs client-side — no server-side audio.
+    - Components communicate through Zustand stores, never direct prop drilling
+      beyond one level.
+    - Audio engine exposes a pure TypeScript API; React components never touch
+      AudioContext directly.
+
+    ## Constraints
+    - No server-side audio processing — everything runs in the browser.
+    - Must work in Chrome 120+ and Firefox 120+ (WebAudio baseline).
+    - Maximum initial bundle size: 500 KB gzipped (excluding audio samples).
+    - All audio operations must be sample-accurate using Tone.Transport scheduling.
+    - Dark theme only — use Ableton Live 11 color palette (#1e1e1e background,
+      #ff764d accent, #a8a8a8 text).
+    - Responsive layout that works at 1280px and above.
+
+    ## Git Coordination
+    - All agents share a single git repository configured via gitConfig.
+    - The git repository is auto-cloned into `/workspace/` at agent startup.
+    - The architect works on the `main` branch and pushes the initial scaffold.
+    - Backend and frontend agents work on dedicated branches (`agent/backend`,
+      `agent/frontend`) that are auto-checked-out at startup.
+    - Agents should commit and push after completing each major component.
+    - The integration reviewer must pull all branches, merge them into main,
+      then run build and test verification.
+    - The shared repository URL is in the `GIT_REPO_URL` environment variable.
+
+    ## Key Features (Priority Order)
+    1. Transport bar: play, pause, stop, BPM control, loop toggle, metronome
+    2. Multi-track arrangement view with horizontal timeline
+    3. Channel mixer: volume faders, pan knobs, solo/mute per track
+    4. Clip launcher grid (session view) — trigger clips per track
+    5. Audio effects rack: reverb, delay, EQ, compressor per channel
+    6. MIDI-style piano roll editor for note input
+    7. Waveform display for audio clips
+    8. Master channel with metering (peak + RMS)

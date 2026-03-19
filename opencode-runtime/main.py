@@ -67,12 +67,22 @@ SESSION_IDLE_TIMEOUT_SECONDS = max(float(os.getenv("OPENCODE_SESSION_IDLE_TIMEOU
 SESSION_IDLE_POLL_SECONDS = max(float(os.getenv("OPENCODE_SESSION_IDLE_POLL_SECONDS", "0.5")), 0.1)
 STRUCTURED_OUTPUT_RETRY_COUNT = max(int(os.getenv("OPENCODE_STRUCTURED_OUTPUT_RETRY_COUNT", "2")), 0)
 AUTONOMY_CONTINUATION_PROMPT = (
-    "Continue working on the task. Review your progress, fix any errors, "
-    "and complete all remaining steps. Verify your work before finishing."
+    "Continue working on the task. Before proceeding:\n"
+    "1. REVIEW: Summarize what you have completed so far and what remains.\n"
+    "2. CHECK: Verify your completed work actually functions — read files back, "
+    "run tests, or execute the code. Fix any issues you find.\n"
+    "3. CONTINUE: Proceed with the next incomplete step in your plan.\n"
+    "4. VERIFY BEFORE FINISHING: Before your final response, confirm every "
+    "requirement from the original task is met — do not claim completion "
+    "without fresh evidence."
 )
 COMPACTION_TOKEN_THRESHOLD = float(os.getenv("OPENCODE_COMPACTION_TOKEN_THRESHOLD", "0.75"))
 SESSION_ABORT_TIMEOUT_SECONDS = max(float(os.getenv("OPENCODE_ABORT_TIMEOUT_SECONDS", "30")), 5.0)
 PLAN_AGENT_PROMPT_THRESHOLD = max(int(os.getenv("OPENCODE_PLAN_THRESHOLD_CHARS", "500")), 100)
+SESSION_MAX_AGE_SECONDS = max(int(os.getenv("OPENCODE_SESSION_MAX_AGE_SECONDS", "86400")), 60)
+SESSION_MAX_ENTRIES = max(int(os.getenv("OPENCODE_SESSION_MAX_ENTRIES", "1000")), 10)
+MAX_COMPACTION_ATTEMPTS = max(int(os.getenv("OPENCODE_MAX_COMPACTION_ATTEMPTS", "2")), 1)
+COMPACTION_MIN_TURN_SPACING = max(int(os.getenv("OPENCODE_COMPACTION_MIN_TURN_SPACING", "3")), 1)
 SESSION_INIT_ON_CREATE = os.getenv("OPENCODE_SESSION_INIT_ON_CREATE", "true").strip().lower() in {
     "1",
     "true",
@@ -100,12 +110,15 @@ FORMAT_INSTRUCTIONS: dict[str, str] = {
     "json": (
         "IMPORTANT: Your final response MUST be valid JSON only. "
         "No markdown fencing, no explanation text before or after the JSON. "
-        "The output must be directly parseable by json.loads()."
+        "The output must be directly parseable by json.loads(). "
+        "Ensure all required fields are present, values have correct types, "
+        "no trailing commas appear, and no comments are included in the JSON."
     ),
     "code": (
         "IMPORTANT: Respond with the requested code only. No markdown code fences "
         "wrapping it. Include code comments where helpful but no explanatory prose "
-        "outside the code."
+        "outside the code. Provide complete, working implementations — never "
+        "truncate with placeholders like '...' or 'rest of code here'."
     ),
     "markdown": "Respond in well-formatted Markdown.",
     "text": "Respond in plain text without any special formatting.",
@@ -114,26 +127,42 @@ FORMAT_INSTRUCTIONS: dict[str, str] = {
 AUTONOMY_SYSTEM_PROMPT = (
     "You are an autonomous coding agent. Follow these rules:\n"
     "1. PLAN FIRST: For complex tasks (3+ steps), use todowrite to create a structured plan "
-    "before writing any code. Track progress by updating todo status as you work.\n"
+    "before writing any code. Order steps by dependency — prerequisites first. Each step "
+    "must be a single, verifiable unit of work. Track progress by updating todo status as you work.\n"
     "2. USE NATIVE TOOLS: Use your built-in tools (write, edit, bash, read, glob, grep, "
     "webfetch, websearch, codesearch) for all file and code operations — do NOT rely on "
     "external MCP servers for tasks you can do natively.\n"
-    "3. COMPLETE FULLY: Create all necessary files, write all code, install dependencies, "
-    "and verify your work. Do not leave tasks partially done.\n"
-    "4. HANDLE ERRORS: If you encounter an error, diagnose it, fix it, and retry automatically. "
-    "Read error messages carefully and address root causes, not symptoms.\n"
+    "3. ATOMIC TASK COMMITMENT: Complete each task fully before starting the next. "
+    "Do not leave tasks partially done or switch to another task mid-way. "
+    "One task at a time, done right.\n"
+    "4. DIAGNOSE BEFORE FIXING: When you encounter an error, STOP. Read the full error message "
+    "and stack trace. Identify the root cause before attempting any fix — never apply "
+    "speculative patches. Address causes, not symptoms.\n"
     "5. NO USER INPUT: Do not ask for user input or clarification — make reasonable decisions "
     "and proceed autonomously.\n"
     "6. FILE OPERATIONS: Use write to create files, edit to modify existing files, "
     "bash to run commands and install dependencies.\n"
-    "7. VERIFY WORK: After creating or modifying files, verify by reading them back, "
-    "running the code, or executing tests. Fix issues before marking tasks complete.\n"
+    "7. VERIFY BEFORE CLAIMING DONE: Task completion is not goal achievement. After each change, "
+    "verify it works: read files back, run the code, execute tests. Work backwards from the goal — "
+    "what must be TRUE for this to work? What must EXIST? What must be CONNECTED? Confirm each "
+    "before marking complete.\n"
     "8. DELEGATE SUBTASKS: For complex multi-part work, use the task tool to delegate "
     "independent subtasks to parallel sub-agents.\n"
     "9. SEARCH BEFORE WRITING: Use glob, grep, and codesearch to understand existing code "
     "before making changes. Understand the codebase structure first.\n"
-    "10. SUMMARIZE: Summarize what you accomplished in your final response, including "
-    "files created/modified and any remaining issues."
+    "10. NO REPEATED FAILURES: If the same approach fails twice, step back and try a "
+    "fundamentally different strategy. Do not retry identical commands expecting different results.\n"
+    "11. CONTEXT AWARENESS: Keep your responses and plans focused. Avoid generating unnecessary "
+    "output that wastes context window space. Prefer targeted edits over full-file rewrites.\n"
+    "12. GIT OPERATIONS: For git operations (clone, commit, push, pull, branch), prefer using "
+    "the git MCP sidecar tools (git_clone, git_commit, git_push, git_pull, git_branch) when "
+    "available — they have authentication pre-configured. Only fall back to bash git commands "
+    "if no git MCP tools are available. The shared repository URL is available in the "
+    "GIT_REPO_URL environment variable — read it with `echo $GIT_REPO_URL` and use it as "
+    "the repo_url parameter for git_clone. When cloning into the workspace, use "
+    "target_dir='/workspace' and full_clone=true for push support.\n"
+    "13. SUMMARIZE: Summarize what you accomplished in your final response, including "
+    "files created/modified and verification results."
 )
 
 A2A_ALLOWED_CALLERS_ENV = "A2A_ALLOWED_CALLERS_JSON"
@@ -450,12 +479,17 @@ def build_generated_config(sidecars: list[dict[str, Any]]) -> tuple[dict[str, An
 
 
 class SessionRegistry:
-    def __init__(self, path: Path):
+    """Thread-safe ``thread_id → session_id`` mapping with lazy pruning."""
+
+    def __init__(self, path: Path, *, max_age_seconds: int = 86400, max_entries: int = 1000):
         self.path = path
         self._lock = threading.Lock()
-        self._cache: dict[str, str] | None = None
+        self._cache: dict[str, dict[str, Any]] | None = None
+        self.max_age_seconds = max_age_seconds
+        self.max_entries = max_entries
+        self._last_prune_time: float = 0.0
 
-    def _load(self) -> dict[str, str]:
+    def _load(self) -> dict[str, dict[str, Any]]:
         if self._cache is not None:
             return dict(self._cache)
         if not self.path.exists():
@@ -468,20 +502,49 @@ class SessionRegistry:
             payload = {}
         if not isinstance(payload, dict):
             payload = {}
-        self._cache = {str(key): str(value) for key, value in payload.items()}
+        # Migrate legacy entries (plain string values) to timestamped dicts
+        migrated: dict[str, dict[str, Any]] = {}
+        for key, value in payload.items():
+            if isinstance(value, dict) and "session_id" in value:
+                migrated[str(key)] = value
+            else:
+                migrated[str(key)] = {"session_id": str(value), "last_accessed": time.time()}
+        self._cache = migrated
         return dict(self._cache)
+
+    def _save(self, data: dict[str, dict[str, Any]]) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text(json.dumps(data, ensure_ascii=False, sort_keys=True, indent=2), encoding="utf-8")
+        self._cache = data
+
+    def _maybe_prune(self, data: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+        """Prune stale/excess entries; debounced to once per 60s."""
+        now = time.time()
+        if now - self._last_prune_time < 60.0:
+            return data
+        self._last_prune_time = now
+        cutoff = now - self.max_age_seconds
+        pruned = {k: v for k, v in data.items() if v.get("last_accessed", 0) >= cutoff}
+        if len(pruned) > self.max_entries:
+            sorted_entries = sorted(pruned.items(), key=lambda kv: kv[1].get("last_accessed", 0), reverse=True)
+            pruned = dict(sorted_entries[: self.max_entries])
+        return pruned
 
     def get(self, thread_id: str) -> str | None:
         with self._lock:
-            return self._load().get(thread_id)
+            data = self._load()
+            entry = data.get(thread_id)
+            if entry is None:
+                return None
+            entry["last_accessed"] = time.time()
+            return entry["session_id"]
 
     def set(self, thread_id: str, session_id: str) -> None:
         with self._lock:
-            payload = self._load()
-            payload[thread_id] = session_id
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            self.path.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2), encoding="utf-8")
-            self._cache = payload
+            data = self._load()
+            data[thread_id] = {"session_id": session_id, "last_accessed": time.time()}
+            data = self._maybe_prune(data)
+            self._save(data)
 
     def get_or_set(self, thread_id: str, session_id: str) -> str:
         """Atomically return an existing session or register *session_id*.
@@ -491,18 +554,31 @@ class SessionRegistry:
         wins and the caller's *session_id* is discarded.
         """
         with self._lock:
-            payload = self._load()
-            existing = payload.get(thread_id)
+            data = self._load()
+            existing = data.get(thread_id)
             if existing:
-                return existing
-            payload[thread_id] = session_id
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            self.path.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2), encoding="utf-8")
-            self._cache = payload
+                existing["last_accessed"] = time.time()
+                return existing["session_id"]
+            data[thread_id] = {"session_id": session_id, "last_accessed": time.time()}
+            data = self._maybe_prune(data)
+            self._save(data)
             return session_id
 
+    @property
+    def size(self) -> int:
+        """Current number of entries (for health metrics)."""
+        with self._lock:
+            return len(self._load())
 
-SESSION_REGISTRY = SessionRegistry(SESSION_MAP_PATH)
+    def stale_count(self, stale_seconds: float = 3600.0) -> int:
+        """Count entries older than *stale_seconds* (for health metrics)."""
+        cutoff = time.time() - stale_seconds
+        with self._lock:
+            data = self._load()
+            return sum(1 for v in data.values() if v.get("last_accessed", 0) < cutoff)
+
+
+SESSION_REGISTRY = SessionRegistry(SESSION_MAP_PATH, max_age_seconds=SESSION_MAX_AGE_SECONDS, max_entries=SESSION_MAX_ENTRIES)
 
 
 def resolve_working_directory(raw_value: str | None) -> str:
@@ -528,7 +604,18 @@ def combine_system_prompt(*parts: str | None) -> str | None:
     rendered = [str(item).strip() for item in parts if str(item or "").strip()]
     if not rendered:
         return None
-    return "\n\n".join(rendered)
+    combined = "\n\n".join(rendered)
+    # Warn if the combined system prompt is very large relative to the
+    # model's context window — it can crowd out working context.
+    if len(combined) > MAX_SYSTEM_PROMPT_CHARS:
+        logger.warning(
+            "Combined system prompt (%d chars) exceeds MAX_SYSTEM_PROMPT_CHARS (%d); "
+            "truncating to fit. Consider shortening your system prompt.",
+            len(combined),
+            MAX_SYSTEM_PROMPT_CHARS,
+        )
+        combined = combined[:MAX_SYSTEM_PROMPT_CHARS]
+    return combined
 
 
 def format_team_context_system_prompt(team_context: dict[str, Any] | None) -> str | None:
@@ -729,6 +816,95 @@ def classify_error_type(payload: dict[str, Any]) -> str | None:
         "MessageOutputLengthError": "output_length",
     }
     return error_map.get(name)
+
+
+def compute_context_budget(payload: dict[str, Any]) -> dict[str, Any]:
+    """Compute context budget information from an OpenCode response payload.
+
+    Returns a dict with token usage, remaining capacity, percentage used,
+    and a status tier: ``"ok"`` (>35% remaining), ``"warning"`` (25-35%),
+    or ``"critical"`` (<25%).
+    """
+    info = payload.get("info") or {}
+    if not isinstance(info, dict):
+        return {"status": "unknown", "model_context_limit": MODEL_CONTEXT_LIMIT}
+    tokens = info.get("tokens")
+    if not isinstance(tokens, dict):
+        return {"status": "unknown", "model_context_limit": MODEL_CONTEXT_LIMIT}
+    total = tokens.get("total") or 0
+    if not total:
+        total = (tokens.get("input") or 0) + (tokens.get("output") or 0) + (tokens.get("cache", {}).get("read") or 0)
+    if total <= 0:
+        return {"status": "unknown", "model_context_limit": MODEL_CONTEXT_LIMIT}
+    remaining = max(MODEL_CONTEXT_LIMIT - total, 0)
+    usage_pct = round((total / MODEL_CONTEXT_LIMIT) * 100, 1)
+    remaining_pct = 100.0 - usage_pct
+    if remaining_pct > 35:
+        status = "ok"
+    elif remaining_pct >= 25:
+        status = "warning"
+    else:
+        status = "critical"
+    return {
+        "model_context_limit": MODEL_CONTEXT_LIMIT,
+        "tokens_used": total,
+        "tokens_remaining": remaining,
+        "usage_percent": usage_pct,
+        "status": status,
+    }
+
+
+_ANTI_PATTERN_REGEXES: list[tuple[str, re.Pattern[str]]] = [
+    ("TODO marker", re.compile(r"\bTODO\b", re.IGNORECASE)),
+    ("FIXME marker", re.compile(r"\bFIXME\b", re.IGNORECASE)),
+    ("HACK marker", re.compile(r"\bHACK\b", re.IGNORECASE)),
+    ("placeholder implementation", re.compile(r"\bplaceholder\b", re.IGNORECASE)),
+    ("stub implementation", re.compile(r"\bstub\b", re.IGNORECASE)),
+    ("not implemented", re.compile(r"\bnot\s+implemented\b", re.IGNORECASE)),
+    ("empty return", re.compile(r"return\s*\n|return\s*$", re.MULTILINE)),
+    ("pass statement", re.compile(r"^\s*pass\s*$", re.MULTILINE)),
+    ("console-only implementation", re.compile(r"console\.log\(|print\(['\"]", re.IGNORECASE)),
+]
+
+
+def detect_anti_patterns(text: str) -> list[str]:
+    """Scan response text for common anti-patterns.
+
+    Returns a deduplicated list of anti-pattern labels found.
+    """
+    if not text:
+        return []
+    found: list[str] = []
+    for label, pattern in _ANTI_PATTERN_REGEXES:
+        if pattern.search(text):
+            found.append(label)
+    return found
+
+
+def derive_task_status(
+    status: str,
+    warnings: list[str],
+    context_budget: dict[str, Any],
+    anti_patterns: list[str] | None = None,
+) -> str:
+    """Derive a high-level task status using the Superpowers 4-status model.
+
+    Returns one of: ``DONE``, ``DONE_WITH_CONCERNS``, ``NEEDS_CONTEXT``,
+    ``BLOCKED``.
+    """
+    if status in ("error",):
+        return "BLOCKED"
+    if context_budget.get("status") == "critical":
+        return "NEEDS_CONTEXT"
+    concerns = bool(warnings) or bool(anti_patterns)
+    if status == "completed" and not concerns:
+        return "DONE"
+    if status == "completed" and concerns:
+        return "DONE_WITH_CONCERNS"
+    # incomplete or unknown statuses with context pressure
+    if context_budget.get("status") == "warning":
+        return "NEEDS_CONTEXT"
+    return "DONE_WITH_CONCERNS"
 
 
 def select_agent_for_prompt(prompt: str, *, is_first_turn: bool) -> str:
@@ -1066,6 +1242,80 @@ SKILL_RUNTIME_CONFIG: dict[str, Any] = {
 }
 
 
+def configure_git_credentials() -> None:
+    """Bootstrap git credentials from env vars so bash git operations have auth.
+
+    Reads GIT_AUTH_METHOD, GIT_TOKEN, GIT_USERNAME, GIT_PASSWORD, and
+    GIT_REPO_URL — the same env vars injected by the operator when
+    gitConfig is set.
+    """
+    auth_method = os.getenv("GIT_AUTH_METHOD", "").strip()
+    if not auth_method:
+        return
+
+    subprocess.run(
+        ["git", "config", "--global", "user.name", "AI Agent"],
+        capture_output=True, timeout=5,
+    )
+    subprocess.run(
+        ["git", "config", "--global", "user.email", "agent@kubemininions.local"],
+        capture_output=True, timeout=5,
+    )
+
+    repo_url = os.getenv("GIT_REPO_URL", "").strip()
+
+    if auth_method == "token":
+        token = os.getenv("GIT_TOKEN", "").strip()
+        if not token:
+            logger.warning("GIT_AUTH_METHOD=token but GIT_TOKEN is empty")
+            return
+        subprocess.run(
+            ["git", "config", "--global", "credential.helper", "store"],
+            capture_output=True, timeout=5,
+        )
+        cred_path = os.path.expanduser("~/.git-credentials")
+        if repo_url and repo_url.startswith("https://"):
+            host = repo_url.split("//")[1].split("/")[0]
+            cred_line = f"https://oauth2:{token}@{host}\n"
+        else:
+            cred_line = f"https://oauth2:{token}@github.com\n"
+        with open(cred_path, "w") as f:
+            f.write(cred_line)
+        os.chmod(cred_path, 0o600)
+        logger.info("Configured git credential store (token) for bash git operations")
+
+    elif auth_method == "basic":
+        username = os.getenv("GIT_USERNAME", "").strip()
+        password = os.getenv("GIT_PASSWORD", "").strip()
+        if not username or not password:
+            logger.warning("GIT_AUTH_METHOD=basic but GIT_USERNAME or GIT_PASSWORD is empty")
+            return
+        subprocess.run(
+            ["git", "config", "--global", "credential.helper", "store"],
+            capture_output=True, timeout=5,
+        )
+        cred_path = os.path.expanduser("~/.git-credentials")
+        if repo_url and repo_url.startswith("https://"):
+            host = repo_url.split("//")[1].split("/")[0]
+            cred_line = f"https://{username}:{password}@{host}\n"
+        else:
+            cred_line = f"https://{username}:{password}@github.com\n"
+        with open(cred_path, "w") as f:
+            f.write(cred_line)
+        os.chmod(cred_path, 0o600)
+        logger.info("Configured git credential store (basic) for bash git operations")
+
+    elif auth_method == "ssh":
+        ssh_key = os.getenv("GIT_SSH_KEY_PATH", "").strip()
+        if ssh_key and os.path.exists(ssh_key):
+            subprocess.run(
+                ["git", "config", "--global", "core.sshCommand",
+                 f"ssh -i {ssh_key} -o StrictHostKeyChecking=accept-new"],
+                capture_output=True, timeout=5,
+            )
+            logger.info("Configured git SSH key for bash git operations")
+
+
 def validate_runtime_startup() -> None:
     binary_path = Path(OPENCODE_BIN)
     if binary_path.is_absolute():
@@ -1220,8 +1470,19 @@ def _send_prompt_with_session_recovery(
         raise
 
 
+def _extract_structured_output(payload: dict[str, Any]) -> Any | None:
+    """Return the structured output object from an OpenCode response, or *None*."""
+    info = payload.get("info")
+    if not isinstance(info, dict):
+        return None
+    structured = info.get("structured")
+    if structured is not None:
+        return structured
+    return info.get("structured_output")
+
+
 def _build_response_metadata(payload: dict[str, Any]) -> dict[str, Any] | None:
-    """Extract metadata (tokens, cost, timing) from the OpenCode response."""
+    """Extract metadata (tokens, cost, timing, structured_output) from the OpenCode response."""
     info = payload.get("info")
     if not isinstance(info, dict):
         return None
@@ -1238,10 +1499,16 @@ def _build_response_metadata(payload: dict[str, Any]) -> dict[str, Any] | None:
     finish = info.get("finish")
     if finish:
         metadata["finish_reason"] = str(finish)
+    structured = _extract_structured_output(payload)
+    if structured is not None:
+        metadata["structured_output"] = structured
     return metadata or None
 
 
-def invoke_opencode(request: InvokeRequest) -> InvokeResponse:
+StreamCallback = Any  # Callable[[str, dict[str, Any]], None] | None
+
+
+def invoke_opencode(request: InvokeRequest, stream_callback: StreamCallback = None) -> InvokeResponse:
     ensure_server_running()
     validate_inbound_a2a_request(request)
 
@@ -1306,14 +1573,24 @@ def invoke_opencode(request: InvokeRequest) -> InvokeResponse:
     retries_used = 0
     last_payload: dict[str, Any] = {}
     current_prompt = request.prompt
-    compaction_triggered = False
+    compaction_attempts = 0
+    last_compaction_turn = -COMPACTION_MIN_TURN_SPACING  # allow first compaction immediately
+    handoff_summary: dict[str, Any] | None = None
 
     # Select agent: use plan for complex first prompts, then build
     current_agent = select_agent_for_prompt(request.prompt, is_first_turn=True) if request.autonomous else DEFAULT_AGENT
     if current_agent == "plan" and current_agent != DEFAULT_AGENT:
         all_warnings.append("Using plan agent for initial analysis before execution.")
 
+    def _emit(event_type: str, data: dict[str, Any]) -> None:
+        if stream_callback is not None:
+            try:
+                stream_callback(event_type, data)
+            except Exception:
+                pass
+
     for turn in range(effective_max_turns):
+        _emit("response.turn_started", {"turn": turn + 1, "max_turns": effective_max_turns, "agent": current_agent})
         use_system = system_prompt if turn == 0 else None
         try:
             session_id, payload = _send_prompt_with_session_recovery(
@@ -1340,6 +1617,7 @@ def invoke_opencode(request: InvokeRequest) -> InvokeResponse:
                     detail=f"OpenCode invocation failed after {retries_used} retries: {exc}",
                 ) from exc
             retries_used += 1
+            _emit("response.error_recovery", {"turn": turn + 1, "error_type": "http", "retry": retries_used, "max_retries": max_retries})
             all_warnings.append(
                 f"Turn {turn + 1}: HTTP error '{exc}', retrying ({retries_used}/{max_retries})"
             )
@@ -1347,7 +1625,9 @@ def invoke_opencode(request: InvokeRequest) -> InvokeResponse:
             # context; only prepend a short recovery note.
             recovery_note = (
                 f"[Note: the previous request encountered a transient error ({type(exc).__name__}). "
-                f"Continue from where you left off.]\n\n"
+                f"Check whether the previous operation partially completed before retrying. "
+                f"If files were partially written or commands partially executed, verify their "
+                f"state before continuing.]\n\n"
             )
             current_prompt = truncate_text(
                 f"{recovery_note}{current_prompt}", MAX_PROMPT_CHARS
@@ -1357,41 +1637,70 @@ def invoke_opencode(request: InvokeRequest) -> InvokeResponse:
         last_payload = payload
         completion = detect_completion_status(payload)
 
+        # Emit per-turn progress
+        turn_text = extract_response_text(payload).strip()
+        _emit("response.turn_completed", {
+            "turn": turn + 1,
+            "status": completion,
+            "response_length": len(turn_text),
+        })
+        if turn_text:
+            _emit("response.delta", {"turn": turn + 1, "delta": turn_text, "source": "opencode"})
+
         # After plan agent completes, switch to build agent for execution
         if current_agent == "plan" and completion in ("completed", "incomplete"):
             current_agent = DEFAULT_AGENT
             if completion == "completed":
                 all_warnings.append("Plan phase completed, switching to build agent for execution.")
                 current_prompt = (
-                    "Now execute the plan you just created. Follow the steps "
-                    "exactly, creating all files and running all commands. "
-                    "Update the todo list as you complete each step."
+                    "Now execute the plan you just created. For each step:\n"
+                    "1. Implement the step completely — do not skip ahead.\n"
+                    "2. Verify it works (read files back, run code, check output).\n"
+                    "3. Fix any issues before moving to the next step.\n"
+                    "4. Update the todo list to mark the step complete.\n"
+                    "After all steps: run the full test suite or verify the overall "
+                    "result meets the original objective."
                 )
                 continue
 
         # Handle context overflow — trigger compaction and retry
-        if completion == "context_overflow" and not compaction_triggered:
-            compaction_triggered = True
+        _can_compact = (
+            compaction_attempts < MAX_COMPACTION_ATTEMPTS
+            and (turn - last_compaction_turn) >= COMPACTION_MIN_TURN_SPACING
+        )
+        if completion == "context_overflow" and _can_compact:
+            compaction_attempts += 1
+            last_compaction_turn = turn
+            _emit("response.compaction", {"turn": turn + 1, "reason": "context_overflow", "attempt": compaction_attempts, "max": MAX_COMPACTION_ATTEMPTS})
             if summarize_session(session_id):
-                all_warnings.append(f"Turn {turn + 1}: context overflow detected, triggered compaction.")
+                all_warnings.append(f"Turn {turn + 1}: context overflow detected, triggered compaction ({compaction_attempts}/{MAX_COMPACTION_ATTEMPTS}).")
                 wait_for_session_idle(session_id, timeout_seconds=SESSION_ABORT_TIMEOUT_SECONDS)
                 current_prompt = (
-                    "The context was compacted due to overflow. Continue working on the "
-                    "task from where you left off. Check what has been done and complete "
-                    "any remaining steps."
+                    "The context was compacted due to overflow. Before continuing:\n"
+                    "1. ORIENT: Read your todowrite plan to recall progress. Run `glob **/*` "
+                    "to see all files currently in the workspace.\n"
+                    "2. LOCATE: Identify exactly which step you were on when context was compacted.\n"
+                    "3. VERIFY: Check the last completed item actually works (read it, run it).\n"
+                    "4. CONTINUE: Proceed from the next incomplete step. Do not redo completed work "
+                    "or recreate files that already exist."
                 )
                 continue
             all_warnings.append(f"Turn {turn + 1}: context overflow, compaction failed.")
 
         # Proactive compaction — if token usage is high, compact before overflow
-        if not compaction_triggered and check_context_overflow(payload):
-            compaction_triggered = True
+        if _can_compact and check_context_overflow(payload):
+            compaction_attempts += 1
+            last_compaction_turn = turn
+            _emit("response.compaction", {"turn": turn + 1, "reason": "proactive", "attempt": compaction_attempts, "max": MAX_COMPACTION_ATTEMPTS})
             if summarize_session(session_id):
-                all_warnings.append(f"Turn {turn + 1}: proactively triggered compaction (token usage high).")
+                all_warnings.append(f"Turn {turn + 1}: proactively triggered compaction (token usage high, {compaction_attempts}/{MAX_COMPACTION_ATTEMPTS}).")
                 wait_for_session_idle(session_id, timeout_seconds=SESSION_ABORT_TIMEOUT_SECONDS)
                 current_prompt = (
-                    "Context was proactively compacted to free space. "
-                    "Continue working on your task from where you left off."
+                    "Context was proactively compacted to free space. Before continuing:\n"
+                    "1. Check your todowrite plan to see which steps are done vs. remaining.\n"
+                    "2. Run `glob **/*` to see existing files — do not recreate them.\n"
+                    "3. Verify the last completed step is correct.\n"
+                    "4. Continue from the next incomplete step — do not restart from the beginning."
                 )
                 continue
 
@@ -1400,23 +1709,33 @@ def invoke_opencode(request: InvokeRequest) -> InvokeResponse:
 
         if completion == "error":
             error_type = classify_error_type(payload)
-            if error_type == "context_overflow" and not compaction_triggered:
-                compaction_triggered = True
+            if error_type == "context_overflow" and _can_compact:
+                compaction_attempts += 1
+                last_compaction_turn = turn
+                _emit("response.compaction", {"turn": turn + 1, "reason": "error_overflow", "attempt": compaction_attempts, "max": MAX_COMPACTION_ATTEMPTS})
                 if summarize_session(session_id):
-                    all_warnings.append(f"Turn {turn + 1}: context overflow error, compacting.")
+                    all_warnings.append(f"Turn {turn + 1}: context overflow error, compacting ({compaction_attempts}/{MAX_COMPACTION_ATTEMPTS}).")
                     wait_for_session_idle(session_id, timeout_seconds=SESSION_ABORT_TIMEOUT_SECONDS)
                     current_prompt = (
-                        "Context was compacted. Continue the task from where you left off."
+                        "Context was compacted after an error. Before continuing:\n"
+                        "1. Review your plan to identify where you stopped.\n"
+                        "2. Run `glob **/*` to see existing files in the workspace.\n"
+                        "3. Check the last action's result — did it succeed or fail?\n"
+                        "4. Continue from the next actionable step. Do not recreate existing files."
                     )
                     continue
             if error_type == "structured_output" and retries_used < max_retries:
                 retries_used += 1
+                _emit("response.error_recovery", {"turn": turn + 1, "error_type": "structured_output", "retry": retries_used, "max_retries": max_retries})
                 all_warnings.append(
                     f"Turn {turn + 1}: structured output validation failed, retrying ({retries_used}/{max_retries})"
                 )
                 current_prompt = (
-                    "Your previous response did not satisfy the required JSON schema. "
-                    "Produce ONLY valid structured output that matches the schema exactly."
+                    "Your previous response did not satisfy the required JSON schema. Fix it now:\n"
+                    "1. Re-read the schema requirements — check all required fields and their types.\n"
+                    "2. Ensure every required field is present with the correct type.\n"
+                    "3. Output ONLY the valid JSON — no markdown fencing, no explanation text.\n"
+                    "4. Validate mentally: would json.loads() parse this without error?"
                 )
                 continue
             if error_type == "auth":
@@ -1424,10 +1743,15 @@ def invoke_opencode(request: InvokeRequest) -> InvokeResponse:
                 break
             if retries_used < max_retries:
                 retries_used += 1
+                _emit("response.error_recovery", {"turn": turn + 1, "error_type": error_type or "unknown", "retry": retries_used, "max_retries": max_retries})
                 all_warnings.append(f"Turn {turn + 1}: agent error ({error_type or 'unknown'}), retrying ({retries_used}/{max_retries})")
                 current_prompt = (
-                    "The previous step encountered an error. Review what went wrong, "
-                    "fix the issues, and complete the task."
+                    "The previous step encountered an error. Before retrying:\n"
+                    "1. Read the error message carefully — what specifically failed?\n"
+                    "2. Identify the root cause — not just the symptom.\n"
+                    "3. Fix the underlying issue, then retry.\n"
+                    "If the same approach has already failed, try a fundamentally "
+                    "different strategy instead of repeating the same steps."
                 )
                 continue
             break
@@ -1439,6 +1763,20 @@ def invoke_opencode(request: InvokeRequest) -> InvokeResponse:
 
         # Exhausted retries or turns
         break
+
+    # Generate handoff summary if context is still critical after exhausting compaction
+    if compaction_attempts >= MAX_COMPACTION_ATTEMPTS and last_payload:
+        budget = compute_context_budget(last_payload)
+        if budget.get("status") == "critical":
+            handoff_summary = {
+                "reason": "context_exhausted",
+                "compaction_attempts": compaction_attempts,
+                "context_budget": budget,
+                "turns_completed": min(turn + 1, effective_max_turns),
+                "original_prompt": truncate_text(request.prompt, 500),
+                "recommendation": "Start a new session. The context window is exhausted.",
+            }
+            all_warnings.append("Context exhausted after max compaction attempts; handoff summary generated.")
 
     # --- Collect full session history for artifacts and tool calls ---
     collected_tool_calls: list[dict[str, Any]] = []
@@ -1491,6 +1829,22 @@ def invoke_opencode(request: InvokeRequest) -> InvokeResponse:
     if response_status != final_status:
         response_metadata["raw_status"] = final_status
 
+    # --- Response enrichment (context intelligence) ---
+    ctx_budget = compute_context_budget(authoritative_payload)
+    response_metadata["context_budget"] = ctx_budget
+
+    anti_patterns = detect_anti_patterns(response_text)
+    if anti_patterns:
+        response_metadata["anti_patterns"] = anti_patterns
+
+    task_status = derive_task_status(
+        response_status, all_warnings, ctx_budget, anti_patterns
+    )
+    response_metadata["task_status"] = task_status
+
+    if handoff_summary:
+        response_metadata["handoff_summary"] = handoff_summary
+
     return InvokeResponse(
         thread_id=logical_thread_id,
         response=response_text,
@@ -1509,6 +1863,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     global _runtime_process, _runtime_ready, SKILL_RUNTIME_CONFIG
 
     ensure_runtime_directories()
+    configure_git_credentials()
     validate_runtime_startup()
     config_files = materialize_opencode_config_files()
     skill_files, skill_warnings = materialize_skill_files()
@@ -1571,6 +1926,8 @@ async def add_request_id(request: Request, call_next):
 
 @app.get("/health")
 def health() -> dict[str, Any]:
+    total_sessions = SESSION_REGISTRY.size
+    stale_sessions = SESSION_REGISTRY.stale_count(3600)  # stale = >1h idle
     return {
         "status": "healthy" if _runtime_ready else "starting",
         "runtime": "opencode",
@@ -1578,6 +1935,12 @@ def health() -> dict[str, Any]:
         "namespace": SERVICE_NAMESPACE,
         "provider": DEFAULT_PROVIDER,
         "agent": DEFAULT_AGENT,
+        "sessions": {
+            "total": total_sessions,
+            "active": total_sessions - stale_sessions,
+            "stale": stale_sessions,
+            "at_capacity": total_sessions >= SESSION_MAX_ENTRIES,
+        },
         "skills": {
             "count": len(SKILL_RUNTIME_CONFIG.get("skillFiles") or []),
             "files": SKILL_RUNTIME_CONFIG.get("skillFiles") or [],
@@ -1597,11 +1960,28 @@ def ready() -> dict[str, Any]:
     if not resolved_binary:
         raise HTTPException(status_code=503, detail=f"opencode binary '{OPENCODE_BIN}' is not available on PATH")
     ensure_server_running()
+    # Check if opencode subprocess is reachable
+    opencode_server_healthy = False
+    try:
+        with httpx.Client(timeout=5.0) as probe:
+            resp = probe.get(f"http://{OPENCODE_SERVER_HOST}:{OPENCODE_SERVER_PORT}/session")
+            opencode_server_healthy = resp.status_code < 500
+    except Exception:
+        pass
+    # Check if session registry file is writable
+    session_registry_writable = False
+    try:
+        registry_path = SESSION_REGISTRY._path
+        session_registry_writable = os.access(registry_path.parent, os.W_OK)
+    except Exception:
+        pass
     return {
         "status": "ready",
         "runtime": "opencode",
         "opencode_binary": OPENCODE_BIN,
         "opencode_binary_path": resolved_binary,
+        "opencode_server_healthy": opencode_server_healthy,
+        "session_registry_writable": session_registry_writable,
         "config_root": OPENCODE_CONFIG_DIR,
         "workspace_root": OPENCODE_WORKDIR,
         "config_files": SKILL_RUNTIME_CONFIG.get("configFiles") or [],
@@ -1625,16 +2005,82 @@ def invoke(request: InvokeRequest) -> InvokeResponse:
     return invoke_opencode(request)
 
 
+@app.post("/cancel")
+def cancel_session(thread_id: str | None = None) -> dict[str, Any]:
+    """Cancel/abort a running session by thread_id.
+
+    Called by the operator when a workflow step times out, to prevent
+    orphaned sessions from continuing to run in the background.
+    """
+    if not thread_id:
+        raise HTTPException(status_code=400, detail="thread_id query parameter is required")
+    session_id = SESSION_REGISTRY.get(thread_id)
+    if session_id is None:
+        raise HTTPException(status_code=404, detail=f"No session found for thread_id '{thread_id}'")
+    aborted = abort_session(session_id)
+    if aborted:
+        return {"status": "cancelled", "session_id": session_id, "thread_id": thread_id}
+    return {"status": "cancel_failed", "session_id": session_id, "thread_id": thread_id}
+
+
+@app.get("/context-budget")
+def context_budget(thread_id: str | None = None) -> dict[str, Any]:
+    """Return context budget telemetry for the given thread."""
+    if not thread_id:
+        raise HTTPException(status_code=400, detail="thread_id query parameter is required")
+    session_id = SESSION_REGISTRY.get(thread_id)
+    if session_id is None:
+        raise HTTPException(status_code=404, detail=f"No session found for thread_id '{thread_id}'")
+    try:
+        messages = get_session_messages(session_id)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to fetch session messages: {exc}") from exc
+    latest = get_latest_assistant_payload(messages) if messages else None
+    budget = compute_context_budget(latest or {})
+    budget["session_id"] = session_id
+    budget["thread_id"] = thread_id
+    budget["compaction_available"] = budget.get("status") in ("warning", "critical")
+    return budget
+
+
 @app.post("/invoke/stream")
 async def invoke_stream(request: InvokeRequest) -> StreamingResponse:
     async def event_generator() -> AsyncIterator[str]:
         thread_id = request.thread_id or str(uuid.uuid4())
         yield sse_event("response.started", {"thread_id": thread_id, "source": "opencode"})
+
+        # Use a thread-safe queue so invoke_opencode_streaming can push
+        # per-turn events from its synchronous thread.
+        event_queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+        loop = asyncio.get_event_loop()
+
+        def _stream_callback(event_type: str, data: dict[str, Any]) -> None:
+            loop.call_soon_threadsafe(event_queue.put_nowait, {"event": event_type, "data": data})
+
+        def _run_invoke() -> InvokeResponse:
+            try:
+                return invoke_opencode(request, stream_callback=_stream_callback)
+            finally:
+                loop.call_soon_threadsafe(event_queue.put_nowait, None)
+
+        task = asyncio.get_event_loop().run_in_executor(None, _run_invoke)
+
+        # Drain per-turn events while invoke is running
+        while True:
+            item = await event_queue.get()
+            if item is None:
+                break
+            yield sse_event(item["event"], item["data"])
+
         try:
-            response = await asyncio.to_thread(invoke_opencode, request)
+            response = await task
         except HTTPException as exc:
             yield sse_event("response.error", {"thread_id": thread_id, "error": str(exc.detail)})
             return
+        except Exception as exc:
+            yield sse_event("response.error", {"thread_id": thread_id, "error": str(exc)})
+            return
+
         if response.response:
             yield sse_event("response.delta", {"thread_id": response.thread_id, "delta": response.response, "source": "opencode"})
         yield sse_event(

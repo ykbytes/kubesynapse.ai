@@ -1,0 +1,172 @@
+apiVersion: sandbox.enterprise.ai/v1alpha1
+kind: AgentWorkflow
+metadata:
+  name: ableton-live-web
+  namespace: default
+spec:
+  description: >
+    Build a browser-based DAW inspired by Ableton Live using 3 specialized
+    OpenCode agents: an architect designs the system, then a backend developer
+    and a frontend developer implement in parallel, followed by an integration
+    review by the architect.
+  input: >
+    Build "Ableton Live Web" — a browser-based Digital Audio Workstation.
+    The app must support multi-track arrangement, a channel mixer with
+    volume/pan/solo/mute, transport controls (play/pause/stop/BPM/loop),
+    a clip launcher, audio effects rack (reverb, delay, EQ, compressor),
+    and a piano roll editor.  Use TypeScript, React 18, Web Audio API with
+    Tone.js, Vite, Tailwind CSS dark theme, and Zustand for state.
+    All audio runs client-side.  The final result must build with
+    `pnpm install && pnpm build` and pass `pnpm test`.
+  contextRef: ableton-live-web-context
+  messageBus: in-memory
+  steps:
+    # Step 1: Architect designs the system and scaffolds the project
+    - name: design
+      type: loop
+      agentRef: ableton-architect
+      prompt: >
+        Design the complete architecture for Ableton Live Web and scaffold
+        the project.  Create the Vite + React + TypeScript project with all
+        config files (package.json, tsconfig.json, vite.config.ts,
+        tailwind.config.ts, postcss.config.js).  Define all TypeScript
+        interfaces in src/types/.  Create Zustand store skeletons in
+        src/stores/.  Write a clear README.md.  The scaffold must pass
+        `pnpm install && pnpm tsc --noEmit`.
+
+        When finished, commit all files and push to the shared git repository
+        so that downstream agents can access the scaffold.
+      loopConfig:
+        maxIterations: 20
+        planSource: prompt
+        commitAfterEachItem: true
+        circuitBreaker:
+          noProgressThreshold: 4
+          cooldownMinutes: 10
+        exitConditions:
+          planComplete: true
+          completionSignalCount: 2
+      execution:
+        timeoutSeconds: 900
+        maxAttempts: 3
+        backoffSeconds: 10
+        retryable: true
+        continueOnError: false
+        maxTurns: 20
+
+    # Step 2: Backend developer implements the audio engine (parallel with frontend)
+    - name: backend
+      type: loop
+      agentRef: ableton-backend
+      prompt: >
+        First, pull the latest code from the shared git repository to get
+        the project scaffold created by the architect.  You are working on
+        the `agent/backend` branch — commit and push to this branch.
+
+        Then implement the complete audio engine under src/engine/ following
+        the TypeScript interfaces created in the design step.  Build the
+        AudioEngine, ChannelStrip, ClipScheduler, transport controls, and
+        all audio effects (Reverb, Delay, EQ3, Compressor).  Wire the
+        Zustand stores in src/stores/ to expose the engine API to React.
+        Write Vitest tests in src/engine/__tests__/ for all public methods.
+        The engine must pass `pnpm test`.
+
+        After completing each major component, commit and push your changes
+        to the `agent/backend` branch.
+      dependsOn:
+        - design
+      loopConfig:
+        maxIterations: 30
+        planSource: prompt
+        commitAfterEachItem: true
+        circuitBreaker:
+          noProgressThreshold: 4
+          cooldownMinutes: 10
+        exitConditions:
+          planComplete: true
+          completionSignalCount: 2
+      execution:
+        timeoutSeconds: 1200
+        maxAttempts: 3
+        backoffSeconds: 10
+        retryable: true
+        continueOnError: false
+        maxTurns: 20
+
+    # Step 3: Frontend developer implements the UI (parallel with backend)
+    - name: frontend
+      type: loop
+      agentRef: ableton-frontend
+      prompt: >
+        First, pull the latest code from the shared git repository to get
+        the project scaffold created by the architect.  You are working on
+        the `agent/frontend` branch — commit and push to this branch.
+
+        Then implement the complete DAW user interface under src/components/
+        following the TypeScript interfaces from the design step.  Build
+        TransportBar, ArrangementView, Mixer, ClipLauncher, EffectsRack,
+        and PianoRoll components.  Wire them to Zustand stores.  Style
+        with Tailwind CSS using the Ableton dark theme palette.  Create
+        the main App.tsx layout with CSS Grid.  Write React Testing Library
+        tests in src/components/__tests__/.  The app must pass `pnpm tsc --noEmit`.
+
+        After completing each major component, commit and push your changes
+        to the `agent/frontend` branch.
+      dependsOn:
+        - design
+      loopConfig:
+        maxIterations: 30
+        planSource: prompt
+        commitAfterEachItem: true
+        circuitBreaker:
+          noProgressThreshold: 4
+          cooldownMinutes: 10
+        exitConditions:
+          planComplete: true
+          completionSignalCount: 2
+      execution:
+        timeoutSeconds: 1200
+        maxAttempts: 3
+        backoffSeconds: 10
+        retryable: true
+        continueOnError: false
+        maxTurns: 20
+
+    # Step 4: Architect reviews integrated result
+    - name: integration-review
+      type: review
+      agentRef: ableton-architect
+      reviewCriteria: >
+        First, pull all code from the shared git repository.  Then merge
+        the agent branches into main:
+          git pull origin main
+          git merge origin/agent/backend --no-edit
+          git merge origin/agent/frontend --no-edit
+        If there are merge conflicts, resolve them by keeping both sides
+        and ensuring the combined code compiles.
+
+        Then verify the following by actually running the commands:
+
+        1. Project builds successfully: run `pnpm install && pnpm build`
+           and report the output.
+        2. All tests pass: run `pnpm test` and report the output.
+        3. TypeScript strict mode has zero errors: run `pnpm tsc --noEmit`
+           and report the output.
+        4. Audio engine exports match the interfaces in src/types/.
+        5. React components use Zustand stores — no direct AudioContext usage.
+        6. Tone.Transport is used for all scheduling — no setTimeout/setInterval.
+        7. Dark theme follows the Ableton color palette.
+        8. All six core components are present: TransportBar, ArrangementView,
+           Mixer, ClipLauncher, EffectsRack, PianoRoll.
+        9. Audio nodes are properly disposed on cleanup.
+        10. App entry point renders correctly and is accessible.
+      dependsOn:
+        - backend
+        - frontend
+      execution:
+        timeoutSeconds: 900
+        maxAttempts: 3
+        backoffSeconds: 10
+        retryable: true
+        continueOnError: false
+        maxTurns: 15

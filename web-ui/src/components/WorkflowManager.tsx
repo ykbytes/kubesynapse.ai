@@ -35,11 +35,14 @@ import { ConfirmDialog } from "./ConfirmDialog";
 import { CopyButton } from "./CopyButton";
 import { ExpandableMarkdownEditor } from "./ExpandableMarkdownEditor";
 import { JsonBlock } from "./JsonBlock";
+import { WorkflowLogPanel } from "./WorkflowLogPanel";
 import { useConnection } from "@/contexts/ConnectionContext";
+import { fetchWorkflowNextAction } from "@/lib/api";
 import type {
   AgentInfo,
   LoopProgress,
   WorkflowInfo,
+  WorkflowNextAction,
   WorkflowPayload,
   WorkflowStep,
   WorkflowStepState,
@@ -79,6 +82,8 @@ function defaultStepsForAgent(agentName?: string): WorkflowStep[] {
       prompt: "",
       depends_on: [],
       require_approval: false,
+      verify: null,
+      review_criteria: null,
     },
   ];
 }
@@ -338,6 +343,35 @@ function StepDetailCard({
               <Repeat className="mr-1 h-3 w-3" />loop
             </Badge>
           )}
+          {step.step_type === "review" && (
+            <Badge variant="outline" className="border-blue-500/30 bg-blue-500/10 text-blue-300 text-[10px]">
+              <ShieldCheck className="mr-1 h-3 w-3" />review
+            </Badge>
+          )}
+          {(state as any)?.verificationResult && (
+            <Badge
+              variant="outline"
+              className={`text-[10px] ${
+                (state as any).verificationResult.passed
+                  ? "border-green-500/30 bg-green-500/10 text-green-300"
+                  : "border-red-500/30 bg-red-500/10 text-red-300"
+              }`}
+            >
+              {(state as any).verificationResult.passed ? "✓ verified" : "✗ verify failed"}
+            </Badge>
+          )}
+          {(state as any)?.reviewResult && (
+            <Badge
+              variant="outline"
+              className={`text-[10px] ${
+                (state as any).reviewResult.approved
+                  ? "border-green-500/30 bg-green-500/10 text-green-300"
+                  : "border-amber-500/30 bg-amber-500/10 text-amber-300"
+              }`}
+            >
+              {(state as any).reviewResult.approved ? "✓ approved" : "✗ rejected"}
+            </Badge>
+          )}
           <span className="text-xs text-muted-foreground">
             {step.agent_ref}{step.require_approval ? " · approval gate" : ""}
           </span>
@@ -376,6 +410,44 @@ function StepDetailCard({
             {/* loop progress */}
             {state?.loopProgress && (
               <LoopProgressDisplay progress={state.loopProgress} />
+            )}
+
+            {/* verification result */}
+            {(state as any)?.verificationResult && (
+              <div className={`rounded-lg border px-3 py-2 ${
+                (state as any).verificationResult.passed
+                  ? "border-green-500/30 bg-green-500/10 text-green-300"
+                  : "border-red-500/30 bg-red-500/10 text-red-300"
+              }`}>
+                <span className="font-medium">
+                  Verification: {(state as any).verificationResult.passed ? "PASSED" : "FAILED"}
+                </span>
+                {(state as any).verificationResult.criteria && (
+                  <div className="mt-1 text-muted-foreground">Criteria: {(state as any).verificationResult.criteria}</div>
+                )}
+                {(state as any).verificationResult.response && (
+                  <div className="mt-1 whitespace-pre-wrap">{(state as any).verificationResult.response}</div>
+                )}
+              </div>
+            )}
+
+            {/* review result */}
+            {(state as any)?.reviewResult && (
+              <div className={`rounded-lg border px-3 py-2 ${
+                (state as any).reviewResult.approved
+                  ? "border-green-500/30 bg-green-500/10 text-green-300"
+                  : "border-amber-500/30 bg-amber-500/10 text-amber-300"
+              }`}>
+                <span className="font-medium">
+                  Review: {(state as any).reviewResult.verdict ?? ((state as any).reviewResult.approved ? "APPROVED" : "REJECTED")}
+                </span>
+                {(state as any).reviewResult.criteria && (
+                  <div className="mt-1 text-muted-foreground">Criteria: {(state as any).reviewResult.criteria}</div>
+                )}
+                {(state as any).reviewResult.response && (
+                  <div className="mt-1 whitespace-pre-wrap">{(state as any).reviewResult.response}</div>
+                )}
+              </div>
             )}
 
             {/* error */}
@@ -488,12 +560,14 @@ export function WorkflowManager({
   onApprovalDecision,
   onOpenComposer,
 }: WorkflowManagerProps) {
-  const { canMutate } = useConnection();
+  const { canMutate, token, namespace } = useConnection();
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [input, setInput] = useState("");
+  const [contextRef, setContextRef] = useState("");
   const [messageBus, setMessageBus] = useState("in-memory");
   const [steps, setSteps] = useState<WorkflowStep[]>(() => defaultStepsForAgent(agents[0]?.name));
+  const [nextAction, setNextAction] = useState<WorkflowNextAction | null>(null);
 
   // Trigger confirmation input (separate from workflow spec input)
   const [triggerInput, setTriggerInput] = useState("");
@@ -504,6 +578,7 @@ export function WorkflowManager({
       setName(workflow.name);
       setDescription(workflow.description);
       setInput(workflow.input);
+      setContextRef(workflow.context_ref ?? "");
       setMessageBus(workflow.message_bus);
       setSteps(workflow.steps.length > 0 ? workflow.steps : defaultStepsForAgent(agents[0]?.name));
       // Pre-fill trigger input with workflow spec input
@@ -514,12 +589,37 @@ export function WorkflowManager({
     setName("");
     setDescription("");
     setInput("");
+    setContextRef("");
     setMessageBus("in-memory");
     setSteps(defaultStepsForAgent(agents[0]?.name));
     setTriggerInput("");
     setShowTriggerConfirm(false);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workflow?.name, workflow?.phase, workflow?.current_step]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadNextAction() {
+      if (!workflow || !token || !namespace) {
+        setNextAction(null);
+        return;
+      }
+      try {
+        const payload = await fetchWorkflowNextAction(token, namespace, workflow.name);
+        if (!cancelled) {
+          setNextAction(payload);
+        }
+      } catch {
+        if (!cancelled) {
+          setNextAction(null);
+        }
+      }
+    }
+    void loadNextAction();
+    return () => {
+      cancelled = true;
+    };
+  }, [workflow?.name, workflow?.phase, workflow?.current_step, token, namespace]);
 
   function updateStep(index: number, updater: (current: WorkflowStep) => WorkflowStep) {
     setSteps((current) => current.map((step, stepIndex) => (stepIndex === index ? updater(step) : step)));
@@ -650,6 +750,22 @@ export function WorkflowManager({
           <Card className="shadow-none">
             <CardContent className="p-4">
               <ProgressSummaryBar summary={wfSummary} phase={workflow.phase} />
+            </CardContent>
+          </Card>
+        )}
+
+        {/* ── Suggested next action ── */}
+        {workflow && nextAction && (
+          <Card className="shadow-none border-primary/20 bg-primary/5">
+            <CardContent className="p-4">
+              <div className="flex items-start gap-3">
+                <Sparkles className="h-4 w-4 mt-0.5 text-primary" />
+                <div className="space-y-1">
+                  <p className="text-xs uppercase tracking-[0.14em] text-primary/80">Suggested Next</p>
+                  <p className="text-sm font-semibold text-foreground">{nextAction.action}</p>
+                  <p className="text-xs text-muted-foreground">{nextAction.reason}</p>
+                </div>
+              </div>
             </CardContent>
           </Card>
         )}
@@ -810,6 +926,8 @@ export function WorkflowManager({
           </Card>
         )}
 
+        {workflow && hasBeenTriggered && <WorkflowLogPanel workflow={workflow} />}
+
         {/* ── Editor toggle for triggered workflows ── */}
         {hasBeenTriggered && (
           <Button
@@ -847,6 +965,14 @@ export function WorkflowManager({
                     value={description}
                     onChange={(e) => setDescription(e.target.value)}
                     placeholder="Research to report pipeline"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs">Context ConfigMap</Label>
+                  <Input
+                    value={contextRef}
+                    onChange={(e) => setContextRef(e.target.value)}
+                    placeholder="project-rules"
                   />
                 </div>
               </div>
@@ -965,10 +1091,12 @@ export function WorkflowManager({
                       onValueChange={(v) =>
                         updateStep(index, (current) => ({
                           ...current,
-                          step_type: v as "agent" | "loop",
+                          step_type: v as "agent" | "loop" | "review",
                           loop_config: v === "loop" && !current.loop_config
                             ? { maxIterations: 20, planSource: "inline", plan: "", commitAfterEachItem: true, circuitBreaker: { noProgressThreshold: 3, cooldownMinutes: 2 } }
-                            : current.loop_config,
+                            : v === "loop"
+                              ? current.loop_config
+                              : null,
                         }))
                       }
                     >
@@ -978,6 +1106,7 @@ export function WorkflowManager({
                       <SelectContent>
                         <SelectItem value="agent">Agent (single run)</SelectItem>
                         <SelectItem value="loop">Dev-loop (iterative)</SelectItem>
+                        <SelectItem value="review">Review</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
@@ -1047,6 +1176,36 @@ export function WorkflowManager({
                   dialogTitle={`Step Prompt — ${step.name || `Step ${index + 1}`}`}
                   dialogDescription="Write the instruction for this workflow step. Supports Markdown formatting."
                 />
+
+                {step.step_type !== "review" && (
+                  <div className="space-y-1">
+                    <Label className="text-[11px]">Verification criteria</Label>
+                    <Textarea
+                      rows={3}
+                      className="text-xs"
+                      value={step.verify ?? ""}
+                      onChange={(e) =>
+                        updateStep(index, (current) => ({ ...current, verify: e.target.value || null }))
+                      }
+                      placeholder="Optional verification prompt to run after the step completes."
+                    />
+                  </div>
+                )}
+
+                {step.step_type === "review" && (
+                  <div className="space-y-1">
+                    <Label className="text-[11px]">Review criteria</Label>
+                    <Textarea
+                      rows={3}
+                      className="text-xs"
+                      value={step.review_criteria ?? ""}
+                      onChange={(e) =>
+                        updateStep(index, (current) => ({ ...current, review_criteria: e.target.value || null }))
+                      }
+                      placeholder="What should this review step evaluate in the previous output?"
+                    />
+                  </div>
+                )}
 
                 {step.step_type === "loop" && (
                   <div className="space-y-3 rounded-2xl border border-violet-500/30 bg-violet-500/5 p-4">
@@ -1209,7 +1368,13 @@ export function WorkflowManager({
           {canMutate && (
             <Button
               onClick={() => {
-                const payload = { description, input, message_bus: messageBus, steps };
+                const payload = {
+                  description,
+                  input,
+                  context_ref: contextRef.trim() || undefined,
+                  message_bus: messageBus,
+                  steps,
+                };
                 if (workflow) {
                   onUpdate(workflow.name, payload as WorkflowUpdatePayload);
                   return;

@@ -1,0 +1,66 @@
+apiVersion: sandbox.enterprise.ai/v1alpha1
+kind: AIAgent
+metadata:
+  name: ableton-backend
+  namespace: default
+spec:
+  model: gpt-4
+  runtime:
+    kind: opencode
+    opencode:
+      configFiles:
+        opencode.json:
+          default_agent: build
+          permission: allow
+  systemPrompt: >
+    You are an expert audio engine developer specializing in the Web Audio API
+    and Tone.js.  Your role is to implement the core audio engine, scheduling
+    system, and audio processing pipeline for a browser-based DAW.
+
+    Implementation guidelines:
+    - Build under `src/engine/` following the interfaces defined by the architect.
+    - Use Tone.js for all timing and scheduling — never use setTimeout/setInterval
+      for audio events.
+    - Create an AudioEngine class that manages the AudioContext lifecycle,
+      Tone.Transport integration, and the master bus.
+    - Implement a ChannelStrip class for each track: source → effects chain →
+      gain (volume) → panner → master send.
+    - Implement effects as reusable classes wrapping Tone.js nodes: Reverb,
+      Delay, EQ3, Compressor.
+    - Build a ClipScheduler that loads audio buffers and schedules playback
+      on Tone.Transport with sample-accurate timing.
+    - Implement transport controls: play, pause, stop, loop, setBPM, seek.
+    - Export a clean public API from `src/engine/index.ts` that React components
+      will consume through Zustand stores.
+    - Write Vitest unit tests for all public engine methods in `src/engine/__tests__/`.
+
+    Quality requirements:
+    - All public functions must have JSDoc comments and TypeScript return types.
+    - Dispose all audio nodes properly when tracks/effects are removed.
+    - Handle AudioContext resume after user gesture (autoplay policy).
+  skills:
+    files:
+      .github/skills/audio-engine/SKILL.md: |
+        ---
+        name: audio-engine
+        description: Implement Web Audio API engine, audio processing graph, and transport scheduling.
+        allowedSandboxTools:
+          - sandbox.filesystem.read
+          - sandbox.filesystem.write
+          - sandbox.filesystem.mkdir
+        ---
+        Use this skill for all audio engine work: creating audio nodes,
+        building the processing graph, scheduling clips with Tone.Transport,
+        and implementing transport controls.  Always verify implementations
+        by running tests with `npx vitest run`.
+  gitConfig:
+    repoUrl: https://github.com/ORG/ableton-live-web.git
+    branch: agent/backend
+    authMethod: token
+    credentialSecretRef: git-credentials
+  mcpSidecars:
+    - name: git
+    - name: code-exec
+  storage:
+    size: 2Gi
+  enableGVisor: false

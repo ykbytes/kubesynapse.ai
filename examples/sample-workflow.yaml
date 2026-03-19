@@ -1,31 +1,39 @@
 apiVersion: sandbox.enterprise.ai/v1alpha1
 kind: AgentWorkflow
 metadata:
-  name: research-report-pipeline
+  name: feature-pipeline
   namespace: default
 spec:
-  description: "Multi-agent pipeline: Research → Analysis → Report Generation"
-  input: "Impact of private 5G adoption on industrial automation"
+  description: "Research -> Implement -> Review -> Report"
+  input: "Add request rate limiting to the API gateway"
+  contextRef: project-rules
   messageBus: in-memory
   steps:
     - name: research
       agentRef: research-assistant
-      prompt: "Research the following topic thoroughly: {{input}}"
+      prompt: "Research approaches for: {{input}}"
       execution:
         timeoutSeconds: 180
         maxAttempts: 2
         backoffSeconds: 3
-    - name: analysis
-      agentRef: analysis-agent
-      prompt: "Analyze the following research findings and identify key insights: {{previous_output}}"
+    - name: implement
+      agentRef: developer-agent
+      prompt: "Implement based on research findings: {{previous_output}}"
       dependsOn:
         - research
+      verify: "Run tests and confirm implementation satisfies the request. Respond PASS or FAIL."
       execution:
-        timeoutSeconds: 120
+        timeoutSeconds: 240
         continueOnError: false
+    - name: code-review
+      type: review
+      agentRef: reviewer-agent
+      reviewCriteria: "Code quality, test coverage, and adherence to project conventions"
+      dependsOn:
+        - implement
     - name: report
       agentRef: report-writer
-      prompt: "Write a professional executive summary based on: {{previous_output}}"
+      prompt: "Write a concise report with implementation summary and review findings: {{previous_output}}"
       dependsOn:
-        - analysis
+        - code-review
       requireApproval: true

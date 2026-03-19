@@ -72,6 +72,7 @@ function ComposerCanvas({
   const [wfName, setWfName] = useState(workflow?.name ?? "");
   const [wfDesc, setWfDesc] = useState(workflow?.description ?? "");
   const [wfInput, setWfInput] = useState(workflow?.input ?? "");
+  const [wfContextRef] = useState(workflow?.context_ref ?? "");
 
   const isNew = !workflow;
 
@@ -347,7 +348,7 @@ function ComposerCanvas({
   // Save — context handlers already show toast.success/toast.error
   const handleSave = useCallback(async () => {
     if (!wfName.trim()) { toast.error("Workflow name is required"); return; }
-    const payload = canvasToPayload(nodes as ComposerNode[], edges, wfName, wfDesc, wfInput);
+    const payload = canvasToPayload(nodes as ComposerNode[], edges, wfName, wfDesc, wfInput, wfContextRef);
     if (isNew) {
       await ws.handleCreateWorkflow(payload);
     } else {
@@ -355,7 +356,7 @@ function ComposerCanvas({
       await ws.handleUpdateWorkflow(wfName, updatePayload);
     }
     setIsDirty(false);
-  }, [nodes, edges, wfName, wfDesc, wfInput, isNew, ws]);
+  }, [nodes, edges, wfName, wfDesc, wfInput, wfContextRef, isNew, ws]);
 
   // Run — context handlers already show toast.success/toast.error
   const handleRun = useCallback(async () => {

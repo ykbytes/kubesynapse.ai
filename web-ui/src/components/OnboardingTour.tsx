@@ -13,22 +13,22 @@ interface TourStep {
 const STEPS: TourStep[] = [
   {
     title: "Create Agents",
-    description: "Define AI agents with custom models, tools, and MCP sidecars. Each agent runs in its own sandboxed pod.",
+    description: "Define an agent with a model, system prompt, and MCP tool sidecars. Hit create and it launches in its own sandboxed pod — ready to chat in seconds.",
     icon: Bot,
   },
   {
     title: "Build Workflows",
-    description: "Chain agents into multi-step workflows with the visual Composer or YAML definitions.",
+    description: "Chain agents into multi-step workflows using the visual Composer or YAML. Add verification gates, dev-loops, and conditional branching between steps.",
     icon: GitBranch,
   },
   {
     title: "Run Evaluations",
-    description: "Test agent quality with evaluation suites. Track metrics across runs.",
+    description: "Create evaluation suites to test agent quality on repeatable inputs. Compare metrics across runs and catch regressions before they ship.",
     icon: FlaskConical,
   },
   {
     title: "Chat & Collaborate",
-    description: "Interact with deployed agents in real time. Approve or reject actions with Human-in-the-Loop controls.",
+    description: "Talk to deployed agents in real time. Route requests across agents with A2A, approve or reject tool calls with Human-in-the-Loop, and inspect every step in the side panel.",
     icon: MessageSquare,
   },
 ];

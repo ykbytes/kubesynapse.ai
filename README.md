@@ -48,6 +48,9 @@ Kubeminionagents is designed as a **shareable, end-to-end AI agent platform** fo
 
 ## 🚦 What you can do today
 
+- **Workflow intelligence** — add verification gates (`verify`), review steps (`type: review`), and project context injection (`contextRef` ConfigMap) to any `AgentWorkflow` for self-verifying, evidence-backed execution
+- **Wave-based parallel execution** — the operator computes dependency-aware waves and runs independent steps concurrently while respecting dependency order
+- **Next-action suggestions** — the API and web UI recommend what to do next based on workflow state (retry, evaluate, deploy)
 - Define `spec.skills.files` to steer runtimes with repo-tracked Markdown skills and scoped capability grants
 - Seed Goose agents with per-agent `runtime.goose.configFiles` instead of relying on chart-wide defaults only
 - Seed OpenCode agents with per-agent `runtime.opencode.configFiles` to materialize OpenCode agents, plugins, skills, and `opencode.json` fragments per agent

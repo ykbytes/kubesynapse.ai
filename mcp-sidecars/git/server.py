@@ -31,6 +31,7 @@ GIT_USERNAME = os.environ.get("GIT_USERNAME", "")
 GIT_PASSWORD = os.environ.get("GIT_PASSWORD", "")
 GIT_SSH_KEY_PATH = os.environ.get("GIT_SSH_KEY_PATH", "/home/mcpuser/.ssh/id_rsa")
 GIT_REPO_URL = os.environ.get("GIT_REPO_URL", "")
+GIT_BRANCH = os.environ.get("GIT_BRANCH", "")
 
 
 def _run(cmd: list[str], cwd: str | None = None, timeout: int = 30) -> subprocess.CompletedProcess:
@@ -140,17 +141,62 @@ def _validate_clone_url(url: str) -> str | None:
 
 
 @server.tool()
-def git_clone(repo_url: str, branch: str = "", full_clone: bool = False) -> str:
+def git_clone(repo_url: str, branch: str = "", full_clone: bool = False, target_dir: str = "") -> str:
     """Clone a Git repository. Returns the local path.
 
     full_clone: If true, perform a full (non-shallow) clone for push support.
+    target_dir: Clone directly into this directory (e.g. '/workspace').
+                If empty, creates a subdirectory named after the repo.
+                If the directory is non-empty, initializes git and pulls
+                from the remote instead of cloning.
     """
     url_err = _validate_clone_url(repo_url)
     if url_err:
         return f"BLOCKED: {url_err}"
     try:
-        repo_name = repo_url.rstrip("/").split("/")[-1].replace(".git", "")
-        dest = os.path.join(WORK_DIR, repo_name)
+        if target_dir:
+            dest = target_dir
+        else:
+            repo_name = repo_url.rstrip("/").split("/")[-1].replace(".git", "")
+            dest = os.path.join(WORK_DIR, repo_name)
+
+        # If target_dir is non-empty or already a git repo, use init+fetch
+        # instead of clone (git clone requires an empty directory).
+        dest_non_empty = os.path.isdir(dest) and os.listdir(dest)
+        dest_is_git = os.path.isdir(os.path.join(dest, ".git"))
+
+        if dest_is_git:
+            # Already a git repo — just fetch latest
+            fetch_cmd = ["git", "fetch", "origin"]
+            result = _run(fetch_cmd, cwd=dest, timeout=120)
+            if result.returncode != 0:
+                return f"ERROR: git fetch failed: {result.stderr.strip()}"
+            return f"Repository at {dest} updated (already initialized)"
+
+        if dest_non_empty:
+            # Non-empty directory — init, add remote, fetch, then checkout
+            os.makedirs(dest, exist_ok=True)
+            init_result = _run(["git", "init"], cwd=dest, timeout=15)
+            if init_result.returncode != 0:
+                return f"ERROR: git init failed: {init_result.stderr.strip()}"
+            _run(["git", "remote", "add", "origin", repo_url], cwd=dest, timeout=15)
+            fetch_result = _run(["git", "fetch", "origin"], cwd=dest, timeout=120)
+            if fetch_result.returncode != 0:
+                return f"ERROR: git fetch failed: {fetch_result.stderr.strip()}"
+            # Check out the target branch (or default) without overwriting
+            # existing files — use reset to align HEAD with remote.
+            target_branch = branch or "main"
+            checkout = _run(
+                ["git", "checkout", "-b", target_branch, f"origin/{target_branch}"],
+                cwd=dest, timeout=30,
+            )
+            if checkout.returncode != 0:
+                # Remote branch may not exist yet (new repo) — just set up
+                # local branch so push works.
+                _run(["git", "checkout", "-b", target_branch], cwd=dest, timeout=15)
+            return f"Initialized git repo at {dest} with remote origin"
+
+        # Standard clone into empty/new directory
         cmd = ["git", "clone"]
         if not full_clone:
             cmd += ["--depth", "1"]
@@ -162,7 +208,15 @@ def git_clone(repo_url: str, branch: str = "", full_clone: bool = False) -> str:
             return f"ERROR: {result.stderr.strip()}"
         # If shallow clone, unshallow for push support
         if not full_clone:
-            _run(["git", "fetch", "--unshallow"], cwd=dest, timeout=120)
+            unshallow = _run(["git", "fetch", "--unshallow"], cwd=dest, timeout=120)
+            if unshallow.returncode != 0:
+                unshallow_err = unshallow.stderr.strip()
+                log.warning("git fetch --unshallow failed for %s: %s", dest, unshallow_err)
+                return (
+                    f"Cloned to {dest} (WARNING: repo is shallow — unshallow failed: "
+                    f"{unshallow_err}. Push may fail. Re-clone with full_clone=true "
+                    f"for push support.)"
+                )
         return f"Cloned to {dest}"
     except subprocess.TimeoutExpired:
         return "ERROR: Clone timed out"
@@ -233,9 +287,13 @@ def git_commit(repo_path: str, message: str, add_all: bool = True) -> str:
 
 @server.tool()
 def git_push(repo_path: str, remote: str = "origin", branch: str = "") -> str:
-    """Push commits to remote. If branch is empty, pushes current branch."""
+    """Push commits to remote. If branch is empty, pushes current branch.
+
+    Uses --set-upstream on the first push so new repositories and branches
+    get proper tracking configuration automatically.
+    """
     try:
-        cmd = ["git", "push", remote]
+        cmd = ["git", "push", "--set-upstream", remote]
         if branch:
             cmd.append(branch)
         else:
@@ -349,6 +407,53 @@ def github_api(endpoint: str, method: str = "GET") -> str:
         return "ERROR: GitHub API call failed"
 
 
+def auto_clone_if_configured() -> None:
+    """Auto-clone the repo into WORK_DIR at startup when GIT_REPO_URL is set.
+
+    Skips if WORK_DIR already contains a .git directory (already cloned).
+    Uses full_clone=true so push works immediately.
+    When GIT_BRANCH is set, checks out (or creates) that branch after cloning.
+    """
+    if not GIT_REPO_URL:
+        log.info("No GIT_REPO_URL set, skipping auto-clone")
+        return
+    git_dir = os.path.join(WORK_DIR, ".git")
+    if os.path.isdir(git_dir):
+        log.info("WORK_DIR already has .git, fetching latest")
+        result = _run(["git", "fetch", "origin"], cwd=WORK_DIR, timeout=120)
+        if result.returncode != 0:
+            log.warning("Auto-fetch failed: %s", result.stderr.strip())
+        if GIT_BRANCH:
+            _checkout_branch(WORK_DIR, GIT_BRANCH)
+        return
+    log.info("Auto-cloning %s into %s", GIT_REPO_URL, WORK_DIR)
+    result_text = git_clone(GIT_REPO_URL, full_clone=True, target_dir=WORK_DIR)
+    log.info("Auto-clone result: %s", result_text)
+    if GIT_BRANCH:
+        _checkout_branch(WORK_DIR, GIT_BRANCH)
+
+
+def _checkout_branch(repo_path: str, branch: str) -> None:
+    """Checkout or create a branch, pulling from origin if it exists remotely."""
+    # Try checking out an existing remote branch
+    result = _run(["git", "checkout", "-b", branch, f"origin/{branch}"], cwd=repo_path, timeout=30)
+    if result.returncode == 0:
+        log.info("Checked out existing remote branch '%s'", branch)
+        return
+    # Try checking out a local branch that already exists
+    result = _run(["git", "checkout", branch], cwd=repo_path, timeout=15)
+    if result.returncode == 0:
+        log.info("Checked out existing local branch '%s'", branch)
+        return
+    # Create a new branch from the current HEAD
+    result = _run(["git", "checkout", "-b", branch], cwd=repo_path, timeout=15)
+    if result.returncode == 0:
+        log.info("Created new branch '%s'", branch)
+    else:
+        log.warning("Failed to create branch '%s': %s", branch, result.stderr.strip())
+
+
 if __name__ == "__main__":
     configure_git_credentials()
+    auto_clone_if_configured()
     run_server(server)

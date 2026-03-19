@@ -88,6 +88,17 @@ See [INSTALL.md](INSTALL.md) for the full installation guide.
 - Explicit A2A routing via `spec.a2a.allowedCallers` on the receiving agent.
 - Specialist-team orchestration: `agentctl invoke --subagent` or `--subagents-file` launches parallel or sequential sub-task teams.
 - `AgentWorkflow` CRD for DAG-based multi-agent pipelines with approval gates, artifact snapshots, and append-only execution journals.
+- Workflow intelligence features: verification gates (`verify`), review steps (`type: review`), project context injection (`contextRef`), wave-based parallel execution, and next-action suggestions.
+
+### Workflow Intelligence
+
+The `AgentWorkflow` CRD supports several intelligence features that improve execution quality and trust:
+
+- **Verification gates** — Any step can include a `verify` field. After the step completes, the operator sends a verification prompt to the same agent and marks the step as failed if verification does not pass.
+- **Review steps** — Steps with `type: review` auto-construct a review prompt from `reviewCriteria` and the previous step output. The reviewing agent returns APPROVED or REJECTED with structured findings.
+- **Context injection** — The workflow-level `contextRef` field references a ConfigMap in the same namespace. Its `context` key is prepended to every step prompt as a `[Project Context]` block, providing consistent project rules to all agents.
+- **Wave execution** — The operator computes dependency-aware execution waves via `compute_execution_waves()`. Steps in the same wave run in parallel via `ThreadPoolExecutor`, while waves execute sequentially.
+- **Next-action suggestions** — The API endpoint `GET /api/v1/agents/{ns}/{name}/next-action` recommends the next thing to do based on workflow state (retry failed step, run evaluation, deploy, etc.). The web UI renders this as a suggestion card.
 
 ### API Gateway (`api-gateway/`)
 - FastAPI service exposing CRUD, invoke, and SSE streaming endpoints for all CRD types.
@@ -119,7 +130,7 @@ See [INSTALL.md](INSTALL.md) for the full installation guide.
 | AIAgent CRD | ✅ Implemented | StatefulSet, Service, PVC, NetworkPolicy per agent |
 | AgentPolicy CRD | ✅ Implemented | Input/output guardrails, model allow-list |
 | AgentTenant CRD | ✅ Implemented | Namespace isolation, resource quotas |
-| AgentWorkflow CRD | ✅ Implemented | DAG executor with approval gates and artifact journals |
+| AgentWorkflow CRD | ✅ Implemented | DAG executor with approval gates, artifact journals, verify/review/contextRef/waves |
 | AgentEval CRD | ✅ Implemented | Scheduled test suites with quality thresholds |
 | AgentApproval CRD | ✅ Implemented | Async HITL approval with optional webhook |
 | LangGraph runtime | ✅ Implemented | Durable SQLite checkpoints, OTel tracing |

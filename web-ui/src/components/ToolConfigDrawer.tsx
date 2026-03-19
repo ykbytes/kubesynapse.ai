@@ -102,6 +102,7 @@ export function ToolConfigDrawer({
       const gc = agent.git_config;
       if (gc.repo_url) initial.repo_url = gc.repo_url;
       if (gc.default_branch) initial.default_branch = gc.default_branch;
+      if (gc.branch) initial.branch = gc.branch;
       if (gc.auth_method) initial.auth_method = gc.auth_method;
       if (gc.push_policy) initial.push_policy = gc.push_policy;
     }
@@ -184,6 +185,7 @@ export function ToolConfigDrawer({
             git_config: {
               repo_url: repoUrl,
               default_branch: formValues.default_branch?.trim() || undefined,
+              branch: formValues.branch?.trim() || undefined,
               push_policy: (formValues.push_policy as AgentDetail["git_config"] extends { push_policy?: infer P } ? P : never) || undefined,
               auth_method: (formValues.auth_method as GitAuthMethod) || "token",
               credential_secret_ref: `${agent.name}-git-credentials`,

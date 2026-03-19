@@ -5,6 +5,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from utils import (  # noqa: E402
+    compute_execution_waves,
     merge_goose_config_files,
     normalize_step_execution,
     parse_agent_a2a_config,
@@ -71,6 +72,19 @@ class WorkflowUtilsTests(unittest.TestCase):
         self.assertIn("Factories adopt private 5G", rendered)
         self.assertIn("Detailed prior output", rendered)
 
+    def test_render_prompt_prepends_project_context(self) -> None:
+        rendered = render_prompt(
+            "Implement feature for {{input}}",
+            "rate limiting",
+            "",
+            {},
+            project_context="Language: Python\nFramework: FastAPI",
+        )
+
+        self.assertIn("[Project Context]", rendered)
+        self.assertIn("Language: Python", rendered)
+        self.assertTrue(rendered.endswith("Implement feature for rate limiting"))
+
     def test_ready_workflow_steps_returns_parallel_frontier(self) -> None:
         steps = [
             {"name": "research", "agentRef": "research-agent"},
@@ -86,6 +100,25 @@ class WorkflowUtilsTests(unittest.TestCase):
             step["name"] for step in ready_workflow_steps(steps, set())
         ]
         self.assertEqual(ready_names, ["research", "finance"])
+
+    def test_compute_execution_waves_groups_by_dependency_layers(self) -> None:
+        steps = [
+            {"name": "research", "agentRef": "research-agent"},
+            {"name": "finance", "agentRef": "finance-agent"},
+            {
+                "name": "analysis",
+                "agentRef": "analysis-agent",
+                "dependsOn": ["research", "finance"],
+            },
+            {
+                "name": "report",
+                "agentRef": "report-agent",
+                "dependsOn": ["analysis"],
+            },
+        ]
+
+        waves = compute_execution_waves(steps)
+        self.assertEqual([[step["name"] for step in wave] for wave in waves], [["research", "finance"], ["analysis"], ["report"]])
 
     def test_normalize_step_execution_applies_defaults_and_overrides(
         self,

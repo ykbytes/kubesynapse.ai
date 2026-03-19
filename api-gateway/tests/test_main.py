@@ -240,6 +240,72 @@ class GatewayRuntimeValidationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             api_gateway_main.InvokeRequest(prompt="hello", a2a_target_agent="analysis-agent")
 
+
+class WorkflowSchemaTests(unittest.TestCase):
+    def test_build_workflow_spec_preserves_context_and_review_fields(self) -> None:
+        body = api_gateway_main.WorkflowRequest(
+            name="feature-pipeline",
+            description="desc",
+            input="input",
+            context_ref="project-rules",
+            steps=[
+                api_gateway_main.WorkflowStepRequest(
+                    name="implement",
+                    agent_ref="dev-agent",
+                    prompt="Implement it",
+                    verify="Run tests and report PASS or FAIL",
+                ),
+                api_gateway_main.WorkflowStepRequest(
+                    name="review",
+                    agent_ref="reviewer-agent",
+                    step_type="review",
+                    review_criteria="Code quality",
+                    depends_on=["implement"],
+                ),
+            ],
+        )
+
+        spec = api_gateway_main.build_workflow_spec(body)
+
+        self.assertEqual(spec["contextRef"], "project-rules")
+        self.assertEqual(spec["steps"][0]["verify"], "Run tests and report PASS or FAIL")
+        self.assertEqual(spec["steps"][1]["type"], "review")
+        self.assertEqual(spec["steps"][1]["reviewCriteria"], "Code quality")
+
+    def test_workflow_info_from_resource_maps_new_fields(self) -> None:
+        workflow = {
+            "metadata": {"name": "feature-pipeline", "namespace": "default", "creationTimestamp": "2026-03-19T00:00:00Z"},
+            "spec": {
+                "description": "desc",
+                "input": "input",
+                "contextRef": "project-rules",
+                "messageBus": "in-memory",
+                "steps": [
+                    {
+                        "name": "implement",
+                        "agentRef": "dev-agent",
+                        "prompt": "Implement",
+                        "verify": "Run tests",
+                    },
+                    {
+                        "name": "review",
+                        "agentRef": "reviewer-agent",
+                        "type": "review",
+                        "reviewCriteria": "Code quality",
+                        "dependsOn": ["implement"],
+                    },
+                ],
+            },
+            "status": {"phase": "running", "currentStep": "review"},
+        }
+
+        info = api_gateway_main.workflow_info_from_resource(workflow)
+
+        self.assertEqual(info.context_ref, "project-rules")
+        self.assertEqual(info.steps[0].verify, "Run tests")
+        self.assertEqual(info.steps[1].step_type, "review")
+        self.assertEqual(info.steps[1].review_criteria, "Code quality")
+
     def test_parse_json_object_response_rejects_invalid_json(self) -> None:
         response = httpx.Response(200, text="not-json")
 

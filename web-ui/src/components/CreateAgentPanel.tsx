@@ -450,12 +450,12 @@ export function CreateAgentPanel({
                                 <p className="font-medium text-sm">{rt === "langgraph" ? "LangGraph runtime" : rt === "goose" ? "Goose runtime" : rt === "opencode" ? "OpenCode runtime" : "Codex runtime"}</p>
                                 <p className="mt-1 text-xs leading-5">
                                   {rt === "langgraph"
-                                    ? "Best for tool-rich agents, MCP routing, and sidecar-based capabilities."
+                                    ? "Best for tool-rich agents with MCP sidecars, multi-tool routing, and enterprise integrations. Choose this when you need database, browser, or custom MCP tools."
                                     : rt === "goose"
-                                      ? "Best for Goose-native workflows and config-driven conversational behavior."
+                                      ? "Best for Goose-native workflows with config-driven extensions and conversational behavior. Choose this for Goose ecosystem tools and prompts."
                                       : rt === "opencode"
-                                        ? "Best for autonomous multi-turn coding with structured output, session management, and context-overflow recovery."
-                                        : "Best for Codex-driven repository implementation workflows with structured stage prompts."}
+                                        ? "Best for autonomous multi-turn coding tasks. Features structured output, session persistence, context-overflow recovery, and automatic plan-then-build execution."
+                                        : "Best for Codex-driven repository implementation with structured stage prompts. Choose this for large-scale code generation from specs."}
                                 </p>
                               </div>
                               {active ? <Badge>Selected</Badge> : null}
@@ -500,7 +500,7 @@ export function CreateAgentPanel({
                     rows={7}
                     value={systemPrompt}
                     onChange={(e) => onSystemPromptChange(e.target.value)}
-                    placeholder="You are a helpful enterprise assistant. Be concise, factual, and do not fabricate information."
+                    placeholder="You are a senior software engineer. Follow these guidelines: (1) Think step-by-step before acting. (2) Read existing code before making changes. (3) Verify your work by running tests. (4) Be concise and factual — do not fabricate information."
                   />
                 </div>
                 <Separator />
@@ -924,6 +924,16 @@ export function CreateAgentPanel({
                             onChange={(e) => onGitFormChange({ ...gitForm, defaultBranch: e.target.value })}
                           />
                         </div>
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label htmlFor="git-branch">Agent working branch <span className="text-muted-foreground text-xs">(optional)</span></Label>
+                        <Input
+                          id="git-branch"
+                          placeholder="e.g. agent/backend — if set, sidecar checks out this branch at startup"
+                          value={gitForm.branch}
+                          onChange={(e) => onGitFormChange({ ...gitForm, branch: e.target.value })}
+                        />
                       </div>
 
                       <Separator />

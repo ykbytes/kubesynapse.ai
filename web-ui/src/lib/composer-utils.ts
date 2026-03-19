@@ -21,6 +21,7 @@ const GAP_Y = 180;
 
 export interface TriggerNodeData extends Record<string, unknown> {
   label: string;
+  contextRef?: string | null;
 }
 
 export interface AgentStepNodeData extends Record<string, unknown> {
@@ -28,11 +29,13 @@ export interface AgentStepNodeData extends Record<string, unknown> {
   agentRef: string;
   prompt: string;
   requireApproval: boolean;
-  stepType: "agent" | "loop" | "conditional";
+  stepType: "agent" | "loop" | "conditional" | "review";
   loopConfig?: LoopConfig | null;
   conditionExpr?: string | null;
   thenSteps?: string[] | null;
   elseSteps?: string[] | null;
+  verify?: string | null;
+  reviewCriteria?: string | null;
   stepState?: WorkflowStepState | null;
   runtimeKind?: string | null;
 }
@@ -59,7 +62,7 @@ export function workflowToCanvas(
     id: TRIGGER_NODE_ID,
     type: "trigger",
     position: { x: 0, y: 0 },
-    data: { label: workflow.name },
+    data: { label: workflow.name, contextRef: workflow.context_ref ?? null },
     deletable: false,
   });
 
@@ -84,6 +87,8 @@ export function workflowToCanvas(
         conditionExpr: step.condition_expr ?? null,
         thenSteps: step.then_steps ?? null,
         elseSteps: step.else_steps ?? null,
+        verify: step.verify ?? null,
+        reviewCriteria: step.review_criteria ?? null,
         stepState,
         runtimeKind: agent?.runtime_kind ?? null,
       },
@@ -182,6 +187,7 @@ export function canvasToPayload(
   name: string,
   description: string,
   input: string,
+  contextRef = "",
 ): WorkflowPayload {
   const steps: WorkflowStep[] = [];
 
@@ -204,6 +210,8 @@ export function canvasToPayload(
       condition_expr: d.conditionExpr,
       then_steps: d.thenSteps,
       else_steps: d.elseSteps,
+      verify: d.verify,
+      review_criteria: d.reviewCriteria,
       execution: {
         _composerX: node.position.x,
         _composerY: node.position.y,
@@ -211,7 +219,7 @@ export function canvasToPayload(
     });
   }
 
-  return { name, description, input, steps };
+  return { name, description, input, context_ref: contextRef || undefined, steps };
 }
 
 /* ── Helpers ── */

@@ -211,8 +211,13 @@ def render_prompt(
     workflow_input: str,
     previous_output: str,
     step_results: dict[str, dict[str, Any]],
+    project_context: str = "",
 ) -> str:
-    """Render a workflow prompt template, substituting structured placeholders."""
+    """Render a workflow prompt template, substituting structured placeholders.
+
+    If *project_context* is provided it is prepended as a ``[Project Context]``
+    block so every step benefits from shared project knowledge.
+    """
 
     def replacer(match: re.Match[str]) -> str:
         expression = match.group(1).strip()
@@ -235,9 +240,10 @@ def render_prompt(
             return ""
         return _resolve_template_value(value)
 
-    return PLACEHOLDER_RE.sub(replacer, template)
-
-
+    rendered = PLACEHOLDER_RE.sub(replacer, template)
+    if project_context:
+        rendered = f"[Project Context]\n{project_context}\n\n{rendered}"
+    return rendered
 def validate_workflow_graph(steps: Sequence[dict[str, Any]]) -> dict[str, Any]:
     if not steps:
         raise ValueError("AgentWorkflow must contain at least one step")
@@ -350,16 +356,56 @@ def ready_workflow_steps(
     return ready
 
 
+def compute_execution_waves(
+    steps: Sequence[dict[str, Any]],
+    completed_steps: set[str] | None = None,
+    skipped_steps: set[str] | None = None,
+) -> list[list[dict[str, Any]]]:
+    """Group remaining workflow steps into execution waves.
+
+    Wave N contains all steps whose dependencies are fully satisfied by the
+    union of *completed_steps* and all steps in waves 0..N-1.  This is a
+    topological-level grouping that maximises parallelism within each wave.
+    """
+    done = set(completed_steps or set())
+    ignored = set(skipped_steps or set())
+    remaining = [
+        s for s in steps
+        if str(s.get("name", "")).strip()
+        and str(s.get("name", "")).strip() not in done
+        and str(s.get("name", "")).strip() not in ignored
+    ]
+    waves: list[list[dict[str, Any]]] = []
+    while remaining:
+        wave = [
+            s for s in remaining
+            if {str(d).strip() for d in s.get("dependsOn") or [] if str(d).strip()}.issubset(done | ignored)
+        ]
+        if not wave:
+            break  # remaining steps have unresolvable deps; caller handles
+        waves.append(wave)
+        done |= {str(s.get("name", "")).strip() for s in wave}
+        remaining = [s for s in remaining if str(s.get("name", "")).strip() not in done]
+    return waves
+
+
 def normalize_step_execution(step: dict[str, Any]) -> dict[str, Any]:
     execution = step.get("execution") or {}
     if not isinstance(execution, dict):
         execution = {}
+    pre_auth = execution.get("preAuthorizedActions") or []
+    if not isinstance(pre_auth, list):
+        pre_auth = []
     return {
         "timeoutSeconds": max(float(execution.get("timeoutSeconds", AGENT_RUNTIME_TIMEOUT_SECONDS) or AGENT_RUNTIME_TIMEOUT_SECONDS), 1.0),
         "maxAttempts": max(int(execution.get("maxAttempts", DEFAULT_WORKFLOW_STEP_MAX_ATTEMPTS) or DEFAULT_WORKFLOW_STEP_MAX_ATTEMPTS), 1),
         "backoffSeconds": max(float(execution.get("backoffSeconds", DEFAULT_WORKFLOW_STEP_BACKOFF_SECONDS) or DEFAULT_WORKFLOW_STEP_BACKOFF_SECONDS), 0.0),
         "retryable": bool(execution.get("retryable", True)),
         "continueOnError": bool(execution.get("continueOnError", False)),
+        "preAuthorizedActions": [str(a).strip() for a in pre_auth if str(a).strip()],
+        "sessionGroup": str(execution.get("sessionGroup") or "").strip(),
+        "verifyRetries": max(int(execution.get("verifyRetries", 0) or 0), 0),
+        "maxTurns": max(int(execution.get("maxTurns", 0) or 0), 0),
     }
 
 
@@ -618,6 +664,26 @@ def invoke_agent_runtime(
             import time
             time.sleep(min(2 ** attempt, 4))
     raise last_exc  # type: ignore[misc]
+
+
+def cancel_agent_session(
+    agent_name: str,
+    namespace: str,
+    thread_id: str,
+    *,
+    timeout_seconds: float = 10.0,
+) -> bool:
+    """Send a cancel request to the agent runtime to abort a running session.
+
+    Returns True if the cancel was acknowledged, False on any error.
+    """
+    try:
+        url = f"{runtime_url(agent_name, namespace)}/cancel?thread_id={thread_id}"
+        with httpx.Client(timeout=timeout_seconds) as client:
+            response = client.post(url)
+        return response.status_code == 200
+    except Exception:
+        return False
 
 
 def normalize_text(text: str) -> str:

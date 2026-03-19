@@ -56,6 +56,8 @@ import type {
   UpdateUserPayload,
   UpdateAgentPayload,
   WorkflowInfo,
+  WorkflowLogsResponse,
+  WorkflowNextAction,
   WorkflowPayload,
   WorkflowPendingApproval,
   WorkflowStep,
@@ -398,6 +400,7 @@ function parseGitConfigPayload(payload: unknown, label: string): GitConfig | nul
   return {
     repo_url: readString(record, "repo_url", label),
     default_branch: readOptionalString(record, "default_branch", label) ?? undefined,
+    branch: readOptionalString(record, "branch", label) ?? undefined,
     push_policy: (readOptionalString(record, "push_policy", label) ?? undefined) as GitConfig["push_policy"],
     auth_method: readString(record, "auth_method", label) as GitConfig["auth_method"],
     credential_secret_ref: readOptionalString(record, "credential_secret_ref", label) ?? undefined,
@@ -727,6 +730,8 @@ function parseWorkflowStepPayload(payload: unknown, label = "WorkflowStep"): Wor
     condition_expr: readOptionalString(record, "condition_expr", label) ?? null,
     then_steps: record.then_steps ? (record.then_steps as string[]) : null,
     else_steps: record.else_steps ? (record.else_steps as string[]) : null,
+    verify: readOptionalString(record, "verify", label) ?? null,
+    review_criteria: readOptionalString(record, "review_criteria", label) ?? null,
   };
 }
 
@@ -737,6 +742,7 @@ function parseWorkflowInfoPayload(payload: unknown, label = "WorkflowInfo"): Wor
     namespace: readString(record, "namespace", label),
     description: readString(record, "description", label, ""),
     input: readString(record, "input", label, ""),
+    context_ref: readOptionalString(record, "context_ref", label),
     message_bus: readString(record, "message_bus", label, "in-memory"),
     steps: (record.steps === undefined ? [] : readRecordArray(record, "steps", label)).map((item, index) =>
       parseWorkflowStepPayload(item, `${label}.steps[${index}]`)
@@ -819,6 +825,16 @@ function parseAgentLogsResponsePayload(payload: unknown): AgentLogsResponse {
   return {
     agent_name: readString(record, "agent_name", "AgentLogsResponse"),
     logs: readString(record, "logs", "AgentLogsResponse", ""),
+  };
+}
+
+function parseWorkflowLogsResponsePayload(payload: unknown): WorkflowLogsResponse {
+  const record = expectRecord(payload, "WorkflowLogsResponse");
+  return {
+    workflow_name: readString(record, "workflow_name", "WorkflowLogsResponse"),
+    job_name: readOptionalString(record, "job_name", "WorkflowLogsResponse") ?? undefined,
+    pod_name: readOptionalString(record, "pod_name", "WorkflowLogsResponse") ?? undefined,
+    logs: readString(record, "logs", "WorkflowLogsResponse", ""),
   };
 }
 
@@ -1479,6 +1495,78 @@ export async function streamAgentLogs(options: LogStreamHandlers): Promise<void>
   });
 }
 
+export interface WorkflowLogStreamHandlers {
+  signal: AbortSignal;
+  token: string;
+  namespace: string;
+  workflowName: string;
+  tail?: number;
+  onLine: (line: string) => void;
+  onStarted: (info: { workflow_name: string; job_name?: string; pod_name?: string }) => void;
+  onError: (error: Error) => void;
+  onStopped: () => void;
+}
+
+export async function fetchWorkflowLogs(
+  token: string,
+  namespace: string,
+  workflowName: string,
+  tail?: number,
+): Promise<WorkflowLogsResponse> {
+  const url = buildUrl(`/api/workflows/${workflowName}/logs`, namespace);
+  const fullUrl = tail ? `${url}${url.includes("?") ? "&" : "?"}tail=${tail}` : url;
+  const response = await fetchAuthenticated(fullUrl, token);
+  return parseJsonResponse(response, parseWorkflowLogsResponsePayload);
+}
+
+export async function streamWorkflowLogs(options: WorkflowLogStreamHandlers): Promise<void> {
+  const url = buildUrl(`/api/workflows/${options.workflowName}/logs/stream`, options.namespace);
+  const fullUrl = options.tail ? `${url}${url.includes("?") ? "&" : "?"}tail=${options.tail}` : url;
+
+  await fetchEventSource(fullUrl, {
+    headers: {
+      ...buildHeaders(options.token),
+      Accept: "text/event-stream",
+    },
+    signal: options.signal,
+    openWhenHidden: true,
+    async onopen(response) {
+      if (!response.ok) {
+        throw new Error(`Workflow log stream failed with status ${response.status}`);
+      }
+    },
+    onmessage(message) {
+      if (!message.event || !message.data) return;
+      try {
+        const data = JSON.parse(message.data);
+        switch (message.event) {
+          case "log.line":
+            if (typeof data.line === "string") options.onLine(data.line);
+            break;
+          case "log.started":
+            options.onStarted(data);
+            break;
+          case "log.error":
+            options.onError(new Error(data.error ?? "Unknown workflow log stream error"));
+            break;
+          case "log.stopped":
+            options.onStopped();
+            break;
+        }
+      } catch (parseErr) {
+        options.onError(new Error(`Failed to parse workflow log event: ${parseErr instanceof Error ? parseErr.message : String(parseErr)}`));
+      }
+    },
+    onerror(error) {
+      options.onError(error instanceof Error ? error : new Error(String(error)));
+      throw error;
+    },
+    onclose() {
+      options.onStopped();
+    },
+  });
+}
+
 export async function decideApproval(
   token: string,
   namespace: string,
@@ -1618,6 +1706,33 @@ export async function fetchWorkflowRuns(
   return parseJsonResponse(response, (payload) => {
     if (!Array.isArray(payload)) throw new Error("Expected array of workflow runs");
     return payload as WorkflowRunRecord[];
+  });
+}
+
+export async function fetchWorkflowNextAction(
+  token: string,
+  namespace: string,
+  workflowName: string,
+): Promise<WorkflowNextAction> {
+  const response = await fetchAuthenticated(
+    buildUrl(`/api/workflows/${workflowName}/next-action`, namespace),
+    token,
+  );
+  return parseJsonResponse(response, (payload) => {
+    const record = expectRecord(payload, "WorkflowNextAction");
+    return {
+      action: readString(record, "action", "WorkflowNextAction"),
+      reason: readString(record, "reason", "WorkflowNextAction"),
+      failedSteps: Array.isArray(record.failedSteps)
+        ? record.failedSteps.map((value) => String(value))
+        : undefined,
+      rejectedReviews: Array.isArray(record.rejectedReviews)
+        ? record.rejectedReviews.map((value) => String(value))
+        : undefined,
+      verifyFailures: Array.isArray(record.verifyFailures)
+        ? record.verifyFailures.map((value) => String(value))
+        : undefined,
+    };
   });
 }
 

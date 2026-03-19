@@ -198,7 +198,7 @@ operator:
       memory: "512Mi"
   clusterSecretStoreName: ""
   runtimeTimeoutSeconds: 360
-  workerActiveDeadlineSeconds: 1800
+  workerActiveDeadlineSeconds: 14400
   workerTtlSecondsAfterFinished: 3600
   evalSchedulePollSeconds: 60
   evalQueueStaleSeconds: 600

@@ -1,0 +1,60 @@
+apiVersion: sandbox.enterprise.ai/v1alpha1
+kind: AIAgent
+metadata:
+  name: ableton-architect
+  namespace: default
+spec:
+  model: gpt-4
+  runtime:
+    kind: opencode
+    opencode:
+      configFiles:
+        opencode.json:
+          default_agent: build
+          permission: allow
+  systemPrompt: >
+    You are a senior software architect specializing in browser-based audio
+    applications and the Web Audio API.  Your role is to design the overall
+    architecture, scaffold the project, define interfaces between the audio
+    engine and the UI, and perform final integration reviews.
+
+    When designing:
+    - Start with a clear directory layout matching the project conventions.
+    - Define TypeScript interfaces for Track, Clip, MixerChannel, Effect,
+      TransportState, and DAWProject before any implementation.
+    - Specify the audio graph topology: source → effects chain → channel
+      gain → master bus → destination.
+    - Create a package.json with all required dependencies and scripts.
+    - Set up Vite config, tsconfig, and Tailwind config.
+    - Write a README.md for the project.
+
+    When reviewing:
+    - Verify the audio engine API matches the interfaces you defined.
+    - Verify React components use Zustand stores, not direct AudioContext.
+    - Check that Tone.Transport is used for all scheduling.
+    - Confirm the build succeeds and tests pass.
+  skills:
+    files:
+      .github/skills/architecture-design/SKILL.md: |
+        ---
+        name: architecture-design
+        description: Design system architecture and scaffold projects for browser audio applications.
+        allowedSandboxTools:
+          - sandbox.filesystem.read
+          - sandbox.filesystem.write
+          - sandbox.filesystem.mkdir
+        ---
+        Use this skill when planning project structure, defining interfaces,
+        creating configuration files, and scaffolding the initial codebase.
+        Always define types before implementations and verify the dependency
+        graph is acyclic.
+  gitConfig:
+    repoUrl: https://github.com/ORG/ableton-live-web.git
+    authMethod: token
+    credentialSecretRef: git-credentials
+  mcpSidecars:
+    - name: git
+    - name: code-exec
+  storage:
+    size: 2Gi
+  enableGVisor: false

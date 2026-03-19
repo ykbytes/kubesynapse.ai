@@ -136,7 +136,9 @@ class OpenCodeRuntimeTests(unittest.TestCase):
             registry.set("thread-a", "ses_123")
 
             self.assertEqual(registry.get("thread-a"), "ses_123")
-            self.assertEqual(json.loads((Path(temp_dir) / "sessions.json").read_text(encoding="utf-8")), {"thread-a": "ses_123"})
+            raw = json.loads((Path(temp_dir) / "sessions.json").read_text(encoding="utf-8"))
+            self.assertEqual(raw["thread-a"]["session_id"], "ses_123")
+            self.assertIn("last_accessed", raw["thread-a"])
 
 
 class ExtractToolCallsTests(unittest.TestCase):
@@ -1524,6 +1526,419 @@ class InvokeOpenCodeLoopTests(unittest.TestCase):
                     resp = opencode_runtime_main.invoke_opencode(req)
             mock_summarize.assert_called()
             self.assertTrue(any("compaction" in w.lower() for w in resp.warnings))
+
+
+class StructuredOutputMetadataTests(unittest.TestCase):
+    """Tests for _extract_structured_output and metadata enrichment."""
+
+    def test_extract_structured_output_from_info_structured(self) -> None:
+        payload = {"info": {"structured": {"key": "value"}}, "parts": []}
+        result = opencode_runtime_main._extract_structured_output(payload)
+        self.assertEqual(result, {"key": "value"})
+
+    def test_extract_structured_output_from_info_structured_output(self) -> None:
+        payload = {"info": {"structured_output": {"a": 1}}, "parts": []}
+        result = opencode_runtime_main._extract_structured_output(payload)
+        self.assertEqual(result, {"a": 1})
+
+    def test_extract_structured_output_returns_none_when_missing(self) -> None:
+        payload = {"info": {"role": "assistant"}, "parts": []}
+        result = opencode_runtime_main._extract_structured_output(payload)
+        self.assertIsNone(result)
+
+    def test_extract_structured_output_empty_payload(self) -> None:
+        result = opencode_runtime_main._extract_structured_output({})
+        self.assertIsNone(result)
+
+    def test_build_response_metadata_includes_structured_output(self) -> None:
+        payload = {
+            "info": {"role": "assistant", "structured": {"result": 42}},
+            "parts": [{"type": "text", "text": "hello"}],
+        }
+        meta = opencode_runtime_main._build_response_metadata(payload)
+        self.assertIsNotNone(meta)
+        self.assertEqual(meta["structured_output"], {"result": 42})
+
+    def test_build_response_metadata_omits_structured_output_when_absent(self) -> None:
+        payload = {
+            "info": {"role": "assistant"},
+            "parts": [{"type": "text", "text": "hello"}],
+        }
+        meta = opencode_runtime_main._build_response_metadata(payload)
+        if meta is not None:
+            self.assertNotIn("structured_output", meta)
+
+
+class SessionRegistryPruningTests(unittest.TestCase):
+    """Tests for SessionRegistry with max_age and max_entries pruning."""
+
+    def _make_registry(self, data: dict | None = None, max_age: int = 3600, max_entries: int = 100):
+        import time as _time
+        td = tempfile.mkdtemp()
+        path = Path(td) / "session-map.json"
+        if data:
+            path.write_text(json.dumps(data), encoding="utf-8")
+        reg = opencode_runtime_main.SessionRegistry(
+            path, max_age_seconds=max_age, max_entries=max_entries
+        )
+        return reg, path, td
+
+    def test_get_or_set_creates_entry_with_timestamp(self) -> None:
+        import time as _time
+        reg, path, _ = self._make_registry()
+        sid = reg.get_or_set("thread1", "ses_abc")
+        self.assertEqual(sid, "ses_abc")
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        entry = raw["thread1"]
+        self.assertEqual(entry["session_id"], "ses_abc")
+        self.assertIn("last_accessed", entry)
+
+    def test_get_returns_existing_session(self) -> None:
+        import time as _time
+        data = {"t1": {"session_id": "ses_1", "last_accessed": _time.time()}}
+        reg, _, _ = self._make_registry(data)
+        self.assertEqual(reg.get("t1"), "ses_1")
+
+    def test_get_returns_none_for_missing(self) -> None:
+        reg, _, _ = self._make_registry()
+        self.assertIsNone(reg.get("nope"))
+
+    def test_size_property(self) -> None:
+        import time as _time
+        data = {
+            "a": {"session_id": "s1", "last_accessed": _time.time()},
+            "b": {"session_id": "s2", "last_accessed": _time.time()},
+        }
+        reg, _, _ = self._make_registry(data)
+        self.assertEqual(reg.size, 2)
+
+    def test_stale_count(self) -> None:
+        import time as _time
+        now = _time.time()
+        data = {
+            "fresh": {"session_id": "s1", "last_accessed": now},
+            "stale": {"session_id": "s2", "last_accessed": now - 7200},
+        }
+        reg, _, _ = self._make_registry(data)
+        self.assertEqual(reg.stale_count(3600), 1)
+
+    def test_legacy_string_entries_migrated(self) -> None:
+        data = {"old_thread": "ses_old"}
+        reg, _, _ = self._make_registry(data)
+        self.assertEqual(reg.get("old_thread"), "ses_old")
+        self.assertEqual(reg.size, 1)
+
+    def test_max_entries_enforced(self) -> None:
+        import time as _time
+        now = _time.time()
+        data = {}
+        for i in range(10):
+            data[f"t{i}"] = {"session_id": f"s{i}", "last_accessed": now - (10 - i)}
+        reg, path, _ = self._make_registry(data, max_entries=5)
+        # Force pruning by resetting debounce
+        reg._last_prune = 0
+        reg.get_or_set("new_thread", "new_ses")
+        self.assertLessEqual(reg.size, 6)
+
+
+class ComputeContextBudgetTests(unittest.TestCase):
+    """Tests for compute_context_budget function."""
+
+    def test_ok_status(self) -> None:
+        payload = {"info": {"tokens": {"total": 50000}}}
+        result = opencode_runtime_main.compute_context_budget(payload)
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["tokens_used"], 50000)
+        self.assertGreater(result["tokens_remaining"], 0)
+
+    def test_warning_status(self) -> None:
+        limit = opencode_runtime_main.MODEL_CONTEXT_LIMIT
+        tokens_used = int(limit * 0.72)
+        payload = {"info": {"tokens": {"total": tokens_used}}}
+        result = opencode_runtime_main.compute_context_budget(payload)
+        self.assertEqual(result["status"], "warning")
+
+    def test_critical_status(self) -> None:
+        limit = opencode_runtime_main.MODEL_CONTEXT_LIMIT
+        tokens_used = int(limit * 0.80)
+        payload = {"info": {"tokens": {"total": tokens_used}}}
+        result = opencode_runtime_main.compute_context_budget(payload)
+        self.assertEqual(result["status"], "critical")
+
+    def test_unknown_status_no_tokens(self) -> None:
+        payload = {"info": {}}
+        result = opencode_runtime_main.compute_context_budget(payload)
+        self.assertEqual(result["status"], "unknown")
+
+    def test_empty_payload(self) -> None:
+        result = opencode_runtime_main.compute_context_budget({})
+        self.assertEqual(result["status"], "unknown")
+
+    def test_computed_total_from_input_output(self) -> None:
+        payload = {"info": {"tokens": {"input": 30000, "output": 5000}}}
+        result = opencode_runtime_main.compute_context_budget(payload)
+        self.assertEqual(result["tokens_used"], 35000)
+
+
+class DetectAntiPatternsTests(unittest.TestCase):
+    """Tests for detect_anti_patterns function."""
+
+    def test_detects_todo(self) -> None:
+        result = opencode_runtime_main.detect_anti_patterns("# TODO: implement this")
+        self.assertIn("TODO marker", result)
+
+    def test_detects_fixme(self) -> None:
+        result = opencode_runtime_main.detect_anti_patterns("# FIXME: broken logic")
+        self.assertIn("FIXME marker", result)
+
+    def test_detects_placeholder(self) -> None:
+        result = opencode_runtime_main.detect_anti_patterns("This is a placeholder value")
+        self.assertIn("placeholder implementation", result)
+
+    def test_detects_stub(self) -> None:
+        result = opencode_runtime_main.detect_anti_patterns("Created a stub function")
+        self.assertIn("stub implementation", result)
+
+    def test_detects_pass_statement(self) -> None:
+        result = opencode_runtime_main.detect_anti_patterns("def foo():\n    pass\n")
+        self.assertIn("pass statement", result)
+
+    def test_detects_not_implemented(self) -> None:
+        result = opencode_runtime_main.detect_anti_patterns("This feature is not implemented yet")
+        self.assertIn("not implemented", result)
+
+    def test_clean_text_returns_empty(self) -> None:
+        result = opencode_runtime_main.detect_anti_patterns("Clean implementation of feature X")
+        self.assertEqual(result, [])
+
+    def test_empty_text_returns_empty(self) -> None:
+        result = opencode_runtime_main.detect_anti_patterns("")
+        self.assertEqual(result, [])
+
+    def test_multiple_patterns(self) -> None:
+        text = "# TODO: fix this\n# FIXME: refactor\ndef stub_fn():\n    pass\n"
+        result = opencode_runtime_main.detect_anti_patterns(text)
+        self.assertGreaterEqual(len(result), 3)
+
+
+class DeriveTaskStatusTests(unittest.TestCase):
+    """Tests for derive_task_status function."""
+
+    def test_done_clean(self) -> None:
+        result = opencode_runtime_main.derive_task_status("completed", [], {"status": "ok"})
+        self.assertEqual(result, "DONE")
+
+    def test_done_with_warnings(self) -> None:
+        result = opencode_runtime_main.derive_task_status("completed", ["some warning"], {"status": "ok"})
+        self.assertEqual(result, "DONE_WITH_CONCERNS")
+
+    def test_done_with_anti_patterns(self) -> None:
+        result = opencode_runtime_main.derive_task_status("completed", [], {"status": "ok"}, ["TODO marker"])
+        self.assertEqual(result, "DONE_WITH_CONCERNS")
+
+    def test_needs_context_critical(self) -> None:
+        result = opencode_runtime_main.derive_task_status("completed", [], {"status": "critical"})
+        self.assertEqual(result, "NEEDS_CONTEXT")
+
+    def test_needs_context_warning_incomplete(self) -> None:
+        result = opencode_runtime_main.derive_task_status("incomplete", [], {"status": "warning"})
+        self.assertEqual(result, "NEEDS_CONTEXT")
+
+    def test_blocked_on_error(self) -> None:
+        result = opencode_runtime_main.derive_task_status("error", [], {"status": "ok"})
+        self.assertEqual(result, "BLOCKED")
+
+
+class MultiStageCompactionTests(InvokeOpenCodeLoopTests):
+    """Tests for multi-stage compaction in the autonomous loop."""
+
+    def test_second_compaction_after_spacing(self) -> None:
+        """Second compaction should be allowed after minimum turn spacing."""
+        high_tokens = {"total": int(opencode_runtime_main.MODEL_CONTEXT_LIMIT * 0.9)}
+        payloads = [
+            self._make_payload("w1", "tool-calls", tokens=high_tokens),
+            self._make_payload("w2", "tool-calls"),
+            self._make_payload("w3", "tool-calls"),
+            self._make_payload("w4", "tool-calls", tokens=high_tokens),
+            self._make_payload("done", "stop"),
+        ]
+        with patch.object(opencode_runtime_main, "COMPACTION_MIN_TURN_SPACING", 3), \
+             patch.object(opencode_runtime_main, "MAX_COMPACTION_ATTEMPTS", 2):
+            resp = self._run_invoke(
+                {"prompt": "A big task", "autonomous": True, "max_turns": 10},
+                payloads,
+            )
+        compaction_warnings = [w for w in resp.warnings if "compaction" in w.lower()]
+        self.assertGreaterEqual(len(compaction_warnings), 1)
+
+    def test_handoff_summary_when_context_exhausted(self) -> None:
+        """When all compaction attempts fail to reduce context, handoff summary should be generated."""
+        critical_tokens = {"total": int(opencode_runtime_main.MODEL_CONTEXT_LIMIT * 0.85)}
+        payloads = [
+            self._make_payload("w1", "tool-calls", tokens=critical_tokens),
+            self._make_payload("w2", "tool-calls", tokens=critical_tokens),
+            self._make_payload("w3", "tool-calls", tokens=critical_tokens),
+            self._make_payload("w4", "tool-calls", tokens=critical_tokens),
+            self._make_payload("w5", "tool-calls", tokens=critical_tokens),
+            self._make_payload("w6", "tool-calls", tokens=critical_tokens),
+            self._make_payload("w7", "tool-calls", tokens=critical_tokens),
+            self._make_payload("w8", "stop", tokens=critical_tokens),
+        ]
+        with patch.object(opencode_runtime_main, "COMPACTION_MIN_TURN_SPACING", 1), \
+             patch.object(opencode_runtime_main, "MAX_COMPACTION_ATTEMPTS", 2):
+            resp = self._run_invoke(
+                {"prompt": "Big task", "autonomous": True, "max_turns": 10},
+                payloads,
+            )
+        self.assertIsNotNone(resp.metadata)
+        if resp.metadata and resp.metadata.get("context_budget", {}).get("status") == "critical":
+            self.assertIn("handoff_summary", resp.metadata)
+
+
+class ResponseEnrichmentTests(InvokeOpenCodeLoopTests):
+    """Tests for context_budget, task_status, anti_patterns in response metadata."""
+
+    def test_metadata_includes_context_budget(self) -> None:
+        payload = self._make_payload("done", "stop", tokens={"total": 50000})
+        resp = self._run_invoke({"prompt": "task"}, [payload])
+        self.assertIsNotNone(resp.metadata)
+        self.assertIn("context_budget", resp.metadata)
+        self.assertIn("status", resp.metadata["context_budget"])
+
+    def test_metadata_includes_task_status(self) -> None:
+        payload = self._make_payload("done", "stop")
+        resp = self._run_invoke({"prompt": "task"}, [payload])
+        self.assertIsNotNone(resp.metadata)
+        self.assertIn("task_status", resp.metadata)
+        self.assertIn(resp.metadata["task_status"], ("DONE", "DONE_WITH_CONCERNS", "NEEDS_CONTEXT", "BLOCKED"))
+
+    def test_metadata_includes_anti_patterns_when_found(self) -> None:
+        payload = self._make_payload("# TODO: implement this\ndef stub():\n    pass", "stop")
+        resp = self._run_invoke({"prompt": "task"}, [payload])
+        self.assertIsNotNone(resp.metadata)
+        self.assertIn("anti_patterns", resp.metadata)
+        self.assertGreater(len(resp.metadata["anti_patterns"]), 0)
+
+    def test_metadata_omits_anti_patterns_when_clean(self) -> None:
+        payload = self._make_payload("Implementation complete with full coverage", "stop")
+        resp = self._run_invoke({"prompt": "task"}, [payload])
+        self.assertIsNotNone(resp.metadata)
+        self.assertNotIn("anti_patterns", resp.metadata)
+
+    def test_task_status_blocked_on_error(self) -> None:
+        payload = self._make_payload("", "stop", error={"name": "ProviderAuthError", "message": "bad"})
+        resp = self._run_invoke({"prompt": "task"}, [payload])
+        self.assertIsNotNone(resp.metadata)
+        self.assertIn(resp.metadata.get("task_status"), ("BLOCKED", "DONE_WITH_CONCERNS"))
+
+
+class SessionHealthMetricsTests(unittest.TestCase):
+    """Tests for session health metrics in /health and /ready."""
+
+    def test_health_includes_sessions_section(self) -> None:
+        with patch.object(opencode_runtime_main, "_runtime_ready", True), \
+             patch.object(opencode_runtime_main, "SKILL_RUNTIME_CONFIG", {"skillFiles": [], "warnings": [], "configFiles": [], "mcpSidecars": []}):
+            result = opencode_runtime_main.health()
+        self.assertIn("sessions", result)
+        sessions = result["sessions"]
+        self.assertIn("total", sessions)
+        self.assertIn("active", sessions)
+        self.assertIn("stale", sessions)
+        self.assertIn("at_capacity", sessions)
+
+    def test_ready_includes_server_health(self) -> None:
+        with patch.object(opencode_runtime_main, "ensure_runtime_directories"), \
+             patch("shutil.which", return_value="/usr/bin/opencode"), \
+             patch.object(opencode_runtime_main, "ensure_server_running"), \
+             patch("httpx.Client") as mock_client_cls, \
+             patch("os.access", return_value=True), \
+             patch.object(opencode_runtime_main, "SKILL_RUNTIME_CONFIG", {"configFiles": [], "skillFiles": [], "mcpSidecars": []}):
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_client = MagicMock()
+            mock_client.__enter__ = MagicMock(return_value=mock_client)
+            mock_client.__exit__ = MagicMock(return_value=False)
+            mock_client.get.return_value = mock_resp
+            mock_client_cls.return_value = mock_client
+            result = opencode_runtime_main.ready()
+        self.assertIn("opencode_server_healthy", result)
+        self.assertIn("session_registry_writable", result)
+
+
+class ContextBudgetEndpointTests(unittest.TestCase):
+    """Tests for the /context-budget endpoint."""
+
+    def test_missing_thread_id_returns_400(self) -> None:
+        from fastapi.testclient import TestClient
+        client = TestClient(opencode_runtime_main.app, raise_server_exceptions=False)
+        with patch.object(opencode_runtime_main, "_runtime_ready", True):
+            resp = client.get("/context-budget")
+        self.assertEqual(resp.status_code, 400)
+
+    def test_unknown_thread_id_returns_404(self) -> None:
+        from fastapi.testclient import TestClient
+        client = TestClient(opencode_runtime_main.app, raise_server_exceptions=False)
+        with patch.object(opencode_runtime_main, "_runtime_ready", True), \
+             patch.object(opencode_runtime_main.SESSION_REGISTRY, "get", return_value=None):
+            resp = client.get("/context-budget?thread_id=unknown")
+        self.assertEqual(resp.status_code, 404)
+
+    def test_valid_thread_returns_budget(self) -> None:
+        from fastapi.testclient import TestClient
+        client = TestClient(opencode_runtime_main.app, raise_server_exceptions=False)
+        mock_messages = [
+            {
+                "info": {"role": "assistant", "tokens": {"total": 50000}},
+                "parts": [{"type": "text", "text": "hi"}],
+            }
+        ]
+        with patch.object(opencode_runtime_main, "_runtime_ready", True), \
+             patch.object(opencode_runtime_main.SESSION_REGISTRY, "get", return_value="ses_test"), \
+             patch.object(opencode_runtime_main, "get_session_messages", return_value=mock_messages):
+            resp = client.get("/context-budget?thread_id=t1")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertIn("status", data)
+        self.assertIn("session_id", data)
+        self.assertEqual(data["session_id"], "ses_test")
+
+
+class StreamingEventsTests(unittest.TestCase):
+    """Tests for per-turn SSE streaming events."""
+
+    def test_stream_emits_multiple_events(self) -> None:
+        """Streaming endpoint should emit turn events for multi-turn invocation."""
+        from fastapi.testclient import TestClient
+
+        payload1 = {"info": {"role": "assistant", "finish": "tool-calls"}, "parts": [{"type": "text", "text": "Working..."}]}
+        payload2 = {"info": {"role": "assistant", "finish": "stop"}, "parts": [{"type": "text", "text": "Done!"}]}
+
+        call_count = {"n": 0}
+        def mock_send(**kwargs):
+            idx = min(call_count["n"], 1)
+            call_count["n"] += 1
+            return kwargs.get("session_id", "ses_test"), [payload1, payload2][idx]
+
+        client = TestClient(opencode_runtime_main.app, raise_server_exceptions=False)
+        with patch.object(opencode_runtime_main, "_runtime_ready", True), \
+             patch.object(opencode_runtime_main, "ensure_server_running"), \
+             patch.object(opencode_runtime_main, "create_remote_session", return_value="ses_test"), \
+             patch.object(opencode_runtime_main, "_send_prompt_with_session_recovery", side_effect=mock_send), \
+             patch.object(opencode_runtime_main, "get_session_messages", return_value=[]), \
+             patch.object(opencode_runtime_main, "get_session_todos", return_value=[]), \
+             patch.object(opencode_runtime_main, "wait_for_session_idle", return_value={"type": "idle"}), \
+             patch.object(opencode_runtime_main, "abort_session", return_value=True), \
+             patch.object(opencode_runtime_main, "summarize_session", return_value=True):
+            resp = client.post(
+                "/invoke/stream",
+                json={"prompt": "Do something", "autonomous": True},
+            )
+        self.assertEqual(resp.status_code, 200)
+        text = resp.text
+        self.assertIn("event: response.started", text)
+        self.assertIn("event: response.completed", text)
+        self.assertIn("response.turn_started", text)
+        self.assertIn("response.turn_completed", text)
 
 
 if __name__ == "__main__":

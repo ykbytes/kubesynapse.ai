@@ -126,6 +126,9 @@ spec:
                     defaultBranch:
                       type: string
                       description: "Base branch to create feature branches from (default: main)"
+                    branch:
+                      type: string
+                      description: "Per-agent working branch (e.g. agent/backend). If set, the git sidecar checks out this branch at startup."
                     pushPolicy:
                       type: string
                       enum:

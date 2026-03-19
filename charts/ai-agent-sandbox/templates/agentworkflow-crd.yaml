@@ -21,6 +21,9 @@ spec:
                 input:
                   type: string
                   description: "Initial workflow input used to resolve the workflow input placeholder"
+                contextRef:
+                  type: string
+                  description: "Name of a ConfigMap in the same namespace containing project context injected into all step prompts"
                 steps:
                   type: array
                   items:
@@ -34,7 +37,8 @@ spec:
                         enum:
                           - agent
                           - loop
-                        description: "Step type: 'agent' (default) runs once, 'loop' runs iterative dev-loop"
+                          - review
+                        description: "Step type: 'agent' (default) runs once, 'loop' runs iterative dev-loop, 'review' runs a criteria-based review"
                       agentRef:
                         type: string
                         description: "Name of the AIAgent CRD to execute this step"
@@ -84,6 +88,12 @@ spec:
                                 type: integer
                                 minimum: 1
                                 description: "Number of consecutive completion signals from agent before exiting"
+                      verify:
+                        type: string
+                        description: "Verification prompt run after step completion. Step fails if verification does not pass."
+                      reviewCriteria:
+                        type: string
+                        description: "Review criteria for review-type steps. The agent evaluates prior output against these criteria."
                       dependsOn:
                         type: array
                         items:

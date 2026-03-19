@@ -27,6 +27,7 @@ export type GitPushPolicy = "after-each-commit" | "end-of-session" | "on-approva
 export interface GitConfig {
   repo_url: string;
   default_branch?: string;
+  branch?: string;
   push_policy?: GitPushPolicy;
   auth_method: GitAuthMethod;
   credential_secret_ref?: string;
@@ -52,6 +53,7 @@ export interface GitFormState {
   authMethod: GitAuthMethod;
   pushPolicy: GitPushPolicy;
   defaultBranch: string;
+  branch: string;
   token: string;
   username: string;
   password: string;
@@ -555,6 +557,13 @@ export interface AgentLogsResponse {
   logs: string;
 }
 
+export interface WorkflowLogsResponse {
+  workflow_name: string;
+  job_name?: string;
+  pod_name?: string;
+  logs: string;
+}
+
 export interface ApprovalInfo {
   name: string;
   namespace: string;
@@ -574,17 +583,20 @@ export interface WorkflowStep {
   depends_on: string[];
   require_approval: boolean;
   execution?: Record<string, unknown> | null;
-  step_type?: "agent" | "loop" | "conditional";
+  step_type?: "agent" | "loop" | "conditional" | "review";
   loop_config?: LoopConfig | null;
   condition_expr?: string | null;
   then_steps?: string[] | null;
   else_steps?: string[] | null;
+  verify?: string | null;
+  review_criteria?: string | null;
 }
 
 export interface WorkflowPayload {
   name: string;
   description?: string;
   input?: string;
+  context_ref?: string;
   message_bus?: string;
   steps: WorkflowStep[];
 }
@@ -592,6 +604,7 @@ export interface WorkflowPayload {
 export interface WorkflowUpdatePayload {
   description?: string;
   input?: string;
+  context_ref?: string;
   message_bus?: string;
   steps: WorkflowStep[];
 }
@@ -636,11 +649,20 @@ export interface WorkflowPendingApproval {
   reason?: string;
 }
 
+export interface WorkflowNextAction {
+  action: string;
+  reason: string;
+  failedSteps?: string[];
+  rejectedReviews?: string[];
+  verifyFailures?: string[];
+}
+
 export interface WorkflowInfo {
   name: string;
   namespace: string;
   description: string;
   input: string;
+  context_ref?: string | null;
   message_bus: string;
   steps: WorkflowStep[];
   phase: string;

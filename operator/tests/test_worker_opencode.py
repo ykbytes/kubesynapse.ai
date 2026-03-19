@@ -162,10 +162,11 @@ class ExecuteWorkflowStepOpenCodeTests(unittest.TestCase):
 
         return worker.execute_workflow_step
 
+    @patch("worker.wait_for_agent_runtime_ready")
     @patch("worker.append_journal_event")
     @patch("worker.invoke_agent_runtime")
     def test_captures_opencode_fields(
-        self, mock_invoke: MagicMock, mock_journal: MagicMock
+        self, mock_invoke: MagicMock, mock_journal: MagicMock, _mock_ready: MagicMock
     ) -> None:
         """Bug 1: artifacts, tool_calls, metadata, warnings are preserved."""
         mock_invoke.return_value = {
@@ -195,10 +196,11 @@ class ExecuteWorkflowStepOpenCodeTests(unittest.TestCase):
         self.assertEqual(sr["metadata"]["todos"], ["write tests"])
         self.assertIn("Tool error: lint warning", sr["warnings"])
 
+    @patch("worker.wait_for_agent_runtime_ready")
     @patch("worker.append_journal_event")
     @patch("worker.invoke_agent_runtime")
     def test_incomplete_status_accepted_with_warning(
-        self, mock_invoke: MagicMock, mock_journal: MagicMock
+        self, mock_invoke: MagicMock, mock_journal: MagicMock, _mock_ready: MagicMock
     ) -> None:
         """Bug 2: 'incomplete' status becomes completed + warning."""
         mock_invoke.return_value = {
@@ -229,10 +231,12 @@ class ExecuteWorkflowStepOpenCodeTests(unittest.TestCase):
             f"Expected 'incomplete' warning, got: {sr['warnings']}",
         )
 
+
+    @patch("worker.wait_for_agent_runtime_ready")
     @patch("worker.append_journal_event")
     @patch("worker.invoke_agent_runtime")
     def test_error_status_still_fails(
-        self, mock_invoke: MagicMock, mock_journal: MagicMock
+        self, mock_invoke: MagicMock, mock_journal: MagicMock, _mock_ready: MagicMock
     ) -> None:
         """Bug 2: 'error' status still raises RuntimeError."""
         mock_invoke.return_value = {
@@ -260,10 +264,11 @@ class ExecuteWorkflowStepOpenCodeTests(unittest.TestCase):
         )
         self.assertEqual(outcome["state"], "failed")
 
+    @patch("worker.wait_for_agent_runtime_ready")
     @patch("worker.append_journal_event")
     @patch("worker.invoke_agent_runtime")
     def test_structured_output_from_metadata(
-        self, mock_invoke: MagicMock, mock_journal: MagicMock
+        self, mock_invoke: MagicMock, mock_journal: MagicMock, _mock_ready: MagicMock
     ) -> None:
         """Bug 3: structured output is extracted from metadata before parse_json_output."""
         mock_invoke.return_value = {
@@ -290,10 +295,11 @@ class ExecuteWorkflowStepOpenCodeTests(unittest.TestCase):
         self.assertEqual(sr["output"]["json"], {"score": 95, "verdict": "pass"})
         self.assertEqual(sr["output"]["type"], "json")
 
+    @patch("worker.wait_for_agent_runtime_ready")
     @patch("worker.append_journal_event")
     @patch("worker.invoke_agent_runtime")
     def test_warnings_in_journal_event(
-        self, mock_invoke: MagicMock, mock_journal: MagicMock
+        self, mock_invoke: MagicMock, mock_journal: MagicMock, _mock_ready: MagicMock
     ) -> None:
         """Bug 6: warnings are included in journal event."""
         mock_invoke.return_value = {
@@ -330,13 +336,51 @@ class ExecuteWorkflowStepOpenCodeTests(unittest.TestCase):
         self.assertIn("toolCallCount", event_data)
 
 
+class ExecuteReviewStepTests(unittest.TestCase):
+    """Review-step rejection returns a failed outcome with review result."""
+
+    @patch("worker.wait_for_agent_runtime_ready")
+    @patch("worker.append_journal_event")
+    @patch("worker.invoke_agent_runtime")
+    def test_rejected_review_returns_failed_outcome_with_review_result(
+        self, mock_invoke: MagicMock, _mock_journal: MagicMock, _mock_ready: MagicMock
+    ) -> None:
+        import worker
+
+        mock_invoke.return_value = {
+            "response": "REJECTED\n1. Missing tests\n2. Edge cases not handled",
+            "thread_id": "review-1",
+            "status": "completed",
+        }
+
+        outcome = worker.execute_review_step(
+            {
+                "name": "code-review",
+                "type": "review",
+                "agentRef": "reviewer-agent",
+                "reviewCriteria": "Code quality and test coverage",
+                "execution": {"maxAttempts": 1, "retryable": True},
+            },
+            workflow_input="",
+            step_results={"implement": {"response": "done", "output": {"json": None}}},
+            run_id="run-1",
+            worker_job={"name": "job-1", "namespace": "default"},
+        )
+
+        self.assertEqual(outcome["state"], "failed")
+        self.assertEqual(outcome["stepState"]["status"], "failed")
+        self.assertFalse(outcome["stepState"]["reviewResult"]["approved"])
+        self.assertEqual(outcome["stepResult"]["reviewResult"]["verdict"], "REJECTED")
+
+
 class LoopStepThreadIdTests(unittest.TestCase):
     """Bug 5: loop steps use a single thread_id across iterations."""
 
+    @patch("worker.wait_for_agent_runtime_ready")
     @patch("worker.append_journal_event")
     @patch("worker.invoke_agent_runtime")
     def test_loop_uses_consistent_thread_id(
-        self, mock_invoke: MagicMock, mock_journal: MagicMock
+        self, mock_invoke: MagicMock, mock_journal: MagicMock, _mock_ready: MagicMock
     ) -> None:
         # First call returns plan complete to end after 1 iteration
         mock_invoke.return_value = {
@@ -378,10 +422,11 @@ class LoopStepThreadIdTests(unittest.TestCase):
         self.assertIn("-loop", tid)
         self.assertNotIn("-iter-", tid)
 
+    @patch("worker.wait_for_agent_runtime_ready")
     @patch("worker.append_journal_event")
     @patch("worker.invoke_agent_runtime")
     def test_loop_collects_artifacts_and_warnings(
-        self, mock_invoke: MagicMock, mock_journal: MagicMock
+        self, mock_invoke: MagicMock, mock_journal: MagicMock, _mock_ready: MagicMock
     ) -> None:
         """Bug 9: loop step_result includes artifacts/tool_calls/warnings."""
         call_count = 0
@@ -526,10 +571,11 @@ class InvokeAgentRuntimeTimeoutTests(unittest.TestCase):
 class ConsecutiveCompletionSignalsResetTests(unittest.TestCase):
     """Bug: consecutive_completion_signals must reset on non-plan_complete signals."""
 
+    @patch("worker.wait_for_agent_runtime_ready")
     @patch("worker.append_journal_event")
     @patch("worker.invoke_agent_runtime")
     def test_no_progress_resets_counter(
-        self, mock_invoke: MagicMock, mock_journal: MagicMock
+        self, mock_invoke: MagicMock, mock_journal: MagicMock, _mock_ready: MagicMock
     ) -> None:
         """PLAN_COMPLETE, NO_PROGRESS, PLAN_COMPLETE should NOT hit threshold=2."""
         responses = iter([
@@ -567,10 +613,11 @@ class ConsecutiveCompletionSignalsResetTests(unittest.TestCase):
         # exit after iteration 3 (falsely counting 2 consecutive).
         self.assertEqual(sr["attempts"], 4)
 
+    @patch("worker.wait_for_agent_runtime_ready")
     @patch("worker.append_journal_event")
     @patch("worker.invoke_agent_runtime")
     def test_ambiguous_signal_resets_counter(
-        self, mock_invoke: MagicMock, mock_journal: MagicMock
+        self, mock_invoke: MagicMock, mock_journal: MagicMock, _mock_ready: MagicMock
     ) -> None:
         """PLAN_COMPLETE, <ambiguous>, PLAN_COMPLETE should NOT hit threshold=2."""
         responses = iter([

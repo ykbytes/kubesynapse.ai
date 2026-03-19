@@ -1812,8 +1812,8 @@ class AgentRuntimeA2ATests(unittest.TestCase):
 
         result = agent_logic_main.execute_git_commit("fix bug", execute_local_tool=fake_local)
         self.assertEqual(result["invoke_status"], "completed")
-        self.assertEqual(len(calls), 2)  # git add -u, git commit -m
-        self.assertEqual(calls[0], ("git", ["add", "-u"]))
+        self.assertEqual(len(calls), 2)  # git add -A, git commit -m
+        self.assertEqual(calls[0], ("git", ["add", "-A"]))
         self.assertEqual(calls[1][0], "git")
         self.assertIn("-m", calls[1][1])
 

@@ -394,7 +394,7 @@ WORKER_SERVICE_ACCOUNT_NAME = os.getenv("WORKER_SERVICE_ACCOUNT_NAME", "default"
 WORKER_ARTIFACT_SIZE = os.getenv("WORKER_ARTIFACT_SIZE", "2Gi")
 WORKER_ARTIFACT_STORAGE_CLASS = os.getenv("WORKER_ARTIFACT_STORAGE_CLASS", "").strip()
 WORKER_TTL_SECONDS_AFTER_FINISHED = get_int_env("WORKER_TTL_SECONDS_AFTER_FINISHED", 3600, minimum=0)
-WORKER_ACTIVE_DEADLINE_SECONDS = get_int_env("WORKER_ACTIVE_DEADLINE_SECONDS", 1800, minimum=60)
+WORKER_ACTIVE_DEADLINE_SECONDS = get_int_env("WORKER_ACTIVE_DEADLINE_SECONDS", 14400, minimum=60)
 WORKER_IMAGE_PULL_POLICY = os.getenv("WORKER_IMAGE_PULL_POLICY", "IfNotPresent").strip() or "IfNotPresent"
 WORKER_CPU_REQUEST = os.getenv("WORKER_CPU_REQUEST", "100m").strip() or "100m"
 WORKER_MEMORY_REQUEST = os.getenv("WORKER_MEMORY_REQUEST", "128Mi").strip() or "128Mi"
@@ -1716,6 +1716,9 @@ def create_agent_statefulset_manifest(
             {"name": "GIT_REPO_URL", "value": git_config.get("repoUrl", "")},
             {"name": "GIT_AUTH_METHOD", "value": git_config.get("authMethod", "")},
         ]
+        git_branch = str(git_config.get("branch", "")).strip()
+        if git_branch:
+            git_sidecar_env.append({"name": "GIT_BRANCH", "value": git_branch})
         cred_secret = git_config.get("credentialSecretRef", "")
         auth_method = git_config.get("authMethod", "")
         if cred_secret and auth_method == "token":
@@ -1736,6 +1739,25 @@ def create_agent_statefulset_manifest(
             })
             git_volume_mounts.append({"name": ssh_vol_name, "mountPath": "/home/mcpuser/.ssh", "readOnly": True})
             git_sidecar_env.append({"name": "GIT_SSH_KEY_PATH", "value": "/home/mcpuser/.ssh/id_rsa"})
+
+        # Also inject git credentials into the main agent container so that
+        # bash-based git operations (git push, git pull) work with auth.
+        git_agent_env: list[dict[str, Any]] = [
+            {"name": "GIT_REPO_URL", "value": git_config.get("repoUrl", "")},
+            {"name": "GIT_AUTH_METHOD", "value": git_config.get("authMethod", "")},
+        ]
+        if git_branch:
+            git_agent_env.append({"name": "GIT_BRANCH", "value": git_branch})
+        if cred_secret and auth_method == "token":
+            git_agent_env.append({
+                "name": "GIT_TOKEN",
+                "valueFrom": {"secretKeyRef": {"name": cred_secret, "key": "token", "optional": True}},
+            })
+        elif cred_secret and auth_method == "basic":
+            git_agent_env.extend([
+                {"name": "GIT_USERNAME", "valueFrom": {"secretKeyRef": {"name": cred_secret, "key": "username", "optional": True}}},
+                {"name": "GIT_PASSWORD", "valueFrom": {"secretKeyRef": {"name": cred_secret, "key": "password", "optional": True}}},
+            ])
 
     pod_security_context = {
         "runAsNonRoot": True,
@@ -1799,6 +1821,10 @@ def create_agent_statefulset_manifest(
                 "value": json.dumps(skills_config.get("files", {}), ensure_ascii=False, sort_keys=True),
             }
         )
+    # Inject git credentials into the main agent container (must happen
+    # AFTER the main env list is created above).
+    if git_config.get("repoUrl") and git_agent_env:
+        env.extend(git_agent_env)
 
     volume_mounts = [
         {"name": "tmp-volume", "mountPath": "/tmp"},
@@ -2133,6 +2159,11 @@ def create_agent_statefulset_manifest(
             if sidecar_name == "git" and git_sidecar_env:
                 sidecar_env.extend(git_sidecar_env)
                 sidecar_vol_mounts.extend(git_volume_mounts)
+            # Git sidecar needs access to the workspace so it can clone repos
+            # into /workspace and commit/push files the agent created there.
+            if sidecar_name == "git":
+                sidecar_env.append({"name": "MCP_WORK_DIR", "value": "/workspace"})
+                sidecar_vol_mounts.append({"name": "workspace-volume", "mountPath": "/workspace"})
             containers.append(
                 {
                     "name": f"mcp-{sidecar_name}",
