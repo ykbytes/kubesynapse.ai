@@ -288,7 +288,7 @@ function AppLayout() {
         </div>
 
         {/* ── Main content ── */}
-        <main className={`flex flex-1 flex-col overflow-hidden ${ws.activeView === "composer" ? "" : "overflow-auto p-4 gap-4"} pb-16 md:pb-0`}>
+        <main className={`flex flex-1 flex-col overflow-hidden pb-16 md:pb-0 ${ws.activeView === "composer" ? "" : "p-4 gap-4"} ${ws.activeView !== "composer" && (!ws.selectedAgentName || (ws.agentCreateMode || (!ws.selectedAgentName && ws.agents.length === 0))) ? "overflow-auto" : ""}`}>
           {ws.activeView !== "composer" && (
             <>
               <div className="flex items-center justify-between">
