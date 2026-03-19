@@ -123,6 +123,13 @@ function AppLayout() {
   const [templateWizardOpen, setTemplateWizardOpen] = useState(false);
   const inspectorSupported = supportsInspector(ws.activeView);
 
+  // ⚠️  All hooks must be declared BEFORE any conditional returns (Rules of Hooks)
+  useEffect(() => {
+    if (!inspectorSupported && ws.inspectorOpen) {
+      ws.setInspectorOpen(false);
+    }
+  }, [inspectorSupported, ws.inspectorOpen, ws.setInspectorOpen]);
+
   // Gate: show loading spinner while auth initializes, then AuthPage if not authenticated
   if (!conn.authReady) {
     return (
@@ -203,12 +210,6 @@ function AppLayout() {
             : ws.selectedEval?.phase ?? (ws.evalCreateMode ? "draft" : "none");
 
   const displayError = ws.workspaceError || conn.connectionError || conn.gatewayError;
-
-  useEffect(() => {
-    if (!inspectorSupported && ws.inspectorOpen) {
-      ws.setInspectorOpen(false);
-    }
-  }, [inspectorSupported, ws.inspectorOpen, ws.setInspectorOpen]);
 
   return (
     <div className="flex h-screen flex-col bg-background text-foreground">
