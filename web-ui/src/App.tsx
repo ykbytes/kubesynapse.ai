@@ -382,7 +382,7 @@ function AppLayout() {
             ) : (
               <>
                 {ws.selectedAgentName && (
-                  <div className="flex gap-1 lg:hidden mb-2">
+                  <div className="mb-2 flex gap-1 2xl:hidden">
                     <Button
                       variant={ws.agentViewTab === "config" ? "secondary" : "ghost"}
                       size="sm" className="h-7 text-xs"
@@ -396,8 +396,8 @@ function AppLayout() {
                   </div>
                 )}
 
-                <div className="flex flex-1 gap-0 overflow-hidden min-h-0">
-                  <div className={`${ws.selectedAgentName ? "hidden lg:flex" : "flex"} ${ws.agentViewTab === "config" ? "flex" : "hidden lg:flex"} ${ws.configPanelCollapsed ? "lg:hidden" : "w-full lg:w-[45%]"} flex-col overflow-auto`}>
+                <div className="flex min-h-0 flex-1 min-w-0 gap-0 overflow-hidden">
+                  <div className={`${ws.selectedAgentName ? "hidden 2xl:flex" : "flex"} ${ws.agentViewTab === "config" ? "flex" : "hidden 2xl:flex"} ${ws.configPanelCollapsed ? "2xl:hidden" : "w-full 2xl:max-w-[48rem] 2xl:basis-[44%]"} min-w-0 flex-col overflow-auto`}>
                     {ws.selectedAgentDetail ? (
                       <AgentManagementPanel
                         token={conn.token}
@@ -428,11 +428,11 @@ function AppLayout() {
                   </div>
 
                   {ws.selectedAgentName && (
-                    <div className={`${ws.agentViewTab === "chat" ? "flex" : "hidden lg:flex"} w-full ${ws.configPanelCollapsed ? "lg:w-full" : "lg:flex-1"} flex-row min-h-0`}>
+                    <div className={`${ws.agentViewTab === "chat" ? "flex" : "hidden 2xl:flex"} w-full min-w-0 ${ws.configPanelCollapsed ? "2xl:w-full" : "2xl:flex-1"} flex-row min-h-0`}>
                       <Button
                         variant="ghost"
                         size="icon"
-                        className="hidden lg:flex h-full w-6 shrink-0 rounded-none border-r border-border hover:bg-muted/50 items-center justify-center"
+                        className="hidden 2xl:flex h-full w-6 shrink-0 rounded-none border-r border-border hover:bg-muted/50 items-center justify-center"
                         onClick={() => ws.setConfigPanelCollapsed(!ws.configPanelCollapsed)}
                         title={ws.configPanelCollapsed ? "Show agent config" : "Hide agent config"}
                       >

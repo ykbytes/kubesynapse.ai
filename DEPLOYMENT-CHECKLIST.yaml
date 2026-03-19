@@ -1,0 +1,496 @@
+# Pre-Deployment Checklist - Kubemininions AI Agent Sandbox
+# Use this checklist when deploying to production
+# Generated: March 19, 2026
+
+---
+deployment_checklist:
+  
+  # ============================================================================
+  # PRE-DEPLOYMENT PHASE
+  # ============================================================================
+  pre_deployment:
+    
+    cluster_preparation:
+      - name: "Kubernetes cluster version check"
+        command: "kubectl version --short"
+        expected: "Server version: v1.24 or higher"
+        critical: true
+        completed: false
+      
+      - name: "kubectl connectivity"
+        command: "kubectl cluster-info"
+        expected: "Kubernetes master is running"
+        critical: true
+        completed: false
+      
+      - name: "Helm version check"
+        command: "helm version"
+        expected: "version.BuildInfo{Version:\"v3.10\" or higher"
+        critical: true
+        completed: false
+
+    cluster_resources:
+      - name: "Available nodes"
+        command: "kubectl get nodes"
+        expected: "Minimum 2 nodes in Ready state"
+        critical: true
+        completed: false
+      
+      - name: "Node resources"
+        command: "kubectl top nodes"
+        expected: "Sufficient CPU and memory per node"
+        critical: true
+        completed: false
+      
+      - name: "Storage class"
+        command: "kubectl get storageclass"
+        expected: "At least one default storage class"
+        critical: false
+        completed: false
+
+    configuration_preparation:
+      - name: "Values file reviewed"
+        file: "deploy/values.dockerhub.local.yaml"
+        checklist:
+          - "All image tags contain explicit versions (not 'latest')"
+          - "Registry URL is correct for your environment"
+          - "Admin password is secure (min 16 characters)"
+          - "JWT secret is configured (min 32 characters)"
+          - "Resource limits are appropriate for your cluster"
+          - "Namespace name is appropriate"
+        critical: true
+        completed: false
+      
+      - name: "Secrets prepared"
+        checklist:
+          - "Generate secure admin password"
+          - "Generate secure JWT secret"
+          - "Generate secure database password"
+          - "Generate LiteLLM master key if using external models"
+          - "Store passwords in secure vault"
+        critical: true
+        completed: false
+      
+      - name: "Image pull credentials"
+        checklist:
+          - "If using private registry, create docker registry secret"
+          - "Test pull credentials: `docker pull <image-name>`"
+          - "Public docker.io images are accessible"
+        critical: false
+        completed: false
+
+  # ============================================================================
+  # DEPLOYMENT PHASE
+  # ============================================================================
+  deployment:
+    
+    namespace_setup:
+      - name: "Create namespace"
+        command: "kubectl create namespace ai-platform"
+        expected: "namespace \"ai-platform\" created"
+        critical: true
+        completed: false
+      
+      - name: "Label namespace"
+        command: "kubectl label namespace ai-platform managed-by=helm"
+        expected: "namespace/ai-platform labeled"
+        critical: false
+        completed: false
+
+    secret_creation:
+      - name: "Create image pull secret (if using private registry)"
+        command: "kubectl create secret docker-registry dockerhub-regcred --docker-server=<server> --docker-username=<user> --docker-password=<pass> -n ai-platform"
+        expected: "secret/dockerhub-regcred created"
+        critical: false
+        completed: false
+      
+      - name: "Create generic secrets (if not using values)"
+        command: "kubectl create secret generic ai-platform-secrets --from-literal=admin-password=<pass> -n ai-platform"
+        expected: "secret/ai-platform-secrets created"
+        critical: false
+        completed: false
+
+    helm_deployment:
+      - name: "Validate Helm chart syntax"
+        command: "helm lint ./charts/ai-agent-sandbox"
+        expected: "1 chart(s) linted, 0 chart(s) failed"
+        critical: true
+        completed: false
+      
+      - name: "Dry-run deployment"
+        command: "helm install ai-agent-sandbox ./charts/ai-agent-sandbox -f deploy/values.dockerhub.local.yaml -n ai-platform --dry-run --debug"
+        expected: "No errors in output"
+        critical: true
+        completed: false
+      
+      - name: "Deploy Helm chart"
+        command: "helm install ai-agent-sandbox ./charts/ai-agent-sandbox -f deploy/values.dockerhub.local.yaml -n ai-platform"
+        expected: "Release \"ai-agent-sandbox\" has been installed"
+        critical: true
+        completed: false
+
+  # ============================================================================
+  # POST-DEPLOYMENT VERIFICATION
+  # ============================================================================
+  post_deployment:
+    
+    pod_health:
+      - name: "Check all pods are running"
+        command: "kubectl get pods -n ai-platform"
+        expected: "All pods in Running or Completed state"
+        critical: true
+        completed: false
+      
+      - name: "Check pod readiness"
+        command: "kubectl get pods -n ai-platform -o jsonpath='{.items[*].status.conditions[?(@.type==\"Ready\")].status}'"
+        expected: "All values are 'True'"
+        critical: true
+        completed: false
+      
+      - name: "Monitor pod startup (60 seconds)"
+        command: "kubectl logs -n ai-platform -l app=ai-agent-sandbox --all-containers=true --tail=20 -f"
+        expected: "No errors in logs"
+        critical: true
+        completed: false
+      
+      - name: "Check for crash loops"
+        command: "kubectl get events -n ai-platform --sort-by='.lastTimestamp'"
+        expected: "No CrashLoopBackOff events"
+        critical: true
+        completed: false
+
+    service_health:
+      - name: "Check services are created"
+        command: "kubectl get svc -n ai-platform"
+        expected: "All expected services (api-gateway, web-ui, etc.) present"
+        critical: true
+        completed: false
+      
+      - name: "Check endpoints"
+        command: "kubectl get endpoints -n ai-platform"
+        expected: "All services have endpoints"
+        critical: true
+        completed: false
+      
+      - name: "Port-forward to gateway (background)"
+        command: "kubectl port-forward -n ai-platform svc/ai-agent-sandbox-api-gateway 8080:8080 &"
+        expected: "Port forwarding established"
+        critical: true
+        completed: false
+
+    api_validation:
+      - name: "Health check endpoint"
+        command: "curl -s http://localhost:8080/api/health | jq"
+        expected: "HTTP 200 OK with status response"
+        critical: true
+        completed: false
+      
+      - name: "Login API test"
+        command: "curl -X POST http://localhost:8080/api/auth/login -H 'Content-Type: application/json' -d '{\"username\":\"admin\",\"password\":\"<password>\"}'"
+        expected: "HTTP 200 with JWT token in response"
+        critical: true
+        completed: false
+      
+      - name: "List agents API"
+        command: "curl -X GET http://localhost:8080/api/agents -H 'Authorization: Bearer <token>'"
+        expected: "HTTP 200 with agent list"
+        critical: true
+        completed: false
+      
+      - name: "Check operator logs"
+        command: "kubectl logs -n ai-platform deployment/ai-agent-sandbox-operator --tail=50"
+        expected: "No error messages, reconciliation logs visible"
+        critical: true
+        completed: false
+
+    web_ui_validation:
+      - name: "Port-forward to web-ui (background)"
+        command: "kubectl port-forward -n ai-platform svc/ai-agent-sandbox-web-ui 3000:80 &"
+        expected: "Port forwarding established"
+        critical: false
+        completed: false
+      
+      - name: "Web UI loads"
+        command: "curl -s http://localhost:3000 | grep -q '<html>' && echo 'HTML loaded'"
+        expected: "HTML content returned"
+        critical: false
+        completed: false
+      
+      - name: "Web UI interactive test"
+        checklist:
+          - "Navigate to http://localhost:3000 in browser"
+          - "Login with admin credentials"
+          - "Chat interface loads without JavaScript errors"
+          - "Config panel is collapsible"
+          - "Session naming works correctly"
+          - "Create a test chat message"
+        critical: false
+        completed: false
+
+  # ============================================================================
+  # FUNCTIONALITY VERIFICATION
+  # ============================================================================
+  functionality:
+    
+    authentication:
+      - name: "Admin login works"
+        steps:
+          - "POST /api/auth/login with admin credentials"
+          - "Receive valid JWT token"
+          - "Token has correct claims (admin=true)"
+        critical: true
+        completed: false
+      
+      - name: "Token validation"
+        steps:
+          - "Use JWT token in Authorization header"
+          - "Token validation succeeds"
+          - "Expired token is rejected"
+        critical: true
+        completed: false
+
+    agent_management:
+      - name: "List agents"
+        command: "curl -H 'Authorization: Bearer <token>' http://localhost:8080/api/agents"
+        expected: "HTTP 200 with list of agents"
+        critical: true
+        completed: false
+      
+      - name: "Create custom agent"
+        steps:
+          - "POST /api/agents with agent definition"
+          - "Agent created with unique ID"
+          - "Agent appears in agent list"
+        critical: false
+        completed: false
+
+    workflow_execution:
+      - name: "Create workflow"
+        steps:
+          - "Define workflow with sample agents"
+          - "Submit workflow definition"
+          - "Workflow stored in cluster"
+        critical: false
+        completed: false
+      
+      - name: "Execute workflow"
+        steps:
+          - "Trigger workflow execution"
+          - "Workflow reaches completion"
+          - "Results accessible via API"
+        critical: false
+        completed: false
+
+  # ============================================================================
+  # SECURITY VERIFICATION
+  # ============================================================================
+  security:
+    
+    rbac:
+      - name: "Service accounts created"
+        command: "kubectl get serviceaccounts -n ai-platform"
+        expected: "Service accounts for operator, gateway, etc."
+        critical: true
+        completed: false
+      
+      - name: "RBAC roles bound"
+        command: "kubectl get rolebindings -n ai-platform"
+        expected: "Role bindings for service accounts"
+        critical: true
+        completed: false
+
+    pod_security:
+      - name: "Pod security contexts"
+        command: "kubectl get pods -n ai-platform -o jsonpath='{.items[*].spec.securityContext}' | jq"
+        expected: "Security contexts configured (non-root, drop capabilities)"
+        critical: true
+        completed: false
+      
+      - name: "No root containers"
+        command: "kubectl get pods -n ai-platform -o jsonpath='{.items[*].spec.containers[*].securityContext.runAsUser}'"
+        expected: "All values > 0 (non-root)"
+        critical: true
+        completed: false
+
+    network_policies:
+      - name: "Network policies (if configured)"
+        command: "kubectl get networkpolicies -n ai-platform"
+        expected: "Network policies restrict traffic appropriately"
+        critical: false
+        completed: false
+
+    secrets_encryption:
+      - name: "Secrets are encrypted at rest"
+        checklist:
+          - "Verify cluster has encryption-at-rest enabled"
+          - "etcd is backed by encrypted storage"
+        critical: true
+        completed: false
+
+  # ============================================================================
+  # PERFORMANCE & MONITORING
+  # ============================================================================
+  performance:
+    
+    resource_usage:
+      - name: "Check pod resource requests"
+        command: "kubectl top pods -n ai-platform"
+        expected: "All pods using expected resources"
+        critical: false
+        completed: false
+      
+      - name: "Check node resource utilization"
+        command: "kubectl top nodes"
+        expected: "Nodes have sufficient free resources"
+        critical: false
+        completed: false
+
+    scaling:
+      - name: "Verify replica counts"
+        command: "kubectl get deployments -n ai-platform"
+        expected: "All deployments at expected replica count"
+        critical: false
+        completed: false
+
+  # ============================================================================
+  # BACKUP & DISASTER RECOVERY
+  # ============================================================================
+  disaster_recovery:
+    
+    database_backup:
+      - name: "Database initialization verified"
+        command: "kubectl exec -n ai-platform $(kubectl get pod -n ai-platform -l app=api-gateway -o jsonpath='{.items[0].metadata.name}') -- echo 'Connected'"
+        expected: "Successfully connected to database pod"
+        critical: true
+        completed: false
+      
+      - name: "Create initial backup"
+        checklist:
+          - "Backup auth database before any production use"
+          - "Store backups in secure, redundant location"
+          - "Document backup and restore procedures"
+        critical: true
+        completed: false
+
+    cluster_state:
+      - name: "Export cluster resources"
+        command: "kubectl get all -n ai-platform -o yaml > ai-platform-backup.yaml"
+        expected: "Backup file created successfully"
+        critical: true
+        completed: false
+
+  # ============================================================================
+  # FINAL APPROVAL
+  # ============================================================================
+  final_approval:
+    
+    sign_off:
+      - name: "Technical review completed"
+        checklist:
+          - "All critical checks passed"
+          - "Security requirements verified"
+          - "Performance acceptable"
+          - "Backup procedures tested"
+        critical: true
+        completed: false
+      
+      - name: "Business stakeholder review"
+        checklist:
+          - "Functionality meets requirements"
+          - "User acceptance criteria met"
+          - "Documentation complete"
+          - "Support runbooks prepared"
+        critical: true
+        completed: false
+      
+      - name: "Go-live decision"
+        checklist:
+          - "All stakeholders approve deployment"
+          - "Rollback plan documented"
+          - "Incident response team briefed"
+          - "Monitoring alerts configured"
+        critical: true
+        completed: false
+
+  # ============================================================================
+  # DEPLOYMENT SUMMARY
+  # ============================================================================
+  summary:
+    deployment_date: ""
+    deployed_by: ""
+    environment: ""
+    chart_version: "0.1.0"
+    platform_version: "1.0.0"
+    notes: ""
+
+---
+
+# Quick Reference Commands
+
+quick_reference:
+  deployment:
+    - "helm install ai-agent-sandbox ./charts/ai-agent-sandbox -f deploy/values.dockerhub.local.yaml -n ai-platform"
+    - "helm upgrade ai-agent-sandbox ./charts/ai-agent-sandbox -f deploy/values.dockerhub.local.yaml -n ai-platform"
+    - "helm rollback ai-agent-sandbox -n ai-platform"
+  
+  monitoring:
+    - "kubectl get all -n ai-platform"
+    - "kubectl logs -n ai-platform deployment/ai-agent-sandbox-operator -f"
+    - "kubectl describe pod <pod-name> -n ai-platform"
+    - "kubectl events -n ai-platform --sort-by='.lastTimestamp'"
+  
+  debugging:
+    - "kubectl exec -it <pod-name> -n ai-platform -- /bin/sh"
+    - "kubectl port-forward svc/ai-agent-sandbox-api-gateway -n ai-platform 8080:8080"
+    - "kubectl port-forward svc/ai-agent-sandbox-web-ui -n ai-platform 3000:80"
+  
+  cleanup:
+    - "helm uninstall ai-agent-sandbox -n ai-platform"
+    - "kubectl delete namespace ai-platform"
+
+---
+
+# Troubleshooting Guide
+
+troubleshooting:
+  
+  pod_not_starting:
+    symptoms:
+      - "Pod stuck in Pending state"
+      - "Pod in ImagePullBackOff"
+      - "Pod in CrashLoopBackOff"
+    solutions:
+      - "Check resource availability: kubectl top nodes"
+      - "Check image pull: kubectl describe pod <pod>"
+      - "Check image registry credentials"
+      - "Review pod logs: kubectl logs -n ai-platform <pod>"
+  
+  api_returning_401:
+    symptoms:
+      - "GET /api/agents returns 401 Unauthorized"
+      - "Login fails"
+    solutions:
+      - "Verify JWT secret is set correctly in values"
+      - "Check token has not expired"
+      - "Verify admin user exists in database"
+      - "Review auth logs: kubectl logs -n ai-platform svc/api-gateway | grep -i auth"
+  
+  web_ui_not_loading:
+    symptoms:
+      - "Blank page or 404"
+      - "JavaScript errors in console"
+    solutions:
+      - "Verify web-ui pod is running: kubectl get pod -n ai-platform -l app=web-ui"
+      - "Check web-ui logs: kubectl logs -n ai-platform -l app=web-ui"
+      - "Verify API gateway is accessible from web-ui: kubectl exec -it <web-ui-pod> -n ai-platform -- wget http://api-gateway:8080/api/health"
+      - "Clear browser cache and reload"
+  
+  operator_not_reconciling:
+    symptoms:
+      - "No agents/workflows being deployed"
+      - "operator logs show errors"
+    solutions:
+      - "Create RBAC permissions: kubectl get clusterrolebindings | grep operator"
+      - "Check operator resource usage"
+      - "Review operator logs for specific errors"
+      - "Verify CRDs are installed: kubectl get crd | grep agent"

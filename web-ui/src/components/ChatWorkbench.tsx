@@ -374,7 +374,7 @@ export function ChatWorkbench({
   }, [messages.length, messages[messages.length - 1]?.status, messages[messages.length - 1]?.content?.length]);
 
   return (
-    <div className="flex h-full flex-col gap-0">
+    <div className="flex h-full min-w-0 flex-1 flex-col gap-0">
       {/* Header */}
       <div className="flex items-center justify-between border-b border-border px-4 py-2.5">
         <div>

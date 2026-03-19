@@ -572,7 +572,7 @@ export function AgentManagementPanel({
           <TabsContent value="tools" className="animate-fade-in space-y-4">
             {runtimeKind !== "goose" ? (
               <>
-                <div className="grid gap-4 2xl:grid-cols-[1.15fr_0.85fr]">
+                <div className="grid gap-4 min-[1900px]:grid-cols-[1.15fr_0.85fr]">
                   <Card className="shadow-none">
                     <CardHeader className="pb-3">
                       <div className="flex items-center gap-2">
@@ -773,7 +773,7 @@ export function AgentManagementPanel({
 
           {/* ─── Skills & Files ─── */}
           <TabsContent value="files" className="animate-fade-in space-y-4">
-            <div className="grid gap-4 2xl:grid-cols-[1.15fr_0.85fr]">
+            <div className="grid gap-4 min-[1900px]:grid-cols-[1.15fr_0.85fr]">
               <Card className="shadow-none">
                 <CardHeader className="pb-3">
                   <div className="flex items-center gap-2">

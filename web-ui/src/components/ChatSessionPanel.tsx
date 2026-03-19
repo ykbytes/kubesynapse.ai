@@ -106,7 +106,7 @@ export const ChatSessionPanel = memo(function ChatSessionPanel({
   onSaveCurrent,
 }: ChatSessionPanelProps) {
   return (
-    <div className="flex flex-col h-full border-r border-border bg-background/50 w-56">
+    <div className="flex h-full w-52 shrink-0 flex-col border-r border-border bg-background/50 xl:w-56">
       <div className="flex items-center justify-between px-3 py-2 border-b border-border">
         <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Sessions</span>
         <div className="flex gap-1">
