@@ -33,6 +33,7 @@ import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { CopyButton } from "./CopyButton";
+import { ExpandableMarkdownEditor } from "./ExpandableMarkdownEditor";
 import { JsonBlock } from "./JsonBlock";
 import { useConnection } from "@/contexts/ConnectionContext";
 import type {
@@ -703,16 +704,16 @@ export function WorkflowManager({
                     <Play className="h-4 w-4 text-primary" />
                     Confirm workflow execution
                   </div>
-                  <div className="space-y-1.5">
-                    <Label className="text-xs text-muted-foreground">Input (editable before run)</Label>
-                    <Textarea
-                      rows={4}
-                      className="text-xs"
-                      value={triggerInput}
-                      onChange={(e) => setTriggerInput(e.target.value)}
-                      placeholder="Describe the task, context, or parameters for this workflow run…"
-                    />
-                  </div>
+                  <ExpandableMarkdownEditor
+                    value={triggerInput}
+                    onChange={setTriggerInput}
+                    label="Input (editable before run)"
+                    rows={4}
+                    textareaClassName="text-xs"
+                    placeholder="Describe the task, context, or parameters for this workflow run…"
+                    dialogTitle="Workflow Run Input"
+                    dialogDescription="Edit the input payload for this workflow execution. Supports Markdown."
+                  />
                   <div className="flex gap-2">
                     <Button
                       size="sm"
@@ -849,15 +850,15 @@ export function WorkflowManager({
                   />
                 </div>
               </div>
-              <div className="space-y-1.5">
-                <Label className="text-xs">Workflow input</Label>
-                <Textarea
-                  rows={4}
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  placeholder="Describe the task, desired output, and constraints the first step should receive."
-                />
-              </div>
+              <ExpandableMarkdownEditor
+                value={input}
+                onChange={setInput}
+                label="Workflow input"
+                rows={4}
+                placeholder="Describe the task, desired output, and constraints the first step should receive."
+                dialogTitle="Workflow Input"
+                dialogDescription="This value is available in step prompts as {{input}}. Supports full Markdown."
+              />
             </CardContent>
           </Card>
 
@@ -1034,18 +1035,18 @@ export function WorkflowManager({
                   </div>
                 </div>
 
-                <div className="space-y-1">
-                  <Label className="text-[11px]">Prompt</Label>
-                  <Textarea
-                    rows={4}
-                    className="text-xs"
-                    value={step.prompt}
-                    onChange={(e) =>
-                      updateStep(index, (current) => ({ ...current, prompt: e.target.value }))
-                    }
-                    placeholder="Explain what this step should do, what context it receives, and what output it should pass to the next step."
-                  />
-                </div>
+                <ExpandableMarkdownEditor
+                  value={step.prompt}
+                  onChange={(v) =>
+                    updateStep(index, (current) => ({ ...current, prompt: v }))
+                  }
+                  label="Prompt"
+                  rows={4}
+                  textareaClassName="text-xs"
+                  placeholder="Explain what this step should do, what context it receives, and what output it should pass to the next step."
+                  dialogTitle={`Step Prompt — ${step.name || `Step ${index + 1}`}`}
+                  dialogDescription="Write the instruction for this workflow step. Supports Markdown formatting."
+                />
 
                 {step.step_type === "loop" && (
                   <div className="space-y-3 rounded-2xl border border-violet-500/30 bg-violet-500/5 p-4">

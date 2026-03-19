@@ -1,12 +1,20 @@
-import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   buildInvocationSummary,
+  createChatSession,
   decideApproval,
+  deleteChatSession,
   fetchAgentLogs,
+  getChatSessionMessages,
   invokeAgent,
+  listChatSessions,
+  saveChatSessionMessages,
   streamAgentInvoke,
   streamAgentLogs,
+  updateChatSessionTitle,
+  apiErrorMessage,
 } from "@/lib/api";
+import type { ChatSessionInfo } from "@/lib/api";
 import { isValidK8sName } from "@/lib/a2a";
 import { useConnection } from "./ConnectionContext";
 import { useWorkspace } from "./WorkspaceContext";
@@ -210,6 +218,16 @@ export interface ChatContextValue {
   // Cross-cutting helpers (for AppLayout use)
   setMessagesForAgent: (agentName: string, updater: (current: UiMessage[]) => UiMessage[]) => void;
   removeAgentChatState: (agentName: string) => void;
+
+  // Chat session persistence
+  chatSessions: ChatSessionInfo[];
+  activeSessionId: string | null;
+  sessionsLoading: boolean;
+  handleNewSession: () => Promise<void>;
+  handleLoadSession: (sessionId: string) => Promise<void>;
+  handleDeleteSession: (sessionId: string) => Promise<void>;
+  handleRenameSession: (sessionId: string, title: string) => Promise<void>;
+  handleSaveCurrentSession: () => Promise<void>;
 }
 
 const ChatContext = createContext<ChatContextValue | null>(null);
@@ -251,6 +269,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
   const [approvalReason, setApprovalReason] = useState("");
   const [approvalBusy, setApprovalBusy] = useState(false);
+
+  // Chat session persistence state
+  const [chatSessions, setChatSessions] = useState<ChatSessionInfo[]>([]);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [sessionsLoading, setSessionsLoading] = useState(false);
 
   const threadIdsRef = useRef<Record<string, string>>({});
   const pendingRequestRef = useRef<Record<string, InvokePayload | null>>({});
@@ -383,7 +406,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           result.response || (nextSummary.status === "approval_pending" ? "Approval pending. Re-submit after approval." : "No response body returned."),
           nextSummary.status === "blocked" ? "error" : "complete");
       } catch (err) {
-        applyInvocationFailure(agentName, assistantMessageId, err instanceof Error ? err.message : String(err));
+        applyInvocationFailure(agentName, assistantMessageId, apiErrorMessage(err));
       } finally { setIsSending(false); }
       return;
     }
@@ -489,7 +512,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       });
     } catch (err) {
       if (!abortController.signal.aborted && !streamErrorHandled) {
-        applyInvocationFailure(agentName, assistantMessageId, err instanceof Error ? err.message : String(err));
+        applyInvocationFailure(agentName, assistantMessageId, apiErrorMessage(err));
       }
     } finally {
       setIsSending(false);
@@ -518,16 +541,16 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       try {
         gooseMaxTurns = parseGooseMaxTurns(selectedGooseChatSettings.maxTurns);
         gooseWorkingDirectory = normalizeGooseWorkingDirectory(selectedGooseChatSettings.workingDirectory);
-      } catch (err) { setChatError(err instanceof Error ? err.message : String(err)); return; }
+      } catch (err) { setChatError(apiErrorMessage(err)); return; }
     }
     if (selectedRuntimeKind === "opencode") {
       try {
         opencodeMaxTurns = parseOpenCodeMaxTurns(selectedOpenCodeChatSettings.maxTurns);
         opencodeWorkingDirectory = normalizeOpenCodeWorkingDirectory(selectedOpenCodeChatSettings.workingDirectory);
-      } catch (err) { setChatError(err instanceof Error ? err.message : String(err)); return; }
+      } catch (err) { setChatError(apiErrorMessage(err)); return; }
     }
     try { explicitA2ATimeoutSeconds = parseA2ATimeoutSeconds(a2aTimeoutSeconds); }
-    catch (err) { setChatError(err instanceof Error ? err.message : String(err)); return; }
+    catch (err) { setChatError(apiErrorMessage(err)); return; }
 
     const normA2AAgent = a2aTargetAgent.trim();
     const normA2ANs = a2aTargetNamespace.trim();
@@ -557,7 +580,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               input_files: inputFiles.length > 0 ? inputFiles : undefined, result_file_path: item.resultFilePath.trim() || undefined,
               share_sandbox_session: item.shareSandboxSession, timeout_seconds: timeoutSeconds };
           });
-      } catch (err) { setChatError(err instanceof Error ? err.message : String(err)); return; }
+      } catch (err) { setChatError(apiErrorMessage(err)); return; }
     }
 
     const payload: InvokePayload = {
@@ -586,7 +609,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     try {
       const result = await fetchAgentLogs(token, namespace, selectedAgentName, 500);
       setLogsForAgent(selectedAgentName, result.logs);
-    } catch (err) { setWorkspaceError(err instanceof Error ? err.message : String(err)); }
+    } catch (err) { setWorkspaceError(apiErrorMessage(err)); }
     finally { setLogsLoading(false); }
   }, [token, namespace, selectedAgentName, setWorkspaceError]);
 
@@ -686,7 +709,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         }
       }
       setApprovalReason("");
-    } catch (err) { setWorkspaceError(err instanceof Error ? err.message : String(err)); }
+    } catch (err) { setWorkspaceError(apiErrorMessage(err)); }
     finally { setApprovalBusy(false); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, namespace, selectedAgentName, summary, approvalReason, setWorkspaceError]);
@@ -701,7 +724,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       await decideApproval(token, namespace, approvalName, decision, approvalReason);
       setApprovalReason("");
       await refreshWorkspaceData({ silent: false });
-    } catch (err) { setWorkspaceError(err instanceof Error ? err.message : String(err)); }
+    } catch (err) { setWorkspaceError(apiErrorMessage(err)); }
     finally { setApprovalBusy(false); }
   }, [token, namespace, selectedWorkflowApprovalName, approvalReason, refreshWorkspaceData, setWorkspaceError]);
 
@@ -766,21 +789,106 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedAgentName]);
 
+  // ── Chat session persistence ──
+
+  // Load sessions list when agent changes
+  useEffect(() => {
+    if (!token.trim() || !selectedAgentName) { setChatSessions([]); setActiveSessionId(null); return; }
+    let cancelled = false;
+    setSessionsLoading(true);
+    void listChatSessions(token, namespace, selectedAgentName)
+      .then((sessions) => { if (!cancelled) setChatSessions(sessions); })
+      .catch(() => { if (!cancelled) setChatSessions([]); })
+      .finally(() => { if (!cancelled) setSessionsLoading(false); });
+    return () => { cancelled = true; };
+  }, [token, namespace, selectedAgentName]);
+
+  const handleNewSession = useCallback(async () => {
+    if (!token.trim() || !selectedAgentName) return;
+    try {
+      const firstMsg = messages[0];
+      const title = firstMsg?.content?.slice(0, 60) || "New Chat";
+      const session = await createChatSession(token, namespace, selectedAgentName, title);
+      // Save current messages into the new session
+      if (messages.length > 0) {
+        await saveChatSessionMessages(token, session.session_id, messages.map((m) => ({
+          message_id: m.id, role: m.role, content: m.content, status: m.status ?? "complete", toolName: m.toolName, toolNode: m.toolNode,
+        })));
+      }
+      setActiveSessionId(session.session_id);
+      setChatSessions((prev) => [session, ...prev]);
+    } catch (err) { setChatError(apiErrorMessage(err)); }
+  }, [token, namespace, selectedAgentName, messages]);
+
+  const handleLoadSession = useCallback(async (sessionId: string) => {
+    if (!token.trim() || !selectedAgentName) return;
+    try {
+      const msgs = await getChatSessionMessages(token, sessionId);
+      setMessagesForAgent(selectedAgentName, () =>
+        msgs.map((m) => ({
+          id: m.message_id, role: m.role as UiMessage["role"], content: m.content, status: m.status as UiMessage["status"],
+          toolName: m.tool_name ?? undefined, toolNode: m.tool_node ?? undefined,
+        })),
+      );
+      setActiveSessionId(sessionId);
+      setChatError("");
+    } catch (err) { setChatError(apiErrorMessage(err)); }
+  }, [token, selectedAgentName, setMessagesForAgent]);
+
+  const handleDeleteSession = useCallback(async (sessionId: string) => {
+    if (!token.trim()) return;
+    try {
+      await deleteChatSession(token, sessionId);
+      setChatSessions((prev) => prev.filter((s) => s.session_id !== sessionId));
+      if (activeSessionId === sessionId) setActiveSessionId(null);
+    } catch (err) { setChatError(apiErrorMessage(err)); }
+  }, [token, activeSessionId]);
+
+  const handleRenameSession = useCallback(async (sessionId: string, title: string) => {
+    if (!token.trim()) return;
+    try {
+      const updated = await updateChatSessionTitle(token, sessionId, title);
+      setChatSessions((prev) => prev.map((s) => s.session_id === sessionId ? updated : s));
+    } catch (err) { setChatError(apiErrorMessage(err)); }
+  }, [token]);
+
+  const handleSaveCurrentSession = useCallback(async () => {
+    if (!token.trim() || !activeSessionId || !selectedAgentName) return;
+    try {
+      await saveChatSessionMessages(token, activeSessionId, messages.map((m) => ({
+        message_id: m.id, role: m.role, content: m.content, status: m.status ?? "complete", toolName: m.toolName, toolNode: m.toolNode,
+      })));
+    } catch (err) { setChatError(apiErrorMessage(err)); }
+  }, [token, activeSessionId, selectedAgentName, messages]);
+
+  const ctxValue = useMemo(() => ({
+    messages, activity, summary, logs, selectedGooseChatSettings, selectedOpenCodeChatSettings, gooseSystemPromptPreview,
+    prompt, streamMode, requireApproval, approvalSupported, chatError, isSending, logsLoading, logsStreaming, canSubmitChat, chatEmptyMessage,
+    a2aTargetAgent, a2aTargetNamespace, a2aTimeoutSeconds,
+    specialistSubagents, specialistTeamConfigured, subagentStrategy,
+    approvalReason, approvalBusy, selectedWorkflowApprovalName,
+    setPrompt, setStreamMode, setRequireApproval, setChatError, setApprovalReason,
+    setA2ATargetAgent, setA2ATargetNamespace, setA2ATimeoutSeconds, setSubagentStrategy,
+    addSpecialistSubagent, updateSpecialistSubagent, removeSpecialistSubagent, clearSpecialistTeam,
+    setGooseMaxTurns, setGooseWorkingDirectory,
+    setOpenCodeOutputFormat, setOpenCodeAutonomous, setOpenCodeMaxTurns, setOpenCodeWorkingDirectory,
+    handleSubmit, handleLoadLogs, handleStreamLogs, handleStopLogStream, handleAgentApprovalDecision, handleWorkflowApprovalDecision, cancelStream,
+    setMessagesForAgent, removeAgentChatState,
+    chatSessions, activeSessionId, sessionsLoading,
+    handleNewSession, handleLoadSession, handleDeleteSession, handleRenameSession, handleSaveCurrentSession,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [
+    messages, activity, summary, logs, selectedGooseChatSettings, selectedOpenCodeChatSettings, gooseSystemPromptPreview,
+    prompt, streamMode, requireApproval, approvalSupported, chatError, isSending, logsLoading, logsStreaming, canSubmitChat, chatEmptyMessage,
+    a2aTargetAgent, a2aTargetNamespace, a2aTimeoutSeconds,
+    specialistSubagents, specialistTeamConfigured, subagentStrategy,
+    approvalReason, approvalBusy, selectedWorkflowApprovalName,
+    chatSessions, activeSessionId, sessionsLoading,
+    handleNewSession, handleLoadSession, handleDeleteSession, handleRenameSession, handleSaveCurrentSession,
+  ]);
+
   return (
-    <ChatContext.Provider value={{
-      messages, activity, summary, logs, selectedGooseChatSettings, selectedOpenCodeChatSettings, gooseSystemPromptPreview,
-      prompt, streamMode, requireApproval, approvalSupported, chatError, isSending, logsLoading, logsStreaming, canSubmitChat, chatEmptyMessage,
-      a2aTargetAgent, a2aTargetNamespace, a2aTimeoutSeconds,
-      specialistSubagents, specialistTeamConfigured, subagentStrategy,
-      approvalReason, approvalBusy, selectedWorkflowApprovalName,
-      setPrompt, setStreamMode, setRequireApproval, setChatError, setApprovalReason,
-      setA2ATargetAgent, setA2ATargetNamespace, setA2ATimeoutSeconds, setSubagentStrategy,
-      addSpecialistSubagent, updateSpecialistSubagent, removeSpecialistSubagent, clearSpecialistTeam,
-      setGooseMaxTurns, setGooseWorkingDirectory,
-      setOpenCodeOutputFormat, setOpenCodeAutonomous, setOpenCodeMaxTurns, setOpenCodeWorkingDirectory,
-      handleSubmit, handleLoadLogs, handleStreamLogs, handleStopLogStream, handleAgentApprovalDecision, handleWorkflowApprovalDecision, cancelStream,
-      setMessagesForAgent, removeAgentChatState,
-    }}>
+    <ChatContext.Provider value={ctxValue}>
       {children}
     </ChatContext.Provider>
   );

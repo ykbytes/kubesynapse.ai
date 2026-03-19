@@ -22,6 +22,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
@@ -228,8 +229,20 @@ export function SkillsCatalogPanel({ token, onAttachSkill, onAttachTool }: Skill
                 Connect to a gateway to browse the skills catalog.
               </p>
             ) : loading ? (
-              <div className="flex items-center justify-center py-8">
-                <LoaderCircle className="h-5 w-5 animate-spin text-muted-foreground" />
+              <div className="grid gap-2">
+                {Array.from({ length: 5 }).map((_, i) => (
+                  <div key={i} className="flex items-start gap-3 rounded-md border border-border bg-card/50 p-3">
+                    <Skeleton className="h-8 w-8 rounded-md shrink-0" />
+                    <div className="flex-1 space-y-2">
+                      <Skeleton className="h-4 w-32 rounded" />
+                      <Skeleton className="h-3 w-full rounded" />
+                      <div className="flex gap-1.5">
+                        <Skeleton className="h-4 w-14 rounded-full" />
+                        <Skeleton className="h-4 w-14 rounded-full" />
+                      </div>
+                    </div>
+                  </div>
+                ))}
               </div>
             ) : skills.length === 0 ? (
               <p className="text-sm text-muted-foreground text-center py-8">

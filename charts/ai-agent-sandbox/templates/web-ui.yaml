@@ -64,6 +64,8 @@ spec:
       automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
+        runAsUser: 101
+        runAsGroup: 101
         seccompProfile:
           type: RuntimeDefault
       volumes:
@@ -71,9 +73,11 @@ spec:
           configMap:
             name: {{ include "ai-agent-sandbox.fullname" . }}-web-ui-nginx
         - name: nginx-cache
-          emptyDir: {}
+          emptyDir:
+            sizeLimit: 128Mi
         - name: tmp
-          emptyDir: {}
+          emptyDir:
+            sizeLimit: 64Mi
       containers:
         - name: web-ui
           image: "{{ .Values.webUi.image.repository }}:{{ .Values.webUi.image.tag }}"

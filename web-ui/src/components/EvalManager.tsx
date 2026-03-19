@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { EvalResultsPanel } from "./EvalResultsPanel";
 import { useConnection } from "@/contexts/ConnectionContext";
 import type { AgentInfo, EvalInfo, EvalPayload, EvalTestCase, EvalUpdatePayload } from "../types";
 
@@ -358,6 +359,10 @@ export function EvalManager({
             confirmLabel="Delete"
             onConfirm={() => onDelete(evalResource.name)}
           />
+        )}
+
+        {evalResource && (evalResource.phase === "completed" || evalResource.phase === "failed" || evalResource.phase === "running") && (
+          <EvalResultsPanel evalResource={evalResource} />
         )}
       </CardContent>
     </Card>

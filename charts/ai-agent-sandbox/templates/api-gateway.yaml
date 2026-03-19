@@ -125,6 +125,20 @@ spec:
               value: "nats://{{ include "ai-agent-sandbox.fullname" . }}-nats:4222"
             - name: QDRANT_URL
               value: "http://{{ include "ai-agent-sandbox.fullname" . }}-qdrant:6333"
+            - name: LITELLM_INTERNAL_URL
+              value: "http://{{ include "ai-agent-sandbox.fullname" . }}-litellm:{{ .Values.litellm.service.port }}"
+            - name: LITELLM_MASTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ai-agent-sandbox.fullname" . }}-llm-api-keys
+                  key: LITELLM_MASTER_KEY
+                  optional: true
+            - name: LLM_SECRET_NAME
+              value: {{ include "ai-agent-sandbox.fullname" . }}-llm-api-keys
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
             - name: API_GATEWAY_AUTH_MODE
               value: {{ .Values.apiGateway.auth.mode | quote }}
             - name: LOCAL_AUTH_ENABLED

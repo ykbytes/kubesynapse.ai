@@ -49,7 +49,7 @@ rules:
   # into the agent StatefulSet, so agents can authenticate to MCP servers.
   - apiGroups: [""]
     resources: [secrets]
-    verbs: [create, delete, get, list, watch, patch, update]
+    verbs: [create, delete, get, patch, update]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -92,7 +92,10 @@ rules:
     verbs: [get]
   - apiGroups: [""]
     resources: [secrets]
-    verbs: [create, get, update, delete]
+    verbs: [get, update]
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [list]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

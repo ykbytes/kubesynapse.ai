@@ -5,7 +5,7 @@ litellm:
   image:
     repository: ghcr.io/berriai/litellm
     tag: main-latest
-    pullPolicy: IfNotPresent
+    pullPolicy: Always
   replicaCount: 1
   service:
     type: ClusterIP
@@ -57,8 +57,6 @@ agentRuntime:
       - jq
       - git
       - rg
-      - python
-      - pip
       - tar
       - unzip
       - zip

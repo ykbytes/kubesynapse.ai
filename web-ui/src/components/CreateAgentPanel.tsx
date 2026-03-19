@@ -36,6 +36,7 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import { ModelSelector } from "@/components/ModelSelector";
 import { fetchCatalogSkillDetail, fetchMcpToolCategories, fetchSkillsCatalog } from "../lib/api";
 import { A2A_ALLOWED_CALLERS_PLACEHOLDER } from "../lib/a2a";
 import { createGooseConfigFileDraft } from "../lib/gooseConfig";
@@ -48,7 +49,8 @@ import {
   stringifyMcpSidecars,
 } from "../lib/mcp";
 import { createSkillFileDraft } from "../lib/skills";
-import type { CatalogSkill, CatalogSkillDetail, GitFormState, GitHubFormState, McpToolCategory, RuntimeKind, TextFileDraft } from "../types";
+import type { AgentInfo, CatalogSkill, CatalogSkillDetail, GitFormState, GitHubFormState, McpToolCategory, RuntimeKind, TextFileDraft, WorkflowInfo } from "../types";
+import { A2ACallerPicker } from "./A2ACallerPicker";
 import { TextFileBundleEditor } from "./TextFileBundleEditor";
 
 const TOOL_ICONS: Record<string, typeof Code> = {
@@ -81,6 +83,8 @@ interface CreateAgentPanelProps {
   mcpServersText: string;
   mcpSidecarsText: string;
   a2aAllowedCallersText: string;
+  agents: AgentInfo[];
+  workflows: WorkflowInfo[];
   skillFileDrafts: TextFileDraft[];
   gooseConfigFileDrafts: TextFileDraft[];
   opencodeConfigFileDrafts: TextFileDraft[];
@@ -159,6 +163,8 @@ export function CreateAgentPanel({
   mcpServersText,
   mcpSidecarsText,
   a2aAllowedCallersText,
+  agents: workspaceAgents,
+  workflows: workspaceWorkflows,
   skillFileDrafts,
   gooseConfigFileDrafts,
   opencodeConfigFileDrafts,
@@ -405,18 +411,15 @@ export function CreateAgentPanel({
                     </div>
                     <div className="space-y-1.5">
                       <Label className="text-xs">Model</Label>
-                      <Input
+                      <ModelSelector
                         value={model}
-                        onChange={(e) => onModelChange(e.target.value)}
-                        onBlur={() => setModelBlurred(true)}
-                        placeholder="gpt-4"
-                        aria-invalid={modelBlurred && !model.trim()}
-                        className={modelBlurred && !model.trim() ? "border-destructive focus-visible:ring-destructive" : ""}
+                        onChange={(v) => { onModelChange(v); setModelBlurred(true); }}
+                        invalid={modelBlurred && !model.trim()}
                       />
                       {modelBlurred && !model.trim() ? (
                         <p className="text-[11px] text-destructive">Model is required.</p>
                       ) : (
-                        <p className="text-[11px] text-muted-foreground">Must match a route exposed by LiteLLM.</p>
+                        <p className="text-[11px] text-muted-foreground">Pick a model route from the LiteLLM proxy.</p>
                       )}
                     </div>
                   </CardContent>
@@ -503,16 +506,14 @@ export function CreateAgentPanel({
                 <Separator />
                 <div className="space-y-1.5">
                   <Label className="text-xs">Allowed caller agents (A2A)</Label>
-                  <Textarea
-                    rows={4}
+                  <A2ACallerPicker
                     value={a2aAllowedCallersText}
-                    onChange={(e) => onA2AAllowedCallersTextChange(e.target.value)}
+                    onChange={onA2AAllowedCallersTextChange}
+                    agents={workspaceAgents}
+                    workflows={workspaceWorkflows}
+                    currentAgentName={name || undefined}
                     placeholder={A2A_ALLOWED_CALLERS_PLACEHOLDER}
-                    className="font-mono text-xs"
                   />
-                  <p className="text-[11px] text-muted-foreground">
-                    One caller per line as namespace/name. Use this only when the agent must accept inbound A2A requests.
-                  </p>
                 </div>
               </CardContent>
             </Card>

@@ -52,9 +52,14 @@ spec:
         - protocol: TCP
           port: 4317
     # 5. Allow Kubernetes API access for policy and approval lookups
-    - ports:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 169.254.169.254/32
+      ports:
         - protocol: TCP
-          port: 443
+          port: 6443
     # 6. Allow MCP servers in the dedicated mcp-hub namespace.
     #    namespaceSelector + podSelector are ANDed: only mcp-server pods in
     #    the namespace labelled sandbox.enterprise.ai/mcp-hub=true are reachable.

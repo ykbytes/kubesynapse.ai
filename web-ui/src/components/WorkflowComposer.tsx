@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState, type DragEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import {
   ReactFlow,
   Background,
@@ -8,6 +8,7 @@ import {
   useEdgesState,
   addEdge,
   type Connection,
+  type Edge,
   type NodeTypes,
   type EdgeTypes,
   ReactFlowProvider,
@@ -17,7 +18,9 @@ import {
 import "@xyflow/react/dist/style.css";
 
 import { useWorkspace } from "@/contexts/WorkspaceContext";
+import { useConnection } from "@/contexts/ConnectionContext";
 import type { AgentInfo, WorkflowInfo } from "@/types";
+import { decideApproval } from "@/lib/api";
 import {
   type ComposerNode,
   type AgentStepNodeData,
@@ -26,7 +29,9 @@ import {
   canvasToPayload,
   autoLayout,
   makeStepId,
+  hasCycle,
 } from "@/lib/composer-utils";
+import { anyStepUsesInput } from "@/lib/template-utils";
 
 import { AgentNode } from "./composer/AgentNode";
 import { TriggerNode } from "./composer/TriggerNode";
@@ -34,19 +39,10 @@ import { DependencyEdge } from "./composer/DependencyEdge";
 import { NodePalette } from "./composer/NodePalette";
 import { PropertiesPanel } from "./composer/PropertiesPanel";
 import { ComposerToolbar } from "./composer/ComposerToolbar";
+import { RunHistoryPanel } from "./composer/RunHistoryPanel";
 import { toast } from "sonner";
 import { AlertCircle } from "lucide-react";
-
-/* ── Custom node/edge registration ── */
-
-const nodeTypes: NodeTypes = {
-  trigger: TriggerNode,
-  agentStep: AgentNode,
-};
-
-const edgeTypes: EdgeTypes = {
-  dependency: DependencyEdge,
-};
+import { cn } from "@/lib/utils";
 
 /* ── Inner canvas (needs ReactFlowProvider parent) ── */
 
@@ -58,8 +54,19 @@ function ComposerCanvas({
   agents: AgentInfo[];
 }) {
   const ws = useWorkspace();
+  const { token, namespace } = useConnection();
   const reactFlowInstance = useReactFlow();
   const wrapperRef = useRef<HTMLDivElement>(null);
+
+  // Node/edge type registrations (must be stable references)
+  const nodeTypes: NodeTypes = useMemo(() => ({
+    trigger: TriggerNode,
+    agentStep: AgentNode,
+  }), []);
+
+  const edgeTypes: EdgeTypes = useMemo(() => ({
+    dependency: DependencyEdge,
+  }), []);
 
   // Form state
   const [wfName, setWfName] = useState(workflow?.name ?? "");
@@ -89,29 +96,132 @@ function ComposerCanvas({
   const [edges, setEdges, onEdgesChange] = useEdgesState(initial.edges);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [isDirty, setIsDirty] = useState(false);
+  const [isMaximized, setIsMaximized] = useState(false);
+  const [paletteCollapsed, setPaletteCollapsed] = useState(false);
+  const [propertiesCollapsed, setPropertiesCollapsed] = useState(false);
+  const [runHistoryCollapsed, setRunHistoryCollapsed] = useState(true);
+
+  // Auto-collapse panels on small viewports
+  useEffect(() => {
+    const mql = window.matchMedia("(max-width: 768px)");
+    function handle(e: MediaQueryList | MediaQueryListEvent) {
+      if (e.matches) {
+        setPaletteCollapsed(true);
+        setPropertiesCollapsed(true);
+      }
+    }
+    handle(mql);
+    mql.addEventListener("change", handle);
+    return () => mql.removeEventListener("change", handle);
+  }, []);
 
   const selectedNode = useMemo(
     () => (nodes as ComposerNode[]).find((n) => n.id === selectedNodeId) ?? null,
     [nodes, selectedNodeId],
   );
 
-  // Handle new connection
-  const onConnect = useCallback(
-    (params: Connection) => {
-      setEdges((eds) =>
-        addEdge({ ...params, type: "dependency" }, eds),
-      );
+  // Handle edge deletion
+  const handleEdgeDelete = useCallback(
+    (edgeId: string) => {
+      setEdges((eds) => eds.filter((e) => e.id !== edgeId));
       setIsDirty(true);
     },
     [setEdges],
   );
 
+  // Inject execution state into edge data so DependencyEdge can animate
+  const edgesWithData = useMemo(() => {
+    if (!workflow?.step_states) return edges;
+    return edges.map((e) => {
+      const sourceStatus =
+        e.source === TRIGGER_NODE_ID
+          ? workflow.phase === "running"
+            ? "running"
+            : workflow.phase === "completed"
+              ? "completed"
+              : null
+          : workflow.step_states?.[e.source]?.status ?? null;
+      return {
+        ...e,
+        data: {
+          ...(e.data ?? {}),
+          sourceStatus,
+          onDelete: handleEdgeDelete,
+        },
+      };
+    });
+  }, [edges, workflow?.step_states, workflow?.phase, handleEdgeDelete]);
+
+  // Connection validation
+  const isValidConnection = useCallback(
+    (connection: Edge | Connection) => {
+      if (!connection.source || !connection.target) return false;
+      // No self-connections
+      if (connection.source === connection.target) return false;
+      // No connecting TO trigger
+      if (connection.target === TRIGGER_NODE_ID) return false;
+      // No duplicates
+      if (edges.some((e) => e.source === connection.source && e.target === connection.target)) return false;
+      // No cycles
+      if (hasCycle(edges, connection.source, connection.target)) return false;
+      return true;
+    },
+    [edges],
+  );
+
+  // Handle new connection
+  const onConnect = useCallback(
+    (params: Connection) => {
+      if (!params.source || !params.target) return;
+      // Double-check validation (in case isValidConnection was bypassed)
+      if (params.source === params.target) {
+        toast.error("Cannot connect a node to itself");
+        return;
+      }
+      if (params.target === TRIGGER_NODE_ID) {
+        toast.error("Cannot connect to the trigger node");
+        return;
+      }
+      if (edges.some((e) => e.source === params.source && e.target === params.target)) {
+        toast.error("Connection already exists");
+        return;
+      }
+      if (hasCycle(edges, params.source, params.target)) {
+        toast.error("Connection would create a cycle");
+        return;
+      }
+      setEdges((eds) => addEdge({ ...params, type: "dependency" }, eds));
+      setIsDirty(true);
+    },
+    [edges, setEdges],
+  );
+
   // Handle node selection
   const onSelectionChange = useCallback(
     ({ nodes: sel }: { nodes: ComposerNode[] }) => {
-      setSelectedNodeId(sel.length === 1 ? sel[0].id : null);
+      const newId = sel.length === 1 ? sel[0].id : null;
+      setSelectedNodeId(newId);
+      // Auto-expand properties panel when a node is selected
+      if (newId && propertiesCollapsed) {
+        setPropertiesCollapsed(false);
+      }
     },
-    [],
+    [propertiesCollapsed],
+  );
+
+  // Handle selecting a node from properties panel
+  const handleSelectNodeFromPanel = useCallback(
+    (nodeId: string) => {
+      setSelectedNodeId(nodeId);
+      const node = nodes.find((n) => n.id === nodeId);
+      if (node) {
+        reactFlowInstance.setCenter(node.position.x + 140, node.position.y + 50, {
+          duration: 300,
+          zoom: reactFlowInstance.getZoom(),
+        });
+      }
+    },
+    [nodes, reactFlowInstance],
   );
 
   // Handle drop of agent from palette
@@ -131,6 +241,9 @@ function ComposerCanvas({
         y: e.clientY,
       });
 
+      // Look up runtime kind
+      const agent = agents.find((a) => a.name === agentName);
+
       setNodes((nds) => {
         const existingIds = new Set(nds.map((n) => n.id));
         const stepId = makeStepId(agentName, existingIds);
@@ -146,7 +259,11 @@ function ComposerCanvas({
             requireApproval: false,
             stepType: "agent",
             loopConfig: null,
+            conditionExpr: null,
+            thenSteps: null,
+            elseSteps: null,
             stepState: null,
+            runtimeKind: agent?.runtime_kind ?? null,
           },
         };
 
@@ -154,7 +271,7 @@ function ComposerCanvas({
       });
       setIsDirty(true);
     },
-    [reactFlowInstance, setNodes],
+    [reactFlowInstance, setNodes, agents],
   );
 
   // Update node data from properties panel
@@ -247,6 +364,18 @@ function ComposerCanvas({
     await ws.handleTriggerWorkflow(wfName, wfInput || undefined);
   }, [wfName, wfInput, isNew, ws]);
 
+  // Approval actions
+  const handleApproval = useCallback(async (decision: "approved" | "denied") => {
+    const approvalName = workflow?.pending_approval?.name;
+    if (!approvalName || !token.trim()) return;
+    try {
+      await decideApproval(token, namespace, approvalName, decision);
+      toast.success(`Workflow step ${decision}`);
+    } catch (err) {
+      toast.error(`Failed to ${decision === "approved" ? "approve" : "deny"}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }, [workflow?.pending_approval?.name, token, namespace]);
+
   // Back — warn if unsaved changes
   const handleBack = useCallback(() => {
     if (isDirty) {
@@ -266,8 +395,57 @@ function ComposerCanvas({
     [setEdges],
   );
 
+  // Toggle maximize with fitView after animation
+  const toggleMaximize = useCallback(() => {
+    setIsMaximized((prev) => !prev);
+    setTimeout(() => reactFlowInstance.fitView({ padding: 0.2 }), 350);
+  }, [reactFlowInstance]);
+
+  // Keyboard shortcuts
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      const ctrl = e.ctrlKey || e.metaKey;
+      // Ctrl+S → Save
+      if (ctrl && e.key === "s") {
+        e.preventDefault();
+        handleSave();
+      }
+      // Ctrl+Shift+L → Auto-layout
+      if (ctrl && e.shiftKey && e.key.toLowerCase() === "l") {
+        e.preventDefault();
+        handleAutoLayout();
+      }
+      // F11 → Toggle maximize
+      if (e.key === "F11") {
+        e.preventDefault();
+        toggleMaximize();
+      }
+      // Escape → Exit maximize
+      if (e.key === "Escape" && isMaximized) {
+        e.preventDefault();
+        setIsMaximized(false);
+        setTimeout(() => reactFlowInstance.fitView({ padding: 0.2 }), 350);
+      }
+      // Ctrl+B → Toggle palette
+      if (ctrl && !e.shiftKey && e.key.toLowerCase() === "b") {
+        e.preventDefault();
+        setPaletteCollapsed((prev) => !prev);
+      }
+      // Ctrl+J → Toggle properties
+      if (ctrl && !e.shiftKey && e.key.toLowerCase() === "j") {
+        e.preventDefault();
+        setPropertiesCollapsed((prev) => !prev);
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [handleSave, handleAutoLayout, toggleMaximize, isMaximized, reactFlowInstance]);
+
   return (
-    <div className="flex flex-col h-full w-full">
+    <div className={cn(
+      "flex flex-col h-full w-full",
+      isMaximized && "fixed inset-0 z-50 bg-background composer-maximized",
+    )}>
       {ws.workflowError && (
         <div className="flex items-center gap-2 border-b border-destructive/30 bg-destructive/10 px-3 py-1.5 text-xs text-destructive shrink-0">
           <AlertCircle className="h-3.5 w-3.5 shrink-0" />
@@ -283,22 +461,36 @@ function ComposerCanvas({
         isDirty={isDirty}
         isSaving={ws.savingWorkflow}
         isRunning={ws.runningWorkflow}
+        isMaximized={isMaximized}
+        summary={workflow?.summary}
+        phase={workflow?.phase}
+        pendingApproval={workflow?.pending_approval}
+        stepsUseInput={anyStepUsesInput(
+          (nodes as ComposerNode[])
+            .filter((n) => n.type === "agentStep")
+            .map((n) => ({ data: { prompt: (n.data as AgentStepNodeData).prompt } })),
+        )}
         onNameChange={(v) => { setWfName(v); setIsDirty(true); }}
         onDescriptionChange={(v) => { setWfDesc(v); setIsDirty(true); }}
         onInputChange={(v) => { setWfInput(v); setIsDirty(true); }}
         onSave={handleSave}
         onRun={handleRun}
+        onApprove={() => handleApproval("approved")}
+        onDeny={() => handleApproval("denied")}
         onAutoLayout={handleAutoLayout}
+        onToggleMaximize={toggleMaximize}
         onBack={handleBack}
       />
 
       <div className="flex flex-1 min-h-0 overflow-hidden">
-        <NodePalette agents={agents} />
+        <NodePalette agents={agents} collapsed={paletteCollapsed} onToggleCollapse={() => setPaletteCollapsed((p) => !p)} />
 
         <div ref={wrapperRef} className="flex-1 relative">
+          {/* Canvas vignette overlay */}
+          <div className="composer-canvas-vignette" />
           <ReactFlow
             nodes={nodes}
-            edges={edges}
+            edges={edgesWithData}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}
@@ -306,39 +498,45 @@ function ComposerCanvas({
             onDragOver={onDragOver}
             onDrop={onDrop}
             onNodesDelete={onNodesDelete}
+            isValidConnection={isValidConnection}
             nodeTypes={nodeTypes}
             edgeTypes={edgeTypes}
+            snapToGrid
+            snapGrid={[20, 20]}
             fitView
-            fitViewOptions={{ padding: 0.2 }}
+            fitViewOptions={{ padding: 0.25 }}
             deleteKeyCode={["Backspace", "Delete"]}
+            connectionLineStyle={{ stroke: "oklch(0.65 0.13 175)", strokeWidth: 2, strokeDasharray: "6 3" }}
             className="bg-background"
           >
-            <Background variant={BackgroundVariant.Dots} gap={20} size={1} />
-            <Controls className="!bg-card !border-border !shadow-sm" />
+            <Background variant={BackgroundVariant.Dots} gap={24} size={1} color="oklch(0.30 0.012 274 / 0.4)" />
+            <Controls className="!bg-card/60 !border-border/50 !shadow-md !rounded-lg" />
             <MiniMap
-              className="!bg-muted/50 !border-border"
+              className="!bg-card/50 !border-border/50 !rounded-xl !shadow-xl"
+              style={{ width: 160, height: 100 }}
               nodeColor={(n) => {
-                if (n.type === "trigger") return "hsl(var(--primary))";
+                if (n.type === "trigger") return "oklch(0.65 0.13 175)";
                 const state = (n.data as AgentStepNodeData)?.stepState?.status;
                 if (state === "completed") return "#22c55e";
                 if (state === "running") return "#eab308";
                 if (state === "failed") return "#ef4444";
-                return "hsl(var(--muted-foreground))";
+                return "oklch(0.65 0.015 274)";
               }}
+              maskColor="oklch(0.145 0.008 274 / 0.7)"
             />
             {/* Custom arrow marker */}
             <svg style={{ position: "absolute", width: 0, height: 0 }}>
               <defs>
                 <marker
                   id="dependency-arrow"
-                  viewBox="0 0 10 10"
-                  refX="10"
-                  refY="5"
-                  markerWidth="6"
-                  markerHeight="6"
+                  viewBox="0 0 12 12"
+                  refX="11"
+                  refY="6"
+                  markerWidth="8"
+                  markerHeight="8"
                   orient="auto-start-reverse"
                 >
-                  <path d="M 0 0 L 10 5 L 0 10 z" fill="hsl(var(--primary))" />
+                  <path d="M 0 1 L 10 6 L 0 11 Q 2 6 0 1" fill="oklch(0.30 0.012 274)" />
                 </marker>
               </defs>
             </svg>
@@ -348,9 +546,22 @@ function ComposerCanvas({
         <PropertiesPanel
           selectedNode={selectedNode}
           agents={agents}
+          edges={edges}
+          nodes={nodes as ComposerNode[]}
+          collapsed={propertiesCollapsed}
+          onToggleCollapse={() => setPropertiesCollapsed((p) => !p)}
           onNodeDataChange={handleNodeDataChange}
+          onSelectNode={handleSelectNodeFromPanel}
         />
       </div>
+
+      {!isNew && (
+        <RunHistoryPanel
+          workflowName={wfName}
+          collapsed={runHistoryCollapsed}
+          onToggle={() => setRunHistoryCollapsed((p) => !p)}
+        />
+      )}
     </div>
   );
 }

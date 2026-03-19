@@ -12,11 +12,11 @@ operator:
   replicaCount: 1
   image:
     repository: docker.io/yakdhane/ai-operator
-    tag: deploy-20260318-094552
+    tag: deploy-20260319-130933
     pullPolicy: IfNotPresent
   workerImage:
     repository: docker.io/yakdhane/ai-operator
-    tag: deploy-20260318-094552
+    tag: deploy-20260319-130933
     pullPolicy: IfNotPresent
 
 gooseRuntime:
@@ -46,7 +46,7 @@ opencodeRuntime:
 apiGateway:
   image:
     repository: docker.io/yakdhane/ai-api-gateway
-    tag: deploy-20260318-094552
+    tag: deploy-20260319-132544
     pullPolicy: IfNotPresent
   auth:
     mode: hybrid
@@ -57,7 +57,7 @@ webUi:
   enabled: true
   image:
     repository: docker.io/yakdhane/ai-agent-sandbox-web-ui
-    tag: deploy-20260318-094552
+    tag: deploy-20260319-135048
     pullPolicy: IfNotPresent
 
 platformSecrets:
@@ -85,29 +85,29 @@ skillsCatalog:
 
 mcpToolSidecars:
   codeExec:
-    image: docker.io/yakdhane/mcp-code-exec:deploy-20260318-094552
+    image: docker.io/yakdhane/mcp-code-exec:deploy-20260319-090333
     port: 8090
   webSearch:
-    image: docker.io/yakdhane/mcp-web-search:deploy-20260318-094552
+    image: docker.io/yakdhane/mcp-web-search:deploy-20260319-090333
     port: 8091
   documents:
-    image: docker.io/yakdhane/mcp-documents:deploy-20260318-094552
+    image: docker.io/yakdhane/mcp-documents:deploy-20260318-211332
     port: 8092
   browser:
-    image: docker.io/yakdhane/mcp-browser:deploy-20260318-094552
+    image: docker.io/yakdhane/mcp-browser:deploy-20260318-211332
     port: 8093
   database:
-    image: docker.io/yakdhane/mcp-database:deploy-20260318-094552
+    image: docker.io/yakdhane/mcp-database:deploy-20260319-090333
     port: 8094
   git:
-    image: docker.io/yakdhane/mcp-git:deploy-20260318-094552
+    image: docker.io/yakdhane/mcp-git:deploy-20260318-211332
     port: 8095
   kubernetes:
-    image: docker.io/yakdhane/mcp-kubernetes:deploy-20260318-094552
+    image: docker.io/yakdhane/mcp-kubernetes:deploy-20260318-211332
     port: 8096
   messaging:
-    image: docker.io/yakdhane/mcp-messaging:deploy-20260318-094552
+    image: docker.io/yakdhane/mcp-messaging:deploy-20260318-211332
     port: 8097
   rag:
-    image: docker.io/yakdhane/mcp-rag:deploy-20260318-094552
+    image: docker.io/yakdhane/mcp-rag:deploy-20260318-211332
     port: 8098

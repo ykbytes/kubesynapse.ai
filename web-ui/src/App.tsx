@@ -3,20 +3,33 @@ import "@fontsource/space-grotesk/500.css";
 import "@fontsource/space-grotesk/700.css";
 
 import { PanelRightOpen } from "lucide-react";
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useState } from "react";
 import { Toaster } from "sonner";
 
 import { AgentManagementPanel } from "./components/AgentManagementPanel";
+import { AdminPanel } from "./components/AdminPanel";
+import { HealthDashboard } from "./components/HealthDashboard";
+import { AuditLogPanel } from "./components/AuditLogPanel";
+import UsageDashboard from "./components/UsageDashboard";
+import { AgentTemplateWizard } from "./components/AgentTemplateWizard";
+import { OnboardingTour } from "./components/OnboardingTour";
 import { AppSidebar } from "./components/AppSidebar";
 import { AuthPage } from "./components/AuthPage";
+import { ChatSessionPanel } from "./components/ChatSessionPanel";
 import { ChatWorkbench } from "./components/ChatWorkbench";
+import { TeamView } from "./components/TeamView";
 import { CreateAgentPanel } from "./components/CreateAgentPanel";
 import { EvalManager } from "./components/EvalManager";
+import { PolicyEditor } from "./components/PolicyEditor";
 import { AgentInspectorDrawer, ResourceInspectorDrawer } from "./components/InspectorDrawer";
+import { SettingsPanel } from "./components/SettingsPanel";
 import { SkillsCatalogPanel } from "./components/SkillsCatalogPanel";
 import { TopBar } from "./components/TopBar";
+import { CommandPalette } from "./components/CommandPalette";
+import { MobileNav } from "./components/MobileNav";
 import { WorkflowManager } from "./components/WorkflowManager";
 import { Button } from "@/components/ui/button";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 const WorkflowComposer = lazy(() =>
   import("./components/WorkflowComposer").then((m) => ({ default: m.WorkflowComposer })),
@@ -26,8 +39,11 @@ import { ConnectionProvider, useConnection } from "./contexts/ConnectionContext"
 import { WorkspaceProvider, useWorkspace } from "./contexts/WorkspaceContext";
 import { ChatProvider, useChat } from "./contexts/ChatContext";
 import { ThemeProvider } from "./contexts/ThemeContext";
+import { NotificationProvider } from "./contexts/NotificationContext";
 
 import type { EvalInfo, UiMessage, WorkflowInfo } from "./types";
+import { cloneAgent, exportBundleUrl, importBundle } from "./lib/api";
+import { toast } from "sonner";
 
 // ── Pure utility functions ──
 
@@ -65,6 +81,17 @@ function evalStatusFromResource(resource: EvalInfo | null): Record<string, unkno
   };
 }
 
+// ── NotificationShell — NotificationProvider needs Connection values ──
+
+function NotificationShell({ children }: { children: React.ReactNode }) {
+  const { token, namespace } = useConnection();
+  return (
+    <NotificationProvider token={token} namespace={namespace}>
+      {children}
+    </NotificationProvider>
+  );
+}
+
 // ── App — Provider shell ──
 
 export default function App() {
@@ -73,7 +100,9 @@ export default function App() {
       <ConnectionProvider>
         <WorkspaceProvider>
           <ChatProvider>
-            <AppLayout />
+            <NotificationShell>
+              <AppLayout />
+            </NotificationShell>
           </ChatProvider>
         </WorkspaceProvider>
       </ConnectionProvider>
@@ -87,6 +116,7 @@ function AppLayout() {
   const conn = useConnection();
   const ws = useWorkspace();
   const chat = useChat();
+  const [templateWizardOpen, setTemplateWizardOpen] = useState(false);
 
   // Gate: show loading spinner while auth initializes, then AuthPage if not authenticated
   if (!conn.authReady) {
@@ -148,7 +178,9 @@ function AppLayout() {
             : "Select a workflow to inspect it."
         : ws.activeView === "catalog"
           ? "Browse pre-built skills and MCP tool sidecars."
-          : ws.selectedEval
+          : ws.activeView === "settings"
+            ? "Manage LLM providers, model routes, and API keys."
+            : ws.selectedEval
             ? `${ws.selectedEval.name} evaluation suite.`
             : ws.evalCreateMode || ws.evals.length === 0
               ? "Create an evaluation suite and let the operator run it."
@@ -161,7 +193,9 @@ function AppLayout() {
         ? ws.selectedWorkflow?.phase ?? (ws.workflowCreateMode ? "draft" : "none")
         : ws.activeView === "catalog"
           ? "browse"
-          : ws.selectedEval?.phase ?? (ws.evalCreateMode ? "draft" : "none");
+          : ws.activeView === "settings"
+            ? "config"
+            : ws.selectedEval?.phase ?? (ws.evalCreateMode ? "draft" : "none");
 
   const displayError = ws.workspaceError || conn.connectionError || conn.gatewayError;
 
@@ -215,6 +249,7 @@ function AppLayout() {
             selectedId={ws.sidebarSelectedId}
             loading={ws.catalogLoading}
             emptyMessage={ws.emptySidebarMessage}
+            isAdmin={conn.isAdmin}
             onViewChange={ws.setActiveView}
             onRefresh={() => void ws.refreshWorkspaceData({ silent: false })}
             onSelect={ws.handleSelectResource}
@@ -234,32 +269,36 @@ function AppLayout() {
         </div>
 
         {/* ── Main content ── */}
-        <main className="flex flex-1 flex-col overflow-auto p-4 gap-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Workspace Status</p>
-              <h2 className="text-lg font-semibold text-foreground">{heroTitle}</h2>
-            </div>
-            <Button variant="outline" size="sm" className="gap-1.5" onClick={() => ws.setInspectorOpen(true)}>
-              <PanelRightOpen className="h-4 w-4" />
-              Inspector
-            </Button>
-          </div>
+        <main className={`flex flex-1 flex-col overflow-hidden ${ws.activeView === "composer" ? "" : "overflow-auto p-4 gap-4"} pb-16 md:pb-0`}>
+          {ws.activeView !== "composer" && (
+            <>
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Workspace Status</p>
+                  <h2 className="text-lg font-semibold text-foreground">{heroTitle}</h2>
+                </div>
+                <Button variant="outline" size="sm" className="gap-1.5" onClick={() => ws.setInspectorOpen(true)}>
+                  <PanelRightOpen className="h-4 w-4" />
+                  Inspector
+                </Button>
+              </div>
 
-          <div className="flex flex-wrap gap-2 text-xs">
-            <span className="rounded-md border border-border bg-card px-3 py-1.5">
-              Gateway: <strong className="text-foreground">{gatewayStatus}</strong>
-            </span>
-            <span className="rounded-md border border-border bg-card px-3 py-1.5">
-              Auth: <strong className="text-foreground">{conn.health?.auth_mode ?? "unknown"}</strong>
-            </span>
-            <span className="rounded-md border border-border bg-card px-3 py-1.5">
-              View: <strong className="text-foreground">{ws.activeView}</strong>
-            </span>
-            <span className="rounded-md border border-border bg-card px-3 py-1.5">
-              Selected: <strong className="text-foreground">{selectedResourceStatus}</strong>
-            </span>
-          </div>
+              <div className="flex flex-wrap gap-2 text-xs">
+                <span className="rounded-md border border-border bg-card px-3 py-1.5">
+                  Gateway: <strong className="text-foreground">{gatewayStatus}</strong>
+                </span>
+                <span className="rounded-md border border-border bg-card px-3 py-1.5">
+                  Auth: <strong className="text-foreground">{conn.health?.auth_mode ?? "unknown"}</strong>
+                </span>
+                <span className="rounded-md border border-border bg-card px-3 py-1.5">
+                  View: <strong className="text-foreground">{ws.activeView}</strong>
+                </span>
+                <span className="rounded-md border border-border bg-card px-3 py-1.5">
+                  Selected: <strong className="text-foreground">{selectedResourceStatus}</strong>
+                </span>
+              </div>
+            </>
+          )}
 
           {displayError && (
             <div className="rounded-md border border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive">
@@ -269,7 +308,18 @@ function AppLayout() {
 
           {ws.activeView === "agents" ? (
             ws.agentCreateMode || (!ws.selectedAgentName && ws.agents.length === 0) ? (
-              <CreateAgentPanel
+              <div className="flex flex-col gap-3">
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 text-xs gap-1 cursor-pointer"
+                    onClick={() => setTemplateWizardOpen(true)}
+                  >
+                    <span className="text-primary">✦</span> From Template
+                  </Button>
+                </div>
+                <CreateAgentPanel
                 token={conn.token}
                 isEmptyWorkspace={ws.agents.length === 0}
                 name={ws.createAgentName}
@@ -279,6 +329,8 @@ function AppLayout() {
                 mcpServersText={ws.createAgentMcpServersText}
                 mcpSidecarsText={ws.createAgentMcpSidecarsText}
                 a2aAllowedCallersText={ws.createAgentA2AAllowedCallersText}
+                agents={ws.agents}
+                workflows={ws.workflows}
                 skillFileDrafts={ws.createAgentSkillFileDrafts}
                 gooseConfigFileDrafts={ws.createAgentGooseConfigFileDrafts}
                 opencodeConfigFileDrafts={ws.createAgentOpenCodeConfigFileDrafts}
@@ -300,6 +352,7 @@ function AppLayout() {
                 onGitHubFormChange={ws.setCreateAgentGitHubForm}
                 onCreate={() => void handleCreateAgentFull()}
               />
+              </div>
             ) : (
               <>
                 {ws.selectedAgentName && (
@@ -324,11 +377,22 @@ function AppLayout() {
                         token={conn.token}
                         agent={ws.selectedAgentDetail}
                         policies={ws.policies}
+                        agents={ws.agents}
+                        workflows={ws.workflows}
                         isSaving={ws.savingAgent}
                         isDeleting={ws.deletingAgent}
                         error={ws.agentManageError}
                         onSave={(payload, a2aText, skills, gooseFiles, opencodeFiles) => void ws.handleSaveAgent(payload, a2aText, skills, gooseFiles, opencodeFiles)}
                         onDelete={() => void handleDeleteAgentFull()}
+                        onClone={async () => {
+                          try {
+                            await cloneAgent(conn.token, conn.namespace, ws.selectedAgentDetail!.name);
+                            toast.success(`Cloned "${ws.selectedAgentDetail!.name}"`);
+                            void ws.refreshWorkspaceData({ silent: true });
+                          } catch (err) {
+                            toast.error(err instanceof Error ? err.message : "Clone failed");
+                          }
+                        }}
                       />
                     ) : (
                       <div className="flex flex-1 items-center justify-center">
@@ -338,7 +402,17 @@ function AppLayout() {
                   </div>
 
                   {ws.selectedAgentName && (
-                    <div className={`${ws.agentViewTab === "chat" ? "flex" : "hidden lg:flex"} w-full lg:w-[55%] flex-col min-h-0`}>
+                    <div className={`${ws.agentViewTab === "chat" ? "flex" : "hidden lg:flex"} w-full lg:w-[55%] flex-row min-h-0`}>
+                      <ChatSessionPanel
+                        sessions={chat.chatSessions}
+                        activeSessionId={chat.activeSessionId}
+                        loading={chat.sessionsLoading}
+                        onNewSession={() => void chat.handleNewSession()}
+                        onLoadSession={(id) => void chat.handleLoadSession(id)}
+                        onDeleteSession={(id) => void chat.handleDeleteSession(id)}
+                        onRenameSession={(id, title) => void chat.handleRenameSession(id, title)}
+                        onSaveCurrent={() => void chat.handleSaveCurrentSession()}
+                      />
                       <ChatWorkbench
                         agentName={ws.selectedAgentName}
                         runtimeKind={ws.selectedRuntimeKind}
@@ -390,6 +464,14 @@ function AppLayout() {
                         onSubmit={() => void chat.handleSubmit()}
                         onCancel={chat.cancelStream}
                       />
+                      <TeamView
+                        specialistSubagents={chat.specialistSubagents}
+                        specialistTeamConfigured={chat.specialistTeamConfigured}
+                        subagentStrategy={chat.subagentStrategy}
+                        summary={chat.summary}
+                        isSending={chat.isSending}
+                        activity={chat.activity}
+                      />
                     </div>
                   )}
                 </div>
@@ -425,6 +507,31 @@ function AppLayout() {
             </Suspense>
           ) : ws.activeView === "catalog" ? (
             <SkillsCatalogPanel token={conn.token} />
+          ) : ws.activeView === "policies" ? (
+            <PolicyEditor selectedPolicyName={ws.sidebarSelectedId || null} />
+          ) : ws.activeView === "settings" ? (
+            <SettingsPanel token={conn.token} isAdmin={conn.isAdmin} />
+          ) : ws.activeView === "admin" ? (
+            <Tabs defaultValue="users" className="flex flex-col h-full">
+              <TabsList className="mx-4 mt-2 shrink-0 w-fit">
+                <TabsTrigger value="users" className="text-xs cursor-pointer">Users</TabsTrigger>
+                <TabsTrigger value="audit" className="text-xs cursor-pointer">Audit Log</TabsTrigger>
+                <TabsTrigger value="usage" className="text-xs cursor-pointer">Usage & Cost</TabsTrigger>
+                <TabsTrigger value="health" className="text-xs cursor-pointer">Health</TabsTrigger>
+              </TabsList>
+              <TabsContent value="users" className="flex-1 min-h-0 mt-0">
+                <AdminPanel token={conn.token} />
+              </TabsContent>
+              <TabsContent value="audit" className="flex-1 min-h-0 mt-0">
+                <AuditLogPanel />
+              </TabsContent>
+              <TabsContent value="usage" className="flex-1 min-h-0 mt-0 overflow-y-auto">
+                <UsageDashboard />
+              </TabsContent>
+              <TabsContent value="health" className="flex-1 min-h-0 mt-0 overflow-y-auto">
+                <HealthDashboard />
+              </TabsContent>
+            </Tabs>
           ) : (
             <EvalManager
               evalResource={ws.evalCreateMode || ws.evals.length === 0 ? null : ws.selectedEval}
@@ -505,7 +612,59 @@ function AppLayout() {
         />
       )}
 
+      <MobileNav
+        activeView={ws.activeView}
+        onViewChange={ws.setActiveView}
+        sidebarContent={
+          <AppSidebar
+            collapsed={false}
+            onToggleCollapse={() => {}}
+            activeView={ws.activeView}
+            counts={ws.sidebarCounts}
+            items={ws.sidebarItems}
+            selectedId={ws.sidebarSelectedId}
+            loading={ws.catalogLoading}
+            emptyMessage={ws.emptySidebarMessage}
+            isAdmin={conn.isAdmin}
+            onViewChange={ws.setActiveView}
+            onRefresh={() => void ws.refreshWorkspaceData({ silent: false })}
+            onSelect={ws.handleSelectResource}
+            onCreateNew={ws.handleCreateNew}
+          />
+        }
+      />
+
       <Toaster position="bottom-right" theme="dark" richColors />
+      <CommandPalette
+        onNavigate={ws.setActiveView}
+        onCreateAgent={() => { ws.setActiveView("agents"); ws.setAgentCreateMode(true); }}
+        onCreateWorkflow={() => { ws.setActiveView("workflows"); ws.setWorkflowCreateMode(true); }}
+        onCreateEval={() => { ws.setActiveView("evals"); ws.setEvalCreateMode(true); }}
+        onExportBundle={() => {
+          const url = exportBundleUrl(conn.token, conn.namespace);
+          window.open(url, "_blank");
+        }}
+        onImportBundle={() => {
+          const input = document.createElement("input");
+          input.type = "file";
+          input.accept = ".yaml,.yml";
+          input.onchange = async () => {
+            const file = input.files?.[0];
+            if (!file) return;
+            const text = await file.text();
+            try {
+              const result = await importBundle(conn.token, conn.namespace, text);
+              toast.success(`Imported ${result.imported} resource(s)`);
+              void ws.refreshWorkspaceData({ silent: true });
+            } catch (err) {
+              toast.error(err instanceof Error ? err.message : "Import failed");
+            }
+          };
+          input.click();
+        }}
+      />
+      <AgentTemplateWizard open={templateWizardOpen} onOpenChange={setTemplateWizardOpen} />
+      <OnboardingTour />
     </div>
   );
 }

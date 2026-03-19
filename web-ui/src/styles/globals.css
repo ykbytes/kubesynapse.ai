@@ -75,6 +75,124 @@
   100% { transform: scale(1); opacity: 1; }
 }
 
+/* ── Composer: handle glow ── */
+@keyframes handle-glow {
+  0%, 100% { box-shadow: 0 0 0 0 oklch(0.65 0.13 175 / 0); }
+  50%      { box-shadow: 0 0 8px 3px oklch(0.65 0.13 175 / 0.35); }
+}
+
+/* ── Composer: running border march ── */
+@keyframes border-march {
+  from { stroke-dashoffset: 24; }
+  to   { stroke-dashoffset: 0; }
+}
+
+/* ── Composer: flow dot travel ── */
+@keyframes flow-dot {
+  0%   { offset-distance: 0%; opacity: 0; }
+  10%  { opacity: 1; }
+  90%  { opacity: 1; }
+  100% { offset-distance: 100%; opacity: 0; }
+}
+
+/* ── Composer: node running pulse ring ── */
+@keyframes node-pulse-ring {
+  0%   { transform: scale(1); opacity: 0.5; }
+  100% { transform: scale(1.08); opacity: 0; }
+}
+
+/* ── Composer: ReactFlow handle overrides ── */
+.react-flow .react-flow__handle {
+  border-radius: 3px;
+  transition: box-shadow 0.15s ease-out, transform 0.15s ease-out;
+}
+
+.react-flow .react-flow__handle:hover {
+  animation: handle-glow 1s ease-in-out infinite;
+  transform: scale(1.25);
+}
+
+.react-flow .react-flow__handle.connecting {
+  animation: handle-glow 0.6s ease-in-out infinite;
+}
+
+/* ── Composer: edge delete button ── */
+.composer-edge-delete {
+  opacity: 0;
+  transition: opacity 0.15s ease-out;
+  pointer-events: none;
+}
+
+.react-flow__edge:hover .composer-edge-delete {
+  opacity: 1;
+  pointer-events: all;
+}
+
+/* ── Composer: maximize enter/exit ── */
+@keyframes composer-maximize-enter {
+  from { opacity: 0; transform: scale(0.97); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+@keyframes composer-maximize-exit {
+  from { opacity: 1; transform: scale(1); }
+  to   { opacity: 0; transform: scale(0.97); }
+}
+
+.composer-maximized {
+  animation: composer-maximize-enter 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.composer-maximized-exit {
+  animation: composer-maximize-exit 0.2s ease-in both;
+}
+
+/* ── Composer: canvas vignette overlay ── */
+.composer-canvas-vignette {
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background: radial-gradient(ellipse at center, transparent 65%, oklch(0.145 0.008 274 / 0.25) 100%);
+}
+
+/* ── Composer: controls responsive position ── */
+@media (max-width: 640px) {
+  .react-flow .react-flow__controls {
+    bottom: 8px !important;
+    left: 8px !important;
+    transform: scale(0.85);
+    transform-origin: bottom left;
+  }
+  .react-flow .react-flow__minimap {
+    display: none !important;
+  }
+}
+
+/* ── Composer: glass minimap ── */
+.react-flow .react-flow__minimap {
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  border-radius: 0.75rem;
+  border: 1px solid oklch(0.30 0.012 274 / 0.5);
+  box-shadow: 0 4px 20px oklch(0 0 0 / 0.3);
+  animation: fade-in 0.3s ease-out both;
+}
+
+/* ── Composer: glass controls ── */
+.react-flow .react-flow__controls {
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  border-radius: 0.75rem;
+  border: 1px solid oklch(0.30 0.012 274 / 0.5);
+  box-shadow: 0 2px 12px oklch(0 0 0 / 0.2);
+  overflow: hidden;
+}
+
+.react-flow .react-flow__controls button {
+  border-color: oklch(0.30 0.012 274 / 0.3);
+}
+
 /* ── Respect reduced motion ── */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
@@ -135,6 +253,14 @@
 @layer base {
   * {
     @apply border-border;
+  }
+
+  .scrollbar-none {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
   }
 
   html {

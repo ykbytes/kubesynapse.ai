@@ -274,6 +274,22 @@ def validate_workflow_graph(steps: Sequence[dict[str, Any]]) -> dict[str, Any]:
             undirected[step_name].add(dependency)
             indegree[step_name] += 1
 
+        # Validate conditional step branch references
+        step_type = str(step.get("type", "agent")).strip()
+        if step_type == "conditional":
+            for branch_field in ("thenSteps", "elseSteps"):
+                branch_refs = [str(s).strip() for s in (step.get(branch_field) or []) if str(s).strip()]
+                missing_refs = [ref for ref in branch_refs if ref not in step_map]
+                if missing_refs:
+                    raise ValueError(
+                        f"Conditional step '{step_name}' references unknown steps "
+                        f"in {branch_field}: {missing_refs}"
+                    )
+                # Add implicit connectivity edges so branch targets remain in the connected graph
+                for ref in branch_refs:
+                    undirected[step_name].add(ref)
+                    undirected[ref].add(step_name)
+
     roots = [name for name, degree in indegree.items() if degree == 0]
     if not roots:
         raise ValueError("Workflow must contain at least one root step")

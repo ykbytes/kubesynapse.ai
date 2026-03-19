@@ -1,11 +1,15 @@
-import { CheckCircle2, LayoutPanelTop, Loader2, Palette, XCircle } from "lucide-react";
-import { useRef, useState, useEffect } from "react";
+import { Check, CheckCircle2, ChevronDown, LayoutPanelTop, Loader2, Palette, XCircle } from "lucide-react";
+import { useRef, useState, useEffect, useCallback } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { StatusBadge } from "./StatusBadge";
 import { ConnectionDialog } from "./ConnectionDialog";
+import { NotificationCenter } from "./NotificationCenter";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { useTheme, THEMES } from "@/contexts/ThemeContext";
+import { BRAND } from "@/lib/brand";
+import { fetchNamespaces } from "@/lib/api";
 import type { AuthConfig, AuthenticatedUser, GatewayHealth } from "@/types";
 
 interface TopBarProps {
@@ -92,6 +96,88 @@ function ThemePicker() {
   );
 }
 
+function NamespaceSwitcher({
+  token,
+  namespace,
+  currentUser,
+  onNamespaceChange,
+}: {
+  token: string;
+  namespace: string;
+  currentUser: AuthenticatedUser | null;
+  onNamespaceChange: (value: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [namespaces, setNamespaces] = useState<string[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  const loadNamespaces = useCallback(async () => {
+    setLoading(true);
+    try {
+      const ns = await fetchNamespaces(token);
+      setNamespaces(ns);
+    } catch {
+      // Fallback to user's allowed_namespaces if API fails
+      const allowed = currentUser?.allowed_namespaces ?? [];
+      if (allowed.length > 0 && !allowed.includes("*")) {
+        setNamespaces(allowed);
+      } else {
+        setNamespaces([namespace]);
+      }
+    } finally {
+      setLoading(false);
+    }
+  }, [token, currentUser, namespace]);
+
+  useEffect(() => {
+    if (open) void loadNamespaces();
+  }, [open, loadNamespaces]);
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className="inline-flex items-center gap-1 rounded-md border border-border/60 bg-transparent px-2 py-1 font-mono text-xs text-foreground transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        >
+          {namespace}
+          <ChevronDown className="h-3 w-3 text-muted-foreground" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-52 p-1" sideOffset={6}>
+        {loading ? (
+          <div className="flex items-center justify-center py-4">
+            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+          </div>
+        ) : namespaces.length === 0 ? (
+          <p className="px-2 py-3 text-center text-xs text-muted-foreground">No namespaces available</p>
+        ) : (
+          <div className="max-h-56 overflow-y-auto">
+            {namespaces.map((ns) => (
+              <button
+                key={ns}
+                type="button"
+                className={`flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-accent ${
+                  ns === namespace ? "bg-accent font-medium" : ""
+                }`}
+                onClick={() => {
+                  onNamespaceChange(ns);
+                  setOpen(false);
+                }}
+              >
+                <span className={`inline-flex h-3.5 w-3.5 items-center justify-center ${ns === namespace ? "text-primary" : "text-transparent"}`}>
+                  <Check className="h-3 w-3" />
+                </span>
+                <span className="font-mono">{ns}</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 export function TopBar({
   health,
   gatewayError,
@@ -142,9 +228,9 @@ export function TopBar({
           </div>
           <div className="flex flex-col">
             <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-              Kubemininions
+              {BRAND.name}
             </span>
-            <span className="text-sm font-semibold text-foreground">Agent Sandbox</span>
+            <span className="text-sm font-semibold text-foreground">{BRAND.tagline}</span>
           </div>
         </div>
 
@@ -160,12 +246,16 @@ export function TopBar({
             <TooltipContent side="bottom">Gateway health: {gatewayStatus}</TooltipContent>
           </Tooltip>
           {token.trim() && (
-            <Badge variant="outline" className="font-mono text-xs">
-              {namespace}
-            </Badge>
+            <NamespaceSwitcher
+              token={token}
+              namespace={namespace}
+              currentUser={currentUser}
+              onNamespaceChange={onNamespaceChange}
+            />
           )}
           {currentUser ? <Badge variant="secondary">{currentUser.role}</Badge> : null}
           <ThemePicker />
+          <NotificationCenter />
           <ConnectionDialog
           connectionError={connectionError}
           onClearConnectionError={onClearConnectionError}

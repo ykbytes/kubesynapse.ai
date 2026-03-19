@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   buildOidcLoginUrl,
   buildSamlLoginUrl,
@@ -10,6 +10,7 @@ import {
   refreshAuthSession,
   registerWithPassword,
   setOnTokenRefreshed,
+  apiErrorMessage,
 } from "@/lib/api";
 import type { AuthConfig, AuthenticatedUser, GatewayHealth, UserRole } from "@/types";
 import { toast } from "sonner";
@@ -142,7 +143,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       return nextConfig;
     } catch (err) {
       setAuthConfig(null);
-      setConnectionError(err instanceof Error ? err.message : String(err));
+      setConnectionError(apiErrorMessage(err));
       return null;
     }
   }
@@ -154,7 +155,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       setAuthPassword("");
       return { token: session.access_token, user: session.user };
     } catch (err) {
-      if (!options?.silent) setConnectionError(err instanceof Error ? err.message : String(err));
+      if (!options?.silent) setConnectionError(apiErrorMessage(err));
       return null;
     }
   }
@@ -162,11 +163,14 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   const doRefreshHealth = useCallback(async (silent = false) => {
     try {
       const nextHealth = await fetchGatewayHealth();
-      setHealth(nextHealth);
-      setGatewayError("");
+      setHealth((prev) => {
+        if (prev && prev.status === nextHealth.status && prev.gateway === nextHealth.gateway && prev.auth_mode === nextHealth.auth_mode && prev.nats_url === nextHealth.nats_url && prev.qdrant_url === nextHealth.qdrant_url) return prev;
+        return nextHealth;
+      });
+      setGatewayError((prev) => prev === "" ? prev : "");
       return nextHealth;
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = apiErrorMessage(err);
       setGatewayError(message);
       if (!silent) setHealth(null);
       return null;
@@ -257,7 +261,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       return true;
     } catch (err) {
       setCurrentUser(null);
-      setConnectionError(err instanceof Error ? err.message : String(err));
+      setConnectionError(apiErrorMessage(err));
       return false;
     } finally {
       setIsConnecting(false);
@@ -280,7 +284,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       toast.success(wasRegistering ? "Account created." : "Signed in.");
       return true;
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = apiErrorMessage(err);
       setConnectionError(message);
       toast.error(message);
       return false;
@@ -293,7 +297,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   const handleLogout = useCallback(async () => {
     setAuthBusy(true);
     try { await logoutSession(token); } catch (err) {
-      toast.error(err instanceof Error ? err.message : String(err));
+      toast.error(apiErrorMessage(err));
     } finally {
       setAuthBusy(false);
       setToken("");
@@ -334,23 +338,31 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     [currentUser],
   );
 
+  const ctxValue = useMemo<ConnectionContextValue>(() => ({
+    token, namespace, health, gatewayError, isConnecting,
+    authConfig, currentUser, authBusy, connectionError, authReady,
+    authUsername, authPassword, authEmail, authDisplayName, authPasswordConfirm,
+    passwordProvider, registerMode,
+    hasRole, canMutate, isAdmin,
+    setToken, setNamespace: setNamespaceSafe,
+    setAuthUsername, setAuthPassword, setAuthEmail, setAuthDisplayName, setAuthPasswordConfirm,
+    setPasswordProvider, setRegisterMode, setConnectionError,
+    handleConnect, handlePasswordAuth, handleLogout,
+    handleOidcStart, handleSamlStart,
+    refreshHealth: doRefreshHealth,
+    refreshCurrentUserProfile: doRefreshCurrentUserProfile,
+  }), [
+    token, namespace, health, gatewayError, isConnecting,
+    authConfig, currentUser, authBusy, connectionError, authReady,
+    authUsername, authPassword, authEmail, authDisplayName, authPasswordConfirm,
+    passwordProvider, registerMode,
+    hasRole, canMutate, isAdmin,
+    setNamespaceSafe, handleConnect, handlePasswordAuth, handleLogout,
+    handleOidcStart, handleSamlStart, doRefreshHealth, doRefreshCurrentUserProfile,
+  ]);
+
   return (
-    <ConnectionContext.Provider
-      value={{
-        token, namespace, health, gatewayError, isConnecting,
-        authConfig, currentUser, authBusy, connectionError, authReady,
-        authUsername, authPassword, authEmail, authDisplayName, authPasswordConfirm,
-        passwordProvider, registerMode,
-        hasRole, canMutate, isAdmin,
-        setToken, setNamespace: setNamespaceSafe,
-        setAuthUsername, setAuthPassword, setAuthEmail, setAuthDisplayName, setAuthPasswordConfirm,
-        setPasswordProvider, setRegisterMode, setConnectionError,
-        handleConnect, handlePasswordAuth, handleLogout,
-        handleOidcStart, handleSamlStart,
-        refreshHealth: doRefreshHealth,
-        refreshCurrentUserProfile: doRefreshCurrentUserProfile,
-      }}
-    >
+    <ConnectionContext.Provider value={ctxValue}>
       {children}
     </ConnectionContext.Provider>
   );

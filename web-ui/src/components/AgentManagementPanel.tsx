@@ -2,6 +2,7 @@ import {
   Bot,
   Brain,
   Code,
+  Copy,
   Database,
   FileText,
   GitBranch,
@@ -38,6 +39,7 @@ import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { ModelSelector } from "@/components/ModelSelector";
 import { A2A_ALLOWED_CALLERS_PLACEHOLDER, stringifyA2APeerRefs } from "../lib/a2a";
 import {
   buildGooseConfigFiles,
@@ -61,6 +63,7 @@ import { buildSkillFiles, createSkillFileDraft, skillFileDraftsFromFiles } from 
 import { fetchCatalogSkillDetail, fetchMcpToolCategories, fetchMcpHubServers, fetchSkillsCatalog } from "../lib/api";
 import type {
   AgentDetail,
+  AgentInfo,
   CatalogSkill,
   CatalogSkillDetail,
   GitConfig,
@@ -71,7 +74,9 @@ import type {
   RuntimeKind,
   TextFileDraft,
   UpdateAgentPayload,
+  WorkflowInfo,
 } from "../types";
+import { A2ACallerPicker } from "./A2ACallerPicker";
 import { TextFileBundleEditor } from "./TextFileBundleEditor";
 import { ToolConfigDrawer } from "./ToolConfigDrawer";
 import { useConnection } from "@/contexts/ConnectionContext";
@@ -134,6 +139,8 @@ interface AgentManagementPanelProps {
   token: string;
   agent: AgentDetail;
   policies: PolicyInfo[];
+  agents: AgentInfo[];
+  workflows: WorkflowInfo[];
   isSaving: boolean;
   isDeleting: boolean;
   error: string;
@@ -145,17 +152,21 @@ interface AgentManagementPanelProps {
     opencodeConfigFiles: Record<string, unknown>,
   ) => void;
   onDelete: () => void;
+  onClone?: () => void;
 }
 
 export function AgentManagementPanel({
   token,
   agent,
   policies,
+  agents: workspaceAgents,
+  workflows: workspaceWorkflows,
   isSaving,
   isDeleting,
   error,
   onSave,
   onDelete,
+  onClone,
 }: AgentManagementPanelProps) {
   const { canMutate } = useConnection();
   const [model, setModel] = useState(agent.model);
@@ -441,8 +452,8 @@ export function AgentManagementPanel({
                   <CardContent className="space-y-4">
                     <div className="space-y-1.5">
                       <Label className="text-xs">Model</Label>
-                      <Input value={model} onChange={(e) => setModel(e.target.value)} placeholder="gpt-4" />
-                      <p className="text-[11px] text-muted-foreground">Must match a route exposed by LiteLLM.</p>
+                      <ModelSelector value={model} onChange={setModel} />
+                      <p className="text-[11px] text-muted-foreground">Pick a model route from the LiteLLM proxy.</p>
                     </div>
                     <div className="space-y-1.5">
                       <Label className="text-xs">Policy</Label>
@@ -544,16 +555,14 @@ export function AgentManagementPanel({
                 <Separator />
                 <div className="space-y-1.5">
                   <Label className="text-xs">Allowed caller agents (A2A)</Label>
-                  <Textarea
-                    rows={4}
+                  <A2ACallerPicker
                     value={a2aAllowedCallersText}
-                    onChange={(e) => setA2aAllowedCallersText(e.target.value)}
+                    onChange={setA2aAllowedCallersText}
+                    agents={workspaceAgents}
+                    workflows={workspaceWorkflows}
+                    currentAgentName={agent.name}
                     placeholder={A2A_ALLOWED_CALLERS_PLACEHOLDER}
-                    className="font-mono text-xs"
                   />
-                  <p className="text-[11px] text-muted-foreground">
-                    One caller per line as namespace/name. Drives inbound A2A access and ingress policy.
-                  </p>
                 </div>
               </CardContent>
             </Card>
@@ -983,6 +992,11 @@ export function AgentManagementPanel({
                   {isSaving ? <LoaderCircle className="mr-1.5 h-4 w-4 animate-spin" /> : <Save className="mr-1.5 h-4 w-4" />}
                   {isSaving ? "Saving..." : "Save changes"}
                 </Button>
+                {onClone && (
+                  <Button variant="outline" onClick={onClone}>
+                    <Copy className="mr-1.5 h-4 w-4" /> Clone
+                  </Button>
+                )}
                 <Button variant="destructive" onClick={() => setDeleteDialogOpen(true)} disabled={isDeleting}>
                   {isDeleting ? <LoaderCircle className="mr-1.5 h-4 w-4 animate-spin" /> : <Trash2 className="mr-1.5 h-4 w-4" />}
                   {isDeleting ? "Deleting..." : "Delete"}

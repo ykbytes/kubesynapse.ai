@@ -1,6 +1,7 @@
 import { useState, useMemo } from "react";
 import { AlertCircle, Check, KeyRound, LayoutPanelTop, Loader2, UserPlus, X } from "lucide-react";
 import { useConnection } from "@/contexts/ConnectionContext";
+import { BRAND } from "@/lib/brand";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -81,8 +82,8 @@ export function AuthPage() {
           <LayoutPanelTop className="h-8 w-8" />
         </div>
         <div className="text-center">
-          <h1 className="text-2xl font-bold tracking-tight text-foreground">Kubemininions</h1>
-          <p className="text-sm text-muted-foreground">AI Agent Sandbox</p>
+          <h1 className="text-2xl font-bold tracking-tight text-foreground">{BRAND.name}</h1>
+          <p className="text-sm text-muted-foreground">{BRAND.tagline}</p>
         </div>
       </div>
 

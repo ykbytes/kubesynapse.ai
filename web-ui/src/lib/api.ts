@@ -23,6 +23,7 @@ import type {
   CreateUserPayload,
   CreateAgentPayload,
   DeleteResponse,
+  EvalCaseResult,
   EvalInfo,
   EvalPayload,
   EvalTestCase,
@@ -37,10 +38,16 @@ import type {
   InvocationSummary,
   InvokePayload,
   InvokeResponse,
+  LLMKeyInfo,
+  LLMModelInfo,
+  LLMProvider,
   LoopConfig,
+  ModelSuggestion,
   McpHubServer,
   McpToolCategory,
   PolicyInfo,
+  PolicyInputGuardrails,
+  PolicyOutputGuardrails,
   RuntimeKind,
   SubagentInvocationMetadata,
   SubagentInvocationResult,
@@ -59,6 +66,42 @@ import type {
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL?.trim() ?? "";
 type JsonRecord = Record<string, unknown>;
+
+// ── Structured API error ──
+
+export type ApiErrorCategory = "network" | "auth" | "validation" | "server" | "timeout" | "unknown";
+
+function categorizeStatus(status: number): ApiErrorCategory {
+  if (status === 401 || status === 403) return "auth";
+  if (status === 408 || status === 504) return "timeout";
+  if (status >= 400 && status < 500) return "validation";
+  if (status >= 500) return "server";
+  return "unknown";
+}
+
+export class ApiError extends Error {
+  readonly code: number;
+  readonly category: ApiErrorCategory;
+  readonly detail: string;
+
+  constructor(code: number, message: string, detail?: string) {
+    super(message);
+    this.name = "ApiError";
+    this.code = code;
+    this.category = categorizeStatus(code);
+    this.detail = detail ?? "";
+  }
+}
+
+export function isApiError(err: unknown): err is ApiError {
+  return err instanceof ApiError;
+}
+
+export function apiErrorMessage(err: unknown): string {
+  if (err instanceof ApiError) return err.detail || err.message;
+  if (err instanceof Error) return err.message;
+  return String(err);
+}
 
 /**
  * Global callback invoked when a silent token refresh succeeds.
@@ -535,9 +578,24 @@ function parseAgentDetailPayload(payload: unknown): AgentDetail {
 
 function parsePolicyInfoPayload(payload: unknown, label = "PolicyInfo"): PolicyInfo {
   const record = expectRecord(payload, label);
+  const igRaw = readOptionalRecord(record, "input_guardrails", label) ?? {};
+  const ogRaw = readOptionalRecord(record, "output_guardrails", label) ?? {};
   return {
     name: readString(record, "name", label),
     namespace: readString(record, "namespace", label),
+    input_guardrails: {
+      blockPromptInjection: readOptionalBoolean(igRaw as JsonRecord, "blockPromptInjection", label) ?? false,
+      blockedPatterns: readStringArray(igRaw as JsonRecord, "blockedPatterns", label, []),
+      maxInputTokens: readOptionalNumber(igRaw as JsonRecord, "maxInputTokens", label) ?? 4096,
+    },
+    output_guardrails: {
+      maskPII: readOptionalBoolean(ogRaw as JsonRecord, "maskPII", label) ?? false,
+      blockedOutputPatterns: readStringArray(ogRaw as JsonRecord, "blockedOutputPatterns", label, []),
+      maxOutputTokens: readOptionalNumber(ogRaw as JsonRecord, "maxOutputTokens", label) ?? 4096,
+    },
+    allowed_models: readStringArray(record, "allowed_models", label, []),
+    allowed_mcp_servers: readStringArray(record, "allowed_mcp_servers", label, []),
+    mcp_require_hitl: readOptionalBoolean(record, "mcp_require_hitl", label) ?? true,
   };
 }
 
@@ -664,8 +722,11 @@ function parseWorkflowStepPayload(payload: unknown, label = "WorkflowStep"): Wor
     depends_on: readStringArray(record, "depends_on", label),
     require_approval: readBoolean(record, "require_approval", label, false),
     execution: readOptionalRecord(record, "execution", label),
-    step_type: (readOptionalString(record, "step_type", label) as "agent" | "loop" | undefined) ?? "agent",
+    step_type: (readOptionalString(record, "step_type", label) as "agent" | "loop" | "conditional" | undefined) ?? "agent",
     loop_config: (readOptionalRecord(record, "loop_config", label) as LoopConfig | null) ?? null,
+    condition_expr: readOptionalString(record, "condition_expr", label) ?? null,
+    then_steps: record.then_steps ? (record.then_steps as string[]) : null,
+    else_steps: record.else_steps ? (record.else_steps as string[]) : null,
   };
 }
 
@@ -721,6 +782,7 @@ function parseEvalTestCasePayload(payload: unknown, label = "EvalTestCase"): Eva
 
 function parseEvalInfoPayload(payload: unknown, label = "EvalInfo"): EvalInfo {
   const record = expectRecord(payload, label);
+  const rawCases = record.cases;
   return {
     name: readString(record, "name", label),
     namespace: readString(record, "namespace", label),
@@ -737,6 +799,7 @@ function parseEvalInfoPayload(payload: unknown, label = "EvalInfo"): EvalInfo {
     summary: readOptionalRecord(record, "summary", label),
     artifact_ref: readOptionalRecord(record, "artifact_ref", label),
     worker_job: readOptionalRecord(record, "worker_job", label),
+    cases: Array.isArray(rawCases) ? rawCases as EvalCaseResult[] : null,
     created_at: readOptionalString(record, "created_at", label),
   };
 }
@@ -830,17 +893,20 @@ export function buildInvocationSummary(fallbackThreadId: string, payload: unknow
 async function parseJsonResponse<T>(response: Response, parser: (payload: unknown) => T): Promise<T> {
   if (!response.ok) {
     const text = await response.text();
+    let detail = "";
     if (text) {
-      let detail = "";
       try {
         const parsed = JSON.parse(text) as { detail?: string };
         detail = parsed.detail ?? "";
       } catch {
-        detail = "";
+        detail = text;
       }
-      throw new Error(detail || text);
     }
-    throw new Error(`Request failed with status ${response.status}`);
+    throw new ApiError(
+      response.status,
+      `Request failed with status ${response.status}`,
+      detail || undefined,
+    );
   }
 
   let payload: unknown;
@@ -856,6 +922,16 @@ async function parseJsonResponse<T>(response: Response, parser: (payload: unknow
 export async function fetchGatewayHealth(): Promise<GatewayHealth> {
   const response = await fetch(buildUrl("/api/health"));
   return parseJsonResponse(response, parseGatewayHealthPayload);
+}
+
+export async function fetchNamespaces(token: string): Promise<string[]> {
+  const response = await fetchAuthenticated(buildUrl("/api/namespaces"), token);
+  return parseJsonResponse(response, (payload) => {
+    const record = expectRecord(payload, "Namespaces");
+    const ns = record.namespaces;
+    if (!Array.isArray(ns)) return ["default"];
+    return ns.filter((n): n is string => typeof n === "string");
+  });
 }
 
 export async function fetchAuthConfig(): Promise<AuthConfig> {
@@ -1002,6 +1078,148 @@ export async function updateUser(token: string, userId: number, payload: UpdateU
   return parseJsonResponse(response, (payloadBody) => parseAdminUserPayload(payloadBody, "AdminUser"));
 }
 
+/* ── Audit Logs ── */
+
+export interface AuditLogEntry {
+  id: number;
+  timestamp: string | null;
+  actor: string | null;
+  actor_type: string | null;
+  action: string;
+  resource_kind: string | null;
+  resource_name: string | null;
+  namespace: string | null;
+  detail: Record<string, unknown> | null;
+  ip_address: string | null;
+  request_id: string | null;
+}
+
+export interface AuditLogResponse {
+  items: AuditLogEntry[];
+  total: number;
+}
+
+export async function fetchAuditLogs(
+  token: string,
+  filters: {
+    actor?: string;
+    actor_type?: string;
+    action?: string;
+    resource_kind?: string;
+    resource_name?: string;
+    namespace?: string;
+    from_date?: string;
+    to_date?: string;
+    limit?: number;
+    offset?: number;
+  } = {},
+): Promise<AuditLogResponse> {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(filters)) {
+    if (value !== undefined && value !== null && value !== "") {
+      params.set(key, String(value));
+    }
+  }
+  const url = buildUrl(`/api/admin/audit${params.toString() ? `?${params}` : ""}`);
+  const response = await fetchAuthenticated(url, token);
+  return parseJsonResponse(response, (payload) => {
+    const record = expectRecord(payload, "AuditLogResponse");
+    return {
+      items: (record.items as AuditLogEntry[]) ?? [],
+      total: (record.total as number) ?? 0,
+    };
+  });
+}
+
+export async function purgeAuditLogs(token: string): Promise<{ deleted: number }> {
+  const response = await fetchAuthenticated(buildUrl("/api/admin/audit/purge"), token, {
+    method: "DELETE",
+  });
+  return parseJsonResponse(response, (payload) => {
+    const record = expectRecord(payload, "PurgeResult");
+    return { deleted: (record.deleted as number) ?? 0 };
+  });
+}
+
+// ── Token Usage & Cost Tracking ──
+
+export interface UsageSummaryItem {
+  group: string;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  estimated_cost_usd: number;
+  invocations: number;
+}
+
+export interface UsageDetailItem {
+  id: number;
+  timestamp: string | null;
+  agent_name: string;
+  namespace: string;
+  user_id: string | null;
+  model: string | null;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  estimated_cost_usd: number | null;
+  session_id: string | null;
+  request_id: string | null;
+}
+
+export interface UsageDetailResponse {
+  items: UsageDetailItem[];
+  total: number;
+}
+
+export async function fetchUsageSummary(
+  token: string,
+  params: {
+    namespace?: string;
+    group_by?: string;
+    from_date?: string;
+    to_date?: string;
+  } = {},
+): Promise<UsageSummaryItem[]> {
+  const url = new URL(buildUrl("/api/usage/summary"), API_BASE_URL || window.location.origin);
+  for (const [k, v] of Object.entries(params)) {
+    if (v) url.searchParams.set(k, v);
+  }
+  const target = API_BASE_URL ? url.toString() : `${url.pathname}${url.search}`;
+  const response = await fetchAuthenticated(target, token);
+  return parseJsonResponse(response, (payload) => {
+    const record = expectRecord(payload, "UsageSummary");
+    return (record.items as UsageSummaryItem[]) ?? [];
+  });
+}
+
+export async function fetchUsageDetail(
+  token: string,
+  params: {
+    namespace?: string;
+    agent_name?: string;
+    model?: string;
+    from_date?: string;
+    to_date?: string;
+    limit?: number;
+    offset?: number;
+  } = {},
+): Promise<UsageDetailResponse> {
+  const url = new URL(buildUrl("/api/usage/detail"), API_BASE_URL || window.location.origin);
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined && v !== null) url.searchParams.set(k, String(v));
+  }
+  const target = API_BASE_URL ? url.toString() : `${url.pathname}${url.search}`;
+  const response = await fetchAuthenticated(target, token);
+  return parseJsonResponse(response, (payload) => {
+    const record = expectRecord(payload, "UsageDetail");
+    return {
+      items: (record.items as UsageDetailItem[]) ?? [],
+      total: (record.total as number) ?? 0,
+    };
+  });
+}
+
 export function buildOidcLoginUrl(providerId: string, nextPath = window.location.pathname): string {
   const url = new URL(buildUrl(`/api/auth/oidc/start/${providerId}`), API_BASE_URL || window.location.origin);
   url.searchParams.set("next", nextPath || "/");
@@ -1032,6 +1250,47 @@ export async function listPolicies(token: string, namespace: string): Promise<Po
     }
     return payload.map((item, index) => parsePolicyInfoPayload(item ?? {}, `PolicyInfo[${index}]`));
   });
+}
+
+export interface CreatePolicyPayload {
+  name: string;
+  input_guardrails: PolicyInputGuardrails;
+  output_guardrails: PolicyOutputGuardrails;
+  allowed_models: string[];
+  allowed_mcp_servers: string[];
+  mcp_require_hitl: boolean;
+}
+
+export type UpdatePolicyPayload = Partial<Omit<CreatePolicyPayload, "name">>;
+
+export async function fetchPolicy(token: string, namespace: string, name: string): Promise<PolicyInfo> {
+  const response = await fetchAuthenticated(buildUrl(`/api/policies/${name}`, namespace), token);
+  return parseJsonResponse(response, parsePolicyInfoPayload);
+}
+
+export async function createPolicy(token: string, namespace: string, payload: CreatePolicyPayload): Promise<PolicyInfo> {
+  const response = await fetchAuthenticated(buildUrl("/api/policies", namespace), token, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return parseJsonResponse(response, parsePolicyInfoPayload);
+}
+
+export async function updatePolicy(token: string, namespace: string, name: string, payload: UpdatePolicyPayload): Promise<PolicyInfo> {
+  const response = await fetchAuthenticated(buildUrl(`/api/policies/${name}`, namespace), token, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return parseJsonResponse(response, parsePolicyInfoPayload);
+}
+
+export async function deletePolicy(token: string, namespace: string, name: string): Promise<DeleteResponse> {
+  const response = await fetchAuthenticated(buildUrl(`/api/policies/${name}`, namespace), token, {
+    method: "DELETE",
+  });
+  return parseJsonResponse(response, parseDeleteResponsePayload);
 }
 
 export async function createAgent(
@@ -1084,6 +1343,46 @@ export async function deleteAgent(token: string, namespace: string, agentName: s
     method: "DELETE",
   });
   return parseJsonResponse(response, parseDeleteResponsePayload);
+}
+
+export async function cloneAgent(
+  token: string,
+  namespace: string,
+  agentName: string,
+  newName?: string,
+): Promise<AgentDetail> {
+  const url = new URL(buildUrl(`/api/agents/${agentName}/clone`, namespace), API_BASE_URL || window.location.origin);
+  if (newName) url.searchParams.set("new_name", newName);
+  const target = API_BASE_URL ? url.toString() : `${url.pathname}${url.search}`;
+  const response = await fetchAuthenticated(target, token, { method: "POST" });
+  return parseJsonResponse(response, (p) => parseAgentDetailPayload(p as Record<string, unknown>));
+}
+
+export function exportBundleUrl(token: string, namespace: string): string {
+  const url = buildUrl("/api/export/bundle", namespace);
+  return `${url}&token=${encodeURIComponent(token)}`;
+}
+
+export async function importBundle(token: string, namespace: string, yamlContent: string): Promise<{ imported: number; results: Array<Record<string, string>> }> {
+  const response = await fetchAuthenticated(buildUrl("/api/import/bundle", namespace), token, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-yaml" },
+    body: yamlContent,
+  });
+  return parseJsonResponse(response, (p) => p as { imported: number; results: Array<Record<string, string>> });
+}
+
+export interface SystemHealth {
+  status: string;
+  namespace: string;
+  auth_mode: string;
+  checks: Record<string, Record<string, unknown>>;
+  timestamp: string;
+}
+
+export async function fetchSystemHealth(token: string, namespace: string): Promise<SystemHealth> {
+  const response = await fetchAuthenticated(buildUrl("/api/system/health", namespace), token);
+  return parseJsonResponse(response, (p) => p as SystemHealth);
 }
 
 export async function invokeAgent(
@@ -1290,6 +1589,53 @@ export async function deleteWorkflow(
     method: "DELETE",
   });
   return parseJsonResponse(response, parseDeleteResponsePayload);
+}
+
+export interface WorkflowRunRecord {
+  id: number;
+  run_id: string | null;
+  phase: string;
+  total_steps: number | null;
+  completed_steps: number | null;
+  failed_steps: number | null;
+  started_at: string | null;
+  completed_at: string | null;
+  triggered_by: string | null;
+  input_text: string | null;
+  created_at: string | null;
+}
+
+export async function fetchWorkflowRuns(
+  token: string,
+  namespace: string,
+  workflowName: string,
+  limit = 20,
+): Promise<WorkflowRunRecord[]> {
+  const response = await fetchAuthenticated(
+    buildUrl(`/api/workflows/${workflowName}/runs`, namespace) + `&limit=${limit}`,
+    token,
+  );
+  return parseJsonResponse(response, (payload) => {
+    if (!Array.isArray(payload)) throw new Error("Expected array of workflow runs");
+    return payload as WorkflowRunRecord[];
+  });
+}
+
+export function createWorkflowStatusStream(
+  token: string,
+  namespace: string,
+  workflowName: string,
+): EventSource {
+  const url = buildUrl(`/api/workflows/${workflowName}/status/stream`, namespace);
+  return new EventSource(`${url}&token=${encodeURIComponent(token)}`);
+}
+
+export function createNotificationStream(
+  token: string,
+  namespace: string,
+): EventSource {
+  const url = buildUrl("/api/notifications/stream", namespace);
+  return new EventSource(`${url}&token=${encodeURIComponent(token)}`);
 }
 
 export async function listEvals(token: string, namespace: string): Promise<EvalInfo[]> {
@@ -1578,4 +1924,242 @@ export async function fetchMcpHubServers(token: string): Promise<McpHubServer[]>
     if (Array.isArray(payload)) return payload as McpHubServer[];
     throw new Error("Invalid MCP hub servers response");
   });
+}
+
+/* ── LLM / Provider Management API ── */
+
+export async function fetchLLMHealth(token: string): Promise<{ status: string; litellm_status?: number; error?: string }> {
+  const response = await fetchAuthenticated(buildUrl("/api/llm/health"), token);
+  return parseJsonResponse(response, (payload) => {
+    const record = expectRecord(payload, "LLMHealth");
+    return {
+      status: readString(record, "status", "LLMHealth"),
+      litellm_status: readOptionalNumber(record, "litellm_status", "LLMHealth") ?? undefined,
+      error: readOptionalString(record, "error", "LLMHealth") ?? undefined,
+    };
+  });
+}
+
+export async function fetchLLMModels(token: string): Promise<LLMModelInfo[]> {
+  const response = await fetchAuthenticated(buildUrl("/api/llm/models"), token);
+  return parseJsonResponse(response, (payload) => {
+    const record = expectRecord(payload, "LLMModels");
+    const models = record.models;
+    if (!Array.isArray(models)) return [];
+    return models.map((item, i) => {
+      const m = expectRecord(item, `models[${i}]`);
+      return {
+        model_name: readString(m, "model_name", `models[${i}]`, ""),
+        litellm_params: isRecord(m.litellm_params) ? (m.litellm_params as Record<string, unknown>) : {},
+        model_info: isRecord(m.model_info) ? (m.model_info as Record<string, unknown>) : {},
+      };
+    });
+  });
+}
+
+export async function addLLMModel(
+  token: string,
+  modelName: string,
+  litellmParams: Record<string, unknown>,
+): Promise<void> {
+  const response = await fetchAuthenticated(buildUrl("/api/llm/models"), token, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model_name: modelName, litellm_params: litellmParams }),
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || `Failed to add model (${response.status})`);
+  }
+}
+
+export async function deleteLLMModel(token: string, modelId: string): Promise<void> {
+  const response = await fetchAuthenticated(buildUrl("/api/llm/models/delete"), token, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: modelId }),
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || `Failed to delete model (${response.status})`);
+  }
+}
+
+export async function fetchLLMKeys(token: string): Promise<LLMKeyInfo[]> {
+  const response = await fetchAuthenticated(buildUrl("/api/llm/keys"), token);
+  return parseJsonResponse(response, (payload) => {
+    const record = expectRecord(payload, "LLMKeys");
+    const keys = record.keys;
+    if (!Array.isArray(keys)) return [];
+    return keys.map((item, i) => {
+      const k = expectRecord(item, `keys[${i}]`);
+      return {
+        name: readString(k, "name", `keys[${i}]`),
+        is_set: readBoolean(k, "is_set", `keys[${i}]`, false),
+      };
+    });
+  });
+}
+
+export async function updateLLMKeys(token: string, keys: Record<string, string>): Promise<void> {
+  const response = await fetchAuthenticated(buildUrl("/api/llm/keys"), token, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ keys }),
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || `Failed to update keys (${response.status})`);
+  }
+}
+
+/* ── Provider-centric LLM API ── */
+
+export async function fetchLLMProviders(token: string): Promise<LLMProvider[]> {
+  const response = await fetchAuthenticated(buildUrl("/api/llm/providers"), token);
+  return parseJsonResponse(response, (payload) => {
+    const record = expectRecord(payload, "LLMProviders");
+    const providers = record.providers;
+    if (!Array.isArray(providers)) return [];
+    return providers.map((item, i) => {
+      const p = expectRecord(item, `providers[${i}]`);
+      return {
+        key_name: readString(p, "key_name", `providers[${i}]`),
+        label: readString(p, "label", `providers[${i}]`),
+        prefix: readString(p, "prefix", `providers[${i}]`, ""),
+        is_configured: typeof p.is_configured === "boolean" ? p.is_configured : null,
+        model_count: typeof p.model_count === "number" ? p.model_count : 0,
+        models: Array.isArray(p.models)
+          ? p.models.map((m: unknown, j: number) => {
+              const model = expectRecord(m, `providers[${i}].models[${j}]`);
+              return {
+                model_name: readString(model, "model_name", `model[${j}]`, ""),
+                litellm_model: readString(model, "litellm_model", `model[${j}]`, ""),
+                id: readString(model, "id", `model[${j}]`, ""),
+              };
+            })
+          : [],
+      };
+    });
+  });
+}
+
+export async function fetchProviderSuggestions(token: string, provider: string, q?: string): Promise<ModelSuggestion[]> {
+  let url = buildUrl(`/api/llm/providers/${encodeURIComponent(provider)}/suggestions`);
+  if (q) url += `?q=${encodeURIComponent(q)}`;
+  const response = await fetchAuthenticated(url, token);
+  return parseJsonResponse(response, (payload) => {
+    const record = expectRecord(payload, "ProviderSuggestions");
+    const suggestions = record.suggestions;
+    if (!Array.isArray(suggestions)) return [];
+    return suggestions.map((item, i) => {
+      const s = expectRecord(item, `suggestions[${i}]`);
+      return {
+        model_id: readString(s, "model_id", `suggestions[${i}]`),
+        display_name: readString(s, "display_name", `suggestions[${i}]`),
+        description: readOptionalString(s, "description", `suggestions[${i}]`) ?? undefined,
+      };
+    });
+  });
+}
+
+export async function addProviderModel(
+  token: string,
+  provider: string,
+  modelId: string,
+  alias?: string,
+): Promise<void> {
+  const response = await fetchAuthenticated(
+    buildUrl(`/api/llm/providers/${encodeURIComponent(provider)}/models`),
+    token,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model_id: modelId, alias: alias || null }),
+    },
+  );
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || `Failed to add model (${response.status})`);
+  }
+}
+
+// ── Chat Session Persistence ──
+
+export interface ChatSessionInfo {
+  session_id: string;
+  title: string;
+  agent_name: string;
+  namespace: string;
+  username: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface ChatMessageInfo {
+  message_id: string;
+  role: string;
+  content: string;
+  status: string;
+  tool_name: string | null;
+  tool_node: string | null;
+  created_at: string | null;
+}
+
+export async function listChatSessions(token: string, namespace: string, agentName: string): Promise<ChatSessionInfo[]> {
+  const url = buildUrl("/api/chat-sessions", namespace);
+  const fullUrl = `${url}${url.includes("?") ? "&" : "?"}agent_name=${encodeURIComponent(agentName)}`;
+  const response = await fetchAuthenticated(fullUrl, token);
+  return parseJsonResponse(response, (payload) => {
+    if (!Array.isArray(payload)) return [];
+    return payload as ChatSessionInfo[];
+  });
+}
+
+export async function createChatSession(
+  token: string, namespace: string, agentName: string, title?: string,
+): Promise<ChatSessionInfo> {
+  const response = await fetchAuthenticated(
+    buildUrl("/api/chat-sessions", namespace),
+    token,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ agent_name: agentName, title: title ?? "Untitled" }) },
+  );
+  return parseJsonResponse(response, (p) => p as ChatSessionInfo);
+}
+
+export async function getChatSessionMessages(token: string, sessionId: string): Promise<ChatMessageInfo[]> {
+  const response = await fetchAuthenticated(buildUrl(`/api/chat-sessions/${encodeURIComponent(sessionId)}/messages`), token);
+  return parseJsonResponse(response, (payload) => {
+    if (!Array.isArray(payload)) return [];
+    return payload as ChatMessageInfo[];
+  });
+}
+
+export async function saveChatSessionMessages(
+  token: string, sessionId: string, messages: Array<{ message_id: string; role: string; content: string; status: string; toolName?: string | null; toolNode?: string | null }>,
+): Promise<void> {
+  const response = await fetchAuthenticated(
+    buildUrl(`/api/chat-sessions/${encodeURIComponent(sessionId)}/messages`),
+    token,
+    { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ messages }) },
+  );
+  if (!response.ok) { const text = await response.text(); throw new ApiError(response.status, "Failed to save messages", text); }
+}
+
+export async function updateChatSessionTitle(token: string, sessionId: string, title: string): Promise<ChatSessionInfo> {
+  const response = await fetchAuthenticated(
+    buildUrl(`/api/chat-sessions/${encodeURIComponent(sessionId)}`),
+    token,
+    { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title }) },
+  );
+  return parseJsonResponse(response, (p) => p as ChatSessionInfo);
+}
+
+export async function deleteChatSession(token: string, sessionId: string): Promise<void> {
+  const response = await fetchAuthenticated(
+    buildUrl(`/api/chat-sessions/${encodeURIComponent(sessionId)}`),
+    token,
+    { method: "DELETE" },
+  );
+  if (!response.ok) { const text = await response.text(); throw new ApiError(response.status, "Failed to delete session", text); }
 }

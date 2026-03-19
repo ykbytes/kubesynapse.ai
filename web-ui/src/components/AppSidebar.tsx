@@ -1,4 +1,4 @@
-import { Bot, GitBranch, FlaskConical, Inbox, Package, Play, Plus, RefreshCw, PanelLeftClose, PanelLeft, Search, Blocks } from "lucide-react";
+import { Bot, GitBranch, FlaskConical, Inbox, Package, Play, Plus, RefreshCw, PanelLeftClose, PanelLeft, Search, Blocks, Settings, ShieldCheck, ShieldAlert } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -27,6 +27,7 @@ interface AppSidebarProps {
   selectedId: string;
   loading: boolean;
   emptyMessage: string;
+  isAdmin?: boolean;
   onViewChange: (view: WorkspaceView) => void;
   onRefresh: () => void;
   onSelect: (id: string) => void;
@@ -40,6 +41,9 @@ const VIEW_META: Record<WorkspaceView, { label: string; icon: typeof Bot }> = {
   composer: { label: "Composer", icon: Blocks },
   evals: { label: "Evals", icon: FlaskConical },
   catalog: { label: "Catalog", icon: Package },
+  policies: { label: "Policies", icon: ShieldAlert },
+  settings: { label: "Settings", icon: Settings },
+  admin: { label: "Admin", icon: ShieldCheck },
 };
 
 function statusDotClasses(status: string): string {
@@ -70,6 +74,7 @@ export function AppSidebar({
   selectedId,
   loading,
   emptyMessage,
+  isAdmin,
   onViewChange,
   onRefresh,
   onSelect,
@@ -81,6 +86,11 @@ export function AppSidebar({
   const [debouncedFilter, setDebouncedFilter] = useState("");
   const debounceRef = useRef<ReturnType<typeof setTimeout>>();
 
+  const visibleViews = useMemo(() => {
+    const all = Object.keys(VIEW_META) as WorkspaceView[];
+    return isAdmin ? all : all.filter((v) => v !== "admin");
+  }, [isAdmin]);
+
   const handleFilterChange = useCallback((value: string) => {
     setFilter(value);
     clearTimeout(debounceRef.current);
@@ -91,6 +101,13 @@ export function AppSidebar({
   useEffect(() => {
     return () => { clearTimeout(debounceRef.current); };
   }, []);
+
+  // Reset view-local filtering when switching sections so resources don't appear "missing"
+  useEffect(() => {
+    setFilter("");
+    setDebouncedFilter("");
+    clearTimeout(debounceRef.current);
+  }, [activeView]);
 
   const filteredItems = useMemo(() => {
     if (!debouncedFilter.trim()) return items;
@@ -113,7 +130,7 @@ export function AppSidebar({
             </TooltipTrigger>
             <TooltipContent side="right">Expand sidebar</TooltipContent>
           </Tooltip>
-          {(Object.keys(VIEW_META) as WorkspaceView[]).map((view) => {
+          {visibleViews.map((view) => {
             const { icon: Icon, label } = VIEW_META[view];
             return (
               <Tooltip key={view}>
@@ -154,27 +171,25 @@ export function AppSidebar({
     <TooltipProvider delayDuration={100}>
     <aside className="flex w-64 flex-col border-r border-border bg-sidebar">
       {/* View tabs */}
-      <div className="flex items-center justify-between border-b border-border px-3 py-2">
-        <div className="flex items-center gap-0.5">
-          {(Object.keys(VIEW_META) as WorkspaceView[]).map((view) => {
+      <div className="border-b border-border px-2 py-2">
+        <div className="grid grid-cols-4 gap-1">
+          {visibleViews.map((view) => {
             const { icon: Icon, label } = VIEW_META[view];
             const count = counts[view];
+            const isActive = activeView === view;
             return (
               <Tooltip key={view}>
                 <TooltipTrigger asChild>
                   <Button
-                    variant={activeView === view ? "secondary" : "ghost"}
+                    variant={isActive ? "secondary" : "ghost"}
                     size="sm"
-                    className="h-7 gap-1 px-2 text-xs"
+                    className="h-10 flex-col items-center justify-center gap-0 px-1"
                     onClick={() => onViewChange(view)}
                     aria-label={`${label} (${count})`}
-                    aria-pressed={activeView === view}
+                    aria-pressed={isActive}
                   >
-                    <Icon className="h-3.5 w-3.5" />
-                    <span className="truncate max-w-[3.5rem]">{label}</span>
-                    {count > 0 && (
-                      <span className="ml-0.5 text-[10px] tabular-nums text-muted-foreground">{count}</span>
-                    )}
+                    <Icon className="h-3.5 w-3.5 shrink-0" />
+                    <span className="max-w-full truncate text-[10px] leading-none">{label}</span>
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent side="bottom">{label} ({count})</TooltipContent>
@@ -182,9 +197,11 @@ export function AppSidebar({
             );
           })}
         </div>
-        <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={onToggleCollapse} aria-label="Collapse sidebar">
-          <PanelLeftClose className="h-3.5 w-3.5" />
-        </Button>
+        <div className="mt-1 flex justify-end">
+          <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={onToggleCollapse} aria-label="Collapse sidebar">
+            <PanelLeftClose className="h-3.5 w-3.5" />
+          </Button>
+        </div>
       </div>
 
       {/* Actions */}

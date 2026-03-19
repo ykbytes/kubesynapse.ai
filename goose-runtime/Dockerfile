@@ -1,4 +1,6 @@
-FROM ghcr.io/block/goose:latest
+# NOTE: Pin to a specific tag/digest when one is available.
+# Using :latest is a mutable tag that can change unexpectedly.
+FROM ghcr.io/block/goose:v1.0.18
 
 USER root
 

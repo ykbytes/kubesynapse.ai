@@ -1,0 +1,98 @@
+[
+  {
+    "id": "code-assistant",
+    "name": "Code Assistant",
+    "description": "A general-purpose coding assistant with access to code execution and git tools.",
+    "icon": "Code",
+    "category": "development",
+    "runtime_kind": "langgraph",
+    "model": "gpt-4o",
+    "system_prompt": "You are a senior software engineer. Help users write, debug, and review code. Follow best practices and write clean, maintainable code. Always explain your reasoning.",
+    "mcp_sidecars": ["code-exec", "git"],
+    "mcp_servers": []
+  },
+  {
+    "id": "research-analyst",
+    "name": "Research Analyst",
+    "description": "An agent that searches the web and analyzes documents for research tasks.",
+    "icon": "Search",
+    "category": "research",
+    "runtime_kind": "langgraph",
+    "model": "gpt-4o",
+    "system_prompt": "You are a research analyst. Search the web, read documents, and synthesize information into clear, well-structured reports. Cite your sources and distinguish between facts and opinions.",
+    "mcp_sidecars": ["web-search", "documents", "rag"],
+    "mcp_servers": []
+  },
+  {
+    "id": "data-engineer",
+    "name": "Data Engineer",
+    "description": "An agent for database queries, data analysis, and pipeline development.",
+    "icon": "Database",
+    "category": "data",
+    "runtime_kind": "langgraph",
+    "model": "gpt-4o",
+    "system_prompt": "You are a data engineer. Help users write SQL queries, design schemas, build data pipelines, and analyze datasets. Always validate queries before execution and handle errors gracefully.",
+    "mcp_sidecars": ["database", "code-exec"],
+    "mcp_servers": []
+  },
+  {
+    "id": "devops-agent",
+    "name": "DevOps Agent",
+    "description": "Manages Kubernetes resources, CI/CD, and infrastructure automation.",
+    "icon": "Container",
+    "category": "operations",
+    "runtime_kind": "langgraph",
+    "model": "gpt-4o",
+    "system_prompt": "You are a DevOps engineer specializing in Kubernetes and cloud infrastructure. Help users manage deployments, troubleshoot pods, write Helm charts, and automate CI/CD pipelines. Follow security best practices.",
+    "mcp_sidecars": ["kubernetes", "git", "code-exec"],
+    "mcp_servers": []
+  },
+  {
+    "id": "browser-agent",
+    "name": "Browser Agent",
+    "description": "An agent that can browse the web, interact with pages, and extract data.",
+    "icon": "Globe",
+    "category": "automation",
+    "runtime_kind": "langgraph",
+    "model": "gpt-4o",
+    "system_prompt": "You are a web automation agent. Navigate websites, fill forms, extract data, and take screenshots. Be methodical and verify each step. Report any errors clearly.",
+    "mcp_sidecars": ["browser", "web-search"],
+    "mcp_servers": []
+  },
+  {
+    "id": "goose-developer",
+    "name": "Goose Developer",
+    "description": "A Goose-runtime coding agent for autonomous software development.",
+    "icon": "Terminal",
+    "category": "development",
+    "runtime_kind": "goose",
+    "model": "gpt-4o",
+    "system_prompt": "",
+    "mcp_sidecars": [],
+    "mcp_servers": []
+  },
+  {
+    "id": "opencode-agent",
+    "name": "OpenCode Agent",
+    "description": "An OpenCode-runtime agent for code editing and project management.",
+    "icon": "FileCode",
+    "category": "development",
+    "runtime_kind": "opencode",
+    "model": "gpt-4o",
+    "system_prompt": "",
+    "mcp_sidecars": [],
+    "mcp_servers": []
+  },
+  {
+    "id": "messaging-bot",
+    "name": "Messaging Bot",
+    "description": "An agent that integrates with Slack and messaging platforms.",
+    "icon": "MessageSquare",
+    "category": "communication",
+    "runtime_kind": "langgraph",
+    "model": "gpt-4o",
+    "system_prompt": "You are a helpful messaging assistant. Respond to messages concisely and professionally. Provide actionable information and follow up when needed.",
+    "mcp_sidecars": ["messaging"],
+    "mcp_servers": []
+  }
+]

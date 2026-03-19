@@ -18,10 +18,13 @@ JWT_ISSUER = os.getenv("JWT_ISSUER", "ai-agent-sandbox").strip() or "ai-agent-sa
 _JWT_SECRET_EXPLICIT = os.getenv("JWT_SECRET", "").strip() or os.getenv("API_GATEWAY_SHARED_TOKEN", "").strip()
 JWT_SECRET = _JWT_SECRET_EXPLICIT or secrets.token_urlsafe(32)
 if not _JWT_SECRET_EXPLICIT:
-    _logger.warning(
-        "JWT_SECRET is not configured — using a random ephemeral secret (tokens will not survive restarts). "
+    _logger.critical(
+        "SECURITY: JWT_SECRET is not configured — using a random ephemeral secret. "
+        "Tokens will NOT survive restarts and all sessions will be lost. "
         "Set JWT_SECRET or API_GATEWAY_SHARED_TOKEN before deploying to production."
     )
+    if os.getenv("REQUIRE_JWT_SECRET", "").strip().lower() in {"1", "true", "yes"}:
+        raise SystemExit("FATAL: JWT_SECRET or API_GATEWAY_SHARED_TOKEN must be set when REQUIRE_JWT_SECRET is enabled.")
 REFRESH_COOKIE_NAME = os.getenv("AUTH_REFRESH_COOKIE_NAME", "ai-agent-refresh").strip() or "ai-agent-refresh"
 
 

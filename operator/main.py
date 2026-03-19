@@ -427,7 +427,7 @@ AGENT_AUTONOMY_ACTION_RETRY_BACKOFF_SECONDS = str(
     get_float_env("AGENT_AUTONOMY_ACTION_RETRY_BACKOFF_SECONDS", 1.0, minimum=0.0)
 )
 AGENT_AUTONOMY_FAILURE_HISTORY_LIMIT = str(get_int_env("AGENT_AUTONOMY_FAILURE_HISTORY_LIMIT", 6, minimum=1))
-DEFAULT_AGENT_LOCAL_TOOL_ALLOWLIST = "curl,wget,jq,git,rg,python,pip,tar,unzip,zip"
+DEFAULT_AGENT_LOCAL_TOOL_ALLOWLIST = "curl,wget,jq,git,rg,tar,unzip,zip"
 DEFAULT_AGENT_LOCAL_TOOL_ALLOWED_ROOTS = "/app/state,/workspace"
 AGENT_LOCAL_TOOL_MOUNT_WORKSPACE = get_bool_env("AGENT_LOCAL_TOOL_MOUNT_WORKSPACE", True)
 AGENT_LOCAL_TOOL_DISCOVERY_ENABLED = serialize_env_value(get_bool_env("AGENT_LOCAL_TOOL_DISCOVERY_ENABLED", True))
@@ -1671,6 +1671,10 @@ def create_agent_statefulset_manifest(
     mcp_sidecars = spec.get("mcpSidecars") or []
     enable_gvisor = spec.get("enableGVisor", False)
     system_prompt = spec.get("systemPrompt", "")
+    if len(system_prompt) > 32000:
+        raise kopf.PermanentError(
+            f"spec.systemPrompt exceeds maximum length (32000 chars, got {len(system_prompt)})"
+        )
     skills_config = parse_agent_skills_config(spec.get("skills"), source="AIAgent.spec.skills")
     mcp_sidecars = _auto_inject_mcp_sidecars(mcp_sidecars, skills_config)
     mcp_sidecars = _validate_mcp_sidecars(mcp_sidecars)
@@ -1684,6 +1688,19 @@ def create_agent_statefulset_manifest(
     git_volumes: list[dict[str, Any]] = []
     git_volume_mounts: list[dict[str, Any]] = []
     if git_config.get("repoUrl"):
+        _repo_url = git_config["repoUrl"]
+        from urllib.parse import urlparse as _urlparse
+        _parsed_repo = _urlparse(_repo_url)
+        _allowed_git_schemes = {"https", "ssh", "git+ssh", "git"}
+        if _parsed_repo.scheme and _parsed_repo.scheme.lower() not in _allowed_git_schemes:
+            raise kopf.PermanentError(
+                f"spec.gitConfig.repoUrl has disallowed scheme '{_parsed_repo.scheme}' "
+                f"(allowed: {', '.join(sorted(_allowed_git_schemes))})"
+            )
+        if not _parsed_repo.scheme and not _repo_url.startswith("git@"):
+            raise kopf.PermanentError(
+                "spec.gitConfig.repoUrl must use https://, git@, or ssh:// scheme"
+            )
         # Auto-inject git sidecar if not already present
         has_git_sidecar = any(s.get("name") == "git" for s in mcp_sidecars)
         if not has_git_sidecar:
@@ -1787,7 +1804,7 @@ def create_agent_statefulset_manifest(
         {"name": "tmp-volume", "mountPath": "/tmp"},
         {"name": "state-volume", "mountPath": "/app/state"},
     ]
-    volumes: list[dict[str, Any]] = [{"name": "tmp-volume", "emptyDir": {}}]
+    volumes: list[dict[str, Any]] = [{"name": "tmp-volume", "emptyDir": {"sizeLimit": "1Gi"}}]
 
     agent_image = RUNTIME_IMAGE
     agent_image_pull_policy = RUNTIME_IMAGE_PULL_POLICY
@@ -1797,7 +1814,7 @@ def create_agent_statefulset_manifest(
         agent_image_pull_policy = GOOSE_RUNTIME_IMAGE_PULL_POLICY
         goose_config_files = merged_goose_runtime_config_files(spec)
         volume_mounts.append({"name": "workspace-volume", "mountPath": "/workspace"})
-        volumes.append({"name": "workspace-volume", "emptyDir": {}})
+        volumes.append({"name": "workspace-volume", "emptyDir": {"sizeLimit": "5Gi"}})
         env.extend(
             [
                 {"name": "GOOSE_PROVIDER", "value": GOOSE_DEFAULT_PROVIDER},
@@ -1830,7 +1847,7 @@ def create_agent_statefulset_manifest(
         agent_image_pull_policy = CODEX_RUNTIME_IMAGE_PULL_POLICY
         codex_config_files = merged_codex_runtime_config_files(spec)
         volume_mounts.append({"name": "workspace-volume", "mountPath": "/workspace"})
-        volumes.append({"name": "workspace-volume", "emptyDir": {}})
+        volumes.append({"name": "workspace-volume", "emptyDir": {"sizeLimit": "5Gi"}})
         env.extend(
             [
                 {"name": "CODEX_PROVIDER", "value": CODEX_DEFAULT_PROVIDER},
@@ -1870,7 +1887,7 @@ def create_agent_statefulset_manifest(
         agent_image_pull_policy = OPENCODE_RUNTIME_IMAGE_PULL_POLICY
         opencode_config_files = merged_opencode_runtime_config_files(spec)
         volume_mounts.append({"name": "workspace-volume", "mountPath": "/workspace"})
-        volumes.append({"name": "workspace-volume", "emptyDir": {}})
+        volumes.append({"name": "workspace-volume", "emptyDir": {"sizeLimit": "5Gi"}})
         env.extend(
             [
                 {"name": "OPENCODE_PROVIDER", "value": OPENCODE_DEFAULT_PROVIDER},
@@ -1921,7 +1938,7 @@ def create_agent_statefulset_manifest(
     else:
         if AGENT_LOCAL_TOOL_MOUNT_WORKSPACE:
             volume_mounts.append({"name": "workspace-volume", "mountPath": "/workspace"})
-            volumes.append({"name": "workspace-volume", "emptyDir": {}})
+            volumes.append({"name": "workspace-volume", "emptyDir": {"sizeLimit": "5Gi"}})
         env.extend(
             [
                 {"name": "LITELLM_API_BASE", "value": f"http://{LITELLM_SVC}:4000"},
@@ -2057,6 +2074,8 @@ def create_agent_statefulset_manifest(
                 "runAsUser": 0,
                 "runAsGroup": 0,
                 "runAsNonRoot": False,
+                "allowPrivilegeEscalation": False,
+                "capabilities": {"drop": ["ALL"], "add": ["CHOWN", "FOWNER"]},
                 "seccompProfile": {"type": "RuntimeDefault"},
             },
             "volumeMounts": [{"name": "state-volume", "mountPath": "/app/state"}],
@@ -2145,6 +2164,7 @@ def create_agent_statefulset_manifest(
 
     pod_spec: dict[str, Any] = {
         "serviceAccountName": RUNTIME_SERVICE_ACCOUNT,
+        "automountServiceAccountToken": False,
         "terminationGracePeriodSeconds": 60,
         "securityContext": pod_security_context,
         "initContainers": init_containers,
@@ -3169,7 +3189,7 @@ def create_worker_job_manifest(
                             "name": "artifacts",
                             "persistentVolumeClaim": {"claimName": artifact_pvc_name},
                         },
-                        {"name": "tmp", "emptyDir": {}},
+                        {"name": "tmp", "emptyDir": {"sizeLimit": "1Gi"}},
                     ],
                 },
             },

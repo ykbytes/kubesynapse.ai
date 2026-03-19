@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import hmac
 import json
 import logging
 import os
@@ -52,6 +53,7 @@ LDAP_USE_STARTTLS = _truthy(os.getenv("LDAP_TLS_ENABLED"), False)
 LDAP_GROUP_ROLE_MAPPING = _json_env("LDAP_GROUP_ROLE_MAPPING", {})
 
 OIDC_PROVIDER_CACHE: dict[str, dict[str, Any]] = {}
+_OIDC_CACHE_TTL_SECONDS = 3600  # 1 hour
 
 
 def _normalize_group_values(value: Any) -> list[str]:
@@ -134,6 +136,12 @@ def authenticate_ldap_user(username: str, password: str) -> dict[str, Any]:
         raise RuntimeError("python-ldap is not installed in this environment.") from exc
 
     connection = ldap.initialize(LDAP_SERVER_URL)
+    if LDAP_SERVER_URL.startswith("ldap://") and not LDAP_USE_STARTTLS:
+        logger.warning(
+            "LDAP connection uses plaintext ldap:// without StartTLS. "
+            "Credentials will transit in cleartext. Set LDAP_TLS_ENABLED=true "
+            "or use ldaps:// to encrypt the connection."
+        )
     user_connection = None
     try:
         connection.set_option(ldap.OPT_PROTOCOL_VERSION, 3)
@@ -526,7 +534,11 @@ def _load_oidc_discovery(provider: dict[str, Any]) -> dict[str, Any]:
     cache_key = provider["id"]
     cached = OIDC_PROVIDER_CACHE.get(cache_key)
     if cached is not None:
-        return cached
+        cached_at = cached.get("_cached_at", 0)
+        if (time.time() - cached_at) < _OIDC_CACHE_TTL_SECONDS:
+            return cached
+        # TTL expired — re-fetch
+        OIDC_PROVIDER_CACHE.pop(cache_key, None)
 
     discovered = dict(provider)
     issuer = str(provider.get("issuer") or "").rstrip("/")
@@ -542,32 +554,144 @@ def _load_oidc_discovery(provider: dict[str, Any]) -> dict[str, Any]:
         discovered["userinfo_endpoint"] = discovered.get("userinfo_endpoint") or payload.get("userinfo_endpoint", "")
         discovered["jwks_url"] = discovered.get("jwks_url") or payload.get("jwks_uri", "")
         discovered["end_session_endpoint"] = discovered.get("end_session_endpoint") or payload.get("end_session_endpoint", "")
+    discovered["_cached_at"] = time.time()
     OIDC_PROVIDER_CACHE[cache_key] = discovered
     return discovered
+
+
+def _fetch_oidc_jwks(jwks_url: str) -> list[dict[str, Any]]:
+    """Fetch JWKS keys from the OIDC provider's jwks_uri endpoint."""
+    if not jwks_url:
+        return []
+    try:
+        response = httpx.get(jwks_url, timeout=10.0)
+        response.raise_for_status()
+        data = response.json()
+        return data.get("keys", [])
+    except (httpx.HTTPError, ValueError, KeyError) as exc:
+        logger.warning("Failed to fetch OIDC JWKS from %s: %s", jwks_url, exc)
+        return []
+
+
+def _verify_oidc_id_token(id_token: str, discovered: dict[str, Any]) -> dict[str, Any]:
+    """Verify the OIDC ID token signature using the provider's JWKS, then return claims."""
+    from jose import jwk as jose_jwk, jwt as jose_jwt, JWTError
+    from jose.utils import base64url_decode as _b64decode
+
+    jwks_url = str(discovered.get("jwks_url") or "").strip()
+    client_id = str(discovered.get("client_id") or "").strip()
+    issuer = str(discovered.get("issuer") or "").strip()
+
+    if not jwks_url:
+        # No JWKS URL available — fall back to unverified claims with a warning.
+        logger.warning(
+            "OIDC provider '%s' has no jwks_url configured; falling back to unverified ID token claims.",
+            discovered.get("id", "unknown"),
+        )
+        return jose_jwt.get_unverified_claims(id_token)
+
+    keys = _fetch_oidc_jwks(jwks_url)
+    if not keys:
+        raise ValueError(
+            f"OIDC provider '{discovered.get('id', 'unknown')}' returned no JWKS keys from {jwks_url}"
+        )
+
+    # Decode the token header to find the key ID (kid)
+    unverified_header = jose_jwt.get_unverified_header(id_token)
+    token_kid = unverified_header.get("kid")
+    token_alg = unverified_header.get("alg", "RS256")
+
+    # Find the matching key
+    matching_key = None
+    for key_data in keys:
+        if token_kid and key_data.get("kid") != token_kid:
+            continue
+        if key_data.get("alg") and key_data["alg"] != token_alg:
+            continue
+        matching_key = key_data
+        break
+
+    if matching_key is None:
+        raise ValueError(
+            f"OIDC ID token kid='{token_kid}' not found in provider JWKS."
+        )
+
+    # Build the RSA/EC public key and verify
+    public_key = jose_jwk.construct(matching_key).public_key()
+    try:
+        claims = jose_jwt.decode(
+            id_token,
+            public_key,
+            algorithms=[token_alg],
+            audience=client_id or None,
+            issuer=issuer or None,
+            options={
+                "verify_aud": bool(client_id),
+                "verify_iss": bool(issuer),
+                "verify_exp": True,
+            },
+        )
+    except JWTError as exc:
+        raise ValueError(f"OIDC ID token signature verification failed: {exc}") from exc
+
+    return claims
 
 
 def _base64url(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).decode("utf-8").rstrip("=")
 
 
+# Key used to HMAC-sign OIDC/SAML transaction cookies so they cannot be tampered with.
+_TRANSACTION_HMAC_KEY: bytes = (os.getenv("TRANSACTION_COOKIE_HMAC_KEY", "").strip().encode("utf-8")
+                                or os.getenv("JWT_SECRET", "").strip().encode("utf-8")
+                                or secrets.token_bytes(32))
+
+
 def _encode_transaction(payload: dict[str, Any]) -> str:
-    return _base64url(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
+    data = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    sig = hmac.new(_TRANSACTION_HMAC_KEY, data, hashlib.sha256).digest()
+    return _base64url(sig + data)
 
 
 def decode_transaction_cookie(value: str) -> dict[str, Any]:
     padding = "=" * (-len(value) % 4)
     raw = base64.urlsafe_b64decode((value + padding).encode("utf-8"))
-    parsed = json.loads(raw.decode("utf-8"))
+    if len(raw) < 32:
+        raise ValueError("OIDC state cookie is too short.")
+    sig, data = raw[:32], raw[32:]
+    expected = hmac.new(_TRANSACTION_HMAC_KEY, data, hashlib.sha256).digest()
+    if not hmac.compare_digest(sig, expected):
+        raise ValueError("OIDC state cookie signature is invalid.")
+    parsed = json.loads(data.decode("utf-8"))
     if not isinstance(parsed, dict):
         raise ValueError("OIDC state cookie is invalid.")
     return parsed
 
 
 def sanitize_redirect_path(value: str | None) -> str:
+    """Ensure redirect target is a safe, same-origin relative path."""
+    from urllib.parse import unquote
+
     candidate = str(value or "").strip()
-    if not candidate.startswith("/"):
+    if not candidate or not candidate.startswith("/"):
         return "/"
-    if candidate.startswith("//"):
+    # Reject protocol-relative URLs, backslash tricks, and dangerous schemes
+    if candidate.startswith("//") or candidate.startswith("/\\"):
+        return "/"
+    # Decode percent-encoding and re-validate
+    try:
+        decoded = unquote(candidate)
+    except Exception:
+        return "/"
+    if decoded.startswith("//") or decoded.startswith("/\\"):
+        return "/"
+    # Block javascript: / data: / vbscript: after decoding
+    stripped = decoded.lstrip("/").lower()
+    if any(stripped.startswith(s) for s in ("javascript:", "data:", "vbscript:")):
+        return "/"
+    # Reject paths with host component (e.g. /@evil.com, /\evil.com)
+    parsed = urlparse(decoded)
+    if parsed.scheme or parsed.netloc:
         return "/"
     return candidate
 
@@ -649,7 +773,7 @@ def exchange_oidc_code(provider_id: str, code: str, state: str, cookie_value: st
     claims: dict[str, Any] = {}
     id_token = str(token_payload.get("id_token") or "").strip()
     if id_token:
-        claims = jwt.get_unverified_claims(id_token)
+        claims = _verify_oidc_id_token(id_token, discovered)
     elif discovered.get("userinfo_endpoint"):
         try:
             userinfo_response = httpx.get(

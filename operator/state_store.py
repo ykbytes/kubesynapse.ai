@@ -281,3 +281,179 @@ def safe_record_eval_state(
             record.updated_at = utc_now()
     except Exception:
         logger.exception("Failed to mirror eval state for %s/%s run %s.", namespace, resource_name, run_id)
+
+
+# ── Chat Session Persistence ──
+
+
+class ChatSession(Base):
+    __tablename__ = "chat_sessions"
+    __table_args__ = (UniqueConstraint("namespace", "agent_name", "session_id", name="uq_chat_sessions_identity"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    namespace = Column(String(128), nullable=False, index=True)
+    agent_name = Column(String(128), nullable=False, index=True)
+    session_id = Column(String(128), nullable=False, index=True)
+    title = Column(String(256), nullable=False, default="Untitled")
+    username = Column(String(128), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
+
+
+class ChatMessage(Base):
+    __tablename__ = "chat_messages"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    session_id = Column(String(128), nullable=False, index=True)
+    message_id = Column(String(128), nullable=False, unique=True)
+    role = Column(String(32), nullable=False)
+    content = Column(String, nullable=False, default="")
+    status = Column(String(32), nullable=False, default="complete")
+    tool_name = Column(String(128), nullable=True)
+    tool_node = Column(String(128), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+
+def list_chat_sessions(namespace: str, agent_name: str, username: str | None = None) -> list[dict[str, Any]]:
+    """Return all chat sessions for a given agent, most recent first."""
+    if not STATE_DB_ENABLED:
+        return []
+    try:
+        with db_session() as session:
+            q = session.query(ChatSession).filter(
+                ChatSession.namespace == namespace,
+                ChatSession.agent_name == agent_name,
+            )
+            if username:
+                q = q.filter(ChatSession.username == username)
+            rows = q.order_by(ChatSession.updated_at.desc()).all()
+            return [
+                {
+                    "session_id": r.session_id,
+                    "title": r.title,
+                    "agent_name": r.agent_name,
+                    "namespace": r.namespace,
+                    "username": r.username,
+                    "created_at": r.created_at.isoformat() if r.created_at else None,
+                    "updated_at": r.updated_at.isoformat() if r.updated_at else None,
+                }
+                for r in rows
+            ]
+    except Exception:
+        logger.exception("Failed to list chat sessions for %s/%s.", namespace, agent_name)
+        return []
+
+
+def create_chat_session(
+    namespace: str, agent_name: str, session_id: str, title: str = "Untitled", username: str | None = None,
+) -> dict[str, Any]:
+    """Create a new chat session record."""
+    with db_session() as session:
+        record = ChatSession(
+            namespace=namespace, agent_name=agent_name, session_id=session_id, title=title, username=username,
+        )
+        session.add(record)
+        session.flush()
+        return {
+            "session_id": record.session_id,
+            "title": record.title,
+            "agent_name": record.agent_name,
+            "namespace": record.namespace,
+            "username": record.username,
+            "created_at": record.created_at.isoformat() if record.created_at else None,
+            "updated_at": record.updated_at.isoformat() if record.updated_at else None,
+        }
+
+
+def get_chat_session_messages(session_id: str) -> list[dict[str, Any]]:
+    """Return all messages for a session, ordered by creation time."""
+    if not STATE_DB_ENABLED:
+        return []
+    try:
+        with db_session() as session:
+            rows = (
+                session.query(ChatMessage)
+                .filter(ChatMessage.session_id == session_id)
+                .order_by(ChatMessage.created_at.asc())
+                .all()
+            )
+            return [
+                {
+                    "message_id": r.message_id,
+                    "role": r.role,
+                    "content": r.content,
+                    "status": r.status,
+                    "tool_name": r.tool_name,
+                    "tool_node": r.tool_node,
+                    "created_at": r.created_at.isoformat() if r.created_at else None,
+                }
+                for r in rows
+            ]
+    except Exception:
+        logger.exception("Failed to get messages for session %s.", session_id)
+        return []
+
+
+def save_chat_messages(session_id: str, messages: list[dict[str, Any]]) -> None:
+    """Replace all messages for a session (full snapshot save)."""
+    if not STATE_DB_ENABLED:
+        return
+    try:
+        with db_session() as session:
+            session.query(ChatMessage).filter(ChatMessage.session_id == session_id).delete()
+            for msg in messages:
+                record = ChatMessage(
+                    session_id=session_id,
+                    message_id=msg.get("message_id") or msg.get("id", ""),
+                    role=msg.get("role", "user"),
+                    content=msg.get("content", ""),
+                    status=msg.get("status", "complete"),
+                    tool_name=msg.get("tool_name") or msg.get("toolName"),
+                    tool_node=msg.get("tool_node") or msg.get("toolNode"),
+                )
+                session.add(record)
+            # Update the session's updated_at timestamp
+            chat_session = session.query(ChatSession).filter(ChatSession.session_id == session_id).one_or_none()
+            if chat_session:
+                chat_session.updated_at = utc_now()
+    except Exception:
+        logger.exception("Failed to save messages for session %s.", session_id)
+
+
+def update_chat_session_title(session_id: str, title: str) -> dict[str, Any] | None:
+    """Update a session's title."""
+    if not STATE_DB_ENABLED:
+        return None
+    try:
+        with db_session() as session:
+            record = session.query(ChatSession).filter(ChatSession.session_id == session_id).one_or_none()
+            if record is None:
+                return None
+            record.title = title
+            record.updated_at = utc_now()
+            return {
+                "session_id": record.session_id,
+                "title": record.title,
+                "agent_name": record.agent_name,
+                "namespace": record.namespace,
+                "username": record.username,
+                "created_at": record.created_at.isoformat() if record.created_at else None,
+                "updated_at": record.updated_at.isoformat() if record.updated_at else None,
+            }
+    except Exception:
+        logger.exception("Failed to update title for session %s.", session_id)
+        return None
+
+
+def delete_chat_session(session_id: str) -> bool:
+    """Delete a chat session and its messages."""
+    if not STATE_DB_ENABLED:
+        return False
+    try:
+        with db_session() as session:
+            session.query(ChatMessage).filter(ChatMessage.session_id == session_id).delete()
+            deleted = session.query(ChatSession).filter(ChatSession.session_id == session_id).delete()
+            return deleted > 0
+    except Exception:
+        logger.exception("Failed to delete session %s.", session_id)
+        return False

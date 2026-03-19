@@ -6,7 +6,7 @@ This document narrates the implementation journey of the AI Agent Sandbox platfo
 
 ## Platform Status (March 2026)
 
-All P0 and P1 roadmap items from the original plan have been implemented and are deployed as pre-built images on DockerHub (`docker.io/yakdhane`). The platform ships as a single self-contained Helm chart covering 7 platform services + 10 bundled MCP sidecars.
+All P0 and P1 roadmap items from the original plan have been implemented and are deployed as pre-built images on DockerHub (`docker.io/yakdhane`). The platform also ships with the major console-side P2 upgrades already delivered: command palette, mobile shell, onboarding tour, clone/export-import flows, and the admin health dashboard. The platform ships as a single self-contained Helm chart covering 7 platform services + 10 bundled MCP sidecars.
 
 **Deploy in one command:**
 ```bash
@@ -96,7 +96,7 @@ See [INSTALL.md](INSTALL.md) for the full installation guide.
 
 ### Web UI (`web-ui/`)
 - React + TypeScript + Vite console built with Tailwind CSS.
-- Full feature set: agent discovery, chat invoke with SSE streaming, A2A routing, specialist-team orchestration, skill/config editors, workflow and evaluation management, approval decisions, runtime log inspection.
+- Full feature set: agent discovery, chat invoke with SSE streaming, session persistence, A2A routing, specialist-team orchestration, skill/config editors, workflow and evaluation management, approval decisions, runtime log inspection, policy/admin operations, provider settings management, notifications, and health visibility.
 - Deployed as part of the Helm chart when `webUi.enabled: true`.
 
 ### CLI (`cli/agentctl.py`)

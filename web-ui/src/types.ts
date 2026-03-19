@@ -230,7 +230,43 @@ export interface AgentInfo {
   runtime_kind?: RuntimeKind;
 }
 
-export type WorkspaceView = "agents" | "workflows" | "evals" | "catalog" | "composer";
+export type WorkspaceView = "agents" | "workflows" | "evals" | "catalog" | "composer" | "policies" | "settings" | "admin";
+
+/* ── LLM Provider types ── */
+
+export interface LLMModelInfo {
+  model_name: string;
+  litellm_params: Record<string, unknown>;
+  model_info?: Record<string, unknown>;
+}
+
+export interface LLMKeyInfo {
+  name: string;
+  is_set: boolean;
+}
+
+/* ── Provider-centric LLM types ── */
+
+export interface ProviderModel {
+  model_name: string;
+  litellm_model: string;
+  id: string;
+}
+
+export interface LLMProvider {
+  key_name: string;
+  label: string;
+  prefix: string;
+  is_configured: boolean | null;
+  model_count: number;
+  models: ProviderModel[];
+}
+
+export interface ModelSuggestion {
+  model_id: string;
+  display_name: string;
+  description?: string;
+}
 
 /* ── Skills Catalog types ── */
 
@@ -303,9 +339,26 @@ export interface McpToolsResponse {
   categories: McpToolCategory[];
 }
 
+export interface PolicyInputGuardrails {
+  blockPromptInjection: boolean;
+  blockedPatterns: string[];
+  maxInputTokens: number;
+}
+
+export interface PolicyOutputGuardrails {
+  maskPII: boolean;
+  blockedOutputPatterns: string[];
+  maxOutputTokens: number;
+}
+
 export interface PolicyInfo {
   name: string;
   namespace: string;
+  input_guardrails: PolicyInputGuardrails;
+  output_guardrails: PolicyOutputGuardrails;
+  allowed_models: string[];
+  allowed_mcp_servers: string[];
+  mcp_require_hitl: boolean;
 }
 
 export interface AgentDetail extends AgentInfo {
@@ -521,8 +574,11 @@ export interface WorkflowStep {
   depends_on: string[];
   require_approval: boolean;
   execution?: Record<string, unknown> | null;
-  step_type?: "agent" | "loop";
+  step_type?: "agent" | "loop" | "conditional";
   loop_config?: LoopConfig | null;
+  condition_expr?: string | null;
+  then_steps?: string[] | null;
+  else_steps?: string[] | null;
 }
 
 export interface WorkflowPayload {
@@ -621,6 +677,21 @@ export interface EvalUpdatePayload {
   failure_threshold?: Record<string, unknown>;
 }
 
+export interface EvalCaseResult {
+  input: string;
+  expectedOutput: string;
+  response: string;
+  error: string;
+  latencyMs: number;
+  status: string;
+  threadId?: string;
+  metrics: {
+    relevance: number;
+    faithfulness: number;
+    toxicity: number;
+  };
+}
+
 export interface EvalInfo {
   name: string;
   namespace: string;
@@ -635,6 +706,7 @@ export interface EvalInfo {
   summary?: Record<string, unknown> | null;
   artifact_ref?: Record<string, unknown> | null;
   worker_job?: Record<string, unknown> | null;
+  cases?: EvalCaseResult[] | null;
   created_at?: string | null;
 }
 

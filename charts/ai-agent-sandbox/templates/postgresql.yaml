@@ -36,6 +36,9 @@ spec:
 {{- end }}
       automountServiceAccountToken: false
       securityContext:
+        runAsNonRoot: true
+        runAsUser: 70
+        runAsGroup: 70
         fsGroup: 70
         seccompProfile:
           type: RuntimeDefault
@@ -83,7 +86,8 @@ spec:
             periodSeconds: 20
       volumes:
         - name: tmp
-          emptyDir: {}
+          emptyDir:
+            sizeLimit: 256Mi
   volumeClaimTemplates:
     - metadata:
         name: data
@@ -96,4 +100,29 @@ spec:
         {{- if .Values.postgresql.persistence.storageClassName }}
         storageClassName: {{ .Values.postgresql.persistence.storageClassName | quote }}
         {{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "ai-agent-sandbox.fullname" . }}-postgresql-isolation
+spec:
+  podSelector:
+    matchLabels:
+      app: postgresql
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: api-gateway
+        - podSelector:
+            matchLabels:
+              app: operator
+        - podSelector:
+            matchLabels:
+              app: litellm
+      ports:
+        - protocol: TCP
+          port: {{ .Values.postgresql.service.port | default 5432 }}
 {{- end }}

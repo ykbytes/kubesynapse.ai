@@ -15,7 +15,8 @@ RUN apt-get update \
 COPY --from=opencode-install /usr/local/lib/node_modules /usr/local/lib/node_modules
 COPY --from=opencode-install /usr/local/bin/opencode /usr/local/bin/opencode
 
-RUN curl -fsSL https://bun.sh/install | bash \
+RUN BUN_VERSION="1.1.45" \
+    && curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}" \
     && mv /root/.bun /opt/bun \
     && ln -sf /opt/bun/bin/bun /usr/local/bin/bun
 

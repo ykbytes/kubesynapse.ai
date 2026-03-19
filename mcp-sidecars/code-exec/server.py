@@ -1,5 +1,6 @@
 """MCP Code Execution sidecar — run Python, Bash, and Node.js safely."""
 
+import re
 import subprocess
 import sys
 import tempfile
@@ -16,6 +17,37 @@ server = create_mcp_server(
 MAX_OUTPUT_CHARS = 8000
 TIMEOUT_SECONDS = 30
 
+# Environment variables safe to pass to executed code.
+# Everything else (MCP_BEARER_TOKEN, DATABASE_URL, secrets) is stripped.
+_SAFE_ENV_KEYS = frozenset({
+    "PATH", "HOME", "LANG", "LC_ALL", "TERM", "TMPDIR", "TEMP", "TMP",
+    "USER", "LOGNAME", "SHELL", "PWD", "HOSTNAME",
+    "PYTHONDONTWRITEBYTECODE", "PYTHONUNBUFFERED",
+    "NODE_PATH", "NODE_ENV",
+})
+
+
+def _sanitized_env() -> dict[str, str]:
+    """Return a copy of os.environ with only safe keys."""
+    return {k: v for k, v in os.environ.items() if k in _SAFE_ENV_KEYS}
+
+# Pattern to detect API keys, tokens, passwords, and other secrets in output
+_SECRET_PATTERN = re.compile(
+    r"""(?x)
+    (?:                                          # Known prefixes
+        (?:sk|pk|ak|api|token|key|secret|password|passwd|pwd|auth|bearer|dckr_pat|ghp|gho|ghs|ghu|glpat|pypi|npm|AKIA)
+        [-_]?[A-Za-z0-9]{16,}
+    )
+    |(?:[A-Za-z0-9+/]{40,}={0,2})              # Base64-ish long strings (potential encoded secrets)
+    """,
+    re.IGNORECASE,
+)
+
+
+def _mask_secrets(text: str) -> str:
+    """Replace likely secret values in output with [REDACTED]."""
+    return _SECRET_PATTERN.sub("[REDACTED]", text)
+
 
 @server.tool()
 def run_python(code: str, timeout: int = TIMEOUT_SECONDS) -> str:
@@ -30,8 +62,9 @@ def run_python(code: str, timeout: int = TIMEOUT_SECONDS) -> str:
                 text=True,
                 timeout=min(timeout, 60),
                 cwd=tempfile.gettempdir(),
+                env=_sanitized_env(),
             )
-            output = result.stdout + result.stderr
+            output = _mask_secrets(result.stdout + result.stderr)
             return output[:MAX_OUTPUT_CHARS] if output else "(no output)"
         except subprocess.TimeoutExpired:
             return f"ERROR: Execution timed out after {timeout}s"
@@ -49,8 +82,9 @@ def run_bash(command: str, timeout: int = TIMEOUT_SECONDS) -> str:
             text=True,
             timeout=min(timeout, 60),
             cwd=tempfile.gettempdir(),
+            env=_sanitized_env(),
         )
-        output = result.stdout + result.stderr
+        output = _mask_secrets(result.stdout + result.stderr)
         return output[:MAX_OUTPUT_CHARS] if output else "(no output)"
     except subprocess.TimeoutExpired:
         return f"ERROR: Command timed out after {timeout}s"
@@ -71,8 +105,9 @@ def run_node(code: str, timeout: int = TIMEOUT_SECONDS) -> str:
                 text=True,
                 timeout=min(timeout, 60),
                 cwd=tempfile.gettempdir(),
+                env=_sanitized_env(),
             )
-            output = result.stdout + result.stderr
+            output = _mask_secrets(result.stdout + result.stderr)
             return output[:MAX_OUTPUT_CHARS] if output else "(no output)"
         except subprocess.TimeoutExpired:
             return f"ERROR: Execution timed out after {timeout}s"

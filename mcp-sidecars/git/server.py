@@ -1,10 +1,14 @@
 """MCP Git & GitHub sidecar — clone, diff, commit, push, branch, and GitHub API."""
 
+import ipaddress
 import logging
 import os
+import re
+import socket
 import subprocess
 import sys
 import tempfile
+from urllib.parse import urlparse
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "base"))
 from mcp_base import create_mcp_server, run_server
@@ -82,17 +86,54 @@ def configure_git_credentials() -> None:
         os.chmod(ssh_dir, 0o700)
         if os.path.exists(GIT_SSH_KEY_PATH):
             os.chmod(GIT_SSH_KEY_PATH, 0o600)
-        # Disable strict host key checking for non-interactive use
+        # Accept new host keys on first connect but verify on subsequent connections
         ssh_config = os.path.join(ssh_dir, "config")
         if not os.path.exists(ssh_config):
             with open(ssh_config, "w") as f:
-                f.write("Host *\n  StrictHostKeyChecking no\n  UserKnownHostsFile /dev/null\n")
+                f.write("Host *\n  StrictHostKeyChecking accept-new\n")
             os.chmod(ssh_config, 0o600)
         _run(["git", "config", "--global", "core.sshCommand",
-              f"ssh -i {GIT_SSH_KEY_PATH} -o StrictHostKeyChecking=no"])
+              f"ssh -i {GIT_SSH_KEY_PATH} -o StrictHostKeyChecking=accept-new"])
         log.info("Configured git SSH key")
     else:
         log.warning(f"Unknown GIT_AUTH_METHOD: {GIT_AUTH_METHOD}")
+
+
+# --- URL validation ---
+
+_BLOCKED_CLONE_SCHEMES = frozenset({"file", "ftp", "ftps"})
+
+_BLOCKED_IP_NETWORKS = [
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("169.254.0.0/16"),
+    ipaddress.ip_network("::1/128"),
+    ipaddress.ip_network("fc00::/7"),
+    ipaddress.ip_network("fe80::/10"),
+]
+
+
+def _validate_clone_url(url: str) -> str | None:
+    """Return an error message if *url* should not be cloned, else None."""
+    # SSH-style URLs (git@host:path) are allowed — only validate parseable URLs
+    if re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", url):
+        parsed = urlparse(url)
+        if parsed.scheme.lower() in _BLOCKED_CLONE_SCHEMES:
+            return f"Scheme '{parsed.scheme}' is not allowed for cloning"
+        hostname = parsed.hostname or ""
+        if not hostname:
+            return "URL has no hostname"
+        try:
+            for info in socket.getaddrinfo(hostname, None):
+                addr = ipaddress.ip_address(info[4][0])
+                for net in _BLOCKED_IP_NETWORKS:
+                    if addr in net:
+                        return "Cloning from internal/private network addresses is blocked"
+        except socket.gaierror:
+            pass  # let git handle DNS failures
+    return None
 
 
 # --- Git tools ---
@@ -104,6 +145,9 @@ def git_clone(repo_url: str, branch: str = "", full_clone: bool = False) -> str:
 
     full_clone: If true, perform a full (non-shallow) clone for push support.
     """
+    url_err = _validate_clone_url(repo_url)
+    if url_err:
+        return f"BLOCKED: {url_err}"
     try:
         repo_name = repo_url.rstrip("/").split("/")[-1].replace(".git", "")
         dest = os.path.join(WORK_DIR, repo_name)
@@ -276,23 +320,33 @@ def git_stash(repo_path: str, action: str = "push", message: str = "") -> str:
 
 @server.tool()
 def github_api(endpoint: str, method: str = "GET") -> str:
-    """Call the GitHub REST API. Requires GITHUB_TOKEN or GIT_TOKEN env var.
+    """Call the GitHub REST API (read-only). Requires GITHUB_TOKEN or GIT_TOKEN env var.
 
     endpoint: API path, e.g. '/repos/owner/repo/issues'
-    method: HTTP method (GET only for safety).
+    method: Must be GET (enforced).
     """
+    if method.upper() != "GET":
+        return "BLOCKED: Only GET requests are allowed through github_api"
     import requests
     token = os.environ.get("GITHUB_TOKEN", "") or GIT_TOKEN
     if not token:
         return "ERROR: GITHUB_TOKEN / GIT_TOKEN not set"
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"}
-    url = f"https://api.github.com{endpoint}" if endpoint.startswith("/") else endpoint
+    # Only allow api.github.com — reject arbitrary URLs
+    if endpoint.startswith("/"):
+        url = f"https://api.github.com{endpoint}"
+    else:
+        parsed = urlparse(endpoint)
+        if parsed.hostname != "api.github.com":
+            return "BLOCKED: Only api.github.com endpoints are allowed"
+        url = endpoint
     try:
-        resp = requests.request(method, url, headers=headers, timeout=15)
+        resp = requests.get(url, headers=headers, timeout=15)
         resp.raise_for_status()
         return str(resp.json())[:MAX_OUTPUT_CHARS]
     except Exception as e:
-        return f"ERROR: GitHub API call failed: {e}"
+        log.exception("GitHub API call failed")
+        return "ERROR: GitHub API call failed"
 
 
 if __name__ == "__main__":

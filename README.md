@@ -52,8 +52,11 @@ Kubeminionagents is designed as a **shareable, end-to-end AI agent platform** fo
 - Seed Goose agents with per-agent `runtime.goose.configFiles` instead of relying on chart-wide defaults only
 - Seed OpenCode agents with per-agent `runtime.opencode.configFiles` to materialize OpenCode agents, plugins, skills, and `opencode.json` fragments per agent
 - Route a request to an explicit peer over A2A or launch a sequential or parallel specialist team from the same invoke surface
-- Inspect approvals, runtime logs, peer reachability, and parsed skill summaries from the bundled web console
-- Manage agents, workflows, and evaluations through either Kubernetes manifests, the API gateway, the CLI, or the UI
+- Inspect approvals, runtime logs, peer reachability, parsed skill summaries, workflow run history, and system health from the bundled web console
+- Manage agents, workflows, evaluations, policies, LLM providers, users, audit logs, and usage reporting through either Kubernetes manifests, the API gateway, the CLI, or the UI
+- Use the visual workflow composer with conditional branches, loop steps, execution status overlays, and per-step output inspection
+- Persist chat sessions per agent, resume past conversations, and coordinate specialist subagent teams from the same chat workbench
+- Export and import workspace bundles, clone existing resources, and use the admin console as the main operational surface
 
 ## ⚡ Quick start
 
@@ -152,7 +155,7 @@ Jump straight to the guide you need:
 | **`INSTALL.md`** | Full install guide: DockerHub quick-start, Kind/Minikube dev setup, production deployment, secrets config, first agent, CLI, API reference, observability, troubleshooting |
 | **`architecture-overview.md`** | System architecture, CRD model, control/data plane design, security model, MCP execution architecture |
 | **`walkthrough.md`** | Implementation narrative: Helm chart foundations, operator reconciliation loop, runtime pipeline, enterprise features |
-| **`web-ui/README.md`** | Frontend local dev workflow and console feature coverage |
+| **`web-ui/README.md`** | Frontend local dev workflow, console feature map, and admin/workbench coverage |
 | **`cli/README.md`** | Full `agentctl` command reference with examples |
 | **`docs/upstream-reference-repos.md`** | Optional local research checkouts for Goose, OpenSandbox, and MCP catalog |
 

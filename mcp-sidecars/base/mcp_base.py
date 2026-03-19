@@ -4,12 +4,15 @@ Every MCP tool sidecar imports this module to get a pre-configured FastMCP
 application with bearer-token authentication and a health endpoint.
 """
 
+import logging
 import os
 import hmac
 from functools import wraps
 from typing import Any
 
 from fastmcp import FastMCP
+
+log = logging.getLogger("mcp-base")
 
 MCP_BEARER_TOKEN = os.getenv("MCP_BEARER_TOKEN", "").strip()
 MCP_SERVER_TYPE = os.getenv("MCP_SERVER_TYPE", "unknown")
@@ -28,7 +31,8 @@ def create_mcp_server(name: str, description: str) -> FastMCP:
 def verify_bearer_token(token: str | None) -> bool:
     """Verify that the provided bearer token matches the expected one."""
     if not MCP_BEARER_TOKEN:
-        return True  # No auth configured
+        log.warning("MCP_BEARER_TOKEN not configured — denying request (fail-secure)")
+        return False  # Fail-secure: deny when no token is configured
     if not token:
         return False
     return hmac.compare_digest(token, MCP_BEARER_TOKEN)

@@ -888,7 +888,7 @@ def execute_loop_step(
     """Execute a loop-type step: iterate over a work plan calling the agent per item."""
     step_name = str(step.get("name", "")).strip()
     loop_config = step.get("loopConfig", {})
-    max_iterations = int(loop_config.get("maxIterations", 20))
+    max_iterations = min(int(loop_config.get("maxIterations", 20)), 100)  # hard cap at 100
     plan_source = loop_config.get("planSource", "inline")
     plan_text = loop_config.get("plan", "")
 
@@ -1104,6 +1104,241 @@ def execute_loop_step(
     }
 
 
+# ---------------------------------------------------------------------------
+# Conditional step execution
+# ---------------------------------------------------------------------------
+
+# Allowed operators for safe condition expression evaluation.
+_CONDITION_OPS: dict[str, Any] = {
+    "contains": lambda text, substr: str(substr).lower() in str(text).lower(),
+    "equals": lambda text, target: str(text).strip() == str(target).strip(),
+    "not_equals": lambda text, target: str(text).strip() != str(target).strip(),
+    "starts_with": lambda text, prefix: str(text).lower().startswith(str(prefix).lower()),
+    "ends_with": lambda text, suffix: str(text).lower().endswith(str(suffix).lower()),
+    "length_gt": lambda text, n: len(str(text)) > int(n),
+    "length_lt": lambda text, n: len(str(text)) < int(n),
+    "is_empty": lambda text: len(str(text).strip()) == 0,
+    "not_empty": lambda text: len(str(text).strip()) > 0,
+    "matches": lambda text, pattern: bool(re.search(str(pattern), str(text))),
+}
+
+
+def evaluate_condition_expr(
+    expr: str,
+    context: dict[str, Any],
+) -> bool:
+    """Evaluate a safe condition expression against step results context.
+
+    Supported expression forms:
+        contains("substring")
+        equals("value")
+        not_equals("value")
+        starts_with("prefix")
+        ends_with("suffix")
+        length_gt(100)
+        length_lt(10)
+        is_empty()
+        not_empty()
+        matches("regex_pattern")
+        not <expr>           — negation
+        <expr> and <expr>    — conjunction
+        <expr> or <expr>     — disjunction
+        true / false         — literals
+
+    The implicit input is ``context["previous_output"]``.
+    """
+    expr = expr.strip()
+    if not expr:
+        return True
+
+    # Boolean literals
+    if expr.lower() == "true":
+        return True
+    if expr.lower() == "false":
+        return False
+
+    # Negation
+    if expr.lower().startswith("not "):
+        return not evaluate_condition_expr(expr[4:], context)
+
+    # Conjunction / disjunction (split on outermost 'and'/'or')
+    for connective, combiner in [(" or ", any), (" and ", all)]:
+        # Only split at the outermost level (not inside parens/quotes)
+        parts = _split_connective(expr, connective)
+        if len(parts) > 1:
+            return combiner(evaluate_condition_expr(p, context) for p in parts)
+
+    # Function-style: op("arg") or op(number) or op()
+    match = re.match(r'^(\w+)\((.*)?\)$', expr, re.DOTALL)
+    if match:
+        op_name = match.group(1).lower()
+        raw_arg = (match.group(2) or "").strip()
+        if op_name not in _CONDITION_OPS:
+            raise ValueError(f"Unknown condition operator: {op_name}")
+
+        previous_output = str(context.get("previous_output", ""))
+        func = _CONDITION_OPS[op_name]
+
+        # Unary operators (no argument)
+        if op_name in ("is_empty", "not_empty"):
+            return func(previous_output)
+
+        # Strip surrounding quotes from argument
+        arg = raw_arg.strip("\"'")
+        return func(previous_output, arg)
+
+    raise ValueError(f"Cannot parse condition expression: {expr!r}")
+
+
+def _split_connective(expr: str, connective: str) -> list[str]:
+    """Split *expr* on *connective* only when not inside quotes or parentheses."""
+    parts: list[str] = []
+    depth = 0
+    in_quote: str | None = None
+    start = 0
+    i = 0
+    lowered = expr.lower()
+    while i < len(expr):
+        ch = expr[i]
+        if in_quote:
+            if ch == in_quote and (i == 0 or expr[i - 1] != "\\"):
+                in_quote = None
+        elif ch in ('"', "'"):
+            in_quote = ch
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        elif depth == 0 and in_quote is None:
+            if lowered[i: i + len(connective)] == connective:
+                parts.append(expr[start:i].strip())
+                i += len(connective)
+                start = i
+                continue
+        i += 1
+    parts.append(expr[start:].strip())
+    return parts
+
+
+def execute_conditional_step(
+    step: dict[str, Any],
+    workflow_input: str,
+    step_results: dict[str, dict[str, Any]],
+    run_id: str,
+    worker_job: dict[str, Any],
+) -> dict[str, Any]:
+    """Execute a conditional-type workflow step.
+
+    Evaluates the ``conditionExpr`` against previous step outputs and returns
+    the list of branch step names to activate (thenSteps or elseSteps) and
+    the list to skip.
+    """
+    step_name = str(step.get("name", "")).strip()
+    condition_expr = str(step.get("conditionExpr", "true")).strip()
+    then_steps: list[str] = [str(s).strip() for s in (step.get("thenSteps") or []) if str(s).strip()]
+    else_steps: list[str] = [str(s).strip() for s in (step.get("elseSteps") or []) if str(s).strip()]
+
+    dependencies = [str(dep).strip() for dep in step.get("dependsOn") or [] if str(dep).strip()]
+    previous_output = previous_output_for_dependencies(dependencies, step_results)
+
+    execution_policy = normalize_step_execution(step)
+    started_at = now_iso()
+    started_perf = time.perf_counter()
+
+    context = {
+        "previous_output": previous_output,
+        "workflow_input": workflow_input,
+        "step_results": step_results,
+    }
+
+    append_journal_event(
+        "workflow.conditional.evaluating",
+        {"runId": run_id, "step": step_name, "expression": condition_expr},
+    )
+
+    try:
+        result = evaluate_condition_expr(condition_expr, context)
+    except Exception as exc:
+        latency_ms = int((time.perf_counter() - started_perf) * 1000)
+        completed_at = now_iso()
+        logger.error("Conditional expression evaluation failed for step '%s': %s", step_name, exc)
+        append_journal_event(
+            "workflow.conditional.error",
+            {"runId": run_id, "step": step_name, "error": str(exc)},
+        )
+        return {
+            "state": "failed",
+            "stepName": step_name,
+            "stepResult": {"response": f"Condition evaluation error: {exc}", "status": "error"},
+            "stepState": build_step_state(
+                step_name=step_name,
+                step=step,
+                status_name="failed",
+                attempts=1,
+                started_at=started_at,
+                completed_at=completed_at,
+                latency_ms=latency_ms,
+                worker_job=worker_job,
+                execution_policy=execution_policy,
+                error=str(exc),
+                failure_class="condition_eval_error",
+            ),
+            "branchTaken": None,
+            "activateSteps": [],
+            "skipSteps": then_steps + else_steps,
+        }
+
+    latency_ms = int((time.perf_counter() - started_perf) * 1000)
+    completed_at = now_iso()
+    branch_taken = "then" if result else "else"
+    activate_steps = then_steps if result else else_steps
+    skip_steps = else_steps if result else then_steps
+
+    append_journal_event(
+        "workflow.conditional.resolved",
+        {
+            "runId": run_id,
+            "step": step_name,
+            "expression": condition_expr,
+            "result": result,
+            "branchTaken": branch_taken,
+            "activateSteps": activate_steps,
+            "skipSteps": skip_steps,
+        },
+    )
+
+    response_text = (
+        f"Condition '{condition_expr}' evaluated to {result}. "
+        f"Branch taken: {branch_taken}. "
+        f"Activating steps: {activate_steps or ['(none)']}."
+    )
+
+    return {
+        "state": "completed",
+        "stepName": step_name,
+        "stepResult": {
+            "response": response_text,
+            "status": "completed",
+            "conditionResult": result,
+            "branchTaken": branch_taken,
+        },
+        "stepState": build_step_state(
+            step_name=step_name,
+            step=step,
+            status_name="completed",
+            attempts=1,
+            started_at=started_at,
+            completed_at=completed_at,
+            latency_ms=latency_ms,
+            worker_job=worker_job,
+            execution_policy=execution_policy,
+        ),
+        "branchTaken": branch_taken,
+        "activateSteps": activate_steps,
+        "skipSteps": skip_steps,
+    }
+
+
 def run_workflow_worker() -> None:
     plural = resource_plural()
     resource = get_resource(plural)
@@ -1157,6 +1392,7 @@ def run_workflow_worker() -> None:
         for step_name, result in step_results.items()
         if str(result.get("status", "")).strip() in {"completed", "continued"}
     }
+    skipped: set[str] = set()  # steps skipped by conditional branches
 
     append_journal_event(
         (
@@ -1196,8 +1432,8 @@ def run_workflow_worker() -> None:
     )
 
     try:
-        while len(completed) < len(steps):
-            ready = ready_workflow_steps(steps, completed)
+        while len(completed) + len(skipped) < len(steps):
+            ready = ready_workflow_steps(steps, completed, skipped_steps=skipped)
             if not ready:
                 raise ValueError(
                     "Workflow contains a dependency cycle "
@@ -1257,6 +1493,10 @@ def run_workflow_worker() -> None:
                     outcome = execute_loop_step(
                         step, str(spec.get("input", "")), step_results, run_id, worker_job,
                         on_iteration_complete=_on_iteration,
+                    )
+                elif step_type == "conditional":
+                    outcome = execute_conditional_step(
+                        step, str(spec.get("input", "")), step_results, run_id, worker_job,
                     )
                 else:
                     outcome = execute_workflow_step(
@@ -1347,6 +1587,15 @@ def run_workflow_worker() -> None:
                 step_results[step_name] = outcome["stepResult"]
                 if outcome["state"] in {"completed", "continued"}:
                     completed.add(step_name)
+                    # Handle conditional branch routing
+                    if "skipSteps" in outcome:
+                        for skip_name in outcome["skipSteps"]:
+                            skipped.add(str(skip_name).strip())
+                            step_states[str(skip_name).strip()] = {
+                                "status": "skipped",
+                                "reason": f"Conditional branch not taken (step '{step_name}')",
+                                "updatedAt": now_iso(),
+                            }
                 if outcome["state"] == "failed":
                     fatal_failures.append(outcome)
 
@@ -1706,6 +1955,7 @@ def run_eval_worker() -> None:
             "artifactRef": artifact_ref(generation),
             "workerJob": worker_job,
             "summary": summary,
+            "cases": results,
         }
         patch_custom_status(plural, eval_status_payload)
         safe_record_eval_state(
@@ -1747,6 +1997,7 @@ def run_eval_worker() -> None:
                 "error": str(exc),
                 "runId": run_id,
             },
+            "cases": results,
         }
         patch_custom_status(plural, eval_status_payload)
         safe_record_eval_state(

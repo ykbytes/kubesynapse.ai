@@ -57,6 +57,19 @@ from auth_store import (
     upsert_external_user,
     validate_email,
     verify_password,
+    create_chat_session,
+    delete_chat_session,
+    get_chat_session_messages,
+    list_chat_sessions,
+    save_chat_messages,
+    update_chat_session_title,
+    query_audit_logs,
+    purge_old_audit_logs,
+    record_usage,
+    query_usage_summary,
+    query_usage_detail,
+    record_workflow_run,
+    list_workflow_runs,
 )
 from enterprise_auth import (
     auth_configuration,
@@ -198,6 +211,9 @@ AUTH_COOKIE_SAMESITE = os.getenv("AUTH_COOKIE_SAMESITE", "lax").strip().lower() 
 OIDC_TRANSACTION_COOKIE_NAME = os.getenv("AUTH_OIDC_TRANSACTION_COOKIE_NAME", "ai-agent-oidc").strip() or "ai-agent-oidc"
 OIDC_TRANSACTION_COOKIE_TTL_SECONDS = max(int(os.getenv("AUTH_OIDC_TRANSACTION_TTL_SECONDS", "600")), 60)
 AGENT_RUNTIME_TIMEOUT_SECONDS = max(float(os.getenv("AGENT_RUNTIME_TIMEOUT_SECONDS", "360")), 1.0)
+LITELLM_INTERNAL_URL = os.getenv("LITELLM_INTERNAL_URL", "").strip() or "http://ai-agent-sandbox-litellm:4000"
+LITELLM_MASTER_KEY = os.getenv("LITELLM_MASTER_KEY", "").strip()
+LLM_SECRET_NAME = os.getenv("LLM_SECRET_NAME", "ai-agent-sandbox-llm-api-keys")
 OIDC_JWKS_TIMEOUT_SECONDS = max(float(os.getenv("OIDC_JWKS_TIMEOUT_SECONDS", "10")), 1.0)
 JWKS_CACHE: dict[str, Any] = {"keys": [], "expires_at": 0.0}
 _JWKS_LOCK = asyncio.Lock()
@@ -476,6 +492,11 @@ class AgentInfo(BaseModel):
 class PolicyInfo(BaseModel):
     name: str
     namespace: str
+    input_guardrails: dict[str, Any] = Field(default_factory=dict)
+    output_guardrails: dict[str, Any] = Field(default_factory=dict)
+    allowed_models: list[str] = Field(default_factory=list)
+    allowed_mcp_servers: list[str] = Field(default_factory=list)
+    mcp_require_hitl: bool = True
 
 
 class AgentDetail(AgentInfo):
@@ -593,8 +614,11 @@ class WorkflowStepRequest(BaseModel):
     depends_on: list[str] = Field(default_factory=list)
     require_approval: bool = False
     execution: dict[str, Any] | None = None
-    step_type: str = Field(default="agent", pattern=r"^(agent|loop)$")
+    step_type: str = Field(default="agent", pattern=r"^(agent|loop|conditional)$")
     loop_config: dict[str, Any] | None = Field(default=None, description="Config for loop-type steps")
+    condition_expr: str | None = Field(default=None, max_length=2000, description="Condition expression for conditional steps")
+    then_steps: list[str] | None = Field(default=None, description="Steps to activate when condition is true")
+    else_steps: list[str] | None = Field(default=None, description="Steps to activate when condition is false")
 
 
 class WorkflowRequest(BaseModel):
@@ -675,6 +699,7 @@ class EvalInfo(BaseModel):
     summary: dict[str, Any] | None = None
     artifact_ref: dict[str, Any] | None = None
     worker_job: dict[str, Any] | None = None
+    cases: list[dict[str, Any]] | None = None
     created_at: str | None = None
 
 
@@ -2526,6 +2551,14 @@ def build_workflow_spec(body: WorkflowRequest | WorkflowUpdateRequest) -> dict[s
             step_spec["type"] = "loop"
             if isinstance(step.loop_config, dict) and step.loop_config:
                 step_spec["loopConfig"] = step.loop_config
+        if step.step_type == "conditional":
+            step_spec["type"] = "conditional"
+            if step.condition_expr:
+                step_spec["conditionExpr"] = step.condition_expr.strip()
+            if step.then_steps:
+                step_spec["thenSteps"] = [s.strip() for s in step.then_steps if s.strip()]
+            if step.else_steps:
+                step_spec["elseSteps"] = [s.strip() for s in step.else_steps if s.strip()]
         if isinstance(step.execution, dict) and step.execution:
             step_spec["execution"] = step.execution
         steps.append(step_spec)
@@ -2598,7 +2631,7 @@ def list_custom_resources(plural: str, namespace: str) -> list[dict[str, Any]]:
         return result.get("items", [])
     except Exception as exc:
         logger.error("Failed to list %s: %s", plural, exc)
-        raise HTTPException(status_code=502, detail=f"Failed to list {plural}: {exc}") from exc
+        raise HTTPException(status_code=502, detail=f"Failed to list {plural}") from exc
 
 
 def read_custom_resource(plural: str, name: str, namespace: str, label: str) -> dict[str, Any]:
@@ -2613,7 +2646,8 @@ def read_custom_resource(plural: str, name: str, namespace: str, label: str) -> 
             name=name,
         )
     except Exception as exc:
-        raise HTTPException(status_code=404, detail=f"{label} '{name}' not found: {exc}") from exc
+        logger.warning("Resource read failed (%s/%s): %s", plural, name, exc)
+        raise HTTPException(status_code=404, detail=f"{label} '{name}' not found") from exc
 
 
 def create_custom_resource(plural: str, namespace: str, name: str, spec: dict[str, Any]) -> dict[str, Any]:
@@ -2639,7 +2673,8 @@ def create_custom_resource(plural: str, namespace: str, name: str, spec: dict[st
         status = getattr(exc, "status", None)
         if status == 409:
             raise HTTPException(status_code=409, detail=f"Resource '{name}' already exists") from exc
-        raise HTTPException(status_code=502, detail=f"Failed to create resource '{name}': {exc}") from exc
+        logger.error("Failed to create resource %s: %s", name, exc)
+        raise HTTPException(status_code=502, detail=f"Failed to create resource '{name}'") from exc
 
 
 def replace_custom_resource_spec(plural: str, name: str, namespace: str, spec: dict[str, Any]) -> dict[str, Any]:
@@ -2675,7 +2710,8 @@ def replace_custom_resource_spec(plural: str, name: str, namespace: str, spec: d
         status = getattr(exc, "status", None)
         if status == 404:
             raise HTTPException(status_code=404, detail=f"Resource '{name}' was not found") from exc
-        raise HTTPException(status_code=502, detail=f"Failed to update resource '{name}': {exc}") from exc
+        logger.error("Failed to update resource %s: %s", name, exc)
+        raise HTTPException(status_code=502, detail=f"Failed to update resource '{name}'") from exc
 
 
 def delete_custom_resource(plural: str, name: str, namespace: str, label: str) -> None:
@@ -2693,14 +2729,21 @@ def delete_custom_resource(plural: str, name: str, namespace: str, label: str) -
         status = getattr(exc, "status", None)
         if status == 404:
             raise HTTPException(status_code=404, detail=f"{label} '{name}' not found") from exc
-        raise HTTPException(status_code=502, detail=f"Failed to delete {label} '{name}': {exc}") from exc
+        logger.error("Failed to delete %s %s: %s", label, name, exc)
+        raise HTTPException(status_code=502, detail=f"Failed to delete {label} '{name}'") from exc
 
 
 def policy_info_from_resource(policy: dict[str, Any]) -> PolicyInfo:
     metadata = policy.get("metadata", {})
+    spec = policy.get("spec", {})
     return PolicyInfo(
         name=metadata.get("name", ""),
         namespace=metadata.get("namespace", "default"),
+        input_guardrails=spec.get("inputGuardrails") or {},
+        output_guardrails=spec.get("outputGuardrails") or {},
+        allowed_models=spec.get("allowedModels") or [],
+        allowed_mcp_servers=spec.get("allowedMcpServers") or [],
+        mcp_require_hitl=spec.get("mcpRequireHitl", True),
     )
 
 
@@ -2858,6 +2901,9 @@ def workflow_info_from_resource(workflow: dict[str, Any]) -> WorkflowInfo:
                 execution=step.get("execution") or None,
                 step_type=step.get("type", "agent") or "agent",
                 loop_config=step.get("loopConfig") or None,
+                condition_expr=step.get("conditionExpr") or None,
+                then_steps=step.get("thenSteps") or None,
+                else_steps=step.get("elseSteps") or None,
             )
             for step in spec.get("steps") or []
         ],
@@ -2900,6 +2946,7 @@ def eval_info_from_resource(eval_resource: dict[str, Any]) -> EvalInfo:
         summary=status.get("summary"),
         artifact_ref=status.get("artifactRef"),
         worker_job=status.get("workerJob"),
+        cases=status.get("cases"),
         created_at=metadata.get("creationTimestamp"),
     )
 
@@ -2949,7 +2996,8 @@ def read_agent(agent_name: str, namespace: str) -> dict[str, Any]:
             name=agent_name,
         )
     except Exception as exc:
-        raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' not found: {exc}") from exc
+        logger.warning("Agent read failed (%s): %s", agent_name, exc)
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' not found") from exc
 
 
 def create_agent_resource(body: CreateAgentRequest, namespace: str) -> dict[str, Any]:
@@ -2979,7 +3027,8 @@ def create_agent_resource(body: CreateAgentRequest, namespace: str) -> dict[str,
     except Exception as exc:
         if getattr(exc, "status", None) == 409:
             raise HTTPException(status_code=409, detail=f"Agent '{body.name}' already exists") from exc
-        raise HTTPException(status_code=502, detail=f"Failed to create agent '{body.name}': {exc}") from exc
+        logger.error("Failed to create agent %s: %s", body.name, exc)
+        raise HTTPException(status_code=502, detail=f"Failed to create agent '{body.name}'") from exc
 
 
 def read_approval(approval_name: str, namespace: str) -> dict[str, Any]:
@@ -2994,7 +3043,8 @@ def read_approval(approval_name: str, namespace: str) -> dict[str, Any]:
             name=approval_name,
         )
     except Exception as exc:
-        raise HTTPException(status_code=404, detail=f"Approval '{approval_name}' not found: {exc}") from exc
+        logger.warning("Approval read failed (%s): %s", approval_name, exc)
+        raise HTTPException(status_code=404, detail=f"Approval '{approval_name}' not found") from exc
 
 
 def list_agent_pods(agent_name: str, namespace: str) -> list[Any]:
@@ -3347,7 +3397,7 @@ def verify_local_access_token(token: str) -> dict[str, Any]:
     try:
         claims = decode_access_token(token)
     except ValueError as exc:
-        raise HTTPException(status_code=401, detail=f"Invalid local access token: {exc}") from exc
+        raise HTTPException(status_code=401, detail="Invalid local access token") from exc
 
     try:
         user_id = int(str(claims.get("sub") or ""))
@@ -3712,6 +3762,118 @@ def admin_update_user(
     return updated
 
 
+@app.get("/api/admin/audit")
+def get_audit_logs(
+    raw_request: Request,
+    actor: str | None = None,
+    actor_type: str | None = None,
+    action: str | None = None,
+    resource_kind: str | None = None,
+    resource_name: str | None = None,
+    namespace: str | None = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+    user=Depends(verify_token),
+):
+    ensure_role(user, "admin")
+    from_dt = None
+    to_dt = None
+    if from_date:
+        try:
+            from_dt = datetime.fromisoformat(from_date)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid from_date format")
+    if to_date:
+        try:
+            to_dt = datetime.fromisoformat(to_date)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid to_date format")
+    return query_audit_logs(
+        actor=actor,
+        actor_type=actor_type,
+        action=action,
+        resource_kind=resource_kind,
+        resource_name=resource_name,
+        namespace=namespace,
+        from_date=from_dt,
+        to_date=to_dt,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@app.delete("/api/admin/audit/purge")
+def purge_audit_logs(
+    raw_request: Request,
+    user=Depends(verify_token),
+):
+    ensure_role(user, "admin")
+    deleted = purge_old_audit_logs()
+    record_audit_log(
+        action="purged",
+        actor_sub=user.get("sub"),
+        actor_username=user.get("username"),
+        actor_type="user",
+        auth_provider=user.get("auth_provider"),
+        resource_kind="audit",
+        detail={"deleted_count": deleted},
+        ip_address=request_client_ip(raw_request),
+    )
+    return {"deleted": deleted}
+
+
+# ── Token Usage & Cost Endpoints ──
+
+
+@app.get("/api/usage/summary")
+def usage_summary(
+    user=Depends(verify_token),
+    namespace: str | None = None,
+    group_by: str = "agent",
+    from_date: str | None = None,
+    to_date: str | None = None,
+):
+    from datetime import datetime as _dt
+
+    parsed_from = _dt.fromisoformat(from_date) if from_date else None
+    parsed_to = _dt.fromisoformat(to_date) if to_date else None
+    rows = query_usage_summary(
+        namespace=namespace,
+        from_date=parsed_from,
+        to_date=parsed_to,
+        group_by=group_by,
+    )
+    return {"items": rows}
+
+
+@app.get("/api/usage/detail")
+def usage_detail(
+    user=Depends(verify_token),
+    namespace: str | None = None,
+    agent_name: str | None = None,
+    model: str | None = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+):
+    from datetime import datetime as _dt
+
+    parsed_from = _dt.fromisoformat(from_date) if from_date else None
+    parsed_to = _dt.fromisoformat(to_date) if to_date else None
+    return query_usage_detail(
+        namespace=namespace,
+        agent_name=agent_name,
+        model=model,
+        from_date=parsed_from,
+        to_date=parsed_to,
+        limit=limit,
+        offset=offset,
+    )
+
+
 @app.get("/api/auth/oidc/start/{provider_id}")
 def start_oidc_login(provider_id: str, raw_request: Request, next: str = "/"):
     if get_oidc_provider(provider_id=provider_id) is None:
@@ -3799,7 +3961,7 @@ def start_saml_login(provider_id: str, raw_request: Request, next: str = "/"):
     return response
 
 
-@app.api_route("/api/auth/saml/callback/{provider_id}", methods=["GET", "POST"])
+@app.api_route("/api/auth/saml/callback/{provider_id}", methods=["POST"])
 async def finish_saml_login(
     provider_id: str,
     raw_request: Request,
@@ -3809,13 +3971,11 @@ async def finish_saml_login(
         raise HTTPException(status_code=400, detail="SAML login transaction cookie is missing")
 
     query_data = {key: value for key, value in raw_request.query_params.multi_items()}
-    post_data: dict[str, Any] = {}
-    if raw_request.method.upper() == "POST":
-        form_data = await raw_request.form()
-        post_data = {str(key): str(value) for key, value in form_data.multi_items()}
+    form_data = await raw_request.form()
+    post_data = {str(key): str(value) for key, value in form_data.multi_items()}
 
-    saml_response = str(post_data.get("SAMLResponse") or query_data.get("SAMLResponse") or "").strip()
-    relay_state = str(post_data.get("RelayState") or query_data.get("RelayState") or "").strip() or None
+    saml_response = str(post_data.get("SAMLResponse") or "").strip()
+    relay_state = str(post_data.get("RelayState") or "").strip() or None
 
     try:
         identity = exchange_saml_response(
@@ -4112,6 +4272,27 @@ def get_mcp_hub_servers(
     return MCP_HUB_SERVERS
 
 
+@app.get("/api/namespaces")
+async def list_namespaces(user=Depends(verify_token)):
+    """Return Kubernetes namespaces the caller is permitted to access."""
+    ensure_role(user, "viewer")
+    allowed = user.get("allowed_namespaces") or []
+    try:
+        from kubernetes import client
+        ns_list = client.CoreV1Api().list_namespace()
+        all_ns = sorted(ns.metadata.name for ns in ns_list.items if ns.metadata and ns.metadata.name)
+    except Exception as exc:
+        logger.warning("Could not list K8s namespaces: %s", exc)
+        # Fall back to what the user's token says they can access
+        if "*" in allowed:
+            return {"namespaces": ["default"]}
+        return {"namespaces": sorted(set(allowed)) if allowed else ["default"]}
+
+    if "*" in allowed:
+        return {"namespaces": all_ns}
+    return {"namespaces": [ns for ns in all_ns if ns in allowed]}
+
+
 @app.get("/api/health")
 def health() -> dict[str, Any]:
     if _SHUTDOWN.is_set():
@@ -4279,6 +4460,104 @@ def list_policies(namespace: str = "default", user=Depends(verify_token)):
     )
 
 
+class PolicyRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=253, pattern=r"^[a-z0-9][a-z0-9\-]*[a-z0-9]$")
+    input_guardrails: dict[str, Any] = Field(default_factory=dict)
+    output_guardrails: dict[str, Any] = Field(default_factory=dict)
+    allowed_models: list[str] = Field(default_factory=list)
+    allowed_mcp_servers: list[str] = Field(default_factory=list)
+    mcp_require_hitl: bool = True
+
+
+class PolicyUpdateRequest(BaseModel):
+    input_guardrails: dict[str, Any] | None = None
+    output_guardrails: dict[str, Any] | None = None
+    allowed_models: list[str] | None = None
+    allowed_mcp_servers: list[str] | None = None
+    mcp_require_hitl: bool | None = None
+
+
+def build_policy_spec(body: PolicyRequest | PolicyUpdateRequest, existing_spec: dict[str, Any] | None = None) -> dict[str, Any]:
+    spec: dict[str, Any] = dict(existing_spec) if existing_spec else {}
+    if isinstance(body, PolicyRequest) or body.input_guardrails is not None:
+        ig = body.input_guardrails or {}
+        spec["inputGuardrails"] = {
+            "blockPromptInjection": ig.get("block_prompt_injection", ig.get("blockPromptInjection", False)),
+            "blockedPatterns": ig.get("blocked_patterns", ig.get("blockedPatterns", [])),
+            "maxInputTokens": ig.get("max_input_tokens", ig.get("maxInputTokens", 4096)),
+        }
+    if isinstance(body, PolicyRequest) or body.output_guardrails is not None:
+        og = body.output_guardrails or {}
+        spec["outputGuardrails"] = {
+            "maskPII": og.get("mask_pii", og.get("maskPII", False)),
+            "blockedOutputPatterns": og.get("blocked_output_patterns", og.get("blockedOutputPatterns", [])),
+            "maxOutputTokens": og.get("max_output_tokens", og.get("maxOutputTokens", 4096)),
+        }
+    if isinstance(body, PolicyRequest) or body.allowed_models is not None:
+        spec["allowedModels"] = body.allowed_models or []
+    if isinstance(body, PolicyRequest) or body.allowed_mcp_servers is not None:
+        spec["allowedMcpServers"] = body.allowed_mcp_servers or []
+    if isinstance(body, PolicyRequest) or body.mcp_require_hitl is not None:
+        spec["mcpRequireHitl"] = body.mcp_require_hitl if body.mcp_require_hitl is not None else True
+    return spec
+
+
+@app.post("/api/policies", response_model=PolicyInfo, status_code=201)
+def create_policy(
+    body: PolicyRequest,
+    namespace: str = "default",
+    user=Depends(verify_token),
+):
+    ensure_namespace_access(user, namespace, "operator")
+    spec = build_policy_spec(body)
+    created = create_custom_resource("agentpolicies", namespace, body.name, spec)
+    return policy_info_from_resource(created)
+
+
+@app.get("/api/policies/{policy_name}", response_model=PolicyInfo)
+def get_policy(policy_name: str, namespace: str = "default", user=Depends(verify_token)):
+    ensure_namespace_access(user, namespace)
+    resource = read_custom_resource("agentpolicies", policy_name, namespace, "Policy")
+    return policy_info_from_resource(resource)
+
+
+@app.patch("/api/policies/{policy_name}", response_model=PolicyInfo)
+def update_policy(
+    policy_name: str,
+    body: PolicyUpdateRequest,
+    namespace: str = "default",
+    user=Depends(verify_token),
+):
+    ensure_namespace_access(user, namespace, "operator")
+    existing = read_custom_resource("agentpolicies", policy_name, namespace, "Policy")
+    existing_spec = existing.get("spec", {})
+    updated_spec = build_policy_spec(body, existing_spec)
+    try:
+        from kubernetes import client
+        updated = client.CustomObjectsApi().patch_namespaced_custom_object(
+            group=RESOURCE_GROUP,
+            version=RESOURCE_VERSION,
+            namespace=namespace,
+            plural="agentpolicies",
+            name=policy_name,
+            body={"spec": updated_spec},
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="Failed to update policy") from exc
+    return policy_info_from_resource(updated)
+
+
+@app.delete("/api/policies/{policy_name}", response_model=DeleteResponse)
+def delete_policy(
+    policy_name: str,
+    namespace: str = "default",
+    user=Depends(verify_token),
+):
+    ensure_namespace_access(user, namespace, "operator")
+    delete_custom_resource("agentpolicies", policy_name, namespace, "Policy")
+    return DeleteResponse(deleted=True)
+
+
 @app.patch("/api/approvals/{approval_name}", response_model=ApprovalInfo)
 def decide_approval(
     approval_name: str,
@@ -4321,7 +4600,7 @@ def decide_approval(
     except Exception as exc:
         raise HTTPException(
             status_code=502,
-            detail=f"Failed to record approval decision: {exc}",
+            detail="Failed to record approval decision",
         ) from exc
 
     return ApprovalInfo(
@@ -4406,6 +4685,54 @@ def delete_agent(
     ensure_namespace_access(user, namespace, "operator")
     delete_custom_resource("aiagents", agent_name, namespace, "Agent")
     return DeleteResponse(status="deleted", kind="agent", name=agent_name, namespace=namespace)
+
+
+@app.post("/api/agents/{agent_name}/clone", response_model=AgentDetail, status_code=201)
+def clone_agent(
+    agent_name: str,
+    namespace: str = "default",
+    new_name: str | None = None,
+    user=Depends(verify_token),
+):
+    """Clone an existing agent CRD into a new resource."""
+    ensure_namespace_access(user, namespace, "operator")
+    source = read_agent(agent_name, namespace)
+
+    # Determine clone name
+    clone_name = new_name or f"{agent_name}-copy"
+    # Sanitize to DNS-1123 label (max 63 chars, lowercase alphanumeric and hyphens)
+    import re as _re
+    clone_name = _re.sub(r"[^a-z0-9-]", "-", clone_name.lower()).strip("-")[:63]
+
+    spec = dict(source.get("spec", {}))
+
+    try:
+        from kubernetes import client
+
+        resource_body: dict[str, Any] = {
+            "apiVersion": f"{RESOURCE_GROUP}/{RESOURCE_VERSION}",
+            "kind": "AIAgent",
+            "metadata": {
+                "name": clone_name,
+                "namespace": namespace,
+                "labels": {"cloned-from": agent_name},
+            },
+            "spec": spec,
+        }
+
+        created = client.CustomObjectsApi().create_namespaced_custom_object(
+            group=RESOURCE_GROUP,
+            version=RESOURCE_VERSION,
+            namespace=namespace,
+            plural="aiagents",
+            body=resource_body,
+        )
+        return agent_detail_from_resource(created)
+    except Exception as exc:
+        if getattr(exc, "status", None) == 409:
+            raise HTTPException(status_code=409, detail=f"Agent '{clone_name}' already exists") from exc
+        logger.error("Failed to clone agent %s → %s: %s", agent_name, clone_name, exc)
+        raise HTTPException(status_code=502, detail=f"Failed to clone agent: {exc}") from exc
 
 
 # ---- Git credential management ----
@@ -4692,7 +5019,8 @@ def trigger_workflow(
         status = getattr(exc, "status", None)
         if status == 409:
             raise HTTPException(status_code=409, detail="Workflow was modified concurrently. Retry.") from exc
-        raise HTTPException(status_code=502, detail=f"Failed to trigger workflow: {exc}") from exc
+        logger.error("Failed to trigger workflow: %s", exc)
+        raise HTTPException(status_code=502, detail="Failed to trigger workflow") from exc
 
     # Reset status so the operator re-reconciles even when the spec
     # (and therefore metadata.generation) did not change.
@@ -4724,7 +5052,23 @@ def trigger_workflow(
     except Exception:
         pass  # spec replace already succeeded; status reset is best-effort
 
-    return workflow_info_from_resource(updated)
+    result = workflow_info_from_resource(updated)
+
+    # Record in run history
+    try:
+        record_workflow_run(
+            workflow_name=workflow_name,
+            namespace=namespace,
+            run_id=result.run_id,
+            phase=result.phase,
+            total_steps=result.summary.get("totalSteps") if isinstance(result.summary, dict) else None,
+            triggered_by=str(user.get("sub", "unknown")),
+            input_text=new_input[:2000] if new_input else None,
+        )
+    except Exception as exc:
+        logger.warning("Failed to record workflow run history: %s", exc)
+
+    return result
 
 
 @app.post("/api/workflows/{workflow_name}/cancel", response_model=WorkflowInfo)
@@ -4750,7 +5094,8 @@ def cancel_workflow(
         status_code = getattr(exc, "status", None)
         if status_code == 404:
             raise HTTPException(status_code=404, detail=f"Workflow '{workflow_name}' not found") from exc
-        raise HTTPException(status_code=502, detail=f"Failed to read workflow: {exc}") from exc
+        logger.error("Failed to read workflow %s for cancel: %s", workflow_name, exc)
+        raise HTTPException(status_code=502, detail="Failed to read workflow") from exc
 
     current_phase = (current.get("status") or {}).get("phase", "pending")
     if current_phase not in ("queued", "running", "waiting-approval"):
@@ -4776,7 +5121,8 @@ def cancel_workflow(
             },
         )
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Failed to cancel workflow: {exc}") from exc
+        logger.error("Failed to cancel workflow: %s", exc)
+        raise HTTPException(status_code=502, detail="Failed to cancel workflow") from exc
 
     try:
         updated = api.get_namespaced_custom_object(
@@ -4792,6 +5138,70 @@ def cancel_workflow(
         current["status"] = {**(current.get("status") or {}), "phase": "cancelled", "pendingApproval": None}
         return workflow_info_from_resource(current)
     return workflow_info_from_resource(updated)
+
+
+@app.get("/api/workflows/{workflow_name}/status/stream")
+def stream_workflow_status(
+    workflow_name: str,
+    namespace: str = "default",
+    user=Depends(verify_token),
+):
+    """SSE stream that pushes workflow status updates until the workflow reaches a terminal phase."""
+    ensure_namespace_access(user, namespace)
+    import asyncio
+
+    async def event_generator():
+        terminal_phases = {"completed", "failed", "cancelled"}
+        prev_hash = ""
+        try:
+            while True:
+                try:
+                    from kubernetes import client as k8s_client
+
+                    resource = k8s_client.CustomObjectsApi().get_namespaced_custom_object(
+                        group=RESOURCE_GROUP,
+                        version=RESOURCE_VERSION,
+                        namespace=namespace,
+                        plural="agentworkflows",
+                        name=workflow_name,
+                    )
+                    info = workflow_info_from_resource(resource)
+                    info_dict = info.model_dump(mode="json")
+                    current_hash = json.dumps(info_dict, sort_keys=True, default=str)
+                    if current_hash != prev_hash:
+                        prev_hash = current_hash
+                        yield sse_event("status", info_dict)
+                    if info.phase in terminal_phases:
+                        yield sse_event("done", {"phase": info.phase})
+                        return
+                except Exception as exc:
+                    yield sse_event("error", {"error": str(exc)})
+                    return
+                await asyncio.sleep(2)
+        except asyncio.CancelledError:
+            return
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.get("/api/workflows/{workflow_name}/runs")
+def get_workflow_runs(
+    workflow_name: str,
+    namespace: str = "default",
+    limit: int = 20,
+    user=Depends(verify_token),
+):
+    """Return the recent run history for a workflow."""
+    ensure_namespace_access(user, namespace)
+    return list_workflow_runs(workflow_name, namespace, limit=limit)
 
 
 @app.get("/api/evals", response_model=list[EvalInfo])
@@ -4873,13 +5283,31 @@ async def invoke_agent(
                 headers={"x-request-id": request_id},
             )
         except Exception as exc:
-            raise HTTPException(status_code=502, detail=f"Agent invocation failed: {exc}") from exc
+            logger.error("Agent invocation failed (%s): %s", agent_name, exc)
+            raise HTTPException(status_code=502, detail="Agent invocation failed") from exc
 
     if response.status_code >= 400:
         error_payload = error_payload_from_body(response.content, "Agent invocation failed")
         raise HTTPException(status_code=502, detail=f"Agent invocation failed: {error_payload['error']}")
 
     data = parse_json_object_response(response, context="Agent runtime /invoke")
+    # Record token usage if present
+    _usage = data.get("usage") or {}
+    if _usage or data.get("model"):
+        try:
+            record_usage(
+                agent_name=agent_name,
+                namespace=namespace,
+                user_id=user.get("sub"),
+                model=data.get("model") or agent["spec"].get("model"),
+                prompt_tokens=int(_usage.get("prompt_tokens", 0)),
+                completion_tokens=int(_usage.get("completion_tokens", 0)),
+                total_tokens=int(_usage.get("total_tokens", 0)),
+                session_id=data.get("thread_id"),
+                request_id=request_id,
+            )
+        except Exception:
+            logger.warning("Failed to record usage for %s", agent_name, exc_info=True)
     return InvokeResponse(
         agent_name=agent_name,
         response=data.get("response", ""),
@@ -4995,7 +5423,8 @@ def get_agent_logs(
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(status_code=404, detail=f"Could not retrieve logs: {exc}") from exc
+        logger.warning("Could not retrieve logs for %s: %s", agent_name, exc)
+        raise HTTPException(status_code=404, detail="Could not retrieve logs") from exc
 
 
 @app.get("/api/agents/{agent_name}/logs/stream")
@@ -5057,7 +5486,851 @@ async def stream_agent_logs(
     return StreamingResponse(log_event_generator(), media_type="text/event-stream")
 
 
+# ─────────────────────────────────────────────────────────────
+# Chat Session Persistence
+# ─────────────────────────────────────────────────────────────
+
+
+class ChatSessionCreate(BaseModel):
+    agent_name: str = Field(..., min_length=1, max_length=128)
+    title: str = Field("Untitled", max_length=256)
+
+
+class ChatSessionUpdate(BaseModel):
+    title: str = Field(..., min_length=1, max_length=256)
+
+
+class ChatMessagePayload(BaseModel):
+    message_id: str = Field(..., min_length=1, max_length=128)
+    role: str = Field(..., min_length=1, max_length=32)
+    content: str = ""
+    status: str = "complete"
+    toolName: str | None = None
+    toolNode: str | None = None
+
+
+class ChatMessagesSave(BaseModel):
+    messages: list[ChatMessagePayload]
+
+
+@app.get("/api/chat-sessions")
+async def api_list_chat_sessions(
+    agent_name: str,
+    namespace: str = "default",
+    user=Depends(verify_token),
+):
+    """List chat sessions for the given agent in the given namespace."""
+    ensure_namespace_access(user, namespace)
+    username = user.get("sub") or user.get("username")
+    return list_chat_sessions(namespace, agent_name, username=username)
+
+
+@app.post("/api/chat-sessions", status_code=201)
+async def api_create_chat_session(
+    body: ChatSessionCreate,
+    namespace: str = "default",
+    user=Depends(verify_token),
+):
+    """Create a new chat session."""
+    ensure_namespace_access(user, namespace)
+    username = user.get("sub") or user.get("username")
+    session_id = str(uuid.uuid4())
+    return create_chat_session(namespace, body.agent_name, session_id, body.title, username=username)
+
+
+@app.get("/api/chat-sessions/{session_id}/messages")
+async def api_get_chat_messages(
+    session_id: str,
+    user=Depends(verify_token),
+):
+    """Get all messages for a chat session."""
+    return get_chat_session_messages(session_id)
+
+
+@app.put("/api/chat-sessions/{session_id}/messages")
+async def api_save_chat_messages(
+    session_id: str,
+    body: ChatMessagesSave,
+    user=Depends(verify_token),
+):
+    """Save (replace) all messages for a chat session."""
+    save_chat_messages(session_id, [m.model_dump() for m in body.messages])
+    return {"status": "ok"}
+
+
+@app.patch("/api/chat-sessions/{session_id}")
+async def api_update_chat_session(
+    session_id: str,
+    body: ChatSessionUpdate,
+    user=Depends(verify_token),
+):
+    """Update a chat session title."""
+    result = update_chat_session_title(session_id, body.title)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return result
+
+
+@app.delete("/api/chat-sessions/{session_id}")
+async def api_delete_chat_session(
+    session_id: str,
+    user=Depends(verify_token),
+):
+    """Delete a chat session and all its messages."""
+    deleted = delete_chat_session(session_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {"status": "deleted"}
+
+
+# ─────────────────────────────────────────────────────────────
+# LLM / Provider management (proxied to the LiteLLM sidecar)
+# ─────────────────────────────────────────────────────────────
+
+_LLM_PROXY_TIMEOUT = httpx.Timeout(15.0, connect=5.0)
+
+# -- well-known provider keys accepted by the platform
+_ALLOWED_SECRET_KEYS = frozenset({
+    "OPENAI_API_KEY",
+    "OPENROUTER_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "AZURE_API_KEY",
+    "GOOGLE_API_KEY",
+    "MISTRAL_API_KEY",
+    "COHERE_API_KEY",
+    "GROQ_API_KEY",
+    "DEEPSEEK_API_KEY",
+    "TOGETHER_API_KEY",
+    "FIREWORKS_API_KEY",
+})
+
+# -- Provider metadata: key_name → {label, prefix for litellm, env reference}
+_PROVIDER_META: dict[str, dict[str, str]] = {
+    "OPENAI_API_KEY":      {"label": "OpenAI",      "prefix": "openai/",        "placeholder": "sk-..."},
+    "OPENROUTER_API_KEY":  {"label": "OpenRouter",   "prefix": "openrouter/",    "placeholder": "sk-or-..."},
+    "ANTHROPIC_API_KEY":   {"label": "Anthropic",    "prefix": "anthropic/",     "placeholder": "sk-ant-..."},
+    "AZURE_API_KEY":       {"label": "Azure OpenAI", "prefix": "azure/",         "placeholder": "..."},
+    "GOOGLE_API_KEY":      {"label": "Google AI",    "prefix": "gemini/",        "placeholder": "AIza..."},
+    "MISTRAL_API_KEY":     {"label": "Mistral",      "prefix": "mistral/",       "placeholder": "..."},
+    "COHERE_API_KEY":      {"label": "Cohere",       "prefix": "cohere/",        "placeholder": "..."},
+    "GROQ_API_KEY":        {"label": "Groq",         "prefix": "groq/",          "placeholder": "gsk_..."},
+    "DEEPSEEK_API_KEY":    {"label": "DeepSeek",     "prefix": "deepseek/",      "placeholder": "sk-..."},
+    "TOGETHER_API_KEY":    {"label": "Together AI",   "prefix": "together_ai/",   "placeholder": "..."},
+    "FIREWORKS_API_KEY":   {"label": "Fireworks",    "prefix": "fireworks_ai/",  "placeholder": "..."},
+}
+
+# -- Popular models per provider (static, curated)
+_PROVIDER_POPULAR_MODELS: dict[str, list[dict[str, str]]] = {
+    "OPENAI_API_KEY": [
+        {"model_id": "gpt-4o", "display_name": "GPT-4o", "description": "Most capable, multimodal"},
+        {"model_id": "gpt-4o-mini", "display_name": "GPT-4o Mini", "description": "Fast and affordable"},
+        {"model_id": "gpt-4-turbo", "display_name": "GPT-4 Turbo", "description": "High capability, 128k context"},
+        {"model_id": "gpt-3.5-turbo", "display_name": "GPT-3.5 Turbo", "description": "Budget option"},
+        {"model_id": "o1", "display_name": "o1", "description": "Reasoning model"},
+        {"model_id": "o1-mini", "display_name": "o1 Mini", "description": "Fast reasoning"},
+        {"model_id": "o3-mini", "display_name": "o3 Mini", "description": "Latest reasoning, cost-effective"},
+    ],
+    "OPENROUTER_API_KEY": [],
+    "ANTHROPIC_API_KEY": [
+        {"model_id": "claude-sonnet-4-20250514", "display_name": "Claude Sonnet 4", "description": "Latest, most capable"},
+        {"model_id": "claude-3-5-sonnet-20241022", "display_name": "Claude 3.5 Sonnet", "description": "Fast and intelligent"},
+        {"model_id": "claude-3-5-haiku-20241022", "display_name": "Claude 3.5 Haiku", "description": "Fastest, most compact"},
+        {"model_id": "claude-3-opus-20240229", "display_name": "Claude 3 Opus", "description": "Most capable (legacy)"},
+    ],
+    "AZURE_API_KEY": [
+        {"model_id": "gpt-4o", "display_name": "GPT-4o", "description": "Azure-hosted GPT-4o"},
+        {"model_id": "gpt-4o-mini", "display_name": "GPT-4o Mini", "description": "Azure-hosted GPT-4o Mini"},
+        {"model_id": "gpt-4", "display_name": "GPT-4", "description": "Azure-hosted GPT-4"},
+    ],
+    "GOOGLE_API_KEY": [
+        {"model_id": "gemini-2.0-flash", "display_name": "Gemini 2.0 Flash", "description": "Fast multimodal"},
+        {"model_id": "gemini-1.5-pro", "display_name": "Gemini 1.5 Pro", "description": "1M context window"},
+        {"model_id": "gemini-1.5-flash", "display_name": "Gemini 1.5 Flash", "description": "Fast, 1M context"},
+    ],
+    "MISTRAL_API_KEY": [
+        {"model_id": "mistral-large-latest", "display_name": "Mistral Large", "description": "Top-tier reasoning"},
+        {"model_id": "mistral-medium-latest", "display_name": "Mistral Medium", "description": "Balanced"},
+        {"model_id": "mistral-small-latest", "display_name": "Mistral Small", "description": "Fast and affordable"},
+        {"model_id": "codestral-latest", "display_name": "Codestral", "description": "Code-specialized"},
+    ],
+    "COHERE_API_KEY": [
+        {"model_id": "command-r-plus", "display_name": "Command R+", "description": "Most capable"},
+        {"model_id": "command-r", "display_name": "Command R", "description": "Balanced"},
+    ],
+    "GROQ_API_KEY": [
+        {"model_id": "llama-3.1-70b-versatile", "display_name": "Llama 3.1 70B", "description": "Fast inference"},
+        {"model_id": "llama-3.1-8b-instant", "display_name": "Llama 3.1 8B", "description": "Ultra-fast"},
+        {"model_id": "mixtral-8x7b-32768", "display_name": "Mixtral 8x7B", "description": "MoE, 32K context"},
+    ],
+    "DEEPSEEK_API_KEY": [
+        {"model_id": "deepseek-chat", "display_name": "DeepSeek Chat", "description": "General purpose"},
+        {"model_id": "deepseek-coder", "display_name": "DeepSeek Coder", "description": "Code-specialized"},
+        {"model_id": "deepseek-reasoner", "display_name": "DeepSeek Reasoner", "description": "Reasoning model"},
+    ],
+    "TOGETHER_API_KEY": [
+        {"model_id": "meta-llama/Llama-3.1-70B-Instruct-Turbo", "display_name": "Llama 3.1 70B Turbo", "description": "Fast Llama"},
+        {"model_id": "meta-llama/Llama-3.1-8B-Instruct-Turbo", "display_name": "Llama 3.1 8B Turbo", "description": "Ultra-fast Llama"},
+        {"model_id": "Qwen/Qwen2.5-72B-Instruct-Turbo", "display_name": "Qwen 2.5 72B", "description": "Top-tier open"},
+    ],
+    "FIREWORKS_API_KEY": [
+        {"model_id": "accounts/fireworks/models/llama-v3p1-70b-instruct", "display_name": "Llama 3.1 70B", "description": "Fast inference"},
+        {"model_id": "accounts/fireworks/models/llama-v3p1-8b-instruct", "display_name": "Llama 3.1 8B", "description": "Low latency"},
+    ],
+}
+
+
+def _litellm_headers() -> dict[str, str]:
+    key = LITELLM_MASTER_KEY
+    if not key:
+        # fall back to env injected from K8s secret
+        key = os.getenv("LITELLM_MASTER_KEY", "") or ""
+    hdrs: dict[str, str] = {"Accept": "application/json"}
+    if key:
+        hdrs["Authorization"] = f"Bearer {key}"
+    return hdrs
+
+
+class LLMModelEntry(BaseModel):
+    model_name: str = Field(..., min_length=1, max_length=200)
+    litellm_params: dict[str, Any] = Field(default_factory=dict)
+
+
+class LLMModelDeleteRequest(BaseModel):
+    id: str = Field(..., min_length=1, max_length=200)
+
+
+class LLMKeyUpdate(BaseModel):
+    keys: dict[str, str] = Field(default_factory=dict, description="Map of KEY_NAME -> value")
+
+
+@app.get("/api/llm/health")
+async def llm_health(user=Depends(verify_token)):
+    """Proxy LiteLLM health check."""
+    ensure_role(user, "viewer")
+    try:
+        async with httpx.AsyncClient(timeout=_LLM_PROXY_TIMEOUT, trust_env=False) as client:
+            resp = await client.get(f"{LITELLM_INTERNAL_URL}/health/liveliness", headers=_litellm_headers())
+            return {"status": "healthy" if resp.status_code == 200 else "unhealthy", "litellm_status": resp.status_code}
+    except Exception as exc:
+        return {"status": "unreachable", "error": str(exc)}
+
+
+@app.get("/api/llm/models")
+async def llm_list_models(user=Depends(verify_token)):
+    """List model deployments configured in LiteLLM."""
+    ensure_role(user, "viewer")
+    try:
+        async with httpx.AsyncClient(timeout=_LLM_PROXY_TIMEOUT, trust_env=False) as client:
+            resp = await client.get(f"{LITELLM_INTERNAL_URL}/model/info", headers=_litellm_headers())
+            resp.raise_for_status()
+            data = resp.json()
+            return {"models": data.get("data", [])}
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(status_code=exc.response.status_code, detail=f"LiteLLM error: {exc.response.text[:500]}") from exc
+    except Exception as exc:
+        logger.error("Failed to reach LiteLLM (model/info): %s", exc)
+        raise HTTPException(status_code=502, detail="Failed to reach LiteLLM") from exc
+
+
+@app.post("/api/llm/models", status_code=201)
+async def llm_add_model(body: LLMModelEntry, user=Depends(verify_token)):
+    """Add a model deployment to LiteLLM."""
+    ensure_role(user, "admin")
+    payload = {"model_name": body.model_name, "litellm_params": body.litellm_params}
+    try:
+        async with httpx.AsyncClient(timeout=_LLM_PROXY_TIMEOUT, trust_env=False) as client:
+            resp = await client.post(
+                f"{LITELLM_INTERNAL_URL}/model/new",
+                headers={**_litellm_headers(), "Content-Type": "application/json"},
+                json=payload,
+            )
+            resp.raise_for_status()
+            return resp.json()
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(status_code=exc.response.status_code, detail=f"LiteLLM error: {exc.response.text[:500]}") from exc
+    except Exception as exc:
+        logger.error("Failed to reach LiteLLM (model/new): %s", exc)
+        raise HTTPException(status_code=502, detail="Failed to reach LiteLLM") from exc
+
+
+@app.post("/api/llm/models/delete")
+async def llm_delete_model(body: LLMModelDeleteRequest, user=Depends(verify_token)):
+    """Delete a model deployment from LiteLLM."""
+    ensure_role(user, "admin")
+    try:
+        async with httpx.AsyncClient(timeout=_LLM_PROXY_TIMEOUT, trust_env=False) as client:
+            resp = await client.post(
+                f"{LITELLM_INTERNAL_URL}/model/delete",
+                headers={**_litellm_headers(), "Content-Type": "application/json"},
+                json={"id": body.id},
+            )
+            resp.raise_for_status()
+            return resp.json()
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(status_code=exc.response.status_code, detail=f"LiteLLM error: {exc.response.text[:500]}") from exc
+    except Exception as exc:
+        logger.error("Failed to reach LiteLLM (model/delete): %s", exc)
+        raise HTTPException(status_code=502, detail="Failed to reach LiteLLM") from exc
+
+
+@app.get("/api/llm/keys")
+def llm_list_keys(user=Depends(verify_token)):
+    """List which LLM API key env vars are set (names only, never values)."""
+    ensure_role(user, "admin")
+    try:
+        from kubernetes import client as k8s_client
+
+        secret = k8s_client.CoreV1Api().read_namespaced_secret(
+            name=LLM_SECRET_NAME,
+            namespace=os.getenv("POD_NAMESPACE", "ai-platform"),
+        )
+        data = secret.data or {}
+        result: list[dict[str, Any]] = []
+        for key_name in sorted(_ALLOWED_SECRET_KEYS):
+            result.append({
+                "name": key_name,
+                "is_set": key_name in data and bool(data[key_name]),
+            })
+        return {"keys": result}
+    except Exception as exc:
+        logger.error("Failed to read LLM secret: %s", exc)
+        raise HTTPException(status_code=502, detail=f"Failed to read secret") from exc
+
+
+@app.put("/api/llm/keys")
+def llm_update_keys(body: LLMKeyUpdate, user=Depends(verify_token)):
+    """Update LLM API key values in the K8s Secret. Admin-only."""
+    ensure_role(user, "admin")
+
+    # Validate key names
+    for key_name in body.keys:
+        if key_name not in _ALLOWED_SECRET_KEYS:
+            raise HTTPException(status_code=400, detail=f"Key '{key_name}' is not a recognized LLM provider key")
+        if len(body.keys[key_name]) > 500:
+            raise HTTPException(status_code=400, detail=f"Key value for '{key_name}' is too long")
+
+    try:
+        from kubernetes import client as k8s_client
+        import base64
+
+        ns = os.getenv("POD_NAMESPACE", "ai-platform")
+        api = k8s_client.CoreV1Api()
+        secret = api.read_namespaced_secret(name=LLM_SECRET_NAME, namespace=ns)
+        existing_data = secret.data or {}
+
+        for key_name, value in body.keys.items():
+            existing_data[key_name] = base64.b64encode(value.encode("utf-8")).decode("ascii")
+
+        secret.data = existing_data
+        api.replace_namespaced_secret(name=LLM_SECRET_NAME, namespace=ns, body=secret)
+        logger.info("Updated LLM API keys: %s (by user %s)", list(body.keys.keys()), user.get("sub", "unknown"))
+        return {"status": "updated", "keys": list(body.keys.keys())}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Failed to update LLM secret: %s", exc)
+        raise HTTPException(status_code=502, detail=f"Failed to update secret") from exc
+
+
+# ─────────────────────────────────────────────────────────────
+# Provider-centric LLM management (new, cleaner API)
+# ─────────────────────────────────────────────────────────────
+
+class ProviderModelAdd(BaseModel):
+    model_id: str = Field(..., min_length=1, max_length=300, description="Model identifier (e.g. gpt-4o-mini)")
+    alias: str | None = Field(None, max_length=200, description="Optional alias; defaults to model_id")
+
+
+@app.get("/api/llm/providers")
+async def llm_list_providers(user=Depends(verify_token)):
+    """Unified provider view: merges model list + key status grouped by provider."""
+    ensure_role(user, "viewer")
+
+    # Fetch models from LiteLLM
+    models_by_provider: dict[str, list[dict[str, Any]]] = {k: [] for k in _PROVIDER_META}
+    try:
+        async with httpx.AsyncClient(timeout=_LLM_PROXY_TIMEOUT, trust_env=False) as client:
+            resp = await client.get(f"{LITELLM_INTERNAL_URL}/model/info", headers=_litellm_headers())
+            resp.raise_for_status()
+            raw_models = resp.json().get("data", [])
+            for m in raw_models:
+                litellm_model = str((m.get("litellm_params") or {}).get("model", ""))
+                api_key_ref = str((m.get("litellm_params") or {}).get("api_key", ""))
+                # Match to provider by litellm prefix
+                matched = False
+                for key_name, meta in _PROVIDER_META.items():
+                    if litellm_model.startswith(meta["prefix"]):
+                        models_by_provider[key_name].append(m)
+                        matched = True
+                        break
+                if not matched:
+                    # Try matching by api_key env reference
+                    for key_name in _PROVIDER_META:
+                        if key_name in api_key_ref:
+                            models_by_provider[key_name].append(m)
+                            break
+    except Exception as exc:
+        logger.warning("Could not fetch LiteLLM models for providers view: %s", exc)
+
+    # Fetch key status from K8s Secret
+    key_status: dict[str, bool] = {}
+    is_admin = (user.get("role") or "viewer") in ("admin",)
+    if is_admin:
+        try:
+            from kubernetes import client as k8s_client
+            secret = k8s_client.CoreV1Api().read_namespaced_secret(
+                name=LLM_SECRET_NAME,
+                namespace=os.getenv("POD_NAMESPACE", "ai-platform"),
+            )
+            data = secret.data or {}
+            for key_name in _ALLOWED_SECRET_KEYS:
+                key_status[key_name] = key_name in data and bool(data[key_name])
+        except Exception as exc:
+            logger.warning("Could not read LLM secret for providers view: %s", exc)
+
+    # Build response
+    providers = []
+    for key_name, meta in _PROVIDER_META.items():
+        raw = models_by_provider.get(key_name, [])
+        provider_models = []
+        for m in raw:
+            provider_models.append({
+                "model_name": m.get("model_name", ""),
+                "litellm_model": str((m.get("litellm_params") or {}).get("model", "")),
+                "id": str((m.get("model_info") or {}).get("id", "")),
+            })
+        providers.append({
+            "key_name": key_name,
+            "label": meta["label"],
+            "prefix": meta["prefix"],
+            "is_configured": key_status.get(key_name, False) if is_admin else None,
+            "model_count": len(provider_models),
+            "models": provider_models,
+        })
+
+    return {"providers": providers}
+
+
+@app.get("/api/llm/providers/{provider}/suggestions")
+async def llm_provider_suggestions(provider: str, q: str = "", user=Depends(verify_token)):
+    """Return model suggestions for a provider.
+
+    Merges already-configured models from LiteLLM with the static popular-models
+    list (excluding duplicates). Supports ``?q=`` for server-side filtering.
+    """
+    ensure_role(user, "viewer")
+    if provider not in _PROVIDER_META:
+        raise HTTPException(status_code=404, detail=f"Unknown provider: {provider}")
+
+    meta = _PROVIDER_META[provider]
+    prefix = meta["prefix"]
+
+    # Fetch already-configured models from LiteLLM for this provider
+    configured: list[dict[str, str]] = []
+    configured_ids: set[str] = set()
+    try:
+        async with httpx.AsyncClient(timeout=_LLM_PROXY_TIMEOUT, trust_env=False) as client:
+            resp = await client.get(f"{LITELLM_INTERNAL_URL}/model/info", headers=_litellm_headers())
+            resp.raise_for_status()
+            for m in resp.json().get("data", []):
+                litellm_model = str((m.get("litellm_params") or {}).get("model", ""))
+                if litellm_model.startswith(prefix):
+                    model_id = litellm_model[len(prefix):]
+                    configured_ids.add(model_id)
+                    configured.append({
+                        "model_id": model_id,
+                        "display_name": m.get("model_name", model_id),
+                        "description": "Already configured",
+                    })
+    except Exception as exc:
+        logger.warning("Could not fetch LiteLLM models for suggestions: %s", exc)
+
+    # Static popular suggestions, excluding already-configured
+    static = [s for s in _PROVIDER_POPULAR_MODELS.get(provider, []) if s["model_id"] not in configured_ids]
+
+    combined = configured + static
+
+    # Apply search filter
+    if q:
+        ql = q.lower()
+        combined = [
+            s for s in combined
+            if ql in s["model_id"].lower()
+            or ql in s["display_name"].lower()
+            or ql in s.get("description", "").lower()
+        ]
+
+    return {"provider": provider, "suggestions": combined}
+
+
+@app.post("/api/llm/providers/{provider}/models", status_code=201)
+async def llm_add_provider_model(provider: str, body: ProviderModelAdd, user=Depends(verify_token)):
+    """Add a model to LiteLLM via the simplified provider-centric API."""
+    ensure_role(user, "admin")
+    if provider not in _PROVIDER_META:
+        raise HTTPException(status_code=404, detail=f"Unknown provider: {provider}")
+
+    meta = _PROVIDER_META[provider]
+    alias = (body.alias or "").strip() or body.model_id.split("/")[-1]
+    litellm_model = f"{meta['prefix']}{body.model_id}"
+    api_key_ref = f"os.environ/{provider}"
+
+    payload = {
+        "model_name": alias,
+        "litellm_params": {
+            "model": litellm_model,
+            "api_key": api_key_ref,
+        },
+    }
+    try:
+        async with httpx.AsyncClient(timeout=_LLM_PROXY_TIMEOUT, trust_env=False) as client:
+            resp = await client.post(
+                f"{LITELLM_INTERNAL_URL}/model/new",
+                headers={**_litellm_headers(), "Content-Type": "application/json"},
+                json=payload,
+            )
+            resp.raise_for_status()
+            return resp.json()
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(status_code=exc.response.status_code, detail=f"LiteLLM error: {exc.response.text[:500]}") from exc
+    except Exception as exc:
+        logger.error("Failed to reach LiteLLM (provider model add): %s", exc)
+        raise HTTPException(status_code=502, detail="Failed to reach LiteLLM") from exc
+
+
 if __name__ == "__main__":
     import uvicorn
 
     uvicorn.run(app, host="0.0.0.0", port=8080)
+
+
+# --------------------------------------------------------------------------- #
+#  Notification SSE stream                                                     #
+# --------------------------------------------------------------------------- #
+
+@app.get("/api/notifications/stream")
+def stream_notifications(
+    namespace: str = "default",
+    user=Depends(verify_token),
+):
+    """Long-lived SSE connection that pushes resource status change events."""
+    ensure_namespace_access(user, namespace)
+    import asyncio
+
+    async def notification_generator():
+        last_agents: dict[str, str] = {}
+        last_workflows: dict[str, str] = {}
+        last_evals: dict[str, str] = {}
+        first_poll = True
+
+        while True:
+            try:
+                agents = list_custom_resources("aiagents", namespace)
+                workflows = list_custom_resources("agentworkflows", namespace)
+                evals = list_custom_resources("agentevals", namespace)
+
+                current_agents: dict[str, str] = {}
+                for a in agents:
+                    name = (a.get("metadata") or {}).get("name", "")
+                    phase = ((a.get("status") or {}).get("phase") or "unknown").lower()
+                    current_agents[name] = phase
+
+                current_workflows: dict[str, str] = {}
+                for w in workflows:
+                    name = (w.get("metadata") or {}).get("name", "")
+                    phase = ((w.get("status") or {}).get("phase") or "unknown").lower()
+                    current_workflows[name] = phase
+
+                current_evals: dict[str, str] = {}
+                for e in evals:
+                    name = (e.get("metadata") or {}).get("name", "")
+                    phase = ((e.get("status") or {}).get("phase") or "unknown").lower()
+                    current_evals[name] = phase
+
+                if not first_poll:
+                    # Agent status changes
+                    for name, phase in current_agents.items():
+                        prev = last_agents.get(name)
+                        if prev != phase:
+                            yield sse_event("agent.status_changed", {
+                                "name": name, "namespace": namespace,
+                                "phase": phase, "previousPhase": prev,
+                                "timestamp": now_iso(),
+                            })
+
+                    # Deleted agents
+                    for name in set(last_agents) - set(current_agents):
+                        yield sse_event("agent.status_changed", {
+                            "name": name, "namespace": namespace,
+                            "phase": "deleted", "previousPhase": last_agents[name],
+                            "timestamp": now_iso(),
+                        })
+
+                    # Workflow status changes
+                    for name, phase in current_workflows.items():
+                        prev = last_workflows.get(name)
+                        if prev != phase:
+                            event_type = "workflow.completed" if phase in ("succeeded",) else \
+                                         "workflow.failed" if phase in ("failed",) else \
+                                         "workflow.approval_needed" if phase in ("waitingapproval", "waiting_approval", "waiting-approval") else \
+                                         "workflow.status_changed"
+                            yield sse_event(event_type, {
+                                "name": name, "namespace": namespace,
+                                "phase": phase, "previousPhase": prev,
+                                "timestamp": now_iso(),
+                            })
+
+                    # Deleted workflows
+                    for name in set(last_workflows) - set(current_workflows):
+                        yield sse_event("workflow.status_changed", {
+                            "name": name, "namespace": namespace,
+                            "phase": "deleted", "previousPhase": last_workflows[name],
+                            "timestamp": now_iso(),
+                        })
+
+                    # Eval status changes
+                    for name, phase in current_evals.items():
+                        prev = last_evals.get(name)
+                        if prev != phase:
+                            event_type = "eval.completed" if phase in ("succeeded",) else \
+                                         "eval.failed" if phase in ("failed",) else \
+                                         "eval.status_changed"
+                            yield sse_event(event_type, {
+                                "name": name, "namespace": namespace,
+                                "phase": phase, "previousPhase": prev,
+                                "timestamp": now_iso(),
+                            })
+
+                    # Deleted evals
+                    for name in set(last_evals) - set(current_evals):
+                        yield sse_event("eval.status_changed", {
+                            "name": name, "namespace": namespace,
+                            "phase": "deleted", "previousPhase": last_evals[name],
+                            "timestamp": now_iso(),
+                        })
+
+                last_agents = current_agents
+                last_workflows = current_workflows
+                last_evals = current_evals
+                first_poll = False
+
+            except Exception as exc:
+                logger.warning("Notification stream poll error: %s", exc)
+                yield sse_event("system.error", {"message": str(exc)[:300], "timestamp": now_iso()})
+
+            yield sse_keepalive_comment()
+            await asyncio.sleep(5)
+
+    return StreamingResponse(notification_generator(), media_type="text/event-stream")
+
+
+# --------------------------------------------------------------------------- #
+#  Export / Import YAML bundles                                                 #
+# --------------------------------------------------------------------------- #
+
+@app.get("/api/export/bundle")
+def export_yaml_bundle(
+    namespace: str = "default",
+    user=Depends(verify_token),
+):
+    """Export all agents, workflows, and evals in the namespace as a multi-document YAML bundle."""
+    ensure_namespace_access(user, namespace)
+    import yaml as _yaml
+
+    documents: list[dict[str, Any]] = []
+    for plural in ("aiagents", "agentworkflows", "agentevals", "agentpolicies"):
+        items = list_custom_resources(plural, namespace)
+        for item in items:
+            # Strip runtime status and server-managed metadata fields
+            doc = {
+                "apiVersion": item.get("apiVersion", f"{RESOURCE_GROUP}/{RESOURCE_VERSION}"),
+                "kind": item.get("kind", plural),
+                "metadata": {
+                    "name": (item.get("metadata") or {}).get("name", ""),
+                    "namespace": namespace,
+                    "labels": (item.get("metadata") or {}).get("labels", {}),
+                    "annotations": (item.get("metadata") or {}).get("annotations", {}),
+                },
+                "spec": item.get("spec", {}),
+            }
+            # Remove empty labels/annotations
+            if not doc["metadata"]["labels"]:
+                del doc["metadata"]["labels"]
+            if not doc["metadata"]["annotations"]:
+                del doc["metadata"]["annotations"]
+            documents.append(doc)
+
+    bundle = _yaml.dump_all(documents, default_flow_style=False, sort_keys=False)
+    return Response(
+        content=bundle,
+        media_type="application/x-yaml",
+        headers={"Content-Disposition": f"attachment; filename=bundle-{namespace}.yaml"},
+    )
+
+
+@app.post("/api/import/bundle", status_code=201)
+async def import_yaml_bundle(
+    request: Request,
+    namespace: str = "default",
+    user=Depends(verify_token),
+):
+    """Import a multi-document YAML bundle, creating or updating resources."""
+    ensure_namespace_access(user, namespace, "operator")
+    import yaml as _yaml
+
+    raw = await request.body()
+    try:
+        documents = list(_yaml.safe_load_all(raw.decode("utf-8")))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid YAML: {exc}") from exc
+
+    results: list[dict[str, str]] = []
+    for doc in documents:
+        if not isinstance(doc, dict) or "kind" not in doc:
+            continue
+
+        kind = doc["kind"]
+        plural_map = {
+            "AIAgent": "aiagents",
+            "AgentWorkflow": "agentworkflows",
+            "AgentEval": "agentevals",
+            "AgentPolicy": "agentpolicies",
+        }
+        plural = plural_map.get(kind)
+        if not plural:
+            results.append({"name": doc.get("metadata", {}).get("name", "?"), "status": "skipped", "reason": f"Unknown kind: {kind}"})
+            continue
+
+        name = (doc.get("metadata") or {}).get("name", "")
+        if not name:
+            results.append({"name": "(unnamed)", "status": "skipped", "reason": "Missing metadata.name"})
+            continue
+
+        doc.setdefault("metadata", {})["namespace"] = namespace
+
+        from kubernetes import client
+        api = client.CustomObjectsApi()
+
+        try:
+            # Try creating
+            api.create_namespaced_custom_object(
+                group=RESOURCE_GROUP,
+                version=RESOURCE_VERSION,
+                namespace=namespace,
+                plural=plural,
+                body=doc,
+            )
+            results.append({"name": name, "kind": kind, "status": "created"})
+        except Exception as create_exc:
+            if getattr(create_exc, "status", None) == 409:
+                # Already exists — update spec only
+                try:
+                    existing = api.get_namespaced_custom_object(
+                        group=RESOURCE_GROUP,
+                        version=RESOURCE_VERSION,
+                        namespace=namespace,
+                        plural=plural,
+                        name=name,
+                    )
+                    existing["spec"] = doc.get("spec", {})
+                    api.replace_namespaced_custom_object(
+                        group=RESOURCE_GROUP,
+                        version=RESOURCE_VERSION,
+                        namespace=namespace,
+                        plural=plural,
+                        name=name,
+                        body=existing,
+                    )
+                    results.append({"name": name, "kind": kind, "status": "updated"})
+                except Exception as upd_exc:
+                    results.append({"name": name, "kind": kind, "status": "error", "reason": str(upd_exc)[:200]})
+            else:
+                results.append({"name": name, "kind": kind, "status": "error", "reason": str(create_exc)[:200]})
+
+    return {"imported": len([r for r in results if r["status"] in ("created", "updated")]), "results": results}
+
+
+# --------------------------------------------------------------------------- #
+#  System health dashboard                                                      #
+# --------------------------------------------------------------------------- #
+
+@app.get("/api/system/health")
+def system_health(
+    namespace: str = "default",
+    user=Depends(verify_token),
+):
+    """Comprehensive system health check across all subsystems."""
+    ensure_namespace_access(user, namespace)
+
+    checks: dict[str, dict[str, Any]] = {}
+
+    # Database
+    try:
+        from auth_store import ENGINE
+        from sqlalchemy import text as _sa_text
+        with ENGINE.connect() as conn:
+            conn.execute(_sa_text("select 1"))
+        checks["database"] = {"status": "ok"}
+    except Exception as exc:
+        checks["database"] = {"status": "error", "message": str(exc)[:200]}
+
+    # Kubernetes API
+    try:
+        from kubernetes import client
+        v1 = client.CoreV1Api()
+        v1.list_namespace(limit=1)
+        checks["kubernetes"] = {"status": "ok"}
+    except Exception as exc:
+        checks["kubernetes"] = {"status": "error", "message": str(exc)[:200]}
+
+    # CRD counts
+    try:
+        agents = list_custom_resources("aiagents", namespace)
+        workflows = list_custom_resources("agentworkflows", namespace)
+        evals = list_custom_resources("agentevals", namespace)
+        policies = list_custom_resources("agentpolicies", namespace)
+
+        agent_phases: dict[str, int] = {}
+        for a in agents:
+            phase = ((a.get("status") or {}).get("phase") or "unknown").lower()
+            agent_phases[phase] = agent_phases.get(phase, 0) + 1
+
+        workflow_phases: dict[str, int] = {}
+        for w in workflows:
+            phase = ((w.get("status") or {}).get("phase") or "unknown").lower()
+            workflow_phases[phase] = workflow_phases.get(phase, 0) + 1
+
+        checks["resources"] = {
+            "status": "ok",
+            "agents": {"total": len(agents), "by_phase": agent_phases},
+            "workflows": {"total": len(workflows), "by_phase": workflow_phases},
+            "evals": {"total": len(evals)},
+            "policies": {"total": len(policies)},
+        }
+    except Exception as exc:
+        checks["resources"] = {"status": "error", "message": str(exc)[:200]}
+
+    # NATS
+    if NATS_URL:
+        checks["nats"] = {"status": "configured", "url": NATS_URL}
+    else:
+        checks["nats"] = {"status": "not_configured"}
+
+    # Qdrant
+    if QDRANT_URL:
+        checks["qdrant"] = {"status": "configured", "url": QDRANT_URL}
+    else:
+        checks["qdrant"] = {"status": "not_configured"}
+
+    overall = "healthy" if all(
+        c.get("status") in ("ok", "configured", "not_configured")
+        for c in checks.values()
+    ) else "degraded"
+
+    return {
+        "status": overall,
+        "namespace": namespace,
+        "auth_mode": AUTH_MODE,
+        "checks": checks,
+        "timestamp": now_iso(),
+    }

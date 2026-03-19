@@ -12,10 +12,10 @@ import type {
 
 export const TRIGGER_NODE_ID = "__trigger__";
 
-const NODE_W = 260;
-const NODE_H = 80;
-const GAP_X = 60;
-const GAP_Y = 120;
+const NODE_W = 280;
+const NODE_H = 100;
+const GAP_X = 80;
+const GAP_Y = 180;
 
 /* ── Node data contracts ── */
 
@@ -28,9 +28,13 @@ export interface AgentStepNodeData extends Record<string, unknown> {
   agentRef: string;
   prompt: string;
   requireApproval: boolean;
-  stepType: "agent" | "loop";
+  stepType: "agent" | "loop" | "conditional";
   loopConfig?: LoopConfig | null;
+  conditionExpr?: string | null;
+  thenSteps?: string[] | null;
+  elseSteps?: string[] | null;
   stepState?: WorkflowStepState | null;
+  runtimeKind?: string | null;
 }
 
 /* ── Composite type for all composer nodes ── */
@@ -48,6 +52,8 @@ export function workflowToCanvas(
   const nodes: ComposerNode[] = [];
   const edges: Edge[] = [];
 
+  const agentMap = new Map(_agents.map((a) => [a.name, a]));
+
   // Trigger node
   nodes.push({
     id: TRIGGER_NODE_ID,
@@ -62,6 +68,7 @@ export function workflowToCanvas(
     const x = (ex?._composerX as number) ?? undefined;
     const y = (ex?._composerY as number) ?? undefined;
     const stepState = workflow.step_states?.[step.name] ?? null;
+    const agent = agentMap.get(step.agent_ref);
 
     nodes.push({
       id: step.name,
@@ -74,7 +81,11 @@ export function workflowToCanvas(
         requireApproval: step.require_approval,
         stepType: step.step_type ?? "agent",
         loopConfig: step.loop_config,
+        conditionExpr: step.condition_expr ?? null,
+        thenSteps: step.then_steps ?? null,
+        elseSteps: step.else_steps ?? null,
         stepState,
+        runtimeKind: agent?.runtime_kind ?? null,
       },
     });
 
@@ -190,6 +201,9 @@ export function canvasToPayload(
       require_approval: d.requireApproval,
       step_type: d.stepType,
       loop_config: d.loopConfig,
+      condition_expr: d.conditionExpr,
+      then_steps: d.thenSteps,
+      else_steps: d.elseSteps,
       execution: {
         _composerX: node.position.x,
         _composerY: node.position.y,
@@ -211,4 +225,53 @@ export function makeStepId(agentName: string, existingIds: Set<string>): string 
     id = `${base}-${n++}`;
   }
   return id;
+}
+
+/* ── Cycle detection (DFS) ── */
+
+export function hasCycle(
+  edges: Edge[],
+  proposedSource: string,
+  proposedTarget: string,
+): boolean {
+  // Build adjacency list including the proposed edge
+  const adj = new Map<string, string[]>();
+  for (const e of edges) {
+    const list = adj.get(e.source) ?? [];
+    list.push(e.target);
+    adj.set(e.source, list);
+  }
+  const srcList = adj.get(proposedSource) ?? [];
+  srcList.push(proposedTarget);
+  adj.set(proposedSource, srcList);
+
+  // DFS from proposedTarget to see if we can reach proposedSource
+  const visited = new Set<string>();
+  const stack = [proposedTarget];
+  while (stack.length > 0) {
+    const node = stack.pop()!;
+    if (node === proposedSource) return true;
+    if (visited.has(node)) continue;
+    visited.add(node);
+    for (const neighbor of adj.get(node) ?? []) {
+      stack.push(neighbor);
+    }
+  }
+  return false;
+}
+
+/* ── Runtime kind → display helpers ── */
+
+export type RuntimeKindKey = "langgraph" | "goose" | "opencode" | "codex" | string;
+
+const RUNTIME_COLORS: Record<string, string> = {
+  langgraph: "border-l-violet-500",
+  goose: "border-l-amber-500",
+  opencode: "border-l-sky-500",
+  codex: "border-l-emerald-500",
+};
+
+export function runtimeAccentClass(kind?: string | null): string {
+  if (!kind) return "border-l-muted-foreground/40";
+  return RUNTIME_COLORS[kind] ?? "border-l-primary/60";
 }

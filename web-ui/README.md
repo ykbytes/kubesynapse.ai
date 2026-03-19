@@ -24,17 +24,20 @@ The image serves the Vite bundle through Nginx with SPA fallback enabled. In the
 
 - Agent discovery through the API gateway
 - Empty-namespace bootstrap by creating an agent from the UI
+- Template-based agent creation and cloning/export-import driven resource bootstrap
 - Agent editing and deletion with structured editors for file-backed skills and Goose config files
 - Chat invoke and SSE streaming invoke
-- Explicit A2A routing and specialist-team orchestration for LangGraph agents from the chat workbench
+- Explicit A2A routing, chat session persistence, and specialist-team orchestration for LangGraph agents from the chat workbench
 - Goose runtime remains chat-first in the UI; approvals, gateway-routed MCP tools, and sandbox session continuity remain LangGraph-only, while a limited safe subset of Goose-native run controls is exposed for chat (`max_turns`, workspace-relative `working_directory`, and a read-only system prompt preview)
 - Thread continuity per selected agent
 - Approval decisions and retry from the UI
-- Per-agent conversation and activity state
+- Per-agent conversation, activity state, and saved session history
 - Runtime log inspection
 - Selected-agent inspector coverage for parsed skill summaries, capability grants, inbound A2A callers, and discovered peer reachability
-- Workflow creation, editing, inspection, and deletion
-- Evaluation creation, editing, inspection, and deletion
+- Workflow creation, editing, inspection, deletion, run history, and visual composer execution monitoring
+- Evaluation creation, editing, inspection, deletion, and per-case result visualization
+- Policy management, admin user management, audit trail review, usage dashboards, and health dashboard access
+- Command palette, mobile navigation shell, onboarding tour, notifications, and redesigned provider-centric settings management
 
 ## Operator workflow
 
@@ -44,5 +47,11 @@ The UI is built around the same production surfaces exposed by the API gateway a
 - create and edit agents without raw JSON for `skills.files` or Goose config bundles
 - inspect runtime-facing configuration, parsed skill summaries, tool and A2A metadata, logs, and approval state side-by-side with chat
 - use the chat workbench for standard prompts, explicit A2A delegation, or specialist-team requests
+
+## Admin and operations
+
+- The admin workspace exposes user management, audit logs, usage and cost reporting, and a system health dashboard.
+- The settings workspace is provider-centric: operators search providers on the left and manage API keys and enabled models in a focused detail pane on the right.
+- The workflow composer includes conditional and loop step editing, live execution state, inline approvals, and recent run history.
 
 For release verification, run `npm run build` before publishing a new image.
