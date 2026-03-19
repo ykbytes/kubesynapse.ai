@@ -1,8 +1,11 @@
+import { useState } from "react";
 import { Bell, CheckCheck, Trash2, Workflow, Bot, FlaskConical, AlertTriangle, Info, CheckCircle2, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useNotifications, type Notification, type NotificationKind } from "@/contexts/NotificationContext";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
+import type { WorkspaceView } from "@/types";
 
 function kindIcon(kind: NotificationKind) {
   if (kind.startsWith("agent.")) return <Bot className="h-3.5 w-3.5 text-primary" />;
@@ -29,12 +32,31 @@ function relativeTime(ts: string): string {
   return `${Math.floor(hrs / 24)}d ago`;
 }
 
-function NotificationItem({ notif, onRead }: { notif: Notification; onRead: (id: string) => void }) {
+function targetViewForNotification(kind: NotificationKind): WorkspaceView | null {
+  if (kind.startsWith("agent.")) return "agents";
+  if (kind.startsWith("workflow.")) return "workflows";
+  if (kind.startsWith("eval.")) return "evals";
+  return null;
+}
+
+function NotificationItem({
+  notif,
+  onNavigate,
+}: {
+  notif: Notification;
+  onNavigate: (notif: Notification) => void;
+}) {
+  const targetView = targetViewForNotification(notif.kind);
+  const ariaLabel = targetView && notif.name
+    ? `Open ${notif.name} in ${targetView}`
+    : `Mark notification for ${notif.name || "system"} as read`;
+
   return (
     <button
       type="button"
       className={`flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-accent ${notif.read ? "opacity-60" : ""}`}
-      onClick={() => onRead(notif.id)}
+      aria-label={ariaLabel}
+      onClick={() => onNavigate(notif)}
     >
       <span className="mt-0.5 flex-shrink-0">{kindIcon(notif.kind)}</span>
       <div className="flex-1 min-w-0">
@@ -59,10 +81,21 @@ function NotificationItem({ notif, onRead }: { notif: Notification; onRead: (id:
 }
 
 export function NotificationCenter() {
+  const [open, setOpen] = useState(false);
   const { notifications, unreadCount, markRead, markAllRead, clearAll } = useNotifications();
+  const ws = useWorkspace();
+
+  const handleNotificationClick = (notif: Notification) => {
+    markRead(notif.id);
+    const targetView = targetViewForNotification(notif.kind);
+    if (targetView && notif.name) {
+      ws.navigateToResource(targetView, notif.name);
+      setOpen(false);
+    }
+  };
 
   return (
-    <Popover>
+    <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <Button variant="outline" size="icon" className="relative h-8 w-8 border-border/60 text-foreground hover:bg-accent" aria-label="Notifications">
           <Bell className="h-4 w-4" />
@@ -79,12 +112,12 @@ export function NotificationCenter() {
           <div className="flex items-center gap-1">
             {unreadCount > 0 && (
               <Button variant="ghost" size="sm" className="h-6 px-1.5 text-[11px]" onClick={markAllRead}>
-                <CheckCheck className="mr-1 h-3 w-3" /> Read all
+                <CheckCheck className="mr-1 h-3 w-3" /> Read all here
               </Button>
             )}
             {notifications.length > 0 && (
               <Button variant="ghost" size="sm" className="h-6 px-1.5 text-[11px] text-muted-foreground" onClick={clearAll}>
-                <Trash2 className="mr-1 h-3 w-3" /> Clear
+                <Trash2 className="mr-1 h-3 w-3" /> Clear feed
               </Button>
             )}
           </div>
@@ -92,11 +125,11 @@ export function NotificationCenter() {
 
         <ScrollArea className="max-h-72">
           {notifications.length === 0 ? (
-            <p className="px-3 py-6 text-center text-xs text-muted-foreground">No notifications yet</p>
+            <p className="px-3 py-6 text-center text-xs text-muted-foreground">No notifications yet in this session.</p>
           ) : (
             <div className="p-1">
               {notifications.map((n) => (
-                <NotificationItem key={n.id} notif={n} onRead={markRead} />
+                <NotificationItem key={n.id} notif={n} onNavigate={handleNotificationClick} />
               ))}
             </div>
           )}

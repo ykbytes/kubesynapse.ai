@@ -231,7 +231,7 @@ export function AgentTemplateWizard({ open, onOpenChange }: AgentTemplateWizardP
           <DialogDescription>
             {step === "pick"
               ? "Select a pre-configured template to quickly create a new agent."
-              : `Customize "${selected?.name}" before creating.`}
+              : `Customize "${selected?.name}" before applying it to the new-agent form.`}
           </DialogDescription>
         </DialogHeader>
 
@@ -365,7 +365,7 @@ export function AgentTemplateWizard({ open, onOpenChange }: AgentTemplateWizardP
           <Button variant="outline" onClick={handleClose} className="cursor-pointer">Cancel</Button>
           {step === "customize" && (
             <Button onClick={handleApply} disabled={!agentName.trim()} className="cursor-pointer">
-              Create Agent
+              Use Template
             </Button>
           )}
         </DialogFooter>

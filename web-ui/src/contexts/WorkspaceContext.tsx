@@ -108,6 +108,8 @@ export interface WorkspaceContextValue {
   setInspectorOpen: (open: boolean) => void;
   agentViewTab: "config" | "chat";
   setAgentViewTab: (tab: "config" | "chat") => void;
+  configPanelCollapsed: boolean;
+  setConfigPanelCollapsed: (collapsed: boolean) => void;
 
   // Create-agent form
   createAgentName: string;
@@ -160,6 +162,7 @@ export interface WorkspaceContextValue {
   handleDeleteEval: (name: string) => Promise<void>;
   handleSelectResource: (name: string) => void;
   handleCreateNew: () => void;
+  navigateToResource: (view: WorkspaceView, name?: string) => void;
 }
 
 const WorkspaceContext = createContext<WorkspaceContextValue | null>(null);
@@ -222,6 +225,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [agentViewTab, setAgentViewTab] = useState<"config" | "chat">("chat");
+  const [configPanelCollapsed, setConfigPanelCollapsed] = useState(false);
 
   // Create-agent form
   const [createAgentName, setCreateAgentName] = useState(DEFAULT_AGENT_NAME);
@@ -656,6 +660,33 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     else { setEvalCreateMode(true); setSelectedEvalName(""); }
   }, [activeView]);
 
+  const navigateToResource = useCallback((view: WorkspaceView, name?: string) => {
+    setActiveView(view);
+    setInspectorOpen(false);
+
+    if (view === "agents") {
+      setAgentCreateMode(false);
+      setSelectedAgentName(name ?? "");
+      return;
+    }
+
+    if (view === "workflows" || view === "composer") {
+      setWorkflowCreateMode(false);
+      setSelectedWorkflowName(name ?? "");
+      return;
+    }
+
+    if (view === "evals") {
+      setEvalCreateMode(false);
+      setSelectedEvalName(name ?? "");
+      return;
+    }
+
+    if (view === "policies") {
+      setSelectedPolicyName(name ?? "");
+    }
+  }, []);
+
   const ctxValue = useMemo<WorkspaceContextValue>(() => ({
     agents, policies, workflows, evals, selectedAgentDetail, selectedRuntimeKind,
     activeView, selectedAgentName, selectedWorkflowName, selectedEvalName,
@@ -664,7 +695,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     catalogLoading, workspaceError, setWorkspaceError, agentManageError, setAgentManageError, workflowError, evalError,
     discoverablePeers, discoveryLoading, discoveryError,
     savingAgent, deletingAgent, isCreatingAgent, savingWorkflow, deletingWorkflow, runningWorkflow, cancellingWorkflow, savingEval, deletingEval,
-    sidebarCollapsed, setSidebarCollapsed, inspectorOpen, setInspectorOpen, agentViewTab, setAgentViewTab,
+    sidebarCollapsed, setSidebarCollapsed, inspectorOpen, setInspectorOpen, agentViewTab, setAgentViewTab, configPanelCollapsed, setConfigPanelCollapsed,
     createAgentName, createAgentModel, createAgentSystemPrompt, createAgentRuntimeKind,
     createAgentMcpServersText, createAgentMcpSidecarsText, createAgentA2AAllowedCallersText,
     createAgentSkillFileDrafts, createAgentGooseConfigFileDrafts, createAgentOpenCodeConfigFileDrafts, createAgentGitForm, createAgentGitHubForm, createError,
@@ -674,7 +705,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     sidebarCounts, sidebarItems, sidebarSelectedId, emptySidebarMessage, selectedAgent, selectedWorkflow, selectedEval,
     refreshWorkspaceData, handleCreateAgent, handleSaveAgent, handleDeleteAgent,
     handleCreateWorkflow, handleUpdateWorkflow, handleDeleteWorkflow, handleTriggerWorkflow, handleCancelWorkflow,
-    handleCreateEval, handleUpdateEval, handleDeleteEval, handleSelectResource, handleCreateNew,
+    handleCreateEval, handleUpdateEval, handleDeleteEval, handleSelectResource, handleCreateNew, navigateToResource,
   }), [
     agents, policies, workflows, evals, selectedAgentDetail, selectedRuntimeKind,
     activeView, selectedAgentName, selectedWorkflowName, selectedEvalName,
@@ -682,14 +713,14 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     catalogLoading, workspaceError, agentManageError, workflowError, evalError,
     discoverablePeers, discoveryLoading, discoveryError,
     savingAgent, deletingAgent, isCreatingAgent, savingWorkflow, deletingWorkflow, runningWorkflow, cancellingWorkflow, savingEval, deletingEval,
-    sidebarCollapsed, inspectorOpen, agentViewTab,
+    sidebarCollapsed, inspectorOpen, agentViewTab, configPanelCollapsed,
     createAgentName, createAgentModel, createAgentSystemPrompt, createAgentRuntimeKind,
     createAgentMcpServersText, createAgentMcpSidecarsText, createAgentA2AAllowedCallersText,
     createAgentSkillFileDrafts, createAgentGooseConfigFileDrafts, createAgentOpenCodeConfigFileDrafts, createAgentGitForm, createAgentGitHubForm, createError,
     sidebarCounts, sidebarItems, sidebarSelectedId, emptySidebarMessage, selectedAgent, selectedWorkflow, selectedEval,
     refreshWorkspaceData, handleCreateAgent, handleSaveAgent, handleDeleteAgent,
     handleCreateWorkflow, handleUpdateWorkflow, handleDeleteWorkflow, handleTriggerWorkflow, handleCancelWorkflow,
-    handleCreateEval, handleUpdateEval, handleDeleteEval, handleSelectResource, handleCreateNew,
+    handleCreateEval, handleUpdateEval, handleDeleteEval, handleSelectResource, handleCreateNew, navigateToResource,
   ]);
 
   return (

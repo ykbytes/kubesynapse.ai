@@ -1,7 +1,7 @@
 FROM python:3.11-slim
 
-RUN getent group operator >/dev/null || groupadd -r operator \
-	&& id -u operator >/dev/null 2>&1 || useradd -r -g operator -ms /bin/bash operator
+RUN getent group operator >/dev/null || groupadd -r -g 37 operator \
+	&& id -u operator >/dev/null 2>&1 || useradd -r -u 999 -g operator -ms /bin/bash operator
 
 WORKDIR /app
 

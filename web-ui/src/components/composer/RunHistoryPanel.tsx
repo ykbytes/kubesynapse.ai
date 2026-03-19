@@ -3,7 +3,7 @@ import { fetchWorkflowRuns, type WorkflowRunRecord } from "@/lib/api";
 import { useConnection } from "@/contexts/ConnectionContext";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { History, RefreshCw, CheckCircle2, XCircle, Clock, Loader2 } from "lucide-react";
+import { History, RefreshCw, CheckCircle2, XCircle, Clock, Loader2, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface RunHistoryPanelProps {
@@ -84,36 +84,69 @@ export function RunHistoryPanel({ workflowName, collapsed, onToggle }: RunHistor
           <RefreshCw className={cn("h-3 w-3", loading && "animate-spin")} />
         </Button>
       </div>
-      <div className="max-h-32 overflow-y-auto px-3 pb-2 space-y-1">
+      <div className="max-h-48 overflow-y-auto px-3 pb-2 space-y-1">
         {runs.length === 0 && !loading && (
           <p className="text-[10px] text-muted-foreground/60 text-center py-2">No runs recorded yet.</p>
         )}
         {runs.map((run) => (
-          <div
-            key={run.id}
-            className="flex items-center gap-2 rounded-md border bg-card/50 px-2 py-1 text-[10px]"
-          >
-            {phaseIcon(run.phase)}
-            <Badge variant="outline" className={cn("text-[9px] h-4 px-1.5 border", phaseColor(run.phase))}>
-              {run.phase}
-            </Badge>
-            {run.run_id && (
-              <span className="font-mono text-muted-foreground">{run.run_id.slice(0, 8)}</span>
-            )}
-            <span className="text-muted-foreground">
-              {run.completed_steps ?? 0}/{run.total_steps ?? "?"} steps
-            </span>
-            {run.triggered_by && (
-              <span className="text-muted-foreground/60 truncate max-w-20" title={run.triggered_by}>
-                by {run.triggered_by}
-              </span>
-            )}
-            <span className="ml-auto text-muted-foreground/60 font-mono shrink-0">
-              {run.created_at ? new Date(run.created_at).toLocaleString() : ""}
-            </span>
-          </div>
+          <RunRow key={run.id} run={run} />
         ))}
       </div>
+    </div>
+  );
+}
+
+function RunRow({ run }: { run: WorkflowRunRecord }) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <div className="rounded-md border bg-card/50 text-[10px]">
+      <button
+        type="button"
+        onClick={() => setExpanded((e) => !e)}
+        className="flex w-full items-center gap-2 px-2 py-1 text-left hover:bg-accent/30 transition-colors"
+        aria-expanded={expanded}
+        aria-label={`Run ${run.run_id?.slice(0, 8) ?? run.id} — ${run.phase}`}
+      >
+        <span className="transition-transform duration-150" style={{ transform: expanded ? "rotate(90deg)" : "rotate(0deg)" }}>
+          <ChevronRight className="h-2.5 w-2.5 text-muted-foreground" />
+        </span>
+        {phaseIcon(run.phase)}
+        <Badge variant="outline" className={cn("text-[9px] h-4 px-1.5 border", phaseColor(run.phase))}>
+          {run.phase}
+        </Badge>
+        {run.run_id && (
+          <span className="font-mono text-muted-foreground">{run.run_id.slice(0, 8)}</span>
+        )}
+        <span className="text-muted-foreground">
+          {run.completed_steps ?? 0}/{run.total_steps ?? "?"} steps
+        </span>
+        {run.triggered_by && (
+          <span className="text-muted-foreground/60 truncate max-w-20" title={run.triggered_by}>
+            by {run.triggered_by}
+          </span>
+        )}
+        <span className="ml-auto text-muted-foreground/60 font-mono shrink-0">
+          {run.created_at ? new Date(run.created_at).toLocaleString() : ""}
+        </span>
+      </button>
+      {expanded && (
+        <div className="border-t border-border/30 px-2.5 py-1.5 space-y-1 text-[10px] text-muted-foreground">
+          {run.run_id && <div><span className="font-medium">Run ID:</span> <span className="font-mono">{run.run_id}</span></div>}
+          {run.started_at && <div><span className="font-medium">Started:</span> {new Date(run.started_at).toLocaleString()}</div>}
+          {run.completed_at && <div><span className="font-medium">Completed:</span> {new Date(run.completed_at).toLocaleString()}</div>}
+          {run.failed_steps != null && run.failed_steps > 0 && (
+            <div><span className="font-medium text-red-400">Failed steps:</span> {run.failed_steps}</div>
+          )}
+          {run.input_text && (
+            <div>
+              <span className="font-medium">Input:</span>
+              <pre className="mt-0.5 whitespace-pre-wrap break-all bg-muted/30 rounded px-1.5 py-1 max-h-24 overflow-y-auto font-mono">
+                {run.input_text.length > 500 ? `${run.input_text.slice(0, 500)}…` : run.input_text}
+              </pre>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

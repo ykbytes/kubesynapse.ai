@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Plus, Save, Trash2, ShieldAlert, X, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { useConnection } from "@/contexts/ConnectionContext";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import {
@@ -102,6 +103,9 @@ export function PolicyEditor({ selectedPolicyName }: PolicyEditorProps) {
   const [isCreateMode, setIsCreateMode] = useState(false);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [confirmDiscardOpen, setConfirmDiscardOpen] = useState(false);
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
+  const pendingPolicyRef = useRef<PolicyInfo | null | undefined>(undefined);
 
   // Form state
   const [name, setName] = useState("");
@@ -111,17 +115,50 @@ export function PolicyEditor({ selectedPolicyName }: PolicyEditorProps) {
   const [allowedMcpServers, setAllowedMcpServers] = useState<string[]>([]);
   const [mcpRequireHitl, setMcpRequireHitl] = useState(true);
 
+  // Dirty-state tracking: compare current form to the loaded policy
+  const isDirty = useMemo(() => {
+    if (isCreateMode) {
+      return name.trim() !== "" ||
+        inputGuardrails.blockPromptInjection !== DEFAULT_INPUT.blockPromptInjection ||
+        inputGuardrails.maxInputTokens !== DEFAULT_INPUT.maxInputTokens ||
+        inputGuardrails.blockedPatterns.length > 0 ||
+        outputGuardrails.maskPII !== DEFAULT_OUTPUT.maskPII ||
+        outputGuardrails.maxOutputTokens !== DEFAULT_OUTPUT.maxOutputTokens ||
+        outputGuardrails.blockedOutputPatterns.length > 0 ||
+        allowedModels.length > 0 || allowedMcpServers.length > 0 || !mcpRequireHitl;
+    }
+    if (!selectedPolicy) return false;
+    return (
+      JSON.stringify(inputGuardrails) !== JSON.stringify(selectedPolicy.input_guardrails) ||
+      JSON.stringify(outputGuardrails) !== JSON.stringify(selectedPolicy.output_guardrails) ||
+      JSON.stringify(allowedModels) !== JSON.stringify(selectedPolicy.allowed_models) ||
+      JSON.stringify(allowedMcpServers) !== JSON.stringify(selectedPolicy.allowed_mcp_servers) ||
+      mcpRequireHitl !== selectedPolicy.mcp_require_hitl
+    );
+  }, [isCreateMode, name, inputGuardrails, outputGuardrails, allowedModels, allowedMcpServers, mcpRequireHitl, selectedPolicy]);
+
+  // Load form from selected policy — with dirty-state guard
+  function loadPolicy(policy: PolicyInfo) {
+    setIsCreateMode(false);
+    setName(policy.name);
+    setInputGuardrails({ ...policy.input_guardrails });
+    setOutputGuardrails({ ...policy.output_guardrails });
+    setAllowedModels([...policy.allowed_models]);
+    setAllowedMcpServers([...policy.allowed_mcp_servers]);
+    setMcpRequireHitl(policy.mcp_require_hitl);
+  }
+
   // Populate form from selected policy
   useEffect(() => {
     if (selectedPolicy) {
-      setIsCreateMode(false);
-      setName(selectedPolicy.name);
-      setInputGuardrails({ ...selectedPolicy.input_guardrails });
-      setOutputGuardrails({ ...selectedPolicy.output_guardrails });
-      setAllowedModels([...selectedPolicy.allowed_models]);
-      setAllowedMcpServers([...selectedPolicy.allowed_mcp_servers]);
-      setMcpRequireHitl(selectedPolicy.mcp_require_hitl);
+      if (isDirty) {
+        pendingPolicyRef.current = selectedPolicy;
+        setConfirmDiscardOpen(true);
+      } else {
+        loadPolicy(selectedPolicy);
+      }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedPolicy]);
 
   const resetToNew = useCallback(() => {
@@ -212,7 +249,7 @@ export function PolicyEditor({ selectedPolicyName }: PolicyEditorProps) {
           </div>
           <div className="flex items-center gap-2">
             {canMutate && !isCreateMode && (
-              <Button variant="destructive" size="sm" className="h-7 text-xs" onClick={() => void handleDelete()} disabled={deleting}>
+              <Button variant="destructive" size="sm" className="h-7 text-xs" onClick={() => setConfirmDeleteOpen(true)} disabled={deleting}>
                 <Trash2 className="h-3 w-3 mr-1" /> {deleting ? "Deleting..." : "Delete"}
               </Button>
             )}
@@ -330,7 +367,39 @@ export function PolicyEditor({ selectedPolicyName }: PolicyEditorProps) {
             onChange={setMcpRequireHitl}
           />
         </Card>
+
+        {isDirty && (
+          <p className="text-xs text-amber-500">You have unsaved changes.</p>
+        )}
       </div>
+
+      <ConfirmDialog
+        open={confirmDiscardOpen}
+        onOpenChange={(open) => {
+          if (!open) {
+            pendingPolicyRef.current = undefined;
+            setConfirmDiscardOpen(false);
+          }
+        }}
+        title="Discard unsaved changes?"
+        description={`You have unsaved changes to "${name}". Switching to another policy will discard them.`}
+        confirmLabel="Discard"
+        variant="destructive"
+        onConfirm={() => {
+          const pending = pendingPolicyRef.current;
+          pendingPolicyRef.current = undefined;
+          if (pending) loadPolicy(pending);
+        }}
+      />
+      <ConfirmDialog
+        open={confirmDeleteOpen}
+        onOpenChange={setConfirmDeleteOpen}
+        title={`Delete policy "${name}"?`}
+        description="This will permanently remove this policy. Agents referencing it will lose their policy assignment."
+        confirmLabel="Delete"
+        variant="destructive"
+        onConfirm={() => void handleDelete()}
+      />
     </ScrollArea>
   );
 }

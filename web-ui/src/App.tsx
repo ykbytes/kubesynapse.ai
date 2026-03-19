@@ -2,8 +2,8 @@ import "@fontsource/space-grotesk/400.css";
 import "@fontsource/space-grotesk/500.css";
 import "@fontsource/space-grotesk/700.css";
 
-import { PanelRightOpen } from "lucide-react";
-import { lazy, Suspense, useState } from "react";
+import { PanelLeftClose, PanelLeftOpen, PanelRightOpen } from "lucide-react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { Toaster } from "sonner";
 
 import { AgentManagementPanel } from "./components/AgentManagementPanel";
@@ -41,7 +41,7 @@ import { ChatProvider, useChat } from "./contexts/ChatContext";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import { NotificationProvider } from "./contexts/NotificationContext";
 
-import type { EvalInfo, UiMessage, WorkflowInfo } from "./types";
+import type { EvalInfo, UiMessage, WorkflowInfo, WorkspaceView } from "./types";
 import { cloneAgent, exportBundleUrl, importBundle } from "./lib/api";
 import { toast } from "sonner";
 
@@ -81,6 +81,10 @@ function evalStatusFromResource(resource: EvalInfo | null): Record<string, unkno
   };
 }
 
+function supportsInspector(view: WorkspaceView): boolean {
+  return view === "agents" || view === "workflows" || view === "composer" || view === "evals";
+}
+
 // ── NotificationShell — NotificationProvider needs Connection values ──
 
 function NotificationShell({ children }: { children: React.ReactNode }) {
@@ -117,6 +121,7 @@ function AppLayout() {
   const ws = useWorkspace();
   const chat = useChat();
   const [templateWizardOpen, setTemplateWizardOpen] = useState(false);
+  const inspectorSupported = supportsInspector(ws.activeView);
 
   // Gate: show loading spinner while auth initializes, then AuthPage if not authenticated
   if (!conn.authReady) {
@@ -199,6 +204,12 @@ function AppLayout() {
 
   const displayError = ws.workspaceError || conn.connectionError || conn.gatewayError;
 
+  useEffect(() => {
+    if (!inspectorSupported && ws.inspectorOpen) {
+      ws.setInspectorOpen(false);
+    }
+  }, [inspectorSupported, ws.inspectorOpen, ws.setInspectorOpen]);
+
   return (
     <div className="flex h-screen flex-col bg-background text-foreground">
       {/* ── TopBar ── */}
@@ -265,6 +276,13 @@ function AppLayout() {
                     }
                   : undefined
             }
+            quickRunLabel={
+              ws.activeView === "agents"
+                ? "Chat with"
+                : ws.activeView === "workflows" || ws.activeView === "composer"
+                  ? "Trigger"
+                  : undefined
+            }
           />
         </div>
 
@@ -277,7 +295,14 @@ function AppLayout() {
                   <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Workspace Status</p>
                   <h2 className="text-lg font-semibold text-foreground">{heroTitle}</h2>
                 </div>
-                <Button variant="outline" size="sm" className="gap-1.5" onClick={() => ws.setInspectorOpen(true)}>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="gap-1.5"
+                  onClick={() => ws.setInspectorOpen(true)}
+                  disabled={!inspectorSupported}
+                  title={inspectorSupported ? undefined : "Inspector is available for agents, workflows, composer, and evaluations."}
+                >
                   <PanelRightOpen className="h-4 w-4" />
                   Inspector
                 </Button>
@@ -370,8 +395,8 @@ function AppLayout() {
                   </div>
                 )}
 
-                <div className="flex flex-1 gap-4 overflow-hidden min-h-0">
-                  <div className={`${ws.selectedAgentName ? "hidden lg:flex" : "flex"} ${ws.agentViewTab === "config" ? "flex" : "hidden lg:flex"} w-full lg:w-[45%] flex-col overflow-auto`}>
+                <div className="flex flex-1 gap-0 overflow-hidden min-h-0">
+                  <div className={`${ws.selectedAgentName ? "hidden lg:flex" : "flex"} ${ws.agentViewTab === "config" ? "flex" : "hidden lg:flex"} ${ws.configPanelCollapsed ? "lg:hidden" : "w-full lg:w-[45%]"} flex-col overflow-auto`}>
                     {ws.selectedAgentDetail ? (
                       <AgentManagementPanel
                         token={conn.token}
@@ -402,7 +427,16 @@ function AppLayout() {
                   </div>
 
                   {ws.selectedAgentName && (
-                    <div className={`${ws.agentViewTab === "chat" ? "flex" : "hidden lg:flex"} w-full lg:w-[55%] flex-row min-h-0`}>
+                    <div className={`${ws.agentViewTab === "chat" ? "flex" : "hidden lg:flex"} w-full ${ws.configPanelCollapsed ? "lg:w-full" : "lg:flex-1"} flex-row min-h-0`}>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="hidden lg:flex h-full w-6 shrink-0 rounded-none border-r border-border hover:bg-muted/50 items-center justify-center"
+                        onClick={() => ws.setConfigPanelCollapsed(!ws.configPanelCollapsed)}
+                        title={ws.configPanelCollapsed ? "Show agent config" : "Hide agent config"}
+                      >
+                        {ws.configPanelCollapsed ? <PanelLeftOpen className="h-3.5 w-3.5" /> : <PanelLeftClose className="h-3.5 w-3.5" />}
+                      </Button>
                       <ChatSessionPanel
                         sessions={chat.chatSessions}
                         activeSessionId={chat.activeSessionId}
@@ -506,7 +540,27 @@ function AppLayout() {
               <WorkflowComposer />
             </Suspense>
           ) : ws.activeView === "catalog" ? (
-            <SkillsCatalogPanel token={conn.token} />
+            <SkillsCatalogPanel
+              token={conn.token}
+              onAttachSkill={(_skillId, files) => {
+                const newDrafts = Object.entries(files).map(([path, content]) => ({
+                  id: createId(),
+                  path,
+                  content,
+                }));
+                ws.setCreateAgentSkillFileDrafts([...ws.createAgentSkillFileDrafts, ...newDrafts]);
+                ws.setAgentCreateMode(true);
+                ws.setActiveView("agents");
+                toast.success("Skill files added to the new agent form");
+              }}
+              onAttachTool={(toolId) => {
+                const prev = ws.createAgentMcpSidecarsText.trim();
+                ws.setCreateAgentMcpSidecarsText(prev ? `${prev}, ${toolId}` : toolId);
+                ws.setAgentCreateMode(true);
+                ws.setActiveView("agents");
+                toast.success(`MCP sidecar "${toolId}" added to the new agent form`);
+              }}
+            />
           ) : ws.activeView === "policies" ? (
             <PolicyEditor selectedPolicyName={ws.sidebarSelectedId || null} />
           ) : ws.activeView === "settings" ? (
@@ -593,7 +647,7 @@ function AppLayout() {
           onApprove={() => void chat.handleWorkflowApprovalDecision("approved")}
           onDeny={() => void chat.handleWorkflowApprovalDecision("denied")}
         />
-      ) : (
+      ) : ws.activeView === "evals" ? (
         <ResourceInspectorDrawer
           open={ws.inspectorOpen}
           onOpenChange={ws.setInspectorOpen}
@@ -604,13 +658,8 @@ function AppLayout() {
           spec={evalSpecFromResource(ws.selectedEval)}
           details={evalStatusFromResource(ws.selectedEval)}
           emptyMessage="Select an evaluation or create a new one."
-          approvalReason={chat.approvalReason}
-          approvalBusy={chat.approvalBusy}
-          onApprovalReasonChange={chat.setApprovalReason}
-          onApprove={() => undefined}
-          onDeny={() => undefined}
         />
-      )}
+      ) : null}
 
       <MobileNav
         activeView={ws.activeView}

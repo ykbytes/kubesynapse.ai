@@ -877,7 +877,7 @@ def worker_artifact_pvc_name(kind: str, namespace: str, name: str) -> str:
 def artifact_file_path(kind: str, namespace: str, name: str, generation: int) -> str:
     safe_namespace = slugify_name(namespace, max_length=40)
     safe_name = slugify_name(name, max_length=40)
-    return f"{kind}s/{safe_namespace}/{safe_name}/generation-{generation}.json"
+    return f"{ARTIFACT_MOUNT_PATH}/{kind}s/{safe_namespace}/{safe_name}/generation-{generation}.json"
 
 
 def worker_passthrough_env() -> list[dict[str, str]]:
@@ -3116,6 +3116,9 @@ def create_worker_job_manifest(
     artifact_journal_path = workflow_journal_path(artifact_path)
     pod_security_context = {
         "runAsNonRoot": True,
+        "runAsUser": 999,
+        "runAsGroup": 37,
+        "fsGroup": 37,
         "seccompProfile": {"type": "RuntimeDefault"},
     }
     container_security_context = {

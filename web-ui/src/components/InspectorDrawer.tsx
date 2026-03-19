@@ -293,11 +293,11 @@ interface ResourceInspectorDrawerProps {
   details: Record<string, unknown> | null;
   emptyMessage: string;
   pendingApprovalName?: string;
-  approvalReason: string;
-  approvalBusy: boolean;
-  onApprovalReasonChange: (value: string) => void;
-  onApprove: () => void;
-  onDeny: () => void;
+  approvalReason?: string;
+  approvalBusy?: boolean;
+  onApprovalReasonChange?: (value: string) => void;
+  onApprove?: () => void;
+  onDeny?: () => void;
 }
 
 export function ResourceInspectorDrawer({
@@ -325,7 +325,7 @@ export function ResourceInspectorDrawer({
         </SheetHeader>
 
         {/* Approval banner */}
-        {pendingApprovalName && (
+        {pendingApprovalName && onApprove && onDeny && (
           <div className="mx-4 mt-3 rounded-md border border-amber-500/30 bg-amber-500/10 p-3">
             <div className="flex items-center gap-2 text-sm font-medium text-amber-400">
               <AlertTriangle className="h-4 w-4" />
@@ -334,8 +334,8 @@ export function ResourceInspectorDrawer({
             <div className="mt-2 flex gap-2">
               <Input
                 placeholder="Reason (optional)"
-                value={approvalReason}
-                onChange={(e) => onApprovalReasonChange(e.target.value)}
+                value={approvalReason ?? ""}
+                onChange={(e) => onApprovalReasonChange?.(e.target.value)}
                 className="h-9 text-xs"
                 aria-label="Approval reason"
               />

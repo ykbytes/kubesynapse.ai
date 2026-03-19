@@ -12,11 +12,11 @@ operator:
   replicaCount: 1
   image:
     repository: docker.io/yakdhane/ai-operator
-    tag: deploy-20260319-130933
+    tag: deploy-20260319-154451
     pullPolicy: IfNotPresent
   workerImage:
     repository: docker.io/yakdhane/ai-operator
-    tag: deploy-20260319-130933
+    tag: deploy-20260319-154451
     pullPolicy: IfNotPresent
 
 gooseRuntime:
@@ -57,7 +57,7 @@ webUi:
   enabled: true
   image:
     repository: docker.io/yakdhane/ai-agent-sandbox-web-ui
-    tag: deploy-20260319-135048
+    tag: deploy-20260319-154451
     pullPolicy: IfNotPresent
 
 platformSecrets:

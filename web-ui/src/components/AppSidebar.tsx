@@ -33,6 +33,7 @@ interface AppSidebarProps {
   onSelect: (id: string) => void;
   onCreateNew: () => void;
   onQuickRun?: (id: string) => void;
+  quickRunLabel?: string;
 }
 
 const VIEW_META: Record<WorkspaceView, { label: string; icon: typeof Bot }> = {
@@ -80,6 +81,7 @@ export function AppSidebar({
   onSelect,
   onCreateNew,
   onQuickRun,
+  quickRunLabel,
 }: AppSidebarProps) {
   const { canMutate } = useConnection();
   const [filter, setFilter] = useState("");
@@ -252,6 +254,11 @@ export function AppSidebar({
               icon={filter.trim() ? Search : Inbox}
               title={filter.trim() ? "No matches" : emptyMessage}
               description={filter.trim() ? `No items match "${debouncedFilter}"` : undefined}
+              action={
+                !filter.trim() && canMutate && (activeView === "agents" || activeView === "workflows" || activeView === "evals")
+                  ? { label: `Create ${VIEW_META[activeView].label.replace(/s$/, "")}`, onClick: onCreateNew }
+                  : undefined
+              }
               className="py-8"
             />
           )}
@@ -263,6 +270,7 @@ export function AppSidebar({
               isSelected={selectedId === item.id}
               onSelect={onSelect}
               onQuickRun={onQuickRun}
+              quickRunLabel={quickRunLabel}
             />
           ))}
         </div>
@@ -278,13 +286,16 @@ const SidebarItem = memo(function SidebarItem({
   isSelected,
   onSelect,
   onQuickRun,
+  quickRunLabel,
 }: {
   item: SidebarResourceItem;
   index: number;
   isSelected: boolean;
   onSelect: (id: string) => void;
   onQuickRun?: (id: string) => void;
+  quickRunLabel?: string;
 }) {
+  const actionLabel = quickRunLabel ? `${quickRunLabel} ${item.title}` : `Run ${item.title}`;
   return (
     <button
       type="button"
@@ -308,7 +319,8 @@ const SidebarItem = memo(function SidebarItem({
         <span
           role="button"
           tabIndex={0}
-          aria-label={`Run ${item.title}`}
+          aria-label={actionLabel}
+          title={actionLabel}
           onClick={(e) => { e.stopPropagation(); onQuickRun(item.id); }}
           onKeyDown={(e) => { if (e.key === "Enter") { e.stopPropagation(); onQuickRun(item.id); } }}
           className="mt-0.5 hidden shrink-0 rounded-md p-1 text-muted-foreground hover:bg-primary/20 hover:text-primary group-hover:inline-flex"

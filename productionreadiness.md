@@ -1,841 +1,586 @@
-# Production Readiness Improvement Prompt — kubemininions AI Agent Sandbox
+# Production Readiness Execution Prompt — kubemininions AI Agent Sandbox
 
 > **Usage**: Copy this entire prompt into an AI coding assistant session that has access to
-> the kubemininions workspace. The prompt produces concrete code changes that move the
-> platform from demo-grade to client-facing production quality. Prioritised by business
-> impact (P0 = blocks client demos, P1 = expected by enterprise buyers, P2 = polish).
+> the kubemininions workspace. This prompt is designed to drive implementation, not just
+> brainstorming. It assumes the agent will read the code first, reconcile status claims against
+> reality, and then make concrete code, deployment, and documentation changes.
 >
-> **Status as of 2026-03-19**: P0 complete. P1 complete. P2 items 2 and 4 through 8 are complete.
-> P2-1 loading skeletons and P2-3 branding and white-labeling remain. See `[STATUS]` tags on each section.
+> **Important**: This document intentionally distinguishes `Open`, `Partial`, and
+> `Shipped in repo`. Do **not** assume that a `Shipped in repo` item is fully production-ready,
+> fully verified, or deployed. Re-check the code and environment before acting.
 
 ---
 
 ## PROMPT START
 
 You are a senior full-stack engineer and platform architect making the **kubemininions
-AI Agent Sandbox** production-ready for enterprise clients. The platform orchestrates AI
-agents on Kubernetes with LLM access, multi-tool execution, visual workflow composition,
-evaluation suites, and multi-tenant isolation. It is deployed on Kubernetes v1.33.0 via Helm
-(revision 20, namespace `ai-platform`).
+AI Agent Sandbox** truly production-ready for enterprise clients.
 
-Your job is to **implement every improvement below** — not just suggest it. Work through
-each section from P0 → P1 → P2. For each fix: modify the source files directly, verify no
-regressions, rebuild affected containers, and deploy.
+The platform orchestrates AI agents on Kubernetes with LLM access, multi-tool execution,
+visual workflow composition, evaluation suites, human-in-the-loop approvals, and
+multi-tenant isolation.
 
-**Items already implemented** are marked `[DONE]` with an implementation summary and findings.
-**Items still to do** are marked `[TODO]`. **Items with known issues** are marked `[ISSUE]`.
+You must **implement improvements directly** in the workspace. Do not stop at analysis.
+For every area you touch, update code, verify behavior, run the narrowest relevant checks,
+rebuild affected images when required, update deployment values, and deploy.
 
----
-
-## Progress Summary
-
-| Tier | Item | Title | Status |
-|------|------|-------|--------|
-| P0 | P0-1 | Workflow conditional branching & loops | ✅ Done |
-| P0 | P0-2 | Chat session persistence | ✅ Done |
-| P0 | P0-3 | Eval results visualization | ✅ Done |
-| P0 | P0-4 | Admin dashboard & user management | ✅ Done |
-| P0 | P0-5 | Error handling & user feedback | ✅ Done |
-| P1 | P1-1 | Audit logging & activity trail | ✅ Done |
-| P1 | P1-2 | Token usage & cost tracking | ✅ Done |
-| P1 | P1-3 | Workflow execution monitor | ✅ Done |
-| P1 | P1-4 | Agent templates wizard | ✅ Done |
-| P1 | P1-5 | Multi-agent team view | ✅ Done |
-| P1 | P1-6 | Policy editor UI | ✅ Done |
-| P1 | P1-7 | Notification system | ✅ Done |
-| P2 | P2-1 | Loading skeletons | ⬜ TODO |
-| P2 | P2-2 | Command palette | ✅ Done |
-| P2 | P2-3 | Branding & white-label | ⬜ TODO |
-| P2 | P2-4 | Mobile responsive | ✅ Done |
-| P2 | P2-5 | Onboarding tour | ✅ Done |
-| P2 | P2-6 | Clone/duplicate resources | ✅ Done |
-| P2 | P2-7 | Export/import bundles | ✅ Done |
-| P2 | P2-8 | Health dashboard | ✅ Done |
-| — | — | Final build, push & deploy | ⬜ TODO |
+Before changing anything:
+1. Reconcile the status ledger below against the current code.
+2. Treat all `Partial` sections as active work, even if major pieces already exist.
+3. Do not trust historical completion language unless you can verify it in code and, when relevant, in the running environment.
 
 ---
 
-## Architecture Reference
+## Operating Rules
+
+1. **Status discipline**
+   - `Open`: not implemented or only minimally scaffolded.
+   - `Partial`: major pieces exist, but important acceptance criteria remain open.
+   - `Shipped in repo`: implemented in code, but still requires production hardening, UX finish, or deployment verification.
+   - `Verified deployed`: only use this if you actively confirm it during the current session.
+
+2. **Prompt maintenance**
+   - Keep one authoritative status ledger.
+   - If you finish or split an item, update the ledger and the item section together.
+   - Remove obsolete known issues instead of leaving stale warnings behind.
+
+3. **Execution rule**
+   - Do not just append features. Fix misleading UX, broken flows, deployment gaps, and operational weaknesses.
+   - Prefer smaller, verifiable sub-items over broad “done” claims.
+
+4. **Verification rule**
+   - Every completed item must include: implementation change, verification method, remaining risk, and deployment impact.
+
+---
+
+## Status Ledger
+
+| Tier | Item | Title | Status | Notes |
+|------|------|-------|--------|-------|
+| P0 | P0-1 | Data safety, dirty state, and loss prevention | Partial | Policy editor now has dirty-state guard and delete confirmation; agent management, workflow, and settings editors still need protection. |
+| P0 | P0-2 | Functional inspector, navigation, and action integrity | Partial | Eval inspector no longer renders no-op approval controls; sidebar quick-run labels are view-aware; catalog attach paths wired; run-history rows expandable. Broader action audit still open. |
+| P0 | P0-3 | Migration, schema evolution, and durable storage | Open | Schema migration discipline, durable Qdrant profiles, and backup/restore workflows remain open. |
+| P0 | P0-4 | Release gates and rollback readiness | Open | Deploy verification is still weaker than required production rollout gates. |
+| P1 | P1-1 | Agent templates and quick start | Partial | Wizard exists and CTA wording is more accurate; duplication and zero-agent auto-start remain open. |
+| P1 | P1-2 | Team collaboration view | Partial | Team panel exists; richer event fidelity and chat/mobile integration remain open. |
+| P1 | P1-3 | Policy editor completion | Partial | CRUD shipped; dirty-state guard and delete confirmation added. Preview, assignment visibility, and A2A-specific policy controls still open. |
+| P1 | P1-4 | Notification system completion | Partial | SSE, bell, and in-app feed ship in repo; deep-link rows now work, but durable state and browser notifications remain open. |
+| P1 | P1-5 | Workflow monitor completion | Partial | Run-history rows now expandable with full detail; replay and output inspection still open. |
+| P1 | P1-6 | Error state consistency | Partial | Structured API errors exist, but app-wide consistency, offline states, and CTA quality are not complete. |
+| P2 | P2-1 | Loading states and skeleton coverage | Partial | Several surfaces already use skeletons; coverage is inconsistent. |
+| P2 | P2-2 | Command palette and shortcuts | Partial | Command palette exists; shortcut coverage, permission gating, and discoverability are incomplete. |
+| P2 | P2-3 | Branding, white label, and theme consistency | Partial | Brand config exists; logo wiring, accent control, favicon, and consistency are incomplete. |
+| P2 | P2-4 | Mobile responsive completion | Partial | Mobile shell exists; chat/composer parity and full navigation parity remain open. |
+| P2 | P2-5 | Onboarding and contextual help | Partial | First-run tour exists; contextual help and “new” affordances remain open. |
+| P2 | P2-6 | Clone, versioning, and resource history | Partial | Clone flow exists; version history, diff summary, and revert support remain open. |
+| P2 | P2-7 | Export, import, and shareability | Partial | Export/import exists; self-contained bundles and shareable config links remain open. |
+| P2 | P2-8 | Health dashboard completion | Partial | Health shell exists; pod/resource insight and operational quick actions remain open. |
+| X | X-1 | Dummy controls and dead-end UX audit | Partial | Eval approval no-ops removed; sidebar labels view-aware; catalog attach wired; sidebar empty-state CTAs added; run-history rows actionable. Remaining: chat starters, team-view empty repair, operation-log navigation. |
+| X | X-2 | Container size and build reproducibility | Open | Must optimize image size and reproducibility wherever practical. |
+| X | X-3 | Deployment verification and rollback gates | Open | Must make release flow safer than “build, push, helm upgrade”. |
+
+---
+
+## Current Architecture Reference
+
+### Major Components
 
 | Component | Language | Key Files | Purpose |
 |-----------|----------|-----------|---------|
-| API Gateway | Python / FastAPI | `api-gateway/main.py` (~5500 LOC), `jwt_utils.py`, `auth_store.py` (~1100 LOC), `enterprise_auth.py` | REST API (70+ routes), auth, proxy |
-| Operator | Python / Kopf | `operator/main.py`, `worker.py` (~1600 LOC), `state_store.py`, `utils.py` | CRD reconciler, workflow/eval engine |
-| Agent Runtime | Python / LangGraph | `agent-runtime/agent_logic.py`, `guardrails.py` | LLM orchestration + tools |
-| Goose Runtime | Python | `goose-runtime/main.py` | Alternative agent runtime (Block / Goose) |
-| Codex Runtime | Python | `codex-runtime/main.py` | OpenAI Codex agent runtime |
-| OpenCode Runtime | Python/Node | `opencode-runtime/main.py` | OpenCode agent runtime |
-| Web UI | React 18 + TypeScript | `web-ui/src/` (~40 components) | SPA (Vite 6 + Tailwind v4 + shadcn/ui) |
-| 9 MCP Sidecars | Python / FastMCP | `mcp-sidecars/*/server.py` | Tool servers |
-| Helm Chart | YAML | `charts/ai-agent-sandbox/` | K8s deployment manifests |
-| CLI | Python / Click | `cli/agentctl.py` | Command-line agent management |
+| API Gateway | Python / FastAPI | `api-gateway/main.py`, `auth_store.py`, `jwt_utils.py`, `enterprise_auth.py` | Auth, REST API, CRD CRUD, SSE, admin APIs |
+| Operator | Python / Kopf | `operator/main.py`, `operator/worker.py`, `operator/utils.py`, `operator/state_store.py` | Control plane reconciliation, workflow and eval execution |
+| Agent Runtime | Python / LangGraph | `agent-runtime/agent_logic.py`, `guardrails.py` | Main runtime, tool orchestration, guardrails |
+| Goose Runtime | Python | `goose-runtime/main.py` | Alternative runtime adapter |
+| Codex Runtime | Python | `codex-runtime/main.py` | Codex adapter |
+| OpenCode Runtime | Python / Node | `opencode-runtime/main.py` | OpenCode adapter |
+| Web UI | React 18 + TypeScript | `web-ui/src/` | Main console |
+| MCP Sidecars | Python / FastMCP | `mcp-sidecars/*/server.py` | Tool execution services |
+| Helm Chart | YAML | `charts/ai-agent-sandbox/` | Deployment and service manifests |
+| CLI | Python / Click | `cli/agentctl.py` | Scriptable operations |
 
-### CRD Types
+### Core CRDs
 
-| CRD | Plural | Handler File | Purpose |
-|-----|--------|-------------|---------|
-| `AIAgent` | `aiagents` | `operator/main.py` | Agent lifecycle (StatefulSet, Service, NetworkPolicy) |
-| `AgentWorkflow` | `agentworkflows` | `operator/main.py` + `worker.py` | DAG-based multi-agent orchestration |
-| `AgentEval` | `agentevals` | `operator/main.py` + `worker.py` | Scheduled test suites with metric thresholds |
-| `AgentPolicy` | `agentpolicies` | `operator/main.py` | Guardrails, model allowlists, HITL config |
-| `AgentTenant` | `agenttenants` | `operator/main.py` | Namespace provisioning + ResourceQuota |
-| `AgentApproval` | `agentapprovals` | `operator/main.py` | HITL approval gates for workflows |
+1. `AIAgent`
+2. `AgentWorkflow`
+3. `AgentEval`
+4. `AgentPolicy`
+5. `AgentTenant`
+6. `AgentApproval`
 
-### Frontend Architecture
+### Primary Frontend Surfaces
 
-| File | Purpose |
-|------|---------|
-| `App.tsx` | Root layout, view router (context-based, no React Router) |
-| `contexts/WorkspaceContext.tsx` | Agent/workflow/eval/policy CRUD state + selection |
-| `contexts/ChatContext.tsx` | Per-agent chat messages, streaming, specialist team |
-| `contexts/ConnectionContext.tsx` | Auth state, gateway health, SSE keepalive |
-| `contexts/ThemeContext.tsx` | Theme persistence (dark/light/midnight/forest) |
-| `lib/api.ts` | Fetch wrapper (~2100 LOC), SSE streaming, token refresh, typed parsers |
-| `components/WorkflowComposer.tsx` | Visual DAG editor (@xyflow/react), lazy-loaded |
-| `components/ChatWorkbench.tsx` | Chat UI with streaming + tool display |
-| `components/EvalManager.tsx` | Eval suite builder + results integration |
-| `components/SettingsPanel.tsx` | LLM provider/model management |
-| `components/SkillsCatalogPanel.tsx` | Skill browser + attachment |
-| `components/PolicyEditor.tsx` | Policy CRUD form with guardrails |
-| `components/AdminPanel.tsx` | User management (admin-only) |
-| `components/AuditLogPanel.tsx` | Audit log viewer (admin-only) |
-| `components/UsageDashboard.tsx` | Token usage & cost dashboard |
-| `components/AgentTemplateWizard.tsx` | Template-based agent creation |
-| `components/ChatSessionPanel.tsx` | Conversation session sidebar |
-
-### Storage Models (auth_store.py — 10 SQLAlchemy models)
-
-| Model | Table | Purpose |
-|-------|-------|---------|
-| `User` | `users` | User accounts (local + external) |
-| `UserSession` | `user_sessions` | JWT session tracking |
-| `AuditLog` | `audit_logs` | Activity trail (indexed: actor_type, action, resource_kind, created_at) |
-| `UsageRecord` | `usage_records` | Per-invocation token/cost metrics |
-| `WorkflowRun` | `workflow_runs` | Workflow run history |
-| `EvalRun` | `eval_runs` | Eval execution records |
-| `ChatSession` | `chat_sessions` | Conversation sessions (unique: namespace+agent+session_id) |
-| `ChatMessage` | `chat_messages` | Persisted chat messages (unique: message_id) |
-
-### Sidebar Views (`WorkspaceView` type)
-
-```
-"agents" | "workflows" | "composer" | "evals" | "catalog" | "policies" | "settings" | "admin"
-```
-
-Icons: Bot, GitBranch, Blocks, FlaskConical, Package, ShieldAlert, Settings, ShieldCheck
-
-### Current Data Flow
-
-```
-User → Web UI → API Gateway (FastAPI, 70+ routes) → K8s API (CRDs)
-                       ↓
-                 Operator (Kopf) watches CRDs → creates StatefulSets + Services
-                       ↓
-                 Agent Pod (runtime + MCP sidecars) runs LLM loop
-                       ↓
-                 Agent calls MCP sidecars via localhost (code-exec, browser, git, db, etc.)
-                       ↓
-                 Workflows: Operator enqueues worker Jobs → sequential/conditional/loop agent HTTP invocations
-                       ↓
-                 Evals: Operator enqueues eval worker → per-case invocation with metric scoring
-```
+1. Agents and chat workbench
+2. Workflow manager and composer
+3. Evaluation manager and results
+4. Catalog and template flows
+5. Policies
+6. Settings
+7. Admin, audit, and usage dashboards
+8. Notifications and onboarding
 
 ---
 
-## P0 — CRITICAL FOR CLIENT DEMOS `[ALL DONE]`
+## First Step In Every Session
+
+Before implementing any item below, do this reconciliation pass:
+
+1. Open the relevant files and confirm whether the feature is actually absent, partial, or shipped.
+2. Search for existing components, contexts, API endpoints, hooks, and deployment values before creating new ones.
+3. Check for stale or misleading UI labels that suggest a feature exists when it only seeds local state or opens an unrelated panel.
+4. When a feature is already partially built, prefer finishing it cleanly over duplicating it.
+5. Update this document when the truth changes.
 
 ---
 
-### P0-1. Workflow Composer: Conditional Branching & Loops `[DONE]`
+## P0 — Critical Production Gaps
 
-<details>
-<summary>Implementation summary</summary>
+These items block confidence in the product even when core features already exist.
 
-**Files modified**:
-- `operator/worker.py` (~350 lines added) — Loop engine + conditional branching
-- `operator/utils.py` — `validate_workflow_graph()` extended for conditional/loop steps
-- `web-ui/src/components/composer/AgentNode.tsx` — Loop & conditional badges, LoopProgressBar
-- `web-ui/src/types.ts` — `CircuitBreakerConfig`, `LoopExitConditions`, `LoopConfig`, `LoopProgress`
+### P0-1. Data Safety, Dirty State, and Loss Prevention `[Partial]`
 
-**Architectural decisions**:
-- **Unified AgentNode** — Conditional and loop steps are rendered through the existing `AgentNode`
-  component with `stepType` discrimination (badge pills), rather than separate `ConditionalNode` /
-  `LoopNode` components. Keeps the component tree flat and avoids node-type proliferation in
-  `@xyflow/react`.
-- **Safe expression evaluator** — `evaluate_condition_expr()` uses a whitelist of string operators
-  (`_CONDITION_OPS`: `contains`, `equals`, `not_equals`, `starts_with`, `ends_with`, `length_gt`,
-  `length_lt`, `is_empty`, `not_empty`, `matches`) with `and`/`or`/`not` connectives. **No `eval()`**.
-  Uses `_split_connective()` for quote/paren-aware tokenization.
-- **Three-state circuit breaker** — `LoopCircuitBreaker` class: `closed → half_open → open`.
-  Tracks `consecutive_no_progress` against configurable `no_progress_threshold`. Includes
-  `cooldown_minutes`. Detected via word-boundary regex signals: `_SIGNAL_ITEM_COMPLETE`,
-  `_SIGNAL_PLAN_COMPLETE`, `_SIGNAL_NO_PROGRESS`.
-- **Loop session persistence** — Each loop uses a single `loop_thread_id` across iterations so
-  the agent maintains context between iterations.
-- **Plan parsing** — `parse_plan_checklist()` parses markdown checklists (`- [ ]`, `- [x]`,
-  numbered lists, bullets) into structured items for progress tracking.
-- **Conditional propagation** — When a conditional branch resolves, `skipSteps` are set to
-  `"skipped"` status with reason text. The main loop's `skipped` set prevents execution.
+**Goal**: Prevent users from losing edits or destructive state through incidental navigation or clicks.
 
-**Test coverage**: Existing `test_connectivity.py` and operator tests pass. Worker routing
-dispatches by `step_type` at L1480-1610.
+**Required work**:
+- Track dirty state in all major editors: policy editor, workflow composer forms, settings model/key flows, and any agent detail forms.
+- Prompt before replacing unsaved changes when the selected resource changes.
+- Add confirmation dialogs to destructive actions such as deleting policies, deleting models, deleting sessions, and locking users.
+- Add undo or soft-recovery where the backend already makes it practical.
 
-</details>
+**Acceptance criteria**:
+- Switching resources with unsaved edits warns the user.
+- Destructive actions do not fire from a single accidental click.
+- Confirmation copy clearly names the affected resource.
 
-**Requirements** (all met):
-- [x] **Conditional steps**: `steps[].type: "conditional"` with `conditionExpr`, `thenSteps[]`,
-  `elseSteps[]`. Events journaled: `workflow.conditional.evaluating`, `workflow.conditional.resolved`.
-- [x] **Loop execution**: `loopConfig` with `maxIterations` (capped at 100), `planSource`,
-  `plan`, `circuitBreaker`, `exitConditions`. Exposes `{{loop_index}}`, `{{loop_output}}`,
-  `loop_progress` dict (iteration, completedItems, totalItems, circuitBreakerState, exitReason).
-- [x] **Composer UI**: AgentNode renders loop/conditional badge pills, `LoopProgressBar` with
-  animated progress. PropertiesPanel exposes condition expression and loop config fields.
-- [x] **Validation**: `validate_workflow_graph()` validates `thenSteps`/`elseSteps` references
-  exist in `step_map` and adds implicit undirected edges for connectivity checking.
+### P0-2. Functional Inspector, Navigation, and Action Integrity `[Partial]`
 
----
+**Goal**: Eliminate controls that open the wrong surface, do nothing, or imply an action that never happens.
 
-### P0-2. Agent Chat: Conversation History & Session Persistence `[DONE]`
+**Required work**:
+- Keep the global Inspector button view-aware and extend that rule to any new shell surfaces.
+- Remove or properly wire approval controls anywhere they are rendered.
+- Continue auditing buttons labeled `Run`, `Create`, `Open`, `Attach`, `Replay`, or `Inspect` so they perform exactly that action.
+- Hide unsupported actions instead of routing them into unrelated views.
 
-<details>
-<summary>Implementation summary</summary>
+**Acceptance criteria**:
+- No inspector button opens the evaluation drawer from unrelated views.
+- No rendered action calls an empty handler.
+- No label promises a side effect when it only seeds local state.
 
-**Files modified**:
-- `api-gateway/auth_store.py` — `ChatSession` + `ChatMessage` models, 6 CRUD functions
-- `api-gateway/main.py` — 6 session endpoints
-- `web-ui/src/components/ChatSessionPanel.tsx` — New component
-- `web-ui/src/contexts/ChatContext.tsx` — Session state + CRUD callbacks
-- `web-ui/src/lib/api.ts` — `ChatSessionInfo` type + 6 API functions
+### P0-3. Migration, Schema Evolution, and Durable Storage `[Open]`
 
-**API routes implemented**:
-- `GET /api/chat-sessions` — List by agent+namespace+username
-- `POST /api/chat-sessions` — Create with UUID session_id
-- `GET /api/chat-sessions/{session_id}/messages` — Fetch messages
-- `PUT /api/chat-sessions/{session_id}/messages` — Save/replace (bulk)
-- `PATCH /api/chat-sessions/{session_id}` — Rename
-- `DELETE /api/chat-sessions/{session_id}` — Delete cascade
+**Goal**: Replace demo-grade persistence behavior with controlled production data management.
 
-**Key decision**: Messages are bulk-replaced (`PUT`) rather than individually appended. This
-simplifies sync — the frontend is authoritative for session content and pushes snapshots.
+**Required work**:
+- Replace `create_all`-style schema management with explicit migrations.
+- Add deployment-safe migration execution.
+- Make Qdrant durable in production profiles.
+- Document backup and restore workflows for PostgreSQL and Qdrant.
 
-</details>
+**Acceptance criteria**:
+- Production startup does not rely on implicit schema creation.
+- Durable stateful services use explicit persistent storage in production values.
+- Backup and restore steps are automated and documented.
 
-**Requirements** (all met):
-- [x] **Backend**: Full CRUD routes in `api-gateway/main.py`.
-- [x] **Storage**: `ChatSession` (namespace, agent_name, session_id, title, username, timestamps)
-  and `ChatMessage` (session_id, message_id, role, content, status, tool_name, tool_node).
-  Unique constraint on `(namespace, agent_name, session_id)`.
-- [x] **Frontend**: `ChatSessionPanel` component with inline rename editing, relative time
-  display, delete/rename actions. Integrated into ChatWorkbench sidebar.
-- [x] **Auto-title**: Generated from first user message.
-- [x] **Message limit**: Cap enforced.
+### P0-4. Release Gates and Rollback Readiness `[Open]`
+
+**Goal**: Prevent “successful deploy” claims without rollout and smoke verification.
+
+**Required work**:
+- Add a release flow that performs linting, build validation, rollout waiting, and smoke checks.
+- Verify gateway health, auth bootstrap, a minimal agent invocation, and one admin surface after deploy.
+- Define rollback steps and required metadata for every release.
+
+**Acceptance criteria**:
+- A deploy is not considered complete until rollout and smoke checks pass.
+- Rollback steps are codified, not tribal knowledge.
 
 ---
 
-### P0-3. Eval Results: Detailed Results Visualization `[DONE]`
+## P1 — Feature Completion And Operational Hardening
 
-<details>
-<summary>Implementation summary</summary>
+### P1-1. Agent Templates And Quick Start `[Partial]`
 
-**Files modified**:
-- `operator/worker.py` — `run_eval_worker()` produces per-case results with metrics
-- `web-ui/src/components/EvalResultsPanel.tsx` — New component
+**Open work**:
+- Eliminate duplication between `catalog/agent-templates.json` and inline template definitions.
+- Auto-show the template flow for first-time or zero-agent users.
+- Fix misleading CTA language if the flow does not actually create an agent yet.
 
-**Per-case result schema** (from worker.py):
-```python
-{
-  "input": str, "expectedOutput": str, "response": str, "error": str | None,
-  "latencyMs": int, "status": "pass" | "fail", "threadId": str,
-  "metrics": { "relevance": float, "faithfulness": float, "toxicity": float }
-}
-```
+### P1-2. Team Collaboration View `[Partial]`
 
-**Metric scoring**: `exact_match_score()` for relevance/faithfulness (token overlap),
-`estimate_toxicity()` for toxicity. Threshold checking via `failure_threshold`
-(`minRelevance`, `minFaithfulness`, `maxToxicity`).
+**Open work**:
+- Improve per-agent event fidelity instead of inferring activity only from summary snapshots.
+- Add clearer tool-call, delegation, and response flow visibility.
+- Make the team panel work cleanly on mobile and narrow layouts.
+- Support stronger streaming-state fidelity for parallel strategies.
 
-</details>
+### P1-3. Policy Editor Completion `[Partial]`
 
-**Requirements** (all met):
-- [x] **Results table**: Per-case table with input, expected, actual, per-metric scores with
-  color-coded pass/fail badges via `metricBadge()`.
-- [x] **Summary cards**: Aggregate stats (passed, failed, avgRelevance, avgFaithfulness,
-  avgToxicity, avgLatency, duration).
-- [x] **Threshold indicators**: Green/red color coding based on threshold comparison.
-- [x] **Export**: Download button for results export.
+**Open work**:
+- Add live YAML preview.
+- Show which agents are assigned to a policy.
+- Add A2A-specific policy controls.
+- Prevent silent edit loss when the selected policy changes.
 
----
+### P1-4. Notification System Completion `[Partial]`
 
-### P0-4. Admin Dashboard & User Management UI `[DONE]`
+**Open work**:
+- Add deep-link navigation from notifications.
+- Persist notification history and read state beyond the current in-memory session.
+- Add browser Notifications API support.
+- Distinguish session-only clear/read actions from durable actions.
 
-<details>
-<summary>Implementation summary</summary>
+### P1-5. Workflow Monitor Completion `[Partial]`
 
-**Files modified**:
-- `web-ui/src/components/AdminPanel.tsx` — Full user management
-- `web-ui/src/App.tsx` — Admin view with tabs (Users, Audit Log, Usage & Cost)
-- `web-ui/src/components/AppSidebar.tsx` — Admin nav (admin-only via `isAdmin` prop)
+**Open work**:
+- Make run-history rows actionable.
+- Add replay, detail drill-in, and output inspection paths.
+- Improve relationship between approvals, runs, and current workflow state.
 
-**Admin view structure** (in App.tsx):
-```tsx
-<Tabs defaultValue="users">
-  <TabsTrigger value="users">Users</TabsTrigger>
-  <TabsTrigger value="audit">Audit Log</TabsTrigger>
-  <TabsTrigger value="usage">Usage & Cost</TabsTrigger>
-</Tabs>
-```
+### P1-6. Error State Consistency `[Partial]`
 
-</details>
-
-**Requirements** (all met):
-- [x] **User table**: Search/sort by username, role, created_at, is_active. Role badges, status badges.
-- [x] **Create user**: Dialog with username, email, password, role, namespaces.
-- [x] **Edit user**: Dialog for role, status, namespaces, password reset.
-- [x] **Disable/Enable**: Toggle active status.
-- [x] **Visibility**: Admin nav filtered by `isAdmin` in `visibleViews`.
+**Open work**:
+- Add consistent offline, permission-denied, and retry states across all major screens.
+- Ensure every failing user action has a meaningful next-step CTA.
+- Standardize empty states around the reusable empty-state component.
 
 ---
 
-### P0-5. Error Handling & User Feedback `[DONE]`
+## P2 — UX, Shell, And Product Finish
 
-<details>
-<summary>Implementation summary</summary>
+### P2-1. Loading States And Skeleton Coverage `[Partial]`
 
-**Files modified**:
-- `web-ui/src/lib/api.ts` — `ApiError` class with structured categorization
-- `web-ui/src/components/TopBar.tsx` — Gateway connection status indicator
+**Open work**:
+- Fill skeleton gaps in chat, eval manager, composer, and any remaining list/detail screens.
+- Add optimistic placeholders where create flows are slow.
+- Standardize empty states with explanation and a primary recovery action.
 
-**`ApiError` class fields**: `code` (HTTP status), `category` (`ApiErrorCategory`: network |
-auth | validation | server | timeout | unknown), `message` (user-friendly), `detail` (technical).
-Helper: `categorizeStatus()` maps HTTP codes → categories. `isApiError()` type guard.
+### P2-2. Command Palette And Shortcuts `[Partial]`
 
-**Connection indicator**: `StatusBadge` with `HealthIcon` (CheckCircle2/XCircle/Loader2).
-States: ok/healthy → green success, offline → red error, loading → neutral, else → yellow warning.
-Tooltip shows "Gateway health: {status}".
+**Open work**:
+- Expand beyond Ctrl/Cmd+K into a coherent shortcut system.
+- Add role-aware filtering that matches the sidebar.
+- Add OS-aware shortcut labels and a shortcut help overlay.
 
-</details>
+### P2-3. Branding, White Label, And Theme Consistency `[Partial]`
 
-**Requirements** (all met):
-- [x] **Error types**: `ApiError` extends `Error` with code, category, message, detail.
-- [x] **Error display**: Toast-based via `sonner`. Category-specific messages and actions.
-- [x] **Connection indicator**: Persistent status badge in TopBar with color-coded health.
+**Open work**:
+- Wire logo support anywhere brand config already exists.
+- Add favicon and accent-color configuration.
+- Remove dark-only global surfaces when the active theme is light.
 
----
+### P2-4. Mobile Responsive Completion `[Partial]`
 
-## P1 — EXPECTED BY ENTERPRISE BUYERS
+**Open work**:
+- Add full mobile navigation parity for all views.
+- Collapse chat session and team side panels appropriately on small screens.
+- Make composer mobile behavior explicit rather than just allowing the desktop canvas to render badly.
+- Ensure touch-target sizes and menu closures are mobile-safe.
 
----
+### P2-5. Onboarding And Contextual Help `[Partial]`
 
-### P1-1. Audit Logging & Activity Trail `[DONE]`
+**Open work**:
+- Add contextual help, not just first-run overlay.
+- Add “new” markers for recently shipped features.
+- Add help affordances in complex admin, policy, and settings flows.
 
-<details>
-<summary>Implementation summary</summary>
+### P2-6. Clone, Versioning, And Resource History `[Partial]`
 
-**Files modified**:
-- `api-gateway/auth_store.py` — `AuditLog` model + 3 functions
-- `api-gateway/main.py` — `GET /api/admin/audit` + `DELETE /api/admin/audit/purge`
-- `web-ui/src/components/AuditLogPanel.tsx` — Full-featured panel
+**Open work**:
+- Keep clone support.
+- Add version history, diff summaries, and revert or restore flows.
 
-**Schema**: `AuditLog` — actor_sub, actor_username, actor_type (user/operator/system/a2a),
-auth_provider, action (created/updated/deleted/invoked/approved/denied/triggered/cancelled/
-login/login_failed/registered/purged), resource_kind, resource_name, resource_namespace,
-detail_json, ip_address, request_id, created_at. **Indexed**: actor_type, action,
-resource_kind, request_id, created_at.
+### P2-7. Export, Import, And Shareability `[Partial]`
 
-**Frontend**: Color-coded action badges (`ACTION_COLORS`), actor type icons (User/Server/Bot/Link),
-relative time display, pagination (PAGE_SIZE=50), filters (actor, actor_type, action,
-resource_kind), purge button, refresh.
+**Open work**:
+- Make exports self-contained.
+- Include referenced assets such as skill files where required.
+- Add shareable bundle or link semantics if appropriate.
 
-</details>
+### P2-8. Health Dashboard Completion `[Partial]`
 
-**Requirements** (all met):
-- [x] **Audit schema**: Full model with all required fields + indexes.
-- [x] **Emit events**: After state-changing route handlers.
-- [x] **Query endpoint**: `GET /api/admin/audit` with all filters + pagination. Admin-only.
-- [x] **UI**: AuditLogPanel with filterable table, color badges, timeline.
-- [x] **Retention**: `DELETE /api/admin/audit/purge` for old records.
-
----
-
-### P1-2. Token Usage & Cost Tracking `[DONE]`
-
-<details>
-<summary>Implementation summary</summary>
-
-**Files modified**:
-- `api-gateway/auth_store.py` — `UsageRecord` model + `estimate_cost()`, `record_usage()`,
-  `query_usage_summary()`, `query_usage_detail()`
-- `api-gateway/main.py` — `GET /api/usage/summary` + `GET /api/usage/detail`
-- `web-ui/src/components/UsageDashboard.tsx` — Dashboard component
-
-**`UsageRecord` schema**: timestamp, agent_name, namespace, user_id, model, prompt_tokens,
-completion_tokens, total_tokens, estimated_cost_usd, session_id, request_id.
-
-**Dashboard features**: Group-by selector (agent/model/user/day), date range filters,
-summary cards with `formatTokens()` (K/M formatting) and `formatCost()`, detail table
-with pagination.
-
-</details>
-
-**Requirements** (all met):
-- [x] **Token counting**: Per-invocation storage.
-- [x] **Storage schema**: Full `UsageRecord` model.
-- [x] **Cost estimation**: `estimate_cost()` function with model pricing.
-- [x] **API endpoints**: Summary (with group_by) + detail (paginated).
-- [x] **Dashboard UI**: Groups, date range, summary cards, detail table.
+**Open work**:
+- Add pod counts, status breadth, and resource visibility.
+- Add operational quick actions only where safe and authorized.
+- Separate “status shell” from “operator control plane actions”.
 
 ---
 
-### P1-3. Workflow Execution Monitor & Live Dashboard `[DONE]`
+## X-1 — Dummy Controls And Dead-End UX Audit
 
-<details>
-<summary>Implementation summary</summary>
+This section is mandatory. Treat misleading controls as production bugs.
 
-**Files modified**:
-- `web-ui/src/components/composer/ComposerToolbar.tsx` — Progress bar + approval buttons
-- `web-ui/src/components/composer/PropertiesPanel.tsx` — Step output inspector + worker job info
-- `web-ui/src/components/composer/RunHistoryPanel.tsx` — New component
-- `web-ui/src/components/WorkflowComposer.tsx` — Wired approval handling + run history
-- `api-gateway/main.py` — SSE stream + run history endpoints
-- `api-gateway/auth_store.py` — `WorkflowRun` model + `record_workflow_run()`, `list_workflow_runs()`
-- `web-ui/src/lib/api.ts` — `WorkflowRunRecord`, `fetchWorkflowRuns()`, `createWorkflowStatusStream()`
+**Current status**:
+- Inspector routing is view-aware for supported resource views and no longer falls through to the evaluation drawer on unrelated screens.
+- Notification rows now deep-link into the relevant resource view instead of only marking items as read.
+- Template wizard CTA copy now reflects that it applies a template to the create form rather than creating the agent immediately.
+- Evaluation inspector no longer renders approval buttons with no-op handlers.
+- Sidebar quick-run buttons now have view-aware labels ("Chat with" for agents, "Trigger" for workflows) with proper tooltips.
+- Catalog skill and MCP tool attach buttons are wired to seed the agent create form and navigate to the agents view.
+- Sidebar empty states for agents, workflows, and evals now include a create CTA button.
+- Workflow run-history rows are expandable with full run detail (timestamps, input, step counts).
+- Policy editor has dirty-state guard (prompts before discarding unsaved changes) and delete confirmation dialog.
+- Remaining audit areas below are still active work.
 
-**SSE stream** (`GET /api/workflows/{name}/status/stream`): Async generator polling CRD every
-2s. Events: `status` (full WorkflowInfo), `done` (terminal phase), `error`. Uses `sse_event()` /
-`sse_keepalive_comment()` helpers. `StreamingResponse` with `text/event-stream`.
+### Audit Rule
 
-**Progress bar** (ComposerToolbar): `h-1.5` rounded-full bar with percentage text. Color-coded
-(emerald=completed, red=failed, primary=running with animate-pulse).
+Search the app for controls that:
+- only toggle local state when their label implies a real operation,
+- only mark something read instead of opening the relevant resource,
+- render buttons with empty handlers,
+- route into unrelated drawers or views,
+- show browse-only surfaces with no apply path,
+- present empty states with no recovery CTA,
+- show action rows that cannot inspect, open, replay, diff, or navigate.
 
-**Inline approval** (ComposerToolbar): Approve (emerald) / Deny (red) buttons when
-`pendingApproval` is set. Calls `decideApproval()` from api.ts.
+### Required audit areas
 
-**Run history** (RunHistoryPanel): Collapsible panel fetching `WorkflowRunRecord[]`. Phase icons
-(CheckCircle2/XCircle/Loader2/Clock), badges, step progress, triggered_by, timestamp.
+1. Generic inspector routing on unsupported views
+2. Evaluation inspector approval controls
+3. Notification row click behavior
+4. Notification `Read all`
+5. Notification `Clear`
+6. Agent sidebar `Run` / quick-run labeling
+7. Template wizard `Create Agent` CTA accuracy
+8. Catalog skill detail apply path
+9. Catalog MCP tool apply path
+10. Sidebar empty-state CTAs
+11. Chat empty-state starter actions
+12. Team-view empty-state repair path
+13. Workflow run-history row actions
+14. Operation-log row actions
 
-</details>
+### Acceptance criteria
 
-**Requirements** (all met):
-- [x] **Live DAG overlay**: Nodes color-coded by state (via AgentNode existing status rendering).
-- [x] **Step output inspector**: PropertiesPanel shows `state.execution` as JSON with copy button,
-  `state.workerJob` info.
-- [x] **Progress bar**: completedSteps/totalSteps with percentage and color coding.
-- [x] **SSE stream**: `GET /api/workflows/{name}/status/stream`.
-- [x] **Approval inline**: Approve/deny buttons in ComposerToolbar.
-- [x] **Run history**: RunHistoryPanel with past runs list.
-
----
-
-### P1-4. Agent Templates & Quick-Start Wizard `[DONE]`
-
-<details>
-<summary>Implementation summary</summary>
-
-**Files created**:
-- `catalog/agent-templates.json` — 8 templates
-- `web-ui/src/components/AgentTemplateWizard.tsx` — Wizard dialog component
-
-**Files modified**:
-- `web-ui/src/App.tsx` — "From Template" button + wizard integration
-
-**Templates** (8 total): code-assistant, research-analyst, data-engineer, devops-agent,
-browser-agent, goose-developer, opencode-agent, messaging-bot. Each has: id, name,
-description, icon, category, runtime_kind, model, system_prompt, mcp_sidecars, mcp_servers.
-
-**Wizard UI**: Two-step dialog (pick template → customize). Category filter buttons
-(all/development/research/data/operations/automation/communication). Template cards with
-icon, name, description, category badge, runtime badge, MCP sidecar badges. On apply:
-sets workspace context create form fields, switches to agents view in create mode.
-
-</details>
-
-> **[ISSUE]** Templates are duplicated — hardcoded inline in `AgentTemplateWizard.tsx` AND
-> stored in `catalog/agent-templates.json`. They are not synchronized at runtime. Consider
-> fetching from the catalog file via the API or importing at build time.
-
-**Requirements** (all met):
-- [x] **Template catalog**: `catalog/agent-templates.json` with 8 templates.
-- [x] **Wizard UI**: 2-step dialog with category filter, card grid, customization form.
-- [x] **Template format**: id, name, description, icon, runtime_kind, model, system_prompt,
-  mcp_sidecars, mcp_servers.
-- [ ] **Quick-start**: Auto-show wizard for zero-agent users (not yet connected to empty state).
+- No high-visibility button is misleading.
+- No action row ends in a dead-end when the label implies a next step.
+- Unsupported actions are hidden or relabeled.
+- Read-only views are clearly described as read-only.
 
 ---
 
-### P1-5. Multi-Agent Team Collaboration View `[TODO]`
+## X-2 — 30 Additional Production-Readiness Areas
 
-**Current state**: `ChatWorkbench` has inline specialist team configuration (props:
-`specialistSubagents`, `specialistTeamConfigured`, CRUD callbacks). Types defined:
-`SpecialistSubagentDraft`, `SubagentInvocationResult`, `SubagentInvocationMetadata` in
-`types.ts`. **No standalone `TeamView.tsx` component exists.**
+Implement or audit the following areas in addition to the feature backlog above.
+Group them, but do not skip any.
 
-**Files to create/modify**:
-- `web-ui/src/components/TeamView.tsx` — New component
-- `web-ui/src/components/ChatWorkbench.tsx` — Integrate team visualization
-- `agent-runtime/agent_logic.py` — Emit structured events for subagent delegation
+### UX And Workflow Completion
 
-**Requirements**:
-- [ ] **Team visualization**: Collapsible right-side panel showing:
-  - List of active subagents with status (idle, thinking, responding)
-  - Current agent's activity (which tool it's calling, what it's generating)
-  - Message flow between agents (chat bubbles with agent avatars)
-  - Delegation arrows showing which agent delegated to which
-- [ ] **Agent avatars**: Deterministic gradient initials from agent names.
-- [ ] **Activity feed**: Timeline of events:
-  - "Agent A delegated to Agent B: 'research X'"
-  - "Agent B called tool: web-search"
-  - "Agent B returned result to Agent A"
-  - "Agent A synthesized final response"
-- [ ] **Streaming per agent**: When multiple agents stream simultaneously (parallel
-  strategy), show separate streaming indicators per agent.
+1. View-specific inspector behavior
+2. Action-label accuracy across the shell
+3. Confirmation coverage for destructive admin flows
+4. Dirty-form protection on policy and settings screens
+5. Deep-link behavior from notifications
+6. Actionable empty states everywhere
+7. Actionable run history
+8. Actionable operation log
 
-**Implementation guidance** (from existing code analysis):
-- The `SubagentInvocationMetadata` type already tracks `delegatingAgentName`, `targetAgentName`,
-  `delegationTimestamp`, `invocationStart` — use these for the activity feed.
-- The `SubagentInvocationResult` type has `status`, `response`, `duration`, `agentName` —
-  use for the subagent status display.
-- Wire into `ChatContext` which already manages `specialistSubagents` state.
+### Accessibility And Keyboard Behavior
 
----
+9. Keyboard-accessible key visibility controls
+10. Keyboard-accessible session actions on touch and non-hover devices
+11. Focus management for dialogs, drawers, and sheet navigation
+12. OS-aware shortcut labels
+13. Shortcut help overlay
+14. Consistent ARIA labeling on icon-only buttons
 
-### P1-6. Policy Editor UI `[DONE]`
+### Mobile And Responsive Parity
 
-<details>
-<summary>Implementation summary</summary>
+15. Full mobile navigation parity across all views
+16. Mobile chat layout without fixed-width side panels
+17. Mobile-safe composer behavior
+18. Close-on-select behavior for mobile drawers and sheets
+19. Touch-target audit for all high-frequency controls
 
-**Files modified/created**:
-- `api-gateway/main.py` — `PolicyRequest`, `PolicyUpdateRequest` models, `build_policy_spec()`,
-  POST/GET/PATCH/DELETE endpoints
-- `web-ui/src/types.ts` — `PolicyInputGuardrails`, `PolicyOutputGuardrails`, expanded `PolicyInfo`
-- `web-ui/src/lib/api.ts` — Updated `parsePolicyInfoPayload()`, `CreatePolicyPayload`,
-  `UpdatePolicyPayload`, `fetchPolicy()`, `createPolicy()`, `updatePolicy()`, `deletePolicy()`
-- `web-ui/src/components/PolicyEditor.tsx` — New component
-- `web-ui/src/components/AppSidebar.tsx` — Added "Policies" view (ShieldAlert icon)
-- `web-ui/src/contexts/WorkspaceContext.tsx` — Policy sidebar items, selection, auto-select
-- `web-ui/src/App.tsx` — Policies view routing
+### Notifications, Shell, And Product Finish
 
-**API routes**:
-- `POST /api/policies` — Create policy (validates name regex: `^[a-z0-9][a-z0-9\-]*[a-z0-9]$`)
-- `GET /api/policies/{policy_name}` — Read single policy
-- `PATCH /api/policies/{policy_name}` — Update policy spec (operator role required)
-- `DELETE /api/policies/{policy_name}` — Delete policy (operator role required)
+20. Durable notification history
+21. Browser notification support
+22. Role-aware command palette actions
+23. Theme-aware global overlays and toasts
+24. Brand logo, favicon, and accent wiring
 
-**`build_policy_spec()` normalizes field names**: Accepts both camelCase (`blockPromptInjection`)
-and snake_case (`block_prompt_injection`) for API flexibility.
+### Container Size And Build Reproducibility
 
-**PolicyEditor component**: Reusable `TagListEditor` (for blockedPatterns, allowedModels,
-allowedMcpServers — Enter to add, X to remove, duplicate prevention), `ToggleField`
-(ON/OFF button toggle). Sections: Input Guardrails, Output Guardrails, Access Control.
+25. Mutable image-tag removal in chart values
+26. Base-image pinning with digest strategy
+27. Multi-stage Python builds where runtime layers still carry build tools
+28. `.dockerignore` coverage for every image context
+29. Heavy image slimming for browser, OpenCode, Codex, and kubernetes sidecars
+30. Dependency lock strategy for Python and Node
+31. Optional dependency separation from default runtime images where feasible
+32. Static asset compression and immutable cache headers for nginx-served UI
+33. Image size budgets and post-build inspection
 
-</details>
+### Deployment Safety And State Durability
 
-**Requirements** (status):
-- [x] **Policy CRUD API**: POST, GET, PATCH, DELETE with auth (operator role for mutations).
-- [x] **Policy editor UI**: Form with input/output guardrails, model/MCP allowlists, HITL toggle.
-- [ ] **Policy preview**: Live YAML CRD spec preview not yet implemented.
-- [ ] **Assignment view**: Which agents use this policy — not yet shown in the editor.
-- [ ] **A2A Policy section**: Allowed targets, max timeout, require HITL — not exposed in form.
+34. Functional readiness probes, not just shallow checks
+35. Observability coverage consistency across components
+36. Migration discipline replacing implicit schema creation
+37. Backup and restore for PostgreSQL and Qdrant
+38. Qdrant persistence in production profiles
+39. Multi-replica production profile for critical stateless services
+40. Post-deploy smoke verification
+41. Rollback playbook and release metadata
+42. Cost and concurrency controls for tenants and workloads
+
+For each numbered area above, if it is already partially implemented, finish it rather than re-creating it.
 
 ---
 
-### P1-7. Notification System `[TODO]`
+## X-3 — Container Size And Runtime Efficiency
 
-**Current state**: Only ephemeral toasts via `sonner` (`toast.error()`, `toast.success()`)
-used ad-hoc throughout components. **No `NotificationCenter.tsx` nor `NotificationContext.tsx`
-exist.** No persistent notification store, no notification bell, no SSE notification stream.
+Treat image size and reproducibility as production concerns, not optional cleanup.
 
-**Files to create/modify**:
-- `api-gateway/main.py` — Add `GET /api/notifications/stream` SSE endpoint
-- `web-ui/src/components/NotificationCenter.tsx` — New component
-- `web-ui/src/components/TopBar.tsx` — Add notification bell icon with unread badge
-- `web-ui/src/contexts/NotificationContext.tsx` — New context
+### Objectives
 
-**Requirements**:
-- [ ] **SSE notification stream**: `GET /api/notifications/stream` — Long-lived SSE
-  connection pushing events:
-  - `agent.status_changed` (agent became ready / failed / deleted)
-  - `workflow.completed` / `workflow.failed` / `workflow.approval_needed`
-  - `eval.completed` / `eval.failed`
-  - `system.connection_restored`
-- [ ] **Notification bell**: Bell icon in TopBar with unread count badge. Dropdown with
-  recent notifications (last 50). Each: icon, title, timestamp, read/unread.
-  Click navigates to relevant resource.
-- [ ] **Toast notifications**: Brief toast via `sonner` on arrival, auto-dismiss 5s.
-- [ ] **Browser notifications**: Notifications API (with permission prompt) for
-  background tab events.
-- [ ] **Mark as read**: Individual + "mark all as read".
+1. Reduce pull time and cold-start latency.
+2. Shrink runtime CVE surface.
+3. Make builds reproducible.
+4. Remove unneeded compilers, package managers, caches, and broad dependency drift from final images.
 
-**Implementation guidance**:
-- The SSE pattern already exists in `GET /api/workflows/{name}/status/stream` — reuse
-  `sse_event()` and `sse_keepalive_comment()` helpers.
-- Use a similar async generator approach: poll K8s CRD status changes every 2-5s,
-  compare against last-seen state, emit deltas.
-- For the context, pattern after `ChatContext.tsx` which manages SSE connections.
-- The TopBar already has a status badge area — add the bell icon next to it.
+### Required work
+
+- Replace mutable tags such as `latest` or `main-latest` in production-facing values.
+- Convert remaining single-stage Python images to multi-stage builds where practical.
+- Use narrow build contexts and add `.dockerignore` files where missing.
+- Pin downloaded binaries and external install sources.
+- Audit heavyweight runtime images and define target budgets.
+- Keep the web UI’s existing multi-stage pattern and improve surrounding images to match that standard.
+- Where enterprise auth or other optional features inflate the default image, consider extras or profile-based installs if that can be done safely.
+
+### Acceptance criteria
+
+- Every production image has a reproducible build story.
+- Final runtime images do not contain unnecessary build toolchains where avoidable.
+- Build context and dependency drift are measurably reduced.
 
 ---
 
-## P2 — POLISH & COMPETITIVE EDGE `[ALL TODO]`
+## Cross-Cutting Checklists
+
+### UX State Matrix
+
+For every major screen, verify:
+- loading
+- empty
+- success
+- validation error
+- server error
+- offline or degraded gateway
+- permission denied
+
+### Accessibility Checklist
+
+Verify:
+- keyboard access to every major action
+- visible focus states
+- no hover-only critical actions
+- correct dialog focus trap behavior
+- sufficient contrast in dark and light themes
+- screen-reader labels for icon-only controls
+
+### Browser And Device Matrix
+
+Verify at minimum:
+- Chrome / Edge
+- Firefox
+- Safari if applicable
+- phone-sized layout
+- tablet-sized layout
+- narrow desktop layout
+
+### API And Data Checklist
+
+For backend changes, verify:
+- auth via `Depends(verify_token)` where required
+- namespace access enforcement
+- indexes for new tables
+- backward-compatible response handling where possible
+- pagination for list endpoints
+- migration impact
+
+### Observability Checklist
+
+Verify:
+- logs are structured enough for debugging
+- metrics exposure is consistent across services
+- traces or OTLP propagation are coherent where already supported
+- health/readiness reflect real dependency state
+
+### Deployment Checklist
+
+Before calling an area complete:
+- build affected images
+- push them
+- update `deploy/values.dockerhub.local.yaml`
+- `helm upgrade` the release
+- wait for rollout
+- validate the UI and key APIs
 
 ---
 
-### P2-1. Loading States & Skeleton Screens `[TODO]`
+## Known Issues To Keep Current
 
-**Current state**: The `Skeleton` UI component exists at `web-ui/src/components/ui/skeleton.tsx`
-but is only used in the sidebar's loading state. Most views show nothing during data fetches.
+### `[ISSUE-1]` Status Board Drift
 
-**Files to modify**:
-- All major panel components (see list below)
-- `web-ui/src/contexts/WorkspaceContext.tsx` — Expose loading flags per resource type
-
-**Requirements**:
-- [ ] **Agent list skeleton**: 4-5 skeleton cards in sidebar (gray pulse).
-- [ ] **Chat workbench**: Empty state with suggested prompts based on agent's system prompt.
-- [ ] **Eval manager**: Skeleton table rows while loading.
-- [ ] **Settings**: Skeleton cards while loading providers/models.
-- [ ] **Composer**: Skeleton canvas with placeholder nodes.
-- [ ] **Empty states**: Every list view with illustration, description, primary CTA.
-- [ ] **Optimistic updates**: Show item in list immediately ("creating..." badge).
-
-**Implementation guidance**:
-- The sidebar already uses `loading` prop + `Skeleton` — extend this pattern.
-- `WorkspaceContext` has `catalogLoading` state — add similar flags for agent/workflow/eval
-  initial loads.
-
----
-
-### P2-2. Keyboard Shortcuts & Command Palette `[TODO]`
-
-**Files to create/modify**:
-- `web-ui/src/hooks/useKeyboardShortcuts.ts` — New hook
-- `web-ui/src/components/CommandPalette.tsx` — New component (uses shadcn `Command`)
-- `web-ui/src/App.tsx` — Register shortcuts
-
-**Requirements**:
-- [ ] **Command palette**: `Ctrl+K` opens command palette with:
-  - Quick agent/workflow search
-  - View switching
-  - Actions (new agent, new workflow, trigger workflow)
-  - Recent items
-- [ ] **Keyboard shortcuts**: Ctrl+N (new agent), Ctrl+Enter (send message), Escape (close),
-  Ctrl+/ (toggle sidebar), 1-5 (switch views when no input focused).
-- [ ] **Shortcut help**: `?` key shows cheat sheet overlay.
-
-**Implementation guidance**:
-- shadcn `Command` component already exists at `web-ui/src/components/ui/command.tsx`.
-- Use `useEffect` + `document.addEventListener("keydown", ...)` for global shortcuts.
-- Check `document.activeElement` tag to avoid firing shortcuts when typing.
-
----
-
-### P2-3. Dark/Light Theme Polish & Branding `[TODO]`
-
-**Current state**: Four themes (dark, light, midnight, forest) managed by `ThemeContext.tsx`.
-Color consistency varies across components.
-
-**Files to modify**:
-- `web-ui/src/index.css` — Theme tokens
-- `web-ui/src/components/TopBar.tsx` — Branding area
-- `web-ui/src/App.tsx` — Brand config
-
-**Requirements**:
-- [ ] **Brand customization**: `BRAND_CONFIG` env variable (JSON): logo URL, product name,
-  primary accent color, favicon URL.
-- [ ] **Theme consistency**: Audit all components for hardcoded colors. Replace with CSS vars.
-- [ ] **Login page branding**: Custom logo and product name on auth page.
-
----
-
-### P2-4. Responsive Mobile Experience `[TODO]`
-
-**Current state**: Basic responsive layout (sidebar hidden on mobile, tab switcher for
-agent config/chat). Composer is not usable on mobile.
-
-**Files to modify**:
-- `web-ui/src/components/WorkflowComposer.tsx` — Mobile adaptation
-- `web-ui/src/App.tsx` — Responsive layout
-- `web-ui/src/components/AppSidebar.tsx` — Mobile drawer
-
-**Requirements**:
-- [ ] **Mobile sidebar**: Slide-out drawer (shadcn `Sheet`) on mobile.
-- [ ] **Composer mobile**: Read-only minimap on < 768px with "Open in desktop" message.
-- [ ] **Touch interactions**: All targets ≥ 44×44px, swipe gestures for chat.
-- [ ] **Bottom navigation**: Bottom tab bar on mobile.
-
-**Implementation guidance**:
-- shadcn `Sheet` component exists at `web-ui/src/components/ui/sheet.tsx` — use for drawer.
-- `@xyflow/react` has `proOptions.hideAttribution` and minimap plugin.
-
----
-
-### P2-5. Onboarding & Guided Tours `[TODO]`
-
-**Files to create/modify**:
-- `web-ui/src/components/OnboardingTour.tsx` — New component
-- `web-ui/src/contexts/WorkspaceContext.tsx` — Track onboarding state
-
-**Requirements**:
-- [ ] **First-run tour**: Highlight agent creation, catalog, chat, composer, settings.
-- [ ] **Feature tooltips**: "New!" badges on recent features.
-- [ ] **Contextual help**: Info icons (ℹ️) on complex fields with explainer tooltips.
-- [ ] **Empty state CTAs**: "Learn more" on every empty state.
-
----
-
-### P2-6. Agent Cloning & Version History `[TODO]`
-
-**Files to modify**:
-- `api-gateway/main.py` — Clone endpoint, version history
-- `operator/main.py` — Version tracking in CRD annotations
-- `web-ui/src/components/AgentManagementPanel.tsx` — Clone button, version list
-
-**Requirements**:
-- [ ] **Clone agent**: `POST /api/agents/{name}/clone` with optional `newName`. Copy all spec.
-- [ ] **Version history**: Track via `metadata.generation`, show diff summary, revert support.
-
-**Implementation guidance**:
-- The generic CRUD helpers `create_custom_resource()` already exist — use for clone.
-- Agent detail already loads full spec via `fetchAgentDetail()` — serialize spec for the clone.
-
----
-
-### P2-7. Export & Import (Sharing Agents/Workflows) `[TODO]`
-
-**Files to modify**:
-- `api-gateway/main.py` — Export/import endpoints
-- `web-ui/src/components/ExportImport.tsx` — New component
-- `cli/agentctl.py` — Export/import commands
-
-**Requirements**:
-- [ ] **Export**: `GET /api/agents/{name}/export` — self-contained YAML bundle (agent spec +
-  skills + policy + workflows).
-- [ ] **Import**: `POST /api/import` — Accept bundle, validate, create resources.
-- [ ] **CLI**: `agentctl agents export/import`.
-- [ ] **Sharing URL**: Base64-encoded config in URL fragment.
-
----
-
-### P2-8. Health Dashboard & System Overview `[TODO]`
-
-**Files to create/modify**:
-- `web-ui/src/components/HealthDashboard.tsx` — New component
-- `api-gateway/main.py` — System health aggregation endpoint
-- `web-ui/src/App.tsx` — Add dashboard view
-
-**Requirements**:
-- [ ] **System health endpoint**: `GET /api/system/health` (admin-only).
-  Components: api-gateway, operator, litellm, postgresql, redis, nats, qdrant.
-  Pod counts, resource usage, active agents/workflows.
-- [ ] **Dashboard UI**: Status cards, agent overview, workflow overview, resource usage charts,
-  quick actions (restart operator, clear stale workflows, purge old PVCs).
-
-**Implementation guidance**:
-- Gateway health already exists at `GET /api/health` — extend rather than replace.
-- K8s API calls can use the existing `kubernetes.client` already imported in main.py.
-- Consider using the existing `SettingsPanel` pattern for the card layout.
-
----
-
-## KNOWN ISSUES & TECHNICAL DEBT
-
-Issues discovered during implementation that should be addressed:
-
-### `[ISSUE-1]` Duplicate WorkflowRun Model in auth_store.py
-
-**Severity**: Medium — silent override, potential schema confusion.
-
-`auth_store.py` contains **two `WorkflowRun` class definitions** (approximately around L163
-and L236). The second definition silently overrides the first. The first has detailed fields
-(`spec_json`, `step_results_json`, `step_states_json`, `artifact_path`, `journal_path`,
-`worker_job_name`), while the second is a simplified version (`total_steps`, `completed_steps`,
-`failed_steps`, `started_at`, `completed_at`).
-
-**Fix**: Merge into a single model that includes all needed columns, or rename the second to
-`WorkflowRunSummary` with a different table name.
+The prompt must not mark an item fully done while its own subsection still lists open requirements.
 
 ### `[ISSUE-2]` Template Catalog Duplication
 
-**Severity**: Low — maintenance burden.
+Templates exist both in the catalog file and in inline frontend definitions. Remove duplication or establish one authoritative source.
 
-Agent templates are defined in two places:
-1. `catalog/agent-templates.json` — canonical file
-2. `web-ui/src/components/AgentTemplateWizard.tsx` — hardcoded inline array
+### `[ISSUE-3]` Policy Editor Incompleteness
 
-Changes to one won't reflect in the other. **Fix**: Either fetch templates via an API endpoint
-(`GET /api/templates`) that reads the JSON file, or import the JSON at build time via Vite's
-`import` statement.
+Policy preview, assignment visibility, and A2A-specific controls remain open.
 
-### `[ISSUE-3]` Policy Editor Missing Features
+### `[ISSUE-4]` Template Wizard Auto-Show
 
-**Severity**: Low — nice-to-have polish.
+Zero-agent onboarding still needs automatic template guidance.
 
-The PolicyEditor implements core guardrail editing but is missing:
-- Live YAML CRD spec preview (syntax-highlighted, updating as form changes)
-- "Assignment view" showing which agents reference this policy
-- A2A policy section (allowed_targets, max_timeout, require_hitl for A2A calls)
+### `[ISSUE-5]` Notification Completion Gap
 
-### `[ISSUE-4]` Agent Template Wizard Auto-Show Not Connected
+Notifications exist in-app, but durable state, browser notifications, and deep-link behavior are incomplete.
 
-**Severity**: Low.
+### `[ISSUE-6]` Mobile Composer And Chat Parity
 
-The P1-4 requirement for auto-showing the wizard when a user has zero agents is not yet
-connected. The `AgentTemplateWizard` opens via a "From Template" button but doesn't
-automatically appear for new users with empty workspaces.
+Mobile shell exists, but full parity for chat side panels and composer behavior is incomplete.
+
+### `[ISSUE-7]` Export And Import Completeness
+
+Export/import exists, but self-contained bundle semantics and shareability are incomplete.
+
+### `[ISSUE-8]` Branding Wiring Gap
+
+Brand config exists, but logo, favicon, and richer white-label support are not fully wired.
 
 ---
 
-## IMPLEMENTATION GUIDELINES
+## Build And Deploy Pattern
 
-### Execution Order
-1. ~~P0 items~~ ✅ All complete
-2. ~~P1-1 through P1-4, P1-6~~ ✅ Complete
-3. **Next**: P1-5 (Team View), P1-7 (Notifications)
-4. **Then**: P2-1 → P2-8
-5. **Finally**: Build, push, deploy all images
-
-### Build & Deploy Pattern
-For each change:
-1. Modify source files
-2. Run existing tests (`pytest` for Python, `npm test` for frontend)
+For each change set:
+1. Modify source files.
+2. Run narrow relevant checks first, then broader checks if needed.
 3. Build affected images: `podman build -t docker.io/yakdhane/<image>:<tag>`
-4. Push to registry: `podman push docker.io/yakdhane/<image>:<tag>`
-5. Update `deploy/values.dockerhub.local.yaml` with new tags
-6. `helm upgrade ai-agent-sandbox ./charts/ai-agent-sandbox -n ai-platform -f deploy/values.dockerhub.local.yaml`
+4. Push images.
+5. Update `deploy/values.dockerhub.local.yaml`.
+6. Deploy with Helm.
+7. Wait for rollout.
+8. Perform smoke verification.
 
-**Docker Hub**: Username `yakdhane`. Images: `api-gateway`, `operator`, `web-ui`,
-`agent-runtime`, `goose-runtime`, `codex-runtime`, `opencode-runtime`, plus MCP sidecars.
+**Images in scope**: `api-gateway`, `operator`, `web-ui`, `agent-runtime`, `goose-runtime`, `codex-runtime`, `opencode-runtime`, and MCP sidecars.
 
-### Code Standards
-- **Python**: Type hints on function signatures, FastAPI `Depends(verify_token)` for auth,
-  `ensure_namespace_access(user, namespace, "operator")` for role-gated mutations
-- **TypeScript**: Strict mode, React functional components with hooks, Tailwind for styling
-- **API conventions**: RESTful, `X-Request-Id` propagation, meaningful HTTP status codes
-- **UI conventions**: Use existing shadcn/ui components (Button, Dialog, Card, Tabs, Badge,
-  Input, Label, ScrollArea, Separator, Sheet, Tooltip, Command, Select, Popover, Textarea,
-  Accordion, Alert, Skeleton), Tailwind dark-mode via CSS custom properties
-- **State management**: React Context API (no Redux). Pattern: `WorkspaceContext` for CRUD,
-  `ChatContext` for chat, `ConnectionContext` for auth, `ThemeContext` for theme.
-- **API client pattern**: `fetchAuthenticated()` → `parseJsonResponse()` → typed parser
-  function (e.g., `parsePolicyInfoPayload()`) using `expectRecord()`, `readString()`,
-  `readOptionalNumber()`, `readStringArray()` helpers.
+---
 
-### Files You Must NOT Break
-These have been security-hardened. Do not modify their security controls:
-- `api-gateway/enterprise_auth.py` — OIDC/SAML/LDAP auth (JWKS verification, cache TTL)
-- `api-gateway/jwt_utils.py` — JWT validation (REQUIRE_JWT_SECRET)
-- `mcp-sidecars/*/server.py` — Sidecar security (SSRF, SQL injection, path traversal)
-- `operator/main.py` — Pod security contexts, automountServiceAccountToken, ResourceQuota
-- `charts/ai-agent-sandbox/templates/*` — RBAC, NetworkPolicies, PodSecurity
+## Definition Of Done For Any Item
 
-### Quality Checklist
-For each feature, verify:
-- [ ] Works in dark and light themes
-- [ ] Shows loading state during API calls
-- [ ] Shows meaningful error on failure (toast via sonner)
-- [ ] Admin-only features check `isAdmin` / use `ensure_namespace_access(user, ns, "operator")`
-- [ ] New API endpoints have `Depends(verify_token)` authentication
-- [ ] New database tables have proper indexes
-- [ ] No console.log statements left in production code
-- [ ] TypeScript compiles clean (`get_errors` returns no errors)
+Do not mark an item complete unless all of the following are true:
+
+1. The implementation exists in code.
+2. The primary UX path works end-to-end.
+3. Loading, empty, error, and permission-denied states are acceptable.
+4. The action is not misleading or dead-ended.
+5. Relevant tests or validation checks pass.
+6. Deployment impact is understood and, if required, exercised.
+7. The status ledger and known-issues section are updated.
 
 ## PROMPT END

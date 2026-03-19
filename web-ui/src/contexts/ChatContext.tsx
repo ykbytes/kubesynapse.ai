@@ -806,8 +806,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const handleNewSession = useCallback(async () => {
     if (!token.trim() || !selectedAgentName) return;
     try {
-      const firstMsg = messages[0];
-      const title = firstMsg?.content?.slice(0, 60) || "New Chat";
+      const title = "New Chat";
       const session = await createChatSession(token, namespace, selectedAgentName, title);
       // Save current messages into the new session
       if (messages.length > 0) {
