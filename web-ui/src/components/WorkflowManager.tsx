@@ -143,6 +143,11 @@ function stepStatusIcon(status: string, isApprovalWaiting: boolean): { icon: Rea
         icon: <XCircle className="h-4 w-4 text-orange-400" />,
         ring: "border-orange-500/30 bg-orange-500/10",
       };
+    case "continued":
+      return {
+        icon: <AlertTriangle className="h-4 w-4 text-amber-400" />,
+        ring: "border-amber-500/30 bg-amber-500/10",
+      };
     default:
       return {
         icon: <Circle className="h-4 w-4 text-muted-foreground/50" />,
@@ -159,6 +164,8 @@ function statusBadgeVariant(status: string): "default" | "secondary" | "destruct
     case "failed":
     case "cancelled":
       return "destructive";
+    case "continued":
+      return "secondary";
     case "running":
     case "queued":
       return "secondary";
@@ -173,6 +180,7 @@ function ProgressSummaryBar({ summary, phase }: { summary: WorkflowSummary; phas
   const total = summary.totalSteps ?? 0;
   const completed = summary.completedSteps ?? 0;
   const failed = summary.failedSteps ?? 0;
+  const continued = summary.continuedSteps ?? 0;
   const skipped = summary.skippedSteps ?? 0;
   const waiting = summary.waitingApprovalSteps ?? 0;
   const done = completed + failed + skipped;
@@ -190,6 +198,11 @@ function ProgressSummaryBar({ summary, phase }: { summary: WorkflowSummary; phas
         {failed > 0 && (
           <span className="flex items-center gap-1 text-destructive">
             <XCircle className="h-3.5 w-3.5" /> {failed} failed
+          </span>
+        )}
+        {continued > 0 && (
+          <span className="flex items-center gap-1 text-amber-400">
+            <AlertTriangle className="h-3.5 w-3.5" /> {continued} continued
           </span>
         )}
         {skipped > 0 && (
@@ -348,28 +361,28 @@ function StepDetailCard({
               <ShieldCheck className="mr-1 h-3 w-3" />review
             </Badge>
           )}
-          {(state as any)?.verificationResult && (
+          {state?.verificationResult && (
             <Badge
               variant="outline"
               className={`text-[10px] ${
-                (state as any).verificationResult.passed
+                state.verificationResult.passed
                   ? "border-green-500/30 bg-green-500/10 text-green-300"
                   : "border-red-500/30 bg-red-500/10 text-red-300"
               }`}
             >
-              {(state as any).verificationResult.passed ? "✓ verified" : "✗ verify failed"}
+              {state.verificationResult.passed ? "✓ verified" : "✗ verify failed"}
             </Badge>
           )}
-          {(state as any)?.reviewResult && (
+          {state?.reviewResult && (
             <Badge
               variant="outline"
               className={`text-[10px] ${
-                (state as any).reviewResult.approved
+                state.reviewResult.approved
                   ? "border-green-500/30 bg-green-500/10 text-green-300"
                   : "border-amber-500/30 bg-amber-500/10 text-amber-300"
               }`}
             >
-              {(state as any).reviewResult.approved ? "✓ approved" : "✗ rejected"}
+              {state.reviewResult.approved ? "✓ approved" : "✗ rejected"}
             </Badge>
           )}
           <span className="text-xs text-muted-foreground">
@@ -413,41 +426,59 @@ function StepDetailCard({
             )}
 
             {/* verification result */}
-            {(state as any)?.verificationResult && (
+            {state?.verificationResult && (
               <div className={`rounded-lg border px-3 py-2 ${
-                (state as any).verificationResult.passed
+                state.verificationResult.passed
                   ? "border-green-500/30 bg-green-500/10 text-green-300"
                   : "border-red-500/30 bg-red-500/10 text-red-300"
               }`}>
                 <span className="font-medium">
-                  Verification: {(state as any).verificationResult.passed ? "PASSED" : "FAILED"}
+                  Verification: {state.verificationResult.passed ? "PASSED" : "FAILED"}
                 </span>
-                {(state as any).verificationResult.criteria && (
-                  <div className="mt-1 text-muted-foreground">Criteria: {(state as any).verificationResult.criteria}</div>
+                {state.verificationResult.criteria && (
+                  <div className="mt-1 text-muted-foreground">Criteria: {state.verificationResult.criteria}</div>
                 )}
-                {(state as any).verificationResult.response && (
-                  <div className="mt-1 whitespace-pre-wrap">{(state as any).verificationResult.response}</div>
+                {state.verificationResult.response && (
+                  <div className="mt-1 whitespace-pre-wrap">{state.verificationResult.response}</div>
                 )}
               </div>
             )}
 
             {/* review result */}
-            {(state as any)?.reviewResult && (
+            {state?.reviewResult && (
               <div className={`rounded-lg border px-3 py-2 ${
-                (state as any).reviewResult.approved
+                state.reviewResult.approved
                   ? "border-green-500/30 bg-green-500/10 text-green-300"
                   : "border-amber-500/30 bg-amber-500/10 text-amber-300"
               }`}>
                 <span className="font-medium">
-                  Review: {(state as any).reviewResult.verdict ?? ((state as any).reviewResult.approved ? "APPROVED" : "REJECTED")}
+                  Review: {state.reviewResult.verdict ?? (state.reviewResult.approved ? "APPROVED" : "REJECTED")}
                 </span>
-                {(state as any).reviewResult.criteria && (
-                  <div className="mt-1 text-muted-foreground">Criteria: {(state as any).reviewResult.criteria}</div>
+                {state.reviewResult.criteria && (
+                  <div className="mt-1 text-muted-foreground">Criteria: {state.reviewResult.criteria}</div>
                 )}
-                {(state as any).reviewResult.response && (
-                  <div className="mt-1 whitespace-pre-wrap">{(state as any).reviewResult.response}</div>
+                {state.reviewResult.response && (
+                  <div className="mt-1 whitespace-pre-wrap">{state.reviewResult.response}</div>
                 )}
               </div>
+            )}
+
+            {/* iteration failures */}
+            {state?.iterationFailures && state.iterationFailures.length > 0 && (
+              <details>
+                <summary className="cursor-pointer text-xs font-medium text-amber-300 hover:text-amber-200">
+                  {state.iterationFailures.length} iteration failure(s)
+                </summary>
+                <div className="mt-1 space-y-1">
+                  {state.iterationFailures.map((f, i) => (
+                    <div key={i} className="rounded-md border border-red-500/20 bg-red-500/5 px-2 py-1 text-[11px]">
+                      <span className="text-muted-foreground">Iteration {f.iteration}</span>
+                      {f.failureClass && <span className="ml-1 text-red-400">({f.failureClass})</span>}
+                      <span className="ml-1 text-red-300">{f.error}</span>
+                    </div>
+                  ))}
+                </div>
+              </details>
             )}
 
             {/* error */}

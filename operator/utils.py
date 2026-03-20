@@ -166,16 +166,43 @@ def parse_runtime_config_files(raw_value: Any, *, source: str) -> dict[str, Any]
     return normalized
 
 
+_FENCED_JSON_RE = re.compile(r"```(?:json)?\s*\n([\s\S]*?)\n```")
+
+
 def parse_json_output(text: str) -> Any | None:
+    """Extract a JSON object or array from agent response text.
+
+    Tries two strategies:
+    1. The entire stripped text is a valid JSON object/array.
+    2. A markdown code-fenced block (````` ```json ... ``` `````) contains
+       valid JSON.  When multiple fenced blocks exist, the *last* one wins
+       (agents typically place their final answer at the end).
+    """
     candidate = text.strip()
     if not candidate:
         return None
-    if not ((candidate.startswith("{") and candidate.endswith("}")) or (candidate.startswith("[") and candidate.endswith("]"))):
-        return None
-    try:
-        return json.loads(candidate)
-    except ValueError:
-        return None
+    # Strategy 1: entire text is JSON
+    if (candidate.startswith("{") and candidate.endswith("}")) or (
+        candidate.startswith("[") and candidate.endswith("]")
+    ):
+        try:
+            return json.loads(candidate)
+        except ValueError:
+            pass
+    # Strategy 2: extract from markdown code fences
+    fences = _FENCED_JSON_RE.findall(candidate)
+    for fenced_content in reversed(fences):
+        fenced = fenced_content.strip()
+        if not fenced:
+            continue
+        if (fenced.startswith("{") and fenced.endswith("}")) or (
+            fenced.startswith("[") and fenced.endswith("]")
+        ):
+            try:
+                return json.loads(fenced)
+            except ValueError:
+                continue
+    return None
 
 
 def _resolve_template_value(value: Any) -> str:

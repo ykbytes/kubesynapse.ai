@@ -4,6 +4,7 @@ import logging
 import os
 import random
 import re
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -1136,8 +1137,8 @@ def execute_loop_step(
             return {
                 "state": "failed",
                 "stepName": step_name,
-                "stepResult": {"agentRef": step.get("agentRef", ""), "response": "", "status": "failed", "error": str(exc), "output": {"text": "", "json": None, "type": "empty"}, "attempts": 0},
-                "stepState": build_step_state(step_name=step_name, step=step, status_name="failed", attempts=0, started_at=started_at, completed_at=now_iso(), latency_ms=0, worker_job=worker_job, execution_policy=execution_policy, error=f"Plan generation failed: {exc}"),
+                "stepResult": {"agentRef": step.get("agentRef", ""), "response": "", "status": "failed", "error": str(exc), "output": {"text": "", "json": None, "type": "empty"}, "attempts": 1},
+                "stepState": build_step_state(step_name=step_name, step=step, status_name="failed", attempts=1, started_at=started_at, completed_at=now_iso(), latency_ms=0, worker_job=worker_job, execution_policy=execution_policy, error=f"Plan generation failed: {exc}"),
             }
 
     checklist = parse_plan_checklist(plan_text)
@@ -1246,6 +1247,11 @@ def execute_loop_step(
             all_loop_warnings.extend(result.get("warnings") or [])
         except Exception as exc:
             logger.warning("Loop iteration %d failed for step '%s': %s", iteration, step_name, exc)
+            # Cancel the agent session to prevent orphaned processes.
+            try:
+                cancel_agent_session(agent_ref, TARGET_NAMESPACE, thread_id)
+            except Exception:
+                pass
             circuit_breaker.record_progress(False)
             loop_progress["circuitBreakerState"] = circuit_breaker.to_dict()
             failure_entry = {
@@ -1659,6 +1665,30 @@ def execute_conditional_step(
     }
 
 
+# Patterns that indicate actionable review criteria (commands to execute,
+# not just evaluation criteria to judge against).
+_ACTIONABLE_CRITERIA_RE = re.compile(
+    r"""
+    (?:^|\s)(?:run|execute|merge|build|install|test|deploy|start|create|clone|pull|push|checkout)\s  # imperative verbs
+    | `[^`]{3,}`           # inline code spans (likely commands)
+    | (?:^|\s)(?:pnpm|npm|npx|yarn|pip|pytest|git|make|cargo|docker|kubectl)\s  # CLI tool names
+    | \$\s*\w              # shell-style $command
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+
+def _review_criteria_is_actionable(criteria: str) -> bool:
+    """Return True if *criteria* contains executable actions (commands, tool invocations).
+
+    When actionable, the review prompt should instruct the agent to *execute*
+    the criteria rather than merely evaluate the output text.
+    """
+    if not criteria:
+        return False
+    return _ACTIONABLE_CRITERIA_RE.search(criteria) is not None
+
+
 class ReviewRejectedError(RuntimeError):
     def __init__(self, message: str, review_result: dict[str, Any]):
         super().__init__(message)
@@ -1691,19 +1721,34 @@ def execute_review_step(
     started_at = now_iso()
     agent_ref = str(step.get("agentRef", ""))
 
-    review_prompt_body = (
-        "You are a reviewer. Evaluate the following output against the review criteria.\n\n"
-        f"## Review Criteria\n{review_criteria}\n\n"
-        f"## Output to Review\n{previous_output}\n\n"
-        "## Instructions\n"
-        "Respond with exactly APPROVED or REJECTED on the first line.\n"
-        "Then provide specific findings as a numbered list."
-    )
+    actionable = _review_criteria_is_actionable(review_criteria)
+    if actionable:
+        review_prompt_body = (
+            "You are a reviewer with execution authority. Execute the review criteria "
+            "step by step in the workspace, then determine whether the work passes.\n\n"
+            f"## Review Criteria (execute each item)\n{review_criteria}\n\n"
+            f"## Prior Step Output (for reference)\n{previous_output}\n\n"
+            "## Important\n"
+            "- Check the actual files in /workspace rather than relying solely on the summaries above.\n"
+            "- Run every command listed in the criteria and report its output.\n"
+            "- After executing all criteria, respond with exactly APPROVED or REJECTED on the first line.\n"
+            "- Then provide specific findings as a numbered list."
+        )
+    else:
+        review_prompt_body = (
+            "You are a reviewer. Evaluate the following output against the review criteria.\n\n"
+            f"## Review Criteria\n{review_criteria}\n\n"
+            f"## Output to Review\n{previous_output}\n\n"
+            "## Instructions\n"
+            "- Check the actual files in /workspace rather than relying solely on the summaries above.\n"
+            "- Respond with exactly APPROVED or REJECTED on the first line.\n"
+            "- Then provide specific findings as a numbered list."
+        )
     review_prompt = f"[Project Context]\n{project_context}\n\n{review_prompt_body}" if project_context else review_prompt_body
 
     append_journal_event(
         "workflow.review.started",
-        {"runId": run_id, "step": step_name, "criteria": review_criteria},
+        {"runId": run_id, "step": step_name, "criteria": review_criteria, "actionable": actionable},
     )
 
     for attempt in range(1, int(execution_policy["maxAttempts"]) + 1):
@@ -1786,6 +1831,25 @@ def execute_review_step(
             latency_ms = int((time.perf_counter() - started_perf) * 1000)
             completed_at = now_iso()
             thread_id = build_thread_id("review", TARGET_NAME, run_id, step_name)
+
+            # Cancel the running session to prevent orphaned agent
+            # processes from consuming resources after a timeout.
+            try:
+                cancel_agent_session(agent_ref, TARGET_NAMESPACE, thread_id)
+            except Exception:
+                pass
+
+            append_journal_event(
+                "workflow.review.attempt.failed",
+                {
+                    "runId": run_id,
+                    "step": step_name,
+                    "attempt": attempt,
+                    "latencyMs": latency_ms,
+                    "error": str(exc),
+                    "failureClass": type(exc).__name__,
+                },
+            )
             should_retry = (
                 bool(execution_policy["retryable"])
                 and attempt < int(execution_policy["maxAttempts"])
@@ -1794,6 +1858,15 @@ def execute_review_step(
                 backoff = min(
                     float(execution_policy["backoffSeconds"]) * (2 ** (attempt - 1)),
                     300.0,
+                )
+                append_journal_event(
+                    "workflow.review.retrying",
+                    {
+                        "runId": run_id,
+                        "step": step_name,
+                        "attempt": attempt,
+                        "sleepSeconds": backoff,
+                    },
                 )
                 if backoff > 0:
                     time.sleep(backoff)
@@ -1986,6 +2059,7 @@ def run_workflow_worker() -> None:
         def _execute_frontier_step(
             step: dict[str, Any],
             pending: dict[str, Any] | None,
+            on_iteration_complete: Any = None,
         ) -> dict[str, Any]:
             step_type = str(step.get("type", "agent")).strip()
             if step_type == "loop":
@@ -1995,6 +2069,7 @@ def run_workflow_worker() -> None:
                     step_results,
                     run_id,
                     worker_job,
+                    on_iteration_complete=on_iteration_complete,
                     project_context=project_context,
                 )
             if step_type == "review":
@@ -2124,12 +2199,31 @@ def run_workflow_worker() -> None:
                     float(normalize_step_execution(f_step).get("timeoutSeconds", 600))
                     for f_step in frontier
                 ) + 120  # step timeout + buffer
+                # Thread-safe progress callback for parallel loop steps
+                _progress_lock = threading.Lock()
+
+                def _make_parallel_on_iteration(step_name: str):
+                    def _on_iter(progress: dict[str, Any]) -> None:
+                        with _progress_lock:
+                            step_states[step_name] = step_states.get(step_name, {})
+                            step_states[step_name]["loopProgress"] = progress
+                            patch_workflow_status(
+                                plural=plural, phase="running", generation=generation,
+                                run_id=run_id, total_steps=len(steps), current_step=step_name,
+                                started_at=started_at, step_states=step_states, worker_job=worker_job,
+                                pending_approval=None, extra_summary={"loopProgress": progress},
+                            )
+                    return _on_iter
+
                 with ThreadPoolExecutor(max_workers=len(frontier)) as executor:
                     future_map = {
                         executor.submit(
                             _execute_frontier_step,
                             step,
                             None,
+                            _make_parallel_on_iteration(str(step.get("name", "")))
+                            if str(step.get("type", "agent")).strip() == "loop"
+                            else None,
                         ): str(step.get("name", ""))
                         for step in frontier
                     }

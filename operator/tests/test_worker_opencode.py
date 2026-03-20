@@ -372,6 +372,95 @@ class ExecuteReviewStepTests(unittest.TestCase):
         self.assertFalse(outcome["stepState"]["reviewResult"]["approved"])
         self.assertEqual(outcome["stepResult"]["reviewResult"]["verdict"], "REJECTED")
 
+    @patch("worker.cancel_agent_session")
+    @patch("worker.wait_for_agent_runtime_ready")
+    @patch("worker.append_journal_event")
+    @patch("worker.invoke_agent_runtime")
+    def test_review_step_cancels_session_on_timeout(
+        self,
+        mock_invoke: MagicMock,
+        mock_journal: MagicMock,
+        _mock_ready: MagicMock,
+        mock_cancel: MagicMock,
+    ) -> None:
+        """Bug: review step must cancel agent session on failure to prevent orphans."""
+        import worker
+
+        mock_invoke.side_effect = TimeoutError("agent runtime timed out")
+
+        outcome = worker.execute_review_step(
+            {
+                "name": "code-review",
+                "type": "review",
+                "agentRef": "reviewer-agent",
+                "reviewCriteria": "Check tests pass",
+                "execution": {"maxAttempts": 1, "retryable": True},
+            },
+            workflow_input="",
+            step_results={},
+            run_id="run-cancel",
+            worker_job={"name": "j1", "namespace": "ns"},
+        )
+
+        self.assertEqual(outcome["state"], "failed")
+        mock_cancel.assert_called_once()
+        cancel_args = mock_cancel.call_args
+        self.assertEqual(cancel_args[0][0], "reviewer-agent")
+
+    @patch("worker.cancel_agent_session")
+    @patch("worker.wait_for_agent_runtime_ready")
+    @patch("worker.append_journal_event")
+    @patch("worker.invoke_agent_runtime")
+    def test_review_step_journals_failed_attempt_and_retry(
+        self,
+        mock_invoke: MagicMock,
+        mock_journal: MagicMock,
+        _mock_ready: MagicMock,
+        mock_cancel: MagicMock,
+    ) -> None:
+        """Bug: review step must log journal events for failed attempts and retries."""
+        import worker
+
+        call_count = 0
+
+        def _invoke_side_effect(*args: Any, **kwargs: Any) -> dict[str, Any]:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise TimeoutError("timed out")
+            return {
+                "response": "APPROVED\nAll tests pass.",
+                "thread_id": "review-retry",
+                "status": "completed",
+            }
+
+        mock_invoke.side_effect = _invoke_side_effect
+
+        outcome = worker.execute_review_step(
+            {
+                "name": "review-step",
+                "type": "review",
+                "agentRef": "reviewer-agent",
+                "reviewCriteria": "Tests must pass",
+                "execution": {
+                    "maxAttempts": 2,
+                    "retryable": True,
+                    "backoffSeconds": 0,
+                },
+            },
+            workflow_input="",
+            step_results={},
+            run_id="run-retry",
+            worker_job={"name": "j1", "namespace": "ns"},
+        )
+
+        self.assertEqual(outcome["state"], "completed")
+
+        journal_events = [call[0][0] for call in mock_journal.call_args_list]
+        self.assertIn("workflow.review.attempt.failed", journal_events)
+        self.assertIn("workflow.review.retrying", journal_events)
+        mock_cancel.assert_called_once()
+
 
 class LoopStepThreadIdTests(unittest.TestCase):
     """Bug 5: loop steps use a single thread_id across iterations."""
@@ -764,6 +853,139 @@ class ValidateWorkflowStepLimitTests(unittest.TestCase):
                 validate_workflow_graph(steps)
         finally:
             utils.MAX_WORKFLOW_STEPS = original
+
+
+class ReviewCriteriaActionableDetectionTests(unittest.TestCase):
+    """_review_criteria_is_actionable should detect executable criteria."""
+
+    def _check(self, criteria: str) -> bool:
+        from worker import _review_criteria_is_actionable
+        return _review_criteria_is_actionable(criteria)
+
+    def test_pure_evaluation_criteria_not_actionable(self) -> None:
+        criteria = (
+            "Code follows the project style guide. "
+            "No unused imports. All functions have docstrings."
+        )
+        self.assertFalse(self._check(criteria))
+
+    def test_empty_criteria_not_actionable(self) -> None:
+        self.assertFalse(self._check(""))
+
+    def test_run_command_is_actionable(self) -> None:
+        self.assertTrue(self._check("run `pnpm build` and report the output"))
+
+    def test_merge_command_is_actionable(self) -> None:
+        self.assertTrue(self._check("merge the agent/backend branch into main"))
+
+    def test_pnpm_tool_name_is_actionable(self) -> None:
+        self.assertTrue(self._check("pnpm install && pnpm test"))
+
+    def test_git_tool_name_is_actionable(self) -> None:
+        self.assertTrue(self._check("git pull origin main"))
+
+    def test_inline_code_span_is_actionable(self) -> None:
+        self.assertTrue(self._check("Execute `npm run build` to verify"))
+
+    def test_ableton_review_criteria_is_actionable(self) -> None:
+        criteria = (
+            "First, pull all code from the shared git repository. Then merge "
+            "the agent branches into main:\n"
+            "  git pull origin main\n"
+            "  git merge origin/agent/backend --no-edit\n"
+            "Run `pnpm install && pnpm build` and report the output."
+        )
+        self.assertTrue(self._check(criteria))
+
+
+class ReviewStepPromptFramingTests(unittest.TestCase):
+    """execute_review_step should adapt its prompt framing based on criteria."""
+
+    @patch("worker.wait_for_agent_runtime_ready")
+    @patch("worker.append_journal_event")
+    @patch("worker.invoke_agent_runtime")
+    def test_actionable_criteria_uses_execution_framing(
+        self, mock_invoke: MagicMock, mock_journal: MagicMock, _mock_ready: MagicMock,
+    ) -> None:
+        mock_invoke.return_value = {
+            "response": "APPROVED\n1. All tests pass.",
+            "thread_id": "t-1",
+            "status": "completed",
+        }
+        from worker import execute_review_step
+        step = {
+            "name": "integration-review",
+            "agentRef": "architect",
+            "type": "review",
+            "reviewCriteria": "run `pnpm test` and verify all tests pass",
+            "dependsOn": ["backend"],
+        }
+        outcome = execute_review_step(
+            step, "build app", {"backend": {"response": "done", "output": {"json": None}}},
+            run_id="run-1", worker_job={"name": "j1", "namespace": "ns"},
+        )
+        self.assertEqual(outcome["state"], "completed")
+        # Verify the prompt sent to the agent uses execution framing
+        call_args = mock_invoke.call_args
+        prompt_sent = call_args[1]["payload"]["prompt"] if "payload" in (call_args[1] or {}) else call_args[0][2]["prompt"]
+        self.assertIn("execution authority", prompt_sent)
+        self.assertIn("execute each item", prompt_sent.lower())
+
+    @patch("worker.wait_for_agent_runtime_ready")
+    @patch("worker.append_journal_event")
+    @patch("worker.invoke_agent_runtime")
+    def test_evaluative_criteria_uses_default_framing(
+        self, mock_invoke: MagicMock, mock_journal: MagicMock, _mock_ready: MagicMock,
+    ) -> None:
+        mock_invoke.return_value = {
+            "response": "APPROVED\n1. Code quality is good.",
+            "thread_id": "t-1",
+            "status": "completed",
+        }
+        from worker import execute_review_step
+        step = {
+            "name": "code-review",
+            "agentRef": "reviewer",
+            "type": "review",
+            "reviewCriteria": "Code follows style guide. No unused imports.",
+            "dependsOn": ["impl"],
+        }
+        outcome = execute_review_step(
+            step, "build app", {"impl": {"response": "done", "output": {"json": None}}},
+            run_id="run-1", worker_job={"name": "j1", "namespace": "ns"},
+        )
+        self.assertEqual(outcome["state"], "completed")
+        call_args = mock_invoke.call_args
+        prompt_sent = call_args[0][2]["prompt"]
+        self.assertIn("Evaluate the following output", prompt_sent)
+        self.assertNotIn("execution authority", prompt_sent)
+
+    @patch("worker.wait_for_agent_runtime_ready")
+    @patch("worker.append_journal_event")
+    @patch("worker.invoke_agent_runtime")
+    def test_review_prompt_includes_workspace_check_hint(
+        self, mock_invoke: MagicMock, mock_journal: MagicMock, _mock_ready: MagicMock,
+    ) -> None:
+        mock_invoke.return_value = {
+            "response": "APPROVED\n1. Looks good.",
+            "thread_id": "t-1",
+            "status": "completed",
+        }
+        from worker import execute_review_step
+        step = {
+            "name": "review",
+            "agentRef": "reviewer",
+            "type": "review",
+            "reviewCriteria": "All files present and correctly formatted.",
+            "dependsOn": ["impl"],
+        }
+        execute_review_step(
+            step, "build app", {"impl": {"response": "done", "output": {"json": None}}},
+            run_id="run-1", worker_job={"name": "j1", "namespace": "ns"},
+        )
+        call_args = mock_invoke.call_args
+        prompt_sent = call_args[0][2]["prompt"]
+        self.assertIn("/workspace", prompt_sent)
 
 
 if __name__ == "__main__":

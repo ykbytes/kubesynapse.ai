@@ -15,6 +15,8 @@ import {
   Code,
   Terminal,
   ShieldAlert,
+  ShieldCheck,
+  AlertTriangle,
   GitBranch,
 } from "lucide-react";
 
@@ -89,6 +91,16 @@ function StatusBadge({ status }: { status?: string | null }) {
     waiting_approval: {
       icon: <ShieldAlert className="h-3 w-3" />,
       label: "Approval",
+      cls: "text-orange-400 bg-orange-500/10 border-orange-500/20",
+    },
+    continued: {
+      icon: <AlertTriangle className="h-3 w-3" />,
+      label: "Continued",
+      cls: "text-amber-400 bg-amber-500/10 border-amber-500/20",
+    },
+    cancelled: {
+      icon: <XCircle className="h-3 w-3" />,
+      label: "Cancelled",
       cls: "text-orange-400 bg-orange-500/10 border-orange-500/20",
     },
   };
@@ -212,6 +224,31 @@ export function AgentNode({ data, selected }: NodeProps<AgentStepNode>) {
           {data.stepType === "conditional" && (
             <span className="inline-flex items-center gap-0.5 rounded-full bg-purple-500/10 border border-purple-500/20 px-1.5 py-0.5 text-[9px] text-purple-400 font-medium">
               <GitBranch className="h-2.5 w-2.5" /> Conditional
+            </span>
+          )}
+          {data.stepState?.verificationResult && (
+            <span className={cn(
+              "inline-flex items-center gap-0.5 rounded-full border px-1.5 py-0.5 text-[9px] font-medium",
+              data.stepState.verificationResult.passed
+                ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400"
+                : "bg-red-500/10 border-red-500/20 text-red-400",
+            )}>
+              <ShieldCheck className="h-2.5 w-2.5" /> {data.stepState.verificationResult.passed ? "Verified" : "Verify Failed"}
+            </span>
+          )}
+          {data.stepState?.reviewResult && (
+            <span className={cn(
+              "inline-flex items-center gap-0.5 rounded-full border px-1.5 py-0.5 text-[9px] font-medium",
+              data.stepState.reviewResult.approved
+                ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400"
+                : "bg-amber-500/10 border-amber-500/20 text-amber-400",
+            )}>
+              <ShieldCheck className="h-2.5 w-2.5" /> {data.stepState.reviewResult.approved ? "Approved" : "Rejected"}
+            </span>
+          )}
+          {data.stepState?.iterationFailures && data.stepState.iterationFailures.length > 0 && (
+            <span className="inline-flex items-center gap-0.5 rounded-full bg-red-500/10 border border-red-500/20 px-1.5 py-0.5 text-[9px] text-red-400 font-medium">
+              <AlertTriangle className="h-2.5 w-2.5" /> {data.stepState.iterationFailures.length} failures
             </span>
           )}
         </div>

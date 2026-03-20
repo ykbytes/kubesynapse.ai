@@ -31,6 +31,7 @@ import {
   Settings,
   Activity,
   GitBranch,
+  ShieldCheck,
   ArrowUp,
   ArrowDown,
   Clock,
@@ -307,7 +308,7 @@ function ConfigTab({
         <Select
           value={data.stepType}
           onValueChange={(v) =>
-            onNodeDataChange(node.id, { stepType: v as "agent" | "loop" | "conditional" })
+            onNodeDataChange(node.id, { stepType: v as "agent" | "loop" | "conditional" | "review" })
           }
         >
           <SelectTrigger className="h-7 text-xs">
@@ -323,6 +324,11 @@ function ConfigTab({
             <SelectItem value="conditional">
               <span className="flex items-center gap-1.5">
                 <GitBranch className="h-3 w-3" /> Conditional
+              </span>
+            </SelectItem>
+            <SelectItem value="review">
+              <span className="flex items-center gap-1.5">
+                <ShieldCheck className="h-3 w-3" /> Review
               </span>
             </SelectItem>
           </SelectContent>
@@ -552,6 +558,57 @@ function ExecutionTab({ data }: { data: AgentStepNodeData }) {
               Exit: {state.loopProgress.exitReason}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Verification result */}
+      {state.verificationResult && (
+        <div className={cn("space-y-1 border rounded-md p-2", state.verificationResult.passed ? "bg-emerald-500/5 border-emerald-500/20" : "bg-red-500/5 border-red-500/20")}>
+          <Label className={cn("text-[10px] font-semibold", state.verificationResult.passed ? "text-emerald-400" : "text-red-400")}>
+            Verification: {state.verificationResult.passed ? "PASSED" : "FAILED"}
+          </Label>
+          {state.verificationResult.criteria && (
+            <div className="text-[9px] text-muted-foreground">Criteria: {state.verificationResult.criteria}</div>
+          )}
+          {state.verificationResult.response && (
+            <div className="text-[9px] whitespace-pre-wrap max-h-24 overflow-auto">{state.verificationResult.response}</div>
+          )}
+          {state.verificationResult.verifyAttempt != null && state.verificationResult.verifyAttempt > 1 && (
+            <div className="text-[9px] text-muted-foreground">Attempt: {state.verificationResult.verifyAttempt}</div>
+          )}
+        </div>
+      )}
+
+      {/* Review result */}
+      {state.reviewResult && (
+        <div className={cn("space-y-1 border rounded-md p-2", state.reviewResult.approved ? "bg-emerald-500/5 border-emerald-500/20" : "bg-amber-500/5 border-amber-500/20")}>
+          <Label className={cn("text-[10px] font-semibold", state.reviewResult.approved ? "text-emerald-400" : "text-amber-400")}>
+            Review: {state.reviewResult.verdict}
+          </Label>
+          {state.reviewResult.criteria && (
+            <div className="text-[9px] text-muted-foreground">Criteria: {state.reviewResult.criteria}</div>
+          )}
+          {state.reviewResult.response && (
+            <div className="text-[9px] whitespace-pre-wrap max-h-24 overflow-auto">{state.reviewResult.response}</div>
+          )}
+        </div>
+      )}
+
+      {/* Iteration failures */}
+      {state.iterationFailures && state.iterationFailures.length > 0 && (
+        <div className="space-y-1 border rounded-md p-2 bg-red-500/5 border-red-500/20">
+          <Label className="text-[10px] text-red-400 font-semibold">
+            Iteration Failures ({state.iterationFailures.length})
+          </Label>
+          <div className="space-y-1 max-h-32 overflow-auto">
+            {state.iterationFailures.map((f, i) => (
+              <div key={i} className="text-[9px] border-b border-red-500/10 pb-1 last:border-0">
+                <span className="text-muted-foreground">#{f.iteration}</span>
+                {f.failureClass && <span className="ml-1 text-red-400">({f.failureClass})</span>}
+                <span className="ml-1 text-red-300 break-words">{f.error}</span>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 

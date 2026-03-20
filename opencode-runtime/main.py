@@ -729,11 +729,19 @@ def abort_session(session_id: str) -> bool:
         return False
 
 
-def summarize_session(session_id: str) -> bool:
+def summarize_session(session_id: str, model_ref: str | None = None) -> bool:
     """Trigger compaction/summarization of a session to free context space."""
     try:
+        model_payload = build_model_payload(model_ref or DEFAULT_MODEL)
         with runtime_http_client() as hclient:
-            response = hclient.post(f"/session/{session_id}/summarize")
+            response = hclient.post(
+                f"/session/{session_id}/summarize",
+                json={
+                    "providerID": model_payload["providerID"],
+                    "modelID": model_payload["modelID"],
+                    "auto": True,
+                },
+            )
             return response.status_code == 200
     except httpx.HTTPError:
         logger.warning("Failed to summarize session %s", session_id)
@@ -788,7 +796,13 @@ def check_context_overflow(payload: dict[str, Any]) -> bool:
     if isinstance(tokens, dict):
         total = tokens.get("total") or 0
         if not total:
-            total = (tokens.get("input") or 0) + (tokens.get("output") or 0) + (tokens.get("cache", {}).get("read") or 0)
+            cache = tokens.get("cache") or {}
+            total = (
+                (tokens.get("input") or 0)
+                + (tokens.get("output") or 0)
+                + (cache.get("read") or 0)
+                + (cache.get("write") or 0)
+            )
         if total > 0 and total >= MODEL_CONTEXT_LIMIT * COMPACTION_TOKEN_THRESHOLD:
             return True
     return False
@@ -833,7 +847,13 @@ def compute_context_budget(payload: dict[str, Any]) -> dict[str, Any]:
         return {"status": "unknown", "model_context_limit": MODEL_CONTEXT_LIMIT}
     total = tokens.get("total") or 0
     if not total:
-        total = (tokens.get("input") or 0) + (tokens.get("output") or 0) + (tokens.get("cache", {}).get("read") or 0)
+        cache = tokens.get("cache") or {}
+        total = (
+            (tokens.get("input") or 0)
+            + (tokens.get("output") or 0)
+            + (cache.get("read") or 0)
+            + (cache.get("write") or 0)
+        )
     if total <= 0:
         return {"status": "unknown", "model_context_limit": MODEL_CONTEXT_LIMIT}
     remaining = max(MODEL_CONTEXT_LIMIT - total, 0)
@@ -1172,6 +1192,7 @@ class InvokeRequest(BaseModel):
     structured_output_retry_count: int = Field(default=STRUCTURED_OUTPUT_RETRY_COUNT, ge=0, le=10)
     max_retries: int | None = Field(default=None, ge=0, le=10)
     autonomous: bool = True
+    pre_authorized_actions: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_request(self) -> "InvokeRequest":
@@ -1456,7 +1477,7 @@ def _send_prompt_with_session_recovery(
     except HTTPException as exc:
         if exc.status_code == 404 and allow_session_recovery:
             session_id = create_remote_session(working_directory)
-            SESSION_REGISTRY.get_or_set(logical_thread_id, session_id)
+            SESSION_REGISTRY.set(logical_thread_id, session_id)
             payload = send_prompt(
                 session_id=session_id,
                 prompt=prompt,
@@ -1557,10 +1578,19 @@ def invoke_opencode(request: InvokeRequest, stream_callback: StreamCallback = No
 
     # Build system prompt stack: autonomy instructions + native-tool preference
     # + user system prompt + output format + team context
+    pre_auth_prompt: str | None = None
+    if request.pre_authorized_actions:
+        allowed = ", ".join(request.pre_authorized_actions)
+        pre_auth_prompt = (
+            f"PRE-AUTHORIZED ACTIONS: The following actions have been pre-approved "
+            f"by the workflow owner and may be executed without hesitation: {allowed}. "
+            f"You do NOT need confirmation to perform these actions."
+        )
     system_prompt = combine_system_prompt(
         AUTONOMY_SYSTEM_PROMPT if request.autonomous else None,
         DEFAULT_SYSTEM_PROMPT,
         request.system,
+        pre_auth_prompt,
         build_format_system_prompt(request.output_format),
         format_team_context_system_prompt(request.team_context),
     )
@@ -1576,6 +1606,7 @@ def invoke_opencode(request: InvokeRequest, stream_callback: StreamCallback = No
     compaction_attempts = 0
     last_compaction_turn = -COMPACTION_MIN_TURN_SPACING  # allow first compaction immediately
     handoff_summary: dict[str, Any] | None = None
+    _resend_format = False  # set True when retrying structured output errors
 
     # Select agent: use plan for complex first prompts, then build
     current_agent = select_agent_for_prompt(request.prompt, is_first_turn=True) if request.autonomous else DEFAULT_AGENT
@@ -1598,7 +1629,7 @@ def invoke_opencode(request: InvokeRequest, stream_callback: StreamCallback = No
                 prompt=current_prompt,
                 model=selected_model,
                 system_prompt=use_system,
-                prompt_format=prompt_format if turn == 0 else None,
+                prompt_format=prompt_format if (turn == 0 or _resend_format) else None,
                 working_directory=working_directory,
                 agent=current_agent,
                 logical_thread_id=logical_thread_id,
@@ -1636,6 +1667,7 @@ def invoke_opencode(request: InvokeRequest, stream_callback: StreamCallback = No
 
         last_payload = payload
         completion = detect_completion_status(payload)
+        _resend_format = False  # reset after each successful send
 
         # Emit per-turn progress
         turn_text = extract_response_text(payload).strip()
@@ -1672,7 +1704,7 @@ def invoke_opencode(request: InvokeRequest, stream_callback: StreamCallback = No
             compaction_attempts += 1
             last_compaction_turn = turn
             _emit("response.compaction", {"turn": turn + 1, "reason": "context_overflow", "attempt": compaction_attempts, "max": MAX_COMPACTION_ATTEMPTS})
-            if summarize_session(session_id):
+            if summarize_session(session_id, model_ref=selected_model):
                 all_warnings.append(f"Turn {turn + 1}: context overflow detected, triggered compaction ({compaction_attempts}/{MAX_COMPACTION_ATTEMPTS}).")
                 wait_for_session_idle(session_id, timeout_seconds=SESSION_ABORT_TIMEOUT_SECONDS)
                 current_prompt = (
@@ -1687,12 +1719,17 @@ def invoke_opencode(request: InvokeRequest, stream_callback: StreamCallback = No
                 continue
             all_warnings.append(f"Turn {turn + 1}: context overflow, compaction failed.")
 
-        # Proactive compaction — if token usage is high, compact before overflow
+        if completion == "completed":
+            break
+
+        # Proactive compaction — if token usage is high, compact before overflow.
+        # Must run AFTER the "completed" check to avoid unnecessary continuation
+        # when the task finished successfully but token usage happens to be high.
         if _can_compact and check_context_overflow(payload):
             compaction_attempts += 1
             last_compaction_turn = turn
             _emit("response.compaction", {"turn": turn + 1, "reason": "proactive", "attempt": compaction_attempts, "max": MAX_COMPACTION_ATTEMPTS})
-            if summarize_session(session_id):
+            if summarize_session(session_id, model_ref=selected_model):
                 all_warnings.append(f"Turn {turn + 1}: proactively triggered compaction (token usage high, {compaction_attempts}/{MAX_COMPACTION_ATTEMPTS}).")
                 wait_for_session_idle(session_id, timeout_seconds=SESSION_ABORT_TIMEOUT_SECONDS)
                 current_prompt = (
@@ -1704,16 +1741,13 @@ def invoke_opencode(request: InvokeRequest, stream_callback: StreamCallback = No
                 )
                 continue
 
-        if completion == "completed":
-            break
-
         if completion == "error":
             error_type = classify_error_type(payload)
             if error_type == "context_overflow" and _can_compact:
                 compaction_attempts += 1
                 last_compaction_turn = turn
                 _emit("response.compaction", {"turn": turn + 1, "reason": "error_overflow", "attempt": compaction_attempts, "max": MAX_COMPACTION_ATTEMPTS})
-                if summarize_session(session_id):
+                if summarize_session(session_id, model_ref=selected_model):
                     all_warnings.append(f"Turn {turn + 1}: context overflow error, compacting ({compaction_attempts}/{MAX_COMPACTION_ATTEMPTS}).")
                     wait_for_session_idle(session_id, timeout_seconds=SESSION_ABORT_TIMEOUT_SECONDS)
                     current_prompt = (
@@ -1726,6 +1760,7 @@ def invoke_opencode(request: InvokeRequest, stream_callback: StreamCallback = No
                     continue
             if error_type == "structured_output" and retries_used < max_retries:
                 retries_used += 1
+                _resend_format = True  # re-send json_schema format on retry
                 _emit("response.error_recovery", {"turn": turn + 1, "error_type": "structured_output", "retry": retries_used, "max_retries": max_retries})
                 all_warnings.append(
                     f"Turn {turn + 1}: structured output validation failed, retrying ({retries_used}/{max_retries})"

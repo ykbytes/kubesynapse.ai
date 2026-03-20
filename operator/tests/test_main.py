@@ -300,7 +300,9 @@ class OperatorManifestTests(unittest.TestCase):
         volumes = pod_spec["volumes"]
 
         self.assertIn({"name": "workspace-volume", "mountPath": "/workspace"}, volume_mounts)
-        self.assertIn({"name": "workspace-volume", "emptyDir": {}}, volumes)
+        workspace_vol = next((v for v in volumes if v.get("name") == "workspace-volume"), None)
+        self.assertIsNotNone(workspace_vol)
+        self.assertIn("emptyDir", workspace_vol)
         self.assertEqual(env["AGENT_LOCAL_TOOL_DISCOVERY_ENABLED"], "false")
         self.assertEqual(env["AGENT_LOCAL_TOOL_ALLOWLIST"], "curl,rg")
         self.assertEqual(env["AGENT_LOCAL_TOOL_ALLOWED_ROOTS"], "/app/state,/workspace,/tmp")

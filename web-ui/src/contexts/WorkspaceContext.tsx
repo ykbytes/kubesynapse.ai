@@ -323,7 +323,19 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         ]);
         setAgents((prev) => stableArrayUpdate(prev, nextAgents));
         setPolicies((prev) => stableArrayUpdate(prev, nextPolicies));
-        setWorkflows((prev) => stableArrayUpdate(prev, nextWorkflows));
+        setWorkflows((prev) => {
+          // When the 3s workflow poll is active, preserve its fresher data for the
+          // actively-polled workflow so the slower 10s list poll doesn't overwrite it.
+          const polledName = workflowPollingRef.current ? selectedWorkflowNameRef.current : null;
+          if (polledName) {
+            const existing = prev.find((pw) => pw.name === polledName);
+            if (existing) {
+              const merged = nextWorkflows.map((nw) => nw.name === polledName ? existing : nw);
+              return stableArrayUpdate(prev, merged);
+            }
+          }
+          return stableArrayUpdate(prev, nextWorkflows);
+        });
         setEvals((prev) => stableArrayUpdate(prev, nextEvals));
         if (!agentCreateModeRef.current) {
           const cur = selectedAgentNameRef.current;

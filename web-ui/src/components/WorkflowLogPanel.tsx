@@ -37,6 +37,14 @@ const OPEN_CODE_KEYWORDS = [
   "approval",
   "retry",
   "auth",
+  "verify",
+  "review",
+  "loop",
+  "circuit_breaker",
+  "artifact",
+  "journal",
+  "cancel",
+  "iteration",
 ];
 const ERROR_KEYWORDS = [
   "error",

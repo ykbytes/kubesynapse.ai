@@ -1000,7 +1000,12 @@ class SummarizeSessionTests(unittest.TestCase):
         mc = self._mock_client(200)
         with patch.object(opencode_runtime_main, "runtime_http_client", return_value=mc):
             self.assertTrue(opencode_runtime_main.summarize_session("ses_1"))
-        mc.post.assert_called_once_with("/session/ses_1/summarize")
+        call_kwargs = mc.post.call_args
+        self.assertIn("/session/ses_1/summarize", call_kwargs.args or (call_kwargs[0],))
+        body = call_kwargs.kwargs.get("json") or call_kwargs[1].get("json", {})
+        self.assertIn("providerID", body)
+        self.assertIn("modelID", body)
+        self.assertTrue(body.get("auto"))
 
     def test_returns_false_on_failure(self) -> None:
         mc = self._mock_client(500)
@@ -1140,6 +1145,28 @@ class CheckContextOverflowTests(unittest.TestCase):
     def test_non_overflow_error_not_detected(self) -> None:
         payload = {"info": {"error": {"name": "APIError", "message": "server error"}}}
         self.assertFalse(opencode_runtime_main.check_context_overflow(payload))
+
+    def test_cache_write_tokens_included_in_fallback_total(self) -> None:
+        """cache.write must be included when computing total from parts (Bug fix)."""
+        with patch.object(opencode_runtime_main, "MODEL_CONTEXT_LIMIT", 100000), \
+             patch.object(opencode_runtime_main, "COMPACTION_TOKEN_THRESHOLD", 0.75):
+            # input(20k) + output(10k) + cache.read(20k) = 50k  -> below 75k threshold
+            # input(20k) + output(10k) + cache.read(20k) + cache.write(40k) = 90k  -> above 75k threshold
+            payload = {"info": {"tokens": {
+                "input": 20000, "output": 10000,
+                "cache": {"read": 20000, "write": 40000},
+            }}}
+            self.assertTrue(opencode_runtime_main.check_context_overflow(payload))
+
+    def test_cache_write_below_threshold_no_overflow(self) -> None:
+        """Verify cache.write included but total still below threshold."""
+        with patch.object(opencode_runtime_main, "MODEL_CONTEXT_LIMIT", 100000), \
+             patch.object(opencode_runtime_main, "COMPACTION_TOKEN_THRESHOLD", 0.75):
+            payload = {"info": {"tokens": {
+                "input": 10000, "output": 5000,
+                "cache": {"read": 5000, "write": 5000},
+            }}}
+            self.assertFalse(opencode_runtime_main.check_context_overflow(payload))
 
 
 class ClassifyErrorTypeTests(unittest.TestCase):
@@ -1509,7 +1536,29 @@ class InvokeOpenCodeLoopTests(unittest.TestCase):
         self.assertTrue(any("aborted" in w.lower() for w in resp.warnings))
 
     def test_proactive_compaction_on_high_tokens(self) -> None:
-        """If token usage is high but no context_overflow, proactively compact."""
+        """If token usage is high on an incomplete response, proactively compact."""
+        with patch.object(opencode_runtime_main, "MODEL_CONTEXT_LIMIT", 100000), \
+             patch.object(opencode_runtime_main, "COMPACTION_TOKEN_THRESHOLD", 0.75):
+            # First response: incomplete with high tokens → triggers proactive compaction
+            high_tokens_incomplete = self._make_payload("Working...", "tool-calls", tokens={"input": 60000, "output": 20000, "total": 80000})
+            # Second response after compaction: completed
+            done = self._make_payload("Done", "stop")
+            mock_summarize = MagicMock(return_value=True)
+            req = opencode_runtime_main.InvokeRequest(prompt="Process", autonomous=True)
+            with self._patch_server_running(), \
+                 self._patch_create_session(), \
+                 self._patch_send_prompt([high_tokens_incomplete, done]):
+                with patch.object(opencode_runtime_main, "get_session_messages", return_value=[]), \
+                     patch.object(opencode_runtime_main, "get_session_todos", return_value=[]), \
+                     patch.object(opencode_runtime_main, "wait_for_session_idle", return_value={"type": "idle"}), \
+                     patch.object(opencode_runtime_main, "abort_session", return_value=True), \
+                     patch.object(opencode_runtime_main, "summarize_session", mock_summarize):
+                    resp = opencode_runtime_main.invoke_opencode(req)
+            mock_summarize.assert_called()
+            self.assertTrue(any("compaction" in w.lower() for w in resp.warnings))
+
+    def test_completed_with_high_tokens_does_not_compact(self) -> None:
+        """Completed tasks must not trigger proactive compaction even with high tokens (Bug fix)."""
         with patch.object(opencode_runtime_main, "MODEL_CONTEXT_LIMIT", 100000), \
              patch.object(opencode_runtime_main, "COMPACTION_TOKEN_THRESHOLD", 0.75):
             payload = self._make_payload("Done", "stop", tokens={"input": 60000, "output": 20000, "total": 80000})
@@ -1524,8 +1573,8 @@ class InvokeOpenCodeLoopTests(unittest.TestCase):
                      patch.object(opencode_runtime_main, "abort_session", return_value=True), \
                      patch.object(opencode_runtime_main, "summarize_session", mock_summarize):
                     resp = opencode_runtime_main.invoke_opencode(req)
-            mock_summarize.assert_called()
-            self.assertTrue(any("compaction" in w.lower() for w in resp.warnings))
+            mock_summarize.assert_not_called()
+            self.assertEqual(resp.status, "completed")
 
 
 class StructuredOutputMetadataTests(unittest.TestCase):
@@ -1641,6 +1690,122 @@ class SessionRegistryPruningTests(unittest.TestCase):
         self.assertLessEqual(reg.size, 6)
 
 
+class SendPromptWithSessionRecoveryTests(unittest.TestCase):
+    """Tests for _send_prompt_with_session_recovery, including 404 registry update."""
+
+    def _make_kwargs(self, session_id: str = "ses_old") -> dict:
+        return dict(
+            session_id=session_id,
+            prompt="hello",
+            model="gpt-4",
+            system_prompt=None,
+            prompt_format=None,
+            working_directory="/workspace",
+            agent="build",
+            logical_thread_id="thread_1",
+            allow_session_recovery=True,
+        )
+
+    def test_successful_send_returns_payload(self) -> None:
+        expected = {"info": {"role": "assistant"}, "parts": []}
+        with patch.object(opencode_runtime_main, "send_prompt", return_value=expected):
+            sid, payload = opencode_runtime_main._send_prompt_with_session_recovery(**self._make_kwargs())
+        self.assertEqual(sid, "ses_old")
+        self.assertEqual(payload, expected)
+
+    def test_404_recovery_updates_registry_with_set(self) -> None:
+        """On 404, the registry must be updated via set() so the dead session is replaced (Bug fix)."""
+        from fastapi import HTTPException as _HTTPException
+        expected = {"info": {"role": "assistant"}, "parts": []}
+        call_count = {"n": 0}
+        def mock_send(**kwargs):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                raise _HTTPException(status_code=404, detail="not found")
+            return expected
+
+        mock_registry = MagicMock()
+        with patch.object(opencode_runtime_main, "send_prompt", side_effect=mock_send), \
+             patch.object(opencode_runtime_main, "create_remote_session", return_value="ses_new"), \
+             patch.object(opencode_runtime_main, "SESSION_REGISTRY", mock_registry):
+            sid, payload = opencode_runtime_main._send_prompt_with_session_recovery(**self._make_kwargs())
+
+        # Verify set() was called (not get_or_set) with the new session
+        mock_registry.set.assert_called_once_with("thread_1", "ses_new")
+        mock_registry.get_or_set.assert_not_called()
+        self.assertEqual(sid, "ses_new")
+        self.assertEqual(payload, expected)
+
+    def test_non_404_error_propagates(self) -> None:
+        from fastapi import HTTPException as _HTTPException
+        with patch.object(opencode_runtime_main, "send_prompt", side_effect=_HTTPException(status_code=500)):
+            with self.assertRaises(_HTTPException) as ctx:
+                opencode_runtime_main._send_prompt_with_session_recovery(**self._make_kwargs())
+        self.assertEqual(ctx.exception.status_code, 500)
+
+    def test_404_without_recovery_allowed_propagates(self) -> None:
+        from fastapi import HTTPException as _HTTPException
+        kwargs = self._make_kwargs()
+        kwargs["allow_session_recovery"] = False
+        with patch.object(opencode_runtime_main, "send_prompt", side_effect=_HTTPException(status_code=404)):
+            with self.assertRaises(_HTTPException) as ctx:
+                opencode_runtime_main._send_prompt_with_session_recovery(**kwargs)
+        self.assertEqual(ctx.exception.status_code, 404)
+
+
+class StructuredOutputFormatRetryTests(unittest.TestCase):
+    """Tests for the _resend_format flag: format must be resent on structured output error retry."""
+
+    def _make_payload(
+        self,
+        text: str = "done",
+        finish: str = "stop",
+        error: dict | None = None,
+        tokens: dict | None = None,
+    ) -> dict:
+        info: dict = {"role": "assistant", "finish": finish}
+        if error:
+            info["error"] = error
+        if tokens:
+            info["tokens"] = tokens
+        return {"info": info, "parts": [{"type": "text", "text": text}]}
+
+    def test_structured_output_retry_resends_format(self) -> None:
+        """When StructuredOutputError occurs, the format should be resent on retry (Bug fix)."""
+        call_log: list[dict] = []
+
+        def mock_send(**kwargs):
+            call_log.append(dict(kwargs))
+            idx = len(call_log) - 1
+            if idx == 0:
+                # First call: return StructuredOutputError
+                return kwargs.get("session_id", "ses"), self._make_payload(
+                    "", "error", error={"name": "StructuredOutputError", "message": "bad format"})
+            # Second call: success
+            return kwargs.get("session_id", "ses"), self._make_payload('{"result": 42}', "stop")
+
+        req = opencode_runtime_main.InvokeRequest(
+            prompt="Analyze this",
+            output_format="json",
+            output_schema={"type": "object", "properties": {"result": {"type": "integer"}}},
+        )
+        with patch.object(opencode_runtime_main, "ensure_server_running"), \
+             patch.object(opencode_runtime_main, "create_remote_session", return_value="ses"), \
+             patch.object(opencode_runtime_main, "_send_prompt_with_session_recovery", side_effect=mock_send), \
+             patch.object(opencode_runtime_main, "get_session_messages", return_value=[]), \
+             patch.object(opencode_runtime_main, "get_session_todos", return_value=[]), \
+             patch.object(opencode_runtime_main, "wait_for_session_idle", return_value={"type": "idle"}), \
+             patch.object(opencode_runtime_main, "abort_session", return_value=True), \
+             patch.object(opencode_runtime_main, "summarize_session", return_value=True):
+            resp = opencode_runtime_main.invoke_opencode(req)
+
+        # The second call (retry after StructuredOutputError) should include prompt_format
+        self.assertGreaterEqual(len(call_log), 2)
+        retry_call = call_log[1]
+        self.assertIsNotNone(retry_call.get("prompt_format"),
+                             "prompt_format should be resent on structured output error retry")
+
+
 class ComputeContextBudgetTests(unittest.TestCase):
     """Tests for compute_context_budget function."""
 
@@ -1678,6 +1843,15 @@ class ComputeContextBudgetTests(unittest.TestCase):
         payload = {"info": {"tokens": {"input": 30000, "output": 5000}}}
         result = opencode_runtime_main.compute_context_budget(payload)
         self.assertEqual(result["tokens_used"], 35000)
+
+    def test_computed_total_includes_cache_write(self) -> None:
+        """cache.write must be included in fallback total (Bug fix)."""
+        payload = {"info": {"tokens": {
+            "input": 10000, "output": 5000,
+            "cache": {"read": 3000, "write": 2000},
+        }}}
+        result = opencode_runtime_main.compute_context_budget(payload)
+        self.assertEqual(result["tokens_used"], 20000)  # 10k + 5k + 3k + 2k
 
 
 class DetectAntiPatternsTests(unittest.TestCase):

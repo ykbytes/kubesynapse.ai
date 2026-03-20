@@ -3132,6 +3132,34 @@ def ensure_worker_artifact_storage(kind: str, resource_namespace: str, resource_
     return str(manifest["metadata"]["name"])
 
 
+def _worker_git_env(git_config: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Build env var entries for git config in worker job containers."""
+    if not git_config:
+        return []
+    items: list[dict[str, Any]] = []
+    repo_url = str(git_config.get("repoUrl", "") or "").strip()
+    if repo_url:
+        items.append({"name": "GIT_REPO_URL", "value": repo_url})
+    auth_method = str(git_config.get("authMethod", "") or "").strip()
+    if auth_method:
+        items.append({"name": "GIT_AUTH_METHOD", "value": auth_method})
+    branch = str(git_config.get("branch", "") or "").strip()
+    if branch:
+        items.append({"name": "GIT_BRANCH", "value": branch})
+    cred_secret = str(git_config.get("credentialSecretRef", "") or "").strip()
+    if cred_secret and auth_method == "token":
+        items.append({
+            "name": "GIT_TOKEN",
+            "valueFrom": {"secretKeyRef": {"name": cred_secret, "key": "token", "optional": True}},
+        })
+    elif cred_secret and auth_method == "basic":
+        items.extend([
+            {"name": "GIT_USERNAME", "valueFrom": {"secretKeyRef": {"name": cred_secret, "key": "username", "optional": True}}},
+            {"name": "GIT_PASSWORD", "valueFrom": {"secretKeyRef": {"name": cred_secret, "key": "password", "optional": True}}},
+        ])
+    return items
+
+
 def create_worker_job_manifest(
     kind: str,
     resource_namespace: str,
@@ -3141,6 +3169,7 @@ def create_worker_job_manifest(
     artifact_path: str,
     *,
     run_id: str | None = None,
+    git_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     timestamp = int(time.time())
     job_name = hashed_resource_name(kind, resource_namespace, resource_name, suffix=f"{generation}-{timestamp}")
@@ -3211,6 +3240,7 @@ def create_worker_job_manifest(
                                 {"name": "EVAL_RUN_ID", "value": run_id or ""},
                                 {"name": "PYTHONDONTWRITEBYTECODE", "value": "1"},
                                 *worker_passthrough_env(),
+                                *_worker_git_env(git_config),
                             ],
                             "volumeMounts": [
                                 {"name": "artifacts", "mountPath": ARTIFACT_MOUNT_PATH},
@@ -3240,6 +3270,7 @@ def enqueue_worker_job(
     artifact_path: str,
     *,
     run_id: str | None = None,
+    git_config: dict[str, Any] | None = None,
 ) -> str:
     manifest = create_worker_job_manifest(
         kind,
@@ -3249,6 +3280,7 @@ def enqueue_worker_job(
         artifact_pvc_name,
         artifact_path,
         run_id=run_id,
+        git_config=git_config,
     )
     batch_api = kubernetes.client.BatchV1Api()
     batch_api.create_namespaced_job(namespace=OPERATOR_NAMESPACE, body=manifest)
@@ -3397,6 +3429,7 @@ def enqueue_workflow_job(
     artifact_pvc_name = ensure_worker_artifact_storage("workflow", namespace, name)
     artifact_path = artifact_file_path("workflow", namespace, name, generation)
     journal_path = workflow_journal_path(artifact_path)
+    git_config = spec.get("gitConfig") or {}
     job_name = enqueue_worker_job(
         "workflow",
         namespace,
@@ -3405,6 +3438,7 @@ def enqueue_workflow_job(
         artifact_pvc_name,
         artifact_path,
         run_id=resolved_run_id,
+        git_config=git_config if git_config else None,
     )
     existing_summary = workflow_status.get("summary", {}) or {}
     summary = {

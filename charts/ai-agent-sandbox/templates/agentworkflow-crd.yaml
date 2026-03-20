@@ -38,7 +38,8 @@ spec:
                           - agent
                           - loop
                           - review
-                        description: "Step type: 'agent' (default) runs once, 'loop' runs iterative dev-loop, 'review' runs a criteria-based review"
+                          - conditional
+                        description: "Step type: 'agent' (default) runs once, 'loop' runs iterative dev-loop, 'review' runs a criteria-based review, 'conditional' evaluates an expression and branches"
                       agentRef:
                         type: string
                         description: "Name of the AIAgent CRD to execute this step"
@@ -94,6 +95,19 @@ spec:
                       reviewCriteria:
                         type: string
                         description: "Review criteria for review-type steps. The agent evaluates prior output against these criteria."
+                      conditionExpr:
+                        type: string
+                        description: "Expression evaluated for conditional-type steps to determine which branch to take"
+                      thenSteps:
+                        type: array
+                        items:
+                          type: string
+                        description: "Step names activated when conditionExpr evaluates to true"
+                      elseSteps:
+                        type: array
+                        items:
+                          type: string
+                        description: "Step names activated when conditionExpr evaluates to false"
                       dependsOn:
                         type: array
                         items:
@@ -119,6 +133,22 @@ spec:
                             type: boolean
                           continueOnError:
                             type: boolean
+                          maxTurns:
+                            type: integer
+                            minimum: 1
+                            description: "Maximum autonomous turns per invocation (for runtimes that support multi-turn execution)"
+                          preAuthorizedActions:
+                            type: array
+                            items:
+                              type: string
+                            description: "Actions pre-approved for autonomous execution without HITL gating"
+                          sessionGroup:
+                            type: string
+                            description: "Steps sharing the same sessionGroup reuse a single runtime session for workspace continuity"
+                          verifyRetries:
+                            type: integer
+                            minimum: 0
+                            description: "Number of retry attempts for the verification gate before failing the step"
                     required:
                       - name
                       - agentRef
@@ -127,6 +157,23 @@ spec:
                   type: string
                   enum: ["in-memory"]
                   description: "Reserved for future transports. The production workflow engine currently uses in-memory dependency passing only."
+                gitConfig:
+                  type: object
+                  description: "Git repository configuration for the workflow. Injected into the worker pod so all steps share repository context."
+                  properties:
+                    repoUrl:
+                      type: string
+                      description: "HTTPS or SSH URL of the git repository"
+                    branch:
+                      type: string
+                      description: "Default branch to use (agents may create per-step branches from this base)"
+                    authMethod:
+                      type: string
+                      enum: ["token", "basic", "ssh"]
+                      description: "Authentication method for git operations"
+                    credentialSecretRef:
+                      type: string
+                      description: "Name of Kubernetes Secret containing git credentials (token, username/password, or ssh_private_key)"
               required:
                 - steps
             status:

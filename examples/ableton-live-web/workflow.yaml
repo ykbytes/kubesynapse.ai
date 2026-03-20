@@ -20,6 +20,11 @@ spec:
     `pnpm install && pnpm build` and pass `pnpm test`.
   contextRef: ableton-live-web-context
   messageBus: in-memory
+  gitConfig:
+    repoUrl: https://github.com/example-org/ableton-live-web.git
+    branch: main
+    authMethod: token
+    credentialSecretRef: git-credentials
   steps:
     # Step 1: Architect designs the system and scaffolds the project
     - name: design

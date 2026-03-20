@@ -609,6 +609,26 @@ export interface WorkflowUpdatePayload {
   steps: WorkflowStep[];
 }
 
+export interface VerificationResult {
+  passed: boolean;
+  response: string;
+  criteria: string;
+  verifyAttempt?: number;
+}
+
+export interface ReviewResult {
+  approved: boolean;
+  verdict: string;
+  response: string;
+  criteria: string;
+}
+
+export interface IterationFailure {
+  iteration: number;
+  error: string;
+  failureClass: string;
+}
+
 export interface WorkflowStepState {
   stepName: string;
   agentRef: string;
@@ -624,6 +644,9 @@ export interface WorkflowStepState {
   workerJob?: Record<string, unknown> | null;
   execution?: Record<string, unknown> | null;
   loopProgress?: LoopProgress | null;
+  verificationResult?: VerificationResult | null;
+  reviewResult?: ReviewResult | null;
+  iterationFailures?: IterationFailure[] | null;
 }
 
 export interface WorkflowSummary {

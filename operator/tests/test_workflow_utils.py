@@ -293,5 +293,97 @@ class WorkflowUtilsTests(unittest.TestCase):
             invoke_agent_runtime("", "ns", {"prompt": "hi"})
 
 
+class ParseJsonOutputTests(unittest.TestCase):
+    """parse_json_output extracts JSON from raw text and markdown fences."""
+
+    def test_pure_json_object(self) -> None:
+        from utils import parse_json_output
+
+        result = parse_json_output('{"key": "value"}')
+        self.assertEqual(result, {"key": "value"})
+
+    def test_pure_json_array(self) -> None:
+        from utils import parse_json_output
+
+        result = parse_json_output('[1, 2, 3]')
+        self.assertEqual(result, [1, 2, 3])
+
+    def test_empty_string_returns_none(self) -> None:
+        from utils import parse_json_output
+
+        self.assertIsNone(parse_json_output(""))
+        self.assertIsNone(parse_json_output("   "))
+
+    def test_plain_text_returns_none(self) -> None:
+        from utils import parse_json_output
+
+        self.assertIsNone(parse_json_output("Just some text output."))
+
+    def test_markdown_fenced_json_object(self) -> None:
+        from utils import parse_json_output
+
+        text = (
+            "Here is the specification:\n"
+            "```json\n"
+            '{"feature_name": "auth", "spec_markdown": "# Auth"}\n'
+            "```\n"
+            "Done."
+        )
+        result = parse_json_output(text)
+        self.assertEqual(result, {"feature_name": "auth", "spec_markdown": "# Auth"})
+
+    def test_markdown_fenced_without_json_tag(self) -> None:
+        from utils import parse_json_output
+
+        text = (
+            "Result:\n"
+            "```\n"
+            '{"score": 95}\n'
+            "```"
+        )
+        result = parse_json_output(text)
+        self.assertEqual(result, {"score": 95})
+
+    def test_multiple_fenced_blocks_prefers_last(self) -> None:
+        from utils import parse_json_output
+
+        text = (
+            "Draft:\n```json\n" '{"version": 1}\n' "```\n"
+            "Final:\n```json\n" '{"version": 2}\n' "```"
+        )
+        result = parse_json_output(text)
+        self.assertEqual(result, {"version": 2})
+
+    def test_fenced_invalid_json_skipped(self) -> None:
+        from utils import parse_json_output
+
+        text = (
+            "Bad block:\n```json\n" "{invalid json}\n" "```\n"
+            "Good block:\n```json\n" '{"ok": true}\n' "```"
+        )
+        result = parse_json_output(text)
+        self.assertEqual(result, {"ok": True})
+
+    def test_fenced_non_json_content_ignored(self) -> None:
+        from utils import parse_json_output
+
+        text = "```\nsome plain text\n```"
+        result = parse_json_output(text)
+        self.assertIsNone(result)
+
+    def test_invalid_json_whole_text_falls_through_to_fences(self) -> None:
+        from utils import parse_json_output
+
+        # Starts with { but isn't valid JSON — should try fence extraction
+        text = (
+            "{not valid json}\n"
+            "```json\n"
+            '{"fallback": true}\n'
+            "```"
+        )
+        result = parse_json_output(text)
+        self.assertEqual(result, {"fallback": True})
+
+
 if __name__ == "__main__":
     unittest.main()

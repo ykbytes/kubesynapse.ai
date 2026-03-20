@@ -725,7 +725,7 @@ function parseWorkflowStepPayload(payload: unknown, label = "WorkflowStep"): Wor
     depends_on: readStringArray(record, "depends_on", label),
     require_approval: readBoolean(record, "require_approval", label, false),
     execution: readOptionalRecord(record, "execution", label),
-    step_type: (readOptionalString(record, "step_type", label) as "agent" | "loop" | "conditional" | undefined) ?? "agent",
+    step_type: (readOptionalString(record, "step_type", label) as "agent" | "loop" | "conditional" | "review" | undefined) ?? "agent",
     loop_config: (readOptionalRecord(record, "loop_config", label) as LoopConfig | null) ?? null,
     condition_expr: readOptionalString(record, "condition_expr", label) ?? null,
     then_steps: record.then_steps ? (record.then_steps as string[]) : null,
