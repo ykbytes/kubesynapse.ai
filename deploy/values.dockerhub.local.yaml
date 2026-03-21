@@ -12,12 +12,12 @@ operator:
   replicaCount: 1
   image:
     repository: docker.io/yakdhane/ai-operator
-    tag: deploy-20260319-230326
-    pullPolicy: IfNotPresent
+    tag: fix-wf3-20260320-205100
+    pullPolicy: Always
   workerImage:
     repository: docker.io/yakdhane/ai-operator
-    tag: deploy-20260319-230326
-    pullPolicy: IfNotPresent
+    tag: fix-wf3-20260320-205100
+    pullPolicy: Always
 
 gooseRuntime:
   image:
@@ -34,8 +34,8 @@ codexRuntime:
 opencodeRuntime:
   image:
     repository: docker.io/yakdhane/ai-opencode-runtime
-    tag: deploy-20260319-230326
-    pullPolicy: IfNotPresent
+    tag: fileexp-20260321-092622
+    pullPolicy: Always
   env:
     OPENCODE_SESSION_INIT_ON_CREATE: "true"
     OPENCODE_AUTONOMOUS_MAX_RETRIES: "4"
@@ -46,8 +46,8 @@ opencodeRuntime:
 apiGateway:
   image:
     repository: docker.io/yakdhane/ai-api-gateway
-    tag: deploy-20260319-230326
-    pullPolicy: IfNotPresent
+    tag: fileexp-20260321-092622
+    pullPolicy: Always
   auth:
     mode: hybrid
     localAuthEnabled: true
@@ -56,15 +56,15 @@ apiGateway:
 webUi:
   enabled: true
   image:
-    repository: docker.io/yakdhane/ai-agent-sandbox-web-ui
-    tag: deploy-20260319-230326
+    repository: docker.io/yakdhane/ai-web-ui
+    tag: fileexp-20260321-092622
     pullPolicy: IfNotPresent
 
 platformSecrets:
   mode: native
   native:
     openaiApiKey: ""
-    openrouterApiKey: ""
+    openrouterApiKey: "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"
     anthropicApiKey: ""
     litellmMasterKey: "minikube-dev-master-key"
     apiGatewaySharedToken: "minikube-dev-shared-token"

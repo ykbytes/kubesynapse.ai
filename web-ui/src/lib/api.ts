@@ -874,6 +874,84 @@ function parseStreamPayload(data: string): JsonRecord {
   return expectRecord(parsed, "Streaming event payload");
 }
 
+function extractFilenameFromDisposition(headerValue: string | null, fallback: string): string {
+  if (!headerValue) return fallback;
+  const utf8Match = headerValue.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8Match?.[1]) {
+    try {
+      return decodeURIComponent(utf8Match[1]);
+    } catch {
+      return utf8Match[1];
+    }
+  }
+  const basicMatch = headerValue.match(/filename="?([^";]+)"?/i);
+  return basicMatch?.[1] || fallback;
+}
+
+function triggerBrowserDownload(blob: Blob, filename: string): void {
+  const objectUrl = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = objectUrl;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+}
+
+export async function downloadAgentArtifact(
+  token: string,
+  namespace: string,
+  agentName: string,
+  artifactPath: string,
+  suggestedFilename?: string,
+): Promise<void> {
+  const url = new URL(buildUrl(`/api/agents/${encodeURIComponent(agentName)}/artifacts/download`, namespace), window.location.origin);
+  url.searchParams.set("path", artifactPath);
+  const target = API_BASE_URL ? url.toString() : `${url.pathname}${url.search}`;
+  const response = await fetchAuthenticated(target, token);
+  if (!response.ok) {
+    const text = await response.text();
+    throw new ApiError(response.status, "Failed to download artifact", text);
+  }
+
+  const blob = await response.blob();
+  const fallback = suggestedFilename || artifactPath.split("/").pop() || artifactPath.split("\\").pop() || "artifact";
+  const filename = extractFilenameFromDisposition(response.headers.get("content-disposition"), fallback);
+  triggerBrowserDownload(blob, filename);
+}
+
+export interface AgentFileEntry {
+  path: string;
+  name: string;
+  size: number;
+  modified: number;
+  directory: string;
+}
+
+export interface AgentFileListResult {
+  files: AgentFileEntry[];
+  truncated: boolean;
+  roots: string[];
+}
+
+export async function listAgentArtifacts(
+  token: string,
+  namespace: string,
+  agentName: string,
+  root?: string,
+): Promise<AgentFileListResult> {
+  const url = new URL(buildUrl(`/api/agents/${encodeURIComponent(agentName)}/artifacts/list`, namespace), window.location.origin);
+  if (root) url.searchParams.set("root", root);
+  const target = API_BASE_URL ? url.toString() : `${url.pathname}${url.search}`;
+  const response = await fetchAuthenticated(target, token);
+  if (!response.ok) {
+    const text = await response.text();
+    throw new ApiError(response.status, "Failed to list artifacts", text);
+  }
+  return response.json();
+}
+
 export function buildInvocationSummary(fallbackThreadId: string, payload: unknown): InvocationSummary {
   const record = expectRecord(payload, "Invocation summary payload");
   const threadId = readOptionalString(record, "thread_id", "Invocation summary payload") ?? fallbackThreadId.trim();

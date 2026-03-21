@@ -42,7 +42,7 @@ import { ThemeProvider } from "./contexts/ThemeContext";
 import { NotificationProvider } from "./contexts/NotificationContext";
 
 import type { EvalInfo, UiMessage, WorkflowInfo, WorkspaceView } from "./types";
-import { cloneAgent, exportBundleUrl, importBundle } from "./lib/api";
+import { cloneAgent, downloadAgentArtifact, exportBundleUrl, importBundle, listAgentArtifacts } from "./lib/api";
 import { toast } from "sonner";
 
 // ── Pure utility functions ──
@@ -491,6 +491,8 @@ function AppLayout() {
                         opencodeMaxTurns={chat.selectedOpenCodeChatSettings.maxTurns}
                         opencodeWorkingDirectory={chat.selectedOpenCodeChatSettings.workingDirectory}
                         summary={chat.summary}
+                        onDownloadArtifact={(path, filename) => downloadAgentArtifact(conn.token, conn.namespace, ws.selectedAgentName, path, filename)}
+                        onListArtifacts={() => listAgentArtifacts(conn.token, conn.namespace, ws.selectedAgentName)}
                         onOpenCodeOutputFormatChange={chat.setOpenCodeOutputFormat}
                         onOpenCodeAutonomousChange={chat.setOpenCodeAutonomous}
                         onOpenCodeMaxTurnsChange={chat.setOpenCodeMaxTurns}

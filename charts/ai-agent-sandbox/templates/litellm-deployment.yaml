@@ -24,9 +24,6 @@ spec:
 {{- end }}
       automountServiceAccountToken: false
       securityContext:
-        runAsNonRoot: true
-        runAsUser: 1000
-        runAsGroup: 1000
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -46,10 +43,21 @@ spec:
             - name: config
               mountPath: /app/config.yaml
               subPath: config.yaml
+            - name: cache
+              mountPath: /.cache
+            - name: npm-cache
+              mountPath: /.npm
+            - name: tmp
+              mountPath: /tmp
           envFrom:
             - secretRef:
                 name: {{ include "ai-agent-sandbox.fullname" . }}-llm-api-keys
                 optional: true
+          env:
+            - name: LITELLM_MIGRATION_DIR
+              value: /tmp/litellm-migrations
+            - name: STORE_MODEL_IN_DB
+              value: "True"
           args: ["--config", "/app/config.yaml"]
           resources:
 {{ toYaml .Values.litellm.resources | indent 12 }}
@@ -67,10 +75,26 @@ spec:
             initialDelaySeconds: 15
             periodSeconds: 15
             failureThreshold: 3
+          startupProbe:
+            httpGet:
+              path: /health/liveliness
+              port: 4000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 30
       volumes:
         - name: config
           configMap:
             name: {{ include "ai-agent-sandbox.fullname" . }}-litellm-config
+        - name: cache
+          emptyDir:
+            sizeLimit: 256Mi
+        - name: npm-cache
+          emptyDir:
+            sizeLimit: 256Mi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -85,6 +109,10 @@ spec:
   ingress:
     - from:
         - podSelector:
+            matchLabels:
+              app: ai-agent
+        - namespaceSelector: {}
+          podSelector:
             matchLabels:
               app: ai-agent
         - podSelector:

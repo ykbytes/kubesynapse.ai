@@ -1070,6 +1070,47 @@ class GatewayA2AProtocolAsyncTests(unittest.IsolatedAsyncioTestCase):
 
 
 class GatewayInvokeProxyTests(unittest.IsolatedAsyncioTestCase):
+    async def test_download_agent_artifact_proxies_runtime_file_response(self) -> None:
+        response = httpx.Response(
+            200,
+            content=b"%PDF-1.4 sample",
+            headers={
+                "content-type": "application/pdf",
+                "content-disposition": 'attachment; filename="AZ305_summary.pdf"',
+            },
+        )
+
+        class FakeAsyncClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def get(self, url, **kwargs):
+                self.url = url
+                self.kwargs = kwargs
+                return response
+
+        fake_client = FakeAsyncClient()
+
+        with patch.object(api_gateway_main.asyncio, "to_thread", return_value={"spec": {"model": "gpt-4"}}), patch.object(
+            api_gateway_main.httpx,
+            "AsyncClient",
+            return_value=fake_client,
+        ):
+            proxied = await api_gateway_main.download_agent_artifact(
+                "demo",
+                "/tmp/AZ305_summary.pdf",
+                "default",
+                user={},
+            )
+
+        self.assertEqual(fake_client.kwargs["params"], {"path": "/tmp/AZ305_summary.pdf"})
+        self.assertEqual(proxied.media_type, "application/pdf")
+        self.assertEqual(proxied.headers.get("content-disposition"), 'attachment; filename="AZ305_summary.pdf"')
+        self.assertEqual(proxied.body, b"%PDF-1.4 sample")
+
     async def test_invoke_agent_rejects_invalid_runtime_json(self) -> None:
         request = api_gateway_main.InvokeRequest(prompt="hello")
         raw_request = types.SimpleNamespace(headers={})

@@ -512,6 +512,8 @@ def execute_workflow_step(
         step_results,
         project_context=project_context,
     )
+    if not prompt.strip():
+        prompt = workflow_input
     # Share session with dependency steps when shareSession is set,
     # so that runtimes with session persistence (e.g. opencode) maintain
     # workspace context across sequential steps.

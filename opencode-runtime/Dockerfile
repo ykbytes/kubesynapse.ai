@@ -1,9 +1,11 @@
 FROM node:20-slim AS opencode-install
 
 RUN npm install -g opencode-ai && \
+    cd /usr/local/lib/node_modules/opencode-ai && \
+    npm install opencode-linux-x64 opencode-linux-x64-baseline 2>/dev/null || true && \
     command -v opencode >/dev/null && \
-    OPENCODE_BIN=$(which opencode) && \
-    echo "OpenCode installed at: $OPENCODE_BIN"
+    opencode --version && \
+    echo "OpenCode installed and verified"
 
 FROM python:3.12-slim
 
@@ -14,6 +16,10 @@ RUN apt-get update \
 
 COPY --from=opencode-install /usr/local/lib/node_modules /usr/local/lib/node_modules
 COPY --from=opencode-install /usr/local/bin/opencode /usr/local/bin/opencode
+# The wrapper uses fs.realpathSync(__filename) to find .opencode next to itself;
+# after COPY (not symlink), scriptDir resolves to /usr/local/bin/ instead of the
+# original node_modules path, so copy the cached binary there too.
+COPY --from=opencode-install /usr/local/lib/node_modules/opencode-ai/bin/.opencode /usr/local/bin/.opencode
 
 RUN BUN_VERSION="1.1.45" \
     && curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}" \

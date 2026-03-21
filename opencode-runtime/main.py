@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import mimetypes
 import os
 import re
 import shutil
@@ -18,7 +19,7 @@ from typing import Any
 import httpx
 import yaml
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field, model_validator
 
 from hitl import hitl_gate
@@ -89,6 +90,28 @@ SESSION_INIT_ON_CREATE = os.getenv("OPENCODE_SESSION_INIT_ON_CREATE", "true").st
     "yes",
     "on",
 }
+DOWNLOADABLE_ARTIFACT_EXTENSIONS: frozenset[str] = frozenset({
+    ".pdf",
+    ".md",
+    ".txt",
+    ".json",
+    ".yaml",
+    ".yml",
+    ".csv",
+    ".html",
+    ".svg",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".doc",
+    ".docx",
+})
+ARTIFACT_PATH_PATTERN = re.compile(
+    r"(?:^|[\s\"'`(])(?P<path>(?:/[A-Za-z0-9._\-/]+|[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)+)"
+    r"(?:\.pdf|\.md|\.txt|\.json|\.yaml|\.yml|\.csv|\.html|\.svg|\.png|\.jpg|\.jpeg|\.gif|\.doc|\.docx))(?=$|[\s\"'`),])",
+    re.IGNORECASE,
+)
 
 NATIVE_TOOL_NAMES: frozenset[str] = frozenset({
     "bash",
@@ -596,6 +619,45 @@ def resolve_working_directory(raw_value: str | None) -> str:
     return str(target)
 
 
+def _path_is_within(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def resolve_download_path(raw_value: str) -> Path:
+    candidate = str(raw_value or "").strip()
+    if not candidate:
+        raise HTTPException(status_code=400, detail="artifact download path must not be blank")
+    target = Path(candidate).expanduser().resolve()
+    allowed_roots = [Path(OPENCODE_WORKDIR).resolve(), Path(HOME_DIR).resolve(), Path("/tmp").resolve()]
+    if not any(_path_is_within(target, root) for root in allowed_roots):
+        raise HTTPException(status_code=400, detail=f"artifact path '{raw_value}' is outside the allowed runtime roots")
+    if not target.exists() or not target.is_file():
+        raise HTTPException(status_code=404, detail=f"artifact path '{raw_value}' does not exist")
+    return target
+
+
+def _iter_artifact_paths(value: Any) -> list[str]:
+    found: list[str] = []
+    if isinstance(value, str):
+        for match in ARTIFACT_PATH_PATTERN.finditer(value):
+            candidate = str(match.group("path") or "").strip().rstrip(".,:;)")
+            if candidate:
+                found.append(candidate)
+        return found
+    if isinstance(value, dict):
+        for nested in value.values():
+            found.extend(_iter_artifact_paths(nested))
+        return found
+    if isinstance(value, list):
+        for nested in value:
+            found.extend(_iter_artifact_paths(nested))
+    return found
+
+
 def sse_event(event: str, data: dict[str, Any]) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
@@ -674,7 +736,7 @@ def build_prompt_format(request: "InvokeRequest") -> dict[str, Any] | None:
         return {
             "type": "json_schema",
             "schema": build_json_output_schema(request.output_schema),
-            "retryCount": request.structured_output_retry_count,
+            "retryCount": request.structured_output_retry_count if request.structured_output_retry_count is not None else STRUCTURED_OUTPUT_RETRY_COUNT,
         }
     return None
 
@@ -985,7 +1047,7 @@ def extract_tool_calls_from_messages(messages: list[dict[str, Any]]) -> list[dic
 
 
 def extract_artifacts_from_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Extract file artifacts from tool parts (write, edit) and patch parts."""
+    """Extract file artifacts from tool parts and patch parts."""
     artifacts: dict[str, dict[str, Any]] = {}
     for msg in messages:
         parts = msg.get("parts")
@@ -1010,6 +1072,16 @@ def extract_artifacts_from_messages(messages: list[dict[str, Any]]) -> list[dict
                                 "tool": tool_name,
                                 "status": "completed",
                             }
+                if state.get("status") == "completed":
+                    for file_path in _iter_artifact_paths(state.get("output")) + _iter_artifact_paths(state.get("input")):
+                        suffix = Path(file_path).suffix.lower()
+                        if suffix not in DOWNLOADABLE_ARTIFACT_EXTENSIONS:
+                            continue
+                        artifacts[file_path] = {
+                            "path": file_path,
+                            "tool": tool_name or "tool",
+                            "status": "completed",
+                        }
             elif part_type == "patch":
                 for file_name in part.get("files") or []:
                     file_name = str(file_name).strip()
@@ -1135,6 +1207,8 @@ def validate_inbound_a2a_request(request: "InvokeRequest") -> None:
     caller_agent_namespace = (request.caller_agent_namespace or "").strip()
     if not caller_agent_name and not caller_agent_namespace:
         return
+    if not A2A_ALLOWED_CALLERS:
+        return
     if (caller_agent_namespace, caller_agent_name) not in A2A_ALLOWED_CALLERS:
         raise HTTPException(
             status_code=403,
@@ -1189,8 +1263,8 @@ class InvokeRequest(BaseModel):
     working_directory: str | None = Field(default=None, max_length=512)
     output_format: str | None = Field(default=None, max_length=32)
     output_schema: dict[str, Any] | None = None
-    structured_output_retry_count: int = Field(default=STRUCTURED_OUTPUT_RETRY_COUNT, ge=0, le=10)
-    max_retries: int | None = Field(default=None, ge=0, le=10)
+    structured_output_retry_count: int | None = Field(default=None)
+    max_retries: int | None = Field(default=None)
     autonomous: bool = True
     pre_authorized_actions: list[str] = Field(default_factory=list)
 
@@ -1375,6 +1449,9 @@ def wait_for_server_ready(process: subprocess.Popen[str]) -> None:
     health_url = f"{server_base_url()}/global/health"
     while time.time() < deadline:
         if process.poll() is not None:
+            stdout_out = process.stdout.read() if process.stdout else ""
+            stderr_out = process.stderr.read() if process.stderr else ""
+            logger.error("OpenCode server exited with code %s.\nSTDOUT: %s\nSTDERR: %s", process.returncode, stdout_out[:4000], stderr_out[:4000])
             raise RuntimeError("OpenCode server exited before becoming ready")
         try:
             with httpx.Client(timeout=2.0, trust_env=False) as client:
@@ -1917,8 +1994,8 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         ],
         cwd=OPENCODE_WORKDIR,
         env=env,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
     )
 
@@ -2082,6 +2159,7 @@ def context_budget(thread_id: str | None = None) -> dict[str, Any]:
 async def invoke_stream(request: InvokeRequest) -> StreamingResponse:
     async def event_generator() -> AsyncIterator[str]:
         thread_id = request.thread_id or str(uuid.uuid4())
+        streamed_delta_count = 0
         yield sse_event("response.started", {"thread_id": thread_id, "source": "opencode"})
 
         # Use a thread-safe queue so invoke_opencode_streaming can push
@@ -2105,6 +2183,8 @@ async def invoke_stream(request: InvokeRequest) -> StreamingResponse:
             item = await event_queue.get()
             if item is None:
                 break
+            if item.get("event") == "response.delta":
+                streamed_delta_count += 1
             yield sse_event(item["event"], item["data"])
 
         try:
@@ -2116,7 +2196,7 @@ async def invoke_stream(request: InvokeRequest) -> StreamingResponse:
             yield sse_event("response.error", {"thread_id": thread_id, "error": str(exc)})
             return
 
-        if response.response:
+        if response.response and streamed_delta_count == 0:
             yield sse_event("response.delta", {"thread_id": response.thread_id, "delta": response.response, "source": "opencode"})
         yield sse_event(
             "response.completed",
@@ -2135,6 +2215,63 @@ async def invoke_stream(request: InvokeRequest) -> StreamingResponse:
         )
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+@app.get("/artifacts/download")
+def download_artifact(path: str) -> FileResponse:
+    artifact_path = resolve_download_path(path)
+    media_type, _encoding = mimetypes.guess_type(artifact_path.name)
+    return FileResponse(
+        artifact_path,
+        media_type=media_type or "application/octet-stream",
+        filename=artifact_path.name,
+    )
+
+
+@app.get("/artifacts/list")
+def list_artifacts(root: str = "") -> dict[str, Any]:
+    """Walk allowed directories and return a flat list of files."""
+    allowed_roots = [Path(OPENCODE_WORKDIR).resolve(), Path(HOME_DIR).resolve(), Path("/tmp").resolve()]
+    if root:
+        target = Path(root).expanduser().resolve()
+        if not any(_path_is_within(target, r) for r in allowed_roots):
+            raise HTTPException(status_code=400, detail=f"root '{root}' is outside the allowed runtime roots")
+        if not target.is_dir():
+            raise HTTPException(status_code=404, detail=f"root '{root}' is not a directory")
+        walk_roots = [target]
+    else:
+        walk_roots = [r for r in allowed_roots if r.is_dir()]
+
+    files: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for walk_root in walk_roots:
+        for dirpath, _dirnames, filenames in os.walk(walk_root):
+            dp = Path(dirpath)
+            # Skip hidden dirs and common noise
+            if any(part.startswith(".") for part in dp.parts[len(walk_root.parts):]):
+                continue
+            for fname in filenames:
+                if fname.startswith("."):
+                    continue
+                fpath = dp / fname
+                posix_path = str(PurePosixPath(fpath))
+                if posix_path in seen:
+                    continue
+                seen.add(posix_path)
+                try:
+                    stat = fpath.stat()
+                except OSError:
+                    continue
+                files.append({
+                    "path": posix_path,
+                    "name": fname,
+                    "size": stat.st_size,
+                    "modified": stat.st_mtime,
+                    "directory": str(PurePosixPath(dp)),
+                })
+                if len(files) >= ARTIFACT_COLLECTION_MAX_FILES:
+                    return {"files": files, "truncated": True, "roots": [str(PurePosixPath(r)) for r in walk_roots]}
+    return {"files": files, "truncated": False, "roots": [str(PurePosixPath(r)) for r in walk_roots]}
 
 
 if __name__ == "__main__":

@@ -1846,7 +1846,7 @@ def create_agent_statefulset_manifest(
                 {"name": "GOOSE_PROVIDER", "value": GOOSE_DEFAULT_PROVIDER},
                 {"name": "GOOSE_MODEL", "value": model},
                 {"name": "GOOSE_SYSTEM_PROMPT", "value": system_prompt},
-                {"name": "LITELLM_HOST", "value": f"http://{LITELLM_SVC}:4000"},
+                {"name": "LITELLM_HOST", "value": f"http://{LITELLM_SVC}.{OPERATOR_NAMESPACE}.svc.cluster.local:4000"},
                 {"name": "LITELLM_BASE_PATH", "value": "v1/chat/completions"},
                 {
                     "name": "LITELLM_API_KEY",
@@ -1879,7 +1879,7 @@ def create_agent_statefulset_manifest(
                 {"name": "CODEX_PROVIDER", "value": CODEX_DEFAULT_PROVIDER},
                 {"name": "CODEX_MODEL", "value": model},
                 {"name": "CODEX_SYSTEM_PROMPT", "value": system_prompt},
-                {"name": "LITELLM_HOST", "value": f"http://{LITELLM_SVC}:4000"},
+                {"name": "LITELLM_HOST", "value": f"http://{LITELLM_SVC}.{OPERATOR_NAMESPACE}.svc.cluster.local:4000"},
                 {"name": "LITELLM_BASE_PATH", "value": "v1/chat/completions"},
                 {
                     "name": "LITELLM_API_KEY",
@@ -1920,7 +1920,7 @@ def create_agent_statefulset_manifest(
                 {"name": "OPENCODE_MODEL", "value": model},
                 {"name": "OPENCODE_SYSTEM_PROMPT", "value": system_prompt},
                 {"name": "OPENCODE_DEFAULT_AGENT", "value": "build"},
-                {"name": "LITELLM_HOST", "value": f"http://{LITELLM_SVC}:4000"},
+                {"name": "LITELLM_HOST", "value": f"http://{LITELLM_SVC}.{OPERATOR_NAMESPACE}.svc.cluster.local:4000"},
                 {"name": "LITELLM_BASE_PATH", "value": "v1/chat/completions"},
                 {"name": "MCP_SERVERS", "value": ",".join(mcp_servers)},
                 {"name": "MCP_HUB_NAMESPACE", "value": MCP_HUB_NAMESPACE},
@@ -1967,7 +1967,7 @@ def create_agent_statefulset_manifest(
             volumes.append({"name": "workspace-volume", "emptyDir": {"sizeLimit": "5Gi"}})
         env.extend(
             [
-                {"name": "LITELLM_API_BASE", "value": f"http://{LITELLM_SVC}:4000"},
+                {"name": "LITELLM_API_BASE", "value": f"http://{LITELLM_SVC}.{OPERATOR_NAMESPACE}.svc.cluster.local:4000"},
                 {"name": "AGENT_ALLOWED_MODELS", "value": ",".join(AGENT_ALLOWED_MODELS)},
                 {"name": "AGENT_MAX_STEPS", "value": AGENT_MAX_STEPS},
                 {"name": "AGENT_MAX_STEPS_LIMIT", "value": AGENT_MAX_STEPS_LIMIT},
@@ -2694,17 +2694,7 @@ def create_agent_resources(spec: dict[str, Any], name: str, namespace: str, logg
     ensure_service(namespace, service_manifest)
     if mcp_auth_secret_manifest is not None:
         ensure_secret(namespace, mcp_auth_secret_manifest)
-    try:
-        ensure_statefulset(namespace, statefulset_manifest)
-    except Exception:
-        # Best-effort cleanup of the Service created above before re-raising
-        try:
-            kubernetes.client.CoreV1Api().delete_namespaced_service(
-                name=name + "-sandbox", namespace=namespace
-            )
-        except Exception:
-            pass
-        raise
+    ensure_statefulset(namespace, statefulset_manifest)
     ensure_network_policy(namespace, network_policy_manifest)
     ensure_network_policy(namespace, a2a_egress_policy_manifest)
     ensure_network_policy(namespace, a2a_ingress_policy_manifest)
@@ -3175,13 +3165,13 @@ def create_worker_job_manifest(
     job_name = hashed_resource_name(kind, resource_namespace, resource_name, suffix=f"{generation}-{timestamp}")
     artifact_journal_path = workflow_journal_path(artifact_path)
     pod_security_context = {
-        "runAsNonRoot": True,
         "runAsUser": 999,
         "runAsGroup": 37,
         "fsGroup": 37,
         "seccompProfile": {"type": "RuntimeDefault"},
     }
     container_security_context = {
+        "runAsNonRoot": True,
         "allowPrivilegeEscalation": False,
         "readOnlyRootFilesystem": True,
         "capabilities": {"drop": ["ALL"]},
@@ -3215,6 +3205,23 @@ def create_worker_job_manifest(
                     "serviceAccountName": WORKER_SERVICE_ACCOUNT_NAME,
                     "securityContext": pod_security_context,
                     "imagePullSecrets": [{"name": secret_name} for secret_name in IMAGE_PULL_SECRETS],
+                    "initContainers": [
+                        {
+                            "name": "init-artifacts",
+                            "image": WORKER_IMAGE,
+                            "imagePullPolicy": WORKER_IMAGE_PULL_POLICY,
+                            "command": ["sh", "-c", "chown -R 999:37 /artifacts && chmod -R 775 /artifacts"],
+                            "securityContext": {
+                                "runAsUser": 0,
+                                "runAsNonRoot": False,
+                                "allowPrivilegeEscalation": False,
+                                "capabilities": {"drop": ["ALL"], "add": ["CHOWN", "FOWNER"]},
+                            },
+                            "volumeMounts": [
+                                {"name": "artifacts", "mountPath": ARTIFACT_MOUNT_PATH},
+                            ],
+                        }
+                    ],
                     "containers": [
                         {
                             "name": "worker",

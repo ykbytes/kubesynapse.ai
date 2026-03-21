@@ -620,14 +620,25 @@ def revoke_refresh_token(refresh_token: str) -> None:
     revoke_session(session_id)
 
 
+# Grace period (seconds) after a session is revoked during which access tokens
+# tied to it are still accepted.  This avoids a cascade of 401s when the refresh
+# rotation revokes the old session while in-flight requests still carry the old
+# access token.
+_SESSION_REVOKE_GRACE_SECONDS = 30
+
+
 def is_session_active(session_id: str, *, user_id: int | None = None) -> bool:
     if not session_id:
         return False
     with db_session() as session:
         record = session.get(UserSession, session_id)
         expires_at = ensure_utc(record.expires_at) if record is not None else None
-        if record is None or record.revoked_at is not None or expires_at is None or expires_at <= utc_now():
+        if record is None or expires_at is None or expires_at <= utc_now():
             return False
+        if record.revoked_at is not None:
+            revoked_at = ensure_utc(record.revoked_at)
+            if revoked_at is None or utc_now() > revoked_at + timedelta(seconds=_SESSION_REVOKE_GRACE_SECONDS):
+                return False
         if user_id is not None and int(record.user_id) != int(user_id):
             return False
         return True

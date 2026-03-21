@@ -5622,6 +5622,9 @@ def validate_inbound_a2a_request(request: InvokeRequest) -> None:
             ),
         )
 
+    if not A2A_ALLOWED_CALLERS:
+        return
+
     if (caller_agent_namespace, caller_agent_name) not in A2A_ALLOWED_CALLERS:
         raise HTTPException(
             status_code=403,

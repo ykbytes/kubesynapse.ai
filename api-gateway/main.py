@@ -364,8 +364,8 @@ class InvokeRequest(BaseModel):
     working_directory: str | None = None
     output_format: str | None = Field(default=None, max_length=32)
     output_schema: dict[str, Any] | None = None
-    max_retries: int | None = Field(default=None, ge=0, le=10)
-    structured_output_retry_count: int | None = Field(default=None, ge=0, le=10)
+    max_retries: int | None = Field(default=None)
+    structured_output_retry_count: int | None = Field(default=None)
     autonomous: bool = True
     builtin_extensions: list[str] = Field(default_factory=list)
     stdio_extensions: list[str] = Field(default_factory=list)
@@ -3520,6 +3520,27 @@ async def verify_token(authorization: str | None = Header(default=None)) -> dict
     return await authenticate_bearer_token(token)
 
 
+async def verify_token_or_query(
+    raw_request: Request,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """Like verify_token but also accepts a *token* query-parameter.
+
+    SSE / EventSource connections cannot set custom HTTP headers, so the
+    browser passes the access token in the query string instead.
+    """
+    if authorization and authorization.startswith("Bearer "):
+        tok = authorization[7:].strip()
+        if tok:
+            return await authenticate_bearer_token(tok)
+
+    tok = raw_request.query_params.get("token", "").strip()
+    if tok:
+        return await authenticate_bearer_token(tok)
+
+    raise HTTPException(status_code=401, detail="Missing token")
+
+
 def a2a_card_http_exception(error: A2AJSONRPCError) -> HTTPException:
     detail = error.message
     if error.data:
@@ -5644,6 +5665,78 @@ async def invoke_agent_stream(
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
+@app.get("/api/agents/{agent_name}/artifacts/download")
+async def download_agent_artifact(
+    agent_name: str,
+    path: str,
+    namespace: str = "default",
+    user=Depends(verify_token),
+):
+    ensure_namespace_access(user, namespace)
+    await asyncio.to_thread(read_agent, agent_name, namespace)
+
+    async with httpx.AsyncClient(timeout=AGENT_RUNTIME_TIMEOUT_SECONDS, trust_env=False) as client:
+        try:
+            response = await client.get(
+                f"{agent_runtime_url(agent_name, namespace)}/artifacts/download",
+                params={"path": path},
+            )
+        except Exception as exc:
+            logger.error("Artifact download failed (%s/%s): %s", namespace, agent_name, exc)
+            raise HTTPException(status_code=502, detail="Artifact download failed") from exc
+
+    if response.status_code >= 400:
+        error_payload = error_payload_from_body(response.content, "Artifact download failed")
+        status_code = response.status_code if response.status_code in {400, 404} else 502
+        raise HTTPException(status_code=status_code, detail=error_payload["error"])
+
+    passthrough_headers = {}
+    content_disposition = response.headers.get("content-disposition")
+    if content_disposition:
+        passthrough_headers["content-disposition"] = content_disposition
+    content_length = response.headers.get("content-length")
+    if content_length:
+        passthrough_headers["content-length"] = content_length
+
+    return Response(
+        content=response.content,
+        media_type=response.headers.get("content-type") or "application/octet-stream",
+        headers=passthrough_headers,
+    )
+
+
+@app.get("/api/agents/{agent_name}/artifacts/list")
+async def list_agent_artifacts(
+    agent_name: str,
+    namespace: str = "default",
+    root: str = "",
+    user=Depends(verify_token),
+):
+    ensure_namespace_access(user, namespace)
+    await asyncio.to_thread(read_agent, agent_name, namespace)
+
+    params: dict[str, str] = {}
+    if root:
+        params["root"] = root
+
+    async with httpx.AsyncClient(timeout=AGENT_RUNTIME_TIMEOUT_SECONDS, trust_env=False) as client:
+        try:
+            response = await client.get(
+                f"{agent_runtime_url(agent_name, namespace)}/artifacts/list",
+                params=params,
+            )
+        except Exception as exc:
+            logger.error("Artifact list failed (%s/%s): %s", namespace, agent_name, exc)
+            raise HTTPException(status_code=502, detail="Artifact listing failed") from exc
+
+    if response.status_code >= 400:
+        error_payload = error_payload_from_body(response.content, "Artifact listing failed")
+        status_code = response.status_code if response.status_code in {400, 404} else 502
+        raise HTTPException(status_code=status_code, detail=error_payload["error"])
+
+    return response.json()
+
+
 @app.get("/api/agents/{agent_name}/logs")
 def get_agent_logs(
     agent_name: str,
@@ -5841,6 +5934,68 @@ async def api_delete_chat_session(
 # ─────────────────────────────────────────────────────────────
 
 _LLM_PROXY_TIMEOUT = httpx.Timeout(15.0, connect=5.0)
+_OPENROUTER_API_TIMEOUT = httpx.Timeout(20.0, connect=10.0)
+
+# -- OpenRouter model cache (TTL-based in-memory)
+_openrouter_model_cache: list[dict[str, str]] = []
+_openrouter_cache_ts: float = 0.0
+_OPENROUTER_CACHE_TTL = 600  # 10 minutes
+
+
+async def _fetch_openrouter_models(api_key: str | None = None) -> list[dict[str, str]]:
+    """Fetch models from OpenRouter API with in-memory caching."""
+    import time
+    global _openrouter_model_cache, _openrouter_cache_ts
+
+    now = time.monotonic()
+    if _openrouter_model_cache and (now - _openrouter_cache_ts) < _OPENROUTER_CACHE_TTL:
+        return _openrouter_model_cache
+
+    headers: dict[str, str] = {"Accept": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    try:
+        async with httpx.AsyncClient(timeout=_OPENROUTER_API_TIMEOUT, trust_env=False) as client:
+            resp = await client.get("https://openrouter.ai/api/v1/models", headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+            models_raw = data.get("data", [])
+            result: list[dict[str, str]] = []
+            for m in models_raw:
+                model_id = m.get("id", "")
+                name = m.get("name", model_id)
+                desc_parts: list[str] = []
+                pricing = m.get("pricing", {})
+                if pricing:
+                    prompt_price = pricing.get("prompt")
+                    if prompt_price is not None:
+                        try:
+                            p = float(prompt_price) * 1_000_000
+                            desc_parts.append(f"${p:.2f}/M input")
+                        except (ValueError, TypeError):
+                            pass
+                ctx = m.get("context_length")
+                if ctx:
+                    try:
+                        desc_parts.append(f"{int(ctx)//1000}k ctx")
+                    except (ValueError, TypeError):
+                        pass
+                description = " · ".join(desc_parts) if desc_parts else ""
+                if model_id:
+                    result.append({
+                        "model_id": model_id,
+                        "display_name": name,
+                        "description": description,
+                    })
+            _openrouter_model_cache = result
+            _openrouter_cache_ts = now
+            logger.info("Fetched %d models from OpenRouter API", len(result))
+            return result
+    except Exception as exc:
+        logger.warning("Failed to fetch OpenRouter models: %s", exc)
+        return _openrouter_model_cache  # return stale cache on error
+
 
 # -- well-known provider keys accepted by the platform
 _ALLOWED_SECRET_KEYS = frozenset({
@@ -6198,6 +6353,46 @@ async def llm_provider_suggestions(provider: str, q: str = "", user=Depends(veri
     except Exception as exc:
         logger.warning("Could not fetch LiteLLM models for suggestions: %s", exc)
 
+    # For OpenRouter, fetch live models from the API
+    if provider == "OPENROUTER_API_KEY":
+        # Read OpenRouter API key from K8s secret or env
+        or_key: str | None = None
+        try:
+            from kubernetes import client as k8s_client
+            ns = os.getenv("POD_NAMESPACE", "ai-platform")
+            secret = k8s_client.CoreV1Api().read_namespaced_secret(name=LLM_SECRET_NAME, namespace=ns)
+            raw = (secret.data or {}).get("OPENROUTER_API_KEY", "")
+            if raw:
+                import base64
+                or_key = base64.b64decode(raw).decode("utf-8").strip() or None
+        except Exception:
+            or_key = os.getenv("OPENROUTER_API_KEY") or None
+
+        live_models = await _fetch_openrouter_models(or_key)
+        # Mark already-configured and merge
+        live_suggestions = []
+        for lm in live_models:
+            entry = dict(lm)
+            if lm["model_id"] in configured_ids:
+                entry["description"] = "Already configured"
+            live_suggestions.append(entry)
+
+        # Apply search filter
+        if q:
+            ql = q.lower()
+            live_suggestions = [
+                s for s in live_suggestions
+                if ql in s["model_id"].lower()
+                or ql in s["display_name"].lower()
+                or ql in s.get("description", "").lower()
+            ]
+
+        # Put configured first, then unconfigured, limit results
+        configured_live = [s for s in live_suggestions if s.get("description") == "Already configured"]
+        unconfigured_live = [s for s in live_suggestions if s.get("description") != "Already configured"]
+        combined = configured_live + unconfigured_live
+        return {"provider": provider, "suggestions": combined[:100]}
+
     # Static popular suggestions, excluding already-configured
     static = [s for s in _PROVIDER_POPULAR_MODELS.get(provider, []) if s["model_id"] not in configured_ids]
 
@@ -6264,7 +6459,7 @@ if __name__ == "__main__":
 @app.get("/api/notifications/stream")
 def stream_notifications(
     namespace: str = "default",
-    user=Depends(verify_token),
+    user=Depends(verify_token_or_query),
 ):
     """Long-lived SSE connection that pushes resource status change events."""
     ensure_namespace_access(user, namespace)

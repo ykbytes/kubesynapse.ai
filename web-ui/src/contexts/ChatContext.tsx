@@ -361,6 +361,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
   function pushActivity(agentName: string, event: string, payload: Record<string, unknown>) {
     if (event === "response.delta") return;
+    // Skip unnamed/empty SSE events (keepalives parsed as "message" with no data)
+    if (event === "message" && Object.keys(payload).length === 0) return;
     setActivityForAgent(agentName, (cur) => [{ id: createId(), event, payload, timestamp: new Date().toISOString() }, ...cur].slice(0, 200));
   }
 
@@ -487,7 +489,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
           if (event === "response.delta") {
             if (typeof ep.delta !== "string") throw new Error("response.delta events must include a string delta field.");
-            setMessagesForAgent(agentName, (cur) => cur.map((m) => m.id === assistantMessageId ? { ...m, content: `${m.content}${ep.delta}`, status: "streaming" } : m));
+            const delta = ep.delta;
+            setMessagesForAgent(agentName, (cur) => cur.map((m) => {
+              if (m.id !== assistantMessageId) return m;
+              const nextContent = delta.startsWith(m.content) ? delta : `${m.content}${delta}`;
+              return { ...m, content: nextContent, status: "streaming" };
+            }));
             return;
           }
 

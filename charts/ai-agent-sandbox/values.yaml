@@ -3,9 +3,9 @@ global:
 
 litellm:
   image:
-    repository: ghcr.io/berriai/litellm
-    tag: main-latest
-    pullPolicy: Always
+    repository: litellm/litellm-database
+    tag: v1.82.3-stable
+    pullPolicy: IfNotPresent
   replicaCount: 1
   service:
     type: ClusterIP
@@ -14,10 +14,10 @@ litellm:
   resources:
     requests:
       cpu: "100m"
-      memory: "256Mi"
+      memory: "512Mi"
     limits:
       cpu: "1"
-      memory: "1Gi"
+      memory: "2Gi"
   config:
     model_list:
       - model_name: gpt-4
@@ -30,6 +30,7 @@ litellm:
           api_key: "os.environ/OPENROUTER_API_KEY"
     general_settings:
       master_key: "os.environ/LITELLM_MASTER_KEY"
+      database_url: "os.environ/DATABASE_URL"
 
 agentRuntime:
   image:
