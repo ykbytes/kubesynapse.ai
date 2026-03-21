@@ -47,16 +47,11 @@ data:
       #ff764d accent, #a8a8a8 text).
     - Responsive layout that works at 1280px and above.
 
-    ## Git Coordination
-    - All agents share a single git repository configured via gitConfig.
-    - The git repository is auto-cloned into `/workspace/` at agent startup.
-    - The architect works on the `main` branch and pushes the initial scaffold.
-    - Backend and frontend agents work on dedicated branches (`agent/backend`,
-      `agent/frontend`) that are auto-checked-out at startup.
-    - Agents should commit and push after completing each major component.
-    - The integration reviewer must pull all branches, merge them into main,
-      then run build and test verification.
-    - The shared repository URL is in the `GIT_REPO_URL` environment variable.
+    ## Workspace
+    - All agents share the `/workspace/` directory via a persistent volume.
+    - The architect creates the project scaffold first; subsequent agents build
+      on top of it in the same workspace.
+    - No git is used — agents read and write files directly in `/workspace/`.
 
     ## Key Features (Priority Order)
     1. Transport bar: play, pause, stop, BPM control, loop toggle, metronome

@@ -24,6 +24,7 @@ from utils import (
     estimate_toxicity,
     exact_match_score,
     invoke_agent_runtime,
+    invoke_agent_runtime_stream,
     normalize_step_execution,
     now_iso,
     parse_json_output,
@@ -583,11 +584,14 @@ def execute_workflow_step(
             }
             if int(execution_policy.get("maxTurns", 0)):
                 invoke_payload["max_turns"] = int(execution_policy["maxTurns"])
-            result = invoke_agent_runtime(
+            # Use streaming invoke for real-time turn-by-turn visibility
+            result = invoke_agent_runtime_stream(
                 agent_ref,
                 TARGET_NAMESPACE,
                 invoke_payload,
                 timeout_seconds=float(execution_policy["timeoutSeconds"]),
+                step_name=step_name,
+                iteration=attempt,
             )
             latency_ms = int((time.perf_counter() - started) * 1000)
             response_text = str(result.get("response", ""))
@@ -1109,16 +1113,24 @@ def execute_loop_step(
         plan_prompt = (
             f"{context_block}"
             f"{dependency_block}"
-            f"Generate a numbered TODO checklist for the following work:\n\n"
+            f"Generate a short TODO checklist for the following work:\n\n"
             f"{workflow_input}\n\n"
             f"{step.get('prompt', '')}\n\n"
-            f"Requirements for the checklist:\n"
-            f"- Order items by dependency — prerequisites before the steps that need them.\n"
-            f"- Each item must be a single, verifiable unit of work (not 'implement everything').\n"
-            f"- Include a final item that verifies the overall result meets the objective.\n"
-            f"- Respond with ONLY a markdown checklist (- [ ] item format), nothing else."
+            f"CRITICAL FORMAT RULES — follow EXACTLY:\n"
+            f"- Output ONLY a markdown checklist using '- [ ] item' format.\n"
+            f"- Maximum 5-8 items. Group related work into single items.\n"
+            f"- Each item = a meaningful chunk of work, not a single file.\n"
+            f"- DO NOT include any prose, explanation, status report, or headings.\n"
+            f"- DO NOT number the items. Use ONLY '- [ ]' prefix.\n"
+            f"- DO NOT create files or run commands — ONLY output the checklist.\n"
+            f"- Last item should verify the result (e.g. run build/tests).\n\n"
+            f"Example format:\n"
+            f"- [ ] Create project config files (package.json, tsconfig, vite.config)\n"
+            f"- [ ] Define TypeScript interfaces in src/types/\n"
+            f"- [ ] Verify with pnpm install && pnpm tsc --noEmit\n"
         )
         thread_id = build_thread_id("workflow", TARGET_NAME, run_id, f"{step_name}-plan")
+        logger.info("[opencode %s] generating plan from prompt...", step_name)
         try:
             wait_for_agent_runtime_ready(agent_ref, TARGET_NAMESPACE)
             plan_result = invoke_agent_runtime(
@@ -1131,7 +1143,7 @@ def execute_loop_step(
                     "caller_agent_namespace": TARGET_NAMESPACE,
                     "parent_thread_id": run_id,
                 },
-                timeout_seconds=120.0,
+                timeout_seconds=float(execution_policy.get("timeoutSeconds", 300)),
             )
             plan_text = str(plan_result.get("response", ""))
         except Exception as exc:
@@ -1146,6 +1158,15 @@ def execute_loop_step(
     checklist = parse_plan_checklist(plan_text)
     if not checklist:
         checklist = [{"text": "Complete the assigned work", "done": False}]
+
+    # Cap at 10 items — if the model returned too many, consolidate
+    if len(checklist) > 10:
+        logger.warning("[opencode %s] plan had %d items, truncating to 10", step_name, len(checklist))
+        checklist = checklist[:10]
+
+    logger.info("[opencode %s] plan generated — %d checklist items:", step_name, len(checklist))
+    for i, item in enumerate(checklist, 1):
+        logger.info("[opencode %s]   %d. %s", step_name, i, item.get("text", "?")[:120])
 
     # Use a single thread_id across all loop iterations so runtimes with
     # session persistence (e.g. opencode) maintain context between iterations.
@@ -1164,6 +1185,7 @@ def execute_loop_step(
         "maxIterations": max_iterations,
         "completedItems": 0,
         "totalItems": len(checklist),
+        "checklistItems": [{"text": c["text"], "done": c.get("done", False)} for c in checklist],
         "circuitBreakerState": circuit_breaker.to_dict(),
         "exitReason": None,
     }
@@ -1220,6 +1242,12 @@ def execute_loop_step(
             {"runId": run_id, "step": step_name, "iteration": iteration, "completedItems": sum(1 for c in checklist if c.get("done"))},
         )
 
+        completed_items = sum(1 for c in checklist if c.get("done"))
+        logger.info(
+            "[opencode %s] === iteration %d/%d started — %d/%d items done ===",
+            step_name, iteration, max_iterations, completed_items, len(checklist),
+        )
+
         try:
             loop_invoke_payload: dict[str, Any] = {
                     "prompt": prompt,
@@ -1233,11 +1261,13 @@ def execute_loop_step(
             }
             if int(execution_policy.get("maxTurns", 0)):
                 loop_invoke_payload["max_turns"] = int(execution_policy["maxTurns"])
-            result = invoke_agent_runtime(
+            result = invoke_agent_runtime_stream(
                 agent_ref,
                 TARGET_NAMESPACE,
                 loop_invoke_payload,
                 timeout_seconds=float(execution_policy.get("timeoutSeconds", 300)),
+                step_name=step_name,
+                iteration=iteration,
             )
             response_text = str(result.get("response", ""))
             successful_iterations += 1
@@ -1247,6 +1277,11 @@ def execute_loop_step(
             all_artifacts.extend(result.get("artifacts") or [])
             all_tool_calls.extend(result.get("tool_calls") or [])
             all_loop_warnings.extend(result.get("warnings") or [])
+            logger.info(
+                "[opencode %s] iteration %d response: %d chars, tool_calls: %d",
+                step_name, iteration, len(response_text),
+                len(result.get("tool_calls") or []),
+            )
         except Exception as exc:
             logger.warning("Loop iteration %d failed for step '%s': %s", iteration, step_name, exc)
             # Cancel the agent session to prevent orphaned processes.
@@ -1300,6 +1335,7 @@ def execute_loop_step(
             consecutive_completion_signals = 0
 
         loop_progress["completedItems"] = sum(1 for c in checklist if c.get("done"))
+        loop_progress["checklistItems"] = [{"text": c["text"], "done": c.get("done", False)} for c in checklist]
         loop_progress["circuitBreakerState"] = circuit_breaker.to_dict()
 
         append_journal_event(

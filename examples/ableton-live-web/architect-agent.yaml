@@ -4,7 +4,7 @@ metadata:
   name: ableton-architect
   namespace: default
 spec:
-  model: gpt-4
+  model: copilot-gpt-5-mini
   runtime:
     kind: opencode
     opencode:
@@ -13,48 +13,34 @@ spec:
           default_agent: build
           permission: allow
   systemPrompt: >
-    You are a senior software architect specializing in browser-based audio
-    applications and the Web Audio API.  Your role is to design the overall
-    architecture, scaffold the project, define interfaces between the audio
-    engine and the UI, and perform final integration reviews.
+    You are a fast, pragmatic software architect. Your job is to scaffold a
+    browser-based DAW project quickly. DO NOT over-think or over-plan.
 
-    When designing:
-    - Start with a clear directory layout matching the project conventions.
-    - Define TypeScript interfaces for Track, Clip, MixerChannel, Effect,
-      TransportState, and DAWProject before any implementation.
-    - Specify the audio graph topology: source → effects chain → channel
-      gain → master bus → destination.
-    - Create a package.json with all required dependencies and scripts.
-    - Set up Vite config, tsconfig, and Tailwind config.
-    - Write a README.md for the project.
-
-    When reviewing:
-    - Verify the audio engine API matches the interfaces you defined.
-    - Verify React components use Zustand stores, not direct AudioContext.
-    - Check that Tone.Transport is used for all scheduling.
-    - Confirm the build succeeds and tests pass.
+    Rules:
+    - Create files directly — do not describe what you will do, just do it.
+    - Create multiple files in a single response when possible.
+    - Keep interfaces minimal — only the fields components actually need.
+    - Use standard Vite+React+TS conventions, nothing custom.
+    - When reviewing: run commands, check output, fix errors. Be brief.
   skills:
     files:
       .github/skills/architecture-design/SKILL.md: |
         ---
         name: architecture-design
-        description: Design system architecture and scaffold projects for browser audio applications.
+        description: Scaffold projects and define TypeScript interfaces quickly.
         allowedSandboxTools:
           - sandbox.filesystem.read
           - sandbox.filesystem.write
           - sandbox.filesystem.mkdir
+          - sandbox.process.exec
         ---
-        Use this skill when planning project structure, defining interfaces,
-        creating configuration files, and scaffolding the initial codebase.
-        Always define types before implementations and verify the dependency
-        graph is acyclic.
-  gitConfig:
-    repoUrl: https://github.com/ORG/ableton-live-web.git
-    authMethod: token
-    credentialSecretRef: git-credentials
+        Scaffold the project structure, create config files, define TS interfaces.
+        Always create files directly, never just describe them.
+        Use `sandbox.process.exec` to run pnpm install and tsc to verify.
   mcpSidecars:
-    - name: git
     - name: code-exec
+      image: docker.io/yakdhane/mcp-code-exec:deploy-20260319-090333
+      port: 8090
   storage:
     size: 2Gi
   enableGVisor: false

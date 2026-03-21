@@ -20,6 +20,9 @@ import type {
   CatalogSkill,
   CatalogSkillDetail,
   ConfigField,
+  CopilotAuthStatus,
+  CopilotDeviceFlowResponse,
+  CopilotPollResponse,
   CreateUserPayload,
   CreateAgentPayload,
   DeleteResponse,
@@ -918,6 +921,24 @@ export async function downloadAgentArtifact(
   const blob = await response.blob();
   const fallback = suggestedFilename || artifactPath.split("/").pop() || artifactPath.split("\\").pop() || "artifact";
   const filename = extractFilenameFromDisposition(response.headers.get("content-disposition"), fallback);
+  triggerBrowserDownload(blob, filename);
+}
+
+export async function downloadAgentArtifactZip(
+  token: string,
+  namespace: string,
+  agentName: string,
+): Promise<void> {
+  const url = new URL(buildUrl(`/api/agents/${encodeURIComponent(agentName)}/artifacts/zip`, namespace), window.location.origin);
+  const target = API_BASE_URL ? url.toString() : `${url.pathname}${url.search}`;
+  const response = await fetchAuthenticated(target, token);
+  if (!response.ok) {
+    const text = await response.text();
+    throw new ApiError(response.status, "Failed to download ZIP archive", text);
+  }
+
+  const blob = await response.blob();
+  const filename = extractFilenameFromDisposition(response.headers.get("content-disposition"), `${agentName}-workspace.zip`);
   triggerBrowserDownload(blob, filename);
 }
 
@@ -2014,6 +2035,10 @@ export async function fetchCatalogSkillDetail(
   return parseJsonResponse(response, (payload) => parseCatalogSkillDetailPayload(payload, "skill_detail"));
 }
 
+export async function refreshSkillsCatalog(token: string): Promise<void> {
+  await fetchAuthenticated(buildUrl("/api/skills/catalog/refresh"), token, { method: "POST" });
+}
+
 export async function fetchMcpToolCategories(token: string): Promise<McpToolCategory[]> {
   const response = await fetchAuthenticated(buildUrl("/api/skills/tools"), token);
   return parseJsonResponse(response, (payload) => {
@@ -2275,6 +2300,46 @@ export async function addProviderModel(
     const text = await response.text();
     throw new Error(text || `Failed to add model (${response.status})`);
   }
+}
+
+/* ── GitHub Copilot Auth ── */
+
+export async function initiateCopilotAuth(token: string): Promise<CopilotDeviceFlowResponse> {
+  const response = await fetchAuthenticated(buildUrl("/api/copilot/auth/device"), token, {
+    method: "POST",
+  });
+  return parseJsonResponse(response, (payload) => {
+    const r = expectRecord(payload, "CopilotDeviceFlow");
+    return {
+      user_code: readString(r, "user_code", "CopilotDeviceFlow"),
+      verification_uri: readString(r, "verification_uri", "CopilotDeviceFlow"),
+      interval: typeof r.interval === "number" ? r.interval : 5,
+    };
+  });
+}
+
+export async function pollCopilotAuth(token: string): Promise<CopilotPollResponse> {
+  const response = await fetchAuthenticated(buildUrl("/api/copilot/auth/poll"), token, {
+    method: "POST",
+  });
+  return parseJsonResponse(response, (payload) => {
+    const r = expectRecord(payload, "CopilotPoll");
+    return {
+      status: readString(r, "status", "CopilotPoll") as CopilotPollResponse["status"],
+      interval: typeof r.interval === "number" ? r.interval : undefined,
+      error: readOptionalString(r, "error", "CopilotPoll") ?? undefined,
+    };
+  });
+}
+
+export async function getCopilotAuthStatus(token: string): Promise<CopilotAuthStatus> {
+  const response = await fetchAuthenticated(buildUrl("/api/copilot/auth/status"), token);
+  return parseJsonResponse(response, (payload) => {
+    const r = expectRecord(payload, "CopilotAuthStatus");
+    return {
+      connected: typeof r.connected === "boolean" ? r.connected : false,
+    };
+  });
 }
 
 // ── Chat Session Persistence ──

@@ -29,7 +29,7 @@ rules:
     resources: [jobs]
     verbs: [create, delete, get, list, watch, patch, update]
   - apiGroups: [""]
-    resources: [pods, services, persistentvolumeclaims, serviceaccounts, namespaces, resourcequotas, limitranges]
+    resources: [pods, services, persistentvolumeclaims, serviceaccounts, namespaces, resourcequotas, limitranges, configmaps]
     verbs: [create, delete, get, list, watch, patch, update]
   - apiGroups: [""]
     resources: [events]

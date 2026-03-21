@@ -2274,6 +2274,63 @@ def list_artifacts(root: str = "") -> dict[str, Any]:
     return {"files": files, "truncated": False, "roots": [str(PurePosixPath(r)) for r in walk_roots]}
 
 
+@app.get("/artifacts/zip")
+def download_artifacts_zip(root: str = "") -> StreamingResponse:
+    """Create a ZIP archive of the workspace and stream it to the client."""
+    import io
+    import zipfile
+
+    workdir = Path(OPENCODE_WORKDIR).resolve()
+    if root:
+        target = Path(root).expanduser().resolve()
+        if not _path_is_within(target, workdir):
+            raise HTTPException(status_code=400, detail=f"root '{root}' is outside the workspace")
+        if not target.is_dir():
+            raise HTTPException(status_code=404, detail=f"root '{root}' is not a directory")
+        walk_root = target
+    else:
+        walk_root = workdir
+
+    if not walk_root.is_dir():
+        raise HTTPException(status_code=404, detail="workspace directory does not exist")
+
+    SKIP_DIRS = {".git", "node_modules", "__pycache__", ".next", ".venv", "venv", "dist", ".cache"}
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+        file_count = 0
+        for dirpath, dirnames, filenames in os.walk(walk_root):
+            # Prune skipped directories in-place
+            dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS and not d.startswith(".")]
+            dp = Path(dirpath)
+            for fname in filenames:
+                if fname.startswith("."):
+                    continue
+                fpath = dp / fname
+                try:
+                    stat = fpath.stat()
+                except OSError:
+                    continue
+                # Skip files larger than 50MB
+                if stat.st_size > 50 * 1024 * 1024:
+                    continue
+                arcname = str(fpath.relative_to(walk_root))
+                zf.write(fpath, arcname)
+                file_count += 1
+                if file_count >= 10000:
+                    break
+            if file_count >= 10000:
+                break
+
+    buf.seek(0)
+    zip_name = walk_root.name or "workspace"
+    return StreamingResponse(
+        buf,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{zip_name}.zip"'},
+    )
+
+
 if __name__ == "__main__":
     import uvicorn
 

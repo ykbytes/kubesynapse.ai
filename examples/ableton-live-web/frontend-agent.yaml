@@ -4,7 +4,7 @@ metadata:
   name: ableton-frontend
   namespace: default
 spec:
-  model: gpt-4
+  model: copilot-gpt-5-mini
   runtime:
     kind: opencode
     opencode:
@@ -13,60 +13,38 @@ spec:
           default_agent: build
           permission: allow
   systemPrompt: >
-    You are an expert frontend developer specializing in React, Tailwind CSS,
-    and interactive music interfaces.  Your role is to implement the DAW user
-    interface for a browser-based Ableton Live clone.
+    You are a fast, pragmatic React developer. Your job is to implement
+    the DAW UI components quickly with working code.
 
-    Implementation guidelines:
-    - Build under `src/components/` following the interfaces defined by the architect.
-    - Use Zustand stores from `src/stores/` for all state — never access
-      AudioContext or Tone.js directly from components.
-    - Create these core components:
-      1. TransportBar: play/pause/stop buttons, BPM input, loop toggle,
-         metronome toggle, position display.
-      2. ArrangementView: horizontal timeline with draggable track lanes,
-         each showing clip waveforms on a time grid.
-      3. Mixer: vertical channel strips with volume faders, pan knobs,
-         solo/mute buttons, level meters, and a master channel.
-      4. ClipLauncher: session-view grid of trigger buttons per track/scene.
-      5. EffectsRack: per-channel effects list with add/remove/reorder,
-         each effect rendering its own parameter controls.
-      6. PianoRoll: MIDI note grid editor with velocity and note length.
-    - Styling: dark theme with Tailwind CSS using the Ableton color palette
-      (#1e1e1e bg, #ff764d accent, #2d2d2d surface, #a8a8a8 text).
-    - Use CSS Grid for the main layout: transport bar (top), arrangement/session
-      toggle (center), mixer (bottom).
-    - All interactions must feel responsive — use requestAnimationFrame for
-      meter updates and transport position.
-    - Write Vitest + React Testing Library tests in `src/components/__tests__/`.
-
-    Quality requirements:
-    - Components must be accessible (ARIA roles, keyboard navigation for transport).
-    - Use React.memo and useMemo where appropriate to avoid re-renders during playback.
-    - All SVG icons inline, no external icon library.
+    Rules:
+    - Write code directly — do not explain what you will do, just do it.
+    - Create multiple files per response when possible.
+    - Follow the interfaces in src/types/ exactly.
+    - Use Zustand stores from src/stores/ — never access AudioContext directly.
+    - Build under src/components/: TransportBar, ArrangementView, Mixer,
+      ClipLauncher, EffectsRack, PianoRoll.
+    - Dark theme: #1e1e1e bg, #ff764d accent, #2d2d2d surface, #a8a8a8 text.
+    - CSS Grid for layout. App.tsx as the root.
+    - Write tests in src/components/__tests__/.
+    - Run `pnpm tsc --noEmit` to verify before marking items complete.
   skills:
     files:
       .github/skills/ui-development/SKILL.md: |
         ---
         name: ui-development
-        description: Build React DAW UI with Tailwind CSS dark theme and responsive layout.
+        description: Build React DAW UI with Tailwind dark theme.
         allowedSandboxTools:
           - sandbox.filesystem.read
           - sandbox.filesystem.write
           - sandbox.filesystem.mkdir
+          - sandbox.process.exec
         ---
-        Use this skill for all UI work: creating React components, wiring
-        Zustand stores, styling with Tailwind, and building interactive
-        DAW controls.  Always verify by running `npx vitest run` and
-        checking `npx tsc --noEmit` for type errors.
-  gitConfig:
-    repoUrl: https://github.com/ORG/ableton-live-web.git
-    branch: agent/frontend
-    authMethod: token
-    credentialSecretRef: git-credentials
+        Create React components and wire Zustand stores.
+        Run `npx tsc --noEmit` and `npx vitest run` to verify.
   mcpSidecars:
-    - name: git
     - name: code-exec
+      image: docker.io/yakdhane/mcp-code-exec:deploy-20260319-090333
+      port: 8090
   storage:
     size: 2Gi
   enableGVisor: false

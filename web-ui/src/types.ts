@@ -104,6 +104,7 @@ export interface LoopProgress {
   maxIterations: number;
   completedItems: number;
   totalItems: number;
+  checklistItems?: { text: string; done: boolean }[];
   circuitBreakerState?: {
     state: string;
     consecutiveNoProgress: number;
@@ -268,6 +269,24 @@ export interface ModelSuggestion {
   model_id: string;
   display_name: string;
   description?: string;
+}
+
+/* ── GitHub Copilot auth types ── */
+
+export interface CopilotDeviceFlowResponse {
+  user_code: string;
+  verification_uri: string;
+  interval: number;
+}
+
+export interface CopilotPollResponse {
+  status: "pending" | "success" | "error";
+  interval?: number;
+  error?: string;
+}
+
+export interface CopilotAuthStatus {
+  connected: boolean;
 }
 
 /* ── Skills Catalog types ── */

@@ -6,6 +6,8 @@ import {
   ChevronRight,
   Circle,
   Clock,
+  Download,
+  FolderOpen,
   LoaderCircle,
   Pencil,
   Play,
@@ -21,7 +23,7 @@ import {
   Workflow,
   XCircle,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -36,8 +38,10 @@ import { CopyButton } from "./CopyButton";
 import { ExpandableMarkdownEditor } from "./ExpandableMarkdownEditor";
 import { JsonBlock } from "./JsonBlock";
 import { WorkflowLogPanel } from "./WorkflowLogPanel";
+import { FileExplorer } from "./FileExplorer";
 import { useConnection } from "@/contexts/ConnectionContext";
-import { fetchWorkflowNextAction } from "@/lib/api";
+import { fetchWorkflowNextAction, listAgentArtifacts, downloadAgentArtifact, downloadAgentArtifactZip } from "@/lib/api";
+import { RunHistoryPanel } from "./composer/RunHistoryPanel";
 import type {
   AgentInfo,
   LoopProgress,
@@ -266,6 +270,7 @@ function ProgressSummaryBar({ summary, phase }: { summary: WorkflowSummary; phas
 function LoopProgressDisplay({ progress }: { progress: LoopProgress }) {
   const pct = progress.totalItems > 0 ? Math.round((progress.completedItems / progress.totalItems) * 100) : 0;
   const cbState = progress.circuitBreakerState?.state ?? "closed";
+  const items = progress.checklistItems ?? [];
 
   return (
     <div className="space-y-2 rounded-lg border border-violet-500/20 bg-violet-500/5 p-3">
@@ -286,6 +291,24 @@ function LoopProgressDisplay({ progress }: { progress: LoopProgress }) {
       <div className="h-1.5 w-full overflow-hidden rounded-full bg-violet-500/10">
         <div className="h-full rounded-full bg-violet-500 transition-all" style={{ width: `${pct}%` }} />
       </div>
+
+      {/* Checklist items visualization */}
+      {items.length > 0 && (
+        <div className="mt-2 space-y-1">
+          <div className="text-[10px] font-medium text-violet-300/80 uppercase tracking-wide">Plan checklist</div>
+          {items.map((item, i) => (
+            <div key={i} className={`flex items-start gap-2 rounded px-2 py-1 text-[11px] ${item.done ? "bg-emerald-500/10 text-emerald-300" : "text-muted-foreground"}`}>
+              {item.done ? (
+                <CheckCircle2 className="mt-0.5 h-3 w-3 shrink-0 text-emerald-400" />
+              ) : (
+                <Circle className="mt-0.5 h-3 w-3 shrink-0 text-muted-foreground/50" />
+              )}
+              <span className={item.done ? "line-through opacity-70" : ""}>{item.text}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
       {progress.featureBranch && (
         <span className="text-[10px] text-muted-foreground">Branch: {progress.featureBranch}</span>
       )}
@@ -570,6 +593,72 @@ function StepDetailCard({
   );
 }
 
+/* ────────── agent file browser tabs ────────── */
+
+function AgentFileBrowserTabs({ agents, token, namespace }: { agents: string[]; token: string | null; namespace: string }) {
+  const [activeAgent, setActiveAgent] = useState(agents[0] ?? "");
+  const [zipping, setZipping] = useState(false);
+
+  const loadFiles = useCallback(async () => {
+    if (!token || !activeAgent) return { files: [], truncated: false, roots: [] };
+    return listAgentArtifacts(token, namespace, activeAgent);
+  }, [token, namespace, activeAgent]);
+
+  const handleDownload = useCallback(async (path: string, filename?: string) => {
+    if (!token || !activeAgent) return;
+    await downloadAgentArtifact(token, namespace, activeAgent, path, filename);
+  }, [token, namespace, activeAgent]);
+
+  const handleDownloadZip = useCallback(async () => {
+    if (!token || !activeAgent) return;
+    setZipping(true);
+    try {
+      await downloadAgentArtifactZip(token, namespace, activeAgent);
+    } finally {
+      setZipping(false);
+    }
+  }, [token, namespace, activeAgent]);
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2">
+        {agents.length > 1 && (
+          <div className="flex gap-1 flex-1">
+            {agents.map((agent) => (
+              <Button
+                key={agent}
+                size="sm"
+                variant={agent === activeAgent ? "secondary" : "ghost"}
+                className="h-7 rounded-lg text-[11px]"
+                onClick={() => setActiveAgent(agent)}
+              >
+                {agent}
+              </Button>
+            ))}
+          </div>
+        )}
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-7 rounded-lg text-[11px] ml-auto"
+          disabled={zipping || !activeAgent}
+          onClick={handleDownloadZip}
+        >
+          <Download className="h-3.5 w-3.5 mr-1.5" />
+          {zipping ? "Downloading…" : "Download All (ZIP)"}
+        </Button>
+      </div>
+      {activeAgent && (
+        <FileExplorer
+          agentName={activeAgent}
+          onLoad={loadFiles}
+          onDownload={handleDownload}
+        />
+      )}
+    </div>
+  );
+}
+
 /* ────────── main component ────────── */
 
 export function WorkflowManager({
@@ -599,6 +688,7 @@ export function WorkflowManager({
   const [messageBus, setMessageBus] = useState("in-memory");
   const [steps, setSteps] = useState<WorkflowStep[]>(() => defaultStepsForAgent(agents[0]?.name));
   const [nextAction, setNextAction] = useState<WorkflowNextAction | null>(null);
+  const [runHistoryCollapsed, setRunHistoryCollapsed] = useState(true);
 
   // Trigger confirmation input (separate from workflow spec input)
   const [triggerInput, setTriggerInput] = useState("");
@@ -785,6 +875,63 @@ export function WorkflowManager({
           </Card>
         )}
 
+        {/* ── Cross-agent pipeline overview ── */}
+        {workflow && hasBeenTriggered && steps.length > 1 && (
+          <Card className="shadow-none">
+            <CardContent className="p-4">
+              <div className="text-[10px] font-medium text-muted-foreground/80 uppercase tracking-wide mb-3">Agent pipeline</div>
+              <div className="flex items-center gap-1 overflow-x-auto pb-1">
+                {steps.map((step, idx) => {
+                  const state = workflow.step_states?.[step.name];
+                  const status = state?.status ?? "pending";
+                  const lp = state?.loopProgress;
+                  const isRunning = status === "running";
+                  const isDone = status === "succeeded" || status === "completed";
+                  const isFailed = status === "failed";
+
+                  return (
+                    <div key={step.name} className="flex items-center gap-1">
+                      <div className={`rounded-lg border px-3 py-2 min-w-[120px] transition-all ${
+                        isRunning ? "border-primary/40 bg-primary/10 ring-1 ring-primary/20" :
+                        isDone ? "border-emerald-500/30 bg-emerald-500/10" :
+                        isFailed ? "border-destructive/30 bg-destructive/10" :
+                        "border-border/40 bg-background/60"
+                      }`}>
+                        <div className="flex items-center gap-1.5 mb-1">
+                          {stepStatusIcon(status, false).icon}
+                          <span className="text-[11px] font-medium truncate">{step.name}</span>
+                        </div>
+                        <div className="text-[10px] text-muted-foreground truncate">{step.agent_ref}</div>
+                        {lp && lp.totalItems > 0 && (
+                          <div className="mt-1.5">
+                            <div className="h-1 w-full overflow-hidden rounded-full bg-border/40">
+                              <div
+                                className={`h-full rounded-full transition-all duration-500 ${isDone ? "bg-emerald-500" : "bg-primary"}`}
+                                style={{ width: `${Math.round((lp.completedItems / lp.totalItems) * 100)}%` }}
+                              />
+                            </div>
+                            <div className="text-[9px] text-muted-foreground mt-0.5">
+                              {lp.completedItems}/{lp.totalItems} · iter {lp.iteration}/{lp.maxIterations}
+                            </div>
+                          </div>
+                        )}
+                        {isRunning && !lp && (
+                          <div className="mt-1">
+                            <LoaderCircle className="h-3 w-3 animate-spin text-primary" />
+                          </div>
+                        )}
+                      </div>
+                      {idx < steps.length - 1 && (
+                        <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/40 shrink-0" />
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
         {/* ── Suggested next action ── */}
         {workflow && nextAction && (
           <Card className="shadow-none border-primary/20 bg-primary/5">
@@ -930,23 +1077,84 @@ export function WorkflowManager({
               </div>
 
               {/* workflow result summary */}
-              {(workflow.phase === "succeeded" || workflow.phase === "completed") && (
-                <div className="mt-4 flex items-center gap-2 rounded-xl border border-emerald-500/30 bg-emerald-500/5 px-3 py-2 text-sm text-emerald-400">
-                  <CheckCircle2 className="h-4 w-4 shrink-0" />
-                  <span>Workflow completed successfully.</span>
-                  {wfSummary?.startedAt && wfSummary?.updatedAt && !Number.isNaN(new Date(wfSummary.startedAt).getTime()) && !Number.isNaN(new Date(wfSummary.updatedAt).getTime()) && (
-                    <span className="ml-auto text-xs text-muted-foreground">
-                      Total: {formatMs(new Date(wfSummary.updatedAt).getTime() - new Date(wfSummary.startedAt).getTime())}
-                    </span>
-                  )}
-                </div>
-              )}
-              {workflow.phase === "failed" && (
-                <div className="mt-4 flex items-center gap-2 rounded-xl border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-                  <AlertTriangle className="h-4 w-4 shrink-0" />
-                  <span>Workflow failed at step <strong>{workflow.current_step || "unknown"}</strong>.</span>
-                </div>
-              )}
+              {(workflow.phase === "succeeded" || workflow.phase === "completed") && (() => {
+                const started = wfSummary?.startedAt ? new Date(wfSummary.startedAt) : null;
+                const ended = wfSummary?.updatedAt ? new Date(wfSummary.updatedAt) : null;
+                const durationMs = started && ended && !Number.isNaN(started.getTime()) && !Number.isNaN(ended.getTime())
+                  ? ended.getTime() - started.getTime()
+                  : null;
+
+                return (
+                  <div className="mt-4 space-y-3">
+                    <div className="flex items-center gap-2 rounded-xl border border-emerald-500/30 bg-emerald-500/5 px-4 py-3 text-sm text-emerald-400">
+                      <CheckCircle2 className="h-5 w-5 shrink-0" />
+                      <span className="font-medium">Workflow completed successfully</span>
+                      {durationMs != null && (
+                        <Badge variant="outline" className="ml-auto border-emerald-500/20 text-emerald-400 text-xs">
+                          {formatMs(durationMs)}
+                        </Badge>
+                      )}
+                    </div>
+                    <div className="grid gap-2 sm:grid-cols-3">
+                      {started && !Number.isNaN(started.getTime()) && (
+                        <div className="rounded-lg border border-border/40 bg-background/60 px-3 py-2">
+                          <p className="text-[10px] uppercase tracking-wider text-muted-foreground/70">Started</p>
+                          <p className="text-xs font-mono text-foreground">{started.toLocaleString()}</p>
+                        </div>
+                      )}
+                      {ended && !Number.isNaN(ended.getTime()) && (
+                        <div className="rounded-lg border border-border/40 bg-background/60 px-3 py-2">
+                          <p className="text-[10px] uppercase tracking-wider text-muted-foreground/70">Completed</p>
+                          <p className="text-xs font-mono text-foreground">{ended.toLocaleString()}</p>
+                        </div>
+                      )}
+                      {durationMs != null && (
+                        <div className="rounded-lg border border-border/40 bg-background/60 px-3 py-2">
+                          <p className="text-[10px] uppercase tracking-wider text-muted-foreground/70">Duration</p>
+                          <p className="text-xs font-mono text-foreground">{formatMs(durationMs)}</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
+              {workflow.phase === "failed" && (() => {
+                const started = wfSummary?.startedAt ? new Date(wfSummary.startedAt) : null;
+                const ended = wfSummary?.updatedAt ? new Date(wfSummary.updatedAt) : null;
+                const durationMs = started && ended && !Number.isNaN(started.getTime()) && !Number.isNaN(ended.getTime())
+                  ? ended.getTime() - started.getTime()
+                  : null;
+
+                return (
+                  <div className="mt-4 space-y-3">
+                    <div className="flex items-center gap-2 rounded-xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+                      <AlertTriangle className="h-5 w-5 shrink-0" />
+                      <span className="font-medium">Workflow failed at step <strong>{workflow.current_step || "unknown"}</strong></span>
+                      {durationMs != null && (
+                        <Badge variant="outline" className="ml-auto border-destructive/20 text-destructive text-xs">
+                          after {formatMs(durationMs)}
+                        </Badge>
+                      )}
+                    </div>
+                    {(started || ended) && (
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        {started && !Number.isNaN(started.getTime()) && (
+                          <div className="rounded-lg border border-border/40 bg-background/60 px-3 py-2">
+                            <p className="text-[10px] uppercase tracking-wider text-muted-foreground/70">Started</p>
+                            <p className="text-xs font-mono text-foreground">{started.toLocaleString()}</p>
+                          </div>
+                        )}
+                        {ended && !Number.isNaN(ended.getTime()) && (
+                          <div className="rounded-lg border border-border/40 bg-background/60 px-3 py-2">
+                            <p className="text-[10px] uppercase tracking-wider text-muted-foreground/70">Failed at</p>
+                            <p className="text-xs font-mono text-foreground">{ended.toLocaleString()}</p>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
               {workflow.phase === "cancelled" && (
                 <div className="mt-4 flex items-center gap-2 rounded-xl border border-orange-500/30 bg-orange-500/5 px-3 py-2 text-sm text-orange-400">
                   <XCircle className="h-4 w-4 shrink-0" />
@@ -958,6 +1166,41 @@ export function WorkflowManager({
         )}
 
         {workflow && hasBeenTriggered && <WorkflowLogPanel workflow={workflow} />}
+
+        {/* ── Agent File Browsers ── */}
+        {workflow && hasBeenTriggered && (() => {
+          const activeAgents = new Set<string>();
+          for (const step of workflow.steps) {
+            const state = workflow.step_states?.[step.name];
+            if (state && (state.status === "running" || state.status === "succeeded" || state.status === "completed" || state.status === "continued")) {
+              if (step.agent_ref) activeAgents.add(step.agent_ref);
+            }
+          }
+          if (activeAgents.size === 0) return null;
+          return (
+            <Card className="shadow-none">
+              <CardHeader className="pb-2">
+                <CardTitle className="flex items-center gap-2 text-sm">
+                  <FolderOpen className="h-4 w-4" />
+                  Agent workspace files
+                </CardTitle>
+                <CardDescription>Browse files created by agents during this workflow run.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <AgentFileBrowserTabs agents={Array.from(activeAgents)} token={token} namespace={namespace ?? "default"} />
+              </CardContent>
+            </Card>
+          );
+        })()}
+
+        {/* ── Run History ── */}
+        {workflow && hasBeenTriggered && (
+          <RunHistoryPanel
+            workflowName={workflow.name}
+            collapsed={runHistoryCollapsed}
+            onToggle={() => setRunHistoryCollapsed((p) => !p)}
+          />
+        )}
 
         {/* ── Editor toggle for triggered workflows ── */}
         {hasBeenTriggered && (

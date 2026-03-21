@@ -693,6 +693,94 @@ def invoke_agent_runtime(
     raise last_exc  # type: ignore[misc]
 
 
+def invoke_agent_runtime_stream(
+    agent_name: str,
+    namespace: str,
+    payload: dict[str, Any],
+    *,
+    timeout_seconds: float | None = None,
+    step_name: str = "",
+    iteration: int = 0,
+) -> dict[str, Any]:
+    """POST to /invoke/stream SSE endpoint, log events in real-time, return final result.
+
+    Falls back to the synchronous /invoke endpoint if streaming fails.
+    """
+    if not agent_name or not K8S_NAME_RE.fullmatch(agent_name):
+        raise ValueError(f"Invalid agent name for runtime invocation: {agent_name!r}")
+    if not namespace or not K8S_NAME_RE.fullmatch(namespace):
+        raise ValueError(f"Invalid namespace for runtime invocation: {namespace!r}")
+    effective_timeout = timeout_seconds or AGENT_RUNTIME_TIMEOUT_SECONDS
+    stream_url = f"{runtime_url(agent_name, namespace)}/invoke/stream"
+    prefix = f"[opencode {step_name} iter={iteration}]" if step_name else f"[opencode {agent_name}]"
+
+    try:
+        with httpx.Client(timeout=effective_timeout) as client:
+            with client.stream("POST", stream_url, json=payload) as resp:
+                if resp.status_code >= 400:
+                    logger.warning("%s stream returned %d, falling back to /invoke", prefix, resp.status_code)
+                    return invoke_agent_runtime(agent_name, namespace, payload, timeout_seconds=timeout_seconds)
+                final_result: dict[str, Any] = {}
+                last_response = ""
+                turn_count = 0
+                current_event_type = ""
+                for line in resp.iter_lines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    if line.startswith("event: "):
+                        current_event_type = line[7:].strip()
+                        continue
+                    if line.startswith("data: "):
+                        raw = line[6:]
+                        if raw == "[DONE]":
+                            break
+                        try:
+                            data = json.loads(raw)
+                        except (json.JSONDecodeError, ValueError):
+                            continue
+                        etype = current_event_type
+                        current_event_type = ""  # reset for next event
+                    if etype == "response.turn_started":
+                        turn_count += 1
+                        agent_name_hint = data.get("agent", "")
+                        logger.info("%s turn %d started (agent=%s)", prefix, turn_count, agent_name_hint or "default")
+                    elif etype == "response.turn_completed":
+                        status = data.get("status", "")
+                        resp_len = data.get("response_length", 0)
+                        logger.info("%s turn %d completed — status=%s, response=%d chars",
+                                    prefix, turn_count, status, resp_len)
+                    elif etype == "response.delta":
+                        delta_text = data.get("delta", "")
+                        # Log first 200 chars of delta to show what opencode is doing
+                        if delta_text:
+                            preview = delta_text[:200].replace("\n", " ")
+                            logger.info("%s turn %d delta: %s%s",
+                                        prefix, turn_count, preview, "..." if len(delta_text) > 200 else "")
+                    elif etype == "response.completed":
+                        final_result = data
+                        last_response = str(final_result.get("response", ""))
+                        logger.info("%s completed — turns: %d, response: %d chars",
+                                    prefix, turn_count, len(last_response))
+                    elif etype == "response.error":
+                        err_msg = data.get("error", "unknown")
+                        logger.warning("%s error event: %s", prefix, err_msg)
+                    elif etype == "response.compaction":
+                        reason = data.get("reason", "?")
+                        logger.info("%s context compaction triggered (reason=%s)", prefix, reason)
+                    elif etype == "response.error_recovery":
+                        retry = data.get("retry", "?")
+                        logger.info("%s error recovery, retry=%s", prefix, retry)
+                if final_result:
+                    return final_result
+                # Stream ended without completed event — fall back
+                logger.warning("%s stream ended without completed event, falling back", prefix)
+                return invoke_agent_runtime(agent_name, namespace, payload, timeout_seconds=timeout_seconds)
+    except Exception as exc:
+        logger.warning("%s stream failed (%s), falling back to /invoke", prefix, exc)
+        return invoke_agent_runtime(agent_name, namespace, payload, timeout_seconds=timeout_seconds)
+
+
 def cancel_agent_session(
     agent_name: str,
     namespace: str,

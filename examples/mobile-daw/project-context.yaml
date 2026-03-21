@@ -1,0 +1,131 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mobile-daw-context
+  namespace: default
+data:
+  context: |
+    # BeatForge — Mobile DAW Project Context
+
+    ## Product Description
+    Build "BeatForge" — a mobile step sequencer, drum machine, and synthesizer
+    app for iOS and Android. The app lets users create beats with a 16-step
+    sequencer grid, trigger drum samples from velocity-sensitive pads, shape
+    sounds with a built-in synthesizer, and mix everything with a per-track
+    mixer. Designed for musicians, producers, and hobbyists who want to make
+    beats on the go. Dark theme optimized for stage and studio use.
+
+    ## Tech Stack (ONLY use packages that exist on npm — verify before adding)
+    - Language: TypeScript (strict mode — no `any`, no .d.ts shims)
+    - Framework: React Native 0.76+ with functional components and hooks
+    - Platform: Expo SDK 52 with expo-router for file-based navigation
+    - Audio: expo-av (Audio.Sound for sample playback) + JS-based scheduling
+    - Animations: react-native-reanimated 3 for 60fps UI animations
+    - Gestures: react-native-gesture-handler for touch interactions
+    - State Management: Zustand 5 for global app state
+    - Navigation: expo-router (file-based tab navigation)
+    - Build: Expo EAS Build for App Store / Play Store submissions
+    - Package Manager: npm
+    - DO NOT use: react-native-audio-api (doesn't exist on npm),
+      expo-audio-stream, or any package you cannot verify exists
+
+    ## Architecture Conventions
+    - Project root at `/workspace/` (Expo project root):
+      - `src/app/` — Expo Router screens and layouts (_layout.tsx, tabs)
+      - `src/components/` — Reusable React Native UI components
+      - `src/engine/` — Audio engine classes (scheduling, playback)
+      - `src/stores/` — Zustand stores for app state
+      - `src/hooks/` — Custom hooks including useAudioSetup (wiring hook)
+      - `src/types/` — Shared TypeScript interfaces and types (NO shims)
+      - `src/utils/` — Helper utilities (timing, formatting, colors)
+      - `src/constants/` — Theme colors, default patterns, tuning tables
+      - `assets/` — App icons, splash screen, bundled samples (placeholder)
+
+    ## CRITICAL: Module Wiring Rules
+    These wiring connections MUST be implemented. Every connection listed
+    below must have actual code that makes the call happen:
+
+    1. **Transport → Engine**: When `transportStore.play()` is called, it MUST:
+       - Call `AudioEngine.getInstance().resume()` to ensure audio context is active
+       - Call `SequencerClock.getInstance().start(bpm, swing)` to begin scheduling
+       - Set `isPlaying = true` and start updating `currentStep`
+    2. **Transport → Clock → Playback**: `SequencerClock.onStep(stepIndex)` MUST:
+       - Read the current pattern from `sequencerStore.getState()`
+       - For each active step at `stepIndex`, call `SamplerEngine.triggerSample()`
+         or `SynthEngine.triggerNote()` depending on track type
+       - Update `transportStore.getState().setCurrentStep(stepIndex)`
+    3. **MixerStore ↔ MixerEngine**: `mixerStore` state changes MUST propagate:
+       - `setVolume(trackId, vol)` → calls `MixerEngine.setTrackVolume(trackId, vol)`
+       - `setPan(trackId, pan)` → calls `MixerEngine.setTrackPan(trackId, pan)`
+       - Store subscribes to engine via `subscribeWithSelector`
+    4. **Screens → Stores → Components**: Every screen MUST:
+       - Import and use the relevant store(s) with selectors
+       - Pass store values to child components
+       - Wire callbacks that update stores (which then update engines)
+    5. **Initialization Hook**: `useAudioSetup()` in `src/hooks/useAudioSetup.ts`:
+       - Called ONCE in root `_layout.tsx`
+       - Initializes AudioEngine, SequencerClock, SamplerEngine, MixerEngine
+       - Creates 8 default mixer channels in MixerEngine (one per track)
+       - Sets up store→engine subscriptions
+       - Returns `{ isReady: boolean }` — app shows loading until ready
+    6. **ProjectStore → All Stores**: `projectStore.loadProject()` MUST:
+       - Hydrate transportStore (bpm, swing)
+       - Hydrate sequencerStore (patterns, tracks)
+       - Hydrate mixerStore (channel volumes, pans, mutes)
+
+    ## Screen Layout (Expo Router Tabs)
+    1. **Sequencer** — 16-step grid with track lanes, pattern selector, transport bar
+    2. **Pads** — 4x4 drum pad grid with velocity display, sample assignment
+    3. **Synth** — Oscillator waveform, filter cutoff/resonance, ADSR envelope
+    4. **Mixer** — Per-track volume faders, pan knobs, mute/solo, master out
+    5. **Settings** — BPM, swing amount, audio buffer size, export, about
+
+    ## Audio Engine Architecture (using expo-av)
+    - `AudioEngine` — Singleton that pre-loads Audio.Sound objects for all
+      drum samples at init. Manages the master volume level.
+    - `SequencerClock` — JS-based scheduling loop using `setInterval(10ms)`.
+      Uses `performance.now()` for timing. Calculates next step time based
+      on BPM. Fires `onStep(stepIndex)` callback when each step is due.
+      Implements swing by delaying even-numbered steps.
+    - `SamplerEngine` — Triggers pre-loaded `Audio.Sound` objects. Creates
+      a pool of sounds per sample to allow overlapping playback. Sets
+      volume based on step velocity (velocity/127 * trackVolume).
+    - `SynthEngine` — Since expo-av doesn't support synthesis, implement a
+      simple approach: pre-generate short sine/saw/square/triangle wav
+      buffers in memory (or use bundled .wav files for each note). For MVP,
+      use a set of pre-rendered note samples at different pitches.
+    - `MixerEngine` — Manages per-track volume and pan state. When a sample
+      plays, applies volume scaling. Pan implemented via stereo balance
+      on the Audio.Sound instance.
+
+    ## Data Models (Key Interfaces — define in src/types/index.ts)
+    - `TransportState`: isPlaying, bpm, swing, currentStep, currentPattern
+    - `Pattern`: id, name, steps (Map<trackId, Step[]>), length (16)
+    - `Step`: active, velocity (0-127), note (for synth tracks)
+    - `Track`: id, name, type ('drum'|'synth'), sampleKey, synthParams, volume, pan, mute, solo
+    - `SynthParams`: waveform ('sine'|'saw'|'square'|'triangle'), attack, decay, sustain, release, filterCutoff, filterResonance
+    - `MixerChannel`: trackId, volume (0-1), pan (-1 to 1), mute, solo, peakLevel
+    - `Project`: name, bpm, swing, patterns[], tracks[], currentPatternId
+
+    ## Constraints
+    - iOS 16+ and Android 12+ (React Native new architecture)
+    - 60fps animations using react-native-reanimated shared values
+    - Dark theme only — music app palette: #0a0a0a background, #1a1a1a surface,
+      #ff6b35 accent/primary, #00d4aa secondary, #e0e0e0 text, #666 muted
+    - Offline-first — no server, no internet required
+    - All state persisted locally (AsyncStorage for project data)
+    - Touch-optimized: minimum 44pt tap targets, haptic feedback on pads
+    - App Store ready: proper app.json, icons, splash, privacy policy
+    - NEVER create a shims.d.ts or any .d.ts file that declares modules as `any`
+    - NEVER use `as any` type assertion — properly type everything
+    - Every store action that affects audio MUST call the corresponding engine method
+
+    ## Key Features (Priority Order)
+    1. Transport bar: play/stop, BPM display, tempo tap, pattern indicator
+    2. Step sequencer: 16-step grid, 8 track lanes, velocity per step
+    3. Drum pads: 8 pads (kick, snare, hihat, etc.), velocity-sensitive
+    4. Synthesizer: note triggering with waveform selection
+    5. Mixer: volume faders, pan knobs, mute/solo per track, master volume
+    6. Pattern system: 8 pattern slots (A1-A8), copy/clear
+    7. Swing control: adjustable swing amount (0-100%)
+    8. App Store config: app.json, eas.json, icons, splash, submission docs

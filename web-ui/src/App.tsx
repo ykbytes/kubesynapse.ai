@@ -3,7 +3,7 @@ import "@fontsource/space-grotesk/500.css";
 import "@fontsource/space-grotesk/700.css";
 
 import { PanelLeftClose, PanelLeftOpen, PanelRightOpen } from "lucide-react";
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import { Toaster } from "sonner";
 
 import { AgentManagementPanel } from "./components/AgentManagementPanel";
@@ -19,6 +19,7 @@ import { ChatSessionPanel } from "./components/ChatSessionPanel";
 import { ChatWorkbench } from "./components/ChatWorkbench";
 import { TeamView } from "./components/TeamView";
 import { CreateAgentPanel } from "./components/CreateAgentPanel";
+import { ConfirmDialog } from "./components/ConfirmDialog";
 import { EvalManager } from "./components/EvalManager";
 import { PolicyEditor } from "./components/PolicyEditor";
 import { AgentInspectorDrawer, ResourceInspectorDrawer } from "./components/InspectorDrawer";
@@ -121,6 +122,7 @@ function AppLayout() {
   const ws = useWorkspace();
   const chat = useChat();
   const [templateWizardOpen, setTemplateWizardOpen] = useState(false);
+  const [sidebarDeleteTarget, setSidebarDeleteTarget] = useState<{ id: string; view: WorkspaceView } | null>(null);
   const inspectorSupported = supportsInspector(ws.activeView);
 
   // ⚠️  All hooks must be declared BEFORE any conditional returns (Rules of Hooks)
@@ -129,6 +131,10 @@ function AppLayout() {
       ws.setInspectorOpen(false);
     }
   }, [inspectorSupported, ws.inspectorOpen, ws.setInspectorOpen]);
+
+  const handleSidebarDeleteRequest = useCallback((id: string) => {
+    setSidebarDeleteTarget({ id, view: ws.activeView });
+  }, [ws.activeView]);
 
   // Gate: show loading spinner while auth initializes, then AuthPage if not authenticated
   if (!conn.authReady) {
@@ -144,6 +150,27 @@ function AppLayout() {
 
   if (!conn.currentUser) {
     return <AuthPage />;
+  }
+
+  // Cross-cutting: sidebar delete
+  async function handleSidebarDeleteConfirm() {
+    if (!sidebarDeleteTarget) return;
+    const { id, view } = sidebarDeleteTarget;
+    setSidebarDeleteTarget(null);
+    try {
+      if (view === "agents") {
+        // Select the agent first so handleDeleteAgent knows which one
+        ws.handleSelectResource(id);
+        const deletedName = await ws.handleDeleteAgent();
+        if (deletedName) chat.removeAgentChatState(deletedName);
+      } else if (view === "workflows" || view === "composer") {
+        await ws.handleDeleteWorkflow(id);
+      } else if (view === "evals") {
+        await ws.handleDeleteEval(id);
+      }
+    } catch (err) {
+      ws.setWorkspaceError(err instanceof Error ? err.message : String(err));
+    }
   }
 
   // Cross-cutting: create agent → init chat message
@@ -284,11 +311,16 @@ function AppLayout() {
                   ? "Trigger"
                   : undefined
             }
+            onDeleteItem={
+              ws.activeView === "agents" || ws.activeView === "workflows" || ws.activeView === "composer" || ws.activeView === "evals"
+                ? handleSidebarDeleteRequest
+                : undefined
+            }
           />
         </div>
 
         {/* ── Main content ── */}
-        <main className={`flex flex-1 flex-col overflow-hidden pb-16 md:pb-0 ${ws.activeView === "composer" ? "" : "p-4 gap-4"} ${ws.activeView !== "composer" && (!ws.selectedAgentName || (ws.agentCreateMode || (!ws.selectedAgentName && ws.agents.length === 0))) ? "overflow-auto" : ""}`}>
+        <main className={`flex flex-1 flex-col pb-16 md:pb-0 ${ws.activeView === "composer" ? "overflow-hidden" : "p-4 gap-4"} ${ws.activeView === "agents" && ws.selectedAgentName && !ws.agentCreateMode ? "overflow-hidden" : "overflow-auto"}`}>
           {ws.activeView !== "composer" && (
             <>
               <div className="flex items-center justify-between">
@@ -682,6 +714,11 @@ function AppLayout() {
             onRefresh={() => void ws.refreshWorkspaceData({ silent: false })}
             onSelect={ws.handleSelectResource}
             onCreateNew={ws.handleCreateNew}
+            onDeleteItem={
+              ws.activeView === "agents" || ws.activeView === "workflows" || ws.activeView === "composer" || ws.activeView === "evals"
+                ? handleSidebarDeleteRequest
+                : undefined
+            }
           />
         }
       />
@@ -716,6 +753,15 @@ function AppLayout() {
         }}
       />
       <AgentTemplateWizard open={templateWizardOpen} onOpenChange={setTemplateWizardOpen} />
+      <ConfirmDialog
+        open={sidebarDeleteTarget !== null}
+        onOpenChange={(open) => { if (!open) setSidebarDeleteTarget(null); }}
+        title={`Delete ${sidebarDeleteTarget?.id ?? ""}?`}
+        description="This will permanently remove this resource and cannot be undone."
+        confirmLabel="Delete"
+        variant="destructive"
+        onConfirm={() => void handleSidebarDeleteConfirm()}
+      />
       <OnboardingTour />
     </div>
   );

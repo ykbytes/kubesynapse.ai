@@ -1,4 +1,4 @@
-import { Bot, GitBranch, FlaskConical, Inbox, Package, Play, Plus, RefreshCw, PanelLeftClose, PanelLeft, Search, Blocks, Settings, ShieldCheck, ShieldAlert } from "lucide-react";
+import { Bot, GitBranch, FlaskConical, Inbox, Package, Play, Plus, RefreshCw, PanelLeftClose, PanelLeft, Search, Blocks, Settings, ShieldCheck, ShieldAlert, Trash2 } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -34,6 +34,7 @@ interface AppSidebarProps {
   onCreateNew: () => void;
   onQuickRun?: (id: string) => void;
   quickRunLabel?: string;
+  onDeleteItem?: (id: string) => void;
 }
 
 const VIEW_META: Record<WorkspaceView, { label: string; icon: typeof Bot }> = {
@@ -82,6 +83,7 @@ export function AppSidebar({
   onCreateNew,
   onQuickRun,
   quickRunLabel,
+  onDeleteItem,
 }: AppSidebarProps) {
   const { canMutate } = useConnection();
   const [filter, setFilter] = useState("");
@@ -271,6 +273,7 @@ export function AppSidebar({
               onSelect={onSelect}
               onQuickRun={onQuickRun}
               quickRunLabel={quickRunLabel}
+              onDelete={onDeleteItem}
             />
           ))}
         </div>
@@ -287,6 +290,7 @@ const SidebarItem = memo(function SidebarItem({
   onSelect,
   onQuickRun,
   quickRunLabel,
+  onDelete,
 }: {
   item: SidebarResourceItem;
   index: number;
@@ -294,40 +298,64 @@ const SidebarItem = memo(function SidebarItem({
   onSelect: (id: string) => void;
   onQuickRun?: (id: string) => void;
   quickRunLabel?: string;
+  onDelete?: (id: string) => void;
 }) {
   const actionLabel = quickRunLabel ? `${quickRunLabel} ${item.title}` : `Run ${item.title}`;
+  const hasActions = onQuickRun || onDelete;
   return (
-    <button
-      type="button"
+    <div
       role="option"
       aria-selected={isSelected}
       onClick={() => onSelect(item.id)}
+      onKeyDown={(e) => { if (e.key === "Enter") onSelect(item.id); }}
+      tabIndex={0}
       style={{ animationDelay: `${index * 30}ms` }}
       className={cn(
-        "group flex w-full items-start gap-2.5 rounded-xl px-2.5 py-2 text-left text-sm",
+        "group flex w-full flex-col rounded-xl px-2.5 py-2 text-left text-sm cursor-pointer",
         "transition-all duration-150 hover:bg-sidebar-accent/80 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
         "animate-slide-up opacity-0 [animation-fill-mode:forwards]",
         isSelected && "bg-sidebar-accent border-l-2 border-primary shadow-md shadow-primary/10",
       )}
     >
-      <span className={cn("mt-1.5 h-2 w-2 shrink-0 rounded-full", statusDotClasses(item.status))} aria-hidden="true" />
-      <div className="min-w-0 flex-1">
-        <p className="truncate font-medium text-sidebar-foreground">{item.title}</p>
-        <p className="truncate text-xs text-muted-foreground">{item.subtitle}</p>
+      <div className="flex w-full items-start gap-2.5">
+        <span className={cn("mt-1.5 h-2 w-2 shrink-0 rounded-full", statusDotClasses(item.status))} aria-hidden="true" />
+        <div className="min-w-0 flex-1">
+          <p className="truncate font-medium text-sidebar-foreground">{item.title}</p>
+          <p className="truncate text-xs text-muted-foreground">{item.subtitle}</p>
+        </div>
       </div>
-      {onQuickRun && (
-        <span
-          role="button"
-          tabIndex={0}
-          aria-label={actionLabel}
-          title={actionLabel}
-          onClick={(e) => { e.stopPropagation(); onQuickRun(item.id); }}
-          onKeyDown={(e) => { if (e.key === "Enter") { e.stopPropagation(); onQuickRun(item.id); } }}
-          className="mt-0.5 hidden shrink-0 rounded-md p-1 text-muted-foreground hover:bg-primary/20 hover:text-primary group-hover:inline-flex"
-        >
-          <Play className="h-3.5 w-3.5" />
-        </span>
+      {hasActions && (
+        <div className="hidden group-hover:flex items-center gap-1 mt-1.5 ml-4.5 pl-0.5">
+          {onQuickRun && (
+            <span
+              role="button"
+              tabIndex={0}
+              aria-label={actionLabel}
+              title={actionLabel}
+              onClick={(e) => { e.stopPropagation(); onQuickRun(item.id); }}
+              onKeyDown={(e) => { if (e.key === "Enter") { e.stopPropagation(); onQuickRun(item.id); } }}
+              className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-primary/20 hover:text-primary"
+            >
+              <Play className="h-3 w-3" />
+              {quickRunLabel}
+            </span>
+          )}
+          {onDelete && (
+            <span
+              role="button"
+              tabIndex={0}
+              aria-label={`Delete ${item.title}`}
+              title={`Delete ${item.title}`}
+              onClick={(e) => { e.stopPropagation(); onDelete(item.id); }}
+              onKeyDown={(e) => { if (e.key === "Enter") { e.stopPropagation(); onDelete(item.id); } }}
+              className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-destructive/20 hover:text-destructive"
+            >
+              <Trash2 className="h-3 w-3" />
+              Delete
+            </span>
+          )}
+        </div>
       )}
-    </button>
+    </div>
   );
 });

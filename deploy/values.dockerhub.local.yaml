@@ -12,11 +12,11 @@ operator:
   replicaCount: 1
   image:
     repository: docker.io/yakdhane/ai-operator
-    tag: fix-wf3-20260320-205100
+    tag: noloop-20260321-145824
     pullPolicy: Always
   workerImage:
     repository: docker.io/yakdhane/ai-operator
-    tag: fix-wf3-20260320-205100
+    tag: noloop-20260321-145824
     pullPolicy: Always
 
 gooseRuntime:
@@ -34,19 +34,20 @@ codexRuntime:
 opencodeRuntime:
   image:
     repository: docker.io/yakdhane/ai-opencode-runtime
-    tag: fileexp-20260321-092622
+    tag: enhance-20260321-155745
     pullPolicy: Always
   env:
-    OPENCODE_SESSION_INIT_ON_CREATE: "true"
-    OPENCODE_AUTONOMOUS_MAX_RETRIES: "4"
-    OPENCODE_AUTONOMOUS_MAX_TURNS: "14"
+    OPENCODE_SESSION_INIT_ON_CREATE: "false"
+    OPENCODE_AUTONOMOUS_MAX_RETRIES: "2"
+    OPENCODE_AUTONOMOUS_MAX_TURNS: "5"
+    OPENCODE_AGENT_STEPS: "200"
     OPENCODE_COMPACTION_TOKEN_THRESHOLD: "0.75"
-    OPENCODE_PLAN_THRESHOLD_CHARS: "500"
+    OPENCODE_PLAN_THRESHOLD_CHARS: "99999"
 
 apiGateway:
   image:
     repository: docker.io/yakdhane/ai-api-gateway
-    tag: fileexp-20260321-092622
+    tag: enhance-20260321-155745
     pullPolicy: Always
   auth:
     mode: hybrid
@@ -56,9 +57,9 @@ apiGateway:
 webUi:
   enabled: true
   image:
-    repository: docker.io/yakdhane/ai-web-ui
-    tag: fileexp-20260321-092622
-    pullPolicy: IfNotPresent
+    repository: docker.io/yakdhane/ai-agent-sandbox-web-ui
+    tag: enhance-20260321-155745
+    pullPolicy: Always
 
 platformSecrets:
   mode: native

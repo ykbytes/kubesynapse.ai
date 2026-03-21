@@ -1,0 +1,223 @@
+apiVersion: sandbox.enterprise.ai/v1alpha1
+kind: AIAgent
+metadata:
+  name: daw-agent
+  namespace: default
+spec:
+  model: copilot-gpt-5-mini
+  runtime:
+    kind: opencode
+    opencode:
+      configFiles:
+        opencode.json:
+          default_agent: build
+          permission: allow
+  systemPrompt: >
+    You are a senior React Native / Expo engineer building a mobile DAW
+    app called BeatForge. You write production-quality TypeScript with
+    strict mode. You create files directly using tools — never explain
+    what you will do, just do it. Fix errors immediately when commands
+    fail. Follow the project context and skills precisely. NEVER create
+    shim files or declare modules as `any`. Every module you create MUST
+    be wired to the modules it depends on — no disconnected code.
+  skills:
+    files:
+      ".github/skills/integration-wiring/SKILL.md": |
+        ---
+        description: "Ensure all modules are wired together — stores call engines, screens use stores, init hook bootstraps everything"
+        ---
+        # Integration Wiring
+
+        EVERY module you create must be connected to the rest of the system.
+        Disconnected code is a critical bug.
+
+        ## Mandatory Wiring Checklist
+        1. **useAudioSetup hook** (src/hooks/useAudioSetup.ts):
+           - Called in root _layout.tsx
+           - Creates AudioEngine, SequencerClock, SamplerEngine, MixerEngine instances
+           - Creates 8 MixerEngine channels (one per default track)
+           - Subscribes mixerStore changes → MixerEngine.setTrackVolume/Pan
+           - Returns { isReady: boolean }
+           - App renders loading screen until isReady === true
+
+        2. **transportStore.play()** must:
+           - Call AudioEngine.getInstance().resume()
+           - Call SequencerClock.getInstance().start(bpm, swing)
+           - Set isPlaying = true
+
+        3. **transportStore.stop()** must:
+           - Call SequencerClock.getInstance().stop()
+           - Set isPlaying = false, currentStep = 0
+
+        4. **SequencerClock.onStep(stepIndex)** callback must:
+           - Read sequencerStore.getState().getCurrentPattern()
+           - For each track, check if step at stepIndex is active
+           - If active and track.type === 'drum': SamplerEngine.play(track.sampleKey, step.velocity)
+           - If active and track.type === 'synth': SynthEngine.play(step.note, step.velocity)
+           - Call transportStore.getState().setCurrentStep(stepIndex)
+
+        5. **Each screen** must import its store and use selectors:
+           - Sequencer screen: useSequencerStore + useTransportStore
+           - Pads screen: useSequencerStore + useSamplerEngine
+           - Synth screen: useSynthStore
+           - Mixer screen: useMixerStore
+           - Settings screen: useTransportStore + useProjectStore
+
+        6. **Every store action** that changes audio state must call
+           the corresponding engine method. No store exists in isolation.
+
+        ## Verification
+        After creating all files, mentally trace these paths:
+        - User taps Play → transportStore.play() → AudioEngine.resume() → SequencerClock.start() → onStep() → SamplerEngine.play() → sound plays
+        - User moves fader → MixerChannel.onVolumeChange → mixerStore.setVolume() → MixerEngine.setTrackVolume() → next sample plays at new volume
+        - App launches → _layout.tsx → useAudioSetup() → engines init → stores hydrated → screens render
+
+      ".github/skills/dependency-validation/SKILL.md": |
+        ---
+        description: "Only use npm packages that actually exist — verify before adding"
+        ---
+        # Dependency Validation
+
+        ## Rules
+        1. **NEVER add a package to package.json unless you are certain it
+           exists on npm.** If unsure, use a known alternative.
+        2. **Approved packages** (known to exist):
+           - expo, expo-router, expo-av, expo-haptics, expo-font
+           - expo-splash-screen, expo-status-bar, expo-constants
+           - react-native, react-native-reanimated, react-native-gesture-handler
+           - react-native-safe-area-context, react-native-screens
+           - @react-native-async-storage/async-storage
+           - zustand, typescript, @expo/vector-icons
+           - react-native-svg (for any SVG graphics)
+        3. **BANNED packages** (do NOT exist or are unreliable):
+           - react-native-audio-api (DOES NOT EXIST on npm)
+           - expo-audio-stream
+           - react-native-web-audio-api
+           - Any package with fewer details than "audio" in its name — verify first
+        4. **For audio playback**, use `expo-av` — it is the standard Expo
+           audio package. Import as: `import { Audio } from 'expo-av';`
+        5. Pin all versions in package.json to specific ranges (e.g., ~52.0.0)
+
+      ".github/skills/strict-types/SKILL.md": |
+        ---
+        description: "Enforce strict TypeScript — no any, no shims, no type escape hatches"
+        ---
+        # Strict TypeScript Rules
+
+        ## ABSOLUTE PROHIBITIONS
+        1. **NEVER create a .d.ts shim file** that declares modules as `any`.
+           For example, NEVER create `src/types/shims.d.ts` with:
+           `declare module 'some-package' { const x: any; export default x; }`
+           This defeats the entire purpose of TypeScript.
+
+        2. **NEVER use `as any`** type assertion anywhere in the codebase.
+
+        3. **NEVER use `// @ts-ignore` or `// @ts-expect-error`** unless
+           there is a genuine library type bug with a comment explaining why.
+
+        ## WHAT TO DO INSTEAD
+        - If a package doesn't have types, write proper interface declarations
+          based on the actual API shape you're using.
+        - If you get a type error, fix the root cause — don't suppress it.
+        - Use proper generics for Zustand stores:
+          `create<StoreInterface>()((set, get) => ({ ... }))`
+        - Use proper typing for React Native components:
+          `StyleSheet.create({ ... })` returns properly typed styles.
+        - For expo-av: `import { Audio, AVPlaybackStatus } from 'expo-av';`
+          The types ship with the package.
+
+        ## Store Typing Pattern
+        ```typescript
+        interface TransportStore {
+          isPlaying: boolean;
+          bpm: number;
+          play: () => void;
+          stop: () => void;
+        }
+        export const useTransportStore = create<TransportStore>()((set, get) => ({
+          isPlaying: false,
+          bpm: 120,
+          play: () => { /* engine calls + set({ isPlaying: true }) */ },
+          stop: () => { /* engine calls + set({ isPlaying: false }) */ },
+        }));
+        ```
+
+      ".github/skills/react-native-quality/SKILL.md": |
+        ---
+        description: "React Native + Expo quality patterns — components, animation, performance"
+        ---
+        # React Native Quality Patterns
+
+        ## Expo Router
+        - File-based routing in `src/app/`. Tab layout in `src/app/(tabs)/_layout.tsx`.
+        - Each tab file exports a default component that is a FULL SCREEN,
+          not a 5-line stub. Minimum 30 lines per screen with real UI.
+
+        ## Component Rules
+        - Every component must render meaningful UI, not placeholder text.
+        - `<Text>Settings will go here</Text>` is NEVER acceptable.
+        - Settings screen MUST have: BPM slider, swing slider, project name
+          input, about section with version number, reset button.
+        - Each screen must have a TransportBar at the top for quick access.
+        - Use `StyleSheet.create()` — no inline styles.
+        - Use `SafeAreaView` from react-native-safe-area-context as root.
+
+        ## Reanimated Rules
+        - Use `useSharedValue`, `useAnimatedStyle`, `withTiming`/`withSpring`.
+        - NEVER use `useSharedValue` inside a `.map()` or loop — create the
+          shared values array OUTSIDE the loop with a fixed size.
+        - For step grid highlighting: use one `useSharedValue<number>` for
+          currentStep, and in each cell check `if (index === currentStep.value)`.
+
+        ## Gesture Handler
+        - Use `GestureDetector` with `Gesture.Tap()`, `Gesture.Pan()`.
+        - Knob: Pan gesture → rotate based on translationY → update store.
+        - Fader: Pan gesture → translate based on translationY → update store.
+        - Pad: Tap gesture → trigger sample + haptic + scale animation.
+
+        ## Zustand
+        - One store per domain: transport, sequencer, mixer, synth, project.
+        - Use `subscribeWithSelector` middleware.
+        - Use selectors with shallow equality: `useStore(s => s.bpm)`.
+        - Store actions MUST call engine methods (see integration-wiring skill).
+
+        ## Performance
+        - Wrap heavy components in `React.memo()`.
+        - Use `useCallback` for event handlers passed as props.
+        - Use `useMemo` for expensive computations (e.g., building grid data).
+
+      ".github/skills/verification-gates/SKILL.md": |
+        ---
+        description: "Verify code works before claiming completion — compile, trace, test"
+        ---
+        # Verification Gates
+
+        ## After EVERY major batch of file creation, run:
+        1. `npx tsc --noEmit` — fix ALL type errors before proceeding
+        2. `find /workspace/src -name "*.ts" -o -name "*.tsx" | head -50` — verify
+           all expected files exist
+
+        ## Before claiming ANY step is complete:
+        1. **Trace the play path**: Read transportStore.play() and verify it
+           calls AudioEngine and SequencerClock. Read SequencerClock.onStep and
+           verify it reads the pattern and triggers samples.
+        2. **Trace the UI path**: Read each screen file and verify it imports
+           a store and renders components that use store data.
+        3. **Check for stubs**: `grep -r "will go here\|TODO\|placeholder\|stub" /workspace/src/`
+           — if any found, fix them immediately.
+        4. **Check for shims**: `ls /workspace/src/types/shims*` — if any shim
+           files exist, DELETE them and fix imports properly.
+        5. **Check disconnected stores**: For each store, verify at least one
+           screen imports it. For each engine, verify at least one store calls it.
+
+        ## Fix Process
+        - Read the file before editing
+        - Fix one error at a time
+        - Re-run tsc after each fix batch
+        - Show evidence (command output) that the error is resolved
+  mcpSidecars:
+    - name: code-exec
+      image: docker.io/yakdhane/mcp-code-exec:deploy-20260319-090333
+      port: 8090
+  storage:
+    size: 2Gi

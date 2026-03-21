@@ -13,9 +13,11 @@ import {
   Monitor,
   Package,
   PlusCircle,
+  RefreshCw,
   Search,
   Server,
   Sparkles,
+  Wand2,
   Wrench,
 } from "lucide-react";
 
@@ -37,7 +39,7 @@ import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { ModelSelector } from "@/components/ModelSelector";
-import { fetchCatalogSkillDetail, fetchMcpToolCategories, fetchSkillsCatalog } from "../lib/api";
+import { fetchCatalogSkillDetail, fetchMcpToolCategories, fetchSkillsCatalog, refreshSkillsCatalog } from "../lib/api";
 import { A2A_ALLOWED_CALLERS_PLACEHOLDER } from "../lib/a2a";
 import { createGooseConfigFileDraft } from "../lib/gooseConfig";
 import { createOpenCodeConfigFileDraft } from "../lib/opencodeConfig";
@@ -323,6 +325,42 @@ export function CreateAgentPanel({
       setCatalogError(nextError instanceof Error ? nextError.message : String(nextError));
     } finally {
       setSkillBusyId("");
+    }
+  }
+
+  async function handleRefreshCatalog(): Promise<void> {
+    setCatalogLoading(true);
+    setCatalogError("");
+    try {
+      await refreshSkillsCatalog(token);
+      const [skills, tools] = await Promise.all([fetchSkillsCatalog(token), fetchMcpToolCategories(token)]);
+      setCatalogSkills(skills);
+      setCatalogTools(tools);
+      setSkillDetailsById({});
+    } catch (nextError) {
+      setCatalogError(nextError instanceof Error ? nextError.message : String(nextError));
+    } finally {
+      setCatalogLoading(false);
+    }
+  }
+
+  async function handleAutoSelectSkills(): Promise<void> {
+    setCatalogError("");
+    setCatalogLoading(true);
+    try {
+      let remaining = catalogSkills;
+      const currentPaths = draftPathsRef.current;
+      remaining = remaining.filter((s) => !hasSkillAttached(skillDetailsById[s.id], currentPaths));
+      let drafts = skillFileDraftsRef.current;
+      for (const skill of remaining) {
+        const detail = await ensureSkillDetail(skill.id);
+        drafts = mergeSkillDrafts(drafts, detail);
+      }
+      onSkillFileDraftsChange(drafts);
+    } catch (nextError) {
+      setCatalogError(nextError instanceof Error ? nextError.message : String(nextError));
+    } finally {
+      setCatalogLoading(false);
     }
   }
 
@@ -702,13 +740,23 @@ export function CreateAgentPanel({
             <div className="grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
               <Card className="shadow-none">
                 <CardHeader className="pb-3">
-                  <div className="flex items-center gap-2">
-                    <div className="flex h-8 w-8 items-center justify-center rounded-xl border border-sky-500/20 bg-sky-500/10 text-sky-300">
-                      <Package className="h-4 w-4" />
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <div className="flex h-8 w-8 items-center justify-center rounded-xl border border-sky-500/20 bg-sky-500/10 text-sky-300">
+                        <Package className="h-4 w-4" />
+                      </div>
+                      <div>
+                        <CardTitle className="text-sm">Skill library</CardTitle>
+                        <CardDescription>Attach curated skills from the catalog with one click. Each skill adds its bundled Markdown files to the agent.</CardDescription>
+                      </div>
                     </div>
-                    <div>
-                      <CardTitle className="text-sm">Skill library</CardTitle>
-                      <CardDescription>Attach curated skills from the catalog with one click. Each skill adds its bundled Markdown files to the agent.</CardDescription>
+                    <div className="flex items-center gap-1">
+                      <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => void handleAutoSelectSkills()} disabled={catalogLoading || !token.trim()} title="Auto-attach all skills">
+                        <Wand2 className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => void handleRefreshCatalog()} disabled={catalogLoading || !token.trim()} title="Refresh catalog">
+                        <RefreshCw className={`h-3.5 w-3.5 ${catalogLoading ? "animate-spin" : ""}`} />
+                      </Button>
                     </div>
                   </div>
                 </CardHeader>

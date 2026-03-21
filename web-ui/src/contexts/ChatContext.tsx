@@ -867,6 +867,24 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     } catch (err) { setChatError(apiErrorMessage(err)); }
   }, [token, activeSessionId, selectedAgentName, messages]);
 
+  // Auto-save after each invocation completes (isSending true → false)
+  const prevSendingRef = useRef(false);
+  const saveRef = useRef(handleSaveCurrentSession);
+  const newSessionRef = useRef(handleNewSession);
+  saveRef.current = handleSaveCurrentSession;
+  newSessionRef.current = handleNewSession;
+
+  useEffect(() => {
+    if (prevSendingRef.current && !isSending) {
+      if (activeSessionId) {
+        void saveRef.current();
+      } else {
+        void newSessionRef.current();
+      }
+    }
+    prevSendingRef.current = isSending;
+  }, [isSending, activeSessionId]);
+
   const ctxValue = useMemo(() => ({
     messages, activity, summary, logs, selectedGooseChatSettings, selectedOpenCodeChatSettings, gooseSystemPromptPreview,
     prompt, streamMode, requireApproval, approvalSupported, chatError, isSending, logsLoading, logsStreaming, canSubmitChat, chatEmptyMessage,

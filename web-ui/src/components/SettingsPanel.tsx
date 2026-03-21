@@ -1,8 +1,11 @@
 import {
   AlertTriangle,
   CheckCircle2,
+  Copy,
   Eye,
   EyeOff,
+  ExternalLink,
+  Github,
   Info,
   Loader2,
   Plus,
@@ -37,6 +40,9 @@ import {
   fetchLLMHealth,
   fetchLLMProviders,
   fetchProviderSuggestions,
+  initiateCopilotAuth,
+  pollCopilotAuth,
+  getCopilotAuthStatus,
   updateLLMKeys,
 } from "@/lib/api";
 import type { LLMProvider, ModelSuggestion } from "@/types";
@@ -53,6 +59,7 @@ const KEY_PLACEHOLDERS: Record<string, string> = {
   DEEPSEEK_API_KEY: "sk-...",
   TOGETHER_API_KEY: "...",
   FIREWORKS_API_KEY: "...",
+  GITHUB_COPILOT_TOKEN: "Authenticated via GitHub",
 };
 
 interface SettingsPanelProps {
@@ -86,6 +93,13 @@ export function SettingsPanel({ token, isAdmin }: SettingsPanelProps) {
   const [selectedModelId, setSelectedModelId] = useState("");
   const [addBusy, setAddBusy] = useState(false);
 
+  // Copilot device flow state
+  const [copilotConnected, setCopilotConnected] = useState<boolean | null>(null);
+  const [copilotFlowActive, setCopilotFlowActive] = useState(false);
+  const [copilotUserCode, setCopilotUserCode] = useState("");
+  const [copilotVerificationUri, setCopilotVerificationUri] = useState("");
+  const copilotPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
@@ -111,7 +125,10 @@ export function SettingsPanel({ token, isAdmin }: SettingsPanelProps) {
   useEffect(() => {
     void refresh();
     void refreshHealth();
-  }, [refresh, refreshHealth]);
+    if (isAdmin) {
+      getCopilotAuthStatus(token).then((s) => setCopilotConnected(s.connected)).catch(() => {});
+    }
+  }, [refresh, refreshHealth, token, isAdmin]);
 
   useEffect(() => {
     if (providers.length === 0) {
@@ -185,6 +202,55 @@ export function SettingsPanel({ token, isAdmin }: SettingsPanelProps) {
       await refresh();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to remove model");
+    }
+  }
+
+  // ── Copilot device flow ──
+
+  function stopCopilotPolling() {
+    if (copilotPollRef.current) {
+      clearInterval(copilotPollRef.current);
+      copilotPollRef.current = null;
+    }
+  }
+
+  // Cleanup on unmount
+  useEffect(() => () => stopCopilotPolling(), []);
+
+  async function startCopilotDeviceFlow() {
+    stopCopilotPolling();
+    setCopilotFlowActive(true);
+    setCopilotUserCode("");
+    setCopilotVerificationUri("");
+    try {
+      const flow = await initiateCopilotAuth(token);
+      setCopilotUserCode(flow.user_code);
+      setCopilotVerificationUri(flow.verification_uri);
+      const interval = (flow.interval + 3) * 1000; // add safety margin
+      copilotPollRef.current = setInterval(async () => {
+        try {
+          const result = await pollCopilotAuth(token);
+          if (result.status === "success") {
+            stopCopilotPolling();
+            setCopilotFlowActive(false);
+            setCopilotConnected(true);
+            toast.success("GitHub Copilot connected!");
+            void refresh();
+          } else if (result.status === "error") {
+            stopCopilotPolling();
+            setCopilotFlowActive(false);
+            toast.error(result.error || "Copilot authorization failed");
+          }
+          // "pending" → keep polling
+        } catch {
+          stopCopilotPolling();
+          setCopilotFlowActive(false);
+          toast.error("Failed to check authorization status");
+        }
+      }, interval);
+    } catch (err) {
+      setCopilotFlowActive(false);
+      toast.error(err instanceof Error ? err.message : "Failed to start Copilot auth");
     }
   }
 
@@ -414,7 +480,78 @@ export function SettingsPanel({ token, isAdmin }: SettingsPanelProps) {
                     </div>
                   </CardHeader>
                   <CardContent className="space-y-5">
-                    {isAdmin && (
+                    {isAdmin && selectedProvider.key_name === "GITHUB_COPILOT_TOKEN" ? (
+                      <div className="space-y-3">
+                        <Label className="text-xs text-muted-foreground">GitHub Copilot Authentication</Label>
+                        {copilotFlowActive && copilotUserCode ? (
+                          <div className="rounded-lg border border-primary/30 bg-primary/5 p-4 space-y-3">
+                            <p className="text-sm text-muted-foreground">
+                              Go to{" "}
+                              <a
+                                href={copilotVerificationUri}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="font-medium text-primary underline inline-flex items-center gap-1"
+                              >
+                                {copilotVerificationUri}
+                                <ExternalLink className="h-3 w-3" />
+                              </a>{" "}
+                              and enter this code:
+                            </p>
+                            <div className="flex items-center gap-2">
+                              <code className="rounded bg-background px-4 py-2 text-2xl font-bold tracking-widest">
+                                {copilotUserCode}
+                              </code>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-9 w-9"
+                                onClick={() => {
+                                  navigator.clipboard.writeText(copilotUserCode);
+                                  toast.success("Code copied!");
+                                }}
+                              >
+                                <Copy className="h-4 w-4" />
+                              </Button>
+                            </div>
+                            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                              Waiting for authorization...
+                            </div>
+                          </div>
+                        ) : copilotConnected ? (
+                          <div className="space-y-2">
+                            <div className="flex items-center gap-2">
+                              <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+                              <span className="text-sm font-medium text-emerald-500">Connected</span>
+                            </div>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-9 gap-1.5 text-xs"
+                              onClick={() => void startCopilotDeviceFlow()}
+                            >
+                              <Github className="h-3.5 w-3.5" />
+                              Reconnect
+                            </Button>
+                          </div>
+                        ) : (
+                          <Button
+                            size="sm"
+                            className="h-9 gap-1.5 text-xs"
+                            onClick={() => void startCopilotDeviceFlow()}
+                            disabled={copilotFlowActive}
+                          >
+                            {copilotFlowActive ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <Github className="h-3.5 w-3.5" />
+                            )}
+                            Connect with GitHub
+                          </Button>
+                        )}
+                      </div>
+                    ) : isAdmin ? (
                       <div className="space-y-2">
                         <Label className="text-xs text-muted-foreground">API Key</Label>
                         <div className="relative">
@@ -445,7 +582,7 @@ export function SettingsPanel({ token, isAdmin }: SettingsPanelProps) {
                           {selectedProvider.is_configured ? "Update key" : "Set key"}
                         </Button>
                       </div>
-                    )}
+                    ) : null}
 
                     <div className="space-y-2">
                       <div className="flex items-center justify-between gap-2">

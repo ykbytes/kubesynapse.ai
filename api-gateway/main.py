@@ -610,7 +610,7 @@ class GitHubCredentialRequest(BaseModel):
 class WorkflowStepRequest(BaseModel):
     name: str = Field(min_length=1, max_length=63)
     agent_ref: str = Field(min_length=1, max_length=63)
-    prompt: str = Field(default="", max_length=4000)
+    prompt: str = Field(default="", max_length=16000)
     depends_on: list[str] = Field(default_factory=list)
     require_approval: bool = False
     execution: dict[str, Any] | None = None
@@ -4298,9 +4298,22 @@ def get_skills_catalog(
             "allowed_mcp_servers": s.get("allowed_mcp_servers", []),
             "allowed_sandbox_tools": s.get("allowed_sandbox_tools", []),
             "bundled_assets": s.get("bundled_assets", []),
+            "files": {k: "" for k in s.get("files", {}).keys()} if isinstance(s.get("files"), dict) else {},
         }
         for s in results
     ]
+
+
+@app.post("/api/skills/catalog/refresh")
+def refresh_skills_catalog(
+    user=Depends(verify_token),
+) -> dict[str, Any]:
+    """Invalidate the in-memory skills catalog cache so the next read reloads from disk."""
+    del user
+    global _SKILLS_CATALOG_CACHE
+    _SKILLS_CATALOG_CACHE = None
+    reloaded = _load_skills_catalog()
+    return {"refreshed": True, "count": len(reloaded)}
 
 
 @app.get("/api/skills/catalog/{skill_id}")
@@ -4971,10 +4984,13 @@ def delete_github_credentials(
 @app.get("/api/workflows", response_model=list[WorkflowInfo])
 def list_workflows(namespace: str = "default", user=Depends(verify_token)):
     ensure_namespace_access(user, namespace)
-    return sorted(
+    workflows = sorted(
         [workflow_info_from_resource(item) for item in list_custom_resources("agentworkflows", namespace)],
         key=lambda item: item.name,
     )
+    for wf in workflows:
+        _sync_workflow_run_history(wf)
+    return workflows
 
 
 @app.post("/api/workflows", response_model=WorkflowInfo, status_code=201)
@@ -4993,6 +5009,45 @@ def create_workflow(
     return workflow_info_from_resource(created)
 
 
+def _sync_workflow_run_history(info: WorkflowInfo) -> None:
+    """Best-effort upsert of workflow run into run history based on current K8s state.
+
+    Called on every status fetch so that runs appear in history regardless of
+    whether the workflow was triggered via the API gateway or kubectl apply.
+    """
+    if not info.run_id or info.phase == "pending":
+        return
+    try:
+        summary = info.summary or {}
+        started_at = None
+        completed_at = None
+        if isinstance(summary.get("startedAt"), str):
+            try:
+                started_at = datetime.fromisoformat(summary["startedAt"].replace("Z", "+00:00"))
+            except (ValueError, TypeError):
+                pass
+        terminal = info.phase in {"completed", "failed", "cancelled"}
+        if terminal and isinstance(summary.get("completedAt"), str):
+            try:
+                completed_at = datetime.fromisoformat(summary["completedAt"].replace("Z", "+00:00"))
+            except (ValueError, TypeError):
+                pass
+
+        record_workflow_run(
+            workflow_name=info.name,
+            namespace=info.namespace,
+            run_id=info.run_id,
+            phase=info.phase,
+            total_steps=summary.get("totalSteps"),
+            completed_steps=summary.get("completedSteps"),
+            failed_steps=summary.get("failedSteps"),
+            started_at=started_at,
+            completed_at=completed_at,
+        )
+    except Exception as exc:
+        logger.debug("Failed to sync workflow run history for %s: %s", info.name, exc)
+
+
 @app.get("/api/workflows/{workflow_name}", response_model=WorkflowInfo)
 def get_workflow(
     workflow_name: str,
@@ -5000,7 +5055,9 @@ def get_workflow(
     user=Depends(verify_token),
 ):
     ensure_namespace_access(user, namespace)
-    return workflow_info_from_resource(read_custom_resource("agentworkflows", workflow_name, namespace, "Workflow"))
+    info = workflow_info_from_resource(read_custom_resource("agentworkflows", workflow_name, namespace, "Workflow"))
+    _sync_workflow_run_history(info)
+    return info
 
 
 @app.patch("/api/workflows/{workflow_name}", response_model=WorkflowInfo)
@@ -5234,6 +5291,7 @@ def stream_workflow_status(
                         name=workflow_name,
                     )
                     info = workflow_info_from_resource(resource)
+                    _sync_workflow_run_history(info)
                     info_dict = info.model_dump(mode="json")
                     current_hash = json.dumps(info_dict, sort_keys=True, default=str)
                     if current_hash != prev_hash:
@@ -5705,6 +5763,51 @@ async def download_agent_artifact(
     )
 
 
+@app.get("/api/agents/{agent_name}/artifacts/zip")
+async def download_agent_artifacts_zip(
+    agent_name: str,
+    namespace: str = "default",
+    root: str = "",
+    user=Depends(verify_token),
+):
+    """Download a ZIP archive of all workspace files from an agent runtime."""
+    ensure_namespace_access(user, namespace)
+    await asyncio.to_thread(read_agent, agent_name, namespace)
+
+    params: dict[str, str] = {}
+    if root:
+        params["root"] = root
+
+    async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=10.0), trust_env=False) as client:
+        try:
+            response = await client.get(
+                f"{agent_runtime_url(agent_name, namespace)}/artifacts/zip",
+                params=params,
+            )
+        except Exception as exc:
+            logger.error("Artifact zip download failed (%s/%s): %s", namespace, agent_name, exc)
+            raise HTTPException(status_code=502, detail="Artifact zip download failed") from exc
+
+    if response.status_code >= 400:
+        error_payload = error_payload_from_body(response.content, "Artifact zip download failed")
+        status_code = response.status_code if response.status_code in {400, 404} else 502
+        raise HTTPException(status_code=status_code, detail=error_payload["error"])
+
+    passthrough_headers = {}
+    content_disposition = response.headers.get("content-disposition")
+    if content_disposition:
+        passthrough_headers["content-disposition"] = content_disposition
+    content_length = response.headers.get("content-length")
+    if content_length:
+        passthrough_headers["content-length"] = content_length
+
+    return Response(
+        content=response.content,
+        media_type=response.headers.get("content-type") or "application/zip",
+        headers=passthrough_headers,
+    )
+
+
 @app.get("/api/agents/{agent_name}/artifacts/list")
 async def list_agent_artifacts(
     agent_name: str,
@@ -5941,6 +6044,59 @@ _openrouter_model_cache: list[dict[str, str]] = []
 _openrouter_cache_ts: float = 0.0
 _OPENROUTER_CACHE_TTL = 600  # 10 minutes
 
+# -- Copilot model cache --
+_copilot_model_cache: list[dict[str, str]] = []
+_copilot_cache_ts: float = 0.0
+_COPILOT_CACHE_TTL = 600  # 10 minutes
+
+
+async def _fetch_copilot_models(copilot_token: str) -> list[dict[str, str]]:
+    """Fetch available models from GitHub Copilot API with caching."""
+    global _copilot_model_cache, _copilot_cache_ts
+
+    now = time.monotonic()
+    if _copilot_model_cache and (now - _copilot_cache_ts) < _COPILOT_CACHE_TTL:
+        return _copilot_model_cache
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0, trust_env=False) as client:
+            resp = await client.get(
+                "https://api.githubcopilot.com/models",
+                headers={
+                    "Authorization": f"Bearer {copilot_token}",
+                    "Accept": "application/json",
+                    "Copilot-Integration-Id": "vscode-chat",
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            models_raw = data if isinstance(data, list) else data.get("data", data.get("models", []))
+            result: list[dict[str, str]] = []
+            for m in models_raw:
+                model_id = m.get("id", "") if isinstance(m, dict) else str(m)
+                if not model_id:
+                    continue
+                name = m.get("name", model_id) if isinstance(m, dict) else model_id
+                caps = m.get("capabilities", {}) if isinstance(m, dict) else {}
+                family = m.get("model_picker_label", m.get("family", "")) if isinstance(m, dict) else ""
+                desc_parts: list[str] = []
+                if family:
+                    desc_parts.append(family)
+                if caps.get("type"):
+                    desc_parts.append(caps["type"])
+                result.append({
+                    "model_id": model_id,
+                    "display_name": name,
+                    "description": " · ".join(desc_parts) if desc_parts else "Copilot model",
+                })
+            _copilot_model_cache = result
+            _copilot_cache_ts = now
+            logger.info("Fetched %d models from GitHub Copilot API", len(result))
+            return result
+    except Exception as exc:
+        logger.warning("Failed to fetch Copilot models: %s", exc)
+        return _copilot_model_cache  # return stale cache on error
+
 
 async def _fetch_openrouter_models(api_key: str | None = None) -> list[dict[str, str]]:
     """Fetch models from OpenRouter API with in-memory caching."""
@@ -6010,6 +6166,7 @@ _ALLOWED_SECRET_KEYS = frozenset({
     "DEEPSEEK_API_KEY",
     "TOGETHER_API_KEY",
     "FIREWORKS_API_KEY",
+    "GITHUB_COPILOT_TOKEN",
 })
 
 # -- Provider metadata: key_name → {label, prefix for litellm, env reference}
@@ -6025,6 +6182,9 @@ _PROVIDER_META: dict[str, dict[str, str]] = {
     "DEEPSEEK_API_KEY":    {"label": "DeepSeek",     "prefix": "deepseek/",      "placeholder": "sk-..."},
     "TOGETHER_API_KEY":    {"label": "Together AI",   "prefix": "together_ai/",   "placeholder": "..."},
     "FIREWORKS_API_KEY":   {"label": "Fireworks",    "prefix": "fireworks_ai/",  "placeholder": "..."},
+    "GITHUB_COPILOT_TOKEN": {"label": "GitHub Copilot", "prefix": "openai/",       "placeholder": "Authenticated via GitHub",
+                             "api_base": "https://api.githubcopilot.com",
+                             "extra_headers": '{"Copilot-Integration-Id": "vscode-chat"}'},
 }
 
 # -- Popular models per provider (static, curated)
@@ -6083,6 +6243,15 @@ _PROVIDER_POPULAR_MODELS: dict[str, list[dict[str, str]]] = {
     "FIREWORKS_API_KEY": [
         {"model_id": "accounts/fireworks/models/llama-v3p1-70b-instruct", "display_name": "Llama 3.1 70B", "description": "Fast inference"},
         {"model_id": "accounts/fireworks/models/llama-v3p1-8b-instruct", "display_name": "Llama 3.1 8B", "description": "Low latency"},
+    ],
+    "GITHUB_COPILOT_TOKEN": [
+        {"model_id": "gpt-4o", "display_name": "GPT-4o", "description": "Most capable, multimodal"},
+        {"model_id": "gpt-4.1", "display_name": "GPT-4.1", "description": "Latest GPT model"},
+        {"model_id": "o3-mini", "display_name": "o3 Mini", "description": "Fast reasoning"},
+        {"model_id": "o4-mini", "display_name": "o4 Mini", "description": "Latest reasoning, cost-effective"},
+        {"model_id": "claude-sonnet-4", "display_name": "Claude Sonnet 4", "description": "Anthropic via Copilot"},
+        {"model_id": "claude-3.5-sonnet", "display_name": "Claude 3.5 Sonnet", "description": "Fast Anthropic via Copilot"},
+        {"model_id": "gemini-2.0-flash", "display_name": "Gemini 2.0 Flash", "description": "Google via Copilot"},
     ],
 }
 
@@ -6263,18 +6432,19 @@ async def llm_list_providers(user=Depends(verify_token)):
             raw_models = resp.json().get("data", [])
             for m in raw_models:
                 litellm_model = str((m.get("litellm_params") or {}).get("model", ""))
-                api_key_ref = str((m.get("litellm_params") or {}).get("api_key", ""))
-                # Match to provider by litellm prefix
+                model_api_base = str((m.get("litellm_params") or {}).get("api_base", "") or "")
+                # Match by api_base first (most specific – works even when
+                # LiteLLM redacts the api_key from /model/info responses).
                 matched = False
                 for key_name, meta in _PROVIDER_META.items():
-                    if litellm_model.startswith(meta["prefix"]):
+                    if meta.get("api_base") and model_api_base and meta["api_base"] in model_api_base:
                         models_by_provider[key_name].append(m)
                         matched = True
                         break
                 if not matched:
-                    # Try matching by api_key env reference
-                    for key_name in _PROVIDER_META:
-                        if key_name in api_key_ref:
+                    # Fall back to litellm prefix match
+                    for key_name, meta in _PROVIDER_META.items():
+                        if litellm_model.startswith(meta["prefix"]):
                             models_by_provider[key_name].append(m)
                             break
     except Exception as exc:
@@ -6342,8 +6512,17 @@ async def llm_provider_suggestions(provider: str, q: str = "", user=Depends(veri
             resp.raise_for_status()
             for m in resp.json().get("data", []):
                 litellm_model = str((m.get("litellm_params") or {}).get("model", ""))
-                if litellm_model.startswith(prefix):
-                    model_id = litellm_model[len(prefix):]
+                model_api_base = str((m.get("litellm_params") or {}).get("api_base", "") or "")
+                provider_api_base = meta.get("api_base", "")
+                # Match by api_base first (works even when LiteLLM redacts api_key)
+                is_match = False
+                if provider_api_base and model_api_base and provider_api_base in model_api_base:
+                    is_match = True
+                elif not provider_api_base and litellm_model.startswith(prefix):
+                    # Prefix match only for providers WITHOUT a custom api_base
+                    is_match = True
+                if is_match:
+                    model_id = litellm_model[len(prefix):] if litellm_model.startswith(prefix) else litellm_model
                     configured_ids.add(model_id)
                     configured.append({
                         "model_id": model_id,
@@ -6393,6 +6572,45 @@ async def llm_provider_suggestions(provider: str, q: str = "", user=Depends(veri
         combined = configured_live + unconfigured_live
         return {"provider": provider, "suggestions": combined[:100]}
 
+    # For GitHub Copilot, fetch live models from the Copilot API
+    if provider == "GITHUB_COPILOT_TOKEN":
+        cp_token: str | None = None
+        try:
+            from kubernetes import client as k8s_client
+            import base64
+            ns = os.getenv("POD_NAMESPACE", "ai-platform")
+            secret = k8s_client.CoreV1Api().read_namespaced_secret(name=LLM_SECRET_NAME, namespace=ns)
+            raw = (secret.data or {}).get("GITHUB_COPILOT_TOKEN", "")
+            if raw:
+                cp_token = base64.b64decode(raw).decode("utf-8").strip() or None
+        except Exception:
+            cp_token = os.getenv("GITHUB_COPILOT_TOKEN") or None
+
+        if cp_token:
+            live_models = await _fetch_copilot_models(cp_token)
+            if live_models:
+                live_suggestions = []
+                for lm in live_models:
+                    entry = dict(lm)
+                    if lm["model_id"] in configured_ids:
+                        entry["description"] = "Already configured"
+                    live_suggestions.append(entry)
+
+                if q:
+                    ql = q.lower()
+                    live_suggestions = [
+                        s for s in live_suggestions
+                        if ql in s["model_id"].lower()
+                        or ql in s["display_name"].lower()
+                        or ql in s.get("description", "").lower()
+                    ]
+
+                configured_live = [s for s in live_suggestions if s.get("description") == "Already configured"]
+                unconfigured_live = [s for s in live_suggestions if s.get("description") != "Already configured"]
+                combined = configured_live + unconfigured_live
+                return {"provider": provider, "suggestions": combined[:100]}
+        # Fall through to static suggestions if no token or fetch failed
+
     # Static popular suggestions, excluding already-configured
     static = [s for s in _PROVIDER_POPULAR_MODELS.get(provider, []) if s["model_id"] not in configured_ids]
 
@@ -6419,16 +6637,47 @@ async def llm_add_provider_model(provider: str, body: ProviderModelAdd, user=Dep
         raise HTTPException(status_code=404, detail=f"Unknown provider: {provider}")
 
     meta = _PROVIDER_META[provider]
-    alias = (body.alias or "").strip() or body.model_id.split("/")[-1]
+    raw_alias = (body.alias or "").strip() or body.model_id.split("/")[-1]
+    # Prefix Copilot aliases with "copilot-" to avoid collisions with direct OpenAI models
+    alias = f"copilot-{raw_alias}" if provider == "GITHUB_COPILOT_TOKEN" else raw_alias
     litellm_model = f"{meta['prefix']}{body.model_id}"
     api_key_ref = f"os.environ/{provider}"
 
+    # For Copilot, read the actual token from the K8s secret instead of using
+    # os.environ/ reference, because the token is set dynamically after LiteLLM
+    # pod start so the env var may not be present.
+    actual_api_key: str | None = None
+    if provider == "GITHUB_COPILOT_TOKEN":
+        try:
+            import base64
+            from kubernetes import client as k8s_client
+            ns = os.getenv("POD_NAMESPACE", "ai-platform")
+            secret = k8s_client.CoreV1Api().read_namespaced_secret(
+                name=LLM_SECRET_NAME,
+                namespace=ns,
+            )
+            raw_b64 = (secret.data or {}).get("GITHUB_COPILOT_TOKEN", "")
+            if raw_b64:
+                actual_api_key = base64.b64decode(raw_b64).decode("utf-8")
+            else:
+                logger.warning("GITHUB_COPILOT_TOKEN is empty in secret %s/%s", ns, LLM_SECRET_NAME)
+        except Exception as exc:
+            logger.error("Failed to read Copilot token from K8s secret: %s", exc)
+        if not actual_api_key:
+            raise HTTPException(status_code=400, detail="GitHub Copilot is not authenticated. Please connect via the device flow first.")
+
+    litellm_params: dict[str, Any] = {
+        "model": litellm_model,
+        "api_key": actual_api_key if actual_api_key else api_key_ref,
+    }
+    if meta.get("api_base"):
+        litellm_params["api_base"] = meta["api_base"]
+    if meta.get("extra_headers"):
+        litellm_params["extra_headers"] = json.loads(meta["extra_headers"])
+
     payload = {
         "model_name": alias,
-        "litellm_params": {
-            "model": litellm_model,
-            "api_key": api_key_ref,
-        },
+        "litellm_params": litellm_params,
     }
     try:
         async with httpx.AsyncClient(timeout=_LLM_PROXY_TIMEOUT, trust_env=False) as client:
@@ -6444,6 +6693,142 @@ async def llm_add_provider_model(provider: str, body: ProviderModelAdd, user=Dep
     except Exception as exc:
         logger.error("Failed to reach LiteLLM (provider model add): %s", exc)
         raise HTTPException(status_code=502, detail="Failed to reach LiteLLM") from exc
+
+
+# --------------------------------------------------------------------------- #
+#  GitHub Copilot – OAuth Device Flow                                          #
+# --------------------------------------------------------------------------- #
+
+_COPILOT_CLIENT_ID = "Ov23li8tweQw6odWQebz"
+_COPILOT_DEVICE_CODE_URL = "https://github.com/login/device/code"
+_COPILOT_ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token"
+
+# In-memory device flow state (keyed by user sub). Cleared on success/error.
+_copilot_device_flows: dict[str, dict[str, Any]] = {}
+
+
+@app.post("/api/copilot/auth/device")
+async def copilot_auth_device(user=Depends(verify_token)):
+    """Initiate GitHub OAuth device flow for Copilot."""
+    ensure_role(user, "admin")
+    user_id = user.get("sub", "unknown")
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0, trust_env=False) as client:
+            resp = await client.post(
+                _COPILOT_DEVICE_CODE_URL,
+                data={"client_id": _COPILOT_CLIENT_ID, "scope": "read:user"},
+                headers={"Accept": "application/json"},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+    except Exception as exc:
+        logger.error("Copilot device flow initiation failed: %s", exc)
+        raise HTTPException(status_code=502, detail="Failed to contact GitHub for device auth") from exc
+
+    user_code = data.get("user_code", "")
+    verification_uri = data.get("verification_uri", "https://github.com/login/device")
+    device_code = data.get("device_code", "")
+    interval = int(data.get("interval", 5))
+
+    if not device_code:
+        raise HTTPException(status_code=502, detail="GitHub did not return a device code")
+
+    _copilot_device_flows[user_id] = {
+        "device_code": device_code,
+        "interval": interval,
+    }
+
+    return {
+        "user_code": user_code,
+        "verification_uri": verification_uri,
+        "interval": interval,
+    }
+
+
+@app.post("/api/copilot/auth/poll")
+async def copilot_auth_poll(user=Depends(verify_token)):
+    """Poll GitHub for device flow completion. On success stores token in K8s secret."""
+    ensure_role(user, "admin")
+    user_id = user.get("sub", "unknown")
+    flow = _copilot_device_flows.get(user_id)
+    if not flow:
+        raise HTTPException(status_code=400, detail="No pending device flow. Call /api/copilot/auth/device first.")
+
+    device_code = flow["device_code"]
+    try:
+        async with httpx.AsyncClient(timeout=15.0, trust_env=False) as client:
+            resp = await client.post(
+                _COPILOT_ACCESS_TOKEN_URL,
+                data={
+                    "client_id": _COPILOT_CLIENT_ID,
+                    "device_code": device_code,
+                    "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+                },
+                headers={"Accept": "application/json"},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+    except Exception as exc:
+        logger.error("Copilot token poll failed: %s", exc)
+        raise HTTPException(status_code=502, detail="Failed to contact GitHub for token") from exc
+
+    # Check for pending/slow_down/error states
+    error = data.get("error")
+    if error == "authorization_pending":
+        return {"status": "pending"}
+    if error == "slow_down":
+        new_interval = int(data.get("interval", flow["interval"] + 5))
+        flow["interval"] = new_interval
+        return {"status": "pending", "interval": new_interval}
+    if error:
+        _copilot_device_flows.pop(user_id, None)
+        return {"status": "error", "error": data.get("error_description", error)}
+
+    access_token = data.get("access_token", "").strip()
+    if not access_token:
+        _copilot_device_flows.pop(user_id, None)
+        return {"status": "error", "error": "No access token in GitHub response"}
+
+    # Store token in K8s secret
+    try:
+        import base64
+        from kubernetes import client as k8s_client
+
+        ns = os.getenv("POD_NAMESPACE", "ai-platform")
+        api = k8s_client.CoreV1Api()
+        secret = api.read_namespaced_secret(name=LLM_SECRET_NAME, namespace=ns)
+        existing_data = secret.data or {}
+        existing_data["GITHUB_COPILOT_TOKEN"] = base64.b64encode(access_token.encode("utf-8")).decode("ascii")
+        secret.data = existing_data
+        api.replace_namespaced_secret(name=LLM_SECRET_NAME, namespace=ns, body=secret)
+        logger.info("Stored Copilot token for user %s", user_id)
+    except Exception as exc:
+        logger.error("Failed to store Copilot token in K8s secret: %s", exc)
+        _copilot_device_flows.pop(user_id, None)
+        raise HTTPException(status_code=502, detail="Token received but failed to store in cluster secret") from exc
+
+    _copilot_device_flows.pop(user_id, None)
+    return {"status": "success"}
+
+
+@app.get("/api/copilot/auth/status")
+def copilot_auth_status(user=Depends(verify_token)):
+    """Check if a Copilot token is stored in the K8s secret."""
+    ensure_role(user, "admin")
+    try:
+        from kubernetes import client as k8s_client
+
+        secret = k8s_client.CoreV1Api().read_namespaced_secret(
+            name=LLM_SECRET_NAME,
+            namespace=os.getenv("POD_NAMESPACE", "ai-platform"),
+        )
+        data = secret.data or {}
+        is_set = "GITHUB_COPILOT_TOKEN" in data and bool(data["GITHUB_COPILOT_TOKEN"])
+        return {"connected": is_set}
+    except Exception as exc:
+        logger.warning("Failed to check Copilot status: %s", exc)
+        return {"connected": False}
 
 
 if __name__ == "__main__":
