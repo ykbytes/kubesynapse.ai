@@ -44,6 +44,7 @@ sys.modules.setdefault("croniter", croniter_module)
 kopf_module = types.ModuleType("kopf")
 kopf_module.on = types.SimpleNamespace(
     startup=_passthrough_decorator,
+    cleanup=_passthrough_decorator,
     create=_passthrough_decorator,
     update=_passthrough_decorator,
     delete=_passthrough_decorator,
@@ -72,45 +73,50 @@ sys.modules.setdefault("kubernetes.config", config_module)
 sys.modules.setdefault("kubernetes.client.rest", rest_module)
 
 import main as operator_main  # noqa: E402
+import builders.manifests as _builders_manifests  # noqa: E402
+import config as _config  # noqa: E402
+import reconcile as _reconcile  # noqa: E402
+import services.k8s as _services_k8s  # noqa: E402
+import controllers.tenant_controller as _tenant_ctrl  # noqa: E402
 
 
 def _api_exception(status: int) -> Exception:
-    exc = operator_main.ApiException(f"status={status}")
+    exc = rest_module.ApiException(f"status={status}")
     exc.status = status
     return exc
 
 
 class OperatorManifestTests(unittest.TestCase):
     def test_classify_reconcile_error_marks_4xx_api_failures_permanent(self) -> None:
-        exc = operator_main.ApiException("invalid resource")
+        exc = rest_module.ApiException("invalid resource")
         exc.status = 422
         exc.reason = "Unprocessable Entity"
         exc.body = '{"error":"invalid"}'
 
-        error = operator_main.classify_reconcile_error("create-agent", exc, default_delay=7)
+        error = _reconcile.classify_reconcile_error("create-agent", exc, default_delay=7)
 
-        self.assertIsInstance(error, operator_main.kopf.PermanentError)
+        self.assertIsInstance(error, kopf_module.PermanentError)
         self.assertIn("create-agent failed:", str(error))
         self.assertIn("status=422", str(error))
         self.assertIn("reason=Unprocessable Entity", str(error))
 
     def test_classify_reconcile_error_uses_backoff_for_5xx_api_failures(self) -> None:
-        exc = operator_main.ApiException("upstream unavailable")
+        exc = rest_module.ApiException("upstream unavailable")
         exc.status = 503
         exc.reason = "Service Unavailable"
 
-        error = operator_main.classify_reconcile_error("run-workflow", exc, default_delay=5)
+        error = _reconcile.classify_reconcile_error("run-workflow", exc, default_delay=5)
 
-        self.assertIsInstance(error, operator_main.kopf.TemporaryError)
+        self.assertIsInstance(error, kopf_module.TemporaryError)
         self.assertEqual(error.delay, 30)
         self.assertIn("status=503", str(error))
 
     def test_create_tenant_rejects_operator_namespace(self) -> None:
         logger = Mock()
 
-        with patch.object(operator_main, "OPERATOR_NAMESPACE", "ai-platform"):
-            with self.assertRaises(operator_main.kopf.PermanentError):
-                operator_main.create_tenant(
+        with patch.object(_tenant_ctrl, "OPERATOR_NAMESPACE", "ai-platform"):
+            with self.assertRaises(kopf_module.PermanentError):
+                _tenant_ctrl.create_tenant(
                     {"tenantName": "team-a", "namespace": "ai-platform"},
                     "team-a",
                     logger,
@@ -119,7 +125,7 @@ class OperatorManifestTests(unittest.TestCase):
         logger.log.assert_called()
 
     def test_statefulset_manifest_includes_state_volume_init_container(self) -> None:
-        manifest = operator_main.create_agent_statefulset_manifest(
+        manifest = _builders_manifests.create_agent_statefulset_manifest(
             "workspace-assistant",
             "default",
             {
@@ -139,7 +145,7 @@ class OperatorManifestTests(unittest.TestCase):
 
         init_container = pod_spec["initContainers"][0]
         self.assertEqual(init_container["name"], "init-state-volume")
-        self.assertEqual(init_container["image"], operator_main.GOOSE_RUNTIME_IMAGE)
+        self.assertEqual(init_container["image"], _config.GOOSE_RUNTIME_IMAGE)
         self.assertEqual(init_container["securityContext"]["runAsUser"], 0)
         self.assertEqual(
             init_container["volumeMounts"],
@@ -148,7 +154,7 @@ class OperatorManifestTests(unittest.TestCase):
         self.assertIn("chown -R 1000:1000 /app/state", init_container["command"][2])
 
     def test_statefulset_manifest_includes_a2a_env(self) -> None:
-        manifest = operator_main.create_agent_statefulset_manifest(
+        manifest = _builders_manifests.create_agent_statefulset_manifest(
             "workspace-assistant",
             "default",
             {
@@ -186,15 +192,15 @@ class OperatorManifestTests(unittest.TestCase):
         }
 
         self.assertEqual(
-            json.loads(env[operator_main.A2A_ALLOWED_CALLERS_ENV]),
+            json.loads(env[_config.A2A_ALLOWED_CALLERS_ENV]),
             [{"name": "research-agent", "namespace": "team-a"}],
         )
         self.assertEqual(
-            json.loads(env[operator_main.A2A_ALLOWED_TARGETS_ENV]),
+            json.loads(env[_config.A2A_ALLOWED_TARGETS_ENV]),
             [{"name": "analysis-agent", "namespace": "team-b"}],
         )
-        self.assertEqual(env[operator_main.A2A_REQUIRE_HITL_ENV], "true")
-        self.assertEqual(env[operator_main.A2A_MAX_TIMEOUT_SECONDS_ENV], "45.0")
+        self.assertEqual(env[_config.A2A_REQUIRE_HITL_ENV], "true")
+        self.assertEqual(env[_config.A2A_MAX_TIMEOUT_SECONDS_ENV], "45.0")
         self.assertEqual(
             env["API_GATEWAY_INTERNAL_URL"],
             "http://ai-agent-sandbox-api-gateway.default.svc.cluster.local:8080",
@@ -206,23 +212,23 @@ class OperatorManifestTests(unittest.TestCase):
 
     def test_statefulset_manifest_includes_autonomy_and_model_env(self) -> None:
         with patch.object(
-            operator_main,
+            _builders_manifests,
             "AGENT_ALLOWED_MODELS",
             ["gpt-4", "openrouter-gpt-4o-mini"],
-        ), patch.object(operator_main, "AGENT_MAX_STEPS", "6"), patch.object(
-            operator_main,
+        ), patch.object(_builders_manifests, "AGENT_MAX_STEPS", "6"), patch.object(
+            _builders_manifests,
             "AGENT_MAX_STEPS_LIMIT",
             "16",
-        ), patch.object(operator_main, "AGENT_DOOM_LOOP_THRESHOLD", "4"), patch.object(
-            operator_main,
+        ), patch.object(_builders_manifests, "AGENT_DOOM_LOOP_THRESHOLD", "4"), patch.object(
+            _builders_manifests,
             "AGENT_SUPERVISOR_HISTORY_LIMIT",
             "10",
-        ), patch.object(operator_main, "AGENT_SUPERVISOR_RESPONSE_CHARS", "8000"), patch.object(
-            operator_main,
+        ), patch.object(_builders_manifests, "AGENT_SUPERVISOR_RESPONSE_CHARS", "8000"), patch.object(
+            _builders_manifests,
             "AGENT_AUTONOMY_CONTINUE_ON_ACTION_ERROR",
             "false",
         ):
-            manifest = operator_main.create_agent_statefulset_manifest(
+            manifest = _builders_manifests.create_agent_statefulset_manifest(
                 "workspace-assistant",
                 "default",
                 {
@@ -252,32 +258,32 @@ class OperatorManifestTests(unittest.TestCase):
         self.assertEqual(env["AGENT_AUTONOMY_CONTINUE_ON_ACTION_ERROR"], "false")
 
     def test_langgraph_manifest_includes_local_tool_env_and_workspace_mount(self) -> None:
-        with patch.object(operator_main, "AGENT_LOCAL_TOOL_MOUNT_WORKSPACE", True), patch.object(
-            operator_main,
+        with patch.object(_builders_manifests, "AGENT_LOCAL_TOOL_MOUNT_WORKSPACE", True), patch.object(
+            _builders_manifests,
             "AGENT_LOCAL_TOOL_DISCOVERY_ENABLED",
             "false",
-        ), patch.object(operator_main, "AGENT_LOCAL_TOOL_ALLOWLIST", "curl,rg"), patch.object(
-            operator_main,
+        ), patch.object(_builders_manifests, "AGENT_LOCAL_TOOL_ALLOWLIST", "curl,rg"), patch.object(
+            _builders_manifests,
             "AGENT_LOCAL_TOOL_ALLOWED_ROOTS",
             "/app/state,/workspace,/tmp",
-        ), patch.object(operator_main, "AGENT_LOCAL_TOOL_TIMEOUT_SECONDS", "45.0"), patch.object(
-            operator_main,
+        ), patch.object(_builders_manifests, "AGENT_LOCAL_TOOL_TIMEOUT_SECONDS", "45.0"), patch.object(
+            _builders_manifests,
             "AGENT_LOCAL_TOOL_MAX_OUTPUT_CHARS",
             "20000",
-        ), patch.object(operator_main, "AGENT_LOCAL_TOOL_MAX_ARGS", "12"), patch.object(
-            operator_main,
+        ), patch.object(_builders_manifests, "AGENT_LOCAL_TOOL_MAX_ARGS", "12"), patch.object(
+            _builders_manifests,
             "AGENT_LOCAL_TOOL_MAX_ARG_CHARS",
             "1024",
-        ), patch.object(operator_main, "AGENT_LOCAL_TOOL_LIST_LIMIT", "18"), patch.object(
-            operator_main,
+        ), patch.object(_builders_manifests, "AGENT_LOCAL_TOOL_LIST_LIMIT", "18"), patch.object(
+            _builders_manifests,
             "AGENT_AUTONOMY_ACTION_RETRY_LIMIT",
             "4",
-        ), patch.object(operator_main, "AGENT_AUTONOMY_ACTION_RETRY_BACKOFF_SECONDS", "2.5"), patch.object(
-            operator_main,
+        ), patch.object(_builders_manifests, "AGENT_AUTONOMY_ACTION_RETRY_BACKOFF_SECONDS", "2.5"), patch.object(
+            _builders_manifests,
             "AGENT_AUTONOMY_FAILURE_HISTORY_LIMIT",
             "9",
         ):
-            manifest = operator_main.create_agent_statefulset_manifest(
+            manifest = _builders_manifests.create_agent_statefulset_manifest(
                 "workspace-assistant",
                 "default",
                 {
@@ -316,8 +322,8 @@ class OperatorManifestTests(unittest.TestCase):
         self.assertEqual(env["AGENT_AUTONOMY_FAILURE_HISTORY_LIMIT"], "9")
 
     def test_langgraph_manifest_skips_workspace_mount_when_disabled(self) -> None:
-        with patch.object(operator_main, "AGENT_LOCAL_TOOL_MOUNT_WORKSPACE", False):
-            manifest = operator_main.create_agent_statefulset_manifest(
+        with patch.object(_builders_manifests, "AGENT_LOCAL_TOOL_MOUNT_WORKSPACE", False):
+            manifest = _builders_manifests.create_agent_statefulset_manifest(
                 "workspace-assistant",
                 "default",
                 {
@@ -338,7 +344,7 @@ class OperatorManifestTests(unittest.TestCase):
         self.assertNotIn("workspace-volume", volume_names)
 
     def test_statefulset_manifest_includes_skill_files_env(self) -> None:
-        manifest = operator_main.create_agent_statefulset_manifest(
+        manifest = _builders_manifests.create_agent_statefulset_manifest(
             "workspace-assistant",
             "default",
             {
@@ -370,9 +376,9 @@ class OperatorManifestTests(unittest.TestCase):
             if "value" in item
         }
 
-        self.assertIn(operator_main.AGENT_SKILL_FILES_ENV, env)
+        self.assertIn(_config.AGENT_SKILL_FILES_ENV, env)
         self.assertEqual(
-            json.loads(env[operator_main.AGENT_SKILL_FILES_ENV]),
+            json.loads(env[_config.AGENT_SKILL_FILES_ENV]),
             {
                 ".github/skills/repo-review/SKILL.md": (
                     "---\n"
@@ -388,14 +394,14 @@ class OperatorManifestTests(unittest.TestCase):
 
     def test_codex_runtime_extra_env_allows_auth_json_but_not_codex_home(self) -> None:
         with patch.object(
-            operator_main,
+            _builders_manifests,
             "CODEX_RUNTIME_EXTRA_ENV",
             {
                 "CODEX_AUTH_JSON": {"auth_mode": "apikey", "OPENAI_API_KEY": "sk-test-key"},
                 "CODEX_HOME": "/tmp/custom-codex-home",
             },
         ):
-            items = operator_main.codex_runtime_extra_env_items()
+            items = _builders_manifests.codex_runtime_extra_env_items()
 
         self.assertEqual(
             items,
@@ -409,7 +415,7 @@ class OperatorManifestTests(unittest.TestCase):
 
     def test_codex_statefulset_manifest_includes_sidecar_env_and_containers(self) -> None:
         sidecars = [{"name": "browser", "image": "example/browser:latest", "port": 8081}]
-        manifest = operator_main.create_agent_statefulset_manifest(
+        manifest = _builders_manifests.create_agent_statefulset_manifest(
             "workspace-assistant",
             "default",
             {
@@ -430,8 +436,8 @@ class OperatorManifestTests(unittest.TestCase):
             if "value" in item
         }
 
-        self.assertEqual(env[operator_main.CODEX_MCP_SIDECARS_ENV], json.dumps(sidecars, ensure_ascii=False, sort_keys=True))
-        self.assertEqual(json.loads(env[operator_main.CODEX_RUNTIME_CONFIG_FILES_ENV]), {"config.toml": 'model = "gpt-4"'})
+        self.assertEqual(env[_config.CODEX_MCP_SIDECARS_ENV], json.dumps(sidecars, ensure_ascii=False, sort_keys=True))
+        self.assertEqual(json.loads(env[_config.CODEX_RUNTIME_CONFIG_FILES_ENV]), {"config.toml": 'model = "gpt-4"'})
         self.assertEqual(pod_spec["containers"][1]["name"], "mcp-browser")
         self.assertEqual(pod_spec["containers"][1]["ports"], [{"containerPort": 8081, "protocol": "TCP"}])
         self.assertEqual(
@@ -461,7 +467,7 @@ class OperatorManifestTests(unittest.TestCase):
 
     def test_statefulset_manifest_rejects_duplicate_sidecar_ports(self) -> None:
         with self.assertRaises(operator_main.kopf.PermanentError):
-            operator_main.create_agent_statefulset_manifest(
+            _builders_manifests.create_agent_statefulset_manifest(
                 "workspace-assistant",
                 "default",
                 {
@@ -480,7 +486,7 @@ class OperatorManifestTests(unittest.TestCase):
 
     def test_statefulset_manifest_rejects_reserved_sidecar_port(self) -> None:
         with self.assertRaisesRegex(operator_main.kopf.PermanentError, "reserved"):
-            operator_main.create_agent_statefulset_manifest(
+            _builders_manifests.create_agent_statefulset_manifest(
                 "workspace-assistant",
                 "default",
                 {
@@ -498,7 +504,7 @@ class OperatorManifestTests(unittest.TestCase):
 
     def test_statefulset_manifest_rejects_sidecar_image_with_metacharacters(self) -> None:
         with self.assertRaisesRegex(operator_main.kopf.PermanentError, "invalid characters"):
-            operator_main.create_agent_statefulset_manifest(
+            _builders_manifests.create_agent_statefulset_manifest(
                 "workspace-assistant",
                 "default",
                 {
@@ -516,7 +522,7 @@ class OperatorManifestTests(unittest.TestCase):
 
     def test_statefulset_manifest_rejects_missing_sidecar_image(self) -> None:
         with self.assertRaises(operator_main.kopf.PermanentError):
-            operator_main.create_agent_statefulset_manifest(
+            _builders_manifests.create_agent_statefulset_manifest(
                 "workspace-assistant",
                 "default",
                 {
@@ -531,9 +537,9 @@ class OperatorManifestTests(unittest.TestCase):
             )
 
     def test_statefulset_manifest_rejects_invalid_auto_injected_sidecar_image(self) -> None:
-        with patch.dict(operator_main.MCP_SIDECAR_CATALOG, {"browser": {"port": 8081}}, clear=True):
+        with patch.dict(_builders_manifests.MCP_SIDECAR_CATALOG, {"browser": {"port": 8081}}, clear=True):
             with self.assertRaises(operator_main.kopf.PermanentError):
-                operator_main.create_agent_statefulset_manifest(
+                _builders_manifests.create_agent_statefulset_manifest(
                     "workspace-assistant",
                     "default",
                     {
@@ -572,14 +578,14 @@ class OperatorManifestTests(unittest.TestCase):
             "systemPrompt": "Be precise.",
         }
 
-        manifest = operator_main.create_agent_statefulset_manifest(
+        manifest = _builders_manifests.create_agent_statefulset_manifest(
             "workspace-assistant",
             "default",
             base_spec,
             None,
             {},
         )
-        updated_manifest = operator_main.create_agent_statefulset_manifest(
+        updated_manifest = _builders_manifests.create_agent_statefulset_manifest(
             "workspace-assistant",
             "default",
             updated_spec,
@@ -588,9 +594,9 @@ class OperatorManifestTests(unittest.TestCase):
         )
 
         annotations = manifest["spec"]["template"]["metadata"]["annotations"]
-        revision = annotations[operator_main.POD_TEMPLATE_REVISION_ANNOTATION]
+        revision = annotations[_builders_manifests.POD_TEMPLATE_REVISION_ANNOTATION]
         updated_revision = updated_manifest["spec"]["template"]["metadata"]["annotations"][
-            operator_main.POD_TEMPLATE_REVISION_ANNOTATION
+            _builders_manifests.POD_TEMPLATE_REVISION_ANNOTATION
         ]
 
         self.assertEqual(len(revision), 12)
@@ -598,12 +604,12 @@ class OperatorManifestTests(unittest.TestCase):
         self.assertNotEqual(revision, updated_revision)
 
     def test_a2a_network_policy_manifests_scope_to_named_agents(self) -> None:
-        ingress = operator_main.create_a2a_ingress_network_policy_manifest(
+        ingress = _builders_manifests.create_a2a_ingress_network_policy_manifest(
             "workspace-assistant",
             "default",
             [{"name": "research-agent", "namespace": "team-a"}],
         )
-        egress = operator_main.create_a2a_egress_network_policy_manifest(
+        egress = _builders_manifests.create_a2a_egress_network_policy_manifest(
             "workspace-assistant",
             "default",
             [{"name": "analysis-agent", "namespace": "team-b"}],
@@ -637,7 +643,7 @@ class OperatorManifestTests(unittest.TestCase):
         self.assertEqual(egress_rule["podSelector"]["matchLabels"]["agent-name"], "analysis-agent")
 
     def test_mcp_network_policy_includes_platform_baseline_egress(self) -> None:
-        manifest = operator_main.create_mcp_network_policy_manifest("workspace-assistant", "tenant-a", ["github"])
+        manifest = _builders_manifests.create_mcp_network_policy_manifest("workspace-assistant", "tenant-a", ["github"])
         rules = manifest["spec"]["egress"]
 
         self.assertTrue(any(rule.get("ports") == [{"protocol": "UDP", "port": 53}, {"protocol": "TCP", "port": 53}] for rule in rules))
@@ -670,16 +676,16 @@ class OperatorManifestTests(unittest.TestCase):
     def test_runtime_namespace_secret_includes_gateway_token_when_configured(self) -> None:
         logger = Mock()
 
-        with patch.object(operator_main, "SECRET_PROVISIONING_MODE", "native"), patch.object(
-            operator_main,
+        with patch.object(_services_k8s, "SECRET_PROVISIONING_MODE", "native"), patch.object(
+            _services_k8s,
             "DEFAULT_LITELLM_MASTER_KEY",
             "litellm-secret",
         ), patch.object(
-            operator_main,
+            _services_k8s,
             "DEFAULT_API_GATEWAY_SHARED_TOKEN",
             "gateway-secret",
-        ), patch.object(operator_main, "ensure_secret") as ensure_secret:
-            operator_main.ensure_runtime_namespace_secret("tenant-a", "workspace-assistant", logger)
+        ), patch.object(_services_k8s, "ensure_secret") as ensure_secret:
+            _services_k8s.ensure_runtime_namespace_secret("tenant-a", "workspace-assistant", logger)
 
         manifest = ensure_secret.call_args.args[1]
         self.assertEqual(manifest["stringData"]["LITELLM_MASTER_KEY"], "litellm-secret")
@@ -688,7 +694,7 @@ class OperatorManifestTests(unittest.TestCase):
 
 class StatefulSetReconcileTests(unittest.TestCase):
     def test_ensure_statefulset_preserves_immutable_fields_and_resizes_pvc(self) -> None:
-        current_manifest = operator_main.create_agent_statefulset_manifest(
+        current_manifest = _builders_manifests.create_agent_statefulset_manifest(
             "workspace-assistant",
             "default",
             {
@@ -700,7 +706,7 @@ class StatefulSetReconcileTests(unittest.TestCase):
             None,
             {},
         )
-        desired_manifest = operator_main.create_agent_statefulset_manifest(
+        desired_manifest = _builders_manifests.create_agent_statefulset_manifest(
             "workspace-assistant",
             "default",
             {
@@ -725,13 +731,13 @@ class StatefulSetReconcileTests(unittest.TestCase):
             "spec": {"resources": {"requests": {"storage": "1Gi"}}}
         }
 
-        with patch.object(operator_main.kubernetes.client, "AppsV1Api", return_value=apps_api, create=True), patch.object(
-            operator_main.kubernetes.client,
+        with patch.object(_services_k8s.kubernetes.client, "AppsV1Api", return_value=apps_api, create=True), patch.object(
+            _services_k8s.kubernetes.client,
             "CoreV1Api",
             return_value=core_api,
             create=True,
         ):
-            operator_main.ensure_statefulset("default", desired_manifest)
+            _services_k8s.ensure_statefulset("default", desired_manifest)
 
         patched_statefulset = apps_api.patch_namespaced_stateful_set.call_args.kwargs["body"]
         self.assertEqual(
@@ -745,15 +751,15 @@ class StatefulSetReconcileTests(unittest.TestCase):
         self.assertEqual(patched_statefulset["spec"]["template"]["metadata"]["labels"]["runtime-kind"], "codex")
         self.assertEqual(
             patched_statefulset["spec"]["template"]["metadata"]["annotations"][
-                operator_main.POD_TEMPLATE_REVISION_ANNOTATION
+                _builders_manifests.POD_TEMPLATE_REVISION_ANNOTATION
             ],
             desired_manifest["spec"]["template"]["metadata"]["annotations"][
-                operator_main.POD_TEMPLATE_REVISION_ANNOTATION
+                _builders_manifests.POD_TEMPLATE_REVISION_ANNOTATION
             ],
         )
         self.assertEqual(
             patched_statefulset["spec"]["template"]["spec"]["containers"][0]["image"],
-            operator_main.CODEX_RUNTIME_IMAGE,
+            _config.CODEX_RUNTIME_IMAGE,
         )
         self.assertEqual(patched_statefulset["spec"]["template"]["spec"]["containers"][1]["name"], "mcp-browser")
 
@@ -763,7 +769,7 @@ class StatefulSetReconcileTests(unittest.TestCase):
         self.assertEqual(pvc_patch["body"]["spec"]["resources"]["requests"]["storage"], "4Gi")
 
     def test_ensure_statefulset_falls_back_to_low_level_merge_patch_when_client_rejects_content_type(self) -> None:
-        desired_manifest = operator_main.create_agent_statefulset_manifest(
+        desired_manifest = _builders_manifests.create_agent_statefulset_manifest(
             "workspace-assistant",
             "default",
             {
@@ -778,7 +784,7 @@ class StatefulSetReconcileTests(unittest.TestCase):
 
         apps_api = Mock()
         apps_api.create_namespaced_stateful_set.side_effect = _api_exception(409)
-        apps_api.patch_namespaced_stateful_set.side_effect = operator_main.ApiTypeError("unsupported kwarg")
+        apps_api.patch_namespaced_stateful_set.side_effect = _services_k8s.ApiTypeError("unsupported kwarg")
         apps_api.read_namespaced_stateful_set.side_effect = [desired_manifest, desired_manifest]
         apps_api.api_client = Mock()
         apps_api.api_client.select_header_accept.return_value = "application/json"
@@ -788,13 +794,13 @@ class StatefulSetReconcileTests(unittest.TestCase):
             "spec": {"resources": {"requests": {"storage": "1Gi"}}}
         }
 
-        with patch.object(operator_main.kubernetes.client, "AppsV1Api", return_value=apps_api, create=True), patch.object(
-            operator_main.kubernetes.client,
+        with patch.object(_services_k8s.kubernetes.client, "AppsV1Api", return_value=apps_api, create=True), patch.object(
+            _services_k8s.kubernetes.client,
             "CoreV1Api",
             return_value=core_api,
             create=True,
         ):
-            operator_main.ensure_statefulset("default", desired_manifest)
+            _services_k8s.ensure_statefulset("default", desired_manifest)
 
         apps_api.patch_namespaced_stateful_set.assert_called_once()
         low_level_patch = apps_api.api_client.call_api.call_args
@@ -805,7 +811,7 @@ class StatefulSetReconcileTests(unittest.TestCase):
         self.assertEqual(low_level_patch.kwargs["body"]["metadata"]["name"], "workspace-assistant-sandbox")
 
     def test_ensure_statefulset_accepts_live_template_with_defaulted_tcp_protocols(self) -> None:
-        desired_manifest = operator_main.create_agent_statefulset_manifest(
+        desired_manifest = _builders_manifests.create_agent_statefulset_manifest(
             "workspace-assistant",
             "default",
             {
@@ -834,19 +840,19 @@ class StatefulSetReconcileTests(unittest.TestCase):
             "spec": {"resources": {"requests": {"storage": "1Gi"}}}
         }
 
-        with patch.object(operator_main.kubernetes.client, "AppsV1Api", return_value=apps_api, create=True), patch.object(
-            operator_main.kubernetes.client,
+        with patch.object(_services_k8s.kubernetes.client, "AppsV1Api", return_value=apps_api, create=True), patch.object(
+            _services_k8s.kubernetes.client,
             "CoreV1Api",
             return_value=core_api,
             create=True,
         ):
-            operator_main.ensure_statefulset("default", desired_manifest)
+            _services_k8s.ensure_statefulset("default", desired_manifest)
 
         apps_api.patch_namespaced_stateful_set.assert_called_once()
         core_api.patch_namespaced_persistent_volume_claim.assert_not_called()
 
     def test_ensure_statefulset_raises_when_pvc_resize_is_forbidden(self) -> None:
-        current_manifest = operator_main.create_agent_statefulset_manifest(
+        current_manifest = _builders_manifests.create_agent_statefulset_manifest(
             "workspace-assistant",
             "default",
             {
@@ -858,7 +864,7 @@ class StatefulSetReconcileTests(unittest.TestCase):
             None,
             {},
         )
-        desired_manifest = operator_main.create_agent_statefulset_manifest(
+        desired_manifest = _builders_manifests.create_agent_statefulset_manifest(
             "workspace-assistant",
             "default",
             {
@@ -883,14 +889,14 @@ class StatefulSetReconcileTests(unittest.TestCase):
         }
         core_api.patch_namespaced_persistent_volume_claim.side_effect = _api_exception(403)
 
-        with patch.object(operator_main.kubernetes.client, "AppsV1Api", return_value=apps_api, create=True), patch.object(
-            operator_main.kubernetes.client,
+        with patch.object(_services_k8s.kubernetes.client, "AppsV1Api", return_value=apps_api, create=True), patch.object(
+            _services_k8s.kubernetes.client,
             "CoreV1Api",
             return_value=core_api,
             create=True,
         ):
             with self.assertRaises(operator_main.kopf.PermanentError):
-                operator_main.ensure_statefulset("default", desired_manifest)
+                _services_k8s.ensure_statefulset("default", desired_manifest)
 
         apps_api.patch_namespaced_stateful_set.assert_called_once()
         core_api.patch_namespaced_persistent_volume_claim.assert_called_once()
@@ -900,7 +906,7 @@ class StatefulSetReconcileTests(unittest.TestCase):
         self.assertEqual(pvc_patch["body"]["spec"]["resources"]["requests"]["storage"], "4Gi")
 
     def test_ensure_statefulset_raises_when_live_template_keeps_removed_sidecar(self) -> None:
-        current_manifest = operator_main.create_agent_statefulset_manifest(
+        current_manifest = _builders_manifests.create_agent_statefulset_manifest(
             "workspace-assistant",
             "default",
             {
@@ -916,7 +922,7 @@ class StatefulSetReconcileTests(unittest.TestCase):
             None,
             {},
         )
-        desired_manifest = operator_main.create_agent_statefulset_manifest(
+        desired_manifest = _builders_manifests.create_agent_statefulset_manifest(
             "workspace-assistant",
             "default",
             {
@@ -936,20 +942,20 @@ class StatefulSetReconcileTests(unittest.TestCase):
 
         core_api = Mock()
 
-        with patch.object(operator_main.kubernetes.client, "AppsV1Api", return_value=apps_api, create=True), patch.object(
-            operator_main.kubernetes.client,
+        with patch.object(_services_k8s.kubernetes.client, "AppsV1Api", return_value=apps_api, create=True), patch.object(
+            _services_k8s.kubernetes.client,
             "CoreV1Api",
             return_value=core_api,
             create=True,
         ):
             with self.assertRaises(operator_main.kopf.TemporaryError):
-                operator_main.ensure_statefulset("default", desired_manifest)
+                _services_k8s.ensure_statefulset("default", desired_manifest)
 
         apps_api.patch_namespaced_stateful_set.assert_called_once()
         core_api.patch_namespaced_persistent_volume_claim.assert_not_called()
 
     def test_ensure_statefulset_skips_pvc_shrink_requests(self) -> None:
-        current_manifest = operator_main.create_agent_statefulset_manifest(
+        current_manifest = _builders_manifests.create_agent_statefulset_manifest(
             "workspace-assistant",
             "default",
             {
@@ -961,7 +967,7 @@ class StatefulSetReconcileTests(unittest.TestCase):
             None,
             {},
         )
-        desired_manifest = operator_main.create_agent_statefulset_manifest(
+        desired_manifest = _builders_manifests.create_agent_statefulset_manifest(
             "workspace-assistant",
             "default",
             {
@@ -985,20 +991,20 @@ class StatefulSetReconcileTests(unittest.TestCase):
             "spec": {"resources": {"requests": {"storage": "4Gi"}}}
         }
 
-        with patch.object(operator_main.kubernetes.client, "AppsV1Api", return_value=apps_api, create=True), patch.object(
-            operator_main.kubernetes.client,
+        with patch.object(_services_k8s.kubernetes.client, "AppsV1Api", return_value=apps_api, create=True), patch.object(
+            _services_k8s.kubernetes.client,
             "CoreV1Api",
             return_value=core_api,
             create=True,
         ):
-            operator_main.ensure_statefulset("default", desired_manifest)
+            _services_k8s.ensure_statefulset("default", desired_manifest)
 
         apps_api.patch_namespaced_stateful_set.assert_called_once()
         core_api.patch_namespaced_persistent_volume_claim.assert_not_called()
 
     def test_opencode_statefulset_manifest_includes_runtime_env_and_sidecars(self) -> None:
         sidecars = [{"name": "browser", "image": "example/browser:latest", "port": 8081}]
-        manifest = operator_main.create_agent_statefulset_manifest(
+        manifest = _builders_manifests.create_agent_statefulset_manifest(
             "workspace-assistant",
             "default",
             {
@@ -1033,13 +1039,13 @@ class StatefulSetReconcileTests(unittest.TestCase):
         }
         container_names = [item["name"] for item in pod_spec["containers"]]
 
-        self.assertEqual(pod_spec["containers"][0]["image"], operator_main.OPENCODE_RUNTIME_IMAGE)
-        self.assertEqual(env["OPENCODE_PROVIDER"], operator_main.OPENCODE_DEFAULT_PROVIDER)
+        self.assertEqual(pod_spec["containers"][0]["image"], _config.OPENCODE_RUNTIME_IMAGE)
+        self.assertEqual(env["OPENCODE_PROVIDER"], _config.OPENCODE_DEFAULT_PROVIDER)
         self.assertEqual(env["OPENCODE_MODEL"], "gpt-4")
         self.assertEqual(env["MCP_SERVERS"], "documents")
-        self.assertEqual(env["HELM_RELEASE_NAME"], operator_main.HELM_RELEASE_NAME)
-        self.assertIn("agents/reviewer.md", json.loads(env[operator_main.OPENCODE_RUNTIME_CONFIG_FILES_ENV]))
-        self.assertEqual(json.loads(env[operator_main.OPENCODE_MCP_SIDECARS_ENV]), sidecars)
+        self.assertEqual(env["HELM_RELEASE_NAME"], _config.HELM_RELEASE_NAME)
+        self.assertIn("agents/reviewer.md", json.loads(env[_config.OPENCODE_RUNTIME_CONFIG_FILES_ENV]))
+        self.assertEqual(json.loads(env[_config.OPENCODE_MCP_SIDECARS_ENV]), sidecars)
         self.assertEqual(
             env_refs["MCP_BEARER_TOKEN"]["secretKeyRef"]["key"],
             "bearer-token",
@@ -1048,7 +1054,7 @@ class StatefulSetReconcileTests(unittest.TestCase):
 
     def test_opencode_runtime_rejects_shared_github_adapter_config(self) -> None:
         with self.assertRaises(operator_main.kopf.PermanentError) as context:
-            operator_main.create_agent_statefulset_manifest(
+            _builders_manifests.create_agent_statefulset_manifest(
                 "workspace-assistant",
                 "default",
                 {
@@ -1063,6 +1069,34 @@ class StatefulSetReconcileTests(unittest.TestCase):
             )
 
         self.assertIn("shared GitHub hub service", str(context.exception))
+
+    # ------------------------------------------------------------------
+    # §2.7 — MAX_PARALLEL_STEPS env injected into worker job manifest
+    # ------------------------------------------------------------------
+
+    def test_worker_job_manifest_includes_max_parallel_steps_default(self) -> None:
+        manifest = _builders_manifests.create_worker_job_manifest(
+            "workflow", "ns-a", "my-wf", 1, "pvc-1", "/artifacts/run.json",
+        )
+        env_map = {
+            e["name"]: e["value"]
+            for e in manifest["spec"]["template"]["spec"]["containers"][0]["env"]
+            if "value" in e
+        }
+        self.assertIn("MAX_PARALLEL_STEPS", env_map)
+        self.assertEqual(env_map["MAX_PARALLEL_STEPS"], str(_config.DEFAULT_MAX_PARALLEL_STEPS))
+
+    def test_worker_job_manifest_max_parallel_steps_override(self) -> None:
+        manifest = _builders_manifests.create_worker_job_manifest(
+            "workflow", "ns-a", "my-wf", 1, "pvc-1", "/artifacts/run.json",
+            max_parallel_steps=8,
+        )
+        env_map = {
+            e["name"]: e["value"]
+            for e in manifest["spec"]["template"]["spec"]["containers"][0]["env"]
+            if "value" in e
+        }
+        self.assertEqual(env_map["MAX_PARALLEL_STEPS"], "8")
 
 
 if __name__ == "__main__":

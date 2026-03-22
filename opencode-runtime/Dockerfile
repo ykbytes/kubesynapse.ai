@@ -31,8 +31,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN /opt/venv/bin/pip install --no-cache-dir -r requirements.txt
 
-COPY main.py .
-COPY hitl.py .
+COPY main.py hitl.py config.py tracing.py utils.py prompts.py models.py session.py skills.py opencode_client.py analysis.py invoke.py supervisor.py ./
 
 RUN test -x /usr/local/bin/opencode && test -x /usr/local/bin/bun
 

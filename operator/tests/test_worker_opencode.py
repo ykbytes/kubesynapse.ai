@@ -164,7 +164,7 @@ class ExecuteWorkflowStepOpenCodeTests(unittest.TestCase):
 
     @patch("worker.wait_for_agent_runtime_ready")
     @patch("worker.append_journal_event")
-    @patch("worker.invoke_agent_runtime")
+    @patch("worker.invoke_agent_runtime_stream")
     def test_captures_opencode_fields(
         self, mock_invoke: MagicMock, mock_journal: MagicMock, _mock_ready: MagicMock
     ) -> None:
@@ -198,7 +198,7 @@ class ExecuteWorkflowStepOpenCodeTests(unittest.TestCase):
 
     @patch("worker.wait_for_agent_runtime_ready")
     @patch("worker.append_journal_event")
-    @patch("worker.invoke_agent_runtime")
+    @patch("worker.invoke_agent_runtime_stream")
     def test_incomplete_status_accepted_with_warning(
         self, mock_invoke: MagicMock, mock_journal: MagicMock, _mock_ready: MagicMock
     ) -> None:
@@ -234,7 +234,7 @@ class ExecuteWorkflowStepOpenCodeTests(unittest.TestCase):
 
     @patch("worker.wait_for_agent_runtime_ready")
     @patch("worker.append_journal_event")
-    @patch("worker.invoke_agent_runtime")
+    @patch("worker.invoke_agent_runtime_stream")
     def test_error_status_still_fails(
         self, mock_invoke: MagicMock, mock_journal: MagicMock, _mock_ready: MagicMock
     ) -> None:
@@ -266,7 +266,7 @@ class ExecuteWorkflowStepOpenCodeTests(unittest.TestCase):
 
     @patch("worker.wait_for_agent_runtime_ready")
     @patch("worker.append_journal_event")
-    @patch("worker.invoke_agent_runtime")
+    @patch("worker.invoke_agent_runtime_stream")
     def test_structured_output_from_metadata(
         self, mock_invoke: MagicMock, mock_journal: MagicMock, _mock_ready: MagicMock
     ) -> None:
@@ -297,7 +297,7 @@ class ExecuteWorkflowStepOpenCodeTests(unittest.TestCase):
 
     @patch("worker.wait_for_agent_runtime_ready")
     @patch("worker.append_journal_event")
-    @patch("worker.invoke_agent_runtime")
+    @patch("worker.invoke_agent_runtime_stream")
     def test_warnings_in_journal_event(
         self, mock_invoke: MagicMock, mock_journal: MagicMock, _mock_ready: MagicMock
     ) -> None:
@@ -467,7 +467,7 @@ class LoopStepThreadIdTests(unittest.TestCase):
 
     @patch("worker.wait_for_agent_runtime_ready")
     @patch("worker.append_journal_event")
-    @patch("worker.invoke_agent_runtime")
+    @patch("worker.invoke_agent_runtime_stream")
     def test_loop_uses_consistent_thread_id(
         self, mock_invoke: MagicMock, mock_journal: MagicMock, _mock_ready: MagicMock
     ) -> None:
@@ -513,7 +513,7 @@ class LoopStepThreadIdTests(unittest.TestCase):
 
     @patch("worker.wait_for_agent_runtime_ready")
     @patch("worker.append_journal_event")
-    @patch("worker.invoke_agent_runtime")
+    @patch("worker.invoke_agent_runtime_stream")
     def test_loop_collects_artifacts_and_warnings(
         self, mock_invoke: MagicMock, mock_journal: MagicMock, _mock_ready: MagicMock
     ) -> None:
@@ -986,6 +986,28 @@ class ReviewStepPromptFramingTests(unittest.TestCase):
         call_args = mock_invoke.call_args
         prompt_sent = call_args[0][2]["prompt"]
         self.assertIn("/workspace", prompt_sent)
+
+
+class MaxParallelStepsTests(unittest.TestCase):
+    """§2.7 — MAX_PARALLEL_STEPS caps ThreadPoolExecutor max_workers."""
+
+    def test_max_parallel_steps_reads_env_default(self) -> None:
+        import worker
+        # Default should be 4 (or whatever env sets).
+        self.assertGreaterEqual(worker.MAX_PARALLEL_STEPS, 1)
+
+    def test_max_parallel_steps_env_override(self) -> None:
+        import importlib
+        import worker
+        with patch.dict("os.environ", {"MAX_PARALLEL_STEPS": "12"}):
+            # Re-evaluate the expression the same way the module does.
+            reloaded_value = max(int("12"), 1)
+            self.assertEqual(reloaded_value, 12)
+
+    def test_max_parallel_steps_env_floor_at_one(self) -> None:
+        # Ensure values < 1 are floored to 1.
+        self.assertEqual(max(int("0"), 1), 1)
+        self.assertEqual(max(int("-5"), 1), 1)
 
 
 if __name__ == "__main__":

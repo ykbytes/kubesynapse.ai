@@ -1,4 +1,4 @@
-import importlib.util
+﻿import importlib.util
 import json
 import os
 import sys
@@ -17,6 +17,13 @@ opencode_runtime_main = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = opencode_runtime_main
 SPEC.loader.exec_module(opencode_runtime_main)
 
+# Sub-module references for patching at the correct resolution site
+skills_mod = sys.modules["skills"]
+opencode_client_mod = sys.modules["opencode_client"]
+invoke_mod = sys.modules["invoke"]
+analysis_mod = sys.modules["analysis"]
+supervisor_mod = sys.modules["supervisor"]
+
 
 class OpenCodeRuntimeTests(unittest.TestCase):
     def test_request_rejects_thread_id_when_no_session_is_enabled(self) -> None:
@@ -25,7 +32,7 @@ class OpenCodeRuntimeTests(unittest.TestCase):
 
     def test_materialize_opencode_config_files_writes_into_config_dir(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir, patch.object(
-            opencode_runtime_main,
+            skills_mod,
             "OPENCODE_CONFIG_DIR",
             str(Path(temp_dir) / "config"),
         ), patch.dict(
@@ -41,7 +48,7 @@ class OpenCodeRuntimeTests(unittest.TestCase):
             clear=False,
         ):
             written = opencode_runtime_main.materialize_opencode_config_files()
-            root = Path(opencode_runtime_main.OPENCODE_CONFIG_DIR)
+            root = Path(skills_mod.OPENCODE_CONFIG_DIR)
 
             self.assertEqual(written, ["opencode.json", "plugins/custom.ts"])
             self.assertEqual(
@@ -61,7 +68,7 @@ class OpenCodeRuntimeTests(unittest.TestCase):
             "Review code and focus on regressions.\n"
         )
         with tempfile.TemporaryDirectory() as temp_dir, patch.object(
-            opencode_runtime_main,
+            skills_mod,
             "OPENCODE_CONFIG_DIR",
             str(Path(temp_dir) / "config"),
         ), patch.dict(
@@ -70,7 +77,7 @@ class OpenCodeRuntimeTests(unittest.TestCase):
             clear=False,
         ):
             written, warnings = opencode_runtime_main.materialize_skill_files()
-            target = Path(opencode_runtime_main.OPENCODE_CONFIG_DIR) / "skills" / "reviewer" / "SKILL.md"
+            target = Path(skills_mod.OPENCODE_CONFIG_DIR) / "skills" / "reviewer" / "SKILL.md"
 
             self.assertEqual(written, ["skills/reviewer/SKILL.md"])
             self.assertEqual(warnings, [])
@@ -111,12 +118,12 @@ class OpenCodeRuntimeTests(unittest.TestCase):
             os.environ,
             {"MCP_SERVERS": "documents,github"},
             clear=False,
-        ), patch.object(opencode_runtime_main, "MCP_BEARER_TOKEN", "token-123"), patch.object(
-            opencode_runtime_main,
+        ), patch.object(skills_mod, "MCP_BEARER_TOKEN", "token-123"), patch.object(
+            skills_mod,
             "HELM_RELEASE_NAME",
             "sandbox",
         ), patch.object(
-            opencode_runtime_main,
+            skills_mod,
             "MCP_HUB_NAMESPACE",
             "mcp-hub",
         ):
@@ -377,7 +384,7 @@ class DetectCompletionStatusTests(unittest.TestCase):
 
     def test_incomplete_on_missing_info(self) -> None:
         # When info dict is absent, we default to empty which yields empty
-        # finish string → treated as incomplete (we cannot confirm completion)
+        # finish string â†’ treated as incomplete (we cannot confirm completion)
         self.assertEqual(opencode_runtime_main.detect_completion_status({}), "incomplete")
 
     def test_unknown_on_non_dict_info(self) -> None:
@@ -707,7 +714,7 @@ class GetSessionMessagesTests(unittest.TestCase):
         mock_client.__enter__ = MagicMock(return_value=mock_client)
         mock_client.__exit__ = MagicMock(return_value=False)
 
-        with patch.object(opencode_runtime_main, "runtime_http_client", return_value=mock_client):
+        with patch.object(opencode_client_mod, "runtime_http_client", return_value=mock_client):
             result = opencode_runtime_main.get_session_messages("nonexistent")
         self.assertEqual(result, [])
 
@@ -731,7 +738,7 @@ class GetSessionMessagesTests(unittest.TestCase):
         mock_client.__enter__ = MagicMock(return_value=mock_client)
         mock_client.__exit__ = MagicMock(return_value=False)
 
-        with patch.object(opencode_runtime_main, "runtime_http_client", return_value=mock_client):
+        with patch.object(opencode_client_mod, "runtime_http_client", return_value=mock_client):
             result = opencode_runtime_main.get_session_messages("ses_abc")
         self.assertEqual(len(result), 2)
 
@@ -947,7 +954,7 @@ class ErrorRecoveryWorkflowTests(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# Phase 6 – Session management helper tests
+# Phase 6 â€“ Session management helper tests
 # ---------------------------------------------------------------------------
 
 
@@ -965,13 +972,13 @@ class AbortSessionTests(unittest.TestCase):
 
     def test_returns_true_on_success(self) -> None:
         mc = self._mock_client(200)
-        with patch.object(opencode_runtime_main, "runtime_http_client", return_value=mc):
+        with patch.object(opencode_client_mod, "runtime_http_client", return_value=mc):
             self.assertTrue(opencode_runtime_main.abort_session("ses_1"))
         mc.post.assert_called_once_with("/session/ses_1/abort")
 
     def test_returns_false_on_non_200(self) -> None:
         mc = self._mock_client(404)
-        with patch.object(opencode_runtime_main, "runtime_http_client", return_value=mc):
+        with patch.object(opencode_client_mod, "runtime_http_client", return_value=mc):
             self.assertFalse(opencode_runtime_main.abort_session("ses_x"))
 
     def test_returns_false_on_http_error(self) -> None:
@@ -980,7 +987,7 @@ class AbortSessionTests(unittest.TestCase):
         mc.post.side_effect = httpx.ConnectError("connection refused")
         mc.__enter__ = MagicMock(return_value=mc)
         mc.__exit__ = MagicMock(return_value=False)
-        with patch.object(opencode_runtime_main, "runtime_http_client", return_value=mc):
+        with patch.object(opencode_client_mod, "runtime_http_client", return_value=mc):
             self.assertFalse(opencode_runtime_main.abort_session("ses_err"))
 
 
@@ -998,7 +1005,7 @@ class SummarizeSessionTests(unittest.TestCase):
 
     def test_returns_true_on_success(self) -> None:
         mc = self._mock_client(200)
-        with patch.object(opencode_runtime_main, "runtime_http_client", return_value=mc):
+        with patch.object(opencode_client_mod, "runtime_http_client", return_value=mc):
             self.assertTrue(opencode_runtime_main.summarize_session("ses_1"))
         call_kwargs = mc.post.call_args
         self.assertIn("/session/ses_1/summarize", call_kwargs.args or (call_kwargs[0],))
@@ -1009,7 +1016,7 @@ class SummarizeSessionTests(unittest.TestCase):
 
     def test_returns_false_on_failure(self) -> None:
         mc = self._mock_client(500)
-        with patch.object(opencode_runtime_main, "runtime_http_client", return_value=mc):
+        with patch.object(opencode_client_mod, "runtime_http_client", return_value=mc):
             self.assertFalse(opencode_runtime_main.summarize_session("ses_x"))
 
     def test_returns_false_on_http_error(self) -> None:
@@ -1018,7 +1025,7 @@ class SummarizeSessionTests(unittest.TestCase):
         mc.post.side_effect = httpx.ConnectError("connection refused")
         mc.__enter__ = MagicMock(return_value=mc)
         mc.__exit__ = MagicMock(return_value=False)
-        with patch.object(opencode_runtime_main, "runtime_http_client", return_value=mc):
+        with patch.object(opencode_client_mod, "runtime_http_client", return_value=mc):
             self.assertFalse(opencode_runtime_main.summarize_session("ses_err"))
 
 
@@ -1036,7 +1043,7 @@ class InitSessionTests(unittest.TestCase):
 
     def test_returns_true_on_success(self) -> None:
         mc = self._mock_client(200)
-        with patch.object(opencode_runtime_main, "runtime_http_client", return_value=mc):
+        with patch.object(opencode_client_mod, "runtime_http_client", return_value=mc):
             self.assertTrue(opencode_runtime_main.init_session("ses_1"))
         call_kwargs = mc.post.call_args
         self.assertIn("/session/ses_1/init", call_kwargs.args or (call_kwargs[0],))
@@ -1047,7 +1054,7 @@ class InitSessionTests(unittest.TestCase):
 
     def test_returns_false_on_failure(self) -> None:
         mc = self._mock_client(500)
-        with patch.object(opencode_runtime_main, "runtime_http_client", return_value=mc):
+        with patch.object(opencode_client_mod, "runtime_http_client", return_value=mc):
             self.assertFalse(opencode_runtime_main.init_session("ses_x"))
 
     def test_returns_false_on_http_error(self) -> None:
@@ -1056,7 +1063,7 @@ class InitSessionTests(unittest.TestCase):
         mc.post.side_effect = httpx.ConnectError("connection refused")
         mc.__enter__ = MagicMock(return_value=mc)
         mc.__exit__ = MagicMock(return_value=False)
-        with patch.object(opencode_runtime_main, "runtime_http_client", return_value=mc):
+        with patch.object(opencode_client_mod, "runtime_http_client", return_value=mc):
             self.assertFalse(opencode_runtime_main.init_session("ses_err"))
 
 
@@ -1076,20 +1083,20 @@ class GetSessionTodosTests(unittest.TestCase):
     def test_returns_todos_on_success(self) -> None:
         todos = [{"id": "1", "title": "Write code", "status": "completed"}]
         mc = self._mock_client(200, todos)
-        with patch.object(opencode_runtime_main, "runtime_http_client", return_value=mc):
+        with patch.object(opencode_client_mod, "runtime_http_client", return_value=mc):
             result = opencode_runtime_main.get_session_todos("ses_1")
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]["title"], "Write code")
 
     def test_returns_empty_on_404(self) -> None:
         mc = self._mock_client(404, None)
-        with patch.object(opencode_runtime_main, "runtime_http_client", return_value=mc):
+        with patch.object(opencode_client_mod, "runtime_http_client", return_value=mc):
             result = opencode_runtime_main.get_session_todos("ses_x")
         self.assertEqual(result, [])
 
     def test_filters_non_dict_items(self) -> None:
         mc = self._mock_client(200, [{"id": "1"}, "bad", 42, {"id": "2"}])
-        with patch.object(opencode_runtime_main, "runtime_http_client", return_value=mc):
+        with patch.object(opencode_client_mod, "runtime_http_client", return_value=mc):
             result = opencode_runtime_main.get_session_todos("ses_1")
         self.assertEqual(len(result), 2)
 
@@ -1099,13 +1106,13 @@ class GetSessionTodosTests(unittest.TestCase):
         mc.get.side_effect = httpx.ConnectError("connection refused")
         mc.__enter__ = MagicMock(return_value=mc)
         mc.__exit__ = MagicMock(return_value=False)
-        with patch.object(opencode_runtime_main, "runtime_http_client", return_value=mc):
+        with patch.object(opencode_client_mod, "runtime_http_client", return_value=mc):
             result = opencode_runtime_main.get_session_todos("ses_err")
         self.assertEqual(result, [])
 
 
 # ---------------------------------------------------------------------------
-# Phase 6 – Context overflow and error classification tests
+# Phase 6 â€“ Context overflow and error classification tests
 # ---------------------------------------------------------------------------
 
 
@@ -1119,14 +1126,14 @@ class CheckContextOverflowTests(unittest.TestCase):
     def test_detects_high_token_usage(self) -> None:
         # With default MODEL_CONTEXT_LIMIT=128000 and COMPACTION_TOKEN_THRESHOLD=0.75
         # threshold = 96000
-        with patch.object(opencode_runtime_main, "MODEL_CONTEXT_LIMIT", 100000), \
-             patch.object(opencode_runtime_main, "COMPACTION_TOKEN_THRESHOLD", 0.75):
+        with patch.object(analysis_mod, "MODEL_CONTEXT_LIMIT", 100000), \
+             patch.object(analysis_mod, "COMPACTION_TOKEN_THRESHOLD", 0.75):
             payload = {"info": {"tokens": {"input": 60000, "output": 20000, "total": 80000}}}
             self.assertTrue(opencode_runtime_main.check_context_overflow(payload))
 
     def test_no_overflow_for_low_token_usage(self) -> None:
-        with patch.object(opencode_runtime_main, "MODEL_CONTEXT_LIMIT", 100000), \
-             patch.object(opencode_runtime_main, "COMPACTION_TOKEN_THRESHOLD", 0.75):
+        with patch.object(analysis_mod, "MODEL_CONTEXT_LIMIT", 100000), \
+             patch.object(analysis_mod, "COMPACTION_TOKEN_THRESHOLD", 0.75):
             payload = {"info": {"tokens": {"input": 1000, "output": 500, "total": 1500}}}
             self.assertFalse(opencode_runtime_main.check_context_overflow(payload))
 
@@ -1137,8 +1144,8 @@ class CheckContextOverflowTests(unittest.TestCase):
         self.assertFalse(opencode_runtime_main.check_context_overflow({"info": "bad"}))
 
     def test_calculates_total_from_parts_when_total_missing(self) -> None:
-        with patch.object(opencode_runtime_main, "MODEL_CONTEXT_LIMIT", 100000), \
-             patch.object(opencode_runtime_main, "COMPACTION_TOKEN_THRESHOLD", 0.75):
+        with patch.object(analysis_mod, "MODEL_CONTEXT_LIMIT", 100000), \
+             patch.object(analysis_mod, "COMPACTION_TOKEN_THRESHOLD", 0.75):
             payload = {"info": {"tokens": {"input": 50000, "output": 30000}}}
             self.assertTrue(opencode_runtime_main.check_context_overflow(payload))
 
@@ -1148,8 +1155,8 @@ class CheckContextOverflowTests(unittest.TestCase):
 
     def test_cache_write_tokens_included_in_fallback_total(self) -> None:
         """cache.write must be included when computing total from parts (Bug fix)."""
-        with patch.object(opencode_runtime_main, "MODEL_CONTEXT_LIMIT", 100000), \
-             patch.object(opencode_runtime_main, "COMPACTION_TOKEN_THRESHOLD", 0.75):
+        with patch.object(analysis_mod, "MODEL_CONTEXT_LIMIT", 100000), \
+             patch.object(analysis_mod, "COMPACTION_TOKEN_THRESHOLD", 0.75):
             # input(20k) + output(10k) + cache.read(20k) = 50k  -> below 75k threshold
             # input(20k) + output(10k) + cache.read(20k) + cache.write(40k) = 90k  -> above 75k threshold
             payload = {"info": {"tokens": {
@@ -1160,8 +1167,8 @@ class CheckContextOverflowTests(unittest.TestCase):
 
     def test_cache_write_below_threshold_no_overflow(self) -> None:
         """Verify cache.write included but total still below threshold."""
-        with patch.object(opencode_runtime_main, "MODEL_CONTEXT_LIMIT", 100000), \
-             patch.object(opencode_runtime_main, "COMPACTION_TOKEN_THRESHOLD", 0.75):
+        with patch.object(analysis_mod, "MODEL_CONTEXT_LIMIT", 100000), \
+             patch.object(analysis_mod, "COMPACTION_TOKEN_THRESHOLD", 0.75):
             payload = {"info": {"tokens": {
                 "input": 10000, "output": 5000,
                 "cache": {"read": 5000, "write": 5000},
@@ -1213,7 +1220,7 @@ class ClassifyErrorTypeTests(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# Phase 6 – Agent selection tests
+# Phase 6 â€“ Agent selection tests
 # ---------------------------------------------------------------------------
 
 
@@ -1230,8 +1237,8 @@ class SelectAgentTests(unittest.TestCase):
         self.assertEqual(result, opencode_runtime_main.DEFAULT_AGENT)
 
     def test_returns_plan_for_complex_long_prompt(self) -> None:
-        with patch.object(opencode_runtime_main, "DEFAULT_AGENT", "build"), \
-             patch.object(opencode_runtime_main, "PLAN_AGENT_PROMPT_THRESHOLD", 100):
+        with patch.object(analysis_mod, "DEFAULT_AGENT", "build"), \
+             patch.object(analysis_mod, "PLAN_AGENT_PROMPT_THRESHOLD", 100):
             complex_prompt = (
                 "Build a complete REST API with the following requirements:\n"
                 "1. User registration and authentication\n"
@@ -1245,20 +1252,20 @@ class SelectAgentTests(unittest.TestCase):
             self.assertEqual(result, "plan")
 
     def test_returns_default_when_threshold_not_met(self) -> None:
-        with patch.object(opencode_runtime_main, "DEFAULT_AGENT", "build"), \
-             patch.object(opencode_runtime_main, "PLAN_AGENT_PROMPT_THRESHOLD", 10000):
+        with patch.object(analysis_mod, "DEFAULT_AGENT", "build"), \
+             patch.object(analysis_mod, "PLAN_AGENT_PROMPT_THRESHOLD", 10000):
             result = opencode_runtime_main.select_agent_for_prompt("short prompt", is_first_turn=True)
             self.assertEqual(result, "build")
 
     def test_returns_default_when_agent_is_not_build(self) -> None:
-        with patch.object(opencode_runtime_main, "DEFAULT_AGENT", "general"):
+        with patch.object(analysis_mod, "DEFAULT_AGENT", "general"):
             long_prompt = "step 1: do this\nstep 2: do that\nstep 3: finalize\n" * 50
             result = opencode_runtime_main.select_agent_for_prompt(long_prompt, is_first_turn=True)
             self.assertEqual(result, "general")
 
 
 # ---------------------------------------------------------------------------
-# Phase 6 – detect_completion_status context_overflow tests
+# Phase 6 â€“ detect_completion_status context_overflow tests
 # ---------------------------------------------------------------------------
 
 
@@ -1279,7 +1286,7 @@ class DetectCompletionStatusContextOverflowTests(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# Phase 6 – Enhanced runtime_capabilities tests
+# Phase 6 â€“ Enhanced runtime_capabilities tests
 # ---------------------------------------------------------------------------
 
 
@@ -1310,7 +1317,7 @@ class RuntimeCapabilitiesEnhancedTests(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# Phase 6 – invoke_opencode loop integration tests (mocked)
+# Phase 6 â€“ invoke_opencode loop integration tests (mocked)
 # ---------------------------------------------------------------------------
 
 
@@ -1332,10 +1339,10 @@ class InvokeOpenCodeLoopTests(unittest.TestCase):
         return {"info": info, "parts": [{"type": "text", "text": text}]}
 
     def _patch_server_running(self):
-        return patch.object(opencode_runtime_main, "ensure_server_running")
+        return patch.object(invoke_mod, "ensure_server_running")
 
     def _patch_create_session(self, session_id: str = "ses_test"):
-        return patch.object(opencode_runtime_main, "create_remote_session", return_value=session_id)
+        return patch.object(invoke_mod, "create_remote_session", return_value=session_id)
 
     def _patch_send_prompt(self, payloads: list[dict]):
         """Patch _send_prompt_with_session_recovery to return successive payloads."""
@@ -1346,16 +1353,16 @@ class InvokeOpenCodeLoopTests(unittest.TestCase):
             call_count["n"] += 1
             return kwargs.get("session_id", "ses_test"), payloads[idx]
 
-        return patch.object(opencode_runtime_main, "_send_prompt_with_session_recovery", side_effect=side_effect)
+        return patch.object(invoke_mod, "_send_prompt_with_session_recovery", side_effect=side_effect)
 
     def _patch_session_helpers(self):
         """Patch session-collection helpers to avoid real HTTP calls."""
         return [
-            patch.object(opencode_runtime_main, "get_session_messages", return_value=[]),
-            patch.object(opencode_runtime_main, "get_session_todos", return_value=[]),
-            patch.object(opencode_runtime_main, "wait_for_session_idle", return_value={"type": "idle"}),
-            patch.object(opencode_runtime_main, "abort_session", return_value=True),
-            patch.object(opencode_runtime_main, "summarize_session", return_value=True),
+            patch.object(invoke_mod, "get_session_messages", return_value=[]),
+            patch.object(invoke_mod, "get_session_todos", return_value=[]),
+            patch.object(invoke_mod, "wait_for_session_idle", return_value={"type": "idle"}),
+            patch.object(invoke_mod, "abort_session", return_value=True),
+            patch.object(invoke_mod, "summarize_session", return_value=True),
         ]
 
     def _run_invoke(self, request_kwargs: dict, payloads: list[dict]) -> opencode_runtime_main.InvokeResponse:
@@ -1409,8 +1416,8 @@ class InvokeOpenCodeLoopTests(unittest.TestCase):
 
     def test_plan_agent_switch_to_build(self) -> None:
         """When plan agent finishes, loop should switch to build agent."""
-        with patch.object(opencode_runtime_main, "PLAN_AGENT_PROMPT_THRESHOLD", 10), \
-             patch.object(opencode_runtime_main, "DEFAULT_AGENT", "build"):
+        with patch.object(analysis_mod, "PLAN_AGENT_PROMPT_THRESHOLD", 10), \
+             patch.object(analysis_mod, "DEFAULT_AGENT", "build"):
             complex_prompt = (
                 "Build a complete system:\n"
                 "1. Create the database schema\n"
@@ -1460,7 +1467,7 @@ class InvokeOpenCodeLoopTests(unittest.TestCase):
         req = opencode_runtime_main.InvokeRequest(prompt="test", max_retries=2)
         with self._patch_server_running(), \
              self._patch_create_session(), \
-             patch.object(opencode_runtime_main, "_send_prompt_with_session_recovery", side_effect=side_effect):
+             patch.object(invoke_mod, "_send_prompt_with_session_recovery", side_effect=side_effect):
             patches = self._patch_session_helpers()
             with patches[0], patches[1], patches[2], patches[3], patches[4]:
                 resp = opencode_runtime_main.invoke_opencode(req)
@@ -1474,11 +1481,11 @@ class InvokeOpenCodeLoopTests(unittest.TestCase):
         with self._patch_server_running(), \
              self._patch_create_session(), \
              self._patch_send_prompt([payload]):
-            with patch.object(opencode_runtime_main, "get_session_messages", return_value=[]), \
-                 patch.object(opencode_runtime_main, "get_session_todos", return_value=todos), \
-                 patch.object(opencode_runtime_main, "wait_for_session_idle", return_value={"type": "idle"}), \
-                 patch.object(opencode_runtime_main, "abort_session", return_value=True), \
-                 patch.object(opencode_runtime_main, "summarize_session", return_value=True):
+            with patch.object(invoke_mod, "get_session_messages", return_value=[]), \
+                 patch.object(invoke_mod, "get_session_todos", return_value=todos), \
+                 patch.object(invoke_mod, "wait_for_session_idle", return_value={"type": "idle"}), \
+                 patch.object(invoke_mod, "abort_session", return_value=True), \
+                 patch.object(invoke_mod, "summarize_session", return_value=True):
                 resp = opencode_runtime_main.invoke_opencode(req)
         self.assertIsNotNone(resp.metadata)
         self.assertEqual(resp.metadata["todos"], todos)
@@ -1490,13 +1497,13 @@ class InvokeOpenCodeLoopTests(unittest.TestCase):
         with self._patch_server_running(), \
              self._patch_create_session(), \
              self._patch_send_prompt([payload]), \
-             patch.object(opencode_runtime_main, "init_session", mock_init), \
-             patch.object(opencode_runtime_main, "SESSION_INIT_ON_CREATE", True):
-            with patch.object(opencode_runtime_main, "get_session_messages", return_value=[]), \
-                 patch.object(opencode_runtime_main, "get_session_todos", return_value=[]), \
-                 patch.object(opencode_runtime_main, "wait_for_session_idle", return_value={"type": "idle"}), \
-                 patch.object(opencode_runtime_main, "abort_session", return_value=True), \
-                 patch.object(opencode_runtime_main, "summarize_session", return_value=True):
+             patch.object(invoke_mod, "init_session", mock_init), \
+             patch.object(invoke_mod, "SESSION_INIT_ON_CREATE", True):
+            with patch.object(invoke_mod, "get_session_messages", return_value=[]), \
+                 patch.object(invoke_mod, "get_session_todos", return_value=[]), \
+                 patch.object(invoke_mod, "wait_for_session_idle", return_value={"type": "idle"}), \
+                 patch.object(invoke_mod, "abort_session", return_value=True), \
+                 patch.object(invoke_mod, "summarize_session", return_value=True):
                 opencode_runtime_main.invoke_opencode(req)
         mock_init.assert_called_once()
 
@@ -1507,13 +1514,13 @@ class InvokeOpenCodeLoopTests(unittest.TestCase):
         with self._patch_server_running(), \
              self._patch_create_session(), \
              self._patch_send_prompt([payload]), \
-             patch.object(opencode_runtime_main, "init_session", mock_init), \
-             patch.object(opencode_runtime_main, "SESSION_INIT_ON_CREATE", False):
-            with patch.object(opencode_runtime_main, "get_session_messages", return_value=[]), \
-                 patch.object(opencode_runtime_main, "get_session_todos", return_value=[]), \
-                 patch.object(opencode_runtime_main, "wait_for_session_idle", return_value={"type": "idle"}), \
-                 patch.object(opencode_runtime_main, "abort_session", return_value=True), \
-                 patch.object(opencode_runtime_main, "summarize_session", return_value=True):
+             patch.object(invoke_mod, "init_session", mock_init), \
+             patch.object(invoke_mod, "SESSION_INIT_ON_CREATE", False):
+            with patch.object(invoke_mod, "get_session_messages", return_value=[]), \
+                 patch.object(invoke_mod, "get_session_todos", return_value=[]), \
+                 patch.object(invoke_mod, "wait_for_session_idle", return_value={"type": "idle"}), \
+                 patch.object(invoke_mod, "abort_session", return_value=True), \
+                 patch.object(invoke_mod, "summarize_session", return_value=True):
                 opencode_runtime_main.invoke_opencode(req)
         mock_init.assert_not_called()
 
@@ -1526,20 +1533,20 @@ class InvokeOpenCodeLoopTests(unittest.TestCase):
         with self._patch_server_running(), \
              self._patch_create_session(), \
              self._patch_send_prompt([payload]):
-            with patch.object(opencode_runtime_main, "get_session_messages", return_value=[]), \
-                 patch.object(opencode_runtime_main, "get_session_todos", return_value=[]), \
-                 patch.object(opencode_runtime_main, "wait_for_session_idle", return_value=busy_status), \
-                 patch.object(opencode_runtime_main, "abort_session", mock_abort) as abort_mock, \
-                 patch.object(opencode_runtime_main, "summarize_session", return_value=True):
+            with patch.object(invoke_mod, "get_session_messages", return_value=[]), \
+                 patch.object(invoke_mod, "get_session_todos", return_value=[]), \
+                 patch.object(invoke_mod, "wait_for_session_idle", return_value=busy_status), \
+                 patch.object(invoke_mod, "abort_session", mock_abort) as abort_mock, \
+                 patch.object(invoke_mod, "summarize_session", return_value=True):
                 resp = opencode_runtime_main.invoke_opencode(req)
         mock_abort.assert_called()
         self.assertTrue(any("aborted" in w.lower() for w in resp.warnings))
 
     def test_proactive_compaction_on_high_tokens(self) -> None:
         """If token usage is high on an incomplete response, proactively compact."""
-        with patch.object(opencode_runtime_main, "MODEL_CONTEXT_LIMIT", 100000), \
-             patch.object(opencode_runtime_main, "COMPACTION_TOKEN_THRESHOLD", 0.75):
-            # First response: incomplete with high tokens → triggers proactive compaction
+        with patch.object(analysis_mod, "MODEL_CONTEXT_LIMIT", 100000), \
+             patch.object(analysis_mod, "COMPACTION_TOKEN_THRESHOLD", 0.75):
+            # First response: incomplete with high tokens â†’ triggers proactive compaction
             high_tokens_incomplete = self._make_payload("Working...", "tool-calls", tokens={"input": 60000, "output": 20000, "total": 80000})
             # Second response after compaction: completed
             done = self._make_payload("Done", "stop")
@@ -1548,30 +1555,30 @@ class InvokeOpenCodeLoopTests(unittest.TestCase):
             with self._patch_server_running(), \
                  self._patch_create_session(), \
                  self._patch_send_prompt([high_tokens_incomplete, done]):
-                with patch.object(opencode_runtime_main, "get_session_messages", return_value=[]), \
-                     patch.object(opencode_runtime_main, "get_session_todos", return_value=[]), \
-                     patch.object(opencode_runtime_main, "wait_for_session_idle", return_value={"type": "idle"}), \
-                     patch.object(opencode_runtime_main, "abort_session", return_value=True), \
-                     patch.object(opencode_runtime_main, "summarize_session", mock_summarize):
+                with patch.object(invoke_mod, "get_session_messages", return_value=[]), \
+                     patch.object(invoke_mod, "get_session_todos", return_value=[]), \
+                     patch.object(invoke_mod, "wait_for_session_idle", return_value={"type": "idle"}), \
+                     patch.object(invoke_mod, "abort_session", return_value=True), \
+                     patch.object(invoke_mod, "summarize_session", mock_summarize):
                     resp = opencode_runtime_main.invoke_opencode(req)
             mock_summarize.assert_called()
             self.assertTrue(any("compaction" in w.lower() for w in resp.warnings))
 
     def test_completed_with_high_tokens_does_not_compact(self) -> None:
         """Completed tasks must not trigger proactive compaction even with high tokens (Bug fix)."""
-        with patch.object(opencode_runtime_main, "MODEL_CONTEXT_LIMIT", 100000), \
-             patch.object(opencode_runtime_main, "COMPACTION_TOKEN_THRESHOLD", 0.75):
+        with patch.object(analysis_mod, "MODEL_CONTEXT_LIMIT", 100000), \
+             patch.object(analysis_mod, "COMPACTION_TOKEN_THRESHOLD", 0.75):
             payload = self._make_payload("Done", "stop", tokens={"input": 60000, "output": 20000, "total": 80000})
             mock_summarize = MagicMock(return_value=True)
             req = opencode_runtime_main.InvokeRequest(prompt="Process")
             with self._patch_server_running(), \
                  self._patch_create_session(), \
                  self._patch_send_prompt([payload]):
-                with patch.object(opencode_runtime_main, "get_session_messages", return_value=[]), \
-                     patch.object(opencode_runtime_main, "get_session_todos", return_value=[]), \
-                     patch.object(opencode_runtime_main, "wait_for_session_idle", return_value={"type": "idle"}), \
-                     patch.object(opencode_runtime_main, "abort_session", return_value=True), \
-                     patch.object(opencode_runtime_main, "summarize_session", mock_summarize):
+                with patch.object(invoke_mod, "get_session_messages", return_value=[]), \
+                     patch.object(invoke_mod, "get_session_todos", return_value=[]), \
+                     patch.object(invoke_mod, "wait_for_session_idle", return_value={"type": "idle"}), \
+                     patch.object(invoke_mod, "abort_session", return_value=True), \
+                     patch.object(invoke_mod, "summarize_session", mock_summarize):
                     resp = opencode_runtime_main.invoke_opencode(req)
             mock_summarize.assert_not_called()
             self.assertEqual(resp.status, "completed")
@@ -1708,7 +1715,7 @@ class SendPromptWithSessionRecoveryTests(unittest.TestCase):
 
     def test_successful_send_returns_payload(self) -> None:
         expected = {"info": {"role": "assistant"}, "parts": []}
-        with patch.object(opencode_runtime_main, "send_prompt", return_value=expected):
+        with patch.object(opencode_client_mod, "send_prompt", return_value=expected):
             sid, payload = opencode_runtime_main._send_prompt_with_session_recovery(**self._make_kwargs())
         self.assertEqual(sid, "ses_old")
         self.assertEqual(payload, expected)
@@ -1725,9 +1732,9 @@ class SendPromptWithSessionRecoveryTests(unittest.TestCase):
             return expected
 
         mock_registry = MagicMock()
-        with patch.object(opencode_runtime_main, "send_prompt", side_effect=mock_send), \
-             patch.object(opencode_runtime_main, "create_remote_session", return_value="ses_new"), \
-             patch.object(opencode_runtime_main, "SESSION_REGISTRY", mock_registry):
+        with patch.object(opencode_client_mod, "send_prompt", side_effect=mock_send), \
+             patch.object(opencode_client_mod, "create_remote_session", return_value="ses_new"), \
+             patch.object(opencode_client_mod, "SESSION_REGISTRY", mock_registry):
             sid, payload = opencode_runtime_main._send_prompt_with_session_recovery(**self._make_kwargs())
 
         # Verify set() was called (not get_or_set) with the new session
@@ -1738,7 +1745,7 @@ class SendPromptWithSessionRecoveryTests(unittest.TestCase):
 
     def test_non_404_error_propagates(self) -> None:
         from fastapi import HTTPException as _HTTPException
-        with patch.object(opencode_runtime_main, "send_prompt", side_effect=_HTTPException(status_code=500)):
+        with patch.object(opencode_client_mod, "send_prompt", side_effect=_HTTPException(status_code=500)):
             with self.assertRaises(_HTTPException) as ctx:
                 opencode_runtime_main._send_prompt_with_session_recovery(**self._make_kwargs())
         self.assertEqual(ctx.exception.status_code, 500)
@@ -1747,7 +1754,7 @@ class SendPromptWithSessionRecoveryTests(unittest.TestCase):
         from fastapi import HTTPException as _HTTPException
         kwargs = self._make_kwargs()
         kwargs["allow_session_recovery"] = False
-        with patch.object(opencode_runtime_main, "send_prompt", side_effect=_HTTPException(status_code=404)):
+        with patch.object(opencode_client_mod, "send_prompt", side_effect=_HTTPException(status_code=404)):
             with self.assertRaises(_HTTPException) as ctx:
                 opencode_runtime_main._send_prompt_with_session_recovery(**kwargs)
         self.assertEqual(ctx.exception.status_code, 404)
@@ -1789,14 +1796,14 @@ class StructuredOutputFormatRetryTests(unittest.TestCase):
             output_format="json",
             output_schema={"type": "object", "properties": {"result": {"type": "integer"}}},
         )
-        with patch.object(opencode_runtime_main, "ensure_server_running"), \
-             patch.object(opencode_runtime_main, "create_remote_session", return_value="ses"), \
-             patch.object(opencode_runtime_main, "_send_prompt_with_session_recovery", side_effect=mock_send), \
-             patch.object(opencode_runtime_main, "get_session_messages", return_value=[]), \
-             patch.object(opencode_runtime_main, "get_session_todos", return_value=[]), \
-             patch.object(opencode_runtime_main, "wait_for_session_idle", return_value={"type": "idle"}), \
-             patch.object(opencode_runtime_main, "abort_session", return_value=True), \
-             patch.object(opencode_runtime_main, "summarize_session", return_value=True):
+        with patch.object(invoke_mod, "ensure_server_running"), \
+             patch.object(invoke_mod, "create_remote_session", return_value="ses"), \
+             patch.object(invoke_mod, "_send_prompt_with_session_recovery", side_effect=mock_send), \
+             patch.object(invoke_mod, "get_session_messages", return_value=[]), \
+             patch.object(invoke_mod, "get_session_todos", return_value=[]), \
+             patch.object(invoke_mod, "wait_for_session_idle", return_value={"type": "idle"}), \
+             patch.object(invoke_mod, "abort_session", return_value=True), \
+             patch.object(invoke_mod, "summarize_session", return_value=True):
             resp = opencode_runtime_main.invoke_opencode(req)
 
         # The second call (retry after StructuredOutputError) should include prompt_format
@@ -1936,8 +1943,8 @@ class MultiStageCompactionTests(InvokeOpenCodeLoopTests):
             self._make_payload("w4", "tool-calls", tokens=high_tokens),
             self._make_payload("done", "stop"),
         ]
-        with patch.object(opencode_runtime_main, "COMPACTION_MIN_TURN_SPACING", 3), \
-             patch.object(opencode_runtime_main, "MAX_COMPACTION_ATTEMPTS", 2):
+        with patch.object(invoke_mod, "COMPACTION_MIN_TURN_SPACING", 3), \
+             patch.object(invoke_mod, "MAX_COMPACTION_ATTEMPTS", 2):
             resp = self._run_invoke(
                 {"prompt": "A big task", "autonomous": True, "max_turns": 10},
                 payloads,
@@ -1958,8 +1965,8 @@ class MultiStageCompactionTests(InvokeOpenCodeLoopTests):
             self._make_payload("w7", "tool-calls", tokens=critical_tokens),
             self._make_payload("w8", "stop", tokens=critical_tokens),
         ]
-        with patch.object(opencode_runtime_main, "COMPACTION_MIN_TURN_SPACING", 1), \
-             patch.object(opencode_runtime_main, "MAX_COMPACTION_ATTEMPTS", 2):
+        with patch.object(invoke_mod, "COMPACTION_MIN_TURN_SPACING", 1), \
+             patch.object(invoke_mod, "MAX_COMPACTION_ATTEMPTS", 2):
             resp = self._run_invoke(
                 {"prompt": "Big task", "autonomous": True, "max_turns": 10},
                 payloads,
@@ -2010,7 +2017,7 @@ class SessionHealthMetricsTests(unittest.TestCase):
     """Tests for session health metrics in /health and /ready."""
 
     def test_health_includes_sessions_section(self) -> None:
-        with patch.object(opencode_runtime_main, "_runtime_ready", True), \
+        with patch.object(supervisor_mod, "_runtime_ready", True), \
              patch.object(opencode_runtime_main, "SKILL_RUNTIME_CONFIG", {"skillFiles": [], "warnings": [], "configFiles": [], "mcpSidecars": []}):
             result = opencode_runtime_main.health()
         self.assertIn("sessions", result)
@@ -2045,14 +2052,14 @@ class ContextBudgetEndpointTests(unittest.TestCase):
     def test_missing_thread_id_returns_400(self) -> None:
         from fastapi.testclient import TestClient
         client = TestClient(opencode_runtime_main.app, raise_server_exceptions=False)
-        with patch.object(opencode_runtime_main, "_runtime_ready", True):
+        with patch.object(supervisor_mod, "_runtime_ready", True):
             resp = client.get("/context-budget")
         self.assertEqual(resp.status_code, 400)
 
     def test_unknown_thread_id_returns_404(self) -> None:
         from fastapi.testclient import TestClient
         client = TestClient(opencode_runtime_main.app, raise_server_exceptions=False)
-        with patch.object(opencode_runtime_main, "_runtime_ready", True), \
+        with patch.object(supervisor_mod, "_runtime_ready", True), \
              patch.object(opencode_runtime_main.SESSION_REGISTRY, "get", return_value=None):
             resp = client.get("/context-budget?thread_id=unknown")
         self.assertEqual(resp.status_code, 404)
@@ -2066,7 +2073,7 @@ class ContextBudgetEndpointTests(unittest.TestCase):
                 "parts": [{"type": "text", "text": "hi"}],
             }
         ]
-        with patch.object(opencode_runtime_main, "_runtime_ready", True), \
+        with patch.object(supervisor_mod, "_runtime_ready", True), \
              patch.object(opencode_runtime_main.SESSION_REGISTRY, "get", return_value="ses_test"), \
              patch.object(opencode_runtime_main, "get_session_messages", return_value=mock_messages):
             resp = client.get("/context-budget?thread_id=t1")
@@ -2094,15 +2101,15 @@ class StreamingEventsTests(unittest.TestCase):
             return kwargs.get("session_id", "ses_test"), [payload1, payload2][idx]
 
         client = TestClient(opencode_runtime_main.app, raise_server_exceptions=False)
-        with patch.object(opencode_runtime_main, "_runtime_ready", True), \
-             patch.object(opencode_runtime_main, "ensure_server_running"), \
-             patch.object(opencode_runtime_main, "create_remote_session", return_value="ses_test"), \
-             patch.object(opencode_runtime_main, "_send_prompt_with_session_recovery", side_effect=mock_send), \
-             patch.object(opencode_runtime_main, "get_session_messages", return_value=[]), \
-             patch.object(opencode_runtime_main, "get_session_todos", return_value=[]), \
-             patch.object(opencode_runtime_main, "wait_for_session_idle", return_value={"type": "idle"}), \
-             patch.object(opencode_runtime_main, "abort_session", return_value=True), \
-             patch.object(opencode_runtime_main, "summarize_session", return_value=True):
+        with patch.object(supervisor_mod, "_runtime_ready", True), \
+             patch.object(invoke_mod, "ensure_server_running"), \
+             patch.object(invoke_mod, "create_remote_session", return_value="ses_test"), \
+             patch.object(invoke_mod, "_send_prompt_with_session_recovery", side_effect=mock_send), \
+             patch.object(invoke_mod, "get_session_messages", return_value=[]), \
+             patch.object(invoke_mod, "get_session_todos", return_value=[]), \
+             patch.object(invoke_mod, "wait_for_session_idle", return_value={"type": "idle"}), \
+             patch.object(invoke_mod, "abort_session", return_value=True), \
+             patch.object(invoke_mod, "summarize_session", return_value=True):
             resp = client.post(
                 "/invoke/stream",
                 json={"prompt": "Do something", "autonomous": True},
@@ -2117,3 +2124,7 @@ class StreamingEventsTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+
+

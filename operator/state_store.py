@@ -91,11 +91,24 @@ def _build_database_url() -> str:
 
 
 DATABASE_URL = _build_database_url()
+
+# §6.2 — Connection pooling configuration
+_is_sqlite = DATABASE_URL.startswith("sqlite")
+_pool_kwargs: dict[str, Any] = {}
+if not _is_sqlite:
+    _pool_kwargs = {
+        "pool_size": int(os.getenv("DATABASE_POOL_SIZE", "10")),
+        "max_overflow": int(os.getenv("DATABASE_MAX_OVERFLOW", "20")),
+        "pool_timeout": int(os.getenv("DATABASE_POOL_TIMEOUT", "30")),
+        "pool_recycle": int(os.getenv("DATABASE_POOL_RECYCLE", "1800")),
+    }
+
 ENGINE = create_engine(
     DATABASE_URL,
     future=True,
     pool_pre_ping=True,
-    connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {},
+    connect_args={"check_same_thread": False} if _is_sqlite else {},
+    **_pool_kwargs,
 )
 SessionLocal = sessionmaker(bind=ENGINE, autoflush=False, autocommit=False, expire_on_commit=False, future=True)
 
@@ -170,10 +183,27 @@ def _completed_timestamp(phase: str, status: dict[str, Any]) -> datetime | None:
 
 
 def init_database() -> None:
+    """Run Alembic migrations to create or upgrade the database schema."""
     if not STATE_DB_ENABLED:
         logger.info("State database mirroring is disabled.")
         return
+
+    alembic_ini = Path(__file__).resolve().parent / "alembic.ini"
+    if alembic_ini.is_file():
+        try:
+            from alembic import command as alembic_command
+            from alembic.config import Config as AlembicConfig
+
+            cfg = AlembicConfig(str(alembic_ini))
+            cfg.set_main_option("sqlalchemy.url", DATABASE_URL)
+            alembic_command.upgrade(cfg, "head")
+            logger.info("Database schema is up to date (via Alembic).")
+            return
+        except Exception:
+            logger.warning("Alembic migration failed, falling back to create_all().", exc_info=True)
+
     Base.metadata.create_all(bind=ENGINE)
+    logger.info("Database schema is up to date (via create_all).")
 
 
 @contextmanager
@@ -187,6 +217,58 @@ def db_session() -> Iterator[Session]:
         raise
     finally:
         session.close()
+
+
+# ---------------------------------------------------------------------------
+# §2.6 — Idempotency: runId uniqueness check
+# ---------------------------------------------------------------------------
+
+def check_workflow_run_conflict(namespace: str, resource_name: str, generation: int, run_id: str) -> str | None:
+    """Return conflicting run_id if another run is active for this workflow+generation."""
+    if not STATE_DB_ENABLED:
+        return None
+    try:
+        with db_session() as session:
+            record = (
+                session.query(WorkflowRun)
+                .filter(
+                    WorkflowRun.namespace == namespace,
+                    WorkflowRun.resource_name == resource_name,
+                    WorkflowRun.generation == generation,
+                    WorkflowRun.phase.in_(["queued", "running"]),
+                    WorkflowRun.run_id != run_id,
+                )
+                .first()
+            )
+            if record is not None:
+                return str(record.run_id)
+    except Exception:
+        logger.exception("Failed to check workflow run conflict for %s/%s gen %d.", namespace, resource_name, generation)
+    return None
+
+
+def check_eval_run_conflict(namespace: str, resource_name: str, generation: int, run_id: str) -> str | None:
+    """Return conflicting run_id if another eval run is active for this eval+generation."""
+    if not STATE_DB_ENABLED:
+        return None
+    try:
+        with db_session() as session:
+            record = (
+                session.query(EvalRun)
+                .filter(
+                    EvalRun.namespace == namespace,
+                    EvalRun.resource_name == resource_name,
+                    EvalRun.generation == generation,
+                    EvalRun.phase.in_(["queued", "running"]),
+                    EvalRun.run_id != run_id,
+                )
+                .first()
+            )
+            if record is not None:
+                return str(record.run_id)
+    except Exception:
+        logger.exception("Failed to check eval run conflict for %s/%s gen %d.", namespace, resource_name, generation)
+    return None
 
 
 def safe_record_workflow_state(

@@ -4,6 +4,7 @@ import logging
 import os
 import random
 import re
+import signal
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -34,7 +35,12 @@ from utils import (
     validate_workflow_graph,
     workflow_journal_path,
 )
-from state_store import init_database as init_state_database, safe_record_eval_state, safe_record_workflow_state
+from state_store import (
+    check_eval_run_conflict,
+    check_workflow_run_conflict,
+    init_database as init_state_database,
+)
+from tracing import init_tracing
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("operator-worker")
@@ -68,6 +74,124 @@ AGENT_RUNTIME_READY_TIMEOUT_SECONDS = max(
     float(os.getenv("AGENT_RUNTIME_READY_TIMEOUT_SECONDS", "180")),
     5.0,
 )
+
+# ---------------------------------------------------------------------------
+# §2.7 — Per-tenant concurrency limit for parallel workflow steps
+# ---------------------------------------------------------------------------
+
+MAX_PARALLEL_STEPS: int = max(int(os.getenv("MAX_PARALLEL_STEPS", "4")), 1)
+
+# ---------------------------------------------------------------------------
+# §7.2 — Graceful shutdown
+# ---------------------------------------------------------------------------
+
+_shutting_down = threading.Event()
+
+
+def is_shutting_down() -> bool:
+    """Return True once the worker is draining."""
+    return _shutting_down.is_set()
+
+
+def _worker_sigterm_handler(signum: int, _frame: object) -> None:
+    """Mark worker as shutting down on SIGTERM."""
+    _shutting_down.set()
+    logger.info("Received signal %s — worker shutdown initiated.", signum)
+
+
+signal.signal(signal.SIGTERM, _worker_sigterm_handler)
+
+
+# ---------------------------------------------------------------------------
+# §2.6 — Idempotency: Kubernetes Lease-based distributed lock
+# ---------------------------------------------------------------------------
+
+_LEASE_HOLDER_IDENTITY = WORKER_JOB_NAME or f"worker-{os.getpid()}"
+
+
+def acquire_worker_lease(kind: str, namespace: str, name: str, generation: int) -> bool:
+    """Acquire a Kubernetes Lease for this worker run. Returns True on success."""
+    lease_name = f"{name}-gen-{generation}-{kind}"[:253]
+    coord_api = kubernetes.client.CoordinationV1Api()
+    now = datetime.now(timezone.utc)
+    lease_body = kubernetes.client.V1Lease(
+        metadata=kubernetes.client.V1ObjectMeta(
+            name=lease_name,
+            namespace=OPERATOR_NAMESPACE,
+            labels={
+                "sandbox.enterprise.ai/kind": kind,
+                "sandbox.enterprise.ai/resource": name,
+                "sandbox.enterprise.ai/namespace": namespace,
+            },
+        ),
+        spec=kubernetes.client.V1LeaseSpec(
+            holder_identity=_LEASE_HOLDER_IDENTITY,
+            acquire_time=now,
+            renew_time=now,
+            lease_duration_seconds=600,
+        ),
+    )
+    try:
+        coord_api.create_namespaced_lease(namespace=OPERATOR_NAMESPACE, body=lease_body)
+        logger.info("Acquired lease %s in %s.", lease_name, OPERATOR_NAMESPACE)
+        return True
+    except kubernetes.client.ApiException as exc:
+        if exc.status == 409:
+            # Lease already exists — check if it's expired
+            try:
+                existing = coord_api.read_namespaced_lease(name=lease_name, namespace=OPERATOR_NAMESPACE)
+                renew = existing.spec.renew_time or existing.spec.acquire_time
+                duration = existing.spec.lease_duration_seconds or 600
+                if renew and (now - renew).total_seconds() > duration:
+                    # Expired — take over
+                    existing.spec.holder_identity = _LEASE_HOLDER_IDENTITY
+                    existing.spec.acquire_time = now
+                    existing.spec.renew_time = now
+                    coord_api.replace_namespaced_lease(
+                        name=lease_name,
+                        namespace=OPERATOR_NAMESPACE,
+                        body=existing,
+                    )
+                    logger.info("Took over expired lease %s.", lease_name)
+                    return True
+                logger.warning(
+                    "Lease %s is held by %s (not expired). Refusing to start.",
+                    lease_name, existing.spec.holder_identity,
+                )
+                return False
+            except kubernetes.client.ApiException:
+                logger.exception("Failed to read existing lease %s.", lease_name)
+                return False
+        logger.exception("Failed to create lease %s.", lease_name)
+        return False
+
+
+def release_worker_lease(kind: str, name: str, generation: int) -> None:
+    """Release the Kubernetes Lease for this worker run."""
+    lease_name = f"{name}-gen-{generation}-{kind}"[:253]
+    try:
+        kubernetes.client.CoordinationV1Api().delete_namespaced_lease(
+            name=lease_name, namespace=OPERATOR_NAMESPACE,
+        )
+        logger.info("Released lease %s.", lease_name)
+    except kubernetes.client.ApiException as exc:
+        if exc.status != 404:
+            logger.warning("Failed to release lease %s: %s", lease_name, exc)
+
+
+def check_run_id_conflict(kind: str, namespace: str, name: str, generation: int, run_id: str) -> None:
+    """Raise RuntimeError if a different run_id is already active for this resource+generation."""
+    if kind == "workflow":
+        conflict = check_workflow_run_conflict(namespace, name, generation, run_id)
+    elif kind == "eval":
+        conflict = check_eval_run_conflict(namespace, name, generation, run_id)
+    else:
+        return
+    if conflict:
+        raise RuntimeError(
+            f"Another {kind} run (run_id={conflict}) is already active "
+            f"for {namespace}/{name} gen {generation}. Refusing to start."
+        )
 
 
 def resource_plural() -> str:
@@ -2071,15 +2195,7 @@ def run_workflow_worker() -> None:
         worker_job=worker_job,
         pending_approval=None,
     )
-    safe_record_workflow_state(
-        namespace=TARGET_NAMESPACE,
-        resource_name=TARGET_NAME,
-        generation=generation,
-        run_id=run_id,
-        phase="running",
-        spec=spec,
-        status=workflow_status_payload,
-    )
+    # §2.5 — DB mirroring is now handled by the status projection controller.
 
     try:
         # Compute execution waves for logging and progress visibility
@@ -2183,15 +2299,7 @@ def run_workflow_worker() -> None:
                 pending_approval=None,
                 extra_summary={"currentFrontier": frontier_names},
             )
-            safe_record_workflow_state(
-                namespace=TARGET_NAMESPACE,
-                resource_name=TARGET_NAME,
-                generation=generation,
-                run_id=run_id,
-                phase="running",
-                spec=spec,
-                status=workflow_status_payload,
-            )
+            # §2.5 — DB mirroring is now handled by the status projection controller.
 
             outcome_by_name: dict[str, dict[str, Any]] = {}
             if len(frontier) == 1:
@@ -2253,7 +2361,14 @@ def run_workflow_worker() -> None:
                             )
                     return _on_iter
 
-                with ThreadPoolExecutor(max_workers=len(frontier)) as executor:
+                # §2.7 — Cap parallel workers to MAX_PARALLEL_STEPS.
+                effective_workers = min(len(frontier), MAX_PARALLEL_STEPS)
+                if effective_workers < len(frontier):
+                    logger.info(
+                        "Throttling parallel frontier [%s]: %d steps capped to %d workers (MAX_PARALLEL_STEPS=%d).",
+                        frontier_label, len(frontier), effective_workers, MAX_PARALLEL_STEPS,
+                    )
+                with ThreadPoolExecutor(max_workers=effective_workers) as executor:
                     future_map = {
                         executor.submit(
                             _execute_frontier_step,
@@ -2266,9 +2381,40 @@ def run_workflow_worker() -> None:
                         for step in frontier
                     }
                     try:
-                        for future in concurrent.futures.as_completed(future_map, timeout=frontier_timeout):
-                            outcome = future.result()
-                            outcome_by_name[outcome["stepName"]] = outcome
+                        # §2.7 — Fail fast: cancel siblings when the first step raises.
+                        done, not_done = concurrent.futures.wait(
+                            future_map, timeout=frontier_timeout, return_when=concurrent.futures.FIRST_EXCEPTION,
+                        )
+                        # Collect results from completed futures; re-raise the first exception.
+                        first_exception: BaseException | None = None
+                        for future in done:
+                            exc = future.exception()
+                            if exc is not None:
+                                first_exception = first_exception or exc
+                            else:
+                                outcome = future.result()
+                                outcome_by_name[outcome["stepName"]] = outcome
+                        if first_exception is not None:
+                            for f in not_done:
+                                f.cancel()
+                            raise first_exception
+                        # If FIRST_EXCEPTION returned but some are still pending, gather remaining.
+                        if not_done:
+                            done2, timed_out = concurrent.futures.wait(
+                                not_done, timeout=frontier_timeout, return_when=concurrent.futures.ALL_COMPLETED,
+                            )
+                            for future in done2:
+                                exc = future.exception()
+                                if exc is not None:
+                                    raise exc
+                                outcome = future.result()
+                                outcome_by_name[outcome["stepName"]] = outcome
+                            if timed_out:
+                                for f in timed_out:
+                                    f.cancel()
+                                raise RuntimeError(
+                                    f"Parallel frontier [{frontier_label}] timed out after {frontier_timeout:.0f}s"
+                                )
                     except concurrent.futures.TimeoutError:
                         for f in future_map:
                             f.cancel()
@@ -2311,15 +2457,7 @@ def run_workflow_worker() -> None:
                         pending_approval=pending_approval,
                         extra_summary={"currentFrontier": frontier_names},
                     )
-                    safe_record_workflow_state(
-                        namespace=TARGET_NAMESPACE,
-                        resource_name=TARGET_NAME,
-                        generation=generation,
-                        run_id=run_id,
-                        phase="waiting-approval",
-                        spec=spec,
-                        status=workflow_status_payload,
-                    )
+                    # §2.5 — DB mirroring is now handled by the status projection controller.
                     _patch_pending_approval_label(str(pending_approval.get("name") or ""))
                     return
 
@@ -2360,15 +2498,7 @@ def run_workflow_worker() -> None:
                 pending_approval=None,
                 extra_summary={"currentFrontier": frontier_names},
             )
-            safe_record_workflow_state(
-                namespace=TARGET_NAMESPACE,
-                resource_name=TARGET_NAME,
-                generation=generation,
-                run_id=run_id,
-                phase="running",
-                spec=spec,
-                status=workflow_status_payload,
-            )
+            # §2.5 — DB mirroring is now handled by the status projection controller.
             append_journal_event(
                 "workflow.frontier.completed",
                 {"runId": run_id, "steps": frontier_names},
@@ -2414,15 +2544,7 @@ def run_workflow_worker() -> None:
             pending_approval=None,
             extra_summary={"completedAt": completed_at},
         )
-        safe_record_workflow_state(
-            namespace=TARGET_NAMESPACE,
-            resource_name=TARGET_NAME,
-            generation=generation,
-            run_id=run_id,
-            phase="completed",
-            spec=spec,
-            status=workflow_status_payload,
-        )
+        # §2.5 — DB mirroring is now handled by the status projection controller.
     except Exception as exc:
         _patch_pending_approval_label(None)
         failed_at = now_iso()
@@ -2454,15 +2576,7 @@ def run_workflow_worker() -> None:
             pending_approval=None,
             extra_summary={"failedAt": failed_at, "error": str(exc)},
         )
-        safe_record_workflow_state(
-            namespace=TARGET_NAMESPACE,
-            resource_name=TARGET_NAME,
-            generation=generation,
-            run_id=run_id,
-            phase="failed",
-            spec=spec,
-            status=workflow_status_payload,
-        )
+        # §2.5 — DB mirroring is now handled by the status projection controller.
         raise
 
 
@@ -2504,16 +2618,7 @@ def run_eval_worker() -> None:
         },
     }
     patch_custom_status(plural, eval_status_payload)
-    safe_record_eval_state(
-        namespace=TARGET_NAMESPACE,
-        resource_name=TARGET_NAME,
-        generation=generation,
-        run_id=run_id,
-        phase="running",
-        passed=None,
-        spec=spec,
-        status=eval_status_payload,
-    )
+    # §2.5 — DB mirroring is now handled by the status projection controller.
 
     try:
         for index, test_case in enumerate(test_suite):
@@ -2652,16 +2757,7 @@ def run_eval_worker() -> None:
                 },
             }
             patch_custom_status(plural, eval_status_payload)
-            safe_record_eval_state(
-                namespace=TARGET_NAMESPACE,
-                resource_name=TARGET_NAME,
-                generation=generation,
-                run_id=run_id,
-                phase="running",
-                passed=None,
-                spec=spec,
-                status=eval_status_payload,
-            )
+            # §2.5 — DB mirroring is now handled by the status projection controller.
 
         completed_at = now_iso()
         summary = {
@@ -2697,16 +2793,7 @@ def run_eval_worker() -> None:
             "cases": results,
         }
         patch_custom_status(plural, eval_status_payload)
-        safe_record_eval_state(
-            namespace=TARGET_NAMESPACE,
-            resource_name=TARGET_NAME,
-            generation=generation,
-            run_id=run_id,
-            phase="completed",
-            passed=passed,
-            spec=spec,
-            status=eval_status_payload,
-        )
+        # §2.5 — DB mirroring is now handled by the status projection controller.
     except Exception as exc:
         failed_at = now_iso()
         write_artifact(
@@ -2739,16 +2826,7 @@ def run_eval_worker() -> None:
             "cases": results,
         }
         patch_custom_status(plural, eval_status_payload)
-        safe_record_eval_state(
-            namespace=TARGET_NAMESPACE,
-            resource_name=TARGET_NAME,
-            generation=generation,
-            run_id=run_id,
-            phase="failed",
-            passed=False,
-            spec=spec,
-            status=eval_status_payload,
-        )
+        # §2.5 — DB mirroring is now handled by the status projection controller.
         raise
 
 
@@ -2761,6 +2839,28 @@ def main() -> int:
 
     load_kubernetes_config()
     init_state_database()
+    init_tracing("kubemininions-worker")
+
+    # §2.6 — Acquire distributed lease before execution
+    resource = get_resource(resource_plural())
+    generation = int((resource.get("metadata", {}).get("generation", 1)))
+    run_id = (
+        str((resource.get("status", {}) or {}).get("runId") or "")
+        or WORKFLOW_RUN_ID
+        or EVAL_RUN_ID
+        or ""
+    )
+
+    if run_id:
+        try:
+            check_run_id_conflict(WORKER_KIND, TARGET_NAMESPACE, TARGET_NAME, generation, run_id)
+        except RuntimeError:
+            logger.exception("Run ID conflict detected. Exiting.")
+            return 1
+
+    if not acquire_worker_lease(WORKER_KIND, TARGET_NAMESPACE, TARGET_NAME, generation):
+        logger.error("Could not acquire lease for %s %s/%s gen %d. Exiting.", WORKER_KIND, TARGET_NAMESPACE, TARGET_NAME, generation)
+        return 1
 
     try:
         if WORKER_KIND == "workflow":
@@ -2770,6 +2870,14 @@ def main() -> int:
         else:
             raise ValueError(f"Unsupported WORKER_KIND '{WORKER_KIND}'")
     except Exception:
+        if is_shutting_down():
+            logger.warning(
+                "Worker interrupted by shutdown for %s '%s/%s'",
+                WORKER_KIND,
+                TARGET_NAMESPACE,
+                TARGET_NAME,
+            )
+            return 1
         logger.exception(
             "Worker failed for %s '%s/%s'",
             WORKER_KIND,
@@ -2777,6 +2885,8 @@ def main() -> int:
             TARGET_NAME,
         )
         return 1
+    finally:
+        release_worker_lease(WORKER_KIND, TARGET_NAME, generation)
     return 0
 
 

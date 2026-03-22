@@ -339,7 +339,7 @@ def build_thread_id(prefix: str, *parts: object, max_length: int = MAX_THREAD_ID
     if len(base) <= max_length:
         return base
 
-    digest = hashlib.sha1(base.encode("utf-8")).hexdigest()[:10]
+    digest = hashlib.sha256(base.encode("utf-8")).hexdigest()[:10]
     keep_length = max(max_length - len(digest) - 1, 1)
     truncated = base[:keep_length].rstrip("-_") or prefix
     return f"{truncated}-{digest}"
@@ -3446,7 +3446,7 @@ def detect_action_cycle(fingerprints: list[str], window_size: int = DOOM_LOOP_WI
 def autonomous_action_fingerprint(action: dict[str, Any]) -> str:
     payload = {key: value for key, value in action.items() if key not in ("response", "thinking")}
     encoded = safe_json_dumps(payload)
-    return hashlib.sha1(encoded.encode("utf-8")).hexdigest()
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 def merge_autonomous_state(state: State, delta: dict[str, Any]) -> State:

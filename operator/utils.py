@@ -84,7 +84,7 @@ def build_thread_id(prefix: str, *parts: object, max_length: int = MAX_THREAD_ID
     if len(base) <= max_length:
         return base
 
-    digest = hashlib.sha1(base.encode("utf-8")).hexdigest()[:10]
+    digest = hashlib.sha256(base.encode("utf-8")).hexdigest()[:10]
     keep_length = max(max_length - len(digest) - 1, 1)
     truncated = base[:keep_length].rstrip("-_") or "item"
     result = f"{truncated}-{digest}"
@@ -93,7 +93,7 @@ def build_thread_id(prefix: str, *parts: object, max_length: int = MAX_THREAD_ID
 
 def build_workflow_run_id(namespace: str, workflow_name: str, generation: int) -> str:
     epoch_ms = int(time.time() * 1000)
-    digest = hashlib.sha1(
+    digest = hashlib.sha256(
         f"workflow:{namespace}:{workflow_name}:{generation}:{epoch_ms}".encode("utf-8")
     ).hexdigest()[:8]
     return build_thread_id("wf-run", namespace, workflow_name, generation, epoch_ms, digest, max_length=96)
@@ -101,7 +101,7 @@ def build_workflow_run_id(namespace: str, workflow_name: str, generation: int) -
 
 def build_eval_run_id(namespace: str, eval_name: str, generation: int) -> str:
     epoch_ms = int(time.time() * 1000)
-    digest = hashlib.sha1(
+    digest = hashlib.sha256(
         f"eval:{namespace}:{eval_name}:{generation}:{epoch_ms}".encode("utf-8")
     ).hexdigest()[:8]
     return build_thread_id("eval-run", namespace, eval_name, generation, epoch_ms, digest, max_length=96)

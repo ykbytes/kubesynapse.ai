@@ -36,6 +36,10 @@ spec:
                     maxGPU:
                       type: string
                       description: "Max GPU quota (e.g., '2')"
+                    maxParallelSteps:
+                      type: integer
+                      minimum: 1
+                      description: "Maximum parallel workflow steps per execution (default: 4)"
                 allowedModels:
                   type: array
                   items:

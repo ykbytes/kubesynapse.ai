@@ -1,0 +1,611 @@
+"""Kubernetes API interaction layer — ensure, enqueue, and utility functions.
+
+§2.1c of the road-to-prod plan: extract all K8s API calls
+(ensure_*, enqueue_*, read_job_state, cancel_worker_job, patch_custom_status)
+and their private helpers from operator/main.py into operator/services/.
+"""
+
+from __future__ import annotations
+
+import copy
+import logging
+from typing import Any
+
+import kopf
+
+import kubernetes.client  # type: ignore[import-untyped]
+from kubernetes.client.rest import ApiException  # type: ignore[import-untyped]
+
+from config import (
+    CLUSTER_SECRET_STORE,
+    DEFAULT_API_GATEWAY_SHARED_TOKEN,
+    DEFAULT_LITELLM_MASTER_KEY,
+    IMAGE_PULL_SECRETS,
+    OPERATOR_NAMESPACE,
+    RUNTIME_CLUSTER_ROLE,
+    RUNTIME_SERVICE_ACCOUNT,
+    SECRET_NAME,
+    SECRET_PROVISIONING_MODE,
+)
+from builders import (
+    _extract_statefulset_storage_request,
+    _parse_storage_quantity,
+    _statefulset_template_signature,
+    artifact_file_path,
+    build_artifact_ref,
+    build_journal_ref,
+    create_a2a_egress_network_policy_manifest,
+    create_a2a_ingress_network_policy_manifest,
+    create_agent_service_manifest,
+    create_agent_statefulset_manifest,
+    create_mcp_auth_secret_manifest,
+    create_mcp_network_policy_manifest,
+    create_worker_artifact_pvc_manifest,
+    create_worker_job_manifest,
+)
+from utils import (
+    build_eval_run_id,
+    build_workflow_run_id,
+    now_iso,
+    parse_a2a_peer_refs,
+    parse_agent_a2a_config,
+    parse_policy_a2a_config,
+    workflow_journal_path,
+)
+
+ApiTypeError = getattr(kubernetes.client, "ApiTypeError", TypeError)
+
+logger = logging.getLogger("operator.services")
+
+
+# ---------------------------------------------------------------------------
+# Shared helpers (used internally by ensure_* and other service functions)
+# ---------------------------------------------------------------------------
+
+def describe_api_exception(exc: ApiException) -> str:
+    """Format an ApiException for human-readable logging."""
+    MAX_LOG_FIELD_LENGTH = 400
+    details: list[str] = []
+    status = getattr(exc, "status", None)
+    if status is not None:
+        details.append(f"status={status}")
+    reason = str(getattr(exc, "reason", "") or "").strip()
+    if reason:
+        details.append(f"reason={reason}")
+    body = str(getattr(exc, "body", "") or "").strip()
+    if body:
+        if len(body) > MAX_LOG_FIELD_LENGTH:
+            body = f"{body[: MAX_LOG_FIELD_LENGTH - 3]}..."
+        details.append(f"body={body}")
+    message = str(exc).strip()
+    if message and message not in {reason, body}:
+        details.append(f"message={message}")
+    return ", ".join(details) or exc.__class__.__name__
+
+
+def _sanitize_kube_resource(resource: Any) -> Any:
+    """Normalize a K8s SDK object to a plain dict."""
+    if isinstance(resource, (dict, list, str, int, float, bool)) or resource is None:
+        return copy.deepcopy(resource)
+
+    api_client_cls = getattr(kubernetes.client, "ApiClient", None)
+    if api_client_cls is not None:
+        try:
+            return api_client_cls().sanitize_for_serialization(resource)
+        except Exception:
+            pass
+
+    if hasattr(resource, "to_dict"):
+        return resource.to_dict()
+    return resource
+
+
+# ---------------------------------------------------------------------------
+# StatefulSet reconciliation helpers
+# ---------------------------------------------------------------------------
+
+def _preserve_statefulset_immutable_fields(
+    manifest: dict[str, Any],
+    current_statefulset: dict[str, Any],
+) -> dict[str, Any]:
+    """Copy immutable fields from current StatefulSet into the desired manifest."""
+    patched_manifest = copy.deepcopy(manifest)
+    patched_spec = patched_manifest.setdefault("spec", {})
+    current_spec = (current_statefulset.get("spec") or {})
+
+    for field_name in ("volumeClaimTemplates", "selector", "serviceName"):
+        current_value = current_spec.get(field_name)
+        if current_value is not None:
+            patched_spec[field_name] = current_value
+
+    return patched_manifest
+
+
+def _patch_statefulset_with_merge_patch(
+    apps_api: Any,
+    namespace: str,
+    statefulset_name: str,
+    manifest: dict[str, Any],
+) -> Any:
+    """Apply a merge-patch to a StatefulSet, falling back to raw API call."""
+    try:
+        return apps_api.patch_namespaced_stateful_set(
+            name=statefulset_name,
+            namespace=namespace,
+            body=manifest,
+            _content_type="application/merge-patch+json",
+        )
+    except ApiTypeError:
+        api_client = apps_api.api_client
+        return api_client.call_api(
+            "/apis/apps/v1/namespaces/{namespace}/statefulsets/{name}",
+            "PATCH",
+            {"name": statefulset_name, "namespace": namespace},
+            [],
+            {
+                "Accept": api_client.select_header_accept(
+                    [
+                        "application/json",
+                        "application/yaml",
+                        "application/vnd.kubernetes.protobuf",
+                    ]
+                ),
+                "Content-Type": "application/merge-patch+json",
+            },
+            body=manifest,
+            post_params=[],
+            files={},
+            response_type="V1StatefulSet",
+            auth_settings=["BearerToken"],
+            _return_http_data_only=True,
+            collection_formats={},
+        )
+
+
+def _resize_statefulset_persistent_volume_claims(
+    core_api: Any,
+    namespace: str,
+    statefulset_name: str,
+    current_statefulset: dict[str, Any],
+    desired_storage: str | None,
+) -> None:
+    """Expand PVCs attached to a StatefulSet if the desired size is larger."""
+    if not desired_storage:
+        return
+
+    desired_quantity = _parse_storage_quantity(desired_storage)
+    current_spec = current_statefulset.get("spec") or {}
+    replicas = max(int(current_spec.get("replicas") or 1), 1)
+    claim_templates = current_spec.get("volumeClaimTemplates") or []
+
+    for template in claim_templates:
+        claim_name = str((template.get("metadata") or {}).get("name") or "").strip()
+        if claim_name != "state-volume":
+            continue
+
+        for ordinal in range(replicas):
+            pvc_name = f"{claim_name}-{statefulset_name}-{ordinal}"
+            try:
+                current_pvc = _sanitize_kube_resource(
+                    core_api.read_namespaced_persistent_volume_claim(name=pvc_name, namespace=namespace)
+                )
+            except ApiException as exc:
+                if exc.status == 404:
+                    continue
+                raise
+
+            current_requests = ((current_pvc.get("spec") or {}).get("resources") or {}).get("requests") or {}
+            current_storage = current_requests.get("storage")
+            if not current_storage:
+                logger.warning(
+                    "Skipping PVC resize because '%s' in namespace '%s' has no storage request.",
+                    pvc_name,
+                    namespace,
+                )
+                continue
+
+            try:
+                current_quantity = _parse_storage_quantity(str(current_storage))
+            except ValueError:
+                logger.warning(
+                    "Skipping PVC resize because '%s' in namespace '%s' has an unsupported storage request %r.",
+                    pvc_name,
+                    namespace,
+                    current_storage,
+                )
+                continue
+
+            if desired_quantity < current_quantity:
+                logger.warning(
+                    "Skipping PVC shrink request for '%s' in namespace '%s': current=%s desired=%s.",
+                    pvc_name,
+                    namespace,
+                    current_storage,
+                    desired_storage,
+                )
+                continue
+            if desired_quantity == current_quantity:
+                continue
+
+            try:
+                core_api.patch_namespaced_persistent_volume_claim(
+                    name=pvc_name,
+                    namespace=namespace,
+                    body={"spec": {"resources": {"requests": {"storage": desired_storage}}}},
+                )
+            except ApiException as exc:
+                if exc.status in (403, 422):
+                    raise kopf.PermanentError(
+                        (
+                            f"PVC resize request for '{pvc_name}' in namespace '{namespace}' could not be applied: "
+                            f"{describe_api_exception(exc)}"
+                        )
+                    )
+                raise
+
+
+# ---------------------------------------------------------------------------
+# ensure_* — idempotent K8s resource creation / update
+# ---------------------------------------------------------------------------
+
+def ensure_persistent_storage(namespace: str, manifest: dict[str, Any]) -> None:
+    """Create a PVC, silently ignoring AlreadyExists."""
+    core_api = kubernetes.client.CoreV1Api()
+    try:
+        core_api.create_namespaced_persistent_volume_claim(namespace=namespace, body=manifest)
+    except ApiException as exc:
+        if exc.status != 409:
+            raise
+
+
+def ensure_service(namespace: str, manifest: dict[str, Any]) -> None:
+    """Create or patch a Service."""
+    core_api = kubernetes.client.CoreV1Api()
+    service_name = manifest["metadata"]["name"]
+    try:
+        core_api.create_namespaced_service(namespace=namespace, body=manifest)
+    except ApiException as exc:
+        if exc.status == 409:
+            core_api.patch_namespaced_service(name=service_name, namespace=namespace, body=manifest)
+            return
+        raise
+
+
+def ensure_statefulset(namespace: str, manifest: dict[str, Any]) -> None:
+    """Create or reconcile a StatefulSet with immutable-field preservation."""
+    apps_api = kubernetes.client.AppsV1Api()
+    core_api = kubernetes.client.CoreV1Api()
+    statefulset_name = manifest["metadata"]["name"]
+    try:
+        apps_api.create_namespaced_stateful_set(namespace=namespace, body=manifest)
+    except ApiException as exc:
+        if exc.status == 409:
+            current_statefulset = _sanitize_kube_resource(
+                apps_api.read_namespaced_stateful_set(name=statefulset_name, namespace=namespace)
+            )
+            desired_storage = _extract_statefulset_storage_request(manifest)
+            patched_manifest = _preserve_statefulset_immutable_fields(manifest, current_statefulset)
+            _patch_statefulset_with_merge_patch(apps_api, namespace, statefulset_name, patched_manifest)
+            reconciled_statefulset = _sanitize_kube_resource(
+                apps_api.read_namespaced_stateful_set(name=statefulset_name, namespace=namespace)
+            )
+            desired_signature = _statefulset_template_signature(patched_manifest)
+            actual_signature = _statefulset_template_signature(reconciled_statefulset)
+            if actual_signature != desired_signature:
+                raise kopf.TemporaryError(
+                    (
+                        f"StatefulSet '{statefulset_name}' in namespace '{namespace}' did not converge to the "
+                        "desired pod template after patching."
+                    ),
+                    delay=2,
+                )
+            _resize_statefulset_persistent_volume_claims(
+                core_api,
+                namespace,
+                statefulset_name,
+                reconciled_statefulset,
+                desired_storage,
+            )
+            return
+        raise
+
+
+def ensure_secret(namespace: str, manifest: dict[str, Any]) -> None:
+    """Create or patch a Secret."""
+    core_api = kubernetes.client.CoreV1Api()
+    secret_name = str(manifest["metadata"]["name"])
+    try:
+        core_api.create_namespaced_secret(namespace=namespace, body=manifest)
+    except ApiException as exc:
+        if exc.status == 409:
+            core_api.patch_namespaced_secret(name=secret_name, namespace=namespace, body=manifest)
+            return
+        raise
+
+
+def ensure_runtime_namespace_secret(namespace: str, owner_name: str, logger: logging.Logger) -> None:
+    """Provision the runtime secret for a namespace (via ExternalSecret or native Secret)."""
+    if SECRET_PROVISIONING_MODE == "external-secrets":
+        external_secret = {
+            "apiVersion": "external-secrets.io/v1beta1",
+            "kind": "ExternalSecret",
+            "metadata": {
+                "name": SECRET_NAME,
+                "namespace": namespace,
+                "labels": {
+                    "managed-by": "ai-agent-sandbox",
+                    "sandbox.enterprise.ai/runtime-secret": "true",
+                    "sandbox.enterprise.ai/owner": owner_name,
+                },
+            },
+            "spec": {
+                "refreshInterval": "1h",
+                "secretStoreRef": {"name": CLUSTER_SECRET_STORE, "kind": "ClusterSecretStore"},
+                "target": {"name": SECRET_NAME},
+                "data": [
+                    {
+                        "secretKey": "LITELLM_MASTER_KEY",
+                        "remoteRef": {"key": "ai-agent-sandbox/litellm-master-key"},
+                    },
+                    {
+                        "secretKey": "API_GATEWAY_SHARED_TOKEN",
+                        "remoteRef": {"key": "ai-agent-sandbox/api-gateway-shared-token"},
+                    }
+                ],
+            },
+        }
+        custom_api = kubernetes.client.CustomObjectsApi()
+        try:
+            custom_api.create_namespaced_custom_object(
+                group="external-secrets.io",
+                version="v1beta1",
+                namespace=namespace,
+                plural="externalsecrets",
+                body=external_secret,
+            )
+            logger.info("ExternalSecret '%s' provisioned for namespace '%s'", SECRET_NAME, namespace)
+        except ApiException as exc:
+            if exc.status == 409:
+                try:
+                    custom_api.patch_namespaced_custom_object(
+                        group="external-secrets.io",
+                        version="v1beta1",
+                        namespace=namespace,
+                        plural="externalsecrets",
+                        name=SECRET_NAME,
+                        body=external_secret,
+                    )
+                except ApiException as patch_exc:
+                    raise kopf.TemporaryError(
+                        f"Failed to update ExternalSecret '{SECRET_NAME}' for namespace '{namespace}': {patch_exc}",
+                        delay=30,
+                    ) from patch_exc
+            else:
+                raise kopf.TemporaryError(
+                    f"Failed to reconcile ExternalSecret '{SECRET_NAME}' for namespace '{namespace}': {exc}",
+                    delay=30,
+                ) from exc
+        return
+
+    string_data: dict[str, str] = {}
+    if DEFAULT_LITELLM_MASTER_KEY:
+        string_data["LITELLM_MASTER_KEY"] = DEFAULT_LITELLM_MASTER_KEY
+    if DEFAULT_API_GATEWAY_SHARED_TOKEN:
+        string_data["API_GATEWAY_SHARED_TOKEN"] = DEFAULT_API_GATEWAY_SHARED_TOKEN
+
+    if not string_data:
+        logger.warning(
+            (
+                "Skipping runtime secret provisioning for namespace '%s' because "
+                "DEFAULT_LITELLM_MASTER_KEY and DEFAULT_API_GATEWAY_SHARED_TOKEN are empty."
+            ),
+            namespace,
+        )
+        return
+
+    secret_manifest = {
+        "apiVersion": "v1",
+        "kind": "Secret",
+        "metadata": {
+            "name": SECRET_NAME,
+            "namespace": namespace,
+            "labels": {
+                "managed-by": "ai-agent-sandbox",
+                "sandbox.enterprise.ai/runtime-secret": "true",
+                "sandbox.enterprise.ai/owner": owner_name,
+            },
+        },
+        "type": "Opaque",
+        "stringData": string_data,
+    }
+    ensure_secret(namespace, secret_manifest)
+    logger.info("Secret '%s' provisioned for namespace '%s'", SECRET_NAME, namespace)
+
+
+def ensure_network_policy(namespace: str, manifest: dict[str, Any]) -> None:
+    """Create or replace a NetworkPolicy."""
+    networking_api = kubernetes.client.NetworkingV1Api()
+    policy_name = str(manifest["metadata"]["name"])
+    try:
+        networking_api.create_namespaced_network_policy(namespace=namespace, body=manifest)
+    except ApiException as exc:
+        if exc.status == 409:
+            networking_api.replace_namespaced_network_policy(
+                name=policy_name, namespace=namespace, body=manifest
+            )
+        else:
+            raise
+
+
+def ensure_runtime_access(namespace: str) -> None:
+    """Create or patch a ServiceAccount and RoleBinding for agent runtimes."""
+    core_api = kubernetes.client.CoreV1Api()
+    rbac_api = kubernetes.client.RbacAuthorizationV1Api()
+
+    service_account = kubernetes.client.V1ServiceAccount(
+        metadata=kubernetes.client.V1ObjectMeta(name=RUNTIME_SERVICE_ACCOUNT, namespace=namespace),
+        image_pull_secrets=[
+            kubernetes.client.V1LocalObjectReference(name=secret_name) for secret_name in IMAGE_PULL_SECRETS
+        ]
+        or None,
+    )
+    try:
+        core_api.create_namespaced_service_account(namespace=namespace, body=service_account)
+    except ApiException as exc:
+        if exc.status == 409:
+            core_api.patch_namespaced_service_account(
+                name=RUNTIME_SERVICE_ACCOUNT,
+                namespace=namespace,
+                body=service_account,
+            )
+        else:
+            raise
+
+    binding = kubernetes.client.V1RoleBinding(
+        metadata=kubernetes.client.V1ObjectMeta(
+            name=f"{RUNTIME_SERVICE_ACCOUNT}-binding",
+            namespace=namespace,
+        ),
+        role_ref=kubernetes.client.V1RoleRef(
+            api_group="rbac.authorization.k8s.io",
+            kind="ClusterRole",
+            name=RUNTIME_CLUSTER_ROLE,
+        ),
+        subjects=[
+            kubernetes.client.V1Subject(
+                kind="ServiceAccount",
+                name=RUNTIME_SERVICE_ACCOUNT,
+                namespace=namespace,
+            )
+        ],
+    )
+    try:
+        rbac_api.create_namespaced_role_binding(namespace=namespace, body=binding)
+    except ApiException as exc:
+        if exc.status == 409:
+            rbac_api.patch_namespaced_role_binding(
+                name=f"{RUNTIME_SERVICE_ACCOUNT}-binding",
+                namespace=namespace,
+                body=binding,
+            )
+        else:
+            raise
+
+
+# ---------------------------------------------------------------------------
+# CRD status patching
+# ---------------------------------------------------------------------------
+
+_STATUS_PATCH_MAX_RETRIES: int = 3
+
+
+def patch_custom_status(plural: str, namespace: str, name: str, status: dict[str, Any]) -> None:
+    """Patch the .status subresource with optimistic concurrency retry on 409."""
+    import random as _random
+    import time as _time
+
+    api = kubernetes.client.CustomObjectsApi()
+    for attempt in range(_STATUS_PATCH_MAX_RETRIES):
+        try:
+            api.patch_namespaced_custom_object_status(
+                group="sandbox.enterprise.ai",
+                version="v1alpha1",
+                namespace=namespace,
+                plural=plural,
+                name=name,
+                body={"status": status},
+            )
+            return
+        except ApiException as exc:
+            if exc.status == 409 and attempt < _STATUS_PATCH_MAX_RETRIES - 1:
+                backoff = (2 ** attempt) + _random.uniform(0, 0.5)
+                logging.getLogger("operator.services.k8s").warning(
+                    "Conflict patching %s/%s/%s status (409), retry %d/%d in %.1fs.",
+                    plural, namespace, name, attempt + 1, _STATUS_PATCH_MAX_RETRIES, backoff,
+                )
+                _time.sleep(backoff)
+                continue
+            raise
+
+
+# ---------------------------------------------------------------------------
+# Worker job management
+# ---------------------------------------------------------------------------
+
+def ensure_worker_artifact_storage(kind: str, resource_namespace: str, resource_name: str) -> str:
+    """Create the artifact PVC for a worker job and return its name."""
+    manifest = create_worker_artifact_pvc_manifest(kind, resource_namespace, resource_name)
+    ensure_persistent_storage(OPERATOR_NAMESPACE, manifest)
+    return str(manifest["metadata"]["name"])
+
+
+def enqueue_worker_job(
+    kind: str,
+    resource_namespace: str,
+    resource_name: str,
+    generation: int,
+    artifact_pvc_name: str,
+    artifact_path: str,
+    *,
+    run_id: str | None = None,
+    git_config: dict[str, Any] | None = None,
+    max_parallel_steps: int | None = None,
+) -> str:
+    """Create a worker Job and return its name."""
+    manifest = create_worker_job_manifest(
+        kind,
+        resource_namespace,
+        resource_name,
+        generation,
+        artifact_pvc_name,
+        artifact_path,
+        run_id=run_id,
+        git_config=git_config,
+        max_parallel_steps=max_parallel_steps,
+    )
+    batch_api = kubernetes.client.BatchV1Api()
+    batch_api.create_namespaced_job(namespace=OPERATOR_NAMESPACE, body=manifest)
+    return str(manifest["metadata"]["name"])
+
+
+def read_job_state(name: str, namespace: str) -> str:
+    """Read the current state of a Job: missing, pending, active, succeeded, failed."""
+    if not name:
+        return "missing"
+
+    batch_api = kubernetes.client.BatchV1Api()
+    try:
+        job = batch_api.read_namespaced_job(name=name, namespace=namespace)
+    except ApiException as exc:
+        if exc.status == 404:
+            return "missing"
+        raise
+
+    status: Any = getattr(job, "status", None)
+    if status is None:
+        return "pending"
+    if (status.active or 0) > 0:
+        return "active"
+    if (status.succeeded or 0) > 0:
+        return "succeeded"
+    if (status.failed or 0) > 0:
+        return "failed"
+    return "pending"
+
+
+def cancel_worker_job(name: str, namespace: str) -> bool:
+    """Delete a worker Job and its pods. Returns True if a Job was deleted."""
+    if not name:
+        return False
+    batch_api = kubernetes.client.BatchV1Api()
+    try:
+        batch_api.delete_namespaced_job(
+            name=name,
+            namespace=namespace,
+            body=kubernetes.client.V1DeleteOptions(propagation_policy="Background"),
+        )
+        return True
+    except ApiException as exc:
+        if exc.status == 404:
+            return False
+        raise

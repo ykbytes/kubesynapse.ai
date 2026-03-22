@@ -12,11 +12,11 @@ operator:
   replicaCount: 1
   image:
     repository: docker.io/yakdhane/ai-operator
-    tag: noloop-20260321-145824
+    tag: deploy-20260322-214352
     pullPolicy: Always
   workerImage:
     repository: docker.io/yakdhane/ai-operator
-    tag: noloop-20260321-145824
+    tag: deploy-20260322-214352
     pullPolicy: Always
 
 gooseRuntime:
@@ -34,7 +34,7 @@ codexRuntime:
 opencodeRuntime:
   image:
     repository: docker.io/yakdhane/ai-opencode-runtime
-    tag: enhance-20260321-155745
+    tag: deploy-20260322-214352
     pullPolicy: Always
   env:
     OPENCODE_SESSION_INIT_ON_CREATE: "false"
@@ -47,7 +47,7 @@ opencodeRuntime:
 apiGateway:
   image:
     repository: docker.io/yakdhane/ai-api-gateway
-    tag: enhance-20260321-155745
+    tag: deploy-20260322-214352
     pullPolicy: Always
   auth:
     mode: hybrid
@@ -58,7 +58,7 @@ webUi:
   enabled: true
   image:
     repository: docker.io/yakdhane/ai-agent-sandbox-web-ui
-    tag: enhance-20260321-155745
+    tag: deploy-20260319-230326
     pullPolicy: Always
 
 platformSecrets:

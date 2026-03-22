@@ -1,0 +1,1193 @@
+openapi: 3.1.0
+info:
+  title: OpenCode Runtime API
+  description: |
+    The OpenCode Runtime API is the HTTP contract between the kubemininions
+    operator/worker and the per-agent OpenCode runtime sidecar.  All invocations
+    from the operator go exclusively through `operator/worker.py`; no controller
+    calls the runtime directly.
+
+    **Transport**: HTTP/1.1 over cluster-internal DNS  
+    **Base URL**: `http://{agent-name}-sandbox.{namespace}.svc.cluster.local:8080`  
+    **Contract Version**: `v1alpha1`
+  version: 1.0.0
+  contact:
+    name: kubemininions
+  license:
+    name: Apache 2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0
+
+servers:
+  - url: http://{agentName}-sandbox.{namespace}.svc.cluster.local:8080
+    description: In-cluster agent runtime
+    variables:
+      agentName:
+        default: my-agent
+        description: Kubernetes name of the AIAgent resource
+      namespace:
+        default: default
+        description: Kubernetes namespace of the AIAgent resource
+
+tags:
+  - name: lifecycle
+    description: Health, readiness, and metadata endpoints
+  - name: invocation
+    description: Synchronous and streaming agent invocation
+  - name: session
+    description: Session management (cancel, context budget)
+  - name: artifacts
+    description: Workspace file listing and download
+
+paths:
+  # ─────────────────────── Lifecycle ───────────────────────
+  /health:
+    get:
+      operationId: getHealth
+      summary: Runtime health check
+      description: |
+        Returns detailed runtime health including session counts, skill
+        configuration, supervisor state, and full capabilities.  Used by
+        Kubernetes liveness probes and the operator health reconciler.
+      tags: [lifecycle]
+      responses:
+        "200":
+          description: Runtime health report
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+
+  /ready:
+    get:
+      operationId: getReady
+      summary: Readiness probe
+      description: |
+        Pre-deployment readiness gate.  Validates: OpenCode binary on PATH,
+        OpenCode HTTP server is responsive, session registry is writable,
+        subprocess is alive.  The operator's `wait_for_agent_runtime_ready()`
+        polls this endpoint every 2 s until 200 or timeout.
+      tags: [lifecycle]
+      responses:
+        "200":
+          description: Runtime is ready to accept invocations
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadyResponse"
+        "503":
+          description: Runtime is not ready
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+
+  /capabilities:
+    get:
+      operationId: getCapabilities
+      summary: Runtime capability declaration
+      description: |
+        Returns declared tools, agents, output formats, session management
+        features, and MCP availability.  Consumed by the gateway and UI for
+        feature-flag decisions.
+      tags: [lifecycle]
+      responses:
+        "200":
+          description: Capability manifest
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CapabilitiesResponse"
+
+  /info:
+    get:
+      operationId: getInfo
+      summary: Runtime contract metadata
+      description: |
+        Declares the runtime contract version (`v1alpha1`), service identity,
+        provider, model, tracing status, and supervisor health.  The operator
+        can use `contract_version` for forward-compatibility checks.
+      tags: [lifecycle]
+      responses:
+        "200":
+          description: Contract metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InfoResponse"
+
+  # ─────────────────────── Invocation ───────────────────────
+  /invoke:
+    post:
+      operationId: invoke
+      summary: Synchronous agent invocation
+      description: |
+        Invoke the OpenCode agent synchronously.  The runtime executes an
+        autonomous multi-turn loop (up to `max_turns` iterations), manages
+        context compaction, and returns the final response with artifacts,
+        tool calls, and rich metadata.
+
+        The operator's `invoke_agent_runtime()` function calls this endpoint
+        with a 3-retry strategy (exponential backoff, max 4 s) for 5xx errors.
+        Permanent 4xx errors (except 408/429) fail immediately.
+      tags: [invocation]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InvokeRequest"
+      responses:
+        "200":
+          description: Invocation completed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InvokeResponse"
+        "400":
+          description: Validation error (bad prompt, unsupported fields, etc.)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationError"
+        "422":
+          description: Pydantic validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationError"
+
+  /invoke/stream:
+    post:
+      operationId: invokeStream
+      summary: Streaming agent invocation (SSE)
+      description: |
+        Same request body as `/invoke`, but the response is a
+        `text/event-stream` (Server-Sent Events) connection.  Events give
+        real-time visibility into each turn, text deltas, compaction events,
+        error recovery, and the final response.
+
+        The operator's `invoke_agent_runtime_stream()` parses SSE events for
+        logging.  Only the `response.completed` event payload is used for
+        business logic.  On stream failure (HTTP ≥ 400), the operator falls
+        back to the synchronous `/invoke` endpoint.
+      tags: [invocation]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InvokeRequest"
+      responses:
+        "200":
+          description: SSE event stream
+          content:
+            text/event-stream:
+              schema:
+                description: |
+                  Newline-delimited Server-Sent Events. Each event has the form:
+                  ```
+                  event: <event_type>
+                  data: <json_payload>
+                  ```
+                  See `SSE*` schemas for individual event types.
+                type: string
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                example: no-cache
+            Connection:
+              schema:
+                type: string
+                example: keep-alive
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationError"
+
+  # ─────────────────────── Session ───────────────────────
+  /cancel:
+    post:
+      operationId: cancelSession
+      summary: Cancel a running session
+      description: |
+        Abort a running agent session identified by `thread_id`.  The runtime
+        sends an abort signal to the OpenCode subprocess session.
+      tags: [session]
+      parameters:
+        - name: thread_id
+          in: query
+          required: true
+          schema:
+            type: string
+          description: The logical thread ID mapping to an internal session
+      responses:
+        "200":
+          description: Cancellation result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CancelResponse"
+        "400":
+          description: Missing thread_id
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+        "404":
+          description: No session found for the given thread_id
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+
+  /context-budget:
+    get:
+      operationId: getContextBudget
+      summary: Token budget telemetry
+      description: |
+        Returns the token usage and context budget status for a session.  Used
+        by the operator to detect context overflow situations and trigger
+        compaction strategies.
+      tags: [session]
+      parameters:
+        - name: thread_id
+          in: query
+          required: true
+          schema:
+            type: string
+          description: The logical thread ID
+      responses:
+        "200":
+          description: Context budget report
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ContextBudgetResponse"
+        "400":
+          description: Missing thread_id
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+        "404":
+          description: No session found for the given thread_id
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+        "502":
+          description: Failed to fetch session messages from OpenCode server
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+
+  # ─────────────────────── Artifacts ───────────────────────
+  /artifacts/download:
+    get:
+      operationId: downloadArtifact
+      summary: Download a single workspace file
+      description: |
+        Download a file by its absolute POSIX path.  The path must be within
+        the allowed roots: `OPENCODE_WORKDIR`, `HOME_DIR`, or `/tmp`.
+      tags: [artifacts]
+      parameters:
+        - name: path
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Absolute POSIX path to the file
+          example: /workspace/src/main.py
+      responses:
+        "200":
+          description: File content with appropriate MIME type
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "400":
+          description: Blank path or path outside allowed roots
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+        "404":
+          description: File does not exist
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+
+  /artifacts/list:
+    get:
+      operationId: listArtifacts
+      summary: List workspace files
+      description: |
+        Walk allowed directories and return a flat list of files with metadata.
+        Hidden files/directories (starting with `.`) are excluded.
+        Results are capped at `ARTIFACT_COLLECTION_MAX_FILES` (default 200).
+      tags: [artifacts]
+      parameters:
+        - name: root
+          in: query
+          required: false
+          schema:
+            type: string
+            default: ""
+          description: |
+            Optional root directory to scope the listing.  Must be within
+            the allowed roots.  If omitted, all allowed roots are walked.
+      responses:
+        "200":
+          description: File listing
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactListResponse"
+        "400":
+          description: Root outside allowed directories
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+        "404":
+          description: Root directory does not exist
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+
+  /artifacts/zip:
+    get:
+      operationId: downloadArtifactsZip
+      summary: Download workspace as ZIP archive
+      description: |
+        Create and stream a ZIP archive of the workspace.  Skips `.git`,
+        `node_modules`, `__pycache__`, `.next`, `.venv`, `venv`, `dist`,
+        `.cache`, and hidden directories.  Individual files larger than 50 MB
+        are skipped.  Maximum 10,000 files.
+      tags: [artifacts]
+      parameters:
+        - name: root
+          in: query
+          required: false
+          schema:
+            type: string
+            default: ""
+          description: |
+            Optional subdirectory within the workspace to scope the archive.
+      responses:
+        "200":
+          description: ZIP archive
+          content:
+            application/zip:
+              schema:
+                type: string
+                format: binary
+          headers:
+            Content-Disposition:
+              schema:
+                type: string
+                example: attachment; filename="workspace.zip"
+        "400":
+          description: Root outside workspace
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+        "404":
+          description: Directory does not exist
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Components
+# ═══════════════════════════════════════════════════════════════════════════
+components:
+  schemas:
+    # ───────────────── Request / Response models ─────────────────
+    InvokeRequest:
+      type: object
+      required: [prompt]
+      description: |
+        Agent invocation request.  Only `prompt` is required; all other fields
+        have sensible defaults.  Fields marked **BLOCKED** will cause a 400
+        validation error if set — they exist for gateway-level routing only.
+      properties:
+        prompt:
+          type: string
+          minLength: 1
+          maxLength: 64000
+          description: The task prompt to send to the agent (whitespace-trimmed)
+        thread_id:
+          type: string
+          maxLength: 128
+          nullable: true
+          description: |
+            Logical thread ID for session resumption.  The runtime maps this
+            to an internal OpenCode session ID.  The operator generates
+            deterministic thread IDs per workflow step.
+        model:
+          type: string
+          maxLength: 256
+          nullable: true
+          description: Model identifier (defaults to `DEFAULT_MODEL`, typically `gpt-4`)
+        system:
+          type: string
+          maxLength: 32000
+          nullable: true
+          description: Custom system prompt (appended to built-in autonomy prompt)
+        require_approval:
+          type: boolean
+          default: false
+          description: Whether the task requires human-in-the-loop approval before execution
+        approval_action:
+          type: string
+          maxLength: 512
+          nullable: true
+          description: Human-readable description of the action requiring approval
+        caller_agent_name:
+          type: string
+          maxLength: 63
+          nullable: true
+          description: |
+            Name of the calling agent (for A2A inbound requests).
+            Must be provided together with `caller_agent_namespace`.
+        caller_agent_namespace:
+          type: string
+          maxLength: 63
+          nullable: true
+          description: |
+            Namespace of the calling agent.
+            Must be provided together with `caller_agent_name`.
+        parent_thread_id:
+          type: string
+          maxLength: 128
+          nullable: true
+          description: Workflow run ID for audit trail linkage
+        caller_request_id:
+          type: string
+          maxLength: 128
+          nullable: true
+          description: Upstream request ID for distributed tracing correlation
+        team_context:
+          type: object
+          nullable: true
+          description: |
+            Multi-agent team context (e.g., shared state, delegation info).
+            JSON-encoded size must not exceed 16,000 characters.
+          additionalProperties: true
+        debug:
+          type: boolean
+          default: false
+          description: Enable verbose debug logging for this invocation
+        no_session:
+          type: boolean
+          default: false
+          description: |
+            Use a transient session that is not persisted.  Cannot be used
+            together with `thread_id`.
+        max_turns:
+          type: integer
+          minimum: 1
+          maximum: 1000
+          nullable: true
+          description: Maximum number of autonomous turns (defaults to 10)
+        max_retries:
+          type: integer
+          nullable: true
+          description: Maximum transient error retries (defaults to 3)
+        autonomous:
+          type: boolean
+          default: true
+          description: Whether multi-turn autonomous execution is enabled
+        pre_authorized_actions:
+          type: array
+          items:
+            type: string
+          default: []
+          description: List of action patterns pre-approved without HITL gate
+        working_directory:
+          type: string
+          maxLength: 512
+          nullable: true
+          description: Override the workspace root directory for this invocation
+        output_format:
+          type: string
+          maxLength: 32
+          nullable: true
+          enum: [json, text, markdown, code]
+          description: |
+            Desired output format.  If `output_schema` is provided without
+            `output_format`, it defaults to `json`.
+        output_schema:
+          type: object
+          nullable: true
+          description: |
+            JSON Schema for structured output validation.  Must be a JSON
+            object.  Automatically sets `output_format` to `json`.
+          additionalProperties: true
+        structured_output_retry_count:
+          type: integer
+          nullable: true
+          description: Number of retries for structured output extraction (defaults to 2)
+        # ── Blocked fields (gateway-level only) ──
+        tool_name:
+          type: string
+          maxLength: 128
+          default: ""
+          description: "**BLOCKED** — Direct tool execution not supported. Will return 400."
+          deprecated: true
+        tool_args:
+          type: object
+          default: {}
+          description: "**BLOCKED** — Tool arguments not supported."
+          deprecated: true
+          additionalProperties: true
+        sandbox_session:
+          type: object
+          nullable: true
+          description: "**BLOCKED** — Sandbox session continuity not supported. Will return 400."
+          deprecated: true
+          additionalProperties: true
+        mcp_server:
+          type: string
+          maxLength: 128
+          nullable: true
+          description: "**BLOCKED** — Gateway-routed MCP not supported. Will return 400."
+          deprecated: true
+        a2a_target_agent:
+          type: string
+          maxLength: 63
+          nullable: true
+          description: "**BLOCKED** — Outbound A2A not supported. Will return 400."
+          deprecated: true
+        a2a_target_namespace:
+          type: string
+          maxLength: 63
+          nullable: true
+          description: "**BLOCKED** — Outbound A2A not supported. Will return 400."
+          deprecated: true
+        a2a_timeout_seconds:
+          type: number
+          format: float
+          minimum: 1.0
+          nullable: true
+          description: "**BLOCKED** — Outbound A2A not supported. Will return 400."
+          deprecated: true
+
+    InvokeResponse:
+      type: object
+      required: [thread_id, response, model]
+      description: |
+        Agent invocation result.  Contains the final response text, session ID,
+        extracted artifacts/tool-calls, and rich metadata for operator
+        processing.
+      properties:
+        thread_id:
+          type: string
+          description: The logical thread ID (new or resumed)
+        response:
+          type: string
+          description: Final agent output text
+        model:
+          type: string
+          description: Model identifier used for this invocation
+        status:
+          type: string
+          default: completed
+          enum: [completed, error, approval_pending, incomplete]
+          description: |
+            Outcome status:
+            - `completed` — task finished successfully
+            - `error` — unrecoverable error occurred
+            - `approval_pending` — waiting for HITL approval
+            - `incomplete` — max turns exhausted without completion
+        approval_name:
+          type: string
+          nullable: true
+          description: |
+            Name of the AgentApproval CRD created when `status` is
+            `approval_pending`.  The operator watches this resource.
+        retry_after_seconds:
+          type: integer
+          nullable: true
+          description: Suggested backoff before retrying (e.g., rate limit)
+        a2a:
+          type: object
+          nullable: true
+          description: |
+            Agent-to-Agent caller metadata echoed back when `caller_agent_name`
+            and `caller_agent_namespace` were provided.
+          properties:
+            caller_agent_name:
+              type: string
+            caller_agent_namespace:
+              type: string
+            caller_request_id:
+              type: string
+              nullable: true
+          additionalProperties: true
+        warnings:
+          type: array
+          items:
+            type: string
+          default: []
+          description: Non-fatal warnings (context truncation, skill load issues, etc.)
+        artifacts:
+          type: array
+          items:
+            $ref: "#/components/schemas/Artifact"
+          default: []
+          description: Files created or modified during execution
+        tool_calls:
+          type: array
+          items:
+            $ref: "#/components/schemas/ToolCall"
+          default: []
+          description: Tool invocations extracted from the agent conversation
+        metadata:
+          $ref: "#/components/schemas/InvokeMetadata"
+
+    # ───────────────── Sub-schemas ─────────────────
+    Artifact:
+      type: object
+      properties:
+        path:
+          type: string
+          description: Absolute or relative POSIX file path
+        tool:
+          type: string
+          enum: [write, edit, patch]
+          description: The tool that produced this artifact
+        status:
+          type: string
+          description: Tool execution status
+        error:
+          type: string
+          nullable: true
+          description: Error message if the tool execution failed
+      additionalProperties: true
+
+    ToolCall:
+      type: object
+      properties:
+        tool:
+          type: string
+          description: Tool name (e.g., `bash`, `write`, `edit`)
+        input:
+          type: string
+          description: Truncated tool input (max 300 chars)
+        output:
+          type: string
+          description: Truncated tool output (max 500 chars)
+        error:
+          type: string
+          nullable: true
+          description: Tool error message if applicable
+      additionalProperties: true
+
+    InvokeMetadata:
+      type: object
+      nullable: true
+      description: Rich telemetry attached to the invocation response
+      properties:
+        tokens:
+          type: object
+          description: Token usage breakdown
+          properties:
+            input:
+              type: integer
+            output:
+              type: integer
+            cache_write:
+              type: integer
+            cache_read:
+              type: integer
+            total:
+              type: integer
+          additionalProperties: true
+        cost:
+          type: number
+          format: float
+          nullable: true
+          description: Monetary cost in USD (if available from provider)
+        time:
+          type: object
+          description: Timing information
+          additionalProperties: true
+        finish_reason:
+          type: string
+          nullable: true
+          description: LLM finish reason (stop, end_turn, length, tool_calls, etc.)
+        structured_output:
+          type: object
+          nullable: true
+          description: Parsed structured output when `output_format` is `json`
+          additionalProperties: true
+        context_budget:
+          type: object
+          nullable: true
+          description: Token budget status at end of invocation
+          additionalProperties: true
+        todos:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+          description: Task list items extracted from the session
+        task_status:
+          type: string
+          nullable: true
+          description: Derived task completion status
+        anti_patterns:
+          type: array
+          items:
+            type: string
+          description: Detected anti-patterns in agent output
+      additionalProperties: true
+
+    # ───────────────── SSE Event schemas ─────────────────
+    SSEResponseStarted:
+      type: object
+      description: "SSE event `response.started` — first event in the stream"
+      properties:
+        thread_id:
+          type: string
+        source:
+          type: string
+          enum: [opencode]
+
+    SSEResponseTurnStarted:
+      type: object
+      description: "SSE event `response.turn_started` — a new autonomous turn begins"
+      properties:
+        turn:
+          type: integer
+          description: 1-based turn number
+        max_turns:
+          type: integer
+          description: Total allowed turns
+        agent:
+          type: string
+          description: Agent name handling this turn (e.g., `build`, `plan`)
+
+    SSEResponseDelta:
+      type: object
+      description: "SSE event `response.delta` — incremental text output"
+      properties:
+        turn:
+          type: integer
+        delta:
+          type: string
+          description: Incremental text chunk
+        source:
+          type: string
+          enum: [opencode]
+
+    SSEResponseTurnCompleted:
+      type: object
+      description: "SSE event `response.turn_completed` — a turn finished"
+      properties:
+        turn:
+          type: integer
+        status:
+          type: string
+        response_length:
+          type: integer
+          description: Character count of the turn response
+
+    SSEResponseCompaction:
+      type: object
+      description: "SSE event `response.compaction` — context compaction triggered"
+      properties:
+        turn:
+          type: integer
+        reason:
+          type: string
+          enum: [context_overflow, proactive, error_overflow]
+        attempt:
+          type: integer
+          description: Compaction attempt number
+        max:
+          type: integer
+          description: Maximum compaction attempts allowed
+
+    SSEResponseErrorRecovery:
+      type: object
+      description: "SSE event `response.error_recovery` — transient error retry"
+      properties:
+        turn:
+          type: integer
+        error_type:
+          type: string
+        retry:
+          type: integer
+          description: Current retry count
+        max_retries:
+          type: integer
+
+    SSEResponseCompleted:
+      type: object
+      description: |
+        SSE event `response.completed` — final event containing the full
+        response.  This is the only event the operator uses for business logic.
+      allOf:
+        - $ref: "#/components/schemas/InvokeResponse"
+
+    SSEResponseError:
+      type: object
+      description: "SSE event `response.error` — fatal error, stream terminates"
+      properties:
+        thread_id:
+          type: string
+        error:
+          type: string
+
+    # ───────────────── Lifecycle response schemas ─────────────────
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [healthy, starting, shutting_down]
+        runtime:
+          type: string
+          enum: [opencode]
+        service:
+          type: string
+          description: Agent service name
+        namespace:
+          type: string
+          description: Kubernetes namespace
+        provider:
+          type: string
+          description: LLM provider (e.g., `litellm`)
+        agent:
+          type: string
+          description: Default agent name (e.g., `build`)
+        sessions:
+          type: object
+          properties:
+            total:
+              type: integer
+            active:
+              type: integer
+            stale:
+              type: integer
+            at_capacity:
+              type: boolean
+        skills:
+          type: object
+          properties:
+            count:
+              type: integer
+            files:
+              type: array
+              items:
+                type: string
+            warnings:
+              type: array
+              items:
+                type: string
+        supervisor:
+          type: object
+          properties:
+            restart_count:
+              type: integer
+            max_restarts:
+              type: integer
+        capabilities:
+          $ref: "#/components/schemas/RuntimeCapabilities"
+
+    ReadyResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ready]
+        runtime:
+          type: string
+          enum: [opencode]
+        opencode_binary:
+          type: string
+          description: Configured binary name
+        opencode_binary_path:
+          type: string
+          nullable: true
+          description: Resolved absolute path on disk
+        opencode_server_healthy:
+          type: boolean
+          description: Whether the internal OpenCode HTTP server responds
+        subprocess_alive:
+          type: boolean
+          description: Whether the OpenCode subprocess is running
+        session_registry_writable:
+          type: boolean
+          description: Whether the session map file directory is writable
+        config_root:
+          type: string
+        workspace_root:
+          type: string
+        config_files:
+          type: array
+          items:
+            type: string
+        skill_files:
+          type: array
+          items:
+            type: string
+        mcp_sidecars:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        capabilities:
+          $ref: "#/components/schemas/RuntimeCapabilities"
+
+    CapabilitiesResponse:
+      type: object
+      properties:
+        runtime:
+          type: string
+          enum: [opencode]
+        service:
+          type: string
+        capabilities:
+          $ref: "#/components/schemas/RuntimeCapabilities"
+
+    InfoResponse:
+      type: object
+      properties:
+        runtime:
+          type: string
+          enum: [opencode]
+        contract_version:
+          type: string
+          enum: [v1alpha1]
+          description: |
+            Semantic contract version for operator compatibility.
+            The operator may use this to gate features or abort on mismatch.
+        service:
+          type: string
+        namespace:
+          type: string
+        provider:
+          type: string
+        model:
+          type: string
+        agent:
+          type: string
+        capabilities:
+          $ref: "#/components/schemas/RuntimeCapabilities"
+        supervisor:
+          type: object
+          properties:
+            restart_count:
+              type: integer
+            max_restarts:
+              type: integer
+        tracing:
+          type: object
+          properties:
+            enabled:
+              type: boolean
+              description: Whether a tracer is currently active
+            otel_available:
+              type: boolean
+              description: Whether OTEL packages are installed
+
+    RuntimeCapabilities:
+      type: object
+      description: |
+        Declared runtime features.  Returned by `/capabilities`, `/health`,
+        `/ready`, and `/info` endpoints.
+      properties:
+        native_tools:
+          type: array
+          items:
+            type: string
+          description: Sorted list of built-in tool names
+        native_tool_count:
+          type: integer
+        output_formats:
+          type: array
+          items:
+            type: string
+          description: Supported output format strings
+        structured_output:
+          type: object
+          properties:
+            supported:
+              type: boolean
+            json_schema:
+              type: boolean
+            default_retry_count:
+              type: integer
+        autonomous_execution:
+          type: object
+          properties:
+            supported:
+              type: boolean
+            default_enabled:
+              type: boolean
+            default_max_retries:
+              type: integer
+            default_max_turns:
+              type: integer
+        agents:
+          type: object
+          properties:
+            available:
+              type: array
+              items:
+                type: string
+            default:
+              type: string
+            plan_threshold_chars:
+              type: integer
+        session_management:
+          type: object
+          properties:
+            abort:
+              type: boolean
+            summarize:
+              type: boolean
+            init:
+              type: boolean
+            init_on_create:
+              type: boolean
+            todos:
+              type: boolean
+            compaction_threshold:
+              type: number
+              format: float
+        mcp_usage:
+          type: object
+          properties:
+            available:
+              type: boolean
+            preferred_mode:
+              type: string
+
+    # ───────────────── Session schemas ─────────────────
+    CancelResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [cancelled, cancel_failed]
+        session_id:
+          type: string
+          description: Internal OpenCode session ID
+        thread_id:
+          type: string
+          description: The logical thread ID provided in the request
+
+    ContextBudgetResponse:
+      type: object
+      properties:
+        session_id:
+          type: string
+          description: Internal OpenCode session ID
+        thread_id:
+          type: string
+        compaction_available:
+          type: boolean
+          description: Whether context compaction can be triggered
+        status:
+          type: string
+          enum: [healthy, warning, critical]
+          description: |
+            Budget status based on token usage vs MODEL_CONTEXT_LIMIT.
+            `warning` = ≥75% used, `critical` = ≥90% used.
+        tokens:
+          type: object
+          description: Token usage breakdown
+          additionalProperties: true
+        cost:
+          type: number
+          format: float
+          nullable: true
+        time:
+          type: object
+          nullable: true
+          additionalProperties: true
+      additionalProperties: true
+
+    # ───────────────── Artifact schemas ─────────────────
+    ArtifactListResponse:
+      type: object
+      properties:
+        files:
+          type: array
+          items:
+            $ref: "#/components/schemas/ArtifactFileEntry"
+          description: Flat list of files found
+        truncated:
+          type: boolean
+          description: |
+            Whether the listing was truncated at the maximum file count
+            (default 200)
+        roots:
+          type: array
+          items:
+            type: string
+          description: POSIX paths of directories that were walked
+
+    ArtifactFileEntry:
+      type: object
+      properties:
+        path:
+          type: string
+          description: Absolute POSIX file path
+        name:
+          type: string
+          description: File name
+        size:
+          type: integer
+          description: File size in bytes
+        modified:
+          type: number
+          format: float
+          description: Last modification time (Unix timestamp)
+        directory:
+          type: string
+          description: Parent directory POSIX path
+
+    # ───────────────── Error schemas ─────────────────
+    ErrorDetail:
+      type: object
+      properties:
+        detail:
+          type: string
+          description: Human-readable error message
+
+    ValidationError:
+      type: object
+      properties:
+        detail:
+          type: array
+          items:
+            type: object
+            properties:
+              loc:
+                type: array
+                items:
+                  oneOf:
+                    - type: string
+                    - type: integer
+                description: Field location path
+              msg:
+                type: string
+                description: Validation error message
+              type:
+                type: string
+                description: Error type identifier

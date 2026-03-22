@@ -8,7 +8,11 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY main.py worker.py utils.py state_store.py ./
+COPY main.py worker.py utils.py state_store.py config.py errors.py reconcile.py tracing.py alembic.ini ./
+COPY controllers/ ./controllers/
+COPY builders/ ./builders/
+COPY services/ ./services/
+COPY migrations/ ./migrations/
 
 RUN chown -R operator:operator /app
 USER operator

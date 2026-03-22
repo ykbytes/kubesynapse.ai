@@ -20,15 +20,23 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install linters
-        run: pip install flake8
-      - name: Lint Operator
-        run: cd operator && flake8 . --max-line-length=120
-      - name: Lint Agent Runtime
-        run: cd agent-runtime && flake8 . --max-line-length=120
-      - name: Lint Goose Runtime
-        run: cd goose-runtime && flake8 . --max-line-length=120
-      - name: Lint API Gateway
-        run: cd api-gateway && flake8 . --max-line-length=120
+        run: pip install ruff mypy pydantic sqlalchemy types-PyYAML types-croniter
+      - name: Ruff check
+        run: ruff check operator/ agent-runtime/ api-gateway/ goose-runtime/
+      - name: Ruff format check
+        run: ruff format --check operator/ agent-runtime/ api-gateway/ goose-runtime/
+      - name: Mypy operator
+        run: cd operator && mypy --config-file ../pyproject.toml . --ignore-missing-imports || true
+      - name: Mypy agent-runtime
+        run: cd agent-runtime && mypy --config-file ../pyproject.toml . --ignore-missing-imports || true
+      - name: Mypy api-gateway
+        run: cd api-gateway && mypy --config-file ../pyproject.toml . --ignore-missing-imports || true
+      - name: SHA-1 ban check
+        run: |
+          if grep -rn 'hashlib\.sha1' operator/ agent-runtime/ api-gateway/ --include='*.py'; then
+            echo "ERROR: hashlib.sha1 usage found. Use sha256 instead."
+            exit 1
+          fi
 
   test:
     runs-on: ubuntu-latest

@@ -3,7 +3,6 @@
 import asyncio
 import contextlib
 import copy
-import hmac
 import json
 import logging
 import os
@@ -15,15 +14,14 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from collections.abc import AsyncGenerator
+from typing import Any, cast
 from urllib.parse import urlencode
 
 import httpx
 from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
-from jose import jwk, jwt
-from jose.utils import base64url_decode
 from pydantic import BaseModel, Field, model_validator
 
 CURRENT_DIR = Path(__file__).resolve().parent
@@ -93,6 +91,30 @@ from jwt_utils import (
     REFRESH_TOKEN_TTL_SECONDS,
     create_access_token,
     decode_access_token,
+)
+from auth_middleware import (  # §4.1 — extracted auth middleware
+    AUTH_MODE,
+    OIDC_TRANSACTION_COOKIE_NAME,
+    authenticate_bearer_token,
+    auth_configuration_payload,
+    browser_auth_enabled,
+    build_session_payload,
+    clear_oidc_transaction_cookie,
+    clear_refresh_cookie,
+    ensure_namespace_access,
+    ensure_role,
+    issue_session_response,
+    local_access_enabled,
+    principal_from_local_user,
+    principal_from_oidc_claims,
+    registration_allowed,
+    request_client_ip,
+    safe_record_audit,
+    set_oidc_transaction_cookie,
+    set_refresh_cookie,
+    shared_token_enabled,
+    verify_token,
+    verify_token_or_query,
 )
 
 try:
@@ -195,28 +217,11 @@ app.add_middleware(
 
 NATS_URL = os.getenv("NATS_URL", "nats://ai-agent-sandbox-nats:4222")
 QDRANT_URL = os.getenv("QDRANT_URL", "http://ai-agent-sandbox-qdrant:6333")
-AUTH_MODE = os.getenv("API_GATEWAY_AUTH_MODE", "shared_token").strip().lower()
-OIDC_JWKS_URL = os.getenv("OIDC_JWKS_URL", "").strip()
-OIDC_ISSUER = os.getenv("OIDC_ISSUER", "").strip()
-OIDC_AUDIENCE = os.getenv("OIDC_AUDIENCE", "").strip()
-SHARED_TOKEN = os.getenv("API_GATEWAY_SHARED_TOKEN", "").strip()
-LOCAL_AUTH_ENABLED = os.getenv("LOCAL_AUTH_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
-if not LOCAL_AUTH_ENABLED:
-    LOCAL_AUTH_ENABLED = AUTH_MODE in {"local", "hybrid", "enterprise"}
-REGISTRATION_ENABLED = os.getenv("AUTH_REGISTRATION_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
-AUTH_COOKIE_SECURE = os.getenv("AUTH_COOKIE_SECURE", "").strip().lower() in {"1", "true", "yes", "on"}
-AUTH_COOKIE_DOMAIN = os.getenv("AUTH_COOKIE_DOMAIN", "").strip() or None
-AUTH_COOKIE_PATH = os.getenv("AUTH_COOKIE_PATH", "/").strip() or "/"
-AUTH_COOKIE_SAMESITE = os.getenv("AUTH_COOKIE_SAMESITE", "lax").strip().lower() or "lax"
-OIDC_TRANSACTION_COOKIE_NAME = os.getenv("AUTH_OIDC_TRANSACTION_COOKIE_NAME", "ai-agent-oidc").strip() or "ai-agent-oidc"
-OIDC_TRANSACTION_COOKIE_TTL_SECONDS = max(int(os.getenv("AUTH_OIDC_TRANSACTION_TTL_SECONDS", "600")), 60)
+# Auth constants (AUTH_MODE, SHARED_TOKEN, etc.) moved to auth_middleware.py — §4.1
 AGENT_RUNTIME_TIMEOUT_SECONDS = max(float(os.getenv("AGENT_RUNTIME_TIMEOUT_SECONDS", "360")), 1.0)
 LITELLM_INTERNAL_URL = os.getenv("LITELLM_INTERNAL_URL", "").strip() or "http://ai-agent-sandbox-litellm:4000"
 LITELLM_MASTER_KEY = os.getenv("LITELLM_MASTER_KEY", "").strip()
 LLM_SECRET_NAME = os.getenv("LLM_SECRET_NAME", "ai-agent-sandbox-llm-api-keys")
-OIDC_JWKS_TIMEOUT_SECONDS = max(float(os.getenv("OIDC_JWKS_TIMEOUT_SECONDS", "10")), 1.0)
-JWKS_CACHE: dict[str, Any] = {"keys": [], "expires_at": 0.0}
-_JWKS_LOCK = asyncio.Lock()
 STREAM_KEEPALIVE_SECONDS = max(float(os.getenv("API_GATEWAY_STREAM_KEEPALIVE_SECONDS", "15")), 5.0)
 A2A_PROTOCOL_VERSION = "1.0"
 A2A_TASK_RETENTION_SECONDS = max(int(os.getenv("A2A_TASK_RETENTION_SECONDS", "3600")), 60)
@@ -2242,7 +2247,7 @@ async def handle_a2a_send_message(
     set_a2a_task_status(record, "TASK_STATE_WORKING", None, {"status": "working"})
     store_a2a_task_record(record)
 
-    raw_request = SimpleNamespace(headers={"x-request-id": gateway_request_id})
+    raw_request = cast(Request, SimpleNamespace(headers={"x-request-id": gateway_request_id}))
     invoke_request = InvokeRequest(
         prompt=prompt,
         thread_id=str(record.get("threadId") or ""),
@@ -2262,7 +2267,7 @@ async def handle_a2a_send_message(
     return jsonrpc_success_response(request_id, {"task": public_a2a_task(record, history_length)})
 
 
-async def iter_runtime_sse_events(body_iterator: Any) -> Any:
+async def iter_runtime_sse_events(body_iterator: Any) -> AsyncGenerator[tuple[str, str], None]:
     buffer = ""
     async for chunk in body_iterator:
         if isinstance(chunk, bytes):
@@ -2296,14 +2301,14 @@ async def handle_a2a_stream_message(
     set_a2a_task_status(record, "TASK_STATE_WORKING", None, {"status": "working"})
     store_a2a_task_record(record)
 
-    raw_request = SimpleNamespace(headers={"x-request-id": gateway_request_id})
+    raw_request = cast(Request, SimpleNamespace(headers={"x-request-id": gateway_request_id}))
     invoke_request = InvokeRequest(
         prompt=prompt,
         thread_id=str(record.get("threadId") or ""),
         team_context=team_context,
     )
 
-    async def event_generator() -> Any:
+    async def event_generator() -> AsyncGenerator[str, None]:
         yielded_artifact = False
         try:
             upstream_response = await invoke_agent_stream(agent_name, invoke_request, raw_request, namespace, user={})
@@ -2405,7 +2410,7 @@ async def handle_a2a_stream_message(
             yield jsonrpc_sse_message(jsonrpc_success_response(request_id, {"statusUpdate": task_status_update_event(record)}))
         finally:
             if hasattr(upstream_response.body_iterator, "aclose"):
-                await upstream_response.body_iterator.aclose()
+                await upstream_response.body_iterator.aclose()  # type: ignore[union-attr]
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
@@ -2657,13 +2662,13 @@ def read_custom_resource(plural: str, name: str, namespace: str, label: str) -> 
     try:
         from kubernetes import client
 
-        return client.CustomObjectsApi().get_namespaced_custom_object(
+        return cast(dict[str, Any], client.CustomObjectsApi().get_namespaced_custom_object(
             group=RESOURCE_GROUP,
             version=RESOURCE_VERSION,
             namespace=namespace,
             plural=plural,
             name=name,
-        )
+        ))
     except Exception as exc:
         logger.warning("Resource read failed (%s/%s): %s", plural, name, exc)
         raise HTTPException(status_code=404, detail=f"{label} '{name}' not found") from exc
@@ -2701,13 +2706,13 @@ def replace_custom_resource_spec(plural: str, name: str, namespace: str, spec: d
         from kubernetes import client
 
         api = client.CustomObjectsApi()
-        current = api.get_namespaced_custom_object(
+        current = cast(dict[str, Any], api.get_namespaced_custom_object(
             group=RESOURCE_GROUP,
             version=RESOURCE_VERSION,
             namespace=namespace,
             plural=plural,
             name=name,
-        )
+        ))
         return api.replace_namespaced_custom_object(
             group=RESOURCE_GROUP,
             version=RESOURCE_VERSION,
@@ -2790,8 +2795,10 @@ def agent_detail_from_resource(agent: dict[str, Any]) -> AgentDetail:
     metadata = agent.get("metadata", {})
     storage = spec.get("storage", {}) if isinstance(spec.get("storage"), dict) else {}
     runtime = spec.get("runtime") if isinstance(spec.get("runtime"), dict) else {}
-    goose_runtime = runtime.get("goose") if isinstance(runtime.get("goose"), dict) else {}
-    opencode_runtime = runtime.get("opencode") if isinstance(runtime.get("opencode"), dict) else {}
+    _goose = runtime.get("goose")
+    goose_runtime: dict[str, Any] = _goose if isinstance(_goose, dict) else {}
+    _opencode = runtime.get("opencode")
+    opencode_runtime: dict[str, Any] = _opencode if isinstance(_opencode, dict) else {}
     try:
         skills_config = parse_agent_skills_config(spec.get("skills"), source="AIAgent.spec.skills", strict=False)
     except HTTPException as exc:
@@ -2823,14 +2830,16 @@ def agent_detail_from_resource(agent: dict[str, Any]) -> AgentDetail:
 
 
 def policy_a2a_targets_from_resource(policy: dict[str, Any]) -> list[dict[str, str]]:
-    spec = policy.get("spec") if isinstance(policy.get("spec"), dict) else {}
+    _spec = policy.get("spec")
+    spec: dict[str, Any] = _spec if isinstance(_spec, dict) else {}
     config = parse_a2a_policy_config(spec.get("a2a"), source="AgentPolicy.spec.a2a")
     return list(config.get("allowedTargets") or [])
 
 
 def discover_agent_peers(agent_name: str, namespace: str) -> AgentDiscoveryResponse:
     caller_agent = read_agent(agent_name, namespace)
-    caller_spec = caller_agent.get("spec") if isinstance(caller_agent.get("spec"), dict) else {}
+    _caller_spec = caller_agent.get("spec")
+    caller_spec: dict[str, Any] = _caller_spec if isinstance(_caller_spec, dict) else {}
     policy_ref = str(caller_spec.get("policyRef") or "").strip() or None
     allowed_targets: list[dict[str, str]] = []
     if policy_ref:
@@ -2861,7 +2870,8 @@ def discover_agent_peers(agent_name: str, namespace: str) -> AgentDiscoveryRespo
             raise
 
         target_info = agent_info_from_resource(target_agent)
-        target_spec = target_agent.get("spec") if isinstance(target_agent.get("spec"), dict) else {}
+        _target_spec = target_agent.get("spec")
+        target_spec: dict[str, Any] = _target_spec if isinstance(_target_spec, dict) else {}
         target_allowed_callers = parse_a2a_agent_config(
             target_spec.get("a2a"),
             source=f"AIAgent[{target_namespace}/{target_name}].spec.a2a",
@@ -3010,13 +3020,13 @@ def read_agent(agent_name: str, namespace: str) -> dict[str, Any]:
     try:
         from kubernetes import client
 
-        return client.CustomObjectsApi().get_namespaced_custom_object(
+        return cast(dict[str, Any], client.CustomObjectsApi().get_namespaced_custom_object(
             group="sandbox.enterprise.ai",
             version="v1alpha1",
             namespace=namespace,
             plural="aiagents",
             name=agent_name,
-        )
+        ))
     except Exception as exc:
         logger.warning("Agent read failed (%s): %s", agent_name, exc)
         raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' not found") from exc
@@ -3057,13 +3067,13 @@ def read_approval(approval_name: str, namespace: str) -> dict[str, Any]:
     try:
         from kubernetes import client
 
-        return client.CustomObjectsApi().get_namespaced_custom_object(
+        return cast(dict[str, Any], client.CustomObjectsApi().get_namespaced_custom_object(
             group="sandbox.enterprise.ai",
             version="v1alpha1",
             namespace=namespace,
             plural="agentapprovals",
             name=approval_name,
-        )
+        ))
     except Exception as exc:
         logger.warning("Approval read failed (%s): %s", approval_name, exc)
         raise HTTPException(status_code=404, detail=f"Approval '{approval_name}' not found") from exc
@@ -3128,417 +3138,7 @@ def get_agent_status(agent_name: str, namespace: str) -> str:
     return str(getattr(pod.status, "phase", "Unknown") or "Unknown").lower()
 
 
-async def load_jwks() -> list[dict[str, Any]]:
-    if JWKS_CACHE["expires_at"] > time.time():
-        return JWKS_CACHE["keys"]
-
-    async with _JWKS_LOCK:
-        if JWKS_CACHE["expires_at"] > time.time():
-            return JWKS_CACHE["keys"]
-
-        if not OIDC_JWKS_URL:
-            raise HTTPException(status_code=503, detail="OIDC JWKS URL is not configured")
-
-        async with httpx.AsyncClient(timeout=OIDC_JWKS_TIMEOUT_SECONDS) as client:
-            response = await client.get(OIDC_JWKS_URL)
-            response.raise_for_status()
-            keys = response.json().get("keys", [])
-
-        JWKS_CACHE.update({"keys": keys, "expires_at": time.time() + 300})
-        return keys
-
-
-def request_client_ip(request: Request) -> str | None:
-    forwarded_for = request.headers.get("x-forwarded-for", "").strip()
-    if forwarded_for:
-        return forwarded_for.split(",", 1)[0].strip() or None
-    if request.client is not None:
-        return request.client.host
-    return None
-
-
-def cookie_samesite() -> str:
-    if AUTH_COOKIE_SAMESITE in {"lax", "strict", "none"}:
-        return AUTH_COOKIE_SAMESITE
-    return "lax"
-
-
-def set_refresh_cookie(response: Response, refresh_token: str) -> None:
-    response.set_cookie(
-        key=REFRESH_COOKIE_NAME,
-        value=refresh_token,
-        max_age=REFRESH_TOKEN_TTL_SECONDS,
-        httponly=True,
-        secure=AUTH_COOKIE_SECURE,
-        samesite=cookie_samesite(),
-        path=AUTH_COOKIE_PATH,
-        domain=AUTH_COOKIE_DOMAIN,
-    )
-
-
-def clear_refresh_cookie(response: Response) -> None:
-    response.delete_cookie(
-        key=REFRESH_COOKIE_NAME,
-        path=AUTH_COOKIE_PATH,
-        domain=AUTH_COOKIE_DOMAIN,
-    )
-
-
-def set_oidc_transaction_cookie(response: Response, cookie_value: str) -> None:
-    response.set_cookie(
-        key=OIDC_TRANSACTION_COOKIE_NAME,
-        value=cookie_value,
-        max_age=OIDC_TRANSACTION_COOKIE_TTL_SECONDS,
-        httponly=True,
-        secure=AUTH_COOKIE_SECURE,
-        samesite=cookie_samesite(),
-        path=AUTH_COOKIE_PATH,
-        domain=AUTH_COOKIE_DOMAIN,
-    )
-
-
-def clear_oidc_transaction_cookie(response: Response) -> None:
-    response.delete_cookie(
-        key=OIDC_TRANSACTION_COOKIE_NAME,
-        path=AUTH_COOKIE_PATH,
-        domain=AUTH_COOKIE_DOMAIN,
-    )
-
-
-def shared_token_enabled() -> bool:
-    return bool(SHARED_TOKEN) and AUTH_MODE in {"shared_token", "auto", "hybrid", "enterprise"}
-
-
-def oidc_bearer_enabled() -> bool:
-    return bool(OIDC_JWKS_URL) and AUTH_MODE in {"oidc", "auto", "hybrid", "enterprise"}
-
-
-def local_access_enabled() -> bool:
-    return LOCAL_AUTH_ENABLED or AUTH_MODE == "local"
-
-
-def browser_auth_enabled() -> bool:
-    return local_access_enabled() or ldap_enabled() or bool(oidc_providers()) or bool(saml_providers())
-
-
-def registration_allowed() -> bool:
-    return local_access_enabled() and (REGISTRATION_ENABLED or count_users() == 0)
-
-
-def auth_configuration_payload() -> dict[str, Any]:
-    return {
-        "auth_mode": AUTH_MODE,
-        "local_enabled": local_access_enabled(),
-        "registration_enabled": registration_allowed(),
-        "shared_token_enabled": shared_token_enabled(),
-        "browser_auth_enabled": browser_auth_enabled(),
-        "bootstrap_complete": count_users() > 0,
-        **auth_configuration(),
-    }
-
-
-def claim_string_list(value: Any) -> list[str]:
-    if value is None:
-        return []
-    if isinstance(value, list):
-        return [str(item).strip() for item in value if str(item).strip()]
-    text = str(value).strip()
-    return [text] if text else []
-
-
-def normalize_principal(
-    *,
-    sub: str,
-    username: str,
-    display_name: str | None,
-    email: str | None,
-    role: str,
-    allowed_namespaces: list[str] | None,
-    auth_provider: str,
-    session_id: str | None = None,
-    is_active: bool = True,
-) -> dict[str, Any]:
-    normalized_role = role if role in ROLE_PRIORITY else "viewer"
-    normalized_namespaces = normalize_namespaces(allowed_namespaces or ["*"]) or ["*"]
-    return {
-        "sub": sub,
-        "id": sub,
-        "username": username,
-        "display_name": display_name or username,
-        "email": email,
-        "role": normalized_role,
-        "allowed_namespaces": normalized_namespaces,
-        "auth_provider": auth_provider,
-        "session_id": session_id,
-        "is_active": is_active,
-    }
-
-
-def build_shared_token_principal() -> dict[str, Any]:
-    return normalize_principal(
-        sub="shared-token-user",
-        username="shared-token-user",
-        display_name="Shared Token",
-        email=None,
-        role="admin",
-        allowed_namespaces=["*"],
-        auth_provider="shared_token",
-    )
-
-
-def principal_from_local_user(user: dict[str, Any], session_id: str) -> dict[str, Any]:
-    return normalize_principal(
-        sub=str(user["id"]),
-        username=str(user["username"]),
-        display_name=user.get("display_name"),
-        email=user.get("email"),
-        role=str(user.get("role") or "viewer"),
-        allowed_namespaces=user.get("allowed_namespaces") or ["default"],
-        auth_provider=str(user.get("auth_provider") or "local"),
-        session_id=session_id,
-        is_active=bool(user.get("is_active", True)),
-    )
-
-
-def principal_from_oidc_claims(claims: dict[str, Any]) -> dict[str, Any]:
-    provider = get_oidc_provider(issuer=str(claims.get("iss") or ""))
-    group_claim = str(provider.get("group_claim") or "groups") if provider else "groups"
-    groups = claim_string_list(claims.get(group_claim))
-    mapped_role = None
-    mapped_namespaces: list[str] = []
-    if provider is not None:
-        role_mapping = provider.get("group_role_mapping")
-        if isinstance(role_mapping, dict):
-            mapped_role, mapped_namespaces = resolve_role_mapping(groups, role_mapping)
-
-    role_candidates = claim_string_list(claims.get("roles"))
-    if claims.get("role") is not None:
-        role_candidates.insert(0, str(claims.get("role")))
-    role = mapped_role if mapped_role in ROLE_PRIORITY else next(
-        (item for item in role_candidates if item in ROLE_PRIORITY),
-        "admin",
-    )
-    allowed_namespaces = mapped_namespaces or normalize_namespaces(
-        claims.get("allowed_namespaces") or claims.get("namespaces") or ["*"]
-    ) or ["*"]
-    email = str(claims.get("email") or "").strip() or None
-    preferred_username = str(
-        claims.get("preferred_username")
-        or claims.get("upn")
-        or email
-        or claims.get("sub")
-        or "oidc-user"
-    ).strip()
-    username = preferred_username.split("@", 1)[0].lower() if "@" in preferred_username else preferred_username.lower()
-    auth_provider = f"oidc:{provider['id']}" if provider else "oidc"
-    return normalize_principal(
-        sub=str(claims.get("sub") or username),
-        username=username,
-        display_name=str(claims.get("name") or claims.get("display_name") or username),
-        email=email,
-        role=role,
-        allowed_namespaces=allowed_namespaces,
-        auth_provider=auth_provider,
-    )
-
-
-def safe_record_audit(
-    *,
-    action: str,
-    principal: dict[str, Any] | None,
-    resource_kind: str | None = None,
-    resource_name: str | None = None,
-    resource_namespace: str | None = None,
-    detail: dict[str, Any] | None = None,
-    ip_address: str | None = None,
-) -> None:
-    try:
-        record_audit_log(
-            action=action,
-            actor_sub=str(principal.get("sub")) if principal else None,
-            actor_username=str(principal.get("username")) if principal else None,
-            auth_provider=str(principal.get("auth_provider")) if principal else None,
-            resource_kind=resource_kind,
-            resource_name=resource_name,
-            resource_namespace=resource_namespace,
-            detail=detail,
-            ip_address=ip_address,
-        )
-    except Exception:
-        logger.exception("Failed to persist audit log for action '%s'.", action)
-
-
-def build_session_payload(user: dict[str, Any], session_record: dict[str, Any]) -> dict[str, Any]:
-    principal = principal_from_local_user(user, str(session_record["id"]))
-    access_token, expires_at, expires_in = create_access_token(principal, session_id=str(session_record["id"]))
-    return {
-        "access_token": access_token,
-        "token_type": "bearer",
-        "expires_in": expires_in,
-        "expires_at": expires_at,
-        "refresh_expires_at": session_record.get("expires_at"),
-        "user": principal,
-        "auth_mode": AUTH_MODE,
-    }
-
-
-def issue_session_response(user: dict[str, Any], session_record: dict[str, Any], refresh_token: str, *, status_code: int = 200) -> JSONResponse:
-    response = JSONResponse(build_session_payload(user, session_record), status_code=status_code)
-    set_refresh_cookie(response, refresh_token)
-    response.headers["Cache-Control"] = "no-store"
-    return response
-
-
-def ensure_role(user: dict[str, Any], minimum_role: str) -> dict[str, Any]:
-    current_role = str(user.get("role") or "viewer")
-    if ROLE_PRIORITY.get(current_role, 0) < ROLE_PRIORITY.get(minimum_role, 0):
-        raise HTTPException(status_code=403, detail=f"{minimum_role.capitalize()} role is required")
-    return user
-
-
-def ensure_namespace_access(user: dict[str, Any], namespace: str, minimum_role: str = "viewer") -> dict[str, Any]:
-    ensure_role(user, minimum_role)
-    allowed_namespaces = normalize_namespaces(user.get("allowed_namespaces") or ["*"]) or ["*"]
-    if "*" in allowed_namespaces or namespace in allowed_namespaces:
-        return user
-    raise HTTPException(status_code=403, detail=f"Access to namespace '{namespace}' is not permitted")
-
-
-def validate_claims(claims: dict[str, Any]) -> None:
-    now = int(time.time())
-    if claims.get("exp") is not None and now >= int(claims["exp"]):
-        raise HTTPException(status_code=401, detail="Token has expired")
-    if claims.get("nbf") is not None and now < int(claims["nbf"]):
-        raise HTTPException(status_code=401, detail="Token is not active yet")
-    if OIDC_ISSUER and claims.get("iss") != OIDC_ISSUER:
-        raise HTTPException(status_code=401, detail="Token issuer is invalid")
-    if OIDC_AUDIENCE:
-        audience = claims.get("aud")
-        valid = audience == OIDC_AUDIENCE or (
-            isinstance(audience, list) and OIDC_AUDIENCE in audience
-        )
-        if not valid:
-            raise HTTPException(status_code=401, detail="Token audience is invalid")
-
-
-async def verify_oidc_token(token: str) -> dict[str, Any]:
-    header = jwt.get_unverified_header(token)
-    key_id = header.get("kid")
-    keys = await load_jwks()
-    key_data = next((item for item in keys if item.get("kid") == key_id), None)
-    if key_data is None:
-        raise HTTPException(status_code=401, detail="Unable to find a signing key for this token")
-
-    signing_key = jwk.construct(key_data)
-    message, encoded_signature = token.rsplit(".", 1)
-    decoded_signature = base64url_decode(encoded_signature.encode("utf-8"))
-    if not signing_key.verify(message.encode("utf-8"), decoded_signature):
-        raise HTTPException(status_code=401, detail="Token signature is invalid")
-
-    claims = jwt.get_unverified_claims(token)
-    validate_claims(claims)
-    return principal_from_oidc_claims(claims)
-
-
-def verify_local_access_token(token: str) -> dict[str, Any]:
-    try:
-        claims = decode_access_token(token)
-    except ValueError as exc:
-        raise HTTPException(status_code=401, detail="Invalid local access token") from exc
-
-    try:
-        user_id = int(str(claims.get("sub") or ""))
-    except ValueError as exc:
-        raise HTTPException(status_code=401, detail="Local access token subject is invalid") from exc
-
-    session_id = str(claims.get("session_id") or "").strip()
-    if not session_id or not is_session_active(session_id, user_id=user_id):
-        raise HTTPException(status_code=401, detail="Local access token session is invalid")
-
-    user = get_active_user_context(user_id)
-    if user is None:
-        raise HTTPException(status_code=401, detail="Local access token user is unavailable")
-
-    return principal_from_local_user(user, session_id)
-
-
-def verify_shared_token(token: str) -> dict[str, Any]:
-    if not SHARED_TOKEN:
-        raise HTTPException(status_code=503, detail="Gateway shared token is not configured")
-    if not hmac.compare_digest(token, SHARED_TOKEN):
-        raise HTTPException(status_code=401, detail="Invalid bearer token")
-    return build_shared_token_principal()
-
-
-async def authenticate_bearer_token(token: str) -> dict[str, Any]:
-    if AUTH_MODE == "shared_token":
-        return verify_shared_token(token)
-    if AUTH_MODE == "oidc":
-        return await verify_oidc_token(token)
-    if AUTH_MODE == "local":
-        return verify_local_access_token(token)
-
-    if AUTH_MODE not in {"auto", "hybrid", "enterprise"}:
-        raise HTTPException(status_code=503, detail=f"Unsupported auth mode '{AUTH_MODE}'")
-
-    failures: list[str] = []
-    is_jwt_like = token.count(".") == 2
-
-    if local_access_enabled() and is_jwt_like:
-        try:
-            return verify_local_access_token(token)
-        except HTTPException as exc:
-            failures.append(str(exc.detail))
-
-    if oidc_bearer_enabled() and is_jwt_like:
-        try:
-            return await verify_oidc_token(token)
-        except HTTPException as exc:
-            failures.append(str(exc.detail))
-        except Exception as exc:
-            logger.warning("OIDC bearer verification failed in hybrid mode: %s", exc)
-            failures.append(str(exc))
-
-    if shared_token_enabled():
-        try:
-            return verify_shared_token(token)
-        except HTTPException as exc:
-            failures.append(str(exc.detail))
-
-    detail = failures[0] if failures else "No configured auth strategy accepted the presented token"
-    raise HTTPException(status_code=401, detail=detail)
-
-
-async def verify_token(authorization: str | None = Header(default=None)) -> dict[str, Any]:
-    if authorization is None or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Invalid authorization header")
-
-    token = authorization[7:].strip()
-    if not token:
-        raise HTTPException(status_code=401, detail="Missing token")
-
-    return await authenticate_bearer_token(token)
-
-
-async def verify_token_or_query(
-    raw_request: Request,
-    authorization: str | None = Header(default=None),
-) -> dict[str, Any]:
-    """Like verify_token but also accepts a *token* query-parameter.
-
-    SSE / EventSource connections cannot set custom HTTP headers, so the
-    browser passes the access token in the query string instead.
-    """
-    if authorization and authorization.startswith("Bearer "):
-        tok = authorization[7:].strip()
-        if tok:
-            return await authenticate_bearer_token(tok)
-
-    tok = raw_request.query_params.get("token", "").strip()
-    if tok:
-        return await authenticate_bearer_token(tok)
-
-    raise HTTPException(status_code=401, detail="Missing token")
+# Auth middleware (load_jwks … verify_token_or_query) extracted to auth_middleware.py — §4.1
 
 
 def a2a_card_http_exception(error: A2AJSONRPCError) -> HTTPException:
@@ -3625,7 +3225,7 @@ def login(body: AuthLoginRequest, raw_request: Request):
         if not local_access_enabled():
             raise HTTPException(status_code=503, detail="Local authentication is not enabled")
         db_user = get_user_by_username(username)
-        if db_user is None or not verify_password(body.password, db_user.password_hash):
+        if db_user is None or not verify_password(body.password, cast(str, db_user.password_hash)):
             note_login_attempt(rate_limit_key, success=False)
             record_failed_login(username)
             raise HTTPException(status_code=401, detail="Invalid username or password")
@@ -3633,8 +3233,8 @@ def login(body: AuthLoginRequest, raw_request: Request):
             raise HTTPException(status_code=403, detail="User account is inactive")
         if is_user_locked(db_user):
             raise HTTPException(status_code=423, detail="User account is temporarily locked")
-        reset_failed_logins(int(db_user.id))
-        user = get_active_user_context(int(db_user.id)) or serialize_user(db_user)
+        reset_failed_logins(cast(int, db_user.id))
+        user = get_active_user_context(cast(int, db_user.id)) or serialize_user(db_user)
     elif provider == "ldap":
         if not ldap_enabled():
             raise HTTPException(status_code=503, detail="LDAP authentication is not enabled")
@@ -4636,7 +4236,7 @@ def delete_policy(
 ):
     ensure_namespace_access(user, namespace, "operator")
     delete_custom_resource("agentpolicies", policy_name, namespace, "Policy")
-    return DeleteResponse(deleted=True)
+    return DeleteResponse(status="deleted", kind="policy", name=policy_name, namespace=namespace)
 
 
 @app.patch("/api/approvals/{approval_name}", response_model=ApprovalInfo)
@@ -4836,6 +4436,7 @@ def create_git_credentials(
     """Create a K8s Secret with git credentials for an agent."""
     ensure_namespace_access(user, namespace, "operator")
     from kubernetes import client
+    from kubernetes.client.rest import ApiException
 
     secret_name = _git_secret_name(agent_name)
     string_data: dict[str, str] = {"auth_method": body.auth_method}
@@ -4858,7 +4459,7 @@ def create_git_credentials(
     )
     try:
         client.CoreV1Api().create_namespaced_secret(namespace=namespace, body=secret)
-    except client.exceptions.ApiException as e:
+    except ApiException as e:
         if e.status == 409:
             client.CoreV1Api().replace_namespaced_secret(name=secret_name, namespace=namespace, body=secret)
         else:
@@ -4875,16 +4476,17 @@ def get_git_credentials(
     """Get git credential metadata (auth method only, never exposes secrets)."""
     ensure_namespace_access(user, namespace)
     from kubernetes import client
+    from kubernetes.client.rest import ApiException
 
     secret_name = _git_secret_name(agent_name)
     try:
-        secret = client.CoreV1Api().read_namespaced_secret(name=secret_name, namespace=namespace)
-        data = secret.data or {}
+        secret_result = client.CoreV1Api().read_namespaced_secret(name=secret_name, namespace=namespace)
+        data: dict[str, str] = getattr(secret_result, "data", None) or {}
         # Only return auth_method, never actual credentials
         import base64
         auth_method = base64.b64decode(data.get("auth_method", "")).decode() if data.get("auth_method") else "unknown"
         return {"exists": True, "secret_name": secret_name, "auth_method": auth_method}
-    except client.exceptions.ApiException as e:
+    except ApiException as e:
         if e.status == 404:
             return {"exists": False, "secret_name": secret_name}
         raise HTTPException(status_code=502, detail=f"Failed to read git credential secret: {e}") from e
@@ -4899,12 +4501,13 @@ def delete_git_credentials(
     """Delete git credential secret for an agent."""
     ensure_namespace_access(user, namespace, "operator")
     from kubernetes import client
+    from kubernetes.client.rest import ApiException
 
     secret_name = _git_secret_name(agent_name)
     try:
         client.CoreV1Api().delete_namespaced_secret(name=secret_name, namespace=namespace)
         return {"status": "deleted", "secret_name": secret_name}
-    except client.exceptions.ApiException as e:
+    except ApiException as e:
         if e.status == 404:
             raise HTTPException(status_code=404, detail=f"Git credentials not found for agent '{agent_name}'") from e
         raise HTTPException(status_code=502, detail=f"Failed to delete git credential secret: {e}") from e
@@ -4920,6 +4523,7 @@ def create_github_credentials(
     """Create a K8s Secret with GitHub MCP credentials for an agent."""
     ensure_namespace_access(user, namespace, "operator")
     from kubernetes import client
+    from kubernetes.client.rest import ApiException
 
     secret_name = _github_secret_name(agent_name)
     secret = client.V1Secret(
@@ -4933,7 +4537,7 @@ def create_github_credentials(
     )
     try:
         client.CoreV1Api().create_namespaced_secret(namespace=namespace, body=secret)
-    except client.exceptions.ApiException as e:
+    except ApiException as e:
         if e.status == 409:
             client.CoreV1Api().replace_namespaced_secret(name=secret_name, namespace=namespace, body=secret)
         else:
@@ -4950,12 +4554,13 @@ def get_github_credentials(
     """Get GitHub credential metadata without exposing secrets."""
     ensure_namespace_access(user, namespace)
     from kubernetes import client
+    from kubernetes.client.rest import ApiException
 
     secret_name = _github_secret_name(agent_name)
     try:
         client.CoreV1Api().read_namespaced_secret(name=secret_name, namespace=namespace)
         return {"exists": True, "secret_name": secret_name}
-    except client.exceptions.ApiException as e:
+    except ApiException as e:
         if e.status == 404:
             return {"exists": False, "secret_name": secret_name}
         raise HTTPException(status_code=502, detail=f"Failed to read GitHub credential secret: {e}") from e
@@ -4970,12 +4575,13 @@ def delete_github_credentials(
     """Delete GitHub credential secret for an agent."""
     ensure_namespace_access(user, namespace, "operator")
     from kubernetes import client
+    from kubernetes.client.rest import ApiException
 
     secret_name = _github_secret_name(agent_name)
     try:
         client.CoreV1Api().delete_namespaced_secret(name=secret_name, namespace=namespace)
         return {"status": "deleted", "secret_name": secret_name}
-    except client.exceptions.ApiException as e:
+    except ApiException as e:
         if e.status == 404:
             raise HTTPException(status_code=404, detail=f"GitHub credentials not found for agent '{agent_name}'") from e
         raise HTTPException(status_code=502, detail=f"Failed to delete GitHub credential secret: {e}") from e
@@ -5103,13 +4709,13 @@ def trigger_workflow(
         from kubernetes import client
 
         api = client.CustomObjectsApi()
-        current = api.get_namespaced_custom_object(
+        current = cast(dict[str, Any], api.get_namespaced_custom_object(
             group=RESOURCE_GROUP,
             version=RESOURCE_VERSION,
             namespace=namespace,
             plural="agentworkflows",
             name=workflow_name,
-        )
+        ))
     except Exception as exc:
         status = getattr(exc, "status", None)
         if status == 404:
@@ -5123,7 +4729,7 @@ def trigger_workflow(
     try:
         from kubernetes import client as k8s_client
 
-        updated = k8s_client.CustomObjectsApi().replace_namespaced_custom_object(
+        updated = cast(dict[str, Any], k8s_client.CustomObjectsApi().replace_namespaced_custom_object(
             group=RESOURCE_GROUP,
             version=RESOURCE_VERSION,
             namespace=namespace,
@@ -5139,7 +4745,7 @@ def trigger_workflow(
                 },
                 "spec": updated_spec,
             },
-        )
+        ))
     except Exception as exc:
         status = getattr(exc, "status", None)
         if status == 409:
@@ -5167,13 +4773,13 @@ def trigger_workflow(
             },
         )
         # Re-read to return the freshest state
-        updated = k8s_client.CustomObjectsApi().get_namespaced_custom_object(
+        updated = cast(dict[str, Any], k8s_client.CustomObjectsApi().get_namespaced_custom_object(
             group=RESOURCE_GROUP,
             version=RESOURCE_VERSION,
             namespace=namespace,
             plural="agentworkflows",
             name=workflow_name,
-        )
+        ))
     except Exception:
         pass  # spec replace already succeeded; status reset is best-effort
 
@@ -5208,13 +4814,13 @@ def cancel_workflow(
         from kubernetes import client
 
         api = client.CustomObjectsApi()
-        current = api.get_namespaced_custom_object(
+        current = cast(dict[str, Any], api.get_namespaced_custom_object(
             group=RESOURCE_GROUP,
             version=RESOURCE_VERSION,
             namespace=namespace,
             plural="agentworkflows",
             name=workflow_name,
-        )
+        ))
     except Exception as exc:
         status_code = getattr(exc, "status", None)
         if status_code == 404:
@@ -5250,13 +4856,13 @@ def cancel_workflow(
         raise HTTPException(status_code=502, detail="Failed to cancel workflow") from exc
 
     try:
-        updated = api.get_namespaced_custom_object(
+        updated = cast(dict[str, Any], api.get_namespaced_custom_object(
             group=RESOURCE_GROUP,
             version=RESOURCE_VERSION,
             namespace=namespace,
             plural="agentworkflows",
             name=workflow_name,
-        )
+        ))
     except Exception:
         # Status was already patched successfully — return a minimal response
         # rather than failing the entire cancel operation.
@@ -5283,13 +4889,13 @@ def stream_workflow_status(
                 try:
                     from kubernetes import client as k8s_client
 
-                    resource = k8s_client.CustomObjectsApi().get_namespaced_custom_object(
+                    resource = cast(dict[str, Any], k8s_client.CustomObjectsApi().get_namespaced_custom_object(
                         group=RESOURCE_GROUP,
                         version=RESOURCE_VERSION,
                         namespace=namespace,
                         plural="agentworkflows",
                         name=workflow_name,
-                    )
+                    ))
                     info = workflow_info_from_resource(resource)
                     _sync_workflow_run_history(info)
                     info_dict = info.model_dump(mode="json")
@@ -5692,7 +5298,11 @@ async def invoke_agent_stream(
                         )
                         return
                     stream_iterator = response.aiter_text()
-                    next_chunk_task = asyncio.create_task(anext(stream_iterator))
+
+                    async def _next_chunk() -> str:
+                        return await anext(stream_iterator)
+
+                    next_chunk_task = asyncio.create_task(_next_chunk())
                     try:
                         while True:
                             done, _ = await asyncio.wait({next_chunk_task}, timeout=STREAM_KEEPALIVE_SECONDS)
@@ -5708,7 +5318,7 @@ async def invoke_agent_stream(
                             if chunk:
                                 yield chunk
 
-                            next_chunk_task = asyncio.create_task(anext(stream_iterator))
+                            next_chunk_task = asyncio.create_task(_next_chunk())
                     finally:
                         try:
                             if not next_chunk_task.done():
@@ -6361,7 +5971,7 @@ def llm_list_keys(user=Depends(verify_token)):
             name=LLM_SECRET_NAME,
             namespace=os.getenv("POD_NAMESPACE", "ai-platform"),
         )
-        data = secret.data or {}
+        data: dict[str, str] = getattr(secret, "data", None) or {}
         result: list[dict[str, Any]] = []
         for key_name in sorted(_ALLOWED_SECRET_KEYS):
             result.append({
@@ -6393,12 +6003,12 @@ def llm_update_keys(body: LLMKeyUpdate, user=Depends(verify_token)):
         ns = os.getenv("POD_NAMESPACE", "ai-platform")
         api = k8s_client.CoreV1Api()
         secret = api.read_namespaced_secret(name=LLM_SECRET_NAME, namespace=ns)
-        existing_data = secret.data or {}
+        existing_data: dict[str, str] = getattr(secret, "data", None) or {}
 
         for key_name, value in body.keys.items():
             existing_data[key_name] = base64.b64encode(value.encode("utf-8")).decode("ascii")
 
-        secret.data = existing_data
+        secret.data = existing_data  # type: ignore[union-attr]
         api.replace_namespaced_secret(name=LLM_SECRET_NAME, namespace=ns, body=secret)
         logger.info("Updated LLM API keys: %s (by user %s)", list(body.keys.keys()), user.get("sub", "unknown"))
         return {"status": "updated", "keys": list(body.keys.keys())}
@@ -6460,7 +6070,7 @@ async def llm_list_providers(user=Depends(verify_token)):
                 name=LLM_SECRET_NAME,
                 namespace=os.getenv("POD_NAMESPACE", "ai-platform"),
             )
-            data = secret.data or {}
+            data: dict[str, str] = getattr(secret, "data", None) or {}
             for key_name in _ALLOWED_SECRET_KEYS:
                 key_status[key_name] = key_name in data and bool(data[key_name])
         except Exception as exc:
@@ -6540,7 +6150,7 @@ async def llm_provider_suggestions(provider: str, q: str = "", user=Depends(veri
             from kubernetes import client as k8s_client
             ns = os.getenv("POD_NAMESPACE", "ai-platform")
             secret = k8s_client.CoreV1Api().read_namespaced_secret(name=LLM_SECRET_NAME, namespace=ns)
-            raw = (secret.data or {}).get("OPENROUTER_API_KEY", "")
+            raw = (getattr(secret, "data", None) or {}).get("OPENROUTER_API_KEY", "")
             if raw:
                 import base64
                 or_key = base64.b64decode(raw).decode("utf-8").strip() or None
@@ -6580,7 +6190,7 @@ async def llm_provider_suggestions(provider: str, q: str = "", user=Depends(veri
             import base64
             ns = os.getenv("POD_NAMESPACE", "ai-platform")
             secret = k8s_client.CoreV1Api().read_namespaced_secret(name=LLM_SECRET_NAME, namespace=ns)
-            raw = (secret.data or {}).get("GITHUB_COPILOT_TOKEN", "")
+            raw = (getattr(secret, "data", None) or {}).get("GITHUB_COPILOT_TOKEN", "")
             if raw:
                 cp_token = base64.b64decode(raw).decode("utf-8").strip() or None
         except Exception:
@@ -6656,7 +6266,7 @@ async def llm_add_provider_model(provider: str, body: ProviderModelAdd, user=Dep
                 name=LLM_SECRET_NAME,
                 namespace=ns,
             )
-            raw_b64 = (secret.data or {}).get("GITHUB_COPILOT_TOKEN", "")
+            raw_b64 = (getattr(secret, "data", None) or {}).get("GITHUB_COPILOT_TOKEN", "")
             if raw_b64:
                 actual_api_key = base64.b64decode(raw_b64).decode("utf-8")
             else:
@@ -6798,9 +6408,9 @@ async def copilot_auth_poll(user=Depends(verify_token)):
         ns = os.getenv("POD_NAMESPACE", "ai-platform")
         api = k8s_client.CoreV1Api()
         secret = api.read_namespaced_secret(name=LLM_SECRET_NAME, namespace=ns)
-        existing_data = secret.data or {}
+        existing_data = getattr(secret, "data", None) or {}
         existing_data["GITHUB_COPILOT_TOKEN"] = base64.b64encode(access_token.encode("utf-8")).decode("ascii")
-        secret.data = existing_data
+        secret.data = existing_data  # type: ignore[union-attr]
         api.replace_namespaced_secret(name=LLM_SECRET_NAME, namespace=ns, body=secret)
         logger.info("Stored Copilot token for user %s", user_id)
     except Exception as exc:
@@ -6823,7 +6433,7 @@ def copilot_auth_status(user=Depends(verify_token)):
             name=LLM_SECRET_NAME,
             namespace=os.getenv("POD_NAMESPACE", "ai-platform"),
         )
-        data = secret.data or {}
+        data: dict[str, str] = getattr(secret, "data", None) or {}
         is_set = "GITHUB_COPILOT_TOKEN" in data and bool(data["GITHUB_COPILOT_TOKEN"])
         return {"connected": is_set}
     except Exception as exc:
@@ -6832,7 +6442,7 @@ def copilot_auth_status(user=Depends(verify_token)):
 
 
 if __name__ == "__main__":
-    import uvicorn
+    import uvicorn  # type: ignore[import-untyped]
 
     uvicorn.run(app, host="0.0.0.0", port=8080)
 
@@ -7058,13 +6668,13 @@ async def import_yaml_bundle(
             if getattr(create_exc, "status", None) == 409:
                 # Already exists — update spec only
                 try:
-                    existing = api.get_namespaced_custom_object(
+                    existing = cast(dict[str, Any], api.get_namespaced_custom_object(
                         group=RESOURCE_GROUP,
                         version=RESOURCE_VERSION,
                         namespace=namespace,
                         plural=plural,
                         name=name,
-                    )
+                    ))
                     existing["spec"] = doc.get("spec", {})
                     api.replace_namespaced_custom_object(
                         group=RESOURCE_GROUP,
