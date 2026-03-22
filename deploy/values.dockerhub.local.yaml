@@ -58,7 +58,7 @@ webUi:
   enabled: true
   image:
     repository: docker.io/yakdhane/ai-agent-sandbox-web-ui
-    tag: deploy-20260319-230326
+    tag: deploy-20260322-222942
     pullPolicy: Always
 
 platformSecrets:
