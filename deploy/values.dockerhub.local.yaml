@@ -47,7 +47,7 @@ opencodeRuntime:
 apiGateway:
   image:
     repository: docker.io/yakdhane/ai-api-gateway
-    tag: deploy-20260322-214352
+    tag: deploy-20260322-222136
     pullPolicy: Always
   auth:
     mode: hybrid

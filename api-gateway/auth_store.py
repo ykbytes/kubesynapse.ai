@@ -360,29 +360,48 @@ def list_users() -> list[dict[str, Any]]:
 
 
 def ensure_bootstrap_admin() -> None:
+    """Create the bootstrap admin account, bypassing password policy."""
     username = os.getenv("AUTH_BOOTSTRAP_ADMIN_USERNAME", "").strip().lower()
     password = os.getenv("AUTH_BOOTSTRAP_ADMIN_PASSWORD", "").strip()
     if not username or not password:
         return
-    if get_user_by_username(username) is not None:
+
+    existing = get_user_by_username(username)
+    if existing is not None:
+        # Ensure the bootstrap user always has admin role
+        if str(existing.role) != "admin":
+            with db_session() as session:
+                user = session.get(User, existing.id)
+                if user is not None:
+                    user.role = "admin"  # type: ignore[assignment]
+                    logger.info("Promoted bootstrap account '%s' to admin role.", username)
         return
 
     email = os.getenv("AUTH_BOOTSTRAP_ADMIN_EMAIL", "").strip() or None
     display_name = os.getenv("AUTH_BOOTSTRAP_ADMIN_DISPLAY_NAME", "Platform Admin").strip() or "Platform Admin"
     allowed_namespaces = normalize_namespaces(os.getenv("AUTH_BOOTSTRAP_ADMIN_NAMESPACES", "*")) or ["*"]
 
+    # Bypass password policy for bootstrap — the admin password is set by the
+    # deployer via env/secret and may not satisfy interactive-user complexity
+    # rules (e.g. dev passwords like "minikube-dev-admin-password").
+    validated_email = validate_email(email)
     try:
-        create_local_user(
-            username=username,
-            password=password,
-            email=email,
-            display_name=display_name,
-            role="admin",
-            allowed_namespaces=allowed_namespaces,
-        )
+        with db_session() as session:
+            user = User(
+                username=username,
+                email=validated_email,
+                display_name=display_name or username,
+                password_hash=hash_password(password),
+                role="admin",
+                allowed_namespaces=normalize_namespaces(allowed_namespaces) or DEFAULT_ALLOWED_NAMESPACES,
+                auth_provider="local",
+                is_active=True,
+            )
+            session.add(user)
+            session.flush()
         logger.info("Bootstrapped local admin account '%s'.", username)
-    except ValueError:
-        logger.info("Bootstrap admin account '%s' already exists.", username)
+    except (IntegrityError, ValueError) as exc:
+        logger.info("Bootstrap admin account '%s' already exists (%s).", username, exc)
 
 
 def create_local_user(
