@@ -1,4 +1,5 @@
 """OpenCode Runtime — FastAPI application, routes, and lifespan."""
+
 from __future__ import annotations
 
 import asyncio
@@ -24,16 +25,21 @@ from fastapi.responses import FileResponse, StreamingResponse
 from config import (  # noqa: F401 — re-exported
     A2A_ALLOWED_CALLERS,
     A2A_ALLOWED_CALLERS_ENV,
+    AGENT_SELECTION_MODE,
     AGENT_SKILL_FILES_ENV,
     ARTIFACT_COLLECTION_MAX_FILES,
     AUTONOMOUS_MAX_RETRIES,
     AUTONOMOUS_MAX_TURNS,
+    COMPACTION_AGGRESSIVE_THRESHOLD,
+    COMPACTION_PRUNE_THRESHOLD,
     COMPACTION_TOKEN_THRESHOLD,
     DEFAULT_AGENT,
     DEFAULT_MODEL,
     DEFAULT_PROVIDER,
     HOME_DIR,
     MAX_PROMPT_CHARS,
+    MEMORY_DIR,
+    MEMORY_ENABLED,
     MODEL_CONTEXT_LIMIT,
     NATIVE_TOOL_NAMES,
     OPENCODE_BIN,
@@ -46,7 +52,12 @@ from config import (  # noqa: F401 — re-exported
     SERVICE_NAMESPACE,
     SESSION_MAX_ENTRIES,
     STRUCTURED_OUTPUT_RETRY_COUNT,
+    TASK_TYPE_AGENT_MAP,
+    WORKSPACE_SNAPSHOT_DIR,
+    WORKSPACE_SNAPSHOT_ENABLED,
     _parse_json_env,
+    _safe_float,
+    _safe_int,
     logger,
     server_base_url,
 )
@@ -68,10 +79,18 @@ from utils import (  # noqa: F401 — re-exported
 from prompts import (  # noqa: F401 — re-exported
     AUTONOMY_CONTINUATION_PROMPT,
     AUTONOMY_SYSTEM_PROMPT,
+    CONTEXT_AWARE_CONTINUATION_PROMPTS,
     FORMAT_INSTRUCTIONS,
+    TASK_TYPE_PROMPTS,
     build_format_system_prompt,
+    build_handoff_resumption_prompt,
+    build_recovery_prompt,
     combine_system_prompt,
+    format_memory_context,
     format_team_context_system_prompt,
+    format_workspace_system_prompt,
+    get_continuation_prompt,
+    get_task_type_prompt,
 )
 from models import InvokeRequest, InvokeResponse  # noqa: F401 — re-exported
 from session import SESSION_REGISTRY, SessionRegistry  # noqa: F401 — re-exported
@@ -104,23 +123,32 @@ from opencode_client import (  # noqa: F401 — re-exported
     wait_for_session_idle,
 )
 from analysis import (  # noqa: F401 — re-exported
+    _ITER_ARTIFACT_MAX_DEPTH,
+    _KEYWORD_PATTERNS,
     _build_response_metadata,
+    _compile_keyword_patterns,
     _extract_structured_output,
     _iter_artifact_paths,
+    _select_agent_simple,
+    build_compaction_hints,
     build_json_output_schema,
     build_prompt_format,
     check_context_overflow,
     classify_error_type,
+    classify_task_type,
     compute_context_budget,
+    compute_context_priority,
     derive_task_status,
     detect_anti_patterns,
     detect_completion_status,
     detect_task_errors,
+    estimate_message_tokens,
     extract_artifacts_from_messages,
     extract_response_text,
     extract_text_from_parts,
     extract_tool_calls_from_messages,
     get_latest_assistant_payload,
+    recommend_compaction_strategy,
     runtime_capabilities,
     select_agent_for_prompt,
 )
@@ -131,6 +159,17 @@ from invoke import (  # noqa: F401 — re-exported
     invoke_opencode,
     resolve_working_directory,
     validate_inbound_a2a_request,
+)
+from memory import (  # noqa: F401 — re-exported
+    MEMORY_ENTRY_TYPES,
+    SESSION_MEMORY,
+    SessionMemory,
+    build_handoff_entry,
+    build_task_summary_entry,
+)
+from workspace import (  # noqa: F401 — re-exported
+    capture_workspace_snapshot,
+    get_or_refresh_snapshot,
 )
 from supervisor import (
     SUPERVISOR_MAX_RESTARTS,
@@ -173,6 +212,7 @@ def resolve_download_path(raw_value: str) -> Path:
 # Lifespan
 # ---------------------------------------------------------------------------
 
+
 @contextlib.asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     signal.signal(signal.SIGTERM, _sigterm_handler)
@@ -195,12 +235,14 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     with _runtime_lock:
         _supervisor_mod._runtime_process = process
         _supervisor_mod._runtime_ready = True
-        SKILL_RUNTIME_CONFIG.update({
-            "skillFiles": skill_files,
-            "warnings": dedupe_items(skill_warnings + generated_warnings),
-            "configFiles": config_files,
-            "mcpSidecars": sidecars,
-        })
+        SKILL_RUNTIME_CONFIG.update(
+            {
+                "skillFiles": skill_files,
+                "warnings": dedupe_items(skill_warnings + generated_warnings),
+                "configFiles": config_files,
+                "mcpSidecars": sidecars,
+            }
+        )
 
     supervisor_thread = threading.Thread(
         target=_run_process_supervisor,
@@ -458,7 +500,9 @@ async def invoke_stream(request: InvokeRequest) -> StreamingResponse:
             return
 
         if response.response and streamed_delta_count == 0:
-            yield sse_event("response.delta", {"thread_id": response.thread_id, "delta": response.response, "source": "opencode"})
+            yield sse_event(
+                "response.delta", {"thread_id": response.thread_id, "delta": response.response, "source": "opencode"}
+            )
         yield sse_event(
             "response.completed",
             {
@@ -508,7 +552,7 @@ def list_artifacts(root: str = "") -> dict[str, Any]:
     for walk_root in walk_roots:
         for dirpath, _dirnames, filenames in os.walk(walk_root):
             dp = Path(dirpath)
-            if any(part.startswith(".") for part in dp.parts[len(walk_root.parts):]):
+            if any(part.startswith(".") for part in dp.parts[len(walk_root.parts) :]):
                 continue
             for fname in filenames:
                 if fname.startswith("."):
@@ -522,13 +566,15 @@ def list_artifacts(root: str = "") -> dict[str, Any]:
                     stat = fpath.stat()
                 except OSError:
                     continue
-                files.append({
-                    "path": posix_path,
-                    "name": fname,
-                    "size": stat.st_size,
-                    "modified": stat.st_mtime,
-                    "directory": str(PurePosixPath(dp)),
-                })
+                files.append(
+                    {
+                        "path": posix_path,
+                        "name": fname,
+                        "size": stat.st_size,
+                        "modified": stat.st_mtime,
+                        "directory": str(PurePosixPath(dp)),
+                    }
+                )
                 if len(files) >= ARTIFACT_COLLECTION_MAX_FILES:
                     return {"files": files, "truncated": True, "roots": [str(PurePosixPath(r)) for r in walk_roots]}
     return {"files": files, "truncated": False, "roots": [str(PurePosixPath(r)) for r in walk_roots]}

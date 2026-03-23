@@ -1,4 +1,5 @@
 """§3.5 Process supervisor and §7.2 graceful shutdown coordination."""
+
 from __future__ import annotations
 
 import json
@@ -38,6 +39,11 @@ _runtime_process: subprocess.Popen[str] | None = None
 _runtime_ready = False
 _runtime_lock = threading.Lock()
 
+# Log file paths for subprocess output (prevents pipe deadlock)
+_LOG_DIR = Path(HOME_DIR) / ".local" / "share" / "opencode-runtime" / "logs"
+_STDOUT_LOG = _LOG_DIR / "opencode-stdout.log"
+_STDERR_LOG = _LOG_DIR / "opencode-stderr.log"
+
 SUPERVISOR_POLL_SECONDS = max(float(os.getenv("OPENCODE_SUPERVISOR_POLL_SECONDS", "5")), 1.0)
 SUPERVISOR_MAX_RESTARTS = max(int(os.getenv("OPENCODE_SUPERVISOR_MAX_RESTARTS", "5")), 0)
 _supervisor_restart_count = 0
@@ -51,6 +57,7 @@ def is_shutting_down() -> bool:
 # ---------------------------------------------------------------------------
 # Runtime validation
 # ---------------------------------------------------------------------------
+
 
 def validate_runtime_startup() -> None:
     """Verify the OpenCode binary is available and executable."""
@@ -87,8 +94,16 @@ def build_server_env(config_content: dict[str, Any]) -> dict[str, str]:
 # Process start / readiness
 # ---------------------------------------------------------------------------
 
+
 def _start_opencode_process(env: dict[str, str]) -> subprocess.Popen[str]:
-    """Start the OpenCode serve subprocess."""
+    """Start the OpenCode serve subprocess.
+
+    Redirects stdout/stderr to log files to prevent pipe buffer deadlocks.
+    The log files are rotated on each restart (previous content is overwritten).
+    """
+    _LOG_DIR.mkdir(parents=True, exist_ok=True)
+    stdout_fh = open(_STDOUT_LOG, "w", encoding="utf-8", buffering=1)
+    stderr_fh = open(_STDERR_LOG, "w", encoding="utf-8", buffering=1)
     return subprocess.Popen(
         [
             OPENCODE_BIN,
@@ -100,8 +115,8 @@ def _start_opencode_process(env: dict[str, str]) -> subprocess.Popen[str]:
         ],
         cwd=OPENCODE_WORKDIR,
         env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stdout=stdout_fh,
+        stderr=stderr_fh,
         text=True,
     )
 
@@ -112,9 +127,25 @@ def wait_for_server_ready(process: subprocess.Popen[str]) -> None:
     health_url = f"{server_base_url()}/global/health"
     while time.time() < deadline:
         if process.poll() is not None:
-            stdout_out = process.stdout.read() if process.stdout else ""
-            stderr_out = process.stderr.read() if process.stderr else ""
-            logger.error("OpenCode server exited with code %s.\nSTDOUT: %s\nSTDERR: %s", process.returncode, stdout_out[:4000], stderr_out[:4000])
+            # Read from log files since we no longer use PIPE
+            stdout_out = ""
+            stderr_out = ""
+            try:
+                if _STDOUT_LOG.exists():
+                    stdout_out = _STDOUT_LOG.read_text(encoding="utf-8", errors="replace")[:4000]
+            except OSError:
+                pass
+            try:
+                if _STDERR_LOG.exists():
+                    stderr_out = _STDERR_LOG.read_text(encoding="utf-8", errors="replace")[:4000]
+            except OSError:
+                pass
+            logger.error(
+                "OpenCode server exited with code %s.\nSTDOUT: %s\nSTDERR: %s",
+                process.returncode,
+                stdout_out,
+                stderr_out,
+            )
             raise RuntimeError("OpenCode server exited before becoming ready")
         try:
             with httpx.Client(timeout=2.0, trust_env=False) as client:
@@ -130,6 +161,7 @@ def wait_for_server_ready(process: subprocess.Popen[str]) -> None:
 # ---------------------------------------------------------------------------
 # Background process supervisor
 # ---------------------------------------------------------------------------
+
 
 def _run_process_supervisor(env: dict[str, str]) -> None:
     """Background thread that monitors and restarts the OpenCode subprocess."""
@@ -148,38 +180,46 @@ def _run_process_supervisor(env: dict[str, str]) -> None:
 
         if proc.poll() is not None:
             exit_code = proc.returncode
-            logger.warning(
-                "OpenCode subprocess exited unexpectedly (code=%s, restarts=%d/%d).",
-                exit_code, _supervisor_restart_count, SUPERVISOR_MAX_RESTARTS,
-            )
             with _runtime_lock:
                 _runtime_ready = False
+                current_restart_count = _supervisor_restart_count
 
-            if _supervisor_restart_count >= SUPERVISOR_MAX_RESTARTS:
+            logger.warning(
+                "OpenCode subprocess exited unexpectedly (code=%s, restarts=%d/%d).",
+                exit_code,
+                current_restart_count,
+                SUPERVISOR_MAX_RESTARTS,
+            )
+
+            if current_restart_count >= SUPERVISOR_MAX_RESTARTS:
                 logger.error(
                     "Max supervisor restarts (%d) reached; not restarting OpenCode subprocess.",
                     SUPERVISOR_MAX_RESTARTS,
                 )
                 continue
 
-            _supervisor_restart_count += 1
             try:
                 new_process = _start_opencode_process(env)
                 wait_for_server_ready(new_process)
                 with _runtime_lock:
+                    _supervisor_restart_count += 1
                     _runtime_process = new_process
                     _runtime_ready = True
                 logger.info(
                     "OpenCode subprocess restarted successfully (attempt %d/%d).",
-                    _supervisor_restart_count, SUPERVISOR_MAX_RESTARTS,
+                    _supervisor_restart_count,
+                    SUPERVISOR_MAX_RESTARTS,
                 )
             except Exception as exc:
+                with _runtime_lock:
+                    _supervisor_restart_count += 1
                 logger.error("Failed to restart OpenCode subprocess: %s", exc)
 
 
 # ---------------------------------------------------------------------------
 # §7.2 — Graceful shutdown
 # ---------------------------------------------------------------------------
+
 
 def _sigterm_handler(signum: int, frame: Any) -> None:
     """Handle SIGTERM for graceful shutdown."""

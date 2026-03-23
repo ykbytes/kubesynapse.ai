@@ -1,4 +1,5 @@
 """Skill materialization, MCP config, runtime directory setup, and git credentials."""
+
 from __future__ import annotations
 
 import logging
@@ -21,6 +22,7 @@ from config import (
     LITELLM_API_KEY,
     MCP_BEARER_TOKEN,
     MCP_HUB_NAMESPACE,
+    MEMORY_DIR,
     MODEL_CONTEXT_LIMIT,
     MODEL_OUTPUT_LIMIT,
     OPENCODE_CONFIG_DIR,
@@ -31,6 +33,7 @@ from config import (
     OPENCODE_WORKDIR,
     SESSION_MAP_PATH,
     SKILL_NAME_RE,
+    WORKSPACE_SNAPSHOT_DIR,
     XDG_CONFIG_HOME,
     XDG_DATA_HOME,
     _parse_json_env,
@@ -58,12 +61,15 @@ def ensure_runtime_directories() -> None:
         Path(OPENCODE_CONFIG_DIR),
         Path(OPENCODE_WORKDIR),
         SESSION_MAP_PATH.parent,
+        Path(MEMORY_DIR),
+        Path(WORKSPACE_SNAPSHOT_DIR),
     ]:
         path.mkdir(parents=True, exist_ok=True)
 
 
 def parse_skill_frontmatter(path: str, content: str) -> tuple[str, list[str]]:
     """Extract the canonical skill name and warnings from a skill file."""
+
     def _normalize_skill_name(candidate: str) -> str:
         lowered = candidate.strip().lower()
         cleaned = re.sub(r"[^a-z0-9-]", "-", lowered)
@@ -184,9 +190,7 @@ def build_shared_mcp_config() -> tuple[dict[str, Any], list[str]]:
             )
             continue
         if not MCP_BEARER_TOKEN:
-            warnings.append(
-                f"Skipping shared MCP server '{server_type}' because MCP_BEARER_TOKEN is not configured."
-            )
+            warnings.append(f"Skipping shared MCP server '{server_type}' because MCP_BEARER_TOKEN is not configured.")
             continue
         entries[server_type] = {
             "type": "remote",
@@ -272,11 +276,13 @@ def configure_git_credentials() -> None:
 
     subprocess.run(
         ["git", "config", "--global", "user.name", "AI Agent"],
-        capture_output=True, timeout=5,
+        capture_output=True,
+        timeout=5,
     )
     subprocess.run(
         ["git", "config", "--global", "user.email", "agent@kubemininions.local"],
-        capture_output=True, timeout=5,
+        capture_output=True,
+        timeout=5,
     )
 
     repo_url = os.getenv("GIT_REPO_URL", "").strip()
@@ -288,7 +294,8 @@ def configure_git_credentials() -> None:
             return
         subprocess.run(
             ["git", "config", "--global", "credential.helper", "store"],
-            capture_output=True, timeout=5,
+            capture_output=True,
+            timeout=5,
         )
         cred_path = os.path.expanduser("~/.git-credentials")
         if repo_url and repo_url.startswith("https://"):
@@ -309,7 +316,8 @@ def configure_git_credentials() -> None:
             return
         subprocess.run(
             ["git", "config", "--global", "credential.helper", "store"],
-            capture_output=True, timeout=5,
+            capture_output=True,
+            timeout=5,
         )
         cred_path = os.path.expanduser("~/.git-credentials")
         if repo_url and repo_url.startswith("https://"):
@@ -326,8 +334,14 @@ def configure_git_credentials() -> None:
         ssh_key = os.getenv("GIT_SSH_KEY_PATH", "").strip()
         if ssh_key and os.path.exists(ssh_key):
             subprocess.run(
-                ["git", "config", "--global", "core.sshCommand",
-                 f"ssh -i {ssh_key} -o StrictHostKeyChecking=accept-new"],
-                capture_output=True, timeout=5,
+                [
+                    "git",
+                    "config",
+                    "--global",
+                    "core.sshCommand",
+                    f"ssh -i {ssh_key} -o StrictHostKeyChecking=accept-new",
+                ],
+                capture_output=True,
+                timeout=5,
             )
             logger.info("Configured git SSH key for bash git operations")

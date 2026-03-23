@@ -1,4 +1,5 @@
 """HTTP client for communicating with the running OpenCode server."""
+
 from __future__ import annotations
 
 import json
@@ -20,7 +21,8 @@ from config import (
     server_base_url,
 )
 from session import SESSION_REGISTRY
-from supervisor import _runtime_lock, _runtime_process, is_shutting_down
+import supervisor as _supervisor_mod
+from supervisor import _runtime_lock, is_shutting_down
 
 import time
 
@@ -32,7 +34,7 @@ def ensure_server_running() -> None:
     if is_shutting_down():
         raise HTTPException(status_code=503, detail="Runtime is shutting down")
     with _runtime_lock:
-        proc = _runtime_process
+        proc = _supervisor_mod._runtime_process
     if proc is None or proc.poll() is not None:
         raise HTTPException(status_code=503, detail="OpenCode server is not running")
 

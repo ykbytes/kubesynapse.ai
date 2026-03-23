@@ -1,4 +1,5 @@
 """Response analysis, context budget, error classification, and artifact extraction."""
+
 from __future__ import annotations
 
 import json
@@ -9,8 +10,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from config import (
+    AGENT_SELECTION_MODE,
     ARTIFACT_COLLECTION_MAX_FILES,
     ARTIFACT_PATH_PATTERN,
+    COMPACTION_AGGRESSIVE_THRESHOLD,
+    COMPACTION_PRUNE_THRESHOLD,
     COMPACTION_TOKEN_THRESHOLD,
     DEFAULT_AGENT,
     DOWNLOADABLE_ARTIFACT_EXTENSIONS,
@@ -19,6 +23,8 @@ from config import (
     PLAN_AGENT_PROMPT_THRESHOLD,
     SESSION_INIT_ON_CREATE,
     STRUCTURED_OUTPUT_RETRY_COUNT,
+    TASK_TYPE_AGENT_MAP,
+    _safe_int,
 )
 from prompts import FORMAT_INSTRUCTIONS
 from utils import truncate_text
@@ -32,6 +38,7 @@ logger = logging.getLogger("opencode-runtime")
 # ---------------------------------------------------------------------------
 # Text extraction
 # ---------------------------------------------------------------------------
+
 
 def extract_text_from_parts(parts: list[dict[str, Any]]) -> str:
     """Extract concatenated text from message parts."""
@@ -70,6 +77,7 @@ def extract_response_text(payload: dict[str, Any]) -> str:
 # Structured output
 # ---------------------------------------------------------------------------
 
+
 def build_json_output_schema(output_schema: dict[str, Any] | None) -> dict[str, Any]:
     """Build a JSON schema for structured output, defaulting to a permissive schema."""
     if output_schema:
@@ -87,7 +95,9 @@ def build_prompt_format(request: "InvokeRequest") -> dict[str, Any] | None:
         return {
             "type": "json_schema",
             "schema": build_json_output_schema(request.output_schema),
-            "retryCount": request.structured_output_retry_count if request.structured_output_retry_count is not None else STRUCTURED_OUTPUT_RETRY_COUNT,
+            "retryCount": request.structured_output_retry_count
+            if request.structured_output_retry_count is not None
+            else STRUCTURED_OUTPUT_RETRY_COUNT,
         }
     return None
 
@@ -130,6 +140,7 @@ def _build_response_metadata(payload: dict[str, Any]) -> dict[str, Any] | None:
 # ---------------------------------------------------------------------------
 # Completion / error classification
 # ---------------------------------------------------------------------------
+
 
 def detect_completion_status(payload: dict[str, Any]) -> str:
     """Determine whether the agent response indicates task completion."""
@@ -282,13 +293,377 @@ def derive_task_status(
 
 
 # ---------------------------------------------------------------------------
+# Graduated compaction strategy
+# ---------------------------------------------------------------------------
+
+
+def estimate_message_tokens(message: dict[str, Any]) -> int:
+    """Estimate the token count for a single message using a char-count heuristic.
+
+    Roughly 4 characters ≈ 1 token for English text and code.
+    """
+    total_chars = 0
+    parts = message.get("parts")
+    if isinstance(parts, list):
+        for part in parts:
+            if not isinstance(part, dict):
+                continue
+            if part.get("type") == "text":
+                total_chars += len(str(part.get("text", "")))
+            elif part.get("type") == "tool":
+                state = part.get("state") or {}
+                if isinstance(state, dict):
+                    total_chars += len(str(state.get("input", "")))
+                    total_chars += len(str(state.get("output", "")))
+    info = message.get("info")
+    if isinstance(info, dict):
+        system = info.get("system")
+        if isinstance(system, str):
+            total_chars += len(system)
+    return max(total_chars // 4, 1)
+
+
+def compute_context_priority(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Score each message by priority for context retention.
+
+    Returns a list of dicts with ``index``, ``priority`` (0-10), ``tokens_est``,
+    and ``category``.  Higher priority = should be retained longer.
+    """
+    scored: list[dict[str, Any]] = []
+    total = len(messages)
+    for idx, msg in enumerate(messages):
+        recency = idx / max(total - 1, 1)  # 0.0 = oldest, 1.0 = newest
+        info = msg.get("info") or {}
+        role = str(info.get("role", "")).lower() if isinstance(info, dict) else ""
+        parts = msg.get("parts") if isinstance(msg.get("parts"), list) else []
+
+        # Base priority from role
+        if role == "system":
+            base = 10  # always retain system prompts
+        elif role == "user":
+            base = 7
+        elif role == "assistant":
+            base = 5
+        else:
+            base = 3
+
+        # Boost for todowrite tool calls (plan state)
+        has_todowrite = any(
+            isinstance(p, dict) and p.get("type") == "tool" and p.get("tool") == "todowrite" for p in parts
+        )
+        if has_todowrite:
+            base = max(base, 9)
+
+        # Boost for error messages (important for debugging context)
+        has_error = False
+        for p in parts:
+            if isinstance(p, dict) and p.get("type") == "tool":
+                state = p.get("state") or {}
+                if isinstance(state, dict) and state.get("status") == "error":
+                    has_error = True
+                    break
+        if has_error:
+            base = min(base + 2, 10)
+
+        # Penalize large tool outputs (safe to prune)
+        tokens_est = estimate_message_tokens(msg)
+        if tokens_est > 2000 and role == "assistant":
+            has_large_output = any(
+                isinstance(p, dict)
+                and p.get("type") == "tool"
+                and isinstance(p.get("state"), dict)
+                and len(str((p.get("state") or {}).get("output", ""))) > 8000
+                for p in parts
+            )
+            if has_large_output:
+                base = max(base - 2, 1)
+
+        # Recency boost: recent messages get +2
+        priority = base + (2.0 * recency)
+        priority = min(priority, 10.0)
+
+        # Categorize
+        if role == "system":
+            category = "system"
+        elif has_todowrite:
+            category = "plan"
+        elif has_error:
+            category = "error_context"
+        elif tokens_est > 2000:
+            category = "large_output"
+        elif role == "user":
+            category = "user_prompt"
+        else:
+            category = "reasoning"
+
+        scored.append(
+            {
+                "index": idx,
+                "priority": round(priority, 1),
+                "tokens_est": tokens_est,
+                "category": category,
+            }
+        )
+    return scored
+
+
+def recommend_compaction_strategy(budget: dict[str, Any]) -> str:
+    """Return a graduated compaction strategy based on context budget.
+
+    Returns one of: ``"none"``, ``"prune_outputs"``, ``"summarize"``, ``"aggressive"``.
+    """
+    usage_pct = budget.get("usage_percent", 0)
+    if usage_pct <= 0:
+        return "none"
+    remaining_pct = 100.0 - usage_pct
+    if remaining_pct > (100.0 * (1.0 - COMPACTION_PRUNE_THRESHOLD)):
+        return "none"
+    if remaining_pct > (100.0 * (1.0 - COMPACTION_TOKEN_THRESHOLD)):
+        return "prune_outputs"
+    if remaining_pct > (100.0 * (1.0 - (1.0 - COMPACTION_AGGRESSIVE_THRESHOLD))):
+        return "summarize"
+    return "aggressive"
+
+
+def build_compaction_hints(messages: list[dict[str, Any]], strategy: str) -> str:
+    """Build a hint string for the compaction/summarization prompt.
+
+    This tells the compaction process what to preserve vs. discard.
+    """
+    if strategy == "none":
+        return ""
+    priorities = compute_context_priority(messages)
+    high_priority = [p for p in priorities if p["priority"] >= 8]
+    low_priority = [p for p in priorities if p["priority"] <= 4]
+
+    hints = []
+    if strategy in ("prune_outputs", "summarize", "aggressive"):
+        if high_priority:
+            categories = set(p["category"] for p in high_priority)
+            hints.append(f"PRESERVE: {', '.join(sorted(categories))} messages (high priority)")
+        if low_priority:
+            total_low_tokens = sum(p["tokens_est"] for p in low_priority)
+            hints.append(
+                f"PRUNE CANDIDATES: {len(low_priority)} messages (~{total_low_tokens} tokens) with low priority"
+            )
+    if strategy == "aggressive":
+        hints.append(
+            "AGGRESSIVE: Condense all reasoning into brief summaries. Retain only plan state and key decisions."
+        )
+    return "\n".join(hints) if hints else ""
+
+
+# ---------------------------------------------------------------------------
+# Task type classification
+# ---------------------------------------------------------------------------
+
+
+def _compile_keyword_patterns(keywords: frozenset[str]) -> list[re.Pattern[str]]:
+    """Compile keyword strings into word-boundary-aware regex patterns.
+
+    Single-word keywords get ``\\b`` word boundaries to avoid substring false
+    positives (e.g. "find" no longer matches inside "findings").  Multi-word
+    phrases already have natural word boundaries at spaces and are matched
+    literally with ``\\b`` anchors on each end.
+    """
+    patterns: list[re.Pattern[str]] = []
+    for kw in keywords:
+        # Escape any regex-special characters (e.g. "ci/cd" -> "ci\\/cd")
+        escaped = re.escape(kw)
+        patterns.append(re.compile(r"\b" + escaped + r"\b", re.IGNORECASE))
+    return patterns
+
+
+_EXPLORATION_KEYWORDS = frozenset(
+    {
+        "explain",
+        "understand",
+        "explore",
+        "investigate",
+        "research",
+        "find",
+        "search",
+        "how does",
+        "what is",
+        "where is",
+        "show me",
+        "list",
+        "describe",
+        "analyze",
+        "document",
+        "map out",
+        "overview",
+    }
+)
+_DEBUGGING_KEYWORDS = frozenset(
+    {
+        "debug",
+        "fix",
+        "bug",
+        "error",
+        "crash",
+        "fail",
+        "broken",
+        "issue",
+        "wrong",
+        "doesn't work",
+        "not working",
+        "traceback",
+        "exception",
+        "stack trace",
+        "regression",
+        "investigate error",
+    }
+)
+_FEATURE_KEYWORDS = frozenset(
+    {
+        "implement",
+        "create",
+        "build",
+        "add",
+        "develop",
+        "feature",
+        "new",
+        "integrate",
+        "set up",
+        "scaffold",
+        "bootstrap",
+        "design",
+    }
+)
+_REVIEW_KEYWORDS = frozenset(
+    {
+        "review",
+        "audit",
+        "check",
+        "inspect",
+        "assess",
+        "evaluate",
+        "critique",
+        "code review",
+        "security review",
+    }
+)
+_REFACTOR_KEYWORDS = frozenset(
+    {
+        "refactor",
+        "restructure",
+        "reorganize",
+        "clean up",
+        "simplify",
+        "extract",
+        "rename",
+        "move",
+        "decouple",
+        "optimize",
+    }
+)
+_DEPLOYMENT_KEYWORDS = frozenset(
+    {
+        "deploy",
+        "deployment",
+        "infrastructure",
+        "ci/cd",
+        "pipeline",
+        "docker",
+        "kubernetes",
+        "helm",
+        "terraform",
+        "bicep",
+        "release",
+    }
+)
+
+# Pre-compiled word-boundary patterns for each category
+_KEYWORD_PATTERNS: dict[str, tuple[list[re.Pattern[str]], float]] = {
+    "exploration": (_compile_keyword_patterns(_EXPLORATION_KEYWORDS), 1.0),
+    "debugging": (_compile_keyword_patterns(_DEBUGGING_KEYWORDS), 1.5),
+    "feature": (_compile_keyword_patterns(_FEATURE_KEYWORDS), 1.0),
+    "review": (_compile_keyword_patterns(_REVIEW_KEYWORDS), 1.2),
+    "refactor": (_compile_keyword_patterns(_REFACTOR_KEYWORDS), 1.2),
+    "deployment": (_compile_keyword_patterns(_DEPLOYMENT_KEYWORDS), 1.0),
+}
+
+
+def classify_task_type(prompt: str) -> str:
+    """Classify the task type from a prompt string.
+
+    Returns one of: ``exploration``, ``debugging``, ``feature``, ``edit``,
+    ``review``, ``refactor``, ``deployment``, ``unknown``.
+
+    Uses word-boundary regex matching to avoid false positives from
+    substring matches (e.g. "find" no longer triggers on "findings").
+    """
+    # Score each category using word-boundary-aware patterns
+    scores: dict[str, float] = {cat: 0.0 for cat in _KEYWORD_PATTERNS}
+    for category, (patterns, weight) in _KEYWORD_PATTERNS.items():
+        for pat in patterns:
+            if pat.search(prompt):
+                scores[category] += weight
+
+    # Short prompts with file paths are likely edits
+    has_file_paths = bool(re.search(r"[\w/]+\.\w{1,5}", prompt))
+    if has_file_paths and len(prompt) < 300:
+        scores["edit"] = 2.0
+    else:
+        scores["edit"] = 0.0
+
+    best = max(scores, key=lambda k: scores[k])
+    if scores[best] < 1.0:
+        return "unknown"
+    return best
+
+
+# ---------------------------------------------------------------------------
 # Agent selection
 # ---------------------------------------------------------------------------
 
-def select_agent_for_prompt(prompt: str, *, is_first_turn: bool) -> str:
-    """Select the appropriate OpenCode agent based on prompt characteristics."""
+
+def select_agent_for_prompt(
+    prompt: str,
+    *,
+    is_first_turn: bool,
+    context_budget_status: str = "ok",
+    has_prior_memory: bool = False,
+) -> str:
+    """Select the appropriate OpenCode agent based on prompt characteristics.
+
+    When ``AGENT_SELECTION_MODE`` is ``"smart"``, uses multi-signal scoring
+    including task type classification, context budget awareness, and history.
+    Falls back to the simple length+markers heuristic when mode is ``"simple"``.
+    """
     if not is_first_turn:
         return DEFAULT_AGENT
+
+    if AGENT_SELECTION_MODE == "simple":
+        return _select_agent_simple(prompt)
+
+    # --- Smart selection ---
+    task_type = classify_task_type(prompt)
+
+    # Context budget awareness: avoid plan agent when budget is tight
+    if context_budget_status in ("warning", "critical"):
+        if task_type in ("feature", "deployment"):
+            # Even complex tasks should skip planning when low on context
+            return DEFAULT_AGENT
+        return TASK_TYPE_AGENT_MAP.get(task_type, DEFAULT_AGENT)
+
+    # History awareness: if resuming with memory, skip planning
+    if has_prior_memory and task_type in ("feature",):
+        return DEFAULT_AGENT
+
+    # Use task type mapping
+    mapped = TASK_TYPE_AGENT_MAP.get(task_type, DEFAULT_AGENT)
+
+    # For feature tasks, also check complexity (short feature requests don't need plan)
+    if mapped == "plan" and len(prompt) < PLAN_AGENT_PROMPT_THRESHOLD:
+        return DEFAULT_AGENT
+
+    return mapped
+
+
+def _select_agent_simple(prompt: str) -> str:
+    """Original simple agent selection: length + complexity markers."""
     if len(prompt) >= PLAN_AGENT_PROMPT_THRESHOLD and DEFAULT_AGENT == "build":
         complexity_markers = 0
         if prompt.count("\n") >= 2:
@@ -305,6 +680,7 @@ def select_agent_for_prompt(prompt: str, *, is_first_turn: bool) -> str:
 # ---------------------------------------------------------------------------
 # Message history extraction
 # ---------------------------------------------------------------------------
+
 
 def get_latest_assistant_payload(messages: list[dict[str, Any]]) -> dict[str, Any] | None:
     """Return the most recent assistant message payload from a message list."""
@@ -331,12 +707,14 @@ def extract_tool_calls_from_messages(messages: list[dict[str, Any]]) -> list[dic
             state = part.get("state") or {}
             if not isinstance(state, dict):
                 continue
-            tool_calls.append({
-                "tool": str(part.get("tool", "")),
-                "status": str(state.get("status", "unknown")),
-                "input": state.get("input"),
-                "output": truncate_text(str(state.get("output", "")), 2000),
-            })
+            tool_calls.append(
+                {
+                    "tool": str(part.get("tool", "")),
+                    "status": str(state.get("status", "unknown")),
+                    "input": state.get("input"),
+                    "output": truncate_text(str(state.get("output", "")), 2000),
+                }
+            )
     return tool_calls
 
 
@@ -370,8 +748,18 @@ def detect_task_errors(messages: list[dict[str, Any]]) -> list[str]:
 # Artifact extraction
 # ---------------------------------------------------------------------------
 
-def _iter_artifact_paths(value: Any) -> list[str]:
-    """Recursively extract file paths from a value using the artifact pattern."""
+
+_ITER_ARTIFACT_MAX_DEPTH = 20
+
+
+def _iter_artifact_paths(value: Any, *, _depth: int = 0) -> list[str]:
+    """Recursively extract file paths from a value using the artifact pattern.
+
+    Enforces a maximum recursion depth of ``_ITER_ARTIFACT_MAX_DEPTH`` to
+    protect against pathologically nested data structures.
+    """
+    if _depth > _ITER_ARTIFACT_MAX_DEPTH:
+        return []
     found: list[str] = []
     if isinstance(value, str):
         for match in ARTIFACT_PATH_PATTERN.finditer(value):
@@ -381,11 +769,11 @@ def _iter_artifact_paths(value: Any) -> list[str]:
         return found
     if isinstance(value, dict):
         for nested in value.values():
-            found.extend(_iter_artifact_paths(nested))
+            found.extend(_iter_artifact_paths(nested, _depth=_depth + 1))
         return found
     if isinstance(value, list):
         for nested in value:
-            found.extend(_iter_artifact_paths(nested))
+            found.extend(_iter_artifact_paths(nested, _depth=_depth + 1))
     return found
 
 
@@ -416,7 +804,9 @@ def extract_artifacts_from_messages(messages: list[dict[str, Any]]) -> list[dict
                                 "status": "completed",
                             }
                 if state.get("status") == "completed":
-                    for file_path in _iter_artifact_paths(state.get("output")) + _iter_artifact_paths(state.get("input")):
+                    for file_path in _iter_artifact_paths(state.get("output")) + _iter_artifact_paths(
+                        state.get("input")
+                    ):
                         suffix = Path(file_path).suffix.lower()
                         if suffix not in DOWNLOADABLE_ARTIFACT_EXTENSIONS:
                             continue
@@ -442,6 +832,7 @@ def extract_artifacts_from_messages(messages: list[dict[str, Any]]) -> list[dict
 # Runtime capabilities
 # ---------------------------------------------------------------------------
 
+
 def runtime_capabilities() -> dict[str, Any]:
     """Return a capabilities descriptor for the runtime."""
     from skills import SKILL_RUNTIME_CONFIG
@@ -458,8 +849,8 @@ def runtime_capabilities() -> dict[str, Any]:
         "autonomous_execution": {
             "supported": True,
             "default_enabled": True,
-            "default_max_retries": int(os.getenv("OPENCODE_AUTONOMOUS_MAX_RETRIES", "3")),
-            "default_max_turns": int(os.getenv("OPENCODE_AUTONOMOUS_MAX_TURNS", "10")),
+            "default_max_retries": _safe_int("OPENCODE_AUTONOMOUS_MAX_RETRIES", 3),
+            "default_max_turns": _safe_int("OPENCODE_AUTONOMOUS_MAX_TURNS", 10),
         },
         "agents": {
             "available": ["build", "plan", "general", "explore"],

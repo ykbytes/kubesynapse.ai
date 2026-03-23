@@ -1,4 +1,5 @@
 """Core invocation logic — the autonomous multi-turn loop."""
+
 from __future__ import annotations
 
 import logging
@@ -12,8 +13,10 @@ from fastapi import HTTPException
 
 from analysis import (
     _build_response_metadata,
+    build_compaction_hints,
     check_context_overflow,
     classify_error_type,
+    classify_task_type,
     compute_context_budget,
     derive_task_status,
     detect_anti_patterns,
@@ -24,6 +27,7 @@ from analysis import (
     get_latest_assistant_payload,
     detect_task_errors,
     build_prompt_format,
+    recommend_compaction_strategy,
     runtime_capabilities,
     select_agent_for_prompt,
 )
@@ -38,13 +42,20 @@ from config import (
     DEFAULT_SYSTEM_PROMPT,
     MAX_COMPACTION_ATTEMPTS,
     MAX_PROMPT_CHARS,
+    MEMORY_ENABLED,
     OPENCODE_WORKDIR,
     SERVICE_NAME,
     SERVICE_NAMESPACE,
     SESSION_ABORT_TIMEOUT_SECONDS,
     SESSION_INIT_ON_CREATE,
+    WORKSPACE_SNAPSHOT_ENABLED,
 )
 from hitl import hitl_gate
+from memory import (
+    SESSION_MEMORY,
+    build_handoff_entry,
+    build_task_summary_entry,
+)
 from models import InvokeRequest, InvokeResponse
 from opencode_client import (
     _send_prompt_with_session_recovery,
@@ -61,12 +72,19 @@ from prompts import (
     AUTONOMY_CONTINUATION_PROMPT,
     AUTONOMY_SYSTEM_PROMPT,
     build_format_system_prompt,
+    build_handoff_resumption_prompt,
+    build_recovery_prompt,
     combine_system_prompt,
+    format_memory_context,
     format_team_context_system_prompt,
+    format_workspace_system_prompt,
+    get_continuation_prompt,
+    get_task_type_prompt,
 )
 from session import SESSION_REGISTRY
 from skills import SKILL_RUNTIME_CONFIG
 from utils import dedupe_items, truncate_text
+from workspace import get_or_refresh_snapshot
 
 logger = logging.getLogger("opencode-runtime")
 
@@ -107,7 +125,9 @@ def build_invoke_warnings(request: InvokeRequest) -> list[str]:
     """Build the initial warnings list for an invocation."""
     warnings: list[str] = []
     if request.no_session:
-        warnings.append("Session persistence is disabled for this invocation; the returned thread_id cannot be resumed.")
+        warnings.append(
+            "Session persistence is disabled for this invocation; the returned thread_id cannot be resumed."
+        )
     warnings.extend(str(item).strip() for item in (SKILL_RUNTIME_CONFIG.get("warnings") or []) if str(item).strip())
     return dedupe_items(warnings)
 
@@ -122,10 +142,57 @@ def resolve_working_directory(raw_value: str | None) -> str:
     try:
         target.relative_to(root)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=f"working_directory '{raw_value}' must stay inside the OpenCode workspace") from exc
+        raise HTTPException(
+            status_code=400, detail=f"working_directory '{raw_value}' must stay inside the OpenCode workspace"
+        ) from exc
     if not target.exists() or not target.is_dir():
-        raise HTTPException(status_code=400, detail=f"working_directory '{raw_value}' does not exist inside the OpenCode workspace")
+        raise HTTPException(
+            status_code=400, detail=f"working_directory '{raw_value}' does not exist inside the OpenCode workspace"
+        )
     return str(target)
+
+
+def _capture_pre_compaction_state(
+    session_id: str,
+    messages: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Capture structured task state before compaction for recovery prompts.
+
+    Fetches todos, recent artifacts, and the last successful tool action.
+    """
+    state: dict[str, Any] = {}
+
+    # Fetch todos
+    try:
+        todos = get_session_todos(session_id)
+        state["todos"] = todos
+    except Exception:
+        state["todos"] = []
+
+    # Extract artifacts and last action from messages
+    if messages is None:
+        try:
+            messages = get_session_messages(session_id)
+        except Exception:
+            messages = []
+
+    if messages:
+        from analysis import extract_artifacts_from_messages, extract_tool_calls_from_messages
+
+        state["artifacts"] = extract_artifacts_from_messages(messages)
+        tool_calls = extract_tool_calls_from_messages(messages)
+        if tool_calls:
+            last_successful = None
+            for tc in reversed(tool_calls):
+                if tc.get("status") == "completed":
+                    last_successful = tc
+                    break
+            if last_successful:
+                state["last_action"] = (
+                    f"{last_successful.get('tool', '?')}: {truncate_text(str(last_successful.get('input', '')), 200)}"
+                )
+
+    return state
 
 
 def invoke_opencode(request: InvokeRequest, stream_callback: StreamCallback = None) -> InvokeResponse:
@@ -172,6 +239,7 @@ def invoke_opencode(request: InvokeRequest, stream_callback: StreamCallback = No
         if not init_session(session_id, selected_model):
             logger.warning("Session init failed for %s", session_id)
 
+    # --- Build enhanced system prompt with workspace and memory context ---
     pre_auth_prompt: str | None = None
     if request.pre_authorized_actions:
         allowed = ", ".join(request.pre_authorized_actions)
@@ -180,11 +248,40 @@ def invoke_opencode(request: InvokeRequest, stream_callback: StreamCallback = No
             f"by the workflow owner and may be executed without hesitation: {allowed}. "
             f"You do NOT need confirmation to perform these actions."
         )
+
+    # Workspace awareness: inject pre-computed codebase context
+    workspace_prompt: str | None = None
+    if WORKSPACE_SNAPSHOT_ENABLED and created_new_session:
+        snapshot = get_or_refresh_snapshot(working_directory)
+        workspace_prompt = format_workspace_system_prompt(snapshot)
+
+    # Cross-session memory: inject prior context
+    memory_prompt: str | None = None
+    has_prior_memory = False
+    handoff_memory: dict[str, Any] | None = None
+    if MEMORY_ENABLED and not request.no_session:
+        has_prior_memory = SESSION_MEMORY.has_memory(logical_thread_id)
+        if has_prior_memory:
+            # Check for handoff entry (session continuity from context exhaustion)
+            handoff_memory = SESSION_MEMORY.get_handoff_memory(logical_thread_id)
+            if handoff_memory:
+                memory_prompt = None  # Will inject via the prompt, not system prompt
+            else:
+                memory_entries = SESSION_MEMORY.build_memory_context(logical_thread_id)
+                memory_prompt = format_memory_context(memory_entries)
+
+    # Task type classification for supplementary prompt
+    task_type = classify_task_type(request.prompt) if request.autonomous else "unknown"
+    task_type_prompt = get_task_type_prompt(task_type) if request.autonomous else None
+
     system_prompt = combine_system_prompt(
         AUTONOMY_SYSTEM_PROMPT if request.autonomous else None,
         DEFAULT_SYSTEM_PROMPT,
         request.system,
         pre_auth_prompt,
+        workspace_prompt,
+        memory_prompt,
+        task_type_prompt,
         build_format_system_prompt(request.output_format),
         format_team_context_system_prompt(request.team_context),
     )
@@ -201,10 +298,28 @@ def invoke_opencode(request: InvokeRequest, stream_callback: StreamCallback = No
     last_compaction_turn = -COMPACTION_MIN_TURN_SPACING
     handoff_summary: dict[str, Any] | None = None
     _resend_format = False
+    current_budget_status = "ok"
 
-    current_agent = select_agent_for_prompt(request.prompt, is_first_turn=True) if request.autonomous else DEFAULT_AGENT
+    # If resuming from handoff, inject the resumption prompt
+    if handoff_memory and created_new_session:
+        resumption = build_handoff_resumption_prompt(handoff_memory)
+        current_prompt = f"{resumption}\n\n---\n\nNEW INSTRUCTIONS:\n{current_prompt}"
+        all_warnings.append("Resuming from prior session handoff — context from previous session injected.")
+
+    current_agent = (
+        select_agent_for_prompt(
+            request.prompt,
+            is_first_turn=True,
+            context_budget_status=current_budget_status,
+            has_prior_memory=has_prior_memory,
+        )
+        if request.autonomous
+        else DEFAULT_AGENT
+    )
     if current_agent == "plan" and current_agent != DEFAULT_AGENT:
         all_warnings.append("Using plan agent for initial analysis before execution.")
+    if current_agent != DEFAULT_AGENT and current_agent != "plan":
+        all_warnings.append(f"Using '{current_agent}' agent based on task type classification ({task_type}).")
 
     def _emit(event_type: str, data: dict[str, Any]) -> None:
         if stream_callback is not None:
@@ -240,31 +355,38 @@ def invoke_opencode(request: InvokeRequest, stream_callback: StreamCallback = No
                     detail=f"OpenCode invocation failed after {retries_used} retries: {exc}",
                 ) from exc
             retries_used += 1
-            _emit("response.error_recovery", {"turn": turn + 1, "error_type": "http", "retry": retries_used, "max_retries": max_retries})
-            all_warnings.append(
-                f"Turn {turn + 1}: HTTP error '{exc}', retrying ({retries_used}/{max_retries})"
+            _emit(
+                "response.error_recovery",
+                {"turn": turn + 1, "error_type": "http", "retry": retries_used, "max_retries": max_retries},
             )
+            all_warnings.append(f"Turn {turn + 1}: HTTP error '{exc}', retrying ({retries_used}/{max_retries})")
             recovery_note = (
                 f"[Note: the previous request encountered a transient error ({type(exc).__name__}). "
                 f"Check whether the previous operation partially completed before retrying. "
                 f"If files were partially written or commands partially executed, verify their "
                 f"state before continuing.]\n\n"
             )
-            current_prompt = truncate_text(
-                f"{recovery_note}{current_prompt}", MAX_PROMPT_CHARS
-            )
+            current_prompt = truncate_text(f"{recovery_note}{current_prompt}", MAX_PROMPT_CHARS)
             continue
 
         last_payload = payload
         completion = detect_completion_status(payload)
         _resend_format = False
 
+        # Update context budget status for prompt selection
+        turn_budget = compute_context_budget(payload)
+        current_budget_status = turn_budget.get("status", "ok")
+
         turn_text = extract_response_text(payload).strip()
-        _emit("response.turn_completed", {
-            "turn": turn + 1,
-            "status": completion,
-            "response_length": len(turn_text),
-        })
+        _emit(
+            "response.turn_completed",
+            {
+                "turn": turn + 1,
+                "status": completion,
+                "response_length": len(turn_text),
+                "context_budget_status": current_budget_status,
+            },
+        )
         if turn_text:
             _emit("response.delta", {"turn": turn + 1, "delta": turn_text, "source": "opencode"})
 
@@ -287,65 +409,103 @@ def invoke_opencode(request: InvokeRequest, stream_callback: StreamCallback = No
             compaction_attempts < MAX_COMPACTION_ATTEMPTS
             and (turn - last_compaction_turn) >= COMPACTION_MIN_TURN_SPACING
         )
+
+        # --- Graduated compaction logic ---
         if completion == "context_overflow" and _can_compact:
             compaction_attempts += 1
             last_compaction_turn = turn
-            _emit("response.compaction", {"turn": turn + 1, "reason": "context_overflow", "attempt": compaction_attempts, "max": MAX_COMPACTION_ATTEMPTS})
+            _emit(
+                "response.compaction",
+                {
+                    "turn": turn + 1,
+                    "reason": "context_overflow",
+                    "attempt": compaction_attempts,
+                    "max": MAX_COMPACTION_ATTEMPTS,
+                },
+            )
+
+            # Capture state before compaction for structured recovery
+            pre_state = _capture_pre_compaction_state(session_id)
+
             if summarize_session(session_id, model_ref=selected_model):
-                all_warnings.append(f"Turn {turn + 1}: context overflow detected, triggered compaction ({compaction_attempts}/{MAX_COMPACTION_ATTEMPTS}).")
-                wait_for_session_idle(session_id, timeout_seconds=SESSION_ABORT_TIMEOUT_SECONDS)
-                current_prompt = (
-                    "The context was compacted due to overflow. Before continuing:\n"
-                    "1. ORIENT: Read your todowrite plan to recall progress. Run `glob **/*` "
-                    "to see all files currently in the workspace.\n"
-                    "2. LOCATE: Identify exactly which step you were on when context was compacted.\n"
-                    "3. VERIFY: Check the last completed item actually works (read it, run it).\n"
-                    "4. CONTINUE: Proceed from the next incomplete step. Do not redo completed work "
-                    "or recreate files that already exist."
+                all_warnings.append(
+                    f"Turn {turn + 1}: context overflow detected, triggered compaction ({compaction_attempts}/{MAX_COMPACTION_ATTEMPTS})."
                 )
+                wait_for_session_idle(session_id, timeout_seconds=SESSION_ABORT_TIMEOUT_SECONDS)
+                # Use structured recovery prompt
+                current_prompt = build_recovery_prompt(pre_state)
                 continue
             all_warnings.append(f"Turn {turn + 1}: context overflow, compaction failed.")
 
         if completion == "completed":
             break
 
+        # Proactive compaction with graduated strategy
         if _can_compact and check_context_overflow(payload):
-            compaction_attempts += 1
-            last_compaction_turn = turn
-            _emit("response.compaction", {"turn": turn + 1, "reason": "proactive", "attempt": compaction_attempts, "max": MAX_COMPACTION_ATTEMPTS})
-            if summarize_session(session_id, model_ref=selected_model):
-                all_warnings.append(f"Turn {turn + 1}: proactively triggered compaction (token usage high, {compaction_attempts}/{MAX_COMPACTION_ATTEMPTS}).")
-                wait_for_session_idle(session_id, timeout_seconds=SESSION_ABORT_TIMEOUT_SECONDS)
-                current_prompt = (
-                    "Context was proactively compacted to free space. Before continuing:\n"
-                    "1. Check your todowrite plan to see which steps are done vs. remaining.\n"
-                    "2. Run `glob **/*` to see existing files — do not recreate them.\n"
-                    "3. Verify the last completed step is correct.\n"
-                    "4. Continue from the next incomplete step — do not restart from the beginning."
+            strategy = recommend_compaction_strategy(turn_budget)
+            if strategy in ("summarize", "aggressive"):
+                compaction_attempts += 1
+                last_compaction_turn = turn
+                _emit(
+                    "response.compaction",
+                    {
+                        "turn": turn + 1,
+                        "reason": "proactive",
+                        "strategy": strategy,
+                        "attempt": compaction_attempts,
+                        "max": MAX_COMPACTION_ATTEMPTS,
+                    },
                 )
-                continue
+
+                # Capture state and hints
+                pre_state = _capture_pre_compaction_state(session_id)
+
+                if summarize_session(session_id, model_ref=selected_model):
+                    all_warnings.append(
+                        f"Turn {turn + 1}: proactively triggered {strategy} compaction ({compaction_attempts}/{MAX_COMPACTION_ATTEMPTS})."
+                    )
+                    wait_for_session_idle(session_id, timeout_seconds=SESSION_ABORT_TIMEOUT_SECONDS)
+                    current_prompt = build_recovery_prompt(pre_state)
+                    continue
+            elif strategy == "prune_outputs":
+                all_warnings.append(
+                    f"Turn {turn + 1}: context usage high — prune_outputs strategy recommended but continuing."
+                )
 
         if completion == "error":
             error_type = classify_error_type(payload)
             if error_type == "context_overflow" and _can_compact:
                 compaction_attempts += 1
                 last_compaction_turn = turn
-                _emit("response.compaction", {"turn": turn + 1, "reason": "error_overflow", "attempt": compaction_attempts, "max": MAX_COMPACTION_ATTEMPTS})
+                _emit(
+                    "response.compaction",
+                    {
+                        "turn": turn + 1,
+                        "reason": "error_overflow",
+                        "attempt": compaction_attempts,
+                        "max": MAX_COMPACTION_ATTEMPTS,
+                    },
+                )
+                pre_state = _capture_pre_compaction_state(session_id)
                 if summarize_session(session_id, model_ref=selected_model):
-                    all_warnings.append(f"Turn {turn + 1}: context overflow error, compacting ({compaction_attempts}/{MAX_COMPACTION_ATTEMPTS}).")
-                    wait_for_session_idle(session_id, timeout_seconds=SESSION_ABORT_TIMEOUT_SECONDS)
-                    current_prompt = (
-                        "Context was compacted after an error. Before continuing:\n"
-                        "1. Review your plan to identify where you stopped.\n"
-                        "2. Run `glob **/*` to see existing files in the workspace.\n"
-                        "3. Check the last action's result — did it succeed or fail?\n"
-                        "4. Continue from the next actionable step. Do not recreate existing files."
+                    all_warnings.append(
+                        f"Turn {turn + 1}: context overflow error, compacting ({compaction_attempts}/{MAX_COMPACTION_ATTEMPTS})."
                     )
+                    wait_for_session_idle(session_id, timeout_seconds=SESSION_ABORT_TIMEOUT_SECONDS)
+                    current_prompt = build_recovery_prompt(pre_state)
                     continue
             if error_type == "structured_output" and retries_used < max_retries:
                 retries_used += 1
                 _resend_format = True
-                _emit("response.error_recovery", {"turn": turn + 1, "error_type": "structured_output", "retry": retries_used, "max_retries": max_retries})
+                _emit(
+                    "response.error_recovery",
+                    {
+                        "turn": turn + 1,
+                        "error_type": "structured_output",
+                        "retry": retries_used,
+                        "max_retries": max_retries,
+                    },
+                )
                 all_warnings.append(
                     f"Turn {turn + 1}: structured output validation failed, retrying ({retries_used}/{max_retries})"
                 )
@@ -362,8 +522,18 @@ def invoke_opencode(request: InvokeRequest, stream_callback: StreamCallback = No
                 break
             if retries_used < max_retries:
                 retries_used += 1
-                _emit("response.error_recovery", {"turn": turn + 1, "error_type": error_type or "unknown", "retry": retries_used, "max_retries": max_retries})
-                all_warnings.append(f"Turn {turn + 1}: agent error ({error_type or 'unknown'}), retrying ({retries_used}/{max_retries})")
+                _emit(
+                    "response.error_recovery",
+                    {
+                        "turn": turn + 1,
+                        "error_type": error_type or "unknown",
+                        "retry": retries_used,
+                        "max_retries": max_retries,
+                    },
+                )
+                all_warnings.append(
+                    f"Turn {turn + 1}: agent error ({error_type or 'unknown'}), retrying ({retries_used}/{max_retries})"
+                )
                 current_prompt = (
                     "The previous step encountered an error. Before retrying:\n"
                     "1. Read the error message carefully — what specifically failed?\n"
@@ -377,11 +547,13 @@ def invoke_opencode(request: InvokeRequest, stream_callback: StreamCallback = No
 
         if completion == "incomplete" and turn + 1 < effective_max_turns:
             all_warnings.append(f"Turn {turn + 1}: task incomplete, sending continuation prompt")
-            current_prompt = AUTONOMY_CONTINUATION_PROMPT
+            # Use context-budget-aware continuation prompt
+            current_prompt = get_continuation_prompt(current_budget_status)
             continue
 
         break
 
+    # --- Handoff summary with memory persistence ---
     if compaction_attempts >= MAX_COMPACTION_ATTEMPTS and last_payload:
         budget = compute_context_budget(last_payload)
         if budget.get("status") == "critical":
@@ -405,9 +577,7 @@ def invoke_opencode(request: InvokeRequest, stream_callback: StreamCallback = No
             final_status = wait_for_session_idle(session_id)
             if str(final_status.get("type", "idle")) != "idle":
                 abort_session(session_id)
-                all_warnings.append(
-                    f"Session {session_id} remained {final_status.get('type', 'busy')}, aborted."
-                )
+                all_warnings.append(f"Session {session_id} remained {final_status.get('type', 'busy')}, aborted.")
                 wait_for_session_idle(session_id, timeout_seconds=5.0)
 
         messages = get_session_messages(session_id)
@@ -451,13 +621,45 @@ def invoke_opencode(request: InvokeRequest, stream_callback: StreamCallback = No
     if anti_patterns:
         response_metadata["anti_patterns"] = anti_patterns
 
-    task_status = derive_task_status(
-        response_status, all_warnings, ctx_budget, anti_patterns
-    )
+    task_status = derive_task_status(response_status, all_warnings, ctx_budget, anti_patterns)
     response_metadata["task_status"] = task_status
+
+    # Include task type and agent selection info
+    if task_type != "unknown":
+        response_metadata["task_type"] = task_type
+    response_metadata["agent_used"] = current_agent
 
     if handoff_summary:
         response_metadata["handoff_summary"] = handoff_summary
+
+    # --- Persist memory after invocation ---
+    if MEMORY_ENABLED and not request.no_session:
+        try:
+            # Save task summary
+            summary_entry = build_task_summary_entry(
+                prompt=request.prompt,
+                response_text=response_text,
+                status=response_status,
+                artifacts=collected_artifacts,
+                tool_calls=collected_tool_calls,
+                todos=collected_todos,
+                warnings=all_warnings,
+                context_budget=ctx_budget,
+            )
+            SESSION_MEMORY.save_memory(logical_thread_id, summary_entry)
+
+            # Save handoff entry if context was exhausted
+            if handoff_summary:
+                handoff_entry = build_handoff_entry(
+                    prompt=request.prompt,
+                    summary=response_text[:2000],
+                    todos=collected_todos,
+                    artifacts=collected_artifacts,
+                    context_budget=ctx_budget,
+                )
+                SESSION_MEMORY.save_memory(logical_thread_id, handoff_entry)
+        except Exception as exc:
+            logger.warning("Failed to persist session memory for %s: %s", logical_thread_id, exc)
 
     return InvokeResponse(
         thread_id=logical_thread_id,
