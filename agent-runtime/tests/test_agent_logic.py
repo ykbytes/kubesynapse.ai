@@ -122,7 +122,9 @@ langchain_openai_module.ChatOpenAI = type("ChatOpenAI", (), {"__init__": lambda 
 sys.modules.setdefault("langchain_openai", langchain_openai_module)
 
 langgraph_sqlite_module = types.ModuleType("langgraph.checkpoint.sqlite")
-langgraph_sqlite_module.SqliteSaver = type("SqliteSaver", (), {"__init__": lambda self, conn: None, "setup": lambda self: None})
+langgraph_sqlite_module.SqliteSaver = type(
+    "SqliteSaver", (), {"__init__": lambda self, conn: None, "setup": lambda self: None}
+)
 sys.modules.setdefault("langgraph.checkpoint.sqlite", langgraph_sqlite_module)
 
 langgraph_graph_module = types.ModuleType("langgraph.graph")
@@ -168,7 +170,9 @@ class _SpanContext:
 
 trace_module = types.ModuleType("opentelemetry.trace")
 trace_module.set_tracer_provider = lambda *_args, **_kwargs: None
-trace_module.get_tracer = lambda *_args, **_kwargs: types.SimpleNamespace(start_as_current_span=lambda *_a, **_k: _SpanContext())
+trace_module.get_tracer = lambda *_args, **_kwargs: types.SimpleNamespace(
+    start_as_current_span=lambda *_a, **_k: _SpanContext()
+)
 opentelemetry_module = types.ModuleType("opentelemetry")
 opentelemetry_module.trace = trace_module
 sys.modules.setdefault("opentelemetry", opentelemetry_module)
@@ -183,7 +187,11 @@ resource_module.Resource = type("Resource", (), {"__init__": lambda self, attrib
 sys.modules.setdefault("opentelemetry.sdk.resources", resource_module)
 
 trace_sdk_module = types.ModuleType("opentelemetry.sdk.trace")
-trace_sdk_module.TracerProvider = type("TracerProvider", (), {"__init__": lambda self, resource=None: None, "add_span_processor": lambda self, processor: None})
+trace_sdk_module.TracerProvider = type(
+    "TracerProvider",
+    (),
+    {"__init__": lambda self, resource=None: None, "add_span_processor": lambda self, processor: None},
+)
 sys.modules.setdefault("opentelemetry.sdk.trace", trace_sdk_module)
 
 trace_export_module = types.ModuleType("opentelemetry.sdk.trace.export")
@@ -191,7 +199,9 @@ trace_export_module.BatchSpanProcessor = type("BatchSpanProcessor", (), {"__init
 sys.modules.setdefault("opentelemetry.sdk.trace.export", trace_export_module)
 
 instrumentator_module = types.ModuleType("prometheus_fastapi_instrumentator")
-instrumentator_module.Instrumentator = type("Instrumentator", (), {"instrument": lambda self, app: self, "expose": lambda self, app, **kwargs: self})
+instrumentator_module.Instrumentator = type(
+    "Instrumentator", (), {"instrument": lambda self, app: self, "expose": lambda self, app, **kwargs: self}
+)
 sys.modules.setdefault("prometheus_fastapi_instrumentator", instrumentator_module)
 
 pythonjsonlogger_module = types.ModuleType("pythonjsonlogger")
@@ -255,9 +265,7 @@ class AgentRuntimeA2ATests(unittest.TestCase):
         self.assertIn("openrouter-gpt-4o-mini", str(context.exception.detail))
 
     def test_extract_json_object_accepts_fenced_json(self) -> None:
-        parsed = agent_logic_main.extract_json_object(
-            "```json\n{\"action\":\"respond\",\"response\":\"done\"}\n```"
-        )
+        parsed = agent_logic_main.extract_json_object('```json\n{"action":"respond","response":"done"}\n```')
 
         self.assertEqual(parsed, {"action": "respond", "response": "done"})
 
@@ -280,7 +288,8 @@ class AgentRuntimeA2ATests(unittest.TestCase):
             plan_invoke=lambda _messages: agent_logic_main.AIMessage(
                 content='{"action":"respond","response":"Incident summarized."}'
             ),
-            execute_action=lambda action, loop_state: execute_calls.append({"action": action, "state": loop_state}) or {},
+            execute_action=lambda action, loop_state: execute_calls.append({"action": action, "state": loop_state})
+            or {},
         )
 
         self.assertEqual(result["invoke_status"], "completed")
@@ -311,7 +320,11 @@ class AgentRuntimeA2ATests(unittest.TestCase):
                 ),
                 execute_action=lambda action, loop_state: calls.append({"action": action, "state": dict(loop_state)})
                 or {
-                    "messages": [agent_logic_main.AIMessage(content="Sandbox tool sandbox.filesystem.read result:\nfile contents")],
+                    "messages": [
+                        agent_logic_main.AIMessage(
+                            content="Sandbox tool sandbox.filesystem.read result:\nfile contents"
+                        )
+                    ],
                     "invoke_status": "continue",
                 },
             )
@@ -340,7 +353,9 @@ class AgentRuntimeA2ATests(unittest.TestCase):
                 content='{"action":"sandbox_tool","tool_name":"sandbox.filesystem.read","tool_args":{"path":"src/app.py"}}'
             ),
             execute_action=lambda _action, _loop_state: {
-                "messages": [agent_logic_main.AIMessage(content="Sandbox tool sandbox.filesystem.read result:\nfile contents")],
+                "messages": [
+                    agent_logic_main.AIMessage(content="Sandbox tool sandbox.filesystem.read result:\nfile contents")
+                ],
                 "invoke_status": "continue",
             },
         )
@@ -356,9 +371,7 @@ class AgentRuntimeA2ATests(unittest.TestCase):
                 agent_logic_main.AIMessage(
                     content='{"action":"sandbox_tool","tool_name":"sandbox.filesystem.read","tool_args":{"path":"src/app.py"}}'
                 ),
-                agent_logic_main.AIMessage(
-                    content='{"action":"respond","response":"Done after inspecting the file."}'
-                ),
+                agent_logic_main.AIMessage(content='{"action":"respond","response":"Done after inspecting the file."}'),
             ]
         )
         state = {
@@ -377,7 +390,9 @@ class AgentRuntimeA2ATests(unittest.TestCase):
             state,
             plan_invoke=lambda _messages: next(decisions),
             execute_action=lambda _action, _loop_state: {
-                "messages": [agent_logic_main.AIMessage(content="Sandbox tool sandbox.filesystem.read result:\nfile contents")],
+                "messages": [
+                    agent_logic_main.AIMessage(content="Sandbox tool sandbox.filesystem.read result:\nfile contents")
+                ],
                 "invoke_status": "continue",
                 "sandbox_session": {"sandbox_id": "sbx-123"},
                 "warnings": ["filesystem read used cached sandbox"],
@@ -438,10 +453,13 @@ class AgentRuntimeA2ATests(unittest.TestCase):
                 "invoke_status": "completed",
             }
 
-        with patch.object(agent_logic_main, "AUTONOMY_ACTION_RETRY_LIMIT", 2), patch.object(
-            agent_logic_main,
-            "AUTONOMY_ACTION_RETRY_BACKOFF_SECONDS",
-            0.0,
+        with (
+            patch.object(agent_logic_main, "AUTONOMY_ACTION_RETRY_LIMIT", 2),
+            patch.object(
+                agent_logic_main,
+                "AUTONOMY_ACTION_RETRY_BACKOFF_SECONDS",
+                0.0,
+            ),
         ):
             result = agent_logic_main.execute_autonomous_action_with_retries("MCP tool github/search", executor)
 
@@ -456,14 +474,18 @@ class AgentRuntimeA2ATests(unittest.TestCase):
             "supportedTools": ["local.command.list", "local.command.run"],
         }
 
-        with patch.object(agent_logic_main, "local_runtime_metadata", return_value=metadata), patch.object(
-            agent_logic_main,
-            "resolve_local_tool_cwd",
-            return_value="/app/state",
-        ), patch.object(
-            agent_logic_main.subprocess,
-            "run",
-            return_value=types.SimpleNamespace(returncode=0, stdout="curl 8.7.1", stderr=""),
+        with (
+            patch.object(agent_logic_main, "local_runtime_metadata", return_value=metadata),
+            patch.object(
+                agent_logic_main,
+                "resolve_local_tool_cwd",
+                return_value="/app/state",
+            ),
+            patch.object(
+                agent_logic_main.subprocess,
+                "run",
+                return_value=types.SimpleNamespace(returncode=0, stdout="curl 8.7.1", stderr=""),
+            ),
         ):
             result = agent_logic_main.execute_local_runtime_tool(
                 "local.command.run",
@@ -481,14 +503,18 @@ class AgentRuntimeA2ATests(unittest.TestCase):
             "supportedTools": ["local.command.list", "local.command.run"],
         }
 
-        with patch.object(agent_logic_main, "local_runtime_metadata", return_value=metadata), patch.object(
-            agent_logic_main,
-            "resolve_local_tool_cwd",
-            return_value="/app/state",
-        ), patch.object(
-            agent_logic_main.subprocess,
-            "run",
-            side_effect=agent_logic_main.subprocess.TimeoutExpired("curl", timeout=5),
+        with (
+            patch.object(agent_logic_main, "local_runtime_metadata", return_value=metadata),
+            patch.object(
+                agent_logic_main,
+                "resolve_local_tool_cwd",
+                return_value="/app/state",
+            ),
+            patch.object(
+                agent_logic_main.subprocess,
+                "run",
+                side_effect=agent_logic_main.subprocess.TimeoutExpired("curl", timeout=5),
+            ),
         ):
             result = agent_logic_main.execute_local_runtime_tool(
                 "local.command.run",
@@ -522,13 +548,18 @@ class AgentRuntimeA2ATests(unittest.TestCase):
             ],
         }
 
-        with patch.object(agent_logic_main, "supervisor_visible_sandbox_tools", return_value=["sandbox.filesystem.read"]), patch.object(
-            agent_logic_main,
-            "supervisor_visible_local_runtime",
-            return_value={
-                "supportedTools": ["local.command.list", "local.command.run"],
-                "availableCommands": [{"name": "curl", "path": "/usr/bin/curl"}],
-            },
+        with (
+            patch.object(
+                agent_logic_main, "supervisor_visible_sandbox_tools", return_value=["sandbox.filesystem.read"]
+            ),
+            patch.object(
+                agent_logic_main,
+                "supervisor_visible_local_runtime",
+                return_value={
+                    "supportedTools": ["local.command.list", "local.command.run"],
+                    "availableCommands": [{"name": "curl", "path": "/usr/bin/curl"}],
+                },
+            ),
         ):
             messages = agent_logic_main.build_supervisor_messages(state)
 
@@ -618,15 +649,19 @@ class AgentRuntimeA2ATests(unittest.TestCase):
             model="openrouter-gpt-4o-mini",
         )
 
-        with patch.object(
-            agent_logic_main,
-            "load_active_policy",
-            return_value=("team-policy", {"allowedModels": ["gpt-4", "openrouter-gpt-4o-mini"]}),
-        ), patch.object(
-            agent_logic_main,
-            "local_runtime_metadata",
-            return_value={"availableCommands": [{"name": "curl", "path": "/usr/bin/curl"}]},
-        ), patch.object(agent_logic_main, "get_runtime", return_value={"graph": FakeGraph()}):
+        with (
+            patch.object(
+                agent_logic_main,
+                "load_active_policy",
+                return_value=("team-policy", {"allowedModels": ["gpt-4", "openrouter-gpt-4o-mini"]}),
+            ),
+            patch.object(
+                agent_logic_main,
+                "local_runtime_metadata",
+                return_value={"availableCommands": [{"name": "curl", "path": "/usr/bin/curl"}]},
+            ),
+            patch.object(agent_logic_main, "get_runtime", return_value={"graph": FakeGraph()}),
+        ):
             response = agent_logic_main.invoke_graph(
                 request,
                 lambda event, payload: events.append((event, payload)),
@@ -672,7 +707,9 @@ class AgentRuntimeA2ATests(unittest.TestCase):
         self.assertEqual(completed_payload["model"], "openrouter-gpt-4o-mini")
         self.assertEqual(completed_payload["step_count"], 2)
         self.assertEqual(completed_payload["stop_reason"], "response")
-        self.assertEqual(next(payload for event, payload in events if event == "response.delta")["delta"], "Autonomy finished.")
+        self.assertEqual(
+            next(payload for event, payload in events if event == "response.delta")["delta"], "Autonomy finished."
+        )
 
     def test_parse_skill_definition_extracts_capabilities(self) -> None:
         definition = agent_logic_main.parse_skill_definition(
@@ -770,7 +807,7 @@ class AgentRuntimeA2ATests(unittest.TestCase):
         self.assertTrue(config["allowSubagents"])
         self.assertIn("research", config["prompt"])
 
-    def test_validate_inbound_a2a_request_rejects_unauthorized_caller(self) -> None:
+    def test_validate_inbound_a2a_request_allows_when_no_caller_allowlist_configured(self) -> None:
         request = agent_logic_main.InvokeRequest(
             prompt="hello",
             caller_agent_name="research-agent",
@@ -778,6 +815,16 @@ class AgentRuntimeA2ATests(unittest.TestCase):
         )
 
         with patch.object(agent_logic_main, "A2A_ALLOWED_CALLERS", frozenset()):
+            agent_logic_main.validate_inbound_a2a_request(request)
+
+    def test_validate_inbound_a2a_request_rejects_caller_not_in_allowlist(self) -> None:
+        request = agent_logic_main.InvokeRequest(
+            prompt="hello",
+            caller_agent_name="research-agent",
+            caller_agent_namespace="team-a",
+        )
+
+        with patch.object(agent_logic_main, "A2A_ALLOWED_CALLERS", frozenset({("team-b", "analysis-agent")})):
             with self.assertRaises(agent_logic_main.HTTPException) as context:
                 agent_logic_main.validate_inbound_a2a_request(request)
 
@@ -785,14 +832,18 @@ class AgentRuntimeA2ATests(unittest.TestCase):
         self.assertIn("research-agent", str(context.exception.detail))
 
     def test_parse_effective_a2a_policy_config_prefers_policy_values(self) -> None:
-        with patch.object(
-            agent_logic_main,
-            "A2A_ALLOWED_TARGETS_SNAPSHOT",
-            frozenset({("env-ns", "env-agent")}),
-        ), patch.object(agent_logic_main, "A2A_REQUIRE_HITL_DEFAULT", False), patch.object(
-            agent_logic_main,
-            "A2A_MAX_TIMEOUT_SECONDS",
-            60.0,
+        with (
+            patch.object(
+                agent_logic_main,
+                "A2A_ALLOWED_TARGETS_SNAPSHOT",
+                frozenset({("env-ns", "env-agent")}),
+            ),
+            patch.object(agent_logic_main, "A2A_REQUIRE_HITL_DEFAULT", False),
+            patch.object(
+                agent_logic_main,
+                "A2A_MAX_TIMEOUT_SECONDS",
+                60.0,
+            ),
         ):
             targets, timeout_seconds, require_hitl = agent_logic_main.parse_effective_a2a_policy_config(
                 {
@@ -861,11 +912,15 @@ class AgentRuntimeA2ATests(unittest.TestCase):
                     raise RuntimeError("network policy blocked direct access")
                 return FakeResponse({"response": "done", "status": "completed", "thread_id": "callee-thread"})
 
-        with patch.object(agent_logic_main.httpx, "Client", FakeClient), patch.object(
-            agent_logic_main,
-            "API_GATEWAY_INTERNAL_URL",
-            "http://gateway.local",
-        ), patch.object(agent_logic_main, "API_GATEWAY_SHARED_TOKEN", "shared-token"):
+        with (
+            patch.object(agent_logic_main.httpx, "Client", FakeClient),
+            patch.object(
+                agent_logic_main,
+                "API_GATEWAY_INTERNAL_URL",
+                "http://gateway.local",
+            ),
+            patch.object(agent_logic_main, "API_GATEWAY_SHARED_TOKEN", "shared-token"),
+        ):
             result, transport, fallback_reason = agent_logic_main.invoke_a2a_target_with_fallback(
                 "analysis-agent",
                 "team-b",
@@ -948,10 +1003,13 @@ class AgentRuntimeA2ATests(unittest.TestCase):
             "warnings": [],
         }
 
-        with patch.object(agent_logic_main, "execute_sandbox_tool", fake_execute), patch.object(
-            agent_logic_main,
-            "invoke_a2a_target_with_fallback",
-            side_effect=fake_invoke,
+        with (
+            patch.object(agent_logic_main, "execute_sandbox_tool", fake_execute),
+            patch.object(
+                agent_logic_main,
+                "invoke_a2a_target_with_fallback",
+                side_effect=fake_invoke,
+            ),
         ):
             result = agent_logic_main.coordinate_specialized_subagents(
                 state,
@@ -972,31 +1030,37 @@ class AgentRuntimeA2ATests(unittest.TestCase):
     # ── New action tests ──────────────────────────────────────────────
 
     def test_normalize_supervisor_action_plan(self) -> None:
-        action = agent_logic_main.normalize_supervisor_action({
-            "action": "plan",
-            "thinking": "I need to plan this",
-            "steps": ["Read the file", "Edit the function", "Run tests"],
-        })
+        action = agent_logic_main.normalize_supervisor_action(
+            {
+                "action": "plan",
+                "thinking": "I need to plan this",
+                "steps": ["Read the file", "Edit the function", "Run tests"],
+            }
+        )
         self.assertIsNotNone(action)
         self.assertEqual(action["action"], "plan")
         self.assertEqual(len(action["steps"]), 3)
         self.assertEqual(action["thinking"], "I need to plan this")
 
     def test_normalize_supervisor_action_plan_empty_steps_returns_none(self) -> None:
-        action = agent_logic_main.normalize_supervisor_action({
-            "action": "plan",
-            "steps": [],
-        })
+        action = agent_logic_main.normalize_supervisor_action(
+            {
+                "action": "plan",
+                "steps": [],
+            }
+        )
         self.assertIsNone(action)
 
     def test_normalize_supervisor_action_edit_file(self) -> None:
-        action = agent_logic_main.normalize_supervisor_action({
-            "action": "edit_file",
-            "thinking": "Fix the bug",
-            "path": "/src/app.py",
-            "old_text": "def old():",
-            "new_text": "def new():",
-        })
+        action = agent_logic_main.normalize_supervisor_action(
+            {
+                "action": "edit_file",
+                "thinking": "Fix the bug",
+                "path": "/src/app.py",
+                "old_text": "def old():",
+                "new_text": "def new():",
+            }
+        )
         self.assertIsNotNone(action)
         self.assertEqual(action["action"], "edit_file")
         self.assertEqual(action["path"], "/src/app.py")
@@ -1004,31 +1068,37 @@ class AgentRuntimeA2ATests(unittest.TestCase):
         self.assertEqual(action["new_text"], "def new():")
 
     def test_normalize_supervisor_action_edit_file_missing_path_returns_none(self) -> None:
-        action = agent_logic_main.normalize_supervisor_action({
-            "action": "edit_file",
-            "old_text": "x",
-            "new_text": "y",
-        })
+        action = agent_logic_main.normalize_supervisor_action(
+            {
+                "action": "edit_file",
+                "old_text": "x",
+                "new_text": "y",
+            }
+        )
         self.assertIsNone(action)
 
     def test_normalize_supervisor_action_batch_read(self) -> None:
-        action = agent_logic_main.normalize_supervisor_action({
-            "action": "batch_read",
-            "thinking": "Need to read multiple files",
-            "reads": [
-                {"path": "/src/a.py"},
-                {"path": "/src/b.py", "start_line": 1, "end_line": 50},
-            ],
-        })
+        action = agent_logic_main.normalize_supervisor_action(
+            {
+                "action": "batch_read",
+                "thinking": "Need to read multiple files",
+                "reads": [
+                    {"path": "/src/a.py"},
+                    {"path": "/src/b.py", "start_line": 1, "end_line": 50},
+                ],
+            }
+        )
         self.assertIsNotNone(action)
         self.assertEqual(action["action"], "batch_read")
         self.assertEqual(len(action["reads"]), 2)
 
     def test_normalize_supervisor_action_batch_read_empty_returns_none(self) -> None:
-        action = agent_logic_main.normalize_supervisor_action({
-            "action": "batch_read",
-            "reads": [],
-        })
+        action = agent_logic_main.normalize_supervisor_action(
+            {
+                "action": "batch_read",
+                "reads": [],
+            }
+        )
         self.assertIsNone(action)
 
     def test_describe_autonomous_action_new_types(self) -> None:
@@ -1057,9 +1127,7 @@ class AgentRuntimeA2ATests(unittest.TestCase):
         self.assertEqual(cat3, "unknown")
 
     def test_format_plan_status(self) -> None:
-        result = agent_logic_main.format_plan_status(
-            ["Step A", "Step B", "Step C"], 1
-        )
+        result = agent_logic_main.format_plan_status(["Step A", "Step B", "Step C"], 1)
         self.assertIn("[done]", result)
         self.assertIn("[current]", result)
         self.assertIn("[pending]", result)
@@ -1090,9 +1158,7 @@ class AgentRuntimeA2ATests(unittest.TestCase):
                 }
             return {"invoke_status": "blocked"}
 
-        result = agent_logic_main.execute_edit_file(
-            "/src/app.py", "def old():", "def new():", fake_sandbox
-        )
+        result = agent_logic_main.execute_edit_file("/src/app.py", "def old():", "def new():", fake_sandbox)
         self.assertEqual(result["invoke_status"], "completed")
         self.assertIn("Successfully edited", result["messages"][0].content)
 
@@ -1103,9 +1169,7 @@ class AgentRuntimeA2ATests(unittest.TestCase):
                 "invoke_status": "completed",
             }
 
-        result = agent_logic_main.execute_edit_file(
-            "/src/app.py", "nonexistent", "replacement", fake_sandbox
-        )
+        result = agent_logic_main.execute_edit_file("/src/app.py", "nonexistent", "replacement", fake_sandbox)
         self.assertEqual(result["invoke_status"], "blocked")
         self.assertIn("old_text not found", result["messages"][0].content)
 
@@ -1116,9 +1180,7 @@ class AgentRuntimeA2ATests(unittest.TestCase):
                 "invoke_status": "completed",
             }
 
-        result = agent_logic_main.execute_edit_file(
-            "/src/app.py", "dup", "new", fake_sandbox
-        )
+        result = agent_logic_main.execute_edit_file("/src/app.py", "dup", "new", fake_sandbox)
         self.assertEqual(result["invoke_status"], "blocked")
         self.assertIn("matches 2 locations", result["messages"][0].content)
 
@@ -1130,22 +1192,20 @@ class AgentRuntimeA2ATests(unittest.TestCase):
                 "invoke_status": "completed",
             }
 
-        result = agent_logic_main.execute_batch_read(
-            [{"path": "/a.py"}, {"path": "/b.py"}], fake_sandbox
-        )
+        result = agent_logic_main.execute_batch_read([{"path": "/a.py"}, {"path": "/b.py"}], fake_sandbox)
         self.assertEqual(result["invoke_status"], "completed")
         self.assertIn("/a.py", result["messages"][0].content)
         self.assertIn("/b.py", result["messages"][0].content)
 
     def test_run_autonomous_session_plan_action_does_not_consume_step(self) -> None:
-        decisions = iter([
-            agent_logic_main.AIMessage(
-                content='{"action":"plan","thinking":"plan it","steps":["Read file","Edit file"]}'
-            ),
-            agent_logic_main.AIMessage(
-                content='{"action":"respond","response":"Done."}'
-            ),
-        ])
+        decisions = iter(
+            [
+                agent_logic_main.AIMessage(
+                    content='{"action":"plan","thinking":"plan it","steps":["Read file","Edit file"]}'
+                ),
+                agent_logic_main.AIMessage(content='{"action":"respond","response":"Done."}'),
+            ]
+        )
         state = {
             "request_prompt": "Fix the bug",
             "messages": [agent_logic_main.HumanMessage(content="Fix the bug")],
@@ -1167,14 +1227,14 @@ class AgentRuntimeA2ATests(unittest.TestCase):
         self.assertIn("Done.", result["messages"][0].content)
 
     def test_run_autonomous_session_appends_change_summary(self) -> None:
-        decisions = iter([
-            agent_logic_main.AIMessage(
-                content='{"action":"edit_file","thinking":"fix it","path":"/app.py","old_text":"old","new_text":"new"}'
-            ),
-            agent_logic_main.AIMessage(
-                content='{"action":"respond","response":"Fixed."}'
-            ),
-        ])
+        decisions = iter(
+            [
+                agent_logic_main.AIMessage(
+                    content='{"action":"edit_file","thinking":"fix it","path":"/app.py","old_text":"old","new_text":"new"}'
+                ),
+                agent_logic_main.AIMessage(content='{"action":"respond","response":"Fixed."}'),
+            ]
+        )
 
         def fake_execute(action, loop_state):
             if action["action"] == "edit_file":
@@ -1205,7 +1265,6 @@ class AgentRuntimeA2ATests(unittest.TestCase):
         self.assertIn("Changes made", response_text)
         self.assertIn("/app.py", response_text)
 
-
     # ------------------------------------------------------------------
     # Phase C: note action
     # ------------------------------------------------------------------
@@ -1220,22 +1279,16 @@ class AgentRuntimeA2ATests(unittest.TestCase):
 
     def test_normalize_supervisor_action_note_truncates_long(self):
         long_note = "x" * 600
-        result = agent_logic_main.normalize_supervisor_action(
-            {"action": "note", "note": long_note}
-        )
+        result = agent_logic_main.normalize_supervisor_action({"action": "note", "note": long_note})
         self.assertIsNotNone(result)
         self.assertEqual(len(result["note"]), 500)
 
     def test_normalize_supervisor_action_note_empty_returns_none(self):
-        result = agent_logic_main.normalize_supervisor_action(
-            {"action": "note", "note": ""}
-        )
+        result = agent_logic_main.normalize_supervisor_action({"action": "note", "note": ""})
         self.assertIsNone(result)
 
     def test_normalize_supervisor_action_note_missing_returns_none(self):
-        result = agent_logic_main.normalize_supervisor_action(
-            {"action": "note"}
-        )
+        result = agent_logic_main.normalize_supervisor_action({"action": "note"})
         self.assertIsNone(result)
 
     def test_describe_autonomous_action_note(self):
@@ -1326,18 +1379,14 @@ class AgentRuntimeA2ATests(unittest.TestCase):
     # ------------------------------------------------------------------
 
     def test_auto_lint_command_python(self):
-        result = agent_logic_main._auto_lint_command(
-            "/app.py", {"projectType": "python"}
-        )
+        result = agent_logic_main._auto_lint_command("/app.py", {"projectType": "python"})
         self.assertIsNotNone(result)
         cmd, args = result
         self.assertEqual(cmd, "python")
         self.assertIn("py_compile", " ".join(args))
 
     def test_auto_lint_command_go(self):
-        result = agent_logic_main._auto_lint_command(
-            "/main.go", {"projectType": "go"}
-        )
+        result = agent_logic_main._auto_lint_command("/main.go", {"projectType": "go"})
         self.assertIsNotNone(result)
         cmd, args = result
         self.assertEqual(cmd, "go")
@@ -1348,9 +1397,7 @@ class AgentRuntimeA2ATests(unittest.TestCase):
         self.assertIsNone(result)
 
     def test_auto_lint_command_unknown_extension(self):
-        result = agent_logic_main._auto_lint_command(
-            "/data.csv", {"projectType": "python"}
-        )
+        result = agent_logic_main._auto_lint_command("/data.csv", {"projectType": "python"})
         self.assertIsNone(result)
 
     # ------------------------------------------------------------------
@@ -1470,12 +1517,14 @@ class AgentRuntimeA2ATests(unittest.TestCase):
 
     def test_run_autonomous_session_note_does_not_consume_step(self):
         """The note action is free — it should not increment step_count."""
-        decisions = iter([
-            # Step 1: agent takes a note (should be free)
-            {"thinking": "saving for later", "action": "note", "note": "API on port 3000"},
-            # Step 2: agent finishes
-            {"thinking": "done", "action": "done", "summary": "Noted."},
-        ])
+        decisions = iter(
+            [
+                # Step 1: agent takes a note (should be free)
+                {"thinking": "saving for later", "action": "note", "note": "API on port 3000"},
+                # Step 2: agent finishes
+                {"thinking": "done", "action": "done", "summary": "Noted."},
+            ]
+        )
 
         def fake_invoke(messages):
             d = next(decisions)
@@ -1514,18 +1563,35 @@ class AgentRuntimeA2ATests(unittest.TestCase):
             if call_count[0] <= 3:
                 # First three: plan then fail twice
                 if call_count[0] == 1:
-                    return agent_logic_main.AIMessage(content=json.dumps({
-                        "thinking": "plan", "action": "plan",
-                        "steps": [{"description": "step A"}, {"description": "step B"}],
-                    }))
-                return agent_logic_main.AIMessage(content=json.dumps({
-                    "thinking": "try", "action": "sandbox_tool",
-                    "tool_name": "filesystem.read", "tool_args": {"path": "/x"},
-                }))
+                    return agent_logic_main.AIMessage(
+                        content=json.dumps(
+                            {
+                                "thinking": "plan",
+                                "action": "plan",
+                                "steps": [{"description": "step A"}, {"description": "step B"}],
+                            }
+                        )
+                    )
+                return agent_logic_main.AIMessage(
+                    content=json.dumps(
+                        {
+                            "thinking": "try",
+                            "action": "sandbox_tool",
+                            "tool_name": "filesystem.read",
+                            "tool_args": {"path": "/x"},
+                        }
+                    )
+                )
             # After replan hint should appear — just finish
-            return agent_logic_main.AIMessage(content=json.dumps({
-                "thinking": "done", "action": "done", "summary": "Gave up.",
-            }))
+            return agent_logic_main.AIMessage(
+                content=json.dumps(
+                    {
+                        "thinking": "done",
+                        "action": "done",
+                        "summary": "Gave up.",
+                    }
+                )
+            )
 
         failure_count = [0]
 
@@ -1562,18 +1628,15 @@ class AgentRuntimeA2ATests(unittest.TestCase):
 
     def test_scan_workspace_profile_derives_lint_test_commands(self):
         """scan_workspace_profile should derive lint/test commands for python projects."""
+
         def fake_sandbox(tool_name, args):
             path = args.get("path", "")
             if tool_name == "filesystem.ls" and path == "/":
-                return {"messages": [agent_logic_main.AIMessage(
-                    content="main.py, requirements.txt, src/"
-                )]}
+                return {"messages": [agent_logic_main.AIMessage(content="main.py, requirements.txt, src/")]}
             if tool_name == "filesystem.ls" and path == "/.git":
                 return {"messages": [agent_logic_main.AIMessage(content="HEAD, refs")]}
             if tool_name == "filesystem.read" and path == "/.git/HEAD":
-                return {"messages": [agent_logic_main.AIMessage(
-                    content="ref: refs/heads/develop"
-                )]}
+                return {"messages": [agent_logic_main.AIMessage(content="ref: refs/heads/develop")]}
             # Config file reads — return content so project type is detected
             if tool_name == "filesystem.read" and path == "/requirements.txt":
                 return {"messages": [agent_logic_main.AIMessage(content="flask\nrequests")]}
@@ -1604,6 +1667,7 @@ class AgentRuntimeA2ATests(unittest.TestCase):
 
     def test_safe_json_dumps_non_serializable_uses_str(self):
         import datetime
+
         result = agent_logic_main.safe_json_dumps({"ts": datetime.date(2024, 1, 1)})
         self.assertIn("2024-01-01", result)
 
@@ -1731,9 +1795,7 @@ class AgentRuntimeA2ATests(unittest.TestCase):
                 return agent_logic_main.AIMessage(
                     content='{"action":"sandbox_tool","tool_name":"filesystem.read","tool_args":{"path":"/test.py"},"thinking":"read"}'
                 )
-            return agent_logic_main.AIMessage(
-                content='{"action":"respond","response":"done","thinking":"ok"}'
-            )
+            return agent_logic_main.AIMessage(content='{"action":"respond","response":"done","thinking":"ok"}')
 
         def execute_action(action, s):
             nonlocal call_count
@@ -1770,29 +1832,35 @@ class AgentRuntimeA2ATests(unittest.TestCase):
     # ------------------------------------------------------------------
 
     def test_normalize_git_commit(self):
-        result = agent_logic_main.normalize_supervisor_action({
-            "action": "git_commit",
-            "message": "fix: resolve bug",
-            "all": True,
-            "thinking": "committing changes",
-        })
+        result = agent_logic_main.normalize_supervisor_action(
+            {
+                "action": "git_commit",
+                "message": "fix: resolve bug",
+                "all": True,
+                "thinking": "committing changes",
+            }
+        )
         self.assertIsNotNone(result)
         self.assertEqual(result["action"], "git_commit")
         self.assertEqual(result["message"], "fix: resolve bug")
         self.assertTrue(result["all"])
 
     def test_normalize_git_commit_empty_message_returns_none(self):
-        result = agent_logic_main.normalize_supervisor_action({
-            "action": "git_commit",
-            "message": "",
-        })
+        result = agent_logic_main.normalize_supervisor_action(
+            {
+                "action": "git_commit",
+                "message": "",
+            }
+        )
         self.assertIsNone(result)
 
     def test_describe_git_commit(self):
-        desc = agent_logic_main.describe_autonomous_action({
-            "action": "git_commit",
-            "message": "feat: add new feature",
-        })
+        desc = agent_logic_main.describe_autonomous_action(
+            {
+                "action": "git_commit",
+                "message": "feat: add new feature",
+            }
+        )
         self.assertIn("Git commit", desc)
         self.assertIn("feat: add new feature", desc)
 
@@ -1836,9 +1904,7 @@ class AgentRuntimeA2ATests(unittest.TestCase):
                 "invoke_status": "completed",
             }
 
-        result = agent_logic_main.execute_git_commit(
-            "manual commit", commit_all=False, execute_local_tool=fake_local
-        )
+        result = agent_logic_main.execute_git_commit("manual commit", commit_all=False, execute_local_tool=fake_local)
         self.assertEqual(result["invoke_status"], "completed")
         self.assertEqual(len(calls), 1)  # only git commit, no git add
 
@@ -1847,9 +1913,11 @@ class AgentRuntimeA2ATests(unittest.TestCase):
     # ------------------------------------------------------------------
 
     def test_auto_test_command_python(self):
-        result = agent_logic_main._auto_test_command({
-            "testCommand": "python -m pytest --tb=short -q",
-        })
+        result = agent_logic_main._auto_test_command(
+            {
+                "testCommand": "python -m pytest --tb=short -q",
+            }
+        )
         self.assertIsNotNone(result)
         cmd, args = result
         self.assertEqual(cmd, "python")
@@ -1870,9 +1938,7 @@ class AgentRuntimeA2ATests(unittest.TestCase):
         events = []
 
         def plan_invoke(messages):
-            return agent_logic_main.AIMessage(
-                content='{"action":"respond","response":"done","thinking":"immediate"}'
-            )
+            return agent_logic_main.AIMessage(content='{"action":"respond","response":"done","thinking":"immediate"}')
 
         state = {
             "request_prompt": "Test events",
@@ -1953,7 +2019,10 @@ class ParseToolCallToActionTests(unittest.TestCase):
         self.assertEqual(action["response"], "Here is the answer")
 
     def test_parses_edit_file_tool_call(self) -> None:
-        tool_call = {"name": "edit_file", "args": {"thinking": "fix bug", "path": "app.py", "old_text": "old", "new_text": "new"}}
+        tool_call = {
+            "name": "edit_file",
+            "args": {"thinking": "fix bug", "path": "app.py", "old_text": "old", "new_text": "new"},
+        }
         action = agent_logic_main.parse_tool_call_to_action(tool_call)
         self.assertIsNotNone(action)
         self.assertEqual(action["action"], "edit_file")
@@ -2085,6 +2154,7 @@ class FuzzyEditMatchingTests(unittest.TestCase):
 
     def test_edit_record_has_inverse_mapping(self) -> None:
         """The _edit_record should swap old_text and new_text for undo."""
+
         def mock_sandbox_tool(tool_name: str, tool_args: dict) -> dict:
             if tool_name == "filesystem.read":
                 return {
@@ -2128,8 +2198,10 @@ class TokenBudgetTests(unittest.TestCase):
             msg.usage_metadata = {"input_tokens": 5000, "output_tokens": 5000}
             return msg
 
-        with patch.object(agent_logic_main, "MAX_TOKEN_BUDGET", 100), \
-             patch.object(agent_logic_main, "publish_runtime_event", lambda e, d: None):
+        with (
+            patch.object(agent_logic_main, "MAX_TOKEN_BUDGET", 100),
+            patch.object(agent_logic_main, "publish_runtime_event", lambda e, d: None),
+        ):
             result = agent_logic_main.run_autonomous_session(
                 state,
                 plan_invoke=plan_invoke,
@@ -2158,14 +2230,14 @@ class TokenBudgetTests(unittest.TestCase):
         }
 
         def plan_invoke(_messages):
-            msg = agent_logic_main.AIMessage(
-                content='{"action":"respond","response":"done"}'
-            )
+            msg = agent_logic_main.AIMessage(content='{"action":"respond","response":"done"}')
             msg.usage_metadata = {"input_tokens": 50000, "output_tokens": 50000}
             return msg
 
-        with patch.object(agent_logic_main, "MAX_TOKEN_BUDGET", 0), \
-             patch.object(agent_logic_main, "publish_runtime_event", lambda e, d: None):
+        with (
+            patch.object(agent_logic_main, "MAX_TOKEN_BUDGET", 0),
+            patch.object(agent_logic_main, "publish_runtime_event", lambda e, d: None),
+        ):
             result = agent_logic_main.run_autonomous_session(
                 state,
                 plan_invoke=plan_invoke,
@@ -2202,7 +2274,12 @@ class ToolCallIntegrationTests(unittest.TestCase):
             if call_count[0] == 1:
                 # First call: return a tool call for sandbox_tool
                 msg = agent_logic_main.AIMessage(content="")
-                msg.tool_calls = [{"name": "sandbox_tool", "args": {"thinking": "read", "tool_name": "filesystem.ls", "tool_args": {"path": "."}}}]
+                msg.tool_calls = [
+                    {
+                        "name": "sandbox_tool",
+                        "args": {"thinking": "read", "tool_name": "filesystem.ls", "tool_args": {"path": "."}},
+                    }
+                ]
                 msg.usage_metadata = {"input_tokens": 100, "output_tokens": 50}
                 return msg
             else:
@@ -2420,10 +2497,12 @@ class ExecuteEditFilesTests(unittest.TestCase):
         return sandbox, storage
 
     def test_successful_multi_edit(self) -> None:
-        sandbox, storage = self._make_sandbox({
-            "a.py": "hello world",
-            "b.py": "foo bar baz",
-        })
+        sandbox, storage = self._make_sandbox(
+            {
+                "a.py": "hello world",
+                "b.py": "foo bar baz",
+            }
+        )
         with patch.object(agent_logic_main, "publish_runtime_event", lambda e, d: None):
             result = agent_logic_main.execute_edit_files(
                 [
@@ -2446,9 +2525,7 @@ class ExecuteEditFilesTests(unittest.TestCase):
 
     def test_missing_path_returns_blocked(self) -> None:
         sandbox, _ = self._make_sandbox({"a.py": "content"})
-        result = agent_logic_main.execute_edit_files(
-            [{"path": "", "old_text": "x", "new_text": "y"}], sandbox
-        )
+        result = agent_logic_main.execute_edit_files([{"path": "", "old_text": "x", "new_text": "y"}], sandbox)
         self.assertEqual(result["invoke_status"], "blocked")
 
     def test_old_text_not_found_returns_blocked(self) -> None:
@@ -2461,9 +2538,7 @@ class ExecuteEditFilesTests(unittest.TestCase):
 
     def test_ambiguous_match_returns_blocked(self) -> None:
         sandbox, _ = self._make_sandbox({"a.py": "foo foo foo"})
-        result = agent_logic_main.execute_edit_files(
-            [{"path": "a.py", "old_text": "foo", "new_text": "bar"}], sandbox
-        )
+        result = agent_logic_main.execute_edit_files([{"path": "a.py", "old_text": "foo", "new_text": "bar"}], sandbox)
         self.assertEqual(result["invoke_status"], "blocked")
         self.assertEqual(result.get("error_type"), "edit_ambiguous_match")
 
@@ -2495,14 +2570,13 @@ class ExecuteSearchCodeTests(unittest.TestCase):
                 "invoke_status": status,
                 "messages": [agent_logic_main.AIMessage(content=output)],
             }
+
         return execute
 
     def test_matches_parsed(self) -> None:
         output = "src/a.py:10:def hello():\nsrc/b.py:20:import os"
         tool = self._make_local_tool(output)
-        result = agent_logic_main.execute_search_code(
-            {"pattern": "hello", "path": "src/"}, tool
-        )
+        result = agent_logic_main.execute_search_code({"pattern": "hello", "path": "src/"}, tool)
         self.assertEqual(result["invoke_status"], "completed")
         matches = result["tool_result"]["results"]
         self.assertEqual(len(matches), 2)
@@ -2511,9 +2585,7 @@ class ExecuteSearchCodeTests(unittest.TestCase):
 
     def test_no_matches(self) -> None:
         tool = self._make_local_tool("")
-        result = agent_logic_main.execute_search_code(
-            {"pattern": "nonexistent"}, tool
-        )
+        result = agent_logic_main.execute_search_code({"pattern": "nonexistent"}, tool)
         self.assertEqual(result["invoke_status"], "completed")
         self.assertEqual(result["tool_result"]["matches"], 0)
 
@@ -2525,9 +2597,7 @@ class ExecuteSearchCodeTests(unittest.TestCase):
     def test_max_results_cap(self) -> None:
         lines = "\n".join(f"f.py:{i}:line{i}" for i in range(100))
         tool = self._make_local_tool(lines)
-        result = agent_logic_main.execute_search_code(
-            {"pattern": "line", "max_results": 5}, tool
-        )
+        result = agent_logic_main.execute_search_code({"pattern": "line", "max_results": 5}, tool)
         self.assertLessEqual(len(result["tool_result"]["results"]), 5)
 
 
@@ -2643,11 +2713,15 @@ class UnifiedDiffTests(unittest.TestCase):
             return {"invoke_status": "blocked", "messages": []}
 
         with patch.object(
-            agent_logic_main, "publish_runtime_event",
+            agent_logic_main,
+            "publish_runtime_event",
             lambda e, d: events.append((e, d)),
         ):
             result = agent_logic_main.execute_edit_file(
-                "test.py", "old line", "new line", mock_sandbox,
+                "test.py",
+                "old line",
+                "new line",
+                mock_sandbox,
             )
 
         self.assertEqual(result["invoke_status"], "completed")
@@ -2674,6 +2748,67 @@ class CostModelCoverageTests(unittest.TestCase):
         cost = agent_logic_main._calculate_cost_usd(1_000_000, 0, "GPT-4o-latest")
         # Should match gpt-4o prefix
         self.assertGreater(cost, 0.0)
+
+
+class ToolPolicyQuickWinTests(unittest.TestCase):
+    def test_parse_tool_policy_config_normalizes_runtime_policy(self) -> None:
+        parsed = agent_logic_main.parse_tool_policy_config(
+            {
+                "toolPolicy": {
+                    "maxDelegationDepth": 3,
+                    "allowedToolPrefixes": ["local.command.", "github/", "github/"],
+                    "blockedToolNames": ["local.command.rm"],
+                    "requireApprovalFor": ["github/create_issue"],
+                }
+            }
+        )
+
+        self.assertEqual(parsed["maxDelegationDepth"], 3)
+        self.assertEqual(parsed["allowedToolPrefixes"], ("local.command.", "github/"))
+        self.assertEqual(parsed["blockedToolNames"], frozenset({"local.command.rm"}))
+        self.assertEqual(parsed["requireApprovalFor"], frozenset({"github/create_issue"}))
+
+    def test_tool_policy_violation_reason_blocks_disallowed_tool(self) -> None:
+        reason = agent_logic_main.tool_policy_violation_reason(
+            tool_name="filesystem.read",
+            mcp_server="",
+            delegation_depth=0,
+            policy_spec={"toolPolicy": {"allowedToolPrefixes": ["local.command."]}},
+        )
+
+        self.assertIn("not allowed", reason or "")
+
+    def test_tool_policy_violation_reason_blocks_excessive_delegation_depth(self) -> None:
+        reason = agent_logic_main.tool_policy_violation_reason(
+            tool_name="",
+            mcp_server="",
+            delegation_depth=2,
+            policy_spec={"toolPolicy": {"maxDelegationDepth": 1}},
+        )
+
+        self.assertIn("exceeds", reason or "")
+
+    def test_tool_requires_policy_approval_matches_mcp_qualified_name(self) -> None:
+        self.assertTrue(
+            agent_logic_main.tool_requires_policy_approval(
+                tool_name="create_issue",
+                mcp_server="github",
+                policy_spec={"toolPolicy": {"requireApprovalFor": ["github/create_issue"]}},
+            )
+        )
+
+    def test_derive_memory_candidates_includes_artifacts_tools_and_summary(self) -> None:
+        memory = agent_logic_main.derive_memory_candidates(
+            {
+                "artifacts": [{"name": "plan.md"}],
+                "tool_call_records": [{"tool_name": "filesystem.read"}],
+            },
+            "Completed the implementation and wrote the plan.",
+        )
+
+        self.assertEqual(memory["episodic"][0]["type"], "artifacts")
+        self.assertEqual(memory["episodic"][1]["type"], "tools")
+        self.assertEqual(memory["procedural"][0]["type"], "response-summary")
 
 
 if __name__ == "__main__":

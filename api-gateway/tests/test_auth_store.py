@@ -192,3 +192,223 @@ class AuthStoreTests(unittest.TestCase):
                 role="viewer",
                 allowed_namespaces=["default"],
             )
+
+    def test_chat_session_summary_includes_memory_candidates(self) -> None:
+        session = self.auth_store.create_chat_session(
+            "default", "reviewer", "session-1", "Review run", username="alice"
+        )
+        self.assertEqual(session["session_id"], "session-1")
+
+        self.auth_store.save_chat_messages(
+            "session-1",
+            [
+                {"message_id": "m1", "role": "user", "content": "Review this patch"},
+                {
+                    "message_id": "m2",
+                    "role": "assistant",
+                    "content": "I found one regression risk and a missing test.",
+                    "toolName": "github/diff",
+                },
+            ],
+        )
+
+        sessions = self.auth_store.list_chat_sessions("default", "reviewer", username="alice")
+        self.assertEqual(len(sessions), 1)
+        summary = sessions[0]["summary"]
+        self.assertEqual(summary["message_count"], 2)
+        self.assertEqual(summary["tool_names"], ["github/diff"])
+        self.assertIn("regression risk", summary["last_assistant_message"])
+        self.assertEqual(summary["memory_candidates"]["episodic"][0]["type"], "tool-usage")
+
+        memory_records = self.auth_store.list_memory_records(
+            "default", "reviewer", username="alice", session_id="session-1"
+        )
+        self.assertGreaterEqual(len(memory_records), 1)
+        self.assertEqual(memory_records[0]["agent_name"], "reviewer")
+        self.assertEqual(memory_records[0]["session_id"], "session-1")
+
+    def test_record_runtime_memory_persists_runtime_metadata(self) -> None:
+        inserted = self.auth_store.record_runtime_memory(
+            "default",
+            "reviewer",
+            session_id="thread-123",
+            username="alice",
+            metadata={
+                "memory": {
+                    "episodic": [{"type": "tools", "names": ["filesystem.read"]}],
+                    "procedural": [{"type": "response-summary", "text": "Summarized the repository layout."}],
+                }
+            },
+        )
+
+        self.assertEqual(inserted, 2)
+        memory_records = self.auth_store.list_memory_records(
+            "default", "reviewer", username="alice", session_id="thread-123"
+        )
+        self.assertEqual(len(memory_records), 2)
+
+    def test_record_runtime_memory_deduplicates_identical_entries(self) -> None:
+        metadata = {
+            "memory": {
+                "episodic": [{"type": "tools", "names": ["filesystem.read"]}],
+                "procedural": [],
+            }
+        }
+
+        self.auth_store.record_runtime_memory(
+            "default", "reviewer", session_id="thread-dup", username="alice", metadata=metadata
+        )
+        self.auth_store.record_runtime_memory(
+            "default", "reviewer", session_id="thread-dup", username="alice", metadata=metadata
+        )
+
+        memory_records = self.auth_store.list_memory_records(
+            "default", "reviewer", username="alice", session_id="thread-dup"
+        )
+        self.assertEqual(len(memory_records), 1)
+
+    def test_memory_record_promote_and_delete(self) -> None:
+        self.auth_store.record_runtime_memory(
+            "default",
+            "reviewer",
+            session_id="thread-manage",
+            username="alice",
+            metadata={
+                "memory": {
+                    "episodic": [],
+                    "procedural": [{"type": "response-summary", "text": "Important durable note."}],
+                }
+            },
+        )
+
+        memory_records = self.auth_store.list_memory_records(
+            "default", "reviewer", username="alice", session_id="thread-manage"
+        )
+        self.assertEqual(len(memory_records), 1)
+        record_id = memory_records[0]["id"]
+
+        updated = self.auth_store.set_memory_record_promoted(record_id, True, username="alice")
+        self.assertIsNotNone(updated)
+        self.assertTrue(updated["promoted"])
+
+        deleted = self.auth_store.delete_memory_record(record_id, username="alice")
+        self.assertTrue(deleted)
+        remaining = self.auth_store.list_memory_records(
+            "default", "reviewer", username="alice", session_id="thread-manage"
+        )
+        self.assertEqual(remaining, [])
+
+    def test_update_memory_record_edits_topic_and_content(self) -> None:
+        self.auth_store.record_runtime_memory(
+            "default",
+            "reviewer",
+            session_id="thread-edit",
+            username="alice",
+            metadata={
+                "memory": {
+                    "episodic": [],
+                    "procedural": [{"type": "response-summary", "text": "Old summary."}],
+                }
+            },
+        )
+        record = self.auth_store.list_memory_records("default", "reviewer", username="alice", session_id="thread-edit")[
+            0
+        ]
+
+        updated = self.auth_store.update_memory_record(
+            record["id"],
+            topic="repo-convention",
+            content="Use make test before pushing.",
+            username="alice",
+        )
+
+        self.assertIsNotNone(updated)
+        self.assertEqual(updated["topic"], "repo-convention")
+        self.assertEqual(updated["content"], "Use make test before pushing.")
+
+    def test_list_promoted_memory_records_returns_only_promoted_items(self) -> None:
+        self.auth_store.record_runtime_memory(
+            "default",
+            "reviewer",
+            session_id="thread-promoted",
+            username="alice",
+            metadata={
+                "memory": {
+                    "episodic": [],
+                    "procedural": [{"type": "response-summary", "text": "Keep this context."}],
+                }
+            },
+        )
+        records = self.auth_store.list_memory_records(
+            "default", "reviewer", username="alice", session_id="thread-promoted"
+        )
+        self.auth_store.set_memory_record_promoted(records[0]["id"], True, username="alice")
+
+        promoted = self.auth_store.list_promoted_memory_records("default", "reviewer", username="alice")
+        self.assertEqual(len(promoted), 1)
+        self.assertTrue(promoted[0]["promoted"])
+
+    def test_record_runtime_memory_auto_promotes_high_signal_entries(self) -> None:
+        self.auth_store.record_runtime_memory(
+            "default",
+            "reviewer",
+            session_id="thread-auto",
+            username="alice",
+            metadata={
+                "memory": {
+                    "episodic": [],
+                    "procedural": [
+                        {"type": "response-summary", "text": "Use make test before pushing changes to the repo."}
+                    ],
+                }
+            },
+            auto_promote=True,
+        )
+
+        records = self.auth_store.list_memory_records("default", "reviewer", username="alice", session_id="thread-auto")
+        self.assertEqual(len(records), 1)
+        self.assertTrue(records[0]["promoted"])
+        self.assertGreater(records[0]["score"], 0.0)
+        self.assertEqual(records[0]["promote_reason"], "high-signal-memory")
+
+    def test_record_workflow_outcome_memory_and_feedback(self) -> None:
+        inserted = self.auth_store.record_workflow_outcome_memory(
+            "default",
+            "reviewer",
+            "repo-check",
+            run_id="run-1",
+            phase="completed",
+            summary={"completedSteps": 3, "totalSteps": 3},
+        )
+        self.assertGreaterEqual(inserted, 1)
+
+        records = self.auth_store.list_memory_records("default", "reviewer", session_id="run-1")
+        self.assertTrue(any(record["topic"] == "workflow-success" for record in records))
+        before = max(float(record["score"]) for record in records)
+
+        updated = self.auth_store.apply_memory_feedback("default", "reviewer", session_id="run-1", success=True)
+        self.assertGreater(updated, 0)
+
+        after_records = self.auth_store.list_memory_records("default", "reviewer", session_id="run-1")
+        after = max(float(record["score"]) for record in after_records)
+        self.assertGreaterEqual(after, before)
+
+    def test_record_eval_outcome_memory_and_feedback(self) -> None:
+        inserted = self.auth_store.record_eval_outcome_memory(
+            "default",
+            "reviewer",
+            "reviewer-eval",
+            phase="completed",
+            passed=True,
+            summary={"score": 0.91},
+        )
+        self.assertGreaterEqual(inserted, 1)
+
+        records = self.auth_store.list_memory_records("default", "reviewer", session_id="reviewer-eval")
+        self.assertTrue(any(record["topic"] == "eval-success" for record in records))
+        before = max(float(record["score"]) for record in records)
+        updated = self.auth_store.apply_memory_feedback("default", "reviewer", session_id="reviewer-eval", success=True)
+        self.assertGreater(updated, 0)
+        after_records = self.auth_store.list_memory_records("default", "reviewer", session_id="reviewer-eval")
+        after = max(float(record["score"]) for record in after_records)
+        self.assertGreaterEqual(after, before)

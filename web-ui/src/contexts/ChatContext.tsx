@@ -1,20 +1,23 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
-  buildInvocationSummary,
-  createChatSession,
-  decideApproval,
-  deleteChatSession,
-  fetchAgentLogs,
-  getChatSessionMessages,
-  invokeAgent,
-  listChatSessions,
-  saveChatSessionMessages,
-  streamAgentInvoke,
-  streamAgentLogs,
-  updateChatSessionTitle,
-  apiErrorMessage,
+    buildInvocationSummary,
+    createChatSession,
+    deleteMemoryRecord,
+    decideApproval,
+    deleteChatSession,
+    fetchAgentLogs,
+    getChatSessionMessages,
+    invokeAgent,
+    listAgentMemory,
+    listChatSessions,
+    saveChatSessionMessages,
+    streamAgentInvoke,
+    streamAgentLogs,
+    updateMemoryRecord,
+    updateChatSessionTitle,
+    apiErrorMessage,
 } from "@/lib/api";
-import type { ChatSessionInfo } from "@/lib/api";
+import type { ChatSessionInfo, ChatSessionSummary, MemoryRecordInfo } from "@/lib/api";
 import { isValidK8sName } from "@/lib/a2a";
 import { useConnection } from "./ConnectionContext";
 import { useWorkspace } from "./WorkspaceContext";
@@ -222,7 +225,13 @@ export interface ChatContextValue {
   // Chat session persistence
   chatSessions: ChatSessionInfo[];
   activeSessionId: string | null;
+  activeSessionSummary: ChatSessionSummary | null;
+  activeMemoryRecords: MemoryRecordInfo[];
+  agentMemoryRecords: MemoryRecordInfo[];
   sessionsLoading: boolean;
+  handlePromoteMemoryRecord: (recordId: number, promoted: boolean) => Promise<void>;
+  handleEditMemoryRecord: (recordId: number, patch: { topic?: string; content?: string; promoted?: boolean }) => Promise<void>;
+  handleDeleteMemoryRecord: (recordId: number) => Promise<void>;
   handleNewSession: () => Promise<void>;
   handleLoadSession: (sessionId: string) => Promise<void>;
   handleDeleteSession: (sessionId: string) => Promise<void>;
@@ -273,6 +282,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   // Chat session persistence state
   const [chatSessions, setChatSessions] = useState<ChatSessionInfo[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [activeMemoryRecords, setActiveMemoryRecords] = useState<MemoryRecordInfo[]>([]);
+  const [agentMemoryRecords, setAgentMemoryRecords] = useState<MemoryRecordInfo[]>([]);
   const [sessionsLoading, setSessionsLoading] = useState(false);
 
   const threadIdsRef = useRef<Record<string, string>>({});
@@ -303,6 +314,79 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const selectedWorkflowApprovalName = typeof selectedWorkflow?.pending_approval?.name === "string"
     ? selectedWorkflow.pending_approval.name
     : undefined;
+  const activeSessionSummary = useMemo(() => {
+    if (!activeSessionId) return null;
+    return chatSessions.find((session) => session.session_id === activeSessionId)?.summary ?? null;
+  }, [activeSessionId, chatSessions]);
+
+  const handlePromoteMemoryRecord = useCallback(async (recordId: number, promoted: boolean) => {
+    if (!token.trim()) return;
+    try {
+      const updated = await updateMemoryRecord(token, recordId, { promoted });
+      setActiveMemoryRecords((prev) => prev.map((record) => record.id === recordId ? updated : record));
+      setAgentMemoryRecords((prev) => prev.map((record) => record.id === recordId ? updated : record));
+    } catch (err) {
+      setChatError(apiErrorMessage(err));
+    }
+  }, [token]);
+
+  const handleEditMemoryRecord = useCallback(async (recordId: number, patch: { topic?: string; content?: string; promoted?: boolean }) => {
+    if (!token.trim()) return;
+    try {
+      const updated = await updateMemoryRecord(token, recordId, patch);
+      setActiveMemoryRecords((prev) => prev.map((record) => record.id === recordId ? updated : record));
+      setAgentMemoryRecords((prev) => prev.map((record) => record.id === recordId ? updated : record));
+    } catch (err) {
+      setChatError(apiErrorMessage(err));
+    }
+  }, [token]);
+
+  const handleDeleteMemoryRecord = useCallback(async (recordId: number) => {
+    if (!token.trim()) return;
+    try {
+      await deleteMemoryRecord(token, recordId);
+      setActiveMemoryRecords((prev) => prev.filter((record) => record.id !== recordId));
+      setAgentMemoryRecords((prev) => prev.filter((record) => record.id !== recordId));
+    } catch (err) {
+      setChatError(apiErrorMessage(err));
+    }
+  }, [token]);
+
+  useEffect(() => {
+    if (!token.trim() || !selectedAgentName) {
+      setAgentMemoryRecords([]);
+      return;
+    }
+    let cancelled = false;
+    void listAgentMemory(token, namespace, selectedAgentName)
+      .then((records) => {
+        if (!cancelled) setAgentMemoryRecords(records);
+      })
+      .catch(() => {
+        if (!cancelled) setAgentMemoryRecords([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [token, namespace, selectedAgentName]);
+
+  useEffect(() => {
+    if (!token.trim() || !selectedAgentName || !activeSessionId) {
+      setActiveMemoryRecords([]);
+      return;
+    }
+    let cancelled = false;
+    void listAgentMemory(token, namespace, selectedAgentName, activeSessionId)
+      .then((records) => {
+        if (!cancelled) setActiveMemoryRecords(records);
+      })
+      .catch(() => {
+        if (!cancelled) setActiveMemoryRecords([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [token, namespace, selectedAgentName, activeSessionId]);
 
   // ── Effects ──
 
@@ -898,7 +982,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     setOpenCodeOutputFormat, setOpenCodeAutonomous, setOpenCodeMaxTurns, setOpenCodeWorkingDirectory,
     handleSubmit, handleLoadLogs, handleStreamLogs, handleStopLogStream, handleAgentApprovalDecision, handleWorkflowApprovalDecision, cancelStream,
     setMessagesForAgent, removeAgentChatState,
-    chatSessions, activeSessionId, sessionsLoading,
+    chatSessions, activeSessionId, activeSessionSummary, activeMemoryRecords, agentMemoryRecords, sessionsLoading,
+    handlePromoteMemoryRecord, handleEditMemoryRecord, handleDeleteMemoryRecord,
     handleNewSession, handleLoadSession, handleDeleteSession, handleRenameSession, handleSaveCurrentSession,
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }), [
@@ -907,7 +992,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     a2aTargetAgent, a2aTargetNamespace, a2aTimeoutSeconds,
     specialistSubagents, specialistTeamConfigured, subagentStrategy,
     approvalReason, approvalBusy, selectedWorkflowApprovalName,
-    chatSessions, activeSessionId, sessionsLoading,
+    chatSessions, activeSessionId, activeSessionSummary, activeMemoryRecords, agentMemoryRecords, sessionsLoading,
+    handlePromoteMemoryRecord, handleEditMemoryRecord, handleDeleteMemoryRecord,
     handleNewSession, handleLoadSession, handleDeleteSession, handleRenameSession, handleSaveCurrentSession,
   ]);
 

@@ -18,7 +18,13 @@ import {
   type CreatePolicyPayload,
   type UpdatePolicyPayload,
 } from "@/lib/api";
-import type { PolicyInfo, PolicyInputGuardrails, PolicyOutputGuardrails } from "@/types";
+import type {
+  PolicyInfo,
+  PolicyInputGuardrails,
+  PolicyMemoryPolicy,
+  PolicyOutputGuardrails,
+  PolicyToolPolicy,
+} from "@/types";
 
 const DEFAULT_INPUT: PolicyInputGuardrails = {
   blockPromptInjection: false,
@@ -30,6 +36,17 @@ const DEFAULT_OUTPUT: PolicyOutputGuardrails = {
   maskPII: false,
   blockedOutputPatterns: [],
   maxOutputTokens: 4096,
+};
+
+const DEFAULT_TOOL_POLICY: PolicyToolPolicy = {
+  allowedToolPrefixes: [],
+  blockedToolNames: [],
+  requireApprovalFor: [],
+};
+
+const DEFAULT_MEMORY_POLICY: PolicyMemoryPolicy = {
+  allowedMemoryTypes: [],
+  autoPromote: false,
 };
 
 function TagListEditor({ values, onChange, placeholder }: { values: string[]; onChange: (v: string[]) => void; placeholder: string }) {
@@ -114,6 +131,8 @@ export function PolicyEditor({ selectedPolicyName }: PolicyEditorProps) {
   const [allowedModels, setAllowedModels] = useState<string[]>([]);
   const [allowedMcpServers, setAllowedMcpServers] = useState<string[]>([]);
   const [mcpRequireHitl, setMcpRequireHitl] = useState(true);
+  const [toolPolicy, setToolPolicy] = useState<PolicyToolPolicy>({ ...DEFAULT_TOOL_POLICY });
+  const [memoryPolicy, setMemoryPolicy] = useState<PolicyMemoryPolicy>({ ...DEFAULT_MEMORY_POLICY });
 
   // Dirty-state tracking: compare current form to the loaded policy
   const isDirty = useMemo(() => {
@@ -125,7 +144,11 @@ export function PolicyEditor({ selectedPolicyName }: PolicyEditorProps) {
         outputGuardrails.maskPII !== DEFAULT_OUTPUT.maskPII ||
         outputGuardrails.maxOutputTokens !== DEFAULT_OUTPUT.maxOutputTokens ||
         outputGuardrails.blockedOutputPatterns.length > 0 ||
-        allowedModels.length > 0 || allowedMcpServers.length > 0 || !mcpRequireHitl;
+        allowedModels.length > 0 || allowedMcpServers.length > 0 || !mcpRequireHitl ||
+        toolPolicy.allowedToolPrefixes.length > 0 || toolPolicy.blockedToolNames.length > 0 ||
+        toolPolicy.requireApprovalFor.length > 0 || typeof toolPolicy.maxDelegationDepth === "number" ||
+        memoryPolicy.allowedMemoryTypes.length > 0 || typeof memoryPolicy.maxInjectedMemories === "number" ||
+        typeof memoryPolicy.maxInjectedChars === "number" || memoryPolicy.autoPromote;
     }
     if (!selectedPolicy) return false;
     return (
@@ -133,9 +156,11 @@ export function PolicyEditor({ selectedPolicyName }: PolicyEditorProps) {
       JSON.stringify(outputGuardrails) !== JSON.stringify(selectedPolicy.output_guardrails) ||
       JSON.stringify(allowedModels) !== JSON.stringify(selectedPolicy.allowed_models) ||
       JSON.stringify(allowedMcpServers) !== JSON.stringify(selectedPolicy.allowed_mcp_servers) ||
-      mcpRequireHitl !== selectedPolicy.mcp_require_hitl
+      mcpRequireHitl !== selectedPolicy.mcp_require_hitl ||
+      JSON.stringify(toolPolicy) !== JSON.stringify(selectedPolicy.tool_policy) ||
+      JSON.stringify(memoryPolicy) !== JSON.stringify(selectedPolicy.memory_policy)
     );
-  }, [isCreateMode, name, inputGuardrails, outputGuardrails, allowedModels, allowedMcpServers, mcpRequireHitl, selectedPolicy]);
+  }, [isCreateMode, name, inputGuardrails, outputGuardrails, allowedModels, allowedMcpServers, mcpRequireHitl, toolPolicy, memoryPolicy, selectedPolicy]);
 
   // Load form from selected policy — with dirty-state guard
   function loadPolicy(policy: PolicyInfo) {
@@ -146,6 +171,18 @@ export function PolicyEditor({ selectedPolicyName }: PolicyEditorProps) {
     setAllowedModels([...policy.allowed_models]);
     setAllowedMcpServers([...policy.allowed_mcp_servers]);
     setMcpRequireHitl(policy.mcp_require_hitl);
+    setToolPolicy({
+      maxDelegationDepth: policy.tool_policy.maxDelegationDepth,
+      allowedToolPrefixes: [...policy.tool_policy.allowedToolPrefixes],
+      blockedToolNames: [...policy.tool_policy.blockedToolNames],
+      requireApprovalFor: [...policy.tool_policy.requireApprovalFor],
+    });
+    setMemoryPolicy({
+      maxInjectedMemories: policy.memory_policy.maxInjectedMemories,
+      maxInjectedChars: policy.memory_policy.maxInjectedChars,
+      allowedMemoryTypes: [...policy.memory_policy.allowedMemoryTypes],
+      autoPromote: policy.memory_policy.autoPromote,
+    });
   }
 
   // Populate form from selected policy
@@ -169,6 +206,8 @@ export function PolicyEditor({ selectedPolicyName }: PolicyEditorProps) {
     setAllowedModels([]);
     setAllowedMcpServers([]);
     setMcpRequireHitl(true);
+    setToolPolicy({ ...DEFAULT_TOOL_POLICY });
+    setMemoryPolicy({ ...DEFAULT_MEMORY_POLICY });
   }, []);
 
   const handleSave = useCallback(async () => {
@@ -187,6 +226,8 @@ export function PolicyEditor({ selectedPolicyName }: PolicyEditorProps) {
           allowed_models: allowedModels,
           allowed_mcp_servers: allowedMcpServers,
           mcp_require_hitl: mcpRequireHitl,
+          tool_policy: toolPolicy,
+          memory_policy: memoryPolicy,
         };
         await createPolicy(token, namespace, payload);
         toast.success(`Policy "${name}" created`);
@@ -198,6 +239,8 @@ export function PolicyEditor({ selectedPolicyName }: PolicyEditorProps) {
           allowed_models: allowedModels,
           allowed_mcp_servers: allowedMcpServers,
           mcp_require_hitl: mcpRequireHitl,
+          tool_policy: toolPolicy,
+          memory_policy: memoryPolicy,
         };
         await updatePolicy(token, namespace, name, payload);
         toast.success(`Policy "${name}" updated`);
@@ -208,7 +251,7 @@ export function PolicyEditor({ selectedPolicyName }: PolicyEditorProps) {
     } finally {
       setSaving(false);
     }
-  }, [token, namespace, isCreateMode, name, inputGuardrails, outputGuardrails, allowedModels, allowedMcpServers, mcpRequireHitl, ws]);
+  }, [token, namespace, isCreateMode, name, inputGuardrails, outputGuardrails, allowedModels, allowedMcpServers, mcpRequireHitl, toolPolicy, memoryPolicy, ws]);
 
   const handleDelete = useCallback(async () => {
     if (!token || !namespace || !selectedPolicyName) return;
@@ -365,6 +408,97 @@ export function PolicyEditor({ selectedPolicyName }: PolicyEditorProps) {
             label="Require Human-in-the-Loop for MCP"
             checked={mcpRequireHitl}
             onChange={setMcpRequireHitl}
+          />
+        </Card>
+
+        <Card className="p-3 space-y-3">
+          <h3 className="text-sm font-medium">Tool Governance</h3>
+          <Separator />
+          <div className="space-y-1">
+            <Label className="text-xs">Max Delegation Depth</Label>
+            <Input
+              type="number"
+              value={typeof toolPolicy.maxDelegationDepth === "number" ? toolPolicy.maxDelegationDepth : ""}
+              onChange={(e) => setToolPolicy((prev) => ({
+                ...prev,
+                maxDelegationDepth: e.target.value.trim() === "" ? undefined : Number(e.target.value),
+              }))}
+              className="h-7 text-xs w-32"
+              min={0}
+              placeholder="unset"
+            />
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs">Allowed Tool Prefixes</Label>
+            <TagListEditor
+              values={toolPolicy.allowedToolPrefixes}
+              onChange={(v) => setToolPolicy((prev) => ({ ...prev, allowedToolPrefixes: v }))}
+              placeholder="e.g. local.command., github/, filesystem."
+            />
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs">Blocked Tool Names</Label>
+            <TagListEditor
+              values={toolPolicy.blockedToolNames}
+              onChange={(v) => setToolPolicy((prev) => ({ ...prev, blockedToolNames: v }))}
+              placeholder="e.g. local.command.rm, github/delete_repo"
+            />
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs">Require Approval For</Label>
+            <TagListEditor
+              values={toolPolicy.requireApprovalFor}
+              onChange={(v) => setToolPolicy((prev) => ({ ...prev, requireApprovalFor: v }))}
+              placeholder="e.g. github/create_issue"
+            />
+          </div>
+        </Card>
+
+        <Card className="p-3 space-y-3">
+          <h3 className="text-sm font-medium">Memory Governance</h3>
+          <Separator />
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-1">
+              <Label className="text-xs">Max Injected Memories</Label>
+              <Input
+                type="number"
+                value={typeof memoryPolicy.maxInjectedMemories === "number" ? memoryPolicy.maxInjectedMemories : ""}
+                onChange={(e) => setMemoryPolicy((prev) => ({
+                  ...prev,
+                  maxInjectedMemories: e.target.value.trim() === "" ? undefined : Number(e.target.value),
+                }))}
+                className="h-7 text-xs w-32"
+                min={0}
+                placeholder="unset"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Max Injected Chars</Label>
+              <Input
+                type="number"
+                value={typeof memoryPolicy.maxInjectedChars === "number" ? memoryPolicy.maxInjectedChars : ""}
+                onChange={(e) => setMemoryPolicy((prev) => ({
+                  ...prev,
+                  maxInjectedChars: e.target.value.trim() === "" ? undefined : Number(e.target.value),
+                }))}
+                className="h-7 text-xs w-32"
+                min={0}
+                placeholder="unset"
+              />
+            </div>
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs">Allowed Memory Types</Label>
+            <TagListEditor
+              values={memoryPolicy.allowedMemoryTypes}
+              onChange={(v) => setMemoryPolicy((prev) => ({ ...prev, allowedMemoryTypes: v }))}
+              placeholder="e.g. procedural, episodic, response-summary"
+            />
+          </div>
+          <ToggleField
+            label="Auto-promote high-signal memory"
+            checked={memoryPolicy.autoPromote}
+            onChange={(v) => setMemoryPolicy((prev) => ({ ...prev, autoPromote: v }))}
           />
         </Card>
 

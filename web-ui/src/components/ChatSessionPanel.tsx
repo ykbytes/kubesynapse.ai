@@ -1,5 +1,5 @@
 import { memo, useState } from "react";
-import { Clock, MessageSquare, Pencil, Plus, Trash2 } from "lucide-react";
+import { Brain, Clock, MessageSquare, Pencil, Plus, Trash2, Wrench } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Input } from "@/components/ui/input";
@@ -26,6 +26,13 @@ function formatRelativeTime(iso: string | null): string {
   if (hours < 24) return `${hours}h ago`;
   const days = Math.floor(hours / 24);
   return `${days}d ago`;
+}
+
+function truncateText(value: string | null | undefined, maxChars = 72): string {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, maxChars - 1).trimEnd()}…`;
 }
 
 const SessionItem = memo(function SessionItem({
@@ -78,6 +85,30 @@ const SessionItem = memo(function SessionItem({
               <Clock className="h-2.5 w-2.5" />
               {formatRelativeTime(session.updated_at)}
             </div>
+            {!!session.summary && (
+              <div className="mt-1.5 space-y-1 text-[10px] text-muted-foreground/75">
+                <div className="flex items-center gap-2">
+                  <span>{session.summary.message_count} msg</span>
+                  {session.summary.tool_names.length > 0 && (
+                    <span className="inline-flex items-center gap-1">
+                      <Wrench className="h-2.5 w-2.5" />
+                      {truncateText(session.summary.tool_names.join(", "), 24)}
+                    </span>
+                  )}
+                </div>
+                {session.summary.last_assistant_message && (
+                  <div className="line-clamp-2 text-[10px] leading-relaxed text-foreground/75">
+                    {truncateText(session.summary.last_assistant_message, 96)}
+                  </div>
+                )}
+                {session.summary.memory_candidates.procedural.length > 0 && (
+                  <div className="inline-flex items-center gap-1 text-[10px] text-primary/80">
+                    <Brain className="h-2.5 w-2.5" />
+                    Memory signal
+                  </div>
+                )}
+              </div>
+            )}
           </>
         )}
       </div>

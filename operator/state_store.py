@@ -158,6 +158,21 @@ class EvalRun(Base):
     completed_at = Column(DateTime(timezone=True), nullable=True)
 
 
+class AgentSession(Base):
+    __tablename__ = "agent_sessions"
+    __table_args__ = (UniqueConstraint("session_id", name="uq_agent_sessions_identity"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    session_id = Column(String(128), nullable=False, index=True)
+    thread_id = Column(String(128), nullable=False, index=True)
+    status = Column(String(64), nullable=False, index=True)
+    payload_json = Column(JSON, nullable=False)
+    token_usage_json = Column(JSON, nullable=True)
+    expires_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
+
+
 def _json_clone(value: Any) -> Any:
     if value is None:
         return None
@@ -363,6 +378,63 @@ def safe_record_eval_state(
             record.updated_at = utc_now()
     except Exception:
         logger.exception("Failed to mirror eval state for %s/%s run %s.", namespace, resource_name, run_id)
+
+
+def safe_record_agent_session(snapshot: dict[str, Any]) -> None:
+    if not STATE_DB_ENABLED:
+        return
+    session_id = str(snapshot.get("session_id") or "").strip()
+    thread_id = str(snapshot.get("thread_id") or "").strip()
+    if not session_id or not thread_id:
+        return
+    try:
+        with db_session() as session:
+            record = session.query(AgentSession).filter(AgentSession.session_id == session_id).one_or_none()
+            if record is None:
+                record = AgentSession(session_id=session_id, thread_id=thread_id, status="active", payload_json={})
+                session.add(record)
+
+            token_usage = snapshot.get("token_usage") if isinstance(snapshot.get("token_usage"), dict) else None
+            expires_at_raw = snapshot.get("expires_at")
+            expires_at = None
+            if isinstance(expires_at_raw, str) and expires_at_raw:
+                normalized = expires_at_raw[:-1] + "+00:00" if expires_at_raw.endswith("Z") else expires_at_raw
+                try:
+                    expires_at = datetime.fromisoformat(normalized)
+                except ValueError:
+                    expires_at = None
+
+            record.thread_id = thread_id
+            record.status = str(snapshot.get("status") or "active").strip() or "active"
+            record.payload_json = _json_clone(snapshot) or {}
+            record.token_usage_json = _json_clone(token_usage)
+            record.expires_at = expires_at
+            record.updated_at = utc_now()
+    except Exception:
+        logger.exception("Failed to mirror agent session %s.", session_id)
+
+
+def get_agent_session(session_id: str) -> dict[str, Any] | None:
+    if not STATE_DB_ENABLED:
+        return None
+    try:
+        with db_session() as session:
+            record = session.query(AgentSession).filter(AgentSession.session_id == session_id).one_or_none()
+            if record is None:
+                return None
+            return {
+                "session_id": record.session_id,
+                "thread_id": record.thread_id,
+                "status": record.status,
+                "payload": _json_clone(record.payload_json) or {},
+                "token_usage": _json_clone(record.token_usage_json),
+                "expires_at": record.expires_at.isoformat() if record.expires_at else None,
+                "created_at": record.created_at.isoformat() if record.created_at else None,
+                "updated_at": record.updated_at.isoformat() if record.updated_at else None,
+            }
+    except Exception:
+        logger.exception("Failed to fetch agent session %s.", session_id)
+        return None
 
 
 # ── Chat Session Persistence ──

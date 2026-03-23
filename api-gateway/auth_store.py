@@ -15,7 +15,19 @@ from typing import Any, Iterator
 from urllib.parse import quote_plus
 
 from passlib.context import CryptContext
-from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, JSON, String, UniqueConstraint, create_engine, func
+from sqlalchemy import (
+    Boolean,
+    Column,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    JSON,
+    String,
+    UniqueConstraint,
+    create_engine,
+    func,
+)
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, declarative_base, relationship, sessionmaker
 
@@ -60,9 +72,7 @@ def _build_database_url() -> str:
         password = os.getenv("DATABASE_PASSWORD", "").strip()
         database_name = os.getenv("DATABASE_NAME", "ai_agent_sandbox").strip() or "ai_agent_sandbox"
         if password:
-            return (
-                f"{driver}://{quote_plus(username)}:{quote_plus(password)}@{host}:{port}/{quote_plus(database_name)}"
-            )
+            return f"{driver}://{quote_plus(username)}:{quote_plus(password)}@{host}:{port}/{quote_plus(database_name)}"
         return f"{driver}://{quote_plus(username)}@{host}:{port}/{quote_plus(database_name)}"
 
     sqlite_path = os.getenv("DATABASE_SQLITE_PATH", "/tmp/ai-agent-sandbox-gateway.db").strip()
@@ -231,6 +241,513 @@ class ChatMessage(Base):
     tool_name = Column(String(128), nullable=True)
     tool_node = Column(String(128), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+
+class MemoryRecord(Base):
+    __tablename__ = "memory_records"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    namespace = Column(String(128), nullable=False, index=True)
+    agent_name = Column(String(128), nullable=False, index=True)
+    session_id = Column(String(128), nullable=True, index=True)
+    memory_type = Column(String(32), nullable=False, index=True)
+    topic = Column(String(128), nullable=True)
+    content_hash = Column(String(64), nullable=False, index=True, default="")
+    content = Column(String, nullable=False, default="")
+    detail_json = Column(JSON, nullable=True)
+    username = Column(String(128), nullable=True)
+    promoted = Column(Boolean, nullable=False, default=False, index=True)
+    score = Column(Float, nullable=False, default=0.0, index=True)
+    promote_reason = Column(String(256), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now, index=True)
+
+
+MEMORY_RETENTION_PER_SESSION = max(int(os.getenv("MEMORY_RETENTION_PER_SESSION", "25")), 1)
+
+
+def _memory_content_hash(memory_type: str, topic: str, content: str) -> str:
+    payload = f"{memory_type}\n{topic}\n{content}".encode("utf-8", "ignore")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _prune_memory_records(
+    session: Session,
+    namespace: str,
+    agent_name: str,
+    session_id: str | None,
+    *,
+    retention_limit: int = MEMORY_RETENTION_PER_SESSION,
+) -> None:
+    rows = (
+        session.query(MemoryRecord)
+        .filter(
+            MemoryRecord.namespace == namespace,
+            MemoryRecord.agent_name == agent_name,
+            MemoryRecord.session_id == session_id,
+            MemoryRecord.promoted.is_(False),
+        )
+        .order_by(MemoryRecord.created_at.desc(), MemoryRecord.id.desc())
+        .all()
+    )
+    for stale in rows[retention_limit:]:
+        session.delete(stale)
+
+
+def _memory_score(
+    memory_type: str, topic: str, content: str, detail_json: dict[str, Any] | None
+) -> tuple[float, str | None]:
+    score = 0.0
+    reason: str | None = None
+    content_len = len(content)
+    if memory_type == "procedural":
+        score += 2.5
+    elif memory_type == "episodic":
+        score += 1.0
+
+    if topic in {"response-summary", "assistant-summary", "repo-convention", "workflow-outcome"}:
+        score += 1.5
+    if 24 <= content_len <= 220:
+        score += 1.0
+    if isinstance(detail_json, dict):
+        if isinstance(detail_json.get("names"), list) and len(detail_json.get("names") or []) >= 2:
+            score += 0.75
+        if isinstance(detail_json.get("count"), int) and int(detail_json.get("count") or 0) >= 2:
+            score += 0.75
+
+    if score >= 4.0:
+        reason = "high-signal-memory"
+    return round(score, 2), reason
+
+
+def _summarize_chat_messages(messages: list[dict[str, Any]]) -> dict[str, Any]:
+    total_messages = len(messages)
+    tool_names = sorted(
+        {
+            str(item.get("tool_name") or item.get("toolName") or "").strip()
+            for item in messages
+            if isinstance(item, dict) and str(item.get("tool_name") or item.get("toolName") or "").strip()
+        }
+    )
+    last_user_message = ""
+    last_assistant_message = ""
+    for item in reversed(messages):
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role") or "").strip().lower()
+        content = str(item.get("content") or "").strip()
+        if not last_assistant_message and role == "assistant" and content:
+            last_assistant_message = content[:280]
+        if not last_user_message and role == "user" and content:
+            last_user_message = content[:280]
+        if last_user_message and last_assistant_message:
+            break
+    return {
+        "message_count": total_messages,
+        "tool_names": tool_names,
+        "last_user_message": last_user_message,
+        "last_assistant_message": last_assistant_message,
+        "memory_candidates": {
+            "episodic": [{"type": "tool-usage", "names": tool_names}] if tool_names else [],
+            "procedural": [{"type": "assistant-summary", "text": last_assistant_message}]
+            if last_assistant_message
+            else [],
+        },
+    }
+
+
+def record_memory_items(
+    namespace: str,
+    agent_name: str,
+    *,
+    session_id: str | None = None,
+    username: str | None = None,
+    summary: dict[str, Any] | None = None,
+    session: Session | None = None,
+    auto_promote: bool = False,
+) -> int:
+    """Persist derived memory candidates for a chat session summary."""
+    if not isinstance(summary, dict):
+        return 0
+
+    memory_candidates = summary.get("memory_candidates") if isinstance(summary.get("memory_candidates"), dict) else {}
+    inserted = 0
+    if session is not None:
+        for memory_type in ("episodic", "procedural"):
+            entries = memory_candidates.get(memory_type)
+            if not isinstance(entries, list):
+                continue
+            for item in entries:
+                if not isinstance(item, dict):
+                    continue
+                content = str(item.get("text") or ", ".join(item.get("names") or []) or "").strip()
+                if not content:
+                    continue
+                topic = str(item.get("type") or "note").strip() or "note"
+                content_hash = _memory_content_hash(memory_type, topic, content)
+                score, promote_reason = _memory_score(
+                    memory_type, topic, content, item if isinstance(item, dict) else None
+                )
+                existing = (
+                    session.query(MemoryRecord)
+                    .filter(
+                        MemoryRecord.namespace == namespace,
+                        MemoryRecord.agent_name == agent_name,
+                        MemoryRecord.session_id == session_id,
+                        MemoryRecord.memory_type == memory_type,
+                        MemoryRecord.topic == topic,
+                        MemoryRecord.content_hash == content_hash,
+                    )
+                    .one_or_none()
+                )
+                if existing is not None:
+                    existing.detail_json = item
+                    existing.username = username or existing.username
+                    existing.created_at = utc_now()
+                    existing.score = score
+                    if auto_promote and promote_reason:
+                        existing.promoted = True
+                        existing.promote_reason = promote_reason
+                    inserted += 1
+                    continue
+                session.add(
+                    MemoryRecord(
+                        namespace=namespace,
+                        agent_name=agent_name,
+                        session_id=session_id,
+                        memory_type=memory_type,
+                        topic=topic,
+                        content_hash=content_hash,
+                        content=content,
+                        detail_json=item,
+                        username=username,
+                        score=score,
+                        promoted=bool(auto_promote and promote_reason),
+                        promote_reason=promote_reason if auto_promote and promote_reason else None,
+                    )
+                )
+                inserted += 1
+        _prune_memory_records(session, namespace, agent_name, session_id)
+        return inserted
+
+    with db_session() as owned_session:
+        return record_memory_items(
+            namespace,
+            agent_name,
+            session_id=session_id,
+            username=username,
+            summary=summary,
+            session=owned_session,
+            auto_promote=auto_promote,
+        )
+
+
+def record_runtime_memory(
+    namespace: str,
+    agent_name: str,
+    *,
+    session_id: str | None = None,
+    username: str | None = None,
+    metadata: dict[str, Any] | None = None,
+    auto_promote: bool = False,
+) -> int:
+    """Persist runtime-emitted memory metadata from invoke responses."""
+    if not isinstance(metadata, dict):
+        return 0
+    memory = metadata.get("memory")
+    if not isinstance(memory, dict):
+        return 0
+    return record_memory_items(
+        namespace,
+        agent_name,
+        session_id=session_id,
+        username=username,
+        summary={"memory_candidates": memory},
+        auto_promote=auto_promote,
+    )
+
+
+def record_workflow_outcome_memory(
+    namespace: str,
+    agent_name: str,
+    workflow_name: str,
+    *,
+    run_id: str | None = None,
+    phase: str,
+    summary: dict[str, Any] | None = None,
+    username: str | None = None,
+) -> int:
+    memory_candidates: dict[str, list[dict[str, Any]]] = {"episodic": [], "procedural": []}
+    normalized_summary = summary if isinstance(summary, dict) else {}
+    completed_steps = normalized_summary.get("completedSteps")
+    failed_steps = normalized_summary.get("failedSteps")
+    total_steps = normalized_summary.get("totalSteps")
+
+    memory_candidates["episodic"].append(
+        {
+            "type": "workflow-outcome",
+            "text": f"Workflow '{workflow_name}' finished with phase '{phase}'.",
+            "workflow": workflow_name,
+            "phase": phase,
+            "count": int(completed_steps or 0),
+        }
+    )
+    if phase == "completed":
+        memory_candidates["procedural"].append(
+            {
+                "type": "workflow-success",
+                "text": (
+                    f"Workflow '{workflow_name}' completed successfully"
+                    f" after {int(completed_steps or 0)}/{int(total_steps or completed_steps or 0)} steps."
+                ),
+                "workflow": workflow_name,
+            }
+        )
+    elif phase == "failed":
+        memory_candidates["procedural"].append(
+            {
+                "type": "workflow-failure",
+                "text": f"Workflow '{workflow_name}' failed after {int(failed_steps or 0)} failed step(s).",
+                "workflow": workflow_name,
+            }
+        )
+
+    return record_memory_items(
+        namespace,
+        agent_name,
+        session_id=run_id,
+        username=username,
+        summary={"memory_candidates": memory_candidates},
+        auto_promote=(phase == "completed"),
+    )
+
+
+def apply_memory_feedback(
+    namespace: str,
+    agent_name: str,
+    *,
+    session_id: str | None = None,
+    success: bool,
+) -> int:
+    delta = 1.0 if success else -1.0
+    updated = 0
+    with db_session() as session:
+        q = session.query(MemoryRecord).filter(
+            MemoryRecord.namespace == namespace,
+            MemoryRecord.agent_name == agent_name,
+        )
+        if session_id:
+            q = q.filter(MemoryRecord.session_id == session_id)
+        rows = q.order_by(MemoryRecord.created_at.desc()).limit(12).all()
+        for record in rows:
+            record.score = max(float(record.score or 0.0) + delta, 0.0)
+            updated += 1
+    return updated
+
+
+def record_eval_outcome_memory(
+    namespace: str,
+    agent_name: str,
+    eval_name: str,
+    *,
+    phase: str,
+    passed: bool | None,
+    summary: dict[str, Any] | None = None,
+) -> int:
+    normalized_summary = summary if isinstance(summary, dict) else {}
+    memory_candidates: dict[str, list[dict[str, Any]]] = {"episodic": [], "procedural": []}
+    memory_candidates["episodic"].append(
+        {
+            "type": "eval-outcome",
+            "text": f"Eval '{eval_name}' finished with phase '{phase}'.",
+            "eval": eval_name,
+            "phase": phase,
+        }
+    )
+    if passed is True:
+        memory_candidates["procedural"].append(
+            {
+                "type": "eval-success",
+                "text": f"Eval '{eval_name}' passed and validated expected agent behavior.",
+                "eval": eval_name,
+                "score": normalized_summary.get("score"),
+            }
+        )
+    elif passed is False or phase == "failed":
+        memory_candidates["procedural"].append(
+            {
+                "type": "eval-failure",
+                "text": f"Eval '{eval_name}' failed and indicates a regression or unmet expectation.",
+                "eval": eval_name,
+                "score": normalized_summary.get("score"),
+            }
+        )
+    return record_memory_items(
+        namespace,
+        agent_name,
+        session_id=eval_name,
+        summary={"memory_candidates": memory_candidates},
+        auto_promote=(passed is True),
+    )
+
+
+def list_memory_records(
+    namespace: str,
+    agent_name: str,
+    *,
+    username: str | None = None,
+    session_id: str | None = None,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    with db_session() as session:
+        q = session.query(MemoryRecord).filter(
+            MemoryRecord.namespace == namespace,
+            MemoryRecord.agent_name == agent_name,
+        )
+        if username:
+            q = q.filter((MemoryRecord.username == username) | (MemoryRecord.username.is_(None)))
+        if session_id:
+            q = q.filter(MemoryRecord.session_id == session_id)
+        rows = q.order_by(MemoryRecord.created_at.desc()).limit(min(max(limit, 1), 200)).all()
+        return [
+            {
+                "id": r.id,
+                "namespace": r.namespace,
+                "agent_name": r.agent_name,
+                "session_id": r.session_id,
+                "memory_type": r.memory_type,
+                "topic": r.topic,
+                "promoted": bool(r.promoted),
+                "score": float(r.score or 0.0),
+                "promote_reason": r.promote_reason,
+                "content": r.content,
+                "detail_json": r.detail_json,
+                "username": r.username,
+                "created_at": ensure_utc(r.created_at).isoformat() if r.created_at else None,
+            }
+            for r in rows
+        ]
+
+
+def list_promoted_memory_records(
+    namespace: str,
+    agent_name: str,
+    *,
+    username: str | None = None,
+    limit: int = 8,
+) -> list[dict[str, Any]]:
+    try:
+        with db_session() as session:
+            q = session.query(MemoryRecord).filter(
+                MemoryRecord.namespace == namespace,
+                MemoryRecord.agent_name == agent_name,
+                MemoryRecord.promoted.is_(True),
+            )
+            if username:
+                q = q.filter((MemoryRecord.username == username) | (MemoryRecord.username.is_(None)))
+            rows = (
+                q.order_by(MemoryRecord.created_at.desc(), MemoryRecord.id.desc()).limit(min(max(limit, 1), 20)).all()
+            )
+            return [
+                {
+                    "id": r.id,
+                    "namespace": r.namespace,
+                    "agent_name": r.agent_name,
+                    "session_id": r.session_id,
+                    "memory_type": r.memory_type,
+                    "topic": r.topic,
+                    "promoted": bool(r.promoted),
+                    "score": float(r.score or 0.0),
+                    "promote_reason": r.promote_reason,
+                    "content": r.content,
+                    "detail_json": r.detail_json,
+                    "username": r.username,
+                    "created_at": ensure_utc(r.created_at).isoformat() if r.created_at else None,
+                }
+                for r in rows
+            ]
+    except Exception as exc:
+        logger.warning("Unable to list promoted memory records for %s/%s: %s", namespace, agent_name, exc)
+        return []
+
+
+def set_memory_record_promoted(record_id: int, promoted: bool, *, username: str | None = None) -> dict[str, Any] | None:
+    with db_session() as session:
+        record = session.query(MemoryRecord).filter(MemoryRecord.id == record_id).one_or_none()
+        if record is None:
+            return None
+        if username and record.username and record.username != username:
+            return None
+        record.promoted = bool(promoted)
+        return {
+            "id": record.id,
+            "namespace": record.namespace,
+            "agent_name": record.agent_name,
+            "session_id": record.session_id,
+            "memory_type": record.memory_type,
+            "topic": record.topic,
+            "promoted": bool(record.promoted),
+            "score": float(record.score or 0.0),
+            "promote_reason": record.promote_reason,
+            "content": record.content,
+            "detail_json": record.detail_json,
+            "username": record.username,
+            "created_at": ensure_utc(record.created_at).isoformat() if record.created_at else None,
+        }
+
+
+def update_memory_record(
+    record_id: int,
+    *,
+    promoted: bool | None = None,
+    topic: str | None = None,
+    content: str | None = None,
+    username: str | None = None,
+) -> dict[str, Any] | None:
+    with db_session() as session:
+        record = session.query(MemoryRecord).filter(MemoryRecord.id == record_id).one_or_none()
+        if record is None:
+            return None
+        if username and record.username and record.username != username:
+            return None
+        if promoted is not None:
+            record.promoted = bool(promoted)
+        if topic is not None:
+            normalized_topic = str(topic).strip() or record.topic or "note"
+            record.topic = normalized_topic
+        if content is not None:
+            normalized_content = str(content).strip()
+            if not normalized_content:
+                return None
+            record.content = normalized_content
+        record.content_hash = _memory_content_hash(
+            record.memory_type, str(record.topic or "note"), str(record.content or "")
+        )
+        return {
+            "id": record.id,
+            "namespace": record.namespace,
+            "agent_name": record.agent_name,
+            "session_id": record.session_id,
+            "memory_type": record.memory_type,
+            "topic": record.topic,
+            "promoted": bool(record.promoted),
+            "score": float(record.score or 0.0),
+            "promote_reason": record.promote_reason,
+            "content": record.content,
+            "detail_json": record.detail_json,
+            "username": record.username,
+            "created_at": ensure_utc(record.created_at).isoformat() if record.created_at else None,
+        }
+
+
+def delete_memory_record(record_id: int, *, username: str | None = None) -> bool:
+    with db_session() as session:
+        record = session.query(MemoryRecord).filter(MemoryRecord.id == record_id).one_or_none()
+        if record is None:
+            return False
+        if username and record.username and record.username != username:
+            return False
+        session.delete(record)
+        return True
 
 
 class WorkflowRunHistory(Base):
@@ -420,8 +937,7 @@ def create_local_user(
         raise ValueError("Username is required.")
     if not password_meets_policy(password):
         raise ValueError(
-            "Password must be at least 8 characters and include an uppercase letter, "
-            "a lowercase letter, and a digit."
+            "Password must be at least 8 characters and include an uppercase letter, a lowercase letter, and a digit."
         )
     if role not in ROLE_PRIORITY:
         raise ValueError(f"Unsupported role '{role}'.")
@@ -472,7 +988,11 @@ def upsert_external_user(
     normalized_username = username.strip().lower()
     normalized_namespaces = normalize_namespaces(allowed_namespaces)
     with db_session() as session:
-        user = session.query(User).filter(User.auth_provider == auth_provider, User.external_id == external_id).one_or_none()
+        user = (
+            session.query(User)
+            .filter(User.auth_provider == auth_provider, User.external_id == external_id)
+            .one_or_none()
+        )
         if user is None:
             user = session.query(User).filter(User.username == normalized_username).one_or_none()
 
@@ -534,8 +1054,7 @@ def update_user_fields(
 def change_user_password(user_id: int, current_password: str, new_password: str) -> dict[str, Any]:
     if not password_meets_policy(new_password):
         raise ValueError(
-            "Password must be at least 8 characters and include an uppercase letter, "
-            "a lowercase letter, and a digit."
+            "Password must be at least 8 characters and include an uppercase letter, a lowercase letter, and a digit."
         )
     with db_session() as session:
         user = session.get(User, user_id)
@@ -848,9 +1367,7 @@ _DEFAULT_PRICING: dict[str, dict[str, float]] = {
 import json as _json
 
 _pricing_override = os.getenv("MODEL_PRICING_JSON", "").strip()
-MODEL_PRICING: dict[str, dict[str, float]] = (
-    _json.loads(_pricing_override) if _pricing_override else _DEFAULT_PRICING
-)
+MODEL_PRICING: dict[str, dict[str, float]] = _json.loads(_pricing_override) if _pricing_override else _DEFAULT_PRICING
 
 
 def estimate_cost(model: str | None, prompt_tokens: int, completion_tokens: int) -> float | None:
@@ -860,7 +1377,9 @@ def estimate_cost(model: str | None, prompt_tokens: int, completion_tokens: int)
     pricing = MODEL_PRICING.get(model) or MODEL_PRICING.get(model.split("/")[-1])
     if not pricing:
         return None
-    cost = (prompt_tokens / 1000) * pricing.get("prompt_per_1k", 0) + (completion_tokens / 1000) * pricing.get("completion_per_1k", 0)
+    cost = (prompt_tokens / 1000) * pricing.get("prompt_per_1k", 0) + (completion_tokens / 1000) * pricing.get(
+        "completion_per_1k", 0
+    )
     return round(cost, 6)
 
 
@@ -1010,18 +1529,27 @@ def list_chat_sessions(namespace: str, agent_name: str, username: str | None = N
                 "username": r.username,
                 "created_at": ensure_utc(r.created_at).isoformat() if r.created_at else None,
                 "updated_at": ensure_utc(r.updated_at).isoformat() if r.updated_at else None,
+                "summary": _summarize_chat_messages(get_chat_session_messages(r.session_id)),
             }
             for r in rows
         ]
 
 
 def create_chat_session(
-    namespace: str, agent_name: str, session_id: str, title: str = "Untitled", username: str | None = None,
+    namespace: str,
+    agent_name: str,
+    session_id: str,
+    title: str = "Untitled",
+    username: str | None = None,
 ) -> dict[str, Any]:
     """Create a new chat session record."""
     with db_session() as session:
         record = ChatSession(
-            namespace=namespace, agent_name=agent_name, session_id=session_id, title=title, username=username,
+            namespace=namespace,
+            agent_name=agent_name,
+            session_id=session_id,
+            title=title,
+            username=username,
         )
         session.add(record)
         session.flush()
@@ -1077,6 +1605,15 @@ def save_chat_messages(session_id: str, messages: list[dict[str, Any]]) -> None:
         chat_session = session.query(ChatSession).filter(ChatSession.session_id == session_id).one_or_none()
         if chat_session:
             chat_session.updated_at = utc_now()
+            summary = _summarize_chat_messages(messages)
+            record_memory_items(
+                chat_session.namespace,
+                chat_session.agent_name,
+                session_id=chat_session.session_id,
+                username=chat_session.username,
+                summary=summary,
+                session=session,
+            )
 
 
 def update_chat_session_title(session_id: str, title: str) -> dict[str, Any] | None:
@@ -1129,11 +1666,15 @@ def record_workflow_run(
         # Upsert by run_id if provided
         existing = None
         if run_id:
-            existing = session.query(WorkflowRunHistory).filter(
-                WorkflowRunHistory.workflow_name == workflow_name,
-                WorkflowRunHistory.namespace == namespace,
-                WorkflowRunHistory.run_id == run_id,
-            ).one_or_none()
+            existing = (
+                session.query(WorkflowRunHistory)
+                .filter(
+                    WorkflowRunHistory.workflow_name == workflow_name,
+                    WorkflowRunHistory.namespace == namespace,
+                    WorkflowRunHistory.run_id == run_id,
+                )
+                .one_or_none()
+            )
         if existing:
             existing.phase = phase
             if total_steps is not None:

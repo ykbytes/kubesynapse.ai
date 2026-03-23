@@ -105,6 +105,50 @@ spec:
                     When true (default), every MCP tool call is routed through hitl_gate()
                     before execution, requiring an AgentApproval CR to be created and approved.
                     Set to false only for fully-trusted, read-only MCP tools.
+                toolPolicy:
+                  type: object
+                  description: "Lightweight tool governance controls for runtime tools, MCP calls, and delegation depth"
+                  properties:
+                    maxDelegationDepth:
+                      type: integer
+                      minimum: 0
+                      description: "Maximum delegation depth allowed for agent-to-agent coordination"
+                    allowedToolPrefixes:
+                      type: array
+                      items:
+                        type: string
+                      description: "Optional allow-list of tool name prefixes such as local.command., filesystem., github/, or browser/"
+                    blockedToolNames:
+                      type: array
+                      items:
+                        type: string
+                      description: "Explicitly blocked tool names, including MCP-qualified names like github/create_issue"
+                    requireApprovalFor:
+                      type: array
+                      items:
+                        type: string
+                      description: "Tool names that always require approval before execution"
+                memoryPolicy:
+                  type: object
+                  description: "Controls how durable memory is retrieved and injected into future invocations"
+                  properties:
+                    maxInjectedMemories:
+                      type: integer
+                      minimum: 0
+                      description: "Maximum number of promoted memory records injected into a request"
+                    maxInjectedChars:
+                      type: integer
+                      minimum: 0
+                      description: "Maximum total characters of injected memory context"
+                    allowedMemoryTypes:
+                      type: array
+                      items:
+                        type: string
+                      description: "Optional allow-list of memory types eligible for retrieval, such as procedural or episodic"
+                    autoPromote:
+                      type: boolean
+                      default: false
+                      description: "Whether the platform may auto-promote high-signal memories without a user pin action"
                 a2a:
                   type: object
                   description: |

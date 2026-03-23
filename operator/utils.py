@@ -101,9 +101,7 @@ def build_workflow_run_id(namespace: str, workflow_name: str, generation: int) -
 
 def build_eval_run_id(namespace: str, eval_name: str, generation: int) -> str:
     epoch_ms = int(time.time() * 1000)
-    digest = hashlib.sha256(
-        f"eval:{namespace}:{eval_name}:{generation}:{epoch_ms}".encode("utf-8")
-    ).hexdigest()[:8]
+    digest = hashlib.sha256(f"eval:{namespace}:{eval_name}:{generation}:{epoch_ms}".encode("utf-8")).hexdigest()[:8]
     return build_thread_id("eval-run", namespace, eval_name, generation, epoch_ms, digest, max_length=96)
 
 
@@ -118,9 +116,7 @@ def _normalize_runtime_config_path(raw_path: Any, *, source: str) -> str:
     if not candidate:
         raise ValueError(f"{source} path must not be blank")
     if len(candidate) > MAX_RUNTIME_CONFIG_PATH_CHARS:
-        raise ValueError(
-            f"{source} path '{candidate}' exceeds {MAX_RUNTIME_CONFIG_PATH_CHARS} characters"
-        )
+        raise ValueError(f"{source} path '{candidate}' exceeds {MAX_RUNTIME_CONFIG_PATH_CHARS} characters")
     if candidate.startswith("/") or re.match(r"^[a-zA-Z]:[/\\]", candidate):
         raise ValueError(f"{source} path '{candidate}' must be relative")
 
@@ -149,20 +145,14 @@ def parse_runtime_config_files(raw_value: Any, *, source: str) -> dict[str, Any]
             serialized = json.dumps(raw_content, ensure_ascii=False, sort_keys=True)
             value = raw_content
         else:
-            raise ValueError(
-                f"{source} path '{path}' must map to a string, object, or array"
-            )
+            raise ValueError(f"{source} path '{path}' must map to a string, object, or array")
         if len(serialized) > MAX_RUNTIME_CONFIG_CONTENT_CHARS:
-            raise ValueError(
-                f"{source} path '{path}' exceeds {MAX_RUNTIME_CONFIG_CONTENT_CHARS} characters"
-            )
+            raise ValueError(f"{source} path '{path}' exceeds {MAX_RUNTIME_CONFIG_CONTENT_CHARS} characters")
         total_chars += len(serialized)
         normalized[path] = value
 
     if total_chars > MAX_RUNTIME_CONFIG_TOTAL_CHARS:
-        raise ValueError(
-            f"{source} exceeds the total content limit of {MAX_RUNTIME_CONFIG_TOTAL_CHARS} characters"
-        )
+        raise ValueError(f"{source} exceeds the total content limit of {MAX_RUNTIME_CONFIG_TOTAL_CHARS} characters")
     return normalized
 
 
@@ -195,9 +185,7 @@ def parse_json_output(text: str) -> Any | None:
         fenced = fenced_content.strip()
         if not fenced:
             continue
-        if (fenced.startswith("{") and fenced.endswith("}")) or (
-            fenced.startswith("[") and fenced.endswith("]")
-        ):
+        if (fenced.startswith("{") and fenced.endswith("}")) or (fenced.startswith("[") and fenced.endswith("]")):
             try:
                 return json.loads(fenced)
             except ValueError:
@@ -255,7 +243,9 @@ def render_prompt(
 
         root, _, remainder = expression.partition(".")
         if root not in step_results:
-            logger.warning("render_prompt: unresolvable placeholder '{{%s}}' — step '%s' has no result", expression, root)
+            logger.warning(
+                "render_prompt: unresolvable placeholder '{{%s}}' — step '%s' has no result", expression, root
+            )
             return ""
 
         if not remainder:
@@ -271,13 +261,13 @@ def render_prompt(
     if project_context:
         rendered = f"[Project Context]\n{project_context}\n\n{rendered}"
     return rendered
+
+
 def validate_workflow_graph(steps: Sequence[dict[str, Any]]) -> dict[str, Any]:
     if not steps:
         raise ValueError("AgentWorkflow must contain at least one step")
     if len(steps) > MAX_WORKFLOW_STEPS:
-        raise ValueError(
-            f"AgentWorkflow contains {len(steps)} steps, exceeding the limit of {MAX_WORKFLOW_STEPS}"
-        )
+        raise ValueError(f"AgentWorkflow contains {len(steps)} steps, exceeding the limit of {MAX_WORKFLOW_STEPS}")
 
     ordered_names: list[str] = []
     step_map: dict[str, dict[str, Any]] = {}
@@ -298,9 +288,7 @@ def validate_workflow_graph(steps: Sequence[dict[str, Any]]) -> dict[str, Any]:
         dependencies = [str(dep).strip() for dep in step.get("dependsOn") or [] if str(dep).strip()]
         missing_dependencies = [dependency for dependency in dependencies if dependency not in step_map]
         if missing_dependencies:
-            raise ValueError(
-                f"Workflow step '{step_name}' depends on unknown steps: {missing_dependencies}"
-            )
+            raise ValueError(f"Workflow step '{step_name}' depends on unknown steps: {missing_dependencies}")
         for dependency in dependencies:
             adjacency[dependency].add(step_name)
             undirected[dependency].add(step_name)
@@ -315,8 +303,7 @@ def validate_workflow_graph(steps: Sequence[dict[str, Any]]) -> dict[str, Any]:
                 missing_refs = [ref for ref in branch_refs if ref not in step_map]
                 if missing_refs:
                     raise ValueError(
-                        f"Conditional step '{step_name}' references unknown steps "
-                        f"in {branch_field}: {missing_refs}"
+                        f"Conditional step '{step_name}' references unknown steps in {branch_field}: {missing_refs}"
                     )
                 # Add implicit connectivity edges so branch targets remain in the connected graph
                 for ref in branch_refs:
@@ -354,9 +341,7 @@ def validate_workflow_graph(steps: Sequence[dict[str, Any]]) -> dict[str, Any]:
 
     if visited != set(ordered_names):
         disconnected = sorted(set(ordered_names) - visited)
-        raise ValueError(
-            f"Workflow must form a single connected DAG. Disconnected steps: {disconnected}"
-        )
+        raise ValueError(f"Workflow must form a single connected DAG. Disconnected steps: {disconnected}")
 
     return {
         "stepMap": step_map,
@@ -397,7 +382,8 @@ def compute_execution_waves(
     done = set(completed_steps or set())
     ignored = set(skipped_steps or set())
     remaining = [
-        s for s in steps
+        s
+        for s in steps
         if str(s.get("name", "")).strip()
         and str(s.get("name", "")).strip() not in done
         and str(s.get("name", "")).strip() not in ignored
@@ -405,7 +391,8 @@ def compute_execution_waves(
     waves: list[list[dict[str, Any]]] = []
     while remaining:
         wave = [
-            s for s in remaining
+            s
+            for s in remaining
             if {str(d).strip() for d in s.get("dependsOn") or [] if str(d).strip()}.issubset(done | ignored)
         ]
         if not wave:
@@ -424,9 +411,20 @@ def normalize_step_execution(step: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(pre_auth, list):
         pre_auth = []
     return {
-        "timeoutSeconds": max(float(execution.get("timeoutSeconds", AGENT_RUNTIME_TIMEOUT_SECONDS) or AGENT_RUNTIME_TIMEOUT_SECONDS), 1.0),
-        "maxAttempts": max(int(execution.get("maxAttempts", DEFAULT_WORKFLOW_STEP_MAX_ATTEMPTS) or DEFAULT_WORKFLOW_STEP_MAX_ATTEMPTS), 1),
-        "backoffSeconds": max(float(execution.get("backoffSeconds", DEFAULT_WORKFLOW_STEP_BACKOFF_SECONDS) or DEFAULT_WORKFLOW_STEP_BACKOFF_SECONDS), 0.0),
+        "timeoutSeconds": max(
+            float(execution.get("timeoutSeconds", AGENT_RUNTIME_TIMEOUT_SECONDS) or AGENT_RUNTIME_TIMEOUT_SECONDS), 1.0
+        ),
+        "maxAttempts": max(
+            int(execution.get("maxAttempts", DEFAULT_WORKFLOW_STEP_MAX_ATTEMPTS) or DEFAULT_WORKFLOW_STEP_MAX_ATTEMPTS),
+            1,
+        ),
+        "backoffSeconds": max(
+            float(
+                execution.get("backoffSeconds", DEFAULT_WORKFLOW_STEP_BACKOFF_SECONDS)
+                or DEFAULT_WORKFLOW_STEP_BACKOFF_SECONDS
+            ),
+            0.0,
+        ),
         "retryable": bool(execution.get("retryable", True)),
         "continueOnError": bool(execution.get("continueOnError", False)),
         "preAuthorizedActions": [str(a).strip() for a in pre_auth if str(a).strip()],
@@ -463,9 +461,7 @@ def normalize_a2a_peer_ref(raw_value: Any, *, source: str) -> dict[str, str]:
     if not K8S_NAME_RE.fullmatch(name):
         raise ValueError(f"{source} name '{name}' must be a valid lowercase Kubernetes resource name.")
     if not K8S_NAME_RE.fullmatch(namespace):
-        raise ValueError(
-            f"{source} namespace '{namespace}' must be a valid lowercase Kubernetes namespace name."
-        )
+        raise ValueError(f"{source} namespace '{namespace}' must be a valid lowercase Kubernetes namespace name.")
 
     return {"name": name, "namespace": namespace}
 
@@ -532,6 +528,94 @@ def parse_policy_a2a_config(policy_spec: dict[str, Any]) -> dict[str, Any]:
     return parsed
 
 
+def parse_tool_policy_config(policy_spec: dict[str, Any]) -> dict[str, Any]:
+    tool_policy = policy_spec.get("toolPolicy")
+    if tool_policy is None:
+        return {}
+    if not isinstance(tool_policy, dict):
+        raise ValueError("AgentPolicy.spec.toolPolicy must be an object when provided.")
+
+    parsed: dict[str, Any] = {}
+
+    max_delegation_depth = tool_policy.get("maxDelegationDepth")
+    if max_delegation_depth is not None:
+        try:
+            max_delegation_depth = int(max_delegation_depth)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("AgentPolicy.spec.toolPolicy.maxDelegationDepth must be an integer.") from exc
+        if max_delegation_depth < 0:
+            raise ValueError("AgentPolicy.spec.toolPolicy.maxDelegationDepth must be >= 0.")
+        parsed["maxDelegationDepth"] = max_delegation_depth
+
+    allowed_tool_prefixes = tool_policy.get("allowedToolPrefixes")
+    if allowed_tool_prefixes is not None:
+        if not isinstance(allowed_tool_prefixes, list):
+            raise ValueError("AgentPolicy.spec.toolPolicy.allowedToolPrefixes must be a list of strings.")
+        normalized_prefixes = [str(item).strip() for item in allowed_tool_prefixes if str(item).strip()]
+        parsed["allowedToolPrefixes"] = sorted(dict.fromkeys(normalized_prefixes))
+
+    blocked_tool_names = tool_policy.get("blockedToolNames")
+    if blocked_tool_names is not None:
+        if not isinstance(blocked_tool_names, list):
+            raise ValueError("AgentPolicy.spec.toolPolicy.blockedToolNames must be a list of strings.")
+        normalized_blocked = [str(item).strip() for item in blocked_tool_names if str(item).strip()]
+        parsed["blockedToolNames"] = sorted(dict.fromkeys(normalized_blocked))
+
+    require_approval_for = tool_policy.get("requireApprovalFor")
+    if require_approval_for is not None:
+        if not isinstance(require_approval_for, list):
+            raise ValueError("AgentPolicy.spec.toolPolicy.requireApprovalFor must be a list of strings.")
+        normalized_approval = [str(item).strip() for item in require_approval_for if str(item).strip()]
+        parsed["requireApprovalFor"] = sorted(dict.fromkeys(normalized_approval))
+
+    return parsed
+
+
+def parse_memory_policy_config(policy_spec: dict[str, Any]) -> dict[str, Any]:
+    memory_policy = policy_spec.get("memoryPolicy")
+    if memory_policy is None:
+        return {}
+    if not isinstance(memory_policy, dict):
+        raise ValueError("AgentPolicy.spec.memoryPolicy must be an object when provided.")
+
+    parsed: dict[str, Any] = {}
+
+    max_injected_memories = memory_policy.get("maxInjectedMemories")
+    if max_injected_memories is not None:
+        try:
+            max_injected_memories = int(max_injected_memories)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("AgentPolicy.spec.memoryPolicy.maxInjectedMemories must be an integer.") from exc
+        if max_injected_memories < 0:
+            raise ValueError("AgentPolicy.spec.memoryPolicy.maxInjectedMemories must be >= 0.")
+        parsed["maxInjectedMemories"] = max_injected_memories
+
+    max_injected_chars = memory_policy.get("maxInjectedChars")
+    if max_injected_chars is not None:
+        try:
+            max_injected_chars = int(max_injected_chars)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("AgentPolicy.spec.memoryPolicy.maxInjectedChars must be an integer.") from exc
+        if max_injected_chars < 0:
+            raise ValueError("AgentPolicy.spec.memoryPolicy.maxInjectedChars must be >= 0.")
+        parsed["maxInjectedChars"] = max_injected_chars
+
+    allowed_memory_types = memory_policy.get("allowedMemoryTypes")
+    if allowed_memory_types is not None:
+        if not isinstance(allowed_memory_types, list):
+            raise ValueError("AgentPolicy.spec.memoryPolicy.allowedMemoryTypes must be a list of strings.")
+        normalized_types = [str(item).strip() for item in allowed_memory_types if str(item).strip()]
+        parsed["allowedMemoryTypes"] = sorted(dict.fromkeys(normalized_types))
+
+    auto_promote = memory_policy.get("autoPromote")
+    if auto_promote is not None:
+        if not isinstance(auto_promote, bool):
+            raise ValueError("AgentPolicy.spec.memoryPolicy.autoPromote must be a boolean.")
+        parsed["autoPromote"] = auto_promote
+
+    return parsed
+
+
 def validate_supported_policy_spec(policy_spec: dict[str, Any]) -> None:
     unsupported_fields = unsupported_policy_budget_fields(policy_spec)
     if unsupported_fields:
@@ -541,6 +625,8 @@ def validate_supported_policy_spec(policy_spec: dict[str, Any]) -> None:
             f"Remove these fields to use this policy: {joined_fields}."
         )
     parse_policy_a2a_config(policy_spec)
+    parse_tool_policy_config(policy_spec)
+    parse_memory_policy_config(policy_spec)
 
 
 def normalize_goose_config_file_path(raw_path: object) -> str:
@@ -560,9 +646,7 @@ def normalize_goose_config_file_path(raw_path: object) -> str:
             "Goose secrets.yaml is not supported here. Inject provider secrets through environment variables instead."
         )
     if parts[0] == "permissions":
-        raise ValueError(
-            "Goose config files under permissions/ are runtime-managed and cannot be preseeded."
-        )
+        raise ValueError("Goose config files under permissions/ are runtime-managed and cannot be preseeded.")
     return candidate
 
 
@@ -582,9 +666,7 @@ def parse_goose_config_files(config_files: Any, *, source: str) -> dict[str, Any
             ) from exc
 
     if not isinstance(config_files, dict):
-        raise ValueError(
-            f"{source} must be a mapping of relative Goose config file paths to contents."
-        )
+        raise ValueError(f"{source} must be a mapping of relative Goose config file paths to contents.")
 
     normalized_files: dict[str, Any] = {}
     for raw_path, raw_content in sorted(config_files.items(), key=lambda item: str(item[0])):
@@ -600,9 +682,7 @@ def normalize_skill_file_path(raw_path: object) -> str:
     if not normalized_path:
         raise ValueError("Skill file paths must not be blank.")
     if len(normalized_path) > MAX_AGENT_SKILL_FILE_PATH_CHARS:
-        raise ValueError(
-            f"Skill file paths must be {MAX_AGENT_SKILL_FILE_PATH_CHARS} characters or fewer."
-        )
+        raise ValueError(f"Skill file paths must be {MAX_AGENT_SKILL_FILE_PATH_CHARS} characters or fewer.")
     if normalized_path.startswith("/"):
         raise ValueError("Skill file paths must be relative to the agent skill root.")
 
@@ -689,7 +769,8 @@ def invoke_agent_runtime(
         )
         if attempt < 2:
             import time
-            time.sleep(min(2 ** attempt, 4))
+
+            time.sleep(min(2**attempt, 4))
     raise last_exc  # type: ignore[misc]
 
 
@@ -748,20 +829,27 @@ def invoke_agent_runtime_stream(
                     elif etype == "response.turn_completed":
                         status = data.get("status", "")
                         resp_len = data.get("response_length", 0)
-                        logger.info("%s turn %d completed — status=%s, response=%d chars",
-                                    prefix, turn_count, status, resp_len)
+                        logger.info(
+                            "%s turn %d completed — status=%s, response=%d chars", prefix, turn_count, status, resp_len
+                        )
                     elif etype == "response.delta":
                         delta_text = data.get("delta", "")
                         # Log first 200 chars of delta to show what opencode is doing
                         if delta_text:
                             preview = delta_text[:200].replace("\n", " ")
-                            logger.info("%s turn %d delta: %s%s",
-                                        prefix, turn_count, preview, "..." if len(delta_text) > 200 else "")
+                            logger.info(
+                                "%s turn %d delta: %s%s",
+                                prefix,
+                                turn_count,
+                                preview,
+                                "..." if len(delta_text) > 200 else "",
+                            )
                     elif etype == "response.completed":
                         final_result = data
                         last_response = str(final_result.get("response", ""))
-                        logger.info("%s completed — turns: %d, response: %d chars",
-                                    prefix, turn_count, len(last_response))
+                        logger.info(
+                            "%s completed — turns: %d, response: %d chars", prefix, turn_count, len(last_response)
+                        )
                     elif etype == "response.error":
                         err_msg = data.get("error", "unknown")
                         logger.warning("%s error event: %s", prefix, err_msg)

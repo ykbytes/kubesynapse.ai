@@ -523,6 +523,12 @@ function AppLayout() {
                         opencodeMaxTurns={chat.selectedOpenCodeChatSettings.maxTurns}
                         opencodeWorkingDirectory={chat.selectedOpenCodeChatSettings.workingDirectory}
                         summary={chat.summary}
+                        activeSessionSummary={chat.activeSessionSummary}
+                        activeMemoryRecords={chat.activeMemoryRecords}
+                        agentMemoryRecords={chat.agentMemoryRecords}
+                        onPromoteMemoryRecord={(recordId, promoted) => void chat.handlePromoteMemoryRecord(recordId, promoted)}
+                        onEditMemoryRecord={(recordId, patch) => void chat.handleEditMemoryRecord(recordId, patch)}
+                        onDeleteMemoryRecord={(recordId) => void chat.handleDeleteMemoryRecord(recordId)}
                         onDownloadArtifact={(path, filename) => downloadAgentArtifact(conn.token, conn.namespace, ws.selectedAgentName, path, filename)}
                         onListArtifacts={() => listAgentArtifacts(conn.token, conn.namespace, ws.selectedAgentName)}
                         onOpenCodeOutputFormatChange={chat.setOpenCodeOutputFormat}

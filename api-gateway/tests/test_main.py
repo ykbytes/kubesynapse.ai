@@ -240,6 +240,139 @@ class GatewayRuntimeValidationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             api_gateway_main.InvokeRequest(prompt="hello", a2a_target_agent="analysis-agent")
 
+    def test_policy_info_from_resource_includes_tool_policy(self) -> None:
+        info = api_gateway_main.policy_info_from_resource(
+            {
+                "metadata": {"name": "team-policy", "namespace": "default"},
+                "spec": {
+                    "allowedModels": ["gpt-4"],
+                    "allowedMcpServers": ["github"],
+                    "mcpRequireHitl": True,
+                    "toolPolicy": {
+                        "maxDelegationDepth": 2,
+                        "allowedToolPrefixes": ["github/"],
+                    },
+                },
+            }
+        )
+
+        self.assertEqual(info.tool_policy["maxDelegationDepth"], 2)
+        self.assertEqual(info.tool_policy["allowedToolPrefixes"], ["github/"])
+
+    def test_build_memory_context_system_note_formats_promoted_records(self) -> None:
+        note = api_gateway_main.build_memory_context_system_note(
+            [
+                {"topic": "response-summary", "content": "Repository uses a monorepo layout."},
+                {"topic": "tools", "content": "filesystem.read, github/diff"},
+            ]
+        )
+
+        self.assertIn("Promoted memory from prior work", note)
+        self.assertIn("response-summary", note)
+        self.assertIn("monorepo layout", note)
+
+    def test_rank_promoted_memory_records_respects_policy_bounds(self) -> None:
+        ranked = api_gateway_main.rank_promoted_memory_records(
+            "Use the repo root Make targets before direct docker builds",
+            [
+                {
+                    "memory_type": "procedural",
+                    "topic": "response-summary",
+                    "content": "Use the repo root Make targets first.",
+                    "created_at": "2026-03-23T00:00:00+00:00",
+                },
+                {
+                    "memory_type": "episodic",
+                    "topic": "tools",
+                    "content": "filesystem.read, github/diff",
+                    "created_at": "2026-03-20T00:00:00+00:00",
+                },
+            ],
+            memory_policy={"maxInjectedMemories": 1, "maxInjectedChars": 200, "allowedMemoryTypes": ["procedural"]},
+        )
+
+        self.assertEqual(len(ranked), 1)
+        self.assertEqual(ranked[0]["memory_type"], "procedural")
+
+    def test_rank_promoted_memory_records_uses_stored_score(self) -> None:
+        ranked = api_gateway_main.rank_promoted_memory_records(
+            "unrelated prompt",
+            [
+                {
+                    "memory_type": "episodic",
+                    "topic": "tools",
+                    "content": "filesystem.read",
+                    "score": 0.0,
+                    "created_at": "2026-03-23T00:00:00+00:00",
+                },
+                {
+                    "memory_type": "procedural",
+                    "topic": "repo-convention",
+                    "content": "Use make test before pushing.",
+                    "score": 5.0,
+                    "created_at": "2026-03-20T00:00:00+00:00",
+                },
+            ],
+            memory_policy={"maxInjectedMemories": 1, "maxInjectedChars": 200},
+        )
+
+        self.assertEqual(len(ranked), 1)
+        self.assertEqual(ranked[0]["topic"], "repo-convention")
+
+    def test_sync_workflow_run_history_records_memory_feedback_for_terminal_workflow(self) -> None:
+        info = api_gateway_main.WorkflowInfo(
+            name="repo-check",
+            namespace="default",
+            phase="completed",
+            run_id="run-1",
+            steps=[api_gateway_main.WorkflowStepRequest(name="step-1", agent_ref="reviewer", prompt="check repo")],
+            summary={
+                "completedSteps": 3,
+                "totalSteps": 3,
+                "startedAt": "2026-03-23T00:00:00Z",
+                "completedAt": "2026-03-23T00:10:00Z",
+            },
+        )
+
+        with (
+            patch.object(api_gateway_main, "record_workflow_run") as record_workflow_run,
+            patch.object(
+                api_gateway_main,
+                "record_workflow_outcome_memory",
+            ) as record_workflow_outcome_memory,
+            patch.object(
+                api_gateway_main,
+                "apply_memory_feedback",
+            ) as apply_memory_feedback,
+        ):
+            api_gateway_main._sync_workflow_run_history(info)
+
+        record_workflow_run.assert_called_once()
+        record_workflow_outcome_memory.assert_called_once()
+        apply_memory_feedback.assert_called_once()
+
+    def test_sync_eval_memory_records_memory_feedback_for_terminal_eval(self) -> None:
+        info = api_gateway_main.EvalInfo(
+            name="reviewer-eval",
+            namespace="default",
+            agent_ref="reviewer",
+            phase="completed",
+            passed=True,
+            summary={"score": 0.91},
+        )
+
+        with (
+            patch.object(api_gateway_main, "record_eval_outcome_memory") as record_eval_outcome_memory,
+            patch.object(
+                api_gateway_main,
+                "apply_memory_feedback",
+            ) as apply_memory_feedback,
+        ):
+            api_gateway_main._sync_eval_memory(info)
+
+        record_eval_outcome_memory.assert_called_once()
+        apply_memory_feedback.assert_called_once()
+
 
 class WorkflowSchemaTests(unittest.TestCase):
     def test_build_workflow_spec_preserves_context_and_review_fields(self) -> None:
@@ -274,7 +407,11 @@ class WorkflowSchemaTests(unittest.TestCase):
 
     def test_workflow_info_from_resource_maps_new_fields(self) -> None:
         workflow = {
-            "metadata": {"name": "feature-pipeline", "namespace": "default", "creationTimestamp": "2026-03-19T00:00:00Z"},
+            "metadata": {
+                "name": "feature-pipeline",
+                "namespace": "default",
+                "creationTimestamp": "2026-03-19T00:00:00Z",
+            },
             "spec": {
                 "description": "desc",
                 "input": "input",
@@ -748,10 +885,13 @@ class GatewayToolCatalogTests(unittest.TestCase):
         ]
 
         for test_case in test_cases:
-            with self.subTest(name=test_case["name"]), patch.dict(
-                api_gateway_main.os.environ,
-                {"MCP_SIDECAR_CATALOG_JSON": json.dumps(test_case["catalog"])},
-                clear=False,
+            with (
+                self.subTest(name=test_case["name"]),
+                patch.dict(
+                    api_gateway_main.os.environ,
+                    {"MCP_SIDECAR_CATALOG_JSON": json.dumps(test_case["catalog"])},
+                    clear=False,
+                ),
             ):
                 api_gateway_main._MCP_SIDECAR_CATALOG_CACHE = None
                 categories = api_gateway_main.get_tool_categories(user=None)
@@ -815,11 +955,15 @@ class GatewayAgentDiscoveryTests(unittest.TestCase):
                 return "running"
             return "unknown"
 
-        with patch.object(api_gateway_main, "read_agent", side_effect=fake_read_agent), patch.object(
-            api_gateway_main,
-            "read_custom_resource",
-            return_value=policy,
-        ), patch.object(api_gateway_main, "get_agent_status", side_effect=fake_get_agent_status):
+        with (
+            patch.object(api_gateway_main, "read_agent", side_effect=fake_read_agent),
+            patch.object(
+                api_gateway_main,
+                "read_custom_resource",
+                return_value=policy,
+            ),
+            patch.object(api_gateway_main, "get_agent_status", side_effect=fake_get_agent_status),
+        ):
             response = api_gateway_main.discover_agent_peers("planner", "default")
 
         self.assertEqual(response.agent_name, "planner")
@@ -868,11 +1012,15 @@ class GatewayAgentDiscoveryTests(unittest.TestCase):
                 return researcher_agent
             raise HTTPException(status_code=404, detail=f"Agent '{name}' not found")
 
-        with patch.object(api_gateway_main, "read_agent", side_effect=fake_read_agent), patch.object(
-            api_gateway_main,
-            "read_custom_resource",
-            return_value=policy,
-        ), patch.object(api_gateway_main, "get_agent_status", return_value="pending"):
+        with (
+            patch.object(api_gateway_main, "read_agent", side_effect=fake_read_agent),
+            patch.object(
+                api_gateway_main,
+                "read_custom_resource",
+                return_value=policy,
+            ),
+            patch.object(api_gateway_main, "get_agent_status", return_value="pending"),
+        ):
             response = api_gateway_main.discover_agent_peers("planner", "default")
 
         self.assertFalse(response.peers[0].reachable)
@@ -913,11 +1061,15 @@ class GatewayA2AProtocolTests(unittest.TestCase):
             }
         }
 
-        with patch.object(api_gateway_main, "read_agent", return_value=agent), patch.object(
-            api_gateway_main,
-            "get_agent_status",
-            return_value="running",
-        ), patch.object(api_gateway_main, "read_custom_resource", return_value=policy):
+        with (
+            patch.object(api_gateway_main, "read_agent", return_value=agent),
+            patch.object(
+                api_gateway_main,
+                "get_agent_status",
+                return_value="running",
+            ),
+            patch.object(api_gateway_main, "read_custom_resource", return_value=policy),
+        ):
             card = api_gateway_main.build_agent_card(
                 "planner",
                 "default",
@@ -1022,7 +1174,7 @@ class GatewayA2AProtocolAsyncTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('"statusUpdate"', payload)
         self.assertIn('"kind": "artifact-update"', payload)
         self.assertIn('"kind": "status-update"', payload)
-        self.assertIn('TASK_STATE_COMPLETED', payload)
+        self.assertIn("TASK_STATE_COMPLETED", payload)
 
         stored_record = next(iter(api_gateway_main.A2A_TASK_STORE.values()))
         task_id = stored_record["task"]["id"]
@@ -1094,10 +1246,13 @@ class GatewayInvokeProxyTests(unittest.IsolatedAsyncioTestCase):
 
         fake_client = FakeAsyncClient()
 
-        with patch.object(api_gateway_main.asyncio, "to_thread", return_value={"spec": {"model": "gpt-4"}}), patch.object(
-            api_gateway_main.httpx,
-            "AsyncClient",
-            return_value=fake_client,
+        with (
+            patch.object(api_gateway_main.asyncio, "to_thread", return_value={"spec": {"model": "gpt-4"}}),
+            patch.object(
+                api_gateway_main.httpx,
+                "AsyncClient",
+                return_value=fake_client,
+            ),
         ):
             proxied = await api_gateway_main.download_agent_artifact(
                 "demo",
@@ -1126,10 +1281,13 @@ class GatewayInvokeProxyTests(unittest.IsolatedAsyncioTestCase):
             async def post(self, *args, **kwargs):
                 return response
 
-        with patch.object(api_gateway_main.asyncio, "to_thread", return_value={"spec": {"model": "gpt-4"}}), patch.object(
-            api_gateway_main.httpx,
-            "AsyncClient",
-            return_value=FakeAsyncClient(),
+        with (
+            patch.object(api_gateway_main.asyncio, "to_thread", return_value={"spec": {"model": "gpt-4"}}),
+            patch.object(
+                api_gateway_main.httpx,
+                "AsyncClient",
+                return_value=FakeAsyncClient(),
+            ),
         ):
             with self.assertRaises(HTTPException) as context:
                 await api_gateway_main.invoke_agent("demo", request, raw_request, "default", user={})
@@ -1170,11 +1328,14 @@ class GatewayInvokeProxyTests(unittest.IsolatedAsyncioTestCase):
             async def post(self, *args, **kwargs):
                 return response
 
-        with patch.object(
-            api_gateway_main.asyncio,
-            "to_thread",
-            return_value={"spec": {"model": "gpt-4", "runtime": {"kind": "langgraph"}}},
-        ), patch.object(api_gateway_main.httpx, "AsyncClient", return_value=FakeAsyncClient()):
+        with (
+            patch.object(
+                api_gateway_main.asyncio,
+                "to_thread",
+                return_value={"spec": {"model": "gpt-4", "runtime": {"kind": "langgraph"}}},
+            ),
+            patch.object(api_gateway_main.httpx, "AsyncClient", return_value=FakeAsyncClient()),
+        ):
             invoke_response = await api_gateway_main.invoke_agent("demo", request, raw_request, "default", user={})
 
         self.assertEqual(invoke_response.a2a["targetAgent"], "analysis-agent")
@@ -1213,11 +1374,14 @@ class GatewayInvokeProxyTests(unittest.IsolatedAsyncioTestCase):
                 captured["json"] = kwargs.get("json")
                 return response
 
-        with patch.object(
-            api_gateway_main.asyncio,
-            "to_thread",
-            return_value={"spec": {"model": "gpt-4", "runtime": {"kind": "langgraph"}}},
-        ), patch.object(api_gateway_main.httpx, "AsyncClient", return_value=FakeAsyncClient()):
+        with (
+            patch.object(
+                api_gateway_main.asyncio,
+                "to_thread",
+                return_value={"spec": {"model": "gpt-4", "runtime": {"kind": "langgraph"}}},
+            ),
+            patch.object(api_gateway_main.httpx, "AsyncClient", return_value=FakeAsyncClient()),
+        ):
             await api_gateway_main.invoke_agent("planner", request, raw_request, "default", user={})
 
         forwarded = captured["json"]
@@ -1226,6 +1390,93 @@ class GatewayInvokeProxyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(forwarded["parent_thread_id"], "thread-parent")
         self.assertEqual(forwarded["caller_request_id"], "req-123")
         self.assertEqual(forwarded["team_context"]["objective"], "Produce a reusable incident summary.")
+
+    async def test_invoke_agent_records_runtime_memory_metadata(self) -> None:
+        request = api_gateway_main.InvokeRequest(prompt="Investigate the incident")
+        raw_request = types.SimpleNamespace(headers={})
+        response = httpx.Response(
+            200,
+            json={
+                "response": "done",
+                "thread_id": "thread-1",
+                "model": "gpt-4",
+                "status": "completed",
+                "metadata": {
+                    "memory": {
+                        "episodic": [{"type": "tools", "names": ["filesystem.read"]}],
+                        "procedural": [{"type": "response-summary", "text": "Summarized the incident."}],
+                    }
+                },
+            },
+        )
+
+        class FakeAsyncClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def post(self, *args, **kwargs):
+                return response
+
+        with (
+            patch.object(
+                api_gateway_main.asyncio,
+                "to_thread",
+                return_value={"spec": {"model": "gpt-4", "runtime": {"kind": "langgraph"}}},
+            ),
+            patch.object(api_gateway_main.httpx, "AsyncClient", return_value=FakeAsyncClient()),
+            patch.object(api_gateway_main, "record_runtime_memory") as record_runtime_memory,
+        ):
+            await api_gateway_main.invoke_agent("planner", request, raw_request, "default", user={"sub": "alice"})
+
+        record_runtime_memory.assert_called_once()
+        self.assertEqual(record_runtime_memory.call_args.kwargs["session_id"], "thread-1")
+
+    async def test_invoke_agent_injects_promoted_memory_into_system_prompt(self) -> None:
+        request = api_gateway_main.InvokeRequest(prompt="Investigate the incident")
+        raw_request = types.SimpleNamespace(headers={})
+        captured: dict[str, object] = {}
+        response = httpx.Response(
+            200,
+            json={
+                "response": "done",
+                "thread_id": "thread-1",
+                "model": "gpt-4",
+                "status": "completed",
+            },
+        )
+
+        class FakeAsyncClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def post(self, _url, **kwargs):
+                captured["json"] = kwargs.get("json")
+                return response
+
+        with (
+            patch.object(
+                api_gateway_main.asyncio,
+                "to_thread",
+                return_value={"spec": {"model": "gpt-4", "runtime": {"kind": "langgraph"}}},
+            ),
+            patch.object(api_gateway_main.httpx, "AsyncClient", return_value=FakeAsyncClient()),
+            patch.object(
+                api_gateway_main,
+                "list_promoted_memory_records",
+                return_value=[{"topic": "response-summary", "content": "Use the repo root Make targets first."}],
+            ),
+        ):
+            await api_gateway_main.invoke_agent("planner", request, raw_request, "default", user={"sub": "alice"})
+
+        forwarded = captured["json"]
+        self.assertIn("Promoted memory from prior work", forwarded["system"])
+        self.assertIn("Use the repo root Make targets first.", forwarded["system"])
 
     async def test_invoke_agent_forwards_and_returns_subagent_metadata(self) -> None:
         request = api_gateway_main.InvokeRequest(
@@ -1277,11 +1528,14 @@ class GatewayInvokeProxyTests(unittest.IsolatedAsyncioTestCase):
                 captured["json"] = kwargs.get("json")
                 return response
 
-        with patch.object(
-            api_gateway_main.asyncio,
-            "to_thread",
-            return_value={"spec": {"model": "gpt-4", "runtime": {"kind": "langgraph"}}},
-        ), patch.object(api_gateway_main.httpx, "AsyncClient", return_value=FakeAsyncClient()):
+        with (
+            patch.object(
+                api_gateway_main.asyncio,
+                "to_thread",
+                return_value={"spec": {"model": "gpt-4", "runtime": {"kind": "langgraph"}}},
+            ),
+            patch.object(api_gateway_main.httpx, "AsyncClient", return_value=FakeAsyncClient()),
+        ):
             invoke_response = await api_gateway_main.invoke_agent("planner", request, raw_request, "default", user={})
 
         forwarded = captured["json"]
@@ -1320,11 +1574,14 @@ class GatewayInvokeProxyTests(unittest.IsolatedAsyncioTestCase):
             async def post(self, *args, **kwargs):
                 return response
 
-        with patch.object(
-            api_gateway_main.asyncio,
-            "to_thread",
-            return_value={"spec": {"model": "gpt-4", "runtime": {"kind": "langgraph"}}},
-        ), patch.object(api_gateway_main.httpx, "AsyncClient", return_value=FakeAsyncClient()):
+        with (
+            patch.object(
+                api_gateway_main.asyncio,
+                "to_thread",
+                return_value={"spec": {"model": "gpt-4", "runtime": {"kind": "langgraph"}}},
+            ),
+            patch.object(api_gateway_main.httpx, "AsyncClient", return_value=FakeAsyncClient()),
+        ):
             invoke_response = await api_gateway_main.invoke_agent("planner", request, raw_request, "default", user={})
 
         self.assertEqual(invoke_response.tool_name, "report.generate")
@@ -1352,10 +1609,13 @@ class GatewayInvokeProxyTests(unittest.IsolatedAsyncioTestCase):
             def stream(self, *args, **kwargs):
                 return FakeStreamContext()
 
-        with patch.object(api_gateway_main.asyncio, "to_thread", return_value={"spec": {"model": "gpt-4"}}), patch.object(
-            api_gateway_main.httpx,
-            "AsyncClient",
-            return_value=FakeAsyncClient(),
+        with (
+            patch.object(api_gateway_main.asyncio, "to_thread", return_value={"spec": {"model": "gpt-4"}}),
+            patch.object(
+                api_gateway_main.httpx,
+                "AsyncClient",
+                return_value=FakeAsyncClient(),
+            ),
         ):
             response = await api_gateway_main.invoke_agent_stream("demo", request, raw_request, "default", user={})
             chunks: list[str] = []
@@ -1378,7 +1638,7 @@ class GatewayInvokeProxyTests(unittest.IsolatedAsyncioTestCase):
 
             async def aiter_text(self):
                 await asyncio.sleep(0.02)
-                yield "event: response.completed\ndata: {\"thread_id\": \"t-1\", \"status\": \"completed\"}\n\n"
+                yield 'event: response.completed\ndata: {"thread_id": "t-1", "status": "completed"}\n\n'
 
         class FakeStreamContext:
             async def __aenter__(self):
@@ -1397,11 +1657,15 @@ class GatewayInvokeProxyTests(unittest.IsolatedAsyncioTestCase):
             def stream(self, *args, **kwargs):
                 return FakeStreamContext()
 
-        with patch.object(api_gateway_main.asyncio, "to_thread", return_value={"spec": {"model": "gpt-4"}}), patch.object(
-            api_gateway_main.httpx,
-            "AsyncClient",
-            return_value=FakeAsyncClient(),
-        ), patch.object(api_gateway_main, "STREAM_KEEPALIVE_SECONDS", 0.01):
+        with (
+            patch.object(api_gateway_main.asyncio, "to_thread", return_value={"spec": {"model": "gpt-4"}}),
+            patch.object(
+                api_gateway_main.httpx,
+                "AsyncClient",
+                return_value=FakeAsyncClient(),
+            ),
+            patch.object(api_gateway_main, "STREAM_KEEPALIVE_SECONDS", 0.01),
+        ):
             response = await api_gateway_main.invoke_agent_stream("demo", request, raw_request, "default", user={})
             chunks: list[str] = []
             async for chunk in response.body_iterator:
@@ -1431,9 +1695,12 @@ class LogStreamTests(unittest.TestCase):
     def setUp(self):
         self._ensure_k8s_mock()
         from unittest.mock import MagicMock
+
         self._mock_core = MagicMock()
         self._core_patcher = patch.object(
-            sys.modules["kubernetes.client"], "CoreV1Api", return_value=self._mock_core,
+            sys.modules["kubernetes.client"],
+            "CoreV1Api",
+            return_value=self._mock_core,
             create=True,
         )
         self._core_patcher.start()
@@ -1442,17 +1709,19 @@ class LogStreamTests(unittest.TestCase):
         self._core_patcher.stop()
 
     def test_get_agent_logs_returns_pod_log_with_timestamps(self) -> None:
-        fake_pod = types.SimpleNamespace(
-            metadata=types.SimpleNamespace(name="my-pod-0")
-        )
+        fake_pod = types.SimpleNamespace(metadata=types.SimpleNamespace(name="my-pod-0"))
         fake_log_text = "2026-03-17T10:00:00Z INFO starting\n2026-03-17T10:00:01Z INFO ready"
         self._mock_core.read_namespaced_pod_log.return_value = fake_log_text
 
-        with patch.object(api_gateway_main, "verify_token", return_value={"sub": "u1", "namespaces": ["ns1"]}), \
-             patch.object(api_gateway_main, "read_agent", return_value={}), \
-             patch.object(api_gateway_main, "list_agent_pods", return_value=[fake_pod]):
+        with (
+            patch.object(api_gateway_main, "verify_token", return_value={"sub": "u1", "namespaces": ["ns1"]}),
+            patch.object(api_gateway_main, "read_agent", return_value={}),
+            patch.object(api_gateway_main, "list_agent_pods", return_value=[fake_pod]),
+        ):
             result = api_gateway_main.get_agent_logs(
-                agent_name="myagent", namespace="ns1", tail=200,
+                agent_name="myagent",
+                namespace="ns1",
+                tail=200,
                 user={"sub": "u1", "namespaces": ["ns1"]},
             )
             self.assertEqual(result["agent_name"], "myagent")
@@ -1463,16 +1732,18 @@ class LogStreamTests(unittest.TestCase):
 
     def test_get_agent_logs_clamps_tail_parameter(self) -> None:
         """Tail parameter should be clamped between 1 and 5000."""
-        fake_pod = types.SimpleNamespace(
-            metadata=types.SimpleNamespace(name="pod-0")
-        )
+        fake_pod = types.SimpleNamespace(metadata=types.SimpleNamespace(name="pod-0"))
         self._mock_core.read_namespaced_pod_log.return_value = ""
 
-        with patch.object(api_gateway_main, "verify_token", return_value={"sub": "u1", "namespaces": ["ns1"]}), \
-             patch.object(api_gateway_main, "read_agent", return_value={}), \
-             patch.object(api_gateway_main, "list_agent_pods", return_value=[fake_pod]):
+        with (
+            patch.object(api_gateway_main, "verify_token", return_value={"sub": "u1", "namespaces": ["ns1"]}),
+            patch.object(api_gateway_main, "read_agent", return_value={}),
+            patch.object(api_gateway_main, "list_agent_pods", return_value=[fake_pod]),
+        ):
             api_gateway_main.get_agent_logs(
-                agent_name="myagent", namespace="ns1", tail=99999,
+                agent_name="myagent",
+                namespace="ns1",
+                tail=99999,
                 user={"sub": "u1", "namespaces": ["ns1"]},
             )
             call_kwargs = self._mock_core.read_namespaced_pod_log.call_args
@@ -1489,12 +1760,15 @@ class LogStreamTests(unittest.TestCase):
 
     def test_get_agent_logs_404_no_pods(self) -> None:
         """Should 404 when no runtime pods exist."""
-        with patch.object(api_gateway_main, "verify_token", return_value={"sub": "u1", "namespaces": ["ns1"]}), \
-             patch.object(api_gateway_main, "read_agent", return_value={}), \
-             patch.object(api_gateway_main, "list_agent_pods", return_value=[]):
+        with (
+            patch.object(api_gateway_main, "verify_token", return_value={"sub": "u1", "namespaces": ["ns1"]}),
+            patch.object(api_gateway_main, "read_agent", return_value={}),
+            patch.object(api_gateway_main, "list_agent_pods", return_value=[]),
+        ):
             with self.assertRaises(HTTPException) as ctx:
                 api_gateway_main.get_agent_logs(
-                    agent_name="myagent", namespace="ns1",
+                    agent_name="myagent",
+                    namespace="ns1",
                     user={"sub": "u1", "namespaces": ["ns1"]},
                 )
             self.assertEqual(ctx.exception.status_code, 404)

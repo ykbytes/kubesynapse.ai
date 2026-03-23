@@ -9,7 +9,9 @@ from utils import (  # noqa: E402
     merge_goose_config_files,
     normalize_step_execution,
     parse_agent_a2a_config,
+    parse_memory_policy_config,
     parse_policy_a2a_config,
+    parse_tool_policy_config,
     parse_goose_config_files,
     ready_workflow_steps,
     render_prompt,
@@ -46,11 +48,7 @@ class WorkflowUtilsTests(unittest.TestCase):
 
     def test_render_prompt_supports_structured_placeholders(self) -> None:
         rendered = render_prompt(
-            (
-                "Topic: {{input}}\n"
-                "Summary: {{research.output.json.summary}}\n"
-                "Prior: {{previous_output}}"
-            ),
+            ("Topic: {{input}}\nSummary: {{research.output.json.summary}}\nPrior: {{previous_output}}"),
             "private 5G",
             "Detailed prior output",
             {
@@ -58,10 +56,7 @@ class WorkflowUtilsTests(unittest.TestCase):
                     "response": "Detailed prior output",
                     "output": {
                         "json": {
-                            "summary": (
-                                "Factories adopt private 5G for "
-                                "low-latency robotics."
-                            ),
+                            "summary": ("Factories adopt private 5G for low-latency robotics."),
                         }
                     },
                 }
@@ -96,9 +91,7 @@ class WorkflowUtilsTests(unittest.TestCase):
             },
         ]
 
-        ready_names = [
-            step["name"] for step in ready_workflow_steps(steps, set())
-        ]
+        ready_names = [step["name"] for step in ready_workflow_steps(steps, set())]
         self.assertEqual(ready_names, ["research", "finance"])
 
     def test_compute_execution_waves_groups_by_dependency_layers(self) -> None:
@@ -118,7 +111,9 @@ class WorkflowUtilsTests(unittest.TestCase):
         ]
 
         waves = compute_execution_waves(steps)
-        self.assertEqual([[step["name"] for step in wave] for wave in waves], [["research", "finance"], ["analysis"], ["report"]])
+        self.assertEqual(
+            [[step["name"] for step in wave] for wave in waves], [["research", "finance"], ["analysis"], ["report"]]
+        )
 
     def test_normalize_step_execution_applies_defaults_and_overrides(
         self,
@@ -159,6 +154,54 @@ class WorkflowUtilsTests(unittest.TestCase):
                 "outputGuardrails": {"maxOutputTokens": 4096},
                 "allowedModels": ["gpt-4"],
             }
+        )
+
+    def test_parse_tool_policy_config_normalizes_lists(self) -> None:
+        parsed = parse_tool_policy_config(
+            {
+                "toolPolicy": {
+                    "maxDelegationDepth": 2,
+                    "allowedToolPrefixes": ["local.command.", "github/", "github/"],
+                    "blockedToolNames": ["local.command.rm", "local.command.rm"],
+                    "requireApprovalFor": ["github/create_issue", "github/create_issue"],
+                }
+            }
+        )
+
+        self.assertEqual(
+            parsed,
+            {
+                "maxDelegationDepth": 2,
+                "allowedToolPrefixes": ["github/", "local.command."],
+                "blockedToolNames": ["local.command.rm"],
+                "requireApprovalFor": ["github/create_issue"],
+            },
+        )
+
+    def test_parse_tool_policy_config_rejects_invalid_shape(self) -> None:
+        with self.assertRaisesRegex(ValueError, "toolPolicy"):
+            parse_tool_policy_config({"toolPolicy": "not-an-object"})
+
+    def test_parse_memory_policy_config_normalizes_values(self) -> None:
+        parsed = parse_memory_policy_config(
+            {
+                "memoryPolicy": {
+                    "maxInjectedMemories": 4,
+                    "maxInjectedChars": 900,
+                    "allowedMemoryTypes": ["procedural", "episodic", "procedural"],
+                    "autoPromote": True,
+                }
+            }
+        )
+
+        self.assertEqual(
+            parsed,
+            {
+                "maxInjectedMemories": 4,
+                "maxInjectedChars": 900,
+                "allowedMemoryTypes": ["episodic", "procedural"],
+                "autoPromote": True,
+            },
         )
 
     def test_parse_policy_a2a_config_normalizes_targets(self) -> None:
@@ -268,9 +311,9 @@ class WorkflowUtilsTests(unittest.TestCase):
             },
         )
 
-
     def test_validate_workflow_graph_rejects_too_many_steps(self) -> None:
         import utils
+
         original = utils.MAX_WORKFLOW_STEPS
         utils.MAX_WORKFLOW_STEPS = 2
         try:
@@ -305,7 +348,7 @@ class ParseJsonOutputTests(unittest.TestCase):
     def test_pure_json_array(self) -> None:
         from utils import parse_json_output
 
-        result = parse_json_output('[1, 2, 3]')
+        result = parse_json_output("[1, 2, 3]")
         self.assertEqual(result, [1, 2, 3])
 
     def test_empty_string_returns_none(self) -> None:
@@ -322,45 +365,28 @@ class ParseJsonOutputTests(unittest.TestCase):
     def test_markdown_fenced_json_object(self) -> None:
         from utils import parse_json_output
 
-        text = (
-            "Here is the specification:\n"
-            "```json\n"
-            '{"feature_name": "auth", "spec_markdown": "# Auth"}\n'
-            "```\n"
-            "Done."
-        )
+        text = 'Here is the specification:\n```json\n{"feature_name": "auth", "spec_markdown": "# Auth"}\n```\nDone.'
         result = parse_json_output(text)
         self.assertEqual(result, {"feature_name": "auth", "spec_markdown": "# Auth"})
 
     def test_markdown_fenced_without_json_tag(self) -> None:
         from utils import parse_json_output
 
-        text = (
-            "Result:\n"
-            "```\n"
-            '{"score": 95}\n'
-            "```"
-        )
+        text = 'Result:\n```\n{"score": 95}\n```'
         result = parse_json_output(text)
         self.assertEqual(result, {"score": 95})
 
     def test_multiple_fenced_blocks_prefers_last(self) -> None:
         from utils import parse_json_output
 
-        text = (
-            "Draft:\n```json\n" '{"version": 1}\n' "```\n"
-            "Final:\n```json\n" '{"version": 2}\n' "```"
-        )
+        text = 'Draft:\n```json\n{"version": 1}\n```\nFinal:\n```json\n{"version": 2}\n```'
         result = parse_json_output(text)
         self.assertEqual(result, {"version": 2})
 
     def test_fenced_invalid_json_skipped(self) -> None:
         from utils import parse_json_output
 
-        text = (
-            "Bad block:\n```json\n" "{invalid json}\n" "```\n"
-            "Good block:\n```json\n" '{"ok": true}\n' "```"
-        )
+        text = 'Bad block:\n```json\n{invalid json}\n```\nGood block:\n```json\n{"ok": true}\n```'
         result = parse_json_output(text)
         self.assertEqual(result, {"ok": True})
 
@@ -375,12 +401,7 @@ class ParseJsonOutputTests(unittest.TestCase):
         from utils import parse_json_output
 
         # Starts with { but isn't valid JSON — should try fence extraction
-        text = (
-            "{not valid json}\n"
-            "```json\n"
-            '{"fallback": true}\n'
-            "```"
-        )
+        text = '{not valid json}\n```json\n{"fallback": true}\n```'
         result = parse_json_output(text)
         self.assertEqual(result, {"fallback": True})
 

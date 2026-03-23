@@ -8,10 +8,12 @@ import hashlib
 import json
 import logging
 import os
+from pathlib import Path
 import re
 import shutil
 import sqlite3
 import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -54,6 +56,16 @@ from opensandbox_tools import (
     sandbox_runtime_metadata,
 )
 
+try:
+    from memory.session_state import SessionStateSnapshot, build_session_state_snapshot
+    from memory.session_store import SessionStore, create_session_store
+except ModuleNotFoundError:
+    current_dir = Path(__file__).resolve().parent
+    if str(current_dir) not in sys.path:
+        sys.path.insert(0, str(current_dir))
+    from memory.session_state import SessionStateSnapshot, build_session_state_snapshot
+    from memory.session_store import SessionStore, create_session_store
+
 
 def configure_logging() -> None:
     log_level = os.getenv("AGENT_LOG_LEVEL", "INFO").upper()
@@ -79,6 +91,7 @@ def _run_async(coro: Any) -> Any:
         loop = None
     if loop is not None and loop.is_running():
         import concurrent.futures
+
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
             return pool.submit(asyncio.run, coro).result()
     return asyncio.run(coro)
@@ -213,12 +226,20 @@ SUPERVISOR_HISTORY_LIMIT = get_int_env("AGENT_SUPERVISOR_HISTORY_LIMIT", 12, min
 ADAPTIVE_REPLAN_THRESHOLD = get_int_env("AGENT_REPLAN_FAILURE_THRESHOLD", 2, minimum=1)
 MAX_REPLAN_COUNT = get_int_env("AGENT_MAX_REPLAN_COUNT", 3, minimum=1)
 MAX_SCRATCHPAD_ENTRIES = get_int_env("AGENT_MAX_SCRATCHPAD_ENTRIES", 30, minimum=1)
-DESTRUCTIVE_TOOL_PATTERNS: frozenset[str] = frozenset({
-    "filesystem.delete",
-})
-DESTRUCTIVE_SHELL_COMMANDS: frozenset[str] = frozenset({
-    "rm", "rmdir", "git push", "git reset", "git clean",
-})
+DESTRUCTIVE_TOOL_PATTERNS: frozenset[str] = frozenset(
+    {
+        "filesystem.delete",
+    }
+)
+DESTRUCTIVE_SHELL_COMMANDS: frozenset[str] = frozenset(
+    {
+        "rm",
+        "rmdir",
+        "git push",
+        "git reset",
+        "git clean",
+    }
+)
 TOOL_CACHE_MAX_ENTRIES = get_int_env("AGENT_TOOL_CACHE_MAX_ENTRIES", 64, minimum=1)
 AUTO_TEST_TIMEOUT_SECONDS = get_float_env("AGENT_AUTO_TEST_TIMEOUT_SECONDS", 20.0, minimum=1.0)
 AUTO_TEST_MAX_OUTPUT_CHARS = get_int_env("AGENT_AUTO_TEST_MAX_OUTPUT_CHARS", 2000, minimum=256)
@@ -227,6 +248,16 @@ DESTRUCTIVE_ACTION_GATE = get_bool_env("AGENT_DESTRUCTIVE_ACTION_GATE", True)
 MAX_EDIT_HISTORY = get_int_env("AGENT_MAX_EDIT_HISTORY", 20, minimum=1)
 USE_TOOL_CALLING = get_bool_env("AGENT_USE_TOOL_CALLING", True)
 MAX_TOKEN_BUDGET = get_int_env("AGENT_MAX_TOKEN_BUDGET", 0, minimum=0)  # 0 = unlimited
+SESSION_STATE_ENABLED = get_bool_env("AGENT_SESSION_STATE_ENABLED", True)
+SESSION_STATE_TTL_SECONDS = get_int_env("AGENT_SESSION_TTL_SECONDS", 86400, minimum=0)
+SESSION_STATE_MAX_MESSAGES = get_int_env("AGENT_SESSION_MAX_MESSAGES", 24, minimum=1)
+SESSION_STATE_MAX_TOOL_RESULTS = get_int_env("AGENT_SESSION_MAX_TOOL_RESULTS", 12, minimum=0)
+SESSION_RESERVED_TOKENS = get_int_env("AGENT_SESSION_RESERVED_TOKENS", 1500, minimum=0)
+SESSION_TOKEN_BUDGET = get_int_env(
+    "AGENT_SESSION_TOKEN_BUDGET",
+    MAX_TOKEN_BUDGET if MAX_TOKEN_BUDGET > 0 else 0,
+    minimum=0,
+)
 FUZZY_MATCH_THRESHOLD = get_float_env("AGENT_FUZZY_MATCH_THRESHOLD", 0.85, minimum=0.5)
 
 # Cost per million tokens for common models (input_cost, output_cost)
@@ -254,9 +285,7 @@ _MODEL_COST_PER_MILLION: dict[str, tuple[float, float]] = {
 }
 
 
-def _calculate_cost_usd(
-    prompt_tokens: int, completion_tokens: int, model: str
-) -> float:
+def _calculate_cost_usd(prompt_tokens: int, completion_tokens: int, model: str) -> float:
     """Calculate approximate USD cost from token counts and model name."""
     # Try exact match, then prefix match
     costs = _MODEL_COST_PER_MILLION.get(model)
@@ -271,6 +300,8 @@ def _calculate_cost_usd(
     input_cost = (prompt_tokens / 1_000_000) * costs[0]
     output_cost = (completion_tokens / 1_000_000) * costs[1]
     return round(input_cost + output_cost, 6)
+
+
 SUPERVISOR_RESPONSE_CHARS = min(
     get_int_env("AGENT_SUPERVISOR_RESPONSE_CHARS", MAX_PROMPT_CHARS, minimum=256),
     MAX_PROMPT_CHARS,
@@ -284,9 +315,7 @@ MAX_AGENT_SKILL_TOTAL_CHARS = get_int_env("AGENT_MAX_SKILL_TOTAL_CHARS", 64000, 
 MAX_AGENT_SKILL_PROMPT_CHARS = get_int_env("AGENT_MAX_SKILL_PROMPT_CHARS", 16000, minimum=512)
 BLOCKED_RESPONSE_PREFIX = "Request blocked"
 SENSITIVE_STREAM_EVENT_SUFFIXES = (".stdout", ".stderr", ".result")
-safe_json_dumps: Callable[..., str] = functools.partial(
-    json.dumps, ensure_ascii=False, sort_keys=True, default=str
-)
+safe_json_dumps: Callable[..., str] = functools.partial(json.dumps, ensure_ascii=False, sort_keys=True, default=str)
 RETRYABLE_HTTP_STATUS_CODES = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
 LOCAL_RUNTIME_TOOL_NAMES = frozenset({"local.command.list", "local.command.run"})
 DEFAULT_LOCAL_COMMAND_ALLOWLIST = (
@@ -326,14 +355,14 @@ LOCAL_TOOL_ALLOWED_ROOTS = tuple(
 )
 LOCAL_TOOL_LIST_LIMIT = get_int_env("AGENT_LOCAL_TOOL_LIST_LIMIT", 32, minimum=1)
 AUTONOMY_ACTION_RETRY_LIMIT = get_int_env("AGENT_AUTONOMY_ACTION_RETRY_LIMIT", 2, minimum=0)
-AUTONOMY_ACTION_RETRY_BACKOFF_SECONDS = get_float_env(
-    "AGENT_AUTONOMY_ACTION_RETRY_BACKOFF_SECONDS", 1.0, minimum=0.0
-)
+AUTONOMY_ACTION_RETRY_BACKOFF_SECONDS = get_float_env("AGENT_AUTONOMY_ACTION_RETRY_BACKOFF_SECONDS", 1.0, minimum=0.0)
 AUTONOMY_FAILURE_HISTORY_LIMIT = get_int_env("AGENT_AUTONOMY_FAILURE_HISTORY_LIMIT", 6, minimum=1)
 
 
 def build_thread_id(prefix: str, *parts: object, max_length: int = MAX_THREAD_ID_CHARS) -> str:
-    normalized_parts = [re.sub(r"[^a-zA-Z0-9_-]+", "-", str(part).strip()).strip("-_") for part in parts if str(part).strip()]
+    normalized_parts = [
+        re.sub(r"[^a-zA-Z0-9_-]+", "-", str(part).strip()).strip("-_") for part in parts if str(part).strip()
+    ]
     normalized_parts = [part for part in normalized_parts if part]
     base = "-".join([prefix, *normalized_parts])
     if len(base) <= max_length:
@@ -408,9 +437,7 @@ def local_runtime_metadata(*, refresh: bool = False) -> dict[str, Any]:
 
 def supervisor_visible_sandbox_tools() -> list[str]:
     supported = [
-        str(item).strip()
-        for item in (sandbox_runtime_metadata().get("supportedTools") or [])
-        if str(item).strip()
+        str(item).strip() for item in (sandbox_runtime_metadata().get("supportedTools") or []) if str(item).strip()
     ]
     if not SKILL_RUNTIME_CONFIG.get("skills"):
         return sorted(supported)
@@ -424,7 +451,9 @@ def supervisor_visible_local_runtime() -> dict[str, Any]:
         return metadata
 
     allowed_patterns = SKILL_RUNTIME_CONFIG.get("allowedSandboxToolPatterns") or frozenset()
-    supported_tools = [tool_name for tool_name in LOCAL_RUNTIME_TOOL_NAMES if skill_allows_sandbox_tool(tool_name, allowed_patterns)]
+    supported_tools = [
+        tool_name for tool_name in LOCAL_RUNTIME_TOOL_NAMES if skill_allows_sandbox_tool(tool_name, allowed_patterns)
+    ]
     visible_commands = metadata.get("availableCommands") if "local.command.run" in supported_tools else []
     return {
         **metadata,
@@ -486,9 +515,7 @@ def resolve_requested_model(requested_model: str | None, policy_spec: dict[str, 
         allowed = ", ".join(sorted(allowed_models))
         raise HTTPException(
             status_code=400,
-            detail=(
-                f"Agent '{SERVICE_NAME}' allows models [{allowed}], not '{requested}'."
-            ),
+            detail=(f"Agent '{SERVICE_NAME}' allows models [{allowed}], not '{requested}'."),
         )
     return requested
 
@@ -496,9 +523,7 @@ def resolve_requested_model(requested_model: str | None, policy_spec: dict[str, 
 def normalize_subagent_strategy(value: Any) -> str:
     strategy = str(value or "sequential").strip().lower() or "sequential"
     if strategy not in SUBAGENT_STRATEGIES:
-        raise ValueError(
-            f"subagent_strategy must be one of {', '.join(sorted(SUBAGENT_STRATEGIES))}"
-        )
+        raise ValueError(f"subagent_strategy must be one of {', '.join(sorted(SUBAGENT_STRATEGIES))}")
     return strategy
 
 
@@ -516,9 +541,7 @@ def normalize_skill_file_path(value: Any, *, source: str) -> str:
     if not text:
         raise ValueError(f"{source} must not be blank")
     if len(text) > MAX_AGENT_SKILL_FILE_PATH_CHARS:
-        raise ValueError(
-            f"{source} must be {MAX_AGENT_SKILL_FILE_PATH_CHARS} characters or fewer"
-        )
+        raise ValueError(f"{source} must be {MAX_AGENT_SKILL_FILE_PATH_CHARS} characters or fewer")
     if text.startswith("/"):
         raise ValueError(f"{source} must be relative")
 
@@ -823,9 +846,7 @@ def load_skill_runtime_config() -> dict[str, Any]:
             warnings.append(f"{SKILL_FILES_ENV}.{path} must not be blank")
             continue
         if len(raw_content) > MAX_AGENT_SKILL_FILE_CONTENT_CHARS:
-            warnings.append(
-                f"{SKILL_FILES_ENV}.{path} exceeds {MAX_AGENT_SKILL_FILE_CONTENT_CHARS} characters"
-            )
+            warnings.append(f"{SKILL_FILES_ENV}.{path} exceeds {MAX_AGENT_SKILL_FILE_CONTENT_CHARS} characters")
             continue
         if len(files) >= MAX_AGENT_SKILL_FILES:
             warnings.append(f"Only the first {MAX_AGENT_SKILL_FILES} skill files were loaded")
@@ -843,8 +864,12 @@ def load_skill_runtime_config() -> dict[str, Any]:
         skill = parse_skill_definition(path, normalized_content)
         skills.append(skill)
         warnings.extend(skill.get("warnings") or [])
-        sandbox_patterns.update(str(item).strip() for item in (skill.get("allowedSandboxTools") or []) if str(item).strip())
-        allowed_mcp_servers.update(str(item).strip() for item in (skill.get("allowedMcpServers") or []) if str(item).strip())
+        sandbox_patterns.update(
+            str(item).strip() for item in (skill.get("allowedSandboxTools") or []) if str(item).strip()
+        )
+        allowed_mcp_servers.update(
+            str(item).strip() for item in (skill.get("allowedMcpServers") or []) if str(item).strip()
+        )
         allowed_a2a_targets.update(
             (str(item.get("namespace") or "").strip(), str(item.get("name") or "").strip())
             for item in (skill.get("allowedA2ATargets") or [])
@@ -918,9 +943,7 @@ def skill_block_reason(
     if a2a_target_agent and a2a_target_namespace:
         allowed_targets = SKILL_RUNTIME_CONFIG.get("allowedA2ATargets") or frozenset()
         if not allowed_targets or (a2a_target_namespace, a2a_target_agent) not in allowed_targets:
-            return (
-                f"A2A target '{a2a_target_namespace}/{a2a_target_agent}' is not granted by the agent's skill files"
-            )
+            return f"A2A target '{a2a_target_namespace}/{a2a_target_agent}' is not granted by the agent's skill files"
 
     if subagents:
         if not bool(SKILL_RUNTIME_CONFIG.get("allowSubagents")):
@@ -1034,7 +1057,9 @@ def build_inbound_team_context(request: "InvokeRequest") -> dict[str, Any] | Non
         if not isinstance(working_agreement, list) or not any(str(item).strip() for item in working_agreement):
             team_context["workingAgreement"] = list(TEAMWORK_WORKING_AGREEMENT)
 
-        existing_chain = team_context.get("delegationChain") if isinstance(team_context.get("delegationChain"), list) else []
+        existing_chain = (
+            team_context.get("delegationChain") if isinstance(team_context.get("delegationChain"), list) else []
+        )
         delegation_chain = dedupe_delegation_chain([*existing_chain, caller_entry])
         if delegation_chain:
             team_context["delegationChain"] = delegation_chain
@@ -1077,17 +1102,22 @@ def build_outbound_team_context(
     if not isinstance(working_agreement, list) or not any(str(item).strip() for item in working_agreement):
         team_context["workingAgreement"] = list(TEAMWORK_WORKING_AGREEMENT)
 
-    existing_chain = team_context.get("delegationChain") if isinstance(team_context.get("delegationChain"), list) else []
+    existing_chain = (
+        team_context.get("delegationChain") if isinstance(team_context.get("delegationChain"), list) else []
+    )
     delegation_chain = dedupe_delegation_chain([*existing_chain, caller_entry])
     if delegation_chain:
         team_context["delegationChain"] = delegation_chain
 
     try:
-        return normalize_json_object(
-            team_context,
-            field_name="team_context",
-            max_chars=TEAM_CONTEXT_MAX_CHARS,
-        ) or {}
+        return (
+            normalize_json_object(
+                team_context,
+                field_name="team_context",
+                max_chars=TEAM_CONTEXT_MAX_CHARS,
+            )
+            or {}
+        )
     except ValueError:
         return {
             "mode": "delegation",
@@ -1124,7 +1154,9 @@ def format_team_context_system_message(team_context: dict[str, Any] | None) -> s
 
     working_agreement = [
         str(item).strip()
-        for item in (team_context.get("workingAgreement") if isinstance(team_context.get("workingAgreement"), list) else [])
+        for item in (
+            team_context.get("workingAgreement") if isinstance(team_context.get("workingAgreement"), list) else []
+        )
         if str(item).strip()
     ]
     if working_agreement:
@@ -1285,10 +1317,13 @@ def invoke_a2a_target_with_fallback(
         raise RuntimeError(f"{direct_failure}; API gateway fallback failed: {exc}") from exc
     return result, "gateway", direct_failure
 
-resource = Resource(attributes={
-    "service.name": SERVICE_NAME,
-    "service.namespace": SERVICE_NAMESPACE,
-})
+
+resource = Resource(
+    attributes={
+        "service.name": SERVICE_NAME,
+        "service.namespace": SERVICE_NAMESPACE,
+    }
+)
 trace_provider = TracerProvider(resource=resource)
 trace.set_tracer_provider(trace_provider)
 otlp_endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "").strip()
@@ -1312,6 +1347,7 @@ async def lifespan(_app: FastAPI):
     finally:
         _SHUTDOWN.set()
         await asyncio.to_thread(shutdown_runtime)
+
 
 app = FastAPI(
     title="AI Agent Runtime",
@@ -1496,7 +1532,9 @@ class InvokeRequest(BaseModel):
     team_context: dict[str, Any] | None = None
     subagents: list[SubagentRequest] = Field(default_factory=list)
     subagent_strategy: str = Field(default="sequential", max_length=16)
-    delegation_depth: int = Field(default=0, ge=0, le=10, description="Current delegation depth for preventing infinite recursion.")
+    delegation_depth: int = Field(
+        default=0, ge=0, le=10, description="Current delegation depth for preventing infinite recursion."
+    )
     mcp_server: str | None = Field(
         default=None,
         max_length=128,
@@ -1619,6 +1657,25 @@ class InvokeResponse(BaseModel):
     tool_calls: list[dict[str, Any]] = Field(default_factory=list)
     metadata: dict[str, Any] | None = None
     token_usage: dict[str, int] | None = None
+
+
+def persist_session_snapshot(
+    agent_state: dict[str, Any], *, session_store: SessionStore | None
+) -> SessionStateSnapshot | None:
+    if not SESSION_STATE_ENABLED or session_store is None:
+        return None
+    snapshot = build_session_state_snapshot(
+        agent_state,
+        session_id=str(agent_state.get("thread_id") or "").strip() or None,
+        ttl_seconds=SESSION_STATE_TTL_SECONDS,
+        max_token_budget=SESSION_TOKEN_BUDGET,
+        reserved_tokens=SESSION_RESERVED_TOKENS,
+        max_messages=SESSION_STATE_MAX_MESSAGES,
+        max_tool_results=SESSION_STATE_MAX_TOOL_RESULTS,
+    )
+    saved = session_store.save(snapshot)
+    session_store.delete_expired()
+    return saved
 
 
 def configure_kubernetes_access() -> None:
@@ -1824,10 +1881,12 @@ def summarize_message_history(
                 summaries.append(f"[{item['role']}] {line}")
 
         if summaries:
-            compressed_middle.append({
-                "role": "system",
-                "content": f"[{len(summaries)} earlier messages compressed]\n" + "\n".join(summaries),
-            })
+            compressed_middle.append(
+                {
+                    "role": "system",
+                    "content": f"[{len(summaries)} earlier messages compressed]\n" + "\n".join(summaries),
+                }
+            )
         # Re-insert decision anchors after the compression summary
         compressed_middle.extend(anchors)
 
@@ -1893,9 +1952,11 @@ def _build_file_tree(execute_sandbox_tool: Callable, max_depth: int = 3) -> str:
             return
         try:
             ls_result = execute_sandbox_tool("filesystem.ls", {"path": path})
-            ls_text = get_message_content(
-                (ls_result.get("messages") or [None])[-1]
-            ).strip() if ls_result.get("messages") else ""
+            ls_text = (
+                get_message_content((ls_result.get("messages") or [None])[-1]).strip()
+                if ls_result.get("messages")
+                else ""
+            )
         except Exception:
             return
         if not ls_text or ls_text.startswith(BLOCKED_RESPONSE_PREFIX):
@@ -1912,9 +1973,11 @@ def _build_file_tree(execute_sandbox_tool: Callable, max_depth: int = 3) -> str:
                 child = f"{path.rstrip('/')}/{entry.rstrip('/')}"
                 try:
                     child_ls = execute_sandbox_tool("filesystem.ls", {"path": child})
-                    child_text = get_message_content(
-                        (child_ls.get("messages") or [None])[-1]
-                    ).strip() if child_ls.get("messages") else ""
+                    child_text = (
+                        get_message_content((child_ls.get("messages") or [None])[-1]).strip()
+                        if child_ls.get("messages")
+                        else ""
+                    )
                     if child_text and not child_text.startswith(BLOCKED_RESPONSE_PREFIX):
                         _ls_dir(child, depth + 1, prefix + "  ")
                 except Exception:
@@ -1930,9 +1993,9 @@ def _scan_git_status(execute_sandbox_tool: Callable) -> dict[str, Any] | None:
     try:
         # Check if .git exists
         git_check = execute_sandbox_tool("filesystem.ls", {"path": "/.git"})
-        git_text = get_message_content(
-            (git_check.get("messages") or [None])[-1]
-        ).strip() if git_check.get("messages") else ""
+        git_text = (
+            get_message_content((git_check.get("messages") or [None])[-1]).strip() if git_check.get("messages") else ""
+        )
         if not git_text or git_text.startswith(BLOCKED_RESPONSE_PREFIX):
             return None
         git_info["enabled"] = True
@@ -1942,9 +2005,11 @@ def _scan_git_status(execute_sandbox_tool: Callable) -> dict[str, Any] | None:
     # Try reading HEAD for branch
     try:
         head_result = execute_sandbox_tool("filesystem.read", {"path": "/.git/HEAD"})
-        head_text = get_message_content(
-            (head_result.get("messages") or [None])[-1]
-        ).strip() if head_result.get("messages") else ""
+        head_text = (
+            get_message_content((head_result.get("messages") or [None])[-1]).strip()
+            if head_result.get("messages")
+            else ""
+        )
         if head_text.startswith("ref: refs/heads/"):
             git_info["branch"] = head_text.replace("ref: refs/heads/", "").strip()
         elif head_text:
@@ -1961,9 +2026,9 @@ def scan_workspace_profile(execute_sandbox_tool: Callable) -> dict[str, Any]:
 
     try:
         ls_result = execute_sandbox_tool("filesystem.ls", {"path": "/"})
-        ls_text = get_message_content(
-            (ls_result.get("messages") or [None])[-1]
-        ).strip() if ls_result.get("messages") else ""
+        ls_text = (
+            get_message_content((ls_result.get("messages") or [None])[-1]).strip() if ls_result.get("messages") else ""
+        )
         if ls_text:
             profile["rootFiles"] = ls_text[:2000]
     except Exception:
@@ -1986,9 +2051,17 @@ def scan_workspace_profile(execute_sandbox_tool: Callable) -> dict[str, Any]:
         pass
 
     config_files = [
-        "README.md", "package.json", "Makefile", "pyproject.toml",
-        "Cargo.toml", "go.mod", "pom.xml", "build.gradle",
-        "requirements.txt", "Dockerfile", ".gitignore",
+        "README.md",
+        "package.json",
+        "Makefile",
+        "pyproject.toml",
+        "Cargo.toml",
+        "go.mod",
+        "pom.xml",
+        "build.gradle",
+        "requirements.txt",
+        "Dockerfile",
+        ".gitignore",
     ]
     detected: list[str] = []
     for fname in config_files:
@@ -1997,9 +2070,11 @@ def scan_workspace_profile(execute_sandbox_tool: Callable) -> dict[str, Any]:
                 "filesystem.read",
                 {"path": f"/{fname}"},
             )
-            content = get_message_content(
-                (read_result.get("messages") or [None])[-1]
-            ).strip() if read_result.get("messages") else ""
+            content = (
+                get_message_content((read_result.get("messages") or [None])[-1]).strip()
+                if read_result.get("messages")
+                else ""
+            )
             if content and not content.startswith(BLOCKED_RESPONSE_PREFIX):
                 profile[fname] = truncate_text(content, 1500)
                 detected.append(fname)
@@ -2049,18 +2124,16 @@ _ERROR_TAXONOMY: dict[str, dict[str, str]] = {
     },
     "syntax_error": {
         "pattern": "syntax error|unexpected token|parse error|invalid syntax|indentation",
-        "hint": "The code has a syntax issue. Read the file around the error line "
-                "and fix the specific syntax problem.",
+        "hint": "The code has a syntax issue. Read the file around the error line and fix the specific syntax problem.",
     },
     "test_failure": {
         "pattern": "test.*fail|assert.*error|expected.*got|fail.*test",
         "hint": "A test failed. Read the test output carefully, identify which assertion "
-                "failed and why, then fix the code (not the test, unless the test is wrong).",
+        "failed and why, then fix the code (not the test, unless the test is wrong).",
     },
     "import_error": {
         "pattern": "import error|module not found|no module named|cannot find module",
-        "hint": "A module is missing. Check the import path, installed packages, "
-                "or whether the module file exists.",
+        "hint": "A module is missing. Check the import path, installed packages, or whether the module file exists.",
     },
     "timeout": {
         "pattern": "timeout|timed out|deadline exceeded",
@@ -2068,13 +2141,12 @@ _ERROR_TAXONOMY: dict[str, dict[str, str]] = {
     },
     "command_not_found": {
         "pattern": "command not found|not recognized|no such command",
-        "hint": "The command is not available. Check local_shell capabilities or "
-                "use a sandbox_tool alternative.",
+        "hint": "The command is not available. Check local_shell capabilities or use a sandbox_tool alternative.",
     },
     "type_error": {
         "pattern": "type error|typeerror|attributeerror|cannot read propert",
         "hint": "A type/attribute error occurred. Check the variable types, "
-                "function signatures, and ensure the right API is being called.",
+        "function signatures, and ensure the right API is being called.",
     },
 }
 
@@ -2121,9 +2193,7 @@ def execute_git_commit(
         # Commit
         commit_result = execute_local_tool("git", ["commit", "-m", message])
         commit_status = str(commit_result.get("invoke_status") or "")
-        commit_output = get_message_content(
-            (commit_result.get("messages") or [None])[-1]
-        ).strip()
+        commit_output = get_message_content((commit_result.get("messages") or [None])[-1]).strip()
 
         if commit_status not in ("completed", "continue"):
             return {
@@ -2161,23 +2231,17 @@ def execute_edit_file(
     read_status = str(read_result.get("invoke_status") or "completed")
     if read_status not in ("completed", "continue"):
         return {
-            "messages": [AIMessage(
-                content=blocked_response(f"edit_file: cannot read '{path}': {read_status}")
-            )],
+            "messages": [AIMessage(content=blocked_response(f"edit_file: cannot read '{path}': {read_status}"))],
             "invoke_status": "blocked",
             "error_type": "edit_read_failed",
             "error": f"Could not read file '{path}' for editing",
             "stop_reason": "edit_read_failed",
         }
 
-    content = get_message_content(
-        (read_result.get("messages") or [None])[-1]
-    ).strip()
+    content = get_message_content((read_result.get("messages") or [None])[-1]).strip()
     if not content or content.startswith(BLOCKED_RESPONSE_PREFIX):
         return {
-            "messages": [AIMessage(
-                content=blocked_response(f"edit_file: file '{path}' is empty or unreadable")
-            )],
+            "messages": [AIMessage(content=blocked_response(f"edit_file: file '{path}' is empty or unreadable"))],
             "invoke_status": "blocked",
             "error_type": "edit_read_failed",
             "error": f"File '{path}' is empty or unreadable",
@@ -2214,11 +2278,7 @@ def execute_edit_file(
             )
 
         return {
-            "messages": [AIMessage(
-                content=blocked_response(
-                    f"edit_file: old_text not found in '{path}'. {hint}"
-                )
-            )],
+            "messages": [AIMessage(content=blocked_response(f"edit_file: old_text not found in '{path}'. {hint}"))],
             "invoke_status": "blocked",
             "error_type": "edit_old_text_not_found",
             "error": f"old_text not found in '{path}'",
@@ -2228,12 +2288,14 @@ def execute_edit_file(
 
     if occurrences > 1:
         return {
-            "messages": [AIMessage(
-                content=blocked_response(
-                    f"edit_file: old_text matches {occurrences} locations in '{path}'. "
-                    "Include more surrounding context to make the match unique."
+            "messages": [
+                AIMessage(
+                    content=blocked_response(
+                        f"edit_file: old_text matches {occurrences} locations in '{path}'. "
+                        "Include more surrounding context to make the match unique."
+                    )
                 )
-            )],
+            ],
             "invoke_status": "blocked",
             "error_type": "edit_ambiguous_match",
             "error": f"old_text matches {occurrences} locations",
@@ -2249,9 +2311,7 @@ def execute_edit_file(
     write_status = str(write_result.get("invoke_status") or "completed")
     if write_status not in ("completed", "continue"):
         return {
-            "messages": [AIMessage(
-                content=blocked_response(f"edit_file: failed to write '{path}': {write_status}")
-            )],
+            "messages": [AIMessage(content=blocked_response(f"edit_file: failed to write '{path}': {write_status}"))],
             "invoke_status": "blocked",
             "error_type": "edit_write_failed",
             "error": f"Could not write file '{path}'",
@@ -2261,18 +2321,17 @@ def execute_edit_file(
     # Count lines changed for summary
     old_lines = old_text.count("\n") + 1
     new_lines = new_text.count("\n") + 1
-    summary = (
-        f"Successfully edited '{path}': replaced {old_lines} lines "
-        f"with {new_lines} lines (1 occurrence)."
-    )
+    summary = f"Successfully edited '{path}': replaced {old_lines} lines with {new_lines} lines (1 occurrence)."
 
     # Generate unified diff for UI display
-    diff_lines = list(difflib.unified_diff(
-        content.splitlines(keepends=True),
-        new_content.splitlines(keepends=True),
-        fromfile=f"a/{path}",
-        tofile=f"b/{path}",
-    ))
+    diff_lines = list(
+        difflib.unified_diff(
+            content.splitlines(keepends=True),
+            new_content.splitlines(keepends=True),
+            fromfile=f"a/{path}",
+            tofile=f"b/{path}",
+        )
+    )
     diff_text = "".join(diff_lines)
     if diff_text:
         publish_runtime_event("agent.step.diff", {"path": path, "diff": diff_text[:4000]})
@@ -2336,9 +2395,9 @@ def execute_edit_files(
         new_text = str(entry.get("new_text") or "")
         if not path or not old_text:
             return {
-                "messages": [AIMessage(content=blocked_response(
-                    f"edit_files: edit[{idx}] missing required path or old_text"
-                ))],
+                "messages": [
+                    AIMessage(content=blocked_response(f"edit_files: edit[{idx}] missing required path or old_text"))
+                ],
                 "invoke_status": "blocked",
                 "error_type": "edit_files_validation",
                 "error": f"edit[{idx}] missing path or old_text",
@@ -2348,23 +2407,19 @@ def execute_edit_files(
         read_result = execute_sandbox_tool("filesystem.read", {"path": path})
         if str(read_result.get("invoke_status") or "") not in ("completed", "continue"):
             return {
-                "messages": [AIMessage(content=blocked_response(
-                    f"edit_files: cannot read '{path}' for edit[{idx}]"
-                ))],
+                "messages": [AIMessage(content=blocked_response(f"edit_files: cannot read '{path}' for edit[{idx}]"))],
                 "invoke_status": "blocked",
                 "error_type": "edit_files_read_failed",
                 "error": f"Cannot read '{path}'",
                 "stop_reason": "edit_files_read_failed",
             }
-        content = get_message_content(
-            (read_result.get("messages") or [None])[-1]
-        ).strip()
+        content = get_message_content((read_result.get("messages") or [None])[-1]).strip()
         occurrences = content.count(old_text)
         if occurrences == 0:
             return {
-                "messages": [AIMessage(content=blocked_response(
-                    f"edit_files: old_text not found in '{path}' (edit[{idx}])"
-                ))],
+                "messages": [
+                    AIMessage(content=blocked_response(f"edit_files: old_text not found in '{path}' (edit[{idx}])"))
+                ],
                 "invoke_status": "blocked",
                 "error_type": "edit_old_text_not_found",
                 "error": f"old_text not found in '{path}' for edit[{idx}]",
@@ -2373,9 +2428,13 @@ def execute_edit_files(
             }
         if occurrences > 1:
             return {
-                "messages": [AIMessage(content=blocked_response(
-                    f"edit_files: old_text matches {occurrences} locations in '{path}' (edit[{idx}])"
-                ))],
+                "messages": [
+                    AIMessage(
+                        content=blocked_response(
+                            f"edit_files: old_text matches {occurrences} locations in '{path}' (edit[{idx}])"
+                        )
+                    )
+                ],
                 "invoke_status": "blocked",
                 "error_type": "edit_ambiguous_match",
                 "error": f"old_text matches {occurrences} locations in '{path}'",
@@ -2383,10 +2442,15 @@ def execute_edit_files(
                 "retryable": True,
             }
         new_content = content.replace(old_text, new_text, 1)
-        validated.append({
-            "path": path, "old_text": old_text, "new_text": new_text,
-            "old_content": content, "new_content": new_content,
-        })
+        validated.append(
+            {
+                "path": path,
+                "old_text": old_text,
+                "new_text": new_text,
+                "old_content": content,
+                "new_content": new_content,
+            }
+        )
 
     # Phase 2 — apply all writes; rollback on failure
     edit_records: list[dict[str, str]] = []
@@ -2398,21 +2462,28 @@ def execute_edit_files(
             for rec in reversed(edit_records):
                 execute_sandbox_tool("filesystem.write", {"path": rec["path"], "content": rec["new_text"]})
             return {
-                "messages": [AIMessage(content=blocked_response(
-                    f"edit_files: write failed for '{v['path']}' (edit[{idx}]); "
-                    f"rolled back {len(edit_records)} prior write(s)"
-                ))],
+                "messages": [
+                    AIMessage(
+                        content=blocked_response(
+                            f"edit_files: write failed for '{v['path']}' (edit[{idx}]); "
+                            f"rolled back {len(edit_records)} prior write(s)"
+                        )
+                    )
+                ],
                 "invoke_status": "blocked",
                 "error_type": "edit_files_write_failed",
                 "error": f"Write failed for '{v['path']}'",
                 "stop_reason": "edit_files_write_failed",
             }
         edit_records.append({"path": v["path"], "old_text": v["new_text"], "new_text": v["old_text"]})
-        dl = list(difflib.unified_diff(
-            v["old_content"].splitlines(keepends=True),
-            v["new_content"].splitlines(keepends=True),
-            fromfile=f"a/{v['path']}", tofile=f"b/{v['path']}",
-        ))
+        dl = list(
+            difflib.unified_diff(
+                v["old_content"].splitlines(keepends=True),
+                v["new_content"].splitlines(keepends=True),
+                fromfile=f"a/{v['path']}",
+                tofile=f"b/{v['path']}",
+            )
+        )
         diffs.append("".join(dl))
 
     summary_parts = [f"- {v['path']}" for v in validated]
@@ -2459,9 +2530,7 @@ def execute_search_code(
     except Exception:
         result = {"invoke_status": "blocked", "messages": []}
 
-    raw_output = get_message_content(
-        (result.get("messages") or [None])[-1]
-    ).strip() if result.get("messages") else ""
+    raw_output = get_message_content((result.get("messages") or [None])[-1]).strip() if result.get("messages") else ""
 
     if not raw_output or str(result.get("invoke_status") or "") == "blocked":
         return {
@@ -2477,11 +2546,13 @@ def execute_search_code(
             break
         parts = line.split(":", 2)
         if len(parts) >= 3:
-            matches.append({
-                "file": parts[0],
-                "line": parts[1],
-                "text": parts[2].strip()[:200],
-            })
+            matches.append(
+                {
+                    "file": parts[0],
+                    "line": parts[1],
+                    "text": parts[2].strip()[:200],
+                }
+            )
         elif len(parts) == 2:
             matches.append({"file": parts[0], "line": parts[1], "text": ""})
 
@@ -2516,9 +2587,11 @@ def execute_batch_read(
                 pass
         try:
             read_result = execute_sandbox_tool("filesystem.read", tool_args)
-            content = get_message_content(
-                (read_result.get("messages") or [None])[-1]
-            ).strip() if read_result.get("messages") else ""
+            content = (
+                get_message_content((read_result.get("messages") or [None])[-1]).strip()
+                if read_result.get("messages")
+                else ""
+            )
         except Exception as exc:
             content = f"Error reading {path}: {exc}"
         header = f"=== {path}"
@@ -2746,7 +2819,11 @@ _SUPERVISOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "type": "object",
                 "properties": {
                     "thinking": {"type": "string", "description": "Chain-of-thought reasoning."},
-                    "steps": {"type": "array", "items": {"type": "string"}, "description": "Ordered list of plan steps."},
+                    "steps": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Ordered list of plan steps.",
+                    },
                 },
                 "required": ["thinking", "steps"],
             },
@@ -2917,7 +2994,11 @@ _SUPERVISOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "properties": {
                     "thinking": {"type": "string", "description": "Chain-of-thought reasoning."},
                     "message": {"type": "string", "description": "Commit message."},
-                    "all": {"type": "boolean", "description": "Stage all tracked modified files before committing.", "default": True},
+                    "all": {
+                        "type": "boolean",
+                        "description": "Stage all tracked modified files before committing.",
+                        "default": True,
+                    },
                 },
                 "required": ["thinking", "message"],
             },
@@ -2976,7 +3057,11 @@ _SUPERVISOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "pattern": {"type": "string", "description": "Search pattern (regex or literal)."},
                     "path": {"type": "string", "description": "Directory to search in (default: workspace root)."},
                     "include": {"type": "string", "description": "Glob pattern to filter files, e.g. '*.py'."},
-                    "max_results": {"type": "integer", "description": "Max results to return (default 20).", "default": 20},
+                    "max_results": {
+                        "type": "integer",
+                        "description": "Max results to return (default 20).",
+                        "default": 20,
+                    },
                 },
                 "required": ["thinking", "pattern"],
             },
@@ -3048,8 +3133,7 @@ def build_supervisor_messages(state: State) -> list[Any]:
     if not SKILL_RUNTIME_CONFIG.get("skills"):
         capabilities["mcpServers"] = sorted(ALLOWED_MCP_SERVERS)
         capabilities["a2aTargets"] = [
-            {"namespace": namespace, "name": name}
-            for namespace, name in sorted(A2A_ALLOWED_TARGETS_SNAPSHOT)
+            {"namespace": namespace, "name": name} for namespace, name in sorted(A2A_ALLOWED_TARGETS_SNAPSHOT)
         ]
         capabilities["allowSubagents"] = bool(A2A_ALLOWED_TARGETS_SNAPSHOT)
 
@@ -3277,11 +3361,13 @@ def normalize_supervisor_action(value: Any) -> dict[str, Any] | None:
         reads: list[dict[str, Any]] = []
         for entry in raw_reads[:8]:
             if isinstance(entry, dict) and str(entry.get("path") or "").strip():
-                reads.append({
-                    "path": str(entry["path"]).strip(),
-                    "start_line": entry.get("start_line"),
-                    "end_line": entry.get("end_line"),
-                })
+                reads.append(
+                    {
+                        "path": str(entry["path"]).strip(),
+                        "start_line": entry.get("start_line"),
+                        "end_line": entry.get("end_line"),
+                    }
+                )
         if not reads:
             return None
         return {"action": action, "reads": reads, "thinking": thinking}
@@ -3309,7 +3395,13 @@ def normalize_supervisor_action(value: Any) -> dict[str, Any] | None:
         shell_tool_args: dict[str, Any] = {"command": command, "args": shell_args}
         if cwd is not None:
             shell_tool_args["cwd"] = str(cwd).strip()
-        return {"action": action, "command": command, "args": shell_args, "tool_args": shell_tool_args, "thinking": thinking}
+        return {
+            "action": action,
+            "command": command,
+            "args": shell_args,
+            "tool_args": shell_tool_args,
+            "thinking": thinking,
+        }
 
     if action == "mcp_tool":
         mcp_server = str(value.get("mcp_server") or "").strip()
@@ -3393,8 +3485,7 @@ def build_reflection_prompt(
     tried_text = ""
     if attempted_actions:
         tried_lines = [
-            f"- {record.get('label', '?')}: {record.get('status', '?')}"
-            for record in attempted_actions[-5:]
+            f"- {record.get('label', '?')}: {record.get('status', '?')}" for record in attempted_actions[-5:]
         ]
         tried_text = "\n\nActions attempted so far:\n" + "\n".join(tried_lines)
 
@@ -3833,15 +3924,9 @@ def build_autonomous_action_observation(action_label: str, result: dict[str, Any
     if not content:
         content = str(result.get("error") or "").strip()
 
-    warnings = dedupe_text_items(
-        [str(item).strip() for item in (result.get("warnings") or []) if str(item).strip()]
-    )
+    warnings = dedupe_text_items([str(item).strip() for item in (result.get("warnings") or []) if str(item).strip()])
 
-    lines = [
-        f"{action_label} result"
-        if status == "completed"
-        else f"{action_label} returned status '{status}'"
-    ]
+    lines = [f"{action_label} result" if status == "completed" else f"{action_label} returned status '{status}'"]
     if stop_reason and stop_reason != "response":
         lines.append(f"Stop reason: {stop_reason}")
     if content:
@@ -3868,9 +3953,7 @@ def normalize_autonomous_action_result(action_label: str, result: dict[str, Any]
     if status == "continue":
         return result
 
-    if status == "completed" or (
-        AUTONOMY_CONTINUE_ON_ACTION_ERROR and not autonomous_result_requires_stop(result)
-    ):
+    if status == "completed" or (AUTONOMY_CONTINUE_ON_ACTION_ERROR and not autonomous_result_requires_stop(result)):
         return {
             **result,
             "messages": [build_autonomous_action_observation(action_label, result)],
@@ -4031,7 +4114,8 @@ def run_autonomous_session(
             _tu["completion_tokens"] = _tu.get("completion_tokens", 0) + int(_usage.get("output_tokens", 0))
             _tu["total_tokens"] = _tu["prompt_tokens"] + _tu["completion_tokens"]
             _tu["cost_usd"] = _calculate_cost_usd(
-                _tu["prompt_tokens"], _tu["completion_tokens"],
+                _tu["prompt_tokens"],
+                _tu["completion_tokens"],
                 str(local_state.get("selected_model") or MODEL_NAME),
             )
             local_state["token_usage"] = _tu
@@ -4044,8 +4128,7 @@ def run_autonomous_session(
                     messages=[
                         AIMessage(
                             content=blocked_response(
-                                f"token budget of {MAX_TOKEN_BUDGET} was exhausted "
-                                f"(used {_tu['total_tokens']} tokens)"
+                                f"token budget of {MAX_TOKEN_BUDGET} was exhausted (used {_tu['total_tokens']} tokens)"
                             )
                         )
                     ],
@@ -4113,7 +4196,7 @@ def run_autonomous_session(
             local_state["active_plan"] = active_plan
             local_state["plan_step_index"] = plan_step_index
             plan_msg = f"Plan created with {len(active_plan)} steps:\n"
-            plan_msg += "\n".join(f"  {i+1}. {s}" for i, s in enumerate(active_plan))
+            plan_msg += "\n".join(f"  {i + 1}. {s}" for i, s in enumerate(active_plan))
             local_state["messages"] = [
                 *(local_state.get("messages") or []),
                 AIMessage(content=plan_msg),
@@ -4122,12 +4205,14 @@ def run_autonomous_session(
                 "agent.plan",
                 {"steps": active_plan, "stepCount": len(active_plan)},
             )
-            attempted_actions.append({
-                "step": step_count,
-                "label": describe_autonomous_action(decision),
-                "status": "completed",
-                "thinking": thinking[:120] if thinking else "",
-            })
+            attempted_actions.append(
+                {
+                    "step": step_count,
+                    "label": describe_autonomous_action(decision),
+                    "status": "completed",
+                    "thinking": thinking[:120] if thinking else "",
+                }
+            )
             continue
 
         # Handle note action inline — saves to scratchpad without consuming a step
@@ -4141,12 +4226,14 @@ def run_autonomous_session(
                 *(local_state.get("messages") or []),
                 AIMessage(content=f"Note saved: {note_text}"),
             ]
-            attempted_actions.append({
-                "step": step_count,
-                "label": "Note to scratchpad",
-                "status": "completed",
-                "thinking": thinking[:120] if thinking else "",
-            })
+            attempted_actions.append(
+                {
+                    "step": step_count,
+                    "label": "Note to scratchpad",
+                    "status": "completed",
+                    "thinking": thinking[:120] if thinking else "",
+                }
+            )
             continue
 
         if decision["action"] == "respond":
@@ -4237,25 +4324,41 @@ def run_autonomous_session(
                             request_id=str(local_state.get("thread_id") or "autonomous"),
                         )
                         if approval.get("decision") != "approved":
-                            result_messages = [AIMessage(content=blocked_response(
-                                f"Destructive action '{action_label}' was denied by human reviewer. "
-                                "Choose a non-destructive alternative."
-                            ))]
+                            result_messages = [
+                                AIMessage(
+                                    content=blocked_response(
+                                        f"Destructive action '{action_label}' was denied by human reviewer. "
+                                        "Choose a non-destructive alternative."
+                                    )
+                                )
+                            ]
                             local_state["messages"] = [*(local_state.get("messages") or []), *result_messages]
-                            attempted_actions.append({
-                                "step": step_count, "label": action_label,
-                                "status": "denied", "thinking": thinking[:120] if thinking else "",
-                            })
+                            attempted_actions.append(
+                                {
+                                    "step": step_count,
+                                    "label": action_label,
+                                    "status": "denied",
+                                    "thinking": thinking[:120] if thinking else "",
+                                }
+                            )
                             continue
                     except PermissionError:
-                        result_messages = [AIMessage(content=blocked_response(
-                            f"Destructive action '{action_label}' requires human approval which was denied."
-                        ))]
+                        result_messages = [
+                            AIMessage(
+                                content=blocked_response(
+                                    f"Destructive action '{action_label}' requires human approval which was denied."
+                                )
+                            )
+                        ]
                         local_state["messages"] = [*(local_state.get("messages") or []), *result_messages]
-                        attempted_actions.append({
-                            "step": step_count, "label": action_label,
-                            "status": "denied", "thinking": thinking[:120] if thinking else "",
-                        })
+                        attempted_actions.append(
+                            {
+                                "step": step_count,
+                                "label": action_label,
+                                "status": "denied",
+                                "thinking": thinking[:120] if thinking else "",
+                            }
+                        )
                         continue
                     except Exception as hitl_exc:
                         logger.debug("HITL gate check failed (non-fatal): %s", hitl_exc)
@@ -4263,10 +4366,12 @@ def run_autonomous_session(
                     # No explicit HITL but gate is enabled: emit strong warning
                     local_state["messages"] = [
                         *(local_state.get("messages") or []),
-                        SystemMessage(content=(
-                            f"WARNING: The action '{action_label}' is destructive and potentially irreversible. "
-                            "Proceeding, but prefer non-destructive alternatives when possible."
-                        )),
+                        SystemMessage(
+                            content=(
+                                f"WARNING: The action '{action_label}' is destructive and potentially irreversible. "
+                                "Proceeding, but prefer non-destructive alternatives when possible."
+                            )
+                        ),
                     ]
 
         # Emit step progress event for UI
@@ -4307,12 +4412,14 @@ def run_autonomous_session(
 
         # Track attempted action
         action_status = autonomous_result_status(result)
-        attempted_actions.append({
-            "step": step_count,
-            "label": action_label,
-            "status": action_status,
-            "thinking": thinking[:120] if thinking else "",
-        })
+        attempted_actions.append(
+            {
+                "step": step_count,
+                "label": action_label,
+                "status": action_status,
+                "thinking": thinking[:120] if thinking else "",
+            }
+        )
 
         # Track file modifications for change summary
         if action_status in ("completed", "continue"):
@@ -4365,9 +4472,7 @@ def run_autonomous_session(
                         local_state,
                     )
                     if str(diff_result.get("invoke_status") or "") in ("completed", "continue"):
-                        diff_text = get_message_content(
-                            (diff_result.get("messages") or [None])[-1]
-                        ).strip()
+                        diff_text = get_message_content((diff_result.get("messages") or [None])[-1]).strip()
                         local_state["git_diff_stat"] = truncate_text(diff_text, 1000)
                 except Exception:
                     pass  # git may not be available
@@ -4383,11 +4488,7 @@ def run_autonomous_session(
             result_messages.append(reflection)
 
             # Adaptive re-planning: after consecutive failures with an active plan
-            if (
-                active_plan
-                and consecutive_failures >= ADAPTIVE_REPLAN_THRESHOLD
-                and replan_count < MAX_REPLAN_COUNT
-            ):
+            if active_plan and consecutive_failures >= ADAPTIVE_REPLAN_THRESHOLD and replan_count < MAX_REPLAN_COUNT:
                 replan_hint = SystemMessage(
                     content=(
                         f"REPLAN: Steps {plan_step_index}-{plan_step_index + 1} have failed "
@@ -4404,17 +4505,15 @@ def run_autonomous_session(
                 result_messages.append(replan_hint)
                 logger.info(
                     "Replan hint injected after %d consecutive failures at step %d",
-                    consecutive_failures, step_count,
+                    consecutive_failures,
+                    step_count,
                 )
 
             result = {**result, "messages": result_messages}
             logger.info("Self-reflection injected after failure at step %d: %s", step_count, action_label)
 
         # Auto-verify + auto-lint after file edits
-        if (
-            action_status in ("completed", "continue")
-            and decision["action"] in ("edit_file", "edit_files")
-        ):
+        if action_status in ("completed", "continue") and decision["action"] in ("edit_file", "edit_files"):
             verify_path = str(decision.get("path") or "").strip()
             if not verify_path and decision["action"] == "edit_files":
                 # Use first edited path for lint/test verification
@@ -4443,29 +4542,29 @@ def run_autonomous_session(
                             local_state,
                         )
                         lint_status = str(lint_result.get("invoke_status") or "completed")
-                        lint_output = get_message_content(
-                            (lint_result.get("messages") or [None])[-1]
-                        ).strip()
+                        lint_output = get_message_content((lint_result.get("messages") or [None])[-1]).strip()
                         if lint_status in ("completed", "continue") and lint_output:
-                            result_messages.append(SystemMessage(
-                                content=f"AUTO-LINT passed for '{verify_path}'."
-                            ))
+                            result_messages.append(SystemMessage(content=f"AUTO-LINT passed for '{verify_path}'."))
                         elif lint_output:
-                            result_messages.append(SystemMessage(
-                                content=(
-                                    f"AUTO-LINT FAILED for '{verify_path}':\\n{lint_output[:1000]}\\n"
-                                    "Fix the syntax error before proceeding."
+                            result_messages.append(
+                                SystemMessage(
+                                    content=(
+                                        f"AUTO-LINT FAILED for '{verify_path}':\\n{lint_output[:1000]}\\n"
+                                        "Fix the syntax error before proceeding."
+                                    )
                                 )
-                            ))
+                            )
                     except Exception as lint_exc:
                         logger.debug("Auto-lint failed (non-fatal): %s", lint_exc)
                 else:
-                    result_messages.append(SystemMessage(
-                        content=(
-                            f"VERIFY: You just edited '{verify_path}'. "
-                            "Consider reading the file or running tests to confirm the change is correct."
+                    result_messages.append(
+                        SystemMessage(
+                            content=(
+                                f"VERIFY: You just edited '{verify_path}'. "
+                                "Consider reading the file or running tests to confirm the change is correct."
+                            )
                         )
-                    ))
+                    )
 
                 # Auto-test: run project test suite after edits (best-effort)
                 # If tests fail and AUTO_TEST_FIX_RETRIES > 0, the failure output
@@ -4486,40 +4585,42 @@ def run_autonomous_session(
                             local_state,
                         )
                         test_status = str(test_result.get("invoke_status") or "completed")
-                        test_output = get_message_content(
-                            (test_result.get("messages") or [None])[-1]
-                        ).strip()
+                        test_output = get_message_content((test_result.get("messages") or [None])[-1]).strip()
                         truncated_output = test_output[:AUTO_TEST_MAX_OUTPUT_CHARS] if test_output else ""
                         if test_status in ("completed", "continue"):
-                            result_messages.append(SystemMessage(
-                                content=f"AUTO-TEST passed after editing '{verify_path}'."
-                            ))
+                            result_messages.append(
+                                SystemMessage(content=f"AUTO-TEST passed after editing '{verify_path}'.")
+                            )
                             local_state["_test_fix_attempts"] = 0
                         elif truncated_output:
                             if _test_fix_attempts < AUTO_TEST_FIX_RETRIES:
                                 local_state["_test_fix_attempts"] = _test_fix_attempts + 1
-                                result_messages.append(SystemMessage(
-                                    content=(
-                                        f"AUTO-TEST FAILED (attempt {_test_fix_attempts + 1}/{AUTO_TEST_FIX_RETRIES}) "
-                                        f"after editing '{verify_path}':\n"
-                                        f"{truncated_output}\n\n"
-                                        "YOU MUST fix this test failure NOW before moving on.\n"
-                                        "1. Read the full error trace — which assertion failed and why?\n"
-                                        "2. Is the test expectation correct, or is the implementation wrong?\n"
-                                        "3. Apply a targeted fix with edit_file based on the root cause."
+                                result_messages.append(
+                                    SystemMessage(
+                                        content=(
+                                            f"AUTO-TEST FAILED (attempt {_test_fix_attempts + 1}/{AUTO_TEST_FIX_RETRIES}) "
+                                            f"after editing '{verify_path}':\n"
+                                            f"{truncated_output}\n\n"
+                                            "YOU MUST fix this test failure NOW before moving on.\n"
+                                            "1. Read the full error trace — which assertion failed and why?\n"
+                                            "2. Is the test expectation correct, or is the implementation wrong?\n"
+                                            "3. Apply a targeted fix with edit_file based on the root cause."
+                                        )
                                     )
-                                ))
+                                )
                             else:
-                                result_messages.append(SystemMessage(
-                                    content=(
-                                        f"AUTO-TEST FAILED after editing '{verify_path}' "
-                                        f"(exhausted {AUTO_TEST_FIX_RETRIES} auto-fix retries):\n"
-                                        f"{truncated_output}\n\n"
-                                        "Auto-fix retries are exhausted. Read the failure carefully "
-                                        "and fix the root cause before proceeding — do not ignore "
-                                        "failing tests."
+                                result_messages.append(
+                                    SystemMessage(
+                                        content=(
+                                            f"AUTO-TEST FAILED after editing '{verify_path}' "
+                                            f"(exhausted {AUTO_TEST_FIX_RETRIES} auto-fix retries):\n"
+                                            f"{truncated_output}\n\n"
+                                            "Auto-fix retries are exhausted. Read the failure carefully "
+                                            "and fix the root cause before proceeding — do not ignore "
+                                            "failing tests."
+                                        )
                                     )
-                                ))
+                                )
                                 local_state["_test_fix_attempts"] = 0
                         publish_runtime_event(
                             "agent.auto_test",
@@ -4574,26 +4675,30 @@ def build_request_guard_text(
 
     if a2a_target_agent.strip() and a2a_target_namespace.strip():
         sections.append(
-            safe_json_dumps({
-                "a2a_target_agent": a2a_target_agent.strip(),
-                "a2a_target_namespace": a2a_target_namespace.strip(),
-            })
+            safe_json_dumps(
+                {
+                    "a2a_target_agent": a2a_target_agent.strip(),
+                    "a2a_target_namespace": a2a_target_namespace.strip(),
+                }
+            )
         )
 
     if subagents:
         sections.append(
-            safe_json_dumps({
-                "subagents": [
-                    {
-                        "name": str(item.get("name") or "").strip(),
-                        "namespace": str(item.get("namespace") or "").strip(),
-                        "role": str(item.get("role") or "").strip() or None,
-                        "task": str(item.get("task") or "").strip() or None,
-                    }
-                    for item in subagents
-                    if isinstance(item, dict)
-                ]
-            })
+            safe_json_dumps(
+                {
+                    "subagents": [
+                        {
+                            "name": str(item.get("name") or "").strip(),
+                            "namespace": str(item.get("namespace") or "").strip(),
+                            "role": str(item.get("role") or "").strip() or None,
+                            "task": str(item.get("task") or "").strip() or None,
+                        }
+                        for item in subagents
+                        if isinstance(item, dict)
+                    ]
+                }
+            )
         )
 
     return "\n\n".join(section for section in sections if section)
@@ -4626,9 +4731,7 @@ def prepare_subagent_shared_files(
         return [], sandbox_session, []
 
     if not isinstance(sandbox_session, dict):
-        warning = (
-            f"Skipped shared file snapshots for {target_namespace}/{target_agent} because no sandbox_session was available."
-        )
+        warning = f"Skipped shared file snapshots for {target_namespace}/{target_agent} because no sandbox_session was available."
         return [], sandbox_session, [warning]
 
     current_session = sandbox_session
@@ -4768,11 +4871,14 @@ def build_subagent_team_context(
         team_context["sharedSandboxSession"] = True
 
     try:
-        return normalize_json_object(
-            team_context,
-            field_name="team_context",
-            max_chars=TEAM_CONTEXT_MAX_CHARS,
-        ) or {}
+        return (
+            normalize_json_object(
+                team_context,
+                field_name="team_context",
+                max_chars=TEAM_CONTEXT_MAX_CHARS,
+            )
+            or {}
+        )
     except ValueError:
         return {
             "mode": "subagent-orchestration",
@@ -4829,10 +4935,7 @@ def build_subagent_prompt(
             lines.append(entry)
 
     if result_file_path:
-        lines.append(
-            "If you produce reusable notes or artifacts, write or summarize them at "
-            f"{result_file_path}."
-        )
+        lines.append(f"If you produce reusable notes or artifacts, write or summarize them at {result_file_path}.")
     lines.append("Return concrete findings, file paths you inspected or changed, and any blockers.")
     return truncate_text("\n\n".join(lines), MAX_PROMPT_CHARS)
 
@@ -4852,9 +4955,7 @@ def write_subagent_result_artifact(
         return sandbox_session, None, []
 
     if not isinstance(sandbox_session, dict):
-        warning = (
-            f"Skipped writing subagent result for {target_namespace}/{target_agent} because no sandbox_session was available."
-        )
+        warning = f"Skipped writing subagent result for {target_namespace}/{target_agent} because no sandbox_session was available."
         return sandbox_session, None, [warning]
 
     current_session = sandbox_session
@@ -5095,26 +5196,31 @@ def coordinate_specialized_subagents(
         if bool(subagent.get("share_sandbox_session", True)) and next_session is not None:
             payload["sandbox_session"] = next_session
 
-        return {
-            "index": index,
-            "name": target_agent,
-            "namespace": target_namespace,
-            "role": role or None,
-            "task": task or None,
-            "thread_id": target_thread_id,
-            "timeout_seconds": float(requested_timeout or max_timeout_seconds),
-            "payload": payload,
-            "shared_files": [
-                {
-                    "path": item.get("path"),
-                    "purpose": item.get("purpose"),
-                    "chars": item.get("chars"),
-                }
-                for item in shared_files
-            ],
-            "result_file_path": result_file_path,
-            "metadata": subagent.get("metadata") if isinstance(subagent.get("metadata"), dict) else None,
-        }, None, next_session, snapshot_warnings
+        return (
+            {
+                "index": index,
+                "name": target_agent,
+                "namespace": target_namespace,
+                "role": role or None,
+                "task": task or None,
+                "thread_id": target_thread_id,
+                "timeout_seconds": float(requested_timeout or max_timeout_seconds),
+                "payload": payload,
+                "shared_files": [
+                    {
+                        "path": item.get("path"),
+                        "purpose": item.get("purpose"),
+                        "chars": item.get("chars"),
+                    }
+                    for item in shared_files
+                ],
+                "result_file_path": result_file_path,
+                "metadata": subagent.get("metadata") if isinstance(subagent.get("metadata"), dict) else None,
+            },
+            None,
+            next_session,
+            snapshot_warnings,
+        )
 
     def invoke_job(job: dict[str, Any]) -> dict[str, Any]:
         try:
@@ -5224,7 +5330,9 @@ def coordinate_specialized_subagents(
     if strategy == "parallel":
         jobs: list[dict[str, Any]] = []
         for index, subagent in enumerate(subagents, start=1):
-            job, blocked_entry, current_session, preparation_warnings = prepare_job(subagent, index, current_session, [])
+            job, blocked_entry, current_session, preparation_warnings = prepare_job(
+                subagent, index, current_session, []
+            )
             warnings.extend(preparation_warnings)
             if blocked_entry is not None:
                 result_entries[index] = blocked_entry
@@ -5573,6 +5681,124 @@ def build_guardrails(policy_spec: dict[str, Any]) -> GuardrailsEngine:
     )
 
 
+def parse_tool_policy_config(policy_spec: dict[str, Any]) -> dict[str, Any]:
+    tool_policy = policy_spec.get("toolPolicy") if isinstance(policy_spec, dict) else None
+    if tool_policy is None:
+        return {}
+    if not isinstance(tool_policy, dict):
+        logger.warning("Ignoring invalid AgentPolicy.spec.toolPolicy value: expected an object")
+        return {}
+
+    parsed: dict[str, Any] = {}
+    try:
+        if tool_policy.get("maxDelegationDepth") is not None:
+            parsed["maxDelegationDepth"] = max(int(tool_policy.get("maxDelegationDepth")), 0)
+    except (TypeError, ValueError):
+        logger.warning("Ignoring invalid AgentPolicy.spec.toolPolicy.maxDelegationDepth value")
+
+    def _normalize_string_list(field_name: str) -> list[str]:
+        value = tool_policy.get(field_name)
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            logger.warning("Ignoring invalid AgentPolicy.spec.toolPolicy.%s value: expected a list", field_name)
+            return []
+        return [str(item).strip() for item in value if str(item).strip()]
+
+    allowed_prefixes = _normalize_string_list("allowedToolPrefixes")
+    blocked_names = _normalize_string_list("blockedToolNames")
+    require_approval_for = _normalize_string_list("requireApprovalFor")
+    if allowed_prefixes:
+        parsed["allowedToolPrefixes"] = tuple(dict.fromkeys(allowed_prefixes))
+    if blocked_names:
+        parsed["blockedToolNames"] = frozenset(blocked_names)
+    if require_approval_for:
+        parsed["requireApprovalFor"] = frozenset(require_approval_for)
+    return parsed
+
+
+def tool_policy_violation_reason(
+    *,
+    tool_name: str,
+    mcp_server: str,
+    delegation_depth: int,
+    policy_spec: dict[str, Any],
+) -> str | None:
+    tool_policy = parse_tool_policy_config(policy_spec)
+    if not tool_policy:
+        return None
+
+    max_delegation_depth = tool_policy.get("maxDelegationDepth")
+    if max_delegation_depth is not None and delegation_depth > int(max_delegation_depth):
+        return (
+            f"Delegation depth {delegation_depth} exceeds AgentPolicy.spec.toolPolicy.maxDelegationDepth "
+            f"({max_delegation_depth})."
+        )
+
+    effective_tool_name = f"{mcp_server}/{tool_name}" if mcp_server else tool_name
+    blocked_names = tool_policy.get("blockedToolNames") or frozenset()
+    if effective_tool_name in blocked_names or tool_name in blocked_names:
+        return f"Tool '{effective_tool_name}' is blocked by AgentPolicy.spec.toolPolicy.blockedToolNames."
+
+    allowed_prefixes = tool_policy.get("allowedToolPrefixes") or ()
+    if effective_tool_name and allowed_prefixes:
+        if not any(
+            effective_tool_name == prefix or effective_tool_name.startswith(prefix) for prefix in allowed_prefixes
+        ):
+            return f"Tool '{effective_tool_name}' is not allowed by AgentPolicy.spec.toolPolicy.allowedToolPrefixes."
+
+    return None
+
+
+def tool_requires_policy_approval(*, tool_name: str, mcp_server: str, policy_spec: dict[str, Any]) -> bool:
+    tool_policy = parse_tool_policy_config(policy_spec)
+    if not tool_policy:
+        return False
+    require_approval_for = tool_policy.get("requireApprovalFor") or frozenset()
+    if not require_approval_for:
+        return False
+    effective_tool_name = f"{mcp_server}/{tool_name}" if mcp_server else tool_name
+    return effective_tool_name in require_approval_for or tool_name in require_approval_for
+
+
+def derive_memory_candidates(result: dict[str, Any], response_text: str) -> dict[str, Any]:
+    artifacts = result.get("artifacts") or []
+    tool_calls = result.get("tool_call_records") or []
+    memory: dict[str, Any] = {
+        "episodic": [],
+        "procedural": [],
+    }
+
+    if artifacts:
+        memory["episodic"].append(
+            {
+                "type": "artifacts",
+                "count": len(artifacts),
+                "names": [
+                    str(item.get("name") or item.get("path") or item.get("type") or "artifact")
+                    for item in artifacts[:5]
+                    if isinstance(item, dict)
+                ],
+            }
+        )
+    if tool_calls:
+        memory["episodic"].append(
+            {
+                "type": "tools",
+                "count": len(tool_calls),
+                "names": [
+                    str(item.get("tool_name") or item.get("toolName") or "tool")
+                    for item in tool_calls[:5]
+                    if isinstance(item, dict)
+                ],
+            }
+        )
+    summary = truncate_text(response_text.strip(), 280) if response_text.strip() else ""
+    if summary:
+        memory["procedural"].append({"type": "response-summary", "text": summary})
+    return memory
+
+
 def parse_effective_a2a_policy_config(policy_spec: dict[str, Any]) -> tuple[frozenset[tuple[str, str]], float, bool]:
     allowed_targets = A2A_ALLOWED_TARGETS_SNAPSHOT
     max_timeout_seconds = A2A_MAX_TIMEOUT_SECONDS
@@ -5691,9 +5917,7 @@ def mcp_call(
     """
     skill_allowed_servers = SKILL_RUNTIME_CONFIG.get("allowedMcpServers") or frozenset()
     if SKILL_RUNTIME_CONFIG.get("skills") and (not skill_allowed_servers or server_type not in skill_allowed_servers):
-        raise PermissionError(
-            f"MCP server '{server_type}' is not granted by the agent's skill files."
-        )
+        raise PermissionError(f"MCP server '{server_type}' is not granted by the agent's skill files.")
 
     if ALLOWED_MCP_SERVERS and server_type not in ALLOWED_MCP_SERVERS:
         raise PermissionError(
@@ -5845,7 +6069,9 @@ def create_agent():
         def _run() -> dict[str, Any]:
             selected_model = str(state.get("selected_model") or MODEL_NAME)
 
-            def invoke_messages(messages: list[Any], *, stream: bool, tools: list[dict] | None = None) -> AIMessage | Any:
+            def invoke_messages(
+                messages: list[Any], *, stream: bool, tools: list[dict] | None = None
+            ) -> AIMessage | Any:
                 llm = get_llm_client(selected_model)
                 active_llm = llm.bind_tools(tools) if tools else llm
                 publisher = current_event_publisher()
@@ -5915,26 +6141,34 @@ def create_agent():
             def execute_action(action: dict[str, Any], loop_state: State) -> dict[str, Any]:
                 action_name = action["action"]
                 if action_name == "sandbox_tool":
-                    return sandbox_tool({
-                        **loop_state,
-                        "tool_name": action["tool_name"],
-                        "tool_args": action["tool_args"],
-                    })
+                    return sandbox_tool(
+                        {
+                            **loop_state,
+                            "tool_name": action["tool_name"],
+                            "tool_args": action["tool_args"],
+                        }
+                    )
 
                 if action_name == "local_shell":
-                    return sandbox_tool({
-                        **loop_state,
-                        "tool_name": "local.command.run",
-                        "tool_args": action["tool_args"],
-                    })
+                    return sandbox_tool(
+                        {
+                            **loop_state,
+                            "tool_name": "local.command.run",
+                            "tool_args": action["tool_args"],
+                        }
+                    )
 
                 if action_name == "edit_file":
+
                     def _edit_sandbox_tool(t_name: str, t_args: dict) -> dict:
-                        return sandbox_tool({
-                            **loop_state,
-                            "tool_name": t_name,
-                            "tool_args": t_args,
-                        })
+                        return sandbox_tool(
+                            {
+                                **loop_state,
+                                "tool_name": t_name,
+                                "tool_args": t_args,
+                            }
+                        )
+
                     return execute_edit_file(
                         action["path"],
                         action["old_text"],
@@ -5943,84 +6177,106 @@ def create_agent():
                     )
 
                 if action_name == "batch_read":
+
                     def _batch_sandbox_tool(t_name: str, t_args: dict) -> dict:
-                        return sandbox_tool({
-                            **loop_state,
-                            "tool_name": t_name,
-                            "tool_args": t_args,
-                        })
+                        return sandbox_tool(
+                            {
+                                **loop_state,
+                                "tool_name": t_name,
+                                "tool_args": t_args,
+                            }
+                        )
+
                     return execute_batch_read(action["reads"], _batch_sandbox_tool)
 
                 if action_name == "mcp_tool":
-                    return mcp_tool({
-                        **loop_state,
-                        "mcp_server": action["mcp_server"],
-                        "mcp_tool_name": action["tool_name"],
-                        "mcp_tool_args": action["tool_args"],
-                    })
+                    return mcp_tool(
+                        {
+                            **loop_state,
+                            "mcp_server": action["mcp_server"],
+                            "mcp_tool_name": action["tool_name"],
+                            "mcp_tool_args": action["tool_args"],
+                        }
+                    )
 
                 if action_name == "a2a_call":
-                    return a2a_call({
-                        **loop_state,
-                        "a2a_target_agent": action["a2a_target_agent"],
-                        "a2a_target_namespace": action["a2a_target_namespace"],
-                        "a2a_timeout_seconds": action.get("a2a_timeout_seconds"),
-                        "delegated_prompt": action.get("delegated_prompt") or loop_state.get("request_prompt", ""),
-                    })
+                    return a2a_call(
+                        {
+                            **loop_state,
+                            "a2a_target_agent": action["a2a_target_agent"],
+                            "a2a_target_namespace": action["a2a_target_namespace"],
+                            "a2a_timeout_seconds": action.get("a2a_timeout_seconds"),
+                            "delegated_prompt": action.get("delegated_prompt") or loop_state.get("request_prompt", ""),
+                        }
+                    )
 
                 if action_name == "subagent_team":
-                    return subagent_team({
-                        **loop_state,
-                        "subagents": action["subagents"],
-                        "subagent_strategy": action["subagent_strategy"],
-                    })
+                    return subagent_team(
+                        {
+                            **loop_state,
+                            "subagents": action["subagents"],
+                            "subagent_strategy": action["subagent_strategy"],
+                        }
+                    )
 
                 if action_name == "git_commit":
                     return execute_git_commit(
                         action["message"],
                         commit_all=bool(action.get("all", True)),
-                        execute_local_tool=lambda cmd, args: sandbox_tool({
-                            **loop_state,
-                            "tool_name": "local.command.run",
-                            "tool_args": {"command": cmd, "args": args},
-                        }),
+                        execute_local_tool=lambda cmd, args: sandbox_tool(
+                            {
+                                **loop_state,
+                                "tool_name": "local.command.run",
+                                "tool_args": {"command": cmd, "args": args},
+                            }
+                        ),
                     )
 
                 if action_name == "undo_edit":
                     edit_history: list[dict[str, str]] = loop_state.get("edit_history") or []
+
                     def _undo_sandbox_tool(t_name: str, t_args: dict) -> dict:
-                        return sandbox_tool({
-                            **loop_state,
-                            "tool_name": t_name,
-                            "tool_args": t_args,
-                        })
+                        return sandbox_tool(
+                            {
+                                **loop_state,
+                                "tool_name": t_name,
+                                "tool_args": t_args,
+                            }
+                        )
+
                     return execute_undo_edit(edit_history, _undo_sandbox_tool)
 
                 if action_name == "edit_files":
+
                     def _edit_files_sandbox_tool(t_name: str, t_args: dict) -> dict:
-                        return sandbox_tool({
-                            **loop_state,
-                            "tool_name": t_name,
-                            "tool_args": t_args,
-                        })
+                        return sandbox_tool(
+                            {
+                                **loop_state,
+                                "tool_name": t_name,
+                                "tool_args": t_args,
+                            }
+                        )
+
                     return execute_edit_files(action.get("edits") or [], _edit_files_sandbox_tool)
 
                 if action_name == "search_code":
-                    return execute_search_code(action, lambda cmd, args: sandbox_tool({
-                        **loop_state,
-                        "tool_name": "local.command.run",
-                        "tool_args": {"command": cmd, "args": args},
-                    }))
+                    return execute_search_code(
+                        action,
+                        lambda cmd, args: sandbox_tool(
+                            {
+                                **loop_state,
+                                "tool_name": "local.command.run",
+                                "tool_args": {"command": cmd, "args": args},
+                            }
+                        ),
+                    )
 
                 if action_name == "parallel_tools":
                     calls = action.get("tool_calls") or []
                     combined_messages: list[Any] = []
                     combined_status = "completed"
                     with ThreadPoolExecutor(max_workers=min(len(calls), 4)) as pool:
-                        future_map = {
-                            pool.submit(execute_action, call, loop_state): i
-                            for i, call in enumerate(calls)
-                        }
+                        future_map = {pool.submit(execute_action, call, loop_state): i for i, call in enumerate(calls)}
                         ordered_results: dict[int, dict[str, Any]] = {}
                         for future in as_completed(future_map):
                             idx = future_map[future]
@@ -6043,9 +6299,7 @@ def create_agent():
                     }
 
                 return {
-                    "messages": [
-                        AIMessage(content=blocked_response(f"unsupported autonomous action '{action_name}'"))
-                    ],
+                    "messages": [AIMessage(content=blocked_response(f"unsupported autonomous action '{action_name}'"))],
                     "invoke_status": "blocked",
                     "stop_reason": "unsupported_action",
                     "error_type": "unsupported_action",
@@ -6168,7 +6422,9 @@ def create_agent():
                     span.set_attribute("mcp.tool_name", tool_nm)
                     logger.info(
                         "MCP tool '%s/%s' returned %d bytes",
-                        server_type, tool_nm, len(result_text),
+                        server_type,
+                        tool_nm,
+                        len(result_text),
                     )
                     publish_runtime_event(
                         "mcp.result",
@@ -6178,7 +6434,13 @@ def create_agent():
                         "messages": [AIMessage(content=result_text)],
                         "invoke_status": "completed",
                         "tool_result": result,
-                        "tool_call_records": [{"tool_name": f"{server_type}/{tool_nm}", "tool_args": tool_arguments, "status": "completed"}],
+                        "tool_call_records": [
+                            {
+                                "tool_name": f"{server_type}/{tool_nm}",
+                                "tool_args": tool_arguments,
+                                "status": "completed",
+                            }
+                        ],
                     }
                 except PermissionError as exc:
                     logger.warning("MCP call blocked by policy allow-list: %s", exc)
@@ -6199,7 +6461,8 @@ def create_agent():
                 except httpx.HTTPStatusError as exc:
                     logger.error(
                         "MCP server '%s' returned HTTP %s",
-                        server_type, exc.response.status_code,
+                        server_type,
+                        exc.response.status_code,
                     )
                     retryable = exc.response.status_code in RETRYABLE_HTTP_STATUS_CODES
                     return blocked_tool_state(
@@ -6227,14 +6490,22 @@ def create_agent():
                 target_namespace = (state.get("a2a_target_namespace") or "").strip()
                 if not target_agent or not target_namespace:
                     return {
-                        "messages": [AIMessage(content=blocked_response("A2A target agent and namespace are required"))],
+                        "messages": [
+                            AIMessage(content=blocked_response("A2A target agent and namespace are required"))
+                        ],
                         "invoke_status": "blocked",
                         "a2a": None,
                     }
 
                 if target_agent == SERVICE_NAME and target_namespace == SERVICE_NAMESPACE:
                     return {
-                        "messages": [AIMessage(content=blocked_response("A2A self-referential call detected: an agent cannot invoke itself"))],
+                        "messages": [
+                            AIMessage(
+                                content=blocked_response(
+                                    "A2A self-referential call detected: an agent cannot invoke itself"
+                                )
+                            )
+                        ],
                         "invoke_status": "blocked",
                         "a2a": None,
                     }
@@ -6333,11 +6604,7 @@ def create_agent():
                     )
                     return {
                         "messages": [
-                            AIMessage(
-                                content=blocked_response(
-                                    f"A2A target returned HTTP {exc.response.status_code}"
-                                )
-                            )
+                            AIMessage(content=blocked_response(f"A2A target returned HTTP {exc.response.status_code}"))
                         ],
                         "invoke_status": "blocked",
                         "a2a": None,
@@ -6354,9 +6621,13 @@ def create_agent():
                         },
                     )
                     return {
-                        "messages": [AIMessage(content=blocked_response(
-                            f"A2A call to '{target_agent}' in '{target_namespace}' timed out after {timeout_seconds}s"
-                        ))],
+                        "messages": [
+                            AIMessage(
+                                content=blocked_response(
+                                    f"A2A call to '{target_agent}' in '{target_namespace}' timed out after {timeout_seconds}s"
+                                )
+                            )
+                        ],
                         "invoke_status": "blocked",
                         "a2a": None,
                     }
@@ -6372,9 +6643,13 @@ def create_agent():
                         },
                     )
                     return {
-                        "messages": [AIMessage(content=blocked_response(
-                            f"A2A call could not connect to '{target_agent}' in '{target_namespace}': {exc}"
-                        ))],
+                        "messages": [
+                            AIMessage(
+                                content=blocked_response(
+                                    f"A2A call could not connect to '{target_agent}' in '{target_namespace}': {exc}"
+                                )
+                            )
+                        ],
                         "invoke_status": "blocked",
                         "a2a": None,
                     }
@@ -6397,7 +6672,9 @@ def create_agent():
 
                 if not isinstance(result, dict):
                     return {
-                        "messages": [AIMessage(content=blocked_response("A2A callee returned a non-object JSON payload"))],
+                        "messages": [
+                            AIMessage(content=blocked_response("A2A callee returned a non-object JSON payload"))
+                        ],
                         "invoke_status": "blocked",
                         "a2a": None,
                     }
@@ -6542,6 +6819,7 @@ def initialize_runtime() -> None:
                 "graph": graph,
                 "connection": connection,
                 "memory": memory,
+                "session_store": create_session_store() if SESSION_STATE_ENABLED else None,
                 "llm_clients": {},
                 "local_tool_inventory": discover_local_tool_inventory(refresh=True),
             }
@@ -6551,6 +6829,12 @@ def initialize_runtime() -> None:
 
 def shutdown_runtime() -> None:
     with RUNTIME_LOCK:
+        session_store = RUNTIME.get("session_store")
+        if session_store is not None:
+            try:
+                session_store.close()
+            except Exception as exc:
+                logger.warning("Failed to close session store cleanly: %s", exc)
         connection = RUNTIME.get("connection")
         if connection is not None:
             try:
@@ -6663,11 +6947,28 @@ def invoke_graph(
     if not INVOCATION_SLOTS.acquire(timeout=REQUEST_QUEUE_TIMEOUT_SECONDS):
         raise HTTPException(status_code=503, detail="Agent runtime is busy. Retry shortly.")
 
+    final_session_snapshot: SessionStateSnapshot | None = None
     try:
         policy_name, policy_spec = load_active_policy()
         selected_model = resolve_requested_model(request.model, policy_spec)
         _, _, a2a_require_hitl = parse_effective_a2a_policy_config(policy_spec)
         thread_id = request.thread_id or str(uuid.uuid4())
+        tool_policy_violation = tool_policy_violation_reason(
+            tool_name=tool_name,
+            mcp_server=mcp_server,
+            delegation_depth=request.delegation_depth,
+            policy_spec=policy_spec,
+        )
+        if tool_policy_violation:
+            return InvokeResponse(
+                thread_id=thread_id,
+                response=blocked_response(tool_policy_violation),
+                context="",
+                model=selected_model,
+                policy_name=policy_name,
+                tool_name=tool_name or None,
+                status="blocked",
+            )
         skill_violation = skill_block_reason(
             tool_name=tool_name,
             mcp_server=mcp_server,
@@ -6725,7 +7026,13 @@ def invoke_graph(
                 thread_id,
                 selected_model,
                 policy_name,
-                require_approval=request.require_approval or bool(a2a_target_agent and a2a_require_hitl),
+                require_approval=(
+                    request.require_approval
+                    or bool(a2a_target_agent and a2a_require_hitl)
+                    or tool_requires_policy_approval(
+                        tool_name=tool_name, mcp_server=mcp_server, policy_spec=policy_spec
+                    )
+                ),
             )
             if approval_response is not None:
                 return approval_response
@@ -6779,10 +7086,13 @@ def invoke_graph(
                 "tool_call_records": [],
             }
 
-            result = get_runtime()["graph"].invoke(
+            runtime = get_runtime()
+            persist_session_snapshot(initial_state, session_store=runtime.get("session_store"))
+            result = runtime["graph"].invoke(
                 initial_state,
                 config={"configurable": {"thread_id": thread_id}},
             )
+            final_session_snapshot = persist_session_snapshot(result, session_store=runtime.get("session_store"))
     except HTTPException:
         raise
     except Exception as exc:
@@ -6826,6 +7136,20 @@ def invoke_graph(
         )
 
     warnings = dedupe_text_items(warnings)
+    response_metadata = (
+        sanitize_public_payload(result.get("metadata"), guardrails) if isinstance(result.get("metadata"), dict) else {}
+    )
+    if final_session_snapshot is not None:
+        response_metadata = dict(response_metadata or {})
+        response_metadata["session"] = {
+            "session_id": final_session_snapshot.session_id,
+            "status": final_session_snapshot.status,
+            "message_count": final_session_snapshot.message_count,
+            "remaining_token_budget": final_session_snapshot.remaining_token_budget,
+        }
+    response_metadata = dict(response_metadata or {})
+    response_metadata["memory"] = derive_memory_candidates(result, response_text)
+    response_metadata["toolPolicy"] = sanitize_public_payload(parse_tool_policy_config(policy_spec), guardrails)
 
     return InvokeResponse(
         thread_id=thread_id,
@@ -6846,6 +7170,8 @@ def invoke_graph(
         warnings=warnings,
         artifacts=result.get("artifacts") or [],
         tool_calls=result.get("tool_call_records") or [],
+        metadata=response_metadata or None,
+        token_usage=result.get("token_usage"),
     )
 
 
@@ -6854,7 +7180,7 @@ def chunk_text(text: str, chunk_size: int = 160) -> Iterator[str]:
         raise ValueError("chunk_size must be greater than 0")
 
     for index in range(0, len(text), chunk_size):
-        yield text[index:index + chunk_size]
+        yield text[index : index + chunk_size]
 
 
 def format_sse_event(event: str, payload: dict[str, Any]) -> str:
@@ -6979,12 +7305,8 @@ async def discover() -> dict[str, Any]:
         "model": MODEL_NAME,
         "status": "shutting-down" if _SHUTDOWN.is_set() else "ready" if RUNTIME.get("graph") else "starting",
         "ragEnabled": RAG_ENABLED,
-        "allowedCallers": sorted(
-            {"namespace": ns, "name": n} for ns, n in A2A_ALLOWED_CALLERS
-        ),
-        "allowedTargets": sorted(
-            {"namespace": ns, "name": n} for ns, n in A2A_ALLOWED_TARGETS_SNAPSHOT
-        ),
+        "allowedCallers": sorted({"namespace": ns, "name": n} for ns, n in A2A_ALLOWED_CALLERS),
+        "allowedTargets": sorted({"namespace": ns, "name": n} for ns, n in A2A_ALLOWED_TARGETS_SNAPSHOT),
         "skills": {
             "count": len(SKILL_RUNTIME_CONFIG.get("skills") or []),
         },

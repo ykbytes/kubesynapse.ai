@@ -372,6 +372,20 @@ export interface PolicyOutputGuardrails {
   maxOutputTokens: number;
 }
 
+export interface PolicyToolPolicy {
+  maxDelegationDepth?: number;
+  allowedToolPrefixes: string[];
+  blockedToolNames: string[];
+  requireApprovalFor: string[];
+}
+
+export interface PolicyMemoryPolicy {
+  maxInjectedMemories?: number;
+  maxInjectedChars?: number;
+  allowedMemoryTypes: string[];
+  autoPromote: boolean;
+}
+
 export interface PolicyInfo {
   name: string;
   namespace: string;
@@ -380,6 +394,8 @@ export interface PolicyInfo {
   allowed_models: string[];
   allowed_mcp_servers: string[];
   mcp_require_hitl: boolean;
+  tool_policy: PolicyToolPolicy;
+  memory_policy: PolicyMemoryPolicy;
 }
 
 export interface AgentDetail extends AgentInfo {

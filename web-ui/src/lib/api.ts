@@ -50,7 +50,9 @@ import type {
   McpToolCategory,
   PolicyInfo,
   PolicyInputGuardrails,
+  PolicyMemoryPolicy,
   PolicyOutputGuardrails,
+  PolicyToolPolicy,
   RuntimeKind,
   SubagentInvocationMetadata,
   SubagentInvocationResult,
@@ -586,6 +588,8 @@ function parsePolicyInfoPayload(payload: unknown, label = "PolicyInfo"): PolicyI
   const record = expectRecord(payload, label);
   const igRaw = readOptionalRecord(record, "input_guardrails", label) ?? {};
   const ogRaw = readOptionalRecord(record, "output_guardrails", label) ?? {};
+  const tpRaw = readOptionalRecord(record, "tool_policy", label) ?? {};
+  const mpRaw = readOptionalRecord(record, "memory_policy", label) ?? {};
   return {
     name: readString(record, "name", label),
     namespace: readString(record, "namespace", label),
@@ -602,6 +606,18 @@ function parsePolicyInfoPayload(payload: unknown, label = "PolicyInfo"): PolicyI
     allowed_models: readStringArray(record, "allowed_models", label, []),
     allowed_mcp_servers: readStringArray(record, "allowed_mcp_servers", label, []),
     mcp_require_hitl: readOptionalBoolean(record, "mcp_require_hitl", label) ?? true,
+    tool_policy: {
+      maxDelegationDepth: readOptionalNumber(tpRaw as JsonRecord, "maxDelegationDepth", label) ?? undefined,
+      allowedToolPrefixes: readStringArray(tpRaw as JsonRecord, "allowedToolPrefixes", label, []),
+      blockedToolNames: readStringArray(tpRaw as JsonRecord, "blockedToolNames", label, []),
+      requireApprovalFor: readStringArray(tpRaw as JsonRecord, "requireApprovalFor", label, []),
+    },
+    memory_policy: {
+      maxInjectedMemories: readOptionalNumber(mpRaw as JsonRecord, "maxInjectedMemories", label) ?? undefined,
+      maxInjectedChars: readOptionalNumber(mpRaw as JsonRecord, "maxInjectedChars", label) ?? undefined,
+      allowedMemoryTypes: readStringArray(mpRaw as JsonRecord, "allowedMemoryTypes", label, []),
+      autoPromote: readOptionalBoolean(mpRaw as JsonRecord, "autoPromote", label) ?? false,
+    },
   };
 }
 
@@ -1374,9 +1390,27 @@ export interface CreatePolicyPayload {
   allowed_models: string[];
   allowed_mcp_servers: string[];
   mcp_require_hitl: boolean;
+  tool_policy: PolicyToolPolicy;
+  memory_policy: PolicyMemoryPolicy;
 }
 
 export type UpdatePolicyPayload = Partial<Omit<CreatePolicyPayload, "name">>;
+
+export interface MemoryRecordInfo {
+  id: number;
+  namespace: string;
+  agent_name: string;
+  session_id: string | null;
+  memory_type: string;
+  topic: string | null;
+  promoted: boolean;
+  score: number;
+  promote_reason: string | null;
+  content: string;
+  detail_json: Record<string, unknown> | null;
+  username: string | null;
+  created_at: string | null;
+}
 
 export async function fetchPolicy(token: string, namespace: string, name: string): Promise<PolicyInfo> {
   const response = await fetchAuthenticated(buildUrl(`/api/policies/${name}`, namespace), token);
@@ -1401,11 +1435,83 @@ export async function updatePolicy(token: string, namespace: string, name: strin
   return parseJsonResponse(response, parsePolicyInfoPayload);
 }
 
+export async function listAgentMemory(
+  token: string,
+  namespace: string,
+  agentName: string,
+  sessionId?: string | null,
+): Promise<MemoryRecordInfo[]> {
+  const url = buildUrl(`/api/agents/${agentName}/memory`, namespace);
+  const fullUrl = sessionId
+    ? `${url}${url.includes("?") ? "&" : "?"}session_id=${encodeURIComponent(sessionId)}`
+    : url;
+  const response = await fetchAuthenticated(fullUrl, token);
+  return parseJsonResponse(response, (payload) => {
+    if (!Array.isArray(payload)) return [];
+    return payload.map((item) => {
+      const record = expectRecord(item, "MemoryRecordInfo");
+      return {
+        id: readOptionalNumber(record, "id", "MemoryRecordInfo") ?? 0,
+        namespace: readString(record, "namespace", "MemoryRecordInfo"),
+        agent_name: readString(record, "agent_name", "MemoryRecordInfo"),
+        session_id: readOptionalString(record, "session_id", "MemoryRecordInfo"),
+        memory_type: readString(record, "memory_type", "MemoryRecordInfo"),
+        topic: readOptionalString(record, "topic", "MemoryRecordInfo"),
+        promoted: readOptionalBoolean(record, "promoted", "MemoryRecordInfo") ?? false,
+        score: readOptionalNumber(record, "score", "MemoryRecordInfo") ?? 0,
+        promote_reason: readOptionalString(record, "promote_reason", "MemoryRecordInfo"),
+        content: readString(record, "content", "MemoryRecordInfo"),
+        detail_json: readOptionalRecord(record, "detail_json", "MemoryRecordInfo"),
+        username: readOptionalString(record, "username", "MemoryRecordInfo"),
+        created_at: readOptionalString(record, "created_at", "MemoryRecordInfo"),
+      } satisfies MemoryRecordInfo;
+    });
+  });
+}
+
 export async function deletePolicy(token: string, namespace: string, name: string): Promise<DeleteResponse> {
   const response = await fetchAuthenticated(buildUrl(`/api/policies/${name}`, namespace), token, {
     method: "DELETE",
   });
   return parseJsonResponse(response, parseDeleteResponsePayload);
+}
+
+export async function updateMemoryRecord(
+  token: string,
+  recordId: number,
+  patch: { promoted?: boolean; topic?: string; content?: string },
+): Promise<MemoryRecordInfo> {
+  const response = await fetchAuthenticated(buildUrl(`/api/memory/${recordId}`), token, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  return parseJsonResponse(response, (payload) => {
+    const record = expectRecord(payload, "MemoryRecordInfo");
+    return {
+      id: readOptionalNumber(record, "id", "MemoryRecordInfo") ?? 0,
+      namespace: readString(record, "namespace", "MemoryRecordInfo"),
+      agent_name: readString(record, "agent_name", "MemoryRecordInfo"),
+      session_id: readOptionalString(record, "session_id", "MemoryRecordInfo"),
+      memory_type: readString(record, "memory_type", "MemoryRecordInfo"),
+      topic: readOptionalString(record, "topic", "MemoryRecordInfo"),
+      promoted: readOptionalBoolean(record, "promoted", "MemoryRecordInfo") ?? false,
+      score: readOptionalNumber(record, "score", "MemoryRecordInfo") ?? 0,
+      promote_reason: readOptionalString(record, "promote_reason", "MemoryRecordInfo"),
+      content: readString(record, "content", "MemoryRecordInfo"),
+      detail_json: readOptionalRecord(record, "detail_json", "MemoryRecordInfo"),
+      username: readOptionalString(record, "username", "MemoryRecordInfo"),
+      created_at: readOptionalString(record, "created_at", "MemoryRecordInfo"),
+    } satisfies MemoryRecordInfo;
+  });
+}
+
+export async function deleteMemoryRecord(token: string, recordId: number): Promise<void> {
+  const response = await fetchAuthenticated(buildUrl(`/api/memory/${recordId}`), token, { method: "DELETE" });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new ApiError(response.status, "Failed to delete memory record", text);
+  }
 }
 
 export async function createAgent(
@@ -2352,6 +2458,25 @@ export interface ChatSessionInfo {
   username: string | null;
   created_at: string | null;
   updated_at: string | null;
+  summary?: ChatSessionSummary | null;
+}
+
+export interface ChatSessionMemoryCandidate {
+  type: string;
+  names?: string[];
+  text?: string;
+  count?: number;
+}
+
+export interface ChatSessionSummary {
+  message_count: number;
+  tool_names: string[];
+  last_user_message: string;
+  last_assistant_message: string;
+  memory_candidates: {
+    episodic: ChatSessionMemoryCandidate[];
+    procedural: ChatSessionMemoryCandidate[];
+  };
 }
 
 export interface ChatMessageInfo {
@@ -2370,7 +2495,44 @@ export async function listChatSessions(token: string, namespace: string, agentNa
   const response = await fetchAuthenticated(fullUrl, token);
   return parseJsonResponse(response, (payload) => {
     if (!Array.isArray(payload)) return [];
-    return payload as ChatSessionInfo[];
+    return payload.map((item) => {
+      const record = expectRecord(item, "ChatSessionInfo");
+      const summaryRecord = record.summary && typeof record.summary === "object" ? record.summary as Record<string, unknown> : null;
+      const memoryRecord = summaryRecord?.memory_candidates && typeof summaryRecord.memory_candidates === "object"
+        ? summaryRecord.memory_candidates as Record<string, unknown>
+        : null;
+      const readCandidates = (key: "episodic" | "procedural"): ChatSessionMemoryCandidate[] => {
+        const value = memoryRecord?.[key];
+        if (!Array.isArray(value)) return [];
+        return value
+          .filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === "object")
+          .map((entry) => ({
+            type: readString(entry, "type", `ChatSessionSummary.${key}`),
+            names: Array.isArray(entry.names) ? entry.names.map((name) => String(name)) : undefined,
+            text: readOptionalString(entry, "text", `ChatSessionSummary.${key}`) ?? undefined,
+            count: typeof entry.count === "number" ? entry.count : undefined,
+          }));
+      };
+      return {
+        session_id: readString(record, "session_id", "ChatSessionInfo"),
+        title: readString(record, "title", "ChatSessionInfo"),
+        agent_name: readString(record, "agent_name", "ChatSessionInfo"),
+        namespace: readString(record, "namespace", "ChatSessionInfo"),
+        username: readOptionalString(record, "username", "ChatSessionInfo"),
+        created_at: readOptionalString(record, "created_at", "ChatSessionInfo"),
+        updated_at: readOptionalString(record, "updated_at", "ChatSessionInfo"),
+        summary: summaryRecord ? {
+          message_count: typeof summaryRecord.message_count === "number" ? summaryRecord.message_count : 0,
+          tool_names: Array.isArray(summaryRecord.tool_names) ? summaryRecord.tool_names.map((name) => String(name)) : [],
+          last_user_message: readOptionalString(summaryRecord, "last_user_message", "ChatSessionSummary") ?? "",
+          last_assistant_message: readOptionalString(summaryRecord, "last_assistant_message", "ChatSessionSummary") ?? "",
+          memory_candidates: {
+            episodic: readCandidates("episodic"),
+            procedural: readCandidates("procedural"),
+          },
+        } : null,
+      } satisfies ChatSessionInfo;
+    });
   });
 }
 
