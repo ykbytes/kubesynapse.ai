@@ -10,6 +10,7 @@ from services.k8s import (
     _resize_statefulset_persistent_volume_claims,
     _sanitize_kube_resource,
     cancel_worker_job,
+    crd_exists,
     describe_api_exception,
     enqueue_worker_job,
     ensure_network_policy,
@@ -21,6 +22,7 @@ from services.k8s import (
     ensure_statefulset,
     ensure_worker_artifact_storage,
     patch_custom_status,
+    prune_orphaned_resources,
     read_job_state,
 )
 
@@ -30,6 +32,7 @@ __all__ = [
     "_resize_statefulset_persistent_volume_claims",
     "_sanitize_kube_resource",
     "cancel_worker_job",
+    "crd_exists",
     "describe_api_exception",
     "enqueue_worker_job",
     "ensure_network_policy",
@@ -41,5 +44,6 @@ __all__ = [
     "ensure_statefulset",
     "ensure_worker_artifact_storage",
     "patch_custom_status",
+    "prune_orphaned_resources",
     "read_job_state",
 ]

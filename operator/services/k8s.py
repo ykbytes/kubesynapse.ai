@@ -22,12 +22,16 @@ from config import (
     DEFAULT_LITELLM_MASTER_KEY,
     IMAGE_PULL_SECRETS,
     OPERATOR_NAMESPACE,
+    ORPHAN_PRUNING_ENABLED,
     RUNTIME_CLUSTER_ROLE,
     RUNTIME_SERVICE_ACCOUNT,
     SECRET_NAME,
     SECRET_PROVISIONING_MODE,
 )
 from builders import (
+    OWNER_LABEL_AGENT_NAME,
+    OWNER_LABEL_MANAGED_BY,
+    OWNER_LABEL_MANAGED_BY_VALUE,
     _extract_statefulset_storage_request,
     _parse_storage_quantity,
     _statefulset_template_signature,
@@ -61,6 +65,44 @@ logger = logging.getLogger("operator.services")
 # ---------------------------------------------------------------------------
 # Shared helpers (used internally by ensure_* and other service functions)
 # ---------------------------------------------------------------------------
+
+
+def crd_exists(group: str, version: str, plural: str) -> bool:
+    """Return True if the CRD exists in the cluster.
+
+    Uses the CRD name format ``<plural>.<group>``. Missing CRDs return False;
+    other API failures are logged and also treated as False so optional
+    controllers can be skipped safely at startup.
+    """
+    crd_name = f"{plural}.{group}"
+    api_cls = getattr(kubernetes.client, "ApiextensionsV1Api", None)
+    if api_cls is None:
+        logger.warning(
+            "Skipping CRD existence check for '%s' because ApiextensionsV1Api is unavailable.",
+            crd_name,
+        )
+        return False
+
+    api = api_cls()
+    try:
+        crd = _sanitize_kube_resource(api.read_custom_resource_definition(name=crd_name))
+    except ApiException as exc:
+        if exc.status == 404:
+            return False
+        logger.warning(
+            "Failed checking CRD '%s' (%s/%s): %s",
+            crd_name,
+            group,
+            version,
+            describe_api_exception(exc),
+        )
+        return False
+
+    versions = ((crd.get("spec") or {}).get("versions") or []) if isinstance(crd, dict) else []
+    if not versions:
+        return True
+    return any(str(item.get("name") or "") == version for item in versions if isinstance(item, dict))
+
 
 def describe_api_exception(exc: ApiException) -> str:
     """Format an ApiException for human-readable logging."""
@@ -104,6 +146,7 @@ def _sanitize_kube_resource(resource: Any) -> Any:
 # StatefulSet reconciliation helpers
 # ---------------------------------------------------------------------------
 
+
 def _preserve_statefulset_immutable_fields(
     manifest: dict[str, Any],
     current_statefulset: dict[str, Any],
@@ -111,7 +154,7 @@ def _preserve_statefulset_immutable_fields(
     """Copy immutable fields from current StatefulSet into the desired manifest."""
     patched_manifest = copy.deepcopy(manifest)
     patched_spec = patched_manifest.setdefault("spec", {})
-    current_spec = (current_statefulset.get("spec") or {})
+    current_spec = current_statefulset.get("spec") or {}
 
     for field_name in ("volumeClaimTemplates", "selector", "serviceName"):
         current_value = current_spec.get(field_name)
@@ -248,6 +291,7 @@ def _resize_statefulset_persistent_volume_claims(
 # ensure_* — idempotent K8s resource creation / update
 # ---------------------------------------------------------------------------
 
+
 def ensure_persistent_storage(namespace: str, manifest: dict[str, Any]) -> None:
     """Create a PVC, silently ignoring AlreadyExists."""
     core_api = kubernetes.client.CoreV1Api()
@@ -350,7 +394,7 @@ def ensure_runtime_namespace_secret(namespace: str, owner_name: str, logger: log
                     {
                         "secretKey": "API_GATEWAY_SHARED_TOKEN",
                         "remoteRef": {"key": "ai-agent-sandbox/api-gateway-shared-token"},
-                    }
+                    },
                 ],
             },
         }
@@ -430,9 +474,7 @@ def ensure_network_policy(namespace: str, manifest: dict[str, Any]) -> None:
         networking_api.create_namespaced_network_policy(namespace=namespace, body=manifest)
     except ApiException as exc:
         if exc.status == 409:
-            networking_api.replace_namespaced_network_policy(
-                name=policy_name, namespace=namespace, body=manifest
-            )
+            networking_api.replace_namespaced_network_policy(name=policy_name, namespace=namespace, body=manifest)
         else:
             raise
 
@@ -518,10 +560,15 @@ def patch_custom_status(plural: str, namespace: str, name: str, status: dict[str
             return
         except ApiException as exc:
             if exc.status == 409 and attempt < _STATUS_PATCH_MAX_RETRIES - 1:
-                backoff = (2 ** attempt) + _random.uniform(0, 0.5)
+                backoff = (2**attempt) + _random.uniform(0, 0.5)
                 logging.getLogger("operator.services.k8s").warning(
                     "Conflict patching %s/%s/%s status (409), retry %d/%d in %.1fs.",
-                    plural, namespace, name, attempt + 1, _STATUS_PATCH_MAX_RETRIES, backoff,
+                    plural,
+                    namespace,
+                    name,
+                    attempt + 1,
+                    _STATUS_PATCH_MAX_RETRIES,
+                    backoff,
                 )
                 _time.sleep(backoff)
                 continue
@@ -531,6 +578,7 @@ def patch_custom_status(plural: str, namespace: str, name: str, status: dict[str
 # ---------------------------------------------------------------------------
 # Worker job management
 # ---------------------------------------------------------------------------
+
 
 def ensure_worker_artifact_storage(kind: str, resource_namespace: str, resource_name: str) -> str:
     """Create the artifact PVC for a worker job and return its name."""
@@ -609,3 +657,127 @@ def cancel_worker_job(name: str, namespace: str) -> bool:
         if exc.status == 404:
             return False
         raise
+
+
+# ---------------------------------------------------------------------------
+# Orphan pruning (§kagent-pattern-6)
+# ---------------------------------------------------------------------------
+
+# Resource types to prune — NetworkPolicies, Services, and Secrets (MCP auth).
+# StatefulSets and PVCs are intentionally excluded: StatefulSets are owned via
+# ownerReferences (K8s GC handles them), and PVCs use Retain policy.
+_PRUNABLE_RESOURCE_TYPES: list[dict[str, str]] = [
+    {
+        "api": "NetworkingV1Api",
+        "list": "list_namespaced_network_policy",
+        "delete": "delete_namespaced_network_policy",
+        "kind": "NetworkPolicy",
+    },
+    {"api": "CoreV1Api", "list": "list_namespaced_service", "delete": "delete_namespaced_service", "kind": "Service"},
+    {"api": "CoreV1Api", "list": "list_namespaced_secret", "delete": "delete_namespaced_secret", "kind": "Secret"},
+]
+
+
+def prune_orphaned_resources(
+    namespace: str,
+    agent_name: str,
+    desired_names: set[str],
+    *,
+    dry_run: bool = False,
+) -> list[str]:
+    """Delete agent-scoped resources that are no longer in the desired set.
+
+    Lists resources matching the owner labels
+    (``sandbox.enterprise.ai/managed-by=operator``,
+    ``sandbox.enterprise.ai/agent-name=<agent_name>``), then deletes any
+    whose ``metadata.name`` is NOT in *desired_names*.
+
+    Parameters
+    ----------
+    namespace : str
+        The namespace to scan.
+    agent_name : str
+        The agent name to scope the label selector.
+    desired_names : set[str]
+        Resource names that should be kept (from ``AgentOutputs.desired_resource_names()``).
+    dry_run : bool
+        If True, log what would be deleted but don't actually delete.
+
+    Returns
+    -------
+    list[str]
+        Names of resources that were (or would be) deleted.
+    """
+    if not ORPHAN_PRUNING_ENABLED:
+        return []
+
+    label_selector = f"{OWNER_LABEL_MANAGED_BY}={OWNER_LABEL_MANAGED_BY_VALUE},{OWNER_LABEL_AGENT_NAME}={agent_name}"
+    pruned: list[str] = []
+
+    for resource_type in _PRUNABLE_RESOURCE_TYPES:
+        api_cls = getattr(kubernetes.client, resource_type["api"])
+        api_instance = api_cls()
+        list_method = getattr(api_instance, resource_type["list"])
+        delete_method = getattr(api_instance, resource_type["delete"])
+        kind = resource_type["kind"]
+
+        try:
+            result = list_method(namespace=namespace, label_selector=label_selector)
+        except ApiException as exc:
+            logger.warning(
+                "Orphan pruning: failed to list %s in namespace '%s': %s",
+                kind,
+                namespace,
+                describe_api_exception(exc),
+            )
+            continue
+
+        items = _sanitize_kube_resource(result)
+        if isinstance(items, dict):
+            items = items.get("items") or []
+        elif hasattr(result, "items"):
+            items = [_sanitize_kube_resource(item) for item in (result.items or [])]
+        else:
+            items = []
+
+        for item in items:
+            item_name = str((item.get("metadata") or {}).get("name") or "")
+            if not item_name:
+                continue
+            if item_name in desired_names:
+                continue
+
+            if dry_run:
+                logger.info(
+                    "Orphan pruning (dry-run): would delete %s '%s' in namespace '%s' for agent '%s'.",
+                    kind,
+                    item_name,
+                    namespace,
+                    agent_name,
+                )
+                pruned.append(item_name)
+                continue
+
+            try:
+                delete_method(name=item_name, namespace=namespace)
+                logger.info(
+                    "Orphan pruning: deleted %s '%s' in namespace '%s' for agent '%s'.",
+                    kind,
+                    item_name,
+                    namespace,
+                    agent_name,
+                )
+                pruned.append(item_name)
+            except ApiException as exc:
+                if exc.status == 404:
+                    # Already gone — not an error
+                    continue
+                logger.warning(
+                    "Orphan pruning: failed to delete %s '%s' in namespace '%s': %s",
+                    kind,
+                    item_name,
+                    namespace,
+                    describe_api_exception(exc),
+                )
+
+    return pruned

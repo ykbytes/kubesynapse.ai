@@ -5,12 +5,40 @@
 Importing this package registers all Kopf handlers.
 """
 
-from controllers import (  # noqa: F401
-    agent_controller,
-    approval_controller,
-    eval_controller,
-    policy_controller,
-    status_projection,
-    tenant_controller,
-    workflow_controller,
-)
+from __future__ import annotations
+
+import importlib
+import logging
+
+from services import crd_exists
+
+logger = logging.getLogger("operator.controllers")
+
+
+def _import_controller(module_name: str) -> None:
+    """Import a controller module for its side-effect of Kopf registration."""
+    importlib.import_module(f"controllers.{module_name}")
+
+
+# Core CRDs: always loaded.
+_import_controller("agent_controller")
+_import_controller("workflow_controller")
+_import_controller("status_projection")
+
+
+def _optional_controller(module_name: str, plural: str) -> None:
+    """Import an optional controller only when its CRD exists."""
+    if crd_exists("sandbox.enterprise.ai", "v1alpha1", plural):
+        _import_controller(module_name)
+        return
+    logger.warning(
+        "Skipping optional controller '%s' because CRD '%s.sandbox.enterprise.ai' is not installed.",
+        module_name,
+        plural,
+    )
+
+
+_optional_controller("eval_controller", "agentevals")
+_optional_controller("approval_controller", "agentapprovals")
+_optional_controller("tenant_controller", "agenttenants")
+_optional_controller("policy_controller", "agentpolicies")

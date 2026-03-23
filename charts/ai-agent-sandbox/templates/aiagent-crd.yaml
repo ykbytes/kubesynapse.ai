@@ -35,7 +35,23 @@ spec:
                   description: "The system instructions for the agent"
                 policyRef:
                   type: string
-                  description: "Optional AgentPolicy name to enforce for this agent"
+                  description: "Optional AgentPolicy reference to enforce for this agent. Supports 'name' or 'namespace/name'."
+                allowedNamespaces:
+                  type: object
+                  description: "Controls which namespaces this agent may reference for cross-namespace A2A targets declared by policy"
+                  properties:
+                    from:
+                      type: string
+                      enum:
+                        - Same
+                        - All
+                        - Selector
+                      default: Same
+                      description: "Whether cross-namespace references are limited to the same namespace, all namespaces, or those matched by selector"
+                    selector:
+                      type: object
+                      description: "Namespace selector used when from=Selector"
+                      x-kubernetes-preserve-unknown-fields: true
                 a2a:
                   type: object
                   description: "Optional inbound A2A caller allow-list for direct agent-to-agent invocation"

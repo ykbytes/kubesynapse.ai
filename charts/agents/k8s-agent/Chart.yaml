@@ -1,0 +1,6 @@
+apiVersion: v2
+name: k8s-agent
+description: Pre-built Helm chart for a Kubernetes-focused AIAgent
+type: application
+version: 0.1.0
+appVersion: "v1alpha1"

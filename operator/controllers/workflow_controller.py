@@ -33,14 +33,31 @@ from services import (
 )
 from utils import build_workflow_run_id, now_iso, validate_workflow_graph, workflow_journal_path
 
-from controllers.eval_controller import parse_iso_datetime
-
 logger = logging.getLogger("operator.controllers.workflow")
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def parse_iso_datetime(value: str | None) -> datetime | None:
+    """Parse an ISO-8601 datetime string, normalising 'Z' and missing tz."""
+    if value is None or not str(value).strip():
+        return None
+
+    normalized = str(value).strip()
+    if normalized.endswith("Z"):
+        normalized = f"{normalized[:-1]}+00:00"
+
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def validate_workflow_spec(spec: dict[str, Any]) -> dict[str, Any]:
@@ -121,10 +138,14 @@ def enqueue_workflow_job(
     if previous_job_name:
         cancel_worker_job(previous_job_name, str(previous_job.get("namespace") or OPERATOR_NAMESPACE))
 
-    resolved_run_id = run_id or str(workflow_status.get("runId") or "") or build_workflow_run_id(
-        namespace,
-        name,
-        generation,
+    resolved_run_id = (
+        run_id
+        or str(workflow_status.get("runId") or "")
+        or build_workflow_run_id(
+            namespace,
+            name,
+            generation,
+        )
     )
     artifact_pvc_name = ensure_worker_artifact_storage("workflow", namespace, name)
     artifact_path = artifact_file_path("workflow", namespace, name, generation)
@@ -171,23 +192,25 @@ def enqueue_workflow_job(
         "agentworkflows",
         namespace,
         name,
-        inject_conditions({
-            "phase": "queued",
-            "runId": resolved_run_id,
-            "currentStep": str(workflow_status.get("currentStep", "") or ""),
-            "observedGeneration": generation,
-            "artifactRef": build_artifact_ref(
-                artifact_pvc_name,
-                artifact_path,
-                generation,
-                journal_path=journal_path,
-            ),
-            "journalRef": build_journal_ref(artifact_pvc_name, journal_path, generation),
-            "workerJob": {"name": job_name, "namespace": OPERATOR_NAMESPACE},
-            "summary": summary,
-            "pendingApproval": None,
-            "stepStates": workflow_status.get("stepStates", {}) or {},
-        }),
+        inject_conditions(
+            {
+                "phase": "queued",
+                "runId": resolved_run_id,
+                "currentStep": str(workflow_status.get("currentStep", "") or ""),
+                "observedGeneration": generation,
+                "artifactRef": build_artifact_ref(
+                    artifact_pvc_name,
+                    artifact_path,
+                    generation,
+                    journal_path=journal_path,
+                ),
+                "journalRef": build_journal_ref(artifact_pvc_name, journal_path, generation),
+                "workerJob": {"name": job_name, "namespace": OPERATOR_NAMESPACE},
+                "summary": summary,
+                "pendingApproval": None,
+                "stepStates": workflow_status.get("stepStates", {}) or {},
+            }
+        ),
     )
     # §2.5 — DB mirroring is now handled by the status projection controller.
     logger.info(
@@ -238,7 +261,14 @@ def run_workflow(
     generation = int((meta or {}).get("generation", 1))
     observed_generation = int(current_status.get("observedGeneration", 0) or 0)
     phase = str(current_status.get("phase", ""))
-    if observed_generation == generation and phase in {"queued", "running", "waiting-approval", "completed", "failed", "cancelled"}:
+    if observed_generation == generation and phase in {
+        "queued",
+        "running",
+        "waiting-approval",
+        "completed",
+        "failed",
+        "cancelled",
+    }:
         log_operator_event(
             logger,
             logging.INFO,
@@ -260,15 +290,17 @@ def run_workflow(
                 "agentworkflows",
                 namespace,
                 name,
-                inject_conditions({
-                    **current_status,
-                    "summary": {
-                        **(current_status.get("summary", {}) or {}),
-                        "totalSteps": len(steps),
-                        "rootSteps": graph.get("roots") or [],
-                        "updatedAt": now_iso(),
-                    },
-                }),
+                inject_conditions(
+                    {
+                        **current_status,
+                        "summary": {
+                            **(current_status.get("summary", {}) or {}),
+                            "totalSteps": len(steps),
+                            "rootSteps": graph.get("roots") or [],
+                            "updatedAt": now_iso(),
+                        },
+                    }
+                ),
             ),
             enqueue_workflow_job(spec, meta, name, namespace, logger, current_status=current_status),
         ),

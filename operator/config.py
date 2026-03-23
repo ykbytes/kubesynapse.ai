@@ -263,10 +263,8 @@ OPEN_SANDBOX_RUNTIME_ENV: dict[str, str] = {
     "OPEN_SANDBOX_DOMAIN": os.getenv("OPEN_SANDBOX_DOMAIN", "").strip(),
     "OPEN_SANDBOX_PROTOCOL": os.getenv("OPEN_SANDBOX_PROTOCOL", "http").strip() or "http",
     "OPEN_SANDBOX_USE_SERVER_PROXY": os.getenv("OPEN_SANDBOX_USE_SERVER_PROXY", "false").strip() or "false",
-    "OPEN_SANDBOX_REQUEST_TIMEOUT_SECONDS": os.getenv("OPEN_SANDBOX_REQUEST_TIMEOUT_SECONDS", "300").strip()
-    or "300",
-    "OPEN_SANDBOX_CONNECT_TIMEOUT_SECONDS": os.getenv("OPEN_SANDBOX_CONNECT_TIMEOUT_SECONDS", "30").strip()
-    or "30",
+    "OPEN_SANDBOX_REQUEST_TIMEOUT_SECONDS": os.getenv("OPEN_SANDBOX_REQUEST_TIMEOUT_SECONDS", "300").strip() or "300",
+    "OPEN_SANDBOX_CONNECT_TIMEOUT_SECONDS": os.getenv("OPEN_SANDBOX_CONNECT_TIMEOUT_SECONDS", "30").strip() or "30",
     "OPEN_SANDBOX_DEFAULT_TTL_SECONDS": os.getenv("OPEN_SANDBOX_DEFAULT_TTL_SECONDS", "600").strip() or "600",
     "OPEN_SANDBOX_DEFAULT_IMAGE": os.getenv("OPEN_SANDBOX_DEFAULT_IMAGE", "python:3.11").strip() or "python:3.11",
     "OPEN_SANDBOX_CODE_IMAGE": os.getenv("OPEN_SANDBOX_CODE_IMAGE", "opensandbox/code-interpreter:latest").strip()
@@ -282,9 +280,7 @@ OPEN_SANDBOX_RUNTIME_ENV: dict[str, str] = {
     "OPEN_SANDBOX_SECURE_RUNTIME_TYPE": os.getenv("OPEN_SANDBOX_SECURE_RUNTIME_TYPE", "").strip(),
 }
 OPEN_SANDBOX_API_KEY_SECRET_NAME: str = os.getenv("OPEN_SANDBOX_API_KEY_SECRET_NAME", "").strip()
-OPEN_SANDBOX_API_KEY_SECRET_KEY: str = (
-    os.getenv("OPEN_SANDBOX_API_KEY_SECRET_KEY", "api-key").strip() or "api-key"
-)
+OPEN_SANDBOX_API_KEY_SECRET_KEY: str = os.getenv("OPEN_SANDBOX_API_KEY_SECRET_KEY", "api-key").strip() or "api-key"
 
 # ---------------------------------------------------------------------------
 # Runtime extra env & config file env-var names
@@ -300,6 +296,16 @@ OPENCODE_RUNTIME_EXTRA_ENV: Any = get_json_env("OPENCODE_RUNTIME_EXTRA_ENV_JSON"
 OPENCODE_RUNTIME_CONFIG_FILES_ENV: str = "OPENCODE_RUNTIME_CONFIG_FILES_JSON"
 OPENCODE_MCP_SIDECARS_ENV: str = "OPENCODE_MCP_SIDECARS_JSON"
 AGENT_SKILL_FILES_ENV: str = "AGENT_SKILL_FILES_JSON"
+
+# ---------------------------------------------------------------------------
+# MCP sidecar catalog (mutable — populated once at import time)
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Orphan pruning (§kagent-pattern-6)
+# ---------------------------------------------------------------------------
+
+ORPHAN_PRUNING_ENABLED: bool = os.getenv("ORPHAN_PRUNING_ENABLED", "true").strip().lower() in ("true", "1", "yes")
 
 # ---------------------------------------------------------------------------
 # MCP sidecar catalog (mutable — populated once at import time)

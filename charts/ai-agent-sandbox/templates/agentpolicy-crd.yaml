@@ -71,6 +71,22 @@ spec:
                   items:
                     type: string
                   description: "Whitelist of LLM models this policy permits (e.g., ['gpt-4', 'claude-3-sonnet'])"
+                allowedNamespaces:
+                  type: object
+                  description: "Controls which namespaces may reference this policy via AIAgent.spec.policyRef"
+                  properties:
+                    from:
+                      type: string
+                      enum:
+                        - Same
+                        - All
+                        - Selector
+                      default: Same
+                      description: "Whether policy references are limited to the same namespace, all namespaces, or those matched by selector"
+                    selector:
+                      type: object
+                      description: "Namespace selector used when from=Selector"
+                      x-kubernetes-preserve-unknown-fields: true
                 # --- MCP Server Access Control ---
                 allowedMcpServers:
                   type: array

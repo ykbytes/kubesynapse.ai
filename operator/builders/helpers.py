@@ -31,6 +31,23 @@ logger = logging.getLogger("operator.builders")
 # ---------------------------------------------------------------------------
 
 POD_TEMPLATE_REVISION_ANNOTATION: str = "sandbox.enterprise.ai/pod-template-revision"
+
+# Orphan pruning labels (§kagent-pattern-6)
+# Added to every agent-scoped manifest so prune_orphaned_resources() can
+# list-by-label and compare against the desired resource set.
+OWNER_LABEL_MANAGED_BY: str = "sandbox.enterprise.ai/managed-by"
+OWNER_LABEL_AGENT_NAME: str = "sandbox.enterprise.ai/agent-name"
+OWNER_LABEL_MANAGED_BY_VALUE: str = "operator"
+
+
+def agent_owner_labels(agent_name: str) -> dict[str, str]:
+    """Return the standard owner labels for orphan pruning."""
+    return {
+        OWNER_LABEL_MANAGED_BY: OWNER_LABEL_MANAGED_BY_VALUE,
+        OWNER_LABEL_AGENT_NAME: agent_name,
+    }
+
+
 KUBERNETES_RESOURCE_NAME_PATTERN: re.Pattern[str] = re.compile(r"^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$")
 STORAGE_QUANTITY_MULTIPLIERS: dict[str, Decimal] = {
     "": Decimal(1),

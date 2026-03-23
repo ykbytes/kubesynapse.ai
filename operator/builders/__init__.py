@@ -2,14 +2,19 @@
 
 §2.1b of the road-to-prod plan: builder functions extracted from the
 operator monolith.
+§kagent-pattern-2: translator module added for the AgentOutputs bundle.
 """
 
 from builders.helpers import (
     KUBERNETES_RESOURCE_NAME_PATTERN,
+    OWNER_LABEL_AGENT_NAME,
+    OWNER_LABEL_MANAGED_BY,
+    OWNER_LABEL_MANAGED_BY_VALUE,
     POD_TEMPLATE_REVISION_ANNOTATION,
     STORAGE_QUANTITY_MULTIPLIERS,
     agent_baseline_egress_rules,
     agent_baseline_ingress_peers,
+    agent_owner_labels,
     artifact_file_path,
     build_artifact_ref,
     build_journal_ref,
@@ -56,13 +61,22 @@ from builders.manifests import (
     validate_runtime_configuration,
 )
 
+from builders.translator import (
+    AgentOutputs,
+    translate_agent,
+)
+
 __all__ = [
     # helpers
     "KUBERNETES_RESOURCE_NAME_PATTERN",
+    "OWNER_LABEL_AGENT_NAME",
+    "OWNER_LABEL_MANAGED_BY",
+    "OWNER_LABEL_MANAGED_BY_VALUE",
     "POD_TEMPLATE_REVISION_ANNOTATION",
     "STORAGE_QUANTITY_MULTIPLIERS",
     "agent_baseline_egress_rules",
     "agent_baseline_ingress_peers",
+    "agent_owner_labels",
     "artifact_file_path",
     "build_artifact_ref",
     "build_journal_ref",
@@ -105,4 +119,7 @@ __all__ = [
     "resolve_runtime_kind",
     "runtime_extra_env_items",
     "validate_runtime_configuration",
+    # translator (§kagent-pattern-2)
+    "AgentOutputs",
+    "translate_agent",
 ]

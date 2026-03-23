@@ -1,0 +1,45 @@
+apiVersion: sandbox.enterprise.ai/v1alpha1
+kind: AIAgent
+metadata:
+  name: {{ default .Chart.Name .Values.agent.name | quote }}
+  namespace: {{ default .Release.Namespace .Values.namespaceOverride | quote }}
+spec:
+  model: {{ .Values.agent.model | quote }}
+  systemPrompt: |
+{{ .Values.agent.systemPrompt | indent 4 }}
+  runtime:
+{{ toYaml .Values.agent.runtime | indent 4 }}
+  storage:
+{{ toYaml .Values.agent.storage | indent 4 }}
+  enableGVisor: {{ .Values.agent.enableGVisor }}
+{{- if .Values.agent.policyRef }}
+  policyRef: {{ .Values.agent.policyRef | quote }}
+{{- end }}
+{{- if .Values.agent.allowedNamespaces }}
+  allowedNamespaces:
+{{ toYaml .Values.agent.allowedNamespaces | indent 4 }}
+{{- end }}
+{{- if .Values.agent.a2a }}
+  a2a:
+{{ toYaml .Values.agent.a2a | indent 4 }}
+{{- end }}
+{{- if .Values.agent.skills }}
+  skills:
+{{ toYaml .Values.agent.skills | indent 4 }}
+{{- end }}
+{{- if .Values.agent.mcpServers }}
+  mcpServers:
+{{ toYaml .Values.agent.mcpServers | indent 4 }}
+{{- end }}
+{{- if .Values.agent.mcpSidecars }}
+  mcpSidecars:
+{{ toYaml .Values.agent.mcpSidecars | indent 4 }}
+{{- end }}
+{{- if .Values.agent.githubConfig }}
+  githubConfig:
+{{ toYaml .Values.agent.githubConfig | indent 4 }}
+{{- end }}
+{{- if .Values.agent.gitConfig }}
+  gitConfig:
+{{ toYaml .Values.agent.gitConfig | indent 4 }}
+{{- end }}

@@ -31,6 +31,67 @@ MAX_LOG_FIELD_LENGTH: int = 400
 # Logging helpers
 # ---------------------------------------------------------------------------
 
+
+def _match_namespace_selector(namespace: str, selector: dict[str, Any]) -> bool:
+    """Evaluate a minimal namespace selector against a namespace name.
+
+    Current support is intentionally small and backward-compatible:
+    - ``matchNames``: explicit namespace allow-list
+    - ``matchLabels.kubernetes.io/metadata.name``: exact namespace match
+    """
+    match_names = selector.get("matchNames")
+    if isinstance(match_names, list):
+        return namespace in {str(item).strip() for item in match_names if str(item).strip()}
+
+    match_labels = selector.get("matchLabels") or {}
+    label_namespace = str(match_labels.get("kubernetes.io/metadata.name") or "").strip()
+    if label_namespace:
+        return namespace == label_namespace
+    return False
+
+
+def validate_cross_namespace_ref(
+    *,
+    source_namespace: str,
+    target_namespace: str,
+    allowed_namespaces: dict[str, Any] | None,
+    field_path: str,
+    target_kind: str,
+) -> None:
+    """Validate a cross-namespace reference using Gateway-style rules.
+
+    Supported schema:
+    - ``{"from": "Same"}`` (default)
+    - ``{"from": "All"}``
+    - ``{"from": "Selector", "selector": {...}}``
+    """
+    if source_namespace == target_namespace:
+        return
+
+    config = allowed_namespaces or {}
+    mode = str(config.get("from") or "Same").strip() or "Same"
+
+    if mode == "All":
+        return
+    if mode == "Same":
+        raise kopf.PermanentError(
+            f"{field_path} may not reference {target_kind} in namespace '{target_namespace}'. "
+            "Cross-namespace references are restricted to the same namespace by default."
+        )
+    if mode == "Selector":
+        selector = config.get("selector")
+        if isinstance(selector, dict) and _match_namespace_selector(source_namespace, selector):
+            return
+        raise kopf.PermanentError(
+            f"{field_path} may not reference {target_kind} in namespace '{target_namespace}' because "
+            f"namespace '{source_namespace}' is not allowed by allowedNamespaces.selector."
+        )
+
+    raise kopf.PermanentError(
+        f"{field_path}.allowedNamespaces.from has unsupported value '{mode}'. Use Same, All, or Selector."
+    )
+
+
 def _serialize_log_field(value: Any) -> str:
     """Serialize a log field value to a bounded JSON string."""
     try:
@@ -118,6 +179,7 @@ def log_operator_event(
 # Error classification
 # ---------------------------------------------------------------------------
 
+
 def classify_reconcile_error(action: str, exc: Exception, *, default_delay: int = 10) -> Exception:
     """Classify an exception into PermanentError or TemporaryError."""
     if isinstance(exc, (kopf.PermanentError, kopf.TemporaryError)):
@@ -181,6 +243,7 @@ def raise_reconcile_error(
 # ---------------------------------------------------------------------------
 # Reconcile execution wrapper
 # ---------------------------------------------------------------------------
+
 
 def execute_reconcile(
     operation: Callable[[], Any],
@@ -290,38 +353,64 @@ def conditions_for_phase(phase: str) -> list[dict[str, str]]:
 
     if phase_lower in {"completed", "succeeded"}:
         return [
-            build_condition("Degraded", _CONDITION_FALSE, "Completed", "Resource completed successfully", last_transition_time=now),
-            build_condition("Progressing", _CONDITION_FALSE, "Completed", "Execution finished", last_transition_time=now),
-            build_condition("Ready", _CONDITION_TRUE, "Completed", "Resource is fully reconciled", last_transition_time=now),
+            build_condition(
+                "Degraded", _CONDITION_FALSE, "Completed", "Resource completed successfully", last_transition_time=now
+            ),
+            build_condition(
+                "Progressing", _CONDITION_FALSE, "Completed", "Execution finished", last_transition_time=now
+            ),
+            build_condition(
+                "Ready", _CONDITION_TRUE, "Completed", "Resource is fully reconciled", last_transition_time=now
+            ),
         ]
     if phase_lower == "failed":
         return [
             build_condition("Degraded", _CONDITION_TRUE, "Failed", "Execution failed", last_transition_time=now),
             build_condition("Progressing", _CONDITION_FALSE, "Failed", "Execution stopped", last_transition_time=now),
-            build_condition("Ready", _CONDITION_FALSE, "Failed", "Resource is in a failed state", last_transition_time=now),
+            build_condition(
+                "Ready", _CONDITION_FALSE, "Failed", "Resource is in a failed state", last_transition_time=now
+            ),
         ]
     if phase_lower in {"running", "provisioning", "executing"}:
         return [
-            build_condition("Degraded", _CONDITION_FALSE, "InProgress", "No degradation detected", last_transition_time=now),
-            build_condition("Progressing", _CONDITION_TRUE, "InProgress", f"Resource is {phase_lower}", last_transition_time=now),
-            build_condition("Ready", _CONDITION_FALSE, "InProgress", "Resource is not yet ready", last_transition_time=now),
+            build_condition(
+                "Degraded", _CONDITION_FALSE, "InProgress", "No degradation detected", last_transition_time=now
+            ),
+            build_condition(
+                "Progressing", _CONDITION_TRUE, "InProgress", f"Resource is {phase_lower}", last_transition_time=now
+            ),
+            build_condition(
+                "Ready", _CONDITION_FALSE, "InProgress", "Resource is not yet ready", last_transition_time=now
+            ),
         ]
     if phase_lower in {"queued", "pending", "scheduling"}:
         return [
-            build_condition("Degraded", _CONDITION_FALSE, "Pending", "No degradation detected", last_transition_time=now),
-            build_condition("Progressing", _CONDITION_TRUE, "Pending", f"Resource is {phase_lower}", last_transition_time=now),
-            build_condition("Ready", _CONDITION_FALSE, "Pending", "Resource is waiting to start", last_transition_time=now),
+            build_condition(
+                "Degraded", _CONDITION_FALSE, "Pending", "No degradation detected", last_transition_time=now
+            ),
+            build_condition(
+                "Progressing", _CONDITION_TRUE, "Pending", f"Resource is {phase_lower}", last_transition_time=now
+            ),
+            build_condition(
+                "Ready", _CONDITION_FALSE, "Pending", "Resource is waiting to start", last_transition_time=now
+            ),
         ]
     if phase_lower == "cancelled":
         return [
-            build_condition("Degraded", _CONDITION_FALSE, "Cancelled", "Resource was cancelled", last_transition_time=now),
-            build_condition("Progressing", _CONDITION_FALSE, "Cancelled", "Execution cancelled", last_transition_time=now),
+            build_condition(
+                "Degraded", _CONDITION_FALSE, "Cancelled", "Resource was cancelled", last_transition_time=now
+            ),
+            build_condition(
+                "Progressing", _CONDITION_FALSE, "Cancelled", "Execution cancelled", last_transition_time=now
+            ),
             build_condition("Ready", _CONDITION_FALSE, "Cancelled", "Resource was cancelled", last_transition_time=now),
         ]
     # Default/unknown phase — treat as progressing
     return [
         build_condition("Degraded", _CONDITION_FALSE, "Unknown", "Phase not recognized", last_transition_time=now),
-        build_condition("Progressing", _CONDITION_TRUE, "Unknown", f"Resource phase: {phase}", last_transition_time=now),
+        build_condition(
+            "Progressing", _CONDITION_TRUE, "Unknown", f"Resource phase: {phase}", last_transition_time=now
+        ),
         build_condition("Ready", _CONDITION_FALSE, "Unknown", "Resource state is unknown", last_transition_time=now),
     ]
 

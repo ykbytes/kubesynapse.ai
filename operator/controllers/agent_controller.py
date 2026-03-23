@@ -1,6 +1,8 @@
 """AIAgent reconciler — create, update, resume, delete handlers.
 
 §2.1d of the road-to-prod plan: agent controller extracted from main.py.
+§kagent-pattern-2: Uses the translator pattern — translate_agent() produces
+an AgentOutputs bundle, the controller applies it via ensure_* functions.
 """
 
 from __future__ import annotations
@@ -13,15 +15,8 @@ import kopf
 import kubernetes.client  # type: ignore[import-untyped]
 from kubernetes.client.rest import ApiException  # type: ignore[import-untyped]
 
-from builders import (
-    create_a2a_egress_network_policy_manifest,
-    create_a2a_ingress_network_policy_manifest,
-    create_agent_service_manifest,
-    create_agent_statefulset_manifest,
-    create_mcp_auth_secret_manifest,
-    create_mcp_network_policy_manifest,
-)
-from reconcile import execute_reconcile, log_operator_event
+from builders.translator import AgentOutputs, translate_agent
+from reconcile import execute_reconcile, log_operator_event, validate_cross_namespace_ref
 from services import (
     ensure_network_policy,
     ensure_runtime_access,
@@ -29,13 +24,9 @@ from services import (
     ensure_secret,
     ensure_service,
     ensure_statefulset,
+    prune_orphaned_resources,
 )
-from utils import (
-    parse_a2a_peer_refs,
-    parse_agent_a2a_config,
-    parse_policy_a2a_config,
-    validate_supported_policy_spec,
-)
+from utils import validate_supported_policy_spec
 
 logger = logging.getLogger("operator.controllers.agent")
 
@@ -44,24 +35,45 @@ logger = logging.getLogger("operator.controllers.agent")
 # Helpers
 # ---------------------------------------------------------------------------
 
+
+def _parse_namespaced_ref(raw_ref: str | None) -> tuple[str | None, str | None]:
+    """Parse a ref that may be either 'name' or 'namespace/name'."""
+    value = str(raw_ref or "").strip()
+    if not value:
+        return None, None
+    if "/" not in value:
+        return None, value
+    ref_namespace, ref_name = value.split("/", 1)
+    return ref_namespace.strip() or None, ref_name.strip() or None
+
+
 def resolve_agent_policy(namespace: str, policy_ref: str | None) -> tuple[str | None, dict[str, Any]]:
     """Resolve the AgentPolicy for a namespace, by ref or first-available."""
     custom_api = kubernetes.client.CustomObjectsApi()
     if policy_ref:
+        policy_namespace, policy_name = _parse_namespaced_ref(policy_ref)
+        resolved_policy_namespace = policy_namespace or namespace
         try:
             policy: dict[str, Any] = custom_api.get_namespaced_custom_object(
                 group="sandbox.enterprise.ai",
                 version="v1alpha1",
-                namespace=namespace,
+                namespace=resolved_policy_namespace,
                 plural="agentpolicies",
-                name=policy_ref,
+                name=policy_name,
             )  # type: ignore[assignment]
             policy_spec = policy.get("spec", {})
+            validate_cross_namespace_ref(
+                source_namespace=namespace,
+                target_namespace=resolved_policy_namespace,
+                allowed_namespaces=policy_spec.get("allowedNamespaces"),
+                field_path="AIAgent.spec.policyRef",
+                target_kind="AgentPolicy",
+            )
             try:
                 validate_supported_policy_spec(policy_spec)
             except ValueError as exc:
                 raise kopf.PermanentError(f"AgentPolicy '{policy_ref}' is not supported: {exc}") from exc
-            return policy_ref, policy_spec
+            return policy_name, policy_spec
         except ApiException as exc:
             if exc.status == 404:
                 raise kopf.PermanentError(f"AgentPolicy '{policy_ref}' was not found") from exc
@@ -116,39 +128,50 @@ def validate_agent_model(model: str, policy_spec: dict[str, Any], tenant_spec: d
         )
 
 
+def validate_agent_cross_namespace_targets(
+    agent_spec: dict[str, Any],
+    policy_spec: dict[str, Any],
+    namespace: str,
+) -> None:
+    """Validate cross-namespace A2A targets using AIAgent.spec.allowedNamespaces."""
+    allowed_namespaces = agent_spec.get("allowedNamespaces")
+    a2a = (policy_spec or {}).get("a2a") or {}
+    for index, target in enumerate(a2a.get("allowedTargets") or []):
+        if not isinstance(target, dict):
+            continue
+        target_namespace = str(target.get("namespace") or "").strip() or namespace
+        validate_cross_namespace_ref(
+            source_namespace=namespace,
+            target_namespace=target_namespace,
+            allowed_namespaces=allowed_namespaces,
+            field_path=f"AgentPolicy.spec.a2a.allowedTargets[{index}]",
+            target_kind="AIAgent",
+        )
+
+
 def create_agent_resources(spec: dict[str, Any], name: str, namespace: str, handler_logger: logging.Logger) -> None:
-    """Provision all Kubernetes resources for an AIAgent."""
+    """Provision all Kubernetes resources for an AIAgent.
+
+    Uses the translator pattern (§kagent-pattern-2): a single
+    ``translate_agent()`` call produces an ``AgentOutputs`` bundle,
+    then this function applies each manifest via ensure_* functions.
+    """
     ensure_runtime_access(namespace)
     ensure_runtime_namespace_secret(namespace, name, handler_logger)
     policy_name, policy_spec = resolve_agent_policy(namespace, spec.get("policyRef"))
     tenant_spec = resolve_tenant_for_namespace(namespace)
+    validate_agent_cross_namespace_targets(spec, policy_spec, namespace)
     validate_agent_model(spec.get("model", "gpt-4"), policy_spec, tenant_spec)
-    agent_a2a_config = parse_agent_a2a_config(spec.get("a2a"), source="AIAgent.spec.a2a")
-    policy_a2a_config = parse_policy_a2a_config(policy_spec or {})
-    allowed_mcp = sorted(
-        {
-            str(item).strip()
-            for item in (policy_spec.get("allowedMcpServers") or [])
-            if str(item).strip()
-        }
-    )
 
-    service_manifest = create_agent_service_manifest(name, namespace)
-    statefulset_manifest = create_agent_statefulset_manifest(name, namespace, spec, policy_name, policy_spec)
-    network_policy_manifest = create_mcp_network_policy_manifest(name, namespace, allowed_mcp)
-    a2a_egress_policy_manifest = create_a2a_egress_network_policy_manifest(
-        name,
-        namespace,
-        parse_a2a_peer_refs(policy_a2a_config.get("allowedTargets"), source="AgentPolicy.spec.a2a.allowedTargets"),
+    # --- Translator pattern: produce all manifests in one call ---
+    outputs: AgentOutputs = translate_agent(
+        spec=spec,
+        name=name,
+        namespace=namespace,
+        policy_name=policy_name,
+        policy_spec=policy_spec,
+        tenant_spec=tenant_spec,
     )
-    a2a_ingress_policy_manifest = create_a2a_ingress_network_policy_manifest(
-        name,
-        namespace,
-        parse_a2a_peer_refs(agent_a2a_config.get("allowedCallers"), source="AIAgent.spec.a2a.allowedCallers"),
-    )
-    mcp_auth_secret_manifest: dict[str, Any] | None = None
-    if allowed_mcp:
-        mcp_auth_secret_manifest = create_mcp_auth_secret_manifest(namespace)
 
     log_operator_event(
         handler_logger,
@@ -157,37 +180,41 @@ def create_agent_resources(spec: dict[str, Any], name: str, namespace: str, hand
         resource_kind="AIAgent",
         name=name,
         namespace=namespace,
-        policyName=policy_name,
-        allowedMcpServers=allowed_mcp,
-        hasTenantPolicy=bool(tenant_spec),
-        runtimeKind=str((spec.get("runtime") or {}).get("kind") or "langgraph")
-        if isinstance(spec.get("runtime") or {}, dict)
-        else "langgraph",
+        policyName=outputs.policy_name,
+        allowedMcpServers=outputs.allowed_mcp_servers,
+        hasTenantPolicy=outputs.has_tenant,
+        runtimeKind=outputs.runtime_kind,
     )
 
-    for manifest in (
-        service_manifest,
-        statefulset_manifest,
-        network_policy_manifest,
-        a2a_egress_policy_manifest,
-        a2a_ingress_policy_manifest,
-    ):
-        if manifest is None:
-            continue
+    # Adopt owned manifests (sets ownerReferences so K8s GC cleans up)
+    for manifest in outputs.owned_manifests():
         kopf.adopt(manifest)
 
-    ensure_service(namespace, service_manifest)
-    if mcp_auth_secret_manifest is not None:
-        ensure_secret(namespace, mcp_auth_secret_manifest)
-    ensure_statefulset(namespace, statefulset_manifest)
-    ensure_network_policy(namespace, network_policy_manifest)
-    ensure_network_policy(namespace, a2a_egress_policy_manifest)
-    ensure_network_policy(namespace, a2a_ingress_policy_manifest)
+    # Apply manifests via idempotent ensure_* functions
+    ensure_service(namespace, outputs.service)
+    if outputs.mcp_auth_secret is not None:
+        ensure_secret(namespace, outputs.mcp_auth_secret)
+    ensure_statefulset(namespace, outputs.statefulset)
+    ensure_network_policy(namespace, outputs.mcp_network_policy)
+    ensure_network_policy(namespace, outputs.a2a_egress_network_policy)
+    ensure_network_policy(namespace, outputs.a2a_ingress_network_policy)
+    pruned_resource_names = prune_orphaned_resources(namespace, name, outputs.desired_resource_names())
+    if pruned_resource_names:
+        log_operator_event(
+            handler_logger,
+            logging.INFO,
+            "Pruned orphaned agent resources.",
+            resource_kind="AIAgent",
+            name=name,
+            namespace=namespace,
+            prunedResourceNames=sorted(pruned_resource_names),
+        )
 
 
 # ---------------------------------------------------------------------------
 # Kopf handlers
 # ---------------------------------------------------------------------------
+
 
 @kopf.on.create("sandbox.enterprise.ai", "v1alpha1", "aiagents")  # type: ignore[arg-type]
 def create_agent(spec: dict[str, Any], name: str, namespace: str, logger: Any, **kwargs: Any) -> None:

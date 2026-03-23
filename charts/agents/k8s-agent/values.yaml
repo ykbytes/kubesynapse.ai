@@ -1,0 +1,36 @@
+nameOverride: ""
+namespaceOverride: ""
+
+agent:
+  name: k8s-agent
+  model: gpt-4
+  policyRef: ""
+  systemPrompt: |
+    You are a Kubernetes platform engineer. Help operators and developers
+    understand cluster resources, troubleshoot workloads, inspect manifests,
+    and propose safe, incremental changes.
+
+    Prefer practical debugging steps, explain likely causes clearly, and avoid
+    destructive actions unless explicitly requested.
+  runtime:
+    kind: opencode
+    opencode:
+      configFiles: {}
+  storage:
+    size: 2Gi
+  enableGVisor: true
+  mcpServers: []
+  mcpSidecars: []
+  githubConfig: {}
+  gitConfig: {}
+  allowedNamespaces: {}
+  a2a: {}
+  skills:
+    files:
+      .github/skills/kubernetes-operations/SKILL.md: |
+        ---
+        name: kubernetes-operations
+        description: Inspect Kubernetes resources, troubleshoot workloads, and explain safe remediation steps.
+        ---
+        Use this skill when the task involves cluster debugging, manifests,
+        pods, services, ingress, RBAC, or rollout behavior.

@@ -118,6 +118,7 @@ from builders.helpers import (
     POD_TEMPLATE_REVISION_ANNOTATION,
     agent_baseline_egress_rules,
     agent_baseline_ingress_peers,
+    agent_owner_labels,
     build_pvc_spec,
     hashed_resource_name,
     platform_namespace_selector,
@@ -434,6 +435,7 @@ def _extract_skill_mcp_servers(skills_config: dict[str, Any]) -> set[str]:
             if len(parts) >= 3:
                 try:
                     import yaml
+
                     fm = yaml.safe_load(parts[1])
                     if isinstance(fm, dict):
                         mcp = fm.get("allowedMcpServers") or fm.get("allowed_mcp_servers") or []
@@ -463,11 +465,13 @@ def _auto_inject_mcp_sidecars(
             continue
         if server_name in MCP_SIDECAR_CATALOG:
             entry = MCP_SIDECAR_CATALOG[server_name]
-            merged.append({
-                "name": server_name,
-                "image": entry.get("image"),
-                "port": entry.get("port", 8080),
-            })
+            merged.append(
+                {
+                    "name": server_name,
+                    "image": entry.get("image"),
+                    "port": entry.get("port", 8080),
+                }
+            )
             logger.info("Auto-injected MCP sidecar '%s' from skill frontmatter", server_name)
     return merged
 
@@ -513,13 +517,13 @@ def validate_runtime_configuration(runtime_kind: str, spec: dict[str, Any]) -> N
     if isinstance(github_config, dict) and github_config:
         credential_secret_ref = str(github_config.get("credentialSecretRef") or "").strip()
         if not credential_secret_ref:
-            raise kopf.PermanentError("AIAgent.spec.githubConfig.credentialSecretRef is required when githubConfig is provided.")
+            raise kopf.PermanentError(
+                "AIAgent.spec.githubConfig.credentialSecretRef is required when githubConfig is provided."
+            )
 
     if runtime_kind == "goose":
         if codex_spec is not None:
-            raise kopf.PermanentError(
-                "AIAgent.spec.runtime.codex is only supported when spec.runtime.kind is 'codex'."
-            )
+            raise kopf.PermanentError("AIAgent.spec.runtime.codex is only supported when spec.runtime.kind is 'codex'.")
         if opencode_spec is not None:
             raise kopf.PermanentError(
                 "AIAgent.spec.runtime.opencode is only supported when spec.runtime.kind is 'opencode'."
@@ -547,9 +551,7 @@ def validate_runtime_configuration(runtime_kind: str, spec: dict[str, Any]) -> N
             )
     elif runtime_kind == "codex":
         if goose_spec is not None:
-            raise kopf.PermanentError(
-                "AIAgent.spec.runtime.goose is only supported when spec.runtime.kind is 'goose'."
-            )
+            raise kopf.PermanentError("AIAgent.spec.runtime.goose is only supported when spec.runtime.kind is 'goose'.")
         if opencode_spec is not None:
             raise kopf.PermanentError(
                 "AIAgent.spec.runtime.opencode is only supported when spec.runtime.kind is 'opencode'."
@@ -573,13 +575,9 @@ def validate_runtime_configuration(runtime_kind: str, spec: dict[str, Any]) -> N
             )
     elif runtime_kind == "opencode":
         if goose_spec is not None:
-            raise kopf.PermanentError(
-                "AIAgent.spec.runtime.goose is only supported when spec.runtime.kind is 'goose'."
-            )
+            raise kopf.PermanentError("AIAgent.spec.runtime.goose is only supported when spec.runtime.kind is 'goose'.")
         if codex_spec is not None:
-            raise kopf.PermanentError(
-                "AIAgent.spec.runtime.codex is only supported when spec.runtime.kind is 'codex'."
-            )
+            raise kopf.PermanentError("AIAgent.spec.runtime.codex is only supported when spec.runtime.kind is 'codex'.")
         if opencode_spec is not None and not isinstance(opencode_spec, dict):
             raise kopf.PermanentError("AIAgent.spec.runtime.opencode must be an object when provided.")
         try:
@@ -595,13 +593,9 @@ def validate_runtime_configuration(runtime_kind: str, spec: dict[str, Any]) -> N
             )
     else:
         if goose_spec is not None:
-            raise kopf.PermanentError(
-                "AIAgent.spec.runtime.goose is only supported when spec.runtime.kind is 'goose'."
-            )
+            raise kopf.PermanentError("AIAgent.spec.runtime.goose is only supported when spec.runtime.kind is 'goose'.")
         if codex_spec is not None:
-            raise kopf.PermanentError(
-                "AIAgent.spec.runtime.codex is only supported when spec.runtime.kind is 'codex'."
-            )
+            raise kopf.PermanentError("AIAgent.spec.runtime.codex is only supported when spec.runtime.kind is 'codex'.")
         if opencode_spec is not None:
             raise kopf.PermanentError(
                 "AIAgent.spec.runtime.opencode is only supported when spec.runtime.kind is 'opencode'."
@@ -648,7 +642,7 @@ def _extract_statefulset_storage_request(manifest: dict[str, Any], claim_name: s
 
 def _statefulset_template_signature(manifest: dict[str, Any]) -> dict[str, Any]:
     """Extract a comparable signature from a StatefulSet's pod template."""
-    template = ((manifest.get("spec") or {}).get("template") or {})
+    template = (manifest.get("spec") or {}).get("template") or {}
     template_metadata = template.get("metadata") or {}
     template_spec = template.get("spec") or {}
 
@@ -710,9 +704,7 @@ def _validate_mcp_sidecars(sidecars: list[dict[str, Any]]) -> list[dict[str, Any
 
         raw_image = str(sidecar.get("image") or "").strip()
         if not raw_image:
-            raise kopf.PermanentError(
-                f"AIAgent.spec.mcpSidecars[{index}].image is required for sidecar '{raw_name}'."
-            )
+            raise kopf.PermanentError(f"AIAgent.spec.mcpSidecars[{index}].image is required for sidecar '{raw_name}'.")
         # Reject images with embedded credentials or shell metacharacters
         if "@" in raw_image.split("/")[0] or any(ch in raw_image for ch in (";", "&", "|", "$", "`", "\n")):
             raise kopf.PermanentError(
@@ -837,13 +829,14 @@ def create_mcp_auth_secret_manifest(namespace: str) -> dict[str, Any]:
 def create_agent_service_manifest(name: str, namespace: str) -> dict[str, Any]:
     """Build a ClusterIP Service manifest for an agent."""
     from config import API_PORT
+
     return {
         "apiVersion": "v1",
         "kind": "Service",
         "metadata": {
             "name": sandbox_name(name),
             "namespace": namespace,
-            "labels": {"app": "ai-agent", "agent-name": name},
+            "labels": {"app": "ai-agent", "agent-name": name, **agent_owner_labels(name)},
         },
         "spec": {
             "selector": {"app": "ai-agent", "agent-name": name},
@@ -873,9 +866,7 @@ def create_agent_statefulset_manifest(
     enable_gvisor = spec.get("enableGVisor", False)
     system_prompt = spec.get("systemPrompt", "")
     if len(system_prompt) > 32000:
-        raise kopf.PermanentError(
-            f"spec.systemPrompt exceeds maximum length (32000 chars, got {len(system_prompt)})"
-        )
+        raise kopf.PermanentError(f"spec.systemPrompt exceeds maximum length (32000 chars, got {len(system_prompt)})")
     skills_config = parse_agent_skills_config(spec.get("skills"), source="AIAgent.spec.skills")
     mcp_sidecars = _auto_inject_mcp_sidecars(mcp_sidecars, skills_config)
     mcp_sidecars = _validate_mcp_sidecars(mcp_sidecars)
@@ -892,6 +883,7 @@ def create_agent_statefulset_manifest(
     if git_config.get("repoUrl"):
         _repo_url = git_config["repoUrl"]
         from urllib.parse import urlparse as _urlparse
+
         _parsed_repo = _urlparse(_repo_url)
         _allowed_git_schemes = {"https", "ssh", "git+ssh", "git"}
         if _parsed_repo.scheme and _parsed_repo.scheme.lower() not in _allowed_git_schemes:
@@ -900,18 +892,18 @@ def create_agent_statefulset_manifest(
                 f"(allowed: {', '.join(sorted(_allowed_git_schemes))})"
             )
         if not _parsed_repo.scheme and not _repo_url.startswith("git@"):
-            raise kopf.PermanentError(
-                "spec.gitConfig.repoUrl must use https://, git@, or ssh:// scheme"
-            )
+            raise kopf.PermanentError("spec.gitConfig.repoUrl must use https://, git@, or ssh:// scheme")
         # Auto-inject git sidecar if not already present
         has_git_sidecar = any(s.get("name") == "git" for s in mcp_sidecars)
         if not has_git_sidecar:
             git_catalog_entry = MCP_SIDECAR_CATALOG.get("git", {})
-            mcp_sidecars.append({
-                "name": "git",
-                "image": git_catalog_entry.get("image", "docker.io/yakdhane/mcp-git:latest"),
-                "port": git_catalog_entry.get("port", 8095),
-            })
+            mcp_sidecars.append(
+                {
+                    "name": "git",
+                    "image": git_catalog_entry.get("image", "docker.io/yakdhane/mcp-git:latest"),
+                    "port": git_catalog_entry.get("port", 8095),
+                }
+            )
             logger.info("Auto-injected git MCP sidecar for agent '%s' (gitConfig present)", name)
 
         git_sidecar_env = [
@@ -924,21 +916,37 @@ def create_agent_statefulset_manifest(
         cred_secret = git_config.get("credentialSecretRef", "")
         auth_method = git_config.get("authMethod", "")
         if cred_secret and auth_method == "token":
-            git_sidecar_env.append({
-                "name": "GIT_TOKEN",
-                "valueFrom": {"secretKeyRef": {"name": cred_secret, "key": "token", "optional": True}},
-            })
+            git_sidecar_env.append(
+                {
+                    "name": "GIT_TOKEN",
+                    "valueFrom": {"secretKeyRef": {"name": cred_secret, "key": "token", "optional": True}},
+                }
+            )
         elif cred_secret and auth_method == "basic":
-            git_sidecar_env.extend([
-                {"name": "GIT_USERNAME", "valueFrom": {"secretKeyRef": {"name": cred_secret, "key": "username", "optional": True}}},
-                {"name": "GIT_PASSWORD", "valueFrom": {"secretKeyRef": {"name": cred_secret, "key": "password", "optional": True}}},
-            ])
+            git_sidecar_env.extend(
+                [
+                    {
+                        "name": "GIT_USERNAME",
+                        "valueFrom": {"secretKeyRef": {"name": cred_secret, "key": "username", "optional": True}},
+                    },
+                    {
+                        "name": "GIT_PASSWORD",
+                        "valueFrom": {"secretKeyRef": {"name": cred_secret, "key": "password", "optional": True}},
+                    },
+                ]
+            )
         elif cred_secret and auth_method == "ssh":
             ssh_vol_name = "git-ssh-key"
-            git_volumes.append({
-                "name": ssh_vol_name,
-                "secret": {"secretName": cred_secret, "items": [{"key": "ssh_private_key", "path": "id_rsa"}], "defaultMode": 0o400},
-            })
+            git_volumes.append(
+                {
+                    "name": ssh_vol_name,
+                    "secret": {
+                        "secretName": cred_secret,
+                        "items": [{"key": "ssh_private_key", "path": "id_rsa"}],
+                        "defaultMode": 0o400,
+                    },
+                }
+            )
             git_volume_mounts.append({"name": ssh_vol_name, "mountPath": "/home/mcpuser/.ssh", "readOnly": True})
             git_sidecar_env.append({"name": "GIT_SSH_KEY_PATH", "value": "/home/mcpuser/.ssh/id_rsa"})
 
@@ -951,15 +959,25 @@ def create_agent_statefulset_manifest(
         if git_branch:
             git_agent_env.append({"name": "GIT_BRANCH", "value": git_branch})
         if cred_secret and auth_method == "token":
-            git_agent_env.append({
-                "name": "GIT_TOKEN",
-                "valueFrom": {"secretKeyRef": {"name": cred_secret, "key": "token", "optional": True}},
-            })
+            git_agent_env.append(
+                {
+                    "name": "GIT_TOKEN",
+                    "valueFrom": {"secretKeyRef": {"name": cred_secret, "key": "token", "optional": True}},
+                }
+            )
         elif cred_secret and auth_method == "basic":
-            git_agent_env.extend([
-                {"name": "GIT_USERNAME", "valueFrom": {"secretKeyRef": {"name": cred_secret, "key": "username", "optional": True}}},
-                {"name": "GIT_PASSWORD", "valueFrom": {"secretKeyRef": {"name": cred_secret, "key": "password", "optional": True}}},
-            ])
+            git_agent_env.extend(
+                [
+                    {
+                        "name": "GIT_USERNAME",
+                        "valueFrom": {"secretKeyRef": {"name": cred_secret, "key": "username", "optional": True}},
+                    },
+                    {
+                        "name": "GIT_PASSWORD",
+                        "valueFrom": {"secretKeyRef": {"name": cred_secret, "key": "password", "optional": True}},
+                    },
+                ]
+            )
 
     pod_security_context = {
         "runAsNonRoot": True,
@@ -1169,7 +1187,10 @@ def create_agent_statefulset_manifest(
             volumes.append({"name": "workspace-volume", "emptyDir": {"sizeLimit": "5Gi"}})
         env.extend(
             [
-                {"name": "LITELLM_API_BASE", "value": f"http://{LITELLM_SVC}.{OPERATOR_NAMESPACE}.svc.cluster.local:4000"},
+                {
+                    "name": "LITELLM_API_BASE",
+                    "value": f"http://{LITELLM_SVC}.{OPERATOR_NAMESPACE}.svc.cluster.local:4000",
+                },
                 {"name": "AGENT_ALLOWED_MODELS", "value": ",".join(AGENT_ALLOWED_MODELS)},
                 {"name": "AGENT_MAX_STEPS", "value": AGENT_MAX_STEPS},
                 {"name": "AGENT_MAX_STEPS_LIMIT", "value": AGENT_MAX_STEPS_LIMIT},
@@ -1246,16 +1267,18 @@ def create_agent_statefulset_manifest(
         allowed_mcp_servers = (policy_spec or {}).get("allowedMcpServers") or []
         require_mcp_bearer_token = bool(allowed_mcp_servers)
         env.append({"name": "ALLOWED_MCP_SERVERS", "value": ",".join(allowed_mcp_servers)})
-        env.append({
-            "name": "MCP_BEARER_TOKEN",
-            "valueFrom": {
-                "secretKeyRef": {
-                    "name": MCP_AUTH_SECRET_NAME,
-                    "key": "bearer-token",
-                    "optional": not require_mcp_bearer_token,
-                }
-            },
-        })
+        env.append(
+            {
+                "name": "MCP_BEARER_TOKEN",
+                "valueFrom": {
+                    "secretKeyRef": {
+                        "name": MCP_AUTH_SECRET_NAME,
+                        "key": "bearer-token",
+                        "optional": not require_mcp_bearer_token,
+                    }
+                },
+            }
+        )
         github_credential_secret = str(github_config.get("credentialSecretRef") or "").strip()
         if github_credential_secret:
             env.append(
@@ -1274,16 +1297,18 @@ def create_agent_statefulset_manifest(
             if env_value:
                 env.append({"name": env_name, "value": env_value})
         if OPEN_SANDBOX_API_KEY_SECRET_NAME:
-            env.append({
-                "name": "OPEN_SANDBOX_API_KEY",
-                "valueFrom": {
-                    "secretKeyRef": {
-                        "name": OPEN_SANDBOX_API_KEY_SECRET_NAME,
-                        "key": OPEN_SANDBOX_API_KEY_SECRET_KEY,
-                        "optional": True,
-                    }
-                },
-            })
+            env.append(
+                {
+                    "name": "OPEN_SANDBOX_API_KEY",
+                    "valueFrom": {
+                        "secretKeyRef": {
+                            "name": OPEN_SANDBOX_API_KEY_SECRET_NAME,
+                            "key": OPEN_SANDBOX_API_KEY_SECRET_KEY,
+                            "optional": True,
+                        }
+                    },
+                }
+            )
         env.extend(agent_runtime_extra_env_items())
 
     init_containers = [
@@ -1420,7 +1445,7 @@ def create_agent_statefulset_manifest(
         "metadata": {
             "name": sandbox_name(name),
             "namespace": namespace,
-            "labels": {"app": "ai-agent", "agent-name": name, "runtime-kind": runtime_kind},
+            "labels": {"app": "ai-agent", "agent-name": name, "runtime-kind": runtime_kind, **agent_owner_labels(name)},
         },
         "spec": {
             "serviceName": sandbox_name(name),
@@ -1433,7 +1458,12 @@ def create_agent_statefulset_manifest(
             },
             "template": {
                 "metadata": {
-                    "labels": {"app": "ai-agent", "agent-name": name, "runtime-kind": runtime_kind},
+                    "labels": {
+                        "app": "ai-agent",
+                        "agent-name": name,
+                        "runtime-kind": runtime_kind,
+                        **agent_owner_labels(name),
+                    },
                     "annotations": {POD_TEMPLATE_REVISION_ANNOTATION: pod_template_revision},
                 },
                 "spec": pod_spec,
@@ -1460,19 +1490,17 @@ def create_mcp_network_policy_manifest(name: str, namespace: str, allowed_mcp_ty
     """Build a NetworkPolicy restricting MCP egress to allowed server types."""
     egress_rules: list[dict[str, Any]] = agent_baseline_egress_rules()
     for mcp_type in allowed_mcp_types:
-        egress_rules.append({
-            "to": [
-                {
-                    "namespaceSelector": {
-                        "matchLabels": {"sandbox.enterprise.ai/mcp-hub": "true"}
-                    },
-                    "podSelector": {
-                        "matchLabels": {"mcp.sandbox.enterprise.ai/type": mcp_type}
-                    },
-                }
-            ],
-            "ports": [{"protocol": "TCP", "port": 8000}],
-        })
+        egress_rules.append(
+            {
+                "to": [
+                    {
+                        "namespaceSelector": {"matchLabels": {"sandbox.enterprise.ai/mcp-hub": "true"}},
+                        "podSelector": {"matchLabels": {"mcp.sandbox.enterprise.ai/type": mcp_type}},
+                    }
+                ],
+                "ports": [{"protocol": "TCP", "port": 8000}],
+            }
+        )
 
     manifest: dict[str, Any] = {
         "apiVersion": "networking.k8s.io/v1",
@@ -1484,6 +1512,7 @@ def create_mcp_network_policy_manifest(name: str, namespace: str, allowed_mcp_ty
                 "app": "ai-agent",
                 "agent-name": name,
                 "sandbox.enterprise.ai/policy-type": "mcp-egress",
+                **agent_owner_labels(name),
             },
         },
         "spec": {
@@ -1502,18 +1531,15 @@ def create_a2a_egress_network_policy_manifest(
 ) -> dict[str, Any]:
     """Build a NetworkPolicy allowing A2A egress to specific target agents."""
     from config import API_PORT as _API_PORT
+
     egress_rules: list[dict[str, Any]] = []
     for target in allowed_targets:
         egress_rules.append(
             {
                 "to": [
                     {
-                        "namespaceSelector": {
-                            "matchLabels": {"kubernetes.io/metadata.name": target["namespace"]}
-                        },
-                        "podSelector": {
-                            "matchLabels": {"app": "ai-agent", "agent-name": target["name"]}
-                        },
+                        "namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": target["namespace"]}},
+                        "podSelector": {"matchLabels": {"app": "ai-agent", "agent-name": target["name"]}},
                     }
                 ],
                 "ports": [{"protocol": "TCP", "port": _API_PORT}],
@@ -1530,6 +1556,7 @@ def create_a2a_egress_network_policy_manifest(
                 "app": "ai-agent",
                 "agent-name": name,
                 "sandbox.enterprise.ai/policy-type": "a2a-egress",
+                **agent_owner_labels(name),
             },
         },
         "spec": {
@@ -1547,16 +1574,13 @@ def create_a2a_ingress_network_policy_manifest(
 ) -> dict[str, Any]:
     """Build a NetworkPolicy allowing A2A ingress from specific caller agents."""
     from config import API_PORT as _API_PORT
+
     allowed_sources: list[dict[str, Any]] = agent_baseline_ingress_peers()
     for caller in allowed_callers:
         allowed_sources.append(
             {
-                "namespaceSelector": {
-                    "matchLabels": {"kubernetes.io/metadata.name": caller["namespace"]}
-                },
-                "podSelector": {
-                    "matchLabels": {"app": "ai-agent", "agent-name": caller["name"]}
-                },
+                "namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": caller["namespace"]}},
+                "podSelector": {"matchLabels": {"app": "ai-agent", "agent-name": caller["name"]}},
             }
         )
 
@@ -1570,6 +1594,7 @@ def create_a2a_ingress_network_policy_manifest(
                 "app": "ai-agent",
                 "agent-name": name,
                 "sandbox.enterprise.ai/policy-type": "a2a-ingress",
+                **agent_owner_labels(name),
             },
         },
         "spec": {
@@ -1601,15 +1626,25 @@ def _worker_git_env(git_config: dict[str, Any] | None) -> list[dict[str, Any]]:
         items.append({"name": "GIT_BRANCH", "value": branch})
     cred_secret = str(git_config.get("credentialSecretRef", "") or "").strip()
     if cred_secret and auth_method == "token":
-        items.append({
-            "name": "GIT_TOKEN",
-            "valueFrom": {"secretKeyRef": {"name": cred_secret, "key": "token", "optional": True}},
-        })
+        items.append(
+            {
+                "name": "GIT_TOKEN",
+                "valueFrom": {"secretKeyRef": {"name": cred_secret, "key": "token", "optional": True}},
+            }
+        )
     elif cred_secret and auth_method == "basic":
-        items.extend([
-            {"name": "GIT_USERNAME", "valueFrom": {"secretKeyRef": {"name": cred_secret, "key": "username", "optional": True}}},
-            {"name": "GIT_PASSWORD", "valueFrom": {"secretKeyRef": {"name": cred_secret, "key": "password", "optional": True}}},
-        ])
+        items.extend(
+            [
+                {
+                    "name": "GIT_USERNAME",
+                    "valueFrom": {"secretKeyRef": {"name": cred_secret, "key": "username", "optional": True}},
+                },
+                {
+                    "name": "GIT_PASSWORD",
+                    "valueFrom": {"secretKeyRef": {"name": cred_secret, "key": "password", "optional": True}},
+                },
+            ]
+        )
     return items
 
 
@@ -1711,7 +1746,10 @@ def create_worker_job_manifest(
                                 {"name": "WORKFLOW_RUN_ID", "value": run_id or ""},
                                 {"name": "EVAL_RUN_ID", "value": run_id or ""},
                                 {"name": "PYTHONDONTWRITEBYTECODE", "value": "1"},
-                                {"name": "MAX_PARALLEL_STEPS", "value": str(max_parallel_steps or DEFAULT_MAX_PARALLEL_STEPS)},
+                                {
+                                    "name": "MAX_PARALLEL_STEPS",
+                                    "value": str(max_parallel_steps or DEFAULT_MAX_PARALLEL_STEPS),
+                                },
                                 *worker_passthrough_env(),
                                 *_worker_git_env(git_config),
                             ],
