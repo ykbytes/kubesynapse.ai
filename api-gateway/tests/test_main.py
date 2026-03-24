@@ -1774,5 +1774,59 @@ class LogStreamTests(unittest.TestCase):
             self.assertEqual(ctx.exception.status_code, 404)
 
 
+class GatewayProviderModelTests(unittest.IsolatedAsyncioTestCase):
+    async def test_add_copilot_model_falls_back_when_token_exchange_fails(self) -> None:
+        class FakeSecret:
+            data = {"GITHUB_COPILOT_TOKEN": "Z2gtb2F1dGgtdG9rZW4="}
+
+        class FakeCoreV1Api:
+            def read_namespaced_secret(self, name, namespace):
+                self.name = name
+                self.namespace = namespace
+                return FakeSecret()
+
+        class FakeAsyncClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def post(self, url, **kwargs):
+                self.url = url
+                self.kwargs = kwargs
+                return httpx.Response(200, json={"ok": True}, request=httpx.Request("POST", url))
+
+        fake_client = FakeAsyncClient()
+        fake_core_v1_api = FakeCoreV1Api()
+        fake_k8s_client = types.SimpleNamespace(CoreV1Api=lambda: fake_core_v1_api)
+
+        with (
+            patch.dict(api_gateway_main.os.environ, {"POD_NAMESPACE": "default"}, clear=False),
+            patch.object(api_gateway_main, "LLM_SECRET_NAME", "ai-agent-sandbox-llm-api-keys"),
+            patch.object(
+                api_gateway_main, "_exchange_copilot_session_token", AsyncMock(side_effect=RuntimeError("boom"))
+            ),
+            patch.object(api_gateway_main.httpx, "AsyncClient", return_value=fake_client),
+            patch.dict(sys.modules, {"kubernetes": types.SimpleNamespace(client=fake_k8s_client)}),
+        ):
+            response = await api_gateway_main.llm_add_provider_model(
+                "GITHUB_COPILOT_TOKEN",
+                api_gateway_main.ProviderModelAdd(model_id="gpt-4o-mini", alias="mini"),
+                user={"role": "operator"},
+            )
+
+        self.assertEqual(response, {"ok": True})
+        self.assertEqual(fake_core_v1_api.name, "ai-agent-sandbox-llm-api-keys")
+        self.assertEqual(fake_core_v1_api.namespace, "default")
+        self.assertEqual(fake_client.url, f"{api_gateway_main.LITELLM_INTERNAL_URL}/model/new")
+        payload = fake_client.kwargs["json"]
+        self.assertEqual(payload["model_name"], "copilot-mini")
+        self.assertEqual(payload["litellm_params"]["model"], "openai/gpt-4o-mini")
+        self.assertEqual(payload["litellm_params"]["api_key"], "gh-oauth-token")
+        self.assertEqual(payload["litellm_params"]["api_base"], "https://api.githubcopilot.com")
+        self.assertEqual(payload["litellm_params"]["extra_headers"], {"Copilot-Integration-Id": "vscode-chat"})
+
+
 if __name__ == "__main__":
     unittest.main()

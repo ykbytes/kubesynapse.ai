@@ -1,6 +1,11 @@
 global:
   imagePullSecrets: []
 
+trustBundle:
+  enabled: false
+  configMapName: ""
+  mountPath: /etc/ssl/certs/custom-ca-bundle.pem
+
 litellm:
   image:
     repository: litellm/litellm-database

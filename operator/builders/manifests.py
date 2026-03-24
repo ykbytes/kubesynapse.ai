@@ -90,6 +90,8 @@ from config import (
     RUNTIME_SERVICE_ACCOUNT,
     SECRET_NAME,
     SUPPORTED_RUNTIME_KINDS,
+    TRUST_BUNDLE_CONFIGMAP_NAME,
+    TRUST_BUNDLE_MOUNT_PATH,
     WORKER_ACTIVE_DEADLINE_SECONDS,
     WORKER_CPU_LIMIT,
     WORKER_CPU_REQUEST,
@@ -129,6 +131,30 @@ from builders.helpers import (
 )
 
 logger = logging.getLogger("operator.builders")
+
+
+def trust_bundle_enabled() -> bool:
+    """Return True when runtime pods should mount a trust bundle."""
+    return bool(TRUST_BUNDLE_CONFIGMAP_NAME and TRUST_BUNDLE_MOUNT_PATH)
+
+
+def trust_bundle_volume_mount() -> dict[str, Any]:
+    """Build the trust bundle file mount used by runtime containers."""
+    return {
+        "name": "trust-bundle",
+        "mountPath": TRUST_BUNDLE_MOUNT_PATH,
+        "subPath": "ca-bundle.pem",
+        "readOnly": True,
+    }
+
+
+def trust_bundle_volume() -> dict[str, Any]:
+    """Build the trust bundle config map volume for runtime pods."""
+    return {
+        "name": "trust-bundle",
+        "configMap": {"name": TRUST_BUNDLE_CONFIGMAP_NAME},
+    }
+
 
 # ---------------------------------------------------------------------------
 # Platform-managed env var names (operators inject these; user overrides are
@@ -1051,6 +1077,9 @@ def create_agent_statefulset_manifest(
         {"name": "state-volume", "mountPath": "/app/state"},
     ]
     volumes: list[dict[str, Any]] = [{"name": "tmp-volume", "emptyDir": {"sizeLimit": "1Gi"}}]
+    if trust_bundle_enabled():
+        volume_mounts.append(trust_bundle_volume_mount())
+        volumes.append(trust_bundle_volume())
 
     agent_image = RUNTIME_IMAGE
     agent_image_pull_policy = RUNTIME_IMAGE_PULL_POLICY
@@ -1311,6 +1340,10 @@ def create_agent_statefulset_manifest(
             )
         env.extend(agent_runtime_extra_env_items())
 
+    init_volume_mounts = [{"name": "state-volume", "mountPath": "/app/state"}]
+    if trust_bundle_enabled():
+        init_volume_mounts.append(trust_bundle_volume_mount())
+
     init_containers = [
         {
             "name": "init-state-volume",
@@ -1331,7 +1364,7 @@ def create_agent_statefulset_manifest(
                 "capabilities": {"drop": ["ALL"], "add": ["CHOWN", "FOWNER"]},
                 "seccompProfile": {"type": "RuntimeDefault"},
             },
-            "volumeMounts": [{"name": "state-volume", "mountPath": "/app/state"}],
+            "volumeMounts": init_volume_mounts,
         }
     ]
 

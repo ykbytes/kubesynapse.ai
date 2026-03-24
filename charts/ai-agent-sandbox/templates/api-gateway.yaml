@@ -22,6 +22,9 @@ spec:
 {{- if .Values.skillsCatalog.enabled }}
         checksum/skills-catalog: {{ include (print $.Template.BasePath "/skills-catalog-configmap.yaml") . | sha256sum }}
 {{- end }}
+{{- if .Values.trustBundle.enabled }}
+        checksum/trust-bundle: {{ include (print $.Template.BasePath "/trust-bundle-configmap.yaml") . | sha256sum }}
+{{- end }}
       labels:
         app: api-gateway
     spec:
@@ -45,6 +48,11 @@ spec:
         - name: skills-catalog
           configMap:
             name: {{ include "ai-agent-sandbox.fullname" . }}-skills-catalog
+{{- end }}
+{{- if .Values.trustBundle.enabled }}
+        - name: trust-bundle
+          configMap:
+            name: {{ default (printf "%s-trust-bundle" (include "ai-agent-sandbox.fullname" .)) .Values.trustBundle.configMapName }}
 {{- end }}
       containers:
         - name: api-gateway
@@ -205,12 +213,26 @@ spec:
             - name: MCP_SIDECAR_CATALOG_JSON
               value: {{ include "ai-agent-sandbox.mcpSidecarCatalogJson" . | quote }}
 {{- end }}
+{{- if .Values.trustBundle.enabled }}
+            - name: SSL_CERT_FILE
+              value: {{ .Values.trustBundle.mountPath | quote }}
+            - name: REQUESTS_CA_BUNDLE
+              value: {{ .Values.trustBundle.mountPath | quote }}
+            - name: NODE_EXTRA_CA_CERTS
+              value: {{ .Values.trustBundle.mountPath | quote }}
+{{- end }}
           volumeMounts:
             - name: tmp
               mountPath: /tmp
 {{- if .Values.skillsCatalog.enabled }}
             - name: skills-catalog
               mountPath: /data
+              readOnly: true
+{{- end }}
+{{- if .Values.trustBundle.enabled }}
+            - name: trust-bundle
+              mountPath: {{ .Values.trustBundle.mountPath | quote }}
+              subPath: ca-bundle.pem
               readOnly: true
 {{- end }}
           resources:

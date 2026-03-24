@@ -94,6 +94,19 @@ def serialize_env_value(value: Any) -> str:
     return str(value)
 
 
+def with_trust_bundle_env(raw_env: Any) -> Any:
+    """Merge trust bundle env vars into a runtime env mapping when configured."""
+    if not isinstance(raw_env, dict):
+        return raw_env
+
+    merged = dict(raw_env)
+    if TRUST_BUNDLE_CONFIGMAP_NAME and TRUST_BUNDLE_MOUNT_PATH:
+        merged.setdefault("SSL_CERT_FILE", TRUST_BUNDLE_MOUNT_PATH)
+        merged.setdefault("REQUESTS_CA_BUNDLE", TRUST_BUNDLE_MOUNT_PATH)
+        merged.setdefault("NODE_EXTRA_CA_CERTS", TRUST_BUNDLE_MOUNT_PATH)
+    return merged
+
+
 # ---------------------------------------------------------------------------
 # Service endpoints & images
 # ---------------------------------------------------------------------------
@@ -137,6 +150,8 @@ SECRET_PROVISIONING_MODE: str = os.getenv("SECRET_PROVISIONING_MODE", "native").
 DEFAULT_LITELLM_MASTER_KEY: str = os.getenv("DEFAULT_LITELLM_MASTER_KEY", "").strip()
 DEFAULT_API_GATEWAY_SHARED_TOKEN: str = os.getenv("DEFAULT_API_GATEWAY_SHARED_TOKEN", "").strip()
 API_GATEWAY_INTERNAL_URL: str = os.getenv("API_GATEWAY_INTERNAL_URL", "").strip()
+TRUST_BUNDLE_CONFIGMAP_NAME: str = os.getenv("TRUST_BUNDLE_CONFIGMAP_NAME", "").strip()
+TRUST_BUNDLE_MOUNT_PATH: str = os.getenv("TRUST_BUNDLE_MOUNT_PATH", "").strip()
 
 # ---------------------------------------------------------------------------
 # Static constants (not loaded from environment)
@@ -286,13 +301,13 @@ OPEN_SANDBOX_API_KEY_SECRET_KEY: str = os.getenv("OPEN_SANDBOX_API_KEY_SECRET_KE
 # Runtime extra env & config file env-var names
 # ---------------------------------------------------------------------------
 
-AGENT_RUNTIME_EXTRA_ENV: Any = get_json_env("AGENT_RUNTIME_EXTRA_ENV_JSON", {})
-GOOSE_RUNTIME_EXTRA_ENV: Any = get_json_env("GOOSE_RUNTIME_EXTRA_ENV_JSON", {})
+AGENT_RUNTIME_EXTRA_ENV: Any = with_trust_bundle_env(get_json_env("AGENT_RUNTIME_EXTRA_ENV_JSON", {}))
+GOOSE_RUNTIME_EXTRA_ENV: Any = with_trust_bundle_env(get_json_env("GOOSE_RUNTIME_EXTRA_ENV_JSON", {}))
 GOOSE_RUNTIME_CONFIG_FILES_ENV: str = "GOOSE_RUNTIME_CONFIG_FILES_JSON"
-CODEX_RUNTIME_EXTRA_ENV: Any = get_json_env("CODEX_RUNTIME_EXTRA_ENV_JSON", {})
+CODEX_RUNTIME_EXTRA_ENV: Any = with_trust_bundle_env(get_json_env("CODEX_RUNTIME_EXTRA_ENV_JSON", {}))
 CODEX_RUNTIME_CONFIG_FILES_ENV: str = "CODEX_RUNTIME_CONFIG_FILES_JSON"
 CODEX_MCP_SIDECARS_ENV: str = "CODEX_MCP_SIDECARS_JSON"
-OPENCODE_RUNTIME_EXTRA_ENV: Any = get_json_env("OPENCODE_RUNTIME_EXTRA_ENV_JSON", {})
+OPENCODE_RUNTIME_EXTRA_ENV: Any = with_trust_bundle_env(get_json_env("OPENCODE_RUNTIME_EXTRA_ENV_JSON", {}))
 OPENCODE_RUNTIME_CONFIG_FILES_ENV: str = "OPENCODE_RUNTIME_CONFIG_FILES_JSON"
 OPENCODE_MCP_SIDECARS_ENV: str = "OPENCODE_MCP_SIDECARS_JSON"
 AGENT_SKILL_FILES_ENV: str = "AGENT_SKILL_FILES_JSON"

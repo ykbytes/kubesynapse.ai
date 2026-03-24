@@ -2,6 +2,9 @@ global:
   imagePullSecrets:
     - dockerhub-regcred
 
+trustBundle:
+  enabled: true
+
 agentRuntime:
   image:
     repository: docker.io/yakdhane/ai-agent-runtime

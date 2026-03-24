@@ -18,6 +18,7 @@ from collections.abc import AsyncGenerator
 from typing import Any, cast
 from urllib.parse import urlencode
 
+import certifi
 import httpx
 from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -6169,13 +6170,19 @@ async def _fetch_copilot_models(copilot_token: str) -> list[dict[str, str]]:
         return _copilot_model_cache
 
     try:
-        async with httpx.AsyncClient(timeout=15.0, trust_env=False) as client:
+        session_token, api_endpoint = await _exchange_copilot_session_token(copilot_token)
+        models_url = f"{api_endpoint.rstrip('/')}/models" if api_endpoint else "https://api.githubcopilot.com/models"
+        async with httpx.AsyncClient(timeout=15.0, trust_env=False, verify=_outbound_ssl_verify()) as client:
             resp = await client.get(
-                "https://api.githubcopilot.com/models",
+                models_url,
                 headers={
-                    "Authorization": f"Bearer {copilot_token}",
+                    "Authorization": f"Bearer {session_token}",
                     "Accept": "application/json",
+                    "User-Agent": "GitHubCopilotChat/0.25.2024",
+                    "Editor-Version": "vscode/1.96.2",
+                    "Editor-Plugin-Version": "copilot-chat/0.25.2024",
                     "Copilot-Integration-Id": "vscode-chat",
+                    "Openai-Intent": "conversation-edits",
                 },
             )
             resp.raise_for_status()
@@ -6771,13 +6778,7 @@ async def llm_provider_suggestions(provider: str, q: str = "", user=Depends(veri
 
                 if q:
                     ql = q.lower()
-                    live_suggestions = [
-                        s
-                        for s in live_suggestions
-                        if ql in s["model_id"].lower()
-                        or ql in s["display_name"].lower()
-                        or ql in s.get("description", "").lower()
-                    ]
+                    live_suggestions = [s for s in live_suggestions if _suggestion_matches(s, q)]
 
                 configured_live = [s for s in live_suggestions if s.get("description") == "Already configured"]
                 unconfigured_live = [s for s in live_suggestions if s.get("description") != "Already configured"]
@@ -6793,11 +6794,7 @@ async def llm_provider_suggestions(provider: str, q: str = "", user=Depends(veri
     # Apply search filter
     if q:
         ql = q.lower()
-        combined = [
-            s
-            for s in combined
-            if ql in s["model_id"].lower() or ql in s["display_name"].lower() or ql in s.get("description", "").lower()
-        ]
+        combined = [s for s in combined if _suggestion_matches(s, q)]
 
     return {"provider": provider, "suggestions": combined}
 
@@ -6820,6 +6817,7 @@ async def llm_add_provider_model(provider: str, body: ProviderModelAdd, user=Dep
     # os.environ/ reference, because the token is set dynamically after LiteLLM
     # pod start so the env var may not be present.
     actual_api_key: str | None = None
+    actual_api_base: str | None = None
     if provider == "GITHUB_COPILOT_TOKEN":
         try:
             import base64
@@ -6841,12 +6839,25 @@ async def llm_add_provider_model(provider: str, body: ProviderModelAdd, user=Dep
             raise HTTPException(
                 status_code=400, detail="GitHub Copilot is not authenticated. Please connect via the device flow first."
             )
+        try:
+            exchanged_token, resolved_api_endpoint = await _exchange_copilot_session_token(actual_api_key)
+            actual_api_key = exchanged_token
+            actual_api_base = resolved_api_endpoint or meta.get("api_base") or None
+        except Exception as exc:
+            logger.warning(
+                "Failed to exchange GitHub token for Copilot session token; falling back to stored OAuth token: %s",
+                exc,
+            )
+            actual_api_base = meta.get("api_base") or None
 
     litellm_params: dict[str, Any] = {
         "model": litellm_model,
         "api_key": actual_api_key if actual_api_key else api_key_ref,
     }
-    if meta.get("api_base"):
+    if provider == "GITHUB_COPILOT_TOKEN":
+        if actual_api_base:
+            litellm_params["api_base"] = actual_api_base
+    elif meta.get("api_base"):
         litellm_params["api_base"] = meta["api_base"]
     if meta.get("extra_headers"):
         litellm_params["extra_headers"] = json.loads(meta["extra_headers"])
@@ -6883,6 +6894,70 @@ _COPILOT_ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token"
 
 # In-memory device flow state (keyed by user sub). Cleared on success/error.
 _copilot_device_flows: dict[str, dict[str, Any]] = {}
+
+
+def _normalized_search_text(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", value.lower())
+
+
+def _suggestion_matches(entry: dict[str, str], query: str) -> bool:
+    ql = query.lower()
+    qn = _normalized_search_text(query)
+    for text in (entry.get("model_id", ""), entry.get("display_name", ""), entry.get("description", "")):
+        lowered = text.lower()
+        if ql in lowered:
+            return True
+        if qn and qn in _normalized_search_text(text):
+            return True
+    return False
+
+
+def _outbound_ssl_verify() -> str:
+    return certifi.where()
+
+
+async def _copilot_get_json(url: str, headers: dict[str, str]) -> Any:
+    last_error: Exception | None = None
+    for verify in (_outbound_ssl_verify(), False):
+        try:
+            async with httpx.AsyncClient(timeout=15.0, trust_env=True, verify=verify) as client:
+                resp = await client.get(url, headers=headers)
+                resp.raise_for_status()
+                return resp.json()
+        except httpx.HTTPStatusError:
+            raise
+        except httpx.TransportError as exc:
+            last_error = exc
+            if verify is not False:
+                logger.warning(
+                    "Copilot HTTPS request failed with certificate verification; retrying insecurely: %s", exc
+                )
+                continue
+            raise
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("Copilot request failed")
+
+
+async def _exchange_copilot_session_token(github_oauth_token: str) -> tuple[str, str | None]:
+    data = await _copilot_get_json(
+        "https://api.github.com/copilot_internal/v2/token",
+        {
+            "Authorization": f"token {github_oauth_token}",
+            "Accept": "application/json",
+            "User-Agent": "GitHubCopilotChat/0.25.2024",
+            "Editor-Version": "vscode/1.96.2",
+            "Editor-Plugin-Version": "copilot-chat/0.25.2024",
+        },
+    )
+
+    token = str(data.get("token") or "").strip()
+    if not token:
+        raise ValueError("Copilot token exchange response did not include a session token")
+
+    endpoints = data.get("endpoints") if isinstance(data.get("endpoints"), dict) else {}
+    api_endpoint = str(endpoints.get("api") or "").strip() or None
+    return token, api_endpoint
 
 
 @app.post("/api/copilot/auth/device")

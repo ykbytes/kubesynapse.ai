@@ -54,6 +54,9 @@ spec:
     metadata:
       annotations:
         checksum/secrets: {{ include (print $.Template.BasePath "/external-secrets.yaml") . | sha256sum }}
+{{- if .Values.trustBundle.enabled }}
+        checksum/trust-bundle: {{ include (print $.Template.BasePath "/trust-bundle-configmap.yaml") . | sha256sum }}
+{{- end }}
       labels:
         app: operator
     spec:
@@ -73,6 +76,11 @@ spec:
       volumes:
         - name: tmp
           emptyDir: {}
+{{- if .Values.trustBundle.enabled }}
+        - name: trust-bundle
+          configMap:
+            name: {{ default (printf "%s-trust-bundle" (include "ai-agent-sandbox.fullname" .)) .Values.trustBundle.configMapName }}
+{{- end }}
       containers:
         - name: operator
           image: "{{ .Values.operator.image.repository }}:{{ .Values.operator.image.tag }}"
@@ -192,6 +200,12 @@ spec:
               value: {{ .Values.opencodeRuntime.provider | default "litellm" | quote }}
             - name: OPENCODE_RUNTIME_EXTRA_ENV_JSON
               value: {{ .Values.opencodeRuntime.env | default dict | toJson | quote }}
+{{- if .Values.trustBundle.enabled }}
+            - name: TRUST_BUNDLE_CONFIGMAP_NAME
+              value: {{ default (printf "%s-trust-bundle" (include "ai-agent-sandbox.fullname" .)) .Values.trustBundle.configMapName | quote }}
+            - name: TRUST_BUNDLE_MOUNT_PATH
+              value: {{ .Values.trustBundle.mountPath | quote }}
+{{- end }}
             - name: WORKER_IMAGE
               value: "{{ .Values.operator.workerImage.repository }}:{{ .Values.operator.workerImage.tag }}"
             - name: WORKER_IMAGE_PULL_POLICY
@@ -317,6 +331,12 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+{{- if .Values.trustBundle.enabled }}
+            - name: trust-bundle
+              mountPath: {{ .Values.trustBundle.mountPath | quote }}
+              subPath: ca-bundle.pem
+              readOnly: true
+{{- end }}
           resources:
 {{ toYaml .Values.operator.resources | indent 12 }}
           startupProbe:

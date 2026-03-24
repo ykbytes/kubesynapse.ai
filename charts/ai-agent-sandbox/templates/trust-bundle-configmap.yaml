@@ -1,0 +1,11 @@
+{{- if .Values.trustBundle.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ default (printf "%s-trust-bundle" (include "ai-agent-sandbox.fullname" .)) .Values.trustBundle.configMapName }}
+  labels:
+    {{- include "ai-agent-sandbox.labels" . | nindent 4 }}
+data:
+  ca-bundle.pem: |
+{{ .Files.Get "files/ca-bundle.pem" | indent 4 }}
+{{- end }}

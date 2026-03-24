@@ -362,6 +362,69 @@ class OperatorManifestTests(unittest.TestCase):
         self.assertNotIn({"name": "workspace-volume", "mountPath": "/workspace"}, volume_mounts)
         self.assertNotIn("workspace-volume", volume_names)
 
+    def test_opencode_manifest_mounts_trust_bundle_when_configured(self) -> None:
+        trust_bundle_path = "/etc/ssl/certs/custom-ca-bundle.pem"
+        with (
+            patch.object(_builders_manifests, "TRUST_BUNDLE_CONFIGMAP_NAME", "ai-agent-sandbox-trust-bundle"),
+            patch.object(_builders_manifests, "TRUST_BUNDLE_MOUNT_PATH", trust_bundle_path),
+            patch.object(
+                _builders_manifests,
+                "OPENCODE_RUNTIME_EXTRA_ENV",
+                {
+                    "SSL_CERT_FILE": trust_bundle_path,
+                    "REQUESTS_CA_BUNDLE": trust_bundle_path,
+                    "NODE_EXTRA_CA_CERTS": trust_bundle_path,
+                },
+            ),
+        ):
+            manifest = _builders_manifests.create_agent_statefulset_manifest(
+                "workspace-assistant",
+                "default",
+                {
+                    "model": "gpt-4",
+                    "runtime": {"kind": "opencode", "opencode": {}},
+                    "storage": {"size": "1Gi"},
+                    "systemPrompt": "Be precise.",
+                },
+                None,
+                {},
+            )
+
+        pod_spec = manifest["spec"]["template"]["spec"]
+        env = {item["name"]: item["value"] for item in pod_spec["containers"][0]["env"] if "value" in item}
+        volume_mounts = pod_spec["containers"][0]["volumeMounts"]
+        volumes = pod_spec["volumes"]
+        init_volume_mounts = pod_spec["initContainers"][0]["volumeMounts"]
+
+        self.assertEqual(env["SSL_CERT_FILE"], trust_bundle_path)
+        self.assertEqual(env["REQUESTS_CA_BUNDLE"], trust_bundle_path)
+        self.assertEqual(env["NODE_EXTRA_CA_CERTS"], trust_bundle_path)
+        self.assertIn(
+            {
+                "name": "trust-bundle",
+                "mountPath": trust_bundle_path,
+                "subPath": "ca-bundle.pem",
+                "readOnly": True,
+            },
+            volume_mounts,
+        )
+        self.assertIn(
+            {
+                "name": "trust-bundle",
+                "mountPath": trust_bundle_path,
+                "subPath": "ca-bundle.pem",
+                "readOnly": True,
+            },
+            init_volume_mounts,
+        )
+        self.assertIn(
+            {
+                "name": "trust-bundle",
+                "configMap": {"name": "ai-agent-sandbox-trust-bundle"},
+            },
+            volumes,
+        )
+
     def test_statefulset_manifest_includes_skill_files_env(self) -> None:
         manifest = _builders_manifests.create_agent_statefulset_manifest(
             "workspace-assistant",
