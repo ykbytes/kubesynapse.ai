@@ -1105,67 +1105,71 @@ exclude = ["tests/"]
 
 ## 16. Migration Strategy
 
+> **Status note (March 24, 2026)**: Only items explicitly marked ✅ below have been
+> completed. All other items remain TODO. Do not add checkmarks without verifying
+> the implementation exists in the codebase.
+
 ### Phase 1: Foundation (Weeks 1-3)
 
 **Goal**: Fix ship-blocking issues without changing architecture.
 
-1. ✅ Add Alembic database migrations
-2. ✅ Split `operator/main.py` into controller modules
-3. ✅ Split `agent-runtime/agent_logic.py` into modules
-4. ✅ Replace SHA-1 with SHA-256
-5. ✅ Add `status.conditions[]` to all CRDs
-6. ✅ Add structured error codes to operator and worker
-7. ✅ Add graceful shutdown handlers to all components
-8. ✅ Add `mypy` strict mode to CI
-9. ✅ Add Kubernetes Lease-based leader election
+1. ✅ Add Alembic database migrations — `operator/alembic.ini` + `operator/migrations/` exist
+2. ✅ Split `operator/main.py` into controller modules — `operator/controllers/`, `builders/`, `services/` exist
+3. ☐ Split `agent-runtime/agent_logic.py` into modules — still monolithic (~5,800 lines)
+4. ☐ Replace SHA-1 with SHA-256 — 5 `hashlib.sha1()` calls remain
+5. ☐ Add `status.conditions[]` to all CRDs — only custom `phase` exists
+6. ☐ Add structured error codes to operator and worker — `errors.py` exists but bare exceptions still used
+7. ☐ Add graceful shutdown handlers to all components
+8. ☐ Add `mypy` strict mode to CI — only flake8 in CI currently
+9. ☐ Add Kubernetes Lease-based leader election
 
 ### Phase 2: Scalability (Weeks 4-6)
 
 **Goal**: Remove horizontal scaling barriers.
 
-1. ✅ Replace SQLite checkpointing with PostgreSQL
-2. ✅ Make PostgreSQL the primary state store (not a mirror)
-3. ✅ Add connection pooling configuration
-4. ✅ Add per-tenant concurrency limits for parallel step execution
-5. ✅ Add artifact retention policy and garbage collection
-6. ✅ Implement idempotency guards (Lease-based locking for workers)
-7. ✅ Move OpenCode session registry to Redis
+1. ☐ Replace SQLite checkpointing with PostgreSQL — still uses `SqliteSaver`
+2. ☐ Make PostgreSQL the primary state store (not a mirror)
+3. ☐ Add connection pooling configuration
+4. ☐ Add per-tenant concurrency limits for parallel step execution
+5. ☐ Add artifact retention policy and garbage collection
+6. ☐ Implement idempotency guards (Lease-based locking for workers)
+7. ☐ Move OpenCode session registry to Redis
 
 ### Phase 3: Standards (Weeks 7-10)
 
 **Goal**: Adopt industry standards for interoperability.
 
-1. ✅ Implement OpenTelemetry distributed tracing
-2. ✅ Define and publish runtime contract (JSON Schema)
-3. ✅ Add proper A2A protocol support (Agent Cards, task lifecycle)
-4. ✅ Upgrade MCP sidecars to official MCP SDK
-5. ✅ Add CloudEvents for event streaming
-6. ✅ Integrate NATS JetStream for event bus
-7. ✅ Add API versioning to gateway
+1. ☐ Implement OpenTelemetry distributed tracing — `tracing.py` skeleton exists, not wired end-to-end
+2. ☐ Define and publish runtime contract (JSON Schema)
+3. ☐ Add proper A2A protocol support (Agent Cards, task lifecycle)
+4. ☐ Upgrade MCP sidecars to official MCP SDK
+5. ☐ Add CloudEvents for event streaming
+6. ☐ Integrate NATS JetStream for event bus
+7. ☐ Add API versioning to gateway
 
 ### Phase 4: Security & Compliance (Weeks 11-13)
 
 **Goal**: Enterprise security posture.
 
-1. ✅ Add ValidatingWebhookConfiguration for tenant enforcement
-2. ✅ Implement comprehensive audit logging
-3. ✅ Add seccomp profiles and PSS enforcement
-4. ✅ Per-agent LiteLLM API key scoping
-5. ✅ Egress NetworkPolicy allow-listing
-6. ✅ Prompt injection detection guardrail
-7. ✅ Secret rotation via External Secrets Operator
+1. ☐ Add ValidatingWebhookConfiguration for tenant enforcement
+2. ☐ Implement comprehensive audit logging
+3. ☐ Add seccomp profiles and PSS enforcement
+4. ☐ Per-agent LiteLLM API key scoping
+5. ☐ Egress NetworkPolicy allow-listing
+6. ☐ Prompt injection detection guardrail
+7. ☐ Secret rotation via External Secrets Operator
 
 ### Phase 5: Polish (Weeks 14-16)
 
 **Goal**: Production readiness signoff.
 
-1. ✅ Split Helm chart into sub-charts
-2. ✅ Add Helm `values.schema.json`
-3. ✅ Performance benchmarks and published limits
-4. ✅ Chaos testing (operator restart, node failure, OOM)
-5. ✅ End-to-end test suite
-6. ✅ Operational runbook document
-7. ✅ CRD conversion webhook for future version migration
+1. ☐ Split Helm chart into sub-charts
+2. ☐ Add Helm `values.schema.json`
+3. ☐ Performance benchmarks and published limits
+4. ☐ Chaos testing (operator restart, node failure, OOM)
+5. ☐ End-to-end test suite
+6. ☐ Operational runbook document
+7. ☐ CRD conversion webhook for future version migration
 
 ---
 
@@ -1174,8 +1178,8 @@ exclude = ["tests/"]
 ### Tier 1 — Will get roasted immediately
 | # | Issue | Fix Effort | Risk if Ignored |
 |---|-------|-----------|-----------------|
-| 1 | Main.py 3900-line monolith | 3 days | "This is prototype code" |
-| 2 | agent_logic.py 4000-line monolith | 3 days | "Unmaintainable" |
+| 1 | Main.py 3900-line monolith | 3 days | "This is prototype code" — ✅ DONE (operator split into controllers/, builders/, services/) |
+| 2 | agent_logic.py ~5,800-line monolith | 3 days | "Unmaintainable" — still monolithic |
 | 3 | No database migrations | 1 day | Data loss on upgrade |
 | 4 | SQLite checkpointing | 2 days | Cannot scale past 1 replica |
 | 5 | Dual source of truth (CRD + DB) | 2 days | Split-brain state |

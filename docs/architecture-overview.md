@@ -42,7 +42,7 @@ The control plane is responsible for provisioning, governance, and orchestration
 The data plane is responsible for serving requests and executing agent logic:
 
 - the API gateway authenticates users and routes requests to the correct agent runtime
-- each agent runtime executes either the LangGraph stack or a Goose adapter behind the same invoke contract
+- each agent runtime executes one of four runtime adapters (LangGraph, Goose, Codex, or OpenCode) behind the same invoke contract
 - LiteLLM brokers model access to external model providers
 - Qdrant stores vector data for retrieval
 - Redis backs LiteLLM response caching
@@ -148,18 +148,21 @@ flowchart LR
 
 | Component | Responsibility | Current implementation |
 |---|---|---|
-| API Gateway | Authenticates callers, lists agents, invokes runtimes, streams responses, fetches logs | [api-gateway/main.py](api-gateway/main.py) |
-| Operator | Watches CRDs and reconciles namespaces, StatefulSets, services, PVCs, RBAC, and worker jobs | [operator/main.py](operator/main.py) |
-| Operator Worker Jobs | Execute workflows and evaluations outside the controller hot path and persist artifacts | [operator/worker.py](operator/worker.py) |
-| Agent Runtime | Executes either the LangGraph state machine or the Goose adapter behind a shared HTTP invoke contract | [agent-runtime/agent_logic.py](agent-runtime/agent_logic.py) and [goose-runtime/main.py](goose-runtime/main.py) |
-| Guardrails Engine | Regex-based prompt injection detection and output redaction / truncation | [agent-runtime/guardrails.py](agent-runtime/guardrails.py) |
-| HITL Module | Creates or reuses `AgentApproval` resources asynchronously and emits optional notifications | [agent-runtime/hitl.py](agent-runtime/hitl.py) |
-| LiteLLM | Central model gateway and auth boundary for model calls | [charts/ai-agent-sandbox/templates/litellm-deployment.yaml](charts/ai-agent-sandbox/templates/litellm-deployment.yaml) |
-| Redis | Backs LiteLLM cache | [charts/ai-agent-sandbox/templates/redis.yaml](charts/ai-agent-sandbox/templates/redis.yaml) and [charts/ai-agent-sandbox/templates/litellm-configmap.yaml](charts/ai-agent-sandbox/templates/litellm-configmap.yaml) |
-| Qdrant | Vector retrieval backend for RAG | [charts/ai-agent-sandbox/templates/qdrant.yaml](charts/ai-agent-sandbox/templates/qdrant.yaml) |
-| NATS | Message bus foundation for future A2A and orchestration scenarios | [charts/ai-agent-sandbox/templates/nats.yaml](charts/ai-agent-sandbox/templates/nats.yaml) |
-| External Secrets | Supplies LLM keys and gateway tokens from a secret backend | [charts/ai-agent-sandbox/templates/external-secrets.yaml](charts/ai-agent-sandbox/templates/external-secrets.yaml) |
-| MCP servers | Optional shared service or local sidecar tool integrations | [charts/ai-agent-sandbox/templates/mcp-server-deployment.yaml](charts/ai-agent-sandbox/templates/mcp-server-deployment.yaml) |
+| API Gateway | Authenticates callers, lists agents, invokes runtimes, streams responses, fetches logs | [api-gateway/main.py](../api-gateway/main.py) |
+| Operator | Watches CRDs and reconciles namespaces, StatefulSets, services, PVCs, RBAC, and worker jobs | [operator/](../operator/) — modularized into `controllers/`, `builders/`, `services/`, with `config.py`, `errors.py`, `reconcile.py`, `tracing.py` |
+| Operator Worker Jobs | Execute workflows and evaluations outside the controller hot path and persist artifacts | [operator/worker.py](../operator/worker.py) |
+| Agent Runtime (LangGraph) | Executes the LangGraph state machine behind a shared HTTP invoke contract | [agent-runtime/agent_logic.py](../agent-runtime/agent_logic.py) |
+| Goose Runtime | Alternative runtime adapter for Goose-based agents | [goose-runtime/main.py](../goose-runtime/main.py) |
+| Codex Runtime | Runtime adapter for OpenAI Codex-based agents | [codex-runtime/main.py](../codex-runtime/main.py) |
+| OpenCode Runtime | Runtime adapter for OpenCode-based agents | [opencode-runtime/main.py](../opencode-runtime/main.py) |
+| Guardrails Engine | Regex-based prompt injection detection and output redaction / truncation | [agent-runtime/guardrails.py](../agent-runtime/guardrails.py) |
+| HITL Module | Creates or reuses `AgentApproval` resources asynchronously and emits optional notifications | [agent-runtime/hitl.py](../agent-runtime/hitl.py) |
+| LiteLLM | Central model gateway and auth boundary for model calls | [charts/ai-agent-sandbox/templates/litellm-deployment.yaml](../charts/ai-agent-sandbox/templates/litellm-deployment.yaml) |
+| Redis | Backs LiteLLM cache | [charts/ai-agent-sandbox/templates/redis.yaml](../charts/ai-agent-sandbox/templates/redis.yaml) |
+| Qdrant | Vector retrieval backend for RAG | [charts/ai-agent-sandbox/templates/qdrant.yaml](../charts/ai-agent-sandbox/templates/qdrant.yaml) |
+| NATS | Message bus foundation for future A2A and orchestration scenarios | [charts/ai-agent-sandbox/templates/nats.yaml](../charts/ai-agent-sandbox/templates/nats.yaml) |
+| External Secrets | Supplies LLM keys and gateway tokens from a secret backend | [charts/ai-agent-sandbox/templates/external-secrets.yaml](../charts/ai-agent-sandbox/templates/external-secrets.yaml) |
+| MCP Sidecars | 10 bundled tool sidecar images (code-exec, web-search, documents, browser, database, git, github-adapter, kubernetes, messaging, rag) | [mcp-sidecars/](../mcp-sidecars/) |
 
 ---
 
@@ -727,14 +730,25 @@ The platform is already structured like a real control-plane/data-plane system, 
 
 | Path | Role |
 |---|---|
-| [api-gateway](api-gateway) | External API surface |
-| [agent-runtime](agent-runtime) | Per-agent execution runtime |
-| [operator](operator) | Kubernetes reconciliation and orchestration |
-| [charts/ai-agent-sandbox](charts/ai-agent-sandbox) | Platform installation and cluster resources |
-| [examples](examples) | Sample CR instances |
-| [cli](cli) | Command-line integration point |
-| [walkthrough.md](walkthrough.md) | Implementation narrative |
-| [upstream-reference-repos.md](upstream-reference-repos.md) | Optional upstream reference checkouts that are intentionally excluded from the shared repo |
+| [api-gateway/](../api-gateway/) | External API surface |
+| [agent-runtime/](../agent-runtime/) | LangGraph-based per-agent execution runtime |
+| [goose-runtime/](../goose-runtime/) | Goose HTTP adapter runtime |
+| [codex-runtime/](../codex-runtime/) | Codex HTTP adapter runtime |
+| [opencode-runtime/](../opencode-runtime/) | OpenCode HTTP adapter runtime |
+| [operator/](../operator/) | Kubernetes reconciliation and orchestration (modularized: controllers/, builders/, services/, migrations/) |
+| [mcp-sidecars/](../mcp-sidecars/) | 10 bundled MCP tool sidecar images |
+| [charts/ai-agent-sandbox/](../charts/ai-agent-sandbox/) | Platform Helm chart and cluster resources |
+| [charts/agents/](../charts/agents/) | Agent-specific Helm sub-charts (devops-agent, code-reviewer, k8s-agent) |
+| [web-ui/](../web-ui/) | React + TypeScript web console |
+| [cli/](../cli/) | `agentctl` CLI tool (Typer + Rich) |
+| [examples/](../examples/) | Sample CR instances |
+| [docs/](../docs/) | Architecture, deployment, and design documentation |
+| [tests/](../tests/) | Cross-cutting integration tests |
+| [scripts/](../scripts/) | Build, packaging, and lint scripts |
+| [catalog/](../catalog/) | Agent templates and skills catalog |
+| [deploy/](../deploy/) | Helm values overrides per environment |
+| [docs/walkthrough.md](walkthrough.md) | Implementation narrative |
+| [docs/upstream-reference-repos.md](upstream-reference-repos.md) | Optional upstream reference checkouts |
 
 ---
 

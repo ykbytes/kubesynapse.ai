@@ -1636,18 +1636,31 @@ kubeminionagents/
 ├── scripts/run_lint.py             ← Python lint runner (flake8 + mypy)
 │
 ├── operator/                       ← Kubernetes operator (Python/Kopf)
-│   ├── main.py                     ← CRD reconciliation handlers
+│   ├── main.py                     ← Entry point and Kopf startup
+│   ├── config.py                   ← OperatorConfig dataclass
+│   ├── errors.py                   ← Structured error codes
+│   ├── reconcile.py                ← Shared reconciliation helpers
+│   ├── tracing.py                  ← OpenTelemetry tracing setup
 │   ├── worker.py                   ← Workflow & eval execution in Jobs
 │   ├── utils.py                    ← Shared utilities
+│   ├── state_store.py              ← SQLAlchemy models and DB init
+│   ├── alembic.ini                 ← Alembic migration config
+│   ├── controllers/                ← Per-CRD reconciliation handlers (7 modules)
+│   ├── builders/                   ← K8s manifest construction (3 modules)
+│   ├── services/                   ← K8s API interaction layer (1 module)
+│   ├── migrations/                 ← Alembic database migrations
+│   ├── tests/                      ← Operator unit tests (5 files)
 │   ├── Dockerfile
 │   └── requirements.txt
 │
 ├── agent-runtime/                  ← Per-agent runtime (Python/FastAPI)
-│   ├── agent_logic.py              ← LangGraph state machine
+│   ├── agent_logic.py              ← LangGraph state machine (monolithic, ~5,800 lines)
 │   ├── guardrails.py               ← Input/output guardrails engine
 │   ├── hitl.py                     ← Human-in-the-loop approval module
 │   ├── opensandbox_tools.py        ← OpenSandbox code execution tools
 │   ├── env_utils.py                ← Safe environment variable parsing
+│   ├── memory/                     ← Session state management
+│   ├── tests/                      ← Agent runtime tests
 │   ├── Dockerfile
 │   └── requirements.txt
 │
@@ -1705,8 +1718,8 @@ kubeminionagents/
 
 ```bash
 make all                  # lint + test + docker-build + helm-package
-make docker-build         # Build 6 core images + 9 bundled MCP sidecars
-make docker-push          # Push 6 core images + 9 bundled MCP sidecars to REGISTRY
+make docker-build         # Build 7 platform images + 10 bundled MCP sidecars (17 total)
+make docker-push          # Push 7 platform images + 10 bundled MCP sidecars to REGISTRY
 make lint                 # Run flake8 on all Python components
 make test                 # Run pytest on all components
 make test-goose-runtime-e2e # Build the Goose runtime image and run Docker-backed E2E coverage

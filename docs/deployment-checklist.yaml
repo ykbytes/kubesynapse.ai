@@ -13,7 +13,7 @@ deployment_checklist:
     cluster_preparation:
       - name: "Kubernetes cluster version check"
         command: "kubectl version --short"
-        expected: "Server version: v1.24 or higher"
+        expected: "Server version: v1.25 or higher"
         critical: true
         completed: false
       

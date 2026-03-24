@@ -50,7 +50,7 @@ This guide ensures the kubemininions platform is ready for production deployment
 #### 1. Prerequisites
 ```bash
 # Ensure you have:
-- Kubernetes cluster (1.24+)
+- Kubernetes cluster (1.25+)
 - kubectl configured
 - Helm 3.10+
 - Docker registry credentials (if using private registry)

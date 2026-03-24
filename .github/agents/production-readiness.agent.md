@@ -96,7 +96,7 @@ Before changing anything:
 | Web UI | React 18 + TypeScript | `web-ui/src/` | Main console |
 | MCP Sidecars | Python / FastMCP | `mcp-sidecars/*/server.py` | Tool execution services |
 | Helm Chart | YAML | `charts/ai-agent-sandbox/` | Deployment and service manifests |
-| CLI | Python / Click | `cli/agentctl.py` | Scriptable operations |
+| CLI | Python / Typer + Rich | `cli/agentctl.py` | Scriptable operations |
 
 ### Core CRDs
 

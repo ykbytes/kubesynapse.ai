@@ -14,7 +14,7 @@ helm upgrade --install ai-agent-sandbox ./charts/ai-agent-sandbox \
   -f ./deploy/values.dockerhub.local.yaml
 ```
 
-See [INSTALL.md](INSTALL.md) for the full installation guide.
+See [INSTALL.md](../INSTALL.md) for the full installation guide.
 
 ---
 

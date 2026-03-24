@@ -1,85 +1,84 @@
 # Road-to-Prod Execution Plan
 
-> **Branch**: `road-to-prod` | **Baseline**: March 22, 2026  
+> **Branch**: `robustness-hardening` | **Baseline**: March 22, 2026 | **Updated**: March 24, 2026  
 > **Source of truth**: `road-to-prod-audit.md` (§2–§18)
 
 ---
 
 ## Current State Assessment
 
-| Component | File | Lines | Key Debt |
-|-----------|------|-------|----------|
-| Operator | `operator/main.py` | ~3,800 | 104 top-level functions, 14 Kopf handlers, ~60 `os.getenv()` calls, 1 `sha1()` call |
-| Worker | `operator/worker.py` | ~2,500 | Dual writes (CRD + DB), no idempotency lock, no SIGTERM handler |
-| Utils | `operator/utils.py` | ~950 | 3 `sha1()` calls (`build_thread_id`, `build_workflow_run_id`, `build_eval_run_id`) |
-| State Store | `operator/state_store.py` | ~800 | `Base.metadata.create_all()` (no migrations), no connection pooling config |
-| Agent Logic | `agent-runtime/agent_logic.py` | ~5,800 | `SqliteSaver`, 5 mutable globals, 2 `sha1()` calls, hardcoded model costs |
-| API Gateway | `api-gateway/main.py` | ~1,500+ | Auth coupled with routing, no API versioning |
-| CI | `.github/workflows/ci.yaml` | 90 | flake8 only (no mypy, no ruff, no security scanning) |
-| Helm Chart | `charts/ai-agent-sandbox/` | 27 templates | Monolithic, no `values.schema.json`, CRDs in templates |
+> **Note**: This table reflects the state as of March 24, 2026. Items marked ✅ DONE
+> have been completed on the `robustness-hardening` branch.
+
+| Component | File(s) | Status | Key Debt |
+|-----------|---------|--------|----------|
+| Operator | `operator/` — modularized into `controllers/` (7), `builders/` (3), `services/` (1), `config.py`, `errors.py`, `reconcile.py`, `tracing.py` | ✅ Split done | Dual writes (CRD + DB), no idempotency lock, no SIGTERM handler, `sha1()` calls remain |
+| Worker | `operator/worker.py` | — | Dual writes, no idempotency lock, no SIGTERM handler |
+| Utils | `operator/utils.py` | — | 3 `sha1()` calls (`build_thread_id`, `build_workflow_run_id`, `build_eval_run_id`) |
+| State Store | `operator/state_store.py` | ✅ Alembic added | `alembic.ini` + `migrations/` exist; connection pooling still missing |
+| Agent Logic | `agent-runtime/agent_logic.py` | Still monolithic | `SqliteSaver`, 5 mutable globals, 2 `sha1()` calls, hardcoded model costs |
+| API Gateway | `api-gateway/main.py` | — | Auth coupled with routing, no API versioning |
+| CI | `.github/workflows/ci.yaml` | — | flake8 only (no mypy, no ruff, no security scanning) |
+| Helm Chart | `charts/ai-agent-sandbox/` | — | Monolithic, no `values.schema.json`, CRDs in templates |
 | CRDs | 6 CRD templates | — | No `.status.conditions[]`, custom `phase` only |
-| Tests | 7 test files total | — | No integration tests, no coverage thresholds |
+| Tests | `operator/tests/` (5), `agent-runtime/tests/` (2), `tests/` (cross-cutting) | — | No integration tests, no coverage thresholds |
 
 ---
 
 ## Phase 1 — Foundation (12 items)
 
-### 1.1 — Split `operator/main.py` (§2.1) ⏱ P0
+### 1.1 — Split `operator/main.py` (§2.1) ⏱ P0 — ✅ DONE
 
-**Goal**: Decompose 3,800-line monolith into controller-per-CRD architecture.
+**Status**: Completed on `robustness-hardening` branch.
 
-**Target structure**:
+**Goal**: Decompose monolith into controller-per-CRD architecture.
+
+**Actual structure** (as implemented):
 ```
 operator/
-  __init__.py
-  main.py                  # Entry point: Kopf startup, import controllers
+  main.py                  # Entry point + Kopf startup
   config.py                # OperatorConfig dataclass, validated env loading
   errors.py                # OperatorError taxonomy, structured error codes
+  reconcile.py             # Shared reconciliation helpers
+  tracing.py               # OpenTelemetry tracing setup
+  utils.py                 # Shared utilities
+  worker.py                # Workflow & eval execution in Jobs
+  state_store.py           # SQLAlchemy models and DB init
+  alembic.ini              # Alembic configuration
   controllers/
     __init__.py
-    agent_controller.py    # create_agent, update_agent, resume_agent, delete_agent (lines 2274-2330)
-    workflow_controller.py # run_workflow, run_workflow_watchdog, on_workflow_phase_cancelled, resume_workflow, delete_workflow (lines 2962-3270)
-    eval_controller.py     # run_eval, resume_eval, delete_eval, run_scheduled_eval (lines 3020-3410)
-    policy_controller.py   # create_policy, update_policy (lines 2333-2362)
-    tenant_controller.py   # create_tenant, delete_tenant, update_tenant, resume_tenant (lines 2364-2644)
-    approval_controller.py # on_approval_decision (line 3349)
+    agent.py               # AIAgent create/update/resume/delete
+    workflow.py             # AgentWorkflow handlers
+    eval.py                # AgentEval handlers
+    policy.py              # AgentPolicy handlers
+    tenant.py              # AgentTenant handlers
+    approval.py            # AgentApproval handlers
+    status_projection.py   # CRD → DB status projection
   builders/
     __init__.py
-    statefulset_builder.py # create_agent_statefulset_manifest, _build_pod_template_revision, _statefulset_template_signature, all StatefulSet construction (lines 1095-1927)
-    job_builder.py         # create_worker_job_manifest, enqueue_worker_job (lines 2688-2960)
-    pvc_builder.py         # build_pvc_spec, create_worker_artifact_pvc_manifest (lines 1087-1378)
-    service_builder.py     # create_agent_service_manifest (line 1410)
-    network_policy_builder.py # All NetworkPolicy manifest functions (lines 2079-2225)
-    secret_builder.py      # create_mcp_auth_secret_manifest (line 1381)
+    helpers.py             # Shared builder utilities
+    manifests.py           # StatefulSet, Job, PVC, Service manifests
+    translator.py          # CRD spec → K8s manifest translation
   services/
     __init__.py
-    k8s_service.py         # ensure_persistent_storage, ensure_service, ensure_statefulset, ensure_secret, ensure_network_policy, patch_custom_status, read_job_state, cancel_worker_job (lines 1928-2070, 2645-2660, 2789-2828)
-    state_service.py       # Wrapper around state_store for recording state
-    runtime_registry.py    # resolve_runtime_kind, validate_runtime_configuration, runtime_extra_env_items, MCP sidecar catalog (lines 398-620, 936-1085)
-  utils.py                 # Keep as shared utility (no changes to this file)
-  worker.py                # Keep as-is for now
-  state_store.py           # Keep as-is for now
+    k8s.py                 # K8s API interaction (ensure_*, patch_custom_status)
+  migrations/
+    env.py                 # Alembic environment config
+    script.py.mako         # Migration template
+    versions/
+      001_initial.py       # Initial schema migration
+  tests/                   # 5 test files
 ```
 
-**Execution steps**:
-1. Create `operator/config.py` — extract all `os.getenv()` calls (lines 237-420) into a frozen `OperatorConfig` dataclass with validation
-2. Create `operator/errors.py` — define `OperatorError` base class with error codes
-3. Create `operator/builders/` — extract manifest construction functions (pure functions, no K8s API calls)
-4. Create `operator/services/k8s_service.py` — extract K8s API interaction functions (`ensure_*`, `patch_custom_status`)
-5. Create `operator/services/runtime_registry.py` — extract runtime kind resolution, MCP catalog loading
-6. Create `operator/controllers/` — extract each Kopf handler group into its own controller
-7. Reduce `operator/main.py` to ~50 lines: Kopf startup, import controllers, register handlers
-8. Update all internal imports
-9. Run `python -m py_compile` on every new file
-10. Run `python -m pytest operator/tests/ -v` to verify
-
-**Dependency order**: config.py → errors.py → builders/ → services/ → controllers/ → main.py
+**What was planned vs. what was done**: The modularization followed the planned structure closely. Minor naming differences (e.g., `agent.py` instead of `agent_controller.py`, `k8s.py` instead of `k8s_service.py`) but the architectural intent is the same. `reconcile.py` and `tracing.py` were added as bonus modules not in the original plan.
 
 ---
 
-### 1.2 — Split `agent-runtime/agent_logic.py` (§3.1) ⏱ P0
+### 1.2 — Split `agent-runtime/agent_logic.py` (§3.1) ⏱ P0 — TODO
 
-**Goal**: Decompose 5,800-line monolith into focused modules.
+**Status**: Not started. `agent_logic.py` remains a monolith. Only `memory/` directory has been extracted so far.
+
+**Goal**: Decompose ~5,800-line monolith into focused modules.
 
 **Target structure**:
 ```
@@ -132,9 +131,11 @@ agent-runtime/
 
 ---
 
-### 1.3 — Add Alembic Database Migrations (§6.1) ⏱ P0
+### 1.3 — Add Alembic Database Migrations (§6.1) ⏱ P0 — ✅ DONE
 
-**Current**: `state_store.py` line 232: `Base.metadata.create_all(bind=ENGINE)`
+**Status**: Completed on `robustness-hardening` branch. Files exist: `operator/alembic.ini`, `operator/migrations/env.py`, `operator/migrations/script.py.mako`, `operator/migrations/versions/001_initial.py`.
+
+**Original plan** (retained for reference):
 
 **Steps**:
 1. Create `operator/alembic/` directory with `env.py`, `alembic.ini`

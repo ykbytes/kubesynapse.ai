@@ -49,22 +49,22 @@ Automated validation script that checks:
 ### Prerequisites
 ```bash
 # Ensure you have:
-- Kubernetes 1.24+ cluster
+- Kubernetes 1.25+ cluster
 - kubectl configured
 - Helm 3.10+
-- Docker (for image validation)
+- Docker or Podman (for image validation)
 ```
 
 ### Step 1: Run Automated Validation
 ```bash
 # Full validation with detailed output
-python test_production_readiness.py --verbose
+python tests/test_production_readiness.py --verbose
 
 # Generate JSON report for documentation
-python test_production_readiness.py --report deployment_report.json
+python tests/test_production_readiness.py --report deployment_report.json
 
 # Run only critical checks
-python test_production_readiness.py 2>&1 | grep FAIL
+python tests/test_production_readiness.py 2>&1 | grep FAIL
 ```
 
 ### Step 2: Review Production Deployment Guide
