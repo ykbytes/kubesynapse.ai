@@ -6,6 +6,8 @@ import { PanelLeftClose, PanelLeftOpen, PanelRightOpen } from "lucide-react";
 import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import { Toaster } from "sonner";
 
+const LandingPage = lazy(() => import("./components/LandingPage").then((m) => ({ default: m.LandingPage })));
+
 const AgentManagementPanel = lazy(() => import("./components/AgentManagementPanel").then((m) => ({ default: m.AgentManagementPanel })));
 const AdminPanel = lazy(() => import("./components/AdminPanel").then((m) => ({ default: m.AdminPanel })));
 const HealthDashboard = lazy(() => import("./components/HealthDashboard").then((m) => ({ default: m.HealthDashboard })));
@@ -142,6 +144,7 @@ function AppLayout() {
   const chat = useChat();
   const [templateWizardOpen, setTemplateWizardOpen] = useState(false);
   const [sidebarDeleteTarget, setSidebarDeleteTarget] = useState<{ id: string; view: WorkspaceView } | null>(null);
+  const [showAuth, setShowAuth] = useState(false);
   const inspectorSupported = supportsInspector(ws.activeView);
 
   // ⚠️  All hooks must be declared BEFORE any conditional returns (Rules of Hooks)
@@ -155,7 +158,7 @@ function AppLayout() {
     setSidebarDeleteTarget({ id, view: ws.activeView });
   }, [ws.activeView]);
 
-  // Gate: show loading spinner while auth initializes, then AuthPage if not authenticated
+  // Gate: show loading spinner while auth initializes
   if (!conn.authReady) {
     return (
       <div className="flex h-screen items-center justify-center bg-background">
@@ -167,10 +170,18 @@ function AppLayout() {
     );
   }
 
+  // Unauthenticated: show Landing Page or Auth Page
   if (!conn.currentUser) {
+    if (showAuth) {
+      return (
+        <Suspense fallback={<LoadingPanel />}>
+          <AuthPage onBack={() => setShowAuth(false)} />
+        </Suspense>
+      );
+    }
     return (
       <Suspense fallback={<LoadingPanel />}>
-        <AuthPage />
+        <LandingPage onLogin={() => setShowAuth(true)} />
       </Suspense>
     );
   }

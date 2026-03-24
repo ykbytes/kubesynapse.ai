@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { AlertCircle, Check, KeyRound, LayoutPanelTop, Loader2, UserPlus, X } from "lucide-react";
+import { AlertCircle, ArrowLeft, Check, KeyRound, LayoutPanelTop, Loader2, UserPlus, X } from "lucide-react";
 import { useConnection } from "@/contexts/ConnectionContext";
 import { BRAND } from "@/lib/brand";
 import { Button } from "@/components/ui/button";
@@ -11,7 +11,11 @@ type AuthTab = "password" | "token";
 
 const EMAIL_RE = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
 
-export function AuthPage() {
+interface AuthPageProps {
+  onBack?: () => void;
+}
+
+export function AuthPage({ onBack }: AuthPageProps) {
   const conn = useConnection();
   const [activeTab, setActiveTab] = useState<AuthTab>("password");
   const [registerError, setRegisterError] = useState("");
@@ -76,6 +80,17 @@ export function AuthPage() {
 
   return (
     <div className="flex min-h-screen flex-col items-center justify-center bg-background p-4">
+      {/* Back to landing page */}
+      {onBack && (
+        <button
+          onClick={onBack}
+          className="mb-6 flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground animate-fade-in"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          Back to home
+        </button>
+      )}
+
       {/* Logo + title */}
       <div className="mb-8 flex flex-col items-center gap-3 animate-fade-in">
         <div className="flex h-14 w-14 items-center justify-center rounded-xl bg-primary/10 text-primary animate-bounce-in">

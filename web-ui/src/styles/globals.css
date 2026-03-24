@@ -75,6 +75,56 @@
   100% { transform: scale(1); opacity: 1; }
 }
 
+/* ── Landing page: shimmer text gradient ── */
+@keyframes shimmer-text {
+  0%   { background-position: -200% center; }
+  100% { background-position: 200% center; }
+}
+
+/* ── Landing page: gentle float ── */
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-12px); }
+}
+
+/* ── Landing page: workflow pulse ring ── */
+@keyframes landing-pulse {
+  0%   { transform: scale(1); opacity: 0.6; }
+  100% { transform: scale(2.2); opacity: 0; }
+}
+
+/* ── Landing page: data flow dash ── */
+@keyframes dash-flow {
+  from { stroke-dashoffset: 24; }
+  to   { stroke-dashoffset: 0; }
+}
+
+/* ── Landing page: typing cursor blink ── */
+@keyframes blink-cursor {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0; }
+}
+
+/* ── Landing page: scan line ── */
+@keyframes scan-line {
+  0%   { transform: translateY(-100%); opacity: 0; }
+  10%  { opacity: 0.6; }
+  90%  { opacity: 0.6; }
+  100% { transform: translateY(100%); opacity: 0; }
+}
+
+/* ── Landing page: orbit ── */
+@keyframes orbit {
+  from { transform: rotate(0deg) translateX(140px) rotate(0deg); }
+  to   { transform: rotate(360deg) translateX(140px) rotate(-360deg); }
+}
+
+/* ── Landing page: glow breathe ── */
+@keyframes glow-breathe {
+  0%, 100% { opacity: 0.15; transform: scale(1); }
+  50%      { opacity: 0.30; transform: scale(1.05); }
+}
+
 /* ── Composer: handle glow ── */
 @keyframes handle-glow {
   0%, 100% { box-shadow: 0 0 0 0 oklch(0.65 0.13 175 / 0); }
@@ -497,4 +547,116 @@ body::before {
 }
 [data-theme="forest"] ::-webkit-scrollbar-thumb:hover {
   background: oklch(0.45 0.015 150);
+}
+
+/* ── Landing page utilities ── */
+
+.text-shimmer {
+  background: linear-gradient(
+    110deg,
+    oklch(0.65 0.13 175) 30%,
+    oklch(0.85 0.08 200) 47%,
+    oklch(0.75 0.14 250) 53%,
+    oklch(0.65 0.13 175) 70%
+  );
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: shimmer-text 4s linear infinite;
+}
+
+.text-gradient-hero {
+  background: linear-gradient(135deg, oklch(0.95 0.006 274) 0%, oklch(0.75 0.10 200) 50%, oklch(0.65 0.13 175) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.glow-orb {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(120px);
+  pointer-events: none;
+  will-change: transform, opacity;
+}
+
+.glow-button {
+  box-shadow:
+    0 0 0 1px oklch(0.65 0.13 175 / 0.3),
+    0 1px 2px oklch(0 0 0 / 0.3),
+    0 4px 16px oklch(0.65 0.13 175 / 0.15),
+    0 8px 32px oklch(0.65 0.13 175 / 0.10);
+  transition: box-shadow 0.3s ease, transform 0.2s ease;
+}
+.glow-button:hover {
+  box-shadow:
+    0 0 0 1px oklch(0.65 0.13 175 / 0.5),
+    0 1px 2px oklch(0 0 0 / 0.3),
+    0 4px 24px oklch(0.65 0.13 175 / 0.25),
+    0 12px 48px oklch(0.65 0.13 175 / 0.15);
+  transform: translateY(-1px);
+}
+
+.landing-card {
+  background: oklch(0.185 0.011 274 / 0.6);
+  border: 1px solid oklch(0.30 0.012 274 / 0.5);
+  backdrop-filter: blur(8px);
+  transition: border-color 0.3s ease, box-shadow 0.3s ease, transform 0.3s ease;
+}
+.landing-card:hover {
+  border-color: oklch(0.65 0.13 175 / 0.3);
+  box-shadow: 0 8px 32px oklch(0 0 0 / 0.2), 0 0 0 1px oklch(0.65 0.13 175 / 0.1);
+  transform: translateY(-2px);
+}
+
+.glass-navbar {
+  background: oklch(0.145 0.008 274 / 0.80);
+  backdrop-filter: blur(16px) saturate(1.2);
+  -webkit-backdrop-filter: blur(16px) saturate(1.2);
+  border-bottom: 1px solid oklch(0.30 0.012 274 / 0.4);
+}
+
+.workflow-node {
+  background: oklch(0.185 0.011 274 / 0.9);
+  border: 1px solid oklch(0.30 0.012 274 / 0.6);
+  border-radius: 0.75rem;
+  backdrop-filter: blur(4px);
+}
+.workflow-node-active {
+  border-color: oklch(0.65 0.13 175 / 0.6);
+  box-shadow: 0 0 16px oklch(0.65 0.13 175 / 0.15), 0 0 0 1px oklch(0.65 0.13 175 / 0.3);
+}
+
+/* Mock UI window for hero */
+.mock-window {
+  background: oklch(0.12 0.008 274);
+  border: 1px solid oklch(0.25 0.012 274);
+  border-radius: 12px;
+  box-shadow:
+    0 25px 50px -12px oklch(0 0 0 / 0.5),
+    0 0 0 1px oklch(0.25 0.012 274 / 0.5),
+    0 0 80px oklch(0.65 0.13 175 / 0.06);
+  overflow: hidden;
+}
+
+.mock-titlebar {
+  background: oklch(0.16 0.010 274);
+  border-bottom: 1px solid oklch(0.25 0.012 274);
+  padding: 10px 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mock-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+/* Animated workflow connector line */
+.connector-animated {
+  stroke-dasharray: 6 4;
+  animation: dash-flow 0.8s linear infinite;
 }
