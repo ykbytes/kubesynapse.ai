@@ -64,7 +64,7 @@ const KEY_PLACEHOLDERS: Record<string, string> = {
 
 interface SettingsPanelProps {
   token: string;
-  isAdmin: boolean;
+  canManageProviders: boolean;
 }
 
 function statusTone(configured: boolean | null): string {
@@ -73,7 +73,7 @@ function statusTone(configured: boolean | null): string {
   return "bg-amber-500/10 text-amber-400 border-amber-500/30";
 }
 
-export function SettingsPanel({ token, isAdmin }: SettingsPanelProps) {
+export function SettingsPanel({ token, canManageProviders }: SettingsPanelProps) {
   const [providers, setProviders] = useState<LLMProvider[]>([]);
   const [health, setHealth] = useState<{ status: string; litellm_status?: number; error?: string } | null>(null);
   const [loading, setLoading] = useState(true);
@@ -125,10 +125,10 @@ export function SettingsPanel({ token, isAdmin }: SettingsPanelProps) {
   useEffect(() => {
     void refresh();
     void refreshHealth();
-    if (isAdmin) {
+    if (canManageProviders) {
       getCopilotAuthStatus(token).then((s) => setCopilotConnected(s.connected)).catch(() => {});
     }
-  }, [refresh, refreshHealth, token, isAdmin]);
+  }, [refresh, refreshHealth, token, canManageProviders]);
 
   useEffect(() => {
     if (providers.length === 0) {
@@ -480,7 +480,7 @@ export function SettingsPanel({ token, isAdmin }: SettingsPanelProps) {
                     </div>
                   </CardHeader>
                   <CardContent className="space-y-5">
-                    {isAdmin && selectedProvider.key_name === "GITHUB_COPILOT_TOKEN" ? (
+                    {canManageProviders && selectedProvider.key_name === "GITHUB_COPILOT_TOKEN" ? (
                       <div className="space-y-3">
                         <Label className="text-xs text-muted-foreground">GitHub Copilot Authentication</Label>
                         {copilotFlowActive && copilotUserCode ? (
@@ -551,7 +551,7 @@ export function SettingsPanel({ token, isAdmin }: SettingsPanelProps) {
                           </Button>
                         )}
                       </div>
-                    ) : isAdmin ? (
+                    ) : canManageProviders ? (
                       <div className="space-y-2">
                         <Label className="text-xs text-muted-foreground">API Key</Label>
                         <div className="relative">
@@ -587,7 +587,7 @@ export function SettingsPanel({ token, isAdmin }: SettingsPanelProps) {
                     <div className="space-y-2">
                       <div className="flex items-center justify-between gap-2">
                         <Label className="text-xs text-muted-foreground">Enabled Models</Label>
-                        {isAdmin && (
+                        {canManageProviders && (
                           <Button
                             variant="outline"
                             size="sm"
@@ -610,7 +610,7 @@ export function SettingsPanel({ token, isAdmin }: SettingsPanelProps) {
                               className="flex items-center gap-2 rounded-md border px-3 py-2 text-sm"
                             >
                               <span className="flex-1 truncate font-medium">{m.model_name}</span>
-                              {isAdmin && m.id && (
+                              {canManageProviders && m.id && (
                                 <Button
                                   variant="ghost"
                                   size="icon"

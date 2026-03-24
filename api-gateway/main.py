@@ -6467,7 +6467,7 @@ async def llm_list_models(user=Depends(verify_token)):
 @app.post("/api/llm/models", status_code=201)
 async def llm_add_model(body: LLMModelEntry, user=Depends(verify_token)):
     """Add a model deployment to LiteLLM."""
-    ensure_role(user, "admin")
+    ensure_role(user, "operator")
     payload = {"model_name": body.model_name, "litellm_params": body.litellm_params}
     try:
         async with httpx.AsyncClient(timeout=_LLM_PROXY_TIMEOUT, trust_env=False) as client:
@@ -6490,7 +6490,7 @@ async def llm_add_model(body: LLMModelEntry, user=Depends(verify_token)):
 @app.post("/api/llm/models/delete")
 async def llm_delete_model(body: LLMModelDeleteRequest, user=Depends(verify_token)):
     """Delete a model deployment from LiteLLM."""
-    ensure_role(user, "admin")
+    ensure_role(user, "operator")
     try:
         async with httpx.AsyncClient(timeout=_LLM_PROXY_TIMEOUT, trust_env=False) as client:
             resp = await client.post(
@@ -6512,7 +6512,7 @@ async def llm_delete_model(body: LLMModelDeleteRequest, user=Depends(verify_toke
 @app.get("/api/llm/keys")
 def llm_list_keys(user=Depends(verify_token)):
     """List which LLM API key env vars are set (names only, never values)."""
-    ensure_role(user, "admin")
+    ensure_role(user, "operator")
     try:
         from kubernetes import client as k8s_client
 
@@ -6537,8 +6537,8 @@ def llm_list_keys(user=Depends(verify_token)):
 
 @app.put("/api/llm/keys")
 def llm_update_keys(body: LLMKeyUpdate, user=Depends(verify_token)):
-    """Update LLM API key values in the K8s Secret. Admin-only."""
-    ensure_role(user, "admin")
+    """Update LLM API key values in the K8s Secret. Operator-or-admin."""
+    ensure_role(user, "operator")
 
     # Validate key names
     for key_name in body.keys:
@@ -6805,7 +6805,7 @@ async def llm_provider_suggestions(provider: str, q: str = "", user=Depends(veri
 @app.post("/api/llm/providers/{provider}/models", status_code=201)
 async def llm_add_provider_model(provider: str, body: ProviderModelAdd, user=Depends(verify_token)):
     """Add a model to LiteLLM via the simplified provider-centric API."""
-    ensure_role(user, "admin")
+    ensure_role(user, "operator")
     if provider not in _PROVIDER_META:
         raise HTTPException(status_code=404, detail=f"Unknown provider: {provider}")
 
@@ -6888,7 +6888,7 @@ _copilot_device_flows: dict[str, dict[str, Any]] = {}
 @app.post("/api/copilot/auth/device")
 async def copilot_auth_device(user=Depends(verify_token)):
     """Initiate GitHub OAuth device flow for Copilot."""
-    ensure_role(user, "admin")
+    ensure_role(user, "operator")
     user_id = user.get("sub", "unknown")
 
     try:
@@ -6927,7 +6927,7 @@ async def copilot_auth_device(user=Depends(verify_token)):
 @app.post("/api/copilot/auth/poll")
 async def copilot_auth_poll(user=Depends(verify_token)):
     """Poll GitHub for device flow completion. On success stores token in K8s secret."""
-    ensure_role(user, "admin")
+    ensure_role(user, "operator")
     user_id = user.get("sub", "unknown")
     flow = _copilot_device_flows.get(user_id)
     if not flow:
@@ -6993,7 +6993,7 @@ async def copilot_auth_poll(user=Depends(verify_token)):
 @app.get("/api/copilot/auth/status")
 def copilot_auth_status(user=Depends(verify_token)):
     """Check if a Copilot token is stored in the K8s secret."""
-    ensure_role(user, "admin")
+    ensure_role(user, "operator")
     try:
         from kubernetes import client as k8s_client
 

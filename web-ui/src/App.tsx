@@ -670,7 +670,7 @@ function AppLayout() {
             </ContentShell>
           ) : ws.activeView === "settings" ? (
             <ContentShell>
-              <SettingsPanel token={conn.token} isAdmin={conn.isAdmin} />
+              <SettingsPanel token={conn.token} canManageProviders={conn.canMutate} />
             </ContentShell>
           ) : ws.activeView === "admin" ? (
               <Tabs defaultValue="users" className="flex flex-col h-full">
