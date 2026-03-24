@@ -35,7 +35,7 @@ litellm:
 agentRuntime:
   image:
     repository: docker.io/yakdhane/ai-agent-runtime
-    tag: e25772a-memory
+    tag: latest
     pullPolicy: IfNotPresent
   env: {}
   allowedModels: []
@@ -184,11 +184,11 @@ operator:
   replicaCount: 2
   image:
     repository: docker.io/yakdhane/ai-operator
-    tag: e25772a-memory
+    tag: latest
     pullPolicy: IfNotPresent
   workerImage:
     repository: docker.io/yakdhane/ai-operator
-    tag: e25772a-memory
+    tag: latest
     pullPolicy: IfNotPresent
   resources:
     requests:
@@ -231,7 +231,7 @@ apiGateway:
   replicaCount: 1
   image:
     repository: docker.io/yakdhane/ai-api-gateway
-    tag: e25772a-memory
+    tag: latest
     pullPolicy: IfNotPresent
   ingressClassName: ""
   ingressHost: ""  # leave empty for a hostless ingress, or set e.g. "agents.mycompany.com"
@@ -309,7 +309,7 @@ webUi:
   replicaCount: 1
   image:
     repository: docker.io/yakdhane/ai-agent-sandbox-web-ui
-    tag: e25772a-memory
+    tag: latest
     pullPolicy: IfNotPresent
   service:
     type: ClusterIP
@@ -493,6 +493,9 @@ skillsCatalog:
 
 # ---------------------------------------------------------------------------
 # MCP Tool Sidecar Images – per-agent tool containers
+# Repo currently ships 10 bundled sidecars:
+# code-exec, web-search, documents, browser, database, git,
+# github-adapter, kubernetes, messaging, rag
 # ---------------------------------------------------------------------------
 mcpToolSidecars:
   codeExec:
@@ -519,15 +522,19 @@ mcpToolSidecars:
     image: docker.io/yakdhane/mcp-git
     tag: latest
     port: 8095
+  githubAdapter:
+    image: docker.io/yakdhane/mcp-github-adapter
+    tag: latest
+    port: 8096
   kubernetes:
     image: docker.io/yakdhane/mcp-kubernetes
     tag: latest
-    port: 8096
+    port: 8097
   messaging:
     image: docker.io/yakdhane/mcp-messaging
     tag: latest
-    port: 8097
+    port: 8098
   rag:
     image: docker.io/yakdhane/mcp-rag
     tag: latest
-    port: 8098
+    port: 8099

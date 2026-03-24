@@ -7,41 +7,41 @@ global:
 operator:
   image:
     repository: docker.io/yakdhane/ai-operator
-    tag: deploy-20260318-094552
+    tag: latest
     pullPolicy: IfNotPresent
   workerImage:
     repository: docker.io/yakdhane/ai-operator
-    tag: deploy-20260318-094552
+    tag: latest
     pullPolicy: IfNotPresent
 
 agentRuntime:
   image:
     repository: docker.io/yakdhane/ai-agent-runtime
-    tag: deploy-20260318-094552
+    tag: latest
     pullPolicy: IfNotPresent
 
 gooseRuntime:
   image:
     repository: docker.io/yakdhane/ai-goose-runtime
-    tag: deploy-20260318-094552
+    tag: latest
     pullPolicy: IfNotPresent
 
 codexRuntime:
   image:
     repository: docker.io/yakdhane/ai-codex-runtime
-    tag: deploy-20260318-094552
+    tag: latest
     pullPolicy: IfNotPresent
 
 opencodeRuntime:
   image:
     repository: docker.io/yakdhane/ai-opencode-runtime
-    tag: deploy-20260318-094552
+    tag: latest
     pullPolicy: IfNotPresent
 
 apiGateway:
   image:
     repository: docker.io/yakdhane/ai-api-gateway
-    tag: deploy-20260318-094552
+    tag: latest
     pullPolicy: IfNotPresent
   ingressClassName: ""
   ingressHost: ""
@@ -58,7 +58,7 @@ webUi:
   enabled: true
   image:
     repository: docker.io/yakdhane/ai-agent-sandbox-web-ui
-    tag: deploy-20260318-094552
+    tag: latest
     pullPolicy: IfNotPresent
 
 litellm:
@@ -91,33 +91,36 @@ mcpHub:
   servers:
     github:
       enabled: true
-      image: docker.io/yakdhane/mcp-github-adapter:deploy-20260318-094552
+      image: docker.io/yakdhane/mcp-github-adapter:latest
 
 mcpToolSidecars:
   codeExec:
     image: docker.io/yakdhane/mcp-code-exec
-    tag: deploy-20260318-094552
+    tag: latest
   webSearch:
     image: docker.io/yakdhane/mcp-web-search
-    tag: deploy-20260318-094552
+    tag: latest
   documents:
     image: docker.io/yakdhane/mcp-documents
-    tag: deploy-20260318-094552
+    tag: latest
   browser:
     image: docker.io/yakdhane/mcp-browser
-    tag: deploy-20260318-094552
+    tag: latest
   database:
     image: docker.io/yakdhane/mcp-database
-    tag: deploy-20260318-094552
+    tag: latest
   git:
     image: docker.io/yakdhane/mcp-git
-    tag: deploy-20260318-094552
+    tag: latest
+  githubAdapter:
+    image: docker.io/yakdhane/mcp-github-adapter
+    tag: latest
   kubernetes:
     image: docker.io/yakdhane/mcp-kubernetes
-    tag: deploy-20260318-094552
+    tag: latest
   messaging:
     image: docker.io/yakdhane/mcp-messaging
-    tag: deploy-20260318-094552
+    tag: latest
   rag:
     image: docker.io/yakdhane/mcp-rag
-    tag: deploy-20260318-094552
+    tag: latest

@@ -21,6 +21,12 @@ gooseRuntime:
     tag: dev
     pullPolicy: IfNotPresent
 
+codexRuntime:
+  image:
+    repository: localhost/kubeminionagents/ai-codex-runtime
+    tag: dev
+    pullPolicy: IfNotPresent
+
 opencodeRuntime:
   image:
     repository: localhost/kubeminionagents/ai-opencode-runtime
@@ -58,3 +64,45 @@ mcpHub:
     github:
       image: localhost/kubeminionagents/mcp-github-adapter
       imagePullPolicy: IfNotPresent
+
+mcpToolSidecars:
+  codeExec:
+    image: localhost/kubeminionagents/mcp-code-exec
+    tag: dev
+    port: 8090
+  webSearch:
+    image: localhost/kubeminionagents/mcp-web-search
+    tag: dev
+    port: 8091
+  documents:
+    image: localhost/kubeminionagents/mcp-documents
+    tag: dev
+    port: 8092
+  browser:
+    image: localhost/kubeminionagents/mcp-browser
+    tag: dev
+    port: 8093
+  database:
+    image: localhost/kubeminionagents/mcp-database
+    tag: dev
+    port: 8094
+  git:
+    image: localhost/kubeminionagents/mcp-git
+    tag: dev
+    port: 8095
+  githubAdapter:
+    image: localhost/kubeminionagents/mcp-github-adapter
+    tag: dev
+    port: 8096
+  kubernetes:
+    image: localhost/kubeminionagents/mcp-kubernetes
+    tag: dev
+    port: 8097
+  messaging:
+    image: localhost/kubeminionagents/mcp-messaging
+    tag: dev
+    port: 8098
+  rag:
+    image: localhost/kubeminionagents/mcp-rag
+    tag: dev
+    port: 8099

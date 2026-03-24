@@ -1,6 +1,6 @@
 apiVersion: v2
 name: ai-agent-sandbox
-description: Enterprise AI agent sandbox containing an Operator, tools, and LLM Gateway
+description: Kubernetes-native AI agent platform with operator, four runtimes, gateway, and MCP services
 type: application
-version: 0.1.0
-appVersion: "1.0.0"
+version: 0.1.1
+appVersion: "2026.03.24"
