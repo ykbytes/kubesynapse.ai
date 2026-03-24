@@ -1,4 +1,5 @@
 """Pydantic request and response models for the OpenCode runtime API."""
+
 from __future__ import annotations
 
 import json
@@ -57,9 +58,13 @@ class InvokeRequest(BaseModel):
         self.tool_name = self.tool_name.strip()
         self.mcp_server = self.mcp_server.strip() or None if self.mcp_server is not None else None
         self.a2a_target_agent = self.a2a_target_agent.strip() or None if self.a2a_target_agent is not None else None
-        self.a2a_target_namespace = self.a2a_target_namespace.strip() or None if self.a2a_target_namespace is not None else None
+        self.a2a_target_namespace = (
+            self.a2a_target_namespace.strip() or None if self.a2a_target_namespace is not None else None
+        )
         self.caller_agent_name = self.caller_agent_name.strip() or None if self.caller_agent_name is not None else None
-        self.caller_agent_namespace = self.caller_agent_namespace.strip() or None if self.caller_agent_namespace is not None else None
+        self.caller_agent_namespace = (
+            self.caller_agent_namespace.strip() or None if self.caller_agent_namespace is not None else None
+        )
         self.parent_thread_id = self.parent_thread_id.strip() or None if self.parent_thread_id is not None else None
         self.caller_request_id = self.caller_request_id.strip() or None if self.caller_request_id is not None else None
         self.output_format = self.output_format.strip().lower() or None if self.output_format is not None else None
@@ -105,4 +110,5 @@ class InvokeResponse(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     artifacts: list[dict[str, Any]] = Field(default_factory=list)
     tool_calls: list[dict[str, Any]] = Field(default_factory=list)
+    continuity: dict[str, Any] | None = None
     metadata: dict[str, Any] | None = None

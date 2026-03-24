@@ -996,6 +996,10 @@ export function buildInvocationSummary(fallbackThreadId: string, payload: unknow
     throw new Error("Invocation summary payload is missing thread_id.");
   }
 
+  const continuity = record.continuity && typeof record.continuity === "object"
+    ? expectRecord(record.continuity, "Invocation summary payload.continuity")
+    : null;
+
   return {
     threadId,
     status: readString(record, "status", "Invocation summary payload", "completed"),
@@ -1016,6 +1020,15 @@ export function buildInvocationSummary(fallbackThreadId: string, payload: unknow
     warnings: record.warnings === undefined ? [] : readStringArray(record, "warnings", "Invocation summary payload"),
     artifacts: Array.isArray(record.artifacts) ? (record.artifacts as Array<Record<string, unknown>>) : null,
     toolCalls: Array.isArray(record.tool_calls) ? (record.tool_calls as Array<Record<string, unknown>>) : null,
+    continuity: continuity ? {
+      createdNewSession: readOptionalBoolean(continuity, "created_new_session", "Invocation continuity") ?? undefined,
+      sessionRecovered: readOptionalBoolean(continuity, "session_recovered", "Invocation continuity") ?? undefined,
+      hasPriorMemory: readOptionalBoolean(continuity, "has_prior_memory", "Invocation continuity") ?? undefined,
+      memoryApplied: readOptionalBoolean(continuity, "memory_applied", "Invocation continuity") ?? undefined,
+      memoryEntryCount: readOptionalNumber(continuity, "memory_entry_count", "Invocation continuity"),
+      handoffResumed: readOptionalBoolean(continuity, "handoff_resumed", "Invocation continuity") ?? undefined,
+      remoteSessionId: readOptionalString(continuity, "remote_session_id", "Invocation continuity"),
+    } satisfies RuntimeContinuitySummary : null,
     metadata: record.metadata !== undefined && record.metadata !== null
       ? expectRecord(record.metadata, "Invocation summary payload.metadata") : null,
   };
@@ -2459,6 +2472,16 @@ export interface ChatSessionInfo {
   created_at: string | null;
   updated_at: string | null;
   summary?: ChatSessionSummary | null;
+}
+
+export interface RuntimeContinuitySummary {
+  createdNewSession?: boolean;
+  sessionRecovered?: boolean;
+  hasPriorMemory?: boolean;
+  memoryApplied?: boolean;
+  memoryEntryCount?: number | null;
+  handoffResumed?: boolean;
+  remoteSessionId?: string | null;
 }
 
 export interface ChatSessionMemoryCandidate {

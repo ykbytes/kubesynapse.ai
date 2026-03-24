@@ -31,24 +31,23 @@ export default defineConfig(({ mode }) => {
     build: {
       rollupOptions: {
         output: {
-          manualChunks: {
-            vendor: ["react", "react-dom"],
-            "radix-ui": [
-              "@radix-ui/react-dialog",
-              "@radix-ui/react-tabs",
-              "@radix-ui/react-select",
-              "@radix-ui/react-tooltip",
-              "@radix-ui/react-scroll-area",
-              "@radix-ui/react-popover",
-              "@radix-ui/react-dropdown-menu",
-              "@radix-ui/react-accordion",
-              "@radix-ui/react-collapsible",
-              "@radix-ui/react-separator",
-              "@radix-ui/react-label",
-              "@radix-ui/react-slot",
-              "@radix-ui/react-toggle",
-            ],
-            composer: ["@xyflow/react"],
+          manualChunks(id) {
+            if (id.includes("node_modules/react") || id.includes("node_modules/scheduler")) {
+              return "react-core";
+            }
+            if (id.includes("@radix-ui")) {
+              return "radix-ui";
+            }
+            if (id.includes("@xyflow/react")) {
+              return "composer";
+            }
+            if (id.includes("lucide-react")) {
+              return "icons";
+            }
+            if (id.includes("sonner") || id.includes("@fontsource")) {
+              return "ui-support";
+            }
+            return undefined;
           },
         },
       },

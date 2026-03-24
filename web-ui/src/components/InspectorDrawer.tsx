@@ -203,11 +203,24 @@ export function AgentInspectorDrawer({
                 {/* Invocation Summary */}
                 {summary && (
                   <Section title="Last Invocation">
-                    <KV label="Thread" value={summary.threadId || "—"} />
+                    <KV label="Thread" value={summary.threadId || "-"} />
                     <KV label="Status" value={summary.status} />
                     {summary.policyName && <KV label="Policy" value={summary.policyName} />}
                     {summary.toolName && <KV label="Tool" value={summary.toolName} />}
                     {summary.approvalName && <KV label="Approval" value={summary.approvalName} />}
+                    {summary.continuity?.remoteSessionId && <KV label="Remote session" value={summary.continuity.remoteSessionId} />}
+                    {(summary.continuity?.sessionRecovered || summary.continuity?.handoffResumed || summary.continuity?.memoryApplied) && (
+                      <div className="space-y-1.5 rounded-md border border-primary/20 bg-primary/5 p-2 text-xs text-muted-foreground">
+                        <div className="font-medium text-foreground">Runtime continuity</div>
+                        {summary.continuity.sessionRecovered && <div>Recovered a prior remote OpenCode session.</div>}
+                        {summary.continuity.handoffResumed && <div>Resumed from a durable handoff summary.</div>}
+                        {summary.continuity.memoryApplied && (
+                          <div>
+                            Applied durable memory{summary.continuity.memoryEntryCount ? ` (${summary.continuity.memoryEntryCount} entries)` : ""}.
+                          </div>
+                        )}
+                      </div>
+                    )}
                     {summary.warnings.length > 0 && (
                       <div className="space-y-1">
                         {summary.warnings.map((w, i) => (

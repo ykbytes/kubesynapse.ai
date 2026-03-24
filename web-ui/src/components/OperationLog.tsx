@@ -5,6 +5,7 @@ import {
   ChevronRight,
   Cloud,
   Cog,
+  Compass,
   FileCode,
   FileSearch,
   GitCommitHorizontal,
@@ -232,6 +233,41 @@ function MetadataFooter({ metadata }: { metadata: Record<string, unknown> }) {
   );
 }
 
+function ContinuityFooter({ summary }: { summary: InvocationSummary }) {
+  const continuity = summary.continuity;
+  if (!continuity) return null;
+
+  const items = [
+    continuity.sessionRecovered ? "session recovered" : null,
+    continuity.handoffResumed ? "handoff resumed" : null,
+    continuity.memoryApplied
+      ? continuity.memoryEntryCount && continuity.memoryEntryCount > 0
+        ? `${continuity.memoryEntryCount} memories applied`
+        : "memory applied"
+      : null,
+    continuity.createdNewSession && !continuity.sessionRecovered ? "fresh session" : null,
+  ].filter((item): item is string => Boolean(item));
+
+  if (items.length === 0 && !continuity.remoteSessionId) return null;
+
+  return (
+    <div className="flex flex-wrap items-center gap-1.5 border-t border-border/30 px-2.5 py-1.5 text-[10px] text-muted-foreground">
+      <span className="inline-flex items-center gap-1 font-medium text-foreground/85">
+        <Compass className="h-3 w-3 text-primary" />
+        Continuity
+      </span>
+      {items.map((item) => (
+        <Badge key={item} variant="outline" className="px-1 py-0 text-[9px]">
+          {item}
+        </Badge>
+      ))}
+      {continuity.remoteSessionId && (
+        <span className="ml-auto font-mono text-[9px] text-muted-foreground/80">{continuity.remoteSessionId}</span>
+      )}
+    </div>
+  );
+}
+
 /* ------------------------------------------------------------------ */
 /*  Public component                                                  */
 /* ------------------------------------------------------------------ */
@@ -297,6 +333,7 @@ export function OperationLog({ summary }: OperationLogProps) {
 
       {/* Metadata footer */}
       {!collapsed && summary.metadata && <MetadataFooter metadata={summary.metadata} />}
+      {!collapsed && <ContinuityFooter summary={summary} />}
     </div>
   );
 }

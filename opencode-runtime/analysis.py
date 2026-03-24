@@ -18,6 +18,7 @@ from config import (
     COMPACTION_TOKEN_THRESHOLD,
     DEFAULT_AGENT,
     DOWNLOADABLE_ARTIFACT_EXTENSIONS,
+    MEMORY_ENABLED,
     MODEL_CONTEXT_LIMIT,
     NATIVE_TOOL_NAMES,
     PLAN_AGENT_PROMPT_THRESHOLD,
@@ -864,6 +865,9 @@ def runtime_capabilities() -> dict[str, Any]:
             "init_on_create": SESSION_INIT_ON_CREATE,
             "todos": True,
             "compaction_threshold": COMPACTION_TOKEN_THRESHOLD,
+            "durable_memory": MEMORY_ENABLED,
+            "session_recovery": True,
+            "handoff_resume": MEMORY_ENABLED,
         },
         "mcp_usage": {
             "available": bool(SKILL_RUNTIME_CONFIG.get("mcpSidecars") or os.getenv("MCP_SERVERS", "").strip()),

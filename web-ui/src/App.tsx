@@ -6,29 +6,29 @@ import { PanelLeftClose, PanelLeftOpen, PanelRightOpen } from "lucide-react";
 import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import { Toaster } from "sonner";
 
-import { AgentManagementPanel } from "./components/AgentManagementPanel";
-import { AdminPanel } from "./components/AdminPanel";
-import { HealthDashboard } from "./components/HealthDashboard";
-import { AuditLogPanel } from "./components/AuditLogPanel";
-import UsageDashboard from "./components/UsageDashboard";
-import { AgentTemplateWizard } from "./components/AgentTemplateWizard";
-import { OnboardingTour } from "./components/OnboardingTour";
-import { AppSidebar } from "./components/AppSidebar";
-import { AuthPage } from "./components/AuthPage";
-import { ChatSessionPanel } from "./components/ChatSessionPanel";
-import { ChatWorkbench } from "./components/ChatWorkbench";
-import { TeamView } from "./components/TeamView";
-import { CreateAgentPanel } from "./components/CreateAgentPanel";
-import { ConfirmDialog } from "./components/ConfirmDialog";
-import { EvalManager } from "./components/EvalManager";
-import { PolicyEditor } from "./components/PolicyEditor";
+const AgentManagementPanel = lazy(() => import("./components/AgentManagementPanel").then((m) => ({ default: m.AgentManagementPanel })));
+const AdminPanel = lazy(() => import("./components/AdminPanel").then((m) => ({ default: m.AdminPanel })));
+const HealthDashboard = lazy(() => import("./components/HealthDashboard").then((m) => ({ default: m.HealthDashboard })));
+const AuditLogPanel = lazy(() => import("./components/AuditLogPanel").then((m) => ({ default: m.AuditLogPanel })));
+const UsageDashboard = lazy(() => import("./components/UsageDashboard"));
+const AgentTemplateWizard = lazy(() => import("./components/AgentTemplateWizard").then((m) => ({ default: m.AgentTemplateWizard })));
+const OnboardingTour = lazy(() => import("./components/OnboardingTour").then((m) => ({ default: m.OnboardingTour })));
+const AppSidebar = lazy(() => import("./components/AppSidebar").then((m) => ({ default: m.AppSidebar })));
+const AuthPage = lazy(() => import("./components/AuthPage").then((m) => ({ default: m.AuthPage })));
+const ChatSessionPanel = lazy(() => import("./components/ChatSessionPanel").then((m) => ({ default: m.ChatSessionPanel })));
+const ChatWorkbench = lazy(() => import("./components/ChatWorkbench").then((m) => ({ default: m.ChatWorkbench })));
+const TeamView = lazy(() => import("./components/TeamView").then((m) => ({ default: m.TeamView })));
+const CreateAgentPanel = lazy(() => import("./components/CreateAgentPanel").then((m) => ({ default: m.CreateAgentPanel })));
+const ConfirmDialog = lazy(() => import("./components/ConfirmDialog").then((m) => ({ default: m.ConfirmDialog })));
+const EvalManager = lazy(() => import("./components/EvalManager").then((m) => ({ default: m.EvalManager })));
+const PolicyEditor = lazy(() => import("./components/PolicyEditor").then((m) => ({ default: m.PolicyEditor })));
 import { AgentInspectorDrawer, ResourceInspectorDrawer } from "./components/InspectorDrawer";
-import { SettingsPanel } from "./components/SettingsPanel";
-import { SkillsCatalogPanel } from "./components/SkillsCatalogPanel";
-import { TopBar } from "./components/TopBar";
-import { CommandPalette } from "./components/CommandPalette";
-import { MobileNav } from "./components/MobileNav";
-import { WorkflowManager } from "./components/WorkflowManager";
+const SettingsPanel = lazy(() => import("./components/SettingsPanel").then((m) => ({ default: m.SettingsPanel })));
+const SkillsCatalogPanel = lazy(() => import("./components/SkillsCatalogPanel").then((m) => ({ default: m.SkillsCatalogPanel })));
+const TopBar = lazy(() => import("./components/TopBar").then((m) => ({ default: m.TopBar })));
+const CommandPalette = lazy(() => import("./components/CommandPalette").then((m) => ({ default: m.CommandPalette })));
+const MobileNav = lazy(() => import("./components/MobileNav").then((m) => ({ default: m.MobileNav })));
+const WorkflowManager = lazy(() => import("./components/WorkflowManager").then((m) => ({ default: m.WorkflowManager })));
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
@@ -97,6 +97,25 @@ function NotificationShell({ children }: { children: React.ReactNode }) {
   );
 }
 
+function LoadingPanel() {
+  return (
+    <div className="flex flex-1 items-center justify-center">
+      <div className="flex flex-col items-center gap-3 animate-fade-in">
+        <div className="h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+        <p className="text-sm text-muted-foreground">Loading workspace...</p>
+      </div>
+    </div>
+  );
+}
+
+function SidebarShell({ children }: { children: React.ReactNode }) {
+  return <Suspense fallback={<div className="w-16 border-r border-border bg-background" />}>{children}</Suspense>;
+}
+
+function ContentShell({ children }: { children: React.ReactNode }) {
+  return <Suspense fallback={<LoadingPanel />}>{children}</Suspense>;
+}
+
 // ── App — Provider shell ──
 
 export default function App() {
@@ -149,7 +168,11 @@ function AppLayout() {
   }
 
   if (!conn.currentUser) {
-    return <AuthPage />;
+    return (
+      <Suspense fallback={<LoadingPanel />}>
+        <AuthPage />
+      </Suspense>
+    );
   }
 
   // Cross-cutting: sidebar delete
@@ -241,82 +264,86 @@ function AppLayout() {
   return (
     <div className="flex h-screen flex-col bg-background text-foreground">
       {/* ── TopBar ── */}
-      <TopBar
-        health={conn.health}
-        gatewayError={conn.gatewayError}
-        token={conn.token}
-        namespace={conn.namespace}
-        isConnecting={conn.isConnecting}
-        authConfig={conn.authConfig}
-        currentUser={conn.currentUser}
-        authBusy={conn.authBusy}
-        authUsername={conn.authUsername}
-        authPassword={conn.authPassword}
-        authEmail={conn.authEmail}
-        authDisplayName={conn.authDisplayName}
-        authPasswordConfirm={conn.authPasswordConfirm}
-        passwordProvider={conn.passwordProvider}
-        registerMode={conn.registerMode}
-        onTokenChange={conn.setToken}
-        onNamespaceChange={conn.setNamespace}
-        onAuthUsernameChange={conn.setAuthUsername}
-        onAuthPasswordChange={conn.setAuthPassword}
-        onAuthEmailChange={conn.setAuthEmail}
-        onAuthDisplayNameChange={conn.setAuthDisplayName}
-        onAuthPasswordConfirmChange={conn.setAuthPasswordConfirm}
-        onPasswordProviderChange={conn.setPasswordProvider}
-        onRegisterModeChange={conn.setRegisterMode}
-        connectionError={conn.connectionError}
-        onClearConnectionError={() => conn.setConnectionError("")}
-        onConnect={() => conn.handleConnect()}
-        onPasswordSubmit={() => conn.handlePasswordAuth()}
-        onStartOidc={conn.handleOidcStart}
-        onStartSaml={conn.handleSamlStart}
-        onLogout={() => void conn.handleLogout()}
-        onRefreshCurrentUser={async () => { await conn.refreshCurrentUserProfile(); }}
-      />
+      <Suspense fallback={<div className="h-14 border-b border-border bg-background" />}>
+        <TopBar
+          health={conn.health}
+          gatewayError={conn.gatewayError}
+          token={conn.token}
+          namespace={conn.namespace}
+          isConnecting={conn.isConnecting}
+          authConfig={conn.authConfig}
+          currentUser={conn.currentUser}
+          authBusy={conn.authBusy}
+          authUsername={conn.authUsername}
+          authPassword={conn.authPassword}
+          authEmail={conn.authEmail}
+          authDisplayName={conn.authDisplayName}
+          authPasswordConfirm={conn.authPasswordConfirm}
+          passwordProvider={conn.passwordProvider}
+          registerMode={conn.registerMode}
+          onTokenChange={conn.setToken}
+          onNamespaceChange={conn.setNamespace}
+          onAuthUsernameChange={conn.setAuthUsername}
+          onAuthPasswordChange={conn.setAuthPassword}
+          onAuthEmailChange={conn.setAuthEmail}
+          onAuthDisplayNameChange={conn.setAuthDisplayName}
+          onAuthPasswordConfirmChange={conn.setAuthPasswordConfirm}
+          onPasswordProviderChange={conn.setPasswordProvider}
+          onRegisterModeChange={conn.setRegisterMode}
+          connectionError={conn.connectionError}
+          onClearConnectionError={() => conn.setConnectionError("")}
+          onConnect={() => conn.handleConnect()}
+          onPasswordSubmit={() => conn.handlePasswordAuth()}
+          onStartOidc={conn.handleOidcStart}
+          onStartSaml={conn.handleSamlStart}
+          onLogout={() => void conn.handleLogout()}
+          onRefreshCurrentUser={async () => { await conn.refreshCurrentUserProfile(); }}
+        />
+      </Suspense>
 
       <div className="flex flex-1 overflow-hidden">
         {/* ── Sidebar ── */}
         <div className="hidden md:flex">
-          <AppSidebar
-            collapsed={ws.sidebarCollapsed}
-            onToggleCollapse={() => ws.setSidebarCollapsed((prev) => !prev)}
-            activeView={ws.activeView}
-            counts={ws.sidebarCounts}
-            items={ws.sidebarItems}
-            selectedId={ws.sidebarSelectedId}
-            loading={ws.catalogLoading}
-            emptyMessage={ws.emptySidebarMessage}
-            isAdmin={conn.isAdmin}
-            onViewChange={ws.setActiveView}
-            onRefresh={() => void ws.refreshWorkspaceData({ silent: false })}
-            onSelect={ws.handleSelectResource}
-            onCreateNew={ws.handleCreateNew}
-            onQuickRun={
-              ws.activeView === "agents"
-                ? (id) => { ws.handleSelectResource(id); ws.setAgentViewTab("chat"); }
-                : ws.activeView === "workflows" || ws.activeView === "composer"
-                  ? (id) => {
-                      ws.handleSelectResource(id);
-                      const wf = ws.workflows.find((w) => w.name === id);
-                      if (wf) void ws.handleTriggerWorkflow(wf.name);
-                    }
+          <SidebarShell>
+            <AppSidebar
+              collapsed={ws.sidebarCollapsed}
+              onToggleCollapse={() => ws.setSidebarCollapsed((prev) => !prev)}
+              activeView={ws.activeView}
+              counts={ws.sidebarCounts}
+              items={ws.sidebarItems}
+              selectedId={ws.sidebarSelectedId}
+              loading={ws.catalogLoading}
+              emptyMessage={ws.emptySidebarMessage}
+              isAdmin={conn.isAdmin}
+              onViewChange={ws.setActiveView}
+              onRefresh={() => void ws.refreshWorkspaceData({ silent: false })}
+              onSelect={ws.handleSelectResource}
+              onCreateNew={ws.handleCreateNew}
+              onQuickRun={
+                ws.activeView === "agents"
+                  ? (id) => { ws.handleSelectResource(id); ws.setAgentViewTab("chat"); }
+                  : ws.activeView === "workflows" || ws.activeView === "composer"
+                    ? (id) => {
+                        ws.handleSelectResource(id);
+                        const wf = ws.workflows.find((w) => w.name === id);
+                        if (wf) void ws.handleTriggerWorkflow(wf.name);
+                      }
+                    : undefined
+              }
+              quickRunLabel={
+                ws.activeView === "agents"
+                  ? "Chat with"
+                  : ws.activeView === "workflows" || ws.activeView === "composer"
+                    ? "Trigger"
+                    : undefined
+              }
+              onDeleteItem={
+                ws.activeView === "agents" || ws.activeView === "workflows" || ws.activeView === "composer" || ws.activeView === "evals"
+                  ? handleSidebarDeleteRequest
                   : undefined
-            }
-            quickRunLabel={
-              ws.activeView === "agents"
-                ? "Chat with"
-                : ws.activeView === "workflows" || ws.activeView === "composer"
-                  ? "Trigger"
-                  : undefined
-            }
-            onDeleteItem={
-              ws.activeView === "agents" || ws.activeView === "workflows" || ws.activeView === "composer" || ws.activeView === "evals"
-                ? handleSidebarDeleteRequest
-                : undefined
-            }
-          />
+              }
+            />
+          </SidebarShell>
         </div>
 
         {/* ── Main content ── */}
@@ -377,39 +404,41 @@ function AppLayout() {
                     <span className="text-primary">✦</span> From Template
                   </Button>
                 </div>
-                <CreateAgentPanel
-                token={conn.token}
-                isEmptyWorkspace={ws.agents.length === 0}
-                name={ws.createAgentName}
-                model={ws.createAgentModel}
-                systemPrompt={ws.createAgentSystemPrompt}
-                runtimeKind={ws.createAgentRuntimeKind}
-                mcpServersText={ws.createAgentMcpServersText}
-                mcpSidecarsText={ws.createAgentMcpSidecarsText}
-                a2aAllowedCallersText={ws.createAgentA2AAllowedCallersText}
-                agents={ws.agents}
-                workflows={ws.workflows}
-                skillFileDrafts={ws.createAgentSkillFileDrafts}
-                gooseConfigFileDrafts={ws.createAgentGooseConfigFileDrafts}
-                opencodeConfigFileDrafts={ws.createAgentOpenCodeConfigFileDrafts}
-                isCreating={ws.isCreatingAgent}
-                error={ws.createError}
-                onMcpServersTextChange={ws.setCreateAgentMcpServersText}
-                onMcpSidecarsTextChange={ws.setCreateAgentMcpSidecarsText}
-                onNameChange={ws.setCreateAgentName}
-                onModelChange={ws.setCreateAgentModel}
-                onSystemPromptChange={ws.setCreateAgentSystemPrompt}
-                onRuntimeKindChange={ws.setCreateAgentRuntimeKind}
-                onA2AAllowedCallersTextChange={ws.setCreateAgentA2AAllowedCallersText}
-                onSkillFileDraftsChange={ws.setCreateAgentSkillFileDrafts}
-                onGooseConfigFileDraftsChange={ws.setCreateAgentGooseConfigFileDrafts}
-                onOpenCodeConfigFileDraftsChange={ws.setCreateAgentOpenCodeConfigFileDrafts}
-                gitForm={ws.createAgentGitForm}
-                onGitFormChange={ws.setCreateAgentGitForm}
-                githubForm={ws.createAgentGitHubForm}
-                onGitHubFormChange={ws.setCreateAgentGitHubForm}
-                onCreate={() => void handleCreateAgentFull()}
-              />
+                <ContentShell>
+                  <CreateAgentPanel
+                    token={conn.token}
+                    isEmptyWorkspace={ws.agents.length === 0}
+                    name={ws.createAgentName}
+                    model={ws.createAgentModel}
+                    systemPrompt={ws.createAgentSystemPrompt}
+                    runtimeKind={ws.createAgentRuntimeKind}
+                    mcpServersText={ws.createAgentMcpServersText}
+                    mcpSidecarsText={ws.createAgentMcpSidecarsText}
+                    a2aAllowedCallersText={ws.createAgentA2AAllowedCallersText}
+                    agents={ws.agents}
+                    workflows={ws.workflows}
+                    skillFileDrafts={ws.createAgentSkillFileDrafts}
+                    gooseConfigFileDrafts={ws.createAgentGooseConfigFileDrafts}
+                    opencodeConfigFileDrafts={ws.createAgentOpenCodeConfigFileDrafts}
+                    isCreating={ws.isCreatingAgent}
+                    error={ws.createError}
+                    onMcpServersTextChange={ws.setCreateAgentMcpServersText}
+                    onMcpSidecarsTextChange={ws.setCreateAgentMcpSidecarsText}
+                    onNameChange={ws.setCreateAgentName}
+                    onModelChange={ws.setCreateAgentModel}
+                    onSystemPromptChange={ws.setCreateAgentSystemPrompt}
+                    onRuntimeKindChange={ws.setCreateAgentRuntimeKind}
+                    onA2AAllowedCallersTextChange={ws.setCreateAgentA2AAllowedCallersText}
+                    onSkillFileDraftsChange={ws.setCreateAgentSkillFileDrafts}
+                    onGooseConfigFileDraftsChange={ws.setCreateAgentGooseConfigFileDrafts}
+                    onOpenCodeConfigFileDraftsChange={ws.setCreateAgentOpenCodeConfigFileDrafts}
+                    gitForm={ws.createAgentGitForm}
+                    onGitFormChange={ws.setCreateAgentGitForm}
+                    githubForm={ws.createAgentGitHubForm}
+                    onGitHubFormChange={ws.setCreateAgentGitHubForm}
+                    onCreate={() => void handleCreateAgentFull()}
+                  />
+                </ContentShell>
               </div>
             ) : (
               <>
@@ -431,27 +460,29 @@ function AppLayout() {
                 <div className="flex min-h-0 flex-1 min-w-0 gap-0 overflow-hidden">
                   <div className={`${ws.selectedAgentName ? "hidden 2xl:flex" : "flex"} ${ws.agentViewTab === "config" ? "flex" : "hidden 2xl:flex"} ${ws.configPanelCollapsed ? "2xl:hidden" : "w-full 2xl:max-w-[48rem] 2xl:basis-[44%]"} min-w-0 flex-col overflow-auto`}>
                     {ws.selectedAgentDetail ? (
-                      <AgentManagementPanel
-                        token={conn.token}
-                        agent={ws.selectedAgentDetail}
-                        policies={ws.policies}
-                        agents={ws.agents}
-                        workflows={ws.workflows}
-                        isSaving={ws.savingAgent}
-                        isDeleting={ws.deletingAgent}
-                        error={ws.agentManageError}
-                        onSave={(payload, a2aText, skills, gooseFiles, opencodeFiles) => void ws.handleSaveAgent(payload, a2aText, skills, gooseFiles, opencodeFiles)}
-                        onDelete={() => void handleDeleteAgentFull()}
-                        onClone={async () => {
-                          try {
-                            await cloneAgent(conn.token, conn.namespace, ws.selectedAgentDetail!.name);
-                            toast.success(`Cloned "${ws.selectedAgentDetail!.name}"`);
-                            void ws.refreshWorkspaceData({ silent: true });
-                          } catch (err) {
-                            toast.error(err instanceof Error ? err.message : "Clone failed");
-                          }
-                        }}
-                      />
+                      <ContentShell>
+                        <AgentManagementPanel
+                          token={conn.token}
+                          agent={ws.selectedAgentDetail}
+                          policies={ws.policies}
+                          agents={ws.agents}
+                          workflows={ws.workflows}
+                          isSaving={ws.savingAgent}
+                          isDeleting={ws.deletingAgent}
+                          error={ws.agentManageError}
+                          onSave={(payload, a2aText, skills, gooseFiles, opencodeFiles) => void ws.handleSaveAgent(payload, a2aText, skills, gooseFiles, opencodeFiles)}
+                          onDelete={() => void handleDeleteAgentFull()}
+                          onClone={async () => {
+                            try {
+                              await cloneAgent(conn.token, conn.namespace, ws.selectedAgentDetail!.name);
+                              toast.success(`Cloned "${ws.selectedAgentDetail!.name}"`);
+                              void ws.refreshWorkspaceData({ silent: true });
+                            } catch (err) {
+                              toast.error(err instanceof Error ? err.message : "Clone failed");
+                            }
+                          }}
+                        />
+                      </ContentShell>
                     ) : (
                       <div className="flex flex-1 items-center justify-center">
                         <p className="text-sm text-muted-foreground">Loading the selected agent settings...</p>
@@ -470,108 +501,126 @@ function AppLayout() {
                       >
                         {ws.configPanelCollapsed ? <PanelLeftOpen className="h-3.5 w-3.5" /> : <PanelLeftClose className="h-3.5 w-3.5" />}
                       </Button>
-                      <ChatSessionPanel
-                        sessions={chat.chatSessions}
-                        activeSessionId={chat.activeSessionId}
-                        loading={chat.sessionsLoading}
-                        onNewSession={() => void chat.handleNewSession()}
-                        onLoadSession={(id) => void chat.handleLoadSession(id)}
-                        onDeleteSession={(id) => void chat.handleDeleteSession(id)}
-                        onRenameSession={(id, title) => void chat.handleRenameSession(id, title)}
-                        onSaveCurrent={() => void chat.handleSaveCurrentSession()}
-                      />
-                      <ChatWorkbench
-                        agentName={ws.selectedAgentName}
-                        runtimeKind={ws.selectedRuntimeKind}
-                        prompt={chat.prompt}
-                        messages={chat.messages}
-                        activity={chat.activity}
-                        isSending={chat.isSending}
-                        tokenReady={Boolean(conn.token.trim())}
-                        streamMode={chat.streamMode}
-                        requireApproval={chat.requireApproval}
-                        approvalSupported={chat.approvalSupported}
-                        a2aTargetAgent={chat.a2aTargetAgent}
-                        a2aTargetNamespace={chat.a2aTargetNamespace}
-                        a2aTimeoutSeconds={chat.a2aTimeoutSeconds}
-                        specialistSubagents={chat.specialistSubagents}
-                        specialistTeamConfigured={chat.specialistTeamConfigured}
-                        subagentStrategy={chat.subagentStrategy}
-                        discoveryPeers={ws.discoverablePeers}
-                        discoveryLoading={ws.discoveryLoading}
-                        discoveryError={ws.discoveryError}
-                        gooseMaxTurns={chat.selectedGooseChatSettings.maxTurns}
-                        gooseWorkingDirectory={chat.selectedGooseChatSettings.workingDirectory}
-                        gooseSystemPrompt={chat.gooseSystemPromptPreview}
-                        emptyMessage={chat.chatEmptyMessage}
-                        error={chat.chatError}
-                        onPromptChange={chat.setPrompt}
-                        onToggleStreamMode={chat.setStreamMode}
-                        onToggleRequireApproval={chat.setRequireApproval}
-                        onA2ATargetAgentChange={(v) => { chat.setChatError(""); chat.setA2ATargetAgent(v); }}
-                        onA2ATargetNamespaceChange={(v) => { chat.setChatError(""); chat.setA2ATargetNamespace(v); }}
-                        onA2ATimeoutSecondsChange={(v) => { chat.setChatError(""); chat.setA2ATimeoutSeconds(v); }}
-                        onSubagentStrategyChange={(v) => { chat.setChatError(""); chat.setSubagentStrategy(v); }}
-                        onAddSpecialistSubagent={chat.addSpecialistSubagent}
-                        onUpdateSpecialistSubagent={(id, patch) => chat.updateSpecialistSubagent(id, patch)}
-                        onRemoveSpecialistSubagent={(id) => chat.removeSpecialistSubagent(id)}
-                        onClearSpecialistTeam={chat.clearSpecialistTeam}
-                        onGooseMaxTurnsChange={chat.setGooseMaxTurns}
-                        onGooseWorkingDirectoryChange={chat.setGooseWorkingDirectory}
-                        opencodeOutputFormat={chat.selectedOpenCodeChatSettings.outputFormat}
-                        opencodeAutonomous={chat.selectedOpenCodeChatSettings.autonomous}
-                        opencodeMaxTurns={chat.selectedOpenCodeChatSettings.maxTurns}
-                        opencodeWorkingDirectory={chat.selectedOpenCodeChatSettings.workingDirectory}
-                        summary={chat.summary}
-                        activeSessionSummary={chat.activeSessionSummary}
-                        activeMemoryRecords={chat.activeMemoryRecords}
-                        agentMemoryRecords={chat.agentMemoryRecords}
-                        onPromoteMemoryRecord={(recordId, promoted) => void chat.handlePromoteMemoryRecord(recordId, promoted)}
-                        onEditMemoryRecord={(recordId, patch) => void chat.handleEditMemoryRecord(recordId, patch)}
-                        onDeleteMemoryRecord={(recordId) => void chat.handleDeleteMemoryRecord(recordId)}
-                        onDownloadArtifact={(path, filename) => downloadAgentArtifact(conn.token, conn.namespace, ws.selectedAgentName, path, filename)}
-                        onListArtifacts={() => listAgentArtifacts(conn.token, conn.namespace, ws.selectedAgentName)}
-                        onOpenCodeOutputFormatChange={chat.setOpenCodeOutputFormat}
-                        onOpenCodeAutonomousChange={chat.setOpenCodeAutonomous}
-                        onOpenCodeMaxTurnsChange={chat.setOpenCodeMaxTurns}
-                        onOpenCodeWorkingDirectoryChange={chat.setOpenCodeWorkingDirectory}
-                        canSubmit={chat.canSubmitChat}
-                        onSubmit={() => void chat.handleSubmit()}
-                        onCancel={chat.cancelStream}
-                      />
-                      <TeamView
-                        specialistSubagents={chat.specialistSubagents}
-                        specialistTeamConfigured={chat.specialistTeamConfigured}
-                        subagentStrategy={chat.subagentStrategy}
-                        summary={chat.summary}
-                        isSending={chat.isSending}
-                        activity={chat.activity}
-                      />
+                      <ContentShell>
+                        <ChatSessionPanel
+                          sessions={chat.chatSessions}
+                          activeSessionId={chat.activeSessionId}
+                          loading={chat.sessionsLoading}
+                          search={chat.sessionSearch}
+                          onSearchChange={chat.setSessionSearch}
+                          sessionDirty={chat.sessionDirty}
+                          sessionSaving={chat.sessionSaving}
+                          lastSessionSaveAt={chat.lastSessionSaveAt}
+                          onNewSession={() => void chat.handleNewSession()}
+                          onLoadSession={(id) => void chat.handleLoadSession(id)}
+                          onDeleteSession={(id) => void chat.handleDeleteSession(id)}
+                          onRenameSession={(id, title) => void chat.handleRenameSession(id, title)}
+                          onSaveCurrent={() => void chat.handleSaveCurrentSession()}
+                        />
+                      </ContentShell>
+                      <ContentShell>
+                        <ChatWorkbench
+                          agentName={ws.selectedAgentName}
+                          runtimeKind={ws.selectedRuntimeKind}
+                          prompt={chat.prompt}
+                          messages={chat.messages}
+                          activity={chat.activity}
+                          isSending={chat.isSending}
+                          tokenReady={Boolean(conn.token.trim())}
+                          streamMode={chat.streamMode}
+                          requireApproval={chat.requireApproval}
+                          approvalSupported={chat.approvalSupported}
+                          a2aTargetAgent={chat.a2aTargetAgent}
+                          a2aTargetNamespace={chat.a2aTargetNamespace}
+                          a2aTimeoutSeconds={chat.a2aTimeoutSeconds}
+                          specialistSubagents={chat.specialistSubagents}
+                          specialistTeamConfigured={chat.specialistTeamConfigured}
+                          subagentStrategy={chat.subagentStrategy}
+                          discoveryPeers={ws.discoverablePeers}
+                          discoveryLoading={ws.discoveryLoading}
+                          discoveryError={ws.discoveryError}
+                          gooseMaxTurns={chat.selectedGooseChatSettings.maxTurns}
+                          gooseWorkingDirectory={chat.selectedGooseChatSettings.workingDirectory}
+                          gooseSystemPrompt={chat.gooseSystemPromptPreview}
+                          emptyMessage={chat.chatEmptyMessage}
+                          error={chat.chatError}
+                          onPromptChange={chat.setPrompt}
+                          onToggleStreamMode={chat.setStreamMode}
+                          onToggleRequireApproval={chat.setRequireApproval}
+                          onA2ATargetAgentChange={(v) => { chat.setChatError(""); chat.setA2ATargetAgent(v); }}
+                          onA2ATargetNamespaceChange={(v) => { chat.setChatError(""); chat.setA2ATargetNamespace(v); }}
+                          onA2ATimeoutSecondsChange={(v) => { chat.setChatError(""); chat.setA2ATimeoutSeconds(v); }}
+                          onSubagentStrategyChange={(v) => { chat.setChatError(""); chat.setSubagentStrategy(v); }}
+                          onAddSpecialistSubagent={chat.addSpecialistSubagent}
+                          onUpdateSpecialistSubagent={(id, patch) => chat.updateSpecialistSubagent(id, patch)}
+                          onRemoveSpecialistSubagent={(id) => chat.removeSpecialistSubagent(id)}
+                          onClearSpecialistTeam={chat.clearSpecialistTeam}
+                          onGooseMaxTurnsChange={chat.setGooseMaxTurns}
+                          onGooseWorkingDirectoryChange={chat.setGooseWorkingDirectory}
+                          opencodeOutputFormat={chat.selectedOpenCodeChatSettings.outputFormat}
+                          opencodeAutonomous={chat.selectedOpenCodeChatSettings.autonomous}
+                          opencodeMaxTurns={chat.selectedOpenCodeChatSettings.maxTurns}
+                          opencodeWorkingDirectory={chat.selectedOpenCodeChatSettings.workingDirectory}
+                          summary={chat.summary}
+                          activeSessionId={chat.activeSessionId}
+                          sessionDirty={chat.sessionDirty}
+                          sessionSaving={chat.sessionSaving}
+                          lastSessionSaveAt={chat.lastSessionSaveAt}
+                          activeSessionSummary={chat.activeSessionSummary}
+                          activeMemoryRecords={chat.activeMemoryRecords}
+                          agentMemoryRecords={chat.agentMemoryRecords}
+                          onPromoteMemoryRecord={(recordId, promoted) => void chat.handlePromoteMemoryRecord(recordId, promoted)}
+                          onEditMemoryRecord={(recordId, patch) => void chat.handleEditMemoryRecord(recordId, patch)}
+                          onDeleteMemoryRecord={(recordId) => void chat.handleDeleteMemoryRecord(recordId)}
+                          onDownloadArtifact={(path, filename) => downloadAgentArtifact(conn.token, conn.namespace, ws.selectedAgentName, path, filename)}
+                          onListArtifacts={() => listAgentArtifacts(conn.token, conn.namespace, ws.selectedAgentName)}
+                          onOpenCodeOutputFormatChange={chat.setOpenCodeOutputFormat}
+                          onOpenCodeAutonomousChange={chat.setOpenCodeAutonomous}
+                          onOpenCodeMaxTurnsChange={chat.setOpenCodeMaxTurns}
+                          onOpenCodeWorkingDirectoryChange={chat.setOpenCodeWorkingDirectory}
+                          onSaveSession={() => void chat.handleSaveCurrentSession()}
+                          canSubmit={chat.canSubmitChat}
+                          onSubmit={() => void chat.handleSubmit()}
+                          onCancel={chat.cancelStream}
+                        />
+                      </ContentShell>
+                      <ContentShell>
+                        <TeamView
+                          specialistSubagents={chat.specialistSubagents}
+                          specialistTeamConfigured={chat.specialistTeamConfigured}
+                          subagentStrategy={chat.subagentStrategy}
+                          summary={chat.summary}
+                          isSending={chat.isSending}
+                          activity={chat.activity}
+                        />
+                      </ContentShell>
                     </div>
                   )}
                 </div>
               </>
             )
           ) : ws.activeView === "workflows" ? (
-            <WorkflowManager
-              workflow={ws.workflowCreateMode || ws.workflows.length === 0 ? null : ws.selectedWorkflow}
-              agents={ws.agents}
-              isSaving={ws.savingWorkflow}
-              isDeleting={ws.deletingWorkflow}
-              isRunning={ws.runningWorkflow}
-              error={ws.workflowError}
-              onCreate={(payload) => void ws.handleCreateWorkflow(payload)}
-              onUpdate={(name, payload) => void ws.handleUpdateWorkflow(name, payload)}
-              onDelete={(name) => void ws.handleDeleteWorkflow(name)}
-              onTrigger={(name, input) => void ws.handleTriggerWorkflow(name, input)}
-              onCancel={(name) => void ws.handleCancelWorkflow(name)}
-              isCancelling={ws.cancellingWorkflow}
-              approvalReason={chat.approvalReason}
-              approvalBusy={chat.approvalBusy}
-              onApprovalReasonChange={chat.setApprovalReason}
-              onApprovalDecision={(decision) => void chat.handleWorkflowApprovalDecision(decision)}
-              onOpenComposer={() => ws.setActiveView("composer")}
-            />
+            <ContentShell>
+              <WorkflowManager
+                workflow={ws.workflowCreateMode || ws.workflows.length === 0 ? null : ws.selectedWorkflow}
+                agents={ws.agents}
+                isSaving={ws.savingWorkflow}
+                isDeleting={ws.deletingWorkflow}
+                isRunning={ws.runningWorkflow}
+                error={ws.workflowError}
+                onCreate={(payload) => void ws.handleCreateWorkflow(payload)}
+                onUpdate={(name, payload) => void ws.handleUpdateWorkflow(name, payload)}
+                onDelete={(name) => void ws.handleDeleteWorkflow(name)}
+                onTrigger={(name, input) => void ws.handleTriggerWorkflow(name, input)}
+                onCancel={(name) => void ws.handleCancelWorkflow(name)}
+                isCancelling={ws.cancellingWorkflow}
+                approvalReason={chat.approvalReason}
+                approvalBusy={chat.approvalBusy}
+                onApprovalReasonChange={chat.setApprovalReason}
+                onApprovalDecision={(decision) => void chat.handleWorkflowApprovalDecision(decision)}
+                onOpenComposer={() => ws.setActiveView("composer")}
+              />
+            </ContentShell>
           ) : ws.activeView === "composer" ? (
             <Suspense fallback={
               <div className="flex flex-1 items-center justify-center">
@@ -581,63 +630,79 @@ function AppLayout() {
               <WorkflowComposer />
             </Suspense>
           ) : ws.activeView === "catalog" ? (
-            <SkillsCatalogPanel
-              token={conn.token}
-              onAttachSkill={(_skillId, files) => {
-                const newDrafts = Object.entries(files).map(([path, content]) => ({
-                  id: createId(),
-                  path,
-                  content,
-                }));
-                ws.setCreateAgentSkillFileDrafts([...ws.createAgentSkillFileDrafts, ...newDrafts]);
-                ws.setAgentCreateMode(true);
-                ws.setActiveView("agents");
-                toast.success("Skill files added to the new agent form");
-              }}
-              onAttachTool={(toolId) => {
-                const prev = ws.createAgentMcpSidecarsText.trim();
-                ws.setCreateAgentMcpSidecarsText(prev ? `${prev}, ${toolId}` : toolId);
-                ws.setAgentCreateMode(true);
-                ws.setActiveView("agents");
-                toast.success(`MCP sidecar "${toolId}" added to the new agent form`);
-              }}
-            />
+            <ContentShell>
+              <SkillsCatalogPanel
+                token={conn.token}
+                onAttachSkill={(_skillId, files) => {
+                  const newDrafts = Object.entries(files).map(([path, content]) => ({
+                    id: createId(),
+                    path,
+                    content,
+                  }));
+                  ws.setCreateAgentSkillFileDrafts([...ws.createAgentSkillFileDrafts, ...newDrafts]);
+                  ws.setAgentCreateMode(true);
+                  ws.setActiveView("agents");
+                  toast.success("Skill files added to the new agent form");
+                }}
+                onAttachTool={(toolId) => {
+                  const prev = ws.createAgentMcpSidecarsText.trim();
+                  ws.setCreateAgentMcpSidecarsText(prev ? `${prev}, ${toolId}` : toolId);
+                  ws.setAgentCreateMode(true);
+                  ws.setActiveView("agents");
+                  toast.success(`MCP sidecar "${toolId}" added to the new agent form`);
+                }}
+              />
+            </ContentShell>
           ) : ws.activeView === "policies" ? (
-            <PolicyEditor selectedPolicyName={ws.sidebarSelectedId || null} />
+            <ContentShell>
+              <PolicyEditor selectedPolicyName={ws.sidebarSelectedId || null} />
+            </ContentShell>
           ) : ws.activeView === "settings" ? (
-            <SettingsPanel token={conn.token} isAdmin={conn.isAdmin} />
+            <ContentShell>
+              <SettingsPanel token={conn.token} isAdmin={conn.isAdmin} />
+            </ContentShell>
           ) : ws.activeView === "admin" ? (
-            <Tabs defaultValue="users" className="flex flex-col h-full">
-              <TabsList className="mx-4 mt-2 shrink-0 w-fit">
+              <Tabs defaultValue="users" className="flex flex-col h-full">
+                <TabsList className="mx-4 mt-2 shrink-0 w-fit">
                 <TabsTrigger value="users" className="text-xs cursor-pointer">Users</TabsTrigger>
                 <TabsTrigger value="audit" className="text-xs cursor-pointer">Audit Log</TabsTrigger>
                 <TabsTrigger value="usage" className="text-xs cursor-pointer">Usage & Cost</TabsTrigger>
                 <TabsTrigger value="health" className="text-xs cursor-pointer">Health</TabsTrigger>
-              </TabsList>
-              <TabsContent value="users" className="flex-1 min-h-0 mt-0">
-                <AdminPanel token={conn.token} />
-              </TabsContent>
-              <TabsContent value="audit" className="flex-1 min-h-0 mt-0">
-                <AuditLogPanel />
-              </TabsContent>
-              <TabsContent value="usage" className="flex-1 min-h-0 mt-0 overflow-y-auto">
-                <UsageDashboard />
-              </TabsContent>
-              <TabsContent value="health" className="flex-1 min-h-0 mt-0 overflow-y-auto">
-                <HealthDashboard />
-              </TabsContent>
-            </Tabs>
+                </TabsList>
+                <TabsContent value="users" className="flex-1 min-h-0 mt-0">
+                  <ContentShell>
+                    <AdminPanel token={conn.token} />
+                  </ContentShell>
+                </TabsContent>
+                <TabsContent value="audit" className="flex-1 min-h-0 mt-0">
+                  <ContentShell>
+                    <AuditLogPanel />
+                  </ContentShell>
+                </TabsContent>
+                <TabsContent value="usage" className="flex-1 min-h-0 mt-0 overflow-y-auto">
+                  <ContentShell>
+                    <UsageDashboard />
+                  </ContentShell>
+                </TabsContent>
+                <TabsContent value="health" className="flex-1 min-h-0 mt-0 overflow-y-auto">
+                  <ContentShell>
+                    <HealthDashboard />
+                  </ContentShell>
+                </TabsContent>
+              </Tabs>
           ) : (
-            <EvalManager
-              evalResource={ws.evalCreateMode || ws.evals.length === 0 ? null : ws.selectedEval}
-              agents={ws.agents}
-              isSaving={ws.savingEval}
-              isDeleting={ws.deletingEval}
-              error={ws.evalError}
-              onCreate={(payload) => void ws.handleCreateEval(payload)}
-              onUpdate={(name, payload) => void ws.handleUpdateEval(name, payload)}
-              onDelete={(name) => void ws.handleDeleteEval(name)}
-            />
+            <ContentShell>
+              <EvalManager
+                evalResource={ws.evalCreateMode || ws.evals.length === 0 ? null : ws.selectedEval}
+                agents={ws.agents}
+                isSaving={ws.savingEval}
+                isDeleting={ws.deletingEval}
+                error={ws.evalError}
+                onCreate={(payload) => void ws.handleCreateEval(payload)}
+                onUpdate={(name, payload) => void ws.handleUpdateEval(name, payload)}
+                onDelete={(name) => void ws.handleDeleteEval(name)}
+              />
+            </ContentShell>
           )}
         </main>
       </div>
@@ -702,73 +767,77 @@ function AppLayout() {
         />
       ) : null}
 
-      <MobileNav
-        activeView={ws.activeView}
-        onViewChange={ws.setActiveView}
-        sidebarContent={
-          <AppSidebar
-            collapsed={false}
-            onToggleCollapse={() => {}}
-            activeView={ws.activeView}
-            counts={ws.sidebarCounts}
-            items={ws.sidebarItems}
-            selectedId={ws.sidebarSelectedId}
-            loading={ws.catalogLoading}
-            emptyMessage={ws.emptySidebarMessage}
-            isAdmin={conn.isAdmin}
-            onViewChange={ws.setActiveView}
-            onRefresh={() => void ws.refreshWorkspaceData({ silent: false })}
-            onSelect={ws.handleSelectResource}
-            onCreateNew={ws.handleCreateNew}
-            onDeleteItem={
-              ws.activeView === "agents" || ws.activeView === "workflows" || ws.activeView === "composer" || ws.activeView === "evals"
-                ? handleSidebarDeleteRequest
-                : undefined
-            }
-          />
-        }
-      />
+      <Suspense fallback={null}>
+        <MobileNav
+          activeView={ws.activeView}
+          onViewChange={ws.setActiveView}
+          sidebarContent={
+            <AppSidebar
+              collapsed={false}
+              onToggleCollapse={() => {}}
+              activeView={ws.activeView}
+              counts={ws.sidebarCounts}
+              items={ws.sidebarItems}
+              selectedId={ws.sidebarSelectedId}
+              loading={ws.catalogLoading}
+              emptyMessage={ws.emptySidebarMessage}
+              isAdmin={conn.isAdmin}
+              onViewChange={ws.setActiveView}
+              onRefresh={() => void ws.refreshWorkspaceData({ silent: false })}
+              onSelect={ws.handleSelectResource}
+              onCreateNew={ws.handleCreateNew}
+              onDeleteItem={
+                ws.activeView === "agents" || ws.activeView === "workflows" || ws.activeView === "composer" || ws.activeView === "evals"
+                  ? handleSidebarDeleteRequest
+                  : undefined
+              }
+            />
+          }
+        />
+      </Suspense>
 
       <Toaster position="bottom-right" theme="dark" richColors />
-      <CommandPalette
-        onNavigate={ws.setActiveView}
-        onCreateAgent={() => { ws.setActiveView("agents"); ws.setAgentCreateMode(true); }}
-        onCreateWorkflow={() => { ws.setActiveView("workflows"); ws.setWorkflowCreateMode(true); }}
-        onCreateEval={() => { ws.setActiveView("evals"); ws.setEvalCreateMode(true); }}
-        onExportBundle={() => {
-          const url = exportBundleUrl(conn.token, conn.namespace);
-          window.open(url, "_blank");
-        }}
-        onImportBundle={() => {
-          const input = document.createElement("input");
-          input.type = "file";
-          input.accept = ".yaml,.yml";
-          input.onchange = async () => {
-            const file = input.files?.[0];
-            if (!file) return;
-            const text = await file.text();
-            try {
-              const result = await importBundle(conn.token, conn.namespace, text);
-              toast.success(`Imported ${result.imported} resource(s)`);
-              void ws.refreshWorkspaceData({ silent: true });
-            } catch (err) {
-              toast.error(err instanceof Error ? err.message : "Import failed");
-            }
-          };
-          input.click();
-        }}
-      />
-      <AgentTemplateWizard open={templateWizardOpen} onOpenChange={setTemplateWizardOpen} />
-      <ConfirmDialog
-        open={sidebarDeleteTarget !== null}
-        onOpenChange={(open) => { if (!open) setSidebarDeleteTarget(null); }}
-        title={`Delete ${sidebarDeleteTarget?.id ?? ""}?`}
-        description="This will permanently remove this resource and cannot be undone."
-        confirmLabel="Delete"
-        variant="destructive"
-        onConfirm={() => void handleSidebarDeleteConfirm()}
-      />
-      <OnboardingTour />
+      <Suspense fallback={null}>
+        <CommandPalette
+          onNavigate={ws.setActiveView}
+          onCreateAgent={() => { ws.setActiveView("agents"); ws.setAgentCreateMode(true); }}
+          onCreateWorkflow={() => { ws.setActiveView("workflows"); ws.setWorkflowCreateMode(true); }}
+          onCreateEval={() => { ws.setActiveView("evals"); ws.setEvalCreateMode(true); }}
+          onExportBundle={() => {
+            const url = exportBundleUrl(conn.token, conn.namespace);
+            window.open(url, "_blank");
+          }}
+          onImportBundle={() => {
+            const input = document.createElement("input");
+            input.type = "file";
+            input.accept = ".yaml,.yml";
+            input.onchange = async () => {
+              const file = input.files?.[0];
+              if (!file) return;
+              const text = await file.text();
+              try {
+                const result = await importBundle(conn.token, conn.namespace, text);
+                toast.success(`Imported ${result.imported} resource(s)`);
+                void ws.refreshWorkspaceData({ silent: true });
+              } catch (err) {
+                toast.error(err instanceof Error ? err.message : "Import failed");
+              }
+            };
+            input.click();
+          }}
+        />
+        <AgentTemplateWizard open={templateWizardOpen} onOpenChange={setTemplateWizardOpen} />
+        <ConfirmDialog
+          open={sidebarDeleteTarget !== null}
+          onOpenChange={(open) => { if (!open) setSidebarDeleteTarget(null); }}
+          title={`Delete ${sidebarDeleteTarget?.id ?? ""}?`}
+          description="This will permanently remove this resource and cannot be undone."
+          confirmLabel="Delete"
+          variant="destructive"
+          onConfirm={() => void handleSidebarDeleteConfirm()}
+        />
+        <OnboardingTour />
+      </Suspense>
     </div>
   );
 }

@@ -143,6 +143,17 @@ function normalizeOpenCodeWorkingDirectory(value: string): string | undefined {
   return segments.join("/");
 }
 
+function buildMessageSignature(messages: UiMessage[]): string {
+  return JSON.stringify(messages.map((message) => ({
+    id: message.id,
+    role: message.role,
+    content: message.content,
+    status: message.status ?? "complete",
+    toolName: message.toolName ?? null,
+    toolNode: message.toolNode ?? null,
+  })));
+}
+
 // ── Context value type ──
 
 export interface ChatContextValue {
@@ -229,6 +240,11 @@ export interface ChatContextValue {
   activeMemoryRecords: MemoryRecordInfo[];
   agentMemoryRecords: MemoryRecordInfo[];
   sessionsLoading: boolean;
+  sessionSearch: string;
+  setSessionSearch: (value: string) => void;
+  sessionDirty: boolean;
+  sessionSaving: boolean;
+  lastSessionSaveAt: string | null;
   handlePromoteMemoryRecord: (recordId: number, promoted: boolean) => Promise<void>;
   handleEditMemoryRecord: (recordId: number, patch: { topic?: string; content?: string; promoted?: boolean }) => Promise<void>;
   handleDeleteMemoryRecord: (recordId: number) => Promise<void>;
@@ -285,6 +301,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const [activeMemoryRecords, setActiveMemoryRecords] = useState<MemoryRecordInfo[]>([]);
   const [agentMemoryRecords, setAgentMemoryRecords] = useState<MemoryRecordInfo[]>([]);
   const [sessionsLoading, setSessionsLoading] = useState(false);
+  const [sessionSearch, setSessionSearch] = useState("");
+  const [sessionDirty, setSessionDirty] = useState(false);
+  const [sessionSaving, setSessionSaving] = useState(false);
+  const [lastSessionSaveAt, setLastSessionSaveAt] = useState<string | null>(null);
+  const savedMessageSignatureRef = useRef<string>("[]");
 
   const threadIdsRef = useRef<Record<string, string>>({});
   const pendingRequestRef = useRef<Record<string, InvokePayload | null>>({});
@@ -884,7 +905,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
   // Load sessions list when agent changes
   useEffect(() => {
-    if (!token.trim() || !selectedAgentName) { setChatSessions([]); setActiveSessionId(null); return; }
+    if (!token.trim() || !selectedAgentName) { setChatSessions([]); setActiveSessionId(null); setSessionSearch(""); return; }
     let cancelled = false;
     setSessionsLoading(true);
     void listChatSessions(token, namespace, selectedAgentName)
@@ -894,21 +915,30 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     return () => { cancelled = true; };
   }, [token, namespace, selectedAgentName]);
 
+  useEffect(() => {
+    if (!activeSessionId) {
+      setSessionDirty(false);
+      return;
+    }
+    setSessionDirty(buildMessageSignature(messages) !== savedMessageSignatureRef.current);
+  }, [messages, activeSessionId]);
+
   const handleNewSession = useCallback(async () => {
     if (!token.trim() || !selectedAgentName) return;
     try {
       const title = "New Chat";
       const session = await createChatSession(token, namespace, selectedAgentName, title);
-      // Save current messages into the new session
-      if (messages.length > 0) {
-        await saveChatSessionMessages(token, session.session_id, messages.map((m) => ({
-          message_id: m.id, role: m.role, content: m.content, status: m.status ?? "complete", toolName: m.toolName, toolNode: m.toolNode,
-        })));
-      }
+      setMessagesForAgent(selectedAgentName, () => []);
+      setSummaryForAgent(selectedAgentName, () => null);
+      setActivityForAgent(selectedAgentName, () => []);
+      delete threadIdsRef.current[selectedAgentName];
+      savedMessageSignatureRef.current = "[]";
       setActiveSessionId(session.session_id);
+      setLastSessionSaveAt(session.updated_at ?? new Date().toISOString());
+      setSessionDirty(false);
       setChatSessions((prev) => [session, ...prev]);
     } catch (err) { setChatError(apiErrorMessage(err)); }
-  }, [token, namespace, selectedAgentName, messages]);
+  }, [token, namespace, selectedAgentName, setMessagesForAgent, setSummaryForAgent]);
 
   const handleLoadSession = useCallback(async (sessionId: string) => {
     if (!token.trim() || !selectedAgentName) return;
@@ -920,10 +950,20 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           toolName: m.tool_name ?? undefined, toolNode: m.tool_node ?? undefined,
         })),
       );
+      savedMessageSignatureRef.current = buildMessageSignature(msgs.map((m) => ({
+        id: m.message_id,
+        role: m.role as UiMessage["role"],
+        content: m.content,
+        status: m.status as UiMessage["status"],
+        toolName: m.tool_name ?? undefined,
+        toolNode: m.tool_node ?? undefined,
+      })));
       setActiveSessionId(sessionId);
+      setLastSessionSaveAt(chatSessions.find((session) => session.session_id === sessionId)?.updated_at ?? new Date().toISOString());
+      setSessionDirty(false);
       setChatError("");
     } catch (err) { setChatError(apiErrorMessage(err)); }
-  }, [token, selectedAgentName, setMessagesForAgent]);
+  }, [token, selectedAgentName, setMessagesForAgent, chatSessions]);
 
   const handleDeleteSession = useCallback(async (sessionId: string) => {
     if (!token.trim()) return;
@@ -945,10 +985,23 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const handleSaveCurrentSession = useCallback(async () => {
     if (!token.trim() || !activeSessionId || !selectedAgentName) return;
     try {
+      setSessionSaving(true);
       await saveChatSessionMessages(token, activeSessionId, messages.map((m) => ({
         message_id: m.id, role: m.role, content: m.content, status: m.status ?? "complete", toolName: m.toolName, toolNode: m.toolNode,
       })));
+      savedMessageSignatureRef.current = buildMessageSignature(messages);
+      const savedAt = new Date().toISOString();
+      setLastSessionSaveAt(savedAt);
+      setSessionDirty(false);
+      setChatSessions((prev) => prev.map((session) => (
+        session.session_id === activeSessionId
+          ? { ...session, updated_at: savedAt }
+          : session
+      )));
     } catch (err) { setChatError(apiErrorMessage(err)); }
+    finally {
+      setSessionSaving(false);
+    }
   }, [token, activeSessionId, selectedAgentName, messages]);
 
   // Auto-save after each invocation completes (isSending true → false)
@@ -983,6 +1036,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     handleSubmit, handleLoadLogs, handleStreamLogs, handleStopLogStream, handleAgentApprovalDecision, handleWorkflowApprovalDecision, cancelStream,
     setMessagesForAgent, removeAgentChatState,
     chatSessions, activeSessionId, activeSessionSummary, activeMemoryRecords, agentMemoryRecords, sessionsLoading,
+    sessionSearch, setSessionSearch, sessionDirty, sessionSaving, lastSessionSaveAt,
     handlePromoteMemoryRecord, handleEditMemoryRecord, handleDeleteMemoryRecord,
     handleNewSession, handleLoadSession, handleDeleteSession, handleRenameSession, handleSaveCurrentSession,
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -993,6 +1047,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     specialistSubagents, specialistTeamConfigured, subagentStrategy,
     approvalReason, approvalBusy, selectedWorkflowApprovalName,
     chatSessions, activeSessionId, activeSessionSummary, activeMemoryRecords, agentMemoryRecords, sessionsLoading,
+    sessionSearch, sessionDirty, sessionSaving, lastSessionSaveAt,
     handlePromoteMemoryRecord, handleEditMemoryRecord, handleDeleteMemoryRecord,
     handleNewSession, handleLoadSession, handleDeleteSession, handleRenameSession, handleSaveCurrentSession,
   ]);

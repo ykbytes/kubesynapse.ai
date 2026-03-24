@@ -678,6 +678,7 @@ class InvokeResponseModelTests(unittest.TestCase):
         resp = opencode_runtime_main.InvokeResponse(thread_id="t1", response="done", model="gpt-4")
         self.assertEqual(resp.artifacts, [])
         self.assertEqual(resp.tool_calls, [])
+        self.assertIsNone(resp.continuity)
         self.assertIsNone(resp.metadata)
 
 
@@ -1358,6 +1359,7 @@ class RuntimeCapabilitiesEnhancedTests(unittest.TestCase):
         self.assertTrue(sm["summarize"])
         self.assertTrue(sm["init"])
         self.assertTrue(sm["todos"])
+        self.assertTrue(sm["session_recovery"])
         self.assertEqual(sm["compaction_threshold"], opencode_runtime_main.COMPACTION_TOKEN_THRESHOLD)
 
     def test_native_tools_include_new_tools(self) -> None:
@@ -1544,6 +1546,22 @@ class InvokeOpenCodeLoopTests(unittest.TestCase):
                 resp = opencode_runtime_main.invoke_opencode(req)
         self.assertIsNotNone(resp.metadata)
         self.assertEqual(resp.metadata["todos"], todos)
+
+    def test_response_includes_continuity_metadata(self) -> None:
+        payload = self._make_payload("All done", "stop")
+        req = opencode_runtime_main.InvokeRequest(prompt="Build it")
+        with self._patch_server_running(), self._patch_create_session(), self._patch_send_prompt([payload]):
+            with (
+                patch.object(invoke_mod, "get_session_messages", return_value=[]),
+                patch.object(invoke_mod, "get_session_todos", return_value=[]),
+                patch.object(invoke_mod, "wait_for_session_idle", return_value={"type": "idle"}),
+                patch.object(invoke_mod, "abort_session", return_value=True),
+                patch.object(invoke_mod, "summarize_session", return_value=True),
+            ):
+                resp = opencode_runtime_main.invoke_opencode(req)
+        self.assertIsNotNone(resp.continuity)
+        self.assertIn("created_new_session", resp.continuity)
+        self.assertIn("remote_session_id", resp.continuity)
 
     def test_session_init_called_for_new_autonomous_session(self) -> None:
         payload = self._make_payload("All done", "stop")

@@ -12,12 +12,14 @@ import {
   FolderOpen,
   LoaderCircle,
   MessageSquare,
+  MemoryStick,
   Pencil,
   Pin,
   PanelRightClose,
   PanelRightOpen,
   Plus,
   RotateCcw,
+  Search,
   Send,
   Square,
   User,
@@ -78,6 +80,10 @@ interface ChatWorkbenchProps {
   opencodeMaxTurns: string;
   opencodeWorkingDirectory: string;
   summary: InvocationSummary | null;
+  activeSessionId: string | null;
+  sessionDirty: boolean;
+  sessionSaving: boolean;
+  lastSessionSaveAt: string | null;
   activeSessionSummary: ChatSessionSummary | null;
   activeMemoryRecords: MemoryRecordInfo[];
   agentMemoryRecords: MemoryRecordInfo[];
@@ -105,6 +111,7 @@ interface ChatWorkbenchProps {
   onOpenCodeAutonomousChange: (value: boolean) => void;
   onOpenCodeMaxTurnsChange: (value: string) => void;
   onOpenCodeWorkingDirectoryChange: (value: string) => void;
+  onSaveSession: () => void;
   canSubmit: boolean;
   onSubmit: () => void;
   onCancel: () => void;
@@ -232,6 +239,154 @@ function truncateText(value: string | null | undefined, maxChars = 120): string 
   if (text.length <= maxChars) return text;
   return `${text.slice(0, maxChars - 1).trimEnd()}…`;
 }
+
+function formatRelativeTime(iso: string | null): string {
+  if (!iso) return "";
+  const diff = Date.now() - new Date(iso).getTime();
+  const minutes = Math.floor(diff / 60_000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
+function formatMemoryTypeLabel(value: string): string {
+  return value.replace(/_/g, " ");
+}
+
+function formatMemorySource(record: MemoryRecordInfo, activeSessionId: string | null): string {
+  if (record.session_id && activeSessionId && record.session_id === activeSessionId) return "This session";
+  if (record.session_id) return "Saved session";
+  return "Agent memory";
+}
+
+function buildContinuityHighlights(summary: InvocationSummary | null): string[] {
+  const continuity = summary?.continuity;
+  if (!continuity) return [];
+  const items: string[] = [];
+  if (continuity.sessionRecovered) items.push("Recovered remote session");
+  if (continuity.handoffResumed) items.push("Resumed from handoff");
+  if (continuity.memoryApplied) {
+    const count = continuity.memoryEntryCount;
+    items.push(count && count > 0 ? `Injected ${count} memory entries` : "Injected durable memory");
+  }
+  if (continuity.createdNewSession && !continuity.sessionRecovered) items.push("Started fresh remote session");
+  return items;
+}
+
+const MemoryRecordCard = memo(function MemoryRecordCard({
+  record,
+  activeSessionId,
+  compact = false,
+  editable = false,
+  editingMemoryId,
+  editingMemoryTopic,
+  editingMemoryContent,
+  onStartEdit,
+  onEditTopicChange,
+  onEditContentChange,
+  onSaveEdit,
+  onCancelEdit,
+  onPromote,
+  onDelete,
+}: {
+  record: MemoryRecordInfo;
+  activeSessionId: string | null;
+  compact?: boolean;
+  editable?: boolean;
+  editingMemoryId?: number | null;
+  editingMemoryTopic?: string;
+  editingMemoryContent?: string;
+  onStartEdit?: (record: MemoryRecordInfo) => void;
+  onEditTopicChange?: (value: string) => void;
+  onEditContentChange?: (value: string) => void;
+  onSaveEdit?: (recordId: number) => void;
+  onCancelEdit?: () => void;
+  onPromote: (recordId: number, promoted: boolean) => void;
+  onDelete: (recordId: number) => void;
+}) {
+  const isEditing = editable && editingMemoryId === record.id;
+  return (
+    <div className="rounded-xl border border-border/60 bg-background/80 px-3 py-3 text-xs text-muted-foreground">
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge variant="outline">{formatMemoryTypeLabel(record.memory_type)}</Badge>
+        {record.promoted && <Badge variant="default">Pinned</Badge>}
+        <span className="font-medium text-foreground/90">{record.topic || "Untitled note"}</span>
+        <span className="text-[10px] text-muted-foreground">score {record.score.toFixed(1)}</span>
+        {record.created_at && <span className="text-[10px] text-muted-foreground">{formatRelativeTime(record.created_at)}</span>}
+        <span className="ml-auto text-[10px] text-muted-foreground">{formatMemorySource(record, activeSessionId)}</span>
+      </div>
+      {isEditing ? (
+        <div className="mt-3 space-y-2">
+          <Input
+            value={editingMemoryTopic || ""}
+            onChange={(e) => onEditTopicChange?.(e.target.value)}
+            className="h-8 text-xs"
+            placeholder="Topic"
+          />
+          <Textarea
+            value={editingMemoryContent || ""}
+            onChange={(e) => onEditContentChange?.(e.target.value)}
+            className="min-h-20 resize-y text-xs"
+            placeholder="Memory content"
+          />
+          <div className="flex items-center gap-2">
+            <Button type="button" size="sm" className="h-7 px-2 text-[10px]" onClick={() => onSaveEdit?.(record.id)}>
+              Save
+            </Button>
+            <Button type="button" variant="outline" size="sm" className="h-7 px-2 text-[10px]" onClick={onCancelEdit}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <>
+          <div className={`mt-2 leading-relaxed text-foreground/85 ${compact ? "line-clamp-3" : ""}`}>{record.content}</div>
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground">
+            {record.promote_reason && <span className="text-primary/80">{record.promote_reason}</span>}
+            {record.username && <span>by {record.username}</span>}
+          </div>
+          <div className="mt-3 flex items-center gap-1">
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7"
+              onClick={() => onPromote(record.id, !record.promoted)}
+              title={record.promoted ? "Unpin memory" : "Pin memory"}
+            >
+              <Pin className="h-3 w-3" />
+            </Button>
+            {editable && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7"
+                onClick={() => onStartEdit?.(record)}
+                title="Edit memory"
+              >
+                <Pencil className="h-3 w-3" />
+              </Button>
+            )}
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7 text-destructive"
+              onClick={() => onDelete(record.id)}
+              title="Delete memory"
+            >
+              <X className="h-3 w-3" />
+            </Button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+});
 
 function collectPathsFromUnknown(value: unknown): string[] {
   if (typeof value === "string") {
@@ -410,6 +565,10 @@ export function ChatWorkbench({
   opencodeMaxTurns,
   opencodeWorkingDirectory,
   summary,
+  activeSessionId,
+  sessionDirty,
+  sessionSaving,
+  lastSessionSaveAt,
   activeSessionSummary,
   activeMemoryRecords,
   agentMemoryRecords,
@@ -437,6 +596,7 @@ export function ChatWorkbench({
   onOpenCodeAutonomousChange,
   onOpenCodeMaxTurnsChange,
   onOpenCodeWorkingDirectoryChange,
+  onSaveSession,
   canSubmit,
   onSubmit,
   onCancel,
@@ -446,7 +606,11 @@ export function ChatWorkbench({
   const scrollContainerRef = useRef<HTMLElement | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
+  const [memoryOpen, setMemoryOpen] = useState(false);
   const [memoryFilter, setMemoryFilter] = useState<"all" | "procedural" | "episodic" | "pinned">("all");
+  const [memorySearch, setMemorySearch] = useState("");
+  const [sessionMemoryExpanded, setSessionMemoryExpanded] = useState(false);
+  const [agentMemoryExpanded, setAgentMemoryExpanded] = useState(false);
   const [editingMemoryId, setEditingMemoryId] = useState<number | null>(null);
   const [editingMemoryTopic, setEditingMemoryTopic] = useState("");
   const [editingMemoryContent, setEditingMemoryContent] = useState("");
@@ -456,12 +620,25 @@ export function ChatWorkbench({
   const a2aMode = Boolean(a2aTargetAgent && a2aTargetNamespace);
   const specialistMode = specialistTeamConfigured;
   const detailCount = (summary ? 1 : 0) + (activity.length > 0 ? 1 : 0);
+  const memoryCount = agentMemoryRecords.length + activeMemoryRecords.length;
   const downloadableArtifacts = useMemo(() => collectDownloadableArtifacts(summary, messages), [summary, messages]);
   const filteredAgentMemoryRecords = useMemo(() => {
-    if (memoryFilter === "all") return agentMemoryRecords;
-    if (memoryFilter === "pinned") return agentMemoryRecords.filter((record) => record.promoted);
-    return agentMemoryRecords.filter((record) => record.memory_type === memoryFilter);
-  }, [agentMemoryRecords, memoryFilter]);
+    const query = memorySearch.trim().toLowerCase();
+    return agentMemoryRecords.filter((record) => {
+      const matchesFilter = memoryFilter === "all"
+        ? true
+        : memoryFilter === "pinned"
+          ? record.promoted
+          : record.memory_type === memoryFilter;
+      if (!matchesFilter) return false;
+      if (!query) return true;
+      return [record.topic, record.content, record.promote_reason, record.memory_type]
+        .some((value) => String(value || "").toLowerCase().includes(query));
+    });
+  }, [agentMemoryRecords, memoryFilter, memorySearch]);
+  const continuityHighlights = useMemo(() => buildContinuityHighlights(summary), [summary]);
+  const visibleSessionMemoryRecords = sessionMemoryExpanded ? activeMemoryRecords : activeMemoryRecords.slice(0, 4);
+  const visibleAgentMemoryRecords = agentMemoryExpanded ? filteredAgentMemoryRecords : filteredAgentMemoryRecords.slice(0, 8);
 
   // Resolve the Radix ScrollArea Viewport (the actual scrollable container)
   const scrollAreaRef = useRef<HTMLDivElement | null>(null);
@@ -481,6 +658,7 @@ export function ChatWorkbench({
   useEffect(() => {
     setDetailsOpen(false);
     setFilesOpen(false);
+    setMemoryOpen(false);
     setDownloadingPath(null);
   }, [agentName]);
 
@@ -512,16 +690,46 @@ export function ChatWorkbench({
           </h2>
         </div>
         <div className="flex items-center gap-2">
+          {activeSessionId && (
+            <div className="hidden items-center gap-2 rounded-full border border-border/70 bg-muted/20 px-2.5 py-1 text-[11px] text-muted-foreground lg:flex">
+              <Brain className="h-3.5 w-3.5 text-primary" />
+              <span className="font-mono text-[10px] text-foreground/80">{activeSessionId.slice(0, 8)}</span>
+              <Badge variant={sessionSaving ? "default" : sessionDirty ? "secondary" : "outline"} className="px-1 py-0 text-[10px]">
+                {sessionSaving ? "Saving" : sessionDirty ? "Unsaved" : "Saved"}
+              </Badge>
+              {lastSessionSaveAt && <span>{formatRelativeTime(lastSessionSaveAt)}</span>}
+              {continuityHighlights.slice(0, 2).map((item) => (
+                <Badge key={item} variant="outline" className="px-1 py-0 text-[10px] text-primary">
+                  {item}
+                </Badge>
+              ))}
+            </div>
+          )}
           {agentName && (
             <Button
               type="button"
               variant="ghost"
               size="sm"
               className="h-8 gap-1 rounded-full px-2 text-xs"
-              onClick={() => { setFilesOpen((o) => !o); if (!filesOpen) setDetailsOpen(false); }}
+              onClick={() => { setFilesOpen((o) => !o); if (!filesOpen) { setDetailsOpen(false); setMemoryOpen(false); } }}
             >
               <FolderOpen className="h-3.5 w-3.5" />
               Files
+            </Button>
+          )}
+          {memoryCount > 0 && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-8 gap-1 rounded-full px-2 text-xs"
+              onClick={() => { setMemoryOpen((open) => !open); if (!memoryOpen) { setDetailsOpen(false); setFilesOpen(false); } }}
+            >
+              <MemoryStick className="h-3.5 w-3.5" />
+              Memory
+              <Badge variant="outline" className="ml-1 px-1 py-0 text-[10px]">
+                {memoryCount}
+              </Badge>
             </Button>
           )}
           {detailCount > 0 && (
@@ -530,7 +738,7 @@ export function ChatWorkbench({
               variant="ghost"
               size="sm"
               className="h-8 gap-1 rounded-full px-2 text-xs"
-              onClick={() => { setDetailsOpen((open) => !open); if (!detailsOpen) setFilesOpen(false); }}
+              onClick={() => { setDetailsOpen((open) => !open); if (!detailsOpen) { setFilesOpen(false); setMemoryOpen(false); } }}
             >
               {detailsOpen ? <PanelRightClose className="h-3.5 w-3.5" /> : <PanelRightOpen className="h-3.5 w-3.5" />}
               Details
@@ -631,7 +839,23 @@ export function ChatWorkbench({
                       {activeSessionSummary.tool_names.length > 0 && (
                         <Badge variant="outline">{truncateText(activeSessionSummary.tool_names.join(", "), 40)}</Badge>
                       )}
+                      {activeSessionId && <Badge variant="outline">session {activeSessionId.slice(0, 8)}</Badge>}
+                      <Badge variant={sessionSaving ? "default" : sessionDirty ? "secondary" : "outline"}>
+                        {sessionSaving ? "Saving" : sessionDirty ? "Unsaved" : "Saved"}
+                      </Badge>
                     </div>
+                    {lastSessionSaveAt && (
+                      <div className="text-[11px] text-muted-foreground">Last saved {formatRelativeTime(lastSessionSaveAt)}</div>
+                    )}
+                    {continuityHighlights.length > 0 && (
+                      <div className="flex flex-wrap gap-2">
+                        {continuityHighlights.map((item) => (
+                          <Badge key={item} variant="secondary" className="bg-primary/10 text-primary">
+                            {item}
+                          </Badge>
+                        ))}
+                      </div>
+                    )}
                     {activeSessionSummary.last_user_message && (
                       <div className="space-y-1">
                         <div className="text-[11px] font-medium text-muted-foreground">Last user request</div>
@@ -666,133 +890,19 @@ export function ChatWorkbench({
                         ))}
                       </div>
                     )}
-                    {activeMemoryRecords.length > 0 && (
-                      <div className="space-y-2">
-                        <div className="text-[11px] font-medium text-muted-foreground">Persisted memory records</div>
-                        {activeMemoryRecords.slice(0, 6).map((record) => (
-                          <div key={record.id} className="rounded-xl border border-border/60 bg-background/80 px-3 py-2 text-xs text-muted-foreground">
-                            <div className="flex items-center gap-2">
-                              <Badge variant="outline">{record.memory_type}</Badge>
-                              {record.topic && <span className="font-medium text-foreground/85">{record.topic}</span>}
-                              {record.promoted && <Badge variant="default">Pinned</Badge>}
-                              <span className="text-[10px] text-muted-foreground">score {record.score.toFixed(1)}</span>
-                              <div className="ml-auto flex items-center gap-1">
-                                <Button
-                                  type="button"
-                                  variant="ghost"
-                                  size="icon"
-                                  className="h-6 w-6"
-                                  onClick={() => onPromoteMemoryRecord(record.id, !record.promoted)}
-                                  title={record.promoted ? "Unpin memory" : "Pin memory"}
-                                >
-                                  <Pin className="h-3 w-3" />
-                                </Button>
-                                <Button
-                                  type="button"
-                                  variant="ghost"
-                                  size="icon"
-                                  className="h-6 w-6 text-destructive"
-                                  onClick={() => onDeleteMemoryRecord(record.id)}
-                                  title="Delete memory"
-                                >
-                                  <X className="h-3 w-3" />
-                                </Button>
-                              </div>
-                            </div>
-                            <div className="mt-1 leading-relaxed text-foreground/80">{truncateText(record.content, 180)}</div>
-                            {record.promote_reason && <div className="mt-1 text-[10px] text-primary/80">{record.promote_reason}</div>}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                    {agentMemoryRecords.length > 0 && (
-                      <div className="space-y-2">
+                    {(activeMemoryRecords.length > 0 || agentMemoryRecords.length > 0) && (
+                      <div className="rounded-xl border border-primary/15 bg-primary/5 px-3 py-3 text-xs text-muted-foreground">
                         <div className="flex items-center justify-between gap-2">
-                          <div className="text-[11px] font-medium text-muted-foreground">Memory manager</div>
-                          <div className="flex flex-wrap gap-1">
-                            {(["all", "procedural", "episodic", "pinned"] as const).map((filterKey) => (
-                              <Button
-                                key={filterKey}
-                                type="button"
-                                variant={memoryFilter === filterKey ? "default" : "outline"}
-                                size="sm"
-                                className="h-6 px-2 text-[10px]"
-                                onClick={() => setMemoryFilter(filterKey)}
-                              >
-                                {filterKey}
-                              </Button>
-                            ))}
-                          </div>
-                        </div>
-                        {filteredAgentMemoryRecords.slice(0, 12).map((record) => (
-                          <div key={`manager-${record.id}`} className="rounded-xl border border-border/60 bg-background/80 px-3 py-2 text-xs text-muted-foreground">
-                            <div className="flex items-center gap-2">
-                              <Badge variant="outline">{record.memory_type}</Badge>
-                              {record.promoted && <Badge variant="default">Pinned</Badge>}
-                              <span className="font-medium text-foreground/85">{record.topic || "note"}</span>
-                              <span className="text-[10px] text-muted-foreground">score {record.score.toFixed(1)}</span>
-                              <div className="ml-auto flex items-center gap-1">
-                                <Button
-                                  type="button"
-                                  variant="ghost"
-                                  size="icon"
-                                  className="h-6 w-6"
-                                  onClick={() => {
-                                    setEditingMemoryId(record.id);
-                                    setEditingMemoryTopic(record.topic || "");
-                                    setEditingMemoryContent(record.content || "");
-                                  }}
-                                  title="Edit memory"
-                                >
-                                  <Pencil className="h-3 w-3" />
-                                </Button>
-                              </div>
+                          <div>
+                            <div className="font-medium text-foreground">Memory workspace</div>
+                            <div className="mt-1 text-[11px]">
+                              Inspect session and durable memory from the dedicated memory drawer.
                             </div>
-                            {editingMemoryId === record.id ? (
-                              <div className="mt-2 space-y-2">
-                                <Input
-                                  value={editingMemoryTopic}
-                                  onChange={(e) => setEditingMemoryTopic(e.target.value)}
-                                  className="h-7 text-xs"
-                                  placeholder="Topic"
-                                />
-                                <Input
-                                  value={editingMemoryContent}
-                                  onChange={(e) => setEditingMemoryContent(e.target.value)}
-                                  className="h-7 text-xs"
-                                  placeholder="Content"
-                                />
-                                <div className="flex items-center gap-2">
-                                  <Button
-                                    type="button"
-                                    size="sm"
-                                    className="h-6 px-2 text-[10px]"
-                                    onClick={() => {
-                                      onEditMemoryRecord(record.id, { topic: editingMemoryTopic, content: editingMemoryContent });
-                                      setEditingMemoryId(null);
-                                    }}
-                                  >
-                                    Save
-                                  </Button>
-                                  <Button
-                                    type="button"
-                                    variant="outline"
-                                    size="sm"
-                                    className="h-6 px-2 text-[10px]"
-                                    onClick={() => setEditingMemoryId(null)}
-                                  >
-                                    Cancel
-                                  </Button>
-                                </div>
-                              </div>
-                            ) : (
-                              <div className="mt-1 space-y-1">
-                                <div className="leading-relaxed text-foreground/80">{truncateText(record.content, 220)}</div>
-                                {record.promote_reason && <div className="text-[10px] text-primary/80">{record.promote_reason}</div>}
-                              </div>
-                            )}
                           </div>
-                        ))}
+                          <Button type="button" size="sm" className="h-7 px-2 text-[10px]" onClick={() => { setMemoryOpen(true); setDetailsOpen(false); }}>
+                            Open memory
+                          </Button>
+                        </div>
                       </div>
                     )}
                   </div>
@@ -829,10 +939,170 @@ export function ChatWorkbench({
             />
           </aside>
         )}
+
+        {memoryOpen && agentName && (
+          <aside className="absolute inset-y-3 right-3 z-10 flex w-[min(30rem,calc(100%-1.5rem))] flex-col overflow-hidden rounded-2xl border border-border/80 bg-background/96 shadow-2xl backdrop-blur-md">
+            <div className="flex items-center justify-between border-b border-border/60 px-3 py-2.5">
+              <div>
+                <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">Memory workspace</div>
+                <div className="text-sm font-semibold">Session + durable memory</div>
+              </div>
+              <Button type="button" variant="ghost" size="icon" className="h-7 w-7" onClick={() => setMemoryOpen(false)}>
+                <PanelRightClose className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+            <ScrollArea className="min-h-0 flex-1">
+              <div className="space-y-4 p-3">
+                {activeSessionSummary && (
+                  <div className="space-y-3 rounded-2xl border border-border/70 bg-muted/20 p-3">
+                    <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
+                      <Brain className="h-3.5 w-3.5" />
+                      Session memory
+                    </div>
+                    <div className="flex flex-wrap gap-2 text-[11px] text-muted-foreground">
+                      <Badge variant="outline">{activeSessionSummary.message_count} messages</Badge>
+                      {activeSessionId && <Badge variant="outline">session {activeSessionId.slice(0, 8)}</Badge>}
+                    </div>
+                    {(activeSessionSummary.memory_candidates.episodic.length > 0 || activeSessionSummary.memory_candidates.procedural.length > 0) && (
+                      <div className="space-y-2">
+                        {activeSessionSummary.memory_candidates.episodic.map((candidate, index) => (
+                          <div key={`episodic-drawer-${index}`} className="rounded-xl border border-border/60 bg-background/80 px-3 py-2 text-xs text-muted-foreground">
+                            <div className="font-medium text-foreground/85">{candidate.type}</div>
+                            {candidate.names && candidate.names.length > 0 && <div>{truncateText(candidate.names.join(", "), 120)}</div>}
+                            {candidate.text && <div>{truncateText(candidate.text, 200)}</div>}
+                          </div>
+                        ))}
+                        {activeSessionSummary.memory_candidates.procedural.map((candidate, index) => (
+                          <div key={`procedural-drawer-${index}`} className="rounded-xl border border-primary/20 bg-primary/5 px-3 py-2 text-xs text-muted-foreground">
+                            <div className="font-medium text-foreground/85">{candidate.type}</div>
+                            {candidate.text && <div>{truncateText(candidate.text, 220)}</div>}
+                            {candidate.names && candidate.names.length > 0 && <div>{truncateText(candidate.names.join(", "), 120)}</div>}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {activeMemoryRecords.length > 0 && (
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="text-[11px] font-medium text-muted-foreground">Persisted session records</div>
+                          {activeMemoryRecords.length > visibleSessionMemoryRecords.length && (
+                            <Button type="button" variant="ghost" size="sm" className="h-6 px-2 text-[10px]" onClick={() => setSessionMemoryExpanded((open) => !open)}>
+                              {sessionMemoryExpanded ? "Show less" : `Show all (${activeMemoryRecords.length})`}
+                            </Button>
+                          )}
+                        </div>
+                        {visibleSessionMemoryRecords.map((record) => (
+                          <MemoryRecordCard
+                            key={`drawer-session-${record.id}`}
+                            record={record}
+                            activeSessionId={activeSessionId}
+                            compact={!sessionMemoryExpanded}
+                            onPromote={onPromoteMemoryRecord}
+                            onDelete={onDeleteMemoryRecord}
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <div className="space-y-3 rounded-2xl border border-border/70 bg-muted/20 p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div>
+                      <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">Durable memory manager</div>
+                      <div className="mt-1 text-xs text-muted-foreground">Search, pin, edit, and prune cross-session memory.</div>
+                    </div>
+                    <Badge variant="outline">{filteredAgentMemoryRecords.length} shown</Badge>
+                  </div>
+                  <div className="flex flex-wrap gap-1">
+                    {(["all", "procedural", "episodic", "pinned"] as const).map((filterKey) => (
+                      <Button
+                        key={filterKey}
+                        type="button"
+                        variant={memoryFilter === filterKey ? "default" : "outline"}
+                        size="sm"
+                        className="h-6 px-2 text-[10px]"
+                        onClick={() => setMemoryFilter(filterKey)}
+                      >
+                        {filterKey}
+                      </Button>
+                    ))}
+                  </div>
+                  <div className="relative">
+                    <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                      value={memorySearch}
+                      onChange={(e) => setMemorySearch(e.target.value)}
+                      className="h-8 pl-7 text-xs"
+                      placeholder="Search topic, content, or reason"
+                    />
+                  </div>
+                  {filteredAgentMemoryRecords.length > visibleAgentMemoryRecords.length && (
+                    <div className="flex justify-end">
+                      <Button type="button" variant="ghost" size="sm" className="h-6 px-2 text-[10px]" onClick={() => setAgentMemoryExpanded((open) => !open)}>
+                        {agentMemoryExpanded ? "Show less" : `Show all (${filteredAgentMemoryRecords.length})`}
+                      </Button>
+                    </div>
+                  )}
+                  {visibleAgentMemoryRecords.map((record) => (
+                    <MemoryRecordCard
+                      key={`drawer-manager-${record.id}`}
+                      record={record}
+                      activeSessionId={activeSessionId}
+                      editable={true}
+                      compact={!agentMemoryExpanded}
+                      editingMemoryId={editingMemoryId}
+                      editingMemoryTopic={editingMemoryTopic}
+                      editingMemoryContent={editingMemoryContent}
+                      onStartEdit={(current) => {
+                        setEditingMemoryId(current.id);
+                        setEditingMemoryTopic(current.topic || "");
+                        setEditingMemoryContent(current.content || "");
+                      }}
+                      onEditTopicChange={setEditingMemoryTopic}
+                      onEditContentChange={setEditingMemoryContent}
+                      onSaveEdit={(recordId) => {
+                        onEditMemoryRecord(recordId, { topic: editingMemoryTopic, content: editingMemoryContent });
+                        setEditingMemoryId(null);
+                      }}
+                      onCancelEdit={() => setEditingMemoryId(null)}
+                      onPromote={onPromoteMemoryRecord}
+                      onDelete={onDeleteMemoryRecord}
+                    />
+                  ))}
+                  {filteredAgentMemoryRecords.length === 0 && (
+                    <div className="rounded-xl border border-dashed border-border/60 px-3 py-4 text-center text-xs text-muted-foreground">
+                      No memory records match the current filter.
+                    </div>
+                  )}
+                </div>
+              </div>
+            </ScrollArea>
+          </aside>
+        )}
       </div>
 
       {/* Composer */}
       <div className="border-t border-border/70 bg-background/90 p-3 backdrop-blur-sm space-y-3">
+        {activeSessionId && (
+          <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-border/70 bg-muted/15 px-3 py-2 text-[11px] text-muted-foreground">
+            <Brain className="h-3.5 w-3.5 text-primary" />
+            <span className="font-medium text-foreground/85">Session continuity</span>
+            <span className="font-mono text-[10px]">{activeSessionId}</span>
+            <Badge variant={sessionSaving ? "default" : sessionDirty ? "secondary" : "outline"} className="text-[10px]">
+              {sessionSaving ? "Saving" : sessionDirty ? "Unsaved changes" : "Saved"}
+            </Badge>
+            {lastSessionSaveAt && <span>Last save {formatRelativeTime(lastSessionSaveAt)}</span>}
+            {continuityHighlights.map((item) => (
+              <Badge key={item} variant="outline" className="text-[10px] text-primary">
+                {item}
+              </Badge>
+            ))}
+            <Button type="button" variant="ghost" size="sm" className="ml-auto h-7 px-2 text-[10px]" onClick={onSaveSession}>
+              Save session
+            </Button>
+          </div>
+        )}
         {/* Toggle chips */}
         <div className="flex flex-wrap gap-2">
           <label className="flex items-center gap-1.5 cursor-pointer text-xs">

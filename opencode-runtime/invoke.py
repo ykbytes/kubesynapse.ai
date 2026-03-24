@@ -258,6 +258,7 @@ def invoke_opencode(request: InvokeRequest, stream_callback: StreamCallback = No
     # Cross-session memory: inject prior context
     memory_prompt: str | None = None
     has_prior_memory = False
+    memory_entry_count = 0
     handoff_memory: dict[str, Any] | None = None
     if MEMORY_ENABLED and not request.no_session:
         has_prior_memory = SESSION_MEMORY.has_memory(logical_thread_id)
@@ -268,6 +269,7 @@ def invoke_opencode(request: InvokeRequest, stream_callback: StreamCallback = No
                 memory_prompt = None  # Will inject via the prompt, not system prompt
             else:
                 memory_entries = SESSION_MEMORY.build_memory_context(logical_thread_id)
+                memory_entry_count = len(memory_entries)
                 memory_prompt = format_memory_context(memory_entries)
 
     # Task type classification for supplementary prompt
@@ -299,12 +301,13 @@ def invoke_opencode(request: InvokeRequest, stream_callback: StreamCallback = No
     handoff_summary: dict[str, Any] | None = None
     _resend_format = False
     current_budget_status = "ok"
+    session_recovered = False
 
     # If resuming from handoff, inject the resumption prompt
     if handoff_memory and created_new_session:
         resumption = build_handoff_resumption_prompt(handoff_memory)
         current_prompt = f"{resumption}\n\n---\n\nNEW INSTRUCTIONS:\n{current_prompt}"
-        all_warnings.append("Resuming from prior session handoff — context from previous session injected.")
+        all_warnings.append("Resuming from prior session handoff - context from previous session injected.")
 
     current_agent = (
         select_agent_for_prompt(
@@ -343,6 +346,8 @@ def invoke_opencode(request: InvokeRequest, stream_callback: StreamCallback = No
                 logical_thread_id=logical_thread_id,
                 allow_session_recovery=(not request.no_session),
             )
+            recovered = bool(payload.pop("_session_recovered", False)) if isinstance(payload, dict) else False
+            session_recovered = session_recovered or recovered
         except httpx.HTTPError as exc:
             is_permanent = (
                 isinstance(exc, httpx.HTTPStatusError)
@@ -632,6 +637,16 @@ def invoke_opencode(request: InvokeRequest, stream_callback: StreamCallback = No
     if handoff_summary:
         response_metadata["handoff_summary"] = handoff_summary
 
+    continuity = {
+        "created_new_session": created_new_session,
+        "session_recovered": session_recovered,
+        "has_prior_memory": has_prior_memory,
+        "memory_applied": bool(memory_prompt) or bool(handoff_memory),
+        "memory_entry_count": memory_entry_count,
+        "handoff_resumed": bool(handoff_memory and created_new_session),
+        "remote_session_id": session_id,
+    }
+
     # --- Persist memory after invocation ---
     if MEMORY_ENABLED and not request.no_session:
         try:
@@ -670,5 +685,6 @@ def invoke_opencode(request: InvokeRequest, stream_callback: StreamCallback = No
         warnings=dedupe_items(all_warnings),
         artifacts=collected_artifacts,
         tool_calls=collected_tool_calls,
+        continuity=continuity,
         metadata=response_metadata or None,
     )

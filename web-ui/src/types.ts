@@ -829,6 +829,15 @@ export interface InvocationSummary {
   warnings: string[];
   artifacts?: Array<Record<string, unknown>> | null;
   toolCalls?: Array<Record<string, unknown>> | null;
+  continuity?: {
+    createdNewSession?: boolean;
+    sessionRecovered?: boolean;
+    hasPriorMemory?: boolean;
+    memoryApplied?: boolean;
+    memoryEntryCount?: number | null;
+    handoffResumed?: boolean;
+    remoteSessionId?: string | null;
+  } | null;
   metadata?: Record<string, unknown> | null;
 }
 

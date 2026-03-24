@@ -133,6 +133,8 @@ def _send_prompt_with_session_recovery(
             working_directory=working_directory,
             agent=agent,
         )
+        if isinstance(payload, dict):
+            payload.setdefault("_session_recovered", False)
         return session_id, payload
     except HTTPException as exc:
         if exc.status_code == 404 and allow_session_recovery:
@@ -147,6 +149,8 @@ def _send_prompt_with_session_recovery(
                 working_directory=working_directory,
                 agent=agent,
             )
+            if isinstance(payload, dict):
+                payload["_session_recovered"] = True
             return session_id, payload
         raise
 
