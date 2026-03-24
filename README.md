@@ -1,12 +1,12 @@
 <div align="center">
 
-  <h1>🚀 Kubeminionagents</h1>
+  <h1>Kubeminionagents</h1>
 
   <h3>Kubernetes-native AI agents, packaged as one sleek platform</h3>
 
   <p>
     Build, deploy, and operate AI agents with a unified control plane, runtimes,
-    API gateway, Helm chart, and web console — all from a single repository.
+    API gateway, Helm chart, and web console &mdash; all from a single repository.
   </p>
 
   <img src="https://img.shields.io/badge/Kubernetes-Native-326CE5?style=for-the-badge&logo=kubernetes&logoColor=white" alt="Kubernetes Native" />
@@ -19,53 +19,59 @@
 
 ---
 
-## ✨ Why this repo feels different
+## Why this repo
 
-Kubeminionagents is designed as a **shareable, end-to-end AI agent platform** for Kubernetes:
+Kubeminionagents is a **shareable, end-to-end AI agent platform** for Kubernetes:
 
-- 🧠 **AI runtime ready** — supports LangGraph-based, Goose-based, Codex-based, and OpenCode-based execution paths
-- 🗂️ **File-backed skills** — agent behavior and capability grants can be versioned as Markdown skill files inside the agent spec
-- 🤝 **Delegation built in** — explicit A2A routing and specialist-team orchestration are available through the gateway, CLI, and web UI
-- 🛡️ **Platform-first** — operator, policies, tenants, and approvals live with the app stack
-- 🌐 **Full product surface** — API gateway and browser UI are included, not bolted on later
-- 📦 **Deployment friendly** — Helm chart, deploy overrides, and packaging scripts are built in
-- 🔧 **Single source of truth** — control plane, runtimes, docs, and automation move together
+- **AI runtime ready** &mdash; supports LangGraph, Goose, Codex, and OpenCode execution paths
+- **File-backed skills** &mdash; agent behavior and capability grants versioned as Markdown skill files
+- **Delegation built in** &mdash; A2A routing and specialist-team orchestration via gateway, CLI, and web UI
+- **Platform-first** &mdash; operator, policies, tenants, and approvals live with the app stack
+- **Full product surface** &mdash; API gateway and browser UI included, not bolted on later
+- **Deployment friendly** &mdash; Helm chart, deploy overrides, and packaging scripts built in
 
-## 🎛️ Platform at a glance
+## Repository layout
 
-| Area | What lives here | Why it matters |
-| --- | --- | --- |
-| `operator/` | Reconciler and worker image | Manages agent lifecycle inside the cluster |
-| `agent-runtime/` | LangGraph-based runtime | Runs agent workflows and execution logic |
-| `goose-runtime/` | Goose HTTP adapter runtime | Supports an alternate runtime path |
-| `codex-runtime/` | Codex HTTP adapter runtime | Provides Codex-native execution for compatible agents |
-| `opencode-runtime/` | OpenCode HTTP adapter runtime | Provides OpenCode sessions, skills, plugins, and MCP-native workflows |
-| `api-gateway/` | CRUD, invoke, and streaming endpoints | Exposes the platform to users and clients |
-| `web-ui/` | React + TypeScript console | Gives operators and developers a visual control surface |
-| `charts/ai-agent-sandbox/` | Full Helm install | Packages the entire platform for deployment |
-| `deploy/` | Shareable values overrides | Makes cluster-specific rollout easier |
-| `scripts/` + `.github/` | Packaging + CI automation | Keeps build and release workflows repeatable |
+```
+kubemininions/
+├── operator/            # K8s operator &mdash; reconciler and worker
+├── agent-runtime/       # LangGraph-based agent runtime
+├── goose-runtime/       # Goose HTTP adapter runtime
+├── codex-runtime/       # Codex HTTP adapter runtime
+├── opencode-runtime/    # OpenCode HTTP adapter runtime
+├── api-gateway/         # FastAPI gateway &mdash; CRUD, invoke, streaming
+├── web-ui/              # React + TypeScript console
+├── mcp-sidecars/        # 10 MCP tool sidecar images
+│   ├── base/            #   shared base module and requirements
+│   ├── browser/         #   headless browser automation
+│   ├── code-exec/       #   sandboxed code execution
+│   ├── database/        #   database query tools
+│   ├── documents/       #   document processing
+│   ├── git/             #   git operations
+│   ├── github-adapter/  #   GitHub API adapter
+│   ├── kubernetes/      #   kubectl / K8s API tools
+│   ├── messaging/       #   messaging (Slack, etc.)
+│   ├── rag/             #   retrieval-augmented generation
+│   └── web-search/      #   web search tools
+├── charts/              # Helm charts
+│   ├── agents/          #   agent CRD templates
+│   └── ai-agent-sandbox/#   full platform chart
+├── catalog/             # Agent templates and skills catalog
+├── cli/                 # agentctl CLI tool
+├── deploy/              # Helm values overrides per environment
+├── docs/                # Architecture, deployment, and design docs
+├── examples/            # Sample YAML manifests and scripts
+├── scripts/             # Build, packaging, and lint scripts
+├── tests/               # Cross-cutting integration tests
+├── .github/             # CI workflows and agent prompts
+├── Makefile             # Build, test, lint, deploy orchestration
+├── pyproject.toml       # Python project config
+└── README.md            # This file
+```
 
-## 🚦 What you can do today
+## Quick start
 
-- **Workflow intelligence** — add verification gates (`verify`), review steps (`type: review`), and project context injection (`contextRef` ConfigMap) to any `AgentWorkflow` for self-verifying, evidence-backed execution
-- **Wave-based parallel execution** — the operator computes dependency-aware waves and runs independent steps concurrently while respecting dependency order
-- **Next-action suggestions** — the API and web UI recommend what to do next based on workflow state (retry, evaluate, deploy)
-- Define `spec.skills.files` to steer runtimes with repo-tracked Markdown skills and scoped capability grants
-- Seed Goose agents with per-agent `runtime.goose.configFiles` instead of relying on chart-wide defaults only
-- Seed OpenCode agents with per-agent `runtime.opencode.configFiles` to materialize OpenCode agents, plugins, skills, and `opencode.json` fragments per agent
-- Route a request to an explicit peer over A2A or launch a sequential or parallel specialist team from the same invoke surface
-- Inspect approvals, runtime logs, peer reachability, parsed skill summaries, workflow run history, and system health from the bundled web console
-- Manage agents, workflows, evaluations, policies, LLM providers, users, audit logs, and usage reporting through either Kubernetes manifests, the API gateway, the CLI, or the UI
-- Use the visual workflow composer with conditional branches, loop steps, execution status overlays, and per-step output inspection
-- Persist chat sessions per agent, resume past conversations, and coordinate specialist subagent teams from the same chat workbench
-- Export and import workspace bundles, clone existing resources, and use the admin console as the main operational surface
-
-## ⚡ Quick start
-
-### Option A — Deploy from pre-built DockerHub images (fastest)
-
-No build step needed. Pull the published images and deploy with a single Helm command.
+### Option A &mdash; Deploy from pre-built DockerHub images (fastest)
 
 **1. Set your LLM API key**
 
@@ -80,112 +86,82 @@ platformSecrets:
 
 **2. Create an image-pull secret (DockerHub rate limits)**
 
-```powershell
-kubectl create secret docker-registry dockerhub-regcred `
-  --docker-username=YOUR_DOCKERHUB_USERNAME `
-  --docker-password=YOUR_DOCKERHUB_TOKEN `
+```bash
+kubectl create secret docker-registry dockerhub-regcred \
+  --docker-username=YOUR_DOCKERHUB_USERNAME \
+  --docker-password=YOUR_DOCKERHUB_TOKEN \
   --docker-email=you@example.com
 ```
 
 **3. Deploy**
 
-```powershell
-helm upgrade --install ai-agent-sandbox .\charts\ai-agent-sandbox `
-  -f .\deploy\values.dockerhub.local.yaml
+```bash
+helm upgrade --install ai-agent-sandbox ./charts/ai-agent-sandbox \
+  -f ./deploy/values.dockerhub.local.yaml
 ```
 
-**4. Test**
+**4. Verify**
 
-```powershell
+```bash
 kubectl port-forward svc/ai-agent-sandbox-api-gateway 8080:8080
 curl http://localhost:8080/api/health
 ```
 
 ---
 
-### Option B — Build and deploy your own images
+### Option B &mdash; Build and deploy your own images
 
 **1. Build all platform and sidecar images**
 
-```powershell
+```bash
 make docker-build REGISTRY=ghcr.io/your-org VERSION=latest CONTAINER_CLI=docker
 ```
 
-This target builds the core platform images (operator, agent-runtime, goose-runtime, codex-runtime,
-opencode-runtime, api-gateway, web-ui) plus all MCP sidecar images from `./mcp-sidecars`.
+**2. Or use the packaging script**
 
-**2. Or use the packaging script (builds, tags, and optionally pushes)**
-
-```powershell
-.\scripts\package-self-contained.ps1 -Registry ghcr.io/your-org -Version 0.1.0 -ContainerCli docker -Push
+```bash
+./scripts/package-self-contained.ps1 -Registry ghcr.io/your-org -Version 0.1.0 -Push
 ```
 
-The script builds every platform image and all 10 bundled MCP sidecars in one pass, generates a
-matching `values-generated.yaml` with pinned image references, and optionally pushes everything.
+**3. Deploy**
 
-**3. Deploy with a cluster override**
-
-```powershell
-# Generic cluster (ingress off, portable defaults)
-helm upgrade --install ai-agent-sandbox .\charts\ai-agent-sandbox -f .\deploy\values.cluster.example.yaml
-
-# Local images loaded into Kind/Minikube
-helm upgrade --install ai-agent-sandbox .\charts\ai-agent-sandbox -f .\deploy\values.local-images.example.yaml
+```bash
+helm upgrade --install ai-agent-sandbox ./charts/ai-agent-sandbox \
+  -f ./deploy/values.cluster.example.yaml
 ```
 
-`deploy/values.cluster.example.yaml` is a portable starting point: ingress is off by default, and
-class name, host, and annotations stay unset until you supply controller-specific values.
-
-## 🧩 Deployment model
-
-The default chart is intentionally **self-contained**:
-
-- first-party images are configurable through chart values
-- platform secrets default to native Kubernetes `Secret` resources
-- LiteLLM reads provider keys and the master key from a shared chart-managed secret
-- tenant provisioning can mint runtime secrets without requiring External Secrets CRDs
-- Redis, Qdrant, NATS, LiteLLM, the API gateway, and the web UI deploy from the same chart
-- ingress defaults are portable across clusters: class name, host, and annotations are opt-in, and ingress can be disabled entirely
-
-If you want a managed secret backend instead, set `platformSecrets.mode=external-secrets` and provide a real `operator.clusterSecretStoreName`.
-
-## 🗺️ Documentation map
-
-Jump straight to the guide you need:
+## Documentation
 
 | Document | Content |
 |---|---|
-| **`INSTALL.md`** | Full install guide: DockerHub quick-start, Kind/Minikube dev setup, production deployment, secrets config, first agent, CLI, API reference, observability, troubleshooting |
-| **`architecture-overview.md`** | System architecture, CRD model, control/data plane design, security model, MCP execution architecture |
-| **`walkthrough.md`** | Implementation narrative: Helm chart foundations, operator reconciliation loop, runtime pipeline, enterprise features |
-| **`web-ui/README.md`** | Frontend local dev workflow, console feature map, and admin/workbench coverage |
-| **`cli/README.md`** | Full `agentctl` command reference with examples |
-| **`docs/upstream-reference-repos.md`** | Optional local research checkouts for Goose, OpenSandbox, and MCP catalog |
+| [`INSTALL.md`](INSTALL.md) | Full install guide: prerequisites, dev setup, production deployment, secrets, troubleshooting |
+| [`docs/architecture-overview.md`](docs/architecture-overview.md) | System architecture, CRD model, control/data plane design, security model |
+| [`docs/walkthrough.md`](docs/walkthrough.md) | Implementation narrative and design decisions |
+| [`docs/execution-plan.md`](docs/execution-plan.md) | Phased project execution plan and progress tracker |
+| [`web-ui/README.md`](web-ui/README.md) | Frontend local dev workflow and feature map |
+| [`cli/README.md`](cli/README.md) | Full `agentctl` command reference |
+| [`docs/upstream-reference-repos.md`](docs/upstream-reference-repos.md) | Optional local research checkouts |
 
-## 🧱 Repository boundaries
+## Make targets
 
-Tracked in this repository:
+```
+make docker-build    # Build all 17 container images
+make docker-push     # Push all images to registry
+make test            # Run unit tests across all services
+make lint            # Run flake8 across all Python services
+make helm-lint       # Lint the Helm chart
+make helm-package    # Package the Helm chart
+make deploy          # Install/upgrade via Helm
+make deploy-sample   # Apply sample agent, tenant, and policy
+make clean           # Remove build artifacts and images
+```
 
-- the platform code and deployment assets listed above
-- shareable automation for packaging and CI
-- documentation needed to install and operate the stack
+## Notes
 
-Intentionally not tracked:
-
-- local reference clones under `tools-repos/`
-- the local MCP catalog clone under `mcp-catalog/`
-- generated artifacts, caches, and machine-specific config
-
-The platform builds and deploys without those local reference clones. See `docs/upstream-reference-repos.md` if you want to recreate them locally.
-
-## 📌 Notes
-
-- OpenSandbox integration is optional and configured through `agentRuntime.openSandbox.*`
-- Shared MCP servers are opt-in by default
-- The packaging script defaults to `docker`. Pass `-ContainerCli podman` if you prefer Podman
-- Pre-built images are published to `docker.io/yakdhane` and can be used with `deploy/values.dockerhub.local.yaml`
-- All chart image defaults use `pullPolicy: IfNotPresent` — images are not re-pulled on every pod restart
-- Ingress is disabled by default in the Helm chart. Enable it per-environment with a values override
+- Pre-built images are published to `docker.io/yakdhane`
+- The packaging script defaults to `docker`; pass `-ContainerCli podman` for Podman
+- Ingress is disabled by default in the Helm chart; enable per-environment with values overrides
+- All chart image defaults use `pullPolicy: IfNotPresent`
 
 ---
 

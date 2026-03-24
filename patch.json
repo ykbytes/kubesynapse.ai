@@ -1,1 +1,0 @@
-﻿{"spec":{"template":{"spec":{"containers":[{"name":"web-ui","image":"docker.io/yakdhane/ai-agent-sandbox-web-ui:toolvis-20260312-225852"}]}}}}

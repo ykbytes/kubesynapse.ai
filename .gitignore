@@ -1,3 +1,6 @@
+# ===========================
+# Python
+# ===========================
 .venv/
 .mypy_cache/
 .pytest_cache/
@@ -6,21 +9,44 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 
-.tmp/
-dist/
+# ===========================
+# Node / Web UI
+# ===========================
 web-ui/dist/
 web-ui/node_modules/
 web-ui/*.tsbuildinfo
 web-ui/vite.config.js
 web-ui/vite.config.d.ts
 
+# ===========================
+# Build artifacts
+# ===========================
+.tmp/
+dist/
+.build-tag.tmp
+.current-tag
+
+# ===========================
+# Lint / test output
+# ===========================
 flake8_output.txt
 mypy_out.txt
 mypy_output.txt
-.sandbox-live.toml
 
+# ===========================
+# Local reference clones
+# ===========================
 tools-repos/
 mcp-catalog/
+codecodenewversionkubemininions_kagent_reference/
 
+# ===========================
+# Runtime / config
+# ===========================
+.sandbox-live.toml
+
+# ===========================
+# OS
+# ===========================
 .DS_Store
 Thumbs.db

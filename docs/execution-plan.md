@@ -1,7 +1,7 @@
 # Road-to-Prod Execution Plan
 
 > **Branch**: `road-to-prod` | **Baseline**: March 22, 2026  
-> **Source of truth**: `roadtoprod.md` (§2–§18)
+> **Source of truth**: `road-to-prod-audit.md` (§2–§18)
 
 ---
 

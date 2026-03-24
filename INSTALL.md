@@ -1631,9 +1631,9 @@ helm install ai-agent-sandbox ./charts/ai-agent-sandbox -f values-prod.yaml --de
 ```
 kubeminionagents/
 ├── INSTALL.md                      ← This file
-├── architecture-overview.md        ← Detailed design document
+├── docs/architecture-overview.md   ← Detailed design document
 ├── Makefile                        ← Build, test, lint, deploy targets
-├── run_lint.py                     ← Python lint runner (flake8 + mypy)
+├── scripts/run_lint.py             ← Python lint runner (flake8 + mypy)
 │
 ├── operator/                       ← Kubernetes operator (Python/Kopf)
 │   ├── main.py                     ← CRD reconciliation handlers

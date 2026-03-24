@@ -734,7 +734,7 @@ The platform is already structured like a real control-plane/data-plane system, 
 | [examples](examples) | Sample CR instances |
 | [cli](cli) | Command-line integration point |
 | [walkthrough.md](walkthrough.md) | Implementation narrative |
-| [docs/upstream-reference-repos.md](docs/upstream-reference-repos.md) | Optional upstream reference checkouts that are intentionally excluded from the shared repo |
+| [upstream-reference-repos.md](upstream-reference-repos.md) | Optional upstream reference checkouts that are intentionally excluded from the shared repo |
 
 ---
 

@@ -1,4 +1,20 @@
-.PHONY: all build test test-goose-runtime-e2e lint docker-build docker-push helm-lint helm-package deploy clean ui-install ui-dev ui-build ui-preview docker-build-ui docker-push-ui docker-build-goose-runtime docker-push-goose-runtime docker-build-codex-runtime docker-push-codex-runtime docker-build-opencode-runtime docker-push-opencode-runtime docker-build-mcp-sidecars docker-push-mcp-sidecars docker-build-mcp-code-exec docker-push-mcp-code-exec docker-build-mcp-web-search docker-push-mcp-web-search docker-build-mcp-documents docker-push-mcp-documents docker-build-mcp-browser docker-push-mcp-browser docker-build-mcp-database docker-push-mcp-database docker-build-mcp-git docker-push-mcp-git docker-build-mcp-github-adapter docker-push-mcp-github-adapter docker-build-mcp-kubernetes docker-push-mcp-kubernetes docker-build-mcp-messaging docker-push-mcp-messaging docker-build-mcp-rag docker-push-mcp-rag
+.PHONY: all build test test-services test-integration test-goose-runtime-e2e lint \
+	docker-build docker-push helm-lint helm-package deploy deploy-sample undeploy clean \
+	ui-install ui-dev ui-build ui-preview \
+	docker-build-operator docker-build-runtime docker-build-goose-runtime \
+	docker-build-codex-runtime docker-build-opencode-runtime docker-build-gateway \
+	docker-build-ui docker-build-mcp-sidecars \
+	docker-push-operator docker-push-runtime docker-push-goose-runtime \
+	docker-push-codex-runtime docker-push-opencode-runtime docker-push-gateway \
+	docker-push-ui docker-push-mcp-sidecars \
+	docker-build-mcp-code-exec docker-build-mcp-web-search docker-build-mcp-documents \
+	docker-build-mcp-browser docker-build-mcp-database docker-build-mcp-git \
+	docker-build-mcp-github-adapter docker-build-mcp-kubernetes docker-build-mcp-messaging \
+	docker-build-mcp-rag \
+	docker-push-mcp-code-exec docker-push-mcp-web-search docker-push-mcp-documents \
+	docker-push-mcp-browser docker-push-mcp-database docker-push-mcp-git \
+	docker-push-mcp-github-adapter docker-push-mcp-kubernetes docker-push-mcp-messaging \
+	docker-push-mcp-rag
 
 CONTAINER_CLI ?= docker
 CONTAINER_BUILD_FLAGS ?= --format docker
@@ -146,7 +162,9 @@ docker-push-mcp-rag:
 # Test & Lint
 # ===========================
 
-test:
+test: test-services test-integration
+
+test-services:
 	@if [ -d operator/tests ]; then cd operator && python -m pytest tests/ -v; else echo "No operator tests found"; fi
 	@if [ -d agent-runtime/tests ]; then cd agent-runtime && python -m pytest tests/ -v; else echo "No agent-runtime tests found"; fi
 	@if [ -d goose-runtime/tests ]; then cd goose-runtime && python -m pytest tests/ -v; else echo "No goose-runtime tests found"; fi
@@ -154,6 +172,9 @@ test:
 	@if [ -d opencode-runtime/tests ]; then cd opencode-runtime && python -m pytest tests/ -v; else echo "No opencode-runtime tests found"; fi
 	@if [ -d api-gateway/tests ]; then cd api-gateway && python -m pytest tests/ -v; else echo "No api-gateway tests found"; fi
 	@if [ -d mcp-sidecars/github-adapter/tests ]; then cd mcp-sidecars/github-adapter && python -m pytest tests/ -v; else echo "No github adapter tests found"; fi
+
+test-integration:
+	@if [ -d tests ]; then python -m pytest tests/ -v; else echo "No integration tests found"; fi
 
 test-goose-runtime-e2e:
 	cd goose-runtime && CONTAINER_CLI=$(CONTAINER_CLI) python -m pytest tests/test_container_e2e.py -v
@@ -210,6 +231,7 @@ clean:
 	$(CONTAINER_CLI) rmi $(REGISTRY)/ai-agent-runtime:$(VERSION) || true
 	$(CONTAINER_CLI) rmi $(REGISTRY)/ai-goose-runtime:$(VERSION) || true
 	$(CONTAINER_CLI) rmi $(REGISTRY)/ai-codex-runtime:$(VERSION) || true
+	$(CONTAINER_CLI) rmi $(REGISTRY)/ai-opencode-runtime:$(VERSION) || true
 	$(CONTAINER_CLI) rmi $(REGISTRY)/ai-api-gateway:$(VERSION) || true
 	$(CONTAINER_CLI) rmi $(REGISTRY)/ai-agent-sandbox-web-ui:$(VERSION) || true
 	$(CONTAINER_CLI) rmi $(REGISTRY)/mcp-code-exec:$(VERSION) || true
