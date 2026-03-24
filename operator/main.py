@@ -33,6 +33,32 @@ def _configure_logging() -> None:
 _configure_logging()
 logger = logging.getLogger("operator")
 
+
+def _load_kubernetes_config() -> None:
+    """Load in-cluster config when available, otherwise fall back to kubeconfig."""
+    load_incluster_config = getattr(kubernetes.config, "load_incluster_config", None)
+    load_kube_config = getattr(kubernetes.config, "load_kube_config", None)
+    config_exception = getattr(kubernetes.config, "ConfigException", Exception)
+
+    if load_incluster_config is None and load_kube_config is None:
+        logger.warning("Kubernetes config loaders are unavailable; skipping client initialization.")
+        return
+
+    try:
+        if load_incluster_config is None:
+            raise config_exception()
+        load_incluster_config()
+        logger.info("Loaded in-cluster Kubernetes config.")
+    except config_exception:
+        if load_kube_config is None:
+            logger.warning(
+                "In-cluster config unavailable and kubeconfig loader missing; skipping client initialization."
+            )
+            return
+        load_kube_config()
+        logger.info("Loaded local kubeconfig file.")
+
+
 from config import (  # noqa: E402 — after logging setup
     EVAL_SCHEDULE_POLL_SECONDS,
     OPERATOR_NAMESPACE,
@@ -44,6 +70,10 @@ from config import (  # noqa: E402 — after logging setup
 from reconcile import log_operator_event  # noqa: E402
 from tracing import init_tracing  # noqa: E402
 
+# Controllers perform CRD existence checks at import time, so K8s auth must be
+# configured before importing the package.
+_load_kubernetes_config()
+
 # Import the controllers package — Kopf handler registration happens at import time.
 import controllers  # noqa: E402,F401
 
@@ -53,12 +83,7 @@ def configure(settings: kopf.OperatorSettings, **_) -> None:
     """Ensure K8s client is authenticated when the operator starts."""
     settings.persistence.finalizer = "sandbox.enterprise.ai/finalizer"
     settings.peering.name = OPERATOR_PEERING_NAME
-    try:
-        kubernetes.config.load_incluster_config()
-        logger.info("Loaded in-cluster Kubernetes config.")
-    except kubernetes.config.ConfigException:
-        kubernetes.config.load_kube_config()
-        logger.info("Loaded local kubeconfig file.")
+    _load_kubernetes_config()
     init_state_database()
     init_tracing("kubemininions-operator")
     log_operator_event(
@@ -108,5 +133,3 @@ def _sigterm_handler(signum: int, _frame: object) -> None:
 
 
 signal.signal(signal.SIGTERM, _sigterm_handler)
-
-

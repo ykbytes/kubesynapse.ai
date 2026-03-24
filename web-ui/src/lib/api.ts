@@ -110,6 +110,43 @@ export function apiErrorMessage(err: unknown): string {
   return String(err);
 }
 
+function formatApiErrorDetail(detail: unknown): string {
+  if (typeof detail === "string") {
+    return detail;
+  }
+  if (Array.isArray(detail)) {
+    const parts = detail
+      .map((item) => {
+        if (isRecord(item)) {
+          const path = Array.isArray(item.loc)
+            ? item.loc.filter((segment): segment is string | number => typeof segment === "string" || typeof segment === "number").join(".")
+            : "";
+          const msg = typeof item.msg === "string" ? item.msg : "Validation error";
+          return path ? `${path}: ${msg}` : msg;
+        }
+        return typeof item === "string" ? item : "Validation error";
+      })
+      .filter((item) => item.trim().length > 0);
+    return parts.join("; ");
+  }
+  if (isRecord(detail)) {
+    const nestedDetail = detail.detail;
+    if (nestedDetail !== undefined && nestedDetail !== detail) {
+      const nested = formatApiErrorDetail(nestedDetail);
+      if (nested) return nested;
+    }
+    try {
+      return JSON.stringify(detail);
+    } catch {
+      return "Request failed.";
+    }
+  }
+  if (detail == null) {
+    return "";
+  }
+  return String(detail);
+}
+
 /**
  * Global callback invoked when a silent token refresh succeeds.
  * ConnectionContext registers this so the React state stays in sync.
@@ -1040,8 +1077,8 @@ async function parseJsonResponse<T>(response: Response, parser: (payload: unknow
     let detail = "";
     if (text) {
       try {
-        const parsed = JSON.parse(text) as { detail?: string };
-        detail = parsed.detail ?? "";
+        const parsed = JSON.parse(text) as { detail?: unknown };
+        detail = formatApiErrorDetail(parsed.detail ?? parsed);
       } catch {
         detail = text;
       }

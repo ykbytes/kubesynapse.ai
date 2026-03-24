@@ -34,7 +34,7 @@ codexRuntime:
 opencodeRuntime:
   image:
     repository: docker.io/yakdhane/ai-opencode-runtime
-    tag: latest
+    tag: copilot-token-exchange
     pullPolicy: Always
   env:
     OPENCODE_SESSION_INIT_ON_CREATE: "false"
