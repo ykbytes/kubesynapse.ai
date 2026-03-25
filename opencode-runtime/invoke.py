@@ -22,6 +22,7 @@ from analysis import (
     detect_anti_patterns,
     detect_completion_status,
     extract_artifacts_from_messages,
+    extract_reasoning_from_parts,
     extract_response_text,
     extract_tool_calls_from_messages,
     get_latest_assistant_payload,
@@ -394,6 +395,13 @@ def invoke_opencode(request: InvokeRequest, stream_callback: StreamCallback = No
         )
         if turn_text:
             _emit("response.delta", {"turn": turn + 1, "delta": turn_text, "source": "opencode"})
+
+        # Emit reasoning/thinking content if present
+        parts = payload.get("parts")
+        if isinstance(parts, list):
+            reasoning_text = extract_reasoning_from_parts(parts)
+            if reasoning_text:
+                _emit("response.reasoning", {"turn": turn + 1, "reasoning": reasoning_text})
 
         if current_agent == "plan" and completion in ("completed", "incomplete"):
             current_agent = DEFAULT_AGENT

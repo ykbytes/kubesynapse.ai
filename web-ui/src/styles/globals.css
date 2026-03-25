@@ -660,3 +660,23 @@ body::before {
   stroke-dasharray: 6 4;
   animation: dash-flow 0.8s linear infinite;
 }
+
+/* Plan panel — animated strikethrough on completed items */
+@keyframes plan-strike {
+  from { width: 0; }
+  to   { width: 100%; }
+}
+
+.plan-strikethrough {
+  position: relative;
+}
+.plan-strikethrough::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  height: 1px;
+  background: currentColor;
+  opacity: 0.5;
+  animation: plan-strike 300ms ease-out forwards;
+}

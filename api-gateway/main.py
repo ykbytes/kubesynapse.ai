@@ -5780,6 +5780,44 @@ async def invoke_agent_stream(
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
+@app.get("/api/agents/{agent_name}/todo")
+async def get_agent_todos(
+    agent_name: str,
+    thread_id: str,
+    request: Request,
+    namespace: str = "default",
+    user=Depends(verify_token),
+):
+    ensure_namespace_access(user, namespace)
+    await asyncio.to_thread(read_agent, agent_name, namespace)
+    # Forward If-None-Match from client for ETag-based conditional polling
+    upstream_headers: dict[str, str] = {}
+    if_none_match = request.headers.get("if-none-match")
+    if if_none_match:
+        upstream_headers["If-None-Match"] = if_none_match
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0), trust_env=False) as client:
+            response = await client.get(
+                f"{agent_runtime_url(agent_name, namespace)}/todo",
+                params={"thread_id": thread_id},
+                headers=upstream_headers,
+            )
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to fetch agent todos: {exc}") from exc
+
+    if response.status_code == 304:
+        return Response(status_code=304, headers={"ETag": response.headers.get("etag", "")})
+    if response.status_code == 404:
+        raise HTTPException(status_code=404, detail="Agent thread not found")
+    if response.status_code >= 400:
+        detail = error_payload_from_body(await response.aread(), "Agent todo request failed")
+        raise HTTPException(status_code=response.status_code, detail=detail.get("error") or "Agent todo request failed")
+    resp_headers: dict[str, str] = {}
+    if etag := response.headers.get("etag"):
+        resp_headers["ETag"] = etag
+    return JSONResponse(content=response.json(), headers=resp_headers)
+
+
 @app.get("/api/agents/{agent_name}/artifacts/download")
 async def download_agent_artifact(
     agent_name: str,

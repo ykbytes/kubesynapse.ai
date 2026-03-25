@@ -40,7 +40,7 @@ litellm:
 agentRuntime:
   image:
     repository: docker.io/yakdhane/ai-agent-runtime
-    tag: latest
+    tag: deploy-20260325-193206
     pullPolicy: IfNotPresent
   env: {}
   allowedModels: []
@@ -112,7 +112,7 @@ agentRuntime:
 gooseRuntime:
   image:
     repository: docker.io/yakdhane/ai-goose-runtime
-    tag: latest
+    tag: deploy-20260325-193206
     pullPolicy: IfNotPresent
   provider: litellm
   env: {}
@@ -141,7 +141,7 @@ gooseRuntime:
 codexRuntime:
   image:
     repository: docker.io/yakdhane/ai-codex-runtime
-    tag: latest
+    tag: deploy-20260325-193206
     pullPolicy: IfNotPresent
   provider: litellm
   env: {}
@@ -160,7 +160,7 @@ codexRuntime:
 opencodeRuntime:
   image:
     repository: docker.io/yakdhane/ai-opencode-runtime
-    tag: copilot-token-exchange
+    tag: deploy-20260325-193206
     pullPolicy: IfNotPresent
   provider: litellm
   env: {}
@@ -189,11 +189,11 @@ operator:
   replicaCount: 2
   image:
     repository: docker.io/yakdhane/ai-operator
-    tag: latest
+    tag: deploy-20260325-193206
     pullPolicy: IfNotPresent
   workerImage:
     repository: docker.io/yakdhane/ai-operator
-    tag: latest
+    tag: deploy-20260325-193206
     pullPolicy: IfNotPresent
   resources:
     requests:
@@ -236,7 +236,7 @@ apiGateway:
   replicaCount: 1
   image:
     repository: docker.io/yakdhane/ai-api-gateway
-    tag: latest
+    tag: deploy-20260325-193206
     pullPolicy: IfNotPresent
   ingressClassName: ""
   ingressHost: ""  # leave empty for a hostless ingress, or set e.g. "agents.mycompany.com"
@@ -314,7 +314,7 @@ webUi:
   replicaCount: 1
   image:
     repository: docker.io/yakdhane/ai-agent-sandbox-web-ui
-    tag: latest
+    tag: deploy-20260325-193206
     pullPolicy: IfNotPresent
   service:
     type: ClusterIP

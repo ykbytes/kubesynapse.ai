@@ -801,6 +801,7 @@ export interface UiMessage {
   id: string;
   role: "user" | "assistant" | "system" | "tool";
   content: string;
+  reasoning?: string;
   status?: "streaming" | "complete" | "error";
   /** Tool-call fields (populated when role === "tool") */
   toolName?: string;
@@ -813,6 +814,12 @@ export interface UiActivity {
   event: string;
   payload: Record<string, unknown>;
   timestamp: string;
+}
+
+export interface UiTodo {
+  content: string;
+  status: "pending" | "in_progress" | "completed" | "cancelled";
+  priority: "high" | "medium" | "low";
 }
 
 export interface InvocationSummary {
@@ -838,6 +845,7 @@ export interface InvocationSummary {
     handoffResumed?: boolean;
     remoteSessionId?: string | null;
   } | null;
+  todos?: UiTodo[] | null;
   metadata?: Record<string, unknown> | null;
 }
 

@@ -1036,6 +1036,25 @@ export function buildInvocationSummary(fallbackThreadId: string, payload: unknow
   const continuity = record.continuity && typeof record.continuity === "object"
     ? expectRecord(record.continuity, "Invocation summary payload.continuity")
     : null;
+  const metadata = record.metadata !== undefined && record.metadata !== null
+    ? expectRecord(record.metadata, "Invocation summary payload.metadata") : null;
+  const todos = (() => {
+    const raw = metadata?.todos;
+    if (!Array.isArray(raw)) return null;
+    return raw.flatMap((item) => {
+      if (!item || typeof item !== "object") return [];
+      const todo = item as Record<string, unknown>;
+      const content = String(todo.content ?? todo.title ?? "").trim();
+      if (!content) return [];
+      const status = String(todo.status ?? "pending").trim().toLowerCase();
+      const priority = String(todo.priority ?? "medium").trim().toLowerCase();
+      return [{
+        content,
+        status: (status === "in_progress" || status === "completed" || status === "cancelled" ? status : "pending") as "pending" | "in_progress" | "completed" | "cancelled",
+        priority: (priority === "high" || priority === "low" ? priority : "medium") as "high" | "medium" | "low",
+      }];
+    });
+  })();
 
   return {
     threadId,
@@ -1066,8 +1085,8 @@ export function buildInvocationSummary(fallbackThreadId: string, payload: unknow
       handoffResumed: readOptionalBoolean(continuity, "handoff_resumed", "Invocation continuity") ?? undefined,
       remoteSessionId: readOptionalString(continuity, "remote_session_id", "Invocation continuity"),
     } satisfies RuntimeContinuitySummary : null,
-    metadata: record.metadata !== undefined && record.metadata !== null
-      ? expectRecord(record.metadata, "Invocation summary payload.metadata") : null,
+    todos,
+    metadata,
   };
 }
 
@@ -2062,6 +2081,46 @@ export interface StreamHandlers {
   onEvent: (event: StreamEvent) => void;
   onError: (error: Error) => void;
   onClose: () => void;
+}
+
+export async function fetchAgentTodos(
+  token: string,
+  namespace: string,
+  agentName: string,
+  threadId: string,
+): Promise<Array<Record<string, unknown>>> {
+  const response = await fetchAuthenticated(
+    buildUrl(`/api/agents/${agentName}/todo?thread_id=${encodeURIComponent(threadId)}`, namespace),
+    token,
+  );
+  return parseJsonResponse(response, (payload) => {
+    const record = expectRecord(payload, "Agent todo response");
+    return Array.isArray(record.todos) ? (record.todos as Array<Record<string, unknown>>) : [];
+  });
+}
+
+/** ETag-aware todo polling. Returns `null` when 304 Not Modified. */
+export async function pollAgentTodos(
+  token: string,
+  namespace: string,
+  agentName: string,
+  threadId: string,
+  etag?: string,
+): Promise<{ todos: Array<Record<string, unknown>>; etag: string | null } | null> {
+  const headers: Record<string, string> = {};
+  if (etag) headers["If-None-Match"] = etag;
+  const response = await fetchAuthenticated(
+    buildUrl(`/api/agents/${agentName}/todo?thread_id=${encodeURIComponent(threadId)}`, namespace),
+    token,
+    { headers },
+  );
+  if (response.status === 304) return null;
+  const newEtag = response.headers.get("etag");
+  const todos = await parseJsonResponse(response, (payload) => {
+    const record = expectRecord(payload, "Agent todo response");
+    return Array.isArray(record.todos) ? (record.todos as Array<Record<string, unknown>>) : [];
+  });
+  return { todos, etag: newEtag };
 }
 
 export async function streamAgentInvoke(options: StreamHandlers): Promise<void> {

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
+import json
 import mimetypes
 import os
 import shutil
@@ -17,7 +19,7 @@ from typing import Any
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 # ---------------------------------------------------------------------------
 # Re-exports for backward compatibility (tests import from main.py)
@@ -441,6 +443,32 @@ def cancel_session(thread_id: str | None = None) -> dict[str, Any]:
     return {"status": "cancel_failed", "session_id": session_id, "thread_id": thread_id}
 
 
+@app.get("/todo")
+def get_todo_state(thread_id: str | None = None, request: Request = None) -> JSONResponse:  # type: ignore[assignment]
+    """Return the current OpenCode todo list for a logical thread.
+
+    Supports conditional requests via ETag / If-None-Match so UI polling
+    is cheap when the todo list hasn't changed.
+    """
+    if not thread_id:
+        raise HTTPException(status_code=400, detail="thread_id query parameter is required")
+    session_id = SESSION_REGISTRY.get(thread_id)
+    if session_id is None:
+        raise HTTPException(status_code=404, detail=f"No session found for thread_id '{thread_id}'")
+    try:
+        todos = get_session_todos(session_id)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to fetch session todos: {exc}") from exc
+
+    body = {"thread_id": thread_id, "session_id": session_id, "sessionID": session_id, "todos": todos}
+    etag = hashlib.md5(json.dumps(todos, sort_keys=True).encode()).hexdigest()  # noqa: S324
+    if request is not None:
+        client_etag = request.headers.get("if-none-match", "").strip(' "')
+        if client_etag and client_etag == etag:
+            return JSONResponse(status_code=304, content=None, headers={"ETag": f'"{etag}"'})
+    return JSONResponse(content=body, headers={"ETag": f'"{etag}"'})
+
+
 @app.get("/context-budget")
 def context_budget(thread_id: str | None = None) -> dict[str, Any]:
     """Return context budget telemetry for the given thread."""
@@ -465,22 +493,54 @@ def context_budget(thread_id: str | None = None) -> dict[str, Any]:
 async def invoke_stream(request: InvokeRequest) -> StreamingResponse:
     async def event_generator() -> AsyncIterator[str]:
         thread_id = request.thread_id or str(uuid.uuid4())
+        request_with_thread = request.model_copy(update={"thread_id": thread_id})
         streamed_delta_count = 0
         yield sse_event("response.started", {"thread_id": thread_id, "source": "opencode"})
 
         event_queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
         loop = asyncio.get_event_loop()
+        stop_todo_poller = asyncio.Event()
 
         def _stream_callback(event_type: str, data: dict[str, Any]) -> None:
             loop.call_soon_threadsafe(event_queue.put_nowait, {"event": event_type, "data": data})
 
         def _run_invoke() -> InvokeResponse:
             try:
-                return invoke_opencode(request, stream_callback=_stream_callback)
+                return invoke_opencode(request_with_thread, stream_callback=_stream_callback)
             finally:
                 loop.call_soon_threadsafe(event_queue.put_nowait, None)
 
+        async def _poll_todos() -> None:
+            last_signature: str | None = None
+            while not stop_todo_poller.is_set():
+                session_id = SESSION_REGISTRY.get(thread_id)
+                if session_id:
+                    try:
+                        todos = await asyncio.to_thread(get_session_todos, session_id)
+                        signature = json.dumps(todos, sort_keys=True)
+                        if signature != last_signature:
+                            last_signature = signature
+                            await event_queue.put(
+                                {
+                                    "event": "todo.updated",
+                                    "data": {
+                                        "thread_id": thread_id,
+                                        "session_id": session_id,
+                                        "sessionID": session_id,
+                                        "todos": todos,
+                                        "source": "opencode",
+                                    },
+                                }
+                            )
+                    except Exception:
+                        pass
+                try:
+                    await asyncio.wait_for(stop_todo_poller.wait(), timeout=0.5)
+                except TimeoutError:
+                    continue
+
         task = asyncio.get_event_loop().run_in_executor(None, _run_invoke)
+        todo_task = asyncio.create_task(_poll_todos())
 
         while True:
             item = await event_queue.get()
@@ -489,6 +549,25 @@ async def invoke_stream(request: InvokeRequest) -> StreamingResponse:
             if item.get("event") == "response.delta":
                 streamed_delta_count += 1
             yield sse_event(item["event"], item["data"])
+
+        stop_todo_poller.set()
+        with contextlib.suppress(Exception):
+            await todo_task
+
+        # Emit todo.cleared when all todos are done/cancelled after invoke
+        try:
+            final_session = SESSION_REGISTRY.get(thread_id)
+            if final_session:
+                final_todos = await asyncio.to_thread(get_session_todos, final_session)
+                if final_todos and all(
+                    t.get("status") in ("completed", "cancelled") for t in final_todos
+                ):
+                    yield sse_event(
+                        "todo.cleared",
+                        {"thread_id": thread_id, "session_id": final_session, "todos": final_todos, "source": "opencode"},
+                    )
+        except Exception:
+            pass
 
         try:
             response = await task

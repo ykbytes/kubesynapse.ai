@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronRight,
+  Circle,
   Cog,
   Download,
   FileText,
@@ -48,9 +49,11 @@ import { EmptyState } from "./EmptyState";
 import { StatusBadge } from "./StatusBadge";
 import { ActivityTimeline } from "./ActivityTimeline";
 import type { AgentDiscoveryPeer, InvocationSummary, RuntimeKind, SpecialistSubagentDraft, UiActivity, UiMessage } from "../types";
+import type { UiTodo } from "../types";
 import { OperationLog } from "./OperationLog";
 import { FileExplorer } from "./FileExplorer";
 import type { AgentFileListResult, ChatSessionSummary, MemoryRecordInfo } from "@/lib/api";
+import { usePlanDock } from "@/hooks/usePlanDock";
 
 interface ChatWorkbenchProps {
   agentName: string;
@@ -58,6 +61,8 @@ interface ChatWorkbenchProps {
   prompt: string;
   messages: UiMessage[];
   activity: UiActivity[];
+  todos: UiTodo[];
+  phase: "plan" | "build" | "idle";
   isSending: boolean;
   tokenReady: boolean;
   streamMode: boolean;
@@ -180,6 +185,7 @@ const roleIcon: Record<string, typeof User> = {
 };
 
 const MessageBubble = memo(function MessageBubble({ message, index }: { message: UiMessage; index: number }) {
+  const [thinkingOpen, setThinkingOpen] = useState(false);
   const bg = roleBg[message.role] ?? "bg-muted/30 border-border";
   const RoleIcon = roleIcon[message.role] ?? MessageSquare;
   const isStreaming = message.status === "streaming";
@@ -207,6 +213,24 @@ const MessageBubble = memo(function MessageBubble({ message, index }: { message:
             </div>
           )}
         </div>
+        {isAssistant && message.reasoning && (
+          <div className="mb-2">
+            <button
+              onClick={() => setThinkingOpen((o) => !o)}
+              className="flex items-center gap-1.5 text-[11px] text-muted-foreground hover:text-foreground transition-colors duration-150"
+              aria-expanded={thinkingOpen}
+            >
+              <Brain className="h-3 w-3" aria-hidden="true" />
+              {thinkingOpen ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+              <span>Thinking</span>
+            </button>
+            {thinkingOpen && (
+              <div className="mt-1.5 rounded-lg border border-border/50 bg-muted/40 px-3 py-2 text-xs text-muted-foreground italic whitespace-pre-wrap break-words leading-relaxed max-h-64 overflow-y-auto">
+                {message.reasoning}
+              </div>
+            )}
+          </div>
+        )}
         {isStreaming && !message.content ? (
           <div className="streaming-dots flex items-center gap-1.5 py-1 text-muted-foreground" aria-label="Thinking">
             <span /><span /><span />
@@ -486,6 +510,253 @@ const ToolBubble = memo(function ToolBubble({ message }: { message: UiMessage })
   );
 });
 
+const planTone: Record<UiTodo["status"], { text: string; border: string; bg: string }> = {
+  pending: {
+    text: "text-muted-foreground",
+    border: "border-border/60",
+    bg: "bg-background/70",
+  },
+  in_progress: {
+    text: "text-foreground",
+    border: "border-primary/30",
+    bg: "bg-primary/5",
+  },
+  completed: {
+    text: "text-muted-foreground",
+    border: "border-emerald-500/20",
+    bg: "bg-emerald-500/5",
+  },
+  cancelled: {
+    text: "text-muted-foreground",
+    border: "border-amber-500/20",
+    bg: "bg-amber-500/5",
+  },
+};
+
+function PlanStatusIcon({ status }: { status: UiTodo["status"] }) {
+  if (status === "completed") return <CheckCircle2 className="h-4 w-4 text-emerald-400" />;
+  if (status === "in_progress") return (
+    <span className="relative flex h-4 w-4 items-center justify-center">
+      <span className="absolute inline-flex h-3 w-3 animate-ping rounded-full bg-primary/40" />
+      <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-primary" />
+    </span>
+  );
+  if (status === "cancelled") return <XCircle className="h-4 w-4 text-amber-400" />;
+  return <Circle className="h-3 w-3 text-muted-foreground/40" />;
+}
+
+const PlanPanel = memo(function PlanPanel({
+  todos,
+  phase,
+  isSending,
+}: {
+  todos: UiTodo[];
+  phase: "plan" | "build" | "idle";
+  isSending: boolean;
+}) {
+  const [collapsed, setCollapsed] = useState(false);
+  const listRef = useRef<HTMLDivElement>(null);
+  const userScrolledRef = useRef(false);
+  const scrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const done = useMemo(() => todos.filter((item) => item.status === "completed" || item.status === "cancelled").length, [todos]);
+  const current = useMemo(
+    () => todos.find((item) => item.status === "in_progress") ?? todos.find((item) => item.status === "pending") ?? null,
+    [todos],
+  );
+  const progress = todos.length > 0 ? Math.round((done / todos.length) * 100) : 0;
+  const allDone = todos.length > 0 && done === todos.length;
+
+  // Auto-scroll to in_progress item
+  useEffect(() => {
+    if (collapsed || userScrolledRef.current) return;
+    const el = listRef.current?.querySelector("[data-plan-active]");
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }, [todos, collapsed]);
+
+  // Detect manual scroll
+  const handleListScroll = useCallback(() => {
+    userScrolledRef.current = true;
+    if (scrollTimerRef.current) clearTimeout(scrollTimerRef.current);
+    scrollTimerRef.current = setTimeout(() => { userScrolledRef.current = false; }, 250);
+  }, []);
+
+  // Cleanup timer on unmount
+  useEffect(() => () => { if (scrollTimerRef.current) clearTimeout(scrollTimerRef.current); }, []);
+
+  // Content height tracking for collapse animation
+  const contentRef = useRef<HTMLDivElement>(null);
+  const [contentHeight, setContentHeight] = useState<number | undefined>(undefined);
+  useEffect(() => {
+    if (!contentRef.current) return;
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) setContentHeight(entry.contentRect.height);
+    });
+    observer.observe(contentRef.current);
+    return () => observer.disconnect();
+  }, []);
+
+  return (
+    <div className="space-y-3 p-3">
+      <div className="rounded-2xl border border-border/70 bg-muted/20 p-3">
+        {/* Collapsible header */}
+        <button
+          type="button"
+          role="button"
+          tabIndex={0}
+          onClick={() => setCollapsed((c) => !c)}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setCollapsed((c) => !c); } }}
+          className="flex w-full items-center gap-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary rounded-lg"
+          aria-expanded={!collapsed}
+          aria-label="Plan tracker"
+        >
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
+              <CheckCircle2 className="h-3.5 w-3.5" />
+              Plan
+              {/* Phase badge */}
+              {phase !== "idle" && (
+                <Badge
+                  variant="outline"
+                  className={`ml-1 px-1.5 py-0 text-[10px] transition-all duration-200 ${
+                    phase === "plan"
+                      ? "border-amber-500/40 text-amber-500 bg-amber-500/10"
+                      : "border-blue-500/40 text-blue-500 bg-blue-500/10"
+                  }`}
+                >
+                  {phase === "plan" ? "Planning" : "Building"}
+                </Badge>
+              )}
+              <Badge variant="outline" className="ml-auto px-1 py-0 text-[10px]">
+                {done}/{todos.length}
+              </Badge>
+            </div>
+            {/* Active todo preview when collapsed */}
+            {current ? (
+              <div
+                className="mt-2 truncate text-sm font-medium text-foreground transition-all duration-300"
+                style={{ opacity: 1, transform: "translateY(0)" }}
+              >
+                {current.content}
+              </div>
+            ) : isSending ? (
+              <div className="mt-2 text-sm text-muted-foreground animate-pulse">
+                Waiting for plan&hellip;
+              </div>
+            ) : (
+              <div className="mt-2 text-sm text-muted-foreground">
+                {allDone ? "All tasks completed" : "No active tasks"}
+              </div>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            {isSending && <LoaderCircle className="h-4 w-4 animate-spin text-primary" />}
+            <div
+              className="transition-transform duration-300"
+              style={{ transform: collapsed ? "rotate(-90deg)" : "rotate(0deg)" }}
+            >
+              <ChevronDown className="h-4 w-4 text-muted-foreground" />
+            </div>
+          </div>
+        </button>
+
+        {/* Progress bar */}
+        <div
+          className="mt-3 h-1.5 overflow-hidden rounded-full bg-border/50"
+          role="progressbar"
+          aria-valuenow={done}
+          aria-valuemax={todos.length}
+          aria-label={`Plan progress: ${done} of ${todos.length} tasks completed`}
+        >
+          {isSending && todos.length === 0 ? (
+            /* Indeterminate shimmer when waiting for plan */
+            <div className="h-full w-full animate-pulse rounded-full bg-gradient-to-r from-transparent via-primary/40 to-transparent" />
+          ) : (
+            <div
+              className={`h-full rounded-full transition-all duration-[400ms] ${
+                allDone ? "bg-emerald-500" : "bg-primary"
+              }`}
+              style={{
+                width: `${progress}%`,
+                transitionTimingFunction: "cubic-bezier(0.34, 1, 0.64, 1)",
+              }}
+            />
+          )}
+        </div>
+      </div>
+
+      {/* Todo list with collapse animation */}
+      <div
+        className="overflow-hidden transition-all duration-300"
+        style={{
+          maxHeight: collapsed ? 0 : contentHeight != null ? `${contentHeight}px` : "32rem",
+          opacity: collapsed ? 0 : 1,
+          transitionTimingFunction: "cubic-bezier(0.4, 0, 0.2, 1)",
+        }}
+      >
+        <div ref={contentRef}>
+          {/* Skeleton loading state */}
+          {isSending && todos.length === 0 ? (
+            <div className="space-y-2" role="list" aria-label="Plan items loading">
+              {[1, 2, 3].map((i) => (
+                <div key={i} className="rounded-2xl border border-border/40 bg-muted/10 px-3 py-3 animate-pulse">
+                  <div className="flex items-start gap-3">
+                    <div className="mt-1 h-4 w-4 rounded-full bg-muted-foreground/20" />
+                    <div className="flex-1 space-y-2">
+                      <div className="h-4 w-3/4 rounded bg-muted-foreground/15" />
+                      <div className="h-3 w-1/3 rounded bg-muted-foreground/10" />
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div
+              ref={listRef}
+              className="max-h-[32rem] space-y-2 overflow-y-auto pr-1"
+              onScroll={handleListScroll}
+              role="list"
+              aria-label="Plan items"
+            >
+              {todos.map((todo, index) => {
+                const tone = planTone[todo.status];
+                const isActive = todo.status === "in_progress";
+                const isDone = todo.status === "completed" || todo.status === "cancelled";
+                return (
+                  <div
+                    key={`${todo.content}-${index}`}
+                    {...(isActive ? { "data-plan-active": true } : {})}
+                    className={`rounded-2xl border px-3 py-3 transition-colors duration-200 ${tone.border} ${tone.bg}`}
+                    role="listitem"
+                    aria-checked={todo.status === "completed"}
+                  >
+                    <div className="flex items-start gap-3">
+                      <div className="mt-0.5 flex h-5 w-5 flex-shrink-0 items-center justify-center">
+                        <PlanStatusIcon status={todo.status} />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div
+                          className={`relative text-sm leading-relaxed transition-opacity duration-200 ${tone.text} ${isDone ? "opacity-60" : ""}`}
+                        >
+                          <span className={isDone ? "plan-strikethrough" : ""}>{todo.content}</span>
+                        </div>
+                        <div className="mt-2 flex items-center gap-2 text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+                          <Badge variant="outline" className="px-1 py-0 text-[10px]">{todo.status.replace("_", " ")}</Badge>
+                          <span>{todo.priority}</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+});
+
 /* ------------------------------------------------------------------ */
 /*  Unified diff viewer                                               */
 /* ------------------------------------------------------------------ */
@@ -543,6 +814,8 @@ export function ChatWorkbench({
   prompt,
   messages,
   activity,
+  todos,
+  phase,
   isSending,
   tokenReady,
   streamMode,
@@ -605,6 +878,8 @@ export function ChatWorkbench({
   const isAtBottomRef = useRef(true);
   const scrollContainerRef = useRef<HTMLElement | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const planDock = usePlanDock({ todos, isSending });
+  const planOpen = planDock.visible;
   const [filesOpen, setFilesOpen] = useState(false);
   const [memoryOpen, setMemoryOpen] = useState(false);
   const [memoryFilter, setMemoryFilter] = useState<"all" | "procedural" | "episodic" | "pinned">("all");
@@ -620,6 +895,7 @@ export function ChatWorkbench({
   const a2aMode = Boolean(a2aTargetAgent && a2aTargetNamespace);
   const specialistMode = specialistTeamConfigured;
   const detailCount = (summary ? 1 : 0) + (activity.length > 0 ? 1 : 0);
+  const planCount = todos.length;
   const memoryCount = agentMemoryRecords.length + activeMemoryRecords.length;
   const downloadableArtifacts = useMemo(() => collectDownloadableArtifacts(summary, messages), [summary, messages]);
   const filteredAgentMemoryRecords = useMemo(() => {
@@ -705,13 +981,28 @@ export function ChatWorkbench({
               ))}
             </div>
           )}
+          {runtimeKind === "opencode" && agentName && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-8 gap-1 rounded-full px-2 text-xs"
+              onClick={() => { planDock.toggle(); if (!planOpen) { setDetailsOpen(false); setFilesOpen(false); setMemoryOpen(false); } }}
+            >
+              {planOpen ? <PanelRightClose className="h-3.5 w-3.5" /> : <PanelRightOpen className="h-3.5 w-3.5" />}
+              Plan
+              <Badge variant="outline" className="ml-1 px-1 py-0 text-[10px]">
+                {planCount}
+              </Badge>
+            </Button>
+          )}
           {agentName && (
             <Button
               type="button"
               variant="ghost"
               size="sm"
               className="h-8 gap-1 rounded-full px-2 text-xs"
-              onClick={() => { setFilesOpen((o) => !o); if (!filesOpen) { setDetailsOpen(false); setMemoryOpen(false); } }}
+              onClick={() => { setFilesOpen((o) => !o); if (!filesOpen) { setDetailsOpen(false); if (planOpen) planDock.toggle(); setMemoryOpen(false); } }}
             >
               <FolderOpen className="h-3.5 w-3.5" />
               Files
@@ -723,7 +1014,7 @@ export function ChatWorkbench({
               variant="ghost"
               size="sm"
               className="h-8 gap-1 rounded-full px-2 text-xs"
-              onClick={() => { setMemoryOpen((open) => !open); if (!memoryOpen) { setDetailsOpen(false); setFilesOpen(false); } }}
+              onClick={() => { setMemoryOpen((open) => !open); if (!memoryOpen) { setDetailsOpen(false); if (planOpen) planDock.toggle(); setFilesOpen(false); } }}
             >
               <MemoryStick className="h-3.5 w-3.5" />
               Memory
@@ -738,7 +1029,7 @@ export function ChatWorkbench({
               variant="ghost"
               size="sm"
               className="h-8 gap-1 rounded-full px-2 text-xs"
-              onClick={() => { setDetailsOpen((open) => !open); if (!detailsOpen) { setFilesOpen(false); setMemoryOpen(false); } }}
+              onClick={() => { setDetailsOpen((open) => !open); if (!detailsOpen) { if (planOpen) planDock.toggle(); setFilesOpen(false); setMemoryOpen(false); } }}
             >
               {detailsOpen ? <PanelRightClose className="h-3.5 w-3.5" /> : <PanelRightOpen className="h-3.5 w-3.5" />}
               Details
@@ -813,6 +1104,29 @@ export function ChatWorkbench({
             <div ref={messagesEndRef} />
           </div>
         </ScrollArea>
+
+        {runtimeKind === "opencode" && planOpen && agentName && (
+          <aside className="absolute inset-y-3 right-3 z-10 flex w-[min(24rem,calc(100%-1.5rem))] flex-col overflow-hidden rounded-2xl border border-border/80 bg-background/96 shadow-2xl backdrop-blur-md">
+            <div className="flex items-center justify-between border-b border-border/60 px-3 py-2.5">
+              <div>
+                <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">OpenCode</div>
+                <div className="text-sm font-semibold">Plan tracker</div>
+              </div>
+              <Button type="button" variant="ghost" size="icon" className="h-7 w-7" onClick={() => planDock.toggle()}>
+                <PanelRightClose className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+            <ScrollArea className="min-h-0 flex-1">
+              {todos.length > 0 ? (
+                <PlanPanel todos={todos} phase={phase} isSending={isSending} />
+              ) : (
+                <div className="flex h-full items-center justify-center p-6 text-center text-sm text-muted-foreground">
+                  OpenCode will populate this panel after it creates a todo plan for the current task.
+                </div>
+              )}
+            </ScrollArea>
+          </aside>
+        )}
 
         {detailsOpen && detailCount > 0 && (
           <aside className="absolute inset-y-3 right-3 z-10 flex w-[min(24rem,calc(100%-1.5rem))] flex-col overflow-hidden rounded-2xl border border-border/80 bg-background/96 shadow-2xl backdrop-blur-md">

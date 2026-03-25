@@ -5,6 +5,8 @@ import {
     deleteMemoryRecord,
     decideApproval,
     deleteChatSession,
+    fetchAgentTodos,
+    pollAgentTodos,
     fetchAgentLogs,
     getChatSessionMessages,
     invokeAgent,
@@ -27,6 +29,7 @@ import type {
   SpecialistSubagentDraft,
   UiActivity,
   UiMessage,
+  UiTodo,
 } from "@/types";
 
 // ── Local types ──
@@ -154,6 +157,23 @@ function buildMessageSignature(messages: UiMessage[]): string {
   })));
 }
 
+function normalizeUiTodos(value: unknown): UiTodo[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const todo = item as Record<string, unknown>;
+    const content = String(todo.content ?? todo.title ?? "").trim();
+    if (!content) return [];
+    const status = String(todo.status ?? "pending").trim().toLowerCase();
+    const priority = String(todo.priority ?? "medium").trim().toLowerCase();
+    return [{
+      content,
+      status: (status === "in_progress" || status === "completed" || status === "cancelled" ? status : "pending") as UiTodo["status"],
+      priority: (priority === "high" || priority === "low" ? priority : "medium") as UiTodo["priority"],
+    }];
+  });
+}
+
 // ── Context value type ──
 
 export interface ChatContextValue {
@@ -161,6 +181,8 @@ export interface ChatContextValue {
   messages: UiMessage[];
   activity: UiActivity[];
   summary: InvocationSummary | null;
+  todos: UiTodo[];
+  phase: "plan" | "build" | "idle";
   logs: string;
   selectedGooseChatSettings: GooseChatSettings;
   selectedOpenCodeChatSettings: OpenCodeChatSettings;
@@ -273,6 +295,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const [messagesByAgent, setMessagesByAgent] = useState<Record<string, UiMessage[]>>({});
   const [activityByAgent, setActivityByAgent] = useState<Record<string, UiActivity[]>>({});
   const [summaryByAgent, setSummaryByAgent] = useState<Record<string, InvocationSummary | null>>({});
+  const [todosByAgent, setTodosByAgent] = useState<Record<string, UiTodo[]>>({});
+  const [phaseByAgent, setPhaseByAgent] = useState<Record<string, "plan" | "build" | "idle">>({});
   const [logsByAgent, setLogsByAgent] = useState<Record<string, string>>({});
   const [gooseChatSettingsByAgent, setGooseChatSettingsByAgent] = useState<Record<string, GooseChatSettings>>({});
   const [opencodeChatSettingsByAgent, setOpenCodeChatSettingsByAgent] = useState<Record<string, OpenCodeChatSettings>>({});
@@ -316,6 +340,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const messages = selectedAgentName ? messagesByAgent[selectedAgentName] ?? [] : [];
   const activity = selectedAgentName ? activityByAgent[selectedAgentName] ?? [] : [];
   const summary = selectedAgentName ? summaryByAgent[selectedAgentName] ?? null : null;
+  const todos = selectedAgentName ? todosByAgent[selectedAgentName] ?? [] : [];
+  const phase: "plan" | "build" | "idle" = selectedAgentName ? phaseByAgent[selectedAgentName] ?? "idle" : "idle";
   const logs = selectedAgentName ? logsByAgent[selectedAgentName] ?? "" : "";
   const selectedGooseChatSettings = selectedAgentName
     ? gooseChatSettingsByAgent[selectedAgentName] ?? DEFAULT_GOOSE_CHAT_SETTINGS
@@ -435,6 +461,14 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     setSummaryByAgent((prev) => ({ ...prev, [agentName]: updater(prev[agentName] ?? null) }));
   }
 
+  function setTodosForAgent(agentName: string, updater: UiTodo[] | ((current: UiTodo[]) => UiTodo[])) {
+    setTodosByAgent((prev) => {
+      const current = prev[agentName] ?? [];
+      const next = typeof updater === "function" ? (updater as (current: UiTodo[]) => UiTodo[])(current) : updater;
+      return { ...prev, [agentName]: next };
+    });
+  }
+
   function setLogsForAgent(agentName: string, value: string | ((prev: string) => string)) {
     setLogsByAgent((prev) => {
       const current = prev[agentName] ?? "";
@@ -455,6 +489,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     setMessagesByAgent((prev) => { const n = { ...prev }; delete n[agentName]; return n; });
     setActivityByAgent((prev) => { const n = { ...prev }; delete n[agentName]; return n; });
     setSummaryByAgent((prev) => { const n = { ...prev }; delete n[agentName]; return n; });
+    setTodosByAgent((prev) => { const n = { ...prev }; delete n[agentName]; return n; });
     setLogsByAgent((prev) => { const n = { ...prev }; delete n[agentName]; return n; });
     setGooseChatSettingsByAgent((prev) => { const n = { ...prev }; delete n[agentName]; return n; });
     setOpenCodeChatSettingsByAgent((prev) => { const n = { ...prev }; delete n[agentName]; return n; });
@@ -466,6 +501,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
   function pushActivity(agentName: string, event: string, payload: Record<string, unknown>) {
     if (event === "response.delta") return;
+    if (event === "response.reasoning") return;
     // Skip unnamed/empty SSE events (keepalives parsed as "message" with no data)
     if (event === "message" && Object.keys(payload).length === 0) return;
     setActivityForAgent(agentName, (cur) => [{ id: createId(), event, payload, timestamp: new Date().toISOString() }, ...cur].slice(0, 200));
@@ -507,6 +543,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       try {
         const result = await invokeAgent(token, namespace, agentName, payload, requestId);
         const nextSummary = updateSummary(agentName, result.thread_id, result);
+        setTodosForAgent(agentName, nextSummary.todos ?? []);
         threadIdsRef.current[agentName] = nextSummary.threadId;
         pendingRequestRef.current[agentName] = nextSummary.status === "approval_pending" ? { ...payload, thread_id: nextSummary.threadId } : null;
         setPendingAssistantContent(agentName, assistantMessageId,
@@ -530,6 +567,19 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         onEvent: ({ event, payload: ep }) => {
           pushActivity(agentName, event, ep);
           const TOOL_NODES = new Set(["sandbox_tool", "mcp_tool", "retrieval", "output_guard"]);
+
+          if (event === "response.started") {
+            if (typeof ep.thread_id === "string" && ep.thread_id.trim()) {
+              threadIdsRef.current[agentName] = ep.thread_id.trim();
+            }
+            return;
+          }
+
+          if (event === "response.turn_started") {
+            const agent = String(ep.agent ?? "").toLowerCase();
+            setPhaseByAgent((prev) => ({ ...prev, [agentName]: agent === "plan" ? "plan" : "build" }));
+            return;
+          }
 
           if (event === "graph.node") {
             const nodeName = String(ep.node ?? "");
@@ -603,14 +653,30 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             return;
           }
 
+          if (event === "response.reasoning") {
+            if (typeof ep.reasoning !== "string") return;
+            const reasoning = ep.reasoning;
+            setMessagesForAgent(agentName, (cur) => cur.map((m) => {
+              if (m.id !== assistantMessageId) return m;
+              return { ...m, reasoning: m.reasoning ? `${m.reasoning}\n${reasoning}` : reasoning, status: "streaming" };
+            }));
+            return;
+          }
+
           if (event === "response.completed") {
             const fallbackThread = threadIdsRef.current[agentName] || `thread-${agentName}-${createId()}`;
             const nextSummary = updateSummary(agentName, fallbackThread, ep);
+            setTodosForAgent(agentName, nextSummary.todos ?? []);
             threadIdsRef.current[agentName] = nextSummary.threadId;
             pendingRequestRef.current[agentName] = nextSummary.status === "approval_pending" ? { ...payload, thread_id: nextSummary.threadId } : null;
             setMessagesForAgent(agentName, (cur) => cur.map((m) => m.id === assistantMessageId
               ? { ...m, content: m.content || (nextSummary.status === "approval_pending" ? "Approval pending. Re-submit after approval." : "Invocation completed."), status: nextSummary.status === "blocked" ? "error" : "complete" }
               : m));
+            return;
+          }
+
+          if (event === "todo.updated") {
+            setTodosForAgent(agentName, normalizeUiTodos(ep.todos));
             return;
           }
 
@@ -628,6 +694,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       }
     } finally {
       setIsSending(false);
+      setPhaseByAgent((prev) => ({ ...prev, [agentName]: "idle" }));
       if (streamAbortRef.current === abortController) {
         streamAbortRef.current = null;
       }
@@ -923,6 +990,46 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     setSessionDirty(buildMessageSignature(messages) !== savedMessageSignatureRef.current);
   }, [messages, activeSessionId]);
 
+  useEffect(() => {
+    if (!token.trim() || !selectedAgentName || selectedRuntimeKind !== "opencode") return;
+    const threadId = threadIdsRef.current[selectedAgentName] || summary?.threadId;
+    if (!threadId) return;
+    let cancelled = false;
+    void fetchAgentTodos(token, namespace, selectedAgentName, threadId)
+      .then((next) => {
+        if (!cancelled) setTodosForAgent(selectedAgentName, normalizeUiTodos(next));
+      })
+      .catch(() => {
+        if (!cancelled && summary?.todos) {
+          setTodosForAgent(selectedAgentName, summary.todos);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [token, namespace, selectedAgentName, selectedRuntimeKind, summary?.threadId, summary?.todos]);
+
+  // Background todo polling with ETag when idle (not streaming)
+  useEffect(() => {
+    if (isSending || !token.trim() || !selectedAgentName || selectedRuntimeKind !== "opencode") return;
+    const threadId = threadIdsRef.current[selectedAgentName] || summary?.threadId;
+    if (!threadId) return;
+    let cancelled = false;
+    let etag: string | undefined;
+    const poll = async () => {
+      try {
+        const result = await pollAgentTodos(token, namespace, selectedAgentName, threadId, etag);
+        if (cancelled) return;
+        if (result) {
+          etag = result.etag ?? undefined;
+          setTodosForAgent(selectedAgentName, normalizeUiTodos(result.todos));
+        }
+      } catch { /* ignore polling errors */ }
+    };
+    const interval = setInterval(poll, 3000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [isSending, token, namespace, selectedAgentName, selectedRuntimeKind, summary?.threadId]);
+
   const handleNewSession = useCallback(async () => {
     if (!token.trim() || !selectedAgentName) return;
     try {
@@ -931,6 +1038,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       setMessagesForAgent(selectedAgentName, () => []);
       setSummaryForAgent(selectedAgentName, () => null);
       setActivityForAgent(selectedAgentName, () => []);
+      setTodosForAgent(selectedAgentName, []);
       delete threadIdsRef.current[selectedAgentName];
       savedMessageSignatureRef.current = "[]";
       setActiveSessionId(session.session_id);
@@ -950,6 +1058,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           toolName: m.tool_name ?? undefined, toolNode: m.tool_node ?? undefined,
         })),
       );
+      setTodosForAgent(selectedAgentName, []);
       savedMessageSignatureRef.current = buildMessageSignature(msgs.map((m) => ({
         id: m.message_id,
         role: m.role as UiMessage["role"],
@@ -1023,7 +1132,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   }, [isSending, activeSessionId]);
 
   const ctxValue = useMemo(() => ({
-    messages, activity, summary, logs, selectedGooseChatSettings, selectedOpenCodeChatSettings, gooseSystemPromptPreview,
+    messages, activity, summary, todos, phase, logs, selectedGooseChatSettings, selectedOpenCodeChatSettings, gooseSystemPromptPreview,
     prompt, streamMode, requireApproval, approvalSupported, chatError, isSending, logsLoading, logsStreaming, canSubmitChat, chatEmptyMessage,
     a2aTargetAgent, a2aTargetNamespace, a2aTimeoutSeconds,
     specialistSubagents, specialistTeamConfigured, subagentStrategy,
@@ -1041,7 +1150,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     handleNewSession, handleLoadSession, handleDeleteSession, handleRenameSession, handleSaveCurrentSession,
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }), [
-    messages, activity, summary, logs, selectedGooseChatSettings, selectedOpenCodeChatSettings, gooseSystemPromptPreview,
+    messages, activity, summary, todos, phase, logs, selectedGooseChatSettings, selectedOpenCodeChatSettings, gooseSystemPromptPreview,
     prompt, streamMode, requireApproval, approvalSupported, chatError, isSending, logsLoading, logsStreaming, canSubmitChat, chatEmptyMessage,
     a2aTargetAgent, a2aTargetNamespace, a2aTimeoutSeconds,
     specialistSubagents, specialistTeamConfigured, subagentStrategy,

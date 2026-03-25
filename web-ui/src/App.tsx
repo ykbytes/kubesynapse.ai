@@ -536,6 +536,8 @@ function AppLayout() {
                           prompt={chat.prompt}
                           messages={chat.messages}
                           activity={chat.activity}
+                          todos={chat.todos}
+                          phase={chat.phase}
                           isSending={chat.isSending}
                           tokenReady={Boolean(conn.token.trim())}
                           streamMode={chat.streamMode}

@@ -54,6 +54,19 @@ def extract_text_from_parts(parts: list[dict[str, Any]]) -> str:
     return "".join(fragments).strip()
 
 
+def extract_reasoning_from_parts(parts: list[dict[str, Any]]) -> str:
+    """Extract concatenated reasoning/thinking text from message parts."""
+    fragments: list[str] = []
+    for item in parts:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") == "reasoning":
+            text = item.get("text")
+            if isinstance(text, str) and text:
+                fragments.append(text)
+    return "\n".join(fragments).strip()
+
+
 def extract_response_text(payload: dict[str, Any]) -> str:
     """Extract the authoritative response text from an OpenCode payload."""
     info = payload.get("info")
