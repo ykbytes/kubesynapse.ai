@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
+  ArrowUp,
   Brain,
   Bot,
   CheckCircle2,
@@ -9,11 +10,14 @@ import {
   Circle,
   Cog,
   Download,
+  FileDiff,
   FileText,
   FolderOpen,
   LoaderCircle,
+  Maximize2,
   MessageSquare,
   MemoryStick,
+  Minimize2,
   Pencil,
   Pin,
   PanelRightClose,
@@ -21,9 +25,7 @@ import {
   Plus,
   RotateCcw,
   Search,
-  Send,
   Square,
-  User,
   X,
   XCircle,
   Zap,
@@ -48,12 +50,19 @@ import { CopyButton } from "./CopyButton";
 import { EmptyState } from "./EmptyState";
 import { StatusBadge } from "./StatusBadge";
 import { ActivityTimeline } from "./ActivityTimeline";
-import type { AgentDiscoveryPeer, InvocationSummary, RuntimeKind, SpecialistSubagentDraft, UiActivity, UiMessage } from "../types";
+import type { AgentDiscoveryPeer, InvocationSummary, RuntimeKind, SpecialistSubagentDraft, UiActivity, UiMessage, UiToolCall } from "../types";
 import type { UiTodo } from "../types";
 import { OperationLog } from "./OperationLog";
 import { FileExplorer } from "./FileExplorer";
 import type { AgentFileListResult, ChatSessionSummary, MemoryRecordInfo } from "@/lib/api";
+import { fetchSessionDiff } from "@/lib/api";
 import { usePlanDock } from "@/hooks/usePlanDock";
+import { useChat } from "@/contexts/ChatContext";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
+import { useConnection } from "@/contexts/ConnectionContext";
+import { QuestionDock } from "./QuestionDock";
+import { FollowupDock } from "./FollowupDock";
+import { MarkdownRenderer } from "./MarkdownRenderer";
 
 interface ChatWorkbenchProps {
   agentName: string;
@@ -170,50 +179,63 @@ function Section({
 }
 
 /* ------------------------------------------------------------------ */
-/*  Message bubble                                                    */
+/*  Message bubble — ChatGPT-style layout                             */
 /* ------------------------------------------------------------------ */
-const roleBg: Record<string, string> = {
-  user: "bg-primary/10 border-primary/20",
-  assistant: "bg-muted/50 border-border",
-  system: "bg-amber-500/10 border-amber-500/20",
-};
-
-const roleIcon: Record<string, typeof User> = {
-  user: User,
-  assistant: Bot,
-  system: Zap,
-};
 
 const MessageBubble = memo(function MessageBubble({ message, index }: { message: UiMessage; index: number }) {
   const [thinkingOpen, setThinkingOpen] = useState(false);
-  const bg = roleBg[message.role] ?? "bg-muted/30 border-border";
-  const RoleIcon = roleIcon[message.role] ?? MessageSquare;
   const isStreaming = message.status === "streaming";
-  const isAssistant = message.role === "assistant";
-  const alignment = message.role === "user" ? "justify-end pl-10" : "justify-start pr-10";
-  return (
-    <div className={`flex ${alignment}`}>
+  const isUser = message.role === "user";
+  const isSystem = message.role === "system";
+
+  // ── User message: right-aligned solid bubble ──
+  if (isUser) {
+    return (
       <div
-        className={`group relative w-fit max-w-[min(54rem,100%)] rounded-2xl border px-4 py-3 text-sm animate-slide-up transition-shadow duration-200 hover:shadow-md ${bg}`}
+        className="flex justify-end animate-slide-up"
         style={{ animationDelay: `${Math.min(index * 30, 300)}ms`, animationFillMode: "backwards" }}
-        role={isStreaming ? "status" : undefined}
-        aria-live={isStreaming ? "polite" : undefined}
       >
-        <div className="mb-1.5 flex items-center gap-2 text-[11px] text-muted-foreground">
-          <RoleIcon className="h-3.5 w-3.5" aria-hidden="true" />
-          <span className="font-medium capitalize">{message.role}</span>
-          {message.status && message.status !== "complete" && (
-            <Badge variant="outline" className="text-[10px] px-1.5 py-0">
-              {message.status}
-            </Badge>
-          )}
-          {isAssistant && message.content && !isStreaming && (
-            <div className="ml-auto opacity-0 group-hover:opacity-100 transition-opacity duration-200">
-              <CopyButton value={message.content} />
-            </div>
-          )}
+        <div className="max-w-[75%] rounded-2xl rounded-br-md bg-primary px-4 py-2.5 text-primary-foreground shadow-sm">
+          <div className="whitespace-pre-wrap break-words text-sm leading-relaxed">
+            {message.content || ""}
+          </div>
         </div>
-        {isAssistant && message.reasoning && (
+      </div>
+    );
+  }
+
+  // ── System message: centered muted pill ──
+  if (isSystem) {
+    return (
+      <div
+        className="flex justify-center animate-slide-up"
+        style={{ animationDelay: `${Math.min(index * 30, 300)}ms`, animationFillMode: "backwards" }}
+      >
+        <div className="flex items-center gap-2 rounded-full border border-amber-500/20 bg-amber-500/10 px-4 py-1.5 text-xs text-amber-400">
+          <Zap className="h-3 w-3" />
+          <span>{message.content || "System message"}</span>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Assistant message: left-aligned, full-width, with avatar ──
+  return (
+    <div
+      className="group flex gap-3 animate-slide-up"
+      style={{ animationDelay: `${Math.min(index * 30, 300)}ms`, animationFillMode: "backwards" }}
+      role={isStreaming ? "status" : undefined}
+      aria-live={isStreaming ? "polite" : undefined}
+    >
+      {/* Avatar */}
+      <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-primary/20 to-primary/5 border border-primary/15 mt-0.5">
+        <Bot className="h-3.5 w-3.5 text-primary" />
+      </div>
+
+      {/* Content */}
+      <div className="min-w-0 flex-1">
+        {/* Thinking section */}
+        {message.reasoning && (
           <div className="mb-2">
             <button
               onClick={() => setThinkingOpen((o) => !o)}
@@ -231,14 +253,33 @@ const MessageBubble = memo(function MessageBubble({ message, index }: { message:
             )}
           </div>
         )}
+
+        {/* Streaming placeholder */}
         {isStreaming && !message.content ? (
           <div className="streaming-dots flex items-center gap-1.5 py-1 text-muted-foreground" aria-label="Thinking">
             <span /><span /><span />
             <span className="text-[11px] ml-1">Thinking...</span>
           </div>
         ) : (
-          <div className="whitespace-pre-wrap break-words text-sm leading-relaxed">
-            {message.content || ""}
+          <MarkdownRenderer content={message.content || ""} />
+        )}
+
+        {/* Tool calls & patches */}
+        {(message.toolCalls?.length || message.patches?.length) ? (
+          <div className="mt-2.5 space-y-1.5">
+            {message.toolCalls?.map((tc, idx) => (
+              <InlineToolCallCard key={`${tc.tool}-${idx}`} tc={tc} />
+            ))}
+            {message.patches?.map((p, idx) => (
+              <PatchBadge key={`patch-${idx}`} files={p.files} />
+            ))}
+          </div>
+        ) : null}
+
+        {/* Copy button — appears on hover */}
+        {message.content && !isStreaming && (
+          <div className="mt-1 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+            <CopyButton value={message.content} className="h-6 w-6" />
           </div>
         )}
       </div>
@@ -457,6 +498,74 @@ function collectDownloadableArtifacts(summary: InvocationSummary | null, message
 }
 
 /* ------------------------------------------------------------------ */
+/*  Inline tool call card (inside assistant messages)                 */
+/* ------------------------------------------------------------------ */
+const InlineToolCallCard = memo(function InlineToolCallCard({ tc }: { tc: UiToolCall }) {
+  const [expanded, setExpanded] = useState(false);
+  const isFailed = tc.status === "error";
+  const isRunning = tc.status === "running";
+  const StatusIcon = isFailed ? XCircle : isRunning ? LoaderCircle : CheckCircle2;
+  const statusLabel = isFailed ? "failed" : isRunning ? "running" : "done";
+  const statusColor = isFailed ? "text-red-500" : isRunning ? "text-amber-500" : "text-emerald-500";
+
+  const inputSummary = useMemo(() => {
+    if (!tc.input) return "";
+    if (typeof tc.input === "string") return tc.input.slice(0, 200);
+    if (typeof tc.input === "object") {
+      const obj = tc.input as Record<string, unknown>;
+      const filePath = obj.filePath || obj.file_path || obj.path || obj.command || obj.url;
+      if (typeof filePath === "string") return filePath;
+      return JSON.stringify(tc.input).slice(0, 200);
+    }
+    return String(tc.input).slice(0, 200);
+  }, [tc.input]);
+
+  return (
+    <div className="rounded-lg border border-border/50 bg-muted/30 text-xs">
+      <button
+        type="button"
+        onClick={() => setExpanded((o) => !o)}
+        className="flex w-full items-center gap-2 px-2.5 py-1.5 text-muted-foreground hover:text-foreground transition-colors"
+      >
+        <Cog className={`h-3 w-3 shrink-0 ${isRunning ? "animate-[spin_2s_linear_infinite]" : ""}`} />
+        <span className="font-medium text-foreground truncate">{tc.tool || "tool"}</span>
+        {inputSummary && <span className="truncate text-muted-foreground/70 max-w-[16rem]">{inputSummary}</span>}
+        <StatusIcon className={`h-3 w-3 ml-auto shrink-0 ${statusColor}`} />
+        <span className={`text-[10px] ${statusColor}`}>{statusLabel}</span>
+        <ChevronRight className={`h-3 w-3 shrink-0 transition-transform ${expanded ? "rotate-90" : ""}`} />
+      </button>
+      {expanded && tc.output && (
+        <div className="border-t border-border/40 px-2.5 py-2">
+          <div className="relative group">
+            <pre className="whitespace-pre-wrap break-words font-mono text-[10px] leading-relaxed text-muted-foreground max-h-40 overflow-auto">
+              {tc.output}
+            </pre>
+            <div className="absolute top-0.5 right-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+              <CopyButton value={tc.output} />
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+});
+
+/* ------------------------------------------------------------------ */
+/*  Patch badge (inside assistant messages)                            */
+/* ------------------------------------------------------------------ */
+const PatchBadge = memo(function PatchBadge({ files }: { files: string[] }) {
+  return (
+    <div className="flex items-center gap-1.5 rounded-lg border border-border/50 bg-muted/30 px-2.5 py-1.5 text-xs text-muted-foreground">
+      <FileDiff className="h-3 w-3 shrink-0 text-blue-500" />
+      <span className="font-medium text-foreground">Files changed:</span>
+      {files.map((f) => (
+        <span key={f} className="font-mono text-[10px] text-blue-500 truncate max-w-[12rem]">{f.split("/").pop() || f}</span>
+      ))}
+    </div>
+  );
+});
+
+/* ------------------------------------------------------------------ */
 /*  Tool call bubble                                                  */
 /* ------------------------------------------------------------------ */
 const ToolBubble = memo(function ToolBubble({ message }: { message: UiMessage }) {
@@ -510,26 +619,30 @@ const ToolBubble = memo(function ToolBubble({ message }: { message: UiMessage })
   );
 });
 
-const planTone: Record<UiTodo["status"], { text: string; border: string; bg: string }> = {
+const planTone: Record<UiTodo["status"], { text: string; border: string; bg: string; icon: string }> = {
   pending: {
-    text: "text-muted-foreground",
-    border: "border-border/60",
-    bg: "bg-background/70",
+    text: "text-muted-foreground/70",
+    border: "border-transparent",
+    bg: "",
+    icon: "text-muted-foreground/30",
   },
   in_progress: {
-    text: "text-foreground",
-    border: "border-primary/30",
+    text: "text-foreground font-medium",
+    border: "border-primary/20",
     bg: "bg-primary/5",
+    icon: "text-primary",
   },
   completed: {
-    text: "text-muted-foreground",
-    border: "border-emerald-500/20",
-    bg: "bg-emerald-500/5",
+    text: "text-muted-foreground/60",
+    border: "border-transparent",
+    bg: "",
+    icon: "text-emerald-500",
   },
   cancelled: {
-    text: "text-muted-foreground",
-    border: "border-amber-500/20",
-    bg: "bg-amber-500/5",
+    text: "text-muted-foreground/50",
+    border: "border-transparent",
+    bg: "",
+    icon: "text-amber-400",
   },
 };
 
@@ -560,10 +673,6 @@ const PlanPanel = memo(function PlanPanel({
   const scrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const done = useMemo(() => todos.filter((item) => item.status === "completed" || item.status === "cancelled").length, [todos]);
-  const current = useMemo(
-    () => todos.find((item) => item.status === "in_progress") ?? todos.find((item) => item.status === "pending") ?? null,
-    [todos],
-  );
   const progress = todos.length > 0 ? Math.round((done / todos.length) * 100) : 0;
   const allDone = todos.length > 0 && done === todos.length;
 
@@ -597,126 +706,67 @@ const PlanPanel = memo(function PlanPanel({
   }, []);
 
   return (
-    <div className="space-y-3 p-3">
-      <div className="rounded-2xl border border-border/70 bg-muted/20 p-3">
-        {/* Collapsible header */}
+    <div className="p-3 space-y-2">
+      {/* Header with progress */}
+      <div className="flex items-center justify-between px-1 pb-1">
         <button
           type="button"
-          role="button"
-          tabIndex={0}
           onClick={() => setCollapsed((c) => !c)}
-          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setCollapsed((c) => !c); } }}
-          className="flex w-full items-center gap-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary rounded-lg"
-          aria-expanded={!collapsed}
-          aria-label="Plan tracker"
+          className="flex items-center gap-2 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
         >
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
-              <CheckCircle2 className="h-3.5 w-3.5" />
-              Plan
-              {/* Phase badge */}
-              {phase !== "idle" && (
-                <Badge
-                  variant="outline"
-                  className={`ml-1 px-1.5 py-0 text-[10px] transition-all duration-200 ${
-                    phase === "plan"
-                      ? "border-amber-500/40 text-amber-500 bg-amber-500/10"
-                      : "border-blue-500/40 text-blue-500 bg-blue-500/10"
-                  }`}
-                >
-                  {phase === "plan" ? "Planning" : "Building"}
-                </Badge>
-              )}
-              <Badge variant="outline" className="ml-auto px-1 py-0 text-[10px]">
-                {done}/{todos.length}
-              </Badge>
-            </div>
-            {/* Active todo preview when collapsed */}
-            {current ? (
-              <div
-                className="mt-2 truncate text-sm font-medium text-foreground transition-all duration-300"
-                style={{ opacity: 1, transform: "translateY(0)" }}
-              >
-                {current.content}
-              </div>
-            ) : isSending ? (
-              <div className="mt-2 text-sm text-muted-foreground animate-pulse">
-                Waiting for plan&hellip;
-              </div>
-            ) : (
-              <div className="mt-2 text-sm text-muted-foreground">
-                {allDone ? "All tasks completed" : "No active tasks"}
-              </div>
-            )}
-          </div>
-          <div className="flex items-center gap-2">
-            {isSending && <LoaderCircle className="h-4 w-4 animate-spin text-primary" />}
-            <div
-              className="transition-transform duration-300"
-              style={{ transform: collapsed ? "rotate(-90deg)" : "rotate(0deg)" }}
-            >
-              <ChevronDown className="h-4 w-4 text-muted-foreground" />
-            </div>
-          </div>
+          <ChevronDown className={`h-3.5 w-3.5 transition-transform duration-200 ${collapsed ? "-rotate-90" : ""}`} />
+          {allDone ? "Completed" : `${done} of ${todos.length} done`}
         </button>
-
-        {/* Progress bar */}
-        <div
-          className="mt-3 h-1.5 overflow-hidden rounded-full bg-border/50"
-          role="progressbar"
-          aria-valuenow={done}
-          aria-valuemax={todos.length}
-          aria-label={`Plan progress: ${done} of ${todos.length} tasks completed`}
-        >
-          {isSending && todos.length === 0 ? (
-            /* Indeterminate shimmer when waiting for plan */
-            <div className="h-full w-full animate-pulse rounded-full bg-gradient-to-r from-transparent via-primary/40 to-transparent" />
-          ) : (
-            <div
-              className={`h-full rounded-full transition-all duration-[400ms] ${
-                allDone ? "bg-emerald-500" : "bg-primary"
-              }`}
-              style={{
-                width: `${progress}%`,
-                transitionTimingFunction: "cubic-bezier(0.34, 1, 0.64, 1)",
-              }}
-            />
-          )}
-        </div>
+        {phase !== "idle" && (
+          <Badge
+            variant="outline"
+            className={`px-2 py-0.5 text-[10px] font-semibold ${
+              phase === "plan"
+                ? "border-amber-500/40 text-amber-500 bg-amber-500/10"
+                : "border-blue-500/40 text-blue-500 bg-blue-500/10"
+            }`}
+          >
+            {phase === "plan" ? "PLANNING" : "BUILDING"}
+          </Badge>
+        )}
       </div>
 
-      {/* Todo list with collapse animation */}
+      {/* Progress bar */}
+      <div className="h-1 overflow-hidden rounded-full bg-border/30 mx-1">
+        {isSending && todos.length === 0 ? (
+          <div className="h-full w-full animate-pulse rounded-full bg-gradient-to-r from-transparent via-primary/40 to-transparent" />
+        ) : (
+          <div
+            className={`h-full rounded-full transition-all duration-500 ${allDone ? "bg-emerald-500" : "bg-primary"}`}
+            style={{ width: `${progress}%` }}
+          />
+        )}
+      </div>
+
+      {/* Todo list */}
       <div
         className="overflow-hidden transition-all duration-300"
         style={{
           maxHeight: collapsed ? 0 : contentHeight != null ? `${contentHeight}px` : "32rem",
           opacity: collapsed ? 0 : 1,
-          transitionTimingFunction: "cubic-bezier(0.4, 0, 0.2, 1)",
         }}
       >
         <div ref={contentRef}>
-          {/* Skeleton loading state */}
           {isSending && todos.length === 0 ? (
-            <div className="space-y-2" role="list" aria-label="Plan items loading">
+            <div className="space-y-1 py-1">
               {[1, 2, 3].map((i) => (
-                <div key={i} className="rounded-2xl border border-border/40 bg-muted/10 px-3 py-3 animate-pulse">
-                  <div className="flex items-start gap-3">
-                    <div className="mt-1 h-4 w-4 rounded-full bg-muted-foreground/20" />
-                    <div className="flex-1 space-y-2">
-                      <div className="h-4 w-3/4 rounded bg-muted-foreground/15" />
-                      <div className="h-3 w-1/3 rounded bg-muted-foreground/10" />
-                    </div>
-                  </div>
+                <div key={i} className="flex items-center gap-3 px-2 py-2 animate-pulse">
+                  <div className="h-4 w-4 rounded-full bg-muted-foreground/15" />
+                  <div className="h-3.5 flex-1 rounded bg-muted-foreground/10" style={{ width: `${60 + i * 10}%` }} />
                 </div>
               ))}
             </div>
           ) : (
             <div
               ref={listRef}
-              className="max-h-[32rem] space-y-2 overflow-y-auto pr-1"
+              className="max-h-[32rem] space-y-0.5 overflow-y-auto"
               onScroll={handleListScroll}
               role="list"
-              aria-label="Plan items"
             >
               {todos.map((todo, index) => {
                 const tone = planTone[todo.status];
@@ -726,25 +776,16 @@ const PlanPanel = memo(function PlanPanel({
                   <div
                     key={`${todo.content}-${index}`}
                     {...(isActive ? { "data-plan-active": true } : {})}
-                    className={`rounded-2xl border px-3 py-3 transition-colors duration-200 ${tone.border} ${tone.bg}`}
+                    className={`flex items-start gap-3 rounded-lg border px-3 py-2 transition-all duration-200 ${tone.border} ${tone.bg}`}
                     role="listitem"
-                    aria-checked={todo.status === "completed"}
                   >
-                    <div className="flex items-start gap-3">
-                      <div className="mt-0.5 flex h-5 w-5 flex-shrink-0 items-center justify-center">
-                        <PlanStatusIcon status={todo.status} />
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <div
-                          className={`relative text-sm leading-relaxed transition-opacity duration-200 ${tone.text} ${isDone ? "opacity-60" : ""}`}
-                        >
-                          <span className={isDone ? "plan-strikethrough" : ""}>{todo.content}</span>
-                        </div>
-                        <div className="mt-2 flex items-center gap-2 text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
-                          <Badge variant="outline" className="px-1 py-0 text-[10px]">{todo.status.replace("_", " ")}</Badge>
-                          <span>{todo.priority}</span>
-                        </div>
-                      </div>
+                    <div className="mt-0.5 flex h-4 w-4 flex-shrink-0 items-center justify-center">
+                      <PlanStatusIcon status={todo.status} />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <span className={`text-[13px] leading-snug ${tone.text} ${isDone ? "line-through" : ""}`}>
+                        {todo.content}
+                      </span>
                     </div>
                   </div>
                 );
@@ -874,9 +915,16 @@ export function ChatWorkbench({
   onSubmit,
   onCancel,
 }: ChatWorkbenchProps) {
+  const {
+    pendingQuestion, questionResponding, handleQuestionReply, handleQuestionReject,
+    followupSuggestions, followupSending, handleFollowupSend, handleFollowupEdit,
+  } = useChat();
+  const { chatFocused, setChatFocused } = useWorkspace();
+  const { token, namespace } = useConnection();
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const isAtBottomRef = useRef(true);
   const scrollContainerRef = useRef<HTMLElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const planDock = usePlanDock({ todos, isSending });
   const planOpen = planDock.visible;
@@ -890,6 +938,9 @@ export function ChatWorkbench({
   const [editingMemoryTopic, setEditingMemoryTopic] = useState("");
   const [editingMemoryContent, setEditingMemoryContent] = useState("");
   const [downloadingPath, setDownloadingPath] = useState<string | null>(null);
+  const [diffOpen, setDiffOpen] = useState(false);
+  const [diffContent, setDiffContent] = useState<string | null>(null);
+  const [diffLoading, setDiffLoading] = useState(false);
   const reachablePeers = useMemo(() => discoveryPeers.filter((peer) => peer.reachable), [discoveryPeers]);
   const activePeerValue = a2aTargetAgent && a2aTargetNamespace ? `${a2aTargetNamespace}/${a2aTargetAgent}` : "";
   const a2aMode = Boolean(a2aTargetAgent && a2aTargetNamespace);
@@ -927,7 +978,13 @@ export function ChatWorkbench({
 
   useEffect(() => {
     if (!isAtBottomRef.current || messages.length === 0) return;
-    messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
+    // Use requestAnimationFrame to ensure DOM has updated before scrolling
+    requestAnimationFrame(() => {
+      const viewport = scrollContainerRef.current;
+      if (viewport) {
+        viewport.scrollTop = viewport.scrollHeight;
+      }
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messages.length, messages[messages.length - 1]?.status, messages[messages.length - 1]?.content?.length]);
 
@@ -943,6 +1000,22 @@ export function ChatWorkbench({
     (path: string, filename?: string) => onDownloadArtifact(path, filename),
     [onDownloadArtifact],
   );
+
+  const handleDiffToggle = useCallback(async () => {
+    if (diffOpen) { setDiffOpen(false); return; }
+    const tid = summary?.threadId;
+    if (!tid || !agentName || !token) return;
+    setDiffOpen(true);
+    setDiffLoading(true);
+    try {
+      const diff = await fetchSessionDiff(token, namespace, agentName, tid);
+      setDiffContent(diff || null);
+    } catch {
+      setDiffContent(null);
+    } finally {
+      setDiffLoading(false);
+    }
+  }, [diffOpen, summary, agentName, token, namespace]);
 
   async function handleArtifactDownload(path: string, filename?: string) {
     try {
@@ -1008,6 +1081,18 @@ export function ChatWorkbench({
               Files
             </Button>
           )}
+          {runtimeKind === "opencode" && summary?.threadId && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-8 gap-1 rounded-full px-2 text-xs"
+              onClick={() => void handleDiffToggle()}
+            >
+              <FileDiff className="h-3.5 w-3.5" />
+              Changes
+            </Button>
+          )}
           {memoryCount > 0 && (
             <Button
               type="button"
@@ -1041,6 +1126,16 @@ export function ChatWorkbench({
           <Badge variant={streamMode ? "default" : "secondary"}>
             {streamMode ? "streaming" : "single-shot"}
           </Badge>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 rounded-full"
+            onClick={() => setChatFocused(!chatFocused)}
+            title={chatFocused ? "Exit focused mode" : "Focused mode"}
+          >
+            {chatFocused ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
+          </Button>
         </div>
       </div>
 
@@ -1051,11 +1146,11 @@ export function ChatWorkbench({
           onScrollCapture={(e) => {
             const el = e.currentTarget.querySelector("[data-radix-scroll-area-viewport]") as HTMLElement | null;
             if (el) {
-              isAtBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+              isAtBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
             }
           }}
         >
-          <div className="mx-auto flex w-full max-w-4xl flex-col gap-4 px-4 py-4" aria-label="Conversation history" aria-live="polite" aria-atomic="false">
+          <div className="mx-auto flex w-full max-w-4xl flex-col gap-5 px-4 py-6" aria-label="Conversation history" aria-live="polite" aria-atomic="false">
             {messages.length === 0 && (
               <EmptyState
                 icon={MessageSquare}
@@ -1122,6 +1217,45 @@ export function ChatWorkbench({
               ) : (
                 <div className="flex h-full items-center justify-center p-6 text-center text-sm text-muted-foreground">
                   OpenCode will populate this panel after it creates a todo plan for the current task.
+                </div>
+              )}
+            </ScrollArea>
+          </aside>
+        )}
+
+        {diffOpen && (
+          <aside className="absolute inset-y-3 right-3 z-10 flex w-[min(32rem,calc(100%-1.5rem))] flex-col overflow-hidden rounded-2xl border border-border/80 bg-background/96 shadow-2xl backdrop-blur-md">
+            <div className="flex items-center justify-between border-b border-border/60 px-3 py-2.5">
+              <div>
+                <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">Session</div>
+                <div className="text-sm font-semibold">File changes</div>
+              </div>
+              <Button type="button" variant="ghost" size="icon" className="h-7 w-7" onClick={() => setDiffOpen(false)}>
+                <PanelRightClose className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+            <ScrollArea className="min-h-0 flex-1">
+              {diffLoading ? (
+                <div className="flex items-center justify-center p-6">
+                  <LoaderCircle className="h-5 w-5 animate-spin text-muted-foreground" />
+                </div>
+              ) : diffContent ? (
+                <div className="p-3">
+                  <pre className="whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-muted-foreground">
+                    {diffContent.split("\n").map((line, idx) => {
+                      let lineClass = "";
+                      if (line.startsWith("+++") || line.startsWith("---")) lineClass = "text-muted-foreground font-semibold";
+                      else if (line.startsWith("+")) lineClass = "text-emerald-500 bg-emerald-500/10";
+                      else if (line.startsWith("-")) lineClass = "text-red-500 bg-red-500/10";
+                      else if (line.startsWith("@@")) lineClass = "text-blue-500";
+                      else if (line.startsWith("diff ")) lineClass = "text-foreground font-semibold mt-2 block";
+                      return <div key={idx} className={lineClass}>{line || "\u00A0"}</div>;
+                    })}
+                  </pre>
+                </div>
+              ) : (
+                <div className="flex items-center justify-center p-6 text-center text-sm text-muted-foreground">
+                  No file changes detected in this session.
                 </div>
               )}
             </ScrollArea>
@@ -1397,8 +1531,8 @@ export function ChatWorkbench({
       </div>
 
       {/* Composer */}
-      <div className="border-t border-border/70 bg-background/90 p-3 backdrop-blur-sm space-y-3">
-        {activeSessionId && (
+      <div className="border-t border-border/40 bg-background/95 px-4 py-3 backdrop-blur-md space-y-2">
+        {!chatFocused && activeSessionId && (
           <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-border/70 bg-muted/15 px-3 py-2 text-[11px] text-muted-foreground">
             <Brain className="h-3.5 w-3.5 text-primary" />
             <span className="font-medium text-foreground/85">Session continuity</span>
@@ -1417,6 +1551,8 @@ export function ChatWorkbench({
             </Button>
           </div>
         )}
+        {!chatFocused && (
+          <>
         {/* Toggle chips */}
         <div className="flex flex-wrap gap-2">
           <label className="flex items-center gap-1.5 cursor-pointer text-xs">
@@ -1827,27 +1963,84 @@ export function ChatWorkbench({
         )}
 
         <Separator />
+          </>
+        )}
+
+        {/* Question dock — blocks input when agent asks a question */}
+        {pendingQuestion && (
+          <QuestionDock
+            request={pendingQuestion}
+            responding={questionResponding}
+            onReply={handleQuestionReply}
+            onReject={handleQuestionReject}
+          />
+        )}
+
+        {/* Followup suggestions — quick-reply buttons */}
+        {!pendingQuestion && followupSuggestions.length > 0 && !isSending && (
+          <FollowupDock
+            items={followupSuggestions}
+            sending={followupSending}
+            onSend={handleFollowupSend}
+            onEdit={handleFollowupEdit}
+          />
+        )}
 
         {/* Prompt input */}
-        <Textarea
-          autoFocus
-          placeholder="Describe what you want the agent to do — e.g. 'Refactor the auth module to use JWT tokens' or 'Write unit tests for the payment service'..."
-          value={prompt}
-          onChange={(e) => onPromptChange(e.target.value)}
-          onKeyDown={(e) => {
-            if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && canSubmit && tokenReady && !isSending) {
-              e.preventDefault();
-              onSubmit();
-            }
-            if (e.key === "Escape" && prompt.trim()) {
-              e.preventDefault();
-              onPromptChange("");
-            }
-          }}
-          rows={3}
-          className="resize-none"
-          aria-label="Prompt"
-        />
+        <div className="relative mx-auto w-full max-w-4xl">
+          <div className="relative rounded-2xl border border-border/60 bg-muted/20 shadow-lg shadow-black/5 transition-colors focus-within:border-primary/30 focus-within:bg-muted/30">
+            <Textarea
+              ref={textareaRef}
+              autoFocus
+              placeholder={chatFocused ? "Message the agent…" : "Describe what you want the agent to do…"}
+              value={prompt}
+              onChange={(e) => {
+                onPromptChange(e.target.value);
+                const el = e.target;
+                el.style.height = "auto";
+                el.style.height = Math.min(el.scrollHeight, 200) + "px";
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey && canSubmit && tokenReady && !isSending) {
+                  e.preventDefault();
+                  onSubmit();
+                  if (textareaRef.current) { textareaRef.current.style.height = "auto"; }
+                }
+                if (e.key === "Escape" && prompt.trim()) {
+                  e.preventDefault();
+                  onPromptChange("");
+                  if (textareaRef.current) { textareaRef.current.style.height = "auto"; }
+                }
+              }}
+              rows={1}
+              className="resize-none border-0 bg-transparent pr-12 pl-4 py-3 min-h-[2.75rem] max-h-[200px] overflow-y-auto focus-visible:ring-0 focus-visible:ring-offset-0 placeholder:text-muted-foreground/50"
+              aria-label="Prompt"
+            />
+            <div className="absolute right-2 bottom-2">
+              {isSending ? (
+                <Button
+                  variant="destructive"
+                  size="icon"
+                  onClick={onCancel}
+                  aria-label="Stop request"
+                  className="h-8 w-8 rounded-full transition-transform duration-150 active:scale-95 shadow-sm"
+                >
+                  <Square className="h-4 w-4" />
+                </Button>
+              ) : (
+                <Button
+                  size="icon"
+                  onClick={onSubmit}
+                  disabled={!agentName || !canSubmit || !tokenReady}
+                  aria-label="Send message (Enter)"
+                  className="h-8 w-8 rounded-full transition-transform duration-150 active:scale-95 shadow-sm"
+                >
+                  <ArrowUp className="h-4 w-4" />
+                </Button>
+              )}
+            </div>
+          </div>
+        </div>
 
         {error && (
           <div role="alert" className="flex items-center gap-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-1.5 text-xs text-destructive">
@@ -1866,39 +2059,19 @@ export function ChatWorkbench({
           </div>
         )}
 
-        <div className="flex items-center justify-between gap-3">
-          <p className="text-[11px] text-muted-foreground flex-1">
-            {!tokenReady
-              ? "Enter a gateway token before sending chat requests."
-              : specialistMode
-                ? "This request coordinates the specialist team."
-                : a2aMode
-                  ? "Request routes through the configured A2A target."
-                  : "Authenticated requests via the API gateway."}
-          </p>
-          {isSending ? (
-            <Button
-              variant="destructive"
-              onClick={onCancel}
-              aria-label="Stop request"
-              className="animate-scale-in transition-transform duration-150 active:scale-95"
-            >
-              <Square className="mr-1.5 h-4 w-4" />
-              Stop
-            </Button>
-          ) : (
-            <Button
-              onClick={onSubmit}
-              disabled={!agentName || !canSubmit || !tokenReady}
-              aria-label="Send message (Cmd+Enter)"
-              className="transition-transform duration-150 active:scale-95"
-            >
-              <Send className="mr-1.5 h-4 w-4" />
-              Send
-              <kbd className="ml-2 text-[10px] rounded px-1 py-0.5 bg-primary-foreground/20 hidden sm:inline">⌘↵</kbd>
-            </Button>
-          )}
-        </div>
+        {!chatFocused && (
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-[11px] text-muted-foreground flex-1">
+              {!tokenReady
+                ? "Enter a gateway token before sending chat requests."
+                : specialistMode
+                  ? "This request coordinates the specialist team."
+                  : a2aMode
+                    ? "Request routes through the configured A2A target."
+                    : "Authenticated requests via the API gateway."}
+            </p>
+          </div>
+        )}
       </div>
     </div>
   );

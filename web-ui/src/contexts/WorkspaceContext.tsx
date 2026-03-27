@@ -110,6 +110,8 @@ export interface WorkspaceContextValue {
   setAgentViewTab: (tab: "config" | "chat") => void;
   configPanelCollapsed: boolean;
   setConfigPanelCollapsed: (collapsed: boolean) => void;
+  chatFocused: boolean;
+  setChatFocused: (focused: boolean) => void;
 
   // Create-agent form
   createAgentName: string;
@@ -226,6 +228,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [agentViewTab, setAgentViewTab] = useState<"config" | "chat">("chat");
   const [configPanelCollapsed, setConfigPanelCollapsed] = useState(false);
+  const [chatFocused, setChatFocused] = useState(false);
 
   // Create-agent form
   const [createAgentName, setCreateAgentName] = useState(DEFAULT_AGENT_NAME);
@@ -708,7 +711,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     catalogLoading, workspaceError, setWorkspaceError, agentManageError, setAgentManageError, workflowError, evalError,
     discoverablePeers, discoveryLoading, discoveryError,
     savingAgent, deletingAgent, isCreatingAgent, savingWorkflow, deletingWorkflow, runningWorkflow, cancellingWorkflow, savingEval, deletingEval,
-    sidebarCollapsed, setSidebarCollapsed, inspectorOpen, setInspectorOpen, agentViewTab, setAgentViewTab, configPanelCollapsed, setConfigPanelCollapsed,
+    sidebarCollapsed, setSidebarCollapsed, inspectorOpen, setInspectorOpen, agentViewTab, setAgentViewTab, configPanelCollapsed, setConfigPanelCollapsed, chatFocused, setChatFocused,
     createAgentName, createAgentModel, createAgentSystemPrompt, createAgentRuntimeKind,
     createAgentMcpServersText, createAgentMcpSidecarsText, createAgentA2AAllowedCallersText,
     createAgentSkillFileDrafts, createAgentGooseConfigFileDrafts, createAgentOpenCodeConfigFileDrafts, createAgentGitForm, createAgentGitHubForm, createError,
@@ -726,7 +729,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     catalogLoading, workspaceError, agentManageError, workflowError, evalError,
     discoverablePeers, discoveryLoading, discoveryError,
     savingAgent, deletingAgent, isCreatingAgent, savingWorkflow, deletingWorkflow, runningWorkflow, cancellingWorkflow, savingEval, deletingEval,
-    sidebarCollapsed, inspectorOpen, agentViewTab, configPanelCollapsed,
+    sidebarCollapsed, inspectorOpen, agentViewTab, configPanelCollapsed, chatFocused,
     createAgentName, createAgentModel, createAgentSystemPrompt, createAgentRuntimeKind,
     createAgentMcpServersText, createAgentMcpSidecarsText, createAgentA2AAllowedCallersText,
     createAgentSkillFileDrafts, createAgentGooseConfigFileDrafts, createAgentOpenCodeConfigFileDrafts, createAgentGitForm, createAgentGitHubForm, createError,

@@ -29,19 +29,19 @@ codexRuntime:
 opencodeRuntime:
   image:
     repository: localhost/kubeminionagents/ai-opencode-runtime
-    tag: dev
+    tag: dev6
     pullPolicy: IfNotPresent
 
 apiGateway:
   image:
     repository: localhost/kubeminionagents/ai-api-gateway
-    tag: dev
+    tag: dev6
     pullPolicy: IfNotPresent
 
 webUi:
   image:
-    repository: localhost/kubeminionagents/ai-agent-sandbox-web-ui
-    tag: dev
+    repository: localhost/kubeminionagents/ai-web-ui
+    tag: dev6
     pullPolicy: IfNotPresent
 
 mcpHub:

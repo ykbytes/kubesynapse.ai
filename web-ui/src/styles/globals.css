@@ -680,3 +680,102 @@ body::before {
   opacity: 0.5;
   animation: plan-strike 300ms ease-out forwards;
 }
+
+/* ── Highlight.js dark theme (GitHub Dark Dimmed) ── */
+.hljs {
+  color: #adbac7;
+  background: transparent;
+}
+.hljs-comment,
+.hljs-quote { color: #768390; font-style: italic; }
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-built_in { color: #f47067; }
+.hljs-string,
+.hljs-attr,
+.hljs-template-tag,
+.hljs-template-variable { color: #96d0ff; }
+.hljs-literal,
+.hljs-number { color: #6cb6ff; }
+.hljs-name,
+.hljs-tag { color: #8ddb8c; }
+.hljs-title,
+.hljs-section,
+.hljs-selector-id { color: #f69d50; font-weight: 600; }
+.hljs-title.class_,
+.hljs-type { color: #f69d50; }
+.hljs-subst { color: #adbac7; }
+.hljs-symbol,
+.hljs-regexp,
+.hljs-link { color: #6cb6ff; }
+.hljs-variable,
+.hljs-deletion { color: #f47067; }
+.hljs-addition { color: #8ddb8c; }
+.hljs-meta { color: #636e7b; }
+.hljs-meta .hljs-keyword { color: #f47067; }
+.hljs-meta .hljs-string { color: #96d0ff; }
+.hljs-emphasis { font-style: italic; }
+.hljs-strong { font-weight: 700; }
+.hljs-function { color: #dcbdfb; }
+.hljs-params { color: #adbac7; }
+.hljs-attr { color: #6cb6ff; }
+.hljs-attribute { color: #96d0ff; }
+.hljs-selector-class { color: #6cb6ff; }
+.hljs-punctuation { color: #768390; }
+.hljs-operator { color: #f47067; }
+.hljs-property { color: #6cb6ff; }
+
+/* ── Markdown body prose styles ── */
+.markdown-body {
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+}
+.markdown-body > *:first-child { margin-top: 0; }
+.markdown-body > *:last-child { margin-bottom: 0; }
+
+/* Code block wrapper */
+.mk-code-block {
+  font-size: 0;
+}
+.mk-code-block code {
+  display: block;
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre;
+  tab-size: 2;
+}
+
+/* Table styling */
+.mk-table {
+  border-collapse: collapse;
+}
+.mk-table tr:nth-child(even) {
+  background: oklch(0.18 0.008 274 / 0.5);
+}
+
+/* Task list checkboxes (from remark-gfm) */
+.markdown-body input[type="checkbox"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border: 2px solid oklch(0.40 0.012 274);
+  border-radius: 4px;
+  vertical-align: middle;
+  margin-right: 6px;
+  position: relative;
+  cursor: default;
+}
+.markdown-body input[type="checkbox"]:checked {
+  background: oklch(0.65 0.13 175);
+  border-color: oklch(0.65 0.13 175);
+}
+.markdown-body input[type="checkbox"]:checked::after {
+  content: "✓";
+  position: absolute;
+  top: -1px;
+  left: 2px;
+  font-size: 11px;
+  color: oklch(0.145 0.008 274);
+  font-weight: 700;
+}

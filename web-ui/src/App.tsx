@@ -453,7 +453,7 @@ function AppLayout() {
               </div>
             ) : (
               <>
-                {ws.selectedAgentName && (
+                {ws.selectedAgentName && !ws.chatFocused && (
                   <div className="mb-2 flex gap-1 2xl:hidden">
                     <Button
                       variant={ws.agentViewTab === "config" ? "secondary" : "ghost"}
@@ -469,7 +469,7 @@ function AppLayout() {
                 )}
 
                 <div className="flex min-h-0 flex-1 min-w-0 gap-0 overflow-hidden">
-                  <div className={`${ws.selectedAgentName ? "hidden 2xl:flex" : "flex"} ${ws.agentViewTab === "config" ? "flex" : "hidden 2xl:flex"} ${ws.configPanelCollapsed ? "2xl:hidden" : "w-full 2xl:max-w-[48rem] 2xl:basis-[44%]"} min-w-0 flex-col overflow-auto`}>
+                  <div className={`${ws.selectedAgentName ? "hidden 2xl:flex" : "flex"} ${ws.agentViewTab === "config" ? "flex" : "hidden 2xl:flex"} ${ws.configPanelCollapsed || ws.chatFocused ? "2xl:hidden" : "w-full 2xl:max-w-[48rem] 2xl:basis-[44%]"} min-w-0 flex-col overflow-auto`}>
                     {ws.selectedAgentDetail ? (
                       <ContentShell>
                         <AgentManagementPanel
@@ -502,7 +502,8 @@ function AppLayout() {
                   </div>
 
                   {ws.selectedAgentName && (
-                    <div className={`${ws.agentViewTab === "chat" ? "flex" : "hidden 2xl:flex"} w-full min-w-0 ${ws.configPanelCollapsed ? "2xl:w-full" : "2xl:flex-1"} flex-row min-h-0`}>
+                    <div className={`${ws.agentViewTab === "chat" ? "flex" : "hidden 2xl:flex"} w-full min-w-0 ${ws.configPanelCollapsed || ws.chatFocused ? "2xl:w-full" : "2xl:flex-1"} flex-row min-h-0`}>
+                      {!ws.chatFocused && (
                       <Button
                         variant="ghost"
                         size="icon"
@@ -512,6 +513,8 @@ function AppLayout() {
                       >
                         {ws.configPanelCollapsed ? <PanelLeftOpen className="h-3.5 w-3.5" /> : <PanelLeftClose className="h-3.5 w-3.5" />}
                       </Button>
+                      )}
+                      {!ws.chatFocused && (
                       <ContentShell>
                         <ChatSessionPanel
                           sessions={chat.chatSessions}
@@ -529,6 +532,7 @@ function AppLayout() {
                           onSaveCurrent={() => void chat.handleSaveCurrentSession()}
                         />
                       </ContentShell>
+                      )}
                       <ContentShell>
                         <ChatWorkbench
                           agentName={ws.selectedAgentName}

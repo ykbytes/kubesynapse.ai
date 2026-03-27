@@ -103,8 +103,10 @@ export function SettingsPanel({ token, canManageProviders }: SettingsPanelProps)
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const p = await fetchLLMProviders(token).catch(() => [] as LLMProvider[]);
+      const p = await fetchLLMProviders(token);
       setProviders(p);
+    } catch {
+      toast.error("Failed to load LLM providers");
     } finally {
       setLoading(false);
     }

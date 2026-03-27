@@ -5818,6 +5818,103 @@ async def get_agent_todos(
     return JSONResponse(content=response.json(), headers=resp_headers)
 
 
+@app.get("/api/agents/{agent_name}/diff")
+async def get_agent_diff(
+    agent_name: str,
+    thread_id: str,
+    namespace: str = "default",
+    user=Depends(verify_token),
+):
+    """Return the unified diff of file changes for the given agent thread."""
+    ensure_namespace_access(user, namespace)
+    await asyncio.to_thread(read_agent, agent_name, namespace)
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0), trust_env=False) as client:
+            response = await client.get(
+                f"{agent_runtime_url(agent_name, namespace)}/diff",
+                params={"thread_id": thread_id},
+            )
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to fetch session diff: {exc}") from exc
+    if response.status_code == 404:
+        raise HTTPException(status_code=404, detail="Agent thread not found")
+    if response.status_code >= 400:
+        detail = error_payload_from_body(await response.aread(), "Agent diff request failed")
+        raise HTTPException(status_code=response.status_code, detail=detail.get("error") or "Agent diff request failed")
+    return JSONResponse(content=response.json())
+
+
+@app.get("/api/agents/{agent_name}/question")
+async def get_agent_questions(
+    agent_name: str,
+    namespace: str = "default",
+    user=Depends(verify_token),
+):
+    """List pending question requests for an agent."""
+    ensure_namespace_access(user, namespace)
+    await asyncio.to_thread(read_agent, agent_name, namespace)
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0), trust_env=False) as client:
+            response = await client.get(
+                f"{agent_runtime_url(agent_name, namespace)}/question",
+            )
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to fetch agent questions: {exc}") from exc
+    if response.status_code >= 400:
+        detail = error_payload_from_body(await response.aread(), "Agent question request failed")
+        raise HTTPException(status_code=response.status_code, detail=detail.get("error") or "Agent question request failed")
+    return JSONResponse(content=response.json())
+
+
+@app.post("/api/agents/{agent_name}/question/{request_id}/reply")
+async def reply_agent_question(
+    agent_name: str,
+    request_id: str,
+    request: Request,
+    namespace: str = "default",
+    user=Depends(verify_token),
+):
+    """Reply to a pending question request."""
+    ensure_namespace_access(user, namespace)
+    await asyncio.to_thread(read_agent, agent_name, namespace)
+    body = await request.json()
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0), trust_env=False) as client:
+            response = await client.post(
+                f"{agent_runtime_url(agent_name, namespace)}/question/{request_id}/reply",
+                json=body,
+            )
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to reply to question: {exc}") from exc
+    if response.status_code >= 400:
+        detail = error_payload_from_body(await response.aread(), "Question reply failed")
+        raise HTTPException(status_code=response.status_code, detail=detail.get("error") or "Question reply failed")
+    return JSONResponse(content=response.json())
+
+
+@app.post("/api/agents/{agent_name}/question/{request_id}/reject")
+async def reject_agent_question(
+    agent_name: str,
+    request_id: str,
+    namespace: str = "default",
+    user=Depends(verify_token),
+):
+    """Reject a pending question request."""
+    ensure_namespace_access(user, namespace)
+    await asyncio.to_thread(read_agent, agent_name, namespace)
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0), trust_env=False) as client:
+            response = await client.post(
+                f"{agent_runtime_url(agent_name, namespace)}/question/{request_id}/reject",
+            )
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to reject question: {exc}") from exc
+    if response.status_code >= 400:
+        detail = error_payload_from_body(await response.aread(), "Question reject failed")
+        raise HTTPException(status_code=response.status_code, detail=detail.get("error") or "Question reject failed")
+    return JSONResponse(content=response.json())
+
+
 @app.get("/api/agents/{agent_name}/artifacts/download")
 async def download_agent_artifact(
     agent_name: str,
@@ -6208,48 +6305,54 @@ async def _fetch_copilot_models(copilot_token: str) -> list[dict[str, str]]:
         return _copilot_model_cache
 
     try:
-        session_token, api_endpoint = await _exchange_copilot_session_token(copilot_token)
-        models_url = f"{api_endpoint.rstrip('/')}/models" if api_endpoint else "https://api.githubcopilot.com/models"
-        async with httpx.AsyncClient(timeout=15.0, trust_env=False, verify=_outbound_ssl_verify()) as client:
-            resp = await client.get(
-                models_url,
-                headers={
-                    "Authorization": f"Bearer {session_token}",
-                    "Accept": "application/json",
-                    "User-Agent": "GitHubCopilotChat/0.25.2024",
-                    "Editor-Version": "vscode/1.96.2",
-                    "Editor-Plugin-Version": "copilot-chat/0.25.2024",
-                    "Copilot-Integration-Id": "vscode-chat",
-                    "Openai-Intent": "conversation-edits",
-                },
+        # Try exchanging for a Copilot session token; fall back to using the
+        # OAuth token directly (works for personal GitHub tokens with Copilot).
+        session_token = copilot_token
+        models_url = "https://api.githubcopilot.com/models"
+        try:
+            exchanged, api_endpoint = await _exchange_copilot_session_token(copilot_token)
+            session_token = exchanged
+            if api_endpoint:
+                models_url = f"{api_endpoint.rstrip('/')}/models"
+        except Exception as exc:
+            logger.info("Copilot token exchange failed, using OAuth token directly: %s", exc)
+        data = await _copilot_get_json(
+            models_url,
+            {
+                "Authorization": f"Bearer {session_token}",
+                "Accept": "application/json",
+                "User-Agent": "GitHubCopilotChat/0.25.2024",
+                "Editor-Version": "vscode/1.96.2",
+                "Editor-Plugin-Version": "copilot-chat/0.25.2024",
+                "Copilot-Integration-Id": "vscode-chat",
+                "Openai-Intent": "conversation-edits",
+            },
+        )
+        models_raw = data if isinstance(data, list) else data.get("data", data.get("models", []))
+        result: list[dict[str, str]] = []
+        for m in models_raw:
+            model_id = m.get("id", "") if isinstance(m, dict) else str(m)
+            if not model_id:
+                continue
+            name = m.get("name", model_id) if isinstance(m, dict) else model_id
+            caps = m.get("capabilities", {}) if isinstance(m, dict) else {}
+            family = m.get("model_picker_label", m.get("family", "")) if isinstance(m, dict) else ""
+            desc_parts: list[str] = []
+            if family:
+                desc_parts.append(family)
+            if caps.get("type"):
+                desc_parts.append(caps["type"])
+            result.append(
+                {
+                    "model_id": model_id,
+                    "display_name": name,
+                    "description": " · ".join(desc_parts) if desc_parts else "Copilot model",
+                }
             )
-            resp.raise_for_status()
-            data = resp.json()
-            models_raw = data if isinstance(data, list) else data.get("data", data.get("models", []))
-            result: list[dict[str, str]] = []
-            for m in models_raw:
-                model_id = m.get("id", "") if isinstance(m, dict) else str(m)
-                if not model_id:
-                    continue
-                name = m.get("name", model_id) if isinstance(m, dict) else model_id
-                caps = m.get("capabilities", {}) if isinstance(m, dict) else {}
-                family = m.get("model_picker_label", m.get("family", "")) if isinstance(m, dict) else ""
-                desc_parts: list[str] = []
-                if family:
-                    desc_parts.append(family)
-                if caps.get("type"):
-                    desc_parts.append(caps["type"])
-                result.append(
-                    {
-                        "model_id": model_id,
-                        "display_name": name,
-                        "description": " · ".join(desc_parts) if desc_parts else "Copilot model",
-                    }
-                )
-            _copilot_model_cache = result
-            _copilot_cache_ts = now
-            logger.info("Fetched %d models from GitHub Copilot API", len(result))
-            return result
+        _copilot_model_cache = result
+        _copilot_cache_ts = now
+        logger.info("Fetched %d models from GitHub Copilot API", len(result))
+        return result
     except Exception as exc:
         logger.warning("Failed to fetch Copilot models: %s", exc)
         return _copilot_model_cache  # return stale cache on error
@@ -6491,9 +6594,10 @@ async def llm_health(user=Depends(verify_token)):
 
 
 @app.get("/api/llm/models")
-async def llm_list_models(user=Depends(verify_token)):
+async def llm_list_models(response: Response, user=Depends(verify_token)):
     """List model deployments configured in LiteLLM."""
     ensure_role(user, "viewer")
+    response.headers["Cache-Control"] = "no-store"
     try:
         async with httpx.AsyncClient(timeout=_LLM_PROXY_TIMEOUT, trust_env=False) as client:
             resp = await client.get(f"{LITELLM_INTERNAL_URL}/model/info", headers=_litellm_headers())
@@ -6626,9 +6730,10 @@ class ProviderModelAdd(BaseModel):
 
 
 @app.get("/api/llm/providers")
-async def llm_list_providers(user=Depends(verify_token)):
+async def llm_list_providers(response: Response, user=Depends(verify_token)):
     """Unified provider view: merges model list + key status grouped by provider."""
     ensure_role(user, "viewer")
+    response.headers["Cache-Control"] = "no-store"
 
     # Fetch models from LiteLLM
     models_by_provider: dict[str, list[dict[str, Any]]] = {k: [] for k in _PROVIDER_META}

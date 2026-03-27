@@ -30,13 +30,13 @@ codexRuntime:
 opencodeRuntime:
   image:
     repository: localhost/kubeminionagents/ai-opencode-runtime
-    tag: dev
+    tag: dev8
     pullPolicy: IfNotPresent
 
 apiGateway:
   image:
     repository: localhost/kubeminionagents/ai-api-gateway
-    tag: dev
+    tag: dev8
     pullPolicy: IfNotPresent
   auth:
     mode: shared_token
@@ -45,7 +45,7 @@ webUi:
   enabled: true
   image:
     repository: localhost/kubeminionagents/ai-agent-sandbox-web-ui
-    tag: dev
+    tag: dev9
     pullPolicy: IfNotPresent
 
 platformSecrets:

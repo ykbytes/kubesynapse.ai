@@ -15,9 +15,9 @@ export type DockState = "hide" | "open" | "close" | "clear";
 interface UsePlanDockOptions {
   todos: UiTodo[];
   isSending: boolean;
-  /** Delay in ms before auto-hiding after completion (default: 400) */
+  /** Delay in ms before auto-hiding after completion (default: 5000) */
   closeDelay?: number;
-  /** Delay in ms before clearing idle todos (default: 400) */
+  /** Delay in ms before clearing idle todos (default: 8000) */
   clearDelay?: number;
 }
 
@@ -44,8 +44,8 @@ function computeDockState(count: number, done: number, isSending: boolean): Dock
 export function usePlanDock({
   todos,
   isSending,
-  closeDelay = 400,
-  clearDelay = 400,
+  closeDelay = 5000,
+  clearDelay = 8000,
 }: UsePlanDockOptions): PlanDockResult {
   const [visible, setVisible] = useState(false);
   const [manualOverride, setManualOverride] = useState(false);
@@ -98,7 +98,11 @@ export function usePlanDock({
     }
 
     if (state === "clear") {
-      // Idle with todos — hold visible briefly then hide
+      // Idle with todos — hold visible briefly then hide (unless user manually opened)
+      if (manualOverride) {
+        prevCountRef.current = count;
+        return;
+      }
       timerRef.current = setTimeout(() => {
         setVisible(false);
         setManualOverride(false);

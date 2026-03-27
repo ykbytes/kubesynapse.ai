@@ -403,6 +403,29 @@ def invoke_opencode(request: InvokeRequest, stream_callback: StreamCallback = No
             if reasoning_text:
                 _emit("response.reasoning", {"turn": turn + 1, "reasoning": reasoning_text})
 
+            # Emit structured tool call and patch events
+            for part in parts:
+                if not isinstance(part, dict):
+                    continue
+                part_type = part.get("type")
+                if part_type == "tool":
+                    state = part.get("state") or {}
+                    if isinstance(state, dict):
+                        _emit("response.tool_call", {
+                            "turn": turn + 1,
+                            "tool": str(part.get("tool", "")),
+                            "status": str(state.get("status", "unknown")),
+                            "input": state.get("input"),
+                            "output": truncate_text(str(state.get("output", "")), 4000),
+                            "source": "opencode",
+                        })
+                elif part_type == "patch":
+                    _emit("response.patch", {
+                        "turn": turn + 1,
+                        "files": part.get("files") or [],
+                        "source": "opencode",
+                    })
+
         if current_agent == "plan" and completion in ("completed", "incomplete"):
             current_agent = DEFAULT_AGENT
             if completion == "completed":

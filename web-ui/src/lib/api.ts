@@ -201,6 +201,7 @@ function buildAuthenticatedInit(token?: string, requestId?: string, init: Reques
     headers.set("X-Request-Id", requestId);
   }
   return buildCredentialedInit({
+    cache: "no-store" as RequestCache,
     ...init,
     headers,
   });
@@ -2121,6 +2122,72 @@ export async function pollAgentTodos(
     return Array.isArray(record.todos) ? (record.todos as Array<Record<string, unknown>>) : [];
   });
   return { todos, etag: newEtag };
+}
+
+/* ── Session Diff API ── */
+
+export async function fetchSessionDiff(
+  token: string,
+  namespace: string,
+  agentName: string,
+  threadId: string,
+): Promise<string> {
+  const response = await fetchAuthenticated(
+    buildUrl(`/api/agents/${agentName}/diff?thread_id=${encodeURIComponent(threadId)}`, namespace),
+    token,
+  );
+  return parseJsonResponse(response, (payload) => {
+    const record = expectRecord(payload, "Session diff response");
+    return typeof record.diff === "string" ? record.diff : "";
+  });
+}
+
+/* ── Question / HITL API ── */
+
+export async function fetchPendingQuestions(
+  token: string,
+  namespace: string,
+  agentName: string,
+): Promise<Array<Record<string, unknown>>> {
+  const response = await fetchAuthenticated(
+    buildUrl(`/api/agents/${agentName}/question`, namespace),
+    token,
+  );
+  return parseJsonResponse(response, (payload) => {
+    if (Array.isArray(payload)) return payload as Array<Record<string, unknown>>;
+    return [];
+  });
+}
+
+export async function replyToQuestion(
+  token: string,
+  namespace: string,
+  agentName: string,
+  requestId: string,
+  answers: string[][],
+): Promise<void> {
+  await fetchAuthenticated(
+    buildUrl(`/api/agents/${agentName}/question/${encodeURIComponent(requestId)}/reply`, namespace),
+    token,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ answers }),
+    },
+  );
+}
+
+export async function rejectQuestion(
+  token: string,
+  namespace: string,
+  agentName: string,
+  requestId: string,
+): Promise<void> {
+  await fetchAuthenticated(
+    buildUrl(`/api/agents/${agentName}/question/${encodeURIComponent(requestId)}/reject`, namespace),
+    token,
+    { method: "POST" },
+  );
 }
 
 export async function streamAgentInvoke(options: StreamHandlers): Promise<void> {

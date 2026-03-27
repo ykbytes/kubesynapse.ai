@@ -235,7 +235,7 @@ def init_session(session_id: str, model_ref: str | None = None) -> bool:
                 json={
                     "providerID": model_payload["providerID"],
                     "modelID": model_payload["modelID"],
-                    "messageID": str(uuid.uuid4()),
+                    "messageID": f"msg_{uuid.uuid4().hex}",
                 },
             )
             return response.status_code == 200
@@ -257,3 +257,65 @@ def get_session_todos(session_id: str) -> list[dict[str, Any]]:
     except (httpx.HTTPError, ValueError):
         pass
     return []
+
+
+def list_pending_questions() -> list[dict[str, Any]]:
+    """Fetch pending question requests from the OpenCode server."""
+    try:
+        with runtime_http_client() as hclient:
+            response = hclient.get("/question")
+            if response.status_code != 200:
+                return []
+            payload = response.json()
+            if isinstance(payload, list):
+                return [item for item in payload if isinstance(item, dict)]
+    except (httpx.HTTPError, ValueError):
+        pass
+    return []
+
+
+def reply_to_question(request_id: str, answers: list[list[str]]) -> bool:
+    """Submit answers to a pending question request."""
+    try:
+        with runtime_http_client() as hclient:
+            response = hclient.post(
+                f"/question/{request_id}/reply",
+                json={"answers": answers},
+            )
+            return response.status_code == 200
+    except httpx.HTTPError:
+        logger.warning("Failed to reply to question %s", request_id)
+        return False
+
+
+def reject_question(request_id: str) -> bool:
+    """Reject a pending question request."""
+    try:
+        with runtime_http_client() as hclient:
+            response = hclient.post(f"/question/{request_id}/reject")
+            return response.status_code == 200
+    except httpx.HTTPError:
+        logger.warning("Failed to reject question %s", request_id)
+        return False
+
+
+def get_session_diff(session_id: str) -> str:
+    """Fetch the unified diff of file changes for a session."""
+    try:
+        with runtime_http_client() as hclient:
+            response = hclient.get(f"/session/{session_id}/diff")
+            if response.status_code != 200:
+                return ""
+            # The diff endpoint may return plain text or JSON
+            content_type = response.headers.get("content-type", "")
+            if "json" in content_type:
+                payload = response.json()
+                if isinstance(payload, str):
+                    return payload
+                if isinstance(payload, dict):
+                    return str(payload.get("diff", payload.get("content", "")))
+                return str(payload)
+            return response.text
+    except (httpx.HTTPError, ValueError):
+        logger.warning("Failed to get session diff for %s", session_id)
+        return ""

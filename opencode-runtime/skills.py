@@ -260,7 +260,13 @@ def build_generated_config(sidecars: list[dict[str, Any]]) -> tuple[dict[str, An
         "agent": {
             "build": {
                 "steps": DEFAULT_AGENT_STEPS,
-            }
+            },
+            "code": {
+                "steps": DEFAULT_AGENT_STEPS,
+            },
+            "plan": {
+                "steps": DEFAULT_AGENT_STEPS,
+            },
         },
     }
     if mcp_config:

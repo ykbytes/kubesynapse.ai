@@ -496,6 +496,13 @@ def verify_shared_token(token: str) -> dict[str, Any]:
 async def authenticate_bearer_token(token: str) -> dict[str, Any]:
     """Route token verification through the configured auth mode."""
     if AUTH_MODE == "shared_token":
+        # If local auth is also enabled and the token looks like a JWT,
+        # try local verification first (supports password-login sessions).
+        if local_access_enabled() and token.count(".") == 2:
+            try:
+                return verify_local_access_token(token)
+            except HTTPException:
+                pass
         return verify_shared_token(token)
     if AUTH_MODE == "oidc":
         return await verify_oidc_token(token)

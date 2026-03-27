@@ -20,6 +20,7 @@ from typing import Any
 import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from pydantic import BaseModel
 
 # ---------------------------------------------------------------------------
 # Re-exports for backward compatibility (tests import from main.py)
@@ -115,10 +116,14 @@ from opencode_client import (  # noqa: F401 — re-exported
     create_remote_session,
     ensure_remote_session,
     ensure_server_running,
+    get_session_diff,
     get_session_messages,
     get_session_status,
     get_session_todos,
     init_session,
+    list_pending_questions,
+    reject_question,
+    reply_to_question,
     runtime_http_client,
     send_prompt,
     summarize_session,
@@ -469,6 +474,52 @@ def get_todo_state(thread_id: str | None = None, request: Request = None) -> JSO
     return JSONResponse(content=body, headers={"ETag": f'"{etag}"'})
 
 
+@app.get("/question")
+def get_pending_questions() -> list[dict[str, Any]]:
+    """Return all pending question requests from the OpenCode server."""
+    ensure_server_running()
+    return list_pending_questions()
+
+
+class QuestionReplyBody(BaseModel):
+    answers: list[list[str]]
+
+
+@app.post("/question/{request_id}/reply")
+def post_question_reply(request_id: str, body: QuestionReplyBody) -> dict[str, Any]:
+    """Reply to a pending question request."""
+    ensure_server_running()
+    ok = reply_to_question(request_id, body.answers)
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"Question '{request_id}' not found or reply failed")
+    return {"status": "replied", "request_id": request_id}
+
+
+@app.post("/question/{request_id}/reject")
+def post_question_reject(request_id: str) -> dict[str, Any]:
+    """Reject a pending question request."""
+    ensure_server_running()
+    ok = reject_question(request_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"Question '{request_id}' not found or reject failed")
+    return {"status": "rejected", "request_id": request_id}
+
+
+@app.get("/diff")
+def get_diff(thread_id: str | None = None) -> dict[str, Any]:
+    """Return the unified diff of file changes for the given thread."""
+    if not thread_id:
+        raise HTTPException(status_code=400, detail="thread_id query parameter is required")
+    session_id = SESSION_REGISTRY.get(thread_id)
+    if session_id is None:
+        raise HTTPException(status_code=404, detail=f"No session found for thread_id '{thread_id}'")
+    try:
+        diff_text = get_session_diff(session_id)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to fetch session diff: {exc}") from exc
+    return {"thread_id": thread_id, "session_id": session_id, "diff": diff_text}
+
+
 @app.get("/context-budget")
 def context_budget(thread_id: str | None = None) -> dict[str, Any]:
     """Return context budget telemetry for the given thread."""
@@ -539,11 +590,44 @@ async def invoke_stream(request: InvokeRequest) -> StreamingResponse:
                 except TimeoutError:
                     continue
 
+        async def _poll_questions() -> None:
+            last_ids: set[str] = set()
+            while not stop_todo_poller.is_set():
+                try:
+                    questions = await asyncio.to_thread(list_pending_questions)
+                    current_ids = {q.get("id", "") for q in questions if q.get("id")}
+                    new_ids = current_ids - last_ids
+                    if new_ids:
+                        for q in questions:
+                            if q.get("id") in new_ids:
+                                await event_queue.put(
+                                    {
+                                        "event": "question.asked",
+                                        "data": {
+                                            "thread_id": thread_id,
+                                            "source": "opencode",
+                                            **q,
+                                        },
+                                    }
+                                )
+                    last_ids = current_ids
+                except Exception:
+                    pass
+                try:
+                    await asyncio.wait_for(stop_todo_poller.wait(), timeout=0.3)
+                except TimeoutError:
+                    continue
+
         task = asyncio.get_event_loop().run_in_executor(None, _run_invoke)
         todo_task = asyncio.create_task(_poll_todos())
+        question_task = asyncio.create_task(_poll_questions())
 
         while True:
-            item = await event_queue.get()
+            try:
+                item = await asyncio.wait_for(event_queue.get(), timeout=10.0)
+            except TimeoutError:
+                yield ": keepalive\n\n"
+                continue
             if item is None:
                 break
             if item.get("event") == "response.delta":
@@ -553,6 +637,8 @@ async def invoke_stream(request: InvokeRequest) -> StreamingResponse:
         stop_todo_poller.set()
         with contextlib.suppress(Exception):
             await todo_task
+        with contextlib.suppress(Exception):
+            await question_task
 
         # Emit todo.cleared when all todos are done/cancelled after invoke
         try:

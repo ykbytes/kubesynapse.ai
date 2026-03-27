@@ -797,6 +797,17 @@ export interface DeleteResponse {
   namespace: string;
 }
 
+export interface UiToolCall {
+  tool: string;
+  status: "completed" | "error" | "running" | "unknown";
+  input?: unknown;
+  output?: string;
+}
+
+export interface UiPatch {
+  files: string[];
+}
+
 export interface UiMessage {
   id: string;
   role: "user" | "assistant" | "system" | "tool";
@@ -807,6 +818,9 @@ export interface UiMessage {
   toolName?: string;
   toolNode?: string;
   toolDetail?: Record<string, unknown>;
+  /** Structured parts from OpenCode */
+  toolCalls?: UiToolCall[];
+  patches?: UiPatch[];
 }
 
 export interface UiActivity {
@@ -820,6 +834,28 @@ export interface UiTodo {
   content: string;
   status: "pending" | "in_progress" | "completed" | "cancelled";
   priority: "high" | "medium" | "low";
+}
+
+/* ── Question / HITL types ── */
+
+export interface QuestionOption {
+  label: string;
+  description: string;
+}
+
+export interface QuestionInfo {
+  question: string;
+  header?: string;
+  options: QuestionOption[];
+  multiple?: boolean;
+  custom?: boolean;
+}
+
+export interface QuestionRequest {
+  id: string;
+  sessionID?: string;
+  questions: QuestionInfo[];
+  tool?: { messageID: string; callID: string };
 }
 
 export interface InvocationSummary {

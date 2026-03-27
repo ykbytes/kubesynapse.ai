@@ -12,6 +12,8 @@ import {
     invokeAgent,
     listAgentMemory,
     listChatSessions,
+    rejectQuestion,
+    replyToQuestion,
     saveChatSessionMessages,
     streamAgentInvoke,
     streamAgentLogs,
@@ -26,6 +28,7 @@ import { useWorkspace } from "./WorkspaceContext";
 import type {
   InvocationSummary,
   InvokePayload,
+  QuestionRequest,
   SpecialistSubagentDraft,
   UiActivity,
   UiMessage,
@@ -174,6 +177,26 @@ function normalizeUiTodos(value: unknown): UiTodo[] {
   });
 }
 
+function normalizeQuestionRequest(payload: Record<string, unknown>): QuestionRequest | null {
+  const id = String(payload.id ?? "").trim();
+  if (!id) return null;
+  const rawQuestions = payload.questions;
+  if (!Array.isArray(rawQuestions) || rawQuestions.length === 0) return null;
+  const questions = rawQuestions.map((q: Record<string, unknown>) => ({
+    question: String(q.question ?? ""),
+    header: q.header ? String(q.header) : undefined,
+    options: Array.isArray(q.options)
+      ? q.options.map((o: Record<string, unknown>) => ({
+          label: String(o.label ?? ""),
+          description: String(o.description ?? ""),
+        }))
+      : [],
+    multiple: q.multiple === true,
+    custom: q.custom !== false,
+  }));
+  return { id, questions, sessionID: payload.sessionID ? String(payload.sessionID) : undefined };
+}
+
 // ── Context value type ──
 
 export interface ChatContextValue {
@@ -214,6 +237,18 @@ export interface ChatContextValue {
   approvalReason: string;
   approvalBusy: boolean;
   selectedWorkflowApprovalName: string | undefined;
+
+  // Question / HITL state
+  pendingQuestion: QuestionRequest | null;
+  questionResponding: boolean;
+  handleQuestionReply: (requestId: string, answers: string[][]) => Promise<void>;
+  handleQuestionReject: (requestId: string) => Promise<void>;
+
+  // Followup suggestions
+  followupSuggestions: { id: string; text: string }[];
+  followupSending: string | undefined;
+  handleFollowupSend: (id: string) => void;
+  handleFollowupEdit: (id: string) => void;
 
   // Setters
   setPrompt: (value: string) => void;
@@ -319,6 +354,14 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const [approvalReason, setApprovalReason] = useState("");
   const [approvalBusy, setApprovalBusy] = useState(false);
 
+  // Question / HITL state
+  const [pendingQuestionByAgent, setPendingQuestionByAgent] = useState<Record<string, QuestionRequest | null>>({});
+  const [questionResponding, setQuestionResponding] = useState(false);
+
+  // Followup suggestions
+  const [followupSuggestionsByAgent, setFollowupSuggestionsByAgent] = useState<Record<string, { id: string; text: string }[]>>({});
+  const [followupSending, setFollowupSending] = useState<string | undefined>(undefined);
+
   // Chat session persistence state
   const [chatSessions, setChatSessions] = useState<ChatSessionInfo[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
@@ -343,6 +386,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const todos = selectedAgentName ? todosByAgent[selectedAgentName] ?? [] : [];
   const phase: "plan" | "build" | "idle" = selectedAgentName ? phaseByAgent[selectedAgentName] ?? "idle" : "idle";
   const logs = selectedAgentName ? logsByAgent[selectedAgentName] ?? "" : "";
+  const pendingQuestion = selectedAgentName ? pendingQuestionByAgent[selectedAgentName] ?? null : null;
+  const followupSuggestions = selectedAgentName ? followupSuggestionsByAgent[selectedAgentName] ?? [] : [];
   const selectedGooseChatSettings = selectedAgentName
     ? gooseChatSettingsByAgent[selectedAgentName] ?? DEFAULT_GOOSE_CHAT_SETTINGS
     : DEFAULT_GOOSE_CHAT_SETTINGS;
@@ -675,8 +720,49 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             return;
           }
 
+          if (event === "response.tool_call") {
+            const tool = String(ep.tool ?? "");
+            const status = String(ep.status ?? "unknown");
+            const input = ep.input;
+            const output = typeof ep.output === "string" ? ep.output : "";
+            setMessagesForAgent(agentName, (cur) => cur.map((m) => {
+              if (m.id !== assistantMessageId) return m;
+              const tc = { tool, status: status as "completed" | "error" | "running" | "unknown", input, output };
+              return { ...m, toolCalls: [...(m.toolCalls ?? []), tc] };
+            }));
+            return;
+          }
+
+          if (event === "response.patch") {
+            const files = Array.isArray(ep.files) ? (ep.files as string[]) : [];
+            if (files.length > 0) {
+              setMessagesForAgent(agentName, (cur) => cur.map((m) => {
+                if (m.id !== assistantMessageId) return m;
+                return { ...m, patches: [...(m.patches ?? []), { files }] };
+              }));
+            }
+            return;
+          }
+
           if (event === "todo.updated") {
             setTodosForAgent(agentName, normalizeUiTodos(ep.todos));
+            return;
+          }
+
+          if (event === "question.asked") {
+            const questionRequest = normalizeQuestionRequest(ep);
+            if (questionRequest) {
+              // Auto-reply when in autonomous mode
+              if (selectedOpenCodeChatSettings.autonomous) {
+                const autoAnswers = questionRequest.questions.map((q) => {
+                  if (q.options.length > 0) return [q.options[0].label];
+                  return ["yes"];
+                });
+                void replyToQuestion(token, namespace, agentName, questionRequest.id, autoAnswers).catch(() => {});
+              } else {
+                setPendingQuestionByAgent((prev) => ({ ...prev, [agentName]: questionRequest }));
+              }
+            }
             return;
           }
 
@@ -907,6 +993,101 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     finally { setApprovalBusy(false); }
   }, [token, namespace, selectedWorkflowApprovalName, approvalReason, refreshWorkspaceData, setWorkspaceError]);
 
+  // ── Question handlers ──
+
+  const handleQuestionReply = useCallback(async (requestId: string, answers: string[][]) => {
+    if (!token.trim() || !selectedAgentName) return;
+    const agentName = selectedAgentName;
+    setQuestionResponding(true);
+    try {
+      await replyToQuestion(token, namespace, agentName, requestId, answers);
+      setPendingQuestionByAgent((prev) => ({ ...prev, [agentName]: null }));
+      // Show answer as user message
+      const answerText = answers.map((a) => a.join(", ")).join(" | ");
+      setMessagesForAgent(agentName, (cur) => [...cur, {
+        id: createId(), role: "user" as const, content: answerText, status: "complete" as const,
+      }]);
+    } catch (err) { setChatError(apiErrorMessage(err)); }
+    finally { setQuestionResponding(false); }
+  }, [token, namespace, selectedAgentName]);
+
+  const handleQuestionReject = useCallback(async (requestId: string) => {
+    if (!token.trim() || !selectedAgentName) return;
+    const agentName = selectedAgentName;
+    setQuestionResponding(true);
+    try {
+      await rejectQuestion(token, namespace, agentName, requestId);
+      setPendingQuestionByAgent((prev) => ({ ...prev, [agentName]: null }));
+    } catch (err) { setChatError(apiErrorMessage(err)); }
+    finally { setQuestionResponding(false); }
+  }, [token, namespace, selectedAgentName]);
+
+  // ── Followup suggestion handlers ──
+
+  const handleFollowupSend = useCallback((id: string) => {
+    const suggestions = selectedAgentName ? followupSuggestionsByAgent[selectedAgentName] ?? [] : [];
+    const suggestion = suggestions.find((s) => s.id === id);
+    if (!suggestion) return;
+    setFollowupSending(id);
+    setPrompt(suggestion.text);
+    // Auto-submit after setting prompt
+    setTimeout(() => {
+      setFollowupSending(undefined);
+      setFollowupSuggestionsByAgent((prev) => {
+        if (!selectedAgentName) return prev;
+        return { ...prev, [selectedAgentName]: [] };
+      });
+    }, 100);
+  }, [selectedAgentName, followupSuggestionsByAgent]);
+
+  const handleFollowupEdit = useCallback((id: string) => {
+    const suggestions = selectedAgentName ? followupSuggestionsByAgent[selectedAgentName] ?? [] : [];
+    const suggestion = suggestions.find((s) => s.id === id);
+    if (!suggestion) return;
+    setPrompt(suggestion.text);
+    setFollowupSuggestionsByAgent((prev) => {
+      if (!selectedAgentName) return prev;
+      return { ...prev, [selectedAgentName]: [] };
+    });
+  }, [selectedAgentName, followupSuggestionsByAgent]);
+
+  // ── Generate followup suggestions from completed responses ──
+  useEffect(() => {
+    if (!selectedAgentName || isSending) return;
+    if (!messages.length) return;
+    const lastMsg = messages[messages.length - 1];
+    if (lastMsg.role !== "assistant" || lastMsg.status !== "complete") return;
+    // Extract questions or action items from the response
+    const content = lastMsg.content;
+    const suggestions: { id: string; text: string }[] = [];
+    // Detect questions at end of response
+    const lines = content.split("\n").filter((l) => l.trim());
+    const lastLines = lines.slice(-8);
+    for (const line of lastLines) {
+      const trimmed = line.trim();
+      // Pattern: numbered/bulleted list items, or **bold:** prefixed options
+      const match = trimmed.match(/^(?:\d+[.)]\s*|-\s*|\*\s*)(?:\*{1,2})?(.{5,120})$/);
+      if (match) {
+        const text = match[1].replace(/\*{1,2}/g, "").replace(/^:\s*/, "").replace(/[`]/g, "").trim();
+        if (text.length >= 5) {
+          suggestions.push({ id: createId(), text });
+        }
+      }
+    }
+    // Also detect if the response ends with a question
+    if (suggestions.length === 0 && lastLines.length > 0) {
+      const lastLine = lastLines[lastLines.length - 1].trim();
+      if (lastLine.endsWith("?") && lastLine.length > 15 && lastLine.length < 200) {
+        suggestions.push({ id: createId(), text: "Yes" });
+        suggestions.push({ id: createId(), text: "No" });
+        suggestions.push({ id: createId(), text: "Tell me more" });
+      }
+    }
+    if (suggestions.length > 0) {
+      setFollowupSuggestionsByAgent((prev) => ({ ...prev, [selectedAgentName]: suggestions.slice(0, 6) }));
+    }
+  }, [selectedAgentName, messages, isSending]);
+
   // ── cancelStream ──
 
   const cancelStream = useCallback(() => {
@@ -1124,12 +1305,27 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     if (prevSendingRef.current && !isSending) {
       if (activeSessionId) {
         void saveRef.current();
-      } else {
-        void newSessionRef.current();
+      } else if (token.trim() && selectedAgentName && messages.length > 0) {
+        // Create session and save without clearing messages
+        void (async () => {
+          try {
+            const title = messages.find((m) => m.role === "user")?.content?.slice(0, 80) || "New Chat";
+            const session = await createChatSession(token, namespace, selectedAgentName, title);
+            setActiveSessionId(session.session_id);
+            setChatSessions((prev) => [session, ...prev]);
+            await saveChatSessionMessages(token, session.session_id, messages.map((m) => ({
+              message_id: m.id, role: m.role, content: m.content, status: m.status ?? "complete", toolName: m.toolName, toolNode: m.toolNode,
+            })));
+            savedMessageSignatureRef.current = buildMessageSignature(messages);
+            const savedAt = new Date().toISOString();
+            setLastSessionSaveAt(savedAt);
+            setSessionDirty(false);
+          } catch (err) { setChatError(apiErrorMessage(err)); }
+        })();
       }
     }
     prevSendingRef.current = isSending;
-  }, [isSending, activeSessionId]);
+  }, [isSending, activeSessionId, token, namespace, selectedAgentName, messages]);
 
   const ctxValue = useMemo(() => ({
     messages, activity, summary, todos, phase, logs, selectedGooseChatSettings, selectedOpenCodeChatSettings, gooseSystemPromptPreview,
@@ -1142,6 +1338,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     addSpecialistSubagent, updateSpecialistSubagent, removeSpecialistSubagent, clearSpecialistTeam,
     setGooseMaxTurns, setGooseWorkingDirectory,
     setOpenCodeOutputFormat, setOpenCodeAutonomous, setOpenCodeMaxTurns, setOpenCodeWorkingDirectory,
+    pendingQuestion, questionResponding, handleQuestionReply, handleQuestionReject,
+    followupSuggestions, followupSending, handleFollowupSend, handleFollowupEdit,
     handleSubmit, handleLoadLogs, handleStreamLogs, handleStopLogStream, handleAgentApprovalDecision, handleWorkflowApprovalDecision, cancelStream,
     setMessagesForAgent, removeAgentChatState,
     chatSessions, activeSessionId, activeSessionSummary, activeMemoryRecords, agentMemoryRecords, sessionsLoading,
@@ -1155,6 +1353,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     a2aTargetAgent, a2aTargetNamespace, a2aTimeoutSeconds,
     specialistSubagents, specialistTeamConfigured, subagentStrategy,
     approvalReason, approvalBusy, selectedWorkflowApprovalName,
+    pendingQuestion, questionResponding, followupSuggestions, followupSending,
     chatSessions, activeSessionId, activeSessionSummary, activeMemoryRecords, agentMemoryRecords, sessionsLoading,
     sessionSearch, sessionDirty, sessionSaving, lastSessionSaveAt,
     handlePromoteMemoryRecord, handleEditMemoryRecord, handleDeleteMemoryRecord,

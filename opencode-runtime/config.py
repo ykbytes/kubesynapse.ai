@@ -77,7 +77,7 @@ MAX_TEAM_CONTEXT_CHARS = max(_safe_int("OPENCODE_MAX_TEAM_CONTEXT_CHARS", 16000)
 HTTP_TIMEOUT_SECONDS = max(_safe_float("OPENCODE_HTTP_TIMEOUT_SECONDS", 300.0), 1.0)
 SERVER_STARTUP_TIMEOUT_SECONDS = max(_safe_float("OPENCODE_STARTUP_TIMEOUT_SECONDS", 60.0), 5.0)
 SERVER_POLL_INTERVAL_SECONDS = max(_safe_float("OPENCODE_STARTUP_POLL_SECONDS", 0.5), 0.1)
-DEFAULT_AGENT_STEPS = max(_safe_int("OPENCODE_AGENT_STEPS", 16), 1)
+DEFAULT_AGENT_STEPS = max(_safe_int("OPENCODE_AGENT_STEPS", 128), 1)
 MODEL_CONTEXT_LIMIT = max(_safe_int("OPENCODE_MODEL_CONTEXT_LIMIT", 128000), 2048)
 MODEL_OUTPUT_LIMIT = max(_safe_int("OPENCODE_MODEL_OUTPUT_LIMIT", 8192), 256)
 
@@ -129,7 +129,7 @@ HELM_RELEASE_NAME = os.getenv("HELM_RELEASE_NAME", "ai-agent-sandbox").strip() o
 # Autonomy
 # ---------------------------------------------------------------------------
 AUTONOMOUS_MAX_RETRIES = max(_safe_int("OPENCODE_AUTONOMOUS_MAX_RETRIES", 3), 0)
-AUTONOMOUS_MAX_TURNS = max(_safe_int("OPENCODE_AUTONOMOUS_MAX_TURNS", 10), 1)
+AUTONOMOUS_MAX_TURNS = max(_safe_int("OPENCODE_AUTONOMOUS_MAX_TURNS", 50), 1)
 
 # ---------------------------------------------------------------------------
 # Artifact / Session limits
