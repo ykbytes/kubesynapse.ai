@@ -251,6 +251,7 @@ def run_workflow(
     name: str,
     namespace: str,
     logger: logging.Logger,
+    retry: int = 0,
     **kwargs: Any,
 ) -> None:
     del kwargs
@@ -312,6 +313,7 @@ def run_workflow(
         meta=meta,
         generation=generation,
         default_delay=10,
+        retry=retry,
         start_message="Reconciling AgentWorkflow for execution.",
         success_message="AgentWorkflow queued successfully.",
         observedGeneration=observed_generation,
@@ -332,6 +334,7 @@ def run_workflow_watchdog(
     name: str,
     namespace: str,
     logger: logging.Logger,
+    retry: int = 0,
     **kwargs: Any,
 ) -> None:  # type: ignore[misc]
     del kwargs
@@ -370,6 +373,7 @@ def run_workflow_watchdog(
         namespace=namespace,
         meta=meta,
         default_delay=10,
+        retry=retry,
         start_message="Re-enqueueing stale AgentWorkflow from watchdog.",
         success_message="Watchdog re-enqueued AgentWorkflow.",
         reason=reason,
@@ -415,6 +419,7 @@ def resume_workflow(
     name: str,
     namespace: str,
     logger: logging.Logger,
+    retry: int = 0,
     **kwargs: Any,
 ) -> None:
     del kwargs
@@ -469,6 +474,7 @@ def resume_workflow(
         namespace=namespace,
         meta=meta,
         default_delay=10,
+        retry=retry,
         start_message="Re-enqueueing AgentWorkflow after operator restart.",
         success_message="AgentWorkflow re-enqueued after operator restart.",
         phase=phase,

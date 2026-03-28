@@ -8,11 +8,11 @@ operator:
   replicaCount: 1
   image:
     repository: localhost/kubeminionagents/ai-operator
-    tag: dev
+    tag: dev4
     pullPolicy: IfNotPresent
   workerImage:
     repository: localhost/kubeminionagents/ai-operator
-    tag: dev
+    tag: dev4
     pullPolicy: IfNotPresent
 
 gooseRuntime:
@@ -30,7 +30,7 @@ codexRuntime:
 opencodeRuntime:
   image:
     repository: localhost/kubeminionagents/ai-opencode-runtime
-    tag: dev8
+    tag: dev10
     pullPolicy: IfNotPresent
 
 apiGateway:
@@ -45,7 +45,7 @@ webUi:
   enabled: true
   image:
     repository: localhost/kubeminionagents/ai-agent-sandbox-web-ui
-    tag: dev9
+    tag: dev10
     pullPolicy: IfNotPresent
 
 platformSecrets:

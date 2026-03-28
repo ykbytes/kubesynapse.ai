@@ -30,9 +30,13 @@ FORMAT_INSTRUCTIONS: dict[str, str] = {
 
 AUTONOMY_SYSTEM_PROMPT = (
     "You are an autonomous coding agent. Follow these rules:\n"
-    "1. PLAN FIRST: For complex tasks (3+ steps), use todowrite to create a structured plan "
-    "before writing any code. Order steps by dependency — prerequisites first. Each step "
-    "must be a single, verifiable unit of work. Track progress by updating todo status as you work.\n"
+    "1. PROGRESS TRACKING: Use the todowrite tool to keep your plan up to date. "
+    "Mark items 'in_progress' when you start them and 'done' when you finish them. "
+    "For complex tasks (3+ steps), create a structured plan before writing code. "
+    "Order tasks by dependency — prerequisites first. Each task must be a "
+    "single, verifiable unit of work. "
+    "Your todowrite plan survives context compaction and "
+    "is visible to the orchestrator for progress tracking.\n"
     "2. USE NATIVE TOOLS: Use your built-in tools (write, edit, bash, read, glob, grep, "
     "webfetch, websearch, codesearch) for all file and code operations — do NOT rely on "
     "external MCP servers for tasks you can do natively.\n"
@@ -67,8 +71,9 @@ AUTONOMY_SYSTEM_PROMPT = (
     "target_dir='/workspace' and full_clone=true for push support.\n"
     "13. SUMMARIZE: Summarize what you accomplished in your final response, including "
     "files created/modified and verification results.\n"
-    "14. CONTEXT BUDGET MANAGEMENT: When working on long tasks, keep your todowrite plan "
-    "as the primary checkpoint — it survives context compaction. Keep tool outputs brief: "
+    "14. CONTEXT BUDGET MANAGEMENT: Your todowrite plan is your primary state checkpoint \u2014 "
+    "it survives context compaction and is reported to the orchestrator. Keep it up to date "
+    "at all times. Keep tool outputs brief: "
     "avoid reading entire large files when you only need specific sections. Use read with "
     "offset/limit for large files. Prefer grep to find specific content rather than reading "
     "everything.\n"
@@ -264,6 +269,34 @@ def format_workspace_system_prompt(snapshot: dict[str, Any] | None) -> str | Non
         parts.append(f"Git: branch={git_info.get('branch', 'unknown')}")
 
     return "\n".join(parts)
+
+
+def format_skills_system_prompt(skill_meta: list[dict[str, str]] | None) -> str | None:
+    """Render available skills as a system prompt fragment.
+
+    Each entry has ``name``, ``description``, ``file``, and ``content`` keys.
+    When ``content`` is present the full skill body is injected so the model
+    does not need to call the skill tool separately.
+    """
+    if not skill_meta:
+        return None
+    lines = [
+        "SKILLS (domain-specific knowledge — already loaded, apply these rules automatically):",
+    ]
+    for meta in skill_meta:
+        name = meta.get("name", "unknown")
+        desc = meta.get("description", "").strip()
+        body = meta.get("content", "").strip()
+        lines.append(f"\n### Skill: {name}")
+        if desc:
+            lines.append(desc)
+        if body:
+            lines.append(body)
+        else:
+            fpath = meta.get("file", "")
+            if fpath:
+                lines.append(f"(Use the 'skill' tool to read: {fpath})")
+    return "\n".join(lines)
 
 
 def build_recovery_prompt(pre_compaction_state: dict[str, Any]) -> str:

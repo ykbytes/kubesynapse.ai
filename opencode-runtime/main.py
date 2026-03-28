@@ -231,7 +231,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     configure_git_credentials()
     validate_runtime_startup()
     config_files = materialize_opencode_config_files()
-    skill_files, skill_warnings = materialize_skill_files()
+    skill_files, skill_meta, skill_warnings = materialize_skill_files()
     sidecars = load_opencode_sidecars()
     generated_config, generated_warnings = build_generated_config(sidecars)
 
@@ -245,6 +245,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         SKILL_RUNTIME_CONFIG.update(
             {
                 "skillFiles": skill_files,
+                "skillMeta": skill_meta,
                 "warnings": dedupe_items(skill_warnings + generated_warnings),
                 "configFiles": config_files,
                 "mcpSidecars": sidecars,

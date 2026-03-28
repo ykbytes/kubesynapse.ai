@@ -217,7 +217,7 @@ def create_agent_resources(spec: dict[str, Any], name: str, namespace: str, hand
 
 
 @kopf.on.create("sandbox.enterprise.ai", "v1alpha1", "aiagents")  # type: ignore[arg-type]
-def create_agent(spec: dict[str, Any], name: str, namespace: str, logger: Any, **kwargs: Any) -> None:
+def create_agent(spec: dict[str, Any], name: str, namespace: str, logger: Any, retry: int = 0, **kwargs: Any) -> None:
     del kwargs
     execute_reconcile(
         lambda: create_agent_resources(spec, name, namespace, logger),
@@ -227,6 +227,7 @@ def create_agent(spec: dict[str, Any], name: str, namespace: str, logger: Any, *
         name=name,
         namespace=namespace,
         default_delay=10,
+        retry=retry,
         start_message="Reconciling AIAgent create event.",
         success_message="AIAgent resources reconciled.",
         policyRef=spec.get("policyRef"),
@@ -234,7 +235,7 @@ def create_agent(spec: dict[str, Any], name: str, namespace: str, logger: Any, *
 
 
 @kopf.on.update("sandbox.enterprise.ai", "v1alpha1", "aiagents")  # type: ignore[arg-type]
-def update_agent(spec: dict[str, Any], name: str, namespace: str, logger: logging.Logger, **kwargs: Any) -> None:
+def update_agent(spec: dict[str, Any], name: str, namespace: str, logger: logging.Logger, retry: int = 0, **kwargs: Any) -> None:
     del kwargs
     execute_reconcile(
         lambda: create_agent_resources(spec, name, namespace, logger),
@@ -244,6 +245,7 @@ def update_agent(spec: dict[str, Any], name: str, namespace: str, logger: loggin
         name=name,
         namespace=namespace,
         default_delay=5,
+        retry=retry,
         start_message="Reconciling AIAgent update event.",
         success_message="AIAgent update reconciled.",
         policyRef=spec.get("policyRef"),
@@ -251,7 +253,7 @@ def update_agent(spec: dict[str, Any], name: str, namespace: str, logger: loggin
 
 
 @kopf.on.resume("sandbox.enterprise.ai", "v1alpha1", "aiagents")  # type: ignore[arg-type]
-def resume_agent(spec: dict[str, Any], name: str, namespace: str, logger: logging.Logger, **kwargs: Any) -> None:
+def resume_agent(spec: dict[str, Any], name: str, namespace: str, logger: logging.Logger, retry: int = 0, **kwargs: Any) -> None:
     del kwargs
     execute_reconcile(
         lambda: create_agent_resources(spec, name, namespace, logger),
@@ -261,6 +263,7 @@ def resume_agent(spec: dict[str, Any], name: str, namespace: str, logger: loggin
         name=name,
         namespace=namespace,
         default_delay=5,
+        retry=retry,
         start_message="Reconciling existing AIAgent on operator startup.",
         success_message="AIAgent resume reconcile completed.",
         policyRef=spec.get("policyRef"),

@@ -45,6 +45,7 @@ import { RunHistoryPanel } from "./composer/RunHistoryPanel";
 import type {
   AgentInfo,
   LoopProgress,
+  PlanProgress,
   WorkflowInfo,
   WorkflowNextAction,
   WorkflowPayload,
@@ -69,6 +70,8 @@ interface WorkflowManagerProps {
   onTrigger: (name: string, input?: string) => void;
   onCancel?: (name: string) => void;
   isCancelling?: boolean;
+  onRetryFailed?: (name: string) => void;
+  isRetrying?: boolean;
   approvalReason: string;
   approvalBusy: boolean;
   onApprovalReasonChange: (value: string) => void;
@@ -322,6 +325,41 @@ function LoopProgressDisplay({ progress }: { progress: LoopProgress }) {
   );
 }
 
+/* ────────── plan progress display (non-loop steps) ────────── */
+
+function PlanProgressDisplay({ progress }: { progress: PlanProgress }) {
+  const items = progress.items ?? [];
+  const pct = progress.totalItems > 0 ? Math.round((progress.completedItems / progress.totalItems) * 100) : 0;
+  if (items.length === 0) return null;
+
+  return (
+    <div className="space-y-2 rounded-lg border border-sky-500/20 bg-sky-500/5 p-3">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2 text-xs font-medium text-sky-300">
+          <Blocks className="h-3.5 w-3.5" />
+          Agent plan — {progress.completedItems}/{progress.totalItems} tasks done
+        </div>
+        <span className="text-[10px] tabular-nums text-muted-foreground">{pct}%</span>
+      </div>
+      <div className="h-1.5 w-full overflow-hidden rounded-full bg-sky-500/10">
+        <div className="h-full rounded-full bg-sky-500 transition-all" style={{ width: `${pct}%` }} />
+      </div>
+      <div className="mt-2 space-y-1">
+        {items.map((item, i) => (
+          <div key={i} className={`flex items-start gap-2 rounded px-2 py-1 text-[11px] ${item.done ? "bg-emerald-500/10 text-emerald-300" : "text-muted-foreground"}`}>
+            {item.done ? (
+              <CheckCircle2 className="mt-0.5 h-3 w-3 shrink-0 text-emerald-400" />
+            ) : (
+              <Circle className="mt-0.5 h-3 w-3 shrink-0 text-muted-foreground/50" />
+            )}
+            <span className={item.done ? "line-through opacity-70" : ""}>{item.text}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /* ────────── step detail card ────────── */
 
 function StepDetailCard({
@@ -416,6 +454,11 @@ function StepDetailCard({
               {state.loopProgress.completedItems}/{state.loopProgress.totalItems} items
             </span>
           )}
+          {state?.planProgress && !state?.loopProgress && (
+            <span className="text-[10px] tabular-nums text-sky-300">
+              {state.planProgress.completedItems}/{state.planProgress.totalItems} tasks
+            </span>
+          )}
           {state?.latencyMs != null && (
             <span className="ml-auto text-[10px] tabular-nums text-muted-foreground">{formatMs(state.latencyMs)}</span>
           )}
@@ -446,6 +489,11 @@ function StepDetailCard({
             {/* loop progress */}
             {state?.loopProgress && (
               <LoopProgressDisplay progress={state.loopProgress} />
+            )}
+
+            {/* plan progress (non-loop steps with agent plan) */}
+            {state?.planProgress && !state?.loopProgress && (
+              <PlanProgressDisplay progress={state.planProgress} />
             )}
 
             {/* verification result */}
@@ -674,6 +722,8 @@ export function WorkflowManager({
   onTrigger,
   onCancel,
   isCancelling,
+  onRetryFailed,
+  isRetrying,
   approvalReason,
   approvalBusy,
   onApprovalReasonChange,
@@ -885,6 +935,7 @@ export function WorkflowManager({
                   const state = workflow.step_states?.[step.name];
                   const status = state?.status ?? "pending";
                   const lp = state?.loopProgress;
+                  const pp = state?.planProgress;
                   const isRunning = status === "running";
                   const isDone = status === "succeeded" || status === "completed";
                   const isFailed = status === "failed";
@@ -915,7 +966,20 @@ export function WorkflowManager({
                             </div>
                           </div>
                         )}
-                        {isRunning && !lp && (
+                        {pp && pp.totalItems > 0 && !lp && (
+                          <div className="mt-1.5">
+                            <div className="h-1 w-full overflow-hidden rounded-full bg-border/40">
+                              <div
+                                className={`h-full rounded-full transition-all duration-500 ${isDone ? "bg-emerald-500" : "bg-sky-500"}`}
+                                style={{ width: `${Math.round((pp.completedItems / pp.totalItems) * 100)}%` }}
+                              />
+                            </div>
+                            <div className="text-[9px] text-muted-foreground mt-0.5">
+                              {pp.completedItems}/{pp.totalItems} tasks
+                            </div>
+                          </div>
+                        )}
+                        {isRunning && !lp && !pp && (
                           <div className="mt-1">
                             <LoaderCircle className="h-3 w-3 animate-spin text-primary" />
                           </div>
@@ -1124,6 +1188,9 @@ export function WorkflowManager({
                 const durationMs = started && ended && !Number.isNaN(started.getTime()) && !Number.isNaN(ended.getTime())
                   ? ended.getTime() - started.getTime()
                   : null;
+                const failedStepNames = Object.entries(workflow.step_states ?? {})
+                  .filter(([, s]) => s?.status === "failed")
+                  .map(([n]) => n);
 
                 return (
                   <div className="mt-4 space-y-3">
@@ -1136,6 +1203,28 @@ export function WorkflowManager({
                         </Badge>
                       )}
                     </div>
+                    {onRetryFailed && failedStepNames.length > 0 && (
+                      <div className="flex items-center gap-3 rounded-xl border border-amber-500/30 bg-amber-500/5 px-4 py-3">
+                        <div className="flex-1 space-y-1">
+                          <p className="text-sm font-medium text-foreground">Retry failed steps</p>
+                          <p className="text-xs text-muted-foreground">
+                            {failedStepNames.length === 1
+                              ? `Re-run step "${failedStepNames[0]}" — completed steps will be preserved.`
+                              : `Re-run ${failedStepNames.length} failed steps (${failedStepNames.join(", ")}) — completed steps will be preserved.`}
+                          </p>
+                        </div>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-8 rounded-xl text-xs border-amber-500/40 hover:bg-amber-500/10"
+                          disabled={isRetrying}
+                          onClick={() => onRetryFailed(workflow.name)}
+                        >
+                          {isRetrying ? <LoaderCircle className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Repeat className="mr-1.5 h-3.5 w-3.5" />}
+                          {isRetrying ? "Retrying…" : "Retry failed"}
+                        </Button>
+                      </div>
+                    )}
                     {(started || ended) && (
                       <div className="grid gap-2 sm:grid-cols-2">
                         {started && !Number.isNaN(started.getTime()) && (

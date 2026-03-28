@@ -614,6 +614,27 @@ def build_step_state(
     return state
 
 
+# ---------------------------------------------------------------------------
+# Plan seeding — extract task items from prompt structure so progress is
+# visible even when the model doesn't call todowrite.
+# ---------------------------------------------------------------------------
+_HEADER_RE = re.compile(r"^##\s+(.+?)$", re.MULTILINE)
+
+
+def extract_plan_items(prompt: str) -> list[dict[str, Any]]:
+    """Parse ``##`` markdown headers from *prompt* and return synthetic todo items."""
+    items: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for match in _HEADER_RE.finditer(prompt):
+        text = match.group(1).strip()
+        if text.lower() in ("overview", "introduction", "summary", "notes", "context"):
+            continue
+        if text not in seen:
+            seen.add(text)
+            items.append({"content": text, "status": "pending"})
+    return items[:20]
+
+
 def execute_workflow_step(
     step: dict[str, Any],
     workflow_input: str,
@@ -622,6 +643,7 @@ def execute_workflow_step(
     pending_approval: dict[str, Any] | None,
     worker_job: dict[str, Any],
     project_context: str = "",
+    on_todo_update: Any = None,
 ) -> dict[str, Any]:
     step_name = str(step.get("name", "")).strip()
     dependencies = [
@@ -669,6 +691,14 @@ def execute_workflow_step(
         # On retry attempts, prepend context about the previous failure
         # so the agent can resume rather than restart from scratch.
         effective_prompt = prompt
+        # Soft nudge: encourage the agent to update its todowrite plan
+        # as it works.  The initial plan is auto-seeded from the prompt
+        # structure, so the agent only needs to mark items in_progress/done.
+        planning_preamble = (
+            "As you work, use the todowrite tool to mark tasks 'in_progress' "
+            "when you start them and 'done' when you finish them.\n\n"
+        )
+        effective_prompt = planning_preamble + effective_prompt
         if attempt > 1:
             effective_prompt = (
                 f"[RETRY ATTEMPT {attempt}] The previous attempt failed. "
@@ -708,6 +738,11 @@ def execute_workflow_step(
             }
             if int(execution_policy.get("maxTurns", 0)):
                 invoke_payload["max_turns"] = int(execution_policy["maxTurns"])
+            # Seed plan from prompt structure so progress is visible immediately.
+            if on_todo_update and attempt == 1:
+                seed = extract_plan_items(effective_prompt)
+                if seed:
+                    on_todo_update(seed)
             # Use streaming invoke for real-time turn-by-turn visibility
             result = invoke_agent_runtime_stream(
                 agent_ref,
@@ -716,6 +751,7 @@ def execute_workflow_step(
                 timeout_seconds=float(execution_policy["timeoutSeconds"]),
                 step_name=step_name,
                 iteration=attempt,
+                on_todo_update=on_todo_update,
             )
             latency_ms = int((time.perf_counter() - started) * 1000)
             response_text = str(result.get("response", ""))
@@ -2214,6 +2250,7 @@ def run_workflow_worker() -> None:
             step: dict[str, Any],
             pending: dict[str, Any] | None,
             on_iteration_complete: Any = None,
+            on_todo_update: Any = None,
         ) -> dict[str, Any]:
             step_type = str(step.get("type", "agent")).strip()
             if step_type == "loop":
@@ -2251,6 +2288,7 @@ def run_workflow_worker() -> None:
                 pending,
                 worker_job,
                 project_context=project_context,
+                on_todo_update=on_todo_update,
             )
 
         while len(completed) + len(skipped) < len(steps):
@@ -2286,6 +2324,19 @@ def run_workflow_worker() -> None:
                 "workflow.frontier.started",
                 {"runId": run_id, "steps": frontier_names},
             )
+            # Mark frontier steps as "running" before execution so the UI
+            # shows the correct status instead of "pending".
+            for f_step in frontier:
+                f_name = str(f_step.get("name", ""))
+                existing = step_states.get(f_name, {})
+                step_states[f_name] = {
+                    **existing,
+                    "stepName": f_name,
+                    "agentRef": str(f_step.get("agentRef", "")),
+                    "status": "running",
+                    "startedAt": existing.get("startedAt") or now_iso(),
+                    "updatedAt": now_iso(),
+                }
             workflow_status_payload = patch_workflow_status(
                 plural=plural,
                 phase="running",
@@ -2300,6 +2351,47 @@ def run_workflow_worker() -> None:
                 extra_summary={"currentFrontier": frontier_names},
             )
             # §2.5 — DB mirroring is now handled by the status projection controller.
+
+            # Build a todo-update callback that propagates agent plan/progress
+            # to the CRD stepStates so the UI can show plan items.
+            # Track the last-seen todo signature per step so that stale todos
+            # from a shared session (sessionGroup) are not propagated to a
+            # new step that hasn't created its own todos yet.
+            _todo_first_seen: dict[str, bool] = {}
+
+            def _make_todo_callback(sn: str):
+                _todo_first_seen[sn] = False
+
+                def _on_todo(todos: list[dict[str, Any]]) -> None:
+                    checklist = [
+                        {"text": str(t.get("content", t.get("text", ""))), "done": str(t.get("status", "")).lower() in {"done", "completed"}}
+                        for t in todos
+                        if isinstance(t, dict) and (t.get("content") or t.get("text"))
+                    ]
+                    if not checklist:
+                        return
+                    # On the very first callback for this step, if ALL items
+                    # are already done this is stale data from a previous step
+                    # in the same shared session — skip it.
+                    if not _todo_first_seen.get(sn):
+                        _todo_first_seen[sn] = True
+                        if all(c["done"] for c in checklist):
+                            return
+                    done_count = sum(1 for c in checklist if c["done"])
+                    step_states[sn] = step_states.get(sn, {})
+                    step_states[sn]["planProgress"] = {
+                        "items": checklist,
+                        "completedItems": done_count,
+                        "totalItems": len(checklist),
+                    }
+                    step_states[sn]["updatedAt"] = now_iso()
+                    patch_workflow_status(
+                        plural=plural, phase="running", generation=generation,
+                        run_id=run_id, total_steps=len(steps), current_step=sn,
+                        started_at=started_at, step_states=step_states, worker_job=worker_job,
+                        pending_approval=None,
+                    )
+                return _on_todo
 
             outcome_by_name: dict[str, dict[str, Any]] = {}
             if len(frontier) == 1:
@@ -2338,6 +2430,7 @@ def run_workflow_worker() -> None:
                         pending_approval or None,
                         worker_job,
                         project_context=project_context,
+                        on_todo_update=_make_todo_callback(str(step.get("name", ""))),
                     )
                 outcome_by_name[outcome["stepName"]] = outcome
             else:
@@ -2361,6 +2454,39 @@ def run_workflow_worker() -> None:
                             )
                     return _on_iter
 
+                def _make_parallel_todo_callback(step_name: str):
+                    _todo_first_seen[step_name] = False
+
+                    def _on_todo(todos: list[dict[str, Any]]) -> None:
+                        checklist = [
+                            {"text": str(t.get("content", t.get("text", ""))), "done": str(t.get("status", "")).lower() in {"done", "completed"}}
+                            for t in todos
+                            if isinstance(t, dict) and (t.get("content") or t.get("text"))
+                        ]
+                        if not checklist:
+                            return
+                        # Skip stale todos from a previous step in a shared session.
+                        if not _todo_first_seen.get(step_name):
+                            _todo_first_seen[step_name] = True
+                            if all(c["done"] for c in checklist):
+                                return
+                        done_count = sum(1 for c in checklist if c["done"])
+                        with _progress_lock:
+                            step_states[step_name] = step_states.get(step_name, {})
+                            step_states[step_name]["planProgress"] = {
+                                "items": checklist,
+                                "completedItems": done_count,
+                                "totalItems": len(checklist),
+                            }
+                            step_states[step_name]["updatedAt"] = now_iso()
+                            patch_workflow_status(
+                                plural=plural, phase="running", generation=generation,
+                                run_id=run_id, total_steps=len(steps), current_step=step_name,
+                                started_at=started_at, step_states=step_states, worker_job=worker_job,
+                                pending_approval=None,
+                            )
+                    return _on_todo
+
                 # §2.7 — Cap parallel workers to MAX_PARALLEL_STEPS.
                 effective_workers = min(len(frontier), MAX_PARALLEL_STEPS)
                 if effective_workers < len(frontier):
@@ -2377,6 +2503,7 @@ def run_workflow_worker() -> None:
                             _make_parallel_on_iteration(str(step.get("name", "")))
                             if str(step.get("type", "agent")).strip() == "loop"
                             else None,
+                            _make_parallel_todo_callback(str(step.get("name", ""))),
                         ): str(step.get("name", ""))
                         for step in frontier
                     }
@@ -2427,7 +2554,12 @@ def run_workflow_worker() -> None:
             for step in frontier:
                 step_name = str(step.get("name", ""))
                 outcome = outcome_by_name[step_name]
+                # Preserve planProgress that was set by the todo callback
+                # before overwriting with the final step state.
+                existing_plan = (step_states.get(step_name) or {}).get("planProgress")
                 step_states[step_name] = outcome["stepState"]
+                if existing_plan:
+                    step_states[step_name]["planProgress"] = existing_plan
 
                 if outcome["state"] == "approval_pending":
                     pending_approval = outcome["pendingApproval"]
@@ -2464,6 +2596,12 @@ def run_workflow_worker() -> None:
                 step_results[step_name] = outcome["stepResult"]
                 if outcome["state"] in {"completed", "continued"}:
                     completed.add(step_name)
+                    # Mark all plan items as done since step completed.
+                    plan = step_states[step_name].get("planProgress")
+                    if plan and plan.get("items"):
+                        for item in plan["items"]:
+                            item["done"] = True
+                        plan["completedItems"] = plan["totalItems"]
                     # Handle conditional branch routing
                     if "skipSteps" in outcome:
                         for skip_name in outcome["skipSteps"]:

@@ -13,211 +13,804 @@ spec:
           default_agent: build
           permission: allow
   systemPrompt: >
-    You are a senior React Native / Expo engineer building a mobile DAW
-    app called BeatForge. You write production-quality TypeScript with
-    strict mode. You create files directly using tools — never explain
-    what you will do, just do it. Fix errors immediately when commands
-    fail. Follow the project context and skills precisely. NEVER create
-    shim files or declare modules as `any`. Every module you create MUST
-    be wired to the modules it depends on — no disconnected code.
+    You are a senior React Native / Expo engineer building a mobile DAW app
+    called BeatForge. You write production-quality TypeScript with strict mode.
+    You create files directly using tools — never explain what you will do, just
+    do it. Fix errors immediately when commands fail.
+
+    Your domain skills are pre-loaded in your context and applied
+    automatically. They cover: known-pitfalls (10 critical bug patterns),
+    audio-engine (AudioEngine, SequencerClock, SamplerEngine, SynthEngine
+    patterns), integration-wiring (3 critical paths and mandatory
+    connections), strict-types (TypeScript rules and Zustand v5 patterns),
+    react-native-quality (component standards, StepCell, PadButton, Knob
+    patterns), and verification-gates (12 quality gates). Do NOT call the
+    skill tool or manually read skill files — you already have the full
+    content in your context.
+
+    The project context (specifications, failure modes, data models, wiring
+    contract) is also injected into every prompt automatically.
+
+    Your definition of "done" for any file:
+      1. No TypeScript errors (tsc --noEmit passes)
+      2. No ESLint errors (eslint --ext .ts,.tsx src/ passes)
+      3. All wiring connections from the integration-wiring skill are satisfied
+      4. All 10 pitfalls from the known-pitfalls skill are enforced
+      5. No placeholder text, no TODO comments, no stub functions
+      6. Audio can actually play (static require maps, real WAV files)
+      7. All components meet the react-native-quality skill standards
   skills:
     files:
+      ".github/skills/known-pitfalls/SKILL.md": |
+        ---
+        name: known-pitfalls
+        description: >
+          Use this skill FIRST, before writing any code. Contains exact
+          wrong→right patterns for bugs that recur in every build of this project.
+          Memorize each one — they are not optional guidance, they are hard rules.
+        ---
+        # Known Pitfalls — Wrong → Right Code Patterns
+
+        Read the project context ConfigMap for full explanations. This skill
+        is a quick-reference cheat sheet. All 10 pitfalls are enforced by the
+        final verification step.
+
+        ## P1 — Metro Bundler: Static require() only
+        ```typescript
+        // WRONG — breaks in production (no error at dev time!)
+        await sound.loadAsync(require('../../' + path));
+
+        // RIGHT — static map at module top level
+        export const SAMPLE_REQUIRES: Record<string, ReturnType<typeof require>> = {
+          kick:       require('../../assets/samples/kick.wav'),
+          snare:      require('../../assets/samples/snare.wav'),
+          hihat:      require('../../assets/samples/hihat.wav'),
+          clap:       require('../../assets/samples/clap.wav'),
+          tom:        require('../../assets/samples/tom.wav'),
+          perc:       require('../../assets/samples/perc.wav'),
+          bass_synth: require('../../assets/samples/bass_synth_C3.wav'),
+          lead_synth: require('../../assets/samples/lead_synth_C4.wav'),
+        };
+        ```
+
+        ## P2 — Zustand v5: Named export
+        ```typescript
+        // WRONG
+        import create from 'zustand';
+        // RIGHT
+        import { create } from 'zustand';
+        ```
+
+        ## P3 — Zustand: Never mutate state directly
+        ```typescript
+        // WRONG — silently broken, no re-render
+        const fn = useStore(s => (id: string) => { s.fieldName = id; });
+        // RIGHT — always use set()
+        // In store: setFieldName: (id) => set({ fieldName: id }),
+        // In component: const setFieldName = useStore(s => s.setFieldName);
+        ```
+
+        ## P4 — Reanimated: No hooks in .map()
+        ```typescript
+        // WRONG — crash: "Hooks can only be called inside a component"
+        const vals = tracks.map(t => useSharedValue(0));
+        // RIGHT — single value tracking current step index
+        const currentStepSV = useSharedValue(0);
+        // Sync it: useEffect(() => { currentStepSV.value = currentStep; }, [currentStep]);
+        ```
+
+        ## P5 — State sync: loadProject() must sync engine
+        ```typescript
+        // WRONG — engine ignores loaded mixer state
+        useMixerStore.setState({ channels: project.mixer });
+        // RIGHT — also sync engine
+        for (const ch of project.mixer) {
+          MixerEngine.getInstance().setVolume(ch.trackId, ch.volume);
+          MixerEngine.getInstance().setPan(ch.trackId, ch.pan);
+          MixerEngine.getInstance().setMute(ch.trackId, ch.mute);
+        }
+        ```
+
+        ## P6 — expo-av: Use InterruptionMode enums, not deprecated constants
+        ```typescript
+        // WRONG
+        interruptionModeIOS: Audio.INTERRUPTION_MODE_IOS_DO_NOT_MIX,
+        // RIGHT
+        import { Audio, InterruptionModeIOS, InterruptionModeAndroid } from 'expo-av';
+        interruptionModeIOS: InterruptionModeIOS.DoNotMix,
+        interruptionModeAndroid: InterruptionModeAndroid.DuckOthers,
+        ```
+
+        ## P7 — Clock: drift correction, not raw setInterval
+        ```typescript
+        // WRONG — accumulates timing error
+        setInterval(() => { onStep(this.stepIndex++); }, stepMs);
+        // RIGHT — lookahead scheduling with nextStepTime tracking
+        // See AudioEngine skill for full pattern
+        ```
+
+        ## P8 — Knob/Fader: stale prop in gesture handler
+        ```typescript
+        // WRONG — value captured at mount, never updates
+        const pan = Gesture.Pan().onUpdate(e => {
+          onChange(value + e.translationY / -200); // `value` is stale
+        });
+        // RIGHT — capture startValue at gesture start
+        const startValue = useSharedValue(0);
+        const pan = Gesture.Pan()
+          .onStart(() => { startValue.value = currentValue.value; })
+          .onUpdate(e => {
+            runOnJS(onChange)(startValue.value + e.translationY / -200);
+          });
+        ```
+
+        ## P9 — WAV files: must be real audio data
+        // 24-byte "WAV" files are empty headers — expo-av loads nothing.
+        // Run scripts/generate-samples.js to create valid WAV files before
+        // any audio work. Verify: `ls -la assets/samples/` — all files > 1KB.
+
+        ## P10 — ErrorBoundary: must log errors
+        ```typescript
+        // WRONG — silently drops all render errors
+        componentDidCatch(error: Error) { /* log */ }
+        // RIGHT
+        componentDidCatch(error: Error, info: React.ErrorInfo) {
+          console.error('[ErrorBoundary]', error.message, info.componentStack);
+        }
+        ```
+
+      ".github/skills/audio-engine/SKILL.md": |
+        ---
+        name: audio-engine
+        description: >
+          Use when creating AudioEngine.ts, SequencerClock.ts, SamplerEngine.ts,
+          or SynthEngine.ts. Contains the complete correct implementation patterns
+          for expo-av audio handling and drift-correcting scheduling.
+        ---
+        # Audio Engine Patterns
+
+        ## AudioEngine.ts — Complete Pattern
+        ```typescript
+        import { Audio, InterruptionModeIOS, InterruptionModeAndroid } from 'expo-av';
+        import { SAMPLE_REQUIRES } from '../constants/sampleRequires';
+
+        type SoundPool = Map<string, Audio.Sound[]>;
+
+        export class AudioEngine {
+          private static instance: AudioEngine | null = null;
+          private pool: SoundPool = new Map();
+          private masterVolume = 1;
+          private initialized = false;
+
+          private constructor() {}
+
+          static getInstance(): AudioEngine {
+            if (!AudioEngine.instance) AudioEngine.instance = new AudioEngine();
+            return AudioEngine.instance;
+          }
+
+          async init(): Promise<void> {
+            if (this.initialized) return;
+            await Audio.setAudioModeAsync({
+              allowsRecordingIOS: false,
+              interruptionModeIOS: InterruptionModeIOS.DoNotMix,
+              playsInSilentModeIOS: true,
+              staysActiveInBackground: true,
+              shouldDuckAndroid: true,
+              interruptionModeAndroid: InterruptionModeAndroid.DuckOthers,
+              playThroughEarpieceAndroid: false,
+            });
+            this.initialized = true;
+          }
+
+          async preloadSamples(poolSize = 4): Promise<void> {
+            // Iterate SAMPLE_REQUIRES (static map) — never use dynamic require()
+            for (const [key, asset] of Object.entries(SAMPLE_REQUIRES)) {
+              const pool: Audio.Sound[] = [];
+              for (let i = 0; i < poolSize; i++) {
+                const sound = new Audio.Sound();
+                await sound.loadAsync(asset);  // asset is the result of require()
+                pool.push(sound);
+              }
+              this.pool.set(key, pool);
+            }
+          }
+
+          resume(): void { /* no-op — audio session stays active */ }
+
+          setMasterVolume(vol: number): void {
+            this.masterVolume = Math.max(0, Math.min(1, vol));
+          }
+
+          getMasterVolume(): number { return this.masterVolume; }
+          getPool(): SoundPool { return this.pool; }
+        }
+        ```
+
+        ## SequencerClock.ts — Drift-Correcting Pattern
+        ```typescript
+        export type StepCallback = (stepIndex: number) => void;
+
+        export class SequencerClock {
+          private static instance: SequencerClock | null = null;
+          private intervalId: ReturnType<typeof setInterval> | null = null;
+          private onStepCb: StepCallback | null = null;
+          private bpm = 120;
+          private swing = 0;
+          private running = false;
+          private stepIndex = 0;
+          private nextStepTime = 0;
+
+          private constructor() {}
+
+          static getInstance(): SequencerClock {
+            if (!SequencerClock.instance) SequencerClock.instance = new SequencerClock();
+            return SequencerClock.instance;
+          }
+
+          onStep(cb: StepCallback): void { this.onStepCb = cb; }
+
+          start(bpm: number, swing: number): void {
+            this.stop();
+            this.bpm = bpm;
+            this.swing = swing;
+            this.running = true;
+            this.stepIndex = 0;
+            this.nextStepTime = performance.now();
+            this.intervalId = setInterval(() => this.tick(), 10);
+          }
+
+          stop(): void {
+            if (this.intervalId !== null) clearInterval(this.intervalId);
+            this.intervalId = null;
+            this.running = false;
+            this.stepIndex = 0;
+          }
+
+          private tick(): void {
+            if (!this.running) return;
+            const now = performance.now();
+            const stepMs = 60000 / this.bpm / 4;
+            // Lookahead loop — fire any steps that are due within 5ms
+            while (this.nextStepTime <= now + 5) {
+              if (this.onStepCb) this.onStepCb(this.stepIndex);
+              this.stepIndex = (this.stepIndex + 1) % 16;
+              // Swing: delay every other step (1-based odd = 2nd, 4th, 6th...)
+              const isSwingStep = this.stepIndex % 2 === 1;
+              const swingMs = isSwingStep ? (this.swing / 100) * stepMs * 0.33 : 0;
+              this.nextStepTime += stepMs + swingMs;
+            }
+          }
+        }
+        ```
+
+        ## SamplerEngine.ts — Pool-Based Pattern
+        ```typescript
+        export class SamplerEngine {
+          private static instance: SamplerEngine | null = null;
+          private poolIndex: Map<string, number> = new Map();
+          private audioEngine = AudioEngine.getInstance();
+
+          private constructor() {}
+
+          static getInstance(): SamplerEngine {
+            if (!SamplerEngine.instance) SamplerEngine.instance = new SamplerEngine();
+            return SamplerEngine.instance;
+          }
+
+          play(sampleKey: string, velocity: number, volume: number, pan: number): void {
+            const pool = this.audioEngine.getPool().get(sampleKey);
+            if (!pool || pool.length === 0) return;
+            const idx = (this.poolIndex.get(sampleKey) ?? 0) % pool.length;
+            this.poolIndex.set(sampleKey, idx + 1);
+            const sound = pool[idx];
+            const vol = (velocity / 127) * volume * this.audioEngine.getMasterVolume();
+            // Use Promise.all to avoid await blocking the scheduler thread
+            Promise.all([
+              sound.setStatusAsync({ volume: vol, isLooping: false }),
+              sound.replayAsync(),
+            ]).catch(() => {/* ignore playback errors */});
+          }
+        }
+        ```
+
+        ## SampleRequires constant (src/constants/sampleRequires.ts)
+        This file MUST exist and contain the static require map.
+        ```typescript
+        // IMPORTANT: All require() calls must be literal static strings.
+        // Metro bundler resolves these at build time. No dynamic paths allowed.
+        export const SAMPLE_REQUIRES: Record<string, ReturnType<typeof require>> = {
+          kick:       require('../../assets/samples/kick.wav'),
+          snare:      require('../../assets/samples/snare.wav'),
+          hihat:      require('../../assets/samples/hihat.wav'),
+          clap:       require('../../assets/samples/clap.wav'),
+          tom:        require('../../assets/samples/tom.wav'),
+          perc:       require('../../assets/samples/perc.wav'),
+          bass_synth: require('../../assets/samples/bass_synth_C3.wav'),
+          lead_synth: require('../../assets/samples/lead_synth_C4.wav'),
+        };
+        ```
+
+        ## WAV Generation Script (scripts/generate-samples.js)
+        Run this script ONCE to create valid audible WAV placeholder samples.
+        Each produces a short sine burst so audio actually plays.
+        ```javascript
+        #!/usr/bin/env node
+        const fs = require('fs');
+        const path = require('path');
+
+        const SAMPLE_RATE = 44100;
+        const CHANNELS = 1;
+        const BIT_DEPTH = 16;
+
+        // Frequencies (Hz) for each sample
+        const SAMPLES = {
+          'kick.wav':           60,
+          'snare.wav':          300,
+          'hihat.wav':          8000,
+          'clap.wav':           1200,
+          'tom.wav':            120,
+          'perc.wav':           500,
+          'bass_synth_C3.wav':  131,
+          'lead_synth_C4.wav':  262,
+        };
+
+        function generateWav(freq, durationMs = 200) {
+          const numSamples = Math.floor(SAMPLE_RATE * durationMs / 1000);
+          const dataSize = numSamples * CHANNELS * (BIT_DEPTH / 8);
+          const buffer = Buffer.alloc(44 + dataSize);
+          // RIFF header
+          buffer.write('RIFF', 0); buffer.writeUInt32LE(36 + dataSize, 4);
+          buffer.write('WAVE', 8); buffer.write('fmt ', 12);
+          buffer.writeUInt32LE(16, 16); buffer.writeUInt16LE(1, 20);  // PCM
+          buffer.writeUInt16LE(CHANNELS, 22);
+          buffer.writeUInt32LE(SAMPLE_RATE, 24);
+          buffer.writeUInt32LE(SAMPLE_RATE * CHANNELS * BIT_DEPTH / 8, 28);
+          buffer.writeUInt16LE(CHANNELS * BIT_DEPTH / 8, 32);
+          buffer.writeUInt16LE(BIT_DEPTH, 34);
+          buffer.write('data', 36); buffer.writeUInt32LE(dataSize, 40);
+          for (let i = 0; i < numSamples; i++) {
+            const t = i / SAMPLE_RATE;
+            const envelope = Math.exp(-t * 15); // fast decay
+            const sample = Math.sin(2 * Math.PI * freq * t) * envelope;
+            const pcm = Math.round(sample * 32767 * 0.8);
+            buffer.writeInt16LE(Math.max(-32768, Math.min(32767, pcm)), 44 + i * 2);
+          }
+          return buffer;
+        }
+
+        const outDir = path.join(__dirname, '../assets/samples');
+        fs.mkdirSync(outDir, { recursive: true });
+        for (const [name, freq] of Object.entries(SAMPLES)) {
+          const out = path.join(outDir, name);
+          fs.writeFileSync(out, generateWav(freq));
+          const stat = fs.statSync(out);
+          console.log(`Generated ${name} (${stat.size} bytes)`);
+        }
+        console.log('Done. All samples ready.');
+        ```
+
       ".github/skills/integration-wiring/SKILL.md": |
         ---
-        description: "Ensure all modules are wired together — stores call engines, screens use stores, init hook bootstraps everything"
+        name: integration-wiring
+        description: >
+          Use when creating stores, hooks, or any module that connects to an
+          engine. Every wiring connection in this skill is MANDATORY. After
+          creating any file, trace the relevant paths below and verify they work.
         ---
-        # Integration Wiring
+        # Integration Wiring — Mandatory Connection Checklist
 
-        EVERY module you create must be connected to the rest of the system.
-        Disconnected code is a critical bug.
+        ## The 3 Critical Paths (must all work end-to-end)
 
-        ## Mandatory Wiring Checklist
-        1. **useAudioSetup hook** (src/hooks/useAudioSetup.ts):
-           - Called in root _layout.tsx
-           - Creates AudioEngine, SequencerClock, SamplerEngine, MixerEngine instances
-           - Creates 8 MixerEngine channels (one per default track)
-           - Subscribes mixerStore changes → MixerEngine.setTrackVolume/Pan
-           - Returns { isReady: boolean }
-           - App renders loading screen until isReady === true
+        ### Path A: Play → Audio
+        User taps Play button
+          → TransportBar calls transportStore.play()
+          → play() calls AudioEngine.getInstance().resume()
+          → play() calls SequencerClock.getInstance().start(bpm, swing)
+          → set({ isPlaying: true })
+          → Clock ticks → fires onStep(stepIndex)
+          → onStep reads sequencerStore.getState().getCurrentPattern()
+          → For each track with active step:
+              drum/sampler: SamplerEngine.getInstance().play(
+                t.sampleKey, step.velocity,
+                MixerEngine.getInstance().getEffectiveVolume(t.id), 0)
+              synth: SynthEngine.getInstance().play(step.note ?? 'C4', step.velocity)
+          → transportStore.getState().setCurrentStep(stepIndex)
+          → StepGrid re-renders with new highlighted column
 
-        2. **transportStore.play()** must:
-           - Call AudioEngine.getInstance().resume()
-           - Call SequencerClock.getInstance().start(bpm, swing)
-           - Set isPlaying = true
+        ### Path B: Fader → Volume
+        User drags MixerChannel fader
+          → Gesture.Pan updates → runOnJS(handleVolumeChange)(newValue)
+          → handleVolumeChange calls mixerStore.setVolume(trackId, newValue)
+          → setVolume calls MixerEngine.getInstance().setVolume(trackId, newValue)
+          → set() updates store for UI
+          → Next SamplerEngine.play() uses new getEffectiveVolume()
 
-        3. **transportStore.stop()** must:
-           - Call SequencerClock.getInstance().stop()
-           - Set isPlaying = false, currentStep = 0
+        ### Path C: App Launch → Ready
+        _layout.tsx renders
+          → useAudioSetup() is called (ONLY in root layout, never in tab screens)
+          → setIsReady(false) — show loading indicator
+          → await AudioEngine.getInstance().init()
+          → await AudioEngine.getInstance().preloadSamples()
+          → MixerEngine.getInstance().initChannels(DEFAULT_TRACKS)
+          → await SynthEngine.getInstance().preloadNotes()
+          → SequencerClock.getInstance().onStep(stepCallback)  ← sets up the callback
+          → setIsReady(true) — reveal app
+          → App is navigable, audio is playable
 
-        4. **SequencerClock.onStep(stepIndex)** callback must:
-           - Read sequencerStore.getState().getCurrentPattern()
-           - For each track, check if step at stepIndex is active
-           - If active and track.type === 'drum': SamplerEngine.play(track.sampleKey, step.velocity)
-           - If active and track.type === 'synth': SynthEngine.play(step.note, step.velocity)
-           - Call transportStore.getState().setCurrentStep(stepIndex)
+        ## useAudioSetup.ts — Step Callback Implementation
+        The onStep callback is the heart of the sequencer. It must be exact:
+        ```typescript
+        SequencerClock.getInstance().onStep((stepIndex: number) => {
+          const { getCurrentPattern, tracks } = useSequencerStore.getState();
+          const { setCurrentStep } = useTransportStore.getState();
+          const me = MixerEngine.getInstance();
+          const pattern = getCurrentPattern();
 
-        5. **Each screen** must import its store and use selectors:
-           - Sequencer screen: useSequencerStore + useTransportStore
-           - Pads screen: useSequencerStore + useSamplerEngine
-           - Synth screen: useSynthStore
-           - Mixer screen: useMixerStore
-           - Settings screen: useTransportStore + useProjectStore
+          for (const track of tracks) {
+            const step = pattern.steps[track.id]?.[stepIndex];
+            if (!step?.active) continue;
+            const effectiveVol = me.getEffectiveVolume(track.id);
+            if (effectiveVol === 0) continue; // muted or non-solo
+            if (track.type === 'drum' || track.type === 'sampler') {
+              SamplerEngine.getInstance().play(
+                track.sampleKey ?? track.id,
+                step.velocity,
+                effectiveVol,
+                0
+              );
+            } else if (track.type === 'synth') {
+              SynthEngine.getInstance().play(step.note ?? 'C4', step.velocity);
+            }
+          }
+          setCurrentStep(stepIndex);
+        });
+        ```
 
-        6. **Every store action** that changes audio state must call
-           the corresponding engine method. No store exists in isolation.
+        ## Cleanup on Unmount
+        useAudioSetup MUST return a cleanup function:
+        ```typescript
+        useEffect(() => {
+          let mounted = true;
+          async function setup() { /* ... */ if (mounted) setIsReady(true); }
+          setup();
+          return () => {
+            mounted = false;
+            SequencerClock.getInstance().stop();
+            // Do NOT destroy Audio.Sound objects — they take time and may
+            // cause issues on fast remounts. Just stop the clock.
+          };
+        }, []);
+        ```
 
-        ## Verification
-        After creating all files, mentally trace these paths:
-        - User taps Play → transportStore.play() → AudioEngine.resume() → SequencerClock.start() → onStep() → SamplerEngine.play() → sound plays
-        - User moves fader → MixerChannel.onVolumeChange → mixerStore.setVolume() → MixerEngine.setTrackVolume() → next sample plays at new volume
-        - App launches → _layout.tsx → useAudioSetup() → engines init → stores hydrated → screens render
+        ## Verification Commands (run after creating wiring)
+        ```bash
+        # Verify transportStore calls both engines
+        grep -c "AudioEngine\|SequencerClock" src/stores/transportStore.ts
+        # Must output: 4 or more
 
-      ".github/skills/dependency-validation/SKILL.md": |
-        ---
-        description: "Only use npm packages that actually exist — verify before adding"
-        ---
-        # Dependency Validation
+        # Verify mixerStore calls MixerEngine for every action
+        grep -c "MixerEngine" src/stores/mixerStore.ts
+        # Must output: 4 or more (setVolume, setPan, setMute, setSolo)
 
-        ## Rules
-        1. **NEVER add a package to package.json unless you are certain it
-           exists on npm.** If unsure, use a known alternative.
-        2. **Approved packages** (known to exist):
-           - expo, expo-router, expo-av, expo-haptics, expo-font
-           - expo-splash-screen, expo-status-bar, expo-constants
-           - react-native, react-native-reanimated, react-native-gesture-handler
-           - react-native-safe-area-context, react-native-screens
-           - @react-native-async-storage/async-storage
-           - zustand, typescript, @expo/vector-icons
-           - react-native-svg (for any SVG graphics)
-        3. **BANNED packages** (do NOT exist or are unreliable):
-           - react-native-audio-api (DOES NOT EXIST on npm)
-           - expo-audio-stream
-           - react-native-web-audio-api
-           - Any package with fewer details than "audio" in its name — verify first
-        4. **For audio playback**, use `expo-av` — it is the standard Expo
-           audio package. Import as: `import { Audio } from 'expo-av';`
-        5. Pin all versions in package.json to specific ranges (e.g., ~52.0.0)
+        # Verify useAudioSetup sets up the clock callback
+        grep -c "onStep\|SamplerEngine\|setCurrentStep" src/hooks/useAudioSetup.ts
+        # Must output: 3 or more
+
+        # Verify no disconnected engine calls
+        grep -rn "getInstance()" src/stores/ | wc -l
+        # Should be > 8
+        ```
 
       ".github/skills/strict-types/SKILL.md": |
         ---
-        description: "Enforce strict TypeScript — no any, no shims, no type escape hatches"
+        name: strict-types
+        description: >
+          Use when writing any TypeScript file. Enforces strict mode rules,
+          provides correct typing patterns for Zustand v5, expo-av, and
+          react-native-reanimated.
         ---
         # Strict TypeScript Rules
 
-        ## ABSOLUTE PROHIBITIONS
-        1. **NEVER create a .d.ts shim file** that declares modules as `any`.
-           For example, NEVER create `src/types/shims.d.ts` with:
-           `declare module 'some-package' { const x: any; export default x; }`
-           This defeats the entire purpose of TypeScript.
+        ## Absolute Prohibitions
+        1. NEVER create a .d.ts shim file. Never: `declare module 'x' { const v: any; }`
+        2. NEVER use `as any` type assertion
+        3. NEVER use `// @ts-ignore` or `// @ts-expect-error`
+        4. NEVER use `Record<string, any>` — specify the value type
 
-        2. **NEVER use `as any`** type assertion anywhere in the codebase.
-
-        3. **NEVER use `// @ts-ignore` or `// @ts-expect-error`** unless
-           there is a genuine library type bug with a comment explaining why.
-
-        ## WHAT TO DO INSTEAD
-        - If a package doesn't have types, write proper interface declarations
-          based on the actual API shape you're using.
-        - If you get a type error, fix the root cause — don't suppress it.
-        - Use proper generics for Zustand stores:
-          `create<StoreInterface>()((set, get) => ({ ... }))`
-        - Use proper typing for React Native components:
-          `StyleSheet.create({ ... })` returns properly typed styles.
-        - For expo-av: `import { Audio, AVPlaybackStatus } from 'expo-av';`
-          The types ship with the package.
-
-        ## Store Typing Pattern
+        ## Zustand v5 Store Typing
         ```typescript
+        import { create } from 'zustand';  // named export
+
         interface TransportStore {
           isPlaying: boolean;
           bpm: number;
-          play: () => void;
+          swing: number;
+          currentStep: number;
+          currentPatternId: string | null;
+          lastTaps: number[];
+          play: () => Promise<void>;
           stop: () => void;
+          setBpm: (bpm: number) => void;
+          setSwing: (swing: number) => void;
+          setCurrentStep: (step: number) => void;
+          tapTempo: () => void;
         }
-        export const useTransportStore = create<TransportStore>()((set, get) => ({
+
+        const useTransportStore = create<TransportStore>()((set, get) => ({
           isPlaying: false,
           bpm: 120,
-          play: () => { /* engine calls + set({ isPlaying: true }) */ },
-          stop: () => { /* engine calls + set({ isPlaying: false }) */ },
+          // ... full implementation
         }));
+        ```
+
+        ## expo-av Typing
+        ```typescript
+        import { Audio, InterruptionModeIOS, InterruptionModeAndroid, AVPlaybackStatus } from 'expo-av';
+        // Audio.Sound is a class — typed pool:
+        const pool: Audio.Sound[] = [];
+        const sound = new Audio.Sound();
+        ```
+
+        ## Reanimated Typing
+        ```typescript
+        import Animated, {
+          useSharedValue, useAnimatedStyle, withSpring, withTiming,
+          SharedValue, runOnJS
+        } from 'react-native-reanimated';
+        import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+        // SharedValue<number> is the correct type annotation
+        const sv: SharedValue<number> = useSharedValue(0);
+        ```
+
+        ## Fixing `makeEmptySteps` — no `any`
+        ```typescript
+        // WRONG
+        function makeEmptySteps(): Record<string, any> { ... }
+        // RIGHT
+        function makeEmptySteps(tracks: Track[]): Record<string, Step[]> {
+          const steps: Record<string, Step[]> = {};
+          for (const t of tracks) {
+            steps[t.id] = Array.from({ length: 16 }, (_, i) => ({
+              index: i, active: false, velocity: 100,
+            }));
+          }
+          return steps;
+        }
+        ```
+
+        ## Gesture Handler with proper types
+        ```typescript
+        import { Gesture, GestureDetector, PanGestureHandlerEventPayload } from
+          'react-native-gesture-handler';
+        // Pan gesture with typed event:
+        const pan = Gesture.Pan()
+          .onStart(() => { /* ... */ })
+          .onUpdate((e) => {
+            // e is PanGestureHandlerEventPayload — no cast needed
+            runOnJS(onChange)(startVal.value + e.translationY / -200);
+          });
         ```
 
       ".github/skills/react-native-quality/SKILL.md": |
         ---
-        description: "React Native + Expo quality patterns — components, animation, performance"
+        name: react-native-quality
+        description: >
+          Use when creating components or screens. Enforces component quality
+          standards: no stubs, minimum content requirements, correct animation
+          patterns, accessibility requirements.
         ---
-        # React Native Quality Patterns
+        # React Native Quality Standards
 
-        ## Expo Router
-        - File-based routing in `src/app/`. Tab layout in `src/app/(tabs)/_layout.tsx`.
-        - Each tab file exports a default component that is a FULL SCREEN,
-          not a 5-line stub. Minimum 30 lines per screen with real UI.
+        ## Minimum Component Requirements
+        Every component must:
+        1. Render real, meaningful UI — no `<Text>Content goes here</Text>`
+        2. Use StyleSheet.create() — no inline style objects
+        3. Have accessibilityLabel on ALL interactive elements
+        4. Use React.memo() if it receives props that change frequently
+        5. Use useCallback() for any function passed as a prop
 
-        ## Component Rules
-        - Every component must render meaningful UI, not placeholder text.
-        - `<Text>Settings will go here</Text>` is NEVER acceptable.
-        - Settings screen MUST have: BPM slider, swing slider, project name
-          input, about section with version number, reset button.
-        - Each screen must have a TransportBar at the top for quick access.
-        - Use `StyleSheet.create()` — no inline styles.
-        - Use `SafeAreaView` from react-native-safe-area-context as root.
+        ## Screen Minimum Requirements
+        - Sequencer: TransportBar + PatternSelector + StepGrid + all wired
+        - Pads: TransportBar + 8 drum pads in 2×4 grid, all tappable, haptic
+        - Synth: TransportBar + waveform selector + ADSR faders + filter knobs
+        - Mixer: TransportBar + MixerView with all 8 channels, scrollable
+        - Settings: BPM slider + swing slider + project save/load + version
 
-        ## Reanimated Rules
-        - Use `useSharedValue`, `useAnimatedStyle`, `withTiming`/`withSpring`.
-        - NEVER use `useSharedValue` inside a `.map()` or loop — create the
-          shared values array OUTSIDE the loop with a fixed size.
-        - For step grid highlighting: use one `useSharedValue<number>` for
-          currentStep, and in each cell check `if (index === currentStep.value)`.
+        ## Animated Step Grid — Correct Pattern
+        ```typescript
+        const StepGrid: React.FC = React.memo(() => {
+          const tracks = useSequencerStore(s => s.tracks);
+          const currentStep = useTransportStore(s => s.currentStep);
+          const isPlaying = useTransportStore(s => s.isPlaying);
+          const toggleStep = useSequencerStore(s => s.toggleStep);
+          const getCurrentPattern = useSequencerStore(s => s.getCurrentPattern);
+          const pattern = getCurrentPattern();
 
-        ## Gesture Handler
-        - Use `GestureDetector` with `Gesture.Tap()`, `Gesture.Pan()`.
-        - Knob: Pan gesture → rotate based on translationY → update store.
-        - Fader: Pan gesture → translate based on translationY → update store.
-        - Pad: Tap gesture → trigger sample + haptic + scale animation.
+          // ONE shared value for current step — not an array, not in .map()
+          const stepSV = useSharedValue(currentStep);
+          useEffect(() => { stepSV.value = currentStep; }, [currentStep]);
 
-        ## Zustand
-        - One store per domain: transport, sequencer, mixer, synth, project.
-        - Use `subscribeWithSelector` middleware.
-        - Use selectors with shallow equality: `useStore(s => s.bpm)`.
-        - Store actions MUST call engine methods (see integration-wiring skill).
+          return (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+              {tracks.map(track => (
+                <View key={track.id} style={styles.row}>
+                  {Array.from({ length: 16 }, (_, col) => {
+                    const step = pattern.steps[track.id]?.[col];
+                    return (
+                      <StepCell
+                        key={col}
+                        col={col}
+                        active={!!step?.active}
+                        velocity={step?.velocity ?? 100}
+                        stepSV={stepSV}
+                        isPlaying={isPlaying}
+                        onPress={() => toggleStep(track.id, col)}
+                        color={track.color ?? '#ff6b35'}
+                      />
+                    );
+                  })}
+                </View>
+              ))}
+            </ScrollView>
+          );
+        });
+        ```
 
-        ## Performance
-        - Wrap heavy components in `React.memo()`.
-        - Use `useCallback` for event handlers passed as props.
-        - Use `useMemo` for expensive computations (e.g., building grid data).
+        ## StepCell — Extracted for memo() performance
+        ```typescript
+        const StepCell = React.memo(({ col, active, velocity, stepSV, isPlaying, onPress, color }: {
+          col: number; active: boolean; velocity: number;
+          stepSV: SharedValue<number>; isPlaying: boolean;
+          onPress: () => void; color: string;
+        }) => {
+          const animStyle = useAnimatedStyle(() => ({
+            borderColor: isPlaying && stepSV.value === col ? color : 'rgba(255,255,255,0.04)',
+            borderWidth: isPlaying && stepSV.value === col ? 2 : 1,
+          }));
+          const tap = Gesture.Tap().onEnd(runOnJS(onPress));
+          return (
+            <GestureDetector gesture={tap}>
+              <Animated.View
+                style={[styles.cell, animStyle,
+                  active ? { backgroundColor: color, opacity: velocity / 127 } : {}]}
+                accessibilityLabel={`Step ${col + 1} ${active ? 'active' : 'inactive'}`}
+                accessibilityRole="button"
+              />
+            </GestureDetector>
+          );
+        });
+        ```
+
+        ## Drum Pad — Complete Implementation
+        ```typescript
+        const PadButton = React.memo(({ track, onPress }: {
+          track: Track; onPress: (id: string, sampleKey?: string) => void;
+        }) => {
+          const scale = useSharedValue(1);
+          const animStyle = useAnimatedStyle(() => ({
+            transform: [{ scale: withSpring(scale.value, { damping: 15 }) }],
+          }));
+          const tap = Gesture.Tap()
+            .onBegin(() => { scale.value = 0.88; })
+            .onFinalize(() => { scale.value = 1; })
+            .onEnd(() => { runOnJS(onPress)(track.id, track.sampleKey); });
+          return (
+            <GestureDetector gesture={tap}>
+              <Animated.View
+                style={[styles.pad, { borderColor: track.color }, animStyle]}
+                accessibilityLabel={`${track.name} drum pad`}
+                accessibilityRole="button"
+              >
+                <Text style={styles.padName}>{track.name}</Text>
+              </Animated.View>
+            </GestureDetector>
+          );
+        });
+        ```
+
+        ## Settings Screen — Must Be Functional, Not a Stub
+        Settings MUST contain:
+        - BPM: Slider (60–240) + TextInput + setBpm()
+        - Swing: Slider (0–100) + setSwing()
+        - Project name: TextInput
+        - Save Project button → projectStore.saveProject()
+        - Load Project button → projectStore.loadProject()
+        - Reset All button → resets all stores to defaults
+        - App version display from app.json
 
       ".github/skills/verification-gates/SKILL.md": |
         ---
-        description: "Verify code works before claiming completion — compile, trace, test"
+        name: verification-gates
+        description: >
+          Use at the end of every step. Run ALL commands. If any check fails,
+          fix the issue and re-run before declaring the step complete.
+          These gates catch the bugs that TypeScript alone does not.
         ---
-        # Verification Gates
+        # Verification Gates — Run After Every Step
 
-        ## After EVERY major batch of file creation, run:
-        1. `npx tsc --noEmit` — fix ALL type errors before proceeding
-        2. `find /workspace/src -name "*.ts" -o -name "*.tsx" | head -50` — verify
-           all expected files exist
+        ## Gate 1: TypeScript (catches type errors)
+        ```bash
+        cd /workspace && npx tsc --noEmit 2>&1
+        # Required: zero errors. Fix ALL before proceeding.
+        ```
 
-        ## Before claiming ANY step is complete:
-        1. **Trace the play path**: Read transportStore.play() and verify it
-           calls AudioEngine and SequencerClock. Read SequencerClock.onStep and
-           verify it reads the pattern and triggers samples.
-        2. **Trace the UI path**: Read each screen file and verify it imports
-           a store and renders components that use store data.
-        3. **Check for stubs**: `grep -r "will go here\|TODO\|placeholder\|stub" /workspace/src/`
-           — if any found, fix them immediately.
-        4. **Check for shims**: `ls /workspace/src/types/shims*` — if any shim
-           files exist, DELETE them and fix imports properly.
-        5. **Check disconnected stores**: For each store, verify at least one
-           screen imports it. For each engine, verify at least one store calls it.
+        ## Gate 2: ESLint (catches hooks violations and any usage)
+        ```bash
+        cd /workspace && npx eslint --ext .ts,.tsx src/ 2>&1
+        # Required: zero errors. Warnings are acceptable but should be fixed.
+        ```
 
-        ## Fix Process
-        - Read the file before editing
-        - Fix one error at a time
-        - Re-run tsc after each fix batch
-        - Show evidence (command output) that the error is resolved
-  mcpSidecars:
-    - name: code-exec
-      image: docker.io/yakdhane/mcp-code-exec:deploy-20260319-090333
-      port: 8090
-  storage:
-    size: 2Gi
+        ## Gate 3: File existence
+        ```bash
+        find /workspace/src -name "*.ts" -o -name "*.tsx" | sort
+        # After foundation step: minimum 20 files
+        # After implement step: minimum 32 files
+        # After polish step: minimum 35 files
+        ```
+
+        ## Gate 4: No placeholder text (catches stub screens)
+        ```bash
+        grep -rn "will go here\|TODO\|FIXME\|placeholder\|stub\|coming soon" /workspace/src/
+        # Required: zero matches
+        ```
+
+        ## Gate 5: No type escapes (catches any usage)
+        ```bash
+        grep -rn "as any\|: any\b\|<any>" /workspace/src/
+        # Required: zero matches (excluding comments explaining why a cast is unavoidable)
+        ```
+
+        ## Gate 6: No shim files
+        ```bash
+        find /workspace/src -name "shims*" -o -name "*.d.ts" | grep -v node_modules
+        # Required: zero matches
+        ```
+
+        ## Gate 7: Correct Zustand import (catches v4 syntax)
+        ```bash
+        grep -rn "^import create from 'zustand'" /workspace/src/
+        # Required: zero matches (must use named import { create })
+        grep -rn "from 'zustand'" /workspace/src/
+        # All lines must show: import { create } from 'zustand'
+        ```
+
+        ## Gate 8: No dynamic require (catches Metro bundler bug)
+        ```bash
+        grep -rn "require('.*' +" /workspace/src/
+        grep -rn 'require(".*" +' /workspace/src/
+        grep -rn "require(\`" /workspace/src/
+        # Required: zero matches
+        ```
+
+        ## Gate 9: Engine wiring (catches disconnected stores)
+        ```bash
+        grep -c "AudioEngine\|SequencerClock" /workspace/src/stores/transportStore.ts
+        # Required: >= 4 (both engines called in play, stop, setBpm, setSwing)
+        grep -c "MixerEngine" /workspace/src/stores/mixerStore.ts
+        # Required: >= 4 (called in setVolume, setPan, setMute, setSolo)
+        grep -c "onStep\|SamplerEngine\|setCurrentStep" /workspace/src/hooks/useAudioSetup.ts
+        # Required: >= 3
+        ```
+
+        ## Gate 10: Real WAV files (catches empty placeholder audio)
+        ```bash
+        ls -la /workspace/assets/samples/*.wav | awk '{print $5, $9}'
+        # Required: every file > 1000 bytes. If any file < 1000 bytes,
+        # run: node scripts/generate-samples.js
+        ```
+
+        ## Gate 11: Unit tests exist and pass
+        ```bash
+        cd /workspace && npx jest --passWithNoTests 2>&1 | tail -20
+        # Required: all test files pass (or no test files yet — acceptable in foundation step only)
+        # After polish step: tests/engine/ must exist and pass
+        ```
+
+        ## Gate 12: Integration trace (manual, read and verify)
+        Read these files and trace the play path manually:
+        1. src/app/_layout.tsx — confirm useAudioSetup() is called here
+        2. src/hooks/useAudioSetup.ts — confirm onStep callback triggers samples
+        3. src/stores/transportStore.ts — confirm play() calls AudioEngine + Clock
+        4. src/engine/SequencerClock.ts — confirm drift-correcting tick() exists
+        5. src/engine/AudioEngine.ts — confirm SAMPLE_REQUIRES used, not dynamic require

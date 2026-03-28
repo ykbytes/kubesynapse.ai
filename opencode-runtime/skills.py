@@ -67,8 +67,8 @@ def ensure_runtime_directories() -> None:
         path.mkdir(parents=True, exist_ok=True)
 
 
-def parse_skill_frontmatter(path: str, content: str) -> tuple[str, list[str]]:
-    """Extract the canonical skill name and warnings from a skill file."""
+def parse_skill_frontmatter(path: str, content: str) -> tuple[str, str, list[str]]:
+    """Extract the canonical skill name, description, and warnings from a skill file."""
 
     def _normalize_skill_name(candidate: str) -> str:
         lowered = candidate.strip().lower()
@@ -78,16 +78,18 @@ def parse_skill_frontmatter(path: str, content: str) -> tuple[str, list[str]]:
 
     default_name = _normalize_skill_name(Path(path).parent.name or Path(path).stem or "skill")
     warnings: list[str] = []
+    description = ""
     if not content.startswith("---"):
-        return default_name, warnings
+        return default_name, description, warnings
     parts = content.split("---", 2)
     if len(parts) < 3:
-        return default_name, warnings
+        return default_name, description, warnings
     try:
         frontmatter = yaml.safe_load(parts[1]) or {}
     except yaml.YAMLError as exc:
         warnings.append(f"Unable to parse skill frontmatter for '{path}': {exc}")
-        return default_name, warnings
+        return default_name, description, warnings
+    description = str(frontmatter.get("description") or "").strip()
     name = _normalize_skill_name(str(frontmatter.get("name") or default_name))
     if not SKILL_NAME_RE.fullmatch(name) or len(name) > 64:
         warnings.append(
@@ -96,7 +98,7 @@ def parse_skill_frontmatter(path: str, content: str) -> tuple[str, list[str]]:
         name = default_name
     if name != default_name:
         warnings.append(f"Materialized skill '{path}' as '{name}' for OpenCode discovery.")
-    return name or default_name, warnings
+    return name or default_name, description, warnings
 
 
 def materialize_opencode_config_files() -> list[str]:
@@ -118,22 +120,27 @@ def materialize_opencode_config_files() -> list[str]:
     return sorted(written_files)
 
 
-def materialize_skill_files() -> tuple[list[str], list[str]]:
-    """Write operator-injected skill files to the OpenCode skills directory."""
+def materialize_skill_files() -> tuple[list[str], list[dict[str, str]], list[str]]:
+    """Write operator-injected skill files to the OpenCode skills directory.
+
+    Returns (written_files, skill_meta, warnings) where skill_meta is a list of
+    dicts with keys ``name``, ``description``, ``file``, and ``content``.
+    """
     payload = _parse_json_env(AGENT_SKILL_FILES_ENV)
     if payload is None:
-        return [], []
+        return [], [], []
     if not isinstance(payload, dict):
         raise RuntimeError(f"{AGENT_SKILL_FILES_ENV} must be a JSON object")
 
     written_files: list[str] = []
+    skill_meta: list[dict[str, str]] = []
     warnings: list[str] = []
     seen_names: set[str] = set()
     skills_root = Path(OPENCODE_CONFIG_DIR) / "skills"
 
     for raw_path, raw_content in payload.items():
         content = str(raw_content)
-        skill_name, skill_warnings = parse_skill_frontmatter(str(raw_path), content)
+        skill_name, skill_description, skill_warnings = parse_skill_frontmatter(str(raw_path), content)
         warnings.extend(skill_warnings)
         if skill_name in seen_names:
             warnings.append(f"Skipping duplicate skill '{skill_name}' while materializing OpenCode skills.")
@@ -142,9 +149,22 @@ def materialize_skill_files() -> tuple[list[str], list[str]]:
         target = skills_root / skill_name / "SKILL.md"
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(f"{content.rstrip()}\n", encoding="utf-8")
-        written_files.append(target.relative_to(Path(OPENCODE_CONFIG_DIR)).as_posix())
+        rel_path = target.relative_to(Path(OPENCODE_CONFIG_DIR)).as_posix()
+        written_files.append(rel_path)
+        # Strip YAML frontmatter for the content injected into the prompt
+        body = content
+        if content.startswith("---"):
+            parts = content.split("---", 2)
+            if len(parts) >= 3:
+                body = parts[2].strip()
+        skill_meta.append({
+            "name": skill_name,
+            "description": skill_description,
+            "file": str(target),
+            "content": body,
+        })
 
-    return sorted(written_files), dedupe_items(warnings)
+    return sorted(written_files), skill_meta, dedupe_items(warnings)
 
 
 def load_opencode_sidecars() -> list[dict[str, Any]]:

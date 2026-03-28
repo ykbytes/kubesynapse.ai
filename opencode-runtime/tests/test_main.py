@@ -88,20 +88,25 @@ class OpenCodeRuntimeTests(unittest.TestCase):
                 clear=False,
             ),
         ):
-            written, warnings = opencode_runtime_main.materialize_skill_files()
+            written, skill_meta, warnings = opencode_runtime_main.materialize_skill_files()
             target = Path(skills_mod.OPENCODE_CONFIG_DIR) / "skills" / "reviewer" / "SKILL.md"
 
             self.assertEqual(written, ["skills/reviewer/SKILL.md"])
             self.assertEqual(warnings, [])
             self.assertEqual(target.read_text(encoding="utf-8"), skill_text)
+            self.assertEqual(len(skill_meta), 1)
+            self.assertEqual(skill_meta[0]["name"], "reviewer")
+            self.assertEqual(skill_meta[0]["description"], "Review code conservatively.")
+            self.assertEqual(skill_meta[0]["content"], "Review code and focus on regressions.")
 
     def test_parse_skill_frontmatter_normalizes_invalid_name(self) -> None:
         content = "---\nname: My_Invalid Skill Name!!!\ndescription: Test skill\n---\nBody\n"
-        name, warnings = opencode_runtime_main.parse_skill_frontmatter(
+        name, description, warnings = opencode_runtime_main.parse_skill_frontmatter(
             ".github/skills/reviewer/SKILL.md",
             content,
         )
         self.assertEqual(name, "my-invalid-skill-name")
+        self.assertEqual(description, "Test skill")
         self.assertTrue(any("Materialized skill" in warning for warning in warnings))
 
     def test_parse_skill_frontmatter_falls_back_for_overlong_name(self) -> None:
@@ -112,7 +117,7 @@ class OpenCodeRuntimeTests(unittest.TestCase):
             "---\n"
             "Body\n"
         )
-        name, warnings = opencode_runtime_main.parse_skill_frontmatter(
+        name, description, warnings = opencode_runtime_main.parse_skill_frontmatter(
             ".github/skills/reviewer/SKILL.md",
             content,
         )

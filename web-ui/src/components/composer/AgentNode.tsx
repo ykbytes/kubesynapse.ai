@@ -134,6 +134,26 @@ function LoopProgressBar({ data }: { data: AgentStepNodeData }) {
   );
 }
 
+function PlanProgressBar({ data }: { data: AgentStepNodeData }) {
+  const pp = data.stepState?.planProgress;
+  if (!pp || pp.totalItems === 0 || data.stepState?.loopProgress) return null;
+  const pct = Math.round((pp.completedItems / pp.totalItems) * 100);
+  return (
+    <div className="mt-1.5">
+      <div className="flex items-center justify-between text-[9px] text-muted-foreground mb-0.5">
+        <span>Plan</span>
+        <span>{pp.completedItems}/{pp.totalItems} tasks</span>
+      </div>
+      <div className="h-1 w-full rounded-full bg-muted">
+        <div
+          className="h-1 rounded-full bg-sky-500 transition-all duration-300"
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
 function LatencyBadge({ ms }: { ms?: number | null }) {
   if (ms == null) return null;
   const label = ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
@@ -255,6 +275,8 @@ export function AgentNode({ data, selected }: NodeProps<AgentStepNode>) {
 
         {/* Loop progress bar */}
         <LoopProgressBar data={data} />
+        {/* Plan progress bar */}
+        <PlanProgressBar data={data} />
 
         {/* Error preview */}
         {status === "failed" && data.stepState?.error && (

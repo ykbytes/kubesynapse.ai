@@ -17,6 +17,7 @@ import {
   listWorkflows,
   triggerWorkflow,
   cancelWorkflow,
+  retryFailedSteps,
   updateAgent,
   updateEval,
   updateWorkflow,
@@ -98,6 +99,7 @@ export interface WorkspaceContextValue {
   deletingWorkflow: boolean;
   runningWorkflow: boolean;
   cancellingWorkflow: boolean;
+  retryingWorkflow: boolean;
   savingEval: boolean;
   deletingEval: boolean;
 
@@ -159,6 +161,7 @@ export interface WorkspaceContextValue {
   handleDeleteWorkflow: (name: string) => Promise<void>;
   handleTriggerWorkflow: (name: string, input?: string) => Promise<void>;
   handleCancelWorkflow: (name: string) => Promise<void>;
+  handleRetryFailedSteps: (name: string) => Promise<void>;
   handleCreateEval: (payload: EvalPayload) => Promise<void>;
   handleUpdateEval: (name: string, payload: EvalUpdatePayload) => Promise<void>;
   handleDeleteEval: (name: string) => Promise<void>;
@@ -217,6 +220,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [deletingWorkflow, setDeletingWorkflow] = useState(false);
   const [runningWorkflow, setRunningWorkflow] = useState(false);
   const [cancellingWorkflow, setCancellingWorkflow] = useState(false);
+  const [retryingWorkflow, setRetryingWorkflow] = useState(false);
   const [savingEval, setSavingEval] = useState(false);
   const [deletingEval, setDeletingEval] = useState(false);
 
@@ -632,6 +636,18 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     finally { setCancellingWorkflow(false); }
   }, [token, namespace]);
 
+  const handleRetryFailedSteps = useCallback(async (name: string) => {
+    if (!token.trim()) return;
+    setRetryingWorkflow(true); setWorkflowError("");
+    try {
+      const updated = await retryFailedSteps(token, namespace, name);
+      setWorkflows((prev) => prev.map((w) => (w.name === updated.name ? updated : w)));
+      toast.success("Retrying failed steps");
+    }
+    catch (err) { const msg = apiErrorMessage(err); setWorkflowError(msg); toast.error("Failed to retry failed steps", { description: msg }); }
+    finally { setRetryingWorkflow(false); }
+  }, [token, namespace]);
+
   const handleCreateEval = useCallback(async (payload: EvalPayload) => {
     if (!token.trim()) return;
     setSavingEval(true); setEvalError("");
@@ -710,7 +726,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     setActiveView, setSelectedAgentName, setAgentCreateMode, setWorkflowCreateMode, setEvalCreateMode, setSelectedAgentDetail,
     catalogLoading, workspaceError, setWorkspaceError, agentManageError, setAgentManageError, workflowError, evalError,
     discoverablePeers, discoveryLoading, discoveryError,
-    savingAgent, deletingAgent, isCreatingAgent, savingWorkflow, deletingWorkflow, runningWorkflow, cancellingWorkflow, savingEval, deletingEval,
+    savingAgent, deletingAgent, isCreatingAgent, savingWorkflow, deletingWorkflow, runningWorkflow, cancellingWorkflow, retryingWorkflow, savingEval, deletingEval,
     sidebarCollapsed, setSidebarCollapsed, inspectorOpen, setInspectorOpen, agentViewTab, setAgentViewTab, configPanelCollapsed, setConfigPanelCollapsed, chatFocused, setChatFocused,
     createAgentName, createAgentModel, createAgentSystemPrompt, createAgentRuntimeKind,
     createAgentMcpServersText, createAgentMcpSidecarsText, createAgentA2AAllowedCallersText,
@@ -720,7 +736,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     setCreateAgentSkillFileDrafts, setCreateAgentGooseConfigFileDrafts, setCreateAgentOpenCodeConfigFileDrafts, setCreateAgentGitForm, setCreateAgentGitHubForm,
     sidebarCounts, sidebarItems, sidebarSelectedId, emptySidebarMessage, selectedAgent, selectedWorkflow, selectedEval,
     refreshWorkspaceData, handleCreateAgent, handleSaveAgent, handleDeleteAgent,
-    handleCreateWorkflow, handleUpdateWorkflow, handleDeleteWorkflow, handleTriggerWorkflow, handleCancelWorkflow,
+    handleCreateWorkflow, handleUpdateWorkflow, handleDeleteWorkflow, handleTriggerWorkflow, handleCancelWorkflow, handleRetryFailedSteps,
     handleCreateEval, handleUpdateEval, handleDeleteEval, handleSelectResource, handleCreateNew, navigateToResource,
   }), [
     agents, policies, workflows, evals, selectedAgentDetail, selectedRuntimeKind,
@@ -728,14 +744,14 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     agentCreateMode, workflowCreateMode, evalCreateMode,
     catalogLoading, workspaceError, agentManageError, workflowError, evalError,
     discoverablePeers, discoveryLoading, discoveryError,
-    savingAgent, deletingAgent, isCreatingAgent, savingWorkflow, deletingWorkflow, runningWorkflow, cancellingWorkflow, savingEval, deletingEval,
+    savingAgent, deletingAgent, isCreatingAgent, savingWorkflow, deletingWorkflow, runningWorkflow, cancellingWorkflow, retryingWorkflow, savingEval, deletingEval,
     sidebarCollapsed, inspectorOpen, agentViewTab, configPanelCollapsed, chatFocused,
     createAgentName, createAgentModel, createAgentSystemPrompt, createAgentRuntimeKind,
     createAgentMcpServersText, createAgentMcpSidecarsText, createAgentA2AAllowedCallersText,
     createAgentSkillFileDrafts, createAgentGooseConfigFileDrafts, createAgentOpenCodeConfigFileDrafts, createAgentGitForm, createAgentGitHubForm, createError,
     sidebarCounts, sidebarItems, sidebarSelectedId, emptySidebarMessage, selectedAgent, selectedWorkflow, selectedEval,
     refreshWorkspaceData, handleCreateAgent, handleSaveAgent, handleDeleteAgent,
-    handleCreateWorkflow, handleUpdateWorkflow, handleDeleteWorkflow, handleTriggerWorkflow, handleCancelWorkflow,
+    handleCreateWorkflow, handleUpdateWorkflow, handleDeleteWorkflow, handleTriggerWorkflow, handleCancelWorkflow, handleRetryFailedSteps,
     handleCreateEval, handleUpdateEval, handleDeleteEval, handleSelectResource, handleCreateNew, navigateToResource,
   ]);
 

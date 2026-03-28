@@ -5,396 +5,727 @@ metadata:
   namespace: default
 spec:
   description: >
-    Build BeatForge — a mobile step sequencer, drum machine, and synthesizer
-    using React Native + Expo. Three steps: foundation (arch + types + engines +
-    stores + wiring), implement (all UI components + screens), polish (fix all
-    issues + verify wiring + App Store docs). All steps share a workspace.
+    Build BeatForge — a production-ready mobile step sequencer, drum machine,
+    and synthesizer using React Native + Expo. Four phases: tooling (project
+    setup and asset generation), foundation (engines, stores, wiring),
+    implement (all UI components and screens), polish (verification, tests,
+    documentation). Domain skills are auto-loaded — the agent has full knowledge
+    of audio patterns, pitfalls, wiring, typing, quality standards, and
+    verification gates from the first turn. Steps share a workspace via
+    session group.
   input: >
-    Build "BeatForge" — a mobile DAW app with step sequencer, drum pads,
-    synthesizer, and mixer. React Native 0.76+, Expo SDK 52, TypeScript strict,
-    expo-av for audio, Zustand 5, expo-router, react-native-reanimated.
-    Target iOS 16+ / Android 12+. Dark theme (#0a0a0a bg, #ff6b35 accent).
-    App Store ready. IMPORTANT: Only use real npm packages. Do NOT use
-    react-native-audio-api — it does not exist. Use expo-av instead.
-    NEVER create shim .d.ts files. See project context for full specification.
+    Build "BeatForge" — a production-ready mobile DAW with 16-step sequencer,
+    velocity-sensitive drum pads, polyphonic synthesizer, per-track mixer with
+    solo/mute/pan/volume, and project save/load. React Native 0.76+, Expo SDK
+    52, TypeScript strict, expo-av for audio, Zustand 5 (named import), expo-
+    router file-based navigation, react-native-reanimated 3 for 60fps animations.
+    Dark theme (#0a0a0a background, #ff6b35 accent, #00d4aa secondary).
+    iOS 16+ / Android 12+. App Store ready. No dynamic require() — all audio
+    assets use static require maps. No .d.ts shim files. No `any` type.
   contextRef: mobile-daw-context
   messageBus: in-memory
 
   steps:
-    # ── Step 1: Foundation ───────────────────────────────────────────────
-    - name: foundation
+    # ── Step 0: Tooling Setup ─────────────────────────────────────────────
+    - name: tooling
       type: agent
       agentRef: daw-agent
       prompt: |
-        You are starting a brand new Expo project in /workspace/. Build the
-        complete foundation: architecture plan, config, types, ALL engine
-        modules, ALL stores, and the wiring hook. After this step, the entire
-        backend/logic layer must be complete and wired.
+        Your job: establish the complete project tooling foundation in /workspace/.
+        After this step, TypeScript checking, linting, formatting, testing, and
+        audio sample generation all work. Subsequent steps depend on this.
 
-        ## PHASE A — Config & Types (create these files first):
+        ## Task 1 — package.json with complete dependencies
+        Create /workspace/package.json. Include ALL of the following:
 
-        1. **package.json** — Dependencies (ONLY real npm packages):
-           - expo ~52.0.0, expo-router ~4.0.0, react-native 0.76.x
-           - expo-av ~14.0.0 (for audio — this is the ONLY audio package)
-           - react-native-reanimated ~3.16.0, react-native-gesture-handler ~2.20.0
-           - react-native-safe-area-context, react-native-screens
-           - expo-haptics, expo-font, expo-splash-screen, expo-status-bar
-           - @react-native-async-storage/async-storage
-           - zustand ^5.0.0, react-native-svg
-           - typescript ~5.6.0, @expo/vector-icons
-           - DO NOT include react-native-audio-api or any fictional package
+        Runtime dependencies:
+          expo: ~52.0.0
+          expo-router: ~4.0.0
+          react-native: 0.76.3
+          expo-av: ~14.0.0
+          react-native-reanimated: ~3.16.0
+          react-native-gesture-handler: ~2.20.0
+          react-native-safe-area-context: ~4.12.0
+          react-native-screens: ~4.1.0
+          expo-haptics: ~14.0.0
+          expo-font: ~13.0.0
+          expo-splash-screen: ~0.29.0
+          expo-status-bar: ~2.0.0
+          expo-constants: ~17.0.0
+          "@react-native-async-storage/async-storage": ~2.1.0
+          zustand: ^5.0.0
+          react-native-svg: ~15.8.0
+          "@expo/vector-icons": ~14.0.0
 
-        2. **tsconfig.json** — strict: true, Expo-compatible, paths aliasing
+        devDependencies (ALL required):
+          typescript: ~5.6.0
+          "@types/react": ~18.3.0
+          "@types/react-native": ~0.73.0
+          eslint: ~8.57.0
+          "@typescript-eslint/eslint-plugin": ~7.18.0
+          "@typescript-eslint/parser": ~7.18.0
+          eslint-plugin-react-hooks: ~4.6.0
+          prettier: ~3.3.0
+          jest: ~29.7.0
+          jest-expo: ~52.0.0
+          "@testing-library/react-native": ~12.8.0
+          "@types/jest": ~29.5.0
 
-        3. **app.json** — name: BeatForge, slug: beatforge, dark mode,
-           ios.bundleIdentifier: com.beatforge.app, android.package: com.beatforge.app
+        scripts:
+          start: expo start
+          android: expo run:android
+          ios: expo run:ios
+          web: expo start --web
+          typecheck: tsc --noEmit
+          lint: eslint --ext .ts,.tsx src/
+          lint:fix: eslint --ext .ts,.tsx src/ --fix
+          format: prettier --write "src/**/*.{ts,tsx}"
+          test: jest --watchAll=false
+          generate-samples: node scripts/generate-samples.js
 
-        4. **eas.json** — development, preview, production profiles
+        jest config in package.json:
+          "jest": {
+            "preset": "jest-expo",
+            "setupFilesAfterSetup": ["./src/test-utils/setup.ts"],
+            "transformIgnorePatterns": [
+              "node_modules/(?!((jest-)?react-native|@react-native(-community)?)|expo(nent)?|@expo(nent)?/.*|@expo-google-fonts/.*|react-navigation|@react-navigation/.*|@unimodules/.*|unimodules|sentry-expo|native-base|react-native-svg)"
+            ]
+          }
 
-        5. **src/types/index.ts** — ALL interfaces with proper types:
-           TransportState, Pattern, Step, Track, SynthParams, MixerChannel,
-           Project, DrumPad, SequencerConfig. IMPORTANT: Pattern.steps should
-           be a Record<string, Step[]> mapping trackId to array of 16 steps.
+        ## Task 2 — tsconfig.json
+        Create /workspace/tsconfig.json:
+          {
+            "extends": "expo/tsconfig.base",
+            "compilerOptions": {
+              "strict": true,
+              "noImplicitAny": true,
+              "strictNullChecks": true,
+              "noUnusedLocals": true,
+              "noUnusedParameters": true,
+              "exactOptionalPropertyTypes": false,
+              "baseUrl": ".",
+              "paths": { "@/*": ["src/*"] }
+            },
+            "include": ["src/**/*", "scripts/**/*"],
+            "exclude": ["node_modules"]
+          }
 
-        6. **src/constants/theme.ts** — Colors (#0a0a0a bg, #1a1a1a surface,
-           #ff6b35 accent, #00d4aa secondary, #e0e0e0 text, #666 muted),
-           spacing scale, font sizes.
+        ## Task 3 — .eslintrc.json
+        Create /workspace/.eslintrc.json:
+          {
+            "root": true,
+            "parser": "@typescript-eslint/parser",
+            "parserOptions": { "project": "./tsconfig.json" },
+            "plugins": ["@typescript-eslint", "react-hooks"],
+            "extends": [
+              "eslint:recommended",
+              "plugin:@typescript-eslint/recommended",
+              "plugin:react-hooks/recommended"
+            ],
+            "rules": {
+              "@typescript-eslint/no-explicit-any": "error",
+              "@typescript-eslint/no-var-requires": "off",
+              "react-hooks/rules-of-hooks": "error",
+              "react-hooks/exhaustive-deps": "warn",
+              "no-console": ["warn", { "allow": ["error", "warn"] }]
+            },
+            "ignorePatterns": ["node_modules/", "scripts/"]
+          }
 
-        7. **src/constants/defaults.ts** — 8 default tracks (kick, snare,
-           hihat, clap, tom, perc, bass-synth, lead-synth), default pattern
-           with all steps inactive, default synth params.
+        ## Task 4 — .prettierrc
+        Create /workspace/.prettierrc:
+          { "semi": true, "singleQuote": true, "trailingComma": "es5",
+            "printWidth": 100, "tabWidth": 2, "bracketSpacing": true }
 
-        ## PHASE B — Engine Layer (using expo-av):
+        ## Task 5 — babel.config.js
+        Create /workspace/babel.config.js:
+          module.exports = function (api) {
+            api.cache(true);
+            return {
+              presets: ['babel-preset-expo'],
+              plugins: ['react-native-reanimated/plugin'],
+            };
+          };
 
-        8. **src/engine/AudioEngine.ts** — Singleton class:
-           - `async init()`: Configure Audio.setAudioModeAsync for playback
-           - `preloadSamples(sampleMap)`: Load Audio.Sound objects for each
-             drum sample key. Use a pool of 4 Sound objects per sample to
-             allow overlapping hits.
-           - `resume()` / `suspend()`: Enable/disable audio session
-           - `setMasterVolume(vol)`: Scale all playback volumes
-           - Store instance as static singleton
+        ## Task 6 — metro.config.js
+        Create /workspace/metro.config.js:
+          const { getDefaultConfig } = require('expo/metro-config');
+          const config = getDefaultConfig(__dirname);
+          config.resolver.assetExts.push('wav');
+          module.exports = config;
 
-        9. **src/engine/SequencerClock.ts** — JS-based clock:
-           - `start(bpm, swing)`: Begin setInterval(10ms) loop
-           - `stop()`: Clear interval, reset state
-           - Uses `performance.now()` to calculate when next step is due
-           - Step duration = 60000 / bpm / 4 (16th notes)
-           - Swing: delay even steps by (swing/100) * stepDuration * 0.5
-           - `onStep` callback fires with (stepIndex: number)
-           - Static singleton pattern
+        ## Task 7 — app.json (Expo config)
+        Create /workspace/app.json:
+          {
+            "expo": {
+              "name": "BeatForge",
+              "slug": "beatforge",
+              "version": "0.1.0",
+              "orientation": "portrait",
+              "icon": "./assets/icon.png",
+              "userInterfaceStyle": "dark",
+              "splash": {
+                "image": "./assets/splash.png",
+                "resizeMode": "contain",
+                "backgroundColor": "#0a0a0a"
+              },
+              "ios": {
+                "supportsTablet": false,
+                "bundleIdentifier": "com.beatforge.app",
+                "buildNumber": "1",
+                "infoPlist": {
+                  "UIBackgroundModes": ["audio"],
+                  "NSMicrophoneUsageDescription": "BeatForge does not use the microphone."
+                }
+              },
+              "android": {
+                "package": "com.beatforge.app",
+                "versionCode": 1,
+                "adaptiveIcon": {
+                  "foregroundImage": "./assets/adaptive-icon.png",
+                  "backgroundColor": "#0a0a0a"
+                },
+                "permissions": []
+              },
+              "plugins": [
+                "expo-router",
+                "expo-av",
+                ["expo-splash-screen", { "backgroundColor": "#0a0a0a" }]
+              ],
+              "experiments": { "typedRoutes": true }
+            }
+          }
 
-        10. **src/engine/SamplerEngine.ts** — Drum sample player:
-            - `play(sampleKey, velocity, volume, pan)`: Pick next available
-              Sound from pool, set volume to (velocity/127 * volume), play
-            - `stop(sampleKey)`: Stop all sounds for a key
-            - Uses AudioEngine's preloaded Sound pool
+        ## Task 8 — eas.json
+        Create /workspace/eas.json with development, preview, production profiles.
 
-        11. **src/engine/SynthEngine.ts** — Simple note player:
-            - For MVP: map note names to pre-computed frequencies
-            - `play(note, velocity, waveform)`: Use expo-av to play a
-              short generated tone. Since expo-av can't synthesize in
-              real-time, use a pragmatic approach: store a few pre-rendered
-              wav/mp3 files for common notes, or generate Audio.Sound from
-              a data URI. Keep it simple but WORKING.
-            - If real synthesis isn't feasible, document the limitation
-              clearly and use placeholder samples that actually load.
+        ## Task 9 — WAV generation script
+        Create /workspace/scripts/generate-samples.js using the exact script
+        from the audio-engine skill (it's in your context). Then RUN it:
+          node scripts/generate-samples.js
+        Verify: ls -la /workspace/assets/samples/ — every file must be > 1000 bytes.
 
-        12. **src/engine/MixerEngine.ts** — Per-track audio state:
-            - `channels: Map<string, { volume: number, pan: number, mute: boolean, solo: boolean }>`
-            - `initChannels(tracks)`: Create a channel for each track
-            - `setVolume(trackId, vol)`, `setPan(trackId, pan)`,
-              `setMute(trackId, mute)`, `setSolo(trackId, solo)`
-            - `getEffectiveVolume(trackId)`: Returns volume considering
-              mute/solo state (if any track is soloed, muted tracks +
-              non-soloed tracks return 0)
-            - Static singleton
+        ## Task 10 — Jest mock setup
+        Create /workspace/src/test-utils/setup.ts:
+          jest.mock('expo-av', () => ({
+            Audio: {
+              Sound: jest.fn().mockImplementation(() => ({
+                loadAsync: jest.fn().mockResolvedValue({}),
+                replayAsync: jest.fn().mockResolvedValue({}),
+                setStatusAsync: jest.fn().mockResolvedValue({}),
+                stopAsync: jest.fn().mockResolvedValue({}),
+                unloadAsync: jest.fn().mockResolvedValue({}),
+              })),
+              setAudioModeAsync: jest.fn().mockResolvedValue({}),
+            },
+            InterruptionModeIOS: { DoNotMix: 0, MixWithOthers: 2 },
+            InterruptionModeAndroid: { DuckOthers: 1, DoNotMix: 0 },
+          }));
+          jest.mock('expo-haptics', () => ({
+            impactAsync: jest.fn().mockResolvedValue(undefined),
+            ImpactFeedbackStyle: { Light: 'light', Medium: 'medium', Heavy: 'heavy' },
+          }));
+          jest.mock('@react-native-async-storage/async-storage', () =>
+            require('@react-native-async-storage/async-storage/jest/async-storage-mock')
+          );
 
-        ## PHASE C — Stores (each store calls its engine):
+        ## Verification
+        Run: npm install (if network available), node scripts/generate-samples.js,
+        then npx tsc --noEmit. Confirm all WAV files > 1000 bytes.
 
-        13. **src/stores/transportStore.ts** — Zustand store:
-            - State: isPlaying, bpm (default 120), swing (default 0),
-              currentStep (0-15), currentPatternId
-            - `play()`: MUST call AudioEngine.getInstance().resume() THEN
-              SequencerClock.getInstance().start(bpm, swing)
-            - `stop()`: MUST call SequencerClock.getInstance().stop()
-            - `setBpm(bpm)`: Update BPM, if playing restart clock
-            - `setSwing(swing)`: Update swing, if playing restart clock
-            - `setCurrentStep(step)`: Called by clock callback
-            - `tapTempo()`: Calculate BPM from last 4 tap timestamps
-
-        14. **src/stores/sequencerStore.ts** — Zustand store:
-            - State: patterns (Pattern[]), tracks (Track[]), currentPatternId
-            - `toggleStep(trackId, stepIndex)`: Toggle step.active
-            - `setVelocity(trackId, stepIndex, velocity)`: Set step velocity
-            - `getCurrentPattern()`: Return current pattern
-            - `copyPattern(fromId, toId)`, `clearPattern(id)`
-            - `addTrack()`, `removeTrack()`
-
-        15. **src/stores/mixerStore.ts** — Zustand store:
-            - State: channels (MixerChannel[]) — initialized from default tracks
-            - `setVolume(trackId, vol)`: MUST also call
-              MixerEngine.getInstance().setVolume(trackId, vol)
-            - `setPan(trackId, pan)`: MUST also call
-              MixerEngine.getInstance().setPan(trackId, pan)
-            - `setMute(trackId)`, `setSolo(trackId)`: Toggle + call engine
-            - `masterVolume`: number 0-1
-            - `setMasterVolume(vol)`: Call AudioEngine.setMasterVolume
-
-        16. **src/stores/synthStore.ts** — waveform, filter params, ADSR
-
-        17. **src/stores/projectStore.ts** — save/load with AsyncStorage:
-            - `saveProject()`: Serialize all store states to AsyncStorage
-            - `loadProject()`: Hydrate transportStore, sequencerStore, mixerStore
-
-        ## PHASE D — Wiring Hook:
-
-        18. **src/hooks/useAudioSetup.ts**:
-            - `useAudioSetup()` hook called in root _layout.tsx
-            - On mount: await AudioEngine.getInstance().init()
-            - Preload samples: AudioEngine.preloadSamples(sampleMap)
-            - Init mixer channels: MixerEngine.getInstance().initChannels(tracks)
-            - Set up SequencerClock.onStep callback that:
-              * Gets current pattern from sequencerStore
-              * For each track, if step is active, triggers sample/synth
-              * Updates currentStep in transportStore
-            - Returns { isReady: boolean, error: string | null }
-
-        19. **src/utils/timing.ts** — BPM-to-ms, swing calculations
-        20. **src/utils/colors.ts** — Color helpers (opacity, lighten)
-
-        ## Verification (MUST DO):
-        - Run: `find /workspace/src -name "*.ts" -o -name "*.tsx" | sort`
-        - Verify ALL 20 files exist
-        - Run: `npx tsc --noEmit` — fix any errors
-        - Run: `grep -r "any" /workspace/src/types/` — must find NO `any` types
-        - Run: `cat /workspace/src/stores/transportStore.ts | grep -E "AudioEngine|SequencerClock"` — must find engine calls
+        ## Handoff state (write to /workspace/.workflow-state.json):
+          {
+            "step": "tooling",
+            "completed": true,
+            "wavFilesGenerated": true,
+            "tscClean": true,
+            "eslintConfigured": true,
+            "sampleFiles": ["kick.wav","snare.wav","hihat.wav","clap.wav",
+                           "tom.wav","perc.wav","bass_synth_C3.wav","lead_synth_C4.wav"]
+          }
       execution:
-        timeoutSeconds: 600
+        timeoutSeconds: 300
         maxAttempts: 1
         retryable: false
         continueOnError: false
         maxTurns: 5
         sessionGroup: dev-session
 
-    # ── Step 2: Implement UI ─────────────────────────────────────────────
+    # ── Step 1: Foundation ────────────────────────────────────────────────
+    - name: foundation
+      type: agent
+      agentRef: daw-agent
+      dependsOn:
+        - tooling
+      prompt: |
+        Read /workspace/.workflow-state.json to confirm tooling is complete.
+        Build the complete logic layer of BeatForge: types, constants, all
+        engine modules, all Zustand stores, and the wiring hook. After this
+        step, `npx tsc --noEmit` passes with zero errors and all wiring
+        connections from the integration-wiring skill are satisfied.
+
+        Your skills have the exact code patterns for every engine class,
+        store pattern, and wiring connection. Follow them precisely.
+
+        ## PHASE A — Types, Constants, Utilities
+
+        ### A1: src/constants/sampleRequires.ts  (MUST BE FIRST)
+        Create the static require map using the exact SAMPLE_REQUIRES pattern
+        from the audio-engine skill. Every require() is a literal static string.
+
+        ### A2: src/types/index.ts
+        Export all type definitions from the project context data models
+        section: Step, Pattern, Track, SynthParams, MixerChannel,
+        TransportState, Project, TrackType, Waveform.
+        NO `any` anywhere. NO shim files.
+
+        ### A3: src/constants/theme.ts
+        Export COLORS, SPACING, FONT_SIZES as named exports.
+        Colors: background '#0a0a0a', surface '#1a1a1a', surfaceLight '#2a2a2a',
+                accent '#ff6b35', secondary '#00d4aa', text '#e0e0e0',
+                textMuted '#999999', muted '#666666', error '#ff4444',
+                success '#00d4aa', border '#333333'.
+
+        ### A4: src/constants/defaults.ts
+        Export DEFAULT_TRACKS (8 tracks: kick, snare, hihat, clap, tom, perc,
+        bass, lead — each with id, name, type, sampleKey, color).
+        Export DEFAULT_PATTERN using makeEmptySteps.
+        Export DEFAULT_SYNTH_PARAMS.
+        makeEmptySteps MUST return Record<string, Step[]>, not Record<string, any>.
+
+        ### A5: src/utils/timing.ts
+        stepDurationMs(bpm): 60000 / bpm / 4
+        swingOffset(stepIndex, swing, stepMs): delay for odd steps
+        bpmToMs(bpm): 60000 / bpm
+        clamp(value, min, max): Math.max(min, Math.min(max, value))
+
+        ### A6: src/utils/colors.ts
+        withOpacity(hex, alpha): RGBA string
+        lighten(hex, percent): lighter hex color
+
+        ## PHASE B — Engine Layer
+        Create all engine classes using the exact patterns from the audio-engine
+        skill. Follow them precisely — they prevent known audio bugs.
+
+        ### B1: src/engine/AudioEngine.ts
+        Singleton. init() with InterruptionModeIOS.DoNotMix (NOT deprecated
+        constant — see pitfall P6). preloadSamples() with pool of 4 from
+        SAMPLE_REQUIRES. resume(), setMasterVolume(), getMasterVolume(), getPool().
+
+        ### B2: src/engine/SequencerClock.ts
+        Singleton. MUST use the drift-correcting pattern with nextStepTime
+        and lookahead tick loop (NOT raw setInterval — pitfall P7).
+        start(bpm, swing), stop(), onStep(cb), private tick().
+
+        ### B3: src/engine/SamplerEngine.ts
+        Singleton. Pool-based playback with pool rotation.
+        play(sampleKey, velocity, volume, pan), stop(sampleKey).
+
+        ### B4: src/engine/SynthEngine.ts
+        Singleton. NOTE_MAP static require map for pre-rendered note samples.
+        play(note, velocity), stopAll(), preloadNotes().
+        Comment: real-time synthesis not possible with expo-av; uses samples.
+
+        ### B5: src/engine/MixerEngine.ts
+        channels: Map<string, MixerChannel>. initChannels(tracks).
+        setVolume, setPan, setMute, setSolo.
+        getEffectiveVolume(trackId): considers mute AND solo correctly —
+          if any channel is soloed, only soloed+unmuted return volume;
+          if none soloed, muted return 0, others return volume.
+
+        ## PHASE C — Zustand Stores
+        Use `import { create } from 'zustand'` (named import — pitfall P2).
+        Follow strict-types skill for store typing patterns.
+        Follow integration-wiring skill for mandatory engine connections.
+
+        ### C1: src/stores/transportStore.ts
+        State: isPlaying, bpm (120), swing (0), currentStep, currentPatternId, lastTaps.
+        Actions: play() → AudioEngine.resume() + SequencerClock.start() + set({isPlaying: true}).
+        stop() → SequencerClock.stop() + set({isPlaying: false, currentStep: 0}).
+        setBpm() → set() + restart clock if playing.
+        setSwing() → set() + restart clock if playing.
+        setCurrentStep(). tapTempo() with lastTaps averaging.
+
+        ### C2: src/stores/sequencerStore.ts
+        State: patterns, tracks, currentPatternId.
+        Actions: toggleStep(trackId, stepIndex) — immutable update.
+        setVelocity(trackId, stepIndex, velocity). setStepProbability(trackId, stepIndex, probability).
+        setCurrentPatternId(id). getCurrentPattern(). copyPattern, clearPattern.
+        addTrack, removeTrack.
+
+        ### C3: src/stores/mixerStore.ts
+        Every action calls the corresponding MixerEngine method AND set().
+        setVolume, setPan, setMute, setSolo, setMasterVolume.
+        Never mutate state directly (pitfall P3).
+
+        ### C4: src/stores/synthStore.ts
+        State: params Record<string, SynthParams>.
+        Actions: setParams, setWaveform, resetParams.
+
+        ### C5: src/stores/projectStore.ts
+        saveProject() → serialize transport + sequencer + mixer + synth to AsyncStorage.
+        loadProject() → deserialize AND sync BOTH stores AND engines.
+        After loading: iterate mixer channels and call MixerEngine methods
+        for each (pitfall P5 — dual-state divergence). Wrap JSON.parse in try/catch.
+
+        ## PHASE D — Wiring Hook
+        ### D1: src/hooks/useAudioSetup.ts
+        Follow the integration-wiring skill EXACTLY for the onStep callback.
+        Returns: { isReady: boolean, error: string | null }.
+        The onStep callback reads pattern → plays samples/synth → sets currentStep.
+        Cleanup: stop clock on unmount.
+        Called ONLY in root _layout.tsx.
+
+        ## PHASE E — Verification
+        Run the verification gates from the verification-gates skill.
+        At minimum run these critical checks:
+        ```bash
+        grep -rn "^import create from 'zustand'" /workspace/src/  # Must be EMPTY
+        grep -rn "require(.*+\|require(\`" /workspace/src/        # Must be EMPTY
+        grep -c "AudioEngine\|SequencerClock" /workspace/src/stores/transportStore.ts  # >= 4
+        grep -c "MixerEngine" /workspace/src/stores/mixerStore.ts  # >= 4
+        cd /workspace && npx tsc --noEmit                          # Zero errors
+        grep -rn ": any\b\|as any\|<any>" /workspace/src/         # Must be EMPTY
+        ```
+        Fix ALL failures before declaring done.
+
+        ## Handoff (update /workspace/.workflow-state.json):
+          {
+            "step": "foundation",
+            "completed": true,
+            "tscClean": true,
+            "storeCount": 5,
+            "engineCount": 5,
+            "wiringGatesPassed": true,
+            "filesCreated": ["list all src/ files created"]
+          }
+      execution:
+        timeoutSeconds: 720
+        maxAttempts: 1
+        retryable: false
+        continueOnError: false
+        maxTurns: 10
+        sessionGroup: dev-session
+
+    # ── Step 2: Implement UI ──────────────────────────────────────────────
     - name: implement
       type: agent
       agentRef: daw-agent
       dependsOn:
         - foundation
       prompt: |
-        The foundation is in /workspace/ — types, engine, stores, and wiring
-        hook are all created. Now build ALL UI components and screens.
 
-        First, run `find /workspace/src -name "*.ts" -o -name "*.tsx" | sort`
-        to see what exists. Read a few key files (types/index.ts, stores/transportStore.ts)
-        to understand the existing interfaces.
+        Read /workspace/.workflow-state.json to understand what exists.
+        Survey existing files: find /workspace/src -name "*.ts" -o -name "*.tsx" | sort
+        Read src/types/index.ts and a store file to know the exact interfaces.
 
-        ## COMPONENTS (src/components/) — Each must be substantial, not stubs:
+        Build ALL UI components and screens. Your react-native-quality skill
+        has the exact patterns for StepGrid/StepCell, PadButton, Knob/Fader.
+        Follow them precisely — they prevent hooks violations and stale prop bugs.
 
-        1. **TransportBar.tsx** (~80 lines) — Horizontal bar with:
-           - Play/Stop button (toggles transportStore.play/stop)
-           - BPM display (number, tappable for tap tempo)
-           - Current pattern indicator (A1-A8)
-           - Swing percentage display
-           - Uses useTransportStore selectors
-           - Animated play button (scale spring on press)
+        ## COMPONENTS (src/components/)
 
-        2. **StepGrid.tsx** (~120 lines) — 16-column × N-track grid:
-           - Each cell shows active state (filled/empty) and velocity (opacity)
-           - Current step column highlighted with accent color when playing
-           - Tap to toggle step, long press for velocity adjustment
-           - Track labels on the left
-           - Uses useSequencerStore and useTransportStore
-           - IMPORTANT: Do NOT use useSharedValue inside .map(). Use ONE
-             shared value for currentStep, check index match in animated style.
+        ### 1. ErrorBoundary.tsx (~50 lines)
+        Class component. componentDidCatch MUST log errors (pitfall P10).
+        Shows friendly error message + "Try again" button.
 
-        3. **DrumPads.tsx** (~100 lines) — 4×2 grid of pads:
-           - Each pad shows drum name and velocity on last hit
-           - Tap triggers SamplerEngine.play() + haptic feedback
-           - Press animation: scale down to 0.9, spring back
-           - Visual flash on the pad matching current sequencer step
-           - Uses GestureDetector with Gesture.Tap()
+        ### 2. Knob.tsx (~100 lines)
+        MUST fix stale prop problem (pitfall P8) using startValue SharedValue
+        captured in onStart. Display: rotary arc showing value position.
+        accessibilityRole="adjustable". Pan gesture with runOnJS(onChange).
 
-        4. **SynthPanel.tsx** (~100 lines) — Synth controls:
-           - Waveform selector (4 buttons: sine, saw, square, triangle)
-           - Filter cutoff knob + resonance knob
-           - ADSR sliders (attack, decay, sustain, release) — 4 vertical faders
-           - Visual ADSR curve display (simple line drawing using View transforms
-             or react-native-svg Path)
-           - Uses useSynthStore
+        ### 3. Fader.tsx (~100 lines)
+        Same stale-prop fix as Knob. Vertical pan gesture.
+        Track bar + thumb indicator + fill showing value.
+        accessibilityRole="adjustable".
 
-        5. **MixerChannel.tsx** (~80 lines) — Single channel strip:
-           - Track name label
-           - Vertical volume fader (Gesture.Pan)
-           - Pan knob (Gesture.Pan, rotary)
-           - Mute/Solo buttons (toggles with color state)
-           - Peak level indicator (simple bar)
-           - Uses useMixerStore with track-specific selector
+        ### 4. TransportBar.tsx (~100 lines)
+        Play/Stop toggle with animated scale spring (withSpring).
+        BPM display (tappable for tapTempo, long-press for fine adjust).
+        Pattern indicator (current pattern name A1-A8).
+        Swing percentage display.
+        Current step indicator (beat dots or progress bar).
+        Use individual useTransportStore selectors, not whole store.
 
-        6. **MixerView.tsx** (~60 lines) — Horizontal scroll of MixerChannels:
-           - One MixerChannel per track
-           - Master volume fader at the end
-           - Track labels along the top
+        ### 5. StepGrid.tsx (~140 lines)
+        Follow the react-native-quality skill pattern EXACTLY:
+        - ONE useSharedValue<number> for currentStep (pitfall P4)
+        - StepCell as a separate React.memo() component
+        - Track labels column (width 80) + horizontal ScrollView grid
+        - Each cell: 44×44px, tap to toggle, opacity = velocity/127
+        - Active step column: accent border when playing
+        - Long press on cell: cycle velocity (100 → 80 → 60 → 40 → 127)
 
-        7. **Knob.tsx** (~70 lines) — Reusable rotary knob:
-           - Pan gesture: translationY maps to value change
-           - Animated rotation using useAnimatedStyle
-           - Value label below
-           - Customizable min/max/step
-           - accessibilityRole="adjustable"
+        ### 6. StepCell.tsx (~60 lines)
+        Extract as standalone memo'd component per react-native-quality skill.
+        Props: col, active, velocity, stepSV, isPlaying, onPress, onLongPress, color.
+        useAnimatedStyle for active step highlight.
+        GestureDetector with Tap gesture using runOnJS.
 
-        8. **Fader.tsx** (~70 lines) — Reusable vertical fader:
-           - Pan gesture: translationY maps to value
-           - Animated position using useAnimatedStyle
-           - Track indicator bar behind the thumb
-           - Customizable min/max
-           - accessibilityRole="adjustable"
+        ### 7. DrumPads.tsx (~120 lines)
+        Follow PadButton pattern from react-native-quality skill.
+        8 pads in 2-column × 4-row grid with FlatList or View grid.
+        Tap: SamplerEngine.play() + Haptics.impactAsync(Medium) + scale animation.
+        Each pad shows: track name, color accent border, velocity indicator.
+        PadButton as separate memo'd component with Gesture.Tap + runOnJS.
 
-        9. **PatternSelector.tsx** (~50 lines) — Row of 8 pattern buttons:
-           - A1-A8 labels, active pattern highlighted
-           - Tap to switch, long press for copy/clear menu
+        ### 8. SynthPanel.tsx (~130 lines)
+        Waveform selector: 4 buttons (sine/square/saw/triangle).
+        Active waveform uses accent color background.
+        ADSR section: 4 vertical Faders labeled Attack/Decay/Sustain/Release.
+        Filter section: Cutoff Knob (20-20000 Hz) + Resonance Knob (0-1).
+        All controls connected to useSynthStore. Labeled with current values.
 
-        10. **ErrorBoundary.tsx** (~40 lines) — Class component:
-            - Catches render errors, shows friendly message + restart button
+        ### 9. MixerChannel.tsx (~100 lines)
+        Props: trackId, name, color.
+        Pan Knob at top (min -1, max 1, center=0, label showing L/C/R).
+        Volume Fader (tall, 160px).
+        Mute button (dimmed when muted) + Solo button (accent when soloed).
+        VU meter: animated bar showing channel.volume as height.
+        Track name label at bottom.
 
-        ## SCREENS (src/app/) — Each must be a COMPLETE screen, not a stub:
+        ### 10. MixerView.tsx (~70 lines)
+        Horizontal ScrollView containing MixerChannel for each track.
+        Master section at end: master volume fader + "Master" label.
+        Master volume → mixerStore.setMasterVolume().
+        Separator line between tracks and master.
 
-        11. **src/app/_layout.tsx** (~30 lines) — Root layout:
-            - SafeAreaProvider + StatusBar
-            - Calls useAudioSetup() — shows loading text until isReady
-            - Wraps children in ErrorBoundary
-            - Renders Slot (expo-router)
+        ### 11. PatternSelector.tsx (~70 lines)
+        8 buttons labeled A1-A8 in a horizontal row.
+        Active pattern: accent background + bold text.
+        Tap → setCurrentPatternId via store action (NOT direct mutation).
+        Long press → Alert with "Copy Pattern" / "Clear Pattern" options.
+        Show dot indicator for patterns with active steps.
 
-        12. **src/app/(tabs)/_layout.tsx** (~50 lines) — Tab navigator:
-            - 5 tabs: Sequencer, Pads, Synth, Mixer, Settings
-            - Dark themed tab bar (#1a1a1a background)
-            - Icons from @expo/vector-icons (MaterialCommunityIcons)
-            - Active tab: #ff6b35, inactive: #666
+        ### 12. HeaderBar.tsx (~40 lines)
+        Shared header with app title "BeatForge", optional subtitle (screen name).
+        Dark background, accent text for title.
 
-        13. **src/app/(tabs)/index.tsx** — Sequencer screen (~40 lines):
-            - TransportBar at top
-            - PatternSelector below
-            - StepGrid as main content (scrollable vertically if needed)
+        ## SCREENS (src/app/)
 
-        14. **src/app/(tabs)/pads.tsx** — Pads screen (~40 lines):
-            - TransportBar at top
-            - DrumPads as main content, centered
-            - Last-hit velocity display
+        ### 13. src/app/_layout.tsx (~40 lines)
+        SafeAreaProvider root. useAudioSetup() called HERE and ONLY HERE.
+        Loading: spinner + "Loading BeatForge..."
+        Error: centered error message with retry.
+        Ready: StatusBar style="light" + ErrorBoundary + <Slot />.
 
-        15. **src/app/(tabs)/synth.tsx** — Synth screen (~40 lines):
-            - TransportBar at top
-            - SynthPanel as main content
-            - Note trigger buttons at bottom (C3-C4 scale)
+        ### 14. src/app/(tabs)/_layout.tsx (~60 lines)
+        5 tabs: index (Sequencer), pads (Pads), synth (Synth),
+        mixer (Mixer), settings (Settings).
+        Tab bar: backgroundColor '#1a1a1a', active '#ff6b35', inactive '#666'.
+        Icons from @expo/vector-icons MaterialCommunityIcons:
+          index → "view-grid-outline", pads → "drum", synth → "piano",
+          mixer → "equalizer", settings → "cog-outline".
+        headerShown: false on all tabs.
 
-        16. **src/app/(tabs)/mixer.tsx** — Mixer screen (~30 lines):
-            - TransportBar at top
-            - MixerView as main content (horizontal scroll)
+        ### 15. src/app/(tabs)/index.tsx — Sequencer (~55 lines)
+        SafeAreaView + dark background.
+        Layout: HeaderBar("Sequencer") → TransportBar → PatternSelector → StepGrid.
+        StepGrid in flex:1 container.
 
-        17. **src/app/(tabs)/settings.tsx** — Settings screen (~80 lines):
-            - NOT a stub. Must contain real, functional controls:
-            - BPM slider (60-240) connected to transportStore.setBpm
-            - Swing slider (0-100%) connected to transportStore.setSwing
-            - Project name text input connected to projectStore
-            - Save/Load project buttons connected to projectStore
-            - Reset all button
-            - About section: app name, version, "Made with Expo"
-            - Uses StyleSheet.create with proper dark theme
+        ### 16. src/app/(tabs)/pads.tsx — Drum Pads (~55 lines)
+        SafeAreaView. HeaderBar("Drum Pads") → TransportBar → DrumPads centered.
+        Subtle hint text "Tap pads to play" below pads.
 
-        ## Verification (MUST DO after creating ALL files):
-        - `find /workspace/src -name "*.tsx" | sort` — count should be 15+
-        - `npx tsc --noEmit` — fix ALL errors
-        - `grep -r "will go here\|TODO\|placeholder" /workspace/src/` — must be EMPTY
-        - `grep -r "shims" /workspace/src/` — must be EMPTY
-        - Read src/app/(tabs)/settings.tsx — verify it has real controls, not placeholder text
-        - Read src/stores/transportStore.ts — verify play() calls AudioEngine and SequencerClock
+        ### 17. src/app/(tabs)/synth.tsx — Synthesizer (~70 lines)
+        SafeAreaView. HeaderBar("Synthesizer") → TransportBar → SynthPanel.
+        Bottom row: 8 note trigger buttons (C3, D3, E3, F3, G3, A3, B3, C4).
+        Each button: touchable with accent border, onPress → SynthEngine.play(note, 100).
+        Haptic feedback on note press.
+
+        ### 18. src/app/(tabs)/mixer.tsx — Mixer (~45 lines)
+        SafeAreaView. HeaderBar("Mixer") → TransportBar → MixerView (flex:1).
+
+        ### 19. src/app/(tabs)/settings.tsx — Settings (~130 lines)
+        MUST BE FULLY FUNCTIONAL — no stubs, no placeholders.
+
+        Section 1 — Transport:
+          BPM: label + current value + Slider (60-240) → transportStore.setBpm()
+          Swing: label + value% + Slider (0-100) → transportStore.setSwing()
+
+        Section 2 — Project:
+          Project name: TextInput (local state)
+          Save Project: TouchableOpacity → projectStore.saveProject()
+          Load Project: TouchableOpacity → projectStore.loadProject()
+          Reset All: TouchableOpacity → reset all stores to defaults with Alert.prompt
+
+        Section 3 — About:
+          "BeatForge v0.1.0"
+          "Built with Expo SDK 52"
+          "Offline-first. No data collected."
+
+        All sections: ScrollView root, dark theme, StyleSheet.create().
+
+        ## Verification
+        Run these checks. Fix ALL failures:
+        ```bash
+        grep -rn "will go here\|TODO\|stub\|placeholder\|coming soon" /workspace/src/  # EMPTY
+        find /workspace/src/app -name "*.tsx" | wc -l                                    # >= 7
+        find /workspace/src/components -name "*.tsx" | wc -l                              # >= 10
+        cd /workspace && npx tsc --noEmit                                                 # Zero errors
+        grep -rn ": any\b\|as any" /workspace/src/                                       # EMPTY
+        grep -n "startValue\|onStart" /workspace/src/components/Knob.tsx                  # Must match
+        grep -n "setCurrentPatternId" /workspace/src/components/PatternSelector.tsx        # Must match
+        grep -rn "useSharedValue" /workspace/src/components/StepGrid.tsx                  # Only 1 call
+        ```
+
+        ## Handoff (update /workspace/.workflow-state.json):
+          {
+            "step": "implement",
+            "completed": true,
+            "screenCount": 7,
+            "componentCount": 12,
+            "tscClean": true,
+            "eslintClean": true,
+            "noPlaceholders": true
+          }
       execution:
         timeoutSeconds: 900
         maxAttempts: 1
         retryable: false
         continueOnError: false
-        maxTurns: 8
+        maxTurns: 14
         sessionGroup: dev-session
 
-    # ── Step 3: Polish & Verify ──────────────────────────────────────────
+    # ── Step 3: Polish & Verify ───────────────────────────────────────────
     - name: polish
       type: agent
       agentRef: daw-agent
       dependsOn:
         - implement
       prompt: |
-        The BeatForge app is nearly complete in /workspace/. Your job is to
-        verify everything works together, fix all issues, and add final polish.
 
-        ## Phase 1 — Audit (read files, don't edit yet):
+        Read /workspace/.workflow-state.json to review what was built.
+        Your job: run every verification gate, fix every issue found, write
+        unit tests, create documentation. The app must be fully buildable
+        and pass all quality checks when this step completes.
 
-        1. Run `npx tsc --noEmit` — note all errors
-        2. Run `grep -r "will go here\|TODO\|FIXME\|placeholder\|stub" /workspace/src/`
-        3. Run `grep -rn "as any\|: any" /workspace/src/` — list any `any` usage
-        4. Check for shim files: `ls /workspace/src/types/shims*`
-        5. Read `src/stores/transportStore.ts` — verify play() calls engines
-        6. Read `src/hooks/useAudioSetup.ts` — verify it wires clock→samples
-        7. Read `src/app/(tabs)/settings.tsx` — verify real controls exist
-        8. Read `src/engine/SequencerClock.ts` — verify onStep triggers samples
-        9. Read `src/components/StepGrid.tsx` — verify it uses store selectors
+        ## Phase 1 — Run All 12 Verification Gates
+        Run ALL gates from the verification-gates skill in order.
+        For each failure: note the file and issue, fix it, re-run the gate.
+        Do NOT skip any gate even if you believe it will pass.
 
-        ## Phase 2 — Fix Everything Found in Audit:
+        Add these additional checks beyond the gates:
+        ```bash
+        # Babel config exists (Reanimated needs it)
+        cat /workspace/babel.config.js | grep "reanimated"
+        # Metro config includes wav
+        cat /workspace/metro.config.js | grep "wav"
+        # All required stores exist
+        ls /workspace/src/stores/*.ts | wc -l  # >= 5
+        # All required engines exist
+        ls /workspace/src/engine/*.ts | wc -l  # >= 5
+        ```
 
-        For each issue found above, fix it:
-        - Type errors: fix root cause, don't add `as any`
-        - Missing wiring: add the engine calls to store actions
-        - Stub screens: replace with real UI
-        - Shim files: delete and fix the imports properly
-        - Disconnected stores: add the missing subscriptions
+        ## Phase 2 — Integration Trace
+        Read and verify each file against the integration-wiring skill:
 
-        Run `npx tsc --noEmit` after fixes. Repeat until clean.
+        **_layout.tsx**: Contains useAudioSetup()? isReady gate renders <Slot>?
+        **useAudioSetup.ts**: onStep callback fires SamplerEngine.play()?
+          setCurrentStep called? Cleanup stops clock?
+        **transportStore.ts**: play() → AudioEngine.resume() + SequencerClock.start()?
+          stop() → SequencerClock.stop()? setBpm() restarts clock if playing?
+        **SequencerClock.ts**: Uses nextStepTime + lookahead (NOT raw setInterval)?
+        **AudioEngine.ts**: Uses SAMPLE_REQUIRES? InterruptionModeIOS.DoNotMix?
+        **mixerStore.ts**: setVolume → MixerEngine.setVolume()?
+          setPan → MixerEngine.setPan()? All 4 actions wired?
+        **projectStore.ts**: loadProject() syncs MixerEngine after loading?
+        **Knob.tsx**: startValue captured in onStart? No stale prop?
+        **StepGrid.tsx**: No useSharedValue in .map()? StepCell is memo'd?
+        **PatternSelector.tsx**: Uses store action, not direct mutation?
 
-        ## Phase 3 — Integration Trace:
+        For each check that FAILS, fix the file and re-verify.
 
-        Trace these paths by reading the actual files and verify each call exists:
+        ## Phase 3 — Unit Tests
+        Create test files using the mock setup from src/test-utils/setup.ts.
 
-        **Play path**: User taps Play on TransportBar →
-        TransportBar calls `transportStore.getState().play()` →
-        play() calls `AudioEngine.getInstance().resume()` →
-        play() calls `SequencerClock.getInstance().start(bpm, swing)` →
-        Clock fires `onStep(0)` →
-        onStep reads `sequencerStore.getState().getCurrentPattern()` →
-        For active steps: `SamplerEngine.getInstance().play(key, vel, vol, pan)` →
-        Audio.Sound.playAsync()
+        ### src/__tests__/engine/sequencerClock.test.ts
+        - start() sets running
+        - stop() resets stepIndex to 0
+        - onStep callback receives sequential indices 0-15, wraps to 0
+        - swing > 0 delays odd steps
 
-        If ANY link in this chain is missing, add it.
+        ### src/__tests__/engine/mixerEngine.test.ts
+        - getEffectiveVolume returns volume when no mute/solo
+        - getEffectiveVolume returns 0 for muted channel
+        - getEffectiveVolume returns volume for soloed channel
+        - getEffectiveVolume returns 0 for non-soloed when another is soloed
 
-        **Fader path**: User drags fader on MixerChannel →
-        MixerChannel calls `onVolumeChange(value)` →
-        Parent passes callback that calls `mixerStore.getState().setVolume(trackId, value)` →
-        setVolume calls `MixerEngine.getInstance().setVolume(trackId, value)` →
-        Next sample plays at new volume
+        ### src/__tests__/utils/timing.test.ts
+        - stepDurationMs(120) === 125
+        - stepDurationMs(60) === 250
+        - swingOffset for odd step with swing > 0
+        - swingOffset for even step === 0
 
-        If ANY link in this chain is missing, add it.
+        ### src/__tests__/stores/transportStore.test.ts
+        Mock AudioEngine and SequencerClock:
+        - play() calls AudioEngine.resume() + SequencerClock.start()
+        - stop() calls SequencerClock.stop()
+        - setBpm() restarts clock if playing
 
-        ## Phase 4 — Final Polish:
+        Run: cd /workspace && npx jest --passWithNoTests 2>&1 | tail -40
 
-        1. **Accessibility** — Add accessibilityLabel to ALL interactive elements
-           in all components. Pads = "button", faders = "adjustable".
-        2. **PRIVACY.md** — No data collection, no analytics, offline only.
-        3. **APPSTORE.md** — App description, keywords (music, daw, sequencer,
-           drum machine, beat maker), category: Music, age rating: 4+,
-           build commands, required assets list.
-        4. **README.md** — Project overview, setup instructions (npm install,
-           npx expo start), feature list, architecture overview.
+        ## Phase 4 — Documentation
+        Create real, complete documentation files:
 
-        ## Final Verification:
-        - `npx tsc --noEmit` — must be clean (0 errors)
-        - `find /workspace/src -name "*.ts" -o -name "*.tsx" | wc -l` — should be 25+
-        - `grep -r "as any\|: any" /workspace/src/` — should be empty
-        - `grep -r "will go here\|TODO\|stub" /workspace/src/` — should be empty
-        - `cat /workspace/src/stores/transportStore.ts | grep -c "Engine"` — should be >= 2
-        - `cat /workspace/src/hooks/useAudioSetup.ts | grep -c "Engine\|Clock"` — should be >= 3
+        ### /workspace/README.md (~100 lines)
+        - Project overview: "BeatForge — Mobile DAW" with feature list
+        - Tech stack: specific versions (RN 0.76, Expo 52, Zustand 5, expo-av)
+        - Quick start: npm install && node scripts/generate-samples.js && npx expo start
+        - Architecture: engines (AudioEngine→SamplerEngine→SequencerClock) →
+          stores (transport, sequencer, mixer, synth, project) →
+          hooks (useAudioSetup) → screens
+        - Directory structure explanation
+        - How to add new drum samples (update sampleRequires.ts + DEFAULT_TRACKS)
+        - Known limitations: expo-av synthesis uses pre-rendered samples;
+          JS timing uses drift-correction but isn't Web Audio precision
+        - App Store build: npx eas build --platform all --profile production
+
+        ### /workspace/PRIVACY.md
+        - No data collection, no analytics, no network requests
+        - All data stored locally in AsyncStorage
+        - No microphone access
+        - Not applicable to GDPR/CCPA (no personal data)
+
+        ### /workspace/APPSTORE.md
+        - App name: BeatForge — Beat Maker & Sequencer
+        - Subtitle: Step Sequencer & Drum Machine
+        - Keywords: beat maker, drum machine, sequencer, music producer
+        - Category: Music, Content rating: 4+
+        - 200-word marketing description
+        - Build commands with EAS
+        - Required assets list (icon, splash, screenshots)
+
+        ## Phase 5 — Final Verification
+        Run ALL 12 verification gates one final time. Print results:
+          "=== FINAL VERIFICATION SUMMARY ==="
+          Gate 1 (tsc): PASS/FAIL
+          Gate 2 (eslint): PASS/FAIL
+          Gate 3 (file count): N files — PASS/FAIL
+          Gate 4 (no stubs): PASS/FAIL
+          Gate 5 (no any): PASS/FAIL
+          Gate 6 (no shims): PASS/FAIL
+          Gate 7 (zustand import): PASS/FAIL
+          Gate 8 (no dynamic require): PASS/FAIL
+          Gate 9 (engine wiring): PASS/FAIL
+          Gate 10 (wav files): PASS/FAIL
+          Gate 11 (tests pass): PASS/FAIL
+          Gate 12 (integration trace): PASS/FAIL
+          "=== BUILD READY: YES / NO ==="
+
+        ## Handoff (final /workspace/.workflow-state.json):
+          {
+            "step": "polish",
+            "completed": true,
+            "allGatesPassed": true,
+            "testsPassed": true,
+            "buildReady": true,
+            "finalFileCount": 0
+          }
       execution:
-        timeoutSeconds: 600
+        timeoutSeconds: 900
         maxAttempts: 1
         retryable: false
-        continueOnError: true
-        maxTurns: 5
+        continueOnError: false
+        maxTurns: 14
         sessionGroup: dev-session

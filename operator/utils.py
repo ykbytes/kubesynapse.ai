@@ -9,7 +9,7 @@ import os
 from pathlib import PurePosixPath
 import re
 import time
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 import httpx
 
@@ -782,6 +782,7 @@ def invoke_agent_runtime_stream(
     timeout_seconds: float | None = None,
     step_name: str = "",
     iteration: int = 0,
+    on_todo_update: Callable[[list[dict[str, Any]]], None] | None = None,
 ) -> dict[str, Any]:
     """POST to /invoke/stream SSE endpoint, log events in real-time, return final result.
 
@@ -859,6 +860,10 @@ def invoke_agent_runtime_stream(
                     elif etype == "response.error_recovery":
                         retry = data.get("retry", "?")
                         logger.info("%s error recovery, retry=%s", prefix, retry)
+                    elif etype in ("todo.updated", "todo.cleared") and on_todo_update is not None:
+                        todos = data.get("todos")
+                        if isinstance(todos, list):
+                            on_todo_update(todos)
                 if final_result:
                     return final_result
                 # Stream ended without completed event — fall back

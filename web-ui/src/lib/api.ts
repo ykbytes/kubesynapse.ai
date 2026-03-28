@@ -1943,6 +1943,17 @@ export async function cancelWorkflow(
   return parseJsonResponse(response, parseWorkflowInfoPayload);
 }
 
+export async function retryFailedSteps(
+  token: string,
+  namespace: string,
+  workflowName: string,
+): Promise<WorkflowInfo> {
+  const response = await fetchAuthenticated(buildUrl(`/api/workflows/${workflowName}/retry-failed`, namespace), token, {
+    method: "POST",
+  });
+  return parseJsonResponse(response, parseWorkflowInfoPayload);
+}
+
 export async function deleteWorkflow(
   token: string,
   namespace: string,

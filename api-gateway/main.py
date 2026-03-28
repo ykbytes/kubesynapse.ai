@@ -5205,6 +5205,168 @@ def trigger_workflow(
     return result
 
 
+@app.post("/api/workflows/{workflow_name}/retry-failed", response_model=WorkflowInfo)
+def retry_failed_workflow_steps(
+    workflow_name: str,
+    namespace: str = "default",
+    user=Depends(verify_token),
+):
+    """Retry only the failed steps of a workflow.
+
+    Resets failed step states back to 'pending' while preserving completed
+    steps, then bumps the resource generation so the operator re-reconciles
+    and enqueues a new worker Job that skips already-completed steps.
+    """
+    ensure_namespace_access(user, namespace, "operator")
+    try:
+        from kubernetes import client
+
+        api = client.CustomObjectsApi()
+        current = cast(
+            dict[str, Any],
+            api.get_namespaced_custom_object(
+                group=RESOURCE_GROUP,
+                version=RESOURCE_VERSION,
+                namespace=namespace,
+                plural="agentworkflows",
+                name=workflow_name,
+            ),
+        )
+    except Exception as exc:
+        status_code = getattr(exc, "status", None)
+        if status_code == 404:
+            raise HTTPException(status_code=404, detail=f"Workflow '{workflow_name}' not found") from exc
+        raise HTTPException(status_code=502, detail=f"Failed to read workflow: {exc}") from exc
+
+    current_status = current.get("status") or {}
+    current_phase = str(current_status.get("phase", "pending") or "pending")
+    if current_phase != "failed":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Workflow is in '{current_phase}' phase. Only failed workflows can retry failed steps.",
+        )
+
+    step_states = current_status.get("stepStates") or {}
+    failed_step_names: list[str] = []
+    patched_step_states: dict[str, Any] = {}
+    for step_name, state in step_states.items():
+        if not isinstance(state, dict):
+            patched_step_states[step_name] = state
+            continue
+        step_status = str(state.get("status", "") or "")
+        if step_status == "failed":
+            failed_step_names.append(step_name)
+            patched_step_states[step_name] = {
+                "status": "pending",
+                "error": None,
+                "failureClass": None,
+                "startedAt": None,
+                "completedAt": None,
+                "iterationFailures": None,
+            }
+        else:
+            patched_step_states[step_name] = state
+
+    if not failed_step_names:
+        raise HTTPException(status_code=409, detail="No failed steps found to retry.")
+
+    # Step 1: Replace spec (unchanged) to bump metadata.generation and
+    # trigger the operator's on.update handler.
+    existing_spec = current.get("spec", {}) or {}
+    try:
+        from kubernetes import client as k8s_client
+
+        k8s_client.CustomObjectsApi().replace_namespaced_custom_object(
+            group=RESOURCE_GROUP,
+            version=RESOURCE_VERSION,
+            namespace=namespace,
+            plural="agentworkflows",
+            name=workflow_name,
+            body={
+                "apiVersion": f"{RESOURCE_GROUP}/{RESOURCE_VERSION}",
+                "kind": RESOURCE_KIND_BY_PLURAL["agentworkflows"],
+                "metadata": {
+                    "name": workflow_name,
+                    "namespace": namespace,
+                    "resourceVersion": current.get("metadata", {}).get("resourceVersion"),
+                },
+                "spec": existing_spec,
+            },
+        )
+    except Exception as exc:
+        status_code = getattr(exc, "status", None)
+        if status_code == 409:
+            raise HTTPException(status_code=409, detail="Workflow was modified concurrently. Retry.") from exc
+        logger.error("Failed to replace workflow spec for retry-failed: %s", exc)
+        raise HTTPException(status_code=502, detail="Failed to trigger retry") from exc
+
+    # Step 2: Patch status to reset failed steps and clear observedGeneration
+    # so the operator's run_workflow handler will re-enqueue.
+    try:
+        k8s_client.CustomObjectsApi().patch_namespaced_custom_object_status(
+            group=RESOURCE_GROUP,
+            version=RESOURCE_VERSION,
+            namespace=namespace,
+            plural="agentworkflows",
+            name=workflow_name,
+            body={
+                "status": {
+                    "phase": "pending",
+                    "observedGeneration": None,
+                    "pendingApproval": None,
+                    "stepStates": patched_step_states,
+                }
+            },
+        )
+    except Exception as exc:
+        logger.error("Failed to patch workflow status for retry-failed: %s", exc)
+        raise HTTPException(status_code=502, detail="Failed to reset failed steps") from exc
+
+    # Re-read and return freshest state
+    try:
+        updated = cast(
+            dict[str, Any],
+            api.get_namespaced_custom_object(
+                group=RESOURCE_GROUP,
+                version=RESOURCE_VERSION,
+                namespace=namespace,
+                plural="agentworkflows",
+                name=workflow_name,
+            ),
+        )
+    except Exception:
+        current["status"] = {
+            **current_status,
+            "phase": "pending",
+            "observedGeneration": None,
+            "pendingApproval": None,
+            "stepStates": patched_step_states,
+        }
+        return workflow_info_from_resource(current)
+
+    result = workflow_info_from_resource(updated)
+
+    try:
+        record_workflow_run(
+            workflow_name=workflow_name,
+            namespace=namespace,
+            run_id=result.run_id,
+            phase=result.phase,
+            total_steps=result.summary.get("totalSteps") if isinstance(result.summary, dict) else None,
+            triggered_by=str(user.get("sub", "unknown")),
+        )
+    except Exception as exc:
+        logger.warning("Failed to record workflow retry-failed run history: %s", exc)
+
+    logger.info(
+        "Retrying failed steps %s for workflow '%s/%s'",
+        failed_step_names,
+        namespace,
+        workflow_name,
+    )
+    return result
+
+
 @app.post("/api/workflows/{workflow_name}/cancel", response_model=WorkflowInfo)
 def cancel_workflow(
     workflow_name: str,
@@ -5502,9 +5664,10 @@ def get_workflow_next_action(
     if phase == "failed":
         if failed_steps:
             return {
-                "action": f"Review step '{failed_steps[0]}' failure and retry",
-                "reason": f"Workflow failed at step(s): {', '.join(failed_steps)}",
+                "action": "Retry failed steps",
+                "reason": f"Workflow failed at step(s): {', '.join(failed_steps)}. Use retry-failed to re-run only the failed steps while preserving completed work.",
                 "failedSteps": failed_steps,
+                "retryAvailable": True,
             }
         return {"action": "Inspect workflow failure and retry", "reason": "Workflow is in failed state."}
 

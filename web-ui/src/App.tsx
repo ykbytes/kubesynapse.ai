@@ -631,6 +631,8 @@ function AppLayout() {
                 onTrigger={(name, input) => void ws.handleTriggerWorkflow(name, input)}
                 onCancel={(name) => void ws.handleCancelWorkflow(name)}
                 isCancelling={ws.cancellingWorkflow}
+                onRetryFailed={(name) => void ws.handleRetryFailedSteps(name)}
+                isRetrying={ws.retryingWorkflow}
                 approvalReason={chat.approvalReason}
                 approvalBusy={chat.approvalBusy}
                 onApprovalReasonChange={chat.setApprovalReason}

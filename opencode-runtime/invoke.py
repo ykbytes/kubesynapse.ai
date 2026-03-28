@@ -77,6 +77,7 @@ from prompts import (
     build_recovery_prompt,
     combine_system_prompt,
     format_memory_context,
+    format_skills_system_prompt,
     format_team_context_system_prompt,
     format_workspace_system_prompt,
     get_continuation_prompt,
@@ -277,6 +278,9 @@ def invoke_opencode(request: InvokeRequest, stream_callback: StreamCallback = No
     task_type = classify_task_type(request.prompt) if request.autonomous else "unknown"
     task_type_prompt = get_task_type_prompt(task_type) if request.autonomous else None
 
+    # Skills awareness: inject available skill names and descriptions
+    skills_prompt = format_skills_system_prompt(SKILL_RUNTIME_CONFIG.get("skillMeta"))
+
     system_prompt = combine_system_prompt(
         AUTONOMY_SYSTEM_PROMPT if request.autonomous else None,
         DEFAULT_SYSTEM_PROMPT,
@@ -284,6 +288,7 @@ def invoke_opencode(request: InvokeRequest, stream_callback: StreamCallback = No
         pre_auth_prompt,
         workspace_prompt,
         memory_prompt,
+        skills_prompt,
         task_type_prompt,
         build_format_system_prompt(request.output_format),
         format_team_context_system_prompt(request.team_context),

@@ -245,6 +245,10 @@ def raise_reconcile_error(
 # ---------------------------------------------------------------------------
 
 
+MAX_HANDLER_RETRIES: int = 50
+"""Maximum number of retries before escalating TemporaryError to PermanentError."""
+
+
 def execute_reconcile(
     operation: Callable[[], Any],
     *,
@@ -256,6 +260,8 @@ def execute_reconcile(
     meta: dict[str, Any] | None = None,
     generation: int | None = None,
     default_delay: int = 10,
+    retry: int | None = None,
+    max_retries: int = MAX_HANDLER_RETRIES,
     start_message: str | None = None,
     success_message: str | None = None,
     **extra: Any,
@@ -285,6 +291,20 @@ def execute_reconcile(
         try:
             result = operation()
         except Exception as exc:
+            # Escalate TemporaryError to PermanentError after too many retries
+            if retry is not None and retry >= max_retries:
+                resolved = classify_reconcile_error(action, exc, default_delay=default_delay)
+                if isinstance(resolved, kopf.TemporaryError):
+                    logger.error(
+                        "Max retries (%d) exceeded for %s %s/%s — escalating to permanent failure.",
+                        max_retries,
+                        resource_kind,
+                        namespace or "",
+                        name,
+                    )
+                    raise kopf.PermanentError(
+                        f"{action} failed after {retry} retries: {resolved}"
+                    ) from exc
             raise_reconcile_error(
                 logger,
                 action,

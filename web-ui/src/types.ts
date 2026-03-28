@@ -658,6 +658,17 @@ export interface ReviewResult {
   criteria: string;
 }
 
+export interface PlanProgressItem {
+  text: string;
+  done: boolean;
+}
+
+export interface PlanProgress {
+  items: PlanProgressItem[];
+  completedItems: number;
+  totalItems: number;
+}
+
 export interface IterationFailure {
   iteration: number;
   error: string;
@@ -679,6 +690,7 @@ export interface WorkflowStepState {
   workerJob?: Record<string, unknown> | null;
   execution?: Record<string, unknown> | null;
   loopProgress?: LoopProgress | null;
+  planProgress?: PlanProgress | null;
   verificationResult?: VerificationResult | null;
   reviewResult?: ReviewResult | null;
   iterationFailures?: IterationFailure[] | null;

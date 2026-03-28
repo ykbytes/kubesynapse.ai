@@ -680,11 +680,16 @@ def _statefulset_template_signature(manifest: dict[str, Any]) -> dict[str, Any]:
         }
 
     def container_signature(container: dict[str, Any]) -> dict[str, Any]:
+        # Sort env vars by name to avoid mismatches when K8s reorders them
+        env_vars = sorted(
+            copy.deepcopy(container.get("env") or []),
+            key=lambda e: e.get("name", ""),
+        )
         return {
             "name": container.get("name"),
             "image": container.get("image"),
             "ports": [port_signature(port) for port in container.get("ports") or []],
-            "env": copy.deepcopy(container.get("env") or []),
+            "env": env_vars,
         }
 
     return {

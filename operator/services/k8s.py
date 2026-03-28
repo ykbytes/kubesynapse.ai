@@ -333,15 +333,39 @@ def ensure_statefulset(namespace: str, manifest: dict[str, Any]) -> None:
             reconciled_statefulset = _sanitize_kube_resource(
                 apps_api.read_namespaced_stateful_set(name=statefulset_name, namespace=namespace)
             )
-            desired_signature = _statefulset_template_signature(patched_manifest)
-            actual_signature = _statefulset_template_signature(reconciled_statefulset)
-            if actual_signature != desired_signature:
+            # Compare only the pod-template-revision annotation which the
+            # operator controls.  K8s may mutate other template fields (env
+            # ordering, defaulted values, injected sidecars) making a full
+            # deep comparison unreliable.
+            from builders.helpers import POD_TEMPLATE_REVISION_ANNOTATION as _REV_ANN
+
+            desired_rev = (
+                ((patched_manifest.get("spec") or {}).get("template") or {})
+                .get("metadata", {})
+                .get("annotations", {})
+                .get(_REV_ANN)
+            )
+            actual_rev = (
+                ((reconciled_statefulset.get("spec") or {}).get("template") or {})
+                .get("metadata", {})
+                .get("annotations", {})
+                .get(_REV_ANN)
+            )
+            if desired_rev and actual_rev != desired_rev:
+                logging.getLogger("operator.services.k8s").warning(
+                    "StatefulSet '%s/%s' pod-template-revision mismatch after patching: "
+                    "desired=%s actual=%s",
+                    namespace,
+                    statefulset_name,
+                    desired_rev,
+                    actual_rev,
+                )
                 raise kopf.TemporaryError(
                     (
                         f"StatefulSet '{statefulset_name}' in namespace '{namespace}' did not converge to the "
                         "desired pod template after patching."
                     ),
-                    delay=2,
+                    delay=10,
                 )
             _resize_statefulset_persistent_volume_claims(
                 core_api,

@@ -102,6 +102,24 @@ function ComposerCanvas({
   const [propertiesCollapsed, setPropertiesCollapsed] = useState(false);
   const [runHistoryCollapsed, setRunHistoryCollapsed] = useState(true);
 
+  // Sync step states from workflow polling to node data
+  useEffect(() => {
+    if (!workflow?.step_states) return;
+    setNodes((nds) => {
+      let changed = false;
+      const next = nds.map((n) => {
+        if (n.type !== "agentStep") return n;
+        const data = n.data as AgentStepNodeData;
+        const latestState = workflow.step_states?.[data.stepName] ?? null;
+        // Deep-compare to avoid unnecessary re-renders from polling
+        if (JSON.stringify(latestState) === JSON.stringify(data.stepState)) return n;
+        changed = true;
+        return { ...n, data: { ...data, stepState: latestState } };
+      });
+      return changed ? next : nds;
+    });
+  }, [workflow?.step_states, setNodes]);
+
   // Auto-collapse panels on small viewports
   useEffect(() => {
     const mql = window.matchMedia("(max-width: 768px)");
