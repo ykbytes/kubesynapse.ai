@@ -17,9 +17,7 @@ function Invoke-Kubectl {
 
 $files = @(
     "project-context.yaml",
-    "architect-agent.yaml",
-    "backend-agent.yaml",
-    "frontend-agent.yaml",
+    "daw-agent.yaml",
     "workflow.yaml"
 )
 

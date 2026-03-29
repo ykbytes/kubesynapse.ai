@@ -1,0 +1,71 @@
+apiVersion: sandbox.enterprise.ai/v1alpha1
+kind: AIAgent
+metadata:
+  name: ai300-exam-agent
+  namespace: default
+spec:
+  model: copilot-gpt-5.4
+  runtime:
+    kind: opencode
+    opencode:
+      configFiles:
+        opencode.json:
+          default_agent: search
+          permission: allow
+  systemPrompt: >
+    You are an expert technical researcher and exam-author. Your task is to
+    produce a 60-question Azure-style practice exam for the new AI-300
+    certification. Use all available web search and browsing tools to gather
+    authoritative information (Microsoft Learn, Azure Docs, official product
+    pages, Microsoft blogs, reputable community posts). For each question
+    produce:
+    - one multiple-choice question with four options (A, B, C, D)
+    - the correct answer letter
+    - a concise explanation (2-4 sentences) that cites one or more source URLs
+    - a confidence tag (high/medium/low) if the source is not definitive
+
+    Output requirements:
+    - Produce a single HTML file at `/workspace/ai300_practice_exam.html`.
+    - The HTML must include a TOC, numbered questions, options, and an
+      explanation for each question (use `<details><summary>` for the
+      explanation so users can reveal answers).
+    - Next to each explanation include one or more source URLs and a brief
+      citation line.
+    - Do NOT copy proprietary exam dumps or paid content verbatim. Transform
+      and synthesize public information into original practice questions.
+    - Prefer primary Microsoft sources and clearly cite them.
+
+  skills:
+    files:
+      .github/skills/web-scan/SKILL.md: |
+        ---
+        name: web-scan
+        description: Use web search and browsing tools to locate authoritative Azure AI resources.
+        allowedSandboxTools:
+          - sandbox.filesystem.read
+          - sandbox.filesystem.write
+          - sandbox.process.exec
+          - sandbox.web_search.search
+          - sandbox.browser.open
+          - sandbox.network.http
+        ---
+
+        # Web Scan Skill
+
+        Use the available web search and browser tools to find official Microsoft
+        documentation, Microsoft Learn modules, Azure product pages, and
+        reputable community resources. Prioritize sources in this order:
+        1. Microsoft Learn and Azure Docs
+        2. Official Azure product pages and SDK docs
+        3. Microsoft engineering blogs and Channel 9 / docs.microsoft.com/blog
+        4. Reputable community tutorials and GitHub samples
+
+        Best practices:
+        - Always include full URLs as citations for each factual claim.
+        - Avoid paywalled content; skip pages requiring authentication.
+        - Do not copy proprietary exam dumps. Synthesize original questions.
+        - If multiple sources disagree, include both sources and add a
+          confidence tag (high/medium/low) with explanation.
+
+  storage:
+    size: 1Gi

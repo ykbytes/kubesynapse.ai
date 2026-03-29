@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ai300-exam-context
+  namespace: default
+data:
+  exam-spec: |-
+    title: AI-300 Practice Exam (generated)
+    totalQuestions: "60"
+    format: multiple-choice (4 options per question)
+    outputPath: /workspace/ai300_practice_exam.html
+    topicBreakdown:
+      - architecture_and_design: 18
+      - data_and_storage: 8
+      - model_deployment_inference: 12
+      - security_privacy_compliance: 8
+      - monitoring_scaling_troubleshooting: 8
+      - integration_and_migration: 6
+    qualityRules:
+      - prefer_primary_sources: Microsoft Learn, Azure Docs, official SDK docs
+      - cite_urls_for_every_explanation: true
+      - avoid_copying_exam_dumps: true
+      - include_confidence_tag_if_uncertain: true

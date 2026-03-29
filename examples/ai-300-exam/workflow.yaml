@@ -1,0 +1,32 @@
+apiVersion: sandbox.enterprise.ai/v1alpha1
+kind: AgentWorkflow
+metadata:
+  name: ai300-exam-generation
+  namespace: default
+spec:
+  description: >
+    Generate a 60-question Azure-style practice exam for the new AI-300
+    certification by scanning authoritative web resources and synthesizing
+    original multiple-choice questions with answers, explanations, and citations.
+  steps:
+    - name: generate-exam
+      type: agent
+      agentRef: ai300-exam-agent
+      prompt: >
+        Your task is to create a single HTML file at `/workspace/ai300_practice_exam.html`.
+        Use web-search and browser tools to gather authoritative information (Microsoft Learn,
+        Azure Docs, official product pages, Microsoft engineering blogs). Produce 60 original
+        multiple-choice questions (4 options each). For each question include the correct answer,
+        a concise explanation (2-4 sentences), and one or more source URLs. Cite sources next
+        to each explanation. Use `<details><summary>` to hide answers by default.
+
+        Start by discovering the official AI-300 exam objectives and authoritative topic list,
+        then create a question distribution that covers all major objectives. Avoid reproducing
+        proprietary exam dumps; synthesize original items. Save the final HTML to `/workspace`.
+      execution:
+        timeoutSeconds: 7200
+        # Allow multiple attempts in case of transient web/network errors
+        maxAttempts: 3
+        # Increase max turns to allow extensive web exploration
+        maxTurns: 300
+        sessionGroup: ai300-session

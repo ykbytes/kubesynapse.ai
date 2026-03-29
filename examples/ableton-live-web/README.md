@@ -1,97 +1,79 @@
-# Ableton Live Web — Multi-Agent Workflow Example
+# Ableton Live Web — 10-Step Agent Workflow
 
-This example deploys a **3-agent workflow** that collaboratively builds a
-browser-based Digital Audio Workstation inspired by Ableton Live.
+This example deploys a **single-agent, 10-step workflow** that builds a
+professional browser-based Digital Audio Workstation inspired by Ableton Live 11.
 
-## Agents
+## Agent
 
-| Agent | Role | Runtime |
-|-------|------|---------|
-| `ableton-architect` | System design, project scaffolding, integration review | OpenCode (plan) |
-| `ableton-backend` | Web Audio engine, Tone.js scheduling, effects pipeline | OpenCode (build) |
-| `ableton-frontend` | React UI, Tailwind dark theme, DAW components | OpenCode (build) |
+| Agent | Model | Runtime |
+|-------|-------|---------|
+| `ableton-daw-agent` | copilot-gpt-5.4 | OpenCode (build, 6 embedded skills) |
 
-## Workflow DAG
+The single agent carries 6 inline skills: known-pitfalls, audio-engine,
+ui-layout, integration-wiring, strict-types, and verification-gates.
+
+## Workflow Pipeline
 
 ```
-design (architect, loop)
-   ├──→ backend  (backend-dev, loop)  ──┐
-   └──→ frontend (frontend-dev, loop) ──┤
-                                        └──→ integration-review (architect, review)
+scaffold → types-and-stores → audio-engine → layout-and-transport
+→ arrangement-view → session-view → mixer-and-effects → instruments
+→ integration → verify-and-polish
 ```
 
-- **design**: The architect generates the architecture, TypeScript interfaces,
-  Zustand store skeletons, and project scaffold (Vite + React + Tailwind config).
-- **backend** / **frontend**: Run **in parallel** — one builds the audio engine
-  (`src/engine/`), the other builds the React UI (`src/components/`).
-- **integration-review**: The architect reviews the combined output against
-  10 acceptance criteria (build, tests, types, conventions).
+All 10 steps share a workspace via `sessionGroup: dev-session`, so each
+step builds on files created by the previous one. Each step prompt uses
+`##` markdown headers that auto-seed plan progress in the UI.
 
-All coding steps use `type: loop` with `planSource: prompt`, so each agent
-generates its own TODO checklist and iterates through it with circuit-breaker
-protection.
+| # | Step | Focus | maxTurns |
+|---|------|-------|----------|
+| 0 | scaffold | package.json, tsconfig, Vite, Tailwind, pnpm install | 5 |
+| 1 | types-and-stores | TypeScript interfaces, 5 Zustand stores | 10 |
+| 2 | audio-engine | Tone.js engine, ChannelStrip, effects, synth, drums | 12 |
+| 3 | layout-and-transport | CSS Grid shell, TransportBar, Sidebar | 10 |
+| 4 | arrangement-view | Multi-track timeline, track lanes, playhead | 12 |
+| 5 | session-view | Clip launcher grid, scene triggers | 10 |
+| 6 | mixer-and-effects | Faders, pan knobs, VU meters, effects rack | 12 |
+| 7 | instruments | Piano roll, synth panel, drum pads, waveform | 12 |
+| 8 | integration | Wire stores→engine, keyboard shortcuts, hooks | 14 |
+| 9 | verify-and-polish | tsc, vite build, UI polish, README | 14 |
+
+## Tech Stack (Generated App)
+
+- React 18 + Vite 5 + TypeScript strict
+- Tone.js 15 for Web Audio scheduling and synthesis
+- Zustand 5 for state management
+- Tailwind CSS 3 with Ableton-inspired dark theme
 
 ## Prerequisites
 
 1. A running AI Agent Sandbox cluster with the operator deployed.
-2. At least one LLM model configured in LiteLLM (default: `gpt-4`).
-3. MCP sidecars available in the catalog: `git`, `code-exec`.
+2. LLM model `copilot-gpt-5.4` configured in LiteLLM.
+3. MCP sidecar `code-exec` available.
 
 ## Deploy
-
-Fast path on Windows:
 
 ```powershell
 ./deploy.ps1 -Namespace default
 ```
 
-Manual path:
+Manual:
 
 ```bash
-# 1. Apply the project context ConfigMap
 kubectl apply -f project-context.yaml
-
-# 2. Create the three agents
-kubectl apply -f architect-agent.yaml
-kubectl apply -f backend-agent.yaml
-kubectl apply -f frontend-agent.yaml
-
-# 3. Wait for all agent pods to become ready
-kubectl wait --for=condition=ready pod -l app=ai-agent --timeout=120s
-
-# 4. Launch the workflow
+kubectl apply -f daw-agent.yaml
 kubectl apply -f workflow.yaml
-
-# 5. Watch progress
 kubectl get agentworkflows ableton-live-web -w
 ```
 
 ## Monitor
 
 ```bash
-# Check workflow status
 kubectl get agentworkflows ableton-live-web -o yaml
-
-# Stream the specific workflow worker job logs
-kubectl -n ai-platform logs job/<worker-job-name> -f
-
-# Check individual agent logs
-kubectl logs -l agent-name=ableton-architect -f
-kubectl logs -l agent-name=ableton-backend -f
-kubectl logs -l agent-name=ableton-frontend -f
+kubectl logs -l agent-name=ableton-daw-agent -c agent-runtime -f
 ```
-
-In the web UI workflow view, use the new `Live logs` panel to switch between:
-
-- the workflow worker logs for orchestration issues
-- each agent runtime log stream
-- filtered views for `OpenCode-focused` and `Errors only`
 
 ## Customization
 
-- **Model**: Change `spec.model` in each agent YAML to use a different LLM
-  (e.g., `gpt-4o`, `claude-sonnet-4-20250514`).
-- **Git**: Add `spec.gitConfig` to each agent to push results to a repository.
-- **Loop iterations**: Adjust `loopConfig.maxIterations` for more or fewer
-  development cycles (default: 15 for design, 20 for backend/frontend).
-- **Timeouts**: Increase `execution.timeoutSeconds` if using slower models.
+- **Model**: Change `spec.model` in `daw-agent.yaml`.
+- **Steps**: Adjust `maxTurns` or `timeoutSeconds` per step in `workflow.yaml`.
+- **Features**: Edit step prompts to add/remove features.
