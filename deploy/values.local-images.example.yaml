@@ -1,93 +1,93 @@
 agentRuntime:
   image:
-    repository: localhost/kubeminionagents/ai-agent-runtime
+    repository: localhost/kubesynthai/kubesynth-agent-runtime
     tag: dev
     pullPolicy: IfNotPresent
 
 operator:
   image:
-    repository: localhost/kubeminionagents/ai-operator
+    repository: localhost/kubesynthai/kubesynth-operator
     tag: dev
     pullPolicy: IfNotPresent
   workerImage:
-    repository: localhost/kubeminionagents/ai-operator
+    repository: localhost/kubesynthai/kubesynth-operator
     tag: dev
     pullPolicy: IfNotPresent
 
 gooseRuntime:
   image:
-    repository: localhost/kubeminionagents/ai-goose-runtime
+    repository: localhost/kubesynthai/kubesynth-goose-runtime
     tag: dev
     pullPolicy: IfNotPresent
 
 codexRuntime:
   image:
-    repository: localhost/kubeminionagents/ai-codex-runtime
+    repository: localhost/kubesynthai/kubesynth-codex-runtime
     tag: dev
     pullPolicy: IfNotPresent
 
 opencodeRuntime:
   image:
-    repository: localhost/kubeminionagents/ai-opencode-runtime
+    repository: localhost/kubesynthai/kubesynth-opencode-runtime
     tag: dev6
     pullPolicy: IfNotPresent
 
 apiGateway:
   image:
-    repository: localhost/kubeminionagents/ai-api-gateway
+    repository: localhost/kubesynthai/kubesynth-api-gateway
     tag: dev6
     pullPolicy: IfNotPresent
 
 webUi:
   image:
-    repository: localhost/kubeminionagents/ai-web-ui
+    repository: localhost/kubesynthai/kubesynth-web-ui
     tag: dev6
     pullPolicy: IfNotPresent
 
 mcpHub:
   servers:
     github:
-      image: localhost/kubeminionagents/mcp-github-adapter
+      image: localhost/kubesynthai/mcp-github-adapter
       imagePullPolicy: IfNotPresent
 
 mcpToolSidecars:
   codeExec:
-    image: localhost/kubeminionagents/mcp-code-exec
+    image: localhost/kubesynthai/mcp-code-exec
     tag: dev
     port: 8090
   webSearch:
-    image: localhost/kubeminionagents/mcp-web-search
+    image: localhost/kubesynthai/mcp-web-search
     tag: dev
     port: 8091
   documents:
-    image: localhost/kubeminionagents/mcp-documents
+    image: localhost/kubesynthai/mcp-documents
     tag: dev
     port: 8092
   browser:
-    image: localhost/kubeminionagents/mcp-browser
+    image: localhost/kubesynthai/mcp-browser
     tag: dev
     port: 8093
   database:
-    image: localhost/kubeminionagents/mcp-database
+    image: localhost/kubesynthai/mcp-database
     tag: dev
     port: 8094
   git:
-    image: localhost/kubeminionagents/mcp-git
+    image: localhost/kubesynthai/mcp-git
     tag: dev
     port: 8095
   githubAdapter:
-    image: localhost/kubeminionagents/mcp-github-adapter
+    image: localhost/kubesynthai/mcp-github-adapter
     tag: dev
     port: 8096
   kubernetes:
-    image: localhost/kubeminionagents/mcp-kubernetes
+    image: localhost/kubesynthai/mcp-kubernetes
     tag: dev
     port: 8097
   messaging:
-    image: localhost/kubeminionagents/mcp-messaging
+    image: localhost/kubesynthai/mcp-messaging
     tag: dev
     port: 8098
   rag:
-    image: localhost/kubeminionagents/mcp-rag
+    image: localhost/kubesynthai/mcp-rag
     tag: dev
     port: 8099

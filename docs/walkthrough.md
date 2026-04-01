@@ -10,7 +10,7 @@ All P0 and P1 roadmap items from the original plan have been implemented and are
 
 **Deploy in one command:**
 ```bash
-helm upgrade --install ai-agent-sandbox ./charts/ai-agent-sandbox \
+helm upgrade --install kubesynth ./charts/kubesynth \
   -f ./deploy/values.dockerhub.local.yaml
 ```
 
@@ -18,7 +18,7 @@ See [INSTALL.md](../INSTALL.md) for the full installation guide.
 
 ---
 
-## Phase 1 — Helm Chart Foundation (`charts/ai-agent-sandbox/`)
+## Phase 1 — Helm Chart Foundation (`charts/kubesynth/`)
 
 - Created standard `Chart.yaml` and `values.yaml` with portable defaults (`pullPolicy: IfNotPresent`, ingress disabled by default).
 - Added **LiteLLM Gateway** Deployment, Service, ConfigMap, and Secrets to centralize LLM routing, authentication, and authorization across all runtimes.

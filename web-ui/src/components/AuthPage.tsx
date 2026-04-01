@@ -107,7 +107,7 @@ export function AuthPage({ onBack }: AuthPageProps) {
         <div className="rounded-xl border border-border bg-card p-6 shadow-lg">
           {/* Bootstrapping banner */}
           {isBootstrapping && (
-            <div className="mb-4 rounded-md border border-primary/30 bg-primary/5 px-3 py-3 text-sm">
+            <div className="mb-4 rounded-md border border-primary/30 bg-primary/5 px-3 py-3 text-sm" role="alert" aria-live="polite">
               <div className="flex items-center gap-2 font-medium text-primary">
                 <UserPlus className="h-4 w-4" />
                 Welcome — create the first admin account

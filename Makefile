@@ -51,25 +51,25 @@ ui-preview:
 docker-build: docker-build-operator docker-build-runtime docker-build-goose-runtime docker-build-codex-runtime docker-build-opencode-runtime docker-build-gateway docker-build-ui docker-build-mcp-sidecars
 
 docker-build-operator:
-	$(CONTAINER_CLI) build $(CONTAINER_BUILD_FLAGS) -t $(REGISTRY)/ai-operator:$(VERSION) ./operator
+	$(CONTAINER_CLI) build $(CONTAINER_BUILD_FLAGS) -t $(REGISTRY)/kubesynth-operator:$(VERSION) ./operator
 
 docker-build-runtime:
-	$(CONTAINER_CLI) build $(CONTAINER_BUILD_FLAGS) -t $(REGISTRY)/ai-agent-runtime:$(VERSION) ./agent-runtime
+	$(CONTAINER_CLI) build $(CONTAINER_BUILD_FLAGS) -t $(REGISTRY)/kubesynth-agent-runtime:$(VERSION) ./agent-runtime
 
 docker-build-goose-runtime:
-	$(CONTAINER_CLI) build $(CONTAINER_BUILD_FLAGS) -t $(REGISTRY)/ai-goose-runtime:$(VERSION) ./goose-runtime
+	$(CONTAINER_CLI) build $(CONTAINER_BUILD_FLAGS) -t $(REGISTRY)/kubesynth-goose-runtime:$(VERSION) ./goose-runtime
 
 docker-build-codex-runtime:
-	$(CONTAINER_CLI) build $(CONTAINER_BUILD_FLAGS) -t $(REGISTRY)/ai-codex-runtime:$(VERSION) ./codex-runtime
+	$(CONTAINER_CLI) build $(CONTAINER_BUILD_FLAGS) -t $(REGISTRY)/kubesynth-codex-runtime:$(VERSION) ./codex-runtime
 
 docker-build-opencode-runtime:
-	$(CONTAINER_CLI) build $(CONTAINER_BUILD_FLAGS) -t $(REGISTRY)/ai-opencode-runtime:$(VERSION) ./opencode-runtime
+	$(CONTAINER_CLI) build $(CONTAINER_BUILD_FLAGS) -t $(REGISTRY)/kubesynth-opencode-runtime:$(VERSION) ./opencode-runtime
 
 docker-build-gateway:
-	$(CONTAINER_CLI) build $(CONTAINER_BUILD_FLAGS) -t $(REGISTRY)/ai-api-gateway:$(VERSION) ./api-gateway
+	$(CONTAINER_CLI) build $(CONTAINER_BUILD_FLAGS) -t $(REGISTRY)/kubesynth-api-gateway:$(VERSION) ./api-gateway
 
 docker-build-ui:
-	$(CONTAINER_CLI) build $(CONTAINER_BUILD_FLAGS) -t $(REGISTRY)/ai-agent-sandbox-web-ui:$(VERSION) ./web-ui
+	$(CONTAINER_CLI) build $(CONTAINER_BUILD_FLAGS) -t $(REGISTRY)/kubesynth-web-ui:$(VERSION) ./web-ui
 
 docker-build-mcp-sidecars: docker-build-mcp-code-exec docker-build-mcp-web-search docker-build-mcp-documents docker-build-mcp-browser docker-build-mcp-database docker-build-mcp-git docker-build-mcp-github-adapter docker-build-mcp-kubernetes docker-build-mcp-messaging docker-build-mcp-rag
 
@@ -106,25 +106,25 @@ docker-build-mcp-rag:
 docker-push: docker-push-operator docker-push-runtime docker-push-goose-runtime docker-push-codex-runtime docker-push-opencode-runtime docker-push-gateway docker-push-ui docker-push-mcp-sidecars
 
 docker-push-operator:
-	$(CONTAINER_CLI) push $(REGISTRY)/ai-operator:$(VERSION)
+	$(CONTAINER_CLI) push $(REGISTRY)/kubesynth-operator:$(VERSION)
 
 docker-push-runtime:
-	$(CONTAINER_CLI) push $(REGISTRY)/ai-agent-runtime:$(VERSION)
+	$(CONTAINER_CLI) push $(REGISTRY)/kubesynth-agent-runtime:$(VERSION)
 
 docker-push-goose-runtime:
-	$(CONTAINER_CLI) push $(REGISTRY)/ai-goose-runtime:$(VERSION)
+	$(CONTAINER_CLI) push $(REGISTRY)/kubesynth-goose-runtime:$(VERSION)
 
 docker-push-codex-runtime:
-	$(CONTAINER_CLI) push $(REGISTRY)/ai-codex-runtime:$(VERSION)
+	$(CONTAINER_CLI) push $(REGISTRY)/kubesynth-codex-runtime:$(VERSION)
 
 docker-push-opencode-runtime:
-	$(CONTAINER_CLI) push $(REGISTRY)/ai-opencode-runtime:$(VERSION)
+	$(CONTAINER_CLI) push $(REGISTRY)/kubesynth-opencode-runtime:$(VERSION)
 
 docker-push-gateway:
-	$(CONTAINER_CLI) push $(REGISTRY)/ai-api-gateway:$(VERSION)
+	$(CONTAINER_CLI) push $(REGISTRY)/kubesynth-api-gateway:$(VERSION)
 
 docker-push-ui:
-	$(CONTAINER_CLI) push $(REGISTRY)/ai-agent-sandbox-web-ui:$(VERSION)
+	$(CONTAINER_CLI) push $(REGISTRY)/kubesynth-web-ui:$(VERSION)
 
 docker-push-mcp-sidecars: docker-push-mcp-code-exec docker-push-mcp-web-search docker-push-mcp-documents docker-push-mcp-browser docker-push-mcp-database docker-push-mcp-git docker-push-mcp-github-adapter docker-push-mcp-kubernetes docker-push-mcp-messaging docker-push-mcp-rag
 
@@ -192,20 +192,20 @@ lint:
 # ===========================
 
 helm-lint:
-	helm lint ./charts/ai-agent-sandbox
+	helm lint ./charts/kubesynth
 
 helm-package:
-	helm package ./charts/ai-agent-sandbox -d ./dist
+	helm package ./charts/kubesynth -d ./dist
 
 helm-template:
-	helm template ai-sandbox ./charts/ai-agent-sandbox $(HELM_SKILLS_CATALOG_ARG)
+	helm template ai-sandbox ./charts/kubesynth $(HELM_SKILLS_CATALOG_ARG)
 
 # ===========================
 # Deploy (local cluster)
 # ===========================
 
 deploy:
-	helm upgrade --install ai-agent-sandbox ./charts/ai-agent-sandbox $(HELM_SKILLS_CATALOG_ARG)
+	helm upgrade --install kubesynth ./charts/kubesynth $(HELM_SKILLS_CATALOG_ARG)
 
 deploy-sample:
 	kubectl apply -f examples/sample-agent.yaml
@@ -213,13 +213,13 @@ deploy-sample:
 	kubectl apply -f examples/sample-policy.yaml
 
 undeploy:
-	helm uninstall ai-agent-sandbox || true
-	kubectl delete crd aiagents.sandbox.enterprise.ai || true
-	kubectl delete crd agentpolicies.sandbox.enterprise.ai || true
-	kubectl delete crd agentapprovals.sandbox.enterprise.ai || true
-	kubectl delete crd agenttenants.sandbox.enterprise.ai || true
-	kubectl delete crd agentworkflows.sandbox.enterprise.ai || true
-	kubectl delete crd agentevals.sandbox.enterprise.ai || true
+	helm uninstall kubesynth || true
+	kubectl delete crd aiagents.kubesynth.ai || true
+	kubectl delete crd agentpolicies.kubesynth.ai || true
+	kubectl delete crd agentapprovals.kubesynth.ai || true
+	kubectl delete crd agenttenants.kubesynth.ai || true
+	kubectl delete crd agentworkflows.kubesynth.ai || true
+	kubectl delete crd agentevals.kubesynth.ai || true
 
 # ===========================
 # Clean
@@ -227,13 +227,13 @@ undeploy:
 
 clean:
 	rm -rf bin/ dist/
-	$(CONTAINER_CLI) rmi $(REGISTRY)/ai-operator:$(VERSION) || true
-	$(CONTAINER_CLI) rmi $(REGISTRY)/ai-agent-runtime:$(VERSION) || true
-	$(CONTAINER_CLI) rmi $(REGISTRY)/ai-goose-runtime:$(VERSION) || true
-	$(CONTAINER_CLI) rmi $(REGISTRY)/ai-codex-runtime:$(VERSION) || true
-	$(CONTAINER_CLI) rmi $(REGISTRY)/ai-opencode-runtime:$(VERSION) || true
-	$(CONTAINER_CLI) rmi $(REGISTRY)/ai-api-gateway:$(VERSION) || true
-	$(CONTAINER_CLI) rmi $(REGISTRY)/ai-agent-sandbox-web-ui:$(VERSION) || true
+	$(CONTAINER_CLI) rmi $(REGISTRY)/kubesynth-operator:$(VERSION) || true
+	$(CONTAINER_CLI) rmi $(REGISTRY)/kubesynth-agent-runtime:$(VERSION) || true
+	$(CONTAINER_CLI) rmi $(REGISTRY)/kubesynth-goose-runtime:$(VERSION) || true
+	$(CONTAINER_CLI) rmi $(REGISTRY)/kubesynth-codex-runtime:$(VERSION) || true
+	$(CONTAINER_CLI) rmi $(REGISTRY)/kubesynth-opencode-runtime:$(VERSION) || true
+	$(CONTAINER_CLI) rmi $(REGISTRY)/kubesynth-api-gateway:$(VERSION) || true
+	$(CONTAINER_CLI) rmi $(REGISTRY)/kubesynth-web-ui:$(VERSION) || true
 	$(CONTAINER_CLI) rmi $(REGISTRY)/mcp-code-exec:$(VERSION) || true
 	$(CONTAINER_CLI) rmi $(REGISTRY)/mcp-web-search:$(VERSION) || true
 	$(CONTAINER_CLI) rmi $(REGISTRY)/mcp-documents:$(VERSION) || true

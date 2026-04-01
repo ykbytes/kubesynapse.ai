@@ -191,7 +191,7 @@ platformSecrets:
 ### 3. Deploy
 
 ```bash
-helm upgrade --install ai-agent-sandbox ./charts/ai-agent-sandbox \
+helm upgrade --install kubesynth ./charts/kubesynth \
   -f ./deploy/values.dockerhub.local.yaml
 ```
 
@@ -205,23 +205,23 @@ Expected pods once everything is ready:
 
 | Pod prefix | Description |
 |---|---|
-| `ai-agent-sandbox-operator-*` | Operator (2 replicas for HA) |
-| `ai-agent-sandbox-api-gateway-*` | API Gateway |
-| `ai-agent-sandbox-litellm-*` | LiteLLM model proxy |
-| `ai-agent-sandbox-redis-*` | Redis cache |
-| `ai-agent-sandbox-qdrant-*` | Qdrant vector database |
-| `ai-agent-sandbox-nats-*` | NATS message bus |
-| `ai-agent-sandbox-web-ui-*` | Web dashboard |
+| `kubesynth-operator-*` | Operator (2 replicas for HA) |
+| `kubesynth-api-gateway-*` | API Gateway |
+| `kubesynth-litellm-*` | LiteLLM model proxy |
+| `kubesynth-redis-*` | Redis cache |
+| `kubesynth-qdrant-*` | Qdrant vector database |
+| `kubesynth-nats-*` | NATS message bus |
+| `kubesynth-web-ui-*` | Web dashboard |
 
 ### 5. Port-forward and test
 
 ```bash
 # API Gateway
-kubectl port-forward svc/ai-agent-sandbox-api-gateway 8080:8080
+kubectl port-forward svc/kubesynth-api-gateway 8080:8080
 curl http://localhost:8080/api/health
 
 # Web UI (open in browser)
-kubectl port-forward svc/ai-agent-sandbox-web-ui 3000:80
+kubectl port-forward svc/kubesynth-web-ui 3000:80
 # Visit http://localhost:3000
 ```
 
@@ -254,7 +254,7 @@ All images live under `docker.io/yakdhane`:
 | `yakdhane/ai-codex-runtime` | Codex HTTP adapter |
 | `yakdhane/ai-opencode-runtime` | OpenCode HTTP adapter |
 | `yakdhane/ai-api-gateway` | FastAPI gateway |
-| `yakdhane/ai-agent-sandbox-web-ui` | React web console |
+| `yakdhane/kubesynth-web-ui` | React web console |
 | `yakdhane/mcp-code-exec` | Code execution MCP sidecar |
 | `yakdhane/mcp-web-search` | Web search MCP sidecar |
 | `yakdhane/mcp-documents` | Document processing MCP sidecar |
@@ -307,31 +307,31 @@ kind create cluster --name ai-sandbox
 
 ```bash
 # From the repository root (builds all platform + sidecar images)
-make docker-build REGISTRY=localhost/kubeminionagents VERSION=dev CONTAINER_CLI=docker
+make docker-build REGISTRY=localhost/kubesynthai VERSION=dev CONTAINER_CLI=docker
 # Produces:
-#   localhost/kubeminionagents/ai-operator:dev
-#   localhost/kubeminionagents/ai-agent-runtime:dev
-#   localhost/kubeminionagents/ai-goose-runtime:dev
-#   localhost/kubeminionagents/ai-codex-runtime:dev
-#   localhost/kubeminionagents/ai-opencode-runtime:dev
-#   localhost/kubeminionagents/ai-api-gateway:dev
-#   localhost/kubeminionagents/ai-agent-sandbox-web-ui:dev
-#   localhost/kubeminionagents/mcp-code-exec:dev
-#   localhost/kubeminionagents/mcp-web-search:dev
-#   localhost/kubeminionagents/mcp-documents:dev
+#   localhost/kubesynthai/ai-operator:dev
+#   localhost/kubesynthai/ai-agent-runtime:dev
+#   localhost/kubesynthai/ai-goose-runtime:dev
+#   localhost/kubesynthai/ai-codex-runtime:dev
+#   localhost/kubesynthai/ai-opencode-runtime:dev
+#   localhost/kubesynthai/ai-api-gateway:dev
+#   localhost/kubesynthai/kubesynth-web-ui:dev
+#   localhost/kubesynthai/mcp-code-exec:dev
+#   localhost/kubesynthai/mcp-web-search:dev
+#   localhost/kubesynthai/mcp-documents:dev
 #   ... (all 10 mcp-* sidecars)
 ```
 
 Or build individual components with Docker:
 
 ```bash
-docker build -t localhost/kubeminionagents/ai-operator:dev ./operator
-docker build -t localhost/kubeminionagents/ai-agent-runtime:dev ./agent-runtime
-docker build -t localhost/kubeminionagents/ai-goose-runtime:dev ./goose-runtime
-docker build -t localhost/kubeminionagents/ai-codex-runtime:dev ./codex-runtime
-docker build -t localhost/kubeminionagents/ai-opencode-runtime:dev ./opencode-runtime
-docker build -t localhost/kubeminionagents/ai-api-gateway:dev ./api-gateway
-docker build -t localhost/kubeminionagents/ai-agent-sandbox-web-ui:dev ./web-ui
+docker build -t localhost/kubesynthai/ai-operator:dev ./operator
+docker build -t localhost/kubesynthai/ai-agent-runtime:dev ./agent-runtime
+docker build -t localhost/kubesynthai/ai-goose-runtime:dev ./goose-runtime
+docker build -t localhost/kubesynthai/ai-codex-runtime:dev ./codex-runtime
+docker build -t localhost/kubesynthai/ai-opencode-runtime:dev ./opencode-runtime
+docker build -t localhost/kubesynthai/ai-api-gateway:dev ./api-gateway
+docker build -t localhost/kubesynthai/kubesynth-web-ui:dev ./web-ui
 ```
 
 The bundled MCP sidecars build from sub-directories under `./mcp-sidecars/`, one Dockerfile each.
@@ -341,25 +341,25 @@ The Makefile builds all of them in one pass and is the recommended approach.
 
 ```bash
 mkdir -p dist
-docker save -o dist/ai-operator.tar localhost/kubeminionagents/ai-operator:dev
-docker save -o dist/ai-agent-runtime.tar localhost/kubeminionagents/ai-agent-runtime:dev
-docker save -o dist/ai-goose-runtime.tar localhost/kubeminionagents/ai-goose-runtime:dev
-docker save -o dist/ai-codex-runtime.tar localhost/kubeminionagents/ai-codex-runtime:dev
-docker save -o dist/ai-opencode-runtime.tar localhost/kubeminionagents/ai-opencode-runtime:dev
-docker save -o dist/ai-api-gateway.tar localhost/kubeminionagents/ai-api-gateway:dev
-docker save -o dist/ai-agent-sandbox-web-ui.tar localhost/kubeminionagents/ai-agent-sandbox-web-ui:dev
+docker save -o dist/ai-operator.tar localhost/kubesynthai/ai-operator:dev
+docker save -o dist/ai-agent-runtime.tar localhost/kubesynthai/ai-agent-runtime:dev
+docker save -o dist/ai-goose-runtime.tar localhost/kubesynthai/ai-goose-runtime:dev
+docker save -o dist/ai-codex-runtime.tar localhost/kubesynthai/ai-codex-runtime:dev
+docker save -o dist/ai-opencode-runtime.tar localhost/kubesynthai/ai-opencode-runtime:dev
+docker save -o dist/ai-api-gateway.tar localhost/kubesynthai/ai-api-gateway:dev
+docker save -o dist/kubesynth-web-ui.tar localhost/kubesynthai/kubesynth-web-ui:dev
 kind load image-archive dist/ai-operator.tar --name ai-sandbox
 kind load image-archive dist/ai-agent-runtime.tar --name ai-sandbox
 kind load image-archive dist/ai-goose-runtime.tar --name ai-sandbox
 kind load image-archive dist/ai-codex-runtime.tar --name ai-sandbox
 kind load image-archive dist/ai-opencode-runtime.tar --name ai-sandbox
 kind load image-archive dist/ai-api-gateway.tar --name ai-sandbox
-kind load image-archive dist/ai-agent-sandbox-web-ui.tar --name ai-sandbox
+kind load image-archive dist/kubesynth-web-ui.tar --name ai-sandbox
 ```
 
 ### 4. Set your LLM API key
 
-Edit `charts/ai-agent-sandbox/values.yaml`:
+Edit `charts/kubesynth/values.yaml`:
 
 ```yaml
 platformSecrets:
@@ -375,11 +375,11 @@ platformSecrets:
   ### 5. Install the Helm chart with the local-image override
 
 ```bash
-  helm install ai-sandbox ./charts/ai-agent-sandbox -f ./deploy/values.local-images.example.yaml
+  helm install ai-sandbox ./charts/kubesynth -f ./deploy/values.local-images.example.yaml
 ```
 
   `deploy/values.local-images.example.yaml` remaps the core platform images to the
-  `localhost/kubeminionagents:*:dev` tags shown above. Extend it with
+  `localhost/kubesynthai:*:dev` tags shown above. Extend it with
   `mcpToolSidecars` entries only if your agents use locally built sidecar images
   instead of the default published ones.
 
@@ -387,8 +387,8 @@ platformSecrets:
 
   ```bash
   eval $(minikube docker-env)   # build directly into Minikube's Docker daemon
-  make docker-build REGISTRY=localhost/kubeminionagents VERSION=dev CONTAINER_CLI=docker
-  helm install ai-sandbox ./charts/ai-agent-sandbox -f ./deploy/values.minikube.local.yaml
+  make docker-build REGISTRY=localhost/kubesynthai VERSION=dev CONTAINER_CLI=docker
+  helm install ai-sandbox ./charts/kubesynth -f ./deploy/values.minikube.local.yaml
   ```
 
   ### 6. Verify pods are running
@@ -401,25 +401,25 @@ Expected pods:
 
 | Pod prefix | Description |
 |---|---|
-| `ai-agent-sandbox-operator-*` | Operator (HA pair) |
-| `ai-agent-sandbox-api-gateway-*` | API Gateway |
-| `ai-agent-sandbox-litellm-*` | LiteLLM model proxy |
-| `ai-agent-sandbox-redis-*` | Redis cache |
-| `ai-agent-sandbox-qdrant-*` | Qdrant vector database |
-| `ai-agent-sandbox-nats-*` | NATS message bus |
-| `ai-agent-sandbox-web-ui-*` | Web dashboard |
+| `kubesynth-operator-*` | Operator (HA pair) |
+| `kubesynth-api-gateway-*` | API Gateway |
+| `kubesynth-litellm-*` | LiteLLM model proxy |
+| `kubesynth-redis-*` | Redis cache |
+| `kubesynth-qdrant-*` | Qdrant vector database |
+| `kubesynth-nats-*` | NATS message bus |
+| `kubesynth-web-ui-*` | Web dashboard |
 
 ### 7. Port-forward and test
 
 ```bash
 # API Gateway
-kubectl port-forward svc/ai-agent-sandbox-api-gateway 8080:8080
+kubectl port-forward svc/kubesynth-api-gateway 8080:8080
 
 # Health check
 curl http://localhost:8080/api/health
 
 # Web UI
-kubectl port-forward svc/ai-agent-sandbox-web-ui 3000:80
+kubectl port-forward svc/kubesynth-web-ui 3000:80
 # Visit http://localhost:3000
 ```
 
@@ -461,7 +461,7 @@ docker build -t $REGISTRY/ai-goose-runtime:$VERSION      ./goose-runtime
 docker build -t $REGISTRY/ai-codex-runtime:$VERSION      ./codex-runtime
 docker build -t $REGISTRY/ai-opencode-runtime:$VERSION   ./opencode-runtime
 docker build -t $REGISTRY/ai-api-gateway:$VERSION        ./api-gateway
-docker build -t $REGISTRY/ai-agent-sandbox-web-ui:$VERSION ./web-ui
+docker build -t $REGISTRY/kubesynth-web-ui:$VERSION ./web-ui
 
 # MCP sidecars (one Dockerfile per sidecar under ./mcp-sidecars/)
 docker build -t $REGISTRY/mcp-code-exec:$VERSION   -f mcp-sidecars/code-exec/Dockerfile   mcp-sidecars
@@ -500,7 +500,7 @@ docker push $REGISTRY/ai-goose-runtime:$VERSION
 docker push $REGISTRY/ai-codex-runtime:$VERSION
 docker push $REGISTRY/ai-opencode-runtime:$VERSION
 docker push $REGISTRY/ai-api-gateway:$VERSION
-docker push $REGISTRY/ai-agent-sandbox-web-ui:$VERSION
+docker push $REGISTRY/kubesynth-web-ui:$VERSION
 # Push all mcp-* images the same way, or use the -Push flag on the packaging script above
 ```
 
@@ -591,13 +591,13 @@ apiGateway:
   auth:
     mode: oidc                              # Use OIDC in production
     oidcIssuer: "https://login.mycompany.com"
-    oidcAudience: "ai-agent-sandbox"
+    oidcAudience: "kubesynth"
     oidcJwksUrl: "https://login.mycompany.com/.well-known/jwks.json"
 
 webUi:
   enabled: true
   image:
-    repository: ghcr.io/your-org/ai-agent-sandbox-web-ui
+    repository: ghcr.io/your-org/kubesynth-web-ui
     tag: "1.0.0"
 
 litellm:
@@ -669,10 +669,10 @@ chart changes unless you want to pin or relocate them.
 
 ```bash
 # Lint first
-helm lint ./charts/ai-agent-sandbox -f values-prod.yaml
+helm lint ./charts/kubesynth -f values-prod.yaml
 
 # Install
-helm upgrade --install ai-sandbox ./charts/ai-agent-sandbox \
+helm upgrade --install ai-sandbox ./charts/kubesynth \
   --namespace ai-platform \
   --create-namespace \
   -f values-prod.yaml \
@@ -688,21 +688,21 @@ If `catalog/skills-catalog.json` exists, include it during Helm installs and upg
 kubectl get pods -n ai-platform
 
 # CRDs registered
-kubectl get crds | grep sandbox.enterprise.ai
+kubectl get crds | grep kubesynth.ai
 
 # Expected CRDs:
-#   aiagents.sandbox.enterprise.ai
-#   agentpolicies.sandbox.enterprise.ai
-#   agentapprovals.sandbox.enterprise.ai
-#   agenttenants.sandbox.enterprise.ai
-#   agentworkflows.sandbox.enterprise.ai
-#   agentevals.sandbox.enterprise.ai
+#   aiagents.kubesynth.ai
+#   agentpolicies.kubesynth.ai
+#   agentapprovals.kubesynth.ai
+#   agenttenants.kubesynth.ai
+#   agentworkflows.kubesynth.ai
+#   agentevals.kubesynth.ai
 
 # Operator logs healthy
 kubectl logs -n ai-platform -l app=operator --tail=50
 
 # API Gateway reachable
-kubectl port-forward -n ai-platform svc/ai-agent-sandbox-api-gateway 8080:8080
+kubectl port-forward -n ai-platform svc/kubesynth-api-gateway 8080:8080
 curl http://localhost:8080/api/health
 ```
 
@@ -747,10 +747,10 @@ Expected secret keys in your backend:
 
 | Remote key | Purpose |
 |------------|---------|
-| `ai-agent-sandbox/openai-api-key` | OpenAI API key |
-| `ai-agent-sandbox/anthropic-api-key` | Anthropic API key |
-| `ai-agent-sandbox/litellm-master-key` | LiteLLM master key |
-| `ai-agent-sandbox/api-gateway-shared-token` | API Gateway bearer token |
+| `kubesynth/openai-api-key` | OpenAI API key |
+| `kubesynth/anthropic-api-key` | Anthropic API key |
+| `kubesynth/litellm-master-key` | LiteLLM master key |
+| `kubesynth/api-gateway-shared-token` | API Gateway bearer token |
 
 ---
 
@@ -762,7 +762,7 @@ Tenants provide namespace isolation, resource quotas, and model allow-lists.
 
 ```yaml
 # my-tenant.yaml
-apiVersion: sandbox.enterprise.ai/v1alpha1
+apiVersion: kubesynth.ai/v1alpha1
 kind: AgentTenant
 metadata:
   name: my-team
@@ -796,7 +796,7 @@ Policies define guardrails and access control.
 
 ```yaml
 # my-policy.yaml
-apiVersion: sandbox.enterprise.ai/v1alpha1
+apiVersion: kubesynth.ai/v1alpha1
 kind: AgentPolicy
 metadata:
   name: standard-policy
@@ -828,7 +828,7 @@ kubectl apply -f my-policy.yaml
 
 ```yaml
 # my-agent.yaml
-apiVersion: sandbox.enterprise.ai/v1alpha1
+apiVersion: kubesynth.ai/v1alpha1
 kind: AIAgent
 metadata:
   name: my-assistant
@@ -987,7 +987,7 @@ Define a DAG of agent steps with dependencies:
 
 ```yaml
 # my-workflow.yaml
-apiVersion: sandbox.enterprise.ai/v1alpha1
+apiVersion: kubesynth.ai/v1alpha1
 kind: AgentWorkflow
 metadata:
   name: research-pipeline
@@ -1061,7 +1061,7 @@ Define automated test suites that run on a schedule:
 
 ```yaml
 # my-eval.yaml
-apiVersion: sandbox.enterprise.ai/v1alpha1
+apiVersion: kubesynth.ai/v1alpha1
 kind: AgentEval
 metadata:
   name: assistant-eval
@@ -1232,7 +1232,7 @@ Access it:
 
 ```bash
 # Port-forward (local dev)
-kubectl port-forward svc/ai-agent-sandbox-web-ui 3000:80
+kubectl port-forward svc/kubesynth-web-ui 3000:80
 # Open http://localhost:3000
 
 # Or via Ingress at the root path (production)
@@ -1525,15 +1525,15 @@ Each agent runs as a singleton StatefulSet (1 replica) with its own PVC for dura
 
 ```bash
 # Remove the Helm release
-helm uninstall ai-agent-sandbox -n ai-platform
+helm uninstall kubesynth -n ai-platform
 
 # Remove CRDs (Helm does not delete CRDs on uninstall)
-kubectl delete crd aiagents.sandbox.enterprise.ai
-kubectl delete crd agentpolicies.sandbox.enterprise.ai
-kubectl delete crd agentapprovals.sandbox.enterprise.ai
-kubectl delete crd agenttenants.sandbox.enterprise.ai
-kubectl delete crd agentworkflows.sandbox.enterprise.ai
-kubectl delete crd agentevals.sandbox.enterprise.ai
+kubectl delete crd aiagents.kubesynth.ai
+kubectl delete crd agentpolicies.kubesynth.ai
+kubectl delete crd agentapprovals.kubesynth.ai
+kubectl delete crd agenttenants.kubesynth.ai
+kubectl delete crd agentworkflows.kubesynth.ai
+kubectl delete crd agentevals.kubesynth.ai
 
 # Remove tenant namespaces (created by the operator)
 kubectl delete namespace agent-tenant-my-team
@@ -1554,10 +1554,10 @@ make undeploy
 kubectl logs -l app=operator -n ai-platform --tail=100
 
 # Verify CRDs are installed
-kubectl get crds | grep sandbox.enterprise.ai
+kubectl get crds | grep kubesynth.ai
 
 # Verify RBAC
-kubectl auth can-i create statefulsets --as=system:serviceaccount:ai-platform:ai-agent-sandbox-operator-sa
+kubectl auth can-i create statefulsets --as=system:serviceaccount:ai-platform:kubesynth-operator-sa
 ```
 
 ### Agent pod not starting
@@ -1608,20 +1608,20 @@ kubectl get agentapprovals -n <tenant-ns>
 kubectl logs -l app=litellm -n ai-platform --tail=50
 
 # Verify the LLM API key secret
-kubectl get secret ai-agent-sandbox-llm-api-keys -n ai-platform -o yaml
+kubectl get secret kubesynth-llm-api-keys -n ai-platform -o yaml
 ```
 
 ### Helm install fails
 
 ```bash
 # Lint first
-helm lint ./charts/ai-agent-sandbox -f values-prod.yaml
+helm lint ./charts/kubesynth -f values-prod.yaml
 
 # Dry-run to see rendered templates
-helm template ai-agent-sandbox ./charts/ai-agent-sandbox -f values-prod.yaml | less
+helm template kubesynth ./charts/kubesynth -f values-prod.yaml | less
 
 # Debug install
-helm install ai-agent-sandbox ./charts/ai-agent-sandbox -f values-prod.yaml --debug --dry-run
+helm install kubesynth ./charts/kubesynth -f values-prod.yaml --debug --dry-run
 ```
 
 ---
@@ -1629,7 +1629,7 @@ helm install ai-agent-sandbox ./charts/ai-agent-sandbox -f values-prod.yaml --de
 ## Project Structure
 
 ```
-kubeminionagents/
+kubesynthai/
 ├── INSTALL.md                      ← This file
 ├── docs/architecture-overview.md   ← Detailed design document
 ├── Makefile                        ← Build, test, lint, deploy targets
@@ -1676,7 +1676,7 @@ kubeminionagents/
 │   ├── pyproject.toml
 │   └── README.md
 │
-├── charts/ai-agent-sandbox/        ← Helm chart
+├── charts/kubesynth/        ← Helm chart
 │   ├── Chart.yaml
 │   ├── values.yaml                 ← All configuration knobs
 │   └── templates/
@@ -1726,7 +1726,7 @@ make test-goose-runtime-e2e # Build the Goose runtime image and run Docker-backe
 make helm-lint            # Lint the Helm chart
 make helm-package         # Package chart to dist/
 make helm-template        # Render templates to stdout
-make deploy               # helm upgrade --install ai-agent-sandbox
+make deploy               # helm upgrade --install kubesynth
 make deploy-sample        # Apply sample agent, tenant, and policy
 make undeploy             # Uninstall chart + delete CRDs
 make build-cli            # Install agentctl into the current Python environment

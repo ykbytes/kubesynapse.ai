@@ -1,5 +1,5 @@
 """Codex Runtime Adapter – HTTP adapter that exposes Codex as an agent runtime
-behind the Kubemininions sandbox gateway.
+behind the KubeSynth sandbox gateway.
 
 Provides the same ``/invoke``, ``/invoke/stream``, ``/health``, and ``/ready``
 contract expected by the operator worker so AgentWorkflow steps can invoke Codex

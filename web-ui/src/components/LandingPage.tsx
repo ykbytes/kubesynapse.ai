@@ -4,7 +4,6 @@ import {
   Bot,
   BrainCircuit,
   CheckCircle2,
-  ChevronRight,
   Database,
   Eye,
   GitBranch,
@@ -17,7 +16,6 @@ import {
   RefreshCw,
   Server,
   Shield,
-  Sparkles,
   Timer,
   Workflow,
   Zap,
@@ -34,12 +32,15 @@ interface LandingPageProps {
 
 function AnnouncementBar() {
   return (
-    <div className="relative overflow-hidden border-b border-border/30 bg-primary/5 px-4 py-2 text-center">
-      <div className="flex items-center justify-center gap-2 text-xs font-medium text-primary">
-        <Sparkles className="h-3.5 w-3.5" />
-        <span>New: Durable Memory, Session Continuity & Tool Governance are live</span>
-        <ChevronRight className="h-3 w-3" />
-      </div>
+    <div className="border-b border-border/20 bg-card/30 px-4 py-2 text-center">
+      <a
+        href="#features"
+        className="group inline-flex items-center gap-2 text-xs text-muted-foreground transition-colors hover:text-foreground"
+      >
+        <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary">New</span>
+        <span>Durable Memory, Session Continuity & Tool Governance are live</span>
+        <ArrowRight className="h-3 w-3 text-primary transition-transform group-hover:translate-x-0.5" />
+      </a>
     </div>
   );
 }
@@ -102,23 +103,19 @@ function Navbar({ onLogin }: { onLogin: () => void }) {
 function HeroSection({ onLogin }: { onLogin: () => void }) {
   return (
     <section className="relative overflow-hidden px-6 pb-20 pt-24 md:pb-32 md:pt-36">
-      {/* Decorative glow orbs */}
+      {/* Decorative glow orbs — teal brand palette only */}
       <div
-        className="glow-orb -top-32 left-1/4 h-[500px] w-[500px] bg-primary/20"
-        style={{ animation: "glow-breathe 6s ease-in-out infinite" }}
-      />
-      <div
-        className="glow-orb -right-20 top-20 h-[400px] w-[400px]"
+        className="glow-orb -top-32 left-1/4 h-[500px] w-[500px]"
         style={{
-          background: "oklch(0.65 0.16 250 / 0.15)",
-          animation: "glow-breathe 8s ease-in-out infinite 2s",
+          background: "oklch(0.65 0.13 175 / 0.12)",
+          animation: "glow-breathe 8s ease-in-out infinite",
         }}
       />
       <div
-        className="glow-orb bottom-0 left-1/2 h-[300px] w-[300px] -translate-x-1/2"
+        className="glow-orb -right-20 top-20 h-[350px] w-[350px]"
         style={{
-          background: "oklch(0.55 0.2 300 / 0.08)",
-          animation: "glow-breathe 7s ease-in-out infinite 4s",
+          background: "oklch(0.60 0.10 190 / 0.08)",
+          animation: "glow-breathe 10s ease-in-out infinite 3s",
         }}
       />
 
@@ -134,14 +131,13 @@ function HeroSection({ onLogin }: { onLogin: () => void }) {
           Orchestrate{" "}
           <span className="text-shimmer">AI Agents</span>
           <br />
-          <span className="text-gradient-hero">That Actually Work</span>
+          <span className="text-gradient-hero">That Actually Ship</span>
         </h1>
 
         {/* Subtitle */}
         <p className="mx-auto mt-6 max-w-2xl text-base text-muted-foreground sm:text-lg md:text-xl animate-slide-up" style={{ animationDelay: "0.1s" }}>
-          Deploy autonomous agents with durable memory, strict governance, and enterprise-grade
-          workflow orchestration. From incident response to compliance — agents that remember,
-          reason, and recover.
+          Deploy autonomous AI agents on Kubernetes with durable memory, governance guardrails,
+          and workflow orchestration — from incident response to compliance.
         </p>
 
         {/* CTAs */}
@@ -186,17 +182,20 @@ function MockUIPreview() {
   return (
     <section className="relative px-6 pb-20 md:pb-32">
       <div className="mx-auto max-w-5xl">
+        <p className="mb-6 text-center text-xs font-semibold uppercase tracking-widest text-primary animate-fade-in">
+          Live Preview
+        </p>
         <div
           className="mock-window animate-scale-in"
-          style={{ animationDelay: "0.3s", animation: "float 6s ease-in-out infinite" }}
+          style={{ animationDelay: "0.3s" }}
         >
           {/* Title bar */}
           <div className="mock-titlebar">
-            <div className="mock-dot" style={{ background: "oklch(0.60 0.20 27)" }} />
-            <div className="mock-dot" style={{ background: "oklch(0.75 0.15 85)" }} />
-            <div className="mock-dot" style={{ background: "oklch(0.65 0.15 145)" }} />
+            <div className="mock-dot bg-muted-foreground/30" />
+            <div className="mock-dot bg-muted-foreground/30" />
+            <div className="mock-dot bg-muted-foreground/30" />
             <div className="ml-4 flex-1 rounded-md bg-background/50 px-3 py-1 text-[11px] text-muted-foreground">
-              kubemininions.io/workspace
+              kubesynth.io/workspace
             </div>
           </div>
 
@@ -311,28 +310,28 @@ const SCENARIOS = [
     title: "Incident Response Automation",
     description: "Agents query Kubernetes clusters, search logs, correlate alerts via web-search, and execute remediation runbooks — with human approval gates for destructive actions.",
     tags: ["kubernetes", "messaging", "web-search", "code-exec"],
-    metrics: { label: "Capability", value: "Parallel Fan-Out" },
+    metrics: { label: "MTTR reduction", value: "80%" },
   },
   {
     icon: Shield,
     title: "Continuous Compliance Auditing",
     description: "Deploy agents that scan cluster configurations, diff against policy baselines in Git, generate remediation PRs, and maintain audit trails with durable memory.",
     tags: ["git", "kubernetes", "documents", "rag"],
-    metrics: { label: "Capability", value: "Full Audit Trail" },
+    metrics: { label: "Coverage", value: "24/7" },
   },
   {
     icon: GitBranch,
     title: "CI/CD Pipeline Intelligence",
     description: "Agents monitor GitHub repositories, analyze build patterns with code-exec, auto-rollback bad deploys via Kubernetes, and notify teams with root cause analysis.",
     tags: ["github-adapter", "git", "code-exec"],
-    metrics: { label: "Capability", value: "DAG Pipelines" },
+    metrics: { label: "Pipelines", value: "Multi-Stage" },
   },
   {
     icon: Database,
     title: "Cost Optimization at Scale",
     description: "Agents analyze resource utilization across clusters, query usage databases, research pricing with browser, and track savings over time with persistent memory.",
     tags: ["kubernetes", "database", "browser"],
-    metrics: { label: "Capability", value: "Persistent Memory" },
+    metrics: { label: "Savings tracked", value: "Ongoing" },
   },
 ];
 
@@ -343,7 +342,7 @@ function EnterpriseScenariosSection() {
         <div className="mb-16 text-center">
           <p className="text-xs font-semibold uppercase tracking-widest text-primary">Enterprise Use Cases</p>
           <h2 className="mt-3 text-3xl font-bold tracking-tight text-foreground sm:text-4xl md:text-5xl">
-            Built for <span className="text-shimmer">Real Operations</span>
+            Built for <span className="text-primary">Real Operations</span>
           </h2>
           <p className="mx-auto mt-4 max-w-2xl text-base text-muted-foreground">
             Not another chatbot wrapper. These are autonomous agents designed for the workflows
@@ -358,14 +357,19 @@ function EnterpriseScenariosSection() {
               <div
                 key={scenario.title}
                 className="landing-card group relative rounded-xl p-6 animate-slide-up"
-                style={{ animationDelay: `${i * 0.1}s` }}
+                style={{ animationDelay: `${i * 0.08}s` }}
               >
                 <div className="flex items-start gap-4">
                   <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary transition-colors group-hover:bg-primary/20">
-                    <Icon className="h-5 w-5" />
+                    <Icon className="h-5 w-5" aria-hidden="true" />
                   </div>
                   <div className="flex-1">
-                    <h3 className="text-lg font-semibold text-foreground">{scenario.title}</h3>
+                    <div className="flex items-center justify-between gap-3">
+                      <h3 className="text-lg font-semibold text-foreground">{scenario.title}</h3>
+                      <span className="flex-shrink-0 rounded-full border border-primary/20 bg-primary/5 px-2.5 py-0.5 text-[10px] font-semibold text-primary">
+                        {scenario.metrics.value}
+                      </span>
+                    </div>
                     <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{scenario.description}</p>
                     <div className="mt-4 flex flex-wrap gap-1.5">
                       {scenario.tags.map((tag) => (
@@ -375,11 +379,6 @@ function EnterpriseScenariosSection() {
                       ))}
                     </div>
                   </div>
-                </div>
-                {/* Metric badge */}
-                <div className="absolute right-6 top-6 text-right">
-                  <div className="text-xl font-bold text-primary">{scenario.metrics.value}</div>
-                  <div className="text-[10px] text-muted-foreground">{scenario.metrics.label}</div>
                 </div>
               </div>
             );
@@ -432,15 +431,15 @@ function FeatureBentoSection() {
     <section id="features" className="relative px-6 py-20 md:py-32">
       {/* Background glow */}
       <div
-        className="glow-orb left-1/2 top-1/2 h-[600px] w-[600px] -translate-x-1/2 -translate-y-1/2"
-        style={{ background: "oklch(0.65 0.13 175 / 0.05)" }}
+        className="glow-orb left-1/2 top-1/2 h-[500px] w-[500px] -translate-x-1/2 -translate-y-1/2"
+        style={{ background: "oklch(0.65 0.13 175 / 0.03)" }}
       />
 
       <div className="relative mx-auto max-w-7xl">
         <div className="mb-16 text-center">
           <p className="text-xs font-semibold uppercase tracking-widest text-primary">Platform Features</p>
           <h2 className="mt-3 text-3xl font-bold tracking-tight text-foreground sm:text-4xl md:text-5xl">
-            Everything You Need to <span className="text-shimmer">Ship Agents</span>
+            Everything You Need to <span className="text-primary">Ship Agents</span>
           </h2>
           <p className="mx-auto mt-4 max-w-2xl text-base text-muted-foreground">
             From development to production. A complete control plane for Kubernetes-native AI agent operations.
@@ -450,17 +449,22 @@ function FeatureBentoSection() {
         <div className="grid gap-4 md:grid-cols-3">
           {FEATURES.map((feature, i) => {
             const Icon = feature.icon;
+            const isHero = !!feature.span;
             return (
               <div
                 key={feature.title}
-                className={`landing-card group rounded-xl p-6 ${feature.span || ""} animate-slide-up`}
+                className={`landing-card group rounded-xl p-6 ${feature.span || ""} animate-slide-up ${isHero ? "border-primary/10" : ""}`}
                 style={{ animationDelay: `${i * 0.08}s` }}
               >
-                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary transition-colors group-hover:bg-primary/20">
-                  <Icon className="h-5 w-5" />
+                <div className="flex items-start gap-4">
+                  <div className={`flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg transition-colors group-hover:bg-primary/20 ${isHero ? "bg-primary/15 ring-1 ring-primary/20" : "bg-primary/10"} text-primary`}>
+                    <Icon className="h-5 w-5" aria-hidden="true" />
+                  </div>
+                  <div className="flex-1">
+                    <h3 className="text-base font-semibold text-foreground">{feature.title}</h3>
+                    <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{feature.description}</p>
+                  </div>
                 </div>
-                <h3 className="mt-4 text-base font-semibold text-foreground">{feature.title}</h3>
-                <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{feature.description}</p>
               </div>
             );
           })}
@@ -479,15 +483,19 @@ interface WorkflowStep {
   icon: typeof Bot;
   x: number;
   y: number;
+  kind: "trigger" | "agent" | "gate" | "action";
 }
 
+const NODE_W = 175;
+const NODE_H = 66;
+
 const WORKFLOW_STEPS: WorkflowStep[] = [
-  { id: "trigger", label: "Alert Received", sublabel: "Webhook trigger", icon: Zap, x: 50, y: 150 },
-  { id: "triage", label: "Triage Agent", sublabel: "Analyze & correlate", icon: BrainCircuit, x: 280, y: 80 },
-  { id: "metrics", label: "Fetch Logs", sublabel: "kubernetes + web-search", icon: Eye, x: 280, y: 220 },
-  { id: "decision", label: "Approval Gate", sublabel: "Human review required", icon: Shield, x: 510, y: 150 },
-  { id: "remediate", label: "Remediate", sublabel: "Execute runbook", icon: Workflow, x: 740, y: 100 },
-  { id: "notify", label: "Notify Team", sublabel: "messaging sidecar", icon: MessageSquare, x: 740, y: 200 },
+  { id: "trigger", label: "Alert Received", sublabel: "Webhook trigger", icon: Zap, x: 20, y: 122, kind: "trigger" },
+  { id: "triage", label: "Triage Agent", sublabel: "Analyze & correlate", icon: BrainCircuit, x: 250, y: 30, kind: "agent" },
+  { id: "metrics", label: "Fetch Logs", sublabel: "kubernetes + web-search", icon: Eye, x: 250, y: 214, kind: "agent" },
+  { id: "decision", label: "Approval Gate", sublabel: "Human review required", icon: Shield, x: 500, y: 122, kind: "gate" },
+  { id: "remediate", label: "Remediate", sublabel: "Execute runbook", icon: Workflow, x: 760, y: 42, kind: "action" },
+  { id: "notify", label: "Notify Team", sublabel: "messaging sidecar", icon: MessageSquare, x: 760, y: 202, kind: "action" },
 ];
 
 const WORKFLOW_EDGES: [string, string][] = [
@@ -499,6 +507,13 @@ const WORKFLOW_EDGES: [string, string][] = [
   ["decision", "notify"],
 ];
 
+const NODE_COLORS: Record<WorkflowStep["kind"], { bg: string; bgActive: string; border: string; borderActive: string }> = {
+  trigger:  { bg: "oklch(0.185 0.011 274)", bgActive: "oklch(0.22 0.018 274)", border: "oklch(0.30 0.012 274 / 0.6)", borderActive: "oklch(0.65 0.13 175 / 0.7)" },
+  agent:    { bg: "oklch(0.185 0.011 274)", bgActive: "oklch(0.22 0.018 274)", border: "oklch(0.30 0.012 274 / 0.6)", borderActive: "oklch(0.65 0.13 175 / 0.7)" },
+  gate:     { bg: "oklch(0.19 0.015 50)",   bgActive: "oklch(0.23 0.025 50)",  border: "oklch(0.35 0.03 50 / 0.5)",   borderActive: "oklch(0.72 0.12 85 / 0.6)" },
+  action:   { bg: "oklch(0.185 0.011 274)", bgActive: "oklch(0.22 0.018 274)", border: "oklch(0.30 0.012 274 / 0.6)", borderActive: "oklch(0.65 0.13 175 / 0.7)" },
+};
+
 function WorkflowDemo() {
   const [activeStep, setActiveStep] = useState(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -506,7 +521,7 @@ function WorkflowDemo() {
   useEffect(() => {
     timerRef.current = setInterval(() => {
       setActiveStep((prev) => (prev + 1) % WORKFLOW_STEPS.length);
-    }, 2000);
+    }, 2500);
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
   }, []);
 
@@ -518,7 +533,7 @@ function WorkflowDemo() {
         <div className="mb-16 text-center">
           <p className="text-xs font-semibold uppercase tracking-widest text-primary">Workflow Orchestration</p>
           <h2 className="mt-3 text-3xl font-bold tracking-tight text-foreground sm:text-4xl md:text-5xl">
-            Agent Pipelines <span className="text-shimmer">in Action</span>
+            Agent Pipelines <span className="text-primary">in Action</span>
           </h2>
           <p className="mx-auto mt-4 max-w-2xl text-base text-muted-foreground">
             Real incident response workflow: from alert to resolution. Each node is an autonomous
@@ -526,38 +541,61 @@ function WorkflowDemo() {
           </p>
         </div>
 
-        <div className="landing-card mx-auto max-w-4xl overflow-hidden rounded-2xl p-4 md:p-8">
+        <div className="landing-card mx-auto max-w-5xl overflow-hidden rounded-2xl p-6 md:p-10">
           {/* SVG workflow diagram */}
           <div className="relative overflow-x-auto">
             <svg
-              viewBox="0 0 850 300"
-              className="mx-auto h-auto w-full max-w-[850px]"
+              viewBox="0 0 960 310"
+              className="mx-auto h-auto w-full max-w-[960px]"
               fill="none"
               xmlns="http://www.w3.org/2000/svg"
+              role="img"
+              aria-label="Animated workflow diagram showing an incident response pipeline with 6 steps"
             >
+              <defs>
+                <filter id="node-glow">
+                  <feGaussianBlur in="SourceGraphic" stdDeviation="6" result="blur" />
+                  <feMerge>
+                    <feMergeNode in="blur" />
+                    <feMergeNode in="SourceGraphic" />
+                  </feMerge>
+                </filter>
+              </defs>
+
               {/* Edges */}
               {WORKFLOW_EDGES.map(([fromId, toId]) => {
                 const from = stepMap.get(fromId)!;
                 const to = stepMap.get(toId)!;
-                const fromX = from.x + 90;
-                const fromY = from.y + 25;
+                const fromX = from.x + NODE_W;
+                const fromY = from.y + NODE_H / 2;
                 const toX = to.x;
-                const toY = to.y + 25;
+                const toY = to.y + NODE_H / 2;
                 const midX = (fromX + toX) / 2;
                 const isActive =
                   WORKFLOW_STEPS[activeStep]?.id === fromId ||
                   WORKFLOW_STEPS[activeStep]?.id === toId;
 
                 return (
-                  <path
-                    key={`${fromId}-${toId}`}
-                    d={`M ${fromX} ${fromY} C ${midX} ${fromY}, ${midX} ${toY}, ${toX} ${toY}`}
-                    stroke={isActive ? "oklch(0.65 0.13 175)" : "oklch(0.30 0.012 274)"}
-                    strokeWidth={isActive ? 2 : 1.5}
-                    strokeDasharray={isActive ? "6 4" : "none"}
-                    className={isActive ? "connector-animated" : ""}
-                    opacity={isActive ? 1 : 0.5}
-                  />
+                  <g key={`${fromId}-${toId}`}>
+                    {/* Base edge */}
+                    <path
+                      d={`M ${fromX} ${fromY} C ${midX} ${fromY}, ${midX} ${toY}, ${toX} ${toY}`}
+                      stroke="oklch(0.28 0.010 274)"
+                      strokeWidth={2}
+                      opacity={0.6}
+                    />
+                    {/* Active glow overlay */}
+                    {isActive && (
+                      <path
+                        d={`M ${fromX} ${fromY} C ${midX} ${fromY}, ${midX} ${toY}, ${toX} ${toY}`}
+                        stroke="oklch(0.65 0.13 175)"
+                        strokeWidth={2.5}
+                        strokeDasharray="8 6"
+                        className="connector-animated"
+                        opacity={0.8}
+                      />
+                    )}
+                  </g>
                 );
               })}
 
@@ -565,57 +603,72 @@ function WorkflowDemo() {
               {WORKFLOW_STEPS.map((step, i) => {
                 const Icon = step.icon;
                 const isActive = activeStep === i;
+                const colors = NODE_COLORS[step.kind];
+                const isGate = step.kind === "gate";
+
                 return (
                   <g key={step.id}>
-                    {/* Pulse ring when active */}
+                    {/* Active glow shadow */}
                     {isActive && (
                       <rect
-                        x={step.x - 4}
-                        y={step.y - 4}
-                        width={98}
-                        height={58}
+                        x={step.x - 2}
+                        y={step.y - 2}
+                        width={NODE_W + 4}
+                        height={NODE_H + 4}
                         rx={14}
                         fill="none"
-                        stroke="oklch(0.65 0.13 175 / 0.4)"
+                        stroke={isGate ? "oklch(0.72 0.12 85 / 0.3)" : "oklch(0.65 0.13 175 / 0.3)"}
                         strokeWidth={2}
-                        style={{ animation: "landing-pulse 2s ease-out infinite" }}
+                        filter="url(#node-glow)"
                       />
                     )}
-                    {/* Node background */}
+
+                    {/* Node body */}
                     <rect
                       x={step.x}
                       y={step.y}
-                      width={90}
-                      height={50}
-                      rx={10}
-                      fill={isActive ? "oklch(0.22 0.020 274)" : "oklch(0.185 0.011 274)"}
-                      stroke={isActive ? "oklch(0.65 0.13 175 / 0.6)" : "oklch(0.30 0.012 274 / 0.6)"}
+                      width={NODE_W}
+                      height={NODE_H}
+                      rx={12}
+                      fill={isActive ? colors.bgActive : colors.bg}
+                      stroke={isActive ? colors.borderActive : colors.border}
                       strokeWidth={isActive ? 1.5 : 1}
                     />
-                    {/* Icon */}
-                    <foreignObject x={step.x + 8} y={step.y + 8} width={16} height={16}>
+
+                    {/* Icon circle */}
+                    <circle
+                      cx={step.x + 24}
+                      cy={step.y + NODE_H / 2 - 3}
+                      r={14}
+                      fill={isActive
+                        ? (isGate ? "oklch(0.72 0.12 85 / 0.12)" : "oklch(0.65 0.13 175 / 0.12)")
+                        : "oklch(0.25 0.010 274 / 0.6)"}
+                    />
+                    <foreignObject x={step.x + 14} y={step.y + NODE_H / 2 - 13} width={20} height={20}>
                       <Icon
-                        className={`h-4 w-4 ${isActive ? "text-primary" : "text-muted-foreground"}`}
+                        className={`h-5 w-5 ${isActive ? (isGate ? "text-amber-400" : "text-primary") : "text-muted-foreground"}`}
                         style={{ display: "block" }}
                       />
                     </foreignObject>
+
                     {/* Label */}
                     <text
-                      x={step.x + 30}
-                      y={step.y + 20}
-                      fill={isActive ? "oklch(0.95 0.006 274)" : "oklch(0.70 0.015 274)"}
-                      fontSize={9}
+                      x={step.x + 46}
+                      y={step.y + 27}
+                      fill={isActive ? "oklch(0.95 0.006 274)" : "oklch(0.72 0.012 274)"}
+                      fontSize={11.5}
                       fontWeight={600}
                       fontFamily="var(--font-sans)"
                     >
                       {step.label}
                     </text>
+
                     {/* Sublabel */}
                     <text
-                      x={step.x + 10}
-                      y={step.y + 38}
-                      fill="oklch(0.50 0.010 274)"
-                      fontSize={7.5}
+                      x={step.x + 46}
+                      y={step.y + 44}
+                      fill={isActive ? "oklch(0.55 0.010 274)" : "oklch(0.45 0.008 274)"}
+                      fontSize={9.5}
                       fontFamily="var(--font-sans)"
                     >
                       {step.sublabel}
@@ -627,7 +680,7 @@ function WorkflowDemo() {
           </div>
 
           {/* Status bar */}
-          <div className="mt-6 flex flex-wrap items-center justify-between gap-4 rounded-lg border border-border/30 bg-background/50 px-4 py-3">
+          <div className="mt-8 flex flex-wrap items-center justify-between gap-4 rounded-xl border border-border/20 bg-background/40 px-5 py-3.5">
             <div className="flex items-center gap-6 text-xs text-muted-foreground">
               <span className="flex items-center gap-1.5">
                 <Timer className="h-3.5 w-3.5 text-primary" />
@@ -656,72 +709,28 @@ function WorkflowDemo() {
 // ─── Metrics Strip ───
 
 const METRICS = [
-  { value: "10", label: "MCP Sidecars" },
-  { value: "42+", label: "Tools Available" },
-  { value: "4", label: "Kubernetes CRDs" },
-  { value: "2-Layer", label: "Durable Memory" },
+  { value: "10+", label: "MCP Sidecars", icon: Server },
+  { value: "42+", label: "Tools Available", icon: Zap },
+  { value: "4", label: "Kubernetes CRDs", icon: Network },
+  { value: "100%", label: "Open Source", icon: Globe },
 ];
 
 function MetricsStrip() {
   return (
     <section className="relative border-y border-border/30 px-6 py-16">
       <div className="mx-auto grid max-w-5xl grid-cols-2 gap-8 md:grid-cols-4">
-        {METRICS.map((metric, i) => (
-          <div key={metric.label} className="text-center animate-slide-up" style={{ animationDelay: `${i * 0.1}s` }}>
-            <div className="text-3xl font-bold tracking-tight text-foreground md:text-4xl">{metric.value}</div>
-            <div className="mt-1 text-xs font-medium text-muted-foreground">{metric.label}</div>
-          </div>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-// ─── Architecture Strip ───
-
-function ArchitectureStrip() {
-  const layers = [
-    { icon: Globe, label: "API Gateway", description: "Unified routing, auth, rate limiting" },
-    { icon: Bot, label: "Agent Runtimes", description: "OpenCode, Goose, A2A" },
-    { icon: BrainCircuit, label: "Memory Engine", description: "Persistent, searchable, governed" },
-    { icon: Server, label: "Kubernetes Operator", description: "CRD-native, self-healing" },
-  ];
-
-  return (
-    <section className="relative px-6 py-20 md:py-32">
-      <div className="mx-auto max-w-7xl">
-        <div className="mb-16 text-center">
-          <p className="text-xs font-semibold uppercase tracking-widest text-primary">Architecture</p>
-          <h2 className="mt-3 text-3xl font-bold tracking-tight text-foreground sm:text-4xl">
-            Kubernetes-Native <span className="text-shimmer">from the Ground Up</span>
-          </h2>
-        </div>
-
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          {layers.map((layer, i) => {
-            const Icon = layer.icon;
-            return (
-              <div
-                key={layer.label}
-                className="landing-card group flex flex-col items-center rounded-xl p-6 text-center animate-slide-up"
-                style={{ animationDelay: `${i * 0.1}s` }}
-              >
-                <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10 text-primary transition-colors group-hover:bg-primary/20">
-                  <Icon className="h-6 w-6" />
-                </div>
-                <h3 className="mt-4 text-sm font-semibold text-foreground">{layer.label}</h3>
-                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{layer.description}</p>
-
-                {/* Connector arrow (except last) */}
-                {i < layers.length - 1 && (
-                  <div className="absolute -right-2 top-1/2 hidden -translate-y-1/2 text-border/60 lg:block">
-                    <ChevronRight className="h-4 w-4" />
-                  </div>
-                )}
+        {METRICS.map((metric, i) => {
+          const Icon = metric.icon;
+          return (
+            <div key={metric.label} className="text-center animate-slide-up" style={{ animationDelay: `${i * 0.08}s` }}>
+              <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                <Icon className="h-5 w-5" />
               </div>
-            );
-          })}
-        </div>
+              <div className="text-3xl font-bold tracking-tight text-foreground md:text-4xl">{metric.value}</div>
+              <div className="mt-1 text-xs font-medium text-muted-foreground">{metric.label}</div>
+            </div>
+          );
+        })}
       </div>
     </section>
   );
@@ -734,17 +743,20 @@ function BottomCTA({ onLogin }: { onLogin: () => void }) {
     <section className="relative overflow-hidden px-6 py-24 md:py-36">
       {/* Glow */}
       <div
-        className="glow-orb left-1/2 top-1/2 h-[500px] w-[500px] -translate-x-1/2 -translate-y-1/2"
-        style={{ background: "oklch(0.65 0.13 175 / 0.08)" }}
+        className="glow-orb left-1/2 top-1/2 h-[400px] w-[400px] -translate-x-1/2 -translate-y-1/2"
+        style={{ background: "oklch(0.65 0.13 175 / 0.06)" }}
       />
 
       <div className="relative mx-auto max-w-3xl text-center">
+        <div className="mx-auto mb-6 flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+          <Workflow className="h-7 w-7" />
+        </div>
         <h2 className="text-3xl font-bold tracking-tight text-foreground sm:text-4xl md:text-5xl">
-          Ready to <span className="text-shimmer">Orchestrate</span>?
+          Ready to <span className="text-primary">Orchestrate</span>?
         </h2>
         <p className="mx-auto mt-4 max-w-xl text-base text-muted-foreground">
-          Initialize your workspace, deploy your first agent, and let it handle the toil.
-          From incident triage to compliance auditing — in minutes, not months.
+          Initialize your workspace and deploy your first agent in minutes.
+          Start with incident triage, compliance, or bring your own workflow.
         </p>
         <div className="mt-10 flex flex-col items-center gap-4 sm:flex-row sm:justify-center">
           <button
@@ -754,13 +766,15 @@ function BottomCTA({ onLogin }: { onLogin: () => void }) {
             Get Started Free
             <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
           </button>
-          <button
-            onClick={() => document.getElementById("scenarios")?.scrollIntoView({ behavior: "smooth" })}
+          <a
+            href="https://github.com/kubemininions/kubemininions"
+            target="_blank"
+            rel="noopener noreferrer"
             className="flex items-center gap-2 rounded-xl border border-border/50 bg-card/30 px-6 py-3.5 text-sm font-medium text-foreground backdrop-blur-sm transition-colors hover:bg-card/60"
           >
-            <Globe className="h-4 w-4 text-primary" />
-            Explore Use Cases
-          </button>
+            <GitBranch className="h-4 w-4 text-primary" />
+            View on GitHub
+          </a>
         </div>
       </div>
     </section>
@@ -771,20 +785,57 @@ function BottomCTA({ onLogin }: { onLogin: () => void }) {
 
 function Footer() {
   return (
-    <footer className="border-t border-border/30 px-6 py-8">
-      <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-4 sm:flex-row">
-        <div className="flex items-center gap-2">
-          <LayoutPanelTop className="h-4 w-4 text-primary" />
-          <span className="text-sm font-semibold text-foreground">{BRAND.name}</span>
+    <footer className="border-t border-border/30 px-6 py-12">
+      <div className="mx-auto max-w-7xl">
+        <div className="grid gap-8 sm:grid-cols-2 lg:grid-cols-4">
+          {/* Brand */}
+          <div className="sm:col-span-2 lg:col-span-1">
+            <div className="flex items-center gap-2">
+              <LayoutPanelTop className="h-4 w-4 text-primary" />
+              <span className="text-sm font-semibold text-foreground">{BRAND.name}</span>
+            </div>
+            <p className="mt-2 text-xs leading-relaxed text-muted-foreground max-w-[240px]">
+              Kubernetes-native AI agent orchestration with durable memory, governance, and enterprise workflow automation.
+            </p>
+          </div>
+
+          {/* Product */}
+          <div>
+            <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Product</h4>
+            <ul className="mt-3 space-y-2 text-xs text-muted-foreground">
+              <li><a href="#features" className="transition-colors hover:text-foreground">Features</a></li>
+              <li><a href="#scenarios" className="transition-colors hover:text-foreground">Use Cases</a></li>
+              <li><a href="#workflows" className="transition-colors hover:text-foreground">Workflows</a></li>
+            </ul>
+          </div>
+
+          {/* Resources */}
+          <div>
+            <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Resources</h4>
+            <ul className="mt-3 space-y-2 text-xs text-muted-foreground">
+              <li><a href="#" className="transition-colors hover:text-foreground">Documentation</a></li>
+              <li><a href="https://github.com/kubemininions/kubemininions" target="_blank" rel="noopener noreferrer" className="transition-colors hover:text-foreground">GitHub</a></li>
+              <li><a href="#" className="transition-colors hover:text-foreground">Changelog</a></li>
+            </ul>
+          </div>
+
+          {/* Community */}
+          <div>
+            <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Community</h4>
+            <ul className="mt-3 space-y-2 text-xs text-muted-foreground">
+              <li><a href="#" className="transition-colors hover:text-foreground">Contributing</a></li>
+              <li><a href="#" className="transition-colors hover:text-foreground">Security</a></li>
+              <li><a href="#" className="transition-colors hover:text-foreground">License</a></li>
+            </ul>
+          </div>
         </div>
-        <div className="flex items-center gap-6 text-xs text-muted-foreground">
-          <a href="#" className="transition-colors hover:text-foreground">Documentation</a>
-          <a href="#" className="transition-colors hover:text-foreground">GitHub</a>
-          <a href="#" className="transition-colors hover:text-foreground">Status</a>
+
+        <div className="mt-10 flex items-center justify-between border-t border-border/20 pt-6">
+          <p className="text-xs text-muted-foreground">
+            &copy; {new Date().getFullYear()} {BRAND.name}. Open source under Apache 2.0.
+          </p>
+          <a href="#" className="text-xs text-muted-foreground transition-colors hover:text-foreground">Status</a>
         </div>
-        <p className="text-xs text-muted-foreground">
-          &copy; {new Date().getFullYear()} {BRAND.name}. All rights reserved.
-        </p>
       </div>
     </footer>
   );
@@ -795,16 +846,23 @@ function Footer() {
 export function LandingPage({ onLogin }: LandingPageProps) {
   return (
     <div className="min-h-screen bg-background text-foreground">
+      <a href="#main-content" className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-[100] focus:rounded-lg focus:bg-primary focus:px-4 focus:py-2 focus:text-primary-foreground focus:text-sm focus:font-medium">
+        Skip to main content
+      </a>
       <AnnouncementBar />
       <Navbar onLogin={onLogin} />
-      <HeroSection onLogin={onLogin} />
-      <MockUIPreview />
-      <EnterpriseScenariosSection />
-      <FeatureBentoSection />
-      <WorkflowDemo />
-      <MetricsStrip />
-      <ArchitectureStrip />
-      <BottomCTA onLogin={onLogin} />
+      <main id="main-content">
+        <HeroSection onLogin={onLogin} />
+        <MockUIPreview />
+        <div className="mx-auto max-w-5xl px-6"><hr className="border-border/15" /></div>
+        <EnterpriseScenariosSection />
+        <div className="mx-auto max-w-5xl px-6"><hr className="border-border/15" /></div>
+        <FeatureBentoSection />
+        <div className="mx-auto max-w-5xl px-6"><hr className="border-border/15" /></div>
+        <WorkflowDemo />
+        <MetricsStrip />
+        <BottomCTA onLogin={onLogin} />
+      </main>
       <Footer />
     </div>
   );

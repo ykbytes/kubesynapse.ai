@@ -19,7 +19,7 @@
 | Agent Logic | `agent-runtime/agent_logic.py` | Still monolithic | `SqliteSaver`, 5 mutable globals, 2 `sha1()` calls, hardcoded model costs |
 | API Gateway | `api-gateway/main.py` | — | Auth coupled with routing, no API versioning |
 | CI | `.github/workflows/ci.yaml` | — | flake8 only (no mypy, no ruff, no security scanning) |
-| Helm Chart | `charts/ai-agent-sandbox/` | — | Monolithic, no `values.schema.json`, CRDs in templates |
+| Helm Chart | `charts/kubesynth/` | — | Monolithic, no `values.schema.json`, CRDs in templates |
 | CRDs | 6 CRD templates | — | No `.status.conditions[]`, custom `phase` only |
 | Tests | `operator/tests/` (5), `agent-runtime/tests/` (2), `tests/` (cross-cutting) | — | No integration tests, no coverage thresholds |
 
@@ -141,7 +141,7 @@ agent-runtime/
 1. Create `operator/alembic/` directory with `env.py`, `alembic.ini`
 2. Generate initial migration from existing models (`WorkflowRun`, `EvalRun`, `ChatSession`, `ChatMessage`)
 3. Replace `init_database()` to run `alembic upgrade head` instead of `create_all()`
-4. Add migration init container to `charts/ai-agent-sandbox/templates/operator-deployment.yaml`
+4. Add migration init container to `charts/kubesynth/templates/operator-deployment.yaml`
 5. Add schema version check on operator startup (refuse to start if migration is behind)
 6. Test: create DB, run migration, verify tables match current schema
 

@@ -1,5 +1,8 @@
 export type RuntimeKind = "langgraph" | "goose" | "codex" | "opencode";
 
+/** Runtimes still under active development — shown with a red "Alpha" badge in the UI. */
+export const ALPHA_RUNTIMES: ReadonlySet<RuntimeKind> = new Set<RuntimeKind>(["langgraph", "goose", "codex"]);
+
 export interface A2APeerRef {
   name: string;
   namespace: string;

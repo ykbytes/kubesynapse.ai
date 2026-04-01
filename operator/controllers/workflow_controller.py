@@ -242,8 +242,8 @@ def enqueue_workflow_job(
 # ---------------------------------------------------------------------------
 
 
-@kopf.on.create("sandbox.enterprise.ai", "v1alpha1", "agentworkflows")  # type: ignore[arg-type]
-@kopf.on.update("sandbox.enterprise.ai", "v1alpha1", "agentworkflows")  # type: ignore[arg-type]
+@kopf.on.create("kubesynth.ai", "v1alpha1", "agentworkflows")  # type: ignore[arg-type]
+@kopf.on.update("kubesynth.ai", "v1alpha1", "agentworkflows")  # type: ignore[arg-type]
 def run_workflow(
     spec: dict[str, Any],
     status: dict[str, Any],
@@ -322,7 +322,7 @@ def run_workflow(
 
 
 @kopf.timer(
-    "sandbox.enterprise.ai",
+    "kubesynth.ai",
     "v1alpha1",
     "agentworkflows",
     interval=WORKFLOW_POLL_SECONDS,
@@ -383,7 +383,7 @@ def run_workflow_watchdog(
     )
 
 
-@kopf.on.field("sandbox.enterprise.ai", "v1alpha1", "agentworkflows", field="status.phase")  # type: ignore[arg-type]
+@kopf.on.field("kubesynth.ai", "v1alpha1", "agentworkflows", field="status.phase")  # type: ignore[arg-type]
 def on_workflow_phase_cancelled(
     old: str | None,
     new: str | None,
@@ -411,7 +411,7 @@ def on_workflow_phase_cancelled(
     )
 
 
-@kopf.on.resume("sandbox.enterprise.ai", "v1alpha1", "agentworkflows")  # type: ignore[arg-type]
+@kopf.on.resume("kubesynth.ai", "v1alpha1", "agentworkflows")  # type: ignore[arg-type]
 def resume_workflow(
     spec: dict[str, Any],
     status: dict[str, Any],
@@ -482,7 +482,7 @@ def resume_workflow(
     )
 
 
-@kopf.on.delete("sandbox.enterprise.ai", "v1alpha1", "agentworkflows")  # type: ignore[arg-type]
+@kopf.on.delete("kubesynth.ai", "v1alpha1", "agentworkflows")  # type: ignore[arg-type]
 def delete_workflow(
     status: dict[str, Any],
     name: str,

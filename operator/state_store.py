@@ -71,16 +71,16 @@ def _build_database_url() -> str:
                 f"Unsupported DATABASE_DRIVER '{driver}'. Allowed: {sorted(_ALLOWED_DRIVERS)}"
             )
         port = int(os.getenv("DATABASE_PORT", "5432").strip() or "5432")
-        username = os.getenv("DATABASE_USER", "ai_agent_sandbox").strip() or "ai_agent_sandbox"
+        username = os.getenv("DATABASE_USER", "kubesynth").strip() or "kubesynth"
         password = os.getenv("DATABASE_PASSWORD", "").strip()
-        database_name = os.getenv("DATABASE_NAME", "ai_agent_sandbox").strip() or "ai_agent_sandbox"
+        database_name = os.getenv("DATABASE_NAME", "kubesynth").strip() or "kubesynth"
         if password:
             return (
                 f"{driver}://{quote_plus(username)}:{quote_plus(password)}@{host}:{port}/{quote_plus(database_name)}"
             )
         return f"{driver}://{quote_plus(username)}@{host}:{port}/{quote_plus(database_name)}"
 
-    sqlite_path = os.getenv("DATABASE_SQLITE_PATH", "/tmp/ai-agent-sandbox-operator.db").strip()
+    sqlite_path = os.getenv("DATABASE_SQLITE_PATH", "/tmp/kubesynth-operator.db").strip()
     if sqlite_path.startswith("sqlite:///"):
         return sqlite_path
     if sqlite_path == ":memory:":

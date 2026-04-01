@@ -45,7 +45,7 @@ from tracing import init_tracing
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("operator-worker")
 
-GROUP = "sandbox.enterprise.ai"
+GROUP = "kubesynth.ai"
 VERSION = "v1alpha1"
 WORKER_KIND = os.getenv("WORKER_KIND", "").strip().lower()
 TARGET_NAMESPACE = os.getenv("TARGET_NAMESPACE", "").strip()
@@ -119,9 +119,9 @@ def acquire_worker_lease(kind: str, namespace: str, name: str, generation: int) 
             name=lease_name,
             namespace=OPERATOR_NAMESPACE,
             labels={
-                "sandbox.enterprise.ai/kind": kind,
-                "sandbox.enterprise.ai/resource": name,
-                "sandbox.enterprise.ai/namespace": namespace,
+                "kubesynth.ai/kind": kind,
+                "kubesynth.ai/resource": name,
+                "kubesynth.ai/namespace": namespace,
             },
         ),
         spec=kubernetes.client.V1LeaseSpec(
@@ -280,7 +280,7 @@ def _patch_pending_approval_label(pending_approval_name: str | None) -> None:
             namespace=TARGET_NAMESPACE,
             plural="agentworkflows",
             name=TARGET_NAME,
-            body={"metadata": {"labels": {"sandbox.enterprise.ai/pending-approval": label_value}}},
+            body={"metadata": {"labels": {"kubesynth.ai/pending-approval": label_value}}},
         )
     except kubernetes.client.ApiException as exc:
         if exc.status == 404:
@@ -2977,7 +2977,7 @@ def main() -> int:
 
     load_kubernetes_config()
     init_state_database()
-    init_tracing("kubemininions-worker")
+    init_tracing("kubesynth-worker")
 
     # §2.6 — Acquire distributed lease before execution
     resource = get_resource(resource_plural())

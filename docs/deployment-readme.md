@@ -1,6 +1,6 @@
 # Deployment & Production Readiness Guide
 
-Welcome to the Kubemininions deployment suite. This directory contains comprehensive resources for preparing and deploying the AI Agent Sandbox to production.
+Welcome to the KubeSynth deployment suite. This directory contains comprehensive resources for preparing and deploying the AI Agent Sandbox to production.
 
 ## 📋 Documentation Files
 
@@ -97,7 +97,7 @@ export JWT_SECRET="your-32-char-secret"
 vim deploy/values.dockerhub.local.yaml
 
 # Deploy using Helm
-helm install ai-agent-sandbox ./charts/ai-agent-sandbox \
+helm install kubesynth ./charts/kubesynth \
   -f deploy/values.dockerhub.local.yaml \
   -n ai-platform
 
@@ -123,7 +123,7 @@ kubectl get pods -n ai-platform -w
 
 ### Scenario 3: Emergency Rollback
 1. Reference rollback commands in deployment guide
-2. Execute: `helm rollback ai-agent-sandbox -n ai-platform`
+2. Execute: `helm rollback kubesynth -n ai-platform`
 3. Verify cluster health using monitoring commands
 4. Post-mortem and root cause analysis
 

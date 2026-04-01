@@ -1803,7 +1803,7 @@ class GatewayProviderModelTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch.dict(api_gateway_main.os.environ, {"POD_NAMESPACE": "default"}, clear=False),
-            patch.object(api_gateway_main, "LLM_SECRET_NAME", "ai-agent-sandbox-llm-api-keys"),
+            patch.object(api_gateway_main, "LLM_SECRET_NAME", "kubesynth-llm-api-keys"),
             patch.object(
                 api_gateway_main, "_exchange_copilot_session_token", AsyncMock(side_effect=RuntimeError("boom"))
             ),
@@ -1817,7 +1817,7 @@ class GatewayProviderModelTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(response, {"ok": True})
-        self.assertEqual(fake_core_v1_api.name, "ai-agent-sandbox-llm-api-keys")
+        self.assertEqual(fake_core_v1_api.name, "kubesynth-llm-api-keys")
         self.assertEqual(fake_core_v1_api.namespace, "default")
         self.assertEqual(fake_client.url, f"{api_gateway_main.LITELLM_INTERNAL_URL}/model/new")
         payload = fake_client.kwargs["json"]

@@ -85,8 +85,9 @@ function ThemePicker() {
               key={t}
               className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-xs text-popover-foreground transition-all duration-150 hover:bg-accent ${t === theme ? "bg-accent font-medium shadow-sm" : ""}`}
               onClick={() => { setTheme(t); setOpen(false); }}
+              aria-label={`Select ${labelFor(t)} theme`}
             >
-              <span className={`inline-block h-3.5 w-3.5 rounded-full border-2 border-border shadow-sm transition-transform duration-200 hover:scale-125 ${THEME_SWATCHES[t]}`} />
+              <span className={`inline-block h-4 w-4 rounded-full border-2 border-border shadow-sm transition-transform duration-200 hover:scale-125 ${THEME_SWATCHES[t]}`} />
               {labelFor(t)}
             </button>
           ))}
@@ -138,7 +139,7 @@ function NamespaceSwitcher({
       <PopoverTrigger asChild>
         <button
           type="button"
-          className="inline-flex items-center gap-1 rounded-md border border-border/60 bg-transparent px-2 py-1 font-mono text-xs text-foreground transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          className="inline-flex items-center gap-1 rounded-md border border-border/60 bg-muted/30 px-2 py-1 font-mono text-xs text-foreground transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         >
           {namespace}
           <ChevronDown className="h-3 w-3 text-muted-foreground" />
@@ -238,7 +239,7 @@ export function TopBar({
           <Tooltip>
             <TooltipTrigger asChild>
               <span>
-                <StatusBadge icon={HealthIcon} status={healthStatusVariant} className={isLoading ? "[&>svg]:animate-spin" : ""}>
+                <StatusBadge icon={HealthIcon} status={healthStatusVariant} className={isLoading ? "[&>svg]:animate-spin" : ""} aria-label={`Gateway status: ${gatewayStatus}`}>
                   {gatewayStatus}
                 </StatusBadge>
               </span>

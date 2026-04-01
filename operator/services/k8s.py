@@ -401,9 +401,9 @@ def ensure_runtime_namespace_secret(namespace: str, owner_name: str, logger: log
                 "name": SECRET_NAME,
                 "namespace": namespace,
                 "labels": {
-                    "managed-by": "ai-agent-sandbox",
-                    "sandbox.enterprise.ai/runtime-secret": "true",
-                    "sandbox.enterprise.ai/owner": owner_name,
+                    "managed-by": "kubesynth",
+                    "kubesynth.ai/runtime-secret": "true",
+                    "kubesynth.ai/owner": owner_name,
                 },
             },
             "spec": {
@@ -413,11 +413,11 @@ def ensure_runtime_namespace_secret(namespace: str, owner_name: str, logger: log
                 "data": [
                     {
                         "secretKey": "LITELLM_MASTER_KEY",
-                        "remoteRef": {"key": "ai-agent-sandbox/litellm-master-key"},
+                        "remoteRef": {"key": "kubesynth/litellm-master-key"},
                     },
                     {
                         "secretKey": "API_GATEWAY_SHARED_TOKEN",
-                        "remoteRef": {"key": "ai-agent-sandbox/api-gateway-shared-token"},
+                        "remoteRef": {"key": "kubesynth/api-gateway-shared-token"},
                     },
                 ],
             },
@@ -478,9 +478,9 @@ def ensure_runtime_namespace_secret(namespace: str, owner_name: str, logger: log
             "name": SECRET_NAME,
             "namespace": namespace,
             "labels": {
-                "managed-by": "ai-agent-sandbox",
-                "sandbox.enterprise.ai/runtime-secret": "true",
-                "sandbox.enterprise.ai/owner": owner_name,
+                "managed-by": "kubesynth",
+                "kubesynth.ai/runtime-secret": "true",
+                "kubesynth.ai/owner": owner_name,
             },
         },
         "type": "Opaque",
@@ -574,7 +574,7 @@ def patch_custom_status(plural: str, namespace: str, name: str, status: dict[str
     for attempt in range(_STATUS_PATCH_MAX_RETRIES):
         try:
             api.patch_namespaced_custom_object_status(
-                group="sandbox.enterprise.ai",
+                group="kubesynth.ai",
                 version="v1alpha1",
                 namespace=namespace,
                 plural=plural,
@@ -712,8 +712,8 @@ def prune_orphaned_resources(
     """Delete agent-scoped resources that are no longer in the desired set.
 
     Lists resources matching the owner labels
-    (``sandbox.enterprise.ai/managed-by=operator``,
-    ``sandbox.enterprise.ai/agent-name=<agent_name>``), then deletes any
+    (``kubesynth.ai/managed-by=operator``,
+    ``kubesynth.ai/agent-name=<agent_name>``), then deletes any
     whose ``metadata.name`` is NOT in *desired_names*.
 
     Parameters

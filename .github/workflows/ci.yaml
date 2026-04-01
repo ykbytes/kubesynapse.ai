@@ -90,7 +90,7 @@ jobs:
         with:
           version: v3.14.0
       - name: Helm Lint
-        run: helm lint ./charts/ai-agent-sandbox
+        run: helm lint ./charts/kubesynth
 
   build-and-push:
     runs-on: ubuntu-latest
@@ -115,43 +115,43 @@ jobs:
 
       - name: Build & Push Operator
         run: |
-          podman build --format docker -t ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/ai-operator:${{ env.VERSION }} ./operator
-          podman push ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/ai-operator:${{ env.VERSION }}
+          podman build --format docker -t ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynth-operator:${{ env.VERSION }} ./operator
+          podman push ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynth-operator:${{ env.VERSION }}
 
       - name: Build & Push Agent Runtime
         run: |
-          podman build --format docker -t ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/ai-agent-runtime:${{ env.VERSION }} ./agent-runtime
-          podman push ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/ai-agent-runtime:${{ env.VERSION }}
+          podman build --format docker -t ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynth-agent-runtime:${{ env.VERSION }} ./agent-runtime
+          podman push ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynth-agent-runtime:${{ env.VERSION }}
 
       - name: Build & Push Goose Runtime
         run: |
-          podman build --format docker -t ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/ai-goose-runtime:${{ env.VERSION }} ./goose-runtime
-          podman push ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/ai-goose-runtime:${{ env.VERSION }}
+          podman build --format docker -t ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynth-goose-runtime:${{ env.VERSION }} ./goose-runtime
+          podman push ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynth-goose-runtime:${{ env.VERSION }}
 
       - name: Build & Push API Gateway
         run: |
-          podman build --format docker -t ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/ai-api-gateway:${{ env.VERSION }} ./api-gateway
-          podman push ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/ai-api-gateway:${{ env.VERSION }}
+          podman build --format docker -t ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynth-api-gateway:${{ env.VERSION }} ./api-gateway
+          podman push ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynth-api-gateway:${{ env.VERSION }}
 
       - name: Build & Push Web UI
         run: |
-          podman build --format docker -t ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/ai-agent-sandbox-web-ui:${{ env.VERSION }} ./web-ui
-          podman push ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/ai-agent-sandbox-web-ui:${{ env.VERSION }}
+          podman build --format docker -t ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynth-web-ui:${{ env.VERSION }} ./web-ui
+          podman push ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynth-web-ui:${{ env.VERSION }}
 
       - name: Verify Chart Renders With Built Images
         run: |
-          helm template ai-agent-sandbox ./charts/ai-agent-sandbox \
-            --set operator.image.repository=${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/ai-operator \
+          helm template kubesynth ./charts/kubesynth \
+            --set operator.image.repository=${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynth-operator \
             --set operator.image.tag=${{ env.VERSION }} \
-            --set operator.workerImage.repository=${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/ai-operator \
+            --set operator.workerImage.repository=${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynth-operator \
             --set operator.workerImage.tag=${{ env.VERSION }} \
-            --set agentRuntime.image.repository=${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/ai-agent-runtime \
+            --set agentRuntime.image.repository=${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynth-agent-runtime \
             --set agentRuntime.image.tag=${{ env.VERSION }} \
-            --set gooseRuntime.image.repository=${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/ai-goose-runtime \
+            --set gooseRuntime.image.repository=${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynth-goose-runtime \
             --set gooseRuntime.image.tag=${{ env.VERSION }} \
-            --set apiGateway.image.repository=${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/ai-api-gateway \
+            --set apiGateway.image.repository=${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynth-api-gateway \
             --set apiGateway.image.tag=${{ env.VERSION }} \
-            --set webUi.image.repository=${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/ai-agent-sandbox-web-ui \
+            --set webUi.image.repository=${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynth-web-ui \
             --set webUi.image.tag=${{ env.VERSION }} > /tmp/chart-render.yaml
 
   helm-package:
@@ -166,7 +166,7 @@ jobs:
       - name: Package Helm Chart
         run: |
           mkdir -p dist
-          helm package ./charts/ai-agent-sandbox -d ./dist
+          helm package ./charts/kubesynth -d ./dist
       - uses: actions/upload-artifact@v4
         with:
           name: helm-chart

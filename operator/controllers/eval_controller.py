@@ -145,8 +145,8 @@ def enqueue_eval_job(
 # ---------------------------------------------------------------------------
 
 
-@kopf.on.create("sandbox.enterprise.ai", "v1alpha1", "agentevals")  # type: ignore[arg-type]
-@kopf.on.update("sandbox.enterprise.ai", "v1alpha1", "agentevals")  # type: ignore[arg-type]
+@kopf.on.create("kubesynth.ai", "v1alpha1", "agentevals")  # type: ignore[arg-type]
+@kopf.on.update("kubesynth.ai", "v1alpha1", "agentevals")  # type: ignore[arg-type]
 def run_eval(
     spec: dict[str, Any],
     status: dict[str, Any],
@@ -202,7 +202,7 @@ def run_eval(
     )
 
 
-@kopf.on.resume("sandbox.enterprise.ai", "v1alpha1", "agentevals")  # type: ignore[arg-type]
+@kopf.on.resume("kubesynth.ai", "v1alpha1", "agentevals")  # type: ignore[arg-type]
 def resume_eval(
     spec: dict[str, Any],
     status: dict[str, Any],
@@ -262,7 +262,7 @@ def resume_eval(
     )
 
 
-@kopf.on.delete("sandbox.enterprise.ai", "v1alpha1", "agentevals")  # type: ignore[arg-type]
+@kopf.on.delete("kubesynth.ai", "v1alpha1", "agentevals")  # type: ignore[arg-type]
 def delete_eval(
     status: dict[str, Any],
     name: str,
@@ -292,7 +292,7 @@ def delete_eval(
 
 
 @kopf.timer(
-    "sandbox.enterprise.ai",
+    "kubesynth.ai",
     "v1alpha1",
     "agentevals",
     interval=EVAL_SCHEDULE_POLL_SECONDS,

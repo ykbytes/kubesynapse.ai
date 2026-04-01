@@ -229,18 +229,18 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type", "Accept", "X-Request-Id"],
 )
 
-NATS_URL = os.getenv("NATS_URL", "nats://ai-agent-sandbox-nats:4222")
-QDRANT_URL = os.getenv("QDRANT_URL", "http://ai-agent-sandbox-qdrant:6333")
+NATS_URL = os.getenv("NATS_URL", "nats://kubesynth-nats:4222")
+QDRANT_URL = os.getenv("QDRANT_URL", "http://kubesynth-qdrant:6333")
 # Auth constants (AUTH_MODE, SHARED_TOKEN, etc.) moved to auth_middleware.py — §4.1
 AGENT_RUNTIME_TIMEOUT_SECONDS = max(float(os.getenv("AGENT_RUNTIME_TIMEOUT_SECONDS", "360")), 1.0)
-LITELLM_INTERNAL_URL = os.getenv("LITELLM_INTERNAL_URL", "").strip() or "http://ai-agent-sandbox-litellm:4000"
+LITELLM_INTERNAL_URL = os.getenv("LITELLM_INTERNAL_URL", "").strip() or "http://kubesynth-litellm:4000"
 LITELLM_MASTER_KEY = os.getenv("LITELLM_MASTER_KEY", "").strip()
-LLM_SECRET_NAME = os.getenv("LLM_SECRET_NAME", "ai-agent-sandbox-llm-api-keys")
+LLM_SECRET_NAME = os.getenv("LLM_SECRET_NAME", "kubesynth-llm-api-keys")
 STREAM_KEEPALIVE_SECONDS = max(float(os.getenv("API_GATEWAY_STREAM_KEEPALIVE_SECONDS", "15")), 5.0)
 A2A_PROTOCOL_VERSION = "1.0"
 A2A_TASK_RETENTION_SECONDS = max(int(os.getenv("A2A_TASK_RETENTION_SECONDS", "3600")), 60)
 A2A_PUBLIC_BASE_URL = os.getenv("API_GATEWAY_PUBLIC_BASE_URL", "").strip()
-A2A_PROVIDER_ORGANIZATION = os.getenv("A2A_PROVIDER_ORGANIZATION", "Kubeminionagents").strip()
+A2A_PROVIDER_ORGANIZATION = os.getenv("A2A_PROVIDER_ORGANIZATION", "kubesynthai").strip()
 A2A_PROVIDER_URL = os.getenv("A2A_PROVIDER_URL", "").strip()
 A2A_TERMINAL_STATES = {
     "TASK_STATE_COMPLETED",
@@ -892,7 +892,7 @@ class UpdateUserRequest(BaseModel):
     allowed_namespaces: list[str] | None = None
 
 
-RESOURCE_GROUP = "sandbox.enterprise.ai"
+RESOURCE_GROUP = "kubesynth.ai"
 RESOURCE_VERSION = "v1alpha1"
 RESOURCE_KIND_BY_PLURAL = {
     "aiagents": "AIAgent",
@@ -1928,7 +1928,7 @@ def build_agent_card(agent_name: str, namespace: str, request: Request) -> dict[
             }
         ],
         "provider": {
-            "organization": A2A_PROVIDER_ORGANIZATION or "Kubeminionagents",
+            "organization": A2A_PROVIDER_ORGANIZATION or "kubesynthai",
             "url": provider_url,
         },
         "version": version,
@@ -3177,7 +3177,7 @@ def get_agents(namespace: str = "default") -> list[dict[str, Any]]:
 
         api = client.CustomObjectsApi()
         result = api.list_namespaced_custom_object(
-            group="sandbox.enterprise.ai",
+            group="kubesynth.ai",
             version="v1alpha1",
             namespace=namespace,
             plural="aiagents",
@@ -3211,7 +3211,7 @@ def read_agent(agent_name: str, namespace: str) -> dict[str, Any]:
         return cast(
             dict[str, Any],
             client.CustomObjectsApi().get_namespaced_custom_object(
-                group="sandbox.enterprise.ai",
+                group="kubesynth.ai",
                 version="v1alpha1",
                 namespace=namespace,
                 plural="aiagents",
@@ -3261,7 +3261,7 @@ def read_approval(approval_name: str, namespace: str) -> dict[str, Any]:
         return cast(
             dict[str, Any],
             client.CustomObjectsApi().get_namespaced_custom_object(
-                group="sandbox.enterprise.ai",
+                group="kubesynth.ai",
                 version="v1alpha1",
                 namespace=namespace,
                 plural="agentapprovals",
@@ -4318,10 +4318,10 @@ async def list_namespaces(user=Depends(verify_token)):
 @app.get("/api/health")
 def health() -> dict[str, Any]:
     if _SHUTDOWN.is_set():
-        return {"status": "shutting-down", "gateway": "ai-agent-sandbox"}
+        return {"status": "shutting-down", "gateway": "kubesynth"}
     return {
         "status": "healthy",
-        "gateway": "ai-agent-sandbox",
+        "gateway": "kubesynth",
         "auth_mode": AUTH_MODE,
         "browser_auth_enabled": browser_auth_enabled(),
         "local_auth_enabled": local_access_enabled(),
@@ -4335,7 +4335,7 @@ def health() -> dict[str, Any]:
 def ready(response: Response) -> dict[str, Any]:
     if _SHUTDOWN.is_set():
         response.status_code = 503
-        return {"status": "shutting-down", "gateway": "ai-agent-sandbox"}
+        return {"status": "shutting-down", "gateway": "kubesynth"}
     checks: dict[str, str] = {}
     try:
         from auth_store import ENGINE
@@ -4349,7 +4349,7 @@ def ready(response: Response) -> dict[str, Any]:
     all_ok = all(v == "ok" for v in checks.values())
     if not all_ok:
         response.status_code = 503
-    return {"status": "ready" if all_ok else "degraded", "gateway": "ai-agent-sandbox", "checks": checks}
+    return {"status": "ready" if all_ok else "degraded", "gateway": "kubesynth", "checks": checks}
 
 
 @app.get("/.well-known/agent-card.json")
@@ -4617,7 +4617,7 @@ def decide_approval(
         from kubernetes import client
 
         client.CustomObjectsApi().patch_namespaced_custom_object_status(
-            group="sandbox.enterprise.ai",
+            group="kubesynth.ai",
             version="v1alpha1",
             namespace=namespace,
             plural="agentapprovals",
@@ -4804,7 +4804,7 @@ def create_git_credentials(
         metadata=client.V1ObjectMeta(
             name=secret_name,
             namespace=namespace,
-            labels={"app.kubernetes.io/managed-by": "kubemininions", "agent": agent_name},
+            labels={"app.kubernetes.io/managed-by": "kubesynth", "agent": agent_name},
         ),
         type="Opaque",
         string_data=string_data,
@@ -4883,7 +4883,7 @@ def create_github_credentials(
         metadata=client.V1ObjectMeta(
             name=secret_name,
             namespace=namespace,
-            labels={"app.kubernetes.io/managed-by": "kubemininions", "agent": agent_name},
+            labels={"app.kubernetes.io/managed-by": "kubesynth", "agent": agent_name},
         ),
         type="Opaque",
         string_data={"token": body.token},

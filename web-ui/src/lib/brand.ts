@@ -5,7 +5,7 @@
  */
 
 export interface BrandConfig {
-  /** Top-line brand name, e.g. "Kubemininions" */
+  /** Top-line brand name, e.g. "KubeSynth" */
   name: string;
   /** Subtitle / product line, e.g. "Agent Sandbox" */
   tagline: string;
@@ -13,11 +13,20 @@ export interface BrandConfig {
   pageTitle: string;
   /** Optional URL to a logo image (replaces the icon in TopBar) */
   logoUrl: string;
+  /** Optional accent color override (CSS color value) */
+  accentColor: string;
+  /** Optional favicon URL */
+  faviconUrl: string;
+  /** Default theme preference */
+  defaultTheme: string;
 }
 
 export const BRAND: BrandConfig = {
-  name: import.meta.env.VITE_BRAND_NAME?.trim() || "Kubemininions",
+  name: import.meta.env.VITE_BRAND_NAME?.trim() || "KubeSynth",
   tagline: import.meta.env.VITE_BRAND_TAGLINE?.trim() || "Agent Sandbox",
-  pageTitle: import.meta.env.VITE_BRAND_PAGE_TITLE?.trim() || "Kubemininions – Agent Sandbox",
+  pageTitle: import.meta.env.VITE_BRAND_PAGE_TITLE?.trim() || "KubeSynth – Agent Sandbox",
   logoUrl: import.meta.env.VITE_BRAND_LOGO_URL?.trim() || "",
+  accentColor: import.meta.env.VITE_BRAND_ACCENT_COLOR?.trim() || "",
+  faviconUrl: import.meta.env.VITE_BRAND_FAVICON_URL?.trim() || "",
+  defaultTheme: import.meta.env.VITE_BRAND_DEFAULT_THEME?.trim() || "dark",
 };

@@ -133,7 +133,7 @@ function stepStatusIcon(status: string, isApprovalWaiting: boolean): { icon: Rea
     case "running":
       return {
         icon: <LoaderCircle className="h-4 w-4 animate-spin text-primary" />,
-        ring: "border-primary/30 bg-primary/10",
+        ring: "border-primary/30 bg-primary/10 animate-glow-pulse shadow-md shadow-primary/15",
       };
     case "skipped":
       return {
@@ -390,7 +390,7 @@ function StepDetailCard({
         <button
           type="button"
           onClick={() => setExpanded((v) => !v)}
-          className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full border transition-all duration-200 ${ring} hover:brightness-110 hover:scale-105 active:scale-95`}
+          className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full border transition-all duration-300 ${ring} hover:brightness-110 hover:scale-105 active:scale-95 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none`}
           title={expanded ? "Collapse" : "Expand"}
         >
           {icon}
@@ -466,7 +466,7 @@ function StepDetailCard({
 
         {/* expanded detail */}
         {expanded && (
-          <div className="mt-2 space-y-2 rounded-xl border border-border/50 bg-background/50 p-3 text-xs">
+          <div className="mt-2 space-y-2 rounded-xl border border-border/50 bg-background/50 p-3 text-xs animate-slide-down">
             {/* timing & attempts */}
             <div className="flex flex-wrap gap-4 text-muted-foreground">
               {state?.startedAt && (

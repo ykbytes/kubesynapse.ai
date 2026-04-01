@@ -29,7 +29,7 @@ except Exception:
     config = None
 
 
-APPROVAL_GROUP = "sandbox.enterprise.ai"
+APPROVAL_GROUP = "kubesynth.ai"
 APPROVAL_VERSION = "v1alpha1"
 APPROVAL_PLURAL = "agentapprovals"
 HITL_MODE = os.getenv("HITL_MODE", "enforce").strip().lower()

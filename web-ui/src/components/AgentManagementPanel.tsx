@@ -63,6 +63,7 @@ import {
 } from "../lib/mcp";
 import { buildSkillFiles, createSkillFileDraft, skillFileDraftsFromFiles } from "../lib/skills";
 import { fetchCatalogSkillDetail, fetchMcpToolCategories, fetchMcpHubServers, fetchSkillsCatalog, refreshSkillsCatalog } from "../lib/api";
+import { ALPHA_RUNTIMES } from "../types";
 import type {
   AgentDetail,
   AgentInfo,
@@ -455,7 +456,10 @@ export function AgentManagementPanel({
           <div className="grid min-w-[240px] gap-2 rounded-2xl border border-border/60 bg-background/70 p-3 text-xs text-muted-foreground lg:grid-cols-3">
             <div>
               <p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground/70">Runtime</p>
-              <p className="mt-1 font-medium text-foreground">{runtimeKind === "langgraph" ? "LangGraph" : runtimeKind === "goose" ? "Goose" : runtimeKind === "opencode" ? "OpenCode" : "Codex"}</p>
+              <p className="mt-1 font-medium text-foreground flex items-center gap-1.5">
+                {runtimeKind === "langgraph" ? "LangGraph" : runtimeKind === "goose" ? "Goose" : runtimeKind === "opencode" ? "OpenCode" : "Codex"}
+                {ALPHA_RUNTIMES.has(runtimeKind) && <span className="inline-flex items-center rounded-full bg-red-500/15 px-1.5 py-0 text-[9px] font-medium text-red-400 border border-red-500/25">Alpha</span>}
+              </p>
             </div>
             <div>
               <p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground/70">Skills</p>

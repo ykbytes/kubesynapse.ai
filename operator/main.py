@@ -81,11 +81,11 @@ import controllers  # noqa: E402,F401
 @kopf.on.startup()
 def configure(settings: kopf.OperatorSettings, **_) -> None:
     """Ensure K8s client is authenticated when the operator starts."""
-    settings.persistence.finalizer = "sandbox.enterprise.ai/finalizer"
+    settings.persistence.finalizer = "kubesynth.ai/finalizer"
     settings.peering.name = OPERATOR_PEERING_NAME
     _load_kubernetes_config()
     init_state_database()
-    init_tracing("kubemininions-operator")
+    init_tracing("kubesynth-operator")
     log_operator_event(
         logger,
         logging.INFO,

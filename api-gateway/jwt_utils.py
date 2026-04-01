@@ -14,7 +14,7 @@ _logger = logging.getLogger("api-gateway.jwt")
 
 ACCESS_TOKEN_TTL_SECONDS = max(int(os.getenv("AUTH_ACCESS_TOKEN_TTL_SECONDS", "900")), 60)
 REFRESH_TOKEN_TTL_SECONDS = max(int(os.getenv("AUTH_REFRESH_TOKEN_TTL_SECONDS", str(7 * 24 * 3600))), 300)
-JWT_ISSUER = os.getenv("JWT_ISSUER", "ai-agent-sandbox").strip() or "ai-agent-sandbox"
+JWT_ISSUER = os.getenv("JWT_ISSUER", "kubesynth").strip() or "kubesynth"
 _JWT_SECRET_EXPLICIT = os.getenv("JWT_SECRET", "").strip() or os.getenv("API_GATEWAY_SHARED_TOKEN", "").strip()
 JWT_SECRET = _JWT_SECRET_EXPLICIT or secrets.token_urlsafe(32)
 if not _JWT_SECRET_EXPLICIT:

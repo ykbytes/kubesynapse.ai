@@ -58,7 +58,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Goose runtime adapter
 - FastAPI API gateway with hybrid auth (shared token + OIDC)
 - React + TypeScript web console
-- Helm chart (`charts/ai-agent-sandbox/`)
+- Helm chart (`charts/kubesynth/`)
 - CLI tool (`agentctl`) built on Typer + Rich
 - MCP sidecar architecture with 3-tier execution model
 - Pre-built images published to `docker.io/yakdhane`

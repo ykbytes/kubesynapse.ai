@@ -2,13 +2,13 @@
 
 **Date:** Cross-validation of `simulation.md` execution trace against actual OpenCode source  
 **OpenCode commit:** `0bbf26a1ce54dc7fb79e2cb098ed593787f20125` (dev branch, github.com/anomalyco/opencode.git)  
-**kubemininions:** Current working tree with fixes applied  
+**kubesynth:** Current working tree with fixes applied  
 
 ---
 
 ## Executive Summary
 
-Cross-validated all 16 problems from `simulation.md` against the actual OpenCode TypeScript source code and the kubemininions codebase. Found:
+Cross-validated all 16 problems from `simulation.md` against the actual OpenCode TypeScript source code and the kubesynth codebase. Found:
 
 - **1 critical bug** (compaction completely broken — fixed)
 - **2 medium bugs** (pre_authorized_actions dead code, loop step missing cancel — fixed)

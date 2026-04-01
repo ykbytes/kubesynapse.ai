@@ -13,13 +13,15 @@ interface EmptyStateProps {
 export function EmptyState({ icon: Icon, title, description, action, className }: EmptyStateProps) {
   return (
     <div
+      role="region"
+      aria-label={title}
       className={cn(
         "flex flex-col items-center justify-center gap-3 py-12 text-center animate-scale-in",
         className
       )}
     >
       <div className="rounded-2xl bg-gradient-to-br from-primary/15 to-primary/5 p-4 animate-icon-float shadow-md shadow-primary/10 border border-primary/10">
-        <Icon className="h-6 w-6 text-primary/70" aria-hidden="true" />
+        <Icon className="h-6 w-6 text-primary/85" aria-hidden="true" />
       </div>
       <div className="space-y-1">
         <h3 className="text-sm font-medium text-foreground">{title}</h3>

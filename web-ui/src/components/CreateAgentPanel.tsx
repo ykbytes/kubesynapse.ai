@@ -51,6 +51,7 @@ import {
   stringifyMcpSidecars,
 } from "../lib/mcp";
 import { createSkillFileDraft } from "../lib/skills";
+import { ALPHA_RUNTIMES } from "../types";
 import type { AgentInfo, CatalogSkill, CatalogSkillDetail, GitFormState, GitHubFormState, McpToolCategory, RuntimeKind, TextFileDraft, WorkflowInfo } from "../types";
 import { A2ACallerPicker } from "./A2ACallerPicker";
 import { TextFileBundleEditor } from "./TextFileBundleEditor";
@@ -401,7 +402,10 @@ export function CreateAgentPanel({
           <div className="grid min-w-[240px] gap-2 rounded-2xl border border-border/60 bg-background/70 p-3 text-xs text-muted-foreground sm:grid-cols-3">
             <div>
               <p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground/70">Runtime</p>
-              <p className="mt-1 font-medium text-foreground">{runtimeKind === "langgraph" ? "LangGraph" : runtimeKind === "goose" ? "Goose" : runtimeKind === "opencode" ? "OpenCode" : "Codex"}</p>
+              <p className="mt-1 font-medium text-foreground flex items-center gap-1.5">
+                {runtimeKind === "langgraph" ? "LangGraph" : runtimeKind === "goose" ? "Goose" : runtimeKind === "opencode" ? "OpenCode" : "Codex"}
+                {ALPHA_RUNTIMES.has(runtimeKind) && <span className="inline-flex items-center rounded-full bg-red-500/15 px-1.5 py-0 text-[9px] font-medium text-red-400 border border-red-500/25">Alpha</span>}
+              </p>
             </div>
             <div>
               <p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground/70">Skills</p>
@@ -485,7 +489,10 @@ export function CreateAgentPanel({
                           >
                             <div className="flex items-center justify-between gap-3">
                               <div>
-                                <p className="font-medium text-sm">{rt === "langgraph" ? "LangGraph runtime" : rt === "goose" ? "Goose runtime" : rt === "opencode" ? "OpenCode runtime" : "Codex runtime"}</p>
+                                <p className="font-medium text-sm flex items-center gap-2">
+                                  {rt === "langgraph" ? "LangGraph runtime" : rt === "goose" ? "Goose runtime" : rt === "opencode" ? "OpenCode runtime" : "Codex runtime"}
+                                  {ALPHA_RUNTIMES.has(rt) && <span className="inline-flex items-center rounded-full bg-red-500/15 px-1.5 py-0 text-[10px] font-medium text-red-400 border border-red-500/25">Alpha</span>}
+                                </p>
                                 <p className="mt-1 text-xs leading-5">
                                   {rt === "langgraph"
                                     ? "Best for tool-rich agents with MCP sidecars, multi-tool routing, and enterprise integrations. Choose this when you need database, browser, or custom MCP tools."

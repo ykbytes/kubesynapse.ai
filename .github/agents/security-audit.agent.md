@@ -1,7 +1,7 @@
-# Security Audit & Fix Prompt — kubemininions AI Agent Sandbox
+# Security Audit & Fix Prompt — kubesynth AI Agent Sandbox
 
 > **Usage**: Copy this entire prompt into an AI coding assistant session that has access to
-> the kubemininions workspace. The prompt is designed for maximum accuracy by referencing
+> the kubesynth workspace. The prompt is designed for maximum accuracy by referencing
 > exact file paths, function names, line patterns, and known vulnerability classes specific
 > to this codebase.
 
@@ -10,7 +10,7 @@
 ## PROMPT START
 
 You are a senior application security engineer performing a comprehensive security audit
-of the **kubemininions AI Agent Sandbox** — a Kubernetes-native platform that orchestrates
+of the **kubesynth AI Agent Sandbox** — a Kubernetes-native platform that orchestrates
 AI agents with LLM access, tool execution, and multi-tenant isolation. The platform is
 deployed on Kubernetes v1.33.0 via Helm.
 
@@ -27,7 +27,7 @@ deployed on Kubernetes v1.33.0 via Helm.
 | Web UI | React + TypeScript | `web-ui/src/` | SPA frontend (Vite + Tailwind) |
 | 9 MCP Sidecars | Python / FastMCP | `mcp-sidecars/*/server.py` | Tool servers (code-exec, browser, git, database, docs, k8s, rag, messaging, web-search) |
 | MCP Base | Python | `mcp-sidecars/base/mcp_base.py` | Shared auth + server bootstrap for all sidecars |
-| Helm Chart | YAML | `charts/ai-agent-sandbox/` | Kubernetes deployment manifests |
+| Helm Chart | YAML | `charts/kubesynth/` | Kubernetes deployment manifests |
 
 ### Auth Stack
 
@@ -119,12 +119,12 @@ User → Web UI → API Gateway → K8s API (CRDs)
 ### 4. Kubernetes Cluster Security
 
 **Files to audit**:
-- `charts/ai-agent-sandbox/templates/operator-rbac.yaml` — RBAC roles
-- `charts/ai-agent-sandbox/templates/agent-network-policy.yaml` — egress rules
-- `charts/ai-agent-sandbox/templates/postgresql.yaml` — DB network isolation
-- `charts/ai-agent-sandbox/templates/litellm-deployment.yaml` — LLM proxy isolation
-- `charts/ai-agent-sandbox/templates/web-ui.yaml` — frontend pod security
-- `charts/ai-agent-sandbox/values.yaml` — default configuration
+- `charts/kubesynth/templates/operator-rbac.yaml` — RBAC roles
+- `charts/kubesynth/templates/agent-network-policy.yaml` — egress rules
+- `charts/kubesynth/templates/postgresql.yaml` — DB network isolation
+- `charts/kubesynth/templates/litellm-deployment.yaml` — LLM proxy isolation
+- `charts/kubesynth/templates/web-ui.yaml` — frontend pod security
+- `charts/kubesynth/values.yaml` — default configuration
 - `operator/main.py` — pod security contexts, volume mounts, init containers
 
 **Known areas of concern — investigate and fix**:
@@ -141,7 +141,7 @@ User → Web UI → API Gateway → K8s API (CRDs)
 **Files to audit**:
 - All `*/Dockerfile` (17 total)
 - All `*/requirements.txt` and `web-ui/package.json`
-- `charts/ai-agent-sandbox/values.yaml` — default image tags
+- `charts/kubesynth/values.yaml` — default image tags
 
 **Known areas of concern — investigate and fix**:
 - [ ] **Goose runtime image tag**: `goose-runtime/Dockerfile` uses `FROM ghcr.io/block/goose:latest` — a mutable tag. Pin to a specific digest.
@@ -153,8 +153,8 @@ User → Web UI → API Gateway → K8s API (CRDs)
 ### 6. Secrets Management
 
 **Files to audit**:
-- `charts/ai-agent-sandbox/templates/external-secrets.yaml`
-- `charts/ai-agent-sandbox/values.yaml` — default secret values
+- `charts/kubesynth/templates/external-secrets.yaml`
+- `charts/kubesynth/values.yaml` — default secret values
 - `deploy/values.dockerhub.local.yaml` — deployment secrets
 - `api-gateway/jwt_utils.py` — JWT secret handling
 - `operator/main.py` — secret creation and propagation

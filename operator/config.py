@@ -111,8 +111,8 @@ def with_trust_bundle_env(raw_env: Any) -> Any:
 # Service endpoints & images
 # ---------------------------------------------------------------------------
 
-LITELLM_SVC: str = os.getenv("LITELLM_SVC_NAME", "ai-agent-sandbox-litellm")
-SECRET_NAME: str = os.getenv("LLM_SECRET_NAME", "ai-agent-sandbox-llm-api-keys")
+LITELLM_SVC: str = os.getenv("LITELLM_SVC_NAME", "kubesynth-litellm")
+SECRET_NAME: str = os.getenv("LLM_SECRET_NAME", "kubesynth-llm-api-keys")
 
 RUNTIME_IMAGE: str = os.getenv("AGENT_RUNTIME_IMAGE", "ghcr.io/your-org/ai-agent-runtime:latest")
 RUNTIME_IMAGE_PULL_POLICY: str = get_string_env("AGENT_RUNTIME_IMAGE_PULL_POLICY", "IfNotPresent")
@@ -136,7 +136,7 @@ RUNTIME_CLUSTER_ROLE: str = os.getenv("RUNTIME_CLUSTER_ROLE", "ai-agent-runtime-
 # Infrastructure services
 # ---------------------------------------------------------------------------
 
-QDRANT_SVC: str = os.getenv("QDRANT_SVC_NAME", "ai-agent-sandbox-qdrant")
+QDRANT_SVC: str = os.getenv("QDRANT_SVC_NAME", "kubesynth-qdrant")
 QDRANT_COLLECTION: str = os.getenv("QDRANT_COLLECTION", "agent-knowledge")
 OTEL_ENDPOINT: str = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "").strip()
 
@@ -145,7 +145,7 @@ OTEL_ENDPOINT: str = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "").strip()
 # ---------------------------------------------------------------------------
 
 DEFAULT_STORAGE_SIZE: str = os.getenv("AGENT_STORAGE_SIZE", "1Gi")
-CLUSTER_SECRET_STORE: str = os.getenv("CLUSTER_SECRET_STORE", "ai-agent-sandbox-vault-backend")
+CLUSTER_SECRET_STORE: str = os.getenv("CLUSTER_SECRET_STORE", "kubesynth-vault-backend")
 SECRET_PROVISIONING_MODE: str = os.getenv("SECRET_PROVISIONING_MODE", "native").strip().lower() or "native"
 DEFAULT_LITELLM_MASTER_KEY: str = os.getenv("DEFAULT_LITELLM_MASTER_KEY", "").strip()
 DEFAULT_API_GATEWAY_SHARED_TOKEN: str = os.getenv("DEFAULT_API_GATEWAY_SHARED_TOKEN", "").strip()
@@ -167,7 +167,7 @@ SUPPORTED_RUNTIME_KINDS: frozenset[str] = frozenset({"langgraph", "goose", "code
 # ---------------------------------------------------------------------------
 
 OPERATOR_NAMESPACE: str = os.getenv("OPERATOR_NAMESPACE", "default").strip() or "default"
-OPERATOR_PEERING_NAME: str = get_string_env("OPERATOR_PEERING_NAME", "ai-agent-sandbox-operator")
+OPERATOR_PEERING_NAME: str = get_string_env("OPERATOR_PEERING_NAME", "kubesynth-operator")
 
 WORKER_IMAGE: str = os.getenv("WORKER_IMAGE", "ghcr.io/your-org/ai-operator:latest")
 WORKER_SERVICE_ACCOUNT_NAME: str = os.getenv("WORKER_SERVICE_ACCOUNT_NAME", "default").strip() or "default"
@@ -267,8 +267,8 @@ A2A_MAX_TIMEOUT_SECONDS_ENV: str = "A2A_MAX_TIMEOUT_SECONDS"
 # ---------------------------------------------------------------------------
 
 MCP_HUB_NAMESPACE: str = os.getenv("MCP_HUB_NAMESPACE", "mcp-hub").strip()
-MCP_AUTH_SECRET_NAME: str = os.getenv("MCP_AUTH_SECRET_NAME", "ai-agent-sandbox-mcp-auth").strip()
-HELM_RELEASE_NAME: str = os.getenv("HELM_RELEASE_NAME", "ai-agent-sandbox").strip() or "ai-agent-sandbox"
+MCP_AUTH_SECRET_NAME: str = os.getenv("MCP_AUTH_SECRET_NAME", "kubesynth-mcp-auth").strip()
+HELM_RELEASE_NAME: str = os.getenv("HELM_RELEASE_NAME", "kubesynth").strip() or "kubesynth"
 
 # ---------------------------------------------------------------------------
 # OpenSandbox runtime env block (forwarded to agent containers)

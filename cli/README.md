@@ -609,7 +609,7 @@ If the resource already exists (HTTP 409), it falls back to an update (PATCH).
 ### 1. Kubernetes Custom Resource Manifests
 
 ```yaml
-apiVersion: sandbox.enterprise.ai/v1alpha1
+apiVersion: kubesynth.ai/v1alpha1
 kind: AIAgent
 metadata:
   name: research-assistant

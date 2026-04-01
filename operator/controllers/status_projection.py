@@ -20,7 +20,7 @@ from state_store import safe_record_eval_state, safe_record_workflow_state
 logger = logging.getLogger("operator.controllers.status_projection")
 
 
-@kopf.on.field("sandbox.enterprise.ai", "v1alpha1", "agentworkflows", field="status.phase")  # type: ignore[arg-type]
+@kopf.on.field("kubesynth.ai", "v1alpha1", "agentworkflows", field="status.phase")  # type: ignore[arg-type]
 def project_workflow_status(
     old: str | None,
     new: str | None,
@@ -58,9 +58,9 @@ def project_workflow_status(
     )
 
 
-if crd_exists("sandbox.enterprise.ai", "v1alpha1", "agentevals"):
+if crd_exists("kubesynth.ai", "v1alpha1", "agentevals"):
 
-    @kopf.on.field("sandbox.enterprise.ai", "v1alpha1", "agentevals", field="status.phase")  # type: ignore[arg-type]
+    @kopf.on.field("kubesynth.ai", "v1alpha1", "agentevals", field="status.phase")  # type: ignore[arg-type]
     def project_eval_status(
         old: str | None,
         new: str | None,

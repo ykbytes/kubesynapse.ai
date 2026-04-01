@@ -1,0 +1,254 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: agentworkflows.kubesynth.ai
+spec:
+  group: kubesynth.ai
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                description:
+                  type: string
+                  description: "Human-readable description of the workflow"
+                input:
+                  type: string
+                  description: "Initial workflow input used to resolve the workflow input placeholder"
+                contextRef:
+                  type: string
+                  description: "Name of a ConfigMap in the same namespace containing project context injected into all step prompts"
+                steps:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                        description: "Step identifier"
+                      type:
+                        type: string
+                        enum:
+                          - agent
+                          - loop
+                          - review
+                          - conditional
+                        description: "Step type: 'agent' (default) runs once, 'loop' runs iterative dev-loop, 'review' runs a criteria-based review, 'conditional' evaluates an expression and branches"
+                      agentRef:
+                        type: string
+                        description: "Name of the AIAgent CRD to execute this step"
+                      prompt:
+                        type: string
+                        description: "Prompt template for this step. Supports previous-step output interpolation"
+                      loopConfig:
+                        type: object
+                        description: "Configuration for loop-type steps (ignored for agent-type)"
+                        properties:
+                          maxIterations:
+                            type: integer
+                            minimum: 1
+                            description: "Maximum number of loop iterations before forced exit"
+                          planSource:
+                            type: string
+                            enum:
+                              - inline
+                              - prompt
+                            description: "Where the work plan comes from: 'inline' (provided in plan field) or 'prompt' (agent generates from PRD)"
+                          plan:
+                            type: string
+                            description: "Inline checklist of TODO items (one per line, markdown checkbox format)"
+                          commitAfterEachItem:
+                            type: boolean
+                            description: "If true, commit after completing each checklist item"
+                          circuitBreaker:
+                            type: object
+                            description: "Circuit breaker settings to detect stagnation"
+                            properties:
+                              noProgressThreshold:
+                                type: integer
+                                minimum: 1
+                                description: "Consecutive iterations with no progress before opening circuit"
+                              cooldownMinutes:
+                                type: integer
+                                minimum: 1
+                                description: "Minutes to wait in half-open state before retrying"
+                          exitConditions:
+                            type: object
+                            description: "Conditions that signal loop completion"
+                            properties:
+                              planComplete:
+                                type: boolean
+                                description: "Exit when all checklist items are done"
+                              completionSignalCount:
+                                type: integer
+                                minimum: 1
+                                description: "Number of consecutive completion signals from agent before exiting"
+                      verify:
+                        type: string
+                        description: "Verification prompt run after step completion. Step fails if verification does not pass."
+                      reviewCriteria:
+                        type: string
+                        description: "Review criteria for review-type steps. The agent evaluates prior output against these criteria."
+                      conditionExpr:
+                        type: string
+                        description: "Expression evaluated for conditional-type steps to determine which branch to take"
+                      thenSteps:
+                        type: array
+                        items:
+                          type: string
+                        description: "Step names activated when conditionExpr evaluates to true"
+                      elseSteps:
+                        type: array
+                        items:
+                          type: string
+                        description: "Step names activated when conditionExpr evaluates to false"
+                      dependsOn:
+                        type: array
+                        items:
+                          type: string
+                        description: "List of step names that must complete before this step runs"
+                      requireApproval:
+                        type: boolean
+                        description: "If true, pause for HITL approval before executing"
+                      execution:
+                        type: object
+                        description: "Per-step execution policy for retries, timeouts, and non-fatal failures"
+                        properties:
+                          timeoutSeconds:
+                            type: integer
+                            minimum: 1
+                          maxAttempts:
+                            type: integer
+                            minimum: 1
+                          backoffSeconds:
+                            type: integer
+                            minimum: 0
+                          retryable:
+                            type: boolean
+                          continueOnError:
+                            type: boolean
+                          maxTurns:
+                            type: integer
+                            minimum: 1
+                            description: "Maximum autonomous turns per invocation (for runtimes that support multi-turn execution)"
+                          preAuthorizedActions:
+                            type: array
+                            items:
+                              type: string
+                            description: "Actions pre-approved for autonomous execution without HITL gating"
+                          sessionGroup:
+                            type: string
+                            description: "Steps sharing the same sessionGroup reuse a single runtime session for workspace continuity"
+                          verifyRetries:
+                            type: integer
+                            minimum: 0
+                            description: "Number of retry attempts for the verification gate before failing the step"
+                    required:
+                      - name
+                      - agentRef
+                  description: "Ordered list of steps forming the workflow DAG"
+                messageBus:
+                  type: string
+                  enum: ["in-memory"]
+                  description: "Reserved for future transports. The production workflow engine currently uses in-memory dependency passing only."
+                gitConfig:
+                  type: object
+                  description: "Git repository configuration for the workflow. Injected into the worker pod so all steps share repository context."
+                  properties:
+                    repoUrl:
+                      type: string
+                      description: "HTTPS or SSH URL of the git repository"
+                    branch:
+                      type: string
+                      description: "Default branch to use (agents may create per-step branches from this base)"
+                    authMethod:
+                      type: string
+                      enum: ["token", "basic", "ssh"]
+                      description: "Authentication method for git operations"
+                    credentialSecretRef:
+                      type: string
+                      description: "Name of Kubernetes Secret containing git credentials (token, username/password, or ssh_private_key)"
+              required:
+                - steps
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  enum: ["pending", "queued", "running", "waiting-approval", "completed", "failed", "cancelled"]
+                runId:
+                  type: string
+                currentStep:
+                  type: string
+                observedGeneration:
+                  type: integer
+                summary:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                artifactRef:
+                  type: object
+                  properties:
+                    namespace:
+                      type: string
+                    pvcName:
+                      type: string
+                    path:
+                      type: string
+                    journalPath:
+                      type: string
+                    generation:
+                      type: integer
+                    updatedAt:
+                      type: string
+                journalRef:
+                  type: object
+                  properties:
+                    namespace:
+                      type: string
+                    pvcName:
+                      type: string
+                    path:
+                      type: string
+                    generation:
+                      type: integer
+                    updatedAt:
+                      type: string
+                pendingApproval:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                stepStates:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                  description: "Per-step state including loopProgress for loop-type steps (iteration, completedItems, circuitBreakerState, featureBranch, lastCommitSha)"
+                workerJob:
+                  type: object
+                  properties:
+                    name:
+                      type: string
+                    namespace:
+                      type: string
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Current Step
+          type: string
+          jsonPath: .status.currentStep
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+  scope: Namespaced
+  names:
+    plural: agentworkflows
+    singular: agentworkflow
+    kind: AgentWorkflow
+    shortNames:
+      - workflow

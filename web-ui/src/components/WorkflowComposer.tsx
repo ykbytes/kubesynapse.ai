@@ -252,7 +252,7 @@ function ComposerCanvas({
   const onDrop = useCallback(
     (e: DragEvent) => {
       e.preventDefault();
-      const agentName = e.dataTransfer.getData("application/kubemininions-agent");
+      const agentName = e.dataTransfer.getData("application/kubesynth-agent");
       if (!agentName || !wrapperRef.current) return;
 
       const position = reactFlowInstance.screenToFlowPosition({

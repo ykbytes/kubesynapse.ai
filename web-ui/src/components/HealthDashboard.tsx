@@ -68,7 +68,7 @@ export function HealthDashboard() {
             {data ? `Last checked: ${new Date(data.timestamp).toLocaleTimeString()}` : "Not checked yet"}
           </p>
         </div>
-        <Button size="sm" variant="outline" onClick={() => void load()} disabled={loading}>
+        <Button size="sm" variant="outline" onClick={() => void load()} disabled={loading} aria-label="Refresh system health status">
           <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${loading ? "animate-spin" : ""}`} />
           Refresh
         </Button>
@@ -101,10 +101,12 @@ export function HealthDashboard() {
                 <div className="flex items-center gap-2">
                   <Skeleton className="h-4 w-4 rounded" />
                   <Skeleton className="h-4 w-24 rounded" />
+                  <Skeleton className="ml-auto h-5 w-16 rounded-full" />
                 </div>
               </CardHeader>
-              <CardContent>
+              <CardContent className="space-y-2">
                 <Skeleton className="h-3 w-full rounded" />
+                <Skeleton className="h-3 w-2/3 rounded" />
               </CardContent>
             </Card>
           ))}
@@ -159,7 +161,16 @@ export function HealthDashboard() {
             );
           })}
         </div>
-      ) : null}
+      ) : (
+        <div className="flex flex-col items-center justify-center gap-3 rounded-xl border border-border/50 bg-background/50 py-10 text-center animate-fade-in">
+          <Activity className="h-6 w-6 text-muted-foreground/60" />
+          <p className="text-sm text-muted-foreground">Click <strong>Refresh</strong> to check system health</p>
+          <Button size="sm" variant="outline" onClick={() => void load()}>
+            <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
+            Check now
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

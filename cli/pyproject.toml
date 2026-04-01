@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "agentctl"
 version = "0.2.0"
-description = "Rich Python CLI for the AI Agent Sandbox"
+description = "Rich Python CLI for KubeSynth"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

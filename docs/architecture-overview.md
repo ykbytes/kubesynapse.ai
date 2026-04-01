@@ -1,8 +1,8 @@
-# Kubeminionagents Architecture and Design Overview
+# kubesynthai Architecture and Design Overview
 
 ## 1. Purpose
 
-This document describes the current architecture, control flows, design choices, and operational model of the Kubeminionagents platform.
+This document describes the current architecture, control flows, design choices, and operational model of the kubesynthai platform.
 
 The system is a Kubernetes-native AI agent sandbox built around these ideas:
 
@@ -20,7 +20,7 @@ This overview reflects the implementation in:
 - [agent-runtime/guardrails.py](agent-runtime/guardrails.py)
 - [agent-runtime/hitl.py](agent-runtime/hitl.py)
 - [operator/main.py](operator/main.py)
-- [charts/ai-agent-sandbox](charts/ai-agent-sandbox)
+- [charts/kubesynth](charts/kubesynth)
 
 ---
 
@@ -157,11 +157,11 @@ flowchart LR
 | OpenCode Runtime | Runtime adapter for OpenCode-based agents | [opencode-runtime/main.py](../opencode-runtime/main.py) |
 | Guardrails Engine | Regex-based prompt injection detection and output redaction / truncation | [agent-runtime/guardrails.py](../agent-runtime/guardrails.py) |
 | HITL Module | Creates or reuses `AgentApproval` resources asynchronously and emits optional notifications | [agent-runtime/hitl.py](../agent-runtime/hitl.py) |
-| LiteLLM | Central model gateway and auth boundary for model calls | [charts/ai-agent-sandbox/templates/litellm-deployment.yaml](../charts/ai-agent-sandbox/templates/litellm-deployment.yaml) |
-| Redis | Backs LiteLLM cache | [charts/ai-agent-sandbox/templates/redis.yaml](../charts/ai-agent-sandbox/templates/redis.yaml) |
-| Qdrant | Vector retrieval backend for RAG | [charts/ai-agent-sandbox/templates/qdrant.yaml](../charts/ai-agent-sandbox/templates/qdrant.yaml) |
-| NATS | Message bus foundation for future A2A and orchestration scenarios | [charts/ai-agent-sandbox/templates/nats.yaml](../charts/ai-agent-sandbox/templates/nats.yaml) |
-| External Secrets | Supplies LLM keys and gateway tokens from a secret backend | [charts/ai-agent-sandbox/templates/external-secrets.yaml](../charts/ai-agent-sandbox/templates/external-secrets.yaml) |
+| LiteLLM | Central model gateway and auth boundary for model calls | [charts/kubesynth/templates/litellm-deployment.yaml](../charts/kubesynth/templates/litellm-deployment.yaml) |
+| Redis | Backs LiteLLM cache | [charts/kubesynth/templates/redis.yaml](../charts/kubesynth/templates/redis.yaml) |
+| Qdrant | Vector retrieval backend for RAG | [charts/kubesynth/templates/qdrant.yaml](../charts/kubesynth/templates/qdrant.yaml) |
+| NATS | Message bus foundation for future A2A and orchestration scenarios | [charts/kubesynth/templates/nats.yaml](../charts/kubesynth/templates/nats.yaml) |
+| External Secrets | Supplies LLM keys and gateway tokens from a secret backend | [charts/kubesynth/templates/external-secrets.yaml](../charts/kubesynth/templates/external-secrets.yaml) |
 | MCP Sidecars | 10 bundled tool sidecar images (code-exec, web-search, documents, browser, database, git, github-adapter, kubernetes, messaging, rag) | [mcp-sidecars/](../mcp-sidecars/) |
 
 ---
@@ -196,7 +196,7 @@ The `AIAgent` CRD supports:
 - `storage.size`
 - `storage.storageClassName`
 
-Reference: [charts/ai-agent-sandbox/templates/aiagent-crd.yaml](charts/ai-agent-sandbox/templates/aiagent-crd.yaml)
+Reference: [charts/kubesynth/templates/aiagent-crd.yaml](charts/kubesynth/templates/aiagent-crd.yaml)
 
 ### AgentPolicy fields
 
@@ -209,7 +209,7 @@ The `AgentPolicy` CRD governs:
 - model allow-lists
 - budget fields reserved for future distributed enforcement
 
-Reference: [charts/ai-agent-sandbox/templates/agentpolicy-crd.yaml](charts/ai-agent-sandbox/templates/agentpolicy-crd.yaml)
+Reference: [charts/kubesynth/templates/agentpolicy-crd.yaml](charts/kubesynth/templates/agentpolicy-crd.yaml)
 
 ### AgentWorkflow fields
 
@@ -221,7 +221,7 @@ The `AgentWorkflow` CRD supports:
 - optional `requireApproval`
 - `messageBus` as an architectural extension point
 
-Reference: [charts/ai-agent-sandbox/templates/agentworkflow-crd.yaml](charts/ai-agent-sandbox/templates/agentworkflow-crd.yaml)
+Reference: [charts/kubesynth/templates/agentworkflow-crd.yaml](charts/kubesynth/templates/agentworkflow-crd.yaml)
 
 ### AgentApproval fields
 
@@ -234,7 +234,7 @@ The `AgentApproval` CRD records:
 - decision state: pending, approved, denied
 - who decided and when
 
-Reference: [charts/ai-agent-sandbox/templates/agentapproval-crd.yaml](charts/ai-agent-sandbox/templates/agentapproval-crd.yaml)
+Reference: [charts/kubesynth/templates/agentapproval-crd.yaml](charts/kubesynth/templates/agentapproval-crd.yaml)
 
 ### AgentEval fields
 
@@ -245,7 +245,7 @@ The `AgentEval` CRD supports:
 - failure thresholds
 - scheduled evaluations
 
-Reference: [charts/ai-agent-sandbox/templates/agenteval-crd.yaml](charts/ai-agent-sandbox/templates/agenteval-crd.yaml)
+Reference: [charts/kubesynth/templates/agenteval-crd.yaml](charts/kubesynth/templates/agenteval-crd.yaml)
 
 ### AgentTenant fields
 
@@ -256,7 +256,7 @@ The `AgentTenant` CRD manages:
 - tenant-level allowed model lists
 - admin identities
 
-Reference: [charts/ai-agent-sandbox/templates/agenttenant-crd.yaml](charts/ai-agent-sandbox/templates/agenttenant-crd.yaml)
+Reference: [charts/kubesynth/templates/agenttenant-crd.yaml](charts/kubesynth/templates/agenttenant-crd.yaml)
 
 ---
 
@@ -561,8 +561,8 @@ Security controls exist at several layers.
 
 References:
 
-- [charts/ai-agent-sandbox/templates/operator-rbac.yaml](charts/ai-agent-sandbox/templates/operator-rbac.yaml)
-- [charts/ai-agent-sandbox/templates/api-gateway.yaml](charts/ai-agent-sandbox/templates/api-gateway.yaml)
+- [charts/kubesynth/templates/operator-rbac.yaml](charts/kubesynth/templates/operator-rbac.yaml)
+- [charts/kubesynth/templates/api-gateway.yaml](charts/kubesynth/templates/api-gateway.yaml)
 
 ### 11.2 Network isolation
 
@@ -576,7 +576,7 @@ The network policy for agent runtime pods allows only:
 - egress to the Kubernetes API
 - egress to explicitly allowed shared MCP services
 
-Reference: [charts/ai-agent-sandbox/templates/agent-network-policy.yaml](charts/ai-agent-sandbox/templates/agent-network-policy.yaml)
+Reference: [charts/kubesynth/templates/agent-network-policy.yaml](charts/kubesynth/templates/agent-network-policy.yaml)
 
 ### 11.3 Pod hardening
 
@@ -598,7 +598,7 @@ The chart includes placeholders for:
 - Azure Key Vault
 - AWS Secrets Manager
 
-Reference: [charts/ai-agent-sandbox/templates/external-secrets.yaml](charts/ai-agent-sandbox/templates/external-secrets.yaml)
+Reference: [charts/kubesynth/templates/external-secrets.yaml](charts/kubesynth/templates/external-secrets.yaml)
 
 ### 11.5 Content governance
 
@@ -622,18 +622,18 @@ MCP tool-calling is secured with three independent, co-operating enforcement lay
 
 Key properties:
 
-- The `mcp-hub` namespace receives a default-deny-all NetworkPolicy on Helm install; that namespace is created by `mcp-hub-namespace.yaml` with the label `sandbox.enterprise.ai/mcp-hub: "true"` which is required for cross-namespace NetworkPolicy matching.
+- The `mcp-hub` namespace receives a default-deny-all NetworkPolicy on Helm install; that namespace is created by `mcp-hub-namespace.yaml` with the label `kubesynth.ai/mcp-hub: "true"` which is required for cross-namespace NetworkPolicy matching.
 - Each agent pod's egress is restricted to only the MCP server types listed in its `AgentPolicy.spec.allowedMcpServers`; the operator generates a per-agent `NetworkPolicy` at creation time.
-- Tenant namespaces are labelled `sandbox.enterprise.ai/tenant: "true"` by the operator so the mcp-hub ingress NetworkPolicy can allow inbound connections from agent pods without opening the namespace to arbitrary traffic.
+- Tenant namespaces are labelled `kubesynth.ai/tenant: "true"` by the operator so the mcp-hub ingress NetworkPolicy can allow inbound connections from agent pods without opening the namespace to arbitrary traffic.
 - MCP server Deployments run as non-root UID 1000 with `readOnlyRootFilesystem`, `allowPrivilegeEscalation: false`, and all Linux capabilities dropped.
 - The bearer token is stored in a K8s `Secret` and injected into agent StatefulSet pods via `secretKeyRef` (optional=true so the pod still starts if MCP is disabled).
 
 References:
 
-- [charts/ai-agent-sandbox/templates/mcp-hub-namespace.yaml](charts/ai-agent-sandbox/templates/mcp-hub-namespace.yaml)
-- [charts/ai-agent-sandbox/templates/mcp-hub-network-policy.yaml](charts/ai-agent-sandbox/templates/mcp-hub-network-policy.yaml)
-- [charts/ai-agent-sandbox/templates/mcp-server-deployment.yaml](charts/ai-agent-sandbox/templates/mcp-server-deployment.yaml)
-- [charts/ai-agent-sandbox/templates/agent-network-policy.yaml](charts/ai-agent-sandbox/templates/agent-network-policy.yaml)
+- [charts/kubesynth/templates/mcp-hub-namespace.yaml](charts/kubesynth/templates/mcp-hub-namespace.yaml)
+- [charts/kubesynth/templates/mcp-hub-network-policy.yaml](charts/kubesynth/templates/mcp-hub-network-policy.yaml)
+- [charts/kubesynth/templates/mcp-server-deployment.yaml](charts/kubesynth/templates/mcp-server-deployment.yaml)
+- [charts/kubesynth/templates/agent-network-policy.yaml](charts/kubesynth/templates/agent-network-policy.yaml)
 - [agent-runtime/agent_logic.py](agent-runtime/agent_logic.py)
 
 ---
@@ -673,8 +673,8 @@ The runtime checkpoint store is local to a singleton agent StatefulSet replica a
 
 References:
 
-- [charts/ai-agent-sandbox/templates/hpa.yaml](charts/ai-agent-sandbox/templates/hpa.yaml)
-- [charts/ai-agent-sandbox/templates/litellm-configmap.yaml](charts/ai-agent-sandbox/templates/litellm-configmap.yaml)
+- [charts/kubesynth/templates/hpa.yaml](charts/kubesynth/templates/hpa.yaml)
+- [charts/kubesynth/templates/litellm-configmap.yaml](charts/kubesynth/templates/litellm-configmap.yaml)
 
 ### Current operational limitations
 
@@ -737,7 +737,7 @@ The platform is already structured like a real control-plane/data-plane system, 
 | [opencode-runtime/](../opencode-runtime/) | OpenCode HTTP adapter runtime |
 | [operator/](../operator/) | Kubernetes reconciliation and orchestration (modularized: controllers/, builders/, services/, migrations/) |
 | [mcp-sidecars/](../mcp-sidecars/) | 10 bundled MCP tool sidecar images |
-| [charts/ai-agent-sandbox/](../charts/ai-agent-sandbox/) | Platform Helm chart and cluster resources |
+| [charts/kubesynth/](../charts/kubesynth/) | Platform Helm chart and cluster resources |
 | [charts/agents/](../charts/agents/) | Agent-specific Helm sub-charts (devops-agent, code-reviewer, k8s-agent) |
 | [web-ui/](../web-ui/) | React + TypeScript web console |
 | [cli/](../cli/) | `agentctl` CLI tool (Typer + Rich) |
@@ -810,7 +810,7 @@ sequenceDiagram
 
 ### Operator-managed per-agent NetworkPolicy
 
-When the operator reconciles an `AIAgent` CR it calls `ensure_mcp_network_policy()` which creates a `NetworkPolicy` named `ai-agent-<name>-mcp-egress` in the tenant namespace. One egress rule is generated per entry in `AgentPolicy.spec.allowedMcpServers`, using the fine-grained label `mcp.sandbox.enterprise.ai/type: <server-type>` so each agent is locked to only its declared MCP types even if additional MCP servers exist in the hub namespace.
+When the operator reconciles an `AIAgent` CR it calls `ensure_mcp_network_policy()` which creates a `NetworkPolicy` named `ai-agent-<name>-mcp-egress` in the tenant namespace. One egress rule is generated per entry in `AgentPolicy.spec.allowedMcpServers`, using the fine-grained label `mcp.kubesynth.ai/type: <server-type>` so each agent is locked to only its declared MCP types even if additional MCP servers exist in the hub namespace.
 
 ### Enterprise MCP catalog
 
@@ -832,7 +832,7 @@ The platform evaluation criteria still center on the same nine categories:
 
 ## 17. Final Assessment
 
-Kubeminionagents is best understood as a **Kubernetes-native agent platform** with:
+kubesynthai is best understood as a **Kubernetes-native agent platform** with:
 
 - declarative agent definitions
 - operator-managed singleton StatefulSet runtime provisioning

@@ -15,8 +15,8 @@ import {
 import type { AuthConfig, AuthenticatedUser, GatewayHealth, UserRole } from "@/types";
 import { toast } from "sonner";
 
-const TOKEN_STORAGE_KEY = "ai-agent-sandbox/token";
-const NAMESPACE_STORAGE_KEY = "ai-agent-sandbox/namespace";
+const TOKEN_STORAGE_KEY = "kubesynth/token";
+const NAMESPACE_STORAGE_KEY = "kubesynth/namespace";
 
 const ROLE_PRIORITY: Record<UserRole, number> = { viewer: 1, operator: 2, admin: 3 };
 

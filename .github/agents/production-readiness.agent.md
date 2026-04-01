@@ -1,7 +1,7 @@
-# Production Readiness Execution Prompt — kubemininions AI Agent Sandbox
+# Production Readiness Execution Prompt — kubesynth AI Agent Sandbox
 
 > **Usage**: Copy this entire prompt into an AI coding assistant session that has access to
-> the kubemininions workspace. This prompt is designed to drive implementation, not just
+> the kubesynth workspace. This prompt is designed to drive implementation, not just
 > brainstorming. It assumes the agent will read the code first, reconcile status claims against
 > reality, and then make concrete code, deployment, and documentation changes.
 >
@@ -13,7 +13,7 @@
 
 ## PROMPT START
 
-You are a senior full-stack engineer and platform architect making the **kubemininions
+You are a senior full-stack engineer and platform architect making the **kubesynth
 AI Agent Sandbox** truly production-ready for enterprise clients.
 
 The platform orchestrates AI agents on Kubernetes with LLM access, multi-tool execution,
@@ -95,7 +95,7 @@ Before changing anything:
 | OpenCode Runtime | Python / Node | `opencode-runtime/main.py` | OpenCode adapter |
 | Web UI | React 18 + TypeScript | `web-ui/src/` | Main console |
 | MCP Sidecars | Python / FastMCP | `mcp-sidecars/*/server.py` | Tool execution services |
-| Helm Chart | YAML | `charts/ai-agent-sandbox/` | Deployment and service manifests |
+| Helm Chart | YAML | `charts/kubesynth/` | Deployment and service manifests |
 | CLI | Python / Typer + Rich | `cli/agentctl.py` | Scriptable operations |
 
 ### Core CRDs

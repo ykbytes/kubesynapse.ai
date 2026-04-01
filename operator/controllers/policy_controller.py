@@ -20,7 +20,7 @@ logger = logging.getLogger("operator.controllers.policy")
 # Kopf handlers
 # ---------------------------------------------------------------------------
 
-@kopf.on.create("sandbox.enterprise.ai", "v1alpha1", "agentpolicies")  # type: ignore[arg-type]
+@kopf.on.create("kubesynth.ai", "v1alpha1", "agentpolicies")  # type: ignore[arg-type]
 def create_policy(spec: dict[str, Any], name: str, namespace: str, logger: logging.Logger, **kwargs: Any) -> None:
     del kwargs
     execute_reconcile(
@@ -35,7 +35,7 @@ def create_policy(spec: dict[str, Any], name: str, namespace: str, logger: loggi
     )
 
 
-@kopf.on.update("sandbox.enterprise.ai", "v1alpha1", "agentpolicies")  # type: ignore[arg-type]
+@kopf.on.update("kubesynth.ai", "v1alpha1", "agentpolicies")  # type: ignore[arg-type]
 def update_policy(spec: dict[str, Any], name: str, namespace: str, logger: logging.Logger, **kwargs: Any) -> None:
     del kwargs
     execute_reconcile(

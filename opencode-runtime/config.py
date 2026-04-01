@@ -123,7 +123,7 @@ LITELLM_API_KEY = os.getenv("LITELLM_API_KEY", "").strip()
 MCP_HUB_NAMESPACE = os.getenv("MCP_HUB_NAMESPACE", "mcp-hub").strip() or "mcp-hub"
 MCP_BEARER_TOKEN = os.getenv("MCP_BEARER_TOKEN", "").strip()
 GITHUB_MCP_TOKEN = os.getenv("GITHUB_MCP_TOKEN", "").strip()
-HELM_RELEASE_NAME = os.getenv("HELM_RELEASE_NAME", "ai-agent-sandbox").strip() or "ai-agent-sandbox"
+HELM_RELEASE_NAME = os.getenv("HELM_RELEASE_NAME", "kubesynth").strip() or "kubesynth"
 
 # ---------------------------------------------------------------------------
 # Autonomy

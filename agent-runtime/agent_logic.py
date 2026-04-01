@@ -166,12 +166,12 @@ MODEL_NAME = os.getenv("AGENT_DEFAULT_MODEL", os.getenv("AGENT_MODEL", "gpt-4"))
 CONFIGURED_ALLOWED_MODELS: frozenset[str] = frozenset(
     item.strip() for item in os.getenv("AGENT_ALLOWED_MODELS", "").split(",") if item.strip()
 )
-LITELLM_BASE = os.getenv("LITELLM_API_BASE", "http://ai-agent-sandbox-litellm:4000")
+LITELLM_BASE = os.getenv("LITELLM_API_BASE", "http://kubesynth-litellm:4000")
 LITELLM_API_KEY = os.getenv("LITELLM_API_KEY", "")
 LITELLM_PLACEHOLDER_API_KEY = os.getenv("LITELLM_PLACEHOLDER_API_KEY", "local-litelm-placeholder")
 SYSTEM_PROMPT = os.getenv("AGENT_SYSTEM_PROMPT", "").strip()
 RAG_ENABLED = get_bool_env("RAG_ENABLED", True)
-QDRANT_URL = os.getenv("QDRANT_URL", "http://ai-agent-sandbox-qdrant:6333")
+QDRANT_URL = os.getenv("QDRANT_URL", "http://kubesynth-qdrant:6333")
 QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "").strip()
 EMBEDDING_MODEL = os.getenv("AGENT_EMBEDDING_MODEL", "text-embedding-3-small")
 RAG_TOP_K = get_int_env("RAG_TOP_K", 3, minimum=1)
@@ -5635,7 +5635,7 @@ def load_active_policy(force_refresh: bool = False) -> tuple[str | None, dict[st
     try:
         if policy_name:
             policy = custom_api.get_namespaced_custom_object(
-                group="sandbox.enterprise.ai",
+                group="kubesynth.ai",
                 version="v1alpha1",
                 namespace=SERVICE_NAMESPACE,
                 plural="agentpolicies",
@@ -5643,7 +5643,7 @@ def load_active_policy(force_refresh: bool = False) -> tuple[str | None, dict[st
             )
         else:
             policies = custom_api.list_namespaced_custom_object(
-                group="sandbox.enterprise.ai",
+                group="kubesynth.ai",
                 version="v1alpha1",
                 namespace=SERVICE_NAMESPACE,
                 plural="agentpolicies",
@@ -5902,7 +5902,7 @@ def mcp_call(
     before this function is reached.
 
     Args:
-        server_type: The ``mcp.sandbox.enterprise.ai/type`` label value
+        server_type: The ``mcp.kubesynth.ai/type`` label value
             (e.g. "weather", "github", "prometheus").
         tool_name:   Name of the MCP tool to invoke.
         tool_args:   Arguments dict forwarded as JSON body.
@@ -5928,7 +5928,7 @@ def mcp_call(
 
     # Build URL: MCP servers are in the mcp-hub namespace using internal K8s DNS.
     # Pattern: http://<release-fullname>-mcp-<type>.<mcp-hub-ns>.svc.cluster.local:8000
-    release_name = os.getenv("HELM_RELEASE_NAME", "ai-agent-sandbox")
+    release_name = os.getenv("HELM_RELEASE_NAME", "kubesynth")
     svc = f"{release_name}-mcp-{server_type}.{MCP_HUB_NAMESPACE}.svc.cluster.local"
     url = f"http://{svc}:8000/tools/{tool_name}"
 

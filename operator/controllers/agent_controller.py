@@ -55,7 +55,7 @@ def resolve_agent_policy(namespace: str, policy_ref: str | None) -> tuple[str | 
         resolved_policy_namespace = policy_namespace or namespace
         try:
             policy: dict[str, Any] = custom_api.get_namespaced_custom_object(
-                group="sandbox.enterprise.ai",
+                group="kubesynth.ai",
                 version="v1alpha1",
                 namespace=resolved_policy_namespace,
                 plural="agentpolicies",
@@ -80,7 +80,7 @@ def resolve_agent_policy(namespace: str, policy_ref: str | None) -> tuple[str | 
             raise
 
     policies = custom_api.list_namespaced_custom_object(
-        group="sandbox.enterprise.ai",
+        group="kubesynth.ai",
         version="v1alpha1",
         namespace=namespace,
         plural="agentpolicies",
@@ -102,7 +102,7 @@ def resolve_tenant_for_namespace(namespace: str) -> dict[str, Any] | None:
     """Find the AgentTenant spec that targets *namespace*."""
     custom_api = kubernetes.client.CustomObjectsApi()
     tenants = custom_api.list_cluster_custom_object(
-        group="sandbox.enterprise.ai",
+        group="kubesynth.ai",
         version="v1alpha1",
         plural="agenttenants",
     ).get("items", [])
@@ -216,7 +216,7 @@ def create_agent_resources(spec: dict[str, Any], name: str, namespace: str, hand
 # ---------------------------------------------------------------------------
 
 
-@kopf.on.create("sandbox.enterprise.ai", "v1alpha1", "aiagents")  # type: ignore[arg-type]
+@kopf.on.create("kubesynth.ai", "v1alpha1", "aiagents")  # type: ignore[arg-type]
 def create_agent(spec: dict[str, Any], name: str, namespace: str, logger: Any, retry: int = 0, **kwargs: Any) -> None:
     del kwargs
     execute_reconcile(
@@ -234,7 +234,7 @@ def create_agent(spec: dict[str, Any], name: str, namespace: str, logger: Any, r
     )
 
 
-@kopf.on.update("sandbox.enterprise.ai", "v1alpha1", "aiagents")  # type: ignore[arg-type]
+@kopf.on.update("kubesynth.ai", "v1alpha1", "aiagents")  # type: ignore[arg-type]
 def update_agent(spec: dict[str, Any], name: str, namespace: str, logger: logging.Logger, retry: int = 0, **kwargs: Any) -> None:
     del kwargs
     execute_reconcile(
@@ -252,7 +252,7 @@ def update_agent(spec: dict[str, Any], name: str, namespace: str, logger: loggin
     )
 
 
-@kopf.on.resume("sandbox.enterprise.ai", "v1alpha1", "aiagents")  # type: ignore[arg-type]
+@kopf.on.resume("kubesynth.ai", "v1alpha1", "aiagents")  # type: ignore[arg-type]
 def resume_agent(spec: dict[str, Any], name: str, namespace: str, logger: logging.Logger, retry: int = 0, **kwargs: Any) -> None:
     del kwargs
     execute_reconcile(
@@ -270,7 +270,7 @@ def resume_agent(spec: dict[str, Any], name: str, namespace: str, logger: loggin
     )
 
 
-@kopf.on.delete("sandbox.enterprise.ai", "v1alpha1", "aiagents")  # type: ignore[arg-type]
+@kopf.on.delete("kubesynth.ai", "v1alpha1", "aiagents")  # type: ignore[arg-type]
 def delete_agent(spec: dict[str, Any], name: str, namespace: str, logger: logging.Logger, **kwargs: Any) -> None:
     del spec, kwargs
     log_operator_event(

@@ -1,6 +1,6 @@
 # Agent Sandbox Console
 
-Vite + React + TypeScript frontend for the kubeminionagents API gateway.
+Vite + React + TypeScript frontend for the kubesynthai API gateway.
 
 ## Local development
 
@@ -16,7 +16,7 @@ Run `npm run build` to create a production bundle in `dist/`.
 
 ## Container image
 
-Build the production image with `podman build -t ghcr.io/your-org/ai-agent-sandbox-web-ui:latest .`.
+Build the production image with `podman build -t ghcr.io/your-org/kubesynth-web-ui:latest .`.
 
 The image serves the Vite bundle through Nginx with SPA fallback enabled. In the Helm chart the UI is published on `/`, while the API gateway remains on `/api` for the same host.
 

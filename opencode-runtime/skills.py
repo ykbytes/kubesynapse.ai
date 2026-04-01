@@ -306,7 +306,7 @@ def configure_git_credentials() -> None:
         timeout=5,
     )
     subprocess.run(
-        ["git", "config", "--global", "user.email", "agent@kubemininions.local"],
+        ["git", "config", "--global", "user.email", "agent@kubesynth.local"],
         capture_output=True,
         timeout=5,
     )

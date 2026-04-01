@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { Bot, GitBranch, FlaskConical, MessageSquare, ArrowRight, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
-const STORAGE_KEY = "ai-agent-sandbox/onboarding-done";
+const STORAGE_KEY = "kubesynth/onboarding-done";
 
 interface TourStep {
   title: string;

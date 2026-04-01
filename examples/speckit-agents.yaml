@@ -13,7 +13,7 @@
 # {{step.output.json.<field>}} placeholders.
 # ---------------------------------------------------------------------------
 
-apiVersion: sandbox.enterprise.ai/v1alpha1
+apiVersion: kubesynth.ai/v1alpha1
 kind: AIAgent
 metadata:
   name: spec-writer
@@ -55,7 +55,7 @@ spec:
     size: 1Gi
   enableGVisor: false
 ---
-apiVersion: sandbox.enterprise.ai/v1alpha1
+apiVersion: kubesynth.ai/v1alpha1
 kind: AIAgent
 metadata:
   name: scrum-master
@@ -95,7 +95,7 @@ spec:
     size: 1Gi
   enableGVisor: false
 ---
-apiVersion: sandbox.enterprise.ai/v1alpha1
+apiVersion: kubesynth.ai/v1alpha1
 kind: AIAgent
 metadata:
   name: planner
@@ -141,7 +141,7 @@ spec:
     size: 1Gi
   enableGVisor: false
 ---
-apiVersion: sandbox.enterprise.ai/v1alpha1
+apiVersion: kubesynth.ai/v1alpha1
 kind: AIAgent
 metadata:
   name: task-generator
@@ -185,7 +185,7 @@ spec:
     size: 1Gi
   enableGVisor: false
 ---
-apiVersion: sandbox.enterprise.ai/v1alpha1
+apiVersion: kubesynth.ai/v1alpha1
 kind: AIAgent
 metadata:
   name: implementer

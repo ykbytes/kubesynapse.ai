@@ -64,7 +64,7 @@ export function NodePalette({ agents, collapsed, onToggleCollapse }: NodePalette
   }, [filtered]);
 
   function onDragStart(e: DragEvent<HTMLDivElement>, agentName: string) {
-    e.dataTransfer.setData("application/kubemininions-agent", agentName);
+    e.dataTransfer.setData("application/kubesynth-agent", agentName);
     e.dataTransfer.effectAllowed = "move";
   }
 

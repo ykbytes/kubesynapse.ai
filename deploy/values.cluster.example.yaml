@@ -6,41 +6,41 @@ global:
 
 operator:
   image:
-    repository: docker.io/yakdhane/ai-operator
+    repository: docker.io/yakdhane/kubesynth-operator
     tag: latest
     pullPolicy: IfNotPresent
   workerImage:
-    repository: docker.io/yakdhane/ai-operator
+    repository: docker.io/yakdhane/kubesynth-operator
     tag: latest
     pullPolicy: IfNotPresent
 
 agentRuntime:
   image:
-    repository: docker.io/yakdhane/ai-agent-runtime
+    repository: docker.io/yakdhane/kubesynth-agent-runtime
     tag: latest
     pullPolicy: IfNotPresent
 
 gooseRuntime:
   image:
-    repository: docker.io/yakdhane/ai-goose-runtime
+    repository: docker.io/yakdhane/kubesynth-goose-runtime
     tag: latest
     pullPolicy: IfNotPresent
 
 codexRuntime:
   image:
-    repository: docker.io/yakdhane/ai-codex-runtime
+    repository: docker.io/yakdhane/kubesynth-codex-runtime
     tag: latest
     pullPolicy: IfNotPresent
 
 opencodeRuntime:
   image:
-    repository: docker.io/yakdhane/ai-opencode-runtime
+    repository: docker.io/yakdhane/kubesynth-opencode-runtime
     tag: latest
     pullPolicy: IfNotPresent
 
 apiGateway:
   image:
-    repository: docker.io/yakdhane/ai-api-gateway
+    repository: docker.io/yakdhane/kubesynth-api-gateway
     tag: latest
     pullPolicy: IfNotPresent
   ingressClassName: ""
@@ -57,7 +57,7 @@ apiGateway:
 webUi:
   enabled: true
   image:
-    repository: docker.io/yakdhane/ai-agent-sandbox-web-ui
+    repository: docker.io/yakdhane/kubesynth-web-ui
     tag: latest
     pullPolicy: IfNotPresent
 

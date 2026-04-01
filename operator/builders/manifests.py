@@ -797,9 +797,9 @@ def create_worker_artifact_pvc_manifest(kind: str, resource_namespace: str, reso
             "namespace": OPERATOR_NAMESPACE,
             "labels": {
                 "app": "operator-worker-artifacts",
-                "sandbox.enterprise.ai/resource-kind": kind,
-                "sandbox.enterprise.ai/resource-name": resource_name,
-                "sandbox.enterprise.ai/resource-namespace": resource_namespace,
+                "kubesynth.ai/resource-kind": kind,
+                "kubesynth.ai/resource-name": resource_name,
+                "kubesynth.ai/resource-namespace": resource_namespace,
             },
         },
         "spec": build_pvc_spec(WORKER_ARTIFACT_SIZE, WORKER_ARTIFACT_STORAGE_CLASS or None),
@@ -843,8 +843,8 @@ def create_mcp_auth_secret_manifest(namespace: str) -> dict[str, Any]:
             "namespace": namespace,
             "labels": {
                 "app": "ai-agent",
-                "sandbox.enterprise.ai/managed-by": "operator",
-                "sandbox.enterprise.ai/secret-purpose": "mcp-auth",
+                "kubesynth.ai/managed-by": "operator",
+                "kubesynth.ai/secret-purpose": "mcp-auth",
             },
         },
         "type": str(getattr(source_secret, "type", None) or "Opaque"),
@@ -996,6 +996,36 @@ def create_agent_statefulset_manifest(
                     "valueFrom": {"secretKeyRef": {"name": cred_secret, "key": "token", "optional": True}},
                 }
             )
+            # Configure git credential helper so CLI `git push/pull` can
+            # authenticate using the injected token automatically.
+            _repo_url_for_cred = git_config.get("repoUrl", "")
+            _parsed = _urlparse(_repo_url_for_cred)
+            _host = _parsed.hostname or ""
+            if _host:
+                git_agent_env.extend(
+                    [
+                        {
+                            "name": "GIT_CONFIG_COUNT",
+                            "value": "2",
+                        },
+                        {
+                            "name": "GIT_CONFIG_KEY_0",
+                            "value": f"credential.https://{_host}.username",
+                        },
+                        {
+                            "name": "GIT_CONFIG_VALUE_0",
+                            "value": "x-access-token",
+                        },
+                        {
+                            "name": "GIT_CONFIG_KEY_1",
+                            "value": f"credential.https://{_host}.helper",
+                        },
+                        {
+                            "name": "GIT_CONFIG_VALUE_1",
+                            "value": "!f() { echo \"password=$GIT_TOKEN\"; }; f",
+                        },
+                    ]
+                )
         elif cred_secret and auth_method == "basic":
             git_agent_env.extend(
                 [
@@ -1009,6 +1039,28 @@ def create_agent_statefulset_manifest(
                     },
                 ]
             )
+            # Configure git credential helper for basic auth so CLI
+            # `git push/pull` uses the injected username/password.
+            _repo_url_for_cred = git_config.get("repoUrl", "")
+            _parsed = _urlparse(_repo_url_for_cred)
+            _host = _parsed.hostname or ""
+            if _host:
+                git_agent_env.extend(
+                    [
+                        {
+                            "name": "GIT_CONFIG_COUNT",
+                            "value": "1",
+                        },
+                        {
+                            "name": "GIT_CONFIG_KEY_0",
+                            "value": f"credential.https://{_host}.helper",
+                        },
+                        {
+                            "name": "GIT_CONFIG_VALUE_0",
+                            "value": "!f() { echo \"username=$GIT_USERNAME\"; echo \"password=$GIT_PASSWORD\"; }; f",
+                        },
+                    ]
+                )
 
     pod_security_context = {
         "runAsNonRoot": True,
@@ -1532,8 +1584,8 @@ def create_mcp_network_policy_manifest(name: str, namespace: str, allowed_mcp_ty
             {
                 "to": [
                     {
-                        "namespaceSelector": {"matchLabels": {"sandbox.enterprise.ai/mcp-hub": "true"}},
-                        "podSelector": {"matchLabels": {"mcp.sandbox.enterprise.ai/type": mcp_type}},
+                        "namespaceSelector": {"matchLabels": {"kubesynth.ai/mcp-hub": "true"}},
+                        "podSelector": {"matchLabels": {"mcp.kubesynth.ai/type": mcp_type}},
                     }
                 ],
                 "ports": [{"protocol": "TCP", "port": 8000}],
@@ -1549,7 +1601,7 @@ def create_mcp_network_policy_manifest(name: str, namespace: str, allowed_mcp_ty
             "labels": {
                 "app": "ai-agent",
                 "agent-name": name,
-                "sandbox.enterprise.ai/policy-type": "mcp-egress",
+                "kubesynth.ai/policy-type": "mcp-egress",
                 **agent_owner_labels(name),
             },
         },
@@ -1593,7 +1645,7 @@ def create_a2a_egress_network_policy_manifest(
             "labels": {
                 "app": "ai-agent",
                 "agent-name": name,
-                "sandbox.enterprise.ai/policy-type": "a2a-egress",
+                "kubesynth.ai/policy-type": "a2a-egress",
                 **agent_owner_labels(name),
             },
         },
@@ -1631,7 +1683,7 @@ def create_a2a_ingress_network_policy_manifest(
             "labels": {
                 "app": "ai-agent",
                 "agent-name": name,
-                "sandbox.enterprise.ai/policy-type": "a2a-ingress",
+                "kubesynth.ai/policy-type": "a2a-ingress",
                 **agent_owner_labels(name),
             },
         },
@@ -1722,9 +1774,9 @@ def create_worker_job_manifest(
             "namespace": OPERATOR_NAMESPACE,
             "labels": {
                 "app": "operator-worker",
-                "sandbox.enterprise.ai/resource-kind": kind,
-                "sandbox.enterprise.ai/resource-name": resource_name,
-                "sandbox.enterprise.ai/resource-namespace": resource_namespace,
+                "kubesynth.ai/resource-kind": kind,
+                "kubesynth.ai/resource-name": resource_name,
+                "kubesynth.ai/resource-namespace": resource_namespace,
             },
         },
         "spec": {
@@ -1735,7 +1787,7 @@ def create_worker_job_manifest(
                 "metadata": {
                     "labels": {
                         "app": "operator-worker",
-                        "sandbox.enterprise.ai/resource-kind": kind,
+                        "kubesynth.ai/resource-kind": kind,
                     }
                 },
                 "spec": {

@@ -1,0 +1,545 @@
+global:
+  imagePullSecrets: []
+
+trustBundle:
+  enabled: false
+  configMapName: ""
+  mountPath: /etc/ssl/certs/custom-ca-bundle.pem
+
+litellm:
+  image:
+    repository: litellm/litellm-database
+    tag: v1.82.3-stable
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+  service:
+    type: ClusterIP
+    port: 4000
+  masterKey: "replace-me-litellm-master-key"  # fallback when platformSecrets.native.litellmMasterKey is not set
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "512Mi"
+    limits:
+      cpu: "1"
+      memory: "2Gi"
+  config:
+    model_list:
+      - model_name: gpt-4
+        litellm_params:
+          model: openai/gpt-4
+          api_key: "os.environ/OPENAI_API_KEY"
+      - model_name: openrouter-gpt-4o-mini
+        litellm_params:
+          model: openrouter/openai/gpt-4o-mini
+          api_key: "os.environ/OPENROUTER_API_KEY"
+    general_settings:
+      master_key: "os.environ/LITELLM_MASTER_KEY"
+      database_url: "os.environ/DATABASE_URL"
+
+agentRuntime:
+  image:
+    repository: docker.io/yakdhane/kubesynth-agent-runtime
+    tag: deploy-20260401-120408
+    pullPolicy: IfNotPresent
+  env: {}
+  allowedModels: []
+  autonomy:
+    maxSteps: 4
+    maxStepsLimit: 12
+    doomLoopThreshold: 3
+    supervisorHistoryLimit: 8
+    supervisorResponseChars: 12000
+    continueOnActionError: true
+    retryLimit: 2
+    retryBackoffSeconds: 1.0
+    failureHistoryLimit: 6
+  localTools:
+    mountWorkspace: true
+    discoveryEnabled: true
+    allowlist:
+      - curl
+      - wget
+      - jq
+      - git
+      - rg
+      - tar
+      - unzip
+      - zip
+    allowedRoots:
+      - /app/state
+      - /workspace
+    timeoutSeconds: 20
+    maxOutputChars: 12000
+    maxArgs: 32
+    maxArgChars: 512
+    listLimit: 32
+  storage:
+    size: 1Gi
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "1"
+      memory: "1Gi"
+  qdrantCollection: agent-knowledge
+  hitl:
+    mode: enforce
+    notificationWebhookUrl: ""
+  openSandbox:
+    domain: ""
+    protocol: "http"
+    useServerProxy: false
+    requestTimeoutSeconds: 300
+    connectTimeoutSeconds: 30
+    defaultTtlSeconds: 600
+    secureRuntimeType: ""
+    auth:
+      apiKeySecretName: ""
+      apiKeySecretKey: "api-key"
+    images:
+      default: "python:3.11"
+      code: "opensandbox/code-interpreter:latest"
+      browser: "opensandbox/chrome:latest"
+      editor: "opensandbox/vscode:latest"
+    languages:
+      pythonVersion: "3.11"
+      javaVersion: "17"
+      nodeVersion: "20"
+      goVersion: "1.24"
+
+gooseRuntime:
+  image:
+    repository: docker.io/yakdhane/kubesynth-goose-runtime
+    tag: deploy-20260401-120408
+    pullPolicy: IfNotPresent
+  provider: litellm
+  env: {}
+  # Example native Goose settings:
+  # env:
+  #   GOOSE_MAX_TURNS: 40
+  #   GOOSE_CONTEXT_STRATEGY: summarize
+  #   GOOSE_MOIM_MESSAGE_TEXT: "Run tests before writing files."
+  #   CONTEXT_FILE_NAMES:
+  #     - AGENTS.md
+  #     - .goosehints
+  #   GOOSE_RUNTIME_BUILTINS:
+  #     - developer
+  #   GOOSE_RUNTIME_CONFIG_FILES_JSON:
+  #     config.yaml: |
+  #       GOOSE_MODE: smart_approve
+  #       GOOSE_AUTO_COMPACT_THRESHOLD: 0.8
+  #       GOOSE_SEARCH_PATHS:
+  #         - /workspace/bin
+  #       slash_commands:
+  #         - command: run-tests
+  #           recipe_path: /workspace/.goose/recipes/run-tests.yaml
+  #     prompts/review.md: |
+  #       Review changes conservatively and call out regression risks.
+
+codexRuntime:
+  image:
+    repository: docker.io/yakdhane/kubesynth-codex-runtime
+    tag: deploy-20260401-120408
+    pullPolicy: IfNotPresent
+  provider: litellm
+  env: {}
+  # Example Codex settings:
+  # env:
+  #   CODEX_COMMAND_TIMEOUT_SECONDS: 600
+  #   CODEX_MAX_PROMPT_CHARS: 16000
+  # To use Codex-managed OpenAI or ChatGPT auth instead of LiteLLM, set:
+  # provider: openai
+  # env:
+  #   CODEX_AUTH_JSON: |
+  #     {"auth_mode":"apikey","OPENAI_API_KEY":"sk-..."}
+  # Or paste the contents of ~/.codex/auth.json from a supported Codex login.
+  # GitHub Copilot / VS Code Copilot credentials are not supported by upstream Codex auth.
+
+opencodeRuntime:
+  image:
+    repository: docker.io/yakdhane/kubesynth-opencode-runtime
+    tag: deploy-20260401-120408
+    pullPolicy: IfNotPresent
+  provider: litellm
+  env: {}
+  # Example OpenCode settings:
+  # env:
+  #   OPENCODE_AGENT_STEPS: 24
+  #   OPENCODE_SESSION_INIT_ON_CREATE: "true"
+  #   OPENCODE_AUTONOMOUS_MAX_RETRIES: "4"
+  #   OPENCODE_AUTONOMOUS_MAX_TURNS: "14"
+  #   OPENCODE_COMPACTION_TOKEN_THRESHOLD: "0.75"
+  #   OPENCODE_PLAN_THRESHOLD_CHARS: "500"
+  #   OPENCODE_RUNTIME_CONFIG_FILES_JSON:
+  #     agents/reviewer.md: |
+  #       ---
+  #       description: Review code without editing it
+  #       mode: subagent
+  #       tools:
+  #         write: false
+  #         edit: false
+  #       ---
+  #       Focus on regressions, operational risk, and missing tests.
+  #     plugins/notify.ts: |
+  #       export const NotifyPlugin = async () => ({})
+
+operator:
+  replicaCount: 2
+  image:
+    repository: docker.io/yakdhane/kubesynth-operator
+    tag: deploy-20260401-120408
+    pullPolicy: IfNotPresent
+  workerImage:
+    repository: docker.io/yakdhane/kubesynth-operator
+    tag: deploy-20260401-120408
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+  clusterSecretStoreName: ""
+  runtimeTimeoutSeconds: 360
+  workerActiveDeadlineSeconds: 14400
+  workerTtlSecondsAfterFinished: 3600
+  evalSchedulePollSeconds: 60
+  evalQueueStaleSeconds: 600
+  workflowPollSeconds: 30
+  workflowQueueStaleSeconds: 300
+  workflowRunningStaleSeconds: 1800
+  workerResources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+  workerArtifacts:
+    size: 2Gi
+    storageClassName: ""
+  stateDbEnabled: true
+
+autoscaling:
+  enabled: false
+  apiGateway:
+    minReplicas: 1
+    maxReplicas: 10
+  litellm:
+    minReplicas: 1
+    maxReplicas: 5
+
+apiGateway:
+  replicaCount: 1
+  image:
+    repository: docker.io/yakdhane/kubesynth-api-gateway
+    tag: deploy-20260401-120408
+    pullPolicy: IfNotPresent
+  ingressClassName: ""
+  ingressHost: ""  # leave empty for a hostless ingress, or set e.g. "agents.mycompany.com"
+  ingress:
+    enabled: false
+    annotations: {}
+  publicBaseUrl: ""
+  corsOrigins: []
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+  tls:
+    enabled: false
+    secretName: ""  # TLS secret name in the Ingress namespace; create via cert-manager or manually
+  auth:
+    mode: hybrid
+    localAuthEnabled: true
+    registrationEnabled: false
+    jwtIssuer: kubesynth
+    accessTokenTtlSeconds: 900
+    refreshTokenTtlSeconds: 604800
+    cookieSecure: false
+    cookieSameSite: lax
+    cookieDomain: ""
+    bootstrapAdminUsername: admin
+    bootstrapAdminEmail: admin@example.com
+    bootstrapAdminDisplayName: Platform Admin
+    bootstrapAdminNamespaces:
+      - "*"
+    oidcIssuer: ""
+    oidcAudience: ""
+    oidcJwksUrl: ""
+    ldap:
+      enabled: false
+      serverUrl: ""
+      bindDn: ""
+      userSearchBase: ""
+      userSearchFilter: "(uid={username})"
+      groupSearchBase: ""
+      groupSearchFilter: "(member={user_dn})"
+      groupAttribute: memberOf
+      usernameAttribute: uid
+      emailAttribute: mail
+      displayNameAttribute: displayName
+      tlsEnabled: false
+      groupRoleMapping: {}
+
+postgresql:
+  enabled: true
+  image:
+    repository: postgres
+    tag: 16-alpine
+    pullPolicy: IfNotPresent
+  service:
+    port: 5432
+  database: kubesynth
+  username: kubesynth
+  persistence:
+    size: 8Gi
+    storageClassName: ""
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "1"
+      memory: "1Gi"
+
+webUi:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: docker.io/yakdhane/kubesynth-web-ui
+    tag: deploy-20260401-120408
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 80
+  ingress:
+    path: "/"
+  resources:
+    requests:
+      cpu: "25m"
+      memory: "64Mi"
+    limits:
+      cpu: "250m"
+      memory: "256Mi"
+
+redis:
+  image:
+    repository: redis
+    tag: 7-alpine
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "64Mi"
+    limits:
+      cpu: "200m"
+      memory: "256Mi"
+  persistence:
+    enabled: false
+    size: "1Gi"
+    storageClassName: ""
+
+qdrant:
+  image:
+    repository: qdrant/qdrant
+    tag: v1.7.4
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "2"
+      memory: "2Gi"
+
+nats:
+  image:
+    repository: nats
+    tag: 2.10-alpine
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: "25m"
+      memory: "32Mi"
+    limits:
+      cpu: "100m"
+      memory: "128Mi"
+
+platformSecrets:
+  mode: native
+  native:
+    openaiApiKey: ""
+    openrouterApiKey: ""
+    anthropicApiKey: ""
+    litellmMasterKey: "replace-me"
+    apiGatewaySharedToken: "replace-me-with-a-long-random-bearer-token"
+    databasePassword: "replace-me-with-a-long-random-database-password"
+    jwtSecret: "replace-me-with-a-long-random-jwt-secret"
+    authBootstrapAdminPassword: ""
+    ldapBindPassword: ""
+    # JSON array of OIDC provider objects, for example:
+    # [{"id":"entra","name":"Microsoft Entra ID","issuer":"https://login.microsoftonline.com/<tenant>/v2.0","client_id":"...","client_secret":"..."}]
+    oidcProvidersJson: "[]"
+    # JSON array of SAML provider objects, for example:
+    # [{"id":"corp-saml","name":"Corporate SSO","idp_entity_id":"https://idp.example.com/metadata","sso_url":"https://idp.example.com/sso","x509cert":"-----BEGIN CERTIFICATE-----..."}]
+    samlProvidersJson: "[]"
+  externalSecrets:
+    refreshInterval: 1h
+    createClusterSecretStore: true
+
+telemetry:
+  otlpEndpoint: ""
+
+# ---------------------------------------------------------------------------
+# MCP Hub – shared enterprise MCP server pool
+# ---------------------------------------------------------------------------
+mcpHub:
+  # Dedicated namespace for all shared MCP servers.
+  # The chart creates this namespace and applies the required label automatically:
+  #   kubesynth.ai/mcp-hub=true
+  # Tenant namespaces must be labelled:
+  #   kubesynth.ai/tenant=true
+  namespace: mcp-hub
+
+  # Auth: bearer token agents present in the Authorization header on every
+  # MCP call. The same secret is mounted into each MCP server pod so it can
+  # validate inbound requests. Rotate via ExternalSecret / Vault in production.
+  # NEVER leave the default value in a real deployment.
+  auth:
+    bearerToken: "replace-me-with-a-strong-random-secret"
+    # If using ExternalSecret, set secretName to the K8s secret that holds
+    # the bearer-token key and leave bearerToken empty. The deployment template
+    # will reference that secret instead of creating a new one.
+    secretName: ""
+
+  # Per-server configuration. Set enabled: false to skip deploying a server.
+  servers:
+    # Shared GitHub access now runs through a local adapter container that
+    # preserves the runtime's /tools/<tool> bridge and proxies to the upstream
+    # GitHub MCP server over streamable HTTP.
+    github:
+      enabled: true
+      image: "docker.io/yakdhane/mcp-github-adapter:latest"
+      imagePullPolicy: IfNotPresent
+      port: 8000
+      servicePort: 8000
+      env:
+        - name: GITHUB_UPSTREAM_URL
+          value: "http://127.0.0.1:8082"
+      extraContainers:
+        - name: github-upstream
+          image: "ghcr.io/github/github-mcp-server:latest"
+          imagePullPolicy: IfNotPresent
+          args:
+            - http
+            - --port
+            - "8082"
+          ports:
+            - containerPort: 8082
+              name: upstream
+              protocol: TCP
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "300m"
+              memory: "256Mi"
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      replicas: 1
+      resources:
+        requests:
+          cpu: "50m"
+          memory: "64Mi"
+        limits:
+          cpu: "300m"
+          memory: "256Mi"
+      livenessProbe:
+        httpGet:
+          path: /healthz
+          port: http
+        initialDelaySeconds: 5
+        periodSeconds: 10
+      readinessProbe:
+        httpGet:
+          path: /healthz
+          port: http
+        initialDelaySeconds: 2
+        periodSeconds: 5
+
+nameOverride: ""
+fullnameOverride: ""
+
+# ---------------------------------------------------------------------------
+# Skills Catalog – browsable catalog of reusable skill files
+# ---------------------------------------------------------------------------
+skillsCatalog:
+  enabled: true
+  # JSON catalog data. Generate with: python scripts/build-catalog-index.py
+  # Then supply it at install time:
+  #   helm upgrade --install ... --set-file skillsCatalog.catalogJson=catalog/skills-catalog.json
+  # Defaults to empty; the UI catalog page will show nothing until populated.
+  catalogJson: "[]"
+
+# ---------------------------------------------------------------------------
+# MCP Tool Sidecar Images – per-agent tool containers
+# Repo currently ships 10 bundled sidecars:
+# code-exec, web-search, documents, browser, database, git,
+# github-adapter, kubernetes, messaging, rag
+# ---------------------------------------------------------------------------
+mcpToolSidecars:
+  codeExec:
+    image: docker.io/yakdhane/mcp-code-exec
+    tag: latest
+    port: 8090
+  webSearch:
+    image: docker.io/yakdhane/mcp-web-search
+    tag: latest
+    port: 8091
+  documents:
+    image: docker.io/yakdhane/mcp-documents
+    tag: latest
+    port: 8092
+  browser:
+    image: docker.io/yakdhane/mcp-browser
+    tag: latest
+    port: 8093
+  database:
+    image: docker.io/yakdhane/mcp-database
+    tag: latest
+    port: 8094
+  git:
+    image: docker.io/yakdhane/mcp-git
+    tag: latest
+    port: 8095
+  githubAdapter:
+    image: docker.io/yakdhane/mcp-github-adapter
+    tag: latest
+    port: 8096
+  kubernetes:
+    image: docker.io/yakdhane/mcp-kubernetes
+    tag: latest
+    port: 8097
+  messaging:
+    image: docker.io/yakdhane/mcp-messaging
+    tag: latest
+    port: 8098
+  rag:
+    image: docker.io/yakdhane/mcp-rag
+    tag: latest
+    port: 8099

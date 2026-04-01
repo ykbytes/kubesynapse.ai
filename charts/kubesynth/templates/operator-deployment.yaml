@@ -1,0 +1,359 @@
+{{- $agentRuntime := .Values.agentRuntime | default dict -}}
+{{- $agentAutonomy := get $agentRuntime "autonomy" | default dict -}}
+{{- $agentLocalTools := get $agentRuntime "localTools" | default dict -}}
+{{- $agentMaxSteps := 4 -}}
+{{- if hasKey $agentAutonomy "maxSteps" }}{{- $agentMaxSteps = get $agentAutonomy "maxSteps" -}}{{- end -}}
+{{- $agentMaxStepsLimit := 12 -}}
+{{- if hasKey $agentAutonomy "maxStepsLimit" }}{{- $agentMaxStepsLimit = get $agentAutonomy "maxStepsLimit" -}}{{- end -}}
+{{- $agentDoomLoopThreshold := 3 -}}
+{{- if hasKey $agentAutonomy "doomLoopThreshold" }}{{- $agentDoomLoopThreshold = get $agentAutonomy "doomLoopThreshold" -}}{{- end -}}
+{{- $agentSupervisorHistoryLimit := 8 -}}
+{{- if hasKey $agentAutonomy "supervisorHistoryLimit" }}{{- $agentSupervisorHistoryLimit = get $agentAutonomy "supervisorHistoryLimit" -}}{{- end -}}
+{{- $agentSupervisorResponseChars := 12000 -}}
+{{- if hasKey $agentAutonomy "supervisorResponseChars" }}{{- $agentSupervisorResponseChars = get $agentAutonomy "supervisorResponseChars" -}}{{- end -}}
+{{- $agentContinueOnActionError := true -}}
+{{- if hasKey $agentAutonomy "continueOnActionError" }}{{- $agentContinueOnActionError = get $agentAutonomy "continueOnActionError" -}}{{- end -}}
+{{- $agentRetryLimit := 2 -}}
+{{- if hasKey $agentAutonomy "retryLimit" }}{{- $agentRetryLimit = get $agentAutonomy "retryLimit" -}}{{- end -}}
+{{- $agentRetryBackoffSeconds := 1.0 -}}
+{{- if hasKey $agentAutonomy "retryBackoffSeconds" }}{{- $agentRetryBackoffSeconds = get $agentAutonomy "retryBackoffSeconds" -}}{{- end -}}
+{{- $agentFailureHistoryLimit := 6 -}}
+{{- if hasKey $agentAutonomy "failureHistoryLimit" }}{{- $agentFailureHistoryLimit = get $agentAutonomy "failureHistoryLimit" -}}{{- end -}}
+{{- $agentMountWorkspace := true -}}
+{{- if hasKey $agentLocalTools "mountWorkspace" }}{{- $agentMountWorkspace = get $agentLocalTools "mountWorkspace" -}}{{- end -}}
+{{- $agentLocalDiscoveryEnabled := true -}}
+{{- if hasKey $agentLocalTools "discoveryEnabled" }}{{- $agentLocalDiscoveryEnabled = get $agentLocalTools "discoveryEnabled" -}}{{- end -}}
+{{- $agentLocalAllowlist := list "curl" "wget" "jq" "git" "rg" "python" "pip" "tar" "unzip" "zip" -}}
+{{- if hasKey $agentLocalTools "allowlist" }}{{- $agentLocalAllowlist = get $agentLocalTools "allowlist" -}}{{- end -}}
+{{- $agentLocalAllowedRoots := list "/app/state" "/workspace" -}}
+{{- if hasKey $agentLocalTools "allowedRoots" }}{{- $agentLocalAllowedRoots = get $agentLocalTools "allowedRoots" -}}{{- end -}}
+{{- $agentLocalTimeoutSeconds := 20 -}}
+{{- if hasKey $agentLocalTools "timeoutSeconds" }}{{- $agentLocalTimeoutSeconds = get $agentLocalTools "timeoutSeconds" -}}{{- end -}}
+{{- $agentLocalMaxOutputChars := 12000 -}}
+{{- if hasKey $agentLocalTools "maxOutputChars" }}{{- $agentLocalMaxOutputChars = get $agentLocalTools "maxOutputChars" -}}{{- end -}}
+{{- $agentLocalMaxArgs := 32 -}}
+{{- if hasKey $agentLocalTools "maxArgs" }}{{- $agentLocalMaxArgs = get $agentLocalTools "maxArgs" -}}{{- end -}}
+{{- $agentLocalMaxArgChars := 512 -}}
+{{- if hasKey $agentLocalTools "maxArgChars" }}{{- $agentLocalMaxArgChars = get $agentLocalTools "maxArgChars" -}}{{- end -}}
+{{- $agentLocalListLimit := 32 -}}
+{{- if hasKey $agentLocalTools "listLimit" }}{{- $agentLocalListLimit = get $agentLocalTools "listLimit" -}}{{- end -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "kubesynth.fullname" . }}-operator
+  labels:
+    app: operator
+spec:
+{{- if not (and .Values.autoscaling (.Values.autoscaling.enabled)) }}
+  replicas: {{ .Values.operator.replicaCount | default 2 }}
+{{- end }}
+  selector:
+    matchLabels:
+      app: operator
+  template:
+    metadata:
+      annotations:
+        checksum/secrets: {{ include (print $.Template.BasePath "/external-secrets.yaml") . | sha256sum }}
+{{- if .Values.trustBundle.enabled }}
+        checksum/trust-bundle: {{ include (print $.Template.BasePath "/trust-bundle-configmap.yaml") . | sha256sum }}
+{{- end }}
+      labels:
+        app: operator
+    spec:
+{{- with (include "kubesynth.imagePullSecrets" .) }}
+{{ . | nindent 6 }}
+{{- end }}
+      serviceAccountName: {{ include "kubesynth.fullname" . }}-operator-sa
+      automountServiceAccountToken: true
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 37
+        fsGroup: 37
+        seccompProfile:
+          type: RuntimeDefault
+      volumes:
+        - name: tmp
+          emptyDir: {}
+{{- if .Values.trustBundle.enabled }}
+        - name: trust-bundle
+          configMap:
+            name: {{ default (printf "%s-trust-bundle" (include "kubesynth.fullname" .)) .Values.trustBundle.configMapName }}
+{{- end }}
+      containers:
+        - name: operator
+          image: "{{ .Values.operator.image.repository }}:{{ .Values.operator.image.tag }}"
+          imagePullPolicy: {{ .Values.operator.image.pullPolicy | default "IfNotPresent" }}
+          command: ["kopf"]
+          args: ["run", "/app/main.py", "--verbose", "--liveness=http://0.0.0.0:8080/healthz"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          ports:
+            - containerPort: 8080
+              name: http
+          env:
+            - name: HOME
+              value: /tmp
+            - name: XDG_CACHE_HOME
+              value: /tmp
+            - name: STATE_DB_ENABLED
+              value: {{ .Values.operator.stateDbEnabled | quote }}
+{{- if .Values.postgresql.enabled }}
+            - name: DATABASE_HOST
+              value: {{ printf "%s-postgresql" (include "kubesynth.fullname" .) | quote }}
+            - name: DATABASE_PORT
+              value: {{ .Values.postgresql.service.port | quote }}
+            - name: DATABASE_NAME
+              value: {{ .Values.postgresql.database | quote }}
+            - name: DATABASE_USER
+              value: {{ .Values.postgresql.username | quote }}
+            - name: DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kubesynth.fullname" . }}-llm-api-keys
+                  key: DATABASE_PASSWORD
+                  optional: true
+{{- else }}
+            - name: DATABASE_SQLITE_PATH
+              value: /tmp/kubesynth-operator.db
+{{- end }}
+            - name: OPERATOR_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: OPERATOR_PEERING_NAME
+              value: {{ printf "%s-operator-peering" (include "kubesynth.fullname" .) | quote }}
+            - name: LITELLM_SVC_NAME
+              value: {{ include "kubesynth.fullname" . }}-litellm
+            - name: LLM_SECRET_NAME
+              value: {{ include "kubesynth.fullname" . }}-llm-api-keys
+            - name: AGENT_RUNTIME_IMAGE
+              value: "{{ .Values.agentRuntime.image.repository }}:{{ .Values.agentRuntime.image.tag }}"
+            - name: AGENT_RUNTIME_IMAGE_PULL_POLICY
+              value: {{ .Values.agentRuntime.image.pullPolicy | default "IfNotPresent" | quote }}
+            - name: AGENT_RUNTIME_EXTRA_ENV_JSON
+              value: {{ .Values.agentRuntime.env | default dict | toJson | quote }}
+            - name: AGENT_ALLOWED_MODELS
+              value: {{ join "," (.Values.agentRuntime.allowedModels | default (list)) | quote }}
+            - name: AGENT_MAX_STEPS
+              value: {{ $agentMaxSteps | quote }}
+            - name: AGENT_MAX_STEPS_LIMIT
+              value: {{ $agentMaxStepsLimit | quote }}
+            - name: AGENT_DOOM_LOOP_THRESHOLD
+              value: {{ $agentDoomLoopThreshold | quote }}
+            - name: AGENT_SUPERVISOR_HISTORY_LIMIT
+              value: {{ $agentSupervisorHistoryLimit | quote }}
+            - name: AGENT_SUPERVISOR_RESPONSE_CHARS
+              value: {{ $agentSupervisorResponseChars | quote }}
+            - name: AGENT_AUTONOMY_CONTINUE_ON_ACTION_ERROR
+              value: {{ $agentContinueOnActionError | quote }}
+            - name: AGENT_AUTONOMY_ACTION_RETRY_LIMIT
+              value: {{ $agentRetryLimit | quote }}
+            - name: AGENT_AUTONOMY_ACTION_RETRY_BACKOFF_SECONDS
+              value: {{ $agentRetryBackoffSeconds | quote }}
+            - name: AGENT_AUTONOMY_FAILURE_HISTORY_LIMIT
+              value: {{ $agentFailureHistoryLimit | quote }}
+            - name: AGENT_LOCAL_TOOL_MOUNT_WORKSPACE
+              value: {{ $agentMountWorkspace | quote }}
+            - name: AGENT_LOCAL_TOOL_DISCOVERY_ENABLED
+              value: {{ $agentLocalDiscoveryEnabled | quote }}
+            - name: AGENT_LOCAL_TOOL_ALLOWLIST
+              value: {{ join "," $agentLocalAllowlist | quote }}
+            - name: AGENT_LOCAL_TOOL_ALLOWED_ROOTS
+              value: {{ join "," $agentLocalAllowedRoots | quote }}
+            - name: AGENT_LOCAL_TOOL_TIMEOUT_SECONDS
+              value: {{ $agentLocalTimeoutSeconds | quote }}
+            - name: AGENT_LOCAL_TOOL_MAX_OUTPUT_CHARS
+              value: {{ $agentLocalMaxOutputChars | quote }}
+            - name: AGENT_LOCAL_TOOL_MAX_ARGS
+              value: {{ $agentLocalMaxArgs | quote }}
+            - name: AGENT_LOCAL_TOOL_MAX_ARG_CHARS
+              value: {{ $agentLocalMaxArgChars | quote }}
+            - name: AGENT_LOCAL_TOOL_LIST_LIMIT
+              value: {{ $agentLocalListLimit | quote }}
+            - name: GOOSE_RUNTIME_IMAGE
+              value: "{{ .Values.gooseRuntime.image.repository }}:{{ .Values.gooseRuntime.image.tag }}"
+            - name: GOOSE_RUNTIME_IMAGE_PULL_POLICY
+              value: {{ .Values.gooseRuntime.image.pullPolicy | default "IfNotPresent" | quote }}
+            - name: GOOSE_DEFAULT_PROVIDER
+              value: {{ .Values.gooseRuntime.provider | default "litellm" | quote }}
+            - name: GOOSE_RUNTIME_EXTRA_ENV_JSON
+              value: {{ .Values.gooseRuntime.env | default dict | toJson | quote }}
+            - name: CODEX_RUNTIME_IMAGE
+              value: "{{ .Values.codexRuntime.image.repository }}:{{ .Values.codexRuntime.image.tag }}"
+            - name: CODEX_RUNTIME_IMAGE_PULL_POLICY
+              value: {{ .Values.codexRuntime.image.pullPolicy | default "IfNotPresent" | quote }}
+            - name: CODEX_DEFAULT_PROVIDER
+              value: {{ .Values.codexRuntime.provider | default "litellm" | quote }}
+            - name: CODEX_RUNTIME_EXTRA_ENV_JSON
+              value: {{ .Values.codexRuntime.env | default dict | toJson | quote }}
+            - name: OPENCODE_RUNTIME_IMAGE
+              value: "{{ .Values.opencodeRuntime.image.repository }}:{{ .Values.opencodeRuntime.image.tag }}"
+            - name: OPENCODE_RUNTIME_IMAGE_PULL_POLICY
+              value: {{ .Values.opencodeRuntime.image.pullPolicy | default "IfNotPresent" | quote }}
+            - name: OPENCODE_DEFAULT_PROVIDER
+              value: {{ .Values.opencodeRuntime.provider | default "litellm" | quote }}
+            - name: OPENCODE_RUNTIME_EXTRA_ENV_JSON
+              value: {{ .Values.opencodeRuntime.env | default dict | toJson | quote }}
+{{- if .Values.trustBundle.enabled }}
+            - name: TRUST_BUNDLE_CONFIGMAP_NAME
+              value: {{ default (printf "%s-trust-bundle" (include "kubesynth.fullname" .)) .Values.trustBundle.configMapName | quote }}
+            - name: TRUST_BUNDLE_MOUNT_PATH
+              value: {{ .Values.trustBundle.mountPath | quote }}
+{{- end }}
+            - name: WORKER_IMAGE
+              value: "{{ .Values.operator.workerImage.repository }}:{{ .Values.operator.workerImage.tag }}"
+            - name: WORKER_IMAGE_PULL_POLICY
+              value: {{ .Values.operator.workerImage.pullPolicy | default "IfNotPresent" | quote }}
+            - name: IMAGE_PULL_SECRETS
+              value: {{ join "," .Values.global.imagePullSecrets | quote }}
+            - name: WORKER_SERVICE_ACCOUNT_NAME
+              value: {{ include "kubesynth.fullname" . }}-operator-sa
+            - name: WORKER_ARTIFACT_SIZE
+              value: {{ .Values.operator.workerArtifacts.size | quote }}
+            - name: WORKER_ARTIFACT_STORAGE_CLASS
+              value: {{ .Values.operator.workerArtifacts.storageClassName | quote }}
+            - name: WORKER_ACTIVE_DEADLINE_SECONDS
+              value: {{ .Values.operator.workerActiveDeadlineSeconds | quote }}
+            - name: WORKER_TTL_SECONDS_AFTER_FINISHED
+              value: {{ .Values.operator.workerTtlSecondsAfterFinished | quote }}
+            - name: WORKER_CPU_REQUEST
+              value: {{ .Values.operator.workerResources.requests.cpu | quote }}
+            - name: WORKER_MEMORY_REQUEST
+              value: {{ .Values.operator.workerResources.requests.memory | quote }}
+            - name: WORKER_CPU_LIMIT
+              value: {{ .Values.operator.workerResources.limits.cpu | quote }}
+            - name: WORKER_MEMORY_LIMIT
+              value: {{ .Values.operator.workerResources.limits.memory | quote }}
+            - name: AGENT_STORAGE_SIZE
+              value: {{ .Values.agentRuntime.storage.size | quote }}
+            - name: AGENT_RUNTIME_TIMEOUT_SECONDS
+              value: {{ .Values.operator.runtimeTimeoutSeconds | quote }}
+            - name: EVAL_SCHEDULE_POLL_SECONDS
+              value: {{ .Values.operator.evalSchedulePollSeconds | quote }}
+            - name: SCHEDULED_EVAL_QUEUE_STALE_SECONDS
+              value: {{ .Values.operator.evalQueueStaleSeconds | quote }}
+            - name: WORKFLOW_POLL_SECONDS
+              value: {{ .Values.operator.workflowPollSeconds | quote }}
+            - name: WORKFLOW_QUEUE_STALE_SECONDS
+              value: {{ .Values.operator.workflowQueueStaleSeconds | quote }}
+            - name: WORKFLOW_RUNNING_STALE_SECONDS
+              value: {{ .Values.operator.workflowRunningStaleSeconds | quote }}
+            - name: QDRANT_SVC_NAME
+              value: {{ include "kubesynth.fullname" . }}-qdrant
+            - name: QDRANT_COLLECTION
+              value: {{ .Values.agentRuntime.qdrantCollection | quote }}
+            - name: CLUSTER_SECRET_STORE
+              value: {{ .Values.operator.clusterSecretStoreName | default (printf "%s-secret-store" (include "kubesynth.fullname" .)) | quote }}
+            - name: SECRET_PROVISIONING_MODE
+              value: {{ .Values.platformSecrets.mode | quote }}
+            - name: DEFAULT_LITELLM_MASTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kubesynth.fullname" . }}-llm-api-keys
+                  key: LITELLM_MASTER_KEY
+                  optional: true
+            - name: DEFAULT_API_GATEWAY_SHARED_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kubesynth.fullname" . }}-llm-api-keys
+                  key: API_GATEWAY_SHARED_TOKEN
+                  optional: true
+            - name: API_GATEWAY_INTERNAL_URL
+              value: {{ printf "http://%s-api-gateway.%s.svc.cluster.local:8080" (include "kubesynth.fullname" .) .Release.Namespace | quote }}
+            - name: AGENT_HITL_MODE
+              value: {{ .Values.agentRuntime.hitl.mode | quote }}
+            - name: HITL_NOTIFICATION_WEBHOOK_URL
+              value: {{ .Values.agentRuntime.hitl.notificationWebhookUrl | quote }}
+            - name: OPEN_SANDBOX_DOMAIN
+              value: {{ .Values.agentRuntime.openSandbox.domain | quote }}
+            - name: OPEN_SANDBOX_PROTOCOL
+              value: {{ .Values.agentRuntime.openSandbox.protocol | quote }}
+            - name: OPEN_SANDBOX_USE_SERVER_PROXY
+              value: {{ .Values.agentRuntime.openSandbox.useServerProxy | quote }}
+            - name: OPEN_SANDBOX_REQUEST_TIMEOUT_SECONDS
+              value: {{ .Values.agentRuntime.openSandbox.requestTimeoutSeconds | quote }}
+            - name: OPEN_SANDBOX_CONNECT_TIMEOUT_SECONDS
+              value: {{ .Values.agentRuntime.openSandbox.connectTimeoutSeconds | quote }}
+            - name: OPEN_SANDBOX_DEFAULT_TTL_SECONDS
+              value: {{ .Values.agentRuntime.openSandbox.defaultTtlSeconds | quote }}
+            - name: OPEN_SANDBOX_DEFAULT_IMAGE
+              value: {{ .Values.agentRuntime.openSandbox.images.default | quote }}
+            - name: OPEN_SANDBOX_CODE_IMAGE
+              value: {{ .Values.agentRuntime.openSandbox.images.code | quote }}
+            - name: OPEN_SANDBOX_BROWSER_IMAGE
+              value: {{ .Values.agentRuntime.openSandbox.images.browser | quote }}
+            - name: OPEN_SANDBOX_EDITOR_IMAGE
+              value: {{ .Values.agentRuntime.openSandbox.images.editor | quote }}
+            - name: OPEN_SANDBOX_PYTHON_VERSION
+              value: {{ .Values.agentRuntime.openSandbox.languages.pythonVersion | quote }}
+            - name: OPEN_SANDBOX_JAVA_VERSION
+              value: {{ .Values.agentRuntime.openSandbox.languages.javaVersion | quote }}
+            - name: OPEN_SANDBOX_NODE_VERSION
+              value: {{ .Values.agentRuntime.openSandbox.languages.nodeVersion | quote }}
+            - name: OPEN_SANDBOX_GO_VERSION
+              value: {{ .Values.agentRuntime.openSandbox.languages.goVersion | quote }}
+            - name: OPEN_SANDBOX_SECURE_RUNTIME_TYPE
+              value: {{ .Values.agentRuntime.openSandbox.secureRuntimeType | quote }}
+            - name: OPEN_SANDBOX_API_KEY_SECRET_NAME
+              value: {{ .Values.agentRuntime.openSandbox.auth.apiKeySecretName | quote }}
+            - name: OPEN_SANDBOX_API_KEY_SECRET_KEY
+              value: {{ .Values.agentRuntime.openSandbox.auth.apiKeySecretKey | quote }}
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ .Values.telemetry.otlpEndpoint | quote }}
+            - name: RUNTIME_SERVICE_ACCOUNT
+              value: ai-agent-runtime
+            - name: RUNTIME_CLUSTER_ROLE
+              value: {{ include "kubesynth.fullname" . }}-runtime-role
+            - name: MCP_HUB_NAMESPACE
+              value: {{ .Values.mcpHub.namespace | default "mcp-hub" | quote }}
+            - name: HELM_RELEASE_NAME
+              value: {{ include "kubesynth.fullname" . | quote }}
+            - name: MCP_AUTH_SECRET_NAME
+              value: {{ .Values.mcpHub.auth.secretName | default (printf "%s-mcp-auth" (include "kubesynth.fullname" .)) | quote }}
+            - name: AGENT_CPU_REQUEST
+              value: {{ .Values.agentRuntime.resources.requests.cpu | quote }}
+            - name: AGENT_MEMORY_REQUEST
+              value: {{ .Values.agentRuntime.resources.requests.memory | quote }}
+            - name: AGENT_CPU_LIMIT
+              value: {{ .Values.agentRuntime.resources.limits.cpu | quote }}
+            - name: AGENT_MEMORY_LIMIT
+              value: {{ .Values.agentRuntime.resources.limits.memory | quote }}
+            {{- if .Values.mcpToolSidecars }}
+            - name: MCP_SIDECAR_CATALOG_JSON
+              value: {{ include "kubesynth.mcpSidecarCatalogJson" . | quote }}
+            {{- end }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+{{- if .Values.trustBundle.enabled }}
+            - name: trust-bundle
+              mountPath: {{ .Values.trustBundle.mountPath | quote }}
+              subPath: ca-bundle.pem
+              readOnly: true
+{{- end }}
+          resources:
+{{ toYaml .Values.operator.resources | indent 12 }}
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            failureThreshold: 30
+            periodSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 30

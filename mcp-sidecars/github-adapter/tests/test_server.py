@@ -97,13 +97,13 @@ class GitHubAdapterTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(self.module, "call_upstream_tool", AsyncMock(return_value={"items": ["repo-a"]})) as call_mock:
             result = await self.module.call_tool(
                 "search_repositories",
-                {"query": "kubemininions"},
+                {"query": "kubesynth"},
                 authorization="Bearer platform-token",
                 github_token="ghp_test",
             )
 
         self.assertEqual(result, {"items": ["repo-a"]})
-        call_mock.assert_awaited_once_with("search_repositories", {"query": "kubemininions"}, "ghp_test")
+        call_mock.assert_awaited_once_with("search_repositories", {"query": "kubesynth"}, "ghp_test")
 
     def test_coerce_tool_result_prefers_structured_content(self) -> None:
         class _Result:
@@ -116,7 +116,7 @@ class GitHubAdapterTests(unittest.IsolatedAsyncioTestCase):
     def test_coerce_tool_result_parses_single_text_json_payload(self) -> None:
         class _TextItem:
             type = "text"
-            text = '{"repos": ["kubemininions"]}'
+            text = '{"repos": ["kubesynth"]}'
 
             def model_dump(self, exclude_none=True):
                 del exclude_none
@@ -126,4 +126,4 @@ class GitHubAdapterTests(unittest.IsolatedAsyncioTestCase):
             content = [_TextItem()]
             isError = False
 
-        self.assertEqual(self.module._coerce_tool_result(_Result()), {"repos": ["kubemininions"]})
+        self.assertEqual(self.module._coerce_tool_result(_Result()), {"repos": ["kubesynth"]})

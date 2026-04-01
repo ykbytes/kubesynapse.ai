@@ -1,0 +1,86 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kubesynth.fullname" . }}-agent-isolation
+spec:
+  podSelector:
+    matchLabels:
+      app: ai-agent
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: api-gateway
+        - podSelector:
+            matchLabels:
+              app: operator
+      ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    # 1. Allow DNS
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # 2. Allow LiteLLM Gateway
+    - to:
+        - podSelector:
+            matchLabels:
+              app: litellm
+      ports:
+        - protocol: TCP
+          port: 4000
+    # 3. Allow Qdrant for RAG retrieval
+    - to:
+        - podSelector:
+            matchLabels:
+              app: qdrant
+      ports:
+        - protocol: TCP
+          port: 6333
+    # 4. Allow OTLP collectors when present
+    - to:
+        - podSelector:
+            matchLabels:
+              app: otel-collector
+      ports:
+        - protocol: TCP
+          port: 4317
+    # 5. Allow Kubernetes API access for policy and approval lookups
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 169.254.169.254/32
+      ports:
+        - protocol: TCP
+          port: 6443
+    # 6. Allow MCP servers in the dedicated mcp-hub namespace.
+    #    namespaceSelector + podSelector are ANDed: only mcp-server pods in
+    #    the namespace labelled kubesynth.ai/mcp-hub=true are reachable.
+    #    Port 8000 only – agents MUST present a bearer token (enforced server-side).
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubesynth.ai/mcp-hub: "true"
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/component: mcp-server
+      ports:
+        - protocol: TCP
+          port: 8000
+    # 7. Allow same-namespace (per-tenant) MCP servers.
+    #    Only pods labelled as mcp-server components are reachable;
+    #    not every pod in the namespace.
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: mcp-server
+      ports:
+        - protocol: TCP
+          port: 8000

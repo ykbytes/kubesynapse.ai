@@ -2,13 +2,13 @@
 
 ## Reporting a Vulnerability
 
-If you discover a security vulnerability in Kubeminionagents, please report it responsibly.
+If you discover a security vulnerability in kubesynthai, please report it responsibly.
 
 **Do not open a public GitHub issue for security vulnerabilities.**
 
 Instead, please send an email to the maintainers or use GitHub's private vulnerability reporting feature at:
 
-https://github.com/kubeminionagents/kubemininions/security/advisories/new
+https://github.com/kubesynthai/kubesynth/security/advisories/new
 
 ### What to include
 

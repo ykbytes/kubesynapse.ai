@@ -227,14 +227,14 @@ async function fetchAuthenticated(
 
       // Notify React state
       if (_onTokenRefreshed) _onTokenRefreshed(session.access_token);
-      localStorage.setItem("ai-agent-sandbox/token", session.access_token);
+      localStorage.setItem("kubesynth/token", session.access_token);
 
       // Retry the original request with the new token
       return fetch(url, buildAuthenticatedInit(session.access_token, requestId, init));
     } catch {
       _refreshPromise = null;
       // Refresh truly failed — clear stale token so the UI re-shows login
-      localStorage.removeItem("ai-agent-sandbox/token");
+      localStorage.removeItem("kubesynth/token");
       return response;
     }
   }

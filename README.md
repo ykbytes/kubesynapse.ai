@@ -1,6 +1,6 @@
 <div align="center">
 
-  <h1>Kubeminionagents</h1>
+  <h1>kubesynthai</h1>
 
   <h3>Kubernetes-native AI agents, packaged as one sleek platform</h3>
 
@@ -21,7 +21,7 @@
 
 ## Why this repo
 
-Kubeminionagents is a **shareable, end-to-end AI agent platform** for Kubernetes:
+kubesynthai is a **shareable, end-to-end AI agent platform** for Kubernetes:
 
 - **AI runtime ready** &mdash; supports LangGraph, Goose, Codex, and OpenCode execution paths
 - **File-backed skills** &mdash; agent behavior and capability grants versioned as Markdown skill files
@@ -33,7 +33,7 @@ Kubeminionagents is a **shareable, end-to-end AI agent platform** for Kubernetes
 ## Repository layout
 
 ```
-kubemininions/
+kubesynth/
 ├── operator/            # K8s operator &mdash; reconciler and worker
 ├── agent-runtime/       # LangGraph-based agent runtime
 ├── goose-runtime/       # Goose HTTP adapter runtime
@@ -55,7 +55,7 @@ kubemininions/
 │   └── web-search/      #   web search tools
 ├── charts/              # Helm charts
 │   ├── agents/          #   agent CRD templates
-│   └── ai-agent-sandbox/#   full platform chart
+│   └── kubesynth/#   full platform chart
 ├── catalog/             # Agent templates and skills catalog
 ├── cli/                 # agentctl CLI tool
 ├── deploy/              # Helm values overrides per environment
@@ -96,14 +96,14 @@ kubectl create secret docker-registry dockerhub-regcred \
 **3. Deploy**
 
 ```bash
-helm upgrade --install ai-agent-sandbox ./charts/ai-agent-sandbox \
+helm upgrade --install kubesynth ./charts/kubesynth \
   -f ./deploy/values.dockerhub.local.yaml
 ```
 
 **4. Verify**
 
 ```bash
-kubectl port-forward svc/ai-agent-sandbox-api-gateway 8080:8080
+kubectl port-forward svc/kubesynth-api-gateway 8080:8080
 curl http://localhost:8080/api/health
 ```
 
@@ -126,7 +126,7 @@ make docker-build REGISTRY=ghcr.io/your-org VERSION=latest CONTAINER_CLI=docker
 **3. Deploy**
 
 ```bash
-helm upgrade --install ai-agent-sandbox ./charts/ai-agent-sandbox \
+helm upgrade --install kubesynth ./charts/kubesynth \
   -f ./deploy/values.cluster.example.yaml
 ```
 

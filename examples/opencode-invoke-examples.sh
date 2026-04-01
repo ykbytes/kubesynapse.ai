@@ -7,7 +7,7 @@
 # Prerequisites:
 #   1. An OpenCode agent deployed:
 #        agentctl apply -f examples/sample-opencode-agent.yaml
-#   2. A running cluster with ai-agent-sandbox installed.
+#   2. A running cluster with kubesynth installed.
 #
 # ─── 1. Create a document ───────────────────────────────────────────
 

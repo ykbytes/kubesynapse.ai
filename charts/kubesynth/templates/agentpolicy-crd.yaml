@@ -1,0 +1,189 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: agentpolicies.kubesynth.ai
+spec:
+  group: kubesynth.ai
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                # --- Input Guardrails ---
+                inputGuardrails:
+                  type: object
+                  properties:
+                    blockPromptInjection:
+                      type: boolean
+                      description: "Block known prompt injection patterns"
+                    blockedPatterns:
+                      type: array
+                      items:
+                        type: string
+                      description: "Regex patterns to block in user input"
+                    maxInputTokens:
+                      type: integer
+                      description: "Maximum allowed input tokens per request"
+                # --- Output Guardrails ---
+                outputGuardrails:
+                  type: object
+                  properties:
+                    maskPII:
+                      type: boolean
+                      description: "Automatically mask PII (SSN, credit cards, emails, phone numbers)"
+                    blockedOutputPatterns:
+                      type: array
+                      items:
+                        type: string
+                      description: "Regex patterns to redact from LLM output"
+                    maxOutputTokens:
+                      type: integer
+                      description: "Maximum allowed output tokens per response"
+                # --- Budget & Rate Limiting ---
+                budget:
+                  type: object
+                  description: |
+                    Reserved for future distributed budget enforcement. These fields are
+                    intentionally unsupported today and are rejected so policies cannot
+                    silently advertise limits that the runtime does not enforce.
+                  x-kubernetes-validations:
+                    - rule: "!has(self.maxTokensPerHour) && !has(self.maxRequestsPerMinute) && !has(self.maxCostPerDayUSD)"
+                      message: "AgentPolicy.spec.budget is reserved for future distributed enforcement and is not supported today. Remove spec.budget to use this policy."
+                  properties:
+                    maxTokensPerHour:
+                      type: integer
+                      description: "Reserved for future distributed enforcement. Unsupported today."
+                    maxRequestsPerMinute:
+                      type: integer
+                      description: "Reserved for future distributed enforcement. Unsupported today."
+                    maxCostPerDayUSD:
+                      type: string
+                      description: "Reserved for future distributed enforcement. Unsupported today."
+                # --- Allowed Models ---
+                allowedModels:
+                  type: array
+                  items:
+                    type: string
+                  description: "Whitelist of LLM models this policy permits (e.g., ['gpt-4', 'claude-3-sonnet'])"
+                allowedNamespaces:
+                  type: object
+                  description: "Controls which namespaces may reference this policy via AIAgent.spec.policyRef"
+                  properties:
+                    from:
+                      type: string
+                      enum:
+                        - Same
+                        - All
+                        - Selector
+                      default: Same
+                      description: "Whether policy references are limited to the same namespace, all namespaces, or those matched by selector"
+                    selector:
+                      type: object
+                      description: "Namespace selector used when from=Selector"
+                      x-kubernetes-preserve-unknown-fields: true
+                # --- MCP Server Access Control ---
+                allowedMcpServers:
+                  type: array
+                  items:
+                    type: string
+                  description: |
+                    Whitelist of MCP server names (mcp.kubesynth.ai/type label values)
+                    this agent is permitted to call. If empty, no MCP calls are allowed.
+                    The operator enforces this by generating per-agent NetworkPolicy egress
+                    rules that restrict which mcp-server pods in the mcp-hub namespace are
+                    reachable. Example: ['github']
+                mcpRequireHitl:
+                  type: boolean
+                  default: true
+                  description: |
+                    When true (default), every MCP tool call is routed through hitl_gate()
+                    before execution, requiring an AgentApproval CR to be created and approved.
+                    Set to false only for fully-trusted, read-only MCP tools.
+                toolPolicy:
+                  type: object
+                  description: "Lightweight tool governance controls for runtime tools, MCP calls, and delegation depth"
+                  properties:
+                    maxDelegationDepth:
+                      type: integer
+                      minimum: 0
+                      description: "Maximum delegation depth allowed for agent-to-agent coordination"
+                    allowedToolPrefixes:
+                      type: array
+                      items:
+                        type: string
+                      description: "Optional allow-list of tool name prefixes such as local.command., filesystem., github/, or browser/"
+                    blockedToolNames:
+                      type: array
+                      items:
+                        type: string
+                      description: "Explicitly blocked tool names, including MCP-qualified names like github/create_issue"
+                    requireApprovalFor:
+                      type: array
+                      items:
+                        type: string
+                      description: "Tool names that always require approval before execution"
+                memoryPolicy:
+                  type: object
+                  description: "Controls how durable memory is retrieved and injected into future invocations"
+                  properties:
+                    maxInjectedMemories:
+                      type: integer
+                      minimum: 0
+                      description: "Maximum number of promoted memory records injected into a request"
+                    maxInjectedChars:
+                      type: integer
+                      minimum: 0
+                      description: "Maximum total characters of injected memory context"
+                    allowedMemoryTypes:
+                      type: array
+                      items:
+                        type: string
+                      description: "Optional allow-list of memory types eligible for retrieval, such as procedural or episodic"
+                    autoPromote:
+                      type: boolean
+                      default: false
+                      description: "Whether the platform may auto-promote high-signal memories without a user pin action"
+                a2a:
+                  type: object
+                  description: |
+                    Optional outbound A2A policy. These settings control which peer agents the
+                    runtime may invoke directly over the internal /invoke API.
+                  properties:
+                    allowedTargets:
+                      type: array
+                      description: "Explicit list of peer agents this policy allows the runtime to invoke"
+                      items:
+                        type: object
+                        properties:
+                          name:
+                            type: string
+                            description: "Target AIAgent name"
+                          namespace:
+                            type: string
+                            description: "Target AIAgent namespace"
+                        required:
+                          - name
+                          - namespace
+                    maxTimeoutSeconds:
+                      type: number
+                      minimum: 1
+                      description: "Maximum outbound A2A HTTP timeout allowed for this policy"
+                    requireHitl:
+                      type: boolean
+                      default: false
+                      description: |
+                        When true, direct outbound A2A calls must pass through the runtime HITL gate
+                        even if the caller did not explicitly set require_approval.
+  scope: Namespaced
+  names:
+    plural: agentpolicies
+    singular: agentpolicy
+    kind: AgentPolicy
+    shortNames:
+      - policy

@@ -1,6 +1,6 @@
-# Contributing to Kubeminionagents
+# Contributing to kubesynthai
 
-Thank you for your interest in contributing to Kubeminionagents.
+Thank you for your interest in contributing to kubesynthai.
 
 ## Getting Started
 
@@ -14,8 +14,8 @@ Thank you for your interest in contributing to Kubeminionagents.
 
 ```bash
 # Clone your fork
-git clone https://github.com/<your-username>/kubemininions.git
-cd kubemininions
+git clone https://github.com/<your-username>/kubesynth.git
+cd kubesynth
 
 # Install Python dependencies (per service)
 pip install -r operator/requirements.txt
@@ -63,7 +63,7 @@ See [README.md](README.md) for the full repository layout. Key areas:
 
 ## Reporting Issues
 
-Use [GitHub Issues](https://github.com/kubeminionagents/kubemininions/issues) to report bugs or request features. Include:
+Use [GitHub Issues](https://github.com/kubesynthai/kubesynth/issues) to report bugs or request features. Include:
 
 - Steps to reproduce
 - Expected vs. actual behavior

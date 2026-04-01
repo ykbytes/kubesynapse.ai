@@ -46,7 +46,7 @@ def configure_git_credentials() -> None:
 
     # Set safe defaults
     _run(["git", "config", "--global", "user.name", "AI Agent"])
-    _run(["git", "config", "--global", "user.email", "agent@kubemininions.local"])
+    _run(["git", "config", "--global", "user.email", "agent@kubesynth.local"])
 
     if GIT_AUTH_METHOD == "token":
         if not GIT_TOKEN:

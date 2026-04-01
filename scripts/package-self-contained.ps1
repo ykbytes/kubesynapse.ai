@@ -19,7 +19,7 @@ $images = @(
     @{ Name = "ai-codex-runtime"; Context = "codex-runtime" },
     @{ Name = "ai-opencode-runtime"; Context = "opencode-runtime" },
     @{ Name = "ai-api-gateway"; Context = "api-gateway" },
-    @{ Name = "ai-agent-sandbox-web-ui"; Context = "web-ui" },
+    @{ Name = "kubesynth-web-ui"; Context = "web-ui" },
     @{ Name = "mcp-code-exec"; Context = "mcp-sidecars"; Dockerfile = "mcp-sidecars/code-exec/Dockerfile" },
     @{ Name = "mcp-web-search"; Context = "mcp-sidecars"; Dockerfile = "mcp-sidecars/web-search/Dockerfile" },
     @{ Name = "mcp-documents"; Context = "mcp-sidecars"; Dockerfile = "mcp-sidecars/documents/Dockerfile" },
@@ -61,7 +61,7 @@ try {
         }
     }
 
-    $valuesPath = Join-Path $outputPath "ai-agent-sandbox-bundle-values.yaml"
+    $valuesPath = Join-Path $outputPath "kubesynth-bundle-values.yaml"
     @"
 # Fill in real secrets and ingress settings before deploying this bundle.
 operator:
@@ -100,7 +100,7 @@ apiGateway:
 
 webUi:
   image:
-    repository: "$Registry/ai-agent-sandbox-web-ui"
+    repository: "$Registry/kubesynth-web-ui"
     tag: "$Version"
 
 mcpHub:
@@ -147,12 +147,12 @@ platformSecrets:
     apiGatewaySharedToken: "replace-me-with-a-long-random-bearer-token"
 "@ | Set-Content -Path $valuesPath -Encoding UTF8
 
-    & helm lint (Join-Path $repoRoot "charts/ai-agent-sandbox") -f $valuesPath
+    & helm lint (Join-Path $repoRoot "charts/kubesynth") -f $valuesPath
     if ($LASTEXITCODE -ne 0) {
         throw "helm lint failed"
     }
 
-    & helm package (Join-Path $repoRoot "charts/ai-agent-sandbox") -d $outputPath
+    & helm package (Join-Path $repoRoot "charts/kubesynth") -d $outputPath
     if ($LASTEXITCODE -ne 0) {
         throw "helm package failed"
     }

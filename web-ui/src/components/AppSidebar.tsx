@@ -176,7 +176,7 @@ export function AppSidebar({
     <aside className="flex w-64 flex-col border-r border-border bg-sidebar">
       {/* View tabs */}
       <div className="border-b border-border px-2 py-2">
-        <div className="grid grid-cols-4 gap-1">
+        <div className="grid grid-cols-2 gap-1 md:grid-cols-4">
           {visibleViews.map((view) => {
             const { icon: Icon, label } = VIEW_META[view];
             const count = counts[view];
@@ -319,6 +319,7 @@ const SidebarItem = memo(function SidebarItem({
     >
       <div className="flex w-full items-start gap-2.5">
         <span className={cn("mt-1.5 h-2 w-2 shrink-0 rounded-full", statusDotClasses(item.status))} aria-hidden="true" />
+        <span className="sr-only">Status: {item.status}</span>
         <div className="min-w-0 flex-1">
           <p className="truncate font-medium text-sidebar-foreground">{item.title}</p>
           <p className="truncate text-xs text-muted-foreground">{item.subtitle}</p>

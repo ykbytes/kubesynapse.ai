@@ -2,8 +2,8 @@ import "@fontsource/space-grotesk/400.css";
 import "@fontsource/space-grotesk/500.css";
 import "@fontsource/space-grotesk/700.css";
 
-import { PanelLeftClose, PanelLeftOpen, PanelRightOpen } from "lucide-react";
-import { lazy, Suspense, useCallback, useEffect, useState } from "react";
+import { PanelLeftClose, PanelLeftOpen, PanelRightOpen, AlertTriangle, RefreshCw } from "lucide-react";
+import React, { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import { Toaster } from "sonner";
 
 const LandingPage = lazy(() => import("./components/LandingPage").then((m) => ({ default: m.LandingPage })));
@@ -118,21 +118,62 @@ function ContentShell({ children }: { children: React.ReactNode }) {
   return <Suspense fallback={<LoadingPanel />}>{children}</Suspense>;
 }
 
+// ── ErrorBoundary — catches lazy-load and render failures ──
+
+interface ErrorBoundaryState { hasError: boolean; error: Error | null }
+
+class ErrorBoundary extends React.Component<{ children: React.ReactNode }, ErrorBoundaryState> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+    return { hasError: true, error };
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="flex h-screen flex-col items-center justify-center gap-4 bg-background p-8 text-center">
+          <div className="rounded-2xl bg-red-500/10 p-4 border border-red-500/20">
+            <AlertTriangle className="h-8 w-8 text-red-400" />
+          </div>
+          <h2 className="text-lg font-semibold text-foreground">Something went wrong</h2>
+          <p className="max-w-md text-sm text-muted-foreground">
+            {this.state.error?.message || "An unexpected error occurred while loading the application."}
+          </p>
+          <button
+            onClick={() => window.location.reload()}
+            className="inline-flex items-center gap-2 rounded-xl border border-border/60 bg-background px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-accent"
+          >
+            <RefreshCw className="h-4 w-4" />
+            Reload page
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 // ── App — Provider shell ──
 
 export default function App() {
   return (
-    <ThemeProvider>
-      <ConnectionProvider>
-        <WorkspaceProvider>
-          <ChatProvider>
-            <NotificationShell>
-              <AppLayout />
-            </NotificationShell>
-          </ChatProvider>
-        </WorkspaceProvider>
-      </ConnectionProvider>
-    </ThemeProvider>
+    <ErrorBoundary>
+      <ThemeProvider>
+        <ConnectionProvider>
+          <WorkspaceProvider>
+            <ChatProvider>
+              <NotificationShell>
+                <AppLayout />
+              </NotificationShell>
+            </ChatProvider>
+          </WorkspaceProvider>
+        </ConnectionProvider>
+      </ThemeProvider>
+    </ErrorBoundary>
   );
 }
 

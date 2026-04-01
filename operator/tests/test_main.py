@@ -205,7 +205,7 @@ class OperatorManifestTests(unittest.TestCase):
         self.assertEqual(env[_config.A2A_MAX_TIMEOUT_SECONDS_ENV], "45.0")
         self.assertEqual(
             env["API_GATEWAY_INTERNAL_URL"],
-            "http://ai-agent-sandbox-api-gateway.default.svc.cluster.local:8080",
+            "http://kubesynth-api-gateway.default.svc.cluster.local:8080",
         )
         self.assertEqual(
             env_refs["API_GATEWAY_SHARED_TOKEN"]["secretKeyRef"]["key"],
@@ -365,7 +365,7 @@ class OperatorManifestTests(unittest.TestCase):
     def test_opencode_manifest_mounts_trust_bundle_when_configured(self) -> None:
         trust_bundle_path = "/etc/ssl/certs/custom-ca-bundle.pem"
         with (
-            patch.object(_builders_manifests, "TRUST_BUNDLE_CONFIGMAP_NAME", "ai-agent-sandbox-trust-bundle"),
+            patch.object(_builders_manifests, "TRUST_BUNDLE_CONFIGMAP_NAME", "kubesynth-trust-bundle"),
             patch.object(_builders_manifests, "TRUST_BUNDLE_MOUNT_PATH", trust_bundle_path),
             patch.object(
                 _builders_manifests,
@@ -420,7 +420,7 @@ class OperatorManifestTests(unittest.TestCase):
         self.assertIn(
             {
                 "name": "trust-bundle",
-                "configMap": {"name": "ai-agent-sandbox-trust-bundle"},
+                "configMap": {"name": "kubesynth-trust-bundle"},
             },
             volumes,
         )
@@ -699,8 +699,8 @@ class OperatorManifestTests(unittest.TestCase):
         )
         egress_rule = egress["spec"]["egress"][0]["to"][0]
 
-        self.assertEqual(ingress["metadata"]["labels"]["sandbox.enterprise.ai/policy-type"], "a2a-ingress")
-        self.assertEqual(egress["metadata"]["labels"]["sandbox.enterprise.ai/policy-type"], "a2a-egress")
+        self.assertEqual(ingress["metadata"]["labels"]["kubesynth.ai/policy-type"], "a2a-ingress")
+        self.assertEqual(egress["metadata"]["labels"]["kubesynth.ai/policy-type"], "a2a-egress")
         self.assertTrue(any(peer["podSelector"]["matchLabels"].get("app") == "api-gateway" for peer in ingress_sources))
         self.assertTrue(
             any(peer["podSelector"]["matchLabels"].get("app") == "operator-worker" for peer in ingress_sources)
@@ -749,7 +749,7 @@ class OperatorManifestTests(unittest.TestCase):
                 rule.get("to", [{}])[0]
                 .get("podSelector", {})
                 .get("matchLabels", {})
-                .get("mcp.sandbox.enterprise.ai/type")
+                .get("mcp.kubesynth.ai/type")
                 == "github"
                 for rule in rules
             )
@@ -810,12 +810,12 @@ class OperatorManifestTests(unittest.TestCase):
 
         for manifest in manifests:
             labels = manifest["metadata"]["labels"]
-            self.assertEqual(labels["sandbox.enterprise.ai/managed-by"], "operator")
-            self.assertEqual(labels["sandbox.enterprise.ai/agent-name"], "workspace-assistant")
+            self.assertEqual(labels["kubesynth.ai/managed-by"], "operator")
+            self.assertEqual(labels["kubesynth.ai/agent-name"], "workspace-assistant")
 
         template_labels = statefulset_manifest["spec"]["template"]["metadata"]["labels"]
-        self.assertEqual(template_labels["sandbox.enterprise.ai/managed-by"], "operator")
-        self.assertEqual(template_labels["sandbox.enterprise.ai/agent-name"], "workspace-assistant")
+        self.assertEqual(template_labels["kubesynth.ai/managed-by"], "operator")
+        self.assertEqual(template_labels["kubesynth.ai/agent-name"], "workspace-assistant")
 
 
 class StatefulSetReconcileTests(unittest.TestCase):
@@ -1053,7 +1053,7 @@ class OrphanPruningTests(unittest.TestCase):
             namespace="default",
         )
         expected_selector = (
-            "sandbox.enterprise.ai/managed-by=operator,sandbox.enterprise.ai/agent-name=workspace-assistant"
+            "kubesynth.ai/managed-by=operator,kubesynth.ai/agent-name=workspace-assistant"
         )
         self.assertEqual(
             networking_api.list_namespaced_network_policy.call_args.kwargs["label_selector"],
@@ -1171,17 +1171,17 @@ class OptionalCrdWatchingTests(unittest.TestCase):
         }
 
         with patch.object(_services_k8s.kubernetes.client, "ApiextensionsV1Api", return_value=api, create=True):
-            exists = _services_k8s.crd_exists("sandbox.enterprise.ai", "v1alpha1", "agentevals")
+            exists = _services_k8s.crd_exists("kubesynth.ai", "v1alpha1", "agentevals")
 
         self.assertTrue(exists)
-        api.read_custom_resource_definition.assert_called_once_with(name="agentevals.sandbox.enterprise.ai")
+        api.read_custom_resource_definition.assert_called_once_with(name="agentevals.kubesynth.ai")
 
     def test_crd_exists_returns_false_for_missing_crd(self) -> None:
         api = Mock()
         api.read_custom_resource_definition.side_effect = _api_exception(404)
 
         with patch.object(_services_k8s.kubernetes.client, "ApiextensionsV1Api", return_value=api, create=True):
-            exists = _services_k8s.crd_exists("sandbox.enterprise.ai", "v1alpha1", "agentevals")
+            exists = _services_k8s.crd_exists("kubesynth.ai", "v1alpha1", "agentevals")
 
         self.assertFalse(exists)
 

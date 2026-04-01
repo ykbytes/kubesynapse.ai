@@ -1,4 +1,4 @@
-# Pre-Deployment Checklist - Kubemininions AI Agent Sandbox
+# Pre-Deployment Checklist - KubeSynth AI Agent Sandbox
 # Use this checklist when deploying to production
 # Generated: March 19, 2026
 
@@ -112,20 +112,20 @@ deployment_checklist:
 
     helm_deployment:
       - name: "Validate Helm chart syntax"
-        command: "helm lint ./charts/ai-agent-sandbox"
+        command: "helm lint ./charts/kubesynth"
         expected: "1 chart(s) linted, 0 chart(s) failed"
         critical: true
         completed: false
       
       - name: "Dry-run deployment"
-        command: "helm install ai-agent-sandbox ./charts/ai-agent-sandbox -f deploy/values.dockerhub.local.yaml -n ai-platform --dry-run --debug"
+        command: "helm install kubesynth ./charts/kubesynth -f deploy/values.dockerhub.local.yaml -n ai-platform --dry-run --debug"
         expected: "No errors in output"
         critical: true
         completed: false
       
       - name: "Deploy Helm chart"
-        command: "helm install ai-agent-sandbox ./charts/ai-agent-sandbox -f deploy/values.dockerhub.local.yaml -n ai-platform"
-        expected: "Release \"ai-agent-sandbox\" has been installed"
+        command: "helm install kubesynth ./charts/kubesynth -f deploy/values.dockerhub.local.yaml -n ai-platform"
+        expected: "Release \"kubesynth\" has been installed"
         critical: true
         completed: false
 
@@ -148,7 +148,7 @@ deployment_checklist:
         completed: false
       
       - name: "Monitor pod startup (60 seconds)"
-        command: "kubectl logs -n ai-platform -l app=ai-agent-sandbox --all-containers=true --tail=20 -f"
+        command: "kubectl logs -n ai-platform -l app=kubesynth --all-containers=true --tail=20 -f"
         expected: "No errors in logs"
         critical: true
         completed: false
@@ -173,7 +173,7 @@ deployment_checklist:
         completed: false
       
       - name: "Port-forward to gateway (background)"
-        command: "kubectl port-forward -n ai-platform svc/ai-agent-sandbox-api-gateway 8080:8080 &"
+        command: "kubectl port-forward -n ai-platform svc/kubesynth-api-gateway 8080:8080 &"
         expected: "Port forwarding established"
         critical: true
         completed: false
@@ -198,14 +198,14 @@ deployment_checklist:
         completed: false
       
       - name: "Check operator logs"
-        command: "kubectl logs -n ai-platform deployment/ai-agent-sandbox-operator --tail=50"
+        command: "kubectl logs -n ai-platform deployment/kubesynth-operator --tail=50"
         expected: "No error messages, reconciliation logs visible"
         critical: true
         completed: false
 
     web_ui_validation:
       - name: "Port-forward to web-ui (background)"
-        command: "kubectl port-forward -n ai-platform svc/ai-agent-sandbox-web-ui 3000:80 &"
+        command: "kubectl port-forward -n ai-platform svc/kubesynth-web-ui 3000:80 &"
         expected: "Port forwarding established"
         critical: false
         completed: false
@@ -429,23 +429,23 @@ deployment_checklist:
 
 quick_reference:
   deployment:
-    - "helm install ai-agent-sandbox ./charts/ai-agent-sandbox -f deploy/values.dockerhub.local.yaml -n ai-platform"
-    - "helm upgrade ai-agent-sandbox ./charts/ai-agent-sandbox -f deploy/values.dockerhub.local.yaml -n ai-platform"
-    - "helm rollback ai-agent-sandbox -n ai-platform"
+    - "helm install kubesynth ./charts/kubesynth -f deploy/values.dockerhub.local.yaml -n ai-platform"
+    - "helm upgrade kubesynth ./charts/kubesynth -f deploy/values.dockerhub.local.yaml -n ai-platform"
+    - "helm rollback kubesynth -n ai-platform"
   
   monitoring:
     - "kubectl get all -n ai-platform"
-    - "kubectl logs -n ai-platform deployment/ai-agent-sandbox-operator -f"
+    - "kubectl logs -n ai-platform deployment/kubesynth-operator -f"
     - "kubectl describe pod <pod-name> -n ai-platform"
     - "kubectl events -n ai-platform --sort-by='.lastTimestamp'"
   
   debugging:
     - "kubectl exec -it <pod-name> -n ai-platform -- /bin/sh"
-    - "kubectl port-forward svc/ai-agent-sandbox-api-gateway -n ai-platform 8080:8080"
-    - "kubectl port-forward svc/ai-agent-sandbox-web-ui -n ai-platform 3000:80"
+    - "kubectl port-forward svc/kubesynth-api-gateway -n ai-platform 8080:8080"
+    - "kubectl port-forward svc/kubesynth-web-ui -n ai-platform 3000:80"
   
   cleanup:
-    - "helm uninstall ai-agent-sandbox -n ai-platform"
+    - "helm uninstall kubesynth -n ai-platform"
     - "kubectl delete namespace ai-platform"
 
 ---

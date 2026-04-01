@@ -1,8 +1,8 @@
 # Production Deployment Guide
 
-## Kubemininions AI Agent Sandbox - Enterprise Deployment
+## KubeSynth AI Agent Sandbox - Enterprise Deployment
 
-This guide ensures the kubemininions platform is ready for production deployment on any Kubernetes cluster.
+This guide ensures the kubesynth platform is ready for production deployment on any Kubernetes cluster.
 
 ### Pre-Deployment Verification Checklist
 
@@ -90,12 +90,12 @@ kubectl create secret docker-registry dockerhub-regcred \
 #### 4. Deploy Helm Chart
 ```bash
 # Deploy with production values
-helm install ai-agent-sandbox ./charts/ai-agent-sandbox \
+helm install kubesynth ./charts/kubesynth \
   -f deploy/values.dockerhub.local.yaml \
   -n ai-platform
 
 # Or update existing deployment
-helm upgrade ai-agent-sandbox ./charts/ai-agent-sandbox \
+helm upgrade kubesynth ./charts/kubesynth \
   -f deploy/values.dockerhub.local.yaml \
   -n ai-platform
 ```
@@ -106,10 +106,10 @@ helm upgrade ai-agent-sandbox ./charts/ai-agent-sandbox \
 kubectl get pods -n ai-platform
 
 # Check operator reconciliation
-kubectl logs -n ai-platform deployment/ai-agent-sandbox-operator
+kubectl logs -n ai-platform deployment/kubesynth-operator
 
 # Verify gateway is healthy
-kubectl get svc -n ai-platform ai-agent-sandbox-api-gateway
+kubectl get svc -n ai-platform kubesynth-api-gateway
 
 # Test API
 curl -X GET http://<gateway-service>/api/health
@@ -153,7 +153,7 @@ curl -X GET http://<gateway-ip:port>/api/agents?namespace=default \
 
 **Increase replicas:**
 ```yaml
-# charts/ai-agent-sandbox/values.yaml
+# charts/kubesynth/values.yaml
 operator:
   replicaCount: 3  # High availability
 
@@ -209,7 +209,7 @@ kubectl exec -n ai-platform <api-gateway-pod> -- \
   sh -c 'cp /data/auth.db /backups/auth.db'
 
 # Check operator logs
-kubectl logs -n ai-platform deployment/ai-agent-sandbox-operator -f
+kubectl logs -n ai-platform deployment/kubesynth-operator -f
 
 # Monitor resource usage
 kubectl top nodes
@@ -219,11 +219,11 @@ kubectl top pods -n ai-platform
 **Updates and rollbacks:**
 ```bash
 # Update image version in values file
-helm upgrade ai-agent-sandbox ./charts/ai-agent-sandbox \
+helm upgrade kubesynth ./charts/kubesynth \
   -f deploy/values.dockerhub.local.yaml
 
 # Rollback if needed
-helm rollback ai-agent-sandbox -n ai-platform
+helm rollback kubesynth -n ai-platform
 ```
 
 ---

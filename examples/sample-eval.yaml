@@ -1,4 +1,4 @@
-apiVersion: sandbox.enterprise.ai/v1alpha1
+apiVersion: kubesynth.ai/v1alpha1
 kind: AgentEval
 metadata:
   name: research-assistant-eval

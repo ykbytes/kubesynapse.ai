@@ -1,4 +1,4 @@
-apiVersion: sandbox.enterprise.ai/v1alpha1
+apiVersion: kubesynth.ai/v1alpha1
 kind: AgentWorkflow
 metadata:
   name: ai300-exam-generation
