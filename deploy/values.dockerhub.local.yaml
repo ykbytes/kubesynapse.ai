@@ -7,37 +7,37 @@ trustBundle:
 
 agentRuntime:
   image:
-    repository: docker.io/yakdhane/kubesynth-agent-runtime
+    repository: docker.io/yakdhane/ai-agent-runtime
     tag: deploy-20260401-212102
     pullPolicy: Always
 
 operator:
   replicaCount: 1
   image:
-    repository: docker.io/yakdhane/kubesynth-operator
+    repository: docker.io/yakdhane/ai-operator
     tag: deploy-20260401-212102
     pullPolicy: Always
   workerImage:
-    repository: docker.io/yakdhane/kubesynth-operator
+    repository: docker.io/yakdhane/ai-operator
     tag: deploy-20260401-212102
     pullPolicy: Always
 
 gooseRuntime:
   image:
-    repository: docker.io/yakdhane/kubesynth-goose-runtime
+    repository: docker.io/yakdhane/ai-goose-runtime
     tag: deploy-20260401-212102
     pullPolicy: Always
 
 codexRuntime:
   image:
-    repository: docker.io/yakdhane/kubesynth-codex-runtime
+    repository: docker.io/yakdhane/ai-codex-runtime
     tag: deploy-20260401-212102
     pullPolicy: Always
 
 opencodeRuntime:
   image:
-    repository: docker.io/yakdhane/kubesynth-opencode-runtime
-    tag: deploy-20260401-212102
+    repository: docker.io/yakdhane/ai-agent-sandbox-codex-runtime
+    tag: deploy-20260401-212102-opencode
     pullPolicy: Always
   env:
     OPENCODE_SESSION_INIT_ON_CREATE: "false"
@@ -49,7 +49,7 @@ opencodeRuntime:
 
 apiGateway:
   image:
-    repository: docker.io/yakdhane/kubesynth-api-gateway
+    repository: docker.io/yakdhane/ai-api-gateway
     tag: deploy-20260401-212102
     pullPolicy: Always
   auth:
@@ -60,7 +60,7 @@ apiGateway:
 webUi:
   enabled: true
   image:
-    repository: docker.io/yakdhane/kubesynth-web-ui
+    repository: docker.io/yakdhane/ai-web-ui
     tag: deploy-20260401-212102
     pullPolicy: Always
 
