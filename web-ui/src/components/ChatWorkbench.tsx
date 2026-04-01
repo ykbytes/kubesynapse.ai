@@ -22,7 +22,6 @@ import {
   Pin,
   PanelRightClose,
   PanelRightOpen,
-  Plus,
   RotateCcw,
   Search,
   Square,
@@ -33,28 +32,21 @@ import {
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { CopyButton } from "./CopyButton";
 import { EmptyState } from "./EmptyState";
 import { StatusBadge } from "./StatusBadge";
 import { ActivityTimeline } from "./ActivityTimeline";
-import type { AgentDiscoveryPeer, InvocationSummary, RuntimeKind, SpecialistSubagentDraft, UiActivity, UiMessage, UiToolCall } from "../types";
+import { MessageToolbar } from "./MessageToolbar";
+import { ExecutionTimeline } from "./ExecutionTimeline";
+import { ChatSettingsDrawer } from "./ChatSettingsDrawer";
+import type { AgentDiscoveryPeer, InvocationSummary, RuntimeKind, SpecialistSubagentDraft, UiActivity, UiMessage } from "../types";
 import type { UiTodo } from "../types";
 import { OperationLog } from "./OperationLog";
 import { FileExplorer } from "./FileExplorer";
-import type { AgentFileListResult, ChatSessionSummary, MemoryRecordInfo } from "@/lib/api";
+import type { AgentArtifactPreview, AgentFileListResult, ChatSessionSummary, MemoryRecordInfo } from "@/lib/api";
 import { fetchSessionDiff } from "@/lib/api";
 import { usePlanDock } from "@/hooks/usePlanDock";
 import { useChat } from "@/contexts/ChatContext";
@@ -108,6 +100,7 @@ interface ChatWorkbenchProps {
   error: string;
   onDownloadArtifact: (path: string, filename?: string) => Promise<void>;
   onListArtifacts: () => Promise<AgentFileListResult>;
+  onPreviewArtifact: (path: string) => Promise<AgentArtifactPreview>;
   onPromptChange: (value: string) => void;
   onToggleStreamMode: (value: boolean) => void;
   onToggleRequireApproval: (value: boolean) => void;
@@ -132,57 +125,22 @@ interface ChatWorkbenchProps {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Collapsible section                                               */
-/* ------------------------------------------------------------------ */
-function Section({
-  title,
-  badge,
-  defaultOpen = false,
-  children,
-}: {
-  title: string;
-  badge?: string;
-  defaultOpen?: boolean;
-  children: React.ReactNode;
-}) {
-  const [open, setOpen] = useState(defaultOpen);
-  const contentRef = useRef<HTMLDivElement>(null);
-  return (
-    <div className="rounded-md border border-border">
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        aria-expanded={open}
-        className="flex w-full items-center gap-2 px-3 py-2 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
-      >
-        <span className="transition-transform duration-200" style={{ transform: open ? "rotate(90deg)" : "rotate(0deg)" }}>
-          <ChevronRight className="h-3.5 w-3.5" />
-        </span>
-        {title}
-        {badge && (
-          <Badge variant="outline" className="ml-auto text-[10px]">
-            {badge}
-          </Badge>
-        )}
-      </button>
-      <div
-        ref={contentRef}
-        className="grid transition-[grid-template-rows] duration-200 ease-out"
-        style={{ gridTemplateRows: open ? "1fr" : "0fr" }}
-      >
-        <div className="overflow-hidden">
-          <div className="border-t border-border px-3 py-3 space-y-3">{children}</div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/* ------------------------------------------------------------------ */
 /*  Message bubble — ChatGPT-style layout                             */
 /* ------------------------------------------------------------------ */
 
-const MessageBubble = memo(function MessageBubble({ message, index }: { message: UiMessage; index: number }) {
+const MessageBubble = memo(function MessageBubble({
+  message,
+  index,
+  onEditPrompt,
+  onRegeneratePrompt,
+  promptForRegenerate,
+}: {
+  message: UiMessage;
+  index: number;
+  onEditPrompt?: (text: string) => void;
+  onRegeneratePrompt?: (text?: string) => Promise<void>;
+  promptForRegenerate?: string | null;
+}) {
   const [thinkingOpen, setThinkingOpen] = useState(false);
   const isStreaming = message.status === "streaming";
   const isUser = message.role === "user";
@@ -192,13 +150,20 @@ const MessageBubble = memo(function MessageBubble({ message, index }: { message:
   if (isUser) {
     return (
       <div
-        className="flex justify-end animate-slide-up"
+        className="group flex justify-end animate-slide-up"
         style={{ animationDelay: `${Math.min(index * 30, 300)}ms`, animationFillMode: "backwards" }}
       >
-        <div className="max-w-[75%] rounded-2xl rounded-br-md bg-primary px-4 py-2.5 text-primary-foreground shadow-sm">
-          <div className="whitespace-pre-wrap break-words text-sm leading-relaxed">
-            {message.content || ""}
+        <div className="max-w-[75%]">
+          <div className="rounded-2xl rounded-br-md bg-primary px-4 py-2.5 text-primary-foreground shadow-sm">
+            <div className="whitespace-pre-wrap break-words text-sm leading-relaxed">
+              {message.content || ""}
+            </div>
           </div>
+          {message.content && (
+            <div className="mt-1 flex justify-end">
+              <MessageToolbar content={message.content} isUser onEdit={onEditPrompt ? () => onEditPrompt(message.content) : undefined} />
+            </div>
+          )}
         </div>
       </div>
     );
@@ -264,28 +229,36 @@ const MessageBubble = memo(function MessageBubble({ message, index }: { message:
           <MarkdownRenderer content={message.content || ""} />
         )}
 
-        {/* Tool calls & patches */}
+        {/* Execution timeline — replaces flat tool cards */}
         {(message.toolCalls?.length || message.patches?.length) ? (
-          <div className="mt-2.5 space-y-1.5">
-            {message.toolCalls?.map((tc, idx) => (
-              <InlineToolCallCard key={`${tc.tool}-${idx}`} tc={tc} />
-            ))}
-            {message.patches?.map((p, idx) => (
-              <PatchBadge key={`patch-${idx}`} files={p.files} />
-            ))}
+          <div className="mt-2.5">
+            <ExecutionTimeline
+              toolCalls={message.toolCalls ?? []}
+              patches={message.patches}
+            />
           </div>
         ) : null}
 
-        {/* Copy button — appears on hover */}
-        {message.content && !isStreaming && (
-          <div className="mt-1 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
-            <CopyButton value={message.content} className="h-6 w-6" />
+        {/* Message toolbar — appears on hover */}
+        {message.content && (
+          <div className="mt-1">
+            <MessageToolbar
+              content={message.content}
+              isStreaming={isStreaming}
+              onRegenerate={promptForRegenerate ? () => { void onRegeneratePrompt?.(promptForRegenerate); } : undefined}
+            />
           </div>
         )}
       </div>
     </div>
   );
 });
+
+type StarterPrompt = {
+  label: string;
+  description: string;
+  prompt: string;
+};
 
 type DownloadableArtifact = {
   path: string;
@@ -496,74 +469,6 @@ function collectDownloadableArtifacts(summary: InvocationSummary | null, message
 
   return Array.from(paths.values());
 }
-
-/* ------------------------------------------------------------------ */
-/*  Inline tool call card (inside assistant messages)                 */
-/* ------------------------------------------------------------------ */
-const InlineToolCallCard = memo(function InlineToolCallCard({ tc }: { tc: UiToolCall }) {
-  const [expanded, setExpanded] = useState(false);
-  const isFailed = tc.status === "error";
-  const isRunning = tc.status === "running";
-  const StatusIcon = isFailed ? XCircle : isRunning ? LoaderCircle : CheckCircle2;
-  const statusLabel = isFailed ? "failed" : isRunning ? "running" : "done";
-  const statusColor = isFailed ? "text-red-500" : isRunning ? "text-amber-500" : "text-emerald-500";
-
-  const inputSummary = useMemo(() => {
-    if (!tc.input) return "";
-    if (typeof tc.input === "string") return tc.input.slice(0, 200);
-    if (typeof tc.input === "object") {
-      const obj = tc.input as Record<string, unknown>;
-      const filePath = obj.filePath || obj.file_path || obj.path || obj.command || obj.url;
-      if (typeof filePath === "string") return filePath;
-      return JSON.stringify(tc.input).slice(0, 200);
-    }
-    return String(tc.input).slice(0, 200);
-  }, [tc.input]);
-
-  return (
-    <div className="rounded-lg border border-border/50 bg-muted/30 text-xs">
-      <button
-        type="button"
-        onClick={() => setExpanded((o) => !o)}
-        className="flex w-full items-center gap-2 px-2.5 py-1.5 text-muted-foreground hover:text-foreground transition-colors"
-      >
-        <Cog className={`h-3 w-3 shrink-0 ${isRunning ? "animate-[spin_2s_linear_infinite]" : ""}`} />
-        <span className="font-medium text-foreground truncate">{tc.tool || "tool"}</span>
-        {inputSummary && <span className="truncate text-muted-foreground/70 max-w-[16rem]">{inputSummary}</span>}
-        <StatusIcon className={`h-3 w-3 ml-auto shrink-0 ${statusColor}`} />
-        <span className={`text-[10px] ${statusColor}`}>{statusLabel}</span>
-        <ChevronRight className={`h-3 w-3 shrink-0 transition-transform ${expanded ? "rotate-90" : ""}`} />
-      </button>
-      {expanded && tc.output && (
-        <div className="border-t border-border/40 px-2.5 py-2">
-          <div className="relative group">
-            <pre className="whitespace-pre-wrap break-words font-mono text-[10px] leading-relaxed text-muted-foreground max-h-40 overflow-auto">
-              {tc.output}
-            </pre>
-            <div className="absolute top-0.5 right-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-              <CopyButton value={tc.output} />
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-});
-
-/* ------------------------------------------------------------------ */
-/*  Patch badge (inside assistant messages)                            */
-/* ------------------------------------------------------------------ */
-const PatchBadge = memo(function PatchBadge({ files }: { files: string[] }) {
-  return (
-    <div className="flex items-center gap-1.5 rounded-lg border border-border/50 bg-muted/30 px-2.5 py-1.5 text-xs text-muted-foreground">
-      <FileDiff className="h-3 w-3 shrink-0 text-blue-500" />
-      <span className="font-medium text-foreground">Files changed:</span>
-      {files.map((f) => (
-        <span key={f} className="font-mono text-[10px] text-blue-500 truncate max-w-[12rem]">{f.split("/").pop() || f}</span>
-      ))}
-    </div>
-  );
-});
 
 /* ------------------------------------------------------------------ */
 /*  Tool call bubble                                                  */
@@ -893,6 +798,7 @@ export function ChatWorkbench({
   error,
   onDownloadArtifact,
   onListArtifacts,
+  onPreviewArtifact,
   onPromptChange,
   onToggleStreamMode,
   onToggleRequireApproval,
@@ -918,6 +824,7 @@ export function ChatWorkbench({
   const {
     pendingQuestion, questionResponding, handleQuestionReply, handleQuestionReject,
     followupSuggestions, followupSending, handleFollowupSend, handleFollowupEdit,
+    lastUserPrompt, handleReusePrompt, handleRegeneratePrompt,
   } = useChat();
   const { chatFocused, setChatFocused } = useWorkspace();
   const { token, namespace } = useConnection();
@@ -938,11 +845,7 @@ export function ChatWorkbench({
   const [editingMemoryTopic, setEditingMemoryTopic] = useState("");
   const [editingMemoryContent, setEditingMemoryContent] = useState("");
   const [downloadingPath, setDownloadingPath] = useState<string | null>(null);
-  const [diffOpen, setDiffOpen] = useState(false);
-  const [diffContent, setDiffContent] = useState<string | null>(null);
-  const [diffLoading, setDiffLoading] = useState(false);
-  const reachablePeers = useMemo(() => discoveryPeers.filter((peer) => peer.reachable), [discoveryPeers]);
-  const activePeerValue = a2aTargetAgent && a2aTargetNamespace ? `${a2aTargetNamespace}/${a2aTargetAgent}` : "";
+  const [fileExplorerView, setFileExplorerView] = useState<"all" | "changed">("all");
   const a2aMode = Boolean(a2aTargetAgent && a2aTargetNamespace);
   const specialistMode = specialistTeamConfigured;
   const detailCount = (summary ? 1 : 0) + (activity.length > 0 ? 1 : 0);
@@ -966,6 +869,78 @@ export function ChatWorkbench({
   const continuityHighlights = useMemo(() => buildContinuityHighlights(summary), [summary]);
   const visibleSessionMemoryRecords = sessionMemoryExpanded ? activeMemoryRecords : activeMemoryRecords.slice(0, 4);
   const visibleAgentMemoryRecords = agentMemoryExpanded ? filteredAgentMemoryRecords : filteredAgentMemoryRecords.slice(0, 8);
+  const starterPrompts = useMemo<StarterPrompt[]>(() => {
+    if (runtimeKind === "opencode") {
+      return [
+        {
+          label: "Ship a scoped change",
+          description: "Inspect the codebase, make a tight plan, and implement the highest-leverage fix safely.",
+          prompt: `Inspect the current ${agentName || "workspace"} codebase, propose a concise plan, then implement the highest-leverage improvement with minimal unrelated changes.`,
+        },
+        {
+          label: "Trace a regression",
+          description: "Walk the failure path end-to-end, isolate root cause, and patch it with validation.",
+          prompt: "Trace the latest regression end-to-end, identify the root cause, and patch it with the smallest safe change. Explain what broke and how you verified the fix.",
+        },
+        {
+          label: "Review operational risk",
+          description: "Prioritize bugs, missing guardrails, and test gaps like a production review.",
+          prompt: "Review this code like a production readiness pass. Prioritize the highest-risk bugs, behavioral regressions, and missing tests, then fix the top issue.",
+        },
+        {
+          label: "Summarize the session",
+          description: "Capture current context, changed files, and the next three best moves for this thread.",
+          prompt: "Summarize the current session state, important files, open risks, and the next three best moves to keep momentum.",
+        },
+      ];
+    }
+    if (runtimeKind === "goose") {
+      return [
+        {
+          label: "Plan the approach",
+          description: "Ask for a structured execution plan before taking action in the sandbox.",
+          prompt: "Review the current task, outline the safest execution plan, and identify any assumptions or blockers before making changes.",
+        },
+        {
+          label: "Inspect the workspace",
+          description: "Map the relevant files, dependencies, and runtime constraints before moving.",
+          prompt: "Inspect this workspace and summarize the important files, runtime dependencies, and constraints that matter for the next change.",
+        },
+        {
+          label: "Prepare a handoff",
+          description: "Create a concise state summary with next actions for another operator.",
+          prompt: "Create a concise handoff covering current state, important findings, and the next concrete actions to take.",
+        },
+        {
+          label: "Audit for drift",
+          description: "Compare intent versus current state and flag the highest-signal mismatches.",
+          prompt: "Audit the current workspace for drift, inconsistencies, or likely integration gaps and explain the highest-priority issues.",
+        },
+      ];
+    }
+    return [
+      {
+        label: "Map the architecture",
+        description: "Summarize how the system fits together before asking for deeper changes.",
+        prompt: "Explain the current architecture, important services, and where the key integration points live in this project.",
+      },
+      {
+        label: "Plan the next move",
+        description: "Ask for a sequence of concrete actions with clear tradeoffs.",
+        prompt: "Given the current state, propose the next three highest-leverage actions and explain the tradeoffs for each.",
+      },
+      {
+        label: "Stress the design",
+        description: "Look for edge cases, operational risk, and quality gaps before shipping.",
+        prompt: "Review the current implementation for operational risks, edge cases, and UX gaps that could hurt production quality.",
+      },
+      {
+        label: "Create a concise brief",
+        description: "Turn the current objective into a scoped execution brief the agent can follow.",
+        prompt: "Convert the current goal into a concise execution brief with success criteria, constraints, and the smallest useful first step.",
+      },
+    ];
+  }, [agentName, runtimeKind]);
 
   // Resolve the Radix ScrollArea Viewport (the actual scrollable container)
   const scrollAreaRef = useRef<HTMLDivElement | null>(null);
@@ -992,30 +967,57 @@ export function ChatWorkbench({
     setDetailsOpen(false);
     setFilesOpen(false);
     setMemoryOpen(false);
+    setFileExplorerView("all");
     setDownloadingPath(null);
   }, [agentName]);
+
+  const focusComposer = useCallback(() => {
+    requestAnimationFrame(() => {
+      const textarea = textareaRef.current;
+      if (!textarea) return;
+      textarea.focus();
+      const nextPosition = textarea.value.length;
+      textarea.setSelectionRange(nextPosition, nextPosition);
+    });
+  }, []);
+
+  const handlePromptReuse = useCallback((text: string) => {
+    handleReusePrompt(text);
+    focusComposer();
+  }, [focusComposer, handleReusePrompt]);
+
+  const findPromptForRegenerate = useCallback((messageIndex: number): string | null => {
+    for (let index = messageIndex - 1; index >= 0; index -= 1) {
+      const candidate = messages[index];
+      if (candidate.role === "user" && candidate.content.trim()) {
+        return candidate.content;
+      }
+    }
+    return lastUserPrompt;
+  }, [lastUserPrompt, messages]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "s") return;
+      if (!messages.length || sessionSaving) return;
+      event.preventDefault();
+      onSaveSession();
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [messages.length, onSaveSession, sessionSaving]);
 
   const stableListArtifacts = useCallback(() => onListArtifacts(), [onListArtifacts]);
   const stableDownloadArtifact = useCallback(
     (path: string, filename?: string) => onDownloadArtifact(path, filename),
     [onDownloadArtifact],
   );
-
-  const handleDiffToggle = useCallback(async () => {
-    if (diffOpen) { setDiffOpen(false); return; }
-    const tid = summary?.threadId;
-    if (!tid || !agentName || !token) return;
-    setDiffOpen(true);
-    setDiffLoading(true);
-    try {
-      const diff = await fetchSessionDiff(token, namespace, agentName, tid);
-      setDiffContent(diff || null);
-    } catch {
-      setDiffContent(null);
-    } finally {
-      setDiffLoading(false);
-    }
-  }, [diffOpen, summary, agentName, token, namespace]);
+  const stablePreviewArtifact = useCallback((path: string) => onPreviewArtifact(path), [onPreviewArtifact]);
+  const stableLoadSessionDiff = useCallback(() => {
+    if (!token || !summary?.threadId) return Promise.resolve("");
+    return fetchSessionDiff(token, namespace, agentName, summary.threadId);
+  }, [agentName, namespace, summary?.threadId, token]);
 
   async function handleArtifactDownload(path: string, filename?: string) {
     try {
@@ -1075,7 +1077,16 @@ export function ChatWorkbench({
               variant="ghost"
               size="sm"
               className="h-8 gap-1 rounded-full px-2 text-xs"
-              onClick={() => { setFilesOpen((o) => !o); if (!filesOpen) { setDetailsOpen(false); if (planOpen) planDock.toggle(); setMemoryOpen(false); } }}
+              onClick={() => {
+                const nextOpen = !(filesOpen && fileExplorerView === "all");
+                setFileExplorerView("all");
+                setFilesOpen(nextOpen);
+                if (nextOpen) {
+                  setDetailsOpen(false);
+                  if (planOpen) planDock.toggle();
+                  setMemoryOpen(false);
+                }
+              }}
             >
               <FolderOpen className="h-3.5 w-3.5" />
               Files
@@ -1087,7 +1098,16 @@ export function ChatWorkbench({
               variant="ghost"
               size="sm"
               className="h-8 gap-1 rounded-full px-2 text-xs"
-              onClick={() => void handleDiffToggle()}
+              onClick={() => {
+                const nextOpen = !(filesOpen && fileExplorerView === "changed");
+                setFileExplorerView("changed");
+                setFilesOpen(nextOpen);
+                if (nextOpen) {
+                  setDetailsOpen(false);
+                  if (planOpen) planDock.toggle();
+                  setMemoryOpen(false);
+                }
+              }}
             >
               <FileDiff className="h-3.5 w-3.5" />
               Changes
@@ -1152,18 +1172,52 @@ export function ChatWorkbench({
         >
           <div className="mx-auto flex w-full max-w-4xl flex-col gap-5 px-4 py-6" aria-label="Conversation history" aria-live="polite" aria-atomic="false">
             {messages.length === 0 && (
-              <EmptyState
-                icon={MessageSquare}
-                title="No messages yet"
-                description={emptyMessage || "Send your first message to start a conversation. Try asking the agent to analyze code, fix a bug, or build a new feature."}
-              />
+              <div className="space-y-4">
+                <EmptyState
+                  icon={MessageSquare}
+                  title="No messages yet"
+                  description={emptyMessage || "Send your first message to start a conversation. Try asking the agent to analyze code, fix a bug, or build a new feature."}
+                />
+                <div className="rounded-2xl border border-border/70 bg-card/70 p-3 shadow-sm backdrop-blur-sm">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">Starter prompts</div>
+                      <div className="mt-1 text-xs text-muted-foreground">Prime the composer with a sharper brief instead of starting from a blank box.</div>
+                    </div>
+                    <Badge variant="outline" className="text-[10px]">Click to draft</Badge>
+                  </div>
+                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                    {starterPrompts.map((item, index) => (
+                      <button
+                        key={item.label}
+                        type="button"
+                        onClick={() => handlePromptReuse(item.prompt)}
+                        className="group rounded-2xl border border-border/70 bg-background/70 px-3 py-3 text-left transition-all duration-200 hover:-translate-y-px hover:border-primary/30 hover:bg-primary/5"
+                        style={{ animationDelay: `${index * 45}ms`, animationFillMode: "backwards" }}
+                      >
+                        <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+                          <Zap className="h-3.5 w-3.5 text-primary transition-transform duration-200 group-hover:scale-110" />
+                          {item.label}
+                        </div>
+                        <div className="mt-2 text-[11px] leading-relaxed text-muted-foreground">{item.description}</div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
             )}
 
             {downloadableArtifacts.length > 0 && (
               <div className="rounded-2xl border border-border/70 bg-background/80 p-3 shadow-sm backdrop-blur-sm">
-                <div className="mb-2 flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
-                  <FileText className="h-3.5 w-3.5" />
-                  Generated files
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
+                    <FileText className="h-3.5 w-3.5" />
+                    Generated files
+                  </div>
+                  <Badge variant="outline" className="text-[10px]">{downloadableArtifacts.length} ready</Badge>
+                </div>
+                <div className="mb-3 text-xs text-muted-foreground">
+                  Files detected from structured artifacts, tool results, and assistant responses in this run.
                 </div>
                 <div className="flex flex-wrap gap-2">
                   {downloadableArtifacts.map((artifact) => {
@@ -1193,7 +1247,14 @@ export function ChatWorkbench({
               message.role === "tool" ? (
                 <ToolBubble key={message.id} message={message} />
               ) : (
-                <MessageBubble key={message.id} message={message} index={i} />
+                <MessageBubble
+                  key={message.id}
+                  message={message}
+                  index={i}
+                  onEditPrompt={handlePromptReuse}
+                  onRegeneratePrompt={handleRegeneratePrompt}
+                  promptForRegenerate={message.role === "assistant" ? findPromptForRegenerate(i) : null}
+                />
               ),
             )}
             <div ref={messagesEndRef} />
@@ -1217,45 +1278,6 @@ export function ChatWorkbench({
               ) : (
                 <div className="flex h-full items-center justify-center p-6 text-center text-sm text-muted-foreground">
                   OpenCode will populate this panel after it creates a todo plan for the current task.
-                </div>
-              )}
-            </ScrollArea>
-          </aside>
-        )}
-
-        {diffOpen && (
-          <aside className="absolute inset-y-3 right-3 z-10 flex w-[min(32rem,calc(100%-1.5rem))] flex-col overflow-hidden rounded-2xl border border-border/80 bg-background/96 shadow-2xl backdrop-blur-md">
-            <div className="flex items-center justify-between border-b border-border/60 px-3 py-2.5">
-              <div>
-                <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">Session</div>
-                <div className="text-sm font-semibold">File changes</div>
-              </div>
-              <Button type="button" variant="ghost" size="icon" className="h-7 w-7" onClick={() => setDiffOpen(false)}>
-                <PanelRightClose className="h-3.5 w-3.5" />
-              </Button>
-            </div>
-            <ScrollArea className="min-h-0 flex-1">
-              {diffLoading ? (
-                <div className="flex items-center justify-center p-6">
-                  <LoaderCircle className="h-5 w-5 animate-spin text-muted-foreground" />
-                </div>
-              ) : diffContent ? (
-                <div className="p-3">
-                  <pre className="whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-muted-foreground">
-                    {diffContent.split("\n").map((line, idx) => {
-                      let lineClass = "";
-                      if (line.startsWith("+++") || line.startsWith("---")) lineClass = "text-muted-foreground font-semibold";
-                      else if (line.startsWith("+")) lineClass = "text-emerald-500 bg-emerald-500/10";
-                      else if (line.startsWith("-")) lineClass = "text-red-500 bg-red-500/10";
-                      else if (line.startsWith("@@")) lineClass = "text-blue-500";
-                      else if (line.startsWith("diff ")) lineClass = "text-foreground font-semibold mt-2 block";
-                      return <div key={idx} className={lineClass}>{line || "\u00A0"}</div>;
-                    })}
-                  </pre>
-                </div>
-              ) : (
-                <div className="flex items-center justify-center p-6 text-center text-sm text-muted-foreground">
-                  No file changes detected in this session.
                 </div>
               )}
             </ScrollArea>
@@ -1370,7 +1392,7 @@ export function ChatWorkbench({
         )}
 
         {filesOpen && agentName && (
-          <aside className="absolute inset-y-3 right-3 z-10 flex w-[min(24rem,calc(100%-1.5rem))] flex-col overflow-hidden rounded-2xl border border-border/80 bg-background/96 shadow-2xl backdrop-blur-md">
+          <aside className="absolute inset-y-3 right-3 z-10 flex w-[min(76rem,calc(100%-1.5rem))] flex-col overflow-hidden rounded-2xl border border-border/80 bg-background/96 shadow-2xl backdrop-blur-md">
             <div className="flex items-center justify-between border-b border-border/60 px-3 py-2.5">
               <div>
                 <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">Workspace</div>
@@ -1384,6 +1406,10 @@ export function ChatWorkbench({
               agentName={agentName}
               onLoad={stableListArtifacts}
               onDownload={stableDownloadArtifact}
+              onPreview={stablePreviewArtifact}
+              onLoadDiff={runtimeKind === "opencode" && summary?.threadId ? stableLoadSessionDiff : undefined}
+              preferredView={fileExplorerView}
+              liveUpdatesEnabled={isSending || phase !== "idle"}
             />
           </aside>
         )}
@@ -1532,29 +1558,55 @@ export function ChatWorkbench({
 
       {/* Composer */}
       <div className="border-t border-border/40 bg-background/95 px-4 py-3 backdrop-blur-md space-y-2">
-        {!chatFocused && activeSessionId && (
+        {!chatFocused && (
           <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-border/70 bg-muted/15 px-3 py-2 text-[11px] text-muted-foreground">
-            <Brain className="h-3.5 w-3.5 text-primary" />
-            <span className="font-medium text-foreground/85">Session continuity</span>
-            <span className="font-mono text-[10px]">{activeSessionId}</span>
-            <Badge variant={sessionSaving ? "default" : sessionDirty ? "secondary" : "outline"} className="text-[10px]">
-              {sessionSaving ? "Saving" : sessionDirty ? "Unsaved changes" : "Saved"}
+            <Badge variant="outline" className="text-[10px] uppercase">{runtimeKind}</Badge>
+            <Badge variant={tokenReady ? "outline" : "secondary"} className="text-[10px]">
+              {tokenReady ? "Gateway ready" : "Token required"}
             </Badge>
-            {lastSessionSaveAt && <span>Last save {formatRelativeTime(lastSessionSaveAt)}</span>}
-            {continuityHighlights.map((item) => (
-              <Badge key={item} variant="outline" className="text-[10px] text-primary">
-                {item}
-              </Badge>
-            ))}
-            <Button type="button" variant="ghost" size="sm" className="ml-auto h-7 px-2 text-[10px]" onClick={onSaveSession}>
-              Save session
-            </Button>
+            <Badge variant={streamMode ? "default" : "secondary"} className="text-[10px]">
+              {streamMode ? "Streaming" : "Single-shot"}
+            </Badge>
+            <Badge variant={requireApproval ? "secondary" : "outline"} className="text-[10px]">
+              {requireApproval ? "Approval on" : "Approval off"}
+            </Badge>
+            <Badge variant="outline" className="text-[10px] text-primary">
+              {specialistMode ? "Specialist team" : a2aMode ? "A2A route" : "Direct run"}
+            </Badge>
+            {activeSessionId ? (
+              <>
+                <Brain className="ml-1 h-3.5 w-3.5 text-primary" />
+                <span className="font-mono text-[10px] text-foreground/85">{activeSessionId.slice(0, 8)}</span>
+                <Badge variant={sessionSaving ? "default" : sessionDirty ? "secondary" : "outline"} className="text-[10px]">
+                  {sessionSaving ? "Saving" : sessionDirty ? "Unsaved" : "Saved"}
+                </Badge>
+                {lastSessionSaveAt && <span>Saved {formatRelativeTime(lastSessionSaveAt)}</span>}
+                {continuityHighlights.slice(0, 2).map((item) => (
+                  <Badge key={item} variant="outline" className="text-[10px] text-primary">
+                    {item}
+                  </Badge>
+                ))}
+              </>
+            ) : (
+              <span>A saved session will appear after the first completed run.</span>
+            )}
+            <div className="ml-auto flex flex-wrap items-center gap-2">
+              {lastUserPrompt && (
+                <Button type="button" variant="ghost" size="sm" className="h-7 gap-1 px-2 text-[10px]" onClick={() => handlePromptReuse(lastUserPrompt)}>
+                  <Pencil className="h-3 w-3" />
+                  Reuse last prompt
+                </Button>
+              )}
+              <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-[10px]" onClick={onSaveSession} disabled={!messages.length || sessionSaving || !tokenReady}>
+                Save session
+              </Button>
+            </div>
           </div>
         )}
         {!chatFocused && (
           <>
-        {/* Toggle chips */}
-        <div className="flex flex-wrap gap-2">
+        {/* Compact controls row: toggles + settings drawer */}
+        <div className="flex flex-wrap items-center gap-2">
           <label className="flex items-center gap-1.5 cursor-pointer text-xs">
             <input
               type="checkbox"
@@ -1577,392 +1629,42 @@ export function ChatWorkbench({
               : <span className="opacity-60">Approval (LangGraph / OpenCode)</span>
             }
           </label>
+          <div className="ml-auto">
+            <ChatSettingsDrawer
+              runtimeKind={runtimeKind}
+              a2aTargetAgent={a2aTargetAgent}
+              a2aTargetNamespace={a2aTargetNamespace}
+              a2aTimeoutSeconds={a2aTimeoutSeconds}
+              onA2ATargetAgentChange={onA2ATargetAgentChange}
+              onA2ATargetNamespaceChange={onA2ATargetNamespaceChange}
+              onA2ATimeoutSecondsChange={onA2ATimeoutSecondsChange}
+              specialistSubagents={specialistSubagents}
+              specialistTeamConfigured={specialistTeamConfigured}
+              subagentStrategy={subagentStrategy}
+              onSubagentStrategyChange={onSubagentStrategyChange}
+              onAddSpecialistSubagent={onAddSpecialistSubagent}
+              onUpdateSpecialistSubagent={onUpdateSpecialistSubagent}
+              onRemoveSpecialistSubagent={onRemoveSpecialistSubagent}
+              onClearSpecialistTeam={onClearSpecialistTeam}
+              discoveryPeers={discoveryPeers}
+              discoveryLoading={discoveryLoading}
+              discoveryError={discoveryError}
+              gooseMaxTurns={gooseMaxTurns}
+              gooseWorkingDirectory={gooseWorkingDirectory}
+              gooseSystemPrompt={gooseSystemPrompt}
+              onGooseMaxTurnsChange={onGooseMaxTurnsChange}
+              onGooseWorkingDirectoryChange={onGooseWorkingDirectoryChange}
+              opencodeOutputFormat={opencodeOutputFormat}
+              opencodeAutonomous={opencodeAutonomous}
+              opencodeMaxTurns={opencodeMaxTurns}
+              opencodeWorkingDirectory={opencodeWorkingDirectory}
+              onOpenCodeOutputFormatChange={onOpenCodeOutputFormatChange}
+              onOpenCodeAutonomousChange={onOpenCodeAutonomousChange}
+              onOpenCodeMaxTurnsChange={onOpenCodeMaxTurnsChange}
+              onOpenCodeWorkingDirectoryChange={onOpenCodeWorkingDirectoryChange}
+            />
+          </div>
         </div>
-
-        {/* Collapsible control sections */}
-        {runtimeKind === "langgraph" && (
-          <>
-            <Section
-              title="Explicit A2A route"
-              badge={`${reachablePeers.length} reachable`}
-            >
-              {specialistMode && (
-                <p className="text-xs text-amber-400">
-                  Clear the specialist team to use single-hop A2A routing.
-                </p>
-              )}
-              <div className="space-y-1.5">
-                <Label className="text-xs">Discoverable peer</Label>
-                <Select
-                  disabled={specialistMode}
-                  value={
-                    reachablePeers.some(
-                      (peer) =>
-                        `${peer.namespace}/${peer.name}` === activePeerValue,
-                    )
-                      ? activePeerValue
-                      : "__direct__"
-                  }
-                  onValueChange={(nextValue) => {
-                    if (!nextValue || nextValue === "__direct__") {
-                      onA2ATargetNamespaceChange("");
-                      onA2ATargetAgentChange("");
-                      return;
-                    }
-                    const idx = nextValue.indexOf("/");
-                    onA2ATargetNamespaceChange(nextValue.slice(0, idx));
-                    onA2ATargetAgentChange(nextValue.slice(idx + 1));
-                  }}
-                >
-                  <SelectTrigger className="h-8 text-xs">
-                    <SelectValue placeholder="Direct reply from selected agent" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__direct__">Direct reply from selected agent</SelectItem>
-                    {reachablePeers.map((peer) => {
-                      const value = `${peer.namespace}/${peer.name}`;
-                      return (
-                        <SelectItem key={value} value={value}>
-                          {value} · {peer.runtime_kind ?? "runtime"} · {peer.model ?? "model"}
-                        </SelectItem>
-                      );
-                    })}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="grid gap-2 sm:grid-cols-3">
-                <div className="space-y-1">
-                  <Label className="text-[11px]">Target namespace</Label>
-                  <Input
-                    className="h-7 text-xs"
-                    disabled={specialistMode}
-                    placeholder="team-b"
-                    value={a2aTargetNamespace}
-                    onChange={(e) => onA2ATargetNamespaceChange(e.target.value)}
-                  />
-                </div>
-                <div className="space-y-1">
-                  <Label className="text-[11px]">Target agent</Label>
-                  <Input
-                    className="h-7 text-xs"
-                    disabled={specialistMode}
-                    placeholder="reviewer"
-                    value={a2aTargetAgent}
-                    onChange={(e) => onA2ATargetAgentChange(e.target.value)}
-                  />
-                </div>
-                <div className="space-y-1">
-                  <Label className="text-[11px]">Timeout (s)</Label>
-                  <Input
-                    className="h-7 text-xs"
-                    disabled={specialistMode}
-                    type="number"
-                    min="1"
-                    placeholder="default"
-                    value={a2aTimeoutSeconds}
-                    onChange={(e) => onA2ATimeoutSecondsChange(e.target.value)}
-                  />
-                </div>
-              </div>
-              {discoveryLoading && (
-                <p className="text-[11px] text-muted-foreground">Loading discoverable peers...</p>
-              )}
-              {discoveryError && (
-                <p className="text-xs text-destructive">{discoveryError}</p>
-              )}
-            </Section>
-
-            <Section
-              title="Specialist team"
-              badge={`${specialistSubagents.length} member${specialistSubagents.length === 1 ? "" : "s"}`}
-            >
-              {a2aMode && (
-                <p className="text-xs text-amber-400">
-                  Clear the explicit A2A route to coordinate a specialist team.
-                </p>
-              )}
-              <div className="flex items-center gap-2">
-                <div className="space-y-1 flex-1">
-                  <Label className="text-[11px]">Strategy</Label>
-                  <Select
-                    disabled={a2aMode}
-                    value={subagentStrategy}
-                    onValueChange={(v) =>
-                      onSubagentStrategyChange(v as "sequential" | "parallel")
-                    }
-                  >
-                    <SelectTrigger className="h-7 text-xs">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="sequential">Sequential</SelectItem>
-                      <SelectItem value="parallel">Parallel</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="flex gap-1.5 self-end">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-7 text-xs"
-                    disabled={a2aMode}
-                    onClick={onAddSpecialistSubagent}
-                  >
-                    <Plus className="mr-1 h-3 w-3" />
-                    Add
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-7 text-xs"
-                    disabled={a2aMode || specialistSubagents.length === 0}
-                    onClick={onClearSpecialistTeam}
-                  >
-                    Clear
-                  </Button>
-                </div>
-              </div>
-              {specialistSubagents.length === 0 ? (
-                <p className="text-[11px] text-muted-foreground">
-                  Add specialists to coordinate planner, researcher, coder, or domain agents.
-                </p>
-              ) : (
-                <div className="space-y-2">
-                  {specialistSubagents.map((subagent, index) => (
-                    <Card key={subagent.id} className="shadow-none">
-                      <CardContent className="p-3 space-y-2">
-                        <div className="flex items-center justify-between">
-                          <span className="text-xs font-medium">
-                            Specialist {index + 1}
-                          </span>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-7 w-7 hover:bg-destructive/20 hover:text-destructive"
-                            disabled={a2aMode}
-                            onClick={() => onRemoveSpecialistSubagent(subagent.id)}
-                            aria-label="Remove specialist"
-                          >
-                            <X className="h-3.5 w-3.5" />
-                          </Button>
-                        </div>
-                        <div className="grid gap-2 sm:grid-cols-2">
-                          <div className="space-y-1">
-                            <Label className="text-[11px]">Namespace</Label>
-                            <Input
-                              className="h-7 text-xs"
-                              disabled={a2aMode}
-                              placeholder="team-b"
-                              value={subagent.namespace}
-                              onChange={(e) =>
-                                onUpdateSpecialistSubagent(subagent.id, { namespace: e.target.value })
-                              }
-                            />
-                          </div>
-                          <div className="space-y-1">
-                            <Label className="text-[11px]">Agent</Label>
-                            <Input
-                              className="h-7 text-xs"
-                              disabled={a2aMode}
-                              placeholder="analysis-agent"
-                              value={subagent.name}
-                              onChange={(e) =>
-                                onUpdateSpecialistSubagent(subagent.id, { name: e.target.value })
-                              }
-                            />
-                          </div>
-                          <div className="space-y-1">
-                            <Label className="text-[11px]">Role</Label>
-                            <Input
-                              className="h-7 text-xs"
-                              disabled={a2aMode}
-                              placeholder="incident analyst"
-                              value={subagent.role}
-                              onChange={(e) =>
-                                onUpdateSpecialistSubagent(subagent.id, { role: e.target.value })
-                              }
-                            />
-                          </div>
-                          <div className="space-y-1">
-                            <Label className="text-[11px]">Timeout (s)</Label>
-                            <Input
-                              className="h-7 text-xs"
-                              disabled={a2aMode}
-                              type="number"
-                              min="1"
-                              placeholder="default"
-                              value={subagent.timeoutSeconds}
-                              onChange={(e) =>
-                                onUpdateSpecialistSubagent(subagent.id, {
-                                  timeoutSeconds: e.target.value,
-                                })
-                              }
-                            />
-                          </div>
-                        </div>
-                        <div className="space-y-1">
-                          <Label className="text-[11px]">Delegated task</Label>
-                          <Textarea
-                            rows={2}
-                            className="text-xs"
-                            disabled={a2aMode}
-                            placeholder="Inspect the failing workflow and explain the root cause."
-                            value={subagent.task}
-                            onChange={(e) =>
-                              onUpdateSpecialistSubagent(subagent.id, { task: e.target.value })
-                            }
-                          />
-                        </div>
-                        <div className="grid gap-2 sm:grid-cols-2">
-                          <div className="space-y-1">
-                            <Label className="text-[11px]">Shared files</Label>
-                            <Textarea
-                              rows={2}
-                              className="text-xs font-mono"
-                              disabled={a2aMode}
-                              placeholder={"src/app.py | main logic\nnotes/incident.md | notes"}
-                              value={subagent.inputFilesText}
-                              onChange={(e) =>
-                                onUpdateSpecialistSubagent(subagent.id, {
-                                  inputFilesText: e.target.value,
-                                })
-                              }
-                            />
-                          </div>
-                          <div className="space-y-1">
-                            <Label className="text-[11px]">Result artifact path</Label>
-                            <Input
-                              className="h-7 text-xs font-mono"
-                              disabled={a2aMode}
-                              placeholder="artifacts/analysis.md"
-                              value={subagent.resultFilePath}
-                              onChange={(e) =>
-                                onUpdateSpecialistSubagent(subagent.id, {
-                                  resultFilePath: e.target.value,
-                                })
-                              }
-                            />
-                          </div>
-                        </div>
-                        <label className="flex items-center gap-1.5 cursor-pointer text-xs">
-                          <input
-                            type="checkbox"
-                            checked={subagent.shareSandboxSession}
-                            disabled={a2aMode}
-                            onChange={(e) =>
-                              onUpdateSpecialistSubagent(subagent.id, {
-                                shareSandboxSession: e.target.checked,
-                              })
-                            }
-                            className="h-3.5 w-3.5 rounded border-input"
-                          />
-                          Share sandbox session
-                        </label>
-                      </CardContent>
-                    </Card>
-                  ))}
-                </div>
-              )}
-            </Section>
-          </>
-        )}
-
-        {runtimeKind === "goose" && (
-          <Section title="Goose run controls" badge="safe subset">
-            <div className="grid gap-2 sm:grid-cols-2">
-              <div className="space-y-1">
-                <Label className="text-[11px]">Max turns</Label>
-                <Input
-                  className="h-7 text-xs"
-                  type="number"
-                  min="1"
-                  placeholder="runtime default"
-                  value={gooseMaxTurns}
-                  onChange={(e) => onGooseMaxTurnsChange(e.target.value)}
-                />
-              </div>
-              <div className="space-y-1">
-                <Label className="text-[11px]">Working directory</Label>
-                <Input
-                  className="h-7 text-xs font-mono"
-                  placeholder="workspace/subdir"
-                  value={gooseWorkingDirectory}
-                  onChange={(e) => onGooseWorkingDirectoryChange(e.target.value)}
-                />
-              </div>
-            </div>
-            <div className="space-y-1">
-              <Label className="text-[11px]">Agent system prompt (read-only)</Label>
-              <Textarea
-                rows={3}
-                readOnly
-                className="text-xs opacity-70"
-                value={gooseSystemPrompt}
-              />
-            </div>
-            <p className="text-[11px] text-amber-400">
-              Goose system overrides are locked. Edit the agent definition to change this prompt.
-            </p>
-          </Section>
-        )}
-
-        {runtimeKind === "opencode" && (
-          <Section title="OpenCode run controls" badge="autonomous">
-            <div className="grid gap-2 sm:grid-cols-2">
-              <div className="space-y-1">
-                <Label className="text-[11px]">Output format</Label>
-                <Select value={opencodeOutputFormat} onValueChange={onOpenCodeOutputFormatChange}>
-                  <SelectTrigger className="h-7 text-xs">
-                    <SelectValue placeholder="text (default)" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="text">text</SelectItem>
-                    <SelectItem value="json">json</SelectItem>
-                    <SelectItem value="stream-json">stream-json</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-1">
-                <Label className="text-[11px]">Max turns</Label>
-                <Input
-                  className="h-7 text-xs"
-                  type="number"
-                  min="1"
-                  placeholder="runtime default"
-                  value={opencodeMaxTurns}
-                  onChange={(e) => onOpenCodeMaxTurnsChange(e.target.value)}
-                />
-              </div>
-            </div>
-            <div className="grid gap-2 sm:grid-cols-2">
-              <div className="space-y-1">
-                <Label className="text-[11px]">Working directory</Label>
-                <Input
-                  className="h-7 text-xs font-mono"
-                  placeholder="workspace/subdir"
-                  value={opencodeWorkingDirectory}
-                  onChange={(e) => onOpenCodeWorkingDirectoryChange(e.target.value)}
-                />
-              </div>
-              <div className="flex items-center gap-2 pt-4">
-                <label className="flex items-center gap-1.5 cursor-pointer text-xs">
-                  <input
-                    type="checkbox"
-                    checked={opencodeAutonomous}
-                    onChange={(e) => onOpenCodeAutonomousChange(e.target.checked)}
-                    className="h-3.5 w-3.5 rounded border-input"
-                  />
-                  Autonomous mode
-                </label>
-              </div>
-            </div>
-            <p className="text-[11px] text-amber-400">
-              Autonomous mode enables multi-turn execution with context-overflow recovery and automatic agent selection.
-            </p>
-          </Section>
-        )}
-
-        <Separator />
           </>
         )}
 
@@ -2001,6 +1703,13 @@ export function ChatWorkbench({
                 el.style.height = Math.min(el.scrollHeight, 200) + "px";
               }}
               onKeyDown={(e) => {
+                if (e.key === "ArrowUp" && !e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey && !prompt.trim()) {
+                  if (lastUserPrompt) {
+                    e.preventDefault();
+                    handlePromptReuse(lastUserPrompt);
+                  }
+                  return;
+                }
                 if (e.key === "Enter" && !e.shiftKey && canSubmit && tokenReady && !isSending) {
                   e.preventDefault();
                   onSubmit();
@@ -2016,28 +1725,41 @@ export function ChatWorkbench({
               className="resize-none border-0 bg-transparent pr-12 pl-4 py-3 min-h-[2.75rem] max-h-[200px] overflow-y-auto focus-visible:ring-0 focus-visible:ring-offset-0 placeholder:text-muted-foreground/50"
               aria-label="Prompt"
             />
-            <div className="absolute right-2 bottom-2">
-              {isSending ? (
-                <Button
-                  variant="destructive"
-                  size="icon"
-                  onClick={onCancel}
-                  aria-label="Stop request"
-                  className="h-8 w-8 rounded-full transition-transform duration-150 active:scale-95 shadow-sm"
-                >
-                  <Square className="h-4 w-4" />
-                </Button>
-              ) : (
-                <Button
-                  size="icon"
-                  onClick={onSubmit}
-                  disabled={!agentName || !canSubmit || !tokenReady}
-                  aria-label="Send message (Enter)"
-                  className="h-8 w-8 rounded-full transition-transform duration-150 active:scale-95 shadow-sm"
-                >
-                  <ArrowUp className="h-4 w-4" />
-                </Button>
-              )}
+            {/* Bottom bar inside composer: runtime chip + send */}
+            <div className="flex items-center justify-between px-2 pb-2">
+              <div className="flex items-center gap-1.5">
+                {agentName && (
+                  <Badge variant="outline" className="px-1.5 py-0 text-[10px] text-muted-foreground border-border/50">
+                    {runtimeKind}
+                  </Badge>
+                )}
+                <span className="text-[10px] text-muted-foreground/50">
+                  Enter send · Shift+Enter newline{lastUserPrompt ? " · ArrowUp reuse last prompt" : ""}
+                </span>
+              </div>
+              <div>
+                {isSending ? (
+                  <Button
+                    variant="destructive"
+                    size="icon"
+                    onClick={onCancel}
+                    aria-label="Stop request"
+                    className="h-8 w-8 rounded-full transition-transform duration-150 active:scale-95 shadow-sm"
+                  >
+                    <Square className="h-4 w-4" />
+                  </Button>
+                ) : (
+                  <Button
+                    size="icon"
+                    onClick={onSubmit}
+                    disabled={!agentName || !canSubmit || !tokenReady}
+                    aria-label="Send message (Enter)"
+                    className="h-8 w-8 rounded-full transition-transform duration-150 active:scale-95 shadow-sm"
+                  >
+                    <ArrowUp className="h-4 w-4" />
+                  </Button>
+                )}
+              </div>
             </div>
           </div>
         </div>
@@ -2050,8 +1772,14 @@ export function ChatWorkbench({
               variant="ghost"
               size="sm"
               className="h-6 px-2 text-[11px] text-destructive hover:text-destructive"
-              onClick={() => { onSubmit(); }}
-              disabled={!canSubmit || !tokenReady || isSending}
+              onClick={() => {
+                if (prompt.trim()) {
+                  onSubmit();
+                  return;
+                }
+                void handleRegeneratePrompt();
+              }}
+              disabled={(!canSubmit && !lastUserPrompt) || !tokenReady || isSending}
             >
               <RotateCcw className="mr-1 h-3 w-3" />
               Retry
@@ -2069,6 +1797,9 @@ export function ChatWorkbench({
                   : a2aMode
                     ? "Request routes through the configured A2A target."
                     : "Authenticated requests via the API gateway."}
+            </p>
+            <p className="text-[10px] text-muted-foreground/70">
+              Ctrl/Cmd+S saves the session.
             </p>
           </div>
         )}

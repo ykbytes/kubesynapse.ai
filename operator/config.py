@@ -125,12 +125,12 @@ CODEX_RUNTIME_IMAGE: str = os.getenv("CODEX_RUNTIME_IMAGE", "ghcr.io/your-org/ai
 CODEX_RUNTIME_IMAGE_PULL_POLICY: str = get_string_env("CODEX_RUNTIME_IMAGE_PULL_POLICY", "IfNotPresent")
 CODEX_DEFAULT_PROVIDER: str = get_string_env("CODEX_DEFAULT_PROVIDER", "litellm")
 
-OPENCODE_RUNTIME_IMAGE: str = os.getenv("OPENCODE_RUNTIME_IMAGE", "yakdhane/ai-opencode-runtime:latest")
+OPENCODE_RUNTIME_IMAGE: str = os.getenv("OPENCODE_RUNTIME_IMAGE", "yakdhane/kubesynth-opencode-runtime:latest")
 OPENCODE_RUNTIME_IMAGE_PULL_POLICY: str = get_string_env("OPENCODE_RUNTIME_IMAGE_PULL_POLICY", "IfNotPresent")
 OPENCODE_DEFAULT_PROVIDER: str = get_string_env("OPENCODE_DEFAULT_PROVIDER", "litellm")
 
-RUNTIME_SERVICE_ACCOUNT: str = os.getenv("RUNTIME_SERVICE_ACCOUNT", "ai-agent-runtime")
-RUNTIME_CLUSTER_ROLE: str = os.getenv("RUNTIME_CLUSTER_ROLE", "ai-agent-runtime-role")
+RUNTIME_SERVICE_ACCOUNT: str = os.getenv("RUNTIME_SERVICE_ACCOUNT", "kubesynth-agent-runtime")
+RUNTIME_CLUSTER_ROLE: str = os.getenv("RUNTIME_CLUSTER_ROLE", "kubesynth-agent-runtime-role")
 
 # ---------------------------------------------------------------------------
 # Infrastructure services

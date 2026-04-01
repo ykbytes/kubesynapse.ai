@@ -8,36 +8,36 @@ trustBundle:
 agentRuntime:
   image:
     repository: docker.io/yakdhane/kubesynth-agent-runtime
-    tag: deploy-20260401-120408
+    tag: deploy-20260401-212102
     pullPolicy: Always
 
 operator:
   replicaCount: 1
   image:
     repository: docker.io/yakdhane/kubesynth-operator
-    tag: deploy-20260401-120408
+    tag: deploy-20260401-212102
     pullPolicy: Always
   workerImage:
     repository: docker.io/yakdhane/kubesynth-operator
-    tag: deploy-20260401-120408
+    tag: deploy-20260401-212102
     pullPolicy: Always
 
 gooseRuntime:
   image:
     repository: docker.io/yakdhane/kubesynth-goose-runtime
-    tag: deploy-20260401-120408
+    tag: deploy-20260401-212102
     pullPolicy: Always
 
 codexRuntime:
   image:
     repository: docker.io/yakdhane/kubesynth-codex-runtime
-    tag: deploy-20260401-120408
+    tag: deploy-20260401-212102
     pullPolicy: Always
 
 opencodeRuntime:
   image:
     repository: docker.io/yakdhane/kubesynth-opencode-runtime
-    tag: deploy-20260401-120408
+    tag: deploy-20260401-212102
     pullPolicy: Always
   env:
     OPENCODE_SESSION_INIT_ON_CREATE: "false"
@@ -50,7 +50,7 @@ opencodeRuntime:
 apiGateway:
   image:
     repository: docker.io/yakdhane/kubesynth-api-gateway
-    tag: deploy-20260401-120408
+    tag: deploy-20260401-212102
     pullPolicy: Always
   auth:
     mode: hybrid
@@ -61,7 +61,7 @@ webUi:
   enabled: true
   image:
     repository: docker.io/yakdhane/kubesynth-web-ui
-    tag: deploy-20260401-120408
+    tag: deploy-20260401-212102
     pullPolicy: Always
 
 platformSecrets:
@@ -81,7 +81,7 @@ mcpHub:
     bearerToken: "minikube-dev-mcp-token"
   servers:
     github:
-      image: docker.io/yakdhane/mcp-github-adapter:deploy-20260401-120408
+      image: docker.io/yakdhane/mcp-github-adapter:deploy-20260401-212102
       imagePullPolicy: Always
 
 skillsCatalog:
@@ -89,32 +89,32 @@ skillsCatalog:
 
 mcpToolSidecars:
   codeExec:
-    image: docker.io/yakdhane/mcp-code-exec:deploy-20260401-120408
+    image: docker.io/yakdhane/mcp-code-exec:deploy-20260401-212102
     port: 8090
   webSearch:
-    image: docker.io/yakdhane/mcp-web-search:deploy-20260401-120408
+    image: docker.io/yakdhane/mcp-web-search:deploy-20260401-212102
     port: 8091
   documents:
-    image: docker.io/yakdhane/mcp-documents:deploy-20260401-120408
+    image: docker.io/yakdhane/mcp-documents:deploy-20260401-212102
     port: 8092
   browser:
-    image: docker.io/yakdhane/mcp-browser:deploy-20260401-120408
+    image: docker.io/yakdhane/mcp-browser:deploy-20260401-212102
     port: 8093
   database:
-    image: docker.io/yakdhane/mcp-database:deploy-20260401-120408
+    image: docker.io/yakdhane/mcp-database:deploy-20260401-212102
     port: 8094
   git:
-    image: docker.io/yakdhane/mcp-git:deploy-20260401-120408
+    image: docker.io/yakdhane/mcp-git:deploy-20260401-212102
     port: 8095
   githubAdapter:
-    image: docker.io/yakdhane/mcp-github-adapter:deploy-20260401-120408
+    image: docker.io/yakdhane/mcp-github-adapter:deploy-20260401-212102
     port: 8096
   kubernetes:
-    image: docker.io/yakdhane/mcp-kubernetes:deploy-20260401-120408
+    image: docker.io/yakdhane/mcp-kubernetes:deploy-20260401-212102
     port: 8097
   messaging:
-    image: docker.io/yakdhane/mcp-messaging:deploy-20260401-120408
+    image: docker.io/yakdhane/mcp-messaging:deploy-20260401-212102
     port: 8098
   rag:
-    image: docker.io/yakdhane/mcp-rag:deploy-20260401-120408
+    image: docker.io/yakdhane/mcp-rag:deploy-20260401-212102
     port: 8099

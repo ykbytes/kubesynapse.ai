@@ -40,7 +40,7 @@ litellm:
 agentRuntime:
   image:
     repository: docker.io/yakdhane/kubesynth-agent-runtime
-    tag: deploy-20260401-120408
+    tag: deploy-20260401-212102
     pullPolicy: IfNotPresent
   env: {}
   allowedModels: []
@@ -112,7 +112,7 @@ agentRuntime:
 gooseRuntime:
   image:
     repository: docker.io/yakdhane/kubesynth-goose-runtime
-    tag: deploy-20260401-120408
+    tag: deploy-20260401-212102
     pullPolicy: IfNotPresent
   provider: litellm
   env: {}
@@ -141,7 +141,7 @@ gooseRuntime:
 codexRuntime:
   image:
     repository: docker.io/yakdhane/kubesynth-codex-runtime
-    tag: deploy-20260401-120408
+    tag: deploy-20260401-212102
     pullPolicy: IfNotPresent
   provider: litellm
   env: {}
@@ -160,7 +160,7 @@ codexRuntime:
 opencodeRuntime:
   image:
     repository: docker.io/yakdhane/kubesynth-opencode-runtime
-    tag: deploy-20260401-120408
+    tag: deploy-20260401-212102
     pullPolicy: IfNotPresent
   provider: litellm
   env: {}
@@ -189,11 +189,11 @@ operator:
   replicaCount: 2
   image:
     repository: docker.io/yakdhane/kubesynth-operator
-    tag: deploy-20260401-120408
+    tag: deploy-20260401-212102
     pullPolicy: IfNotPresent
   workerImage:
     repository: docker.io/yakdhane/kubesynth-operator
-    tag: deploy-20260401-120408
+    tag: deploy-20260401-212102
     pullPolicy: IfNotPresent
   resources:
     requests:
@@ -236,7 +236,7 @@ apiGateway:
   replicaCount: 1
   image:
     repository: docker.io/yakdhane/kubesynth-api-gateway
-    tag: deploy-20260401-120408
+    tag: deploy-20260401-212102
     pullPolicy: IfNotPresent
   ingressClassName: ""
   ingressHost: ""  # leave empty for a hostless ingress, or set e.g. "agents.mycompany.com"
@@ -314,7 +314,7 @@ webUi:
   replicaCount: 1
   image:
     repository: docker.io/yakdhane/kubesynth-web-ui
-    tag: deploy-20260401-120408
+    tag: deploy-20260401-212102
     pullPolicy: IfNotPresent
   service:
     type: ClusterIP
@@ -426,7 +426,7 @@ mcpHub:
     # GitHub MCP server over streamable HTTP.
     github:
       enabled: true
-      image: "docker.io/yakdhane/mcp-github-adapter:latest"
+      image: "docker.io/yakdhane/mcp-github-adapter:deploy-20260401-212102"
       imagePullPolicy: IfNotPresent
       port: 8000
       servicePort: 8000
@@ -505,41 +505,41 @@ skillsCatalog:
 mcpToolSidecars:
   codeExec:
     image: docker.io/yakdhane/mcp-code-exec
-    tag: latest
+    tag: deploy-20260401-212102
     port: 8090
   webSearch:
     image: docker.io/yakdhane/mcp-web-search
-    tag: latest
+    tag: deploy-20260401-212102
     port: 8091
   documents:
     image: docker.io/yakdhane/mcp-documents
-    tag: latest
+    tag: deploy-20260401-212102
     port: 8092
   browser:
     image: docker.io/yakdhane/mcp-browser
-    tag: latest
+    tag: deploy-20260401-212102
     port: 8093
   database:
     image: docker.io/yakdhane/mcp-database
-    tag: latest
+    tag: deploy-20260401-212102
     port: 8094
   git:
     image: docker.io/yakdhane/mcp-git
-    tag: latest
+    tag: deploy-20260401-212102
     port: 8095
   githubAdapter:
     image: docker.io/yakdhane/mcp-github-adapter
-    tag: latest
+    tag: deploy-20260401-212102
     port: 8096
   kubernetes:
     image: docker.io/yakdhane/mcp-kubernetes
-    tag: latest
+    tag: deploy-20260401-212102
     port: 8097
   messaging:
     image: docker.io/yakdhane/mcp-messaging
-    tag: latest
+    tag: deploy-20260401-212102
     port: 8098
   rag:
     image: docker.io/yakdhane/mcp-rag
-    tag: latest
+    tag: deploy-20260401-212102
     port: 8099

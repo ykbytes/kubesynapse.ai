@@ -19,7 +19,9 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
+import { Card, CardContent } from "@/components/ui/card";
 import {
+  AlertTriangle,
   Shield,
   Search,
   ChevronLeft,
@@ -30,9 +32,12 @@ import {
   Bot,
   Server,
   Link,
+  CheckCircle2,
+  ShieldCheck,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { EmptyState } from "./EmptyState";
 
 const PAGE_SIZE = 50;
 
@@ -121,6 +126,32 @@ export function AuditLogPanel() {
   }, [loadData]);
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const activeFilters = useMemo(
+    () => [
+      actorFilter ? { label: "Actor", value: actorFilter } : null,
+      actionFilter ? { label: "Action", value: actionFilter } : null,
+      resourceKindFilter ? { label: "Kind", value: resourceKindFilter } : null,
+      searchText ? { label: "Name", value: searchText } : null,
+    ].filter((item): item is { label: string; value: string } => Boolean(item)),
+    [actionFilter, actorFilter, resourceKindFilter, searchText],
+  );
+  const summary = useMemo(() => {
+    const riskyActions = new Set(["login_failed", "denied", "deleted", "purged", "cancelled"]);
+    const approvalActions = new Set(["approved", "denied"]);
+    return {
+      visible: items.length,
+      risky: items.filter((item) => riskyActions.has(item.action)).length,
+      approvals: items.filter((item) => approvalActions.has(item.action)).length,
+      uniqueActors: new Set(items.map((item) => item.actor || "system")).size,
+    };
+  }, [items]);
+  const resetFilters = useCallback(() => {
+    setActorFilter("");
+    setActionFilter("");
+    setResourceKindFilter("");
+    setSearchText("");
+    setPage(0);
+  }, []);
 
   const handlePurge = useCallback(async () => {
     if (!conn.token) return;
@@ -154,7 +185,42 @@ export function AuditLogPanel() {
       </div>
 
       {/* Filters */}
-      <div className="px-4 py-2 border-b flex items-end gap-3 flex-wrap shrink-0">
+      <div className="px-4 py-3 border-b shrink-0 space-y-3">
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <Card className="border-border/60 bg-card/70 shadow-none">
+            <CardContent className="py-3">
+              <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">Visible events</div>
+              <div className="mt-1 text-lg font-semibold text-foreground">{summary.visible}</div>
+              <p className="mt-1 text-xs text-muted-foreground">Current page results after filters and namespace scoping.</p>
+            </CardContent>
+          </Card>
+          <Card className="border-border/60 bg-card/70 shadow-none">
+            <CardContent className="py-3">
+              <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">Risk signals</div>
+              <div className="mt-1 flex items-center gap-2 text-lg font-semibold text-foreground">
+                {summary.risky}
+                {summary.risky > 0 ? <AlertTriangle className="h-4 w-4 text-amber-400" /> : <CheckCircle2 className="h-4 w-4 text-emerald-400" />}
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground">Denied, destructive, cancelled, or failed auth events in view.</p>
+            </CardContent>
+          </Card>
+          <Card className="border-border/60 bg-card/70 shadow-none">
+            <CardContent className="py-3">
+              <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">Approvals</div>
+              <div className="mt-1 text-lg font-semibold text-foreground">{summary.approvals}</div>
+              <p className="mt-1 text-xs text-muted-foreground">Decision events that explain how humans are gating sensitive actions.</p>
+            </CardContent>
+          </Card>
+          <Card className="border-border/60 bg-card/70 shadow-none">
+            <CardContent className="py-3">
+              <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">Actors</div>
+              <div className="mt-1 text-lg font-semibold text-foreground">{summary.uniqueActors}</div>
+              <p className="mt-1 text-xs text-muted-foreground">Distinct users, agents, or operator identities represented in this slice.</p>
+            </CardContent>
+          </Card>
+        </div>
+
+        <div className="flex items-end gap-3 flex-wrap">
         <div className="space-y-1">
           <Label className="text-[10px]">Actor</Label>
           <Input
@@ -204,6 +270,23 @@ export function AuditLogPanel() {
             />
           </div>
         </div>
+
+          {activeFilters.length > 0 && (
+            <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={resetFilters}>
+              Clear filters
+            </Button>
+          )}
+        </div>
+
+        {activeFilters.length > 0 && (
+          <div className="flex flex-wrap gap-2">
+            {activeFilters.map((filter) => (
+              <Badge key={`${filter.label}:${filter.value}`} variant="outline" className="text-[10px]">
+                {filter.label}: {filter.value}
+              </Badge>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Table */}
@@ -215,9 +298,13 @@ export function AuditLogPanel() {
             ))}
           </div>
         ) : items.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
-            <Shield className="h-8 w-8 mb-2 opacity-40" />
-            <p className="text-sm">No audit records found</p>
+          <div className="p-4">
+            <EmptyState
+              icon={activeFilters.length > 0 ? Search : ShieldCheck}
+              title={activeFilters.length > 0 ? "No events match the current filters" : "Audit history will appear here"}
+              description={activeFilters.length > 0 ? "Broaden the filters to review a wider slice of actor, resource, and approval activity." : "Once users, agents, and operator actions move through the platform, this panel becomes the source of truth for governance review."}
+              action={activeFilters.length > 0 ? { label: "Clear filters", onClick: resetFilters } : undefined}
+            />
           </div>
         ) : (
           <table className="w-full text-xs">

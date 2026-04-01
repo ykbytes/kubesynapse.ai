@@ -13,33 +13,13 @@ from typing import Any, Callable, Sequence
 
 import httpx
 
+from config import get_float_env, get_int_env
+
 
 logger = logging.getLogger("operator-utils")
 
 PLACEHOLDER_RE = re.compile(r"{{\s*([^{}]+?)\s*}}")
 K8S_NAME_RE = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
-
-
-def get_float_env(name: str, default: float, minimum: float = 0.0) -> float:
-    raw_value = os.getenv(name)
-    if raw_value is None:
-        return max(default, minimum)
-    try:
-        return max(float(raw_value.strip()), minimum)
-    except ValueError:
-        logger.warning("Invalid float value for %s=%r. Falling back to %s.", name, raw_value, default)
-        return max(default, minimum)
-
-
-def get_int_env(name: str, default: int, minimum: int = 0) -> int:
-    raw_value = os.getenv(name)
-    if raw_value is None:
-        return max(default, minimum)
-    try:
-        return max(int(raw_value.strip()), minimum)
-    except ValueError:
-        logger.warning("Invalid integer value for %s=%r. Falling back to %s.", name, raw_value, default)
-        return max(default, minimum)
 
 
 AGENT_RUNTIME_TIMEOUT_SECONDS = get_float_env("AGENT_RUNTIME_TIMEOUT_SECONDS", 360.0, minimum=1.0)
@@ -768,8 +748,6 @@ def invoke_agent_runtime(
             response=response,
         )
         if attempt < 2:
-            import time
-
             time.sleep(min(2**attempt, 4))
     raise last_exc  # type: ignore[misc]
 
@@ -886,9 +864,9 @@ def cancel_agent_session(
     Returns True if the cancel was acknowledged, False on any error.
     """
     try:
-        url = f"{runtime_url(agent_name, namespace)}/cancel?thread_id={thread_id}"
+        url = f"{runtime_url(agent_name, namespace)}/cancel"
         with httpx.Client(timeout=timeout_seconds) as client:
-            response = client.post(url)
+            response = client.post(url, params={"thread_id": thread_id})
         return response.status_code == 200
     except Exception:
         return False

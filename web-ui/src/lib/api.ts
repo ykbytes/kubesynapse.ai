@@ -956,6 +956,103 @@ function triggerBrowserDownload(blob: Blob, filename: string): void {
   window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
 }
 
+function buildArtifactDownloadUrl(namespace: string, agentName: string, artifactPath: string): string {
+  const url = new URL(buildUrl(`/api/agents/${encodeURIComponent(agentName)}/artifacts/download`, namespace), window.location.origin);
+  url.searchParams.set("path", artifactPath);
+  return API_BASE_URL ? url.toString() : `${url.pathname}${url.search}`;
+}
+
+const IMAGE_PREVIEW_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".bmp", ".ico"]);
+const MARKDOWN_PREVIEW_EXTENSIONS = new Set([".md", ".markdown", ".mdx"]);
+const TEXT_PREVIEW_EXTENSIONS = new Set([
+  ".txt",
+  ".log",
+  ".json",
+  ".yaml",
+  ".yml",
+  ".toml",
+  ".ini",
+  ".env",
+  ".xml",
+  ".html",
+  ".htm",
+  ".css",
+  ".scss",
+  ".js",
+  ".jsx",
+  ".ts",
+  ".tsx",
+  ".mjs",
+  ".cjs",
+  ".py",
+  ".rb",
+  ".go",
+  ".rs",
+  ".java",
+  ".kt",
+  ".swift",
+  ".php",
+  ".sql",
+  ".sh",
+  ".bash",
+  ".zsh",
+  ".ps1",
+  ".psm1",
+  ".dockerfile",
+  ".csv",
+]);
+
+function getArtifactExtension(artifactPath: string): string {
+  const fileName = artifactPath.split(/[\\/]/).pop()?.toLowerCase() ?? "";
+  if (fileName === "dockerfile") return ".dockerfile";
+  if (fileName.startsWith(".")) return fileName;
+  const extensionIndex = fileName.lastIndexOf(".");
+  return extensionIndex >= 0 ? fileName.slice(extensionIndex) : "";
+}
+
+export type AgentArtifactPreviewKind = "text" | "markdown" | "image" | "pdf" | "unsupported";
+
+export interface AgentArtifactPreview {
+  path: string;
+  name: string;
+  size: number;
+  contentType: string;
+  kind: AgentArtifactPreviewKind;
+  blob?: Blob;
+  text?: string;
+  message?: string;
+}
+
+function classifyArtifactPreviewKind(artifactPath: string, contentType: string): AgentArtifactPreviewKind {
+  const extension = getArtifactExtension(artifactPath);
+  const normalizedType = contentType.toLowerCase();
+
+  if (normalizedType.startsWith("image/") || IMAGE_PREVIEW_EXTENSIONS.has(extension)) {
+    return "image";
+  }
+  if (normalizedType === "application/pdf" || extension === ".pdf") {
+    return "pdf";
+  }
+  if (normalizedType === "text/markdown" || MARKDOWN_PREVIEW_EXTENSIONS.has(extension)) {
+    return "markdown";
+  }
+  if (
+    normalizedType.startsWith("text/") ||
+    normalizedType.includes("json") ||
+    normalizedType.includes("xml") ||
+    normalizedType.includes("yaml") ||
+    normalizedType.includes("javascript") ||
+    normalizedType.includes("typescript") ||
+    normalizedType.includes("shell") ||
+    normalizedType.includes("x-sh") ||
+    normalizedType.includes("x-python") ||
+    TEXT_PREVIEW_EXTENSIONS.has(extension)
+  ) {
+    return "text";
+  }
+  return "unsupported";
+}
+
 export async function downloadAgentArtifact(
   token: string,
   namespace: string,
@@ -963,9 +1060,7 @@ export async function downloadAgentArtifact(
   artifactPath: string,
   suggestedFilename?: string,
 ): Promise<void> {
-  const url = new URL(buildUrl(`/api/agents/${encodeURIComponent(agentName)}/artifacts/download`, namespace), window.location.origin);
-  url.searchParams.set("path", artifactPath);
-  const target = API_BASE_URL ? url.toString() : `${url.pathname}${url.search}`;
+  const target = buildArtifactDownloadUrl(namespace, agentName, artifactPath);
   const response = await fetchAuthenticated(target, token);
   if (!response.ok) {
     const text = await response.text();
@@ -976,6 +1071,60 @@ export async function downloadAgentArtifact(
   const fallback = suggestedFilename || artifactPath.split("/").pop() || artifactPath.split("\\").pop() || "artifact";
   const filename = extractFilenameFromDisposition(response.headers.get("content-disposition"), fallback);
   triggerBrowserDownload(blob, filename);
+}
+
+export async function previewAgentArtifact(
+  token: string,
+  namespace: string,
+  agentName: string,
+  artifactPath: string,
+): Promise<AgentArtifactPreview> {
+  const target = buildArtifactDownloadUrl(namespace, agentName, artifactPath);
+  const response = await fetchAuthenticated(target, token, {
+    headers: {
+      Accept: "*/*",
+    },
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new ApiError(response.status, "Failed to preview artifact", text);
+  }
+
+  const blob = await response.blob();
+  const name = artifactPath.split("/").pop() || artifactPath.split("\\").pop() || "artifact";
+  const contentType = (response.headers.get("content-type") || blob.type || "application/octet-stream").split(";")[0].trim().toLowerCase();
+  const kind = classifyArtifactPreviewKind(artifactPath, contentType);
+
+  if (kind === "image" || kind === "pdf") {
+    return {
+      path: artifactPath,
+      name,
+      size: blob.size,
+      contentType,
+      kind,
+      blob,
+    };
+  }
+
+  if (kind === "unsupported") {
+    return {
+      path: artifactPath,
+      name,
+      size: blob.size,
+      contentType,
+      kind,
+      message: "Preview is not available for this file type yet.",
+    };
+  }
+
+  return {
+    path: artifactPath,
+    name,
+    size: blob.size,
+    contentType,
+    kind,
+    text: await blob.text(),
+  };
 }
 
 export async function downloadAgentArtifactZip(

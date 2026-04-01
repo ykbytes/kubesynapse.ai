@@ -6,6 +6,7 @@ import {
     decideApproval,
     deleteChatSession,
     fetchAgentTodos,
+  fetchPendingQuestions,
     pollAgentTodos,
     fetchAgentLogs,
     getChatSessionMessages,
@@ -42,6 +43,12 @@ type InvokeExecutionOptions = {
   payload: InvokePayload;
   userPrompt?: string;
   appendUserMessage?: boolean;
+  systemNotice?: string;
+};
+
+type PromptSubmissionOptions = {
+  appendUserMessage?: boolean;
+  clearComposer?: boolean;
   systemNotice?: string;
 };
 
@@ -249,6 +256,9 @@ export interface ChatContextValue {
   followupSending: string | undefined;
   handleFollowupSend: (id: string) => void;
   handleFollowupEdit: (id: string) => void;
+  lastUserPrompt: string | null;
+  handleReusePrompt: (text: string) => void;
+  handleRegeneratePrompt: (text?: string) => Promise<void>;
 
   // Setters
   setPrompt: (value: string) => void;
@@ -403,6 +413,15 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const chatEmptyMessage = selectedAgentName
     ? "Run chat requests, explicit A2A delegations, or specialist-team orchestration from this workspace. Streaming is enabled by default."
     : "Select an agent from the catalog or create a new one to start an invocation.";
+  const lastUserPrompt = useMemo(() => {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index];
+      if (message?.role !== "user") continue;
+      const content = message.content.trim();
+      if (content) return content;
+    }
+    return null;
+  }, [messages]);
   const selectedWorkflowApprovalName = typeof selectedWorkflow?.pending_approval?.name === "string"
     ? selectedWorkflow.pending_approval.name
     : undefined;
@@ -535,7 +554,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     setActivityByAgent((prev) => { const n = { ...prev }; delete n[agentName]; return n; });
     setSummaryByAgent((prev) => { const n = { ...prev }; delete n[agentName]; return n; });
     setTodosByAgent((prev) => { const n = { ...prev }; delete n[agentName]; return n; });
+    setPhaseByAgent((prev) => { const n = { ...prev }; delete n[agentName]; return n; });
     setLogsByAgent((prev) => { const n = { ...prev }; delete n[agentName]; return n; });
+    setPendingQuestionByAgent((prev) => { const n = { ...prev }; delete n[agentName]; return n; });
+    setFollowupSuggestionsByAgent((prev) => { const n = { ...prev }; delete n[agentName]; return n; });
     setGooseChatSettingsByAgent((prev) => { const n = { ...prev }; delete n[agentName]; return n; });
     setOpenCodeChatSettingsByAgent((prev) => { const n = { ...prev }; delete n[agentName]; return n; });
     delete threadIdsRef.current[agentName];
@@ -787,14 +809,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     }
   }
 
-  // ── handleSubmit ──
+  // ── prompt submission helpers ──
 
-  const handleSubmit = useCallback(async () => {
-    if (!token.trim()) { setChatError("Enter the gateway token before sending chat requests."); return; }
-    if (!selectedAgentName || !canSubmitChat) return;
-
-    const agentName = selectedAgentName;
-    const nextPrompt = prompt.trim();
+  const buildInvokePayload = useCallback((agentName: string, promptText: string): InvokePayload | null => {
+    const nextPrompt = promptText.trim();
     let gooseMaxTurns: number | undefined;
     let gooseWorkingDirectory: string | undefined;
     let opencodeMaxTurns: number | undefined;
@@ -806,28 +824,29 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       try {
         gooseMaxTurns = parseGooseMaxTurns(selectedGooseChatSettings.maxTurns);
         gooseWorkingDirectory = normalizeGooseWorkingDirectory(selectedGooseChatSettings.workingDirectory);
-      } catch (err) { setChatError(apiErrorMessage(err)); return; }
+      } catch (err) { setChatError(apiErrorMessage(err)); return null; }
     }
     if (selectedRuntimeKind === "opencode") {
       try {
         opencodeMaxTurns = parseOpenCodeMaxTurns(selectedOpenCodeChatSettings.maxTurns);
         opencodeWorkingDirectory = normalizeOpenCodeWorkingDirectory(selectedOpenCodeChatSettings.workingDirectory);
-      } catch (err) { setChatError(apiErrorMessage(err)); return; }
+      } catch (err) { setChatError(apiErrorMessage(err)); return null; }
     }
     try { explicitA2ATimeoutSeconds = parseA2ATimeoutSeconds(a2aTimeoutSeconds); }
-    catch (err) { setChatError(apiErrorMessage(err)); return; }
+    catch (err) { setChatError(apiErrorMessage(err)); return null; }
 
     const normA2AAgent = a2aTargetAgent.trim();
     const normA2ANs = a2aTargetNamespace.trim();
     const hasExplicitA2A = normA2AAgent.length > 0 || normA2ANs.length > 0;
-    if (specialistTeamConfigured && selectedRuntimeKind !== "langgraph") { setChatError("Specialist-team orchestration is currently available for LangGraph agents only."); return; }
+    if (specialistTeamConfigured && selectedRuntimeKind !== "langgraph") { setChatError("Specialist-team orchestration is currently available for LangGraph agents only."); return null; }
     if (hasExplicitA2A) {
-      if (selectedRuntimeKind !== "langgraph") { setChatError("Explicit A2A routing is only supported for LangGraph agents."); return; }
-      if (!normA2AAgent || !normA2ANs) { setChatError("Provide both an A2A target namespace and an A2A target agent."); return; }
-      if (!isValidK8sName(normA2AAgent)) { setChatError("A2A target agent must be a valid lowercase Kubernetes name."); return; }
-      if (!isValidK8sName(normA2ANs)) { setChatError("A2A target namespace must be a valid lowercase Kubernetes name."); return; }
+      if (selectedRuntimeKind !== "langgraph") { setChatError("Explicit A2A routing is only supported for LangGraph agents."); return null; }
+      if (!normA2AAgent || !normA2ANs) { setChatError("Provide both an A2A target namespace and an A2A target agent."); return null; }
+      if (!isValidK8sName(normA2AAgent)) { setChatError("A2A target agent must be a valid lowercase Kubernetes name."); return null; }
+      if (!isValidK8sName(normA2ANs)) { setChatError("A2A target namespace must be a valid lowercase Kubernetes name."); return null; }
     }
-    if (hasExplicitA2A && specialistTeamConfigured) { setChatError("Use either an explicit A2A target or a specialist team for this request, not both."); return; }
+    if (hasExplicitA2A && specialistTeamConfigured) { setChatError("Use either an explicit A2A target or a specialist team for this request, not both."); return null; }
+    if (!nextPrompt && !specialistTeamConfigured) { setChatError("Enter a prompt before sending a chat request."); return null; }
 
     if (specialistTeamConfigured) {
       try {
@@ -841,14 +860,21 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             const inputFiles = parseSubagentInputFiles(item.inputFilesText);
             const task = item.task.trim();
             if (!nextPrompt && !task) throw new Error(`Specialist ${idx + 1} requires a delegated task when the main prompt is blank.`);
-            return { name, namespace: sns, role: item.role.trim() || undefined, task: task || undefined,
-              input_files: inputFiles.length > 0 ? inputFiles : undefined, result_file_path: item.resultFilePath.trim() || undefined,
-              share_sandbox_session: item.shareSandboxSession, timeout_seconds: timeoutSeconds };
+            return {
+              name,
+              namespace: sns,
+              role: item.role.trim() || undefined,
+              task: task || undefined,
+              input_files: inputFiles.length > 0 ? inputFiles : undefined,
+              result_file_path: item.resultFilePath.trim() || undefined,
+              share_sandbox_session: item.shareSandboxSession,
+              timeout_seconds: timeoutSeconds,
+            };
           });
-      } catch (err) { setChatError(apiErrorMessage(err)); return; }
+      } catch (err) { setChatError(apiErrorMessage(err)); return null; }
     }
 
-    const payload: InvokePayload = {
+    return {
       prompt: nextPrompt, thread_id: threadIdsRef.current[agentName], require_approval: requireApproval,
       approval_action: requireApproval ? `Approve UI request for ${agentName}` : undefined,
       a2a_target_agent: hasExplicitA2A ? normA2AAgent : undefined, a2a_target_namespace: hasExplicitA2A ? normA2ANs : undefined,
@@ -859,12 +885,55 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       output_format: selectedRuntimeKind === "opencode" ? selectedOpenCodeChatSettings.outputFormat || undefined : undefined,
       autonomous: selectedRuntimeKind === "opencode" ? selectedOpenCodeChatSettings.autonomous : undefined,
     };
-
-    setPrompt("");
-    await runInvocation({ agentName, payload, userPrompt: nextPrompt, appendUserMessage: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, namespace, selectedAgentName, selectedRuntimeKind, prompt, canSubmitChat, streamMode, requireApproval,
-    a2aTargetAgent, a2aTargetNamespace, a2aTimeoutSeconds, specialistSubagents, subagentStrategy, selectedGooseChatSettings, selectedOpenCodeChatSettings]);
+  }, [selectedRuntimeKind, selectedGooseChatSettings, selectedOpenCodeChatSettings, a2aTimeoutSeconds, a2aTargetAgent, a2aTargetNamespace, specialistTeamConfigured, specialistSubagents, requireApproval, subagentStrategy]);
+
+  const submitPromptText = useCallback(async (promptText: string, options: PromptSubmissionOptions = {}) => {
+    if (!token.trim()) { setChatError("Enter the gateway token before sending chat requests."); return; }
+    if (!selectedAgentName) return;
+
+    const nextPrompt = promptText.trim();
+    const payload = buildInvokePayload(selectedAgentName, nextPrompt);
+    if (!payload) return;
+
+    if (options.clearComposer !== false) {
+      setPrompt("");
+    }
+
+    await runInvocation({
+      agentName: selectedAgentName,
+      payload,
+      userPrompt: nextPrompt,
+      appendUserMessage: options.appendUserMessage ?? true,
+      systemNotice: options.systemNotice,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, selectedAgentName, buildInvokePayload]);
+
+  // ── handleSubmit ──
+
+  const handleSubmit = useCallback(async () => {
+    if (!selectedAgentName || !canSubmitChat) return;
+    await submitPromptText(prompt, { clearComposer: true });
+  }, [selectedAgentName, canSubmitChat, prompt, submitPromptText]);
+
+  const handleReusePrompt = useCallback((text: string) => {
+    setChatError("");
+    setPrompt(text);
+  }, []);
+
+  const handleRegeneratePrompt = useCallback(async (text?: string) => {
+    const nextPrompt = String(text ?? lastUserPrompt ?? "").trim();
+    if (!nextPrompt) {
+      setChatError("No previous prompt is available to regenerate.");
+      return;
+    }
+    await submitPromptText(nextPrompt, {
+      appendUserMessage: false,
+      clearComposer: false,
+      systemNotice: "Regenerating a prior prompt in the current session.",
+    });
+  }, [lastUserPrompt, submitPromptText]);
 
   // ── handleLoadLogs ──
 
@@ -1024,32 +1093,30 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
   // ── Followup suggestion handlers ──
 
-  const handleFollowupSend = useCallback((id: string) => {
-    const suggestions = selectedAgentName ? followupSuggestionsByAgent[selectedAgentName] ?? [] : [];
+  const handleFollowupSend = useCallback(async (id: string) => {
+    if (!selectedAgentName) return;
+    const suggestions = followupSuggestionsByAgent[selectedAgentName] ?? [];
     const suggestion = suggestions.find((s) => s.id === id);
     if (!suggestion) return;
     setFollowupSending(id);
-    setPrompt(suggestion.text);
-    // Auto-submit after setting prompt
-    setTimeout(() => {
+    try {
+      await submitPromptText(suggestion.text, { clearComposer: true });
+      setFollowupSuggestionsByAgent((prev) => ({ ...prev, [selectedAgentName]: [] }));
+    } finally {
       setFollowupSending(undefined);
-      setFollowupSuggestionsByAgent((prev) => {
-        if (!selectedAgentName) return prev;
-        return { ...prev, [selectedAgentName]: [] };
-      });
-    }, 100);
-  }, [selectedAgentName, followupSuggestionsByAgent]);
+    }
+  }, [selectedAgentName, followupSuggestionsByAgent, submitPromptText]);
 
   const handleFollowupEdit = useCallback((id: string) => {
     const suggestions = selectedAgentName ? followupSuggestionsByAgent[selectedAgentName] ?? [] : [];
     const suggestion = suggestions.find((s) => s.id === id);
     if (!suggestion) return;
-    setPrompt(suggestion.text);
+    handleReusePrompt(suggestion.text);
     setFollowupSuggestionsByAgent((prev) => {
       if (!selectedAgentName) return prev;
       return { ...prev, [selectedAgentName]: [] };
     });
-  }, [selectedAgentName, followupSuggestionsByAgent]);
+  }, [selectedAgentName, followupSuggestionsByAgent, handleReusePrompt]);
 
   // ── Generate followup suggestions from completed responses ──
   useEffect(() => {
@@ -1211,6 +1278,57 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     return () => { cancelled = true; clearInterval(interval); };
   }, [isSending, token, namespace, selectedAgentName, selectedRuntimeKind, summary?.threadId]);
 
+  useEffect(() => {
+    if (!selectedAgentName) return;
+    if (!token.trim() || selectedRuntimeKind !== "opencode") {
+      setPendingQuestionByAgent((prev) => {
+        if ((prev[selectedAgentName] ?? null) === null) return prev;
+        return { ...prev, [selectedAgentName]: null };
+      });
+      return;
+    }
+
+    let cancelled = false;
+    const syncPendingQuestion = async () => {
+      try {
+        const pending = await fetchPendingQuestions(token, namespace, selectedAgentName);
+        if (cancelled) return;
+
+        let nextQuestion: QuestionRequest | null = null;
+        for (const item of pending) {
+          const normalized = normalizeQuestionRequest(item);
+          if (normalized) {
+            nextQuestion = normalized;
+            break;
+          }
+        }
+
+        setPendingQuestionByAgent((prev) => {
+          const current = prev[selectedAgentName] ?? null;
+          if ((current?.id ?? "") === (nextQuestion?.id ?? "")) return prev;
+          return { ...prev, [selectedAgentName]: nextQuestion };
+        });
+      } catch {
+        // Keep the current question state when the recovery probe fails.
+      }
+    };
+
+    void syncPendingQuestion();
+    if (isSending) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const interval = setInterval(() => {
+      void syncPendingQuestion();
+    }, 4000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [isSending, token, namespace, selectedAgentName, selectedRuntimeKind]);
+
   const handleNewSession = useCallback(async () => {
     if (!token.trim() || !selectedAgentName) return;
     try {
@@ -1333,13 +1451,14 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     a2aTargetAgent, a2aTargetNamespace, a2aTimeoutSeconds,
     specialistSubagents, specialistTeamConfigured, subagentStrategy,
     approvalReason, approvalBusy, selectedWorkflowApprovalName,
+    lastUserPrompt,
     setPrompt, setStreamMode, setRequireApproval, setChatError, setApprovalReason,
     setA2ATargetAgent, setA2ATargetNamespace, setA2ATimeoutSeconds, setSubagentStrategy,
     addSpecialistSubagent, updateSpecialistSubagent, removeSpecialistSubagent, clearSpecialistTeam,
     setGooseMaxTurns, setGooseWorkingDirectory,
     setOpenCodeOutputFormat, setOpenCodeAutonomous, setOpenCodeMaxTurns, setOpenCodeWorkingDirectory,
     pendingQuestion, questionResponding, handleQuestionReply, handleQuestionReject,
-    followupSuggestions, followupSending, handleFollowupSend, handleFollowupEdit,
+    followupSuggestions, followupSending, handleFollowupSend, handleFollowupEdit, handleReusePrompt, handleRegeneratePrompt,
     handleSubmit, handleLoadLogs, handleStreamLogs, handleStopLogStream, handleAgentApprovalDecision, handleWorkflowApprovalDecision, cancelStream,
     setMessagesForAgent, removeAgentChatState,
     chatSessions, activeSessionId, activeSessionSummary, activeMemoryRecords, agentMemoryRecords, sessionsLoading,
@@ -1353,10 +1472,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     a2aTargetAgent, a2aTargetNamespace, a2aTimeoutSeconds,
     specialistSubagents, specialistTeamConfigured, subagentStrategy,
     approvalReason, approvalBusy, selectedWorkflowApprovalName,
-    pendingQuestion, questionResponding, followupSuggestions, followupSending,
+    pendingQuestion, questionResponding, followupSuggestions, followupSending, lastUserPrompt,
     chatSessions, activeSessionId, activeSessionSummary, activeMemoryRecords, agentMemoryRecords, sessionsLoading,
     sessionSearch, sessionDirty, sessionSaving, lastSessionSaveAt,
     handlePromoteMemoryRecord, handleEditMemoryRecord, handleDeleteMemoryRecord,
+    handleReusePrompt, handleRegeneratePrompt,
     handleNewSession, handleLoadSession, handleDeleteSession, handleRenameSession, handleSaveCurrentSession,
   ]);
 

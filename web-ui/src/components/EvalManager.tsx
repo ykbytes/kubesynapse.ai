@@ -1,5 +1,5 @@
-import { LoaderCircle, PlusCircle, Save, Trash2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { AlertTriangle, CheckCircle2, LoaderCircle, PlusCircle, Save, Trash2 } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -119,6 +119,44 @@ export function EvalManager({
   }
 
   const canSubmit = Boolean(name.trim()) && Boolean(agentRef.trim()) && testSuite.every((item) => item.input.trim() && item.metrics.length > 0);
+  const metricCoverage = useMemo(() => Array.from(new Set(testSuite.flatMap((item) => item.metrics))).sort(), [testSuite]);
+  const thresholdPreview = useMemo(() => buildFailureThreshold(), [thresholds]);
+  const configuredThresholdCount = Object.keys(thresholdPreview.values).length;
+  const evalBrief = useMemo(() => {
+    if (!evalResource) {
+      return {
+        tone: "border-primary/20 bg-primary/5",
+        title: "Create an evaluation that can actually catch regressions",
+        body: "Use enough cases to cover the real prompt shapes you care about, choose metrics deliberately, and configure thresholds only where the team is ready to enforce a standard.",
+      };
+    }
+    if (evalResource.phase === "running") {
+      return {
+        tone: "border-primary/20 bg-primary/5",
+        title: "An evaluation run is in flight",
+        body: `The suite is currently executing against ${evalResource.agent_ref}. Keep this panel focused on quality posture, not config churn, until the results settle.`,
+      };
+    }
+    if (evalResource.passed === true) {
+      return {
+        tone: "border-emerald-500/20 bg-emerald-500/10",
+        title: "The current suite is passing",
+        body: `The last recorded run cleared its quality gate. Use the result panel to confirm why it passed before broadening the test surface or tightening thresholds.`,
+      };
+    }
+    if (evalResource.passed === false || evalResource.phase === "failed") {
+      return {
+        tone: "border-red-500/20 bg-red-500/10",
+        title: "Quality regressions need operator attention",
+        body: "The latest run did not meet the configured bar. Use the result summary to isolate which cases failed and whether the issue is relevance, toxicity, latency, or runtime behavior.",
+      };
+    }
+    return {
+      tone: "border-border/60 bg-muted/20",
+      title: "This suite is defined but still needs an operational baseline",
+      body: "Run the evaluation at least once so the team has a real pass/fail reference before editing prompts, thresholds, or schedule cadence.",
+    };
+  }, [evalResource]);
 
   return (
     <Card>
@@ -138,6 +176,47 @@ export function EvalManager({
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
+        <div className="grid gap-3 md:grid-cols-4">
+          <div className="rounded-2xl border border-border/60 bg-background/60 p-3">
+            <p className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground/70">Status</p>
+            <p className="mt-1 text-xl font-semibold text-foreground">{evalResource?.phase ?? "draft"}</p>
+          </div>
+          <div className="rounded-2xl border border-border/60 bg-background/60 p-3">
+            <p className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground/70">Cases</p>
+            <p className="mt-1 text-xl font-semibold text-foreground">{testSuite.length}</p>
+          </div>
+          <div className="rounded-2xl border border-border/60 bg-background/60 p-3">
+            <p className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground/70">Metrics</p>
+            <p className="mt-1 text-xl font-semibold text-foreground">{metricCoverage.length}</p>
+          </div>
+          <div className="rounded-2xl border border-border/60 bg-background/60 p-3">
+            <p className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground/70">Thresholds</p>
+            <p className="mt-1 text-xl font-semibold text-foreground">{configuredThresholdCount}</p>
+          </div>
+        </div>
+
+        <div className={evalBrief.tone + " rounded-2xl border px-4 py-4"}>
+          <div className="flex items-start gap-3">
+            {evalBrief.tone.includes("emerald") ? <CheckCircle2 className="mt-0.5 h-4 w-4 text-emerald-400" /> : evalBrief.tone.includes("red") ? <AlertTriangle className="mt-0.5 h-4 w-4 text-red-400" /> : <CheckCircle2 className="mt-0.5 h-4 w-4 text-primary" />}
+            <div className="space-y-1">
+              <p className="text-sm font-semibold text-foreground">{evalBrief.title}</p>
+              <p className="text-sm leading-relaxed text-muted-foreground">{evalBrief.body}</p>
+              <div className="flex flex-wrap gap-2 pt-1">
+                <Badge variant="outline" className="text-[10px]">Agent {agentRef || "unselected"}</Badge>
+                <Badge variant="outline" className="text-[10px]">{schedule.trim() ? `Scheduled ${schedule.trim()}` : "Manual run"}</Badge>
+                <Badge variant="outline" className="text-[10px]">{metricCoverage.join(", ") || "No metrics"}</Badge>
+                {evalResource?.last_run && <Badge variant="outline" className="text-[10px]">Last run {new Date(evalResource.last_run).toLocaleString()}</Badge>}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {thresholdPreview.error && (
+          <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+            {thresholdPreview.error}
+          </div>
+        )}
+
         {/* Config */}
         <div className="grid gap-4 sm:grid-cols-3">
           <div className="space-y-1.5">

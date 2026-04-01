@@ -58,7 +58,8 @@ def init_tracing(service_name: str = "kubesynth-operator") -> None:
 
     resource = Resource.create({"service.name": service_name})  # type: ignore[possibly-undefined]
     provider = TracerProvider(resource=resource)  # type: ignore[possibly-undefined]
-    exporter = OTLPSpanExporter(endpoint=endpoint, insecure=True)  # type: ignore[possibly-undefined]
+    otel_insecure = os.getenv("OTEL_EXPORTER_OTLP_INSECURE", "true").strip().lower() in {"1", "true", "yes"}
+    exporter = OTLPSpanExporter(endpoint=endpoint, insecure=otel_insecure)  # type: ignore[possibly-undefined]
     provider.add_span_processor(BatchSpanProcessor(exporter))  # type: ignore[possibly-undefined]
     trace.set_tracer_provider(provider)  # type: ignore[union-attr]
     _tracer = trace.get_tracer(service_name)  # type: ignore[union-attr]

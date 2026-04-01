@@ -40,7 +40,7 @@ import { JsonBlock } from "./JsonBlock";
 import { WorkflowLogPanel } from "./WorkflowLogPanel";
 import { FileExplorer } from "./FileExplorer";
 import { useConnection } from "@/contexts/ConnectionContext";
-import { fetchWorkflowNextAction, listAgentArtifacts, downloadAgentArtifact, downloadAgentArtifactZip } from "@/lib/api";
+import { fetchWorkflowNextAction, listAgentArtifacts, downloadAgentArtifact, downloadAgentArtifactZip, previewAgentArtifact } from "@/lib/api";
 import { RunHistoryPanel } from "./composer/RunHistoryPanel";
 import type {
   AgentInfo,
@@ -643,7 +643,17 @@ function StepDetailCard({
 
 /* ────────── agent file browser tabs ────────── */
 
-function AgentFileBrowserTabs({ agents, token, namespace }: { agents: string[]; token: string | null; namespace: string }) {
+function AgentFileBrowserTabs({
+  agents,
+  token,
+  namespace,
+  liveUpdatesEnabled,
+}: {
+  agents: string[];
+  token: string | null;
+  namespace: string;
+  liveUpdatesEnabled: boolean;
+}) {
   const [activeAgent, setActiveAgent] = useState(agents[0] ?? "");
   const [zipping, setZipping] = useState(false);
 
@@ -655,6 +665,13 @@ function AgentFileBrowserTabs({ agents, token, namespace }: { agents: string[]; 
   const handleDownload = useCallback(async (path: string, filename?: string) => {
     if (!token || !activeAgent) return;
     await downloadAgentArtifact(token, namespace, activeAgent, path, filename);
+  }, [token, namespace, activeAgent]);
+
+  const handlePreview = useCallback(async (path: string) => {
+    if (!token || !activeAgent) {
+      throw new Error("Enter a gateway token before previewing files.");
+    }
+    return previewAgentArtifact(token, namespace, activeAgent, path);
   }, [token, namespace, activeAgent]);
 
   const handleDownloadZip = useCallback(async () => {
@@ -701,6 +718,8 @@ function AgentFileBrowserTabs({ agents, token, namespace }: { agents: string[]; 
           agentName={activeAgent}
           onLoad={loadFiles}
           onDownload={handleDownload}
+          onPreview={handlePreview}
+          liveUpdatesEnabled={liveUpdatesEnabled}
         />
       )}
     </div>
@@ -849,6 +868,8 @@ export function WorkflowManager({
   const canSubmit = Boolean(name.trim()) && steps.length > 0 && hasUniqueStepNames && steps.every((step) => step.name.trim() && step.agent_ref.trim());
   const uniqueAgentCount = new Set(steps.map((step) => step.agent_ref).filter(Boolean)).size;
   const approvalStepCount = steps.filter((step) => step.require_approval).length;
+  const loopStepCount = steps.filter((step) => step.step_type === "loop").length;
+  const reviewStepCount = steps.filter((step) => step.step_type === "review").length;
 
   // Derive pending approval step name for inline controls
   const pendingApprovalStep = useMemo(() => {
@@ -860,6 +881,52 @@ export function WorkflowManager({
   const wfSummary: WorkflowSummary | undefined = workflow?.summary ?? undefined;
   const isActive = workflow?.phase === "running" || workflow?.phase === "queued" || workflow?.phase === "waiting-approval";
   const hasBeenTriggered = Boolean(workflow && (workflow.phase !== "pending" || workflow.run_id || workflow.summary));
+  const completedStepCount = wfSummary?.completedSteps ?? Object.values(workflow?.step_states ?? {}).filter((state) => state?.status === "succeeded" || state?.status === "completed").length;
+  const failedStepCount = wfSummary?.failedSteps ?? Object.values(workflow?.step_states ?? {}).filter((state) => state?.status === "failed").length;
+  const waitingApprovalCount = wfSummary?.waitingApprovalSteps ?? (workflow?.pending_approval ? 1 : 0);
+  const currentFocus = workflow?.current_step || wfSummary?.currentFrontier?.[0] || nextAction?.failedSteps?.[0] || nextAction?.verifyFailures?.[0] || "Ready for execution";
+  const workflowBrief = useMemo(() => {
+    if (!workflow) {
+      return {
+        tone: "border-primary/20 bg-primary/5",
+        title: "Design an orchestration path that is easy to operate",
+        body: "Use clear step ownership, deliberate approval gates, and retry-friendly boundaries so the workflow reads like an operational playbook instead of a prompt chain.",
+      };
+    }
+    if (workflow.phase === "waiting-approval") {
+      return {
+        tone: "border-amber-500/20 bg-amber-500/10",
+        title: "Execution is blocked on a human gate",
+        body: `The current run has reached an approval boundary at ${currentFocus}. Resolve that decision before expecting additional progress from the operator.`,
+      };
+    }
+    if (workflow.phase === "running" || workflow.phase === "queued") {
+      return {
+        tone: "border-primary/20 bg-primary/5",
+        title: "The workflow is actively progressing through its execution graph",
+        body: `${completedStepCount} of ${wfSummary?.totalSteps ?? steps.length} steps are complete. Focus attention on ${currentFocus} and use logs or run history to verify whether this run is tracking normally.`,
+      };
+    }
+    if (workflow.phase === "failed") {
+      return {
+        tone: "border-red-500/20 bg-red-500/10",
+        title: "The latest run failed and should be triaged before re-running end to end",
+        body: `${failedStepCount} step${failedStepCount === 1 ? "" : "s"} failed. Use the failed-step summary, logs, and recent-run comparison below to isolate what regressed and retry only what broke.`,
+      };
+    }
+    if (workflow.phase === "completed" || workflow.phase === "succeeded") {
+      return {
+        tone: "border-emerald-500/20 bg-emerald-500/10",
+        title: "The workflow is in a strong state for reuse and comparison",
+        body: `The last execution completed successfully across ${wfSummary?.totalSteps ?? steps.length} steps. Compare that result against prior runs before changing prompts, agents, or approval policy.`,
+      };
+    }
+    return {
+      tone: "border-border/60 bg-muted/20",
+      title: "The workflow definition is ready, but the operational story is still ahead",
+      body: "Run the workflow once to capture the first execution baseline, then refine failure handling, approvals, and run-to-run consistency from real results.",
+    };
+  }, [completedStepCount, currentFocus, failedStepCount, steps.length, wfSummary?.totalSteps, workflow,]);
   const [showEditor, setShowEditor] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
 
@@ -915,6 +982,47 @@ export function WorkflowManager({
             </p>
           </div>
         </div>
+
+        <Card className="shadow-none">
+          <CardContent className="p-4">
+            <div className="grid gap-4 xl:grid-cols-[minmax(0,1.45fr)_minmax(18rem,1fr)]">
+              <div className={workflowBrief.tone + " rounded-2xl border px-4 py-4"}>
+                <div className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground/80">Execution brief</div>
+                <div className="mt-2 text-sm font-semibold text-foreground">{workflowBrief.title}</div>
+                <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{workflowBrief.body}</p>
+                {nextAction && (
+                  <div className="mt-3 rounded-xl border border-border/50 bg-background/60 px-3 py-2">
+                    <div className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Suggested next action</div>
+                    <div className="mt-1 text-sm font-medium text-foreground">{nextAction.action}</div>
+                    <div className="mt-1 text-xs leading-relaxed text-muted-foreground">{nextAction.reason}</div>
+                  </div>
+                )}
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <div className="rounded-2xl border border-border/60 bg-background/60 px-3 py-3">
+                  <div className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground/70">Current focus</div>
+                  <div className="mt-1 text-sm font-medium text-foreground">{currentFocus}</div>
+                  <div className="mt-1 text-xs text-muted-foreground">Current step, frontier, or the highest-signal failure target.</div>
+                </div>
+                <div className="rounded-2xl border border-border/60 bg-background/60 px-3 py-3">
+                  <div className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground/70">Governance</div>
+                  <div className="mt-1 text-sm font-medium text-foreground">{approvalStepCount} gate{approvalStepCount === 1 ? "" : "s"}</div>
+                  <div className="mt-1 text-xs text-muted-foreground">{waitingApprovalCount > 0 ? `${waitingApprovalCount} waiting for approval right now.` : "Approval boundaries are configured into the workflow graph."}</div>
+                </div>
+                <div className="rounded-2xl border border-border/60 bg-background/60 px-3 py-3">
+                  <div className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground/70">Execution model</div>
+                  <div className="mt-1 text-sm font-medium text-foreground">{messageBus}</div>
+                  <div className="mt-1 text-xs text-muted-foreground">{loopStepCount > 0 ? `${loopStepCount} loop step${loopStepCount === 1 ? "" : "s"}` : "No autonomous loop steps"} · {reviewStepCount} review step{reviewStepCount === 1 ? "" : "s"}</div>
+                </div>
+                <div className="rounded-2xl border border-border/60 bg-background/60 px-3 py-3">
+                  <div className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground/70">Run posture</div>
+                  <div className="mt-1 text-sm font-medium text-foreground">{completedStepCount} complete / {failedStepCount} failed</div>
+                  <div className="mt-1 text-xs text-muted-foreground">{uniqueAgentCount} agent{uniqueAgentCount === 1 ? "" : "s"} participating across {steps.length} step{steps.length === 1 ? "" : "s"}.</div>
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
 
         {/* ── Live progress bar (when summary exists) ── */}
         {workflow && wfSummary && (wfSummary.totalSteps ?? 0) > 0 && (
@@ -1276,7 +1384,7 @@ export function WorkflowManager({
                 <CardDescription>Browse files created by agents during this workflow run.</CardDescription>
               </CardHeader>
               <CardContent>
-                <AgentFileBrowserTabs agents={Array.from(activeAgents)} token={token} namespace={namespace ?? "default"} />
+                <AgentFileBrowserTabs agents={Array.from(activeAgents)} token={token} namespace={namespace ?? "default"} liveUpdatesEnabled={isRunning} />
               </CardContent>
             </Card>
           );

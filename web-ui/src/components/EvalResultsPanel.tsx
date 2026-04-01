@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { CheckCircle, Download, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle, Download, XCircle } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -9,6 +9,37 @@ import type { EvalCaseResult, EvalInfo } from "@/types";
 
 interface EvalResultsPanelProps {
   evalResource: EvalInfo;
+}
+
+function readThreshold(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
+}
+
+function metricPass(value: number, threshold: number | undefined, metric: string): boolean {
+  const isHigherBetter = metric === "relevance" || metric === "faithfulness";
+  if (threshold === undefined) return true;
+  return isHigherBetter ? value >= threshold : value <= threshold;
+}
+
+function caseAttentionReasons(c: EvalCaseResult, thresholds: Record<string, unknown>): string[] {
+  const reasons: string[] = [];
+  const minRelevance = readThreshold(thresholds.minRelevance);
+  const minFaithfulness = readThreshold(thresholds.minFaithfulness);
+  const maxToxicity = readThreshold(thresholds.maxToxicity);
+  const maxLatencyMs = readThreshold(thresholds.maxLatencyMs);
+
+  if (c.status === "failed" || c.status === "blocked") reasons.push(`Case ${c.status}`);
+  if (c.error) reasons.push("Runtime error");
+  if (!metricPass(c.metrics?.relevance ?? 0, minRelevance, "relevance")) reasons.push("Low relevance");
+  if (!metricPass(c.metrics?.faithfulness ?? 0, minFaithfulness, "faithfulness")) reasons.push("Low faithfulness");
+  if (!metricPass(c.metrics?.toxicity ?? 0, maxToxicity, "toxicity")) reasons.push("Toxicity threshold exceeded");
+  if (maxLatencyMs !== undefined && (c.latencyMs ?? 0) > maxLatencyMs) reasons.push("Latency threshold exceeded");
+  return reasons;
 }
 
 function metricBadge(value: number, threshold: number | undefined, metric: string) {
@@ -43,6 +74,10 @@ export function EvalResultsPanel({ evalResource }: EvalResultsPanelProps) {
   const cases = evalResource.cases ?? [];
   const summary = evalResource.summary ?? {};
   const thresholds = evalResource.failure_threshold ?? {};
+  const minRelevance = readThreshold(thresholds.minRelevance);
+  const minFaithfulness = readThreshold(thresholds.minFaithfulness);
+  const maxToxicity = readThreshold(thresholds.maxToxicity);
+  const maxLatencyMs = readThreshold(thresholds.maxLatencyMs);
 
   const stats = useMemo(() => {
     const total = cases.length;
@@ -81,6 +116,34 @@ export function EvalResultsPanel({ evalResource }: EvalResultsPanelProps) {
         : null,
     };
   }, [cases, summary]);
+  const insights = useMemo(() => {
+    const breachCounts = {
+      relevance: 0,
+      faithfulness: 0,
+      toxicity: 0,
+      latency: 0,
+    };
+    const attentionCases = cases
+      .map((item, index) => ({ index: index + 1, item, reasons: caseAttentionReasons(item, thresholds) }))
+      .filter((entry) => entry.reasons.length > 0);
+
+    for (const entry of attentionCases) {
+      if (entry.reasons.includes("Low relevance")) breachCounts.relevance += 1;
+      if (entry.reasons.includes("Low faithfulness")) breachCounts.faithfulness += 1;
+      if (entry.reasons.includes("Toxicity threshold exceeded")) breachCounts.toxicity += 1;
+      if (entry.reasons.includes("Latency threshold exceeded")) breachCounts.latency += 1;
+    }
+
+    const dominantIssue = Object.entries(breachCounts)
+      .sort((left, right) => right[1] - left[1])[0];
+
+    return {
+      attentionCases,
+      breachCounts,
+      dominantIssue: dominantIssue && dominantIssue[1] > 0 ? dominantIssue : null,
+      passRate: stats.total > 0 ? Math.round((stats.passed / stats.total) * 100) : 0,
+    };
+  }, [cases, stats.passed, stats.total, thresholds]);
 
   const handleExportCsv = () => {
     const headers = [
@@ -134,6 +197,31 @@ export function EvalResultsPanel({ evalResource }: EvalResultsPanelProps) {
 
   return (
     <div className="mt-4 space-y-4">
+      <Card className={evalResource.passed ? "border-emerald-500/20 bg-emerald-500/5" : "border-amber-500/20 bg-amber-500/5"}>
+        <CardContent className="space-y-3 py-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant={evalResource.passed ? "default" : "destructive"} className="gap-1">
+              {evalResource.passed ? <CheckCircle className="h-3 w-3" /> : <XCircle className="h-3 w-3" />}
+              {evalResource.passed ? "Quality gate passed" : "Quality gate failed"}
+            </Badge>
+            <Badge variant="outline" className="text-[10px]">Pass rate {insights.passRate}%</Badge>
+            {evalResource.last_run && <Badge variant="outline" className="text-[10px]">Last run {new Date(evalResource.last_run).toLocaleString()}</Badge>}
+          </div>
+          <div>
+            <div className="text-sm font-semibold text-foreground">
+              {evalResource.passed
+                ? "This suite is currently enforcing a reliable quality bar."
+                : "This suite is surfacing regressions or weak cases that need follow-through."}
+            </div>
+            <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+              {insights.dominantIssue
+                ? `The primary issue in the latest run is ${insights.dominantIssue[0]}, with ${insights.dominantIssue[1]} case${insights.dominantIssue[1] === 1 ? "" : "s"} breaching that expectation.`
+                : "No single metric dominates the failures. Review the detailed cases below to understand whether the misses are runtime errors, qualitative regressions, or threshold drift."}
+            </p>
+          </div>
+        </CardContent>
+      </Card>
+
       {/* ── Summary Cards ── */}
       <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
         <Card className="shadow-none">
@@ -180,6 +268,37 @@ export function EvalResultsPanel({ evalResource }: EvalResultsPanelProps) {
         </Card>
       </div>
 
+      <div className="grid gap-3 md:grid-cols-4">
+        <Card className="shadow-none">
+          <CardContent className="p-3">
+            <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Min relevance</p>
+            <p className="mt-1 text-lg font-semibold tabular-nums text-foreground">{minRelevance ?? "—"}</p>
+            <p className="mt-1 text-[11px] text-muted-foreground">{insights.breachCounts.relevance} breaches</p>
+          </CardContent>
+        </Card>
+        <Card className="shadow-none">
+          <CardContent className="p-3">
+            <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Min faithfulness</p>
+            <p className="mt-1 text-lg font-semibold tabular-nums text-foreground">{minFaithfulness ?? "—"}</p>
+            <p className="mt-1 text-[11px] text-muted-foreground">{insights.breachCounts.faithfulness} breaches</p>
+          </CardContent>
+        </Card>
+        <Card className="shadow-none">
+          <CardContent className="p-3">
+            <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Max toxicity</p>
+            <p className="mt-1 text-lg font-semibold tabular-nums text-foreground">{maxToxicity ?? "—"}</p>
+            <p className="mt-1 text-[11px] text-muted-foreground">{insights.breachCounts.toxicity} breaches</p>
+          </CardContent>
+        </Card>
+        <Card className="shadow-none">
+          <CardContent className="p-3">
+            <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Max latency</p>
+            <p className="mt-1 text-lg font-semibold tabular-nums text-foreground">{maxLatencyMs ?? "—"}</p>
+            <p className="mt-1 text-[11px] text-muted-foreground">{insights.breachCounts.latency} breaches</p>
+          </CardContent>
+        </Card>
+      </div>
+
       {/* ── Overall pass/fail + export ── */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
@@ -198,6 +317,30 @@ export function EvalResultsPanel({ evalResource }: EvalResultsPanelProps) {
           Export CSV
         </Button>
       </div>
+
+      {insights.attentionCases.length > 0 && (
+        <Card className="shadow-none border-amber-500/20 bg-amber-500/5">
+          <CardHeader className="pb-2">
+            <CardTitle className="flex items-center gap-2 text-sm">
+              <AlertTriangle className="h-4 w-4 text-amber-400" />
+              Cases needing attention
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2 text-sm">
+            {insights.attentionCases.slice(0, 3).map(({ index, item, reasons }) => (
+              <div key={`${index}-${item.input.slice(0, 12)}`} className="rounded-xl border border-border/50 bg-background/60 px-3 py-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge variant="outline" className="text-[10px]">Case {index}</Badge>
+                  {reasons.slice(0, 2).map((reason) => (
+                    <Badge key={reason} variant="outline" className="text-[10px] border-amber-500/30 text-amber-400">{reason}</Badge>
+                  ))}
+                </div>
+                <div className="mt-2 text-xs leading-relaxed text-muted-foreground">{truncate(item.input, 140)}</div>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
 
       {/* ── Results Table ── */}
       <Card className="overflow-hidden">

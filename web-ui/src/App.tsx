@@ -31,6 +31,7 @@ const TopBar = lazy(() => import("./components/TopBar").then((m) => ({ default: 
 const CommandPalette = lazy(() => import("./components/CommandPalette").then((m) => ({ default: m.CommandPalette })));
 const MobileNav = lazy(() => import("./components/MobileNav").then((m) => ({ default: m.MobileNav })));
 const WorkflowManager = lazy(() => import("./components/WorkflowManager").then((m) => ({ default: m.WorkflowManager })));
+const WorkspaceOverview = lazy(() => import("./components/WorkspaceOverview").then((m) => ({ default: m.WorkspaceOverview })));
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
@@ -45,7 +46,7 @@ import { ThemeProvider } from "./contexts/ThemeContext";
 import { NotificationProvider } from "./contexts/NotificationContext";
 
 import type { EvalInfo, UiMessage, WorkflowInfo, WorkspaceView } from "./types";
-import { cloneAgent, downloadAgentArtifact, exportBundleUrl, importBundle, listAgentArtifacts } from "./lib/api";
+import { cloneAgent, downloadAgentArtifact, exportBundleUrl, importBundle, listAgentArtifacts, previewAgentArtifact } from "./lib/api";
 import { toast } from "sonner";
 
 // ── Pure utility functions ──
@@ -312,6 +313,14 @@ function AppLayout() {
             : ws.selectedEval?.phase ?? (ws.evalCreateMode ? "draft" : "none");
 
   const displayError = ws.workspaceError || conn.connectionError || conn.gatewayError;
+  const showWorkspaceOverview =
+    ws.activeView === "agents"
+      ? ws.agentCreateMode || !ws.selectedAgentName
+      : ws.activeView === "workflows"
+        ? ws.workflowCreateMode || !ws.selectedWorkflow?.name
+        : ws.activeView === "evals"
+          ? ws.evalCreateMode || !ws.selectedEval?.name
+          : ws.activeView === "catalog" || ws.activeView === "settings" || ws.activeView === "admin";
 
   return (
     <div className="flex h-screen flex-col bg-background text-foreground">
@@ -441,6 +450,33 @@ function AppLayout() {
             <div className="rounded-md border border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive">
               {displayError}
             </div>
+          )}
+
+          {showWorkspaceOverview && (
+            <ContentShell>
+              <WorkspaceOverview
+                namespace={conn.namespace}
+                gatewayStatus={gatewayStatus}
+                authMode={conn.health?.auth_mode ?? "unknown"}
+                currentUser={conn.currentUser}
+                agentCount={ws.agents.length}
+                workflowCount={ws.workflows.length}
+                evalCount={ws.evals.length}
+                policyCount={ws.policies.length}
+                hasConversation={chat.chatSessions.length > 0 || chat.messages.length > 0}
+                onCreateAgent={() => {
+                  ws.setActiveView("agents");
+                  ws.handleCreateNew();
+                }}
+                onOpenCatalog={() => ws.setActiveView("catalog")}
+                onOpenWorkflowBuilder={() => {
+                  ws.setActiveView("workflows");
+                  ws.setWorkflowCreateMode(true);
+                }}
+                onOpenEvals={() => ws.setActiveView("evals")}
+                onOpenOperations={() => ws.setActiveView(conn.isAdmin ? "admin" : "settings")}
+              />
+            </ContentShell>
           )}
 
           {ws.activeView === "agents" ? (
@@ -632,6 +668,7 @@ function AppLayout() {
                           onDeleteMemoryRecord={(recordId) => void chat.handleDeleteMemoryRecord(recordId)}
                           onDownloadArtifact={(path, filename) => downloadAgentArtifact(conn.token, conn.namespace, ws.selectedAgentName, path, filename)}
                           onListArtifacts={() => listAgentArtifacts(conn.token, conn.namespace, ws.selectedAgentName)}
+                          onPreviewArtifact={(path) => previewAgentArtifact(conn.token, conn.namespace, ws.selectedAgentName, path)}
                           onOpenCodeOutputFormatChange={chat.setOpenCodeOutputFormat}
                           onOpenCodeAutonomousChange={chat.setOpenCodeAutonomous}
                           onOpenCodeMaxTurnsChange={chat.setOpenCodeMaxTurns}

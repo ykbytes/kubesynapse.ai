@@ -225,16 +225,18 @@ def wait_for_agent_runtime_ready(
     deadline = time.time() + timeout_seconds
     url = f"{runtime_url(agent_name, namespace)}/ready"
     last_error = "runtime not ready"
-    while time.time() < deadline:
-        try:
-            with httpx.Client(timeout=min(poll_interval_seconds, 5.0)) as client:
+    with httpx.Client(timeout=min(poll_interval_seconds, 5.0)) as client:
+        while time.time() < deadline:
+            if is_shutting_down():
+                raise RuntimeError("Worker shutdown initiated while waiting for agent runtime")
+            try:
                 response = client.get(url)
-            if response.status_code == 200:
-                return
-            last_error = f"HTTP {response.status_code}"
-        except Exception as exc:
-            last_error = str(exc)
-        time.sleep(min(poll_interval_seconds, max(deadline - time.time(), 0.1)))
+                if response.status_code == 200:
+                    return
+                last_error = f"HTTP {response.status_code}"
+            except Exception as exc:
+                last_error = str(exc)
+            time.sleep(min(poll_interval_seconds, max(deadline - time.time(), 0.1)))
     raise RuntimeError(
         f"Agent runtime '{agent_name}' in namespace '{namespace}' did not become ready within "
         f"{timeout_seconds:.0f}s: {last_error}"
@@ -2292,6 +2294,8 @@ def run_workflow_worker() -> None:
             )
 
         while len(completed) + len(skipped) < len(steps):
+            if is_shutting_down():
+                raise RuntimeError("Worker shutdown initiated — aborting workflow execution")
             ready = ready_workflow_steps(steps, completed, skipped_steps=skipped)
             if not ready:
                 raise ValueError(

@@ -1,11 +1,13 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Activity,
+  ArrowRight,
   CheckCircle2,
   Database,
   Layers,
   RefreshCw,
   Server,
+  ShieldCheck,
   XCircle,
   AlertTriangle,
 } from "lucide-react";
@@ -16,6 +18,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useConnection } from "@/contexts/ConnectionContext";
 import { fetchSystemHealth, type SystemHealth } from "@/lib/api";
 import { toast } from "sonner";
+import { EmptyState } from "./EmptyState";
 
 function StatusIcon({ status }: { status: string }) {
   if (status === "ok" || status === "healthy") return <CheckCircle2 className="h-4 w-4 text-emerald-400" />;
@@ -43,14 +46,17 @@ export function HealthDashboard() {
   const { token, namespace } = useConnection();
   const [data, setData] = useState<SystemHealth | null>(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
 
   const load = useCallback(async () => {
     if (!token.trim()) return;
     setLoading(true);
+    setError("");
     try {
       const result = await fetchSystemHealth(token, namespace);
       setData(result);
-    } catch (err) {
+    } catch {
+      setError("The gateway responded, but the platform health check could not be completed.");
       toast.error("Failed to load system health");
     } finally {
       setLoading(false);
@@ -58,6 +64,77 @@ export function HealthDashboard() {
   }, [token, namespace]);
 
   useEffect(() => { void load(); }, [load]);
+
+  const checkEntries = useMemo(() => Object.entries(data?.checks ?? {}), [data]);
+  const checkSummary = useMemo(() => {
+    const meaningfulChecks = checkEntries.filter(([key]) => key !== "resources");
+    const healthy = meaningfulChecks.filter(([, check]) => {
+      const status = String((check as Record<string, unknown>).status ?? "unknown");
+      return status === "ok" || status === "healthy" || status === "configured";
+    }).length;
+    const unhealthy = meaningfulChecks.length - healthy;
+    const notConfigured = meaningfulChecks.filter(([, check]) => String((check as Record<string, unknown>).status ?? "") === "not_configured").length;
+    return { total: meaningfulChecks.length, healthy, unhealthy, notConfigured };
+  }, [checkEntries]);
+  const resourceCheck = useMemo(() => {
+    const raw = data?.checks?.resources as Record<string, unknown> | undefined;
+    if (!raw) return null;
+    const agents = (raw.agents as Record<string, unknown> | undefined)?.total as number | undefined;
+    const workflows = (raw.workflows as Record<string, unknown> | undefined)?.total as number | undefined;
+    const evals = (raw.evals as Record<string, unknown> | undefined)?.total as number | undefined;
+    const policies = (raw.policies as Record<string, unknown> | undefined)?.total as number | undefined;
+    return {
+      agents: agents ?? 0,
+      workflows: workflows ?? 0,
+      evals: evals ?? 0,
+      policies: policies ?? 0,
+      total: (agents ?? 0) + (workflows ?? 0) + (evals ?? 0) + (policies ?? 0),
+    };
+  }, [data]);
+  const postureNotes = useMemo(() => {
+    if (!data) return [] as { tone: "success" | "warning" | "error"; title: string; body: string }[];
+
+    const notes: { tone: "success" | "warning" | "error"; title: string; body: string }[] = [];
+    if (data.status === "error" || data.status === "degraded") {
+      notes.push({
+        tone: "error",
+        title: "Platform attention required",
+        body: "One or more subsystems are degraded. Review the failing checks below before expanding usage or blaming runtime behavior.",
+      });
+    }
+    if (checkSummary.notConfigured > 0) {
+      notes.push({
+        tone: "warning",
+        title: "Configuration gaps detected",
+        body: "Some subsystems are reachable but not fully configured. Resolve those before calling the platform production-ready.",
+      });
+    }
+    if ((resourceCheck?.total ?? 0) === 0) {
+      notes.push({
+        tone: "warning",
+        title: "No managed resources yet",
+        body: "The control plane is reachable, but there are no provisioned agents, workflows, evaluations, or policies in this namespace.",
+      });
+    }
+    if (notes.length === 0) {
+      notes.push({
+        tone: "success",
+        title: "Operational baseline looks good",
+        body: "Connectivity, auth posture, and subsystem checks are in a healthy state for continued validation and demos.",
+      });
+    }
+    return notes;
+  }, [checkSummary.notConfigured, data, resourceCheck]);
+
+  if (!token.trim()) {
+    return (
+      <EmptyState
+        icon={ShieldCheck}
+        title="Connect to inspect platform health"
+        description="Health checks require a gateway token and namespace context before the console can query subsystem status."
+      />
+    );
+  }
 
   return (
     <div className="space-y-4">
@@ -73,6 +150,47 @@ export function HealthDashboard() {
           Refresh
         </Button>
       </div>
+
+      {error && (
+        <div className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+          {error}
+        </div>
+      )}
+
+      {data && (
+        <div className="grid gap-3 lg:grid-cols-4">
+          <Card className="border-border/70 bg-card/80">
+            <CardContent className="flex items-center gap-3 py-4">
+              <StatusIcon status={data.status} />
+              <div>
+                <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">Platform</div>
+                <div className="text-lg font-semibold capitalize text-foreground">{data.status}</div>
+              </div>
+            </CardContent>
+          </Card>
+          <Card className="border-border/70 bg-card/80">
+            <CardContent className="py-4">
+              <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">Subsystems</div>
+              <div className="mt-1 text-lg font-semibold text-foreground">{checkSummary.healthy}/{checkSummary.total || 0}</div>
+              <p className="mt-1 text-xs text-muted-foreground">Healthy checks across the active control-plane dependencies.</p>
+            </CardContent>
+          </Card>
+          <Card className="border-border/70 bg-card/80">
+            <CardContent className="py-4">
+              <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">Resources</div>
+              <div className="mt-1 text-lg font-semibold text-foreground">{resourceCheck?.total ?? 0}</div>
+              <p className="mt-1 text-xs text-muted-foreground">Agents, workflows, evaluations, and policies tracked in this namespace.</p>
+            </CardContent>
+          </Card>
+          <Card className="border-border/70 bg-card/80">
+            <CardContent className="py-4">
+              <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">Auth posture</div>
+              <div className="mt-1 text-lg font-semibold capitalize text-foreground">{data.auth_mode}</div>
+              <p className="mt-1 text-xs text-muted-foreground">Namespace {data.namespace} is being checked through the current gateway auth path.</p>
+            </CardContent>
+          </Card>
+        </div>
+      )}
 
       {/* Overall status */}
       {data && (
@@ -90,6 +208,29 @@ export function HealthDashboard() {
             </Badge>
           </CardContent>
         </Card>
+      )}
+
+      {data && (
+        <div className="grid gap-3 lg:grid-cols-2">
+          {postureNotes.map((note) => (
+            <div
+              key={note.title}
+              className={
+                note.tone === "success"
+                  ? "rounded-2xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3"
+                  : note.tone === "error"
+                    ? "rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-3"
+                    : "rounded-2xl border border-amber-500/20 bg-amber-500/10 px-4 py-3"
+              }
+            >
+              <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+                {note.tone === "success" ? <CheckCircle2 className="h-4 w-4 text-emerald-400" /> : note.tone === "error" ? <AlertTriangle className="h-4 w-4 text-red-400" /> : <AlertTriangle className="h-4 w-4 text-amber-400" />}
+                {note.title}
+              </div>
+              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{note.body}</p>
+            </div>
+          ))}
+        </div>
       )}
 
       {/* Subsystem checks */}
@@ -156,20 +297,24 @@ export function HealthDashboard() {
                       ))}
                     </div>
                   )}
+                  {key !== "resources" && status !== "ok" && status !== "healthy" && status !== "configured" && (
+                    <Button variant="ghost" size="sm" className="mt-2 h-6 px-0 text-[11px] text-primary hover:bg-transparent hover:text-primary/90">
+                      Review and remediate
+                      <ArrowRight className="ml-1 h-3 w-3" />
+                    </Button>
+                  )}
                 </CardContent>
               </Card>
             );
           })}
         </div>
       ) : (
-        <div className="flex flex-col items-center justify-center gap-3 rounded-xl border border-border/50 bg-background/50 py-10 text-center animate-fade-in">
-          <Activity className="h-6 w-6 text-muted-foreground/60" />
-          <p className="text-sm text-muted-foreground">Click <strong>Refresh</strong> to check system health</p>
-          <Button size="sm" variant="outline" onClick={() => void load()}>
-            <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
-            Check now
-          </Button>
-        </div>
+        <EmptyState
+          icon={Activity}
+          title="Run the first health check"
+          description="Query the gateway to validate connectivity, auth posture, and subsystem readiness for this namespace."
+          action={{ label: "Check now", onClick: () => void load() }}
+        />
       )}
     </div>
   );
