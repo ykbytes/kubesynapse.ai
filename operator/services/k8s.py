@@ -507,6 +507,7 @@ def ensure_runtime_access(namespace: str) -> None:
     """Create or patch a ServiceAccount and RoleBinding for agent runtimes."""
     core_api = kubernetes.client.CoreV1Api()
     rbac_api = kubernetes.client.RbacAuthorizationV1Api()
+    binding_name = f"{RUNTIME_SERVICE_ACCOUNT}-binding"
 
     service_account = kubernetes.client.V1ServiceAccount(
         metadata=kubernetes.client.V1ObjectMeta(name=RUNTIME_SERVICE_ACCOUNT, namespace=namespace),
@@ -529,7 +530,7 @@ def ensure_runtime_access(namespace: str) -> None:
 
     binding = kubernetes.client.V1RoleBinding(
         metadata=kubernetes.client.V1ObjectMeta(
-            name=f"{RUNTIME_SERVICE_ACCOUNT}-binding",
+            name=binding_name,
             namespace=namespace,
         ),
         role_ref=kubernetes.client.V1RoleRef(
@@ -549,11 +550,24 @@ def ensure_runtime_access(namespace: str) -> None:
         rbac_api.create_namespaced_role_binding(namespace=namespace, body=binding)
     except ApiException as exc:
         if exc.status == 409:
-            rbac_api.patch_namespaced_role_binding(
-                name=f"{RUNTIME_SERVICE_ACCOUNT}-binding",
-                namespace=namespace,
-                body=binding,
-            )
+            try:
+                rbac_api.patch_namespaced_role_binding(
+                    name=binding_name,
+                    namespace=namespace,
+                    body=binding,
+                )
+            except ApiException as patch_exc:
+                patch_body = str(getattr(patch_exc, "body", "") or "")
+                if patch_exc.status == 422 and "cannot change roleRef" in patch_body:
+                    logger.warning(
+                        "RoleBinding '%s/%s' has an immutable roleRef mismatch; recreating it.",
+                        namespace,
+                        binding_name,
+                    )
+                    rbac_api.delete_namespaced_role_binding(name=binding_name, namespace=namespace)
+                    rbac_api.create_namespaced_role_binding(namespace=namespace, body=binding)
+                else:
+                    raise
         else:
             raise
 
