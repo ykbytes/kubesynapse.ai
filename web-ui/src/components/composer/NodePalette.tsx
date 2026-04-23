@@ -1,31 +1,16 @@
 import { useMemo, useState, type DragEvent } from "react";
 import type { AgentInfo } from "@/types";
-import { Bot, Brain, Bird, Code, Terminal, GripVertical, Search, ChevronDown, ChevronRight, PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { Bot, GripVertical, Search, ChevronDown, ChevronRight, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { getRuntimeSignal } from "@/lib/agentSignals";
 import { cn } from "@/lib/utils";
 
 interface NodePaletteProps {
   agents: AgentInfo[];
   collapsed: boolean;
   onToggleCollapse: () => void;
-}
-
-function runtimeIcon(kind?: string | null) {
-  const cls = "h-3.5 w-3.5 shrink-0";
-  switch (kind) {
-    case "langgraph":
-      return <Brain className={cn(cls, "text-violet-400")} />;
-    case "goose":
-      return <Bird className={cn(cls, "text-amber-400")} />;
-    case "opencode":
-      return <Code className={cn(cls, "text-sky-400")} />;
-    case "codex":
-      return <Terminal className={cn(cls, "text-emerald-400")} />;
-    default:
-      return <Bot className={cn(cls, "text-muted-foreground")} />;
-  }
 }
 
 function statusDot(status?: string) {
@@ -126,6 +111,10 @@ export function NodePalette({ agents, collapsed, onToggleCollapse }: NodePalette
         <div className="p-2 space-y-1">
           {Array.from(grouped.entries()).map(([kind, group]) => {
             const isCollapsed = groupCollapsed[kind];
+            const runtimeSignal = kind === "other" ? null : getRuntimeSignal(kind as AgentInfo["runtime_kind"]);
+            const RuntimeIcon = runtimeSignal?.icon ?? Bot;
+            const runtimeTone = runtimeSignal?.tone ?? "border-border/60 bg-background/60 text-muted-foreground";
+            const runtimeLabel = runtimeSignal?.shortLabel ?? "Other";
             return (
               <div key={kind}>
                 {/* Category header */}
@@ -140,8 +129,10 @@ export function NodePalette({ agents, collapsed, onToggleCollapse }: NodePalette
                   ) : (
                     <ChevronDown className="h-3 w-3" />
                   )}
-                  {runtimeIcon(kind)}
-                  <span className="flex-1 text-left">{kind}</span>
+                  <span className={cn("inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5", runtimeTone)}>
+                    <RuntimeIcon className="h-3 w-3" />
+                    <span className="leading-none">{runtimeLabel}</span>
+                  </span>
                   <span className="text-[9px] text-muted-foreground/60">{group.length}</span>
                 </button>
 

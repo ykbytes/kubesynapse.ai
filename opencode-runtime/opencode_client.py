@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import uuid
 from typing import Any
 
@@ -16,6 +17,7 @@ from config import (
     HTTP_TIMEOUT_SECONDS,
     OPENCODE_WORKDIR,
     SERVICE_NAME,
+    SESSION_IDLE_MAX_POLL_SECONDS,
     SESSION_IDLE_POLL_SECONDS,
     SESSION_IDLE_TIMEOUT_SECONDS,
     server_base_url,
@@ -27,6 +29,32 @@ from supervisor import _runtime_lock, is_shutting_down
 import time
 
 logger = logging.getLogger("opencode-runtime")
+
+
+# ---------------------------------------------------------------------------
+# Ascending message-ID generator (matches OpenCode's ID format so that
+# string comparison ``lastUser.id < lastAssistant.id`` works correctly in
+# the server's ``loop()`` exit condition).
+# Format: msg_{12 hex chars}{14 random base62 chars}
+# The 12 hex chars encode  timestamp_ms * 0x1000 + monotonic_counter.
+# ---------------------------------------------------------------------------
+_id_last_ts: int = 0
+_id_counter: int = 0
+_BASE62 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+
+
+def _ascending_message_id() -> str:
+    """Generate a message ID that sorts lexicographically after any earlier ID."""
+    global _id_last_ts, _id_counter
+    now_ms = int(time.time() * 1000)
+    if now_ms != _id_last_ts:
+        _id_last_ts = now_ms
+        _id_counter = 0
+    _id_counter += 1
+    encoded = (now_ms * 0x1000 + _id_counter) & 0xFFFFFFFFFFFF  # lower 48 bits
+    time_hex = encoded.to_bytes(6, "big").hex()
+    rand_part = "".join(_BASE62[b % 62] for b in os.urandom(14))
+    return f"msg_{time_hex}{rand_part}"
 
 
 def ensure_server_running() -> None:
@@ -53,6 +81,26 @@ def build_model_payload(model_ref: str) -> dict[str, str]:
         model_id = model_id.strip() or DEFAULT_MODEL
         return {"providerID": provider_id, "modelID": model_id}
     return {"providerID": DEFAULT_PROVIDER, "modelID": cleaned or DEFAULT_MODEL}
+
+
+def _resolve_message_response_from_history(session_id: str, message_id: str) -> dict[str, Any]:
+    """Recover the assistant payload when OpenCode accepts a prompt but returns no body."""
+    wait_for_session_idle(session_id)
+    messages = get_session_messages(session_id)
+    from analysis import get_latest_assistant_payload
+
+    payload = get_latest_assistant_payload(messages, parent_message_id=message_id)
+    if payload is not None:
+        return payload
+
+    fallback = get_latest_assistant_payload(messages)
+    if fallback is not None:
+        return fallback
+
+    raise HTTPException(
+        status_code=502,
+        detail="OpenCode accepted the prompt but returned no assistant payload.",
+    )
 
 
 def create_remote_session(working_directory: str) -> str:
@@ -88,7 +136,9 @@ def send_prompt(
     agent: str,
 ) -> dict[str, Any]:
     """Send a prompt to a session and return the response payload."""
+    message_id = _ascending_message_id()
     body: dict[str, Any] = {
+        "messageID": message_id,
         "parts": [{"type": "text", "text": prompt}],
         "model": build_model_payload(model),
         "agent": agent,
@@ -107,7 +157,54 @@ def send_prompt(
         if response.status_code == 404:
             raise HTTPException(status_code=404, detail="OpenCode session not found")
         response.raise_for_status()
-        return response.json()
+        if not response.content or not response.content.strip():
+            return _resolve_message_response_from_history(session_id, message_id)
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"OpenCode message response was not valid JSON: {response.text[:200]}",
+            ) from exc
+    if not isinstance(payload, dict):
+        return _resolve_message_response_from_history(session_id, message_id)
+    return payload
+
+
+def send_prompt_async(
+    *,
+    session_id: str,
+    prompt: str,
+    model: str,
+    system_prompt: str | None,
+    prompt_format: dict[str, Any] | None,
+    working_directory: str,
+    agent: str,
+    message_id: str | None = None,
+) -> str:
+    """Send a prompt asynchronously and return the user message id used for the request."""
+    actual_message_id = (message_id or _ascending_message_id()).strip()
+    body: dict[str, Any] = {
+        "messageID": actual_message_id,
+        "parts": [{"type": "text", "text": prompt}],
+        "model": build_model_payload(model),
+        "agent": agent,
+    }
+    if system_prompt:
+        body["system"] = system_prompt
+    if prompt_format:
+        body["format"] = prompt_format
+
+    with runtime_http_client() as client:
+        response = client.post(
+            f"/session/{session_id}/prompt_async",
+            params={"directory": working_directory},
+            json=body,
+        )
+        if response.status_code == 404:
+            raise HTTPException(status_code=404, detail="OpenCode session not found")
+        response.raise_for_status()
+    return actual_message_id
 
 
 def _send_prompt_with_session_recovery(
@@ -168,6 +265,30 @@ def get_session_messages(session_id: str) -> list[dict[str, Any]]:
     return [item for item in payload if isinstance(item, dict)]
 
 
+def get_session_message(session_id: str, message_id: str) -> dict[str, Any] | None:
+    """Fetch a specific message payload for a session from the OpenCode server."""
+    try:
+        with runtime_http_client() as hclient:
+            response = hclient.get(f"/session/{session_id}/message/{message_id}")
+            if response.status_code == 404:
+                return None
+            response.raise_for_status()
+            payload = response.json()
+    except (httpx.HTTPError, ValueError):
+        logger.warning("Failed to get session message %s for %s", message_id, session_id)
+        return None
+    if not isinstance(payload, dict):
+        return None
+    info = payload.get("info")
+    if not isinstance(info, dict):
+        return None
+    parts = payload.get("parts") if isinstance(payload.get("parts"), list) else []
+    return {
+        "info": info,
+        "parts": [item for item in parts if isinstance(item, dict)],
+    }
+
+
 def get_session_status(session_id: str) -> dict[str, Any]:
     """Check the current status (idle/busy/retry) of a session."""
     try:
@@ -177,7 +298,10 @@ def get_session_status(session_id: str) -> dict[str, Any]:
             statuses = response.json()
         if not isinstance(statuses, dict):
             return {"type": "idle"}
-        return statuses.get(session_id, {"type": "idle"})
+        session_status = statuses.get(session_id)
+        if not isinstance(session_status, dict):
+            return {"type": "idle"}
+        return session_status
     except (httpx.HTTPError, ValueError):
         logger.warning("Failed to get session status for %s; assuming idle.", session_id)
         return {"type": "idle"}
@@ -185,13 +309,18 @@ def get_session_status(session_id: str) -> dict[str, Any]:
 
 def wait_for_session_idle(session_id: str, timeout_seconds: float = SESSION_IDLE_TIMEOUT_SECONDS) -> dict[str, Any]:
     """Block until the session becomes idle or *timeout_seconds* elapses."""
-    deadline = time.time() + timeout_seconds
+    deadline = time.monotonic() + timeout_seconds
     last_status = {"type": "idle"}
-    while time.time() < deadline:
+    next_delay = min(SESSION_IDLE_POLL_SECONDS, max(SESSION_IDLE_POLL_SECONDS / 2, 0.1))
+    while True:
         last_status = get_session_status(session_id)
         if str(last_status.get("type", "idle")) == "idle":
             return last_status
-        time.sleep(SESSION_IDLE_POLL_SECONDS)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return last_status
+        time.sleep(min(next_delay, remaining))
+        next_delay = min(max(next_delay * 2, SESSION_IDLE_POLL_SECONDS), SESSION_IDLE_MAX_POLL_SECONDS)
     return last_status
 
 

@@ -136,6 +136,13 @@ def parse_runtime_config_files(raw_value: Any, *, source: str) -> dict[str, Any]
     return normalized
 
 
+def merge_runtime_config_files(*config_sets: tuple[Any, str]) -> dict[str, Any]:
+    merged: dict[str, Any] = {}
+    for value, source in config_sets:
+        merged.update(parse_runtime_config_files(value, source=source))
+    return merged
+
+
 _FENCED_JSON_RE = re.compile(r"```(?:json)?\s*\n([\s\S]*?)\n```")
 
 
@@ -171,6 +178,19 @@ def parse_json_output(text: str) -> Any | None:
             except ValueError:
                 continue
     return None
+
+
+def missing_json_paths(payload: Any, required_paths: Sequence[str]) -> list[str]:
+    """Return required dotted JSON paths that are missing or blank."""
+    missing: list[str] = []
+    for raw_path in required_paths:
+        path = str(raw_path).strip()
+        if not path:
+            continue
+        value = _lookup_path(payload, path.split("."))
+        if value in (None, "", [], {}):
+            missing.append(path)
+    return missing
 
 
 def _resolve_template_value(value: Any) -> str:
@@ -390,6 +410,9 @@ def normalize_step_execution(step: dict[str, Any]) -> dict[str, Any]:
     pre_auth = execution.get("preAuthorizedActions") or []
     if not isinstance(pre_auth, list):
         pre_auth = []
+    required_json_paths = execution.get("requiredJsonPaths") or []
+    if not isinstance(required_json_paths, list):
+        required_json_paths = []
     return {
         "timeoutSeconds": max(
             float(execution.get("timeoutSeconds", AGENT_RUNTIME_TIMEOUT_SECONDS) or AGENT_RUNTIME_TIMEOUT_SECONDS), 1.0
@@ -408,6 +431,7 @@ def normalize_step_execution(step: dict[str, Any]) -> dict[str, Any]:
         "retryable": bool(execution.get("retryable", True)),
         "continueOnError": bool(execution.get("continueOnError", False)),
         "preAuthorizedActions": [str(a).strip() for a in pre_auth if str(a).strip()],
+        "requiredJsonPaths": [str(path).strip() for path in required_json_paths if str(path).strip()],
         "sessionGroup": str(execution.get("sessionGroup") or "").strip(),
         "verifyRetries": max(int(execution.get("verifyRetries", 0) or 0), 0),
         "maxTurns": max(int(execution.get("maxTurns", 0) or 0), 0),
@@ -609,54 +633,6 @@ def validate_supported_policy_spec(policy_spec: dict[str, Any]) -> None:
     parse_memory_policy_config(policy_spec)
 
 
-def normalize_goose_config_file_path(raw_path: object) -> str:
-    normalized_path = str(raw_path).replace("\\", "/").strip()
-    if not normalized_path:
-        raise ValueError("Goose config file paths must not be blank.")
-    if normalized_path.startswith("/"):
-        raise ValueError("Goose config file paths must be relative to the Goose config root.")
-
-    parts = [part for part in normalized_path.split("/") if part]
-    if not parts or any(part in {".", ".."} for part in parts):
-        raise ValueError(f"Goose config file path '{raw_path}' is invalid.")
-
-    candidate = "/".join(parts)
-    if candidate in GOOSE_CONFIG_FORBIDDEN_FILES:
-        raise ValueError(
-            "Goose secrets.yaml is not supported here. Inject provider secrets through environment variables instead."
-        )
-    if parts[0] == "permissions":
-        raise ValueError("Goose config files under permissions/ are runtime-managed and cannot be preseeded.")
-    return candidate
-
-
-def parse_goose_config_files(config_files: Any, *, source: str) -> dict[str, Any]:
-    if config_files is None:
-        return {}
-
-    if isinstance(config_files, str):
-        trimmed = config_files.strip()
-        if not trimmed:
-            return {}
-        try:
-            config_files = json.loads(trimmed)
-        except ValueError as exc:
-            raise ValueError(
-                f"{source} must be a JSON object or mapping of relative Goose config file paths to contents."
-            ) from exc
-
-    if not isinstance(config_files, dict):
-        raise ValueError(f"{source} must be a mapping of relative Goose config file paths to contents.")
-
-    normalized_files: dict[str, Any] = {}
-    for raw_path, raw_content in sorted(config_files.items(), key=lambda item: str(item[0])):
-        normalized_path = normalize_goose_config_file_path(raw_path)
-        if raw_content is None:
-            raise ValueError(f"{source}.{normalized_path} must not be null.")
-        normalized_files[normalized_path] = raw_content
-    return normalized_files
-
-
 def normalize_skill_file_path(raw_path: object) -> str:
     normalized_path = str(raw_path).replace("\\", "/").strip()
     if not normalized_path:
@@ -712,11 +688,61 @@ def parse_agent_skills_config(skills_config: Any, *, source: str = "AIAgent.spec
     return {"files": normalized_files} if normalized_files else {}
 
 
-def merge_goose_config_files(*config_sets: tuple[Any, str]) -> dict[str, Any]:
-    merged: dict[str, Any] = {}
-    for value, source in config_sets:
-        merged.update(parse_goose_config_files(value, source=source))
-    return merged
+def runtime_error_message(response: httpx.Response, *, max_body_chars: int = 400) -> str:
+    """Build a compact HTTP error message that includes a trimmed response body."""
+    try:
+        response.read()
+    except Exception:
+        pass
+
+    body = ""
+    try:
+        body = " ".join(response.text.strip().split())
+    except Exception:
+        body = ""
+
+    if body and len(body) > max_body_chars:
+        body = f"{body[:max_body_chars].rstrip()}..."
+
+    base = f"Runtime request failed with HTTP {response.status_code} for url '{response.request.url}'"
+    return f"{base}: {body}" if body else base
+
+
+def _preview_stream_value(value: Any, *, limit: int = 160) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (dict, list)):
+        try:
+            rendered = json.dumps(value, sort_keys=True, default=str)
+        except Exception:
+            rendered = str(value)
+    else:
+        rendered = str(value)
+    collapsed = " ".join(rendered.split())
+    if len(collapsed) <= limit:
+        return collapsed
+    return f"{collapsed[: max(limit - 3, 1)].rstrip()}..."
+
+
+def _tool_call_input_preview(tool_input: Any) -> str:
+    if isinstance(tool_input, dict):
+        for key in (
+            "command",
+            "path",
+            "filePath",
+            "file_path",
+            "target_dir",
+            "workingDirectory",
+            "working_directory",
+            "query",
+            "url",
+            "repo",
+            "name",
+        ):
+            preview = _preview_stream_value(tool_input.get(key))
+            if preview:
+                return preview
+    return _preview_stream_value(tool_input)
 
 
 def invoke_agent_runtime(
@@ -740,10 +766,15 @@ def invoke_agent_runtime(
         with httpx.Client(timeout=effective_timeout) as client:
             response = client.post(url, json=payload)
         if response.status_code < 500:
-            response.raise_for_status()
+            if response.status_code >= 400:
+                raise httpx.HTTPStatusError(
+                    runtime_error_message(response),
+                    request=response.request,
+                    response=response,
+                )
             return response.json()  # type: ignore[no-any-return]
         last_exc = httpx.HTTPStatusError(
-            f"Server error {response.status_code}",
+            runtime_error_message(response),
             request=response.request,
             response=response,
         )
@@ -778,7 +809,12 @@ def invoke_agent_runtime_stream(
         with httpx.Client(timeout=effective_timeout) as client:
             with client.stream("POST", stream_url, json=payload) as resp:
                 if resp.status_code >= 400:
-                    logger.warning("%s stream returned %d, falling back to /invoke", prefix, resp.status_code)
+                    logger.warning(
+                        "%s stream returned %d, falling back to /invoke: %s",
+                        prefix,
+                        resp.status_code,
+                        runtime_error_message(resp),
+                    )
                     return invoke_agent_runtime(agent_name, namespace, payload, timeout_seconds=timeout_seconds)
                 final_result: dict[str, Any] = {}
                 last_response = ""
@@ -788,19 +824,25 @@ def invoke_agent_runtime_stream(
                     line = line.strip()
                     if not line:
                         continue
+                    if line.startswith(":"):
+                        continue
                     if line.startswith("event: "):
                         current_event_type = line[7:].strip()
                         continue
-                    if line.startswith("data: "):
-                        raw = line[6:]
-                        if raw == "[DONE]":
-                            break
-                        try:
-                            data = json.loads(raw)
-                        except (json.JSONDecodeError, ValueError):
-                            continue
-                        etype = current_event_type
-                        current_event_type = ""  # reset for next event
+                    if not line.startswith("data: "):
+                        continue
+                    raw = line[6:]
+                    if raw == "[DONE]":
+                        break
+                    try:
+                        data = json.loads(raw)
+                    except (json.JSONDecodeError, ValueError):
+                        current_event_type = ""
+                        continue
+                    etype = current_event_type
+                    current_event_type = ""  # reset for next event
+                    if not etype:
+                        continue
                     if etype == "response.turn_started":
                         turn_count += 1
                         agent_name_hint = data.get("agent", "")
@@ -823,6 +865,35 @@ def invoke_agent_runtime_stream(
                                 preview,
                                 "..." if len(delta_text) > 200 else "",
                             )
+                    elif etype == "response.tool_call":
+                        tool_name = str(data.get("tool", "") or "tool")
+                        tool_status = str(data.get("status", "unknown") or "unknown")
+                        input_preview = _tool_call_input_preview(data.get("input"))
+                        suffix = f": {input_preview}" if input_preview else ""
+                        logger.info(
+                            "%s tool_call: %s [%s]%s",
+                            prefix,
+                            tool_name,
+                            tool_status,
+                            suffix,
+                        )
+                    elif etype == "response.patch":
+                        raw_files = data.get("files")
+                        patch_files: list[str] = []
+                        if isinstance(raw_files, list):
+                            for item in raw_files[:5]:
+                                if isinstance(item, dict):
+                                    file_name = str(item.get("path") or item.get("file") or item.get("name") or "").strip()
+                                else:
+                                    file_name = str(item or "").strip()
+                                if file_name:
+                                    patch_files.append(file_name)
+                        logger.info(
+                            "%s patch: %d file(s)%s",
+                            prefix,
+                            len(raw_files) if isinstance(raw_files, list) else 0,
+                            f" — {', '.join(patch_files)}" if patch_files else "",
+                        )
                     elif etype == "response.completed":
                         final_result = data
                         last_response = str(final_result.get("response", ""))

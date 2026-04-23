@@ -10,6 +10,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from config import (
+    A2A_ALLOWED_TARGETS,
+    A2A_MAX_TIMEOUT_SECONDS,
+    A2A_REQUIRE_HITL,
+    API_GATEWAY_INTERNAL_URL,
+    API_GATEWAY_SHARED_TOKEN,
     AGENT_SELECTION_MODE,
     ARTIFACT_COLLECTION_MAX_FILES,
     ARTIFACT_PATH_PATTERN,
@@ -28,6 +33,8 @@ from config import (
     _safe_int,
 )
 from prompts import FORMAT_INSTRUCTIONS
+from sanitize_secrets import redact_secrets
+from skills import SKILL_RUNTIME_CONFIG
 from utils import truncate_text
 
 if TYPE_CHECKING:
@@ -85,6 +92,26 @@ def extract_response_text(payload: dict[str, Any]) -> str:
         if text:
             return text
     return ""
+
+
+def assistant_payload_has_signal(payload: dict[str, Any]) -> bool:
+    """Return True when an assistant payload carries meaningful response content."""
+    if extract_response_text(payload).strip():
+        return True
+
+    parts = payload.get("parts")
+    if not isinstance(parts, list):
+        return False
+
+    for item in parts:
+        if not isinstance(item, dict):
+            continue
+        part_type = str(item.get("type") or "").strip().lower()
+        if part_type == "reasoning" and str(item.get("text") or "").strip():
+            return True
+        if part_type in {"tool", "patch"}:
+            return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -194,6 +221,48 @@ def classify_error_type(payload: dict[str, Any]) -> str | None:
         "MessageOutputLengthError": "output_length",
     }
     return error_map.get(name)
+
+
+def extract_error_message(payload: dict[str, Any]) -> str:
+    """Extract the most useful human-readable error message from an OpenCode payload."""
+    info = payload.get("info") or {}
+    if not isinstance(info, dict):
+        return ""
+    error = info.get("error")
+    if not isinstance(error, dict):
+        return ""
+    data = error.get("data")
+    if isinstance(data, dict):
+        detailed = str(data.get("message") or "").strip()
+        if detailed:
+            return detailed
+    message = str(error.get("message") or "").strip()
+    if message:
+        return message
+    return str(error.get("name") or "").strip()
+
+
+def is_error_retryable(payload: dict[str, Any]) -> bool | None:
+    """Return whether an OpenCode error is explicitly marked retryable."""
+    info = payload.get("info") or {}
+    if not isinstance(info, dict):
+        return None
+    error = info.get("error")
+    if not isinstance(error, dict):
+        return None
+    data = error.get("data")
+    if not isinstance(data, dict) or "isRetryable" not in data:
+        return None
+    raw_value = data.get("isRetryable")
+    if isinstance(raw_value, bool):
+        return raw_value
+    if isinstance(raw_value, str):
+        normalized = raw_value.strip().lower()
+        if normalized in ("true", "1", "yes"):
+            return True
+        if normalized in ("false", "0", "no"):
+            return False
+    return None
 
 
 def check_context_overflow(payload: dict[str, Any]) -> bool:
@@ -696,16 +765,27 @@ def _select_agent_simple(prompt: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def get_latest_assistant_payload(messages: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """Return the most recent assistant message payload from a message list."""
+def get_latest_assistant_payload(
+    messages: list[dict[str, Any]],
+    parent_message_id: str | None = None,
+) -> dict[str, Any] | None:
+    """Return the latest meaningful assistant payload, optionally filtered by parent id."""
+    latest_payload: dict[str, Any] | None = None
     for message in reversed(messages):
         info = message.get("info")
-        if isinstance(info, dict) and info.get("role") == "assistant":
-            return {
-                "info": info,
-                "parts": message.get("parts") if isinstance(message.get("parts"), list) else [],
-            }
-    return None
+        if not isinstance(info, dict) or info.get("role") != "assistant":
+            continue
+        if parent_message_id is not None and str(info.get("parentID") or "").strip() != parent_message_id:
+            continue
+        payload = {
+            "info": info,
+            "parts": message.get("parts") if isinstance(message.get("parts"), list) else [],
+        }
+        if latest_payload is None:
+            latest_payload = payload
+        if assistant_payload_has_signal(payload):
+            return payload
+    return latest_payload
 
 
 def extract_tool_calls_from_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -721,15 +801,116 @@ def extract_tool_calls_from_messages(messages: list[dict[str, Any]]) -> list[dic
             state = part.get("state") or {}
             if not isinstance(state, dict):
                 continue
+            raw_input = state.get("input")
+            raw_output = truncate_text(str(state.get("output", "")), 2000)
+            # Redact secrets from both input and output before exposing to the frontend
+            sanitized_input = redact_secrets(str(raw_input)) if isinstance(raw_input, str) else raw_input
+            sanitized_output = redact_secrets(raw_output)
             tool_calls.append(
                 {
                     "tool": str(part.get("tool", "")),
                     "status": str(state.get("status", "unknown")),
-                    "input": state.get("input"),
-                    "output": truncate_text(str(state.get("output", "")), 2000),
+                    "input": sanitized_input,
+                    "output": sanitized_output,
                 }
             )
     return tool_calls
+
+
+
+def _extract_named_items(value: list[Any], *, max_items: int = 3) -> str:
+    """Return a short preview of named items from a structured tool output list."""
+    names: list[str] = []
+    for item in value:
+        candidate = ""
+        if isinstance(item, dict):
+            metadata = item.get("metadata")
+            if isinstance(metadata, dict):
+                candidate = str(metadata.get("name") or "").strip()
+            if not candidate:
+                candidate = str(item.get("name") or item.get("id") or "").strip()
+        elif item not in (None, ""):
+            candidate = str(item).strip()
+        if candidate:
+            names.append(candidate)
+        if len(names) >= max_items:
+            break
+    if not names:
+        return ""
+    suffix = "" if len(value) <= len(names) else ", ..."
+    return ", ".join(names) + suffix
+
+
+def _summarize_tool_output(value: Any, *, max_chars: int = 240) -> str:
+    """Return a compact, human-readable preview for a tool output payload."""
+    text = str(value or "").strip()
+    if not text:
+        return ""
+
+    if text.startswith(("{", "[")):
+        try:
+            parsed = json.loads(text)
+        except Exception:
+            parsed = None
+        if isinstance(parsed, list):
+            preview = _extract_named_items(parsed)
+            summary = f"returned {len(parsed)} item{'s' if len(parsed) != 1 else ''}"
+            if preview:
+                summary = f"{summary}: {preview}"
+            return truncate_text(summary, max_chars)
+        if isinstance(parsed, dict):
+            items = parsed.get("items")
+            if isinstance(items, list):
+                preview = _extract_named_items(items)
+                summary = f"returned {len(items)} item{'s' if len(items) != 1 else ''}"
+                if preview:
+                    summary = f"{summary}: {preview}"
+                return truncate_text(summary, max_chars)
+            keys = [str(key) for key in parsed.keys()][:5]
+            if keys:
+                return truncate_text(f"returned an object with keys: {', '.join(keys)}", max_chars)
+
+    compact = re.sub(r"\s+", " ", text).strip()
+    return truncate_text(compact, max_chars)
+
+
+def build_tool_only_response(tool_calls: list[dict[str, Any]], *, max_tools: int = 5) -> str:
+    """Build a readable fallback response when a run has tool calls but no assistant text."""
+    visible_tool_calls = [call for call in tool_calls if isinstance(call, dict)]
+    if not visible_tool_calls:
+        return ""
+
+    lines = [
+        "The run completed tool execution but did not return a final written summary.",
+        "",
+        "Tool results:",
+    ]
+
+    for call in visible_tool_calls[-max_tools:]:
+        tool_name = str(call.get("tool") or "tool").strip() or "tool"
+        status = str(call.get("status") or "unknown").strip().lower() or "unknown"
+        output_preview = _summarize_tool_output(call.get("output"))
+        input_preview = _summarize_tool_output(call.get("input"), max_chars=120)
+
+        if status == "completed":
+            if output_preview:
+                detail = output_preview
+            elif input_preview:
+                detail = f"completed with no textual output. Input: {input_preview}"
+            else:
+                detail = "completed with no textual output"
+        else:
+            detail = output_preview or input_preview or status
+            if detail != status:
+                detail = f"{status} - {detail}"
+
+        lines.append(f"- {tool_name}: {detail}")
+
+    omitted = len(visible_tool_calls) - min(len(visible_tool_calls), max_tools)
+    if omitted > 0:
+        lines.append(f"- ... {omitted} earlier tool call{'s' if omitted != 1 else ''} omitted.")
+
+    return "\n".join(lines)
 
 
 def detect_task_errors(messages: list[dict[str, Any]]) -> list[str]:
@@ -741,7 +922,9 @@ def detect_task_errors(messages: list[dict[str, Any]]) -> list[str]:
             err = info.get("error")
             if err:
                 if isinstance(err, dict):
-                    errors.append(str(err.get("message", err.get("name", str(err)))))
+                    payload = {"info": {"error": err}}
+                    message = extract_error_message(payload)
+                    errors.append(message or str(err.get("name", str(err))))
                 else:
                     errors.append(str(err))
         parts = msg.get("parts")
@@ -849,8 +1032,6 @@ def extract_artifacts_from_messages(messages: list[dict[str, Any]]) -> list[dict
 
 def runtime_capabilities() -> dict[str, Any]:
     """Return a capabilities descriptor for the runtime."""
-    from skills import SKILL_RUNTIME_CONFIG
-
     return {
         "native_tools": sorted(NATIVE_TOOL_NAMES),
         "native_tool_count": len(NATIVE_TOOL_NAMES),
@@ -883,7 +1064,23 @@ def runtime_capabilities() -> dict[str, Any]:
             "handoff_resume": MEMORY_ENABLED,
         },
         "mcp_usage": {
-            "available": bool(SKILL_RUNTIME_CONFIG.get("mcpSidecars") or os.getenv("MCP_SERVERS", "").strip()),
+            "available": bool(
+                SKILL_RUNTIME_CONFIG.get("mcpSidecars")
+                or os.getenv("OPENCODE_MCP_CONNECTIONS_JSON", "").strip()
+                or os.getenv("MCP_SERVERS", "").strip()
+            ),
             "preferred_mode": "native-tools-first",
+        },
+        "a2a": {
+            "outbound_supported": True,
+            "transport": "a2a-jsonrpc",
+            "gateway_configured": bool(API_GATEWAY_INTERNAL_URL and API_GATEWAY_SHARED_TOKEN),
+            "allowed_target_count": len(A2A_ALLOWED_TARGETS),
+            "allowed_targets": [
+                {"namespace": namespace, "name": name}
+                for namespace, name in sorted(A2A_ALLOWED_TARGETS)
+            ],
+            "max_timeout_seconds": A2A_MAX_TIMEOUT_SECONDS,
+            "requires_hitl": A2A_REQUIRE_HITL,
         },
     }

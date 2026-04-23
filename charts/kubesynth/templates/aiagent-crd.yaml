@@ -81,44 +81,18 @@ spec:
                         Map of relative Markdown skill paths, typically .github/skills/<name>/SKILL.md,
                         to the file contents that should be materialized inside the runtime.
                         The skill file body steers the agent and optional frontmatter can declare
-                        allowed sandbox tools, MCP servers, A2A targets, subagent usage, and Goose extensions.
+                        allowed sandbox tools, MCP servers, A2A targets, and subagent usage.
                       additionalProperties:
                         type: string
                 runtime:
                   type: object
-                  description: "Selects which runtime implementation should execute this agent"
+                  description: "Selects the runtime implementation that should execute this agent"
                   properties:
                     kind:
                       type: string
                       enum:
-                        - langgraph
-                        - goose
-                        - codex
                         - opencode
                       description: "Runtime implementation to provision for this agent"
-                    goose:
-                      type: object
-                      description: "Goose-specific configuration used when runtime.kind=goose"
-                      properties:
-                        configFiles:
-                          type: object
-                          description: |
-                            Optional map of relative Goose config-root paths to file contents,
-                            for example config.yaml or prompts/review.md. Agent-specific entries
-                            override chart-wide GOOSE_RUNTIME_CONFIG_FILES_JSON defaults by path.
-                          additionalProperties:
-                            x-kubernetes-preserve-unknown-fields: true
-                    codex:
-                      type: object
-                      description: "Codex-specific configuration used when runtime.kind=codex"
-                      properties:
-                        configFiles:
-                          type: object
-                          description: |
-                            Optional map of relative Codex config paths to file contents.
-                            Agent-specific entries override chart-wide CODEX_RUNTIME_CONFIG_FILES_JSON defaults by path.
-                          additionalProperties:
-                            x-kubernetes-preserve-unknown-fields: true
                     opencode:
                       type: object
                       description: "OpenCode-specific configuration used when runtime.kind=opencode"
@@ -132,6 +106,8 @@ spec:
                             OPENCODE_RUNTIME_CONFIG_FILES_JSON defaults by path.
                           additionalProperties:
                             x-kubernetes-preserve-unknown-fields: true
+                  required:
+                    - kind
                 gitConfig:
                   type: object
                   description: "Git repository configuration for autonomous dev-loop workflows"
@@ -176,6 +152,26 @@ spec:
                       description: "Name of the K8s Secret holding the GitHub personal access token"
                   required:
                     - credentialSecretRef
+                mcpConnections:
+                  type: array
+                  description: "Structured MCP connection snapshots resolved by the gateway, including transport-specific runtime metadata."
+                  items:
+                    type: object
+                    properties:
+                      connectionId:
+                        type: string
+                        nullable: true
+                      name:
+                        type: string
+                      slug:
+                        type: string
+                      serverId:
+                        type: string
+                      transport:
+                        type: string
+                      source:
+                        type: string
+                    x-kubernetes-preserve-unknown-fields: true
                 mcpServers:
                   type: array
                   items:
@@ -196,17 +192,40 @@ spec:
                 enableGVisor:
                   type: boolean
                   description: "If true, configures the Pod to use the gVisor runtime class (if available)"
+                resources:
+                  type: object
+                  description: "Optional per-agent CPU and memory overrides for the runtime container"
+                  properties:
+                    requests:
+                      type: object
+                      properties:
+                        cpu:
+                          type: string
+                          description: "Requested CPU quantity for the agent runtime container"
+                        memory:
+                          type: string
+                          description: "Requested memory quantity for the agent runtime container"
+                    limits:
+                      type: object
+                      properties:
+                        cpu:
+                          type: string
+                          description: "CPU limit for the agent runtime container"
+                        memory:
+                          type: string
+                          description: "Memory limit for the agent runtime container"
                 storage:
                   type: object
                   properties:
                     size:
                       type: string
-                      description: "Persistent storage request for LangGraph checkpoints (for example '1Gi')"
+                      description: "Persistent storage request for the runtime workspace (for example '1Gi')"
                     storageClassName:
                       type: string
-                      description: "Optional StorageClass name for checkpoint persistence"
+                      description: "Optional StorageClass name for workspace persistence"
               required:
                 - model
+                - runtime
   scope: Namespaced
   names:
     plural: aiagents

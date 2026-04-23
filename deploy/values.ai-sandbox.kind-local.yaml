@@ -1,0 +1,43 @@
+# Narrow image overrides for the live local Kind release.
+# Safe usage:
+#   make deploy-ai-sandbox-kind
+#
+# This file is intentionally limited to image references so it can be applied
+# on top of the existing ai-sandbox release with --reuse-values without replaying
+# stale secrets or older platform settings.
+
+global:
+  imagePullSecrets: []
+
+opencodeRuntime:
+  image:
+    repository: localhost/kubesynthai/kubesynth-opencode-runtime
+    tag: mcp-structured-20260413-4
+    pullPolicy: IfNotPresent
+
+operator:
+  image:
+    repository: localhost/kubesynthai/kubesynth-operator
+    tag: mcp-structured-20260413-3
+    pullPolicy: IfNotPresent
+  workerImage:
+    repository: localhost/kubesynthai/kubesynth-operator
+    tag: mcp-structured-20260413-3
+    pullPolicy: IfNotPresent
+
+apiGateway:
+  image:
+    repository: localhost/kubesynthai/kubesynth-api-gateway
+    tag: google-oidc-20260413-223019
+    pullPolicy: IfNotPresent
+
+webUi:
+  image:
+    repository: localhost/kubesynthai/kubesynth-web-ui
+    tag: google-oidc-20260413-223019
+    pullPolicy: IfNotPresent
+
+collector:
+  image:
+    repository: localhost/kubesynthai/collector-agent
+    tag: dev

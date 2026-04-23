@@ -81,6 +81,26 @@ def _namespaces_from_mapping(value: Any) -> list[str]:
     return []
 
 
+def _provider_brand(*candidates: Any) -> str:
+    fingerprint = " ".join(str(candidate or "").strip().lower() for candidate in candidates)
+    if not fingerprint:
+        return "generic"
+    if "google" in fingerprint or "accounts.google.com" in fingerprint:
+        return "google"
+    if (
+        "microsoft" in fingerprint
+        or "entra" in fingerprint
+        or "azuread" in fingerprint
+        or "login.microsoftonline.com" in fingerprint
+    ):
+        return "microsoft"
+    if "okta" in fingerprint:
+        return "okta"
+    if "github" in fingerprint:
+        return "github"
+    return "generic"
+
+
 def resolve_role_mapping(groups: list[str], mapping: dict[str, Any], default_role: str = "viewer") -> tuple[str, list[str]]:
     role = default_role if default_role in ROLE_PRIORITY else "viewer"
     namespaces: set[str] = set()
@@ -290,6 +310,7 @@ def saml_providers() -> list[dict[str, Any]]:
             "id": item["id"],
             "name": item["name"],
             "kind": "saml",
+            "brand": _provider_brand(item["id"], item["name"], item.get("idp_entity_id"), item.get("sso_url")),
             "supported": True,
         }
         for item in _configured_saml_providers()
@@ -300,7 +321,13 @@ def auth_configuration() -> dict[str, Any]:
     return {
         "password_providers": [provider for provider in ["local", "ldap" if ldap_enabled() else None] if provider],
         "oidc_providers": [
-            {"id": item["id"], "name": item["name"], "kind": "oidc", "supported": True}
+            {
+                "id": item["id"],
+                "name": item["name"],
+                "kind": "oidc",
+                "brand": _provider_brand(item["id"], item["name"], item.get("issuer"), item.get("authorization_endpoint")),
+                "supported": True,
+            }
             for item in oidc_providers()
         ],
         "saml_providers": saml_providers(),

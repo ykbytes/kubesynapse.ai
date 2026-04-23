@@ -5,28 +5,538 @@ metadata:
   namespace: default
 spec:
   description: >
-    Generate a 60-question Azure-style practice exam for the new AI-300
-    certification by scanning authoritative web resources and synthesizing
-    original multiple-choice questions with answers, explanations, and citations.
-  steps:
-    - name: generate-exam
-      type: agent
-      agentRef: ai300-exam-agent
-      prompt: >
-        Your task is to create a single HTML file at `/workspace/ai300_practice_exam.html`.
-        Use web-search and browser tools to gather authoritative information (Microsoft Learn,
-        Azure Docs, official product pages, Microsoft engineering blogs). Produce 60 original
-        multiple-choice questions (4 options each). For each question include the correct answer,
-        a concise explanation (2-4 sentences), and one or more source URLs. Cite sources next
-        to each explanation. Use `<details><summary>` to hide answers by default.
+    Generate a Udemy-ready 60-question Azure AI-300 practice exam
+    (Operationalizing Machine Learning and Generative AI Solutions) by:
+    researching official exam objectives via web search, generating grounded
+    questions in batches with per-question citation verification, validating
+    all answers against Microsoft Learn documentation, and compiling a
+    professional HTML exam file with interactive scoring and collapsible
+    explanations.
+  input: ""
+  contextRef: ai300-exam-context
+  messageBus: in-memory
 
-        Start by discovering the official AI-300 exam objectives and authoritative topic list,
-        then create a question distribution that covers all major objectives. Avoid reproducing
-        proprietary exam dumps; synthesize original items. Save the final HTML to `/workspace`.
+  steps:
+    # ── Step 1: Discover exam objectives and collect reference material ──
+    - name: research-exam-scope
+      agentRef: ai300-researcher
+      prompt: |
+        Research the Azure AI-300 certification exam: "Operationalizing Machine
+        Learning and Generative AI Solutions". This is a REAL exam (currently in
+        beta). Use SerpAPI and the MCP web-search tools to discover and verify:
+
+        1. The official exam objectives and study guide from:
+           https://learn.microsoft.com/en-us/credentials/certifications/resources/study-guides/ai-300
+        2. All 5 exam domains with their percentage weights.
+        3. Detailed sub-topics under each domain.
+        4. The official exam format (passing score 700, beta status).
+        5. Key Azure services covered: Azure Machine Learning, Microsoft Foundry,
+           GitHub Actions, Bicep, MLflow, managed endpoints, AutoML.
+        6. Any recent service updates or renames affecting the exam.
+
+        Search queries to execute:
+        - "AI-300 exam study guide site:learn.microsoft.com"
+        - "Azure Machine Learning MLOps site:learn.microsoft.com"
+        - "Microsoft Foundry GenAIOps site:learn.microsoft.com"
+        - "Azure ML managed endpoints deployment site:learn.microsoft.com"
+        - "MLflow Azure Machine Learning tracking site:learn.microsoft.com"
+
+        For each domain found, collect at least 5 authoritative reference URLs
+        from Microsoft Learn.
+
+        Return structured JSON per your output contract.
       execution:
-        timeoutSeconds: 7200
-        # Allow multiple attempts in case of transient web/network errors
-        maxAttempts: 3
-        # Increase max turns to allow extensive web exploration
-        maxTurns: 300
-        sessionGroup: ai300-session
+        timeoutSeconds: 1800
+        maxAttempts: 2
+        backoffSeconds: 10
+        maxTurns: 50
+        requiredJsonPaths:
+          - exam_info.exam_code
+          - domains.0.name
+          - domains.0.subtopics.0
+          - reference_urls.0
+
+    # ── Step 2: Deep-dive each domain for question-writing material ──
+    - name: deep-dive-references
+      agentRef: ai300-researcher
+      dependsOn:
+        - research-exam-scope
+      prompt: |
+        Using the exam scope from the previous step, deep-dive into each of the
+        5 AI-300 domains to collect specific technical facts needed for writing
+        exam questions.
+
+        Exam scope data:
+        {{research-exam-scope.output.json}}
+
+        For EACH domain and its sub-topics, use SerpAPI to search
+        site:learn.microsoft.com and collect:
+
+        DOMAIN 1 — MLOps Infrastructure:
+        - Machine Learning workspace creation (ARM/Bicep templates)
+        - Datastore types and configuration (blob, ADLS, SQL)
+        - Compute targets (clusters, instances, serverless)
+        - IAM for ML workspaces (RBAC roles, managed identities)
+        - Data assets, environments, components
+        - GitHub integration and Git-based workflows
+        - Network isolation (VNet, private endpoints)
+
+        DOMAIN 2 — ML Model Lifecycle:
+        - MLflow experiment tracking APIs and methods
+        - AutoML configuration and task types
+        - Hyperparameter tuning with SweepJob
+        - Distributed training (Horovod, DeepSpeed, PyTorch DDP)
+        - Training pipelines with pipeline components
+        - Model registration in MLflow format
+        - Responsible AI dashboard and metrics
+        - Real-time vs batch managed endpoints
+        - Blue-green deployment and traffic splitting
+        - Data drift detection and monitoring
+
+        DOMAIN 3 — GenAIOps Infrastructure:
+        - Microsoft Foundry project/hub creation
+        - Foundation model deployment (serverless API vs managed compute)
+        - Provisioned throughput units (PTU)
+        - Prompt flow and prompt management
+        - Network security for Foundry
+
+        DOMAIN 4 — GenAI QA & Observability:
+        - AI quality metrics (groundedness, relevance, coherence, fluency)
+        - Risk and safety evaluations
+        - Foundry monitoring dashboards
+        - Token consumption tracking
+        - Tracing and debugging capabilities
+
+        DOMAIN 5 — Optimize GenAI:
+        - RAG optimization (chunk sizes, similarity thresholds)
+        - Embedding model selection and fine-tuning
+        - Hybrid search (semantic + keyword)
+        - Fine-tuning methods (LoRA, full fine-tuning)
+        - Synthetic data generation for fine-tuning
+        - A/B testing for RAG systems
+
+        For each fact, record the exact source URL. Aim for at least 10 key
+        facts per domain (50+ facts total).
+
+        CRITICAL OUTPUT INSTRUCTION:
+        - Do NOT generate questions.
+        - Do NOT create HTML.
+        - Do NOT write files.
+        - Return ONLY a single raw JSON object that matches your output
+          contract. Do not include markdown fences or commentary.
+
+        Return structured JSON per your output contract.
+      execution:
+        timeoutSeconds: 2400
+        maxAttempts: 2
+        backoffSeconds: 10
+        maxTurns: 80
+        requiredJsonPaths:
+          - domain_references.0.domain
+          - domain_references.0.key_facts.0
+
+    # ── Step 3: Generate questions 1-27 (Domains 1 and 2) ──
+    - name: generate-questions-part1
+      agentRef: ai300-exam-writer
+      dependsOn:
+        - deep-dive-references
+      prompt: |
+        Generate questions 1 through 27 for the AI-300 practice exam covering
+        the first two domains. Write the output to /workspace/questions_part1.json.
+
+        Research data — exam scope:
+        {{research-exam-scope.output.json}}
+
+        Research data — deep-dive references:
+        {{deep-dive-references.output.json}}
+
+        QUESTION ALLOCATION FOR THIS BATCH:
+
+        Domain 1: "Design and implement an MLOps infrastructure" — 11 questions
+          - 6 multiple-choice
+          - 2 multiple-select
+          - 1 scenario (e.g. deploying ML workspace with Bicep + GitHub Actions)
+          - 1 ordering (e.g. steps to set up IaC for ML workspace)
+          - 1 yes/no-series (e.g. statements about compute targets)
+          Topics to cover: workspaces, datastores, compute targets, IAM, data
+          assets, environments, components, registries, GitHub integration, Bicep,
+          Azure CLI, GitHub Actions, network restrictions, Git source control.
+
+        Domain 2: "Implement machine learning model lifecycle and operations" — 16 questions
+          - 8 multiple-choice
+          - 3 multiple-select
+          - 3 scenario (e.g. MLflow tracking setup, endpoint deployment, data drift)
+          - 1 ordering (e.g. model registration to deployment pipeline)
+          - 1 yes/no-series (e.g. statements about managed endpoints)
+          Topics to cover: MLflow experiment tracking, AutoML, notebooks,
+          hyperparameter tuning, training scripts, distributed training, training
+          pipelines, model performance comparison, feature retrieval spec, MLflow
+          registration, responsible AI, model archiving, real-time endpoints,
+          batch endpoints, progressive rollout, rollback, data drift, monitoring
+          metrics, retraining triggers.
+
+        CRITICAL QUALITY REQUIREMENTS:
+        - For EVERY question: search SerpAPI for the specific topic BEFORE writing.
+          Example: before writing about MLflow tracking, search
+          "MLflow experiment tracking Azure Machine Learning site:learn.microsoft.com"
+        - Verify the correct answer matches what the documentation says.
+        - Include at least one Microsoft Learn URL per question's source_urls.
+        - Write original questions; do not copy from any source.
+        - Use real Azure ML SDK v2 calls, CLI commands, REST API endpoints, Bicep
+          resource types.
+        - Include realistic Python code snippets in scenario questions.
+        - Make distractors plausible but clearly wrong.
+        - For every option, statement, or ordered step, include a concise
+          rationale explaining why it is correct or incorrect.
+        - Vary difficulty: 30% easy, 50% medium, 20% hard.
+
+        CRITICAL OUTPUT INSTRUCTION:
+        - Write the batch to /workspace/questions_part1.json.
+        - Then return ONLY a single raw JSON object that matches the output
+          contract in your system prompt.
+        - Do not wrap the JSON in markdown fences.
+        - Do not include commentary before or after the JSON.
+        - The workflow validates your final response body, not just the file
+          write. File creation alone is not enough for success.
+
+        Number questions from 1 to 27. Write the JSON file following the output
+        contract format specified in your system prompt.
+      execution:
+        timeoutSeconds: 3600
+        maxAttempts: 2
+        backoffSeconds: 10
+        maxTurns: 200
+        requiredJsonPaths:
+          - questions.0.id
+          - questions.0.correct_answer
+          - questions.0.explanation
+          - questions.0.source_urls.0
+
+    # ── Step 4: Generate questions 28-60 (Domains 3, 4, 5) ──
+    - name: generate-questions-part2
+      agentRef: ai300-exam-writer
+      dependsOn:
+        - generate-questions-part1
+      prompt: |
+        Generate questions 28 through 60 for the AI-300 practice exam covering
+        the last three domains. Write the output to /workspace/questions_part2.json.
+
+        Research data — exam scope:
+        {{research-exam-scope.output.json}}
+
+        Research data — deep-dive references:
+        {{deep-dive-references.output.json}}
+
+        QUESTION ALLOCATION FOR THIS BATCH:
+
+        Domain 3: "Design and implement a GenAIOps infrastructure" — 14 questions
+          - 7 multiple-choice
+          - 2 multiple-select
+          - 3 scenario (e.g. Foundry project setup, model deployment with PTU,
+            prompt versioning workflow)
+          - 1 ordering (e.g. steps to deploy foundation model to production)
+          - 1 yes/no-series (e.g. statements about Foundry capabilities)
+          Topics to cover: Foundry resources, project environments, managed
+          identities, RBAC, network security, Bicep deployment, serverless API
+          endpoints, managed compute, model selection, model versioning,
+          provisioned throughput units, prompt design, prompt variants,
+          prompt version control with Git.
+
+        Domain 4: "Implement generative AI quality assurance and observability" — 10 questions
+          - 5 multiple-choice
+          - 2 multiple-select
+          - 2 scenario (e.g. setting up evaluation pipeline, configuring monitoring)
+          - 1 ordering (e.g. steps to set up automated evaluation workflow)
+          Topics to cover: test datasets, data mapping, groundedness metrics,
+          relevance, coherence, fluency, risk/safety evaluations, harmful content
+          detection, automated evaluation workflows, custom metrics, continuous
+          monitoring in Foundry, latency/throughput metrics, token consumption,
+          resource usage, logging, tracing, debugging.
+
+        Domain 5: "Optimize generative AI systems and model performance" — 9 questions
+          - 4 multiple-choice
+          - 2 multiple-select
+          - 1 scenario (e.g. optimizing RAG pipeline for production)
+          - 1 ordering (e.g. fine-tuning workflow steps)
+          - 1 yes/no-series (e.g. statements about RAG optimization)
+          Topics to cover: similarity thresholds, chunk sizes, retrieval
+          strategies, embedding model selection, hybrid search, relevance metrics,
+          A/B testing, fine-tuning methods, synthetic data, fine-tuned model
+          monitoring, dev-to-production model management.
+
+        CRITICAL QUALITY REQUIREMENTS:
+        Same as part 1 — for EVERY question:
+        - Search SerpAPI for the specific topic BEFORE writing.
+        - Verify the correct answer against Microsoft documentation.
+        - Include at least one Microsoft Learn URL per question.
+        - Write original questions, not copies.
+        - Use real service names, APIs, SDKs, Bicep types.
+        - Include realistic code in scenario questions.
+        - For every option, statement, or ordered step, include a concise
+          rationale explaining why it is correct or incorrect.
+        - Vary difficulty: 30% easy, 50% medium, 20% hard.
+
+        CRITICAL OUTPUT INSTRUCTION:
+        - Write the batch to /workspace/questions_part2.json.
+        - Then return ONLY a single raw JSON object that matches the output
+          contract in your system prompt.
+        - Do not wrap the JSON in markdown fences.
+        - Do not include commentary before or after the JSON.
+        - The workflow validates your final response body, not just the file
+          write. File creation alone is not enough for success.
+
+        Number questions from 28 to 60. Write the JSON file following the output
+        contract format specified in your system prompt.
+      execution:
+        timeoutSeconds: 3600
+        maxAttempts: 2
+        backoffSeconds: 10
+        maxTurns: 200
+        requiredJsonPaths:
+          - questions.0.id
+          - questions.0.correct_answer
+          - questions.0.explanation
+          - questions.0.source_urls.0
+
+    # ── Step 5: Validate all 60 questions ──
+    - name: validate-all-questions
+      agentRef: ai300-qa-reviewer
+      dependsOn:
+        - generate-questions-part1
+        - generate-questions-part2
+      prompt: |
+        Validate all 60 questions from both batches. Read the question files and
+        perform thorough fact-checking.
+
+        Questions batch 1 (Qs 1-27):
+        {{generate-questions-part1.output.json}}
+
+        Questions batch 2 (Qs 28-60):
+        {{generate-questions-part2.output.json}}
+
+        VALIDATION TASKS:
+        1. For EACH question, use SerpAPI to search for the specific topic and
+           verify the stated correct answer matches official Microsoft docs.
+        2. Check every source URL — search for updated URLs if any are dead.
+        3. Verify no two questions are essentially duplicates or test the same
+           concept in the same way.
+        4. Verify domain coverage matches the allocation:
+           - MLOps Infrastructure: 11, ML Model Lifecycle: 16,
+           - GenAIOps Infrastructure: 14, GenAI QA & Observability: 10,
+           - Optimize GenAI: 9
+        5. Verify question type distribution:
+           - Multiple-choice: ~30, Multiple-select: ~10, Scenario: ~10,
+           - Ordering: ~5, Yes/no-series: ~5
+        6. Verify difficulty balance: ~30% easy, ~50% medium, ~20% hard.
+        7. Flag any question that appears to be copied from a known source.
+        8. Verify all questions use current Azure service names (Azure Machine
+           Learning, Microsoft Foundry, MLflow, etc.).
+        9. Reject any question whose citation is generic or does not directly
+           support the exact correct answer.
+        10. Reject or correct any question with medium/low confidence.
+        11. Verify that scenario, ordering, and yes/no-series questions include
+           the fields required to render them correctly in HTML.
+        12. Verify every question includes complete answer-by-answer rationale
+           coverage:
+           - `option_rationales` for all multiple-choice, multiple-select, and
+             scenario options
+           - `ordering_rationales` for each position in ordering questions
+           - statement-level `rationale` fields for yes-no-series questions
+
+        For incorrect answers, provide the corrected answer, updated
+        explanation, corrected rationale fields, and verified source URL.
+
+        Return structured JSON per your output contract.
+      execution:
+        timeoutSeconds: 3600
+        maxAttempts: 2
+        backoffSeconds: 10
+        maxTurns: 150
+        requiredJsonPaths:
+          - validated_questions.0.id
+          - validation_summary.total_verified
+          - validation_summary.corrections_made
+          - validation_summary.questions_with_complete_answer_rationales
+          - quality_score
+          - ready_for_publish
+
+    # ── Step 6: Compile the Udemy-ready HTML exam file ──
+    - name: compile-udemy-html
+      agentRef: ai300-exam-writer
+      dependsOn:
+        - validate-all-questions
+      prompt: |
+        Compile all validated questions into a single professional, Udemy-ready
+        HTML file at /workspace/ai300_practice_exam.html.
+
+        Validation results and corrected questions:
+        {{validate-all-questions.output.json}}
+
+        Original questions batch 1:
+        {{generate-questions-part1.output.json}}
+
+        Original questions batch 2:
+        {{generate-questions-part2.output.json}}
+
+        HTML REQUIREMENTS:
+        1. Single self-contained HTML file with all CSS and JS embedded.
+        2. Professional color scheme (Azure blue #0078D4 as accent).
+        3. Header: "AI-300 Practice Exam: Operationalizing Machine Learning
+           and Generative AI Solutions" with question count, passing score.
+        4. Table of contents linking to each domain section (5 domains).
+        5. Questions organized by domain, each section with a header showing
+           domain name and question count.
+        6. Each question shows:
+           - Question number and type badge (MC, MS, Scenario, Order, Y/N)
+           - The question text (with scenario if applicable)
+           - Answer options (radio buttons for MC, checkboxes for MS)
+           - A <details><summary>Show Answer & Explanation</summary> toggle
+           - Inside the toggle: correct answer highlighted in green, full
+             explanation, an answer-by-answer rationale section for every
+             option or statement, and clickable source URL links
+        7. Interactive JavaScript features:
+           - Score tracker: users select answers and click "Check Answer" to
+             see if they got it right. Running score displayed at top.
+           - Progress bar showing how many questions answered.
+           - Domain-level score breakdown table updated in real time.
+           - "Reveal All Answers" button at the bottom.
+           - "Reset Exam" button to start over.
+        8. Responsive design for desktop and mobile.
+        9. Print-friendly: @media print hides interactive elements, shows all
+           answers and explanations.
+
+          IMPLEMENTATION RULES:
+          1. Use the validated question set as the source of truth. Do not change
+            the question count, domain counts, or type counts during compilation.
+          2. Build a single valid JavaScript data assignment exactly like this:
+            `window.questionsData = [ ... ];`
+            The assignment must contain all 60 questions in one array.
+          3. Ensure the script that reads `window.questionsData` runs only after
+            the array has been defined, or reads it lazily at runtime.
+          4. Support ALL 5 question types in both rendering and scoring logic:
+            multiple-choice, multiple-select, scenario, ordering, yes-no-series.
+          5. Ordering questions must be interactive and scoreable.
+          6. If a question object contains a `scenario` field, display it before
+            the question stem.
+          7. Render answer-by-answer rationales for every question:
+            - all `option_rationales` entries for multiple-choice,
+              multiple-select, and scenario questions
+            - all `ordering_rationales` entries for ordering questions
+            - all statement `rationale` entries for yes-no-series questions
+          8. Use balanced, valid HTML. In particular, keep `<details>` and all
+            container `<div>` elements properly closed.
+          9. Do not fetch any external CSS, JS, fonts, or images.
+          10. After writing the HTML file, re-open it and verify that it contains:
+            - `window.questionsData = [`
+            - exactly 60 question objects in the data array
+            - answer-by-answer rationale sections for all supported question types
+            - renderer logic for ordering questions
+            - `revealAll()` and `resetExam()` functions
+            - valid details/summary sections
+
+        Apply any corrections from the validation step (corrected answers,
+        updated explanations, fixed URLs).
+
+          Return ONLY raw JSON confirming the output:
+        {
+          "output_file": "/workspace/ai300_practice_exam.html",
+          "total_questions": 60,
+          "format": "html",
+          "domains_included": 5,
+           "self_contained": true,
+           "contains_valid_questions_array": true,
+           "contains_per_answer_rationales": true,
+           "supports_all_question_types": true,
+           "question_type_counts": {
+            "multiple_choice": 30,
+            "multiple_select": 10,
+            "scenario": 10,
+            "ordering": 5,
+            "yes_no_series": 5
+           },
+           "domain_counts": {
+            "mlops_infrastructure": 11,
+            "ml_model_lifecycle": 16,
+            "genaiops_infrastructure": 14,
+            "genai_qa_observability": 10,
+            "optimize_genai": 9
+           },
+           "interactive_features": ["score-tracker", "progress-bar", "domain-breakdown", "reveal-all", "reset"]
+        }
+      execution:
+        timeoutSeconds: 1800
+        maxAttempts: 2
+        backoffSeconds: 10
+        maxTurns: 50
+        requiredJsonPaths:
+          - output_file
+          - total_questions
+          - self_contained
+          - contains_valid_questions_array
+          - contains_per_answer_rationales
+          - supports_all_question_types
+          - question_type_counts.multiple_choice
+          - question_type_counts.ordering
+          - domain_counts.mlops_infrastructure
+          - domain_counts.optimize_genai
+
+    # ── Step 7: Final quality check (context-based, no filesystem access) ──
+    - name: final-quality-check
+      agentRef: ai300-qa-reviewer
+      dependsOn:
+        - compile-udemy-html
+      prompt: |
+        IMPORTANT: You are running on a SEPARATE sandbox from the exam-writer.
+        Do NOT try to read files from /workspace — they will not exist here.
+        Perform ALL checks using ONLY the data provided below in this prompt.
+
+        Compilation report from the exam-writer step:
+        {{compile-udemy-html.output.json}}
+
+        Validation results from the QA step:
+        {{validate-all-questions.output.json}}
+
+        Using ONLY the data above, verify:
+        1. The compilation report confirms all 60 questions were included.
+        2. The validation data covers all 60 question IDs (1-60).
+        3. All 5 domains are present in the validation data.
+        4. All 5 question types are present (MC, MS, scenario, ordering, Y/N).
+        5. The validation quality_score is >= 85.
+        6. No blocking issues were flagged in the validation.
+        7. Source URLs are present for questions in the validation data.
+        8. No copied content flags exist in the validation data.
+        9. The compilation report says the HTML is self-contained.
+        10. The compilation report says `window.questionsData` is a valid array.
+        11. The compilation report says per-answer rationales are present.
+        12. The compilation report says all question types are supported.
+        13. The compilation report question_type_counts exactly match 30/10/10/5/5.
+        14. The compilation report domain_counts exactly match 11/16/14/10/9.
+        15. The validation summary reports complete answer-rationale coverage for
+            all 60 questions.
+
+        CRITICAL OUTPUT INSTRUCTION:
+        You MUST respond with ONLY a single JSON object — no markdown fences,
+        no commentary, no explanation before or after. Just the raw JSON.
+
+        Use this exact schema:
+        {"quality_score": 0, "issues_found": 0, "ready_for_publish": false, "checks_passed": {"all_60_questions_present": false, "all_explanations_have_citations": false, "all_answer_rationales_present": false, "all_5_types_represented": false, "all_5_domains_covered": false, "no_formatting_errors": false, "no_copied_content": false}, "blocking_issues": [], "final_notes": ""}
+
+        Fill in the actual values based on your analysis. Set ready_for_publish
+        to true if quality_score >= 85 and there are zero blocking issues.
+      execution:
+        timeoutSeconds: 900
+        maxAttempts: 2
+        maxTurns: 30
+        requiredJsonPaths:
+          - quality_score
+          - ready_for_publish
+
+    # ── Step 8: Publish gate ──
+    - name: publish-gate
+      type: conditional
+      agentRef: ai300-qa-reviewer
+      dependsOn:
+        - final-quality-check
+      conditionExpr: 'matches("\"ready_for_publish\"\\s*:\\s*true")'
+      thenSteps: []
+      elseSteps: []

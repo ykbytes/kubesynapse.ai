@@ -18,6 +18,7 @@ import {
   Database,
   Container,
   Globe,
+  Server,
   Terminal,
   FileCode,
   MessageSquare,
@@ -25,6 +26,8 @@ import {
   Sparkles,
   ArrowLeft,
 } from "lucide-react";
+import { deriveAgentVisualSignals } from "@/lib/agentSignals";
+import { stringifyMcpSidecars } from "@/lib/mcp";
 import { cn } from "@/lib/utils";
 import type { RuntimeKind } from "@/types";
 
@@ -43,6 +46,25 @@ interface AgentTemplate {
   mcp_servers: string[];
 }
 
+const TEMPLATE_SIDECAR_SPECS: Record<string, { name: string; image: string; port: number }> = {
+  "code-exec": { name: "code-exec", image: "localhost/kubesynthai/mcp-code-exec", port: 8090 },
+  "web-search": { name: "web-search", image: "localhost/kubesynthai/mcp-web-search", port: 8091 },
+  documents: { name: "documents", image: "localhost/kubesynthai/mcp-documents", port: 8092 },
+  browser: { name: "browser", image: "localhost/kubesynthai/mcp-browser", port: 8093 },
+  database: { name: "database", image: "localhost/kubesynthai/mcp-database", port: 8094 },
+  git: { name: "git", image: "localhost/kubesynthai/mcp-git", port: 8095 },
+  kubernetes: { name: "kubernetes", image: "localhost/kubesynthai/mcp-kubernetes", port: 8097 },
+  messaging: { name: "messaging", image: "localhost/kubesynthai/mcp-messaging", port: 8098 },
+  rag: { name: "rag", image: "localhost/kubesynthai/mcp-rag", port: 8099 },
+};
+
+function resolveTemplateSidecars(sidecarIds: string[]): Array<Record<string, unknown>> {
+  return sidecarIds
+    .map((sidecarId) => TEMPLATE_SIDECAR_SPECS[sidecarId])
+    .filter((sidecar): sidecar is { name: string; image: string; port: number } => Boolean(sidecar))
+    .map((sidecar) => ({ ...sidecar }));
+}
+
 const TEMPLATES: AgentTemplate[] = [
   {
     id: "code-assistant",
@@ -50,7 +72,7 @@ const TEMPLATES: AgentTemplate[] = [
     description: "A general-purpose coding assistant with access to code execution and git tools.",
     icon: "Code",
     category: "development",
-    runtime_kind: "langgraph",
+    runtime_kind: "opencode",
     model: "gpt-4o",
     system_prompt: "You are a senior software engineer. Help users write, debug, and review code. Follow best practices and write clean, maintainable code. Always explain your reasoning.",
     mcp_sidecars: ["code-exec", "git"],
@@ -62,7 +84,7 @@ const TEMPLATES: AgentTemplate[] = [
     description: "An agent that searches the web and analyzes documents for research tasks.",
     icon: "Search",
     category: "research",
-    runtime_kind: "langgraph",
+    runtime_kind: "opencode",
     model: "gpt-4o",
     system_prompt: "You are a research analyst. Search the web, read documents, and synthesize information into clear, well-structured reports. Cite your sources.",
     mcp_sidecars: ["web-search", "documents", "rag"],
@@ -74,7 +96,7 @@ const TEMPLATES: AgentTemplate[] = [
     description: "An agent for database queries, data analysis, and pipeline development.",
     icon: "Database",
     category: "data",
-    runtime_kind: "langgraph",
+    runtime_kind: "opencode",
     model: "gpt-4o",
     system_prompt: "You are a data engineer. Help users write SQL queries, design schemas, build data pipelines, and analyze datasets.",
     mcp_sidecars: ["database", "code-exec"],
@@ -86,10 +108,22 @@ const TEMPLATES: AgentTemplate[] = [
     description: "Manages Kubernetes resources, CI/CD, and infrastructure automation.",
     icon: "Container",
     category: "operations",
-    runtime_kind: "langgraph",
+    runtime_kind: "opencode",
     model: "gpt-4o",
     system_prompt: "You are a DevOps engineer specializing in Kubernetes and cloud infrastructure. Help users manage deployments, troubleshoot pods, and automate CI/CD.",
     mcp_sidecars: ["kubernetes", "git", "code-exec"],
+    mcp_servers: [],
+  },
+  {
+    id: "cluster-intel",
+    name: "Cluster Intel",
+    description: "Inspects live Kubernetes cluster health, workloads, and configuration through direct Kubernetes MCP access.",
+    icon: "Server",
+    category: "operations",
+    runtime_kind: "opencode",
+    model: "copilot-gpt-5-mini",
+    system_prompt: "You are Cluster Intel, a Kubernetes SRE assistant powered by GPT-5 Mini. You have direct access to live cluster state through the kubernetes MCP tools and may also receive recent cluster intelligence summaries.\n\nWhen the user asks about cluster health, incidents, workloads, or configuration:\n- Inspect the live cluster with the kubernetes MCP tools first.\n- Correlate live findings with any recent cluster intelligence context when it is present.\n- Summarize health, call out anomalies, explain impact, and recommend concrete next actions.\n- Report uncertainty clearly if a resource cannot be inspected.\n\nPrioritize checking:\n- pod health across namespaces\n- node conditions and scheduling failures\n- recent warning events\n- deployments, statefulsets, and daemonsets with unavailable replicas\n- services, ingress, network policies, and obvious RBAC issues when relevant\n\nResponse format:\n## Cluster Health Summary\n- Overall Status: [HEALTHY|DEGRADED|CRITICAL]\n- Key Signals: [short bullets]\n\n## Issues Found\n- [severity] [namespace/kind/name] - finding, impact, evidence\n\n## Recommendations\n- [prioritized action]\n\nDo not ask the user to paste kubectl output when the kubernetes MCP tools can answer the question directly. Only ask for manual command output if the tool path is unavailable or insufficient.",
+    mcp_sidecars: ["kubernetes"],
     mcp_servers: [],
   },
   {
@@ -98,22 +132,10 @@ const TEMPLATES: AgentTemplate[] = [
     description: "An agent that can browse the web, interact with pages, and extract data.",
     icon: "Globe",
     category: "automation",
-    runtime_kind: "langgraph",
+    runtime_kind: "opencode",
     model: "gpt-4o",
     system_prompt: "You are a web automation agent. Navigate websites, fill forms, extract data, and take screenshots.",
     mcp_sidecars: ["browser", "web-search"],
-    mcp_servers: [],
-  },
-  {
-    id: "goose-developer",
-    name: "Goose Developer",
-    description: "A Goose-runtime coding agent for autonomous software development.",
-    icon: "Terminal",
-    category: "development",
-    runtime_kind: "goose",
-    model: "gpt-4o",
-    system_prompt: "",
-    mcp_sidecars: [],
     mcp_servers: [],
   },
   {
@@ -134,7 +156,7 @@ const TEMPLATES: AgentTemplate[] = [
     description: "An agent that integrates with Slack and messaging platforms.",
     icon: "MessageSquare",
     category: "communication",
-    runtime_kind: "langgraph",
+    runtime_kind: "opencode",
     model: "gpt-4o",
     system_prompt: "You are a helpful messaging assistant. Respond concisely and professionally.",
     mcp_sidecars: ["messaging"],
@@ -148,6 +170,7 @@ const ICON_MAP: Record<string, typeof Code> = {
   Database,
   Container,
   Globe,
+  Server,
   Terminal,
   FileCode,
   MessageSquare,
@@ -193,12 +216,24 @@ export function AgentTemplateWizard({ open, onOpenChange }: AgentTemplateWizardP
     ws.setCreateAgentModel(model || selected.model);
     ws.setCreateAgentSystemPrompt(selected.system_prompt);
     ws.setCreateAgentRuntimeKind(selected.runtime_kind);
-    if (selected.mcp_sidecars.length > 0) {
-      ws.setCreateAgentMcpSidecarsText(selected.mcp_sidecars.join(", "));
-    }
-    if (selected.mcp_servers.length > 0) {
-      ws.setCreateAgentMcpServersText(selected.mcp_servers.join("\n"));
-    }
+    ws.setCreateAgentMcpSidecarsText(stringifyMcpSidecars(resolveTemplateSidecars(selected.mcp_sidecars)));
+    ws.setCreateAgentMcpServersText(selected.mcp_servers.join("\n"));
+    ws.setCreateAgentA2AAllowedCallersText("");
+    ws.setCreateAgentSkillFileDrafts([]);
+    ws.setCreateAgentOpenCodeConfigFileDrafts([]);
+    ws.setCreateAgentGitForm({
+      enabled: false,
+      repoUrl: "",
+      authMethod: "token",
+      pushPolicy: "after-each-commit",
+      defaultBranch: "main",
+      branch: "",
+      token: "",
+      username: "",
+      password: "",
+      sshPrivateKey: "",
+    });
+    ws.setCreateAgentGitHubForm({ enabled: false, token: "" });
     // Switch to agent create mode
     ws.setActiveView("agents");
     ws.setAgentCreateMode(true);
@@ -264,6 +299,11 @@ export function AgentTemplateWizard({ open, onOpenChange }: AgentTemplateWizardP
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               {filtered.map((template) => {
                 const Icon = ICON_MAP[template.icon] ?? Code;
+                const templateSignals = deriveAgentVisualSignals({
+                  runtime_kind: template.runtime_kind,
+                  mcp_sidecars: resolveTemplateSidecars(template.mcp_sidecars),
+                });
+                const RuntimeIcon = templateSignals.runtime.icon;
                 return (
                   <button
                     key={template.id}
@@ -289,10 +329,19 @@ export function AgentTemplateWizard({ open, onOpenChange }: AgentTemplateWizardP
                         {template.description}
                       </p>
                       <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
-                        <Badge variant="secondary" className="text-[9px] h-4 px-1.5">{template.runtime_kind}</Badge>
-                        {template.mcp_sidecars.map((s) => (
-                          <Badge key={s} variant="outline" className="text-[9px] h-4 px-1.5">{s}</Badge>
-                        ))}
+                        <span className={cn("inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[9px]", templateSignals.runtime.tone)}>
+                          <RuntimeIcon className="h-3 w-3" />
+                          {templateSignals.runtime.shortLabel}
+                        </span>
+                        {templateSignals.capabilities.slice(0, 3).map((capability) => {
+                          const CapabilityIcon = capability.icon;
+                          return (
+                            <span key={capability.id} className={cn("inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[9px]", capability.tone)}>
+                              <CapabilityIcon className="h-3 w-3" />
+                              {capability.shortLabel}
+                            </span>
+                          );
+                        })}
                       </div>
                     </div>
                     <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0 mt-1" />
@@ -305,59 +354,84 @@ export function AgentTemplateWizard({ open, onOpenChange }: AgentTemplateWizardP
 
         {step === "customize" && selected && (
           <div className="flex-1 overflow-auto space-y-4 py-2">
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-7 text-xs gap-1 cursor-pointer"
-              onClick={() => setStep("pick")}
-            >
-              <ArrowLeft className="h-3 w-3" /> Back to templates
-            </Button>
+            {(() => {
+              const selectedSignals = deriveAgentVisualSignals({
+                runtime_kind: selected.runtime_kind,
+                mcp_sidecars: resolveTemplateSidecars(selected.mcp_sidecars),
+              });
+              const RuntimeIcon = selectedSignals.runtime.icon;
+              const AccessIcon = selectedSignals.access.icon;
+              return (
+                <>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 text-xs gap-1 cursor-pointer"
+                    onClick={() => setStep("pick")}
+                  >
+                    <ArrowLeft className="h-3 w-3" /> Back to templates
+                  </Button>
 
-            <div className="space-y-3">
-              <div className="space-y-1.5">
-                <Label className="text-xs">Agent Name</Label>
-                <Input
-                  value={agentName}
-                  onChange={(e) => setAgentName(e.target.value)}
-                  placeholder="my-code-assistant"
-                  className="h-8 text-sm"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label className="text-xs">Model</Label>
-                <Input
-                  value={model}
-                  onChange={(e) => setModel(e.target.value)}
-                  placeholder="gpt-4o"
-                  className="h-8 text-sm"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label className="text-xs">Runtime</Label>
-                <div className="text-sm text-muted-foreground bg-muted/30 rounded-md px-3 py-1.5">
-                  {selected.runtime_kind}
-                </div>
-              </div>
-              {selected.system_prompt && (
-                <div className="space-y-1.5">
-                  <Label className="text-xs">System Prompt (preview)</Label>
-                  <div className="text-[11px] text-muted-foreground bg-muted/30 rounded-md px-3 py-2 max-h-24 overflow-auto">
-                    {selected.system_prompt}
+                  <div className="space-y-3">
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Agent Name</Label>
+                      <Input
+                        value={agentName}
+                        onChange={(e) => setAgentName(e.target.value)}
+                        placeholder="my-code-assistant"
+                        className="h-8 text-sm"
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Model</Label>
+                      <Input
+                        value={model}
+                        onChange={(e) => setModel(e.target.value)}
+                        placeholder="gpt-4o"
+                        className="h-8 text-sm"
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Runtime</Label>
+                      <div className="flex items-center gap-1.5 flex-wrap bg-muted/30 rounded-md px-3 py-2">
+                        <span className={cn("inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px]", selectedSignals.runtime.tone)}>
+                          <RuntimeIcon className="h-3 w-3" />
+                          {selectedSignals.runtime.shortLabel}
+                        </span>
+                        <span className={cn("inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px]", selectedSignals.access.tone)}>
+                          <AccessIcon className="h-3 w-3" />
+                          {selectedSignals.access.label}
+                        </span>
+                      </div>
+                    </div>
+                    {selected.system_prompt && (
+                      <div className="space-y-1.5">
+                        <Label className="text-xs">System Prompt (preview)</Label>
+                        <div className="text-[11px] text-muted-foreground bg-muted/30 rounded-md px-3 py-2 max-h-24 overflow-auto">
+                          {selected.system_prompt}
+                        </div>
+                      </div>
+                    )}
+                    {selected.mcp_sidecars.length > 0 && (
+                      <div className="space-y-1.5">
+                        <Label className="text-xs">MCP Sidecars</Label>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          {selectedSignals.capabilities.map((capability) => {
+                            const CapabilityIcon = capability.icon;
+                            return (
+                              <span key={capability.id} className={cn("inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px]", capability.tone)}>
+                                <CapabilityIcon className="h-3 w-3" />
+                                {capability.label}
+                              </span>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
                   </div>
-                </div>
-              )}
-              {selected.mcp_sidecars.length > 0 && (
-                <div className="space-y-1.5">
-                  <Label className="text-xs">MCP Sidecars</Label>
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    {selected.mcp_sidecars.map((s) => (
-                      <Badge key={s} variant="outline" className="text-xs">{s}</Badge>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
+                </>
+              );
+            })()}
           </div>
         )}
 

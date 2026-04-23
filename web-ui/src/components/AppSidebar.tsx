@@ -1,5 +1,6 @@
-import { Bot, GitBranch, FlaskConical, Inbox, Package, Play, Plus, RefreshCw, PanelLeftClose, PanelLeft, Search, Blocks, Settings, ShieldCheck, ShieldAlert, Trash2 } from "lucide-react";
+import { Bot, GitBranch, FlaskConical, Inbox, MessageSquare, Package, Play, Plug, Plus, Radar, RefreshCw, PanelLeftClose, PanelLeft, Search, Blocks, Settings, ShieldCheck, ShieldAlert, Trash2 } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { AgentVisualSignals } from "@/lib/agentSignals";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,6 +17,7 @@ export interface SidebarResourceItem {
   subtitle: string;
   status: string;
   note?: string;
+  signals?: AgentVisualSignals;
 }
 
 interface AppSidebarProps {
@@ -39,11 +41,14 @@ interface AppSidebarProps {
 
 const VIEW_META: Record<WorkspaceView, { label: string; icon: typeof Bot }> = {
   agents: { label: "Agents", icon: Bot },
+  chat: { label: "Chat", icon: MessageSquare },
   workflows: { label: "Workflows", icon: GitBranch },
   composer: { label: "Composer", icon: Blocks },
   evals: { label: "Evals", icon: FlaskConical },
   catalog: { label: "Catalog", icon: Package },
   policies: { label: "Policies", icon: ShieldAlert },
+  intelligence: { label: "Intelligence", icon: Radar },
+  mcp: { label: "MCP Servers", icon: Plug },
   settings: { label: "Settings", icon: Settings },
   admin: { label: "Admin", icon: ShieldCheck },
 };
@@ -51,17 +56,17 @@ const VIEW_META: Record<WorkspaceView, { label: string; icon: typeof Bot }> = {
 function statusDotClasses(status: string): string {
   switch (status) {
     case "running":
-      return "bg-emerald-500 animate-[breathe-pulse_2s_ease-in-out_infinite]";
+      return "bg-success animate-[breathe-pulse_2s_cubic-bezier(0.2,0,0.38,0.9)_infinite]";
     case "succeeded":
     case "completed":
-      return "bg-emerald-500";
+      return "bg-success";
     case "pending":
     case "queued":
     case "progressing":
-      return "bg-amber-500 animate-[breathe-pulse_2s_ease-in-out_infinite]";
+      return "bg-warning animate-[breathe-pulse_2s_cubic-bezier(0.2,0,0.38,0.9)_infinite]";
     case "failed":
     case "error":
-      return "bg-red-500";
+      return "bg-destructive";
     default:
       return "bg-muted-foreground/40";
   }
@@ -119,52 +124,67 @@ export function AppSidebar({
     return items.filter(
       (item) =>
         item.title.toLowerCase().includes(lower) ||
-        item.subtitle.toLowerCase().includes(lower),
+        item.subtitle.toLowerCase().includes(lower) ||
+        (item.note ?? "").toLowerCase().includes(lower) ||
+        (item.signals?.runtime.label.toLowerCase().includes(lower) ?? false) ||
+        (item.signals?.access.label.toLowerCase().includes(lower) ?? false) ||
+        (item.signals?.capabilities.some((capability) => capability.label.toLowerCase().includes(lower) || capability.shortLabel.toLowerCase().includes(lower)) ?? false),
     );
   }, [items, debouncedFilter]);
   if (collapsed) {
     return (
       <TooltipProvider delayDuration={100}>
-        <aside className="flex w-12 flex-col items-center border-r border-border bg-sidebar py-2 gap-2">
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={onToggleCollapse} aria-label="Expand sidebar">
-                <PanelLeft className="h-4 w-4" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="right">Expand sidebar</TooltipContent>
-          </Tooltip>
-          {visibleViews.map((view) => {
-            const { icon: Icon, label } = VIEW_META[view];
-            return (
-              <Tooltip key={view}>
+        <aside className="flex w-14 flex-col items-center border-r border-sidebar-border/80 bg-sidebar/92 backdrop-blur-xl">
+          {/* Match header height */}
+          <div className="flex h-14 w-full items-center justify-center border-b border-sidebar-border/80">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="icon" className="h-9 w-9 rounded-xl text-muted-foreground hover:bg-sidebar-accent/75 hover:text-sidebar-accent-foreground" onClick={onToggleCollapse} aria-label="Expand sidebar">
+                  <PanelLeft className="h-4 w-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="right">Expand sidebar</TooltipContent>
+            </Tooltip>
+          </div>
+          <nav className="flex flex-col items-center gap-1 py-2" aria-label="Workspace views">
+            {visibleViews.map((view) => {
+              const { icon: Icon, label } = VIEW_META[view];
+              const isActive = activeView === view;
+              return (
+                <Tooltip key={view}>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className={cn(
+                        "h-9 w-9 rounded-xl transition-colors duration-150 ease-productive",
+                        isActive ? "bg-sidebar-primary/15 text-primary shadow-sm hover:bg-sidebar-primary/18" : "text-muted-foreground hover:bg-sidebar-accent/75 hover:text-sidebar-accent-foreground",
+                      )}
+                      onClick={() => onViewChange(view)}
+                      aria-label={`${label} (${counts[view]})`}
+                      aria-pressed={isActive}
+                    >
+                      <Icon className="h-4 w-4" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="right">
+                    {label} ({counts[view]})
+                  </TooltipContent>
+                </Tooltip>
+              );
+            })}
+          </nav>
+          {canMutate && (
+            <div className="mt-auto border-t border-sidebar-border/80 py-2">
+              <Tooltip>
                 <TooltipTrigger asChild>
-                  <Button
-                    variant={activeView === view ? "secondary" : "ghost"}
-                    size="icon"
-                    className="h-8 w-8"
-                    onClick={() => onViewChange(view)}
-                    aria-label={`${label} (${counts[view]})`}
-                    aria-pressed={activeView === view}
-                  >
-                    <Icon className="h-4 w-4" />
+                  <Button variant="ghost" size="icon" className="h-9 w-9 rounded-xl text-muted-foreground hover:bg-sidebar-accent/75 hover:text-sidebar-accent-foreground" onClick={onCreateNew} aria-label="Create new">
+                    <Plus className="h-4 w-4" />
                   </Button>
                 </TooltipTrigger>
-                <TooltipContent side="right">
-                  {label} ({counts[view]})
-                </TooltipContent>
+                <TooltipContent side="right">Create new</TooltipContent>
               </Tooltip>
-            );
-          })}
-          {canMutate && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={onCreateNew} aria-label="Create new">
-                <Plus className="h-4 w-4" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="right">Create new</TooltipContent>
-          </Tooltip>
+            </div>
           )}
         </aside>
       </TooltipProvider>
@@ -173,63 +193,78 @@ export function AppSidebar({
 
   return (
     <TooltipProvider delayDuration={100}>
-    <aside className="flex w-64 flex-col border-r border-border bg-sidebar">
-      {/* View tabs */}
-      <div className="border-b border-border px-2 py-2">
-        <div className="grid grid-cols-2 gap-1 md:grid-cols-4">
+    <aside className="flex h-full w-full min-w-0 flex-col border-r border-sidebar-border/80 bg-sidebar/92 backdrop-blur-xl">
+      {/* Header */}
+      <div className="flex h-14 items-center justify-between border-b border-sidebar-border/80 px-3.5">
+        <div className="min-w-0">
+          <p className="text-[10px] font-medium uppercase tracking-[0.22em] text-muted-foreground">Workspace</p>
+          <p className="truncate text-sm font-semibold text-sidebar-foreground">{VIEW_META[activeView].label}</p>
+        </div>
+        <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0 rounded-xl text-muted-foreground hover:bg-sidebar-accent/75 hover:text-sidebar-accent-foreground" onClick={onToggleCollapse} aria-label="Collapse sidebar">
+          <PanelLeftClose className="h-3.5 w-3.5" />
+        </Button>
+      </div>
+
+      {/* Vertical nav */}
+      <nav className="border-b border-sidebar-border/80 px-2.5 py-2.5" aria-label="Workspace views">
+        <div className="space-y-0.5">
           {visibleViews.map((view) => {
             const { icon: Icon, label } = VIEW_META[view];
             const count = counts[view];
             const isActive = activeView === view;
             return (
-              <Tooltip key={view}>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant={isActive ? "secondary" : "ghost"}
-                    size="sm"
-                    className="h-10 flex-col items-center justify-center gap-0 px-1"
-                    onClick={() => onViewChange(view)}
-                    aria-label={`${label} (${count})`}
-                    aria-pressed={isActive}
+              <button
+                key={view}
+                onClick={() => onViewChange(view)}
+                className={cn(
+                  "flex w-full items-center gap-2.5 rounded-xl border px-3 py-2 text-[13px] font-medium transition-all duration-150 ease-productive",
+                  isActive
+                    ? "border-sidebar-border bg-sidebar-primary/15 text-sidebar-foreground shadow-sm"
+                    : "border-transparent text-muted-foreground hover:bg-sidebar-accent/70 hover:text-sidebar-accent-foreground",
+                )}
+                aria-label={`${label} (${count})`}
+                aria-pressed={isActive}
+              >
+                <Icon className={cn("h-4 w-4 shrink-0 transition-colors", isActive ? "text-primary" : "")} />
+                <span className="flex-1 text-left">{label}</span>
+                {count > 0 && (
+                  <span
+                    className={cn(
+                      "ml-auto flex h-5 min-w-[1.25rem] items-center justify-center rounded-full border px-1.5 text-[10px] font-semibold tabular-nums",
+                      isActive ? "border-primary/25 bg-primary/14 text-primary" : "border-border/55 bg-secondary/70 text-muted-foreground",
+                    )}
                   >
-                    <Icon className="h-3.5 w-3.5 shrink-0" />
-                    <span className="max-w-full truncate text-[10px] leading-none">{label}</span>
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">{label} ({count})</TooltipContent>
-              </Tooltip>
+                    {count}
+                  </span>
+                )}
+              </button>
             );
           })}
         </div>
-        <div className="mt-1 flex justify-end">
-          <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={onToggleCollapse} aria-label="Collapse sidebar">
-            <PanelLeftClose className="h-3.5 w-3.5" />
-          </Button>
-        </div>
-      </div>
+      </nav>
 
       {/* Actions */}
-      <div className="flex gap-1.5 border-b border-border px-3 py-2">
-{canMutate && (
-        <Button size="sm" className="h-7 flex-1 gap-1.5 text-xs" onClick={onCreateNew}>
-          <Plus className="h-3.5 w-3.5" />
-          New
-        </Button>
-)}
-        <Button variant="outline" size="icon" className="h-7 w-7" onClick={onRefresh} disabled={loading} aria-label="Refresh list">
+      <div className="flex gap-2 border-b border-sidebar-border/80 px-3.5 py-3">
+        {canMutate && (
+          <Button size="sm" className="h-8 flex-1 gap-1.5 rounded-xl text-xs" onClick={onCreateNew}>
+            <Plus className="h-3.5 w-3.5" />
+            New
+          </Button>
+        )}
+        <Button variant="outline" size="icon" className="h-8 w-8 rounded-xl" onClick={onRefresh} disabled={loading} aria-label="Refresh list">
           <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
         </Button>
       </div>
 
       {/* Search */}
-      <div className="px-3 py-2 border-b border-border">
+      <div className="border-b border-sidebar-border/80 px-3.5 py-3">
         <div className="relative">
-          <Search className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+          <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
           <Input
             value={filter}
             onChange={(e) => handleFilterChange(e.target.value)}
-            placeholder="Filter..."
-            className="h-7 pl-7 text-xs"
+            placeholder={`Search ${VIEW_META[activeView].label.toLowerCase()}...`}
+            className="h-9 border-sidebar-border/70 bg-card/68 pl-9 text-xs"
             aria-label="Filter resources"
           />
         </div>
@@ -237,11 +272,11 @@ export function AppSidebar({
 
       {/* Resource list */}
       <ScrollArea className="flex-1">
-        <div className="p-2 space-y-1" role="listbox" aria-label={`${VIEW_META[activeView].label} list`}>
+        <div className="space-y-1.5 p-2.5" role="listbox" aria-label={`${VIEW_META[activeView].label} list`}>
           {loading && filteredItems.length === 0 && (
             <>
               {[0, 1, 2, 3].map((i) => (
-                <div key={i} className="flex items-start gap-2.5 rounded-md px-2.5 py-2">
+                <div key={i} className="flex items-start gap-2.5 rounded-xl border border-transparent px-3 py-2.5">
                   <Skeleton className="mt-1.5 h-2 w-2 shrink-0 rounded-full" />
                   <div className="min-w-0 flex-1 space-y-1.5">
                     <Skeleton className="h-3.5 w-3/4 rounded" />
@@ -257,8 +292,11 @@ export function AppSidebar({
               title={filter.trim() ? "No matches" : emptyMessage}
               description={filter.trim() ? `No items match "${debouncedFilter}"` : undefined}
               action={
-                !filter.trim() && canMutate && (activeView === "agents" || activeView === "workflows" || activeView === "evals")
-                  ? { label: `Create ${VIEW_META[activeView].label.replace(/s$/, "")}`, onClick: onCreateNew }
+                !filter.trim() && canMutate && (activeView === "agents" || activeView === "chat" || activeView === "workflows" || activeView === "evals")
+                  ? {
+                      label: activeView === "chat" ? "Create Agent" : `Create ${VIEW_META[activeView].label.replace(/s$/, "")}`,
+                      onClick: onCreateNew,
+                    }
                   : undefined
               }
               className="py-8"
@@ -302,6 +340,9 @@ const SidebarItem = memo(function SidebarItem({
 }) {
   const actionLabel = quickRunLabel ? `${quickRunLabel} ${item.title}` : `Run ${item.title}`;
   const hasActions = onQuickRun || onDelete;
+  const runtimeSignal = item.signals?.runtime;
+  const accessSignal = item.signals?.access;
+  const secondaryMeta = [item.note, runtimeSignal?.label, accessSignal?.label].filter(Boolean).join(" • ");
   return (
     <div
       role="option"
@@ -311,22 +352,38 @@ const SidebarItem = memo(function SidebarItem({
       tabIndex={0}
       style={{ animationDelay: `${index * 30}ms` }}
       className={cn(
-        "group flex w-full flex-col rounded-xl px-2.5 py-2 text-left text-sm cursor-pointer",
-        "transition-all duration-150 hover:bg-sidebar-accent/80 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
+        "group flex w-full cursor-pointer flex-col rounded-[calc(var(--radius-lg)+2px)] border px-3 py-2.5 text-left text-sm",
+        "transition-all duration-150 ease-productive hover:border-sidebar-border/65 hover:bg-sidebar-accent/55 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
         "animate-slide-up opacity-0 [animation-fill-mode:forwards]",
-        isSelected && "bg-sidebar-accent border-l-2 border-primary shadow-md shadow-primary/10",
+        isSelected ? "border-sidebar-border bg-sidebar-accent/82 shadow-sm" : "border-transparent",
       )}
     >
       <div className="flex w-full items-start gap-2.5">
-        <span className={cn("mt-1.5 h-2 w-2 shrink-0 rounded-full", statusDotClasses(item.status))} aria-hidden="true" />
+        {runtimeSignal ? (
+          <span className={cn("mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border shadow-inner", runtimeSignal.tone)} aria-hidden="true">
+            <runtimeSignal.icon className="h-4 w-4" />
+          </span>
+        ) : (
+          <span className={cn("mt-1.5 h-2 w-2 shrink-0 rounded-full", statusDotClasses(item.status))} aria-hidden="true" />
+        )}
         <span className="sr-only">Status: {item.status}</span>
-        <div className="min-w-0 flex-1">
-          <p className="truncate font-medium text-sidebar-foreground">{item.title}</p>
-          <p className="truncate text-xs text-muted-foreground">{item.subtitle}</p>
+        <div className="min-w-0 flex-1 space-y-1.5">
+          <div className="flex items-start justify-between gap-2">
+            <p className="min-w-0 flex-1 line-clamp-2 break-words text-[12.5px] font-medium leading-5 text-sidebar-foreground">{item.title}</p>
+            {runtimeSignal ? <span className={cn("mt-1 inline-flex h-2 w-2 shrink-0 rounded-full", statusDotClasses(item.status))} aria-hidden="true" /> : null}
+          </div>
+          <p className="line-clamp-1 break-all text-[11px] leading-5 text-muted-foreground">{item.subtitle}</p>
+          {secondaryMeta ? <p className="line-clamp-2 break-all text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground/85">{secondaryMeta}</p> : null}
         </div>
       </div>
       {hasActions && (
-        <div className="hidden group-hover:flex items-center gap-1 mt-1.5 ml-4.5 pl-0.5">
+        <div
+          className={cn(
+            "mt-2 items-center gap-1.5 group-focus-within:flex",
+            isSelected ? "flex" : "hidden group-hover:flex",
+            item.signals ? "ml-11" : "ml-4.5 pl-0.5",
+          )}
+        >
           {onQuickRun && (
             <span
               role="button"
@@ -335,7 +392,7 @@ const SidebarItem = memo(function SidebarItem({
               title={actionLabel}
               onClick={(e) => { e.stopPropagation(); onQuickRun(item.id); }}
               onKeyDown={(e) => { if (e.key === "Enter") { e.stopPropagation(); onQuickRun(item.id); } }}
-              className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-primary/20 hover:text-primary"
+              className="inline-flex items-center gap-1 rounded-full border border-border/60 bg-card/64 px-2 py-1 text-[10px] font-medium uppercase tracking-[0.1em] text-muted-foreground hover:border-primary/25 hover:bg-primary/12 hover:text-primary"
             >
               <Play className="h-3 w-3" />
               {quickRunLabel}
@@ -349,7 +406,7 @@ const SidebarItem = memo(function SidebarItem({
               title={`Delete ${item.title}`}
               onClick={(e) => { e.stopPropagation(); onDelete(item.id); }}
               onKeyDown={(e) => { if (e.key === "Enter") { e.stopPropagation(); onDelete(item.id); } }}
-              className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-destructive/20 hover:text-destructive"
+              className="inline-flex items-center gap-1 rounded-full border border-border/60 bg-card/64 px-2 py-1 text-[10px] font-medium uppercase tracking-[0.1em] text-muted-foreground hover:border-destructive/25 hover:bg-destructive/12 hover:text-destructive"
             >
               <Trash2 className="h-3 w-3" />
               Delete

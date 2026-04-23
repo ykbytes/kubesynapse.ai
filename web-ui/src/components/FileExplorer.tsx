@@ -32,6 +32,7 @@ interface FileExplorerProps {
   agentName: string;
   onLoad: () => Promise<AgentFileListResult>;
   onDownload: (path: string, filename?: string) => Promise<void>;
+  onDownloadAll?: () => Promise<void>;
   onPreview: (path: string) => Promise<AgentArtifactPreview>;
   onLoadDiff?: () => Promise<string>;
   preferredView?: "all" | "changed";
@@ -302,6 +303,7 @@ export const FileExplorer = memo(function FileExplorer({
   agentName,
   onLoad,
   onDownload,
+  onDownloadAll,
   onPreview,
   onLoadDiff,
   preferredView = "all",
@@ -327,6 +329,7 @@ export const FileExplorer = memo(function FileExplorer({
   const [diffRefreshing, setDiffRefreshing] = useState(false);
   const [diffError, setDiffError] = useState("");
   const [downloadingPath, setDownloadingPath] = useState<string | null>(null);
+  const [downloadingAll, setDownloadingAll] = useState(false);
   const hasDataRef = useRef(false);
   const hasDiffRef = useRef(false);
   const previewPathRef = useRef<string | null>(null);
@@ -584,6 +587,16 @@ export const FileExplorer = memo(function FileExplorer({
     [onDownload],
   );
 
+  const handleDownloadAll = useCallback(async () => {
+    if (!onDownloadAll) return;
+    try {
+      setDownloadingAll(true);
+      await onDownloadAll();
+    } finally {
+      setDownloadingAll(false);
+    }
+  }, [onDownloadAll]);
+
   const handleSelect = useCallback((path: string) => {
     setManualPreviewMode(false);
     setPreviewMode(viewMode === "changed" ? "diff" : "preview");
@@ -655,6 +668,19 @@ export const FileExplorer = memo(function FileExplorer({
         >
           <RefreshCw className={`h-3.5 w-3.5 ${loading || refreshing || diffLoading || diffRefreshing ? "animate-spin" : ""}`} />
         </Button>
+        {onDownloadAll && (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-7 gap-1.5 px-2 text-[10px]"
+            onClick={() => void handleDownloadAll()}
+            disabled={downloadingAll || Boolean(!data || data.files.length === 0)}
+          >
+            {downloadingAll ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
+            {downloadingAll ? "Downloading…" : "Download All (ZIP)"}
+          </Button>
+        )}
       </div>
 
       <div className="grid min-h-0 flex-1 lg:grid-cols-[minmax(19rem,22rem)_minmax(0,1fr)]">

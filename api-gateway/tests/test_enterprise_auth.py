@@ -115,7 +115,7 @@ class EnterpriseAuthSamlTests(unittest.TestCase):
     def test_build_saml_authorization_request_and_metadata(self) -> None:
         providers = self.enterprise_auth.saml_providers()
 
-        self.assertEqual(providers, [{"id": "corp", "name": "Corporate SSO", "kind": "saml", "supported": True}])
+        self.assertEqual(providers, [{"id": "corp", "name": "Corporate SSO", "kind": "saml", "brand": "generic", "supported": True}])
 
         auth_request = self.enterprise_auth.build_saml_authorization_request(
             "corp",
@@ -189,4 +189,34 @@ class LdapEscapeTests(unittest.TestCase):
         self.assertEqual(
             self.ea._ldap_escape("user\\*(name)"),
             "user\\5c\\2a\\28name\\29",
+        )
+
+
+class EnterpriseAuthOidcTests(unittest.TestCase):
+    def setUp(self) -> None:
+        oidc_config = json.dumps(
+            [
+                {
+                    "id": "google",
+                    "name": "Google",
+                    "issuer": "https://accounts.google.com",
+                    "client_id": "test-client-id",
+                    "client_secret": "test-client-secret",
+                    "redirect_uri": "https://gateway.example.com/api/auth/oidc/callback/google",
+                }
+            ]
+        )
+        env_patcher = patch.dict(os.environ, {"OIDC_PROVIDERS_JSON": oidc_config}, clear=False)
+        env_patcher.start()
+        self.addCleanup(env_patcher.stop)
+
+        self.module_name, self.enterprise_auth = load_enterprise_auth()
+        self.addCleanup(lambda: sys.modules.pop(self.module_name, None))
+
+    def test_auth_configuration_exposes_provider_brand(self) -> None:
+        config = self.enterprise_auth.auth_configuration()
+
+        self.assertEqual(
+            config["oidc_providers"],
+            [{"id": "google", "name": "Google", "kind": "oidc", "brand": "google", "supported": True}],
         )

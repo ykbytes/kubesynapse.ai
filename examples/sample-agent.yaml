@@ -6,6 +6,8 @@ metadata:
 spec:
   model: gpt-4
   policyRef: strict-enterprise-policy
+  runtime:
+    kind: opencode
   systemPrompt: >
     You are an enterprise research assistant. You help analysts
     find and summarize information from internal documents and data sources.

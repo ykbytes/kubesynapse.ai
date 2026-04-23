@@ -33,13 +33,13 @@ import pytest
 # Bootstrap: import the runtime module from source
 # ---------------------------------------------------------------------------
 MODULE_PATH = Path(__file__).resolve().parents[1] / "main.py"
-sys.path.insert(0, str(MODULE_PATH.parent))
 SPEC = importlib.util.spec_from_file_location("opencode_runtime_main", MODULE_PATH)
 if SPEC is None or SPEC.loader is None:
     raise RuntimeError("Failed to load opencode-runtime main module for tests")
 mod = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = mod
 SPEC.loader.exec_module(mod)
+opencode_client_mod = mod.RUNTIME_IMPORTED_MODULES["opencode_client"]
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -80,6 +80,10 @@ pytestmark = pytest.mark.integration
 skip_no_opencode = pytest.mark.skipif(
     not _opencode_available(),
     reason="opencode binary not found on PATH",
+)
+skip_live_prompt_tests = pytest.mark.skipif(
+    os.getenv("OPENCODE_RUN_LIVE_PROMPTS", "").strip().lower() not in {"1", "true", "yes"},
+    reason="live prompt integration requires OPENCODE_RUN_LIVE_PROMPTS=1 and a reachable model backend",
 )
 
 
@@ -208,8 +212,11 @@ class TestSessionLifecycle:
 
 
 @skip_no_opencode
+@skip_live_prompt_tests
 class TestPromptExecution:
     """Test sending prompts and collecting responses."""
+
+    LIVE_PROMPT_TIMEOUT_SECONDS = 240.0
 
     def test_send_simple_prompt(self, opencode_server):
         """Create a session, send a prompt, and verify we get a response."""
@@ -218,7 +225,7 @@ class TestPromptExecution:
         base = opencode_server["base_url"]
         workspace = str(opencode_server["workspace"])
 
-        with httpx.Client(base_url=base, timeout=120.0, trust_env=False) as client:
+        with httpx.Client(base_url=base, timeout=self.LIVE_PROMPT_TIMEOUT_SECONDS, trust_env=False) as client:
             # 1. Create session
             session_resp = client.post("/session", params={"directory": workspace}, json={"title": "prompt-test"})
             assert session_resp.status_code == 200
@@ -251,7 +258,7 @@ class TestPromptExecution:
         base = opencode_server["base_url"]
         workspace = str(opencode_server["workspace"])
 
-        with httpx.Client(base_url=base, timeout=120.0, trust_env=False) as client:
+        with httpx.Client(base_url=base, timeout=self.LIVE_PROMPT_TIMEOUT_SECONDS, trust_env=False) as client:
             # Create session and send prompt
             session_resp = client.post("/session", params={"directory": workspace}, json={"title": "history-test"})
             session_id = session_resp.json()["id"]
@@ -276,8 +283,11 @@ class TestPromptExecution:
 
 
 @skip_no_opencode
+@skip_live_prompt_tests
 class TestFileCreation:
     """Test that the agent can create files using native tools."""
+
+    LIVE_PROMPT_TIMEOUT_SECONDS = 240.0
 
     def test_write_tool_creates_file(self, opencode_server):
         """Ask the agent to create a file and verify it exists on disk."""
@@ -287,7 +297,7 @@ class TestFileCreation:
         workspace = opencode_server["workspace"]
         target_file = workspace / "integration_output.txt"
 
-        with httpx.Client(base_url=base, timeout=180.0, trust_env=False) as client:
+        with httpx.Client(base_url=base, timeout=self.LIVE_PROMPT_TIMEOUT_SECONDS, trust_env=False) as client:
             session_resp = client.post(
                 "/session", params={"directory": str(workspace)}, json={"title": "file-creation-test"}
             )
@@ -346,7 +356,7 @@ class TestRuntimeHelpers:
             session_id = session_resp.json()["id"]
 
         # Use the runtime's own helper with a patched base URL
-        with patch.object(mod, "server_base_url", return_value=base):
+        with patch.object(opencode_client_mod, "server_base_url", return_value=base):
             messages = mod.get_session_messages(session_id)
         assert isinstance(messages, list)
 
@@ -363,7 +373,7 @@ class TestRuntimeHelpers:
             )
             session_id = session_resp.json()["id"]
 
-        with patch.object(mod, "server_base_url", return_value=base):
+        with patch.object(opencode_client_mod, "server_base_url", return_value=base):
             status = mod.get_session_status(session_id)
         # New session should be idle (or not present in the status dict,
         # in which case get_session_status defaults to {"type": "idle"})
@@ -382,7 +392,7 @@ class TestRuntimeHelpers:
             )
             session_id = session_resp.json()["id"]
 
-        with patch.object(mod, "server_base_url", return_value=base):
+        with patch.object(opencode_client_mod, "server_base_url", return_value=base):
             t0 = time.time()
             status = mod.wait_for_session_idle(session_id, timeout_seconds=5.0)
             elapsed = time.time() - t0
@@ -396,7 +406,10 @@ class TestRuntimeHelpers:
         base = opencode_server["base_url"]
         workspace = str(opencode_server["workspace"])
 
-        with httpx.Client(base_url=base, timeout=120.0, trust_env=False) as client:
+        if os.getenv("OPENCODE_RUN_LIVE_PROMPTS", "").strip().lower() not in {"1", "true", "yes"}:
+            pytest.skip("live prompt integration requires OPENCODE_RUN_LIVE_PROMPTS=1 and a reachable model backend")
+
+        with httpx.Client(base_url=base, timeout=TestPromptExecution.LIVE_PROMPT_TIMEOUT_SECONDS, trust_env=False) as client:
             session_resp = client.post(
                 "/session", params={"directory": workspace}, json={"title": "extract-test"}
             )
@@ -409,7 +422,7 @@ class TestRuntimeHelpers:
             }
             client.post(f"/session/{session_id}/message", params={"directory": workspace}, json=body)
 
-        with patch.object(mod, "server_base_url", return_value=base):
+        with patch.object(opencode_client_mod, "server_base_url", return_value=base):
             messages = mod.get_session_messages(session_id)
 
         assert len(messages) >= 2

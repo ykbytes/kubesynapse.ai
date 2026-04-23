@@ -9,6 +9,8 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sh
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ActivityTimeline } from "./ActivityTimeline";
 import { JsonBlock } from "./JsonBlock";
+import { deriveAgentVisualSignals } from "@/lib/agentSignals";
+import { cn } from "@/lib/utils";
 import type {
   AgentDetail,
   AgentDiscoveryPeer,
@@ -72,6 +74,8 @@ export function AgentInspectorDrawer({
   onStreamLogs,
   onStopLogStream,
 }: AgentInspectorDrawerProps) {
+  const agentSignals = selectedAgentDetail ? deriveAgentVisualSignals(selectedAgentDetail) : null;
+
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent side="right" className="w-full sm:max-w-[480px] p-0 flex flex-col">
@@ -143,6 +147,37 @@ export function AgentInspectorDrawer({
                 {/* Agent config */}
                 {selectedAgentDetail && (
                   <Section title="Agent Config">
+                    {agentSignals && (
+                      <div className="flex flex-wrap gap-1.5 pb-1">
+                        {(() => {
+                          const RuntimeIcon = agentSignals.runtime.icon;
+                          return (
+                            <span className={cn("inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px]", agentSignals.runtime.tone)}>
+                              <RuntimeIcon className="h-3 w-3" />
+                              {agentSignals.runtime.shortLabel}
+                            </span>
+                          );
+                        })()}
+                        {(() => {
+                          const AccessIcon = agentSignals.access.icon;
+                          return (
+                            <span className={cn("inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px]", agentSignals.access.tone)}>
+                              <AccessIcon className="h-3 w-3" />
+                              {agentSignals.access.label}
+                            </span>
+                          );
+                        })()}
+                        {agentSignals.capabilities.slice(0, 4).map((capability) => {
+                          const CapabilityIcon = capability.icon;
+                          return (
+                            <span key={capability.id} className={cn("inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px]", capability.tone)}>
+                              <CapabilityIcon className="h-3 w-3" />
+                              {capability.shortLabel}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    )}
                     <KV label="Model" value={selectedAgentDetail.model} />
                     <KV label="Runtime" value={selectedAgentDetail.runtime_kind} />
                     <KV label="Status" value={selectedAgentDetail.status} />
@@ -191,13 +226,20 @@ export function AgentInspectorDrawer({
                   {!discoveryLoading && discoverablePeers.length === 0 && !discoveryError && (
                     <p className="text-xs text-muted-foreground">No peers discovered.</p>
                   )}
-                  {discoverablePeers.map((peer) => (
-                    <div key={`${peer.namespace}/${peer.name}`} className="flex items-center gap-2 text-xs">
+                  {discoverablePeers.map((peer) => {
+                    const peerSignals = deriveAgentVisualSignals({ runtime_kind: peer.runtime_kind });
+                    const PeerRuntimeIcon = peerSignals.runtime.icon;
+                    return (
+                    <div key={`${peer.namespace}/${peer.name}`} className="flex flex-wrap items-center gap-2 text-xs">
                       <span className={`h-1.5 w-1.5 rounded-full ${peer.reachable ? "bg-emerald-500" : "bg-red-500"}`} />
                       <span className="font-mono">{peer.namespace}/{peer.name}</span>
+                      <span className={cn("inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px]", peerSignals.runtime.tone)}>
+                        <PeerRuntimeIcon className="h-3 w-3" />
+                        {peerSignals.runtime.shortLabel}
+                      </span>
                       {peer.model && <span className="text-muted-foreground">({peer.model})</span>}
                     </div>
-                  ))}
+                  );})}
                 </Section>
 
                 {/* Invocation Summary */}

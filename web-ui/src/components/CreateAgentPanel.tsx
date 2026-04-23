@@ -1,24 +1,17 @@
+import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Bot,
-  Brain,
-  Code,
-  Database,
-  FileText,
   GitBranch,
   Globe,
   LoaderCircle,
   Lock,
-  Mail,
-  Monitor,
   Package,
   PlusCircle,
   RefreshCw,
   Search,
-  Server,
   Sparkles,
   Wand2,
-  Wrench,
 } from "lucide-react";
 
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
@@ -39,34 +32,38 @@ import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { ModelSelector } from "@/components/ModelSelector";
-import { fetchCatalogSkillDetail, fetchMcpToolCategories, fetchSkillsCatalog, refreshSkillsCatalog } from "../lib/api";
+import { McpServerBadgeIcon } from "@/components/McpServerBadgeIcon";
+import { fetchCatalogSkillDetail, fetchMcpConnections, fetchSkillsCatalog, refreshSkillsCatalog } from "../lib/api";
 import { A2A_ALLOWED_CALLERS_PLACEHOLDER } from "../lib/a2a";
-import { createGooseConfigFileDraft } from "../lib/gooseConfig";
 import { createOpenCodeConfigFileDraft } from "../lib/opencodeConfig";
 import {
+  formatMcpSidecarLabel,
   MCP_SERVERS_PLACEHOLDER,
   MCP_SIDECARS_PLACEHOLDER,
+  formatContainerImageDisplay,
   parseMcpServersText,
   parseMcpSidecarsText,
-  stringifyMcpSidecars,
 } from "../lib/mcp";
 import { createSkillFileDraft } from "../lib/skills";
-import { ALPHA_RUNTIMES } from "../types";
-import type { AgentInfo, CatalogSkill, CatalogSkillDetail, GitFormState, GitHubFormState, McpToolCategory, RuntimeKind, TextFileDraft, WorkflowInfo } from "../types";
+import type { AgentInfo, CatalogSkill, CatalogSkillDetail, GitFormState, McpConnection, RuntimeKind, TextFileDraft, WorkflowInfo } from "../types";
 import { A2ACallerPicker } from "./A2ACallerPicker";
 import { TextFileBundleEditor } from "./TextFileBundleEditor";
+import { SYSTEM_PROMPT_MAX_CHARS, systemPromptLengthError } from "../lib/agentPrompt";
 
-const TOOL_ICONS: Record<string, typeof Code> = {
-  "code-exec": Code,
-  "web-search": Globe,
-  documents: FileText,
-  browser: Monitor,
-  database: Database,
-  git: GitBranch,
-  kubernetes: Server,
-  messaging: Mail,
-  rag: Brain,
-};
+const MCP_SUPPORT_BADGE_STYLES = {
+  ready: "border-emerald-500/30 bg-emerald-500/10 text-emerald-300",
+  limited: "border-amber-500/30 bg-amber-500/10 text-amber-300",
+  planned: "border-slate-500/30 bg-slate-500/10 text-slate-300",
+} as const;
+
+const MCP_VALIDATION_BADGE_STYLES = {
+  draft: "border-slate-500/30 bg-slate-500/10 text-slate-300",
+  valid: "border-emerald-500/30 bg-emerald-500/10 text-emerald-300",
+  warning: "border-amber-500/30 bg-amber-500/10 text-amber-300",
+  invalid: "border-destructive/30 bg-destructive/10 text-destructive",
+} as const;
+
+type ConnectionFilterValue = "all" | "selected" | "remote" | "hub" | "sidecar";
 
 const SKILL_CATEGORY_STYLES: Record<string, string> = {
   design: "border-fuchsia-500/30 bg-fuchsia-500/10 text-fuchsia-200",
@@ -78,35 +75,33 @@ const SKILL_CATEGORY_STYLES: Record<string, string> = {
 
 interface CreateAgentPanelProps {
   token: string;
+  namespace: string;
   isEmptyWorkspace: boolean;
   name: string;
   model: string;
   systemPrompt: string;
   runtimeKind: RuntimeKind;
+  mcpConnectionIds: string[];
   mcpServersText: string;
   mcpSidecarsText: string;
   a2aAllowedCallersText: string;
   agents: AgentInfo[];
   workflows: WorkflowInfo[];
   skillFileDrafts: TextFileDraft[];
-  gooseConfigFileDrafts: TextFileDraft[];
   opencodeConfigFileDrafts: TextFileDraft[];
   isCreating: boolean;
   error: string;
+  onMcpConnectionIdsChange: (value: string[]) => void;
   onMcpServersTextChange: (value: string) => void;
   onMcpSidecarsTextChange: (value: string) => void;
   onNameChange: (value: string) => void;
   onModelChange: (value: string) => void;
   onSystemPromptChange: (value: string) => void;
-  onRuntimeKindChange: (value: RuntimeKind) => void;
   onA2AAllowedCallersTextChange: (value: string) => void;
   onSkillFileDraftsChange: (value: TextFileDraft[]) => void;
-  onGooseConfigFileDraftsChange: (value: TextFileDraft[]) => void;
   onOpenCodeConfigFileDraftsChange: (value: TextFileDraft[]) => void;
   gitForm: GitFormState;
   onGitFormChange: (value: GitFormState) => void;
-  githubForm: GitHubFormState;
-  onGitHubFormChange: (value: GitHubFormState) => void;
   onCreate: () => void;
 }
 
@@ -148,49 +143,59 @@ function hasSkillAttached(detail: CatalogSkillDetail | undefined, draftPaths: Se
   return Object.keys(detail.assets).every((path) => draftPaths.has(normalizeDraftPath(path)));
 }
 
-function buildManagedSidecarSpec(tool: McpToolCategory): Record<string, unknown> {
-  return {
-    name: tool.id,
-    image: tool.sidecar_image,
-    port: tool.default_port,
-  };
+function formatConnectionRuntimeSummary(connection: McpConnection): string {
+  if (connection.transport === "sidecar") {
+    const preview = connection.runtime_preview?.sidecar;
+    const rawPort = preview?.port ?? connection.config.sidecar_port;
+    const port = typeof rawPort === "number" ? rawPort : Number(rawPort ?? NaN);
+    const image = typeof preview?.image === "string" && preview.image.trim() ? preview.image : "";
+    const label = image ? formatContainerImageDisplay(image) : "Pod sidecar";
+    return Number.isFinite(port) ? `${label} on port ${port}` : label;
+  }
+  if (connection.transport === "remote") {
+    const previewUrl = typeof connection.runtime_preview?.url === "string" ? connection.runtime_preview.url.trim() : "";
+    if (previewUrl) {
+      return previewUrl.replace(/^https?:\/\//, "");
+    }
+    return connection.status_reason?.trim() || "Remote MCP endpoint";
+  }
+  return connection.status_reason?.trim() || "Shared namespace hub route";
 }
 
 export function CreateAgentPanel({
   token,
+  namespace,
   isEmptyWorkspace,
   name,
   model,
   systemPrompt,
   runtimeKind,
+  mcpConnectionIds,
   mcpServersText,
   mcpSidecarsText,
   a2aAllowedCallersText,
   agents: workspaceAgents,
   workflows: workspaceWorkflows,
   skillFileDrafts,
-  gooseConfigFileDrafts,
   opencodeConfigFileDrafts,
   isCreating,
   error,
+  onMcpConnectionIdsChange,
   onMcpServersTextChange,
   onMcpSidecarsTextChange,
   onNameChange,
   onModelChange,
   onSystemPromptChange,
-  onRuntimeKindChange,
   onA2AAllowedCallersTextChange,
   onSkillFileDraftsChange,
-  onGooseConfigFileDraftsChange,
   onOpenCodeConfigFileDraftsChange,
   gitForm,
   onGitFormChange,
-  githubForm,
-  onGitHubFormChange,
   onCreate,
 }: CreateAgentPanelProps) {
+  const ws = useWorkspace();
   const [catalogSkills, setCatalogSkills] = useState<CatalogSkill[]>([]);
-  const [catalogTools, setCatalogTools] = useState<McpToolCategory[]>([]);
+  const [mcpConnections, setMcpConnections] = useState<McpConnection[]>([]);
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [catalogError, setCatalogError] = useState("");
   const [skillSearch, setSkillSearch] = useState("");
@@ -199,11 +204,23 @@ export function CreateAgentPanel({
   const [skillBusyId, setSkillBusyId] = useState("");
   const [nameBlurred, setNameBlurred] = useState(false);
   const [modelBlurred, setModelBlurred] = useState(false);
+  const [localError, setLocalError] = useState("");
+  const [connectionSearch, setConnectionSearch] = useState("");
+  const [connectionFilter, setConnectionFilter] = useState<ConnectionFilterValue>("all");
+
+  const systemPromptError = useMemo(() => systemPromptLengthError(systemPrompt), [systemPrompt]);
+  const displayError = localError || systemPromptError || error;
+
+  useEffect(() => {
+    if (!systemPromptError && localError) {
+      setLocalError("");
+    }
+  }, [localError, systemPromptError]);
 
   useEffect(() => {
     if (!token.trim()) {
       setCatalogSkills([]);
-      setCatalogTools([]);
+      setMcpConnections([]);
       setCatalogError("");
       return;
     }
@@ -212,13 +229,13 @@ export function CreateAgentPanel({
     setCatalogLoading(true);
     setCatalogError("");
 
-    Promise.all([fetchSkillsCatalog(token), fetchMcpToolCategories(token)])
-      .then(([skills, tools]) => {
+    Promise.all([fetchSkillsCatalog(token), fetchMcpConnections(token, namespace)])
+      .then(([skills, connections]) => {
         if (cancelled) {
           return;
         }
         setCatalogSkills(skills);
-        setCatalogTools(tools);
+        setMcpConnections(connections);
       })
       .catch((nextError) => {
         if (!cancelled) {
@@ -234,12 +251,12 @@ export function CreateAgentPanel({
     return () => {
       cancelled = true;
     };
-  }, [token]);
+  }, [token, namespace]);
 
   const sidecarState = useMemo(() => {
     try {
       return {
-        items: runtimeKind !== "goose" ? parseMcpSidecarsText(mcpSidecarsText) : [],
+        items: parseMcpSidecarsText(mcpSidecarsText),
         error: "",
       };
     } catch (nextError) {
@@ -249,17 +266,6 @@ export function CreateAgentPanel({
       };
     }
   }, [mcpSidecarsText, runtimeKind]);
-
-  const selectedToolIds = useMemo(() => {
-    const ids = new Set<string>();
-    for (const sidecar of sidecarState.items) {
-      const sidecarName = sidecar.name;
-      if (typeof sidecarName === "string" && sidecarName.trim()) {
-        ids.add(sidecarName.trim());
-      }
-    }
-    return ids;
-  }, [sidecarState.items]);
 
   const draftPaths = useMemo(
     () => new Set(skillFileDrafts.map((draft) => normalizeDraftPath(draft.path)).filter(Boolean)),
@@ -298,10 +304,50 @@ export function CreateAgentPanel({
     [catalogSkills],
   );
 
-  const sharedMcpServers = useMemo(
-    () => (runtimeKind === "langgraph" ? parseMcpServersText(mcpServersText) : []),
-    [mcpServersText, runtimeKind],
+  const selectedConnections = useMemo(
+    () => mcpConnections.filter((connection) => mcpConnectionIds.includes(connection.id)),
+    [mcpConnections, mcpConnectionIds],
   );
+  const selectedConnectionStats = useMemo(
+    () => ({
+      remote: selectedConnections.filter((connection) => connection.transport === "remote").length,
+      hub: selectedConnections.filter((connection) => connection.transport === "hub").length,
+      sidecar: selectedConnections.filter((connection) => connection.transport === "sidecar").length,
+    }),
+    [selectedConnections],
+  );
+  const legacySharedServers = useMemo(() => parseMcpServersText(mcpServersText), [mcpServersText]);
+  const legacyOverrideCount = legacySharedServers.length + sidecarState.items.length;
+  const hasLegacyOverrides = legacyOverrideCount > 0;
+  const legacyOverridesConflict = selectedConnections.length > 0 && hasLegacyOverrides;
+  const filteredConnections = useMemo(() => {
+    const query = connectionSearch.trim().toLowerCase();
+    return [...mcpConnections]
+      .filter((connection) => {
+        if (connectionFilter === "selected" && !mcpConnectionIds.includes(connection.id)) {
+          return false;
+        }
+        if (connectionFilter !== "all" && connectionFilter !== "selected" && connection.transport !== connectionFilter) {
+          return false;
+        }
+        if (!query) {
+          return true;
+        }
+        return [connection.name, connection.server_name ?? "", connection.server_id, connection.transport]
+          .some((value) => value.toLowerCase().includes(query));
+      })
+      .sort((left, right) => {
+        const leftSelected = mcpConnectionIds.includes(left.id);
+        const rightSelected = mcpConnectionIds.includes(right.id);
+        if (leftSelected !== rightSelected) {
+          return leftSelected ? -1 : 1;
+        }
+        if (left.attachable !== right.attachable) {
+          return left.attachable ? -1 : 1;
+        }
+        return left.name.localeCompare(right.name);
+      });
+  }, [connectionFilter, connectionSearch, mcpConnectionIds, mcpConnections]);
 
   async function ensureSkillDetail(skillId: string): Promise<CatalogSkillDetail> {
     const cached = skillDetailsById[skillId];
@@ -334,9 +380,8 @@ export function CreateAgentPanel({
     setCatalogError("");
     try {
       await refreshSkillsCatalog(token);
-      const [skills, tools] = await Promise.all([fetchSkillsCatalog(token), fetchMcpToolCategories(token)]);
+      const skills = await fetchSkillsCatalog(token);
       setCatalogSkills(skills);
-      setCatalogTools(tools);
       setSkillDetailsById({});
     } catch (nextError) {
       setCatalogError(nextError instanceof Error ? nextError.message : String(nextError));
@@ -365,56 +410,64 @@ export function CreateAgentPanel({
     }
   }
 
-  function handleToggleTool(tool: McpToolCategory) {
-    if (!tool.sidecar_image) {
+  function handleToggleSavedConnection(connectionId: string) {
+    const connection = mcpConnections.find((item) => item.id === connectionId);
+    if (!connection) {
       return;
     }
-    const nextSidecars = sidecarState.items.filter((sidecar) => {
-      const sidecarName = sidecar.name;
-      return !(typeof sidecarName === "string" && sidecarName.trim() === tool.id);
-    });
-
-    if (!selectedToolIds.has(tool.id)) {
-      nextSidecars.push(buildManagedSidecarSpec(tool));
+    if (!connection.attachable) {
+      setCatalogError(connection.status_reason ?? `${connection.name} is saved but cannot be attached to agents yet.`);
+      return;
     }
+    if (mcpConnectionIds.includes(connectionId)) {
+      onMcpConnectionIdsChange(mcpConnectionIds.filter((id) => id !== connectionId));
+      setCatalogError("");
+      return;
+    }
+    onMcpConnectionIdsChange([...mcpConnectionIds, connectionId]);
+    setCatalogError("");
+  }
 
-    onMcpSidecarsTextChange(stringifyMcpSidecars(nextSidecars));
+  function handleOpenMcpManagement() {
+    ws.setAgentCreateMode(false);
+    ws.setActiveView("mcp");
+    setCatalogError("");
+  }
+
+  function handleCreateClick() {
+    if (systemPromptError) {
+      setLocalError(systemPromptError);
+      return;
+    }
+    setLocalError("");
+    onCreate();
   }
 
   return (
     <Card className="border-border/70 bg-card/95 shadow-[0_24px_80px_-48px_rgba(0,0,0,0.65)]">
-      <CardHeader className="pb-4">
-        <div className="flex flex-wrap items-start gap-4">
-          <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-primary/20 bg-primary/10 text-primary shadow-inner shadow-primary/10">
+      <CardHeader className="pb-3">
+        <div className="flex min-w-0 items-start gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-primary/20 bg-primary/10 text-primary shadow-inner shadow-primary/10">
             <Bot className="h-5 w-5" />
           </div>
           <div className="min-w-0 flex-1 space-y-2">
-            <div className="flex flex-wrap items-center gap-2">
-              <CardTitle className="text-lg">
+            <div className="flex flex-wrap items-start gap-2">
+              <CardTitle className="min-w-0 break-words text-base leading-tight">
                 {isEmptyWorkspace ? "Create your first agent" : "Create a new agent"}
               </CardTitle>
               <Badge variant="secondary">guided setup</Badge>
             </div>
-            <CardDescription className="max-w-3xl text-sm leading-6">
-              Start with the core identity, then attach curated skills and managed toolkits. Advanced file and routing controls stay available when you need them, but the default path stays fast and clean.
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+              <span>OpenCode runtime</span>
+              <span>{skillFileDrafts.length} skill file{skillFileDrafts.length === 1 ? "" : "s"}</span>
+              <span>{selectedConnections.length} saved MCP connection{selectedConnections.length === 1 ? "" : "s"}</span>
+              {hasLegacyOverrides ? (
+                <span>{legacyOverrideCount} legacy override{legacyOverrideCount === 1 ? "" : "s"}</span>
+              ) : null}
+            </div>
+            <CardDescription className="max-w-none break-words text-sm leading-5">
+              Start with identity, then attach only the skills and managed MCP connections this OpenCode agent actually needs.
             </CardDescription>
-          </div>
-          <div className="grid min-w-[240px] gap-2 rounded-2xl border border-border/60 bg-background/70 p-3 text-xs text-muted-foreground sm:grid-cols-3">
-            <div>
-              <p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground/70">Runtime</p>
-              <p className="mt-1 font-medium text-foreground flex items-center gap-1.5">
-                {runtimeKind === "langgraph" ? "LangGraph" : runtimeKind === "goose" ? "Goose" : runtimeKind === "opencode" ? "OpenCode" : "Codex"}
-                {ALPHA_RUNTIMES.has(runtimeKind) && <span className="inline-flex items-center rounded-full bg-red-500/15 px-1.5 py-0 text-[9px] font-medium text-red-400 border border-red-500/25">Alpha</span>}
-              </p>
-            </div>
-            <div>
-              <p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground/70">Skills</p>
-              <p className="mt-1 font-medium text-foreground">{skillFileDrafts.length} files</p>
-            </div>
-            <div>
-              <p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground/70">Tools</p>
-              <p className="mt-1 font-medium text-foreground">{selectedToolIds.size} sidecars</p>
-            </div>
           </div>
         </div>
       </CardHeader>
@@ -423,7 +476,7 @@ export function CreateAgentPanel({
           <TabsList className="h-auto flex-wrap justify-start gap-1 rounded-2xl border border-border/60 bg-background/70 p-1.5">
             <TabsTrigger value="basics">Basics</TabsTrigger>
             <TabsTrigger value="behavior">Behavior</TabsTrigger>
-            <TabsTrigger value="tools">Capabilities</TabsTrigger>
+            <TabsTrigger value="tools">MCP Connections</TabsTrigger>
             <TabsTrigger value="files">Skills & Files</TabsTrigger>
             <TabsTrigger value="repository">Repository</TabsTrigger>
           </TabsList>
@@ -470,44 +523,19 @@ export function CreateAgentPanel({
                 <Card className="shadow-none">
                   <CardHeader className="pb-3">
                     <CardTitle className="text-sm">Runtime profile</CardTitle>
-                    <CardDescription>Choose the runtime first. Capability options adapt to the selected engine.</CardDescription>
+                    <CardDescription>The workspace now provisions OpenCode agents only.</CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-3">
-                    <div className="grid gap-2">
-                      {(["langgraph", "goose", "codex", "opencode"] as RuntimeKind[]).map((rt) => {
-                        const active = runtimeKind === rt;
-                        return (
-                          <button
-                            key={rt}
-                            type="button"
-                            onClick={() => onRuntimeKindChange(rt)}
-                            className={`rounded-2xl border px-4 py-3 text-left transition ${
-                              active
-                                ? "border-primary/40 bg-primary/10 text-foreground shadow-inner shadow-primary/10"
-                                : "border-border/70 bg-background/60 text-muted-foreground hover:border-primary/30 hover:bg-accent/40 hover:text-foreground"
-                            }`}
-                          >
-                            <div className="flex items-center justify-between gap-3">
-                              <div>
-                                <p className="font-medium text-sm flex items-center gap-2">
-                                  {rt === "langgraph" ? "LangGraph runtime" : rt === "goose" ? "Goose runtime" : rt === "opencode" ? "OpenCode runtime" : "Codex runtime"}
-                                  {ALPHA_RUNTIMES.has(rt) && <span className="inline-flex items-center rounded-full bg-red-500/15 px-1.5 py-0 text-[10px] font-medium text-red-400 border border-red-500/25">Alpha</span>}
-                                </p>
-                                <p className="mt-1 text-xs leading-5">
-                                  {rt === "langgraph"
-                                    ? "Best for tool-rich agents with MCP sidecars, multi-tool routing, and enterprise integrations. Choose this when you need database, browser, or custom MCP tools."
-                                    : rt === "goose"
-                                      ? "Best for Goose-native workflows with config-driven extensions and conversational behavior. Choose this for Goose ecosystem tools and prompts."
-                                      : rt === "opencode"
-                                        ? "Best for autonomous multi-turn coding tasks. Features structured output, session persistence, context-overflow recovery, and automatic plan-then-build execution."
-                                        : "Best for Codex-driven repository implementation with structured stage prompts. Choose this for large-scale code generation from specs."}
-                                </p>
-                              </div>
-                              {active ? <Badge>Selected</Badge> : null}
-                            </div>
-                          </button>
-                        );
-                      })}
+                    <div className="rounded-2xl border border-primary/40 bg-primary/10 px-4 py-3 text-left text-foreground shadow-inner shadow-primary/10">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <p className="font-medium text-sm">OpenCode runtime</p>
+                          <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                            Best for autonomous multi-turn coding tasks with structured output, session persistence, context-overflow recovery, shared MCP routing, and managed sidecars.
+                          </p>
+                        </div>
+                        <Badge>Selected</Badge>
+                      </div>
                     </div>
                   </CardContent>
                 </Card>
@@ -521,11 +549,11 @@ export function CreateAgentPanel({
                 <CardContent className="space-y-3 text-sm text-muted-foreground">
                   <div className="rounded-2xl border border-border/60 bg-background/60 p-3">
                     <p className="font-medium text-foreground">Recommended path</p>
-                    <p className="mt-1 leading-6">Use curated skills for behavior, curated toolkits for execution, and keep advanced raw editors for custom overrides only.</p>
+                    <p className="mt-1 leading-6">Use curated skills for behavior, saved MCP connections for execution, and keep raw editors only as a fallback path for legacy configurations.</p>
                   </div>
                   <div className="rounded-2xl border border-border/60 bg-background/60 p-3">
                     <p className="font-medium text-foreground">Creation stays reversible</p>
-                    <p className="mt-1 leading-6">You can still attach custom skill files, enterprise MCP endpoints, and raw sidecar specs before saving.</p>
+                    <p className="mt-1 leading-6">You can still attach custom skill files, select saved namespace-scoped MCP connections, and fall back to raw overrides if you are migrating older agents.</p>
                   </div>
                 </CardContent>
               </Card>
@@ -544,13 +572,34 @@ export function CreateAgentPanel({
                   <Textarea
                     rows={7}
                     value={systemPrompt}
-                    onChange={(e) => onSystemPromptChange(e.target.value)}
+                    onChange={(e) => {
+                      if (localError) {
+                        setLocalError("");
+                      }
+                      onSystemPromptChange(e.target.value);
+                    }}
                     placeholder="You are a senior software engineer. Follow these guidelines: (1) Think step-by-step before acting. (2) Read existing code before making changes. (3) Verify your work by running tests. (4) Be concise and factual — do not fabricate information."
                   />
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                    <span className={systemPromptError ? "text-destructive" : "text-muted-foreground"}>
+                      {systemPrompt.length}/{SYSTEM_PROMPT_MAX_CHARS} characters
+                    </span>
+                    <span className="text-muted-foreground">
+                      A2A caller changes save independently, but the system prompt still must stay within the limit.
+                    </span>
+                  </div>
+                  {systemPromptError ? (
+                    <p className="text-xs text-destructive">{systemPromptError}</p>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">Keep the system prompt at {SYSTEM_PROMPT_MAX_CHARS} characters or fewer.</p>
+                  )}
                 </div>
                 <Separator />
                 <div className="space-y-1.5">
                   <Label className="text-xs">Allowed caller agents (A2A)</Label>
+                  <p className="text-xs text-muted-foreground">
+                    Inbound only. These agents may call this agent. Outbound peer discovery and delegation come from the agent policy&apos;s allowed targets.
+                  </p>
                   <A2ACallerPicker
                     value={a2aAllowedCallersText}
                     onChange={onA2AAllowedCallersTextChange}
@@ -565,182 +614,343 @@ export function CreateAgentPanel({
           </TabsContent>
 
           <TabsContent value="tools" className="animate-fade-in space-y-4">
-            {runtimeKind !== "goose" ? (
-              <>
-                <div className="grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
-                  <Card className="shadow-none">
-                    <CardHeader className="pb-3">
+            <>
+              <div className="grid gap-4 xl:grid-cols-[1.05fr_0.95fr]">
+                <Card className="shadow-none">
+                  <CardHeader className="pb-3">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
                       <div className="flex items-center gap-2">
                         <div className="flex h-8 w-8 items-center justify-center rounded-xl border border-primary/20 bg-primary/10 text-primary">
-                          <Wrench className="h-4 w-4" />
-                        </div>
-                        <div>
-                          <CardTitle className="text-sm">Managed toolkits</CardTitle>
-                          <CardDescription>Attach deployable sidecars directly from the platform catalog.</CardDescription>
-                        </div>
-                      </div>
-                    </CardHeader>
-                    <CardContent className="space-y-3">
-                      {catalogError ? (
-                        <div className="rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-                          {catalogError}
-                        </div>
-                      ) : null}
-                      {sidecarState.error ? (
-                        <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
-                          The raw sidecar JSON is invalid. Fix it in Advanced routing before using the managed picker again.
-                        </div>
-                      ) : null}
-                      <div className="grid gap-3 md:grid-cols-2">
-                        {catalogTools.map((tool) => {
-                          const Icon = TOOL_ICONS[tool.id] ?? Wrench;
-                          const selected = selectedToolIds.has(tool.id);
-                          return (
-                            <div
-                              key={tool.id}
-                              className={`rounded-2xl border p-4 transition ${
-                                selected
-                                  ? "border-primary/40 bg-primary/10 shadow-inner shadow-primary/10"
-                                  : "border-border/70 bg-background/60 hover:border-primary/20 hover:bg-accent/40"
-                              }`}
-                            >
-                              <div className="flex items-start gap-3">
-                                <div className="mt-0.5 flex h-10 w-10 items-center justify-center rounded-xl border border-border/70 bg-card text-primary">
-                                  <Icon className="h-4 w-4" />
-                                </div>
-                                <div className="min-w-0 flex-1">
-                                  <div className="flex flex-wrap items-center gap-2">
-                                    <p className="font-medium text-foreground">{tool.name}</p>
-                                    <Badge variant={selected ? "default" : "outline"}>Port {tool.default_port}</Badge>
-                                  </div>
-                                  <p className="mt-1 text-sm leading-6 text-muted-foreground">{tool.description}</p>
-                                </div>
-                              </div>
-                              <div className="mt-4 flex items-center justify-between gap-3">
-                                <p className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground/70">{tool.id}</p>
-                                <Button
-                                  variant={selected ? "secondary" : "default"}
-                                  size="sm"
-                                  onClick={() => handleToggleTool(tool)}
-                                  disabled={!tool.sidecar_image || Boolean(sidecarState.error)}
-                                >
-                                  {selected ? "Remove" : "Add toolkit"}
-                                </Button>
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                      {catalogLoading ? (
-                        <div className="flex items-center justify-center py-3 text-sm text-muted-foreground">
-                          <LoaderCircle className="mr-2 h-4 w-4 animate-spin" /> Loading platform toolkits...
-                        </div>
-                      ) : null}
-                    </CardContent>
-                  </Card>
-
-                  <Card className="shadow-none">
-                    <CardHeader className="pb-3">
-                      <div className="flex items-center gap-2">
-                        <div className="flex h-8 w-8 items-center justify-center rounded-xl border border-emerald-500/20 bg-emerald-500/10 text-emerald-300">
                           <Sparkles className="h-4 w-4" />
                         </div>
                         <div>
-                          <CardTitle className="text-sm">Selected capability set</CardTitle>
-                          <CardDescription>Review what will ship with the agent before creation.</CardDescription>
+                          <CardTitle className="text-sm">Saved MCP connections</CardTitle>
+                          <CardDescription>Bind namespace-scoped saved connections here. Registry browsing, endpoint autofill, and published tool lists now live in the MCP page.</CardDescription>
                         </div>
                       </div>
-                    </CardHeader>
-                    <CardContent className="space-y-4">
-                      <div className="grid grid-cols-2 gap-3">
-                        <div className="rounded-2xl border border-border/60 bg-background/60 p-3">
-                          <p className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground/70">Sidecars</p>
-                          <p className="mt-1 text-xl font-semibold text-foreground">{selectedToolIds.size}</p>
-                        </div>
-                        <div className="rounded-2xl border border-border/60 bg-background/60 p-3">
-                          <p className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground/70">Shared MCP</p>
-                          <p className="mt-1 text-xl font-semibold text-foreground">{sharedMcpServers.length}</p>
-                        </div>
+                      <Button variant="outline" size="sm" onClick={handleOpenMcpManagement}>
+                        Open MCP page
+                      </Button>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    {catalogError ? (
+                      <div className="rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                        {catalogError}
                       </div>
-                      <div className="space-y-2">
-                        <p className="text-xs font-medium text-foreground">Attached toolkits</p>
-                        {selectedToolIds.size > 0 ? (
-                          <div className="flex flex-wrap gap-2">
-                            {catalogTools
-                              .filter((tool) => selectedToolIds.has(tool.id))
-                              .map((tool) => (
-                                <Badge key={tool.id} variant="secondary" className="rounded-full px-3 py-1">
-                                  {tool.name}
-                                </Badge>
-                              ))}
-                          </div>
-                        ) : (
-                          <p className="text-sm text-muted-foreground">No managed sidecars selected yet.</p>
-                        )}
+                    ) : null}
+                    {sidecarState.error ? (
+                      <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+                        The raw sidecar JSON is invalid. Fix it in Legacy raw overrides before mixing it with saved connections.
                       </div>
-                      <div className="space-y-2">
-                        <p className="text-xs font-medium text-foreground">Enterprise MCP endpoints</p>
-                        {sharedMcpServers.length > 0 ? (
-                          <div className="flex flex-wrap gap-2">
-                            {sharedMcpServers.map((serverName) => (
-                              <Badge key={serverName} variant="outline" className="rounded-full px-3 py-1">
-                                {serverName}
-                              </Badge>
-                            ))}
-                          </div>
-                        ) : (
-                          <p className="text-sm text-muted-foreground">None configured. Use Advanced routing if you need shared MCP endpoints.</p>
-                        )}
-                      </div>
-                    </CardContent>
-                  </Card>
-                </div>
+                    ) : null}
 
-                <Accordion type="single" collapsible className="rounded-2xl border border-border/70 bg-background/50 px-4">
-                  <AccordionItem value="advanced-routing" className="border-none">
-                    <AccordionTrigger className="py-4 text-sm font-medium">Advanced routing & raw overrides</AccordionTrigger>
-                    <AccordionContent className="space-y-4">
-                      <div className="grid gap-4 xl:grid-cols-2">
-                        <div className="space-y-1.5">
-                          <Label className="text-xs">Shared MCP servers</Label>
-                          {runtimeKind === "langgraph" ? (
-                            <>
-                              <Textarea
-                                rows={4}
-                                value={mcpServersText}
-                                onChange={(e) => onMcpServersTextChange(e.target.value)}
-                                placeholder={MCP_SERVERS_PLACEHOLDER}
-                                className="font-mono text-xs"
-                              />
-                              <p className="text-[11px] text-muted-foreground">One shared enterprise MCP server per line.</p>
-                            </>
-                          ) : (
-                            <div className="rounded-xl border border-dashed border-border/70 bg-background/60 px-3 py-3 text-[11px] text-muted-foreground">
-                              Codex agents can attach pod-local MCP sidecars here, but shared gateway-routed MCP servers are still LangGraph-only.
-                            </div>
-                          )}
+                    <div className="rounded-xl border border-border/60 bg-background/60 p-3 text-[11px] leading-5 text-muted-foreground">
+                      MCP connections are the standard attachment path for new agents. Sidecar transports deploy per-agent containers automatically, while remote and hub transports keep endpoint and auth settings reusable at the namespace level.
+                    </div>
+
+                    <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                      <div className="relative flex-1">
+                        <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                        <Input
+                          value={connectionSearch}
+                          onChange={(event) => setConnectionSearch(event.target.value)}
+                          placeholder="Search connections, servers, or transports"
+                          className="pl-9"
+                        />
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Select value={connectionFilter} onValueChange={(value) => setConnectionFilter(value as ConnectionFilterValue)}>
+                          <SelectTrigger className="w-[190px]">
+                            <SelectValue placeholder="Filter connections" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="all">All connections</SelectItem>
+                            <SelectItem value="selected">Selected only</SelectItem>
+                            <SelectItem value="remote">Remote only</SelectItem>
+                            <SelectItem value="hub">Hub only</SelectItem>
+                            <SelectItem value="sidecar">Sidecar only</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <Badge variant="secondary">{filteredConnections.length} shown</Badge>
+                      </div>
+                    </div>
+
+                    {catalogLoading ? (
+                      <div className="flex items-center justify-center rounded-xl border border-dashed border-border/70 bg-background/40 px-4 py-6 text-sm text-muted-foreground">
+                        <LoaderCircle className="mr-2 h-4 w-4 animate-spin" /> Loading saved MCP connections...
+                      </div>
+                    ) : mcpConnections.length > 0 ? (
+                      filteredConnections.length > 0 ? (
+                        <ScrollArea className="max-h-[560px] pr-3">
+                          <div className="grid gap-3 md:grid-cols-2">
+                            {filteredConnections.map((connection) => {
+                              const selected = mcpConnectionIds.includes(connection.id);
+                              const blocked = !connection.attachable;
+                              return (
+                                <button
+                                  key={connection.id}
+                                  type="button"
+                                  onClick={() => handleToggleSavedConnection(connection.id)}
+                                  disabled={blocked}
+                                  className={`rounded-2xl border p-4 text-left transition ${
+                                    selected
+                                      ? "border-primary/30 bg-primary/10 shadow-inner shadow-primary/10"
+                                      : blocked
+                                        ? "cursor-not-allowed border-border/60 bg-background/40 opacity-70"
+                                        : "border-border/60 bg-background/60 hover:border-primary/20 hover:bg-accent/40"
+                                  }`}
+                                >
+                                  <div className="flex items-start gap-3">
+                                    <McpServerBadgeIcon
+                                      serverId={connection.server_id}
+                                      serverName={connection.server_name ?? connection.server_id}
+                                      transport={connection.transport}
+                                      size="md"
+                                    />
+                                    <div className="min-w-0 flex-1 space-y-2">
+                                      <div className="flex flex-wrap items-center gap-2">
+                                        <p className="font-medium text-foreground">{connection.name}</p>
+                                        {selected ? (
+                                          <Badge variant="secondary" className="text-[10px]">
+                                            Selected
+                                          </Badge>
+                                        ) : null}
+                                        {blocked ? (
+                                          <Badge variant="outline" className="border-amber-500/30 bg-amber-500/10 text-[10px] text-amber-300">
+                                            Needs setup
+                                          </Badge>
+                                        ) : null}
+                                      </div>
+                                      <p className="text-sm text-muted-foreground">{connection.server_name ?? connection.server_id}</p>
+                                      <p className="text-xs leading-5 text-muted-foreground">{formatConnectionRuntimeSummary(connection)}</p>
+                                      {connection.status_reason && !blocked ? (
+                                        <p className="text-[11px] leading-5 text-muted-foreground">{connection.status_reason}</p>
+                                      ) : null}
+                                    </div>
+                                  </div>
+                                  <div className="mt-4 flex flex-wrap items-center gap-2">
+                                    <Badge variant="outline" className={`text-[10px] ${MCP_SUPPORT_BADGE_STYLES[connection.support_level]}`}>
+                                      {connection.support_level}
+                                    </Badge>
+                                    <Badge variant="outline" className={`text-[10px] ${MCP_VALIDATION_BADGE_STYLES[connection.validation.status]}`}>
+                                      {connection.validation.status}
+                                    </Badge>
+                                    <Badge variant="outline" className="text-[10px] capitalize">
+                                      {connection.transport}
+                                    </Badge>
+                                    <Badge variant="secondary" className="text-[10px]">
+                                      {connection.binding_count} binding{connection.binding_count === 1 ? "" : "s"}
+                                    </Badge>
+                                  </div>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </ScrollArea>
+                      ) : (
+                        <div className="rounded-xl border border-dashed border-border/70 bg-background/40 px-4 py-6 text-sm text-muted-foreground">
+                          No saved MCP connections match the current search or transport filter.
                         </div>
-                        <div className="space-y-1.5">
-                          <Label className="text-xs">Raw sidecar JSON</Label>
+                      )
+                    ) : (
+                      <div className="rounded-xl border border-dashed border-border/70 bg-background/40 px-4 py-6 text-sm text-muted-foreground">
+                        <p>No saved MCP connections exist in this namespace yet.</p>
+                        <p className="mt-1 text-xs leading-5">Create them in the MCP page first, then return here to bind them to the agent.</p>
+                        <Button variant="outline" size="sm" className="mt-3" onClick={handleOpenMcpManagement}>
+                          Create saved connection
+                        </Button>
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+
+                <Card className="shadow-none">
+                  <CardHeader className="pb-3">
+                    <div className="flex items-center gap-2">
+                      <div className="flex h-8 w-8 items-center justify-center rounded-xl border border-emerald-500/20 bg-emerald-500/10 text-emerald-300">
+                        <Globe className="h-4 w-4" />
+                      </div>
+                      <div>
+                        <CardTitle className="text-sm">Connection summary</CardTitle>
+                        <CardDescription>Only the saved connections selected here are attached to the agent runtime.</CardDescription>
+                      </div>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <div className="grid grid-cols-3 gap-3">
+                      <div className="rounded-2xl border border-sky-500/20 bg-sky-500/5 p-3">
+                        <p className="text-[10px] uppercase tracking-[0.16em] text-sky-400/70">Remote</p>
+                        <p className="mt-1 text-xl font-semibold text-foreground">{selectedConnectionStats.remote}</p>
+                      </div>
+                      <div className="rounded-2xl border border-violet-500/20 bg-violet-500/5 p-3">
+                        <p className="text-[10px] uppercase tracking-[0.16em] text-violet-400/70">Hub</p>
+                        <p className="mt-1 text-xl font-semibold text-foreground">{selectedConnectionStats.hub}</p>
+                      </div>
+                      <div className="rounded-2xl border border-amber-500/20 bg-amber-500/5 p-3">
+                        <p className="text-[10px] uppercase tracking-[0.16em] text-amber-400/70">Sidecars</p>
+                        <p className="mt-1 text-xl font-semibold text-foreground">{selectedConnectionStats.sidecar}</p>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <p className="text-xs font-medium text-foreground">Selected connections</p>
+                      {selectedConnections.length > 0 ? (
+                        <div className="flex flex-wrap gap-2">
+                          {selectedConnections.map((connection) => (
+                            <Badge
+                              key={connection.id}
+                              variant="outline"
+                              className={`rounded-full px-3 py-1 ${
+                                connection.transport === "remote"
+                                  ? "border-sky-500/30 bg-sky-500/10 text-sky-300"
+                                  : connection.transport === "hub"
+                                    ? "border-violet-500/30 bg-violet-500/10 text-violet-300"
+                                    : "border-amber-500/30 bg-amber-500/10 text-amber-300"
+                              }`}
+                            >
+                              <span className="inline-flex items-center gap-1.5">
+                                <McpServerBadgeIcon
+                                  serverId={connection.server_id}
+                                  serverName={connection.server_name ?? connection.server_id}
+                                  transport={connection.transport}
+                                  size="xs"
+                                />
+                                <span>{connection.name}</span>
+                              </span>
+                            </Badge>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-sm text-muted-foreground">No saved connections selected yet.</p>
+                      )}
+                    </div>
+
+                    <div className="rounded-xl border border-border/60 bg-background/60 p-3 text-xs leading-5 text-muted-foreground">
+                      Use the MCP page to browse registry entries, review published tools, and create or validate saved connections. This screen only decides which reusable MCP bindings travel with the agent.
+                    </div>
+
+                    <div className="space-y-2">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="text-xs font-medium text-foreground">Legacy raw overrides</p>
+                        {hasLegacyOverrides ? (
+                          <Badge variant="outline" className="border-amber-500/30 bg-amber-500/10 text-[10px] text-amber-300">
+                            legacy path
+                          </Badge>
+                        ) : null}
+                      </div>
+                      {hasLegacyOverrides ? (
+                        <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-3 text-xs text-muted-foreground">
+                          {legacySharedServers.length > 0 ? (
+                            <div className="space-y-2">
+                              <p className="font-medium text-foreground">Legacy shared MCP endpoints</p>
+                              <div className="flex flex-wrap gap-2">
+                                {legacySharedServers.map((serverName) => (
+                                  <Badge key={serverName} variant="outline" className="rounded-full px-3 py-1 text-[10px] border-amber-500/30 bg-amber-500/10 text-amber-300">
+                                    {serverName}
+                                  </Badge>
+                                ))}
+                              </div>
+                            </div>
+                          ) : null}
+                          {sidecarState.items.length > 0 ? (
+                            <div className={`space-y-2 ${legacySharedServers.length > 0 ? "mt-3" : ""}`}>
+                              <p className="font-medium text-foreground">Legacy raw sidecars</p>
+                              <div className="flex flex-wrap gap-2">
+                                {sidecarState.items.map((sidecar, index) => {
+                                  const label = formatMcpSidecarLabel(sidecar, index);
+                                  return (
+                                    <Badge key={`${label}-${index}`} variant="outline" className="rounded-full px-3 py-1 text-[10px] border-amber-500/30 bg-amber-500/10 text-amber-300">
+                                      {label}
+                                    </Badge>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          ) : null}
+                          <p className="mt-3 text-[11px] leading-5 text-muted-foreground">
+                            Raw overrides bypass the saved-connection validation flow and should be kept only for migrations or one-off custom MCP endpoints.
+                          </p>
+                        </div>
+                      ) : (
+                        <p className="text-sm text-muted-foreground">No legacy raw overrides are active.</p>
+                      )}
+                    </div>
+
+                    <Separator />
+                    <div className="rounded-xl border border-border/60 bg-background/60 p-3 text-xs text-muted-foreground">
+                      <p className="mb-1 font-medium text-foreground">Transport costs</p>
+                      <ul className="space-y-0.5 text-[11px]">
+                        <li><span className="text-sky-400">Remote</span> — external MCP endpoint captured per namespace connection</li>
+                        <li><span className="text-violet-400">Hub</span> — shared pod in mcp-hub namespace with saved namespace bindings</li>
+                        <li><span className="text-amber-400">Sidecar</span> — container per agent pod, with saved sidecar config preserved end to end</li>
+                      </ul>
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+
+              {legacyOverridesConflict ? (
+                <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+                  This agent currently mixes saved MCP connections with legacy raw overrides. Keep only one path for the same MCP so the runtime does not see duplicate routes.
+                </div>
+              ) : hasLegacyOverrides ? (
+                <div className="rounded-2xl border border-amber-500/20 bg-amber-500/5 px-4 py-3 text-sm text-muted-foreground">
+                  Legacy raw overrides are active. Prefer moving them into saved MCP connections so they can be validated, reused, and shown clearly in the namespace connection list.
+                </div>
+              ) : null}
+
+              <Accordion type="single" collapsible className="rounded-2xl border border-border/70 bg-background/50 px-4">
+                <AccordionItem value="advanced-routing" className="border-none">
+                  <AccordionTrigger className="py-4 text-sm font-medium">Legacy raw overrides</AccordionTrigger>
+                  <AccordionContent className="space-y-4">
+                    <div className="rounded-xl border border-border/60 bg-background/60 px-3 py-3 text-[11px] leading-5 text-muted-foreground">
+                      Use this only when you are migrating older agents or attaching an MCP endpoint that is not modeled yet as a saved connection. The saved-connection binding above is the preferred path.
+                    </div>
+                    <div className="grid gap-4 xl:grid-cols-2">
+                      <div className="space-y-1.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <Label className="text-xs">Legacy shared MCP endpoints</Label>
+                          {legacySharedServers.length > 0 ? (
+                            <Button variant="ghost" size="sm" className="h-7 px-2 text-[11px]" onClick={() => onMcpServersTextChange("")}>
+                              Clear
+                            </Button>
+                          ) : null}
+                        </div>
+                        <>
                           <Textarea
-                            rows={7}
-                            value={mcpSidecarsText}
-                            onChange={(e) => onMcpSidecarsTextChange(e.target.value)}
-                            placeholder={MCP_SIDECARS_PLACEHOLDER}
+                            rows={4}
+                            value={mcpServersText}
+                            onChange={(e) => onMcpServersTextChange(e.target.value)}
+                            placeholder={MCP_SERVERS_PLACEHOLDER}
                             className="font-mono text-xs"
                           />
-                          <p className="text-[11px] text-muted-foreground">Keeps full access to custom sidecar specs and manual overrides.</p>
-                        </div>
+                          <p className="text-[11px] text-muted-foreground">One legacy shared MCP endpoint per line. Prefer creating a saved connection instead so namespace reuse and validation work automatically.</p>
+                        </>
                       </div>
-                    </AccordionContent>
-                  </AccordionItem>
-                </Accordion>
-              </>
-            ) : (
-              <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-300">
-                Goose runtimes do not support shared MCP servers or sidecars yet. Switch to LangGraph or Codex to use sidecar-based MCP tools.
-              </div>
-            )}
+                      <div className="space-y-1.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <Label className="text-xs">Legacy raw sidecar JSON</Label>
+                          {mcpSidecarsText.trim() ? (
+                            <Button variant="ghost" size="sm" className="h-7 px-2 text-[11px]" onClick={() => onMcpSidecarsTextChange("")}>
+                              Clear
+                            </Button>
+                          ) : null}
+                        </div>
+                        <Textarea
+                          rows={7}
+                          value={mcpSidecarsText}
+                          onChange={(e) => onMcpSidecarsTextChange(e.target.value)}
+                          placeholder={MCP_SIDECARS_PLACEHOLDER}
+                          className="font-mono text-xs"
+                        />
+                        <p className="text-[11px] text-muted-foreground">Full access to custom sidecar specs and manual overrides. Keep this for expert-only edge cases that are not represented in the managed catalog yet.</p>
+                      </div>
+                    </div>
+                  </AccordionContent>
+                </AccordionItem>
+              </Accordion>
+            </>
           </TabsContent>
 
           <TabsContent value="files" className="animate-fade-in space-y-4">
@@ -897,36 +1107,21 @@ export function CreateAgentPanel({
                     addLabel="Add custom skill file"
                     emptyMessage="No skill documents attached. Use the library above or add a custom file manually."
                     pathHint="Repo-relative Markdown path, e.g. .github/skills/reviewer/SKILL.md"
-                    contentHint="Full skill document including optional frontmatter for tools, MCP, A2A, or Goose extensions."
+                    contentHint="Full skill document including optional frontmatter for tools, MCP, or A2A metadata."
                     onAdd={() => onSkillFileDraftsChange([...skillFileDrafts, createSkillFileDraft()])}
                     onChange={onSkillFileDraftsChange}
                   />
-                  {runtimeKind === "goose" ? (
-                    <TextFileBundleEditor
-                      title="Goose config files"
-                      description="Preseed the Goose config root with prompts or runtime settings."
-                      entries={gooseConfigFileDrafts}
-                      addLabel="Add Goose file"
-                      emptyMessage="No Goose config files attached. Add config.yaml or prompt fragments as needed."
-                      pathHint="Path relative to Goose config root, e.g. config.yaml"
-                      contentHint="YAML, Markdown, or plain text. Secrets stay in environment variables."
-                      onAdd={() => onGooseConfigFileDraftsChange([...gooseConfigFileDrafts, createGooseConfigFileDraft()])}
-                      onChange={onGooseConfigFileDraftsChange}
-                    />
-                  ) : null}
-                  {runtimeKind === "opencode" ? (
-                    <TextFileBundleEditor
-                      title="OpenCode config files"
-                      description="Preseed the OpenCode config root with provider settings or runtime configuration."
-                      entries={opencodeConfigFileDrafts}
-                      addLabel="Add OpenCode file"
-                      emptyMessage="No OpenCode config files attached. Add config.json or provider settings as needed."
-                      pathHint="Path relative to OpenCode config root, e.g. config.json"
-                      contentHint="JSON or plain text configuration. Secrets stay in environment variables."
-                      onAdd={() => onOpenCodeConfigFileDraftsChange([...opencodeConfigFileDrafts, createOpenCodeConfigFileDraft()])}
-                      onChange={onOpenCodeConfigFileDraftsChange}
-                    />
-                  ) : null}
+                  <TextFileBundleEditor
+                    title="OpenCode config files"
+                    description="Preseed the OpenCode config root with provider settings or runtime configuration."
+                    entries={opencodeConfigFileDrafts}
+                    addLabel="Add OpenCode file"
+                    emptyMessage="No OpenCode config files attached. Add config.json or provider settings as needed."
+                    pathHint="Path relative to OpenCode config root, e.g. config.json"
+                    contentHint="JSON or plain text configuration. Secrets stay in environment variables."
+                    onAdd={() => onOpenCodeConfigFileDraftsChange([...opencodeConfigFileDrafts, createOpenCodeConfigFileDraft()])}
+                    onChange={onOpenCodeConfigFileDraftsChange}
+                  />
                 </AccordionContent>
               </AccordionItem>
             </Accordion>
@@ -1095,71 +1290,37 @@ export function CreateAgentPanel({
                     </div>
                     <div>
                       <CardTitle className="text-sm">GitHub MCP access</CardTitle>
-                      <CardDescription>Attach a per-agent GitHub personal access token for the shared GitHub MCP adapter.</CardDescription>
+                      <CardDescription>GitHub runtime credentials are not available in the OpenCode-only deployment path.</CardDescription>
                     </div>
                   </div>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  <div className="flex items-center gap-3">
-                    <input
-                      type="checkbox"
-                      id="github-enabled"
-                      checked={githubForm.enabled}
-                      disabled={runtimeKind !== "langgraph"}
-                      onChange={(e) => onGitHubFormChange({ ...githubForm, enabled: e.target.checked })}
-                      className="h-4 w-4 rounded border-border"
-                    />
-                    <Label htmlFor="github-enabled" className="text-sm font-medium">Enable shared GitHub MCP access</Label>
-                  </div>
-
-                  {runtimeKind !== "langgraph" ? (
-                    <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-300">
-                      GitHub MCP access is currently wired only for LangGraph agents. Switch the runtime to LangGraph to enable it.
-                    </div>
-                  ) : null}
-
                   <div className="rounded-2xl border border-border/60 bg-background/60 p-4 text-sm text-muted-foreground">
-                    The platform creates a per-agent Kubernetes Secret, injects the token only into that agent runtime, and forwards it to the shared GitHub adapter on each GitHub MCP call. Your AgentPolicy still needs to allow the <span className="font-mono text-foreground">github</span> MCP server.
+                    OpenCode agents can still use ordinary git repository credentials and shared MCP servers, but the legacy per-agent <span className="font-mono text-foreground">github_config</span> secret path is no longer accepted by the gateway.
                   </div>
-
-                  {runtimeKind === "langgraph" && githubForm.enabled ? (
-                    <Card className="border-border/60 shadow-none">
-                      <CardHeader className="pb-3">
-                        <div className="flex items-center gap-2">
-                          <Lock className="h-4 w-4 text-muted-foreground" />
-                          <CardTitle className="text-sm">GitHub token</CardTitle>
-                        </div>
-                        <CardDescription>Use a PAT with only the scopes the agent needs for repository, issue, or pull request operations.</CardDescription>
-                      </CardHeader>
-                      <CardContent className="space-y-2">
-                        <Label htmlFor="github-token">Personal access token</Label>
-                        <Input
-                          id="github-token"
-                          type="password"
-                          placeholder="github_pat_..."
-                          value={githubForm.token}
-                          onChange={(e) => onGitHubFormChange({ ...githubForm, token: e.target.value })}
-                        />
-                      </CardContent>
-                    </Card>
-                  ) : null}
                 </CardContent>
               </Card>
             </div>
           </TabsContent>
         </Tabs>
 
-        {error && (
-          <div className="mt-4 rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-            {error}
+        {displayError && (
+          <div className="mt-4 rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive" role="alert">
+            {displayError}
           </div>
         )}
 
         <div className="mt-5 flex flex-wrap items-center justify-between gap-4 border-t border-border pt-4">
-          <p className="max-w-2xl text-xs leading-5 text-muted-foreground">
-            Creation keeps all existing functionality intact. The guided pickers write into the same MCP sidecar specs and skill files that the runtime already understands.
-          </p>
-          <Button onClick={onCreate} disabled={!name.trim() || !model.trim() || isCreating} className="min-w-[160px]">
+          {systemPromptError ? (
+            <p className="max-w-2xl text-xs leading-5 text-destructive">
+              {systemPromptError}
+            </p>
+          ) : (
+            <p className="max-w-2xl text-xs leading-5 text-muted-foreground">
+              Creation keeps all existing functionality intact. The guided pickers write into the same MCP sidecar specs and skill files that the runtime already understands.
+            </p>
+          )}
+          <Button onClick={handleCreateClick} disabled={!name.trim() || !model.trim() || isCreating || Boolean(systemPromptError)} className="min-w-[160px]">
             {isCreating ? <LoaderCircle className="mr-1.5 h-4 w-4 animate-spin" /> : <PlusCircle className="mr-1.5 h-4 w-4" />}
             {isCreating ? "Creating..." : "Create agent"}
           </Button>

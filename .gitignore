@@ -32,6 +32,7 @@ dist/
 flake8_output.txt
 mypy_out.txt
 mypy_output.txt
+.pytest-*.txt
 
 # ===========================
 # Local reference clones
@@ -44,6 +45,7 @@ codecodenewversionkubesynth_kagent_reference/
 # Runtime / config
 # ===========================
 .sandbox-live.toml
+api-gateway/.local/
 
 # ===========================
 # OS

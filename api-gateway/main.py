@@ -1,8 +1,11 @@
 """REST API Gateway for the AI Agent Sandbox."""
 
 import asyncio
+import base64
 import contextlib
 import copy
+import html
+import hashlib
 import json
 import logging
 import os
@@ -11,7 +14,7 @@ import sys
 import threading
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from collections.abc import AsyncGenerator
@@ -20,7 +23,7 @@ from urllib.parse import urlencode
 
 import certifi
 import httpx
-from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Request, Response, status
+from fastapi import Body, Cookie, Depends, FastAPI, Header, HTTPException, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel, Field, model_validator
@@ -29,18 +32,25 @@ CURRENT_DIR = Path(__file__).resolve().parent
 if str(CURRENT_DIR) not in sys.path:
     sys.path.insert(0, str(CURRENT_DIR))
 
+MCP_HUB_NAMESPACE = os.getenv("MCP_HUB_NAMESPACE", "mcp-hub").strip() or "mcp-hub"
+HELM_RELEASE_NAME = os.getenv("HELM_RELEASE_NAME", "kubesynth").strip() or "kubesynth"
+
 from auth_store import (
     ROLE_PRIORITY,
     change_user_password,
     count_users,
+    create_mcp_connection,
     create_local_user,
     create_session_for_user,
     ensure_bootstrap_admin,
     get_active_user_context,
+    get_mcp_connection,
+    get_mcp_connection_rows_by_ids,
     get_user_by_username,
     init_database,
     is_session_active,
     is_user_locked,
+    list_mcp_connections,
     list_users as list_local_users,
     login_rate_limit_key,
     login_rate_limited,
@@ -52,7 +62,9 @@ from auth_store import (
     revoke_refresh_token,
     rotate_refresh_session,
     serialize_user,
+    slugify_mcp_connection_name,
     update_user_fields,
+    update_mcp_connection,
     upsert_external_user,
     validate_email,
     verify_password,
@@ -77,7 +89,16 @@ from auth_store import (
     query_usage_summary,
     query_usage_detail,
     record_workflow_run,
+    record_workflow_run_log_archive,
+    delete_mcp_connection,
     list_workflow_runs,
+    get_workflow_run_trace as load_workflow_run_trace,
+    db_session,
+    IntelligenceCollectorRow,
+    IntelligenceTaskRow,
+    IntelligenceScheduleRow,
+    IntelligenceAlertRow,
+    AlertHistoryRow,
 )
 from enterprise_auth import (
     auth_configuration,
@@ -99,6 +120,7 @@ from jwt_utils import (
     ACCESS_TOKEN_TTL_SECONDS,
     REFRESH_COOKIE_NAME,
     REFRESH_TOKEN_TTL_SECONDS,
+    JWT_SECRET,
     create_access_token,
     decode_access_token,
 )
@@ -197,9 +219,17 @@ async def lifespan(app: FastAPI):
                 logger.exception("Failed to initialize auth database after %d attempts: %s", max_db_retries, exc)
                 raise RuntimeError("Auth database initialization failed") from exc
     try:
+        _load_collectors_from_db()
+        _load_tasks_from_db()
+        # Validate shared token is configured
+        shared_token = os.environ.get("API_GATEWAY_SHARED_TOKEN", "")
+        if not shared_token:
+            logger.error("API_GATEWAY_SHARED_TOKEN is empty — authentication is not configured!")
+        _scheduler_task = asyncio.create_task(_intelligence_scheduler_loop())
         yield
     finally:
         _SHUTDOWN.set()
+        _scheduler_task.cancel()
         logger.info("API gateway shutting down.")
 
 
@@ -237,6 +267,8 @@ LITELLM_INTERNAL_URL = os.getenv("LITELLM_INTERNAL_URL", "").strip() or "http://
 LITELLM_MASTER_KEY = os.getenv("LITELLM_MASTER_KEY", "").strip()
 LLM_SECRET_NAME = os.getenv("LLM_SECRET_NAME", "kubesynth-llm-api-keys")
 STREAM_KEEPALIVE_SECONDS = max(float(os.getenv("API_GATEWAY_STREAM_KEEPALIVE_SECONDS", "15")), 5.0)
+AGENT_READ_CACHE_TTL_SECONDS = max(float(os.getenv("API_GATEWAY_AGENT_READ_CACHE_TTL_SECONDS", "2.0")), 0.0)
+AGENT_READ_CACHE_MAX_ENTRIES = max(int(os.getenv("API_GATEWAY_AGENT_READ_CACHE_MAX_ENTRIES", "256")), 1)
 A2A_PROTOCOL_VERSION = "1.0"
 A2A_TASK_RETENTION_SECONDS = max(int(os.getenv("A2A_TASK_RETENTION_SECONDS", "3600")), 60)
 A2A_PUBLIC_BASE_URL = os.getenv("API_GATEWAY_PUBLIC_BASE_URL", "").strip()
@@ -263,6 +295,8 @@ A2A_UNSUPPORTED_OPERATION_ERROR = -32004
 A2A_CONTENT_TYPE_NOT_SUPPORTED_ERROR = -32005
 A2A_VERSION_NOT_SUPPORTED_ERROR = -32009
 A2A_TASK_STORE_LOCK = threading.Lock()
+_AGENT_READ_CACHE_LOCK = threading.Lock()
+_AGENT_READ_CACHE: dict[tuple[str, str], tuple[float, dict[str, Any]]] = {}
 A2A_TASK_STORE: dict[tuple[str, str, str], dict[str, Any]] = {}
 TEAM_CONTEXT_MAX_CHARS = max(int(os.getenv("A2A_TEAM_CONTEXT_MAX_CHARS", "4096")), 256)
 MAX_SUBAGENT_FILE_CHARS = max(int(os.getenv("AGENT_MAX_SUBAGENT_FILE_CHARS", "4000")), 256)
@@ -273,6 +307,29 @@ MAX_AGENT_SKILL_FILES = max(int(os.getenv("AGENT_MAX_SKILL_FILES", "24")), 1)
 MAX_AGENT_SKILL_FILE_PATH_CHARS = max(int(os.getenv("AGENT_MAX_SKILL_FILE_PATH_CHARS", "256")), 32)
 MAX_AGENT_SKILL_FILE_CONTENT_CHARS = max(int(os.getenv("AGENT_MAX_SKILL_FILE_CONTENT_CHARS", "16000")), 512)
 MAX_AGENT_SKILL_TOTAL_CHARS = max(int(os.getenv("AGENT_MAX_SKILL_TOTAL_CHARS", "64000")), 4096)
+FACTORY_AGENT_NAME = "kubesynth-factory"
+FACTORY_WORKFLOW_NAME = "kubesynth-factory-pipeline"
+FACTORY_CONTEXT_NAME = "kubesynth-factory-context"
+DEFAULT_FACTORY_MODE = "governed-bundle"
+FACTORY_MODES = frozenset({"lightweight-draft", "governed-bundle", "fully-autonomous"})
+FACTORY_MODE_SYSTEM_NOTES = {
+    "lightweight-draft": (
+        "Factory mode: lightweight-draft. Produce the fastest useful first-pass blueprint that still respects the real KubeSynth CRDs. "
+        "Keep the design lean, surface assumptions explicitly, and stop at a draft artifact set without deployment execution."
+    ),
+    "governed-bundle": (
+        "Factory mode: governed-bundle. Produce a review-ready, enterprise-grade bundle with strong prompts, supporting deliverables, and clear approval boundaries. "
+        "Optimize for a governed artifact handoff rather than deployment execution."
+    ),
+    "fully-autonomous": (
+        "Factory mode: fully-autonomous. Produce the most capable end-to-end bundle you can, with strong decomposition, rich prompts, verification guidance, and operational realism. "
+        "Still respect explicit approval boundaries and current KubeSynth runtime constraints."
+    ),
+}
+FACTORY_WORKFLOW_INPUT_RE = re.compile(
+    r"^\s*\[Factory Mode\]\s*\r?\n(?P<mode>[^\r\n]+)\s*(?:\r?\n)+\[User Request\]\s*\r?\n(?P<request>[\s\S]*?)\s*$",
+    re.IGNORECASE,
+)
 
 
 def normalize_json_object(value: Any, *, field_name: str, max_chars: int) -> dict[str, Any] | None:
@@ -305,6 +362,53 @@ def normalize_path_text(value: Any, *, source: str) -> str:
     if len(text) > 512:
         raise ValueError(f"{source} must not exceed 512 characters")
     return text
+
+
+def normalize_factory_mode(value: Any) -> str | None:
+    normalized = str(value or "").strip().lower()
+    if not normalized:
+        return None
+    if normalized not in FACTORY_MODES:
+        raise ValueError(f"factory_mode must be one of {', '.join(sorted(FACTORY_MODES))}")
+    return normalized
+
+
+def is_factory_agent_resource(agent_name: str, agent: dict[str, Any] | None = None) -> bool:
+    if agent_name == FACTORY_AGENT_NAME:
+        return True
+    spec = (agent or {}).get("spec") or {}
+    return str(spec.get("contextRef") or "").strip() == FACTORY_CONTEXT_NAME
+
+
+def is_factory_workflow_resource(workflow_name: str, workflow_spec: dict[str, Any] | None = None) -> bool:
+    if workflow_name == FACTORY_WORKFLOW_NAME:
+        return True
+    spec = workflow_spec or {}
+    return str(spec.get("contextRef") or "").strip() == FACTORY_CONTEXT_NAME
+
+
+def append_system_note(request_payload: dict[str, Any], note: str | None) -> None:
+    note_text = str(note or "").strip()
+    if not note_text:
+        return
+    existing_system = str(request_payload.get("system") or "").strip()
+    request_payload["system"] = f"{existing_system}\n\n{note_text}" if existing_system else note_text
+
+
+def unwrap_factory_workflow_input(raw_input: str) -> tuple[str | None, str]:
+    match = FACTORY_WORKFLOW_INPUT_RE.match(raw_input or "")
+    if not match:
+        return None, str(raw_input or "").strip()
+    try:
+        mode = normalize_factory_mode(match.group("mode"))
+    except ValueError:
+        return None, str(raw_input or "").strip()
+    request_text = str(match.group("request") or "").strip()
+    return mode, request_text
+
+
+def build_factory_workflow_input(user_request: str, factory_mode: str) -> str:
+    return f"[Factory Mode]\n{factory_mode}\n\n[User Request]\n{user_request.strip()}"
 
 
 class SubagentFileRef(BaseModel):
@@ -359,6 +463,7 @@ class InvokeRequest(BaseModel):
     thread_id: str | None = None
     model: str | None = None
     system: str | None = None
+    factory_mode: str | None = Field(default=None, max_length=32)
     require_approval: bool = False
     approval_action: str | None = None
     tool_name: str = ""
@@ -394,6 +499,7 @@ class InvokeRequest(BaseModel):
         self.thread_id = self.thread_id.strip() or None if self.thread_id is not None else None
         self.model = self.model.strip() or None if self.model is not None else None
         self.system = self.system.strip() or None if self.system is not None else None
+        self.factory_mode = normalize_factory_mode(self.factory_mode)
         self.approval_action = self.approval_action.strip() or None if self.approval_action is not None else None
         self.tool_name = self.tool_name.strip()
         self.mcp_server = self.mcp_server.strip() or None if self.mcp_server is not None else None
@@ -505,7 +611,7 @@ class AgentInfo(BaseModel):
     model: str
     namespace: str
     status: str
-    runtime_kind: str = "langgraph"
+    runtime_kind: str = "unknown"
 
 
 class PolicyInfo(BaseModel):
@@ -640,12 +746,12 @@ class AgentDetail(AgentInfo):
     policy_ref: str | None = None
     storage_size: str | None = None
     enable_gvisor: bool = False
+    mcp_connections: list[dict[str, Any]] = Field(default_factory=list)
     mcp_servers: list[str] = Field(default_factory=list)
     mcp_sidecars: list[dict[str, Any]] = Field(default_factory=list)
     a2a_config: dict[str, Any] = Field(default_factory=dict)
     skills: dict[str, Any] = Field(default_factory=dict)
     skill_summaries: list[dict[str, Any]] = Field(default_factory=list)
-    goose_config_files: dict[str, Any] = Field(default_factory=dict)
     opencode_config_files: dict[str, Any] = Field(default_factory=dict)
     git_config: dict[str, Any] | None = None
     github_config: dict[str, Any] | None = None
@@ -679,6 +785,9 @@ class A2AJSONRPCError(Exception):
         self.data = data or {}
 
 
+AGENT_SYSTEM_PROMPT_MAX_CHARS = 12000
+
+
 class CreateAgentRequest(BaseModel):
     name: str = Field(
         min_length=1,
@@ -686,16 +795,16 @@ class CreateAgentRequest(BaseModel):
         pattern=r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
     )
     model: str = Field(min_length=1, max_length=255)
-    system_prompt: str = Field(default="", max_length=4000)
+    system_prompt: str = Field(default="", max_length=AGENT_SYSTEM_PROMPT_MAX_CHARS)
     policy_ref: str | None = Field(default=None, max_length=253)
     storage_size: str | None = Field(default="1Gi", max_length=32)
-    runtime_kind: str = Field(default="langgraph", pattern=r"^(langgraph|goose|codex|opencode)$")
+    runtime_kind: str = Field(pattern=r"^opencode$")
     enable_gvisor: bool = False
+    mcp_connection_ids: list[str] = Field(default_factory=list)
     mcp_servers: list[str] = Field(default_factory=list)
     mcp_sidecars: list[dict[str, Any]] = Field(default_factory=list)
     a2a_config: dict[str, Any] | None = None
     skills: dict[str, Any] | None = None
-    goose_config_files: dict[str, Any] = Field(default_factory=dict)
     opencode_config_files: dict[str, Any] = Field(default_factory=dict)
     git_config: dict[str, Any] | None = Field(default=None, description="Git repo config for dev-loop workflows")
     github_config: dict[str, Any] | None = Field(
@@ -705,21 +814,37 @@ class CreateAgentRequest(BaseModel):
 
 class UpdateAgentRequest(BaseModel):
     model: str = Field(min_length=1, max_length=255)
-    system_prompt: str = Field(default="", max_length=4000)
+    system_prompt: str = Field(default="", max_length=AGENT_SYSTEM_PROMPT_MAX_CHARS)
     policy_ref: str | None = Field(default=None, max_length=253)
     storage_size: str | None = Field(default="1Gi", max_length=32)
-    runtime_kind: str | None = Field(default=None, pattern=r"^(langgraph|goose|codex|opencode)$")
+    runtime_kind: str | None = Field(default=None, pattern=r"^opencode$")
     enable_gvisor: bool = False
+    mcp_connection_ids: list[str] | None = None
     mcp_servers: list[str] = Field(default_factory=list)
     mcp_sidecars: list[dict[str, Any]] = Field(default_factory=list)
     a2a_config: dict[str, Any] | None = None
     skills: dict[str, Any] | None = None
-    goose_config_files: dict[str, Any] | None = None
     opencode_config_files: dict[str, Any] | None = None
     git_config: dict[str, Any] | None = Field(default=None, description="Git repo config for dev-loop workflows")
     github_config: dict[str, Any] | None = Field(
         default=None, description="Shared GitHub MCP credentials for this agent"
     )
+
+
+class McpConnectionRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    server_id: str = Field(min_length=1, max_length=128)
+    config: dict[str, Any] = Field(default_factory=dict)
+    credentials: dict[str, str] = Field(default_factory=dict)
+    validate_on_save: bool = False
+
+
+class McpConnectionUpdateRequest(BaseModel):
+    name: str | None = Field(default=None, max_length=128)
+    server_id: str | None = Field(default=None, max_length=128)
+    config: dict[str, Any] | None = None
+    credentials: dict[str, str] | None = None
+    validate_on_save: bool = False
 
 
 class GitCredentialRequest(BaseModel):
@@ -896,8 +1021,13 @@ RESOURCE_GROUP = "kubesynth.ai"
 RESOURCE_VERSION = "v1alpha1"
 RESOURCE_KIND_BY_PLURAL = {
     "aiagents": "AIAgent",
+    "agentpolicies": "AgentPolicy",
     "agentworkflows": "AgentWorkflow",
     "agentevals": "AgentEval",
+    "observationtargets": "ObservationTarget",
+    "observationpolicies": "ObservationPolicy",
+    "observationreports": "ObservationReport",
+    "connectorplugins": "ConnectorPlugin",
 }
 
 
@@ -906,35 +1036,19 @@ def agent_runtime_url(agent_name: str, namespace: str) -> str:
 
 
 def normalized_runtime_kind(raw_value: str | None) -> str:
-    runtime_kind = (raw_value or "langgraph").strip().lower() or "langgraph"
-    if runtime_kind not in {"langgraph", "goose", "codex", "opencode"}:
-        raise ValueError(f"Unsupported runtime kind '{runtime_kind}'")
+    runtime_kind = str(raw_value or "").strip().lower()
+    if not runtime_kind:
+        raise ValueError("runtime kind must be explicitly set")
+    if runtime_kind != "opencode":
+        raise ValueError(f"runtime kind must be 'opencode'; '{runtime_kind}' is no longer supported")
     return runtime_kind
 
 
-def normalize_goose_config_file_path(raw_path: object) -> str:
-    normalized_path = str(raw_path).replace("\\", "/").strip()
-    if not normalized_path:
-        raise HTTPException(status_code=400, detail="goose_config_files paths must not be blank")
-    if normalized_path.startswith("/"):
-        raise HTTPException(status_code=400, detail="goose_config_files paths must be relative")
-
-    parts = [part for part in normalized_path.split("/") if part]
-    if not parts or any(part in {".", ".."} for part in parts):
-        raise HTTPException(status_code=400, detail=f"goose_config_files path '{raw_path}' is invalid")
-
-    candidate = "/".join(parts)
-    if candidate == "secrets.yaml":
-        raise HTTPException(
-            status_code=400,
-            detail="goose_config_files cannot preseed secrets.yaml; use Kubernetes secrets and environment variables instead",
-        )
-    if parts[0] == "permissions":
-        raise HTTPException(
-            status_code=400,
-            detail="goose_config_files cannot preseed permissions/* because Goose manages that path at runtime",
-        )
-    return candidate
+def normalized_opencode_runtime_kind(raw_value: str | None, *, field_name: str) -> str:
+    runtime_kind = normalized_runtime_kind(raw_value)
+    if runtime_kind != "opencode":
+        raise ValueError(f"{field_name} must be 'opencode'; '{runtime_kind}' is no longer supported")
+    return runtime_kind
 
 
 def normalize_runtime_config_file_path(raw_path: object, *, source: str) -> str:
@@ -1167,30 +1281,6 @@ def parse_skill_summary(path: str, content: str, *, strict: bool) -> dict[str, A
             source=f"skills.files.{path}.allow_subagents",
             warnings=warnings,
         ),
-        "goose_builtin_extensions": skill_metadata_string_list(
-            metadata,
-            "gooseBuiltinExtensions",
-            "goose_builtin_extensions",
-            strict=strict,
-            source=f"skills.files.{path}.goose_builtin_extensions",
-            warnings=warnings,
-        ),
-        "goose_stdio_extensions": skill_metadata_string_list(
-            metadata,
-            "gooseStdioExtensions",
-            "goose_stdio_extensions",
-            strict=strict,
-            source=f"skills.files.{path}.goose_stdio_extensions",
-            warnings=warnings,
-        ),
-        "goose_streamable_http_extensions": skill_metadata_string_list(
-            metadata,
-            "gooseStreamableHttpExtensions",
-            "goose_streamable_http_extensions",
-            strict=strict,
-            source=f"skills.files.{path}.goose_streamable_http_extensions",
-            warnings=warnings,
-        ),
         "valid": not bool(warnings),
         "warnings": warnings,
     }
@@ -1263,9 +1353,6 @@ def parse_agent_skill_summaries(config: Any) -> list[dict[str, Any]]:
                     "allowed_mcp_servers": [],
                     "allowed_a2a_targets": [],
                     "allow_subagents": False,
-                    "goose_builtin_extensions": [],
-                    "goose_stdio_extensions": [],
-                    "goose_streamable_http_extensions": [],
                     "valid": False,
                     "warnings": [str(exc.detail)],
                 }
@@ -1282,9 +1369,6 @@ def parse_agent_skill_summaries(config: Any) -> list[dict[str, Any]]:
                     "allowed_mcp_servers": [],
                     "allowed_a2a_targets": [],
                     "allow_subagents": False,
-                    "goose_builtin_extensions": [],
-                    "goose_stdio_extensions": [],
-                    "goose_streamable_http_extensions": [],
                     "valid": False,
                     "warnings": [f"skills.files.{path} must be a Markdown string"],
                 }
@@ -1382,23 +1466,6 @@ def parse_a2a_policy_config(config: Any, *, source: str) -> dict[str, Any]:
     return normalized
 
 
-def parse_goose_config_files(config_files: Any, *, source: str) -> dict[str, Any]:
-    if config_files is None:
-        return {}
-    if not isinstance(config_files, dict):
-        raise HTTPException(
-            status_code=400, detail=f"{source} must be a JSON object keyed by relative Goose config paths"
-        )
-
-    normalized: dict[str, Any] = {}
-    for raw_path, raw_content in sorted(config_files.items(), key=lambda item: str(item[0])):
-        normalized_path = normalize_goose_config_file_path(raw_path)
-        if raw_content is None:
-            raise HTTPException(status_code=400, detail=f"{source}.{normalized_path} must not be null")
-        normalized[normalized_path] = raw_content
-    return normalized
-
-
 def parse_opencode_config_files(config_files: Any, *, source: str) -> dict[str, Any]:
     if config_files is None:
         return {}
@@ -1417,95 +1484,50 @@ def parse_opencode_config_files(config_files: Any, *, source: str) -> dict[str, 
 
 
 def runtime_kind_from_spec(spec: dict[str, Any] | None) -> str:
-    runtime_spec = (spec or {}).get("runtime") or {}
-    if isinstance(runtime_spec, dict):
+    runtime_spec = (spec or {}).get("runtime")
+    if not isinstance(runtime_spec, dict):
+        raise HTTPException(status_code=400, detail="AIAgent.spec.runtime.kind must be explicitly set")
+    try:
         return normalized_runtime_kind(runtime_spec.get("kind"))
-    return "langgraph"
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid AIAgent runtime configuration: {exc}") from exc
 
 
 def validate_agent_runtime_compatibility(spec: dict[str, Any]) -> None:
     runtime_kind = runtime_kind_from_spec(spec)
-    if runtime_kind == "goose":
-        errors: list[str] = []
-        if spec.get("mcpServers"):
-            errors.append(
-                "Goose runtime does not support mcp_servers. Use the LangGraph runtime for MCP routing today."
-            )
-        if spec.get("mcpSidecars"):
-            errors.append(
-                "Goose runtime does not support mcp_sidecars. Use the LangGraph runtime for sidecar-based MCP tools today."
-            )
-        if spec.get("githubConfig"):
-            errors.append(
-                "Goose runtime does not support github_config. Use the LangGraph runtime for shared GitHub MCP access today."
-            )
-        if errors:
-            raise HTTPException(status_code=400, detail=" ".join(errors))
-    elif runtime_kind == "codex":
-        errors = []
-        if spec.get("mcpServers"):
-            errors.append(
-                "Codex runtime does not support mcp_servers. Use the LangGraph runtime for MCP routing today."
-            )
-        if spec.get("githubConfig"):
-            errors.append(
-                "Codex runtime does not support github_config. Use the LangGraph runtime for shared GitHub MCP access today."
-            )
-        if errors:
-            raise HTTPException(status_code=400, detail=" ".join(errors))
-    elif runtime_kind == "opencode":
-        errors = []
-        if spec.get("githubConfig"):
-            errors.append(
-                "OpenCode runtime does not support github_config because the shared GitHub hub service is exposed through an HTTP adapter rather than a native MCP endpoint. Use sidecar-based GitHub MCP or the LangGraph runtime for shared GitHub MCP access today."
-            )
-        if errors:
-            raise HTTPException(status_code=400, detail=" ".join(errors))
+    if runtime_kind != "opencode":
+        raise HTTPException(status_code=400, detail=f"Unsupported AIAgent runtime kind '{runtime_kind}'")
+    if spec.get("githubConfig"):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "OpenCode runtime does not support github_config because the shared GitHub hub service is exposed "
+                "through an HTTP adapter rather than a native MCP endpoint. Use sidecar-based GitHub MCP instead."
+            ),
+        )
 
 
 def validate_invoke_runtime_compatibility(runtime_kind: str, request: InvokeRequest) -> None:
-    if runtime_kind not in {"goose", "codex", "opencode"}:
-        return
+    if runtime_kind != "opencode":
+        raise HTTPException(status_code=400, detail=f"Unsupported AIAgent runtime kind '{runtime_kind}'")
 
     unsupported_fields: list[str] = []
-    if runtime_kind in {"goose", "codex"} and request.require_approval:
-        unsupported_fields.append("require_approval")
     if request.tool_name.strip():
         unsupported_fields.append("tool_name")
     if (request.mcp_server or "").strip():
         unsupported_fields.append("mcp_server")
     if request.sandbox_session is not None:
         unsupported_fields.append("sandbox_session")
-    if request.a2a_target_agent or request.a2a_target_namespace:
-        unsupported_fields.append("a2a_target")
-    if request.a2a_timeout_seconds is not None:
-        unsupported_fields.append("a2a_timeout_seconds")
     if request.subagents:
         unsupported_fields.append("subagents")
-    if runtime_kind in {"goose", "codex"}:
-        if request.output_format:
-            unsupported_fields.append("output_format")
-        if request.output_schema is not None:
-            unsupported_fields.append("output_schema")
-        if request.max_retries is not None:
-            unsupported_fields.append("max_retries")
-        if request.structured_output_retry_count is not None:
-            unsupported_fields.append("structured_output_retry_count")
-        if request.autonomous is False:
-            unsupported_fields.append("autonomous")
 
     if unsupported_fields:
         joined_fields = ", ".join(unsupported_fields)
-        runtime_label = {
-            "goose": "Goose",
-            "codex": "Codex",
-            "opencode": "OpenCode",
-        }[runtime_kind]
         raise HTTPException(
             status_code=400,
             detail=(
-                f"{runtime_label} runtime currently supports chat-style prompt invocation. "
-                f"Unsupported fields for {runtime_kind} agents: {joined_fields}."
+                "OpenCode runtime currently supports chat-style prompt invocation and explicit outbound A2A "
+                f"invocation. Unsupported fields for opencode agents: {joined_fields}."
             ),
         )
 
@@ -1531,18 +1553,54 @@ def error_payload_from_body(body: bytes, fallback: str) -> dict[str, str]:
     if not text:
         return {"error": fallback}
 
+    def _normalize_error_text(value: str) -> str:
+        return re.sub(r"\s+", " ", value).strip()
+
+    def _truncate_error_text(value: str) -> str:
+        normalized = _normalize_error_text(value)
+        if len(normalized) <= 400:
+            return normalized
+        return f"{normalized[:397]}..."
+
+    def _sanitize_error_text(value: str) -> str:
+        trimmed = value.strip()
+        if not trimmed:
+            return fallback
+
+        if re.search(r"<(?:!doctype\s+html|html|body|title|h1)\b", trimmed, re.IGNORECASE):
+            headline = None
+            for pattern in (
+                re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL),
+                re.compile(r"<h1[^>]*>(.*?)</h1>", re.IGNORECASE | re.DOTALL),
+            ):
+                match = pattern.search(trimmed)
+                if match and match.group(1).strip():
+                    headline = _normalize_error_text(html.unescape(re.sub(r"<[^>]+>", " ", match.group(1))))
+                    if headline:
+                        break
+
+            if headline:
+                return _truncate_error_text(f"Upstream service error: {headline}")
+
+            plain_text = _normalize_error_text(html.unescape(re.sub(r"<[^>]+>", " ", trimmed)))
+            if plain_text:
+                return _truncate_error_text(f"Upstream service error: {plain_text}")
+            return fallback
+
+        return _truncate_error_text(trimmed)
+
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError:
-        return {"error": text}
+        return {"error": _sanitize_error_text(text)}
 
     if isinstance(parsed, dict):
         for key in ("detail", "error"):
             value = parsed.get(key)
             if isinstance(value, str) and value.strip():
-                return {"error": value.strip()}
+                return {"error": _sanitize_error_text(value)}
 
-    return {"error": text}
+    return {"error": _sanitize_error_text(text)}
 
 
 def sse_event(event: str, payload: dict[str, Any]) -> str:
@@ -1555,6 +1613,11 @@ def sse_keepalive_comment() -> str:
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def build_retry_workflow_run_id(namespace: str, workflow_name: str, generation: int) -> str:
+    epoch_ms = int(time.time() * 1000)
+    return f"wf-run-{namespace}-{workflow_name}-{generation}-{epoch_ms}-{uuid.uuid4().hex[:8]}"
 
 
 def dedupe_text_values(values: list[str]) -> list[str]:
@@ -1657,6 +1720,1135 @@ def serialize_agent_github_config(config: Any) -> dict[str, Any] | None:
     if not normalized:
         return None
     return {"credential_secret_ref": normalized["credentialSecretRef"]}
+
+
+MCP_CONNECTION_VALIDATION_STATES = {"draft", "valid", "warning", "invalid"}
+
+
+def _mcp_registry_index() -> dict[str, dict[str, Any]]:
+    return {entry["id"]: entry for entry in _build_mcp_registry_results()}
+
+
+def _lookup_mcp_registry_entry(server_id: str, *, required: bool = True) -> dict[str, Any] | None:
+    normalized_server_id = str(server_id or "").strip()
+    if not normalized_server_id:
+        if required:
+            raise HTTPException(status_code=400, detail="server_id is required")
+        return None
+    entry = _mcp_registry_index().get(normalized_server_id)
+    if entry is None and required:
+        raise HTTPException(status_code=404, detail=f"MCP server '{normalized_server_id}' was not found in the registry.")
+    return entry
+
+
+def _mcp_connection_secret_name(connection_id: str) -> str:
+    normalized = re.sub(r"[^a-z0-9-]+", "-", str(connection_id or "").strip().lower()).strip("-") or "connection"
+    return f"mcp-conn-{normalized}"[:63].rstrip("-")
+
+
+def _mcp_connection_secret_env_var(connection_id: str, key: str) -> str:
+    normalized_connection = re.sub(r"[^A-Za-z0-9]+", "_", str(connection_id or "")).upper().strip("_") or "CONNECTION"
+    normalized_key = re.sub(r"[^A-Za-z0-9]+", "_", str(key or "")).upper().strip("_") or "VALUE"
+    return f"MCP_CONNECTION_{normalized_connection}_{normalized_key}"[:180]
+
+
+def _sidecar_config_env_name(server_id: str, key: str) -> str:
+    prefix = re.sub(r"[^A-Za-z0-9]+", "_", str(server_id or "").replace("-sidecar", "")).upper().strip("_") or "MCP"
+    suffix = re.sub(r"[^A-Za-z0-9]+", "_", str(key or "")).upper().strip("_") or "VALUE"
+    return f"{prefix}_{suffix}"[:120]
+
+
+def _configured_credential_keys(credential_metadata: Any) -> set[str]:
+    if not isinstance(credential_metadata, list):
+        return set()
+    configured: set[str] = set()
+    for item in credential_metadata:
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get("key") or "").strip()
+        if key and bool(item.get("configured")):
+            configured.add(key)
+    return configured
+
+
+def _credential_fields_for_entry(entry: dict[str, Any]) -> list[dict[str, Any]]:
+    fields = entry.get("config_schema") if isinstance(entry.get("config_schema"), list) else []
+    return [field for field in fields if isinstance(field, dict) and bool(field.get("is_credential"))]
+
+
+def _non_credential_fields_for_entry(entry: dict[str, Any]) -> list[dict[str, Any]]:
+    fields = entry.get("config_schema") if isinstance(entry.get("config_schema"), list) else []
+    return [field for field in fields if isinstance(field, dict) and not bool(field.get("is_credential"))]
+
+
+def _trimmed_json_mapping(value: Any, *, source: str) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise HTTPException(status_code=400, detail=f"{source} must be an object")
+    normalized: dict[str, Any] = {}
+    for raw_key, raw_value in value.items():
+        key = str(raw_key or "").strip()
+        if not key:
+            continue
+        if isinstance(raw_value, str):
+            trimmed = raw_value.strip()
+            if trimmed:
+                normalized[key] = trimmed
+            continue
+        if raw_value is None:
+            continue
+        normalized[key] = raw_value
+    return normalized
+
+
+def _normalize_mcp_connection_config(entry: dict[str, Any], value: Any, *, source: str) -> dict[str, Any]:
+    normalized = _trimmed_json_mapping(value, source=f"{source}.config")
+    transport = str(entry.get("transport") or "").strip().lower()
+
+    for field in _non_credential_fields_for_entry(entry):
+        key = str(field.get("key") or "").strip()
+        if key and bool(field.get("required")) and key not in normalized:
+            raise HTTPException(status_code=400, detail=f"{source}.config.{key} is required")
+
+    if transport == "remote":
+        default_endpoint = str(entry.get("endpoint") or "").strip()
+        endpoint_url = str(normalized.get("endpoint_url") or default_endpoint).strip()
+        if endpoint_url:
+            normalized["endpoint_url"] = endpoint_url
+        if bool(entry.get("attachable")) and not endpoint_url:
+            raise HTTPException(status_code=400, detail=f"{source}.config.endpoint_url is required for remote MCP connections")
+    elif transport == "hub":
+        normalized["endpoint_url"] = _build_hub_mcp_url(entry)
+    elif transport == "sidecar":
+        if not normalized.get("sidecar_image") and entry.get("sidecar_image"):
+            normalized["sidecar_image"] = entry.get("sidecar_image")
+        if "sidecar_port" not in normalized and entry.get("sidecar_port") is not None:
+            normalized["sidecar_port"] = entry.get("sidecar_port")
+        normalized["endpoint_path"] = str(normalized.get("endpoint_path") or "/mcp").strip() or "/mcp"
+        if "sidecar_port" in normalized:
+            try:
+                normalized["sidecar_port"] = int(normalized["sidecar_port"])
+            except (TypeError, ValueError) as exc:
+                raise HTTPException(status_code=400, detail=f"{source}.config.sidecar_port must be an integer") from exc
+
+    return normalized
+
+
+def _normalize_mcp_connection_credentials(entry: dict[str, Any], value: Any, *, source: str) -> dict[str, str]:
+    normalized = _trimmed_json_mapping(value, source=f"{source}.credentials")
+    allowed_keys = {str(field.get("key") or "").strip() for field in _credential_fields_for_entry(entry)}
+    return {
+        key: str(item_value)
+        for key, item_value in normalized.items()
+        if key in allowed_keys and str(item_value).strip()
+    }
+
+
+def _build_mcp_connection_credential_metadata(
+    entry: dict[str, Any],
+    *,
+    configured_keys: set[str],
+) -> list[dict[str, Any]]:
+    metadata: list[dict[str, Any]] = []
+    for field in _credential_fields_for_entry(entry):
+        key = str(field.get("key") or "").strip()
+        if not key:
+            continue
+        metadata.append(
+            {
+                "key": key,
+                "label": str(field.get("label") or key),
+                "type": str(field.get("type") or "text"),
+                "group": str(field.get("group") or "credentials"),
+                "required": bool(field.get("required")),
+                "configured": key in configured_keys,
+            }
+        )
+    return metadata
+
+
+def _build_hub_mcp_url(entry: dict[str, Any]) -> str:
+    hub_server_name = str(entry.get("hub_server_name") or entry.get("id") or "").strip()
+    return f"http://{HELM_RELEASE_NAME}-mcp-{hub_server_name}.{MCP_HUB_NAMESPACE}.svc.cluster.local:8000/mcp"
+
+
+def _first_configured_key(configured_keys: set[str], *candidates: str) -> str | None:
+    for candidate in candidates:
+        if candidate in configured_keys:
+            return candidate
+    return None
+
+
+def _build_runtime_header_bindings(
+    connection_id: str,
+    entry: dict[str, Any],
+    *,
+    secret_name: str | None,
+    configured_keys: set[str],
+) -> list[dict[str, Any]]:
+    if not secret_name:
+        return []
+
+    server_id = str(entry.get("id") or "").strip()
+    auth_type = str(entry.get("auth_type") or "none").strip().lower()
+    custom_header_name = str(entry.get("auth_header_name") or "").strip() or None
+    custom_header_prefix_raw = entry.get("auth_header_prefix")
+    custom_header_prefix = None if custom_header_prefix_raw is None else str(custom_header_prefix_raw)
+    bindings: list[dict[str, Any]] = []
+
+    def append_header(header_name: str, key: str, *, prefix: str | None = None) -> None:
+        bindings.append(
+            {
+                "name": header_name,
+                "envVar": _mcp_connection_secret_env_var(connection_id, key),
+                "secretKeyRef": {"name": secret_name, "key": key, "optional": False},
+                "prefix": prefix,
+            }
+        )
+
+    if server_id == "datadog":
+        api_key = _first_configured_key(configured_keys, "api_key")
+        app_key = _first_configured_key(configured_keys, "app_key")
+        if api_key:
+            append_header("DD-API-KEY", api_key)
+        if app_key:
+            append_header("DD-APPLICATION-KEY", app_key)
+        return bindings
+
+    if auth_type == "bearer":
+        token_key = _first_configured_key(configured_keys, "token", "access_token", "bearer_token", "api_key")
+        if token_key:
+            append_header(custom_header_name or "Authorization", token_key, prefix="Bearer " if custom_header_prefix is None else custom_header_prefix)
+        return bindings
+
+    if auth_type == "oauth":
+        token_key = _first_configured_key(configured_keys, "access_token", "token", "bearer_token")
+        if token_key:
+            append_header(
+                custom_header_name or "Authorization",
+                token_key,
+                prefix="Bearer " if custom_header_prefix is None else custom_header_prefix,
+            )
+        return bindings
+
+    if auth_type == "api_key":
+        api_key = _first_configured_key(configured_keys, "api_key", "token", "key")
+        if api_key:
+            append_header(custom_header_name or "X-API-Key", api_key, prefix=custom_header_prefix)
+        return bindings
+
+    if auth_type == "connection_string":
+        connection_string_key = _first_configured_key(configured_keys, "connection_string")
+        if connection_string_key:
+            append_header("X-Connection-String", connection_string_key)
+        return bindings
+
+    return bindings
+
+
+def _build_mcp_connection_runtime_payload(connection_record: dict[str, Any], entry: dict[str, Any]) -> dict[str, Any]:
+    connection_id = str(connection_record.get("id") or "").strip()
+    slug = str(connection_record.get("slug") or slugify_mcp_connection_name(connection_record.get("name") or connection_id))
+    config = connection_record.get("config") if isinstance(connection_record.get("config"), dict) else {}
+    secret_name = str(connection_record.get("secret_name") or "").strip() or None
+    secret_values = _mcp_connection_secret_values_for_record(connection_record)
+    configured_keys = _configured_credential_keys(connection_record.get("credential_metadata")) | set(secret_values)
+    transport = str(entry.get("transport") or connection_record.get("transport") or "remote").strip().lower() or "remote"
+
+    if transport == "sidecar":
+        image = str(config.get("sidecar_image") or entry.get("sidecar_image") or "").strip()
+        raw_port = config.get("sidecar_port", entry.get("sidecar_port") or 8097)
+        try:
+            port = int(raw_port)
+        except (TypeError, ValueError):
+            port = int(entry.get("sidecar_port") or 8097)
+        env_items: list[dict[str, Any]] = []
+        for field in entry.get("config_schema") or []:
+            if not isinstance(field, dict):
+                continue
+            key = str(field.get("key") or "").strip()
+            if not key:
+                continue
+            env_name = _sidecar_config_env_name(str(entry.get("id") or slug), key)
+            if bool(field.get("is_credential")):
+                if secret_name and key in configured_keys:
+                    env_items.append(
+                        {
+                            "name": env_name,
+                            "envVar": _mcp_connection_secret_env_var(connection_id, key),
+                            "secretKeyRef": {"name": secret_name, "key": key, "optional": False},
+                        }
+                    )
+                continue
+            value = config.get(key)
+            if value is None or str(value).strip() == "":
+                continue
+            env_items.append({"name": env_name, "value": str(value)})
+        sidecar_name = f"mcp-{slug}"[:59].rstrip("-") or f"mcp-{connection_id[:8]}"
+        return {
+            "kind": "sidecar",
+            "configKey": slug,
+            "sidecar": {
+                "name": sidecar_name,
+                "image": image,
+                "port": port,
+                "endpointPath": str(config.get("endpoint_path") or "/mcp").strip() or "/mcp",
+                "env": env_items,
+            },
+        }
+
+    url = str(config.get("endpoint_url") or entry.get("endpoint") or "").strip()
+    if transport == "hub":
+        url = _build_hub_mcp_url(entry)
+
+    return {
+        "kind": "remote",
+        "configKey": slug,
+        "url": url,
+        "headers": _build_runtime_header_bindings(connection_id, entry, secret_name=secret_name, configured_keys=configured_keys),
+    }
+
+
+def _serialize_saved_mcp_connection_record(
+    connection_record: dict[str, Any],
+    *,
+    binding_count: int = 0,
+) -> dict[str, Any]:
+    entry = _lookup_mcp_registry_entry(str(connection_record.get("server_id") or ""), required=False)
+    if entry is None:
+        return {
+            **connection_record,
+            "server_name": str(connection_record.get("server_id") or "unknown"),
+            "support_level": "planned",
+            "attachable": False,
+            "status_reason": "The backing registry entry is no longer present.",
+            "runtime_preview": None,
+            "oauth": None,
+            "binding_count": binding_count,
+        }
+    return {
+        **connection_record,
+        "server_name": entry.get("name"),
+        "support_level": entry.get("support_level", "planned"),
+        "attachable": bool(entry.get("attachable")),
+        "status_reason": entry.get("status_reason"),
+        "runtime_preview": _build_mcp_connection_runtime_payload(connection_record, entry),
+        "oauth": _build_mcp_connection_oauth_status(connection_record, entry),
+        "binding_count": binding_count,
+    }
+
+
+def _required_mcp_fields_missing(entry: dict[str, Any], config: dict[str, Any], credential_metadata: list[dict[str, Any]]) -> list[str]:
+    missing: list[str] = []
+    configured_keys = _configured_credential_keys(credential_metadata)
+    for field in _non_credential_fields_for_entry(entry):
+        key = str(field.get("key") or "").strip()
+        if key and bool(field.get("required")) and key not in config:
+            missing.append(key)
+    for field in _credential_fields_for_entry(entry):
+        key = str(field.get("key") or "").strip()
+        if key and bool(field.get("required")) and key not in configured_keys:
+            missing.append(key)
+    if str(entry.get("transport") or "") == "remote" and bool(entry.get("attachable")):
+        endpoint_url = str(config.get("endpoint_url") or "").strip()
+        if not endpoint_url:
+            missing.append("endpoint_url")
+    return dedupe_text_values(missing)
+
+
+def _validate_saved_mcp_connection_record(connection_record: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
+    entry = _lookup_mcp_registry_entry(str(connection_record.get("server_id") or ""), required=False)
+    if entry is None:
+        return (
+            "invalid",
+            "The backing registry entry no longer exists.",
+            {"reason": "registry_entry_missing"},
+        )
+
+    config = connection_record.get("config") if isinstance(connection_record.get("config"), dict) else {}
+    credential_metadata = (
+        connection_record.get("credential_metadata") if isinstance(connection_record.get("credential_metadata"), list) else []
+    )
+    missing_fields = _required_mcp_fields_missing(entry, config, credential_metadata)
+    if missing_fields:
+        return (
+            "invalid",
+            f"Missing required fields: {', '.join(missing_fields)}.",
+            {"missing_fields": missing_fields},
+        )
+
+    if not bool(entry.get("attachable")):
+        return (
+            "warning",
+            str(entry.get("status_reason") or "This MCP server is not attachable yet."),
+            {"reason": "registry_not_attachable"},
+        )
+
+    transport = str(entry.get("transport") or "").strip().lower()
+    if transport == "sidecar":
+        return (
+            "valid",
+            "Sidecar settings were captured successfully. Runtime validation completes when an agent pod starts.",
+            {"transport": "sidecar"},
+        )
+
+    secret_values = _mcp_connection_secret_values_for_record(connection_record)
+    auth_type = str(entry.get("auth_type") or "none").strip().lower()
+    if auth_type == "oauth":
+        secret_values = _ensure_mcp_connection_oauth_access_token(connection_record, entry)
+        oauth_status = _build_mcp_connection_oauth_status(connection_record, entry, secret_values=secret_values)
+        oauth_state = str((oauth_status or {}).get("state") or "required")
+        if oauth_state != "connected":
+            return (
+                "warning",
+                "Refresh or reconnect the OAuth session before validating this connection."
+                if oauth_state == "expired"
+                else "Complete the browser OAuth sign-in before validating this connection.",
+                {"reason": f"oauth_{oauth_state}", "oauth": oauth_status},
+            )
+
+    endpoint_url = str(config.get("endpoint_url") or entry.get("endpoint") or "").strip()
+    if transport == "hub":
+        endpoint_url = _build_hub_mcp_url(entry)
+    if not endpoint_url:
+        return (
+            "invalid",
+            "No MCP endpoint URL is configured for this connection.",
+            {"reason": "endpoint_missing"},
+        )
+
+    try:
+        parsed = httpx.URL(endpoint_url)
+    except Exception as exc:
+        return (
+            "invalid",
+            f"Endpoint URL is invalid: {exc}",
+            {"reason": "invalid_url", "url": endpoint_url},
+        )
+
+    if parsed.scheme not in {"http", "https"}:
+        return (
+            "invalid",
+            "Endpoint URL must use http or https.",
+            {"reason": "invalid_scheme", "url": endpoint_url},
+        )
+
+    try:
+        with httpx.Client(timeout=5.0, follow_redirects=True, verify=certifi.where()) as client:
+            response = client.get(
+                endpoint_url,
+                headers=_resolved_mcp_connection_request_headers(connection_record, entry, secret_values=secret_values),
+            )
+    except Exception as exc:
+        return (
+            "warning",
+            f"Endpoint could not be reached from the gateway: {exc}",
+            {"reason": "unreachable", "url": endpoint_url},
+        )
+
+    if response.status_code == 404:
+        return (
+            "invalid",
+            "Endpoint responded with 404. Verify the MCP path and vendor URL.",
+            {"reason": "not_found", "url": endpoint_url, "status_code": response.status_code},
+        )
+    if response.status_code >= 500:
+        return (
+            "warning",
+            f"Endpoint responded with server error {response.status_code}.",
+            {"reason": "server_error", "url": endpoint_url, "status_code": response.status_code},
+        )
+
+    return (
+        "valid",
+        f"Endpoint responded with HTTP {response.status_code}. Reachability is confirmed; vendor-specific auth was not deeply verified.",
+        {"url": endpoint_url, "status_code": response.status_code, "auth_type": auth_type},
+    )
+
+
+def _upsert_mcp_connection_secret(namespace: str, connection_id: str, credentials: dict[str, str]) -> str | None:
+    trimmed_credentials = {key: value for key, value in credentials.items() if str(value or "").strip()}
+    if not trimmed_credentials:
+        return None
+
+    from kubernetes import client
+    from kubernetes.client.rest import ApiException
+
+    secret_name = _mcp_connection_secret_name(connection_id)
+    secret = client.V1Secret(
+        metadata=client.V1ObjectMeta(
+            name=secret_name,
+            namespace=namespace,
+            labels={
+                "app.kubernetes.io/managed-by": "kubesynth",
+                "kubesynth.ai/mcp-connection-id": connection_id,
+            },
+        ),
+        type="Opaque",
+        string_data=trimmed_credentials,
+    )
+    try:
+        client.CoreV1Api().create_namespaced_secret(namespace=namespace, body=secret)
+    except ApiException as exc:
+        if exc.status == 409:
+            client.CoreV1Api().replace_namespaced_secret(name=secret_name, namespace=namespace, body=secret)
+        else:
+            raise HTTPException(status_code=502, detail=f"Failed to store MCP connection credentials: {exc}") from exc
+    return secret_name
+
+
+def _delete_mcp_connection_secret(namespace: str, secret_name: str | None) -> None:
+    trimmed_secret_name = str(secret_name or "").strip()
+    if not trimmed_secret_name:
+        return
+    from kubernetes import client
+    from kubernetes.client.rest import ApiException
+
+    try:
+        client.CoreV1Api().delete_namespaced_secret(name=trimmed_secret_name, namespace=namespace)
+    except ApiException as exc:
+        if exc.status != 404:
+            raise HTTPException(status_code=502, detail=f"Failed to delete MCP connection credentials: {exc}") from exc
+
+
+_MCP_OAUTH_PENDING_FLOWS: dict[str, dict[str, Any]] = {}
+_MCP_OAUTH_FLOW_TTL_SECONDS = 900
+_MCP_OAUTH_EXPIRY_SKEW_SECONDS = 60
+_MCP_OAUTH_SESSION_KEYS = {"access_token", "refresh_token", "token_type", "expires_at", "scope"}
+
+
+def _trimmed_string_mapping(value: Any) -> dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    normalized: dict[str, str] = {}
+    for raw_key, raw_value in value.items():
+        key = str(raw_key or "").strip()
+        item_value = str(raw_value or "").strip()
+        if key and item_value:
+            normalized[key] = item_value
+    return normalized
+
+
+def _read_mcp_connection_secret_values(namespace: str, secret_name: str | None) -> dict[str, str]:
+    trimmed_secret_name = str(secret_name or "").strip()
+    if not trimmed_secret_name:
+        return {}
+
+    from kubernetes import client
+    from kubernetes.client.rest import ApiException
+
+    try:
+        secret = client.CoreV1Api().read_namespaced_secret(name=trimmed_secret_name, namespace=namespace)
+    except ApiException as exc:
+        if exc.status == 404:
+            return {}
+        raise HTTPException(status_code=502, detail=f"Failed to read MCP connection credentials: {exc}") from exc
+
+    raw_data = getattr(secret, "data", None) or {}
+    decoded: dict[str, str] = {}
+    for raw_key, raw_value in raw_data.items():
+        key = str(raw_key or "").strip()
+        encoded = str(raw_value or "").strip()
+        if not key or not encoded:
+            continue
+        try:
+            decoded[key] = base64.b64decode(encoded).decode("utf-8")
+        except Exception:
+            logger.warning("Failed to decode MCP connection secret field '%s' from %s/%s", key, namespace, trimmed_secret_name)
+    return decoded
+
+
+def _mcp_connection_secret_values_for_record(connection_record: dict[str, Any]) -> dict[str, str]:
+    namespace = str(connection_record.get("namespace") or "default").strip() or "default"
+    secret_name = str(connection_record.get("secret_name") or "").strip() or None
+    return _read_mcp_connection_secret_values(namespace, secret_name)
+
+
+def _clear_mcp_oauth_session_values(secret_values: dict[str, str]) -> dict[str, str]:
+    return {key: value for key, value in secret_values.items() if key not in _MCP_OAUTH_SESSION_KEYS}
+
+
+def _parse_iso_datetime(value: Any) -> datetime | None:
+    raw_value = str(value or "").strip()
+    if not raw_value:
+        return None
+    with contextlib.suppress(ValueError):
+        return datetime.fromisoformat(raw_value.replace("Z", "+00:00")).astimezone(timezone.utc)
+    return None
+
+
+def _mcp_oauth_entry_metadata(entry: dict[str, Any]) -> dict[str, Any]:
+    authorization_url = str(entry.get("oauth_authorization_url") or "").strip()
+    token_url = str(entry.get("oauth_token_url") or "").strip()
+    token_auth_method = str(entry.get("oauth_token_auth_method") or "client_secret_post").strip().lower() or "client_secret_post"
+    if token_auth_method not in {"client_secret_post", "client_secret_basic", "none"}:
+        token_auth_method = "client_secret_post"
+    scopes = [str(scope).strip() for scope in (entry.get("oauth_scopes") or []) if str(scope).strip()]
+    return {
+        "authorization_url": authorization_url,
+        "token_url": token_url,
+        "token_auth_method": token_auth_method,
+        "scopes": scopes,
+        "authorize_params": _trimmed_string_mapping(entry.get("oauth_extra_authorize_params")),
+        "token_params": _trimmed_string_mapping(entry.get("oauth_extra_token_params")),
+        "pkce": bool(entry.get("oauth_pkce", True)),
+    }
+
+
+def _saved_oauth_support(entry: dict[str, Any]) -> tuple[bool, str | None]:
+    metadata = _mcp_oauth_entry_metadata(entry)
+    if not metadata["authorization_url"] or not metadata["token_url"]:
+        return False, "This OAuth-backed MCP entry still needs provider authorization metadata before KubeSynth can drive the sign-in flow."
+
+    config_keys = {str(field.get("key") or "").strip() for field in _non_credential_fields_for_entry(entry)}
+    credential_keys = {str(field.get("key") or "").strip() for field in _credential_fields_for_entry(entry)}
+    has_client_id = bool(str(entry.get("oauth_client_id") or "").strip()) or "client_id" in config_keys or "client_id" in credential_keys
+    if not has_client_id:
+        return False, "This OAuth entry does not expose a client_id field or managed client registration yet."
+
+    if metadata["token_auth_method"] != "none":
+        has_client_secret = bool(str(entry.get("oauth_client_secret") or "").strip()) or "client_secret" in credential_keys
+        if not has_client_secret:
+            return False, "This OAuth entry does not expose a client_secret field or managed client secret yet."
+
+    return True, None
+
+
+def _mcp_oauth_client_id(connection_record: dict[str, Any], entry: dict[str, Any], secret_values: dict[str, str]) -> str:
+    config = connection_record.get("config") if isinstance(connection_record.get("config"), dict) else {}
+    client_id = str(config.get("client_id") or secret_values.get("client_id") or entry.get("oauth_client_id") or "").strip()
+    if not client_id:
+        raise HTTPException(status_code=400, detail="OAuth client_id is required before starting this MCP connection sign-in.")
+    return client_id
+
+
+def _mcp_oauth_client_secret(connection_record: dict[str, Any], entry: dict[str, Any], secret_values: dict[str, str]) -> str:
+    del connection_record
+    return str(secret_values.get("client_secret") or entry.get("oauth_client_secret") or "").strip()
+
+
+def _mcp_oauth_redirect_uri(request: Request, connection_id: str) -> str:
+    return f"{public_base_url(request)}/api/mcp/connections/{connection_id}/oauth/callback"
+
+
+def _mcp_oauth_code_verifier() -> str:
+    return base64.urlsafe_b64encode(os.urandom(48)).decode("ascii").rstrip("=")
+
+
+def _mcp_oauth_code_challenge(code_verifier: str) -> str:
+    digest = hashlib.sha256(code_verifier.encode("ascii")).digest()
+    return base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
+
+
+def _build_mcp_oauth_token_request(
+    entry: dict[str, Any],
+    connection_record: dict[str, Any],
+    *,
+    grant_type: str,
+    secret_values: dict[str, str],
+    code: str | None = None,
+    refresh_token: str | None = None,
+    redirect_uri: str | None = None,
+    code_verifier: str | None = None,
+) -> tuple[str, dict[str, str], dict[str, str]]:
+    metadata = _mcp_oauth_entry_metadata(entry)
+    token_url = str(metadata["token_url"] or "").strip()
+    if not token_url:
+        raise HTTPException(status_code=400, detail="OAuth token exchange is not configured for this MCP registry entry.")
+
+    client_id = _mcp_oauth_client_id(connection_record, entry, secret_values)
+    client_secret = _mcp_oauth_client_secret(connection_record, entry, secret_values)
+    headers = {"Accept": "application/json"}
+    data = dict(metadata["token_params"])
+    data["grant_type"] = grant_type
+
+    if grant_type == "authorization_code":
+        auth_code = str(code or "").strip()
+        if not auth_code:
+            raise HTTPException(status_code=400, detail="OAuth callback did not include an authorization code.")
+        data["code"] = auth_code
+        if redirect_uri:
+            data["redirect_uri"] = redirect_uri
+        if code_verifier:
+            data["code_verifier"] = code_verifier
+    elif grant_type == "refresh_token":
+        refresh_value = str(refresh_token or secret_values.get("refresh_token") or "").strip()
+        if not refresh_value:
+            raise HTTPException(status_code=400, detail="No refresh token is stored for this MCP connection.")
+        data["refresh_token"] = refresh_value
+    else:
+        raise HTTPException(status_code=400, detail=f"Unsupported OAuth grant type '{grant_type}'.")
+
+    token_auth_method = str(metadata["token_auth_method"] or "client_secret_post")
+    if token_auth_method == "client_secret_basic":
+        if not client_secret:
+            raise HTTPException(status_code=400, detail="OAuth client_secret is required before completing this MCP sign-in.")
+        basic_token = base64.b64encode(f"{client_id}:{client_secret}".encode("utf-8")).decode("ascii")
+        headers["Authorization"] = f"Basic {basic_token}"
+    else:
+        data["client_id"] = client_id
+        if token_auth_method == "client_secret_post":
+            if not client_secret:
+                raise HTTPException(status_code=400, detail="OAuth client_secret is required before completing this MCP sign-in.")
+            data["client_secret"] = client_secret
+
+    return token_url, headers, data
+
+
+def _extract_mcp_oauth_token_bundle(token_payload: Any, existing_secret_values: dict[str, str]) -> dict[str, str]:
+    if not isinstance(token_payload, dict):
+        raise HTTPException(status_code=502, detail="OAuth provider returned an unexpected token response.")
+
+    access_token = str(token_payload.get("access_token") or "").strip()
+    if not access_token:
+        error_description = str(token_payload.get("error_description") or token_payload.get("error") or "").strip()
+        raise HTTPException(
+            status_code=502,
+            detail=error_description or "OAuth provider did not return an access token.",
+        )
+
+    bundle = {
+        "access_token": access_token,
+        "token_type": str(token_payload.get("token_type") or existing_secret_values.get("token_type") or "Bearer").strip() or "Bearer",
+    }
+
+    refresh_token = str(token_payload.get("refresh_token") or existing_secret_values.get("refresh_token") or "").strip()
+    if refresh_token:
+        bundle["refresh_token"] = refresh_token
+
+    raw_scope = str(token_payload.get("scope") or existing_secret_values.get("scope") or "").strip()
+    if raw_scope:
+        bundle["scope"] = raw_scope
+
+    expires_in = token_payload.get("expires_in")
+    if expires_in is not None:
+        with contextlib.suppress(TypeError, ValueError):
+            ttl_seconds = int(float(expires_in))
+            if ttl_seconds > 0:
+                bundle["expires_at"] = (datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)).isoformat()
+
+    return bundle
+
+
+def _store_mcp_oauth_token_bundle(
+    namespace: str,
+    connection_id: str,
+    existing_secret_values: dict[str, str],
+    token_bundle: dict[str, str],
+) -> tuple[str | None, dict[str, str]]:
+    merged_secret_values = dict(existing_secret_values)
+    merged_secret_values.update(token_bundle)
+    if "expires_at" not in token_bundle:
+        merged_secret_values.pop("expires_at", None)
+    secret_name = _upsert_mcp_connection_secret(namespace, connection_id, merged_secret_values)
+    return secret_name, merged_secret_values
+
+
+def _build_mcp_connection_oauth_status(
+    connection_record: dict[str, Any],
+    entry: dict[str, Any],
+    *,
+    secret_values: dict[str, str] | None = None,
+) -> dict[str, Any] | None:
+    if str(entry.get("auth_type") or "none").strip().lower() != "oauth":
+        return None
+
+    resolved_secret_values = secret_values if secret_values is not None else _mcp_connection_secret_values_for_record(connection_record)
+    access_token = str(resolved_secret_values.get("access_token") or "").strip()
+    refresh_token = str(resolved_secret_values.get("refresh_token") or "").strip()
+    expires_at = _parse_iso_datetime(resolved_secret_values.get("expires_at"))
+    expiry_cutoff = datetime.now(timezone.utc) + timedelta(seconds=_MCP_OAUTH_EXPIRY_SKEW_SECONDS)
+    if access_token and (expires_at is None or expires_at > expiry_cutoff):
+        state = "connected"
+    elif access_token or refresh_token:
+        state = "expired"
+    else:
+        state = "required"
+
+    scope_value = str(resolved_secret_values.get("scope") or "").strip()
+    scopes = [item for item in scope_value.split() if item] if scope_value else list(_mcp_oauth_entry_metadata(entry)["scopes"])
+    return {
+        "connected": state == "connected",
+        "state": state,
+        "expires_at": expires_at.isoformat() if expires_at else None,
+        "refresh_available": bool(refresh_token),
+        "scope": scopes,
+    }
+
+
+def _refresh_mcp_connection_oauth_access_token_sync(
+    connection_record: dict[str, Any],
+    entry: dict[str, Any],
+    *,
+    secret_values: dict[str, str] | None = None,
+) -> dict[str, str]:
+    resolved_secret_values = secret_values if secret_values is not None else _mcp_connection_secret_values_for_record(connection_record)
+    token_url, headers, data = _build_mcp_oauth_token_request(
+        entry,
+        connection_record,
+        grant_type="refresh_token",
+        secret_values=resolved_secret_values,
+    )
+    try:
+        with httpx.Client(timeout=15.0, follow_redirects=True, verify=certifi.where()) as client:
+            response = client.post(token_url, data=data, headers=headers)
+            response.raise_for_status()
+            token_payload = response.json()
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to refresh MCP OAuth token: {exc}") from exc
+
+    token_bundle = _extract_mcp_oauth_token_bundle(token_payload, resolved_secret_values)
+    namespace = str(connection_record.get("namespace") or "default").strip() or "default"
+    connection_id = str(connection_record.get("id") or "").strip()
+    secret_name, merged_secret_values = _store_mcp_oauth_token_bundle(namespace, connection_id, resolved_secret_values, token_bundle)
+    if secret_name and secret_name != connection_record.get("secret_name"):
+        update_mcp_connection(namespace, connection_id, secret_name=secret_name)
+    return merged_secret_values
+
+
+def _ensure_mcp_connection_oauth_access_token(connection_record: dict[str, Any], entry: dict[str, Any]) -> dict[str, str]:
+    if str(entry.get("auth_type") or "none").strip().lower() != "oauth":
+        return _mcp_connection_secret_values_for_record(connection_record)
+
+    secret_values = _mcp_connection_secret_values_for_record(connection_record)
+    oauth_status = _build_mcp_connection_oauth_status(connection_record, entry, secret_values=secret_values)
+    if oauth_status is None or str(oauth_status.get("state") or "required") == "connected":
+        return secret_values
+    if not bool(oauth_status.get("refresh_available")):
+        return secret_values
+
+    try:
+        return _refresh_mcp_connection_oauth_access_token_sync(connection_record, entry, secret_values=secret_values)
+    except HTTPException as exc:
+        logger.warning(
+            "Failed to refresh OAuth session for MCP connection %s/%s: %s",
+            connection_record.get("namespace"),
+            connection_record.get("id"),
+            exc.detail,
+        )
+        return secret_values
+
+
+def _resolved_mcp_connection_request_headers(
+    connection_record: dict[str, Any],
+    entry: dict[str, Any],
+    *,
+    secret_values: dict[str, str] | None = None,
+) -> dict[str, str]:
+    resolved_secret_values = secret_values if secret_values is not None else _mcp_connection_secret_values_for_record(connection_record)
+    if not resolved_secret_values:
+        return {}
+
+    connection_id = str(connection_record.get("id") or "").strip()
+    secret_name = str(connection_record.get("secret_name") or "").strip() or "mcp-connection-secret"
+    configured_keys = _configured_credential_keys(connection_record.get("credential_metadata")) | set(resolved_secret_values)
+    headers: dict[str, str] = {}
+    for binding in _build_runtime_header_bindings(connection_id, entry, secret_name=secret_name, configured_keys=configured_keys):
+        if not isinstance(binding, dict):
+            continue
+        secret_key_ref = binding.get("secretKeyRef") if isinstance(binding.get("secretKeyRef"), dict) else {}
+        secret_key = str(secret_key_ref.get("key") or "").strip()
+        header_name = str(binding.get("name") or "").strip()
+        raw_value = str(resolved_secret_values.get(secret_key) or "").strip()
+        if not header_name or not raw_value:
+            continue
+        prefix = str(binding.get("prefix") or "")
+        headers[header_name] = f"{prefix}{raw_value}"
+    return headers
+
+
+def _restart_bound_agents_for_mcp_connection(namespace: str, connection_id: str) -> list[str]:
+    bindings = _list_mcp_connection_bindings(namespace).get(connection_id, [])
+    agent_names = sorted({str(item.get("agent_name") or "").strip() for item in bindings if item.get("agent_name")})
+    if not agent_names:
+        return []
+
+    from kubernetes import client
+    from kubernetes.client.rest import ApiException
+
+    api = client.CoreV1Api()
+    restarted: list[str] = []
+    for agent_name in agent_names:
+        pods = list_agent_pods(agent_name, namespace)
+        for pod in pods:
+            pod_name = str(getattr(getattr(pod, "metadata", None), "name", "") or "").strip()
+            if not pod_name:
+                continue
+            try:
+                api.delete_namespaced_pod(name=pod_name, namespace=namespace)
+            except ApiException as exc:
+                if exc.status != 404:
+                    logger.warning("Failed to restart pod %s for MCP OAuth refresh: %s", pod_name, exc)
+        restarted.append(agent_name)
+    return restarted
+
+
+def _build_saved_agent_mcp_connections(namespace: str, connection_ids: list[str]) -> list[dict[str, Any]]:
+    normalized_ids = dedupe_text_values(connection_ids)
+    if not normalized_ids:
+        return []
+    stored_connections = get_mcp_connection_rows_by_ids(namespace, normalized_ids)
+    if len(stored_connections) != len(normalized_ids):
+        found_ids = {row.id for row in stored_connections}
+        missing_ids = [item_id for item_id in normalized_ids if item_id not in found_ids]
+        raise HTTPException(status_code=400, detail=f"Unknown MCP connection ids: {', '.join(missing_ids)}")
+
+    snapshots: list[dict[str, Any]] = []
+    used_ports: set[int] = set()
+    for row in stored_connections:
+        stored = {
+            "id": row.id,
+            "namespace": row.namespace,
+            "name": row.name,
+            "slug": row.slug,
+            "server_id": row.server_id,
+            "transport": row.transport,
+            "auth_type": row.auth_type,
+            "config": copy.deepcopy(row.config_json) if isinstance(row.config_json, dict) else {},
+            "credential_metadata": copy.deepcopy(row.credential_metadata_json)
+            if isinstance(row.credential_metadata_json, list)
+            else [],
+            "secret_name": row.secret_name,
+            "validation": {
+                "status": row.validation_status,
+                "message": row.validation_message,
+                "detail": copy.deepcopy(row.validation_detail_json) if isinstance(row.validation_detail_json, dict) else None,
+                "last_validated_at": row.last_validated_at.isoformat() if row.last_validated_at else None,
+            },
+        }
+        entry = _lookup_mcp_registry_entry(row.server_id)
+        if str(entry.get("auth_type") or "none").strip().lower() == "oauth":
+            secret_values = _ensure_mcp_connection_oauth_access_token(stored, entry)
+            oauth_status = _build_mcp_connection_oauth_status(stored, entry, secret_values=secret_values)
+            if str((oauth_status or {}).get("state") or "required") != "connected":
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"MCP connection '{row.name}' needs a fresh OAuth session before it can be attached to an agent. "
+                        "Reconnect or refresh it from the MCP page first."
+                    ),
+                )
+        runtime_payload = _build_mcp_connection_runtime_payload(stored, entry)
+        if runtime_payload.get("kind") == "sidecar":
+            raw_port = ((runtime_payload.get("sidecar") or {}).get("port"))
+            if isinstance(raw_port, int):
+                if raw_port in used_ports:
+                    raise HTTPException(status_code=400, detail=f"Duplicate MCP sidecar port detected: {raw_port}")
+                used_ports.add(raw_port)
+        snapshots.append(
+            {
+                "connectionId": row.id,
+                "name": row.name,
+                "slug": row.slug,
+                "serverId": row.server_id,
+                "serverName": entry.get("name"),
+                "transport": entry.get("transport"),
+                "supportLevel": entry.get("support_level", "planned"),
+                "attachable": bool(entry.get("attachable")),
+                "statusReason": entry.get("status_reason"),
+                "source": "saved",
+                "config": stored["config"],
+                "credentialMetadata": stored["credential_metadata"],
+                "validation": stored["validation"],
+                "runtime": runtime_payload,
+            }
+        )
+    return snapshots
+
+
+def _build_legacy_agent_mcp_connections(mcp_servers: list[str], mcp_sidecars: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    registry_by_id = _mcp_registry_index()
+    snapshots: list[dict[str, Any]] = []
+
+    for server_name in dedupe_text_values(mcp_servers):
+        entry = registry_by_id.get(server_name)
+        if entry is None:
+            for candidate in registry_by_id.values():
+                if str(candidate.get("hub_server_name") or "").strip() == server_name:
+                    entry = candidate
+                    break
+        if entry is None:
+            url = f"http://{HELM_RELEASE_NAME}-mcp-{server_name}.{MCP_HUB_NAMESPACE}.svc.cluster.local:8000/mcp"
+            snapshots.append(
+                {
+                    "connectionId": None,
+                    "name": server_name,
+                    "slug": slugify_mcp_connection_name(server_name),
+                    "serverId": server_name,
+                    "serverName": server_name,
+                    "transport": "hub",
+                    "supportLevel": "limited",
+                    "attachable": True,
+                    "statusReason": "Legacy shared MCP server reference.",
+                    "source": "legacy",
+                    "config": {"endpoint_url": url},
+                    "credentialMetadata": [],
+                    "validation": {"status": "draft", "message": None, "detail": None, "last_validated_at": None},
+                    "runtime": {
+                        "kind": "remote",
+                        "configKey": slugify_mcp_connection_name(server_name),
+                        "url": url,
+                        "headers": [{"name": "Authorization", "envVar": "MCP_BEARER_TOKEN", "prefix": "Bearer "}],
+                    },
+                }
+            )
+            continue
+
+        endpoint_url = str(entry.get("endpoint") or "").strip()
+        if str(entry.get("transport") or "") == "hub":
+            endpoint_url = _build_hub_mcp_url(entry)
+        snapshots.append(
+            {
+                "connectionId": None,
+                "name": entry.get("name"),
+                "slug": slugify_mcp_connection_name(entry.get("name") or server_name),
+                "serverId": entry.get("id"),
+                "serverName": entry.get("name"),
+                "transport": entry.get("transport"),
+                "supportLevel": entry.get("support_level", "planned"),
+                "attachable": bool(entry.get("attachable")),
+                "statusReason": entry.get("status_reason"),
+                "source": "legacy",
+                "config": {"endpoint_url": endpoint_url} if endpoint_url else {},
+                "credentialMetadata": [],
+                "validation": {"status": "draft", "message": None, "detail": None, "last_validated_at": None},
+                "runtime": {
+                    "kind": "remote",
+                    "configKey": slugify_mcp_connection_name(entry.get("name") or server_name),
+                    "url": endpoint_url,
+                    "headers": (
+                        [{"name": "Authorization", "envVar": "MCP_BEARER_TOKEN", "prefix": "Bearer "}]
+                        if str(entry.get("transport") or "") == "hub"
+                        else []
+                    ),
+                },
+            }
+        )
+
+    for index, sidecar in enumerate(mcp_sidecars):
+        if not isinstance(sidecar, dict):
+            continue
+        raw_name = str(sidecar.get("name") or f"sidecar-{index}").strip() or f"sidecar-{index}"
+        raw_image = str(sidecar.get("image") or "").strip()
+        try:
+            port = int(sidecar.get("port", 8097))
+        except (TypeError, ValueError):
+            port = 8097
+        snapshots.append(
+            {
+                "connectionId": None,
+                "name": raw_name,
+                "slug": slugify_mcp_connection_name(raw_name),
+                "serverId": raw_name,
+                "serverName": raw_name,
+                "transport": "sidecar",
+                "supportLevel": "limited",
+                "attachable": True,
+                "statusReason": "Legacy sidecar MCP definition.",
+                "source": "legacy",
+                "config": {"sidecar_image": raw_image, "sidecar_port": port, "endpoint_path": "/mcp"},
+                "credentialMetadata": [],
+                "validation": {"status": "draft", "message": None, "detail": None, "last_validated_at": None},
+                "runtime": {
+                    "kind": "sidecar",
+                    "configKey": slugify_mcp_connection_name(raw_name),
+                    "sidecar": {
+                        "name": raw_name,
+                        "image": raw_image,
+                        "port": port,
+                        "endpointPath": "/mcp",
+                        "env": [],
+                    },
+                },
+            }
+        )
+    return snapshots
+
+
+def _derive_legacy_mcp_fields_from_connections(mcp_connections: list[dict[str, Any]]) -> tuple[list[str], list[dict[str, Any]]]:
+    servers: list[str] = []
+    sidecars: list[dict[str, Any]] = []
+    registry_by_id = _mcp_registry_index()
+    for connection in mcp_connections:
+        if not isinstance(connection, dict):
+            continue
+        transport = str(connection.get("transport") or "").strip().lower()
+        server_id = str(connection.get("serverId") or "").strip()
+        if transport in {"hub", "remote"} and server_id:
+            entry = registry_by_id.get(server_id)
+            if entry is not None and str(entry.get("transport") or "") == "hub":
+                servers.append(str(entry.get("hub_server_name") or server_id).strip() or server_id)
+            else:
+                servers.append(server_id)
+            continue
+        sidecar = ((connection.get("runtime") or {}).get("sidecar")) if isinstance(connection.get("runtime"), dict) else None
+        if isinstance(sidecar, dict):
+            try:
+                port = int(sidecar.get("port", 8097))
+            except (TypeError, ValueError):
+                port = 8097
+            sidecars.append(
+                {
+                    "name": str(sidecar.get("name") or server_id or connection.get("slug") or "sidecar").strip() or "sidecar",
+                    "image": str(sidecar.get("image") or "").strip(),
+                    "port": port,
+                }
+            )
+    return dedupe_text_values(servers), sidecars
+
+
+def _resolve_agent_mcp_connections(
+    body: CreateAgentRequest | UpdateAgentRequest,
+    *,
+    namespace: str,
+    existing_spec: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    requested_connection_ids = getattr(body, "mcp_connection_ids", None)
+    legacy_servers = dedupe_text_values([server.strip() for server in getattr(body, "mcp_servers", []) if server.strip()])
+    legacy_sidecars = getattr(body, "mcp_sidecars", []) or []
+
+    if requested_connection_ids:
+        return _build_saved_agent_mcp_connections(namespace, requested_connection_ids)
+
+    if requested_connection_ids == [] and (legacy_servers or legacy_sidecars):
+        return _build_legacy_agent_mcp_connections(legacy_servers, legacy_sidecars)
+
+    existing_connections = (existing_spec or {}).get("mcpConnections") if isinstance((existing_spec or {}).get("mcpConnections"), list) else []
+    if requested_connection_ids is None and existing_connections:
+        return copy.deepcopy(existing_connections)
+
+    if legacy_servers or legacy_sidecars:
+        return _build_legacy_agent_mcp_connections(legacy_servers, legacy_sidecars)
+
+    return []
+
+
+def _list_mcp_connection_bindings(namespace: str) -> dict[str, list[dict[str, Any]]]:
+    bindings: dict[str, list[dict[str, Any]]] = {}
+    for agent in get_agents(namespace):
+        metadata = agent.get("metadata") if isinstance(agent.get("metadata"), dict) else {}
+        spec = agent.get("spec") if isinstance(agent.get("spec"), dict) else {}
+        raw_connections = spec.get("mcpConnections") if isinstance(spec.get("mcpConnections"), list) else []
+        if not raw_connections:
+            raw_connections = _build_legacy_agent_mcp_connections(spec.get("mcpServers") or [], spec.get("mcpSidecars") or [])
+        for connection in raw_connections:
+            if not isinstance(connection, dict):
+                continue
+            connection_id = str(connection.get("connectionId") or "").strip()
+            if not connection_id:
+                continue
+            bindings.setdefault(connection_id, []).append(
+                {
+                    "agent_name": str(metadata.get("name") or "").strip(),
+                    "namespace": str(metadata.get("namespace") or namespace).strip() or namespace,
+                    "connection_id": connection_id,
+                    "connection_name": str(connection.get("name") or connection.get("slug") or connection_id).strip(),
+                    "server_id": str(connection.get("serverId") or "").strip(),
+                    "transport": str(connection.get("transport") or "").strip() or "unknown",
+                }
+            )
+    return bindings
 
 
 def jsonrpc_success_response(request_id: Any, result: dict[str, Any]) -> dict[str, Any]:
@@ -1819,13 +3011,6 @@ def build_agent_card_skills(agent: AgentDetail, policy_targets: list[dict[str, s
                     *(["sandbox"] if summary.get("allowed_sandbox_tools") else []),
                     *(["a2a"] if summary.get("allowed_a2a_targets") else []),
                     *(["subagents"] if summary.get("allow_subagents") else []),
-                    *(
-                        ["goose"]
-                        if summary.get("goose_builtin_extensions")
-                        or summary.get("goose_stdio_extensions")
-                        or summary.get("goose_streamable_http_extensions")
-                        else []
-                    ),
                 ]
             )
             skills.append(
@@ -1916,9 +3101,6 @@ def build_agent_card(agent_name: str, namespace: str, request: Request) -> dict[
                 f"{agent_detail.runtime_kind.capitalize()} agent in namespace {namespace} running model {agent_detail.model}."
             ),
         ),
-        "url": interface_url,
-        "protocolVersion": A2A_PROTOCOL_VERSION,
-        "preferredTransport": "JSONRPC",
         "supportedInterfaces": [
             {
                 "url": interface_url,
@@ -1971,23 +3153,21 @@ def a2a_task_store_key(namespace: str, agent_name: str, task_id: str) -> tuple[s
 
 def create_a2a_status_message(text: str, context_id: str, task_id: str) -> dict[str, Any]:
     return {
-        "kind": "message",
         "messageId": str(uuid.uuid4()),
         "contextId": context_id,
         "taskId": task_id,
         "role": "ROLE_AGENT",
-        "parts": [{"kind": "text", "text": text, "mediaType": "text/plain"}],
+        "parts": [{"text": text, "mediaType": "text/plain"}],
     }
 
 
 def create_a2a_history_message(role: str, text: str, context_id: str, task_id: str) -> dict[str, Any]:
     return {
-        "kind": "message",
         "messageId": str(uuid.uuid4()),
         "contextId": context_id,
         "taskId": task_id,
         "role": role,
-        "parts": [{"kind": "text", "text": text, "mediaType": "text/plain"}],
+        "parts": [{"text": text, "mediaType": "text/plain"}],
     }
 
 
@@ -2001,7 +3181,6 @@ def create_a2a_task_record(
         "artifactText": "",
         "updatedAt": time.time(),
         "task": {
-            "kind": "task",
             "id": task_id,
             "contextId": context_id,
             "status": {
@@ -2049,11 +3228,10 @@ def set_a2a_task_artifact_text(record: dict[str, Any], text: str) -> None:
         if text:
             task["artifacts"] = [
                 {
-                    "kind": "artifact",
                     "artifactId": f"{task['id']}-response",
                     "name": "response",
                     "description": "Text response emitted by the agent.",
-                    "parts": [{"kind": "text", "text": text, "mediaType": "text/plain"}],
+                    "parts": [{"text": text, "mediaType": "text/plain"}],
                 }
             ]
         else:
@@ -2128,14 +3306,12 @@ def normalize_a2a_parts(parts: Any) -> tuple[list[dict[str, Any]], str]:
         normalized_part: dict[str, Any]
         if raw_part.get("text") is not None:
             normalized_part = {
-                "kind": "text",
                 "text": str(raw_part.get("text") or ""),
                 "mediaType": str(raw_part.get("mediaType") or "text/plain"),
             }
             prompt_parts.append(normalized_part["text"])
         elif "data" in raw_part:
             normalized_part = {
-                "kind": "data",
                 "data": raw_part.get("data"),
                 "mediaType": str(raw_part.get("mediaType") or "application/json"),
             }
@@ -2180,6 +3356,68 @@ def parse_reference_task_ids(raw_value: Any) -> list[str]:
     return reference_task_ids
 
 
+def parse_a2a_passthrough_metadata(raw_value: Any) -> dict[str, Any]:
+    if raw_value is None:
+        return {}
+    if not isinstance(raw_value, dict):
+        raise A2AJSONRPCError(JSONRPC_INVALID_PARAMS, "metadata must be an object when provided")
+
+    passthrough = raw_value.get("kubesynthInvoke")
+    if passthrough is None:
+        return {}
+    if not isinstance(passthrough, dict):
+        raise A2AJSONRPCError(JSONRPC_INVALID_PARAMS, "metadata.kubesynthInvoke must be an object when provided")
+
+    parsed: dict[str, Any] = {}
+    thread_id = str(passthrough.get("threadId") or "").strip()
+    if thread_id:
+        parsed["thread_id"] = thread_id
+
+    system = str(passthrough.get("system") or "").strip()
+    if system:
+        parsed["system"] = system
+
+    model = str(passthrough.get("model") or "").strip()
+    if model:
+        parsed["model"] = model
+
+    caller_agent_name = str(passthrough.get("callerAgentName") or "").strip()
+    if caller_agent_name:
+        parsed["caller_agent_name"] = caller_agent_name
+
+    caller_agent_namespace = str(passthrough.get("callerAgentNamespace") or "").strip()
+    if caller_agent_namespace:
+        parsed["caller_agent_namespace"] = caller_agent_namespace
+
+    parent_thread_id = str(passthrough.get("parentThreadId") or "").strip()
+    if parent_thread_id:
+        parsed["parent_thread_id"] = parent_thread_id
+
+    caller_request_id = str(passthrough.get("callerRequestId") or "").strip()
+    if caller_request_id:
+        parsed["caller_request_id"] = caller_request_id
+
+    sandbox_session = passthrough.get("sandboxSession")
+    if sandbox_session is not None:
+        if not isinstance(sandbox_session, dict):
+            raise A2AJSONRPCError(
+                JSONRPC_INVALID_PARAMS,
+                "metadata.kubesynthInvoke.sandboxSession must be an object when provided",
+            )
+        parsed["sandbox_session"] = copy.deepcopy(sandbox_session)
+
+    team_context = passthrough.get("teamContext")
+    if team_context is not None:
+        if not isinstance(team_context, dict):
+            raise A2AJSONRPCError(
+                JSONRPC_INVALID_PARAMS,
+                "metadata.kubesynthInvoke.teamContext must be an object when provided",
+            )
+        parsed["team_context"] = copy.deepcopy(team_context)
+
+    return parsed
+
+
 def infer_context_from_reference_tasks(agent_name: str, namespace: str, reference_task_ids: list[str]) -> str | None:
     for task_id in reference_task_ids:
         referenced_record = get_a2a_task_record(namespace, agent_name, task_id)
@@ -2219,6 +3457,8 @@ def prepare_a2a_task_for_message(
             "Push notifications are not supported by this gateway",
         )
     history_length = parse_history_length(configuration.get("historyLength"), field_name="configuration.historyLength")
+    passthrough_metadata = parse_a2a_passthrough_metadata(params.get("metadata"))
+    requested_thread_id = str(passthrough_metadata.get("thread_id") or "").strip() or None
 
     if task_id:
         record = get_a2a_task_record(namespace, agent_name, task_id)
@@ -2252,11 +3492,16 @@ def prepare_a2a_task_for_message(
             or str(uuid.uuid4())
         )
         task_id = str(uuid.uuid4())
-        record = create_a2a_task_record(agent_name, namespace, context_id, task_id, context_id)
+        record = create_a2a_task_record(
+            agent_name,
+            namespace,
+            context_id,
+            task_id,
+            requested_thread_id or context_id,
+        )
         store_a2a_task_record(record)
 
     normalized_message: dict[str, Any] = {
-        "kind": "message",
         "messageId": message_id,
         "contextId": context_id,
         "taskId": task_id,
@@ -2270,7 +3515,9 @@ def prepare_a2a_task_for_message(
         normalized_message["referenceTaskIds"] = reference_task_ids
 
     append_a2a_task_history(record, normalized_message)
-    team_context: dict[str, Any] = {
+    team_context = passthrough_metadata.get("team_context")
+    team_context = copy.deepcopy(team_context) if isinstance(team_context, dict) else {}
+    team_context.update({
         "mode": "a2a-jsonrpc",
         "contextId": context_id,
         "taskId": task_id,
@@ -2280,17 +3527,33 @@ def prepare_a2a_task_for_message(
             "Return concrete results that another agent can reuse.",
             "Mention blockers or missing information explicitly.",
         ],
-    }
+    })
     if reference_task_ids:
         team_context["referenceTaskIds"] = reference_task_ids
     if isinstance(metadata, dict) and metadata:
         team_context["messageMetadata"] = metadata
-    return record, prompt, history_length, team_context
+
+    invoke_options: dict[str, Any] = {
+        "thread_id": str(record.get("threadId") or "").strip() or context_id,
+        "team_context": team_context,
+    }
+    for key in (
+        "system",
+        "model",
+        "caller_agent_name",
+        "caller_agent_namespace",
+        "parent_thread_id",
+        "caller_request_id",
+        "sandbox_session",
+    ):
+        value = passthrough_metadata.get(key)
+        if value:
+            invoke_options[key] = value
+    return record, prompt, history_length, invoke_options
 
 
 def public_a2a_task(record: dict[str, Any], history_length: int | None = None) -> dict[str, Any]:
     task = copy.deepcopy(record.get("task", {}))
-    task.setdefault("kind", "task")
     history = task.get("history") if isinstance(task.get("history"), list) else []
     if history_length == 0:
         task.pop("history", None)
@@ -2314,7 +3577,6 @@ def public_a2a_task(record: dict[str, Any], history_length: int | None = None) -
 def task_status_update_event(record: dict[str, Any]) -> dict[str, Any]:
     task = record.get("task", {})
     return {
-        "kind": "status-update",
         "taskId": task.get("id"),
         "contextId": task.get("contextId"),
         "status": copy.deepcopy(task.get("status") or {}),
@@ -2325,14 +3587,12 @@ def task_status_update_event(record: dict[str, Any]) -> dict[str, Any]:
 def task_artifact_update_event(record: dict[str, Any], delta: str, *, append: bool, last_chunk: bool) -> dict[str, Any]:
     task = record.get("task", {})
     return {
-        "kind": "artifact-update",
         "taskId": task.get("id"),
         "contextId": task.get("contextId"),
         "artifact": {
-            "kind": "artifact",
             "artifactId": f"{task.get('id')}-response",
             "name": "response",
-            "parts": [{"kind": "text", "text": delta, "mediaType": "text/plain"}],
+            "parts": [{"text": delta, "mediaType": "text/plain"}],
         },
         "append": append,
         "lastChunk": last_chunk,
@@ -2403,15 +3663,22 @@ async def handle_a2a_send_message(
     request_id: Any,
     gateway_request_id: str,
 ) -> dict[str, Any]:
-    record, prompt, history_length, team_context = prepare_a2a_task_for_message(agent_name, namespace, params)
+    record, prompt, history_length, invoke_options = prepare_a2a_task_for_message(agent_name, namespace, params)
     set_a2a_task_status(record, "TASK_STATE_WORKING", None, {"status": "working"})
     store_a2a_task_record(record)
 
     raw_request = cast(Request, SimpleNamespace(headers={"x-request-id": gateway_request_id}))
     invoke_request = InvokeRequest(
         prompt=prompt,
-        thread_id=str(record.get("threadId") or ""),
-        team_context=team_context,
+        thread_id=str(invoke_options.get("thread_id") or ""),
+        team_context=invoke_options.get("team_context"),
+        system=invoke_options.get("system"),
+        model=invoke_options.get("model"),
+        caller_agent_name=invoke_options.get("caller_agent_name"),
+        caller_agent_namespace=invoke_options.get("caller_agent_namespace"),
+        parent_thread_id=invoke_options.get("parent_thread_id"),
+        caller_request_id=invoke_options.get("caller_request_id"),
+        sandbox_session=invoke_options.get("sandbox_session"),
     )
     try:
         invoke_response = await invoke_agent(agent_name, invoke_request, raw_request, namespace, user={})
@@ -2457,15 +3724,22 @@ async def handle_a2a_stream_message(
     request_id: Any,
     gateway_request_id: str,
 ) -> StreamingResponse:
-    record, prompt, history_length, team_context = prepare_a2a_task_for_message(agent_name, namespace, params)
+    record, prompt, history_length, invoke_options = prepare_a2a_task_for_message(agent_name, namespace, params)
     set_a2a_task_status(record, "TASK_STATE_WORKING", None, {"status": "working"})
     store_a2a_task_record(record)
 
     raw_request = cast(Request, SimpleNamespace(headers={"x-request-id": gateway_request_id}))
     invoke_request = InvokeRequest(
         prompt=prompt,
-        thread_id=str(record.get("threadId") or ""),
-        team_context=team_context,
+        thread_id=str(invoke_options.get("thread_id") or ""),
+        team_context=invoke_options.get("team_context"),
+        system=invoke_options.get("system"),
+        model=invoke_options.get("model"),
+        caller_agent_name=invoke_options.get("caller_agent_name"),
+        caller_agent_namespace=invoke_options.get("caller_agent_namespace"),
+        parent_thread_id=invoke_options.get("parent_thread_id"),
+        caller_request_id=invoke_options.get("caller_request_id"),
+        sandbox_session=invoke_options.get("sandbox_session"),
     )
 
     async def event_generator() -> AsyncGenerator[str, None]:
@@ -2616,34 +3890,36 @@ def handle_a2a_get_task(agent_name: str, namespace: str, params: dict[str, Any],
 def build_agent_spec(
     body: CreateAgentRequest | UpdateAgentRequest,
     existing_spec: dict[str, Any] | None = None,
+    *,
+    namespace: str = "default",
 ) -> dict[str, Any]:
+    def _parse_namespaced_ref(raw_ref: str | None) -> tuple[str | None, str | None]:
+        value = str(raw_ref or "").strip()
+        if not value:
+            return None, None
+        if "/" not in value:
+            return None, value
+        ref_namespace, ref_name = value.split("/", 1)
+        return ref_namespace.strip() or None, ref_name.strip() or None
+
     existing_runtime = (existing_spec or {}).get("runtime") or {}
     existing_runtime_kind = None
-    existing_goose_config_files: Any = None
     existing_opencode_config_files: Any = None
     existing_a2a_config: Any = (existing_spec or {}).get("a2a")
     existing_skills: Any = (existing_spec or {}).get("skills")
     if isinstance(existing_runtime, dict):
         existing_runtime_kind = existing_runtime.get("kind")
-        existing_goose = existing_runtime.get("goose") or {}
-        if isinstance(existing_goose, dict):
-            existing_goose_config_files = existing_goose.get("configFiles")
         existing_opencode = existing_runtime.get("opencode") or {}
         if isinstance(existing_opencode, dict):
             existing_opencode_config_files = existing_opencode.get("configFiles")
 
-    runtime_kind = normalized_runtime_kind(getattr(body, "runtime_kind", None) or existing_runtime_kind)
-    requested_goose_config_files = getattr(body, "goose_config_files", None)
-    if requested_goose_config_files is None:
-        goose_config_files = parse_goose_config_files(
-            existing_goose_config_files,
-            source="existing runtime.goose.configFiles",
+    try:
+        runtime_kind = normalized_opencode_runtime_kind(
+            getattr(body, "runtime_kind", None) or existing_runtime_kind,
+            field_name="runtime_kind",
         )
-    else:
-        goose_config_files = parse_goose_config_files(
-            requested_goose_config_files,
-            source="goose_config_files",
-        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     requested_opencode_config_files = getattr(body, "opencode_config_files", None)
     if requested_opencode_config_files is None:
@@ -2669,16 +3945,19 @@ def build_agent_spec(
     else:
         skills_config = parse_agent_skills_config(requested_skills, source="skills", strict=True)
 
-    if runtime_kind != "goose" and goose_config_files:
-        raise HTTPException(
-            status_code=400,
-            detail="goose_config_files is only supported when runtime_kind is 'goose'",
-        )
     if runtime_kind != "opencode" and opencode_config_files:
         raise HTTPException(
             status_code=400,
             detail="opencode_config_files is only supported when runtime_kind is 'opencode'",
         )
+
+    policy_ref = str(getattr(body, "policy_ref", None) or "").strip() or None
+    if policy_ref:
+        policy_namespace, policy_name = _parse_namespaced_ref(policy_ref)
+        resolved_policy_namespace = policy_namespace or namespace
+        if not policy_name:
+            raise HTTPException(status_code=400, detail="policy_ref must not be blank")
+        read_custom_resource("agentpolicies", policy_name, resolved_policy_namespace, "Policy")
 
     requested_git_config = getattr(body, "git_config", None)
     if requested_git_config is None:
@@ -2694,7 +3973,8 @@ def build_agent_spec(
     else:
         github_config = parse_agent_github_config(requested_github_config, source="github_config")
 
-    mcp_servers = dedupe_text_values([server.strip() for server in body.mcp_servers if server.strip()])
+    mcp_connections = _resolve_agent_mcp_connections(body, namespace=namespace, existing_spec=existing_spec)
+    mcp_servers, mcp_sidecars = _derive_legacy_mcp_fields_from_connections(mcp_connections)
     if github_config and "github" not in mcp_servers:
         mcp_servers.append("github")
 
@@ -2703,20 +3983,19 @@ def build_agent_spec(
         "systemPrompt": body.system_prompt.strip(),
         "enableGVisor": body.enable_gvisor,
         "storage": {"size": (body.storage_size or "1Gi").strip() or "1Gi"},
+        "mcpConnections": mcp_connections,
         "mcpServers": mcp_servers,
-        "mcpSidecars": body.mcp_sidecars,
+        "mcpSidecars": mcp_sidecars,
         "runtime": {"kind": runtime_kind},
     }
     if a2a_config:
         spec["a2a"] = a2a_config
     if skills_config:
         spec["skills"] = skills_config
-    if runtime_kind == "goose" and goose_config_files:
-        spec["runtime"]["goose"] = {"configFiles": goose_config_files}
     if runtime_kind == "opencode" and opencode_config_files:
         spec["runtime"]["opencode"] = {"configFiles": opencode_config_files}
-    if body.policy_ref and body.policy_ref.strip():
-        spec["policyRef"] = body.policy_ref.strip()
+    if policy_ref:
+        spec["policyRef"] = policy_ref
     if git_config:
         spec["gitConfig"] = git_config
     if github_config:
@@ -2901,7 +4180,7 @@ def replace_custom_resource_spec(plural: str, name: str, namespace: str, spec: d
                 name=name,
             ),
         )
-        return api.replace_namespaced_custom_object(
+        updated = api.replace_namespaced_custom_object(
             group=RESOURCE_GROUP,
             version=RESOURCE_VERSION,
             namespace=namespace,
@@ -2918,6 +4197,9 @@ def replace_custom_resource_spec(plural: str, name: str, namespace: str, spec: d
                 "spec": spec,
             },
         )
+        if plural == "aiagents":
+            invalidate_agent_read_cache(agent_name=name, namespace=namespace)
+        return updated
     except Exception as exc:
         status = getattr(exc, "status", None)
         if status == 404:
@@ -2937,6 +4219,8 @@ def delete_custom_resource(plural: str, name: str, namespace: str, label: str) -
             plural=plural,
             name=name,
         )
+        if plural == "aiagents":
+            invalidate_agent_read_cache(agent_name=name, namespace=namespace)
     except Exception as exc:
         status = getattr(exc, "status", None)
         if status == 404:
@@ -2965,9 +4249,9 @@ def agent_info_from_resource(agent: dict[str, Any]) -> AgentInfo:
     metadata = agent.get("metadata", {})
     spec = agent.get("spec", {})
     runtime_spec = spec.get("runtime") or {}
-    runtime_kind = "langgraph"
+    runtime_kind = "unknown"
     if isinstance(runtime_spec, dict):
-        runtime_kind = str(runtime_spec.get("kind") or "langgraph")
+        runtime_kind = str(runtime_spec.get("kind") or "").strip().lower() or "unknown"
     namespace = metadata.get("namespace", "default")
     name = metadata.get("name", "")
     return AgentInfo(
@@ -2985,8 +4269,6 @@ def agent_detail_from_resource(agent: dict[str, Any]) -> AgentDetail:
     metadata = agent.get("metadata", {})
     storage = spec.get("storage", {}) if isinstance(spec.get("storage"), dict) else {}
     runtime = spec.get("runtime") if isinstance(spec.get("runtime"), dict) else {}
-    _goose = runtime.get("goose")
-    goose_runtime: dict[str, Any] = _goose if isinstance(_goose, dict) else {}
     _opencode = runtime.get("opencode")
     opencode_runtime: dict[str, Any] = _opencode if isinstance(_opencode, dict) else {}
     try:
@@ -2994,21 +4276,27 @@ def agent_detail_from_resource(agent: dict[str, Any]) -> AgentDetail:
     except HTTPException as exc:
         logger.warning("Ignoring invalid skills config for agent %s/%s: %s", info.namespace, info.name, exc.detail)
         skills_config = {}
+    raw_mcp_connections = spec.get("mcpConnections") if isinstance(spec.get("mcpConnections"), list) else None
+    mcp_connections = copy.deepcopy(raw_mcp_connections) if raw_mcp_connections is not None else _build_legacy_agent_mcp_connections(
+        spec.get("mcpServers") or [],
+        spec.get("mcpSidecars") or [],
+    )
+    mcp_servers = spec.get("mcpServers") if isinstance(spec.get("mcpServers"), list) else []
+    mcp_sidecars = spec.get("mcpSidecars") if isinstance(spec.get("mcpSidecars"), list) else []
+    if (not mcp_servers and not mcp_sidecars) and mcp_connections:
+        mcp_servers, mcp_sidecars = _derive_legacy_mcp_fields_from_connections(mcp_connections)
     return AgentDetail(
         **info.model_dump(),
         system_prompt=spec.get("systemPrompt", "") or "",
         policy_ref=spec.get("policyRef"),
         storage_size=storage.get("size"),
         enable_gvisor=bool(spec.get("enableGVisor", False)),
-        mcp_servers=spec.get("mcpServers") or [],
-        mcp_sidecars=spec.get("mcpSidecars") or [],
+        mcp_connections=mcp_connections,
+        mcp_servers=mcp_servers,
+        mcp_sidecars=mcp_sidecars,
         a2a_config=parse_a2a_agent_config(spec.get("a2a"), source="AIAgent.spec.a2a"),
         skills=skills_config,
         skill_summaries=parse_agent_skill_summaries(skills_config),
-        goose_config_files=parse_goose_config_files(
-            goose_runtime.get("configFiles"),
-            source="AIAgent.spec.runtime.goose.configFiles",
-        ),
         opencode_config_files=parse_opencode_config_files(
             opencode_runtime.get("configFiles"),
             source="AIAgent.spec.runtime.opencode.configFiles",
@@ -3024,6 +4312,126 @@ def policy_a2a_targets_from_resource(policy: dict[str, Any]) -> list[dict[str, s
     spec: dict[str, Any] = _spec if isinstance(_spec, dict) else {}
     config = parse_a2a_policy_config(spec.get("a2a"), source="AgentPolicy.spec.a2a")
     return list(config.get("allowedTargets") or [])
+
+
+def runtime_supports_direct_chat_delegation(runtime_kind: str) -> bool:
+    return False
+
+
+def format_a2a_peer_ref_list(peer_refs: list[dict[str, str]], *, max_items: int = 6) -> str:
+    labels = [f"{item['namespace']}/{item['name']}" for item in peer_refs if item.get("namespace") and item.get("name")]
+    if not labels:
+        return "none"
+    if len(labels) <= max_items:
+        return ", ".join(labels)
+    remainder = len(labels) - max_items
+    return f"{', '.join(labels[:max_items])}, +{remainder} more"
+
+
+def build_agent_collaboration_system_note(agent_name: str, namespace: str, agent: dict[str, Any]) -> str | None:
+    _spec = agent.get("spec")
+    spec: dict[str, Any] = _spec if isinstance(_spec, dict) else {}
+    runtime_kind = runtime_kind_from_spec(spec)
+    runtime_label = "OpenCode" if runtime_kind == "opencode" else (runtime_kind.capitalize() if runtime_kind else "Agent")
+    inbound_callers = parse_a2a_agent_config(
+        spec.get("a2a"),
+        source=f"AIAgent[{namespace}/{agent_name}].spec.a2a",
+    ).get("allowedCallers", [])
+    policy_ref = str(spec.get("policyRef") or "").strip() or None
+
+    outbound_targets: list[dict[str, str]] = []
+    if policy_ref:
+        try:
+            outbound_targets = policy_a2a_targets_from_resource(
+                read_custom_resource("agentpolicies", policy_ref, namespace, "Policy")
+            )
+        except HTTPException as exc:
+            if exc.status_code != 404:
+                raise
+            logger.warning(
+                "Agent %s/%s references missing policy %s while building collaboration note",
+                namespace,
+                agent_name,
+                policy_ref,
+            )
+
+    discovery: AgentDiscoveryResponse | None = None
+    if policy_ref:
+        try:
+            discovery = discover_agent_peers(agent_name, namespace)
+        except HTTPException:
+            logger.warning(
+                "Failed to discover peer agents for %s/%s while building collaboration note",
+                namespace,
+                agent_name,
+                exc_info=True,
+            )
+
+    if not inbound_callers and not policy_ref and not outbound_targets and not (discovery and discovery.peers):
+        return None
+
+    lines = ["COLLABORATION CONTEXT:"]
+    lines.append(f"- Agents allowed to call you (inbound A2A): {format_a2a_peer_ref_list(inbound_callers)}")
+    if policy_ref:
+        lines.append(f"- Outbound delegation policy: {policy_ref}")
+    else:
+        lines.append("- Outbound delegation policy: none configured")
+    lines.append(
+        f"- Agents you are configured to call (outbound policy targets): {format_a2a_peer_ref_list(outbound_targets)}"
+    )
+
+    peers = list((discovery.peers if discovery else []) or [])
+    reachable: list[dict[str, str]] = []
+    if peers:
+        reachable = [
+            {"namespace": peer.namespace, "name": peer.name}
+            for peer in peers
+            if peer.reachable
+        ]
+        blocked = [peer for peer in peers if not peer.reachable]
+        if reachable:
+            lines.append(f"- Currently reachable outbound peers: {format_a2a_peer_ref_list(reachable)}")
+        if blocked:
+            blocked_descriptions = []
+            for peer in blocked[:6]:
+                reason = (peer.reason or peer.status or "unavailable").strip()
+                blocked_descriptions.append(f"{peer.namespace}/{peer.name} ({reason})")
+            if len(blocked) > 6:
+                blocked_descriptions.append(f"+{len(blocked) - 6} more")
+            lines.append(f"- Outbound peers currently blocked or unavailable: {', '.join(blocked_descriptions)}")
+
+    if not runtime_supports_direct_chat_delegation(runtime_kind):
+        if runtime_kind == "opencode":
+            example_peer = reachable[0] if reachable else (outbound_targets[0] if outbound_targets else None)
+            example_peer_namespace = (example_peer or {}).get("namespace") or namespace
+            example_peer_name = (example_peer or {}).get("name") or "peer-agent"
+            lines.append(
+                "- Runtime note: OpenCode supports explicit outbound A2A through the internal API gateway when the target agent is allowed by policy."
+            )
+            lines.append(
+                f"- To actually query a peer from standard chat, use the bash tool to POST JSON-RPC 2.0 to $API_GATEWAY_INTERNAL_URL/a2a/<agent>?namespace=<namespace> with Authorization: Bearer $API_GATEWAY_SHARED_TOKEN and A2A-Version: {A2A_PROTOCOL_VERSION}."
+            )
+            lines.append(
+                f"- Use method SendMessage. Put the task prompt in params.message.parts[]. For KubeSynth caller continuity, include params.metadata.kubesynthInvoke.threadId plus callerAgentName='{agent_name}' and callerAgentNamespace='{namespace}'."
+            )
+            lines.append(
+                f"- URL rule: if a peer is shown as namespace/name, put only the agent name in the /a2a/<agent> path and keep the namespace in the ?namespace= query parameter. Example: peer {example_peer_namespace}/{example_peer_name} maps to $API_GATEWAY_INTERNAL_URL/a2a/{example_peer_name}?namespace={example_peer_namespace}."
+            )
+            lines.append(
+                "- Delegation rule: do not mark a delegation step complete, summarize delegated work as done, or move past a delegated research/review task until the peer actually returns a concrete result or an explicit failure."
+            )
+            lines.append(
+                "- If a peer call is slow, blocked, or fails, report that explicitly, keep that task incomplete in your todo plan, and either retry or revise the plan before continuing."
+            )
+        else:
+            lines.append(
+                f"- Runtime limitation: {runtime_label} agents do not support direct outbound A2A or specialist-team delegation from standard chat requests in this build."
+            )
+
+    lines.append(
+        "- When asked about collaboration, distinguish inbound callers from outbound delegates and only claim peer results after you actually invoke the peer through the configured platform route."
+    )
+    return "\n".join(lines)
 
 
 def discover_agent_peers(agent_name: str, namespace: str) -> AgentDiscoveryResponse:
@@ -3098,6 +4506,23 @@ def discover_agent_peers(agent_name: str, namespace: str) -> AgentDiscoveryRespo
     )
 
 
+def resolve_invoke_agent_reference(agent_name: str, namespace: str | None, *, path_namespace: str | None = None) -> tuple[str, str]:
+    resolved_agent_name = (agent_name or "").strip()
+    if not K8S_NAME_RE.fullmatch(resolved_agent_name):
+        raise HTTPException(status_code=400, detail="agent_name must be a valid Kubernetes resource name")
+
+    resolved_namespace = (path_namespace or namespace or "default").strip() or "default"
+    if namespace and namespace.strip() and path_namespace and namespace.strip() != resolved_namespace:
+        raise HTTPException(
+            status_code=400,
+            detail="namespace query parameter must match the namespace segment in the agent invoke path",
+        )
+    if not K8S_NAME_RE.fullmatch(resolved_namespace):
+        raise HTTPException(status_code=400, detail="namespace must be a valid Kubernetes namespace name")
+
+    return resolved_agent_name, resolved_namespace
+
+
 def workflow_info_from_resource(workflow: dict[str, Any]) -> WorkflowInfo:
     metadata = workflow.get("metadata", {})
     spec = workflow.get("spec", {})
@@ -3139,6 +4564,194 @@ def workflow_info_from_resource(workflow: dict[str, Any]) -> WorkflowInfo:
         worker_job=status.get("workerJob"),
         created_at=metadata.get("creationTimestamp"),
     )
+
+
+def _workflow_resource_from_trace(trace: dict[str, Any]) -> dict[str, Any]:
+    spec = trace.get("spec") if isinstance(trace.get("spec"), dict) else {}
+    status = trace.get("status") if isinstance(trace.get("status"), dict) else {}
+
+    normalized_spec = dict(spec)
+    if not normalized_spec.get("input") and trace.get("input_text"):
+        normalized_spec["input"] = trace["input_text"]
+
+    normalized_status = dict(status)
+    if not normalized_status.get("phase") and trace.get("phase"):
+        normalized_status["phase"] = trace["phase"]
+    if not normalized_status.get("summary") and isinstance(trace.get("summary"), dict):
+        normalized_status["summary"] = trace["summary"]
+    if not normalized_status.get("stepStates") and isinstance(trace.get("step_states"), dict):
+        normalized_status["stepStates"] = trace["step_states"]
+    if not normalized_status.get("runId") and trace.get("run_id"):
+        normalized_status["runId"] = trace["run_id"]
+    if not normalized_status.get("workerJob") and trace.get("worker_job_name"):
+        normalized_status["workerJob"] = {
+            "name": trace["worker_job_name"],
+            "namespace": trace.get("namespace") or "default",
+        }
+    if not normalized_status.get("journalRef") and trace.get("journal_path"):
+        normalized_status["journalRef"] = {"path": trace["journal_path"]}
+    if not normalized_status.get("pendingApproval") and trace.get("pending_approval_name"):
+        normalized_status["pendingApproval"] = {"name": trace["pending_approval_name"]}
+
+    metadata: dict[str, Any] = {
+        "name": trace.get("workflow_name") or "",
+        "namespace": trace.get("namespace") or "default",
+    }
+    if trace.get("created_at"):
+        metadata["creationTimestamp"] = trace["created_at"]
+    if trace.get("generation") is not None:
+        metadata["generation"] = trace["generation"]
+
+    return {
+        "metadata": metadata,
+        "spec": normalized_spec,
+        "status": normalized_status,
+    }
+
+
+def _tail_log_text(log_text: str, tail_lines: int | None) -> str:
+    if tail_lines is None or tail_lines <= 0 or not log_text:
+        return log_text
+    lines = log_text.splitlines()
+    if len(lines) <= tail_lines:
+        return log_text
+    return "\n".join(lines[-tail_lines:])
+
+
+def _read_workflow_job_logs(job_name: str, namespace: str, tail_lines: int | None = None) -> tuple[str, str]:
+    pods = list_job_pods(job_name, namespace)
+    if not pods:
+        raise HTTPException(status_code=404, detail=f"No worker pod found for workflow job '{job_name}'")
+
+    pod_name = str(getattr(pods[0].metadata, "name", "") or "")
+    if not pod_name:
+        raise HTTPException(status_code=404, detail=f"No worker pod found for workflow job '{job_name}'")
+
+    try:
+        from kubernetes import client
+
+        kwargs: dict[str, Any] = {
+            "name": pod_name,
+            "namespace": namespace,
+            "container": "worker",
+            "timestamps": True,
+        }
+        if tail_lines is not None:
+            kwargs["tail_lines"] = tail_lines
+        logs = client.CoreV1Api().read_namespaced_pod_log(**kwargs)
+        return str(logs or ""), pod_name
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("Could not retrieve workflow logs for job %s/%s: %s", namespace, job_name, exc)
+        raise HTTPException(status_code=404, detail="Could not retrieve workflow logs") from exc
+
+
+def _resolve_workflow_run_trace_payload(
+    workflow_name: str,
+    namespace: str,
+    run_id: str,
+    *,
+    tail: int | None = None,
+    persist_live_fallback: bool = False,
+) -> dict[str, Any]:
+    trace = load_workflow_run_trace(workflow_name, namespace, run_id, include_logs=True)
+    if trace is None:
+        raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found for workflow '{workflow_name}'")
+
+    archived_logs = trace.get("logs") if isinstance(trace.get("logs"), str) else ""
+    logs = archived_logs
+    source = "archived" if archived_logs else "unavailable"
+    pod_name: str | None = None
+    live_log_error: str | None = None
+
+    if not logs and trace.get("worker_job_name"):
+        try:
+            logs, pod_name = _read_workflow_job_logs(str(trace["worker_job_name"]), namespace, tail)
+            source = "live-worker"
+            if logs and persist_live_fallback:
+                with contextlib.suppress(Exception):
+                    record_workflow_run_log_archive(
+                        workflow_name=workflow_name,
+                        namespace=namespace,
+                        run_id=run_id,
+                        log_text=logs,
+                        source="gateway-live-fallback",
+                    )
+        except HTTPException as exc:
+            live_log_error = str(exc.detail)
+        except Exception as exc:
+            live_log_error = str(exc)
+    elif logs:
+        logs = _tail_log_text(logs, tail)
+
+    workflow_snapshot = workflow_info_from_resource(_workflow_resource_from_trace(trace)).model_dump(mode="json")
+    return {
+        "workflow_name": workflow_name,
+        "namespace": namespace,
+        "history_id": trace.get("history_id"),
+        "run_id": run_id,
+        "phase": trace.get("phase"),
+        "source": source,
+        "logs": logs or "",
+        "pod_name": pod_name,
+        "worker_job_name": trace.get("worker_job_name"),
+        "workflow": workflow_snapshot,
+        "summary": trace.get("summary"),
+        "step_states": trace.get("step_states"),
+        "triggered_by": trace.get("triggered_by"),
+        "input_text": trace.get("input_text"),
+        "artifact_path": trace.get("artifact_path"),
+        "journal_path": trace.get("journal_path"),
+        "created_at": trace.get("created_at"),
+        "updated_at": trace.get("updated_at"),
+        "completed_at": trace.get("completed_at"),
+        "archived_log_available": bool(trace.get("archived_log_available")) or source == "live-worker",
+        "archived_log_source": trace.get("archived_log_source"),
+        "archived_log_truncated": bool(trace.get("archived_log_truncated")),
+        "archived_log_captured_at": trace.get("archived_log_captured_at"),
+        "live_log_error": live_log_error,
+    }
+
+
+def _workflow_logs_response_from_trace(trace_payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "workflow_name": trace_payload.get("workflow_name"),
+        "run_id": trace_payload.get("run_id"),
+        "job_name": trace_payload.get("worker_job_name"),
+        "pod_name": trace_payload.get("pod_name"),
+        "source": trace_payload.get("source"),
+        "archived_log_available": trace_payload.get("archived_log_available"),
+        "archived_log_source": trace_payload.get("archived_log_source"),
+        "archived_log_truncated": trace_payload.get("archived_log_truncated"),
+        "archived_log_captured_at": trace_payload.get("archived_log_captured_at"),
+        "logs": trace_payload.get("logs") or "",
+    }
+
+
+def _fallback_workflow_logs_from_run(
+    workflow_name: str,
+    namespace: str,
+    run_id: str | None,
+    *,
+    tail: int,
+) -> dict[str, Any] | None:
+    if not run_id:
+        return None
+    try:
+        trace_payload = _resolve_workflow_run_trace_payload(
+            workflow_name,
+            namespace,
+            run_id,
+            tail=tail,
+            persist_live_fallback=True,
+        )
+    except HTTPException:
+        return None
+
+    if not trace_payload.get("logs"):
+        return None
+    return _workflow_logs_response_from_trace(trace_payload)
 
 
 def eval_info_from_resource(eval_resource: dict[str, Any]) -> EvalInfo:
@@ -3223,8 +4836,53 @@ def read_agent(agent_name: str, namespace: str) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' not found") from exc
 
 
+def _prune_agent_read_cache(now: float) -> None:
+    expired_keys = [key for key, (expires_at, _) in _AGENT_READ_CACHE.items() if expires_at <= now]
+    for key in expired_keys:
+        _AGENT_READ_CACHE.pop(key, None)
+    while len(_AGENT_READ_CACHE) > AGENT_READ_CACHE_MAX_ENTRIES:
+        oldest_key = min(_AGENT_READ_CACHE.items(), key=lambda item: item[1][0])[0]
+        _AGENT_READ_CACHE.pop(oldest_key, None)
+
+
+def invalidate_agent_read_cache(agent_name: str | None = None, namespace: str | None = None) -> None:
+    with _AGENT_READ_CACHE_LOCK:
+        if agent_name is None and namespace is None:
+            _AGENT_READ_CACHE.clear()
+            return
+        matching_keys = [
+            key
+            for key in _AGENT_READ_CACHE
+            if (agent_name is None or key[1] == agent_name) and (namespace is None or key[0] == namespace)
+        ]
+        for key in matching_keys:
+            _AGENT_READ_CACHE.pop(key, None)
+
+
+def read_agent_cached(agent_name: str, namespace: str) -> dict[str, Any]:
+    if AGENT_READ_CACHE_TTL_SECONDS <= 0:
+        return read_agent(agent_name, namespace)
+
+    cache_key = (namespace, agent_name)
+    now = time.monotonic()
+    with _AGENT_READ_CACHE_LOCK:
+        cached_entry = _AGENT_READ_CACHE.get(cache_key)
+        if cached_entry is not None:
+            expires_at, cached_agent = cached_entry
+            if expires_at > now:
+                return copy.deepcopy(cached_agent)
+            _AGENT_READ_CACHE.pop(cache_key, None)
+
+    agent = read_agent(agent_name, namespace)
+    with _AGENT_READ_CACHE_LOCK:
+        cache_time = time.monotonic()
+        _AGENT_READ_CACHE[cache_key] = (cache_time + AGENT_READ_CACHE_TTL_SECONDS, copy.deepcopy(agent))
+        _prune_agent_read_cache(cache_time)
+    return agent
+
+
 def create_agent_resource(body: CreateAgentRequest, namespace: str) -> dict[str, Any]:
-    spec = build_agent_spec(body)
+    spec = build_agent_spec(body, namespace=namespace)
     validate_agent_runtime_compatibility(spec)
 
     try:
@@ -3240,13 +4898,15 @@ def create_agent_resource(body: CreateAgentRequest, namespace: str) -> dict[str,
             "spec": spec,
         }
 
-        return client.CustomObjectsApi().create_namespaced_custom_object(
+        created = client.CustomObjectsApi().create_namespaced_custom_object(
             group=RESOURCE_GROUP,
             version=RESOURCE_VERSION,
             namespace=namespace,
             plural="aiagents",
             body=resource_body,
         )
+        invalidate_agent_read_cache(agent_name=body.name, namespace=namespace)
+        return created
     except Exception as exc:
         if getattr(exc, "status", None) == 409:
             raise HTTPException(status_code=409, detail=f"Agent '{body.name}' already exists") from exc
@@ -4201,6 +5861,1134 @@ MCP_HUB_SERVERS: list[dict[str, Any]] = [
     },
 ]
 
+# ── MCP Registry ── comprehensive catalog of all known MCP servers ──
+
+MCP_REGISTRY: list[dict[str, Any]] = [
+    # ── Remote-native servers (vendor-hosted, zero containers) ──
+    {
+        "id": "github-remote",
+        "name": "GitHub MCP",
+        "description": "Access GitHub repos, issues, PRs, code search, and actions via GitHub's hosted MCP endpoint.",
+        "icon": "git-branch",
+        "category": "developer",
+        "transport": "remote",
+        "endpoint": "https://api.githubcopilot.com/mcp/",
+        "auth_type": "bearer",
+        "enabled": True,
+        "tags": ["git", "code", "issues", "pull-requests"],
+        "tools_count": 35,
+        "docs_url": "https://github.com/github/github-mcp-server/blob/main/docs/remote-server.md",
+        "repository_url": "https://github.com/github/github-mcp-server",
+        "protocol_label": "Streamable HTTP",
+        "deployment_model": "GitHub-hosted remote",
+        "connection_notes": "The hosted GitHub endpoint works with PAT auth today. GitHub Enterprise Cloud with data residency uses a different copilot-api.<subdomain>.ghe.com endpoint.",
+        "config_schema": [
+            {"key": "token", "label": "GitHub PAT", "type": "password", "placeholder": "ghp_...", "required": True, "group": "credentials", "is_credential": True},
+        ],
+    },
+    {
+        "id": "context7",
+        "name": "Context7",
+        "description": "Up-to-date documentation and code examples for any library, pulled from source. Prevents hallucinated APIs.",
+        "icon": "book-open",
+        "category": "developer",
+        "transport": "remote",
+        "endpoint": "https://mcp.context7.com/mcp",
+        "auth_type": "api_key",
+        "enabled": True,
+        "tags": ["documentation", "libraries", "code-examples"],
+        "tools_count": 2,
+        "docs_url": "https://context7.com/docs/resources/all-clients",
+        "repository_url": "https://github.com/upstash/context7",
+        "protocol_label": "Streamable HTTP",
+        "deployment_model": "Vendor-hosted remote",
+        "connection_notes": "Context7 works without auth, but the vendor recommends an API key for higher rate limits in supported clients.",
+        "auth_header_name": "CONTEXT7_API_KEY",
+        "config_schema": [
+            {"key": "api_key", "label": "Context7 API Key", "type": "password", "required": False, "group": "credentials", "is_credential": True},
+        ],
+    },
+    {
+        "id": "microsoft-learn",
+        "name": "Microsoft Learn",
+        "description": "Trusted Microsoft documentation and code samples from the official Learn MCP endpoint.",
+        "icon": "book-open",
+        "category": "developer",
+        "transport": "remote",
+        "endpoint": "https://learn.microsoft.com/api/mcp",
+        "auth_type": "none",
+        "enabled": True,
+        "tags": ["documentation", "microsoft", "azure", "code-samples"],
+        "tools_count": 3,
+        "tool_names": ["microsoft_docs_search", "microsoft_docs_fetch", "microsoft_code_sample_search"],
+        "docs_url": "https://learn.microsoft.com/en-us/training/support/mcp",
+        "repository_url": "https://github.com/MicrosoftDocs/mcp",
+        "protocol_label": "Streamable HTTP",
+        "deployment_model": "Vendor-hosted remote",
+        "connection_notes": "The Learn endpoint is public. A plain browser-style GET may return 405 even though the MCP server is healthy; connect with a real MCP client over Streamable HTTP.",
+        "config_schema": [],
+    },
+    {
+        "id": "brave-search",
+        "name": "Brave Search",
+        "description": "Web and local search using Brave's Search API with privacy-focused results.",
+        "icon": "globe",
+        "category": "search",
+        "transport": "remote",
+        "endpoint": None,
+        "auth_type": "api_key",
+        "enabled": True,
+        "tags": ["web-search", "local-search", "news"],
+        "tools_count": 2,
+        "config_schema": [
+            {"key": "api_key", "label": "Brave API Key", "type": "password", "required": True, "group": "credentials", "is_credential": True},
+        ],
+    },
+    {
+        "id": "firecrawl",
+        "name": "Firecrawl",
+        "description": "Web scraping, crawling, and content extraction. Convert any website to clean markdown or structured data.",
+        "icon": "globe",
+        "category": "search",
+        "transport": "remote",
+        "endpoint": None,
+        "auth_type": "api_key",
+        "enabled": True,
+        "tags": ["web-scraping", "crawling", "extraction"],
+        "tools_count": 14,
+        "tool_names": [
+            "firecrawl_scrape",
+            "firecrawl_batch_scrape",
+            "firecrawl_check_batch_status",
+            "firecrawl_map",
+            "firecrawl_search",
+            "firecrawl_crawl",
+            "firecrawl_check_crawl_status",
+            "firecrawl_extract",
+            "firecrawl_agent",
+            "firecrawl_agent_status",
+            "firecrawl_browser_create",
+            "firecrawl_browser_execute",
+            "firecrawl_browser_list",
+            "firecrawl_browser_delete",
+        ],
+        "docs_url": "https://github.com/firecrawl/firecrawl-mcp-server",
+        "repository_url": "https://github.com/firecrawl/firecrawl-mcp-server",
+        "protocol_label": "stdio or self-hosted Streamable HTTP",
+        "deployment_model": "Self-hosted or local bridge",
+        "suggested_endpoint": "http://localhost:3000/mcp",
+        "connection_notes": "The official package runs over stdio by default and can expose a local Streamable HTTP endpoint at http://localhost:3000/mcp. No vendor-hosted default MCP endpoint is published in the docs.",
+        "config_schema": [
+            {"key": "api_key", "label": "Firecrawl API Key", "type": "password", "required": True, "group": "credentials", "is_credential": True},
+        ],
+    },
+    {
+        "id": "sentry",
+        "name": "Sentry (Self-hosted / local)",
+        "description": "Run Sentry's MCP server locally or against self-hosted Sentry with token-based auth.",
+        "icon": "alert-triangle",
+        "category": "observability",
+        "transport": "remote",
+        "endpoint": None,
+        "auth_type": "bearer",
+        "enabled": True,
+        "tags": ["errors", "monitoring", "debugging", "stack-traces"],
+        "tools_count": 8,
+        "docs_url": "https://docs.sentry.io/product/sentry-mcp/",
+        "repository_url": "https://github.com/getsentry/sentry-mcp",
+        "protocol_label": "Local stdio or self-hosted HTTP",
+        "deployment_model": "Self-hosted or local bridge",
+        "connection_notes": "Use this entry when you run the open-source MCP server yourself for self-hosted Sentry or local stdio workflows. The official sentry.io hosted endpoint is listed separately.",
+        "config_schema": [
+            {"key": "token", "label": "Sentry Auth Token", "type": "password", "required": True, "group": "credentials", "is_credential": True},
+            {"key": "organization", "label": "Organization Slug", "type": "text", "required": True, "group": "connection"},
+        ],
+    },
+    {
+        "id": "sentry-remote",
+        "name": "Sentry Cloud",
+        "description": "Official Sentry-hosted MCP endpoint for sentry.io with OAuth login and optional org/project scoping.",
+        "icon": "alert-triangle",
+        "category": "observability",
+        "transport": "remote",
+        "endpoint": "https://mcp.sentry.dev/mcp",
+        "auth_type": "oauth",
+        "enabled": True,
+        "tags": ["errors", "monitoring", "debugging", "stack-traces", "oauth"],
+        "tools_count": 8,
+        "docs_url": "https://docs.sentry.io/product/sentry-mcp/",
+        "repository_url": "https://github.com/getsentry/sentry-mcp",
+        "protocol_label": "Streamable HTTP",
+        "deployment_model": "Vendor-hosted remote",
+        "connection_notes": "The hosted sentry.io endpoint uses OAuth and supports scoped URLs like /mcp/<org>/<project>. Self-hosted Sentry still requires the local stdio server.",
+        "config_schema": [],
+    },
+    {
+        "id": "linear",
+        "name": "Linear",
+        "description": "Manage issues, projects, and cycles in Linear. Create, update, search, and comment on issues.",
+        "icon": "layout-list",
+        "category": "project-management",
+        "transport": "remote",
+        "endpoint": None,
+        "auth_type": "api_key",
+        "enabled": True,
+        "tags": ["issues", "project-management", "agile", "tracking"],
+        "tools_count": 12,
+        "config_schema": [
+            {"key": "api_key", "label": "Linear API Key", "type": "password", "required": True, "group": "credentials", "is_credential": True},
+        ],
+    },
+    {
+        "id": "atlassian-rovo",
+        "name": "Atlassian Rovo",
+        "description": "Official Atlassian-hosted MCP endpoint for Jira, Confluence, Bitbucket, and Compass workflows.",
+        "icon": "layout-list",
+        "category": "project-management",
+        "transport": "remote",
+        "endpoint": "https://mcp.atlassian.com/v1/mcp",
+        "auth_type": "bearer",
+        "enabled": True,
+        "tags": ["jira", "confluence", "bitbucket", "compass", "project-management"],
+        "tools_count": 20,
+        "protocol_label": "Streamable HTTP",
+        "deployment_model": "Vendor-hosted remote",
+        "connection_notes": "Atlassian's hosted MCP endpoint supports Jira, Confluence, Bitbucket, and Compass. OAuth is the default interactive path, while service-account style bearer tokens are suitable for headless saved connections.",
+        "config_schema": [
+            {"key": "token", "label": "Atlassian Access Token", "type": "password", "required": True, "group": "credentials", "is_credential": True},
+        ],
+    },
+    {
+        "id": "slack",
+        "name": "Slack",
+        "description": "Read and send messages, manage channels, search history, and interact with Slack workspaces.",
+        "icon": "message-square",
+        "category": "communication",
+        "transport": "remote",
+        "endpoint": None,
+        "auth_type": "bearer",
+        "enabled": True,
+        "tags": ["messaging", "channels", "team-communication"],
+        "tools_count": 10,
+        "config_schema": [
+            {"key": "token", "label": "Slack Bot Token", "type": "password", "placeholder": "xoxb-...", "required": True, "group": "credentials", "is_credential": True},
+        ],
+    },
+    {
+        "id": "notion",
+        "name": "Notion (Self-hosted)",
+        "description": "Open-source Notion API MCP server for self-hosted stdio or Streamable HTTP deployments.",
+        "icon": "file-text",
+        "category": "productivity",
+        "transport": "remote",
+        "endpoint": None,
+        "auth_type": "bearer",
+        "enabled": True,
+        "tags": ["wiki", "documents", "databases", "knowledge-base"],
+        "tools_count": 22,
+        "docs_url": "https://github.com/makenotion/notion-mcp-server",
+        "repository_url": "https://github.com/makenotion/notion-mcp-server",
+        "protocol_label": "stdio or self-hosted Streamable HTTP",
+        "deployment_model": "Self-hosted or local bridge",
+        "connection_notes": "This entry is for the open-source Notion server that you run yourself. The official hosted Notion MCP endpoint is listed separately below.",
+        "config_schema": [
+            {"key": "token", "label": "Notion Integration Token", "type": "password", "placeholder": "ntn_...", "required": True, "group": "credentials", "is_credential": True},
+        ],
+    },
+    {
+        "id": "notion-remote",
+        "name": "Notion Cloud",
+        "description": "Official Notion-hosted MCP endpoint for workspace search, content fetch, comments, views, and page operations.",
+        "icon": "file-text",
+        "category": "productivity",
+        "transport": "remote",
+        "endpoint": "https://mcp.notion.com/mcp",
+        "auth_type": "oauth",
+        "enabled": True,
+        "tags": ["wiki", "documents", "databases", "knowledge-base", "oauth"],
+        "tools_count": 18,
+        "tool_names": [
+            "search",
+            "fetch",
+            "create-page",
+            "update-page",
+            "move-page",
+            "duplicate-page",
+            "create-database",
+            "update-data-source",
+            "create-view",
+            "update-view",
+            "query-data-sources",
+            "query-database-view",
+            "add-comment",
+            "get-comments",
+            "get-teams",
+            "list-users",
+            "get-current-user",
+            "get-bot-info",
+        ],
+        "docs_url": "https://developers.notion.com/guides/mcp/get-started-with-mcp",
+        "repository_url": "https://github.com/makenotion/notion-mcp-server",
+        "protocol_label": "Streamable HTTP or SSE",
+        "deployment_model": "Vendor-hosted remote",
+        "connection_notes": "Official hosted Notion MCP uses OAuth and also exposes a legacy SSE endpoint for older clients. Save the connection once, supply your Notion OAuth app credentials, and complete the browser sign-in from the MCP page.",
+        "oauth_authorization_url": "https://api.notion.com/v1/oauth/authorize",
+        "oauth_token_url": "https://api.notion.com/v1/oauth/token",
+        "oauth_token_auth_method": "client_secret_basic",
+        "oauth_extra_authorize_params": {"owner": "user"},
+        "config_schema": [
+            {"key": "client_id", "label": "OAuth Client ID", "type": "text", "required": True, "group": "connection"},
+            {"key": "client_secret", "label": "OAuth Client Secret", "type": "password", "required": True, "group": "credentials", "is_credential": True},
+        ],
+    },
+    # ── Shared Hub servers (deployed centrally in mcp-hub namespace) ──
+    {
+        "id": "github-hub",
+        "name": "GitHub (Hub)",
+        "description": "Shared GitHub API access deployed in the platform MCP hub namespace. Central management for all agents.",
+        "icon": "git-branch",
+        "category": "developer",
+        "transport": "hub",
+        "hub_server_name": "github",
+        "auth_type": "bearer",
+        "enabled": True,
+        "tags": ["git", "code", "issues", "pull-requests"],
+        "tools_count": 35,
+        "config_schema": [
+            {"key": "token", "label": "GitHub PAT", "type": "password", "placeholder": "ghp_...", "required": True, "group": "credentials", "is_credential": True},
+        ],
+    },
+    {
+        "id": "postgres-hub",
+        "name": "PostgreSQL (Hub)",
+        "description": "Shared read-only PostgreSQL access deployed in the MCP hub. Query tables, list schemas, describe databases.",
+        "icon": "database",
+        "category": "data",
+        "transport": "hub",
+        "hub_server_name": "postgres-readonly",
+        "auth_type": "connection_string",
+        "enabled": True,
+        "tags": ["sql", "database", "postgres", "read-only"],
+        "tools_count": 5,
+        "config_schema": [
+            {"key": "connection_string", "label": "PostgreSQL Connection String", "type": "password", "placeholder": "postgresql://user:pass@host:5432/db", "required": True, "group": "connection", "is_credential": True},
+        ],
+    },
+    # ── Sidecar servers (run as containers in the agent pod) ──
+    {
+        "id": "playwright-sidecar",
+        "name": "Playwright Browser",
+        "description": "Full browser automation with Playwright. Navigate pages, take screenshots, click elements, fill forms, and extract content.",
+        "icon": "monitor",
+        "category": "browser",
+        "transport": "sidecar",
+        "auth_type": "none",
+        "enabled": True,
+        "tags": ["browser", "automation", "screenshots", "testing"],
+        "tools_count": 18,
+        "config_schema": [],
+    },
+    {
+        "id": "filesystem-sidecar",
+        "name": "Filesystem",
+        "description": "Safe file system operations within a sandboxed workspace. Read, write, search, and manage files.",
+        "icon": "folder",
+        "category": "developer",
+        "transport": "sidecar",
+        "auth_type": "none",
+        "enabled": True,
+        "tags": ["files", "filesystem", "workspace"],
+        "tools_count": 11,
+        "config_schema": [],
+    },
+    {
+        "id": "memory-sidecar",
+        "name": "Memory & Knowledge Graph",
+        "description": "Persistent memory with a knowledge graph backend. Store entities, relations, and retrieve context across sessions.",
+        "icon": "brain",
+        "category": "ai",
+        "transport": "sidecar",
+        "auth_type": "none",
+        "enabled": True,
+        "tags": ["memory", "knowledge-graph", "persistence", "context"],
+        "tools_count": 7,
+        "config_schema": [],
+    },
+    {
+        "id": "puppeteer-sidecar",
+        "name": "Puppeteer",
+        "description": "Headless Chrome automation for web scraping, screenshot capture, and page interaction.",
+        "icon": "monitor",
+        "category": "browser",
+        "transport": "sidecar",
+        "auth_type": "none",
+        "enabled": True,
+        "tags": ["browser", "headless", "chrome", "scraping"],
+        "tools_count": 9,
+        "config_schema": [],
+    },
+    # ── Cloud & Infrastructure ──
+    {
+        "id": "azure-mcp",
+        "name": "Azure MCP Server",
+        "description": "276 tools across 57 Azure services including Compute, Storage, AI, DevOps, Networking, and more.",
+        "icon": "cloud",
+        "category": "cloud",
+        "transport": "remote",
+        "endpoint": None,
+        "auth_type": "oauth",
+        "enabled": True,
+        "tags": ["azure", "cloud", "infrastructure", "devops"],
+        "tools_count": 276,
+        "docs_url": "https://learn.microsoft.com/azure/developer/azure-mcp-server/",
+        "repository_url": "https://github.com/microsoft/mcp",
+        "protocol_label": "stdio or self-hosted Streamable HTTP",
+        "deployment_model": "Self-hosted remote preview",
+        "connection_notes": "Azure publishes packages, IDE integrations, and a self-hosted remote preview for platforms like Foundry and Copilot Studio, but no shared vendor-hosted MCP endpoint is documented.",
+        "config_schema": [
+            {"key": "tenant_id", "label": "Azure Tenant ID", "type": "text", "required": True, "group": "connection"},
+            {"key": "client_id", "label": "Client ID", "type": "text", "required": True, "group": "credentials"},
+            {"key": "client_secret", "label": "Client Secret", "type": "password", "required": True, "group": "credentials", "is_credential": True},
+        ],
+    },
+    {
+        "id": "aws-kb-retrieval",
+        "name": "AWS Knowledge Base",
+        "description": "Retrieve information from AWS Knowledge Bases using Amazon Bedrock Agent Runtime.",
+        "icon": "cloud",
+        "category": "cloud",
+        "transport": "remote",
+        "endpoint": None,
+        "auth_type": "api_key",
+        "enabled": True,
+        "tags": ["aws", "knowledge-base", "bedrock", "rag"],
+        "tools_count": 1,
+        "config_schema": [
+            {"key": "access_key", "label": "AWS Access Key", "type": "text", "required": True, "group": "credentials"},
+            {"key": "secret_key", "label": "AWS Secret Key", "type": "password", "required": True, "group": "credentials", "is_credential": True},
+            {"key": "region", "label": "AWS Region", "type": "text", "placeholder": "us-east-1", "required": True, "group": "connection"},
+        ],
+    },
+    # ── Data & Analytics ──
+    {
+        "id": "qdrant",
+        "name": "Qdrant Vector Search",
+        "description": "Semantic vector search operations. Create collections, upsert points, and query with filters.",
+        "icon": "search",
+        "category": "data",
+        "transport": "sidecar",
+        "auth_type": "api_key",
+        "enabled": True,
+        "tags": ["vector-search", "embeddings", "semantic", "rag"],
+        "tools_count": 6,
+        "config_schema": [
+            {"key": "url", "label": "Qdrant URL", "type": "text", "placeholder": "http://qdrant:6333", "required": True, "group": "connection"},
+            {"key": "api_key", "label": "Qdrant API Key", "type": "password", "group": "credentials", "is_credential": True},
+        ],
+    },
+    {
+        "id": "sqlite",
+        "name": "SQLite",
+        "description": "Interact with SQLite databases. Run queries, describe schemas, and manage tables.",
+        "icon": "database",
+        "category": "data",
+        "transport": "sidecar",
+        "auth_type": "none",
+        "enabled": True,
+        "tags": ["sql", "database", "sqlite", "local"],
+        "tools_count": 6,
+        "config_schema": [
+            {"key": "db_path", "label": "Database Path", "type": "text", "placeholder": "/data/mydb.sqlite", "required": True, "group": "connection"},
+        ],
+    },
+    # ── DevOps & CI/CD ──
+    {
+        "id": "docker",
+        "name": "Docker",
+        "description": "Manage Docker containers, images, volumes and networks. Build, run, and inspect containers.",
+        "icon": "box",
+        "category": "devops",
+        "transport": "sidecar",
+        "auth_type": "none",
+        "enabled": True,
+        "tags": ["docker", "containers", "images", "devops"],
+        "tools_count": 15,
+        "config_schema": [],
+    },
+    {
+        "id": "kubernetes-mcp",
+        "name": "Kubernetes",
+        "description": "Full Kubernetes cluster operations. Get pods, logs, apply manifests, scale deployments, and manage resources.",
+        "icon": "server",
+        "category": "devops",
+        "transport": "sidecar",
+        "auth_type": "kubeconfig",
+        "enabled": True,
+        "tags": ["kubernetes", "k8s", "cluster", "pods", "deployments"],
+        "tools_count": 20,
+        "config_schema": [],
+    },
+    # ── Communication ──
+    {
+        "id": "gmail",
+        "name": "Gmail",
+        "description": "Read, send, search, and manage emails via Gmail API with OAuth2 authentication.",
+        "icon": "mail",
+        "category": "communication",
+        "transport": "remote",
+        "endpoint": None,
+        "auth_type": "oauth",
+        "enabled": True,
+        "tags": ["email", "gmail", "google"],
+        "tools_count": 8,
+        "docs_url": "https://developers.google.com/gmail/api/guides",
+        "connection_notes": "Use this entry with your own Gmail MCP deployment endpoint. Save the endpoint URL, register a Google OAuth app with this gateway as the redirect target, and complete the browser sign-in from the MCP page.",
+        "oauth_authorization_url": "https://accounts.google.com/o/oauth2/v2/auth",
+        "oauth_token_url": "https://oauth2.googleapis.com/token",
+        "oauth_scopes": [
+            "openid",
+            "email",
+            "profile",
+            "https://www.googleapis.com/auth/gmail.modify",
+            "https://www.googleapis.com/auth/gmail.send",
+        ],
+        "oauth_extra_authorize_params": {
+            "access_type": "offline",
+            "include_granted_scopes": "true",
+            "prompt": "consent"
+        },
+        "config_schema": [
+            {"key": "client_id", "label": "OAuth Client ID", "type": "text", "required": True, "group": "credentials"},
+            {"key": "client_secret", "label": "OAuth Client Secret", "type": "password", "required": True, "group": "credentials", "is_credential": True},
+        ],
+    },
+    {
+        "id": "discord",
+        "name": "Discord",
+        "description": "Interact with Discord servers. Read messages, send messages, manage channels, and respond to events.",
+        "icon": "message-square",
+        "category": "communication",
+        "transport": "remote",
+        "endpoint": None,
+        "auth_type": "bearer",
+        "enabled": True,
+        "tags": ["messaging", "discord", "community"],
+        "tools_count": 7,
+        "config_schema": [
+            {"key": "token", "label": "Discord Bot Token", "type": "password", "required": True, "group": "credentials", "is_credential": True},
+        ],
+    },
+    # ── Design & Content ──
+    {
+        "id": "figma",
+        "name": "Figma",
+        "description": "Official Figma-hosted MCP server for design context, screenshots, Code Connect, and write-to-canvas workflows.",
+        "icon": "palette",
+        "category": "design",
+        "transport": "remote",
+        "endpoint": "https://mcp.figma.com/mcp",
+        "auth_type": "oauth",
+        "enabled": True,
+        "tags": ["design", "figma", "ui", "components", "design-systems"],
+        "tools_count": 16,
+        "tool_names": [
+            "get_design_context",
+            "generate_figma_design",
+            "get_variable_defs",
+            "get_code_connect_map",
+            "add_code_connect_map",
+            "get_code_connect_suggestions",
+            "send_code_connect_mappings",
+            "get_screenshot",
+            "create_design_system_rules",
+            "get_metadata",
+            "get_figjam",
+            "generate_diagram",
+            "whoami",
+            "use_figma",
+            "search_design_system",
+            "create_new_file",
+        ],
+        "docs_url": "https://developers.figma.com/docs/figma-mcp-server/remote-server-installation/",
+        "repository_url": "https://github.com/figma/mcp-server-guide",
+        "protocol_label": "Streamable HTTP",
+        "deployment_model": "Vendor-hosted remote",
+        "connection_notes": "Figma only allows approved MCP clients to connect to the hosted endpoint. Interactive OAuth is required, and some write-to-canvas tools are available only in supported clients.",
+        "config_schema": [],
+    },
+    # ── AI & ML ──
+    {
+        "id": "exa",
+        "name": "Exa Search",
+        "description": "AI-powered web search that understands meaning. Find similar content, get clean page extracts.",
+        "icon": "sparkles",
+        "category": "ai",
+        "transport": "remote",
+        "endpoint": None,
+        "auth_type": "api_key",
+        "enabled": True,
+        "tags": ["search", "ai-search", "semantic", "content"],
+        "tools_count": 3,
+        "config_schema": [
+            {"key": "api_key", "label": "Exa API Key", "type": "password", "required": True, "group": "credentials", "is_credential": True},
+        ],
+    },
+    {
+        "id": "tavily",
+        "name": "Tavily Search",
+        "description": "AI-optimized Tavily remote MCP endpoint for search, extract, map, and crawl workflows.",
+        "icon": "globe",
+        "category": "search",
+        "transport": "remote",
+        "endpoint": "https://mcp.tavily.com/mcp",
+        "auth_type": "api_key",
+        "enabled": True,
+        "tags": ["search", "ai-search", "research"],
+        "tools_count": 4,
+        "tool_names": ["tavily-search", "tavily-extract", "tavily-map", "tavily-crawl"],
+        "docs_url": "https://github.com/tavily-ai/tavily-mcp",
+        "repository_url": "https://github.com/tavily-ai/tavily-mcp",
+        "protocol_label": "Streamable HTTP",
+        "deployment_model": "Vendor-hosted remote",
+        "connection_notes": "Tavily supports either OAuth or API-key auth. KubeSynth uses Bearer-token API-key auth for headless saved connections.",
+        "auth_header_name": "Authorization",
+        "auth_header_prefix": "Bearer ",
+        "config_schema": [
+            {"key": "api_key", "label": "Tavily API Key", "type": "password", "required": True, "group": "credentials", "is_credential": True},
+        ],
+    },
+    # ── Monitoring & Observability ──
+    {
+        "id": "grafana",
+        "name": "Grafana",
+        "description": "Query dashboards, explore metrics, search logs, and manage alerts from Grafana.",
+        "icon": "activity",
+        "category": "observability",
+        "transport": "remote",
+        "endpoint": None,
+        "auth_type": "api_key",
+        "enabled": True,
+        "tags": ["monitoring", "metrics", "dashboards", "alerts"],
+        "tools_count": 8,
+        "config_schema": [
+            {"key": "url", "label": "Grafana URL", "type": "text", "placeholder": "https://grafana.example.com", "required": True, "group": "connection"},
+            {"key": "api_key", "label": "Grafana API Key", "type": "password", "required": True, "group": "credentials", "is_credential": True},
+        ],
+    },
+    {
+        "id": "datadog",
+        "name": "Datadog",
+        "description": "Query metrics, search logs, manage monitors, and explore traces from Datadog.",
+        "icon": "activity",
+        "category": "observability",
+        "transport": "remote",
+        "endpoint": None,
+        "auth_type": "api_key",
+        "enabled": True,
+        "tags": ["monitoring", "apm", "logs", "infrastructure"],
+        "tools_count": 10,
+        "config_schema": [
+            {"key": "api_key", "label": "Datadog API Key", "type": "password", "required": True, "group": "credentials", "is_credential": True},
+            {"key": "app_key", "label": "Datadog App Key", "type": "password", "required": True, "group": "credentials", "is_credential": True},
+            {"key": "site", "label": "Datadog Site", "type": "text", "placeholder": "datadoghq.com", "group": "connection"},
+        ],
+    },
+    {
+        "id": "netdata-cloud",
+        "name": "Netdata Cloud",
+        "description": "Official Netdata-hosted MCP endpoint for infrastructure troubleshooting and observability workflows.",
+        "icon": "activity",
+        "category": "observability",
+        "transport": "remote",
+        "endpoint": "https://app.netdata.cloud/api/v1/mcp",
+        "auth_type": "bearer",
+        "enabled": True,
+        "tags": ["observability", "metrics", "infrastructure", "troubleshooting"],
+        "tools_count": 6,
+        "protocol_label": "Streamable HTTP",
+        "deployment_model": "Vendor-hosted remote",
+        "connection_notes": "Netdata Cloud uses bearer-token authentication against the hosted MCP endpoint. Use this entry for hosted Netdata Cloud troubleshooting rather than self-hosted collectors.",
+        "config_schema": [
+            {"key": "token", "label": "Netdata Cloud Token", "type": "password", "required": True, "group": "credentials", "is_credential": True},
+        ],
+    },
+]
+
+# ── MCP Profiles ── curated presets for common use cases ──
+
+MCP_PROFILES: list[dict[str, Any]] = [
+    {
+        "id": "developer-essentials",
+        "name": "Developer Essentials",
+        "description": "Core toolkit for software development: GitHub access, code documentation, browser testing, and filesystem operations.",
+        "icon": "code",
+        "color": "sky",
+        "servers": ["github-remote", "context7", "playwright-sidecar", "filesystem-sidecar"],
+        "tags": ["development", "recommended"],
+    },
+    {
+        "id": "cloud-ops",
+        "name": "Cloud Operations",
+        "description": "Full-stack infrastructure management with Azure, Kubernetes, Docker, and observability tools.",
+        "icon": "cloud",
+        "color": "violet",
+        "servers": ["azure-mcp", "kubernetes-mcp", "docker", "grafana", "netdata-cloud", "sentry"],
+        "tags": ["infrastructure", "devops", "monitoring"],
+    },
+    {
+        "id": "data-science",
+        "name": "Data & Analytics",
+        "description": "Database access, vector search, and knowledge retrieval for data-intensive workflows.",
+        "icon": "database",
+        "color": "emerald",
+        "servers": ["postgres-hub", "sqlite", "qdrant", "exa"],
+        "tags": ["data", "analytics", "ml"],
+    },
+    {
+        "id": "research-writer",
+        "name": "Research & Writing",
+        "description": "Web research, content retrieval, documentation lookup, and AI-powered search for writing and analysis tasks.",
+        "icon": "book-open",
+        "color": "amber",
+        "servers": ["brave-search", "tavily", "context7", "firecrawl", "notion"],
+        "tags": ["research", "writing", "content"],
+    },
+    {
+        "id": "team-collaboration",
+        "name": "Team Collaboration",
+        "description": "Connect with your team through Slack, Linear, email, and knowledge bases like Notion.",
+        "icon": "users",
+        "color": "rose",
+        "servers": ["slack", "linear", "atlassian-rovo", "notion", "gmail"],
+        "tags": ["communication", "project-management", "team"],
+    },
+    {
+        "id": "full-stack",
+        "name": "Full Stack",
+        "description": "Everything included: development, cloud, data, communication, and research tools for maximum capability.",
+        "icon": "layers",
+        "color": "fuchsia",
+        "servers": ["github-remote", "context7", "playwright-sidecar", "filesystem-sidecar", "azure-mcp", "kubernetes-mcp", "postgres-hub", "brave-search", "slack", "grafana"],
+        "tags": ["everything", "maximum-capability"],
+    },
+]
+
+MCP_REGISTRY_TOOL_NAMES: dict[str, list[str]] = {
+    "github-remote": [
+        "Search repositories",
+        "Search code",
+        "Read issues",
+        "Create issues",
+        "Read pull requests",
+        "Create pull requests",
+        "Review pull request files",
+        "Trigger Actions workflows",
+    ],
+    "context7": [
+        "Resolve library IDs",
+        "Fetch library docs",
+    ],
+    "brave-search": [
+        "Web search",
+        "Local search",
+    ],
+    "firecrawl": [
+        "Scrape page",
+        "Crawl site",
+        "Map site",
+        "Extract structured data",
+        "Search indexed pages",
+        "Deep research",
+    ],
+    "sentry": [
+        "Find issues",
+        "Inspect issue details",
+        "Read stack traces",
+        "Query traces",
+        "Search releases",
+        "List projects",
+        "Comment on issues",
+        "Assign issues",
+    ],
+    "linear": [
+        "Search issues",
+        "Create issue",
+        "Update issue",
+        "Comment on issue",
+        "List projects",
+        "List cycles",
+        "Search teams",
+        "Create project",
+    ],
+    "slack": [
+        "Search messages",
+        "Read channel history",
+        "Post message",
+        "Reply in thread",
+        "List channels",
+        "Read channel info",
+        "Lookup users",
+        "Open direct message",
+    ],
+    "notion": [
+        "Search pages",
+        "Read page",
+        "Create page",
+        "Update page",
+        "Search databases",
+        "Query database",
+        "Create database row",
+        "Update database row",
+    ],
+    "github-hub": [
+        "Search repositories",
+        "Search code",
+        "Read issues",
+        "Create issues",
+        "Read pull requests",
+        "Create pull requests",
+        "Review pull request files",
+        "Trigger Actions workflows",
+    ],
+    "postgres-hub": [
+        "List schemas",
+        "List tables",
+        "Describe table",
+        "Run read-only query",
+        "Explain query",
+    ],
+    "playwright-sidecar": [
+        "Open page",
+        "Click element",
+        "Fill form",
+        "Take screenshot",
+        "Evaluate script",
+        "Wait for selector",
+        "Extract text",
+        "Manage tabs",
+    ],
+    "filesystem-sidecar": [
+        "List directory",
+        "Read file",
+        "Write file",
+        "Edit file",
+        "Create directory",
+        "Move file",
+        "Delete file",
+        "Search workspace",
+    ],
+    "memory-sidecar": [
+        "Store memory",
+        "Search memories",
+        "Read entities",
+        "Write entities",
+        "Link related facts",
+        "Summarize context",
+        "Pin memory",
+    ],
+    "puppeteer-sidecar": [
+        "Open page",
+        "Click element",
+        "Fill form",
+        "Take screenshot",
+        "Evaluate script",
+        "Extract text",
+        "Generate PDF",
+        "Manage tabs",
+    ],
+    "azure-mcp": [
+        "List subscriptions",
+        "Manage resource groups",
+        "Inspect virtual machines",
+        "Query storage accounts",
+        "Deploy templates",
+        "Manage Container Apps",
+        "Read Azure Monitor metrics",
+        "Work with Azure OpenAI resources",
+    ],
+    "aws-kb-retrieval": [
+        "Retrieve knowledge base context",
+    ],
+    "qdrant": [
+        "Create collection",
+        "List collections",
+        "Upsert points",
+        "Query points",
+        "Delete points",
+        "Inspect collection",
+    ],
+    "sqlite": [
+        "Open database",
+        "List tables",
+        "Describe table",
+        "Run query",
+        "Insert row",
+        "Update row",
+    ],
+    "docker": [
+        "List containers",
+        "Inspect container",
+        "View logs",
+        "Build image",
+        "Run container",
+        "Stop container",
+        "List images",
+        "Manage networks",
+    ],
+    "kubernetes-mcp": [
+        "List resources",
+        "Read logs",
+        "Describe resource",
+        "Apply manifest",
+        "Delete resource",
+        "Scale workload",
+        "Restart workload",
+        "Inspect events",
+    ],
+    "gmail": [
+        "Search mail",
+        "Read message",
+        "Send message",
+        "Draft reply",
+        "List threads",
+        "Read attachments",
+        "Label message",
+        "Archive message",
+    ],
+    "discord": [
+        "List guilds",
+        "List channels",
+        "Read messages",
+        "Send message",
+        "Reply in thread",
+        "Manage channels",
+        "Lookup members",
+    ],
+    "figma": [
+        "Read file",
+        "Inspect components",
+        "Read design tokens",
+        "Read frames",
+        "Inspect styles",
+    ],
+    "exa": [
+        "Search web",
+        "Find similar pages",
+        "Answer with citations",
+    ],
+    "tavily": [
+        "Search web",
+        "Deep research",
+    ],
+    "grafana": [
+        "List dashboards",
+        "Read dashboard",
+        "Query metrics",
+        "Search logs",
+        "Inspect traces",
+        "List alerts",
+        "Read alert rule",
+        "Explore datasources",
+    ],
+    "datadog": [
+        "Query metrics",
+        "Search logs",
+        "Inspect traces",
+        "List monitors",
+        "Read monitor",
+        "Manage downtime",
+        "Query events",
+        "Read dashboards",
+    ],
+}
+
+
+def _build_mcp_registry_entry(entry: dict[str, Any]) -> dict[str, Any]:
+    result = dict(entry)
+    tool_names = result.get("tool_names")
+    if not isinstance(tool_names, list):
+        tool_names = MCP_REGISTRY_TOOL_NAMES.get(str(result.get("id") or ""), [])
+    result["tool_names"] = [str(name).strip() for name in tool_names if str(name).strip()]
+
+    if result.get("transport") == "sidecar":
+        tid = str(result.get("id", "")).replace("-sidecar", "")
+        image = _resolve_sidecar_image(tid)
+        if image:
+            result["sidecar_image"] = image
+        port = _resolve_sidecar_port(tid, 0)
+        if port:
+            result["sidecar_port"] = port
+
+    transport = str(result.get("transport") or "").strip().lower()
+    auth_type = str(result.get("auth_type") or "none").strip().lower()
+    registry_endpoint = str(result.get("endpoint") or "").strip()
+    config_schema = result.get("config_schema") if isinstance(result.get("config_schema"), list) else []
+
+    for metadata_key in (
+        "docs_url",
+        "repository_url",
+        "connection_notes",
+        "auth_header_name",
+        "suggested_endpoint",
+        "oauth_authorization_url",
+        "oauth_token_url",
+    ):
+        cleaned_value = str(result.get(metadata_key) or "").strip()
+        if cleaned_value:
+            result[metadata_key] = cleaned_value
+        else:
+            result.pop(metadata_key, None)
+    if result.get("auth_header_prefix") is not None:
+        result["auth_header_prefix"] = str(result.get("auth_header_prefix"))
+    oauth_scopes = result.get("oauth_scopes") if isinstance(result.get("oauth_scopes"), list) else []
+    cleaned_oauth_scopes = [str(scope).strip() for scope in oauth_scopes if str(scope).strip()]
+    if cleaned_oauth_scopes:
+        result["oauth_scopes"] = cleaned_oauth_scopes
+    else:
+        result.pop("oauth_scopes", None)
+    oauth_extra_authorize_params = _trimmed_string_mapping(result.get("oauth_extra_authorize_params"))
+    if oauth_extra_authorize_params:
+        result["oauth_extra_authorize_params"] = oauth_extra_authorize_params
+    else:
+        result.pop("oauth_extra_authorize_params", None)
+    oauth_extra_token_params = _trimmed_string_mapping(result.get("oauth_extra_token_params"))
+    if oauth_extra_token_params:
+        result["oauth_extra_token_params"] = oauth_extra_token_params
+    else:
+        result.pop("oauth_extra_token_params", None)
+    oauth_token_auth_method = str(result.get("oauth_token_auth_method") or "").strip().lower()
+    if oauth_token_auth_method in {"client_secret_post", "client_secret_basic", "none"}:
+        result["oauth_token_auth_method"] = oauth_token_auth_method
+    else:
+        result.pop("oauth_token_auth_method", None)
+    if "oauth_pkce" in result:
+        result["oauth_pkce"] = bool(result.get("oauth_pkce"))
+
+    protocol_label = str(result.get("protocol_label") or "").strip()
+    if not protocol_label:
+        if transport == "remote":
+            protocol_label = "Streamable HTTP"
+        elif transport == "hub":
+            protocol_label = "Cluster service HTTP"
+        elif transport == "sidecar":
+            protocol_label = "Pod-local HTTP"
+    if protocol_label:
+        result["protocol_label"] = protocol_label
+
+    deployment_model = str(result.get("deployment_model") or "").strip()
+    if not deployment_model:
+        if transport == "remote":
+            deployment_model = "Vendor-hosted remote" if registry_endpoint else "Self-hosted remote"
+        elif transport == "hub":
+            deployment_model = "Shared hub service"
+        elif transport == "sidecar":
+            deployment_model = "Per-agent sidecar"
+    if deployment_model:
+        result["deployment_model"] = deployment_model
+
+    if transport == "remote":
+        if auth_type == "oauth":
+            oauth_supported, oauth_reason = _saved_oauth_support(result)
+            if not oauth_supported:
+                result.update(
+                    {
+                        "support_level": "planned",
+                        "attachable": False,
+                        "status_reason": oauth_reason
+                        or "This OAuth-backed MCP entry still needs provider metadata before KubeSynth can drive the sign-in flow.",
+                    }
+                )
+                return result
+            result.update(
+                {
+                    "support_level": "ready" if registry_endpoint else "limited",
+                    "attachable": True,
+                    "status_reason": (
+                        "Attachable after you save the connection and complete browser-based OAuth once from the MCP page. KubeSynth stores the resulting token on the saved connection and reuses it for runtime headers."
+                        if registry_endpoint
+                        else "Attachable after you save the connection, provide the endpoint URL for your own deployment, and complete browser-based OAuth once from the MCP page."
+                    ),
+                }
+            )
+            return result
+        if auth_type == "kubeconfig":
+            result.update(
+                {
+                    "support_level": "planned",
+                    "attachable": False,
+                    "status_reason": "Kubeconfig-backed remote MCP flows still need runtime-specific credential mounting before they can be attached to agents.",
+                }
+            )
+            return result
+        if registry_endpoint:
+            result.update(
+                {
+                    "support_level": "ready",
+                    "attachable": True,
+                    "status_reason": "Attachable with a saved namespace-scoped connection. The published remote MCP endpoint is prefilled from the registry; add credentials or optional overrides only when needed.",
+                }
+            )
+            return result
+        result.update(
+            {
+                "support_level": "limited",
+                "attachable": True,
+                "status_reason": "No default endpoint is published for this MCP. Use it only when you run your own remote MCP deployment and can provide its endpoint URL and credentials.",
+            }
+        )
+        return result
+
+    if transport == "hub":
+        support_level = "ready" if auth_type in {"none", "bearer", "api_key"} else "limited"
+        result.update(
+            {
+                "support_level": support_level,
+                "attachable": True,
+                "status_reason": (
+                    "Attachable through the shared MCP hub with saved namespace-scoped connection metadata and credentials."
+                    if support_level == "ready"
+                    else "Attachable through the shared MCP hub, but non-standard credential flows may still need adapter-specific follow-up."
+                ),
+            }
+        )
+        return result
+
+    if transport == "sidecar":
+        if not result.get("sidecar_image"):
+            result.update(
+                {
+                    "support_level": "planned",
+                    "attachable": False,
+                    "status_reason": "This sidecar is listed in the registry, but no managed sidecar image is registered for it yet.",
+                }
+            )
+            return result
+        result.update(
+            {
+                "support_level": "ready",
+                "attachable": True,
+                "status_reason": (
+                    "Attachable today as a managed per-agent sidecar. Saved connections preserve image, port, and per-sidecar configuration."
+                    if config_schema
+                    else "Attachable today as a managed per-agent sidecar."
+                ),
+            }
+        )
+        return result
+
+    result.update(
+        {
+            "support_level": "planned",
+            "attachable": False,
+            "status_reason": "This MCP server has an unknown transport and is not attachable yet.",
+        }
+    )
+    return result
+
+
+def _build_mcp_registry_results() -> list[dict[str, Any]]:
+    return [_build_mcp_registry_entry(entry) for entry in MCP_REGISTRY]
+
 
 @app.get("/api/skills/catalog")
 def get_skills_catalog(
@@ -4291,6 +7079,614 @@ def get_mcp_hub_servers(
     """Return metadata about shared MCP hub servers available for agents."""
     del user
     return MCP_HUB_SERVERS
+
+
+# ── MCP Registry & Management API ──
+
+
+@app.get("/api/mcp/registry")
+def get_mcp_registry(
+    category: str | None = None,
+    transport: str | None = None,
+    search: str | None = None,
+    user=Depends(verify_token),
+) -> list[dict[str, Any]]:
+    """Return the full MCP server registry with optional filtering."""
+    del user
+    results = _build_mcp_registry_results()
+
+    if category:
+        cat_lower = category.strip().lower()
+        results = [s for s in results if s.get("category", "").lower() == cat_lower]
+
+    if transport:
+        t_lower = transport.strip().lower()
+        results = [s for s in results if s.get("transport", "").lower() == t_lower]
+
+    if search:
+        search_lower = search.strip().lower()
+        results = [
+            s
+            for s in results
+            if search_lower in s.get("name", "").lower()
+            or search_lower in s.get("description", "").lower()
+            or search_lower in s.get("id", "").lower()
+            or any(search_lower in tag for tag in s.get("tags", []))
+        ]
+
+    return results
+
+
+@app.get("/api/mcp/profiles")
+def get_mcp_profiles(
+    user=Depends(verify_token),
+) -> list[dict[str, Any]]:
+    """Return curated MCP profiles (presets)."""
+    del user
+    registry_index = {s["id"]: s for s in _build_mcp_registry_results()}
+    enriched = []
+    for profile in MCP_PROFILES:
+        resolved_servers = []
+        attachable_servers = []
+        blocked_servers = []
+        total_tools = 0
+        for sid in profile.get("servers", []):
+            entry = registry_index.get(sid)
+            if entry:
+                resolved_entry = {
+                    "id": sid,
+                    "name": entry["name"],
+                    "transport": entry["transport"],
+                    "support_level": entry.get("support_level", "planned"),
+                    "attachable": bool(entry.get("attachable")),
+                    "status_reason": entry.get("status_reason"),
+                }
+                resolved_servers.append(resolved_entry)
+                if resolved_entry["attachable"]:
+                    attachable_servers.append(resolved_entry)
+                else:
+                    blocked_servers.append(resolved_entry)
+                total_tools += entry.get("tools_count", 0)
+        support_level = "planned"
+        if attachable_servers and not blocked_servers:
+            support_level = "ready"
+        elif attachable_servers:
+            support_level = "limited"
+        enriched.append(
+            {
+                **profile,
+                "resolved_servers": resolved_servers,
+                "attachable_servers": attachable_servers,
+                "blocked_servers": blocked_servers,
+                "can_apply": bool(attachable_servers),
+                "support_level": support_level,
+                "total_tools": total_tools,
+            }
+        )
+    return enriched
+
+
+@app.get("/api/mcp/registry/{server_id}")
+def get_mcp_server_detail(
+    server_id: str,
+    user=Depends(verify_token),
+) -> dict[str, Any]:
+    """Return full detail for a single MCP registry entry."""
+    del user
+    for entry in MCP_REGISTRY:
+        if entry["id"] == server_id:
+            return _build_mcp_registry_entry(entry)
+    raise HTTPException(status_code=404, detail=f"MCP server '{server_id}' not found in registry.")
+
+
+@app.get("/api/mcp/categories")
+def get_mcp_categories(
+    user=Depends(verify_token),
+) -> list[dict[str, Any]]:
+    """Return all unique MCP categories with counts."""
+    del user
+    category_counts: dict[str, int] = {}
+    for entry in MCP_REGISTRY:
+        cat = entry.get("category", "other")
+        category_counts[cat] = category_counts.get(cat, 0) + 1
+    return [{"id": cat, "name": cat.replace("-", " ").title(), "count": count} for cat, count in sorted(category_counts.items())]
+
+
+@app.get("/api/mcp/stats")
+def get_mcp_stats(
+    user=Depends(verify_token),
+) -> dict[str, Any]:
+    """Return aggregate MCP registry statistics."""
+    del user
+    transport_counts: dict[str, int] = {}
+    total_tools = 0
+    for entry in MCP_REGISTRY:
+        t = entry.get("transport", "unknown")
+        transport_counts[t] = transport_counts.get(t, 0) + 1
+        total_tools += entry.get("tools_count", 0)
+    return {
+        "total_servers": len(MCP_REGISTRY),
+        "total_tools": total_tools,
+        "total_profiles": len(MCP_PROFILES),
+        "by_transport": transport_counts,
+        "categories": len(set(e.get("category", "other") for e in MCP_REGISTRY)),
+    }
+
+
+@app.get("/api/mcp/connections")
+def get_mcp_connections(
+    namespace: str = "default",
+    user=Depends(verify_token),
+) -> list[dict[str, Any]]:
+    ensure_namespace_access(user, namespace)
+    bindings_by_id = _list_mcp_connection_bindings(namespace)
+    return [
+        _serialize_saved_mcp_connection_record(record, binding_count=len(bindings_by_id.get(record["id"], [])))
+        for record in list_mcp_connections(namespace)
+    ]
+
+
+@app.post("/api/mcp/connections", status_code=201)
+def create_saved_mcp_connection(
+    body: McpConnectionRequest,
+    namespace: str = "default",
+    user=Depends(verify_token),
+) -> dict[str, Any]:
+    ensure_namespace_access(user, namespace, "operator")
+    entry = _lookup_mcp_registry_entry(body.server_id)
+    config = _normalize_mcp_connection_config(entry, body.config, source="body")
+    credentials = _normalize_mcp_connection_credentials(entry, body.credentials, source="body")
+    credential_metadata = _build_mcp_connection_credential_metadata(entry, configured_keys=set(credentials))
+    created = create_mcp_connection(
+        namespace=namespace,
+        name=body.name,
+        server_id=str(entry.get("id") or body.server_id),
+        transport=str(entry.get("transport") or "remote"),
+        auth_type=str(entry.get("auth_type") or "none"),
+        config=config,
+        credential_metadata=credential_metadata,
+        validation_status="draft",
+        validation_message="Saved but not validated yet.",
+    )
+    try:
+        secret_name = _upsert_mcp_connection_secret(namespace, created["id"], credentials)
+        validation_status = "draft"
+        validation_message = "Saved but not validated yet."
+        validation_detail: dict[str, Any] | None = None
+        validated_at: datetime | None = None
+        if body.validate_on_save:
+            validation_status, validation_message, validation_detail = _validate_saved_mcp_connection_record(
+                {**created, "secret_name": secret_name, "credential_metadata": credential_metadata}
+            )
+            validated_at = datetime.now(timezone.utc)
+        updated = update_mcp_connection(
+            namespace,
+            created["id"],
+            transport=str(entry.get("transport") or "remote"),
+            auth_type=str(entry.get("auth_type") or "none"),
+            config=config,
+            credential_metadata=credential_metadata,
+            secret_name=secret_name,
+            validation_status=validation_status,
+            validation_message=validation_message,
+            validation_detail=validation_detail,
+            last_validated_at=validated_at,
+        )
+    except Exception:
+        delete_mcp_connection(namespace, created["id"])
+        raise
+    return _serialize_saved_mcp_connection_record(updated)
+
+
+@app.get("/api/mcp/connections/{connection_id}")
+def get_saved_mcp_connection(
+    connection_id: str,
+    namespace: str = "default",
+    user=Depends(verify_token),
+) -> dict[str, Any]:
+    ensure_namespace_access(user, namespace)
+    record = get_mcp_connection(namespace, connection_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"MCP connection '{connection_id}' was not found.")
+    bindings = _list_mcp_connection_bindings(namespace).get(connection_id, [])
+    return _serialize_saved_mcp_connection_record(record, binding_count=len(bindings))
+
+
+@app.patch("/api/mcp/connections/{connection_id}")
+def update_saved_mcp_connection(
+    connection_id: str,
+    body: McpConnectionUpdateRequest,
+    namespace: str = "default",
+    user=Depends(verify_token),
+) -> dict[str, Any]:
+    ensure_namespace_access(user, namespace, "operator")
+    existing = get_mcp_connection(namespace, connection_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail=f"MCP connection '{connection_id}' was not found.")
+
+    next_server_id = str(body.server_id or existing["server_id"]).strip()
+    entry = _lookup_mcp_registry_entry(next_server_id)
+    server_changed = next_server_id != str(existing.get("server_id") or "")
+
+    config_source = body.config if body.config is not None else ({} if server_changed else existing.get("config") or {})
+    config = _normalize_mcp_connection_config(entry, config_source, source="body")
+
+    existing_configured_keys = set() if server_changed else _configured_credential_keys(existing.get("credential_metadata"))
+    credentials = _normalize_mcp_connection_credentials(entry, body.credentials, source="body") if body.credentials is not None else {}
+    configured_keys = existing_configured_keys | set(credentials)
+    credential_metadata = _build_mcp_connection_credential_metadata(entry, configured_keys=configured_keys)
+
+    existing_secret_name = str(existing.get("secret_name") or "").strip() or None
+    existing_secret_values = {} if server_changed else _read_mcp_connection_secret_values(namespace, existing_secret_name)
+    secret_name = existing_secret_name
+    next_secret_values = dict(existing_secret_values)
+    if server_changed and existing_secret_name:
+        _delete_mcp_connection_secret(namespace, existing_secret_name)
+        secret_name = None
+        next_secret_values = {}
+    if credentials:
+        next_secret_values.update(credentials)
+
+    should_reset_oauth_session = str(entry.get("auth_type") or "none").strip().lower() == "oauth" and (
+        server_changed or body.config is not None or body.credentials is not None
+    )
+    if should_reset_oauth_session:
+        next_secret_values = _clear_mcp_oauth_session_values(next_secret_values)
+
+    if body.credentials is not None or should_reset_oauth_session:
+        if next_secret_values:
+            secret_name = _upsert_mcp_connection_secret(namespace, connection_id, next_secret_values)
+        else:
+            if existing_secret_name and not server_changed:
+                _delete_mcp_connection_secret(namespace, existing_secret_name)
+            secret_name = None
+
+    validation_status = str((existing.get("validation") or {}).get("status") or "draft")
+    validation_message = str((existing.get("validation") or {}).get("message") or "Saved but not validated yet.")
+    validation_detail = (existing.get("validation") or {}).get("detail")
+    validated_at_raw = (existing.get("validation") or {}).get("last_validated_at")
+    validated_at: datetime | None = None
+    if isinstance(validated_at_raw, str) and validated_at_raw:
+        with contextlib.suppress(ValueError):
+            validated_at = datetime.fromisoformat(validated_at_raw.replace("Z", "+00:00"))
+
+    if server_changed or body.config is not None or body.credentials is not None:
+        validation_status = "draft"
+        validation_message = "Saved but not validated yet."
+        validation_detail = None
+        validated_at = None
+    if body.validate_on_save:
+        validation_status, validation_message, validation_detail = _validate_saved_mcp_connection_record(
+            {
+                **existing,
+                "id": connection_id,
+                "name": body.name or existing.get("name"),
+                "server_id": next_server_id,
+                "transport": entry.get("transport"),
+                "auth_type": entry.get("auth_type"),
+                "config": config,
+                "credential_metadata": credential_metadata,
+                "secret_name": secret_name,
+            }
+        )
+        validated_at = datetime.now(timezone.utc)
+
+    updated = update_mcp_connection(
+        namespace,
+        connection_id,
+        name=body.name,
+        transport=str(entry.get("transport") or "remote"),
+        auth_type=str(entry.get("auth_type") or "none"),
+        config=config,
+        credential_metadata=credential_metadata,
+        secret_name=secret_name,
+        validation_status=validation_status,
+        validation_message=validation_message,
+        validation_detail=validation_detail if isinstance(validation_detail, dict) else None,
+        last_validated_at=validated_at,
+    )
+    bindings = _list_mcp_connection_bindings(namespace).get(connection_id, [])
+    return _serialize_saved_mcp_connection_record(updated, binding_count=len(bindings))
+
+
+@app.post("/api/mcp/connections/{connection_id}/validate")
+def validate_saved_mcp_connection(
+    connection_id: str,
+    namespace: str = "default",
+    user=Depends(verify_token),
+) -> dict[str, Any]:
+    ensure_namespace_access(user, namespace, "operator")
+    existing = get_mcp_connection(namespace, connection_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail=f"MCP connection '{connection_id}' was not found.")
+
+    validation_status, validation_message, validation_detail = _validate_saved_mcp_connection_record(existing)
+    updated = update_mcp_connection(
+        namespace,
+        connection_id,
+        validation_status=validation_status,
+        validation_message=validation_message,
+        validation_detail=validation_detail,
+        last_validated_at=datetime.now(timezone.utc),
+    )
+    bindings = _list_mcp_connection_bindings(namespace).get(connection_id, [])
+    return _serialize_saved_mcp_connection_record(updated, binding_count=len(bindings))
+
+
+def _clean_expired_mcp_oauth_flows() -> None:
+    now = datetime.now(timezone.utc)
+    expired_states = [
+        state
+        for state, flow in _MCP_OAUTH_PENDING_FLOWS.items()
+        if _parse_iso_datetime(flow.get("expires_at")) and cast(datetime, _parse_iso_datetime(flow.get("expires_at"))) <= now
+    ]
+    for state in expired_states:
+        _MCP_OAUTH_PENDING_FLOWS.pop(state, None)
+
+
+def _mcp_oauth_callback_response(
+    connection_id: str,
+    *,
+    status_value: str,
+    message: str,
+    restarted_agents: list[str] | None = None,
+) -> Response:
+    payload = json.dumps(
+        {
+            "type": "kubesynth-mcp-oauth-result",
+            "connectionId": connection_id,
+            "status": status_value,
+            "message": message,
+            "restartedAgents": restarted_agents or [],
+        }
+    )
+    title = "MCP OAuth connected" if status_value == "success" else "MCP OAuth failed"
+    safe_title = html.escape(title)
+    safe_message = html.escape(message)
+    html_body = f"""<!doctype html>
+<html lang=\"en\">
+  <head>
+    <meta charset=\"utf-8\" />
+    <title>{safe_title}</title>
+    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
+    <style>
+      body {{ font-family: ui-sans-serif, system-ui, sans-serif; background: #0c1117; color: #f5f7fa; margin: 0; }}
+      main {{ max-width: 32rem; margin: 12vh auto; padding: 2rem; border-radius: 1rem; border: 1px solid rgba(255,255,255,0.08); background: rgba(255,255,255,0.04); }}
+      h1 {{ margin: 0 0 0.75rem; font-size: 1.125rem; }}
+      p {{ margin: 0; line-height: 1.6; color: rgba(245,247,250,0.82); }}
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>{safe_title}</h1>
+      <p>{safe_message}</p>
+    </main>
+    <script>
+      (function() {{
+        const payload = {payload};
+        try {{
+          if (window.opener && !window.opener.closed) {{
+            window.opener.postMessage(payload, "*");
+          }}
+        }} catch (_error) {{}}
+        try {{
+          window.close();
+        }} catch (_error) {{}}
+      }})();
+    </script>
+  </body>
+</html>"""
+    return Response(content=html_body, media_type="text/html")
+
+
+@app.post("/api/mcp/connections/{connection_id}/oauth/start")
+def start_saved_mcp_connection_oauth(
+    connection_id: str,
+    raw_request: Request,
+    namespace: str = "default",
+    user=Depends(verify_token),
+) -> dict[str, Any]:
+    ensure_namespace_access(user, namespace, "operator")
+    record = get_mcp_connection(namespace, connection_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"MCP connection '{connection_id}' was not found.")
+
+    entry = _lookup_mcp_registry_entry(str(record.get("server_id") or ""))
+    if str(entry.get("auth_type") or "none").strip().lower() != "oauth":
+        raise HTTPException(status_code=400, detail="This MCP connection does not use OAuth.")
+    supported, support_reason = _saved_oauth_support(entry)
+    if not supported:
+        raise HTTPException(status_code=400, detail=support_reason or "OAuth is not configured for this MCP entry yet.")
+
+    secret_values = _mcp_connection_secret_values_for_record(record)
+    metadata = _mcp_oauth_entry_metadata(entry)
+    redirect_uri = _mcp_oauth_redirect_uri(raw_request, connection_id)
+    code_verifier = _mcp_oauth_code_verifier()
+    state = uuid.uuid4().hex
+    params = {
+        "response_type": "code",
+        "client_id": _mcp_oauth_client_id(record, entry, secret_values),
+        "redirect_uri": redirect_uri,
+        "state": state,
+    }
+    if metadata["scopes"]:
+        params["scope"] = " ".join(metadata["scopes"])
+    if bool(metadata["pkce"]):
+        params["code_challenge"] = _mcp_oauth_code_challenge(code_verifier)
+        params["code_challenge_method"] = "S256"
+    params.update(metadata["authorize_params"])
+
+    _clean_expired_mcp_oauth_flows()
+    expires_at = datetime.now(timezone.utc) + timedelta(seconds=_MCP_OAUTH_FLOW_TTL_SECONDS)
+    _MCP_OAUTH_PENDING_FLOWS[state] = {
+        "connection_id": connection_id,
+        "namespace": namespace,
+        "user_sub": str(user.get("sub") or "").strip(),
+        "code_verifier": code_verifier,
+        "expires_at": expires_at.isoformat(),
+    }
+    return {
+        "authorization_url": f"{metadata['authorization_url']}?{urlencode(params)}",
+        "expires_at": expires_at.isoformat(),
+    }
+
+
+@app.get("/api/mcp/connections/{connection_id}/oauth/callback")
+async def complete_saved_mcp_connection_oauth(
+    connection_id: str,
+    raw_request: Request,
+    state: str = "",
+    code: str | None = None,
+    error: str | None = None,
+    error_description: str | None = None,
+) -> Response:
+    _clean_expired_mcp_oauth_flows()
+    flow = _MCP_OAUTH_PENDING_FLOWS.get(state)
+    if flow is None or str(flow.get("connection_id") or "") != connection_id:
+        return _mcp_oauth_callback_response(
+            connection_id,
+            status_value="error",
+            message="This OAuth sign-in session expired or no longer matches the saved connection.",
+        )
+
+    namespace = str(flow.get("namespace") or "default").strip() or "default"
+    _MCP_OAUTH_PENDING_FLOWS.pop(state, None)
+    if error:
+        message = str(error_description or error).strip() or "OAuth provider rejected the sign-in request."
+        return _mcp_oauth_callback_response(connection_id, status_value="error", message=message)
+
+    record = get_mcp_connection(namespace, connection_id)
+    if record is None:
+        return _mcp_oauth_callback_response(
+            connection_id,
+            status_value="error",
+            message="The saved MCP connection was deleted before OAuth completed.",
+        )
+
+    entry = _lookup_mcp_registry_entry(str(record.get("server_id") or ""))
+    secret_values = _mcp_connection_secret_values_for_record(record)
+    try:
+        token_url, headers, data = _build_mcp_oauth_token_request(
+            entry,
+            record,
+            grant_type="authorization_code",
+            secret_values=secret_values,
+            code=code,
+            redirect_uri=_mcp_oauth_redirect_uri(raw_request, connection_id),
+            code_verifier=str(flow.get("code_verifier") or "").strip() or None,
+        )
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True, verify=certifi.where()) as client:
+            response = await client.post(token_url, data=data, headers=headers)
+            response.raise_for_status()
+            token_payload = response.json()
+        token_bundle = _extract_mcp_oauth_token_bundle(token_payload, secret_values)
+        secret_name, _merged_secret_values = _store_mcp_oauth_token_bundle(namespace, connection_id, secret_values, token_bundle)
+        validation_status, validation_message, validation_detail = _validate_saved_mcp_connection_record(
+            {
+                **record,
+                "secret_name": secret_name,
+            }
+        )
+        updated = update_mcp_connection(
+            namespace,
+            connection_id,
+            secret_name=secret_name,
+            validation_status=validation_status,
+            validation_message=validation_message,
+            validation_detail=validation_detail if isinstance(validation_detail, dict) else None,
+            last_validated_at=datetime.now(timezone.utc),
+        )
+        restarted_agents = _restart_bound_agents_for_mcp_connection(namespace, connection_id)
+    except HTTPException as exc:
+        return _mcp_oauth_callback_response(connection_id, status_value="error", message=str(exc.detail))
+    except Exception as exc:
+        logger.exception("Failed to complete MCP OAuth callback for %s/%s", namespace, connection_id)
+        return _mcp_oauth_callback_response(
+            connection_id,
+            status_value="error",
+            message=f"Failed to complete OAuth sign-in: {exc}",
+        )
+
+    message = "OAuth sign-in completed and the saved MCP connection is ready to use."
+    if restarted_agents:
+        message = f"OAuth sign-in completed. Restarted {len(restarted_agents)} bound agent(s) so they pick up the refreshed token."
+    del updated
+    return _mcp_oauth_callback_response(
+        connection_id,
+        status_value="success",
+        message=message,
+        restarted_agents=restarted_agents,
+    )
+
+
+@app.post("/api/mcp/connections/{connection_id}/oauth/refresh")
+def refresh_saved_mcp_connection_oauth(
+    connection_id: str,
+    namespace: str = "default",
+    user=Depends(verify_token),
+) -> dict[str, Any]:
+    ensure_namespace_access(user, namespace, "operator")
+    record = get_mcp_connection(namespace, connection_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"MCP connection '{connection_id}' was not found.")
+
+    entry = _lookup_mcp_registry_entry(str(record.get("server_id") or ""))
+    if str(entry.get("auth_type") or "none").strip().lower() != "oauth":
+        raise HTTPException(status_code=400, detail="This MCP connection does not use OAuth.")
+
+    _refresh_mcp_connection_oauth_access_token_sync(record, entry)
+    refreshed_record = get_mcp_connection(namespace, connection_id) or record
+    validation_status, validation_message, validation_detail = _validate_saved_mcp_connection_record(refreshed_record)
+    updated = update_mcp_connection(
+        namespace,
+        connection_id,
+        secret_name=str(refreshed_record.get("secret_name") or "").strip() or None,
+        validation_status=validation_status,
+        validation_message=validation_message,
+        validation_detail=validation_detail if isinstance(validation_detail, dict) else None,
+        last_validated_at=datetime.now(timezone.utc),
+    )
+    _restart_bound_agents_for_mcp_connection(namespace, connection_id)
+    bindings = _list_mcp_connection_bindings(namespace).get(connection_id, [])
+    return _serialize_saved_mcp_connection_record(updated, binding_count=len(bindings))
+
+
+@app.get("/api/mcp/connections/{connection_id}/bindings")
+def get_saved_mcp_connection_bindings(
+    connection_id: str,
+    namespace: str = "default",
+    user=Depends(verify_token),
+) -> list[dict[str, Any]]:
+    ensure_namespace_access(user, namespace)
+    if get_mcp_connection(namespace, connection_id) is None:
+        raise HTTPException(status_code=404, detail=f"MCP connection '{connection_id}' was not found.")
+    bindings = _list_mcp_connection_bindings(namespace).get(connection_id, [])
+    return sorted(bindings, key=lambda item: (item.get("namespace", ""), item.get("agent_name", "")))
+
+
+@app.delete("/api/mcp/connections/{connection_id}", response_model=DeleteResponse)
+def delete_saved_mcp_connection(
+    connection_id: str,
+    namespace: str = "default",
+    user=Depends(verify_token),
+) -> DeleteResponse:
+    ensure_namespace_access(user, namespace, "operator")
+    record = get_mcp_connection(namespace, connection_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"MCP connection '{connection_id}' was not found.")
+    bindings = _list_mcp_connection_bindings(namespace).get(connection_id, [])
+    if bindings:
+        bound_agents = ", ".join(sorted({str(item.get("agent_name") or "") for item in bindings if item.get("agent_name")}))
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"MCP connection '{record['name']}' is still bound to {len(bindings)} agent(s): {bound_agents or 'unknown'}"
+            ),
+        )
+
+    _delete_mcp_connection_secret(namespace, record.get("secret_name"))
+    delete_mcp_connection(namespace, connection_id)
+    return DeleteResponse(status="deleted", kind="mcp_connection", name=record["name"], namespace=namespace)
 
 
 @app.get("/api/namespaces")
@@ -4696,7 +8092,7 @@ def update_agent(
 ):
     ensure_namespace_access(user, namespace, "operator")
     current_agent = read_agent(agent_name, namespace)
-    next_spec = build_agent_spec(body, current_agent.get("spec", {}))
+    next_spec = build_agent_spec(body, current_agent.get("spec", {}), namespace=namespace)
     validate_agent_runtime_compatibility(next_spec)
     updated = replace_custom_resource_spec(
         "aiagents",
@@ -4759,6 +8155,7 @@ def clone_agent(
             plural="aiagents",
             body=resource_body,
         )
+        invalidate_agent_read_cache(agent_name=clone_name, namespace=namespace)
         return agent_detail_from_resource(created)
     except Exception as exc:
         if getattr(exc, "status", None) == 409:
@@ -5085,6 +8482,13 @@ def delete_workflow(
 
 class WorkflowTriggerRequest(BaseModel):
     input: str = Field(default="", max_length=4000)
+    factory_mode: str | None = Field(default=None, max_length=32)
+
+    @model_validator(mode="after")
+    def normalize_fields(self) -> "WorkflowTriggerRequest":
+        self.input = self.input.strip()
+        self.factory_mode = normalize_factory_mode(self.factory_mode)
+        return self
 
 
 @app.post("/api/workflows/{workflow_name}/trigger", response_model=WorkflowInfo)
@@ -5120,7 +8524,16 @@ def trigger_workflow(
         raise HTTPException(status_code=502, detail=f"Failed to read workflow: {exc}") from exc
 
     existing_spec = current.get("spec", {}) or {}
-    new_input = (body.input if body else "") or existing_spec.get("input", "")
+    if body and body.factory_mode and not is_factory_workflow_resource(workflow_name, existing_spec):
+        raise HTTPException(status_code=400, detail="factory_mode is only supported for the KubeSynth factory workflow.")
+
+    existing_input = str(existing_spec.get("input", "") or "")
+    _, unwrapped_existing_request = unwrap_factory_workflow_input(existing_input)
+    base_input = body.input if body and body.input else (unwrapped_existing_request or existing_input)
+    if body and body.factory_mode:
+        new_input = build_factory_workflow_input(base_input, body.factory_mode)
+    else:
+        new_input = base_input
     updated_spec = {**existing_spec, "input": new_input}
 
     try:
@@ -5214,8 +8627,8 @@ def retry_failed_workflow_steps(
     """Retry only the failed steps of a workflow.
 
     Resets failed step states back to 'pending' while preserving completed
-    steps, then bumps the resource generation so the operator re-reconciles
-    and enqueues a new worker Job that skips already-completed steps.
+    steps, preserves the current artifact generation, and assigns a fresh
+    runId so session-aware runtimes perform a new failed-step attempt.
     """
     ensure_namespace_access(user, namespace, "operator")
     try:
@@ -5270,39 +8683,17 @@ def retry_failed_workflow_steps(
     if not failed_step_names:
         raise HTTPException(status_code=409, detail="No failed steps found to retry.")
 
-    # Step 1: Replace spec (unchanged) to bump metadata.generation and
-    # trigger the operator's on.update handler.
-    existing_spec = current.get("spec", {}) or {}
+    current_generation = int((current.get("metadata") or {}).get("generation") or 1)
+    retry_run_id = build_retry_workflow_run_id(namespace, workflow_name, current_generation)
+
+    # Patch status only. Keeping the current generation preserves the existing
+    # artifact path so dependent downstream steps can still read the completed
+    # step outputs they rely on. A fresh runId forces session-aware runtimes
+    # such as OpenCode to use a new thread instead of replaying the previous
+    # failed step session.
     try:
         from kubernetes import client as k8s_client
 
-        k8s_client.CustomObjectsApi().replace_namespaced_custom_object(
-            group=RESOURCE_GROUP,
-            version=RESOURCE_VERSION,
-            namespace=namespace,
-            plural="agentworkflows",
-            name=workflow_name,
-            body={
-                "apiVersion": f"{RESOURCE_GROUP}/{RESOURCE_VERSION}",
-                "kind": RESOURCE_KIND_BY_PLURAL["agentworkflows"],
-                "metadata": {
-                    "name": workflow_name,
-                    "namespace": namespace,
-                    "resourceVersion": current.get("metadata", {}).get("resourceVersion"),
-                },
-                "spec": existing_spec,
-            },
-        )
-    except Exception as exc:
-        status_code = getattr(exc, "status", None)
-        if status_code == 409:
-            raise HTTPException(status_code=409, detail="Workflow was modified concurrently. Retry.") from exc
-        logger.error("Failed to replace workflow spec for retry-failed: %s", exc)
-        raise HTTPException(status_code=502, detail="Failed to trigger retry") from exc
-
-    # Step 2: Patch status to reset failed steps and clear observedGeneration
-    # so the operator's run_workflow handler will re-enqueue.
-    try:
         k8s_client.CustomObjectsApi().patch_namespaced_custom_object_status(
             group=RESOURCE_GROUP,
             version=RESOURCE_VERSION,
@@ -5312,9 +8703,19 @@ def retry_failed_workflow_steps(
             body={
                 "status": {
                     "phase": "pending",
+                    "runId": retry_run_id,
                     "observedGeneration": None,
                     "pendingApproval": None,
                     "stepStates": patched_step_states,
+                    "workerJob": None,
+                    "summary": {
+                        **(current_status.get("summary") or {}),
+                        "runId": retry_run_id,
+                        "failedSteps": 0,
+                        "waitingApprovalSteps": 0,
+                        "error": None,
+                        "updatedAt": now_iso(),
+                    },
                 }
             },
         )
@@ -5322,7 +8723,7 @@ def retry_failed_workflow_steps(
         logger.error("Failed to patch workflow status for retry-failed: %s", exc)
         raise HTTPException(status_code=502, detail="Failed to reset failed steps") from exc
 
-    # Re-read and return freshest state
+    # Re-read and return freshest state.
     try:
         updated = cast(
             dict[str, Any],
@@ -5338,9 +8739,19 @@ def retry_failed_workflow_steps(
         current["status"] = {
             **current_status,
             "phase": "pending",
+            "runId": retry_run_id,
             "observedGeneration": None,
             "pendingApproval": None,
+            "workerJob": None,
             "stepStates": patched_step_states,
+            "summary": {
+                **(current_status.get("summary") or {}),
+                "runId": retry_run_id,
+                "failedSteps": 0,
+                "waitingApprovalSteps": 0,
+                "error": None,
+                "updatedAt": now_iso(),
+            },
         }
         return workflow_info_from_resource(current)
 
@@ -5510,6 +8921,45 @@ def get_workflow_runs(
     return list_workflow_runs(workflow_name, namespace, limit=limit)
 
 
+@app.get("/api/workflows/{workflow_name}/runs/{run_id}/trace")
+def get_workflow_run_trace_endpoint(
+    workflow_name: str,
+    run_id: str,
+    namespace: str = "default",
+    tail: int = 4000,
+    user=Depends(verify_token),
+):
+    ensure_namespace_access(user, namespace)
+    tail = max(1, min(tail, 20000))
+    return _resolve_workflow_run_trace_payload(
+        workflow_name,
+        namespace,
+        run_id,
+        tail=tail,
+        persist_live_fallback=True,
+    )
+
+
+@app.get("/api/workflows/{workflow_name}/runs/{run_id}/export")
+def export_workflow_run_trace(
+    workflow_name: str,
+    run_id: str,
+    namespace: str = "default",
+    user=Depends(verify_token),
+):
+    ensure_namespace_access(user, namespace)
+    payload = _resolve_workflow_run_trace_payload(
+        workflow_name,
+        namespace,
+        run_id,
+        tail=None,
+        persist_live_fallback=True,
+    )
+    response = JSONResponse(payload)
+    response.headers["Content-Disposition"] = f'attachment; filename="{workflow_name}-{run_id}-trace.json"'
+    return response
+
+
 @app.get("/api/workflows/{workflow_name}/logs")
 def get_workflow_logs(
     workflow_name: str,
@@ -5521,40 +8971,37 @@ def get_workflow_logs(
     tail = max(1, min(tail, 5000))
     resource = read_custom_resource("agentworkflows", workflow_name, namespace, "Workflow")
     status = (resource.get("status") or {}) if isinstance(resource, dict) else {}
+    run_id = str(status.get("runId") or "") or None
     worker_job = status.get("workerJob") or {}
     job_name = str(worker_job.get("name") or "")
     job_namespace = str(worker_job.get("namespace") or namespace)
     if not job_name:
+        archived_logs = _fallback_workflow_logs_from_run(workflow_name, namespace, run_id, tail=tail)
+        if archived_logs is not None:
+            return archived_logs
         raise HTTPException(status_code=404, detail=f"No worker job found for workflow '{workflow_name}'")
 
-    pods = list_job_pods(job_name, job_namespace)
-    if not pods:
-        raise HTTPException(status_code=404, detail=f"No worker pod found for workflow '{workflow_name}'")
-
-    pod_name = str(getattr(pods[0].metadata, "name", "") or "")
-    if not pod_name:
-        raise HTTPException(status_code=404, detail=f"No worker pod found for workflow '{workflow_name}'")
-
     try:
-        from kubernetes import client
-
-        logs = client.CoreV1Api().read_namespaced_pod_log(
-            name=pod_name,
-            namespace=job_namespace,
-            container="worker",
-            tail_lines=tail,
-            timestamps=True,
-        )
+        logs, pod_name = _read_workflow_job_logs(job_name, job_namespace, tail)
         return {
             "workflow_name": workflow_name,
+            "run_id": run_id,
             "job_name": job_name,
             "pod_name": pod_name,
+            "source": "live-worker",
+            "archived_log_available": False,
             "logs": logs,
         }
     except HTTPException:
+        archived_logs = _fallback_workflow_logs_from_run(workflow_name, namespace, run_id, tail=tail)
+        if archived_logs is not None:
+            return archived_logs
         raise
     except Exception as exc:
         logger.warning("Could not retrieve workflow logs for %s: %s", workflow_name, exc)
+        archived_logs = _fallback_workflow_logs_from_run(workflow_name, namespace, run_id, tail=tail)
+        if archived_logs is not None:
+            return archived_logs
         raise HTTPException(status_code=404, detail="Could not retrieve workflow logs") from exc
 
 
@@ -5793,10 +9240,13 @@ async def invoke_agent(
     namespace: str = "default",
     user=Depends(verify_token),
 ):
+    agent_name, namespace = resolve_invoke_agent_reference(agent_name, namespace)
     ensure_namespace_access(user, namespace)
-    agent = await asyncio.to_thread(read_agent, agent_name, namespace)
+    agent = await asyncio.to_thread(read_agent_cached, agent_name, namespace)
     validate_invoke_runtime_compatibility(runtime_kind_from_spec(agent.get("spec", {})), request)
-    request_payload = request.model_dump()
+    if request.factory_mode and not is_factory_agent_resource(agent_name, agent):
+        raise HTTPException(status_code=400, detail="factory_mode is only supported for the KubeSynth factory agent.")
+    request_payload = request.model_dump(exclude={"factory_mode"})
     policy_memory = resolve_agent_memory_policy(agent, namespace)
     normalized_memory_policy = _normalize_memory_policy(policy_memory)
     promoted_memory = list_promoted_memory_records(
@@ -5811,6 +9261,15 @@ async def invoke_agent(
     if memory_note:
         existing_system = str(request_payload.get("system") or "").strip()
         request_payload["system"] = f"{memory_note}\n\n{existing_system}" if existing_system else memory_note
+    append_system_note(request_payload, build_agent_collaboration_system_note(agent_name, namespace, agent))
+    # Auto-inject intelligence context for intelligence-aware agents
+    if _agent_wants_intelligence(agent):
+        intel_ctx = _build_auto_intelligence_context(namespace)
+        if intel_ctx:
+            existing_system = str(request_payload.get("system") or "").strip()
+            request_payload["system"] = f"{existing_system}\n\n{intel_ctx}" if existing_system else intel_ctx
+    if request.factory_mode:
+        append_system_note(request_payload, FACTORY_MODE_SYSTEM_NOTES.get(request.factory_mode))
     request_id = raw_request.headers.get("x-request-id") or str(uuid.uuid4())
     async with httpx.AsyncClient(timeout=AGENT_RUNTIME_TIMEOUT_SECONDS, trust_env=False) as client:
         try:
@@ -5877,6 +9336,23 @@ async def invoke_agent(
     )
 
 
+@app.post("/api/agents/{agent_namespace}/{agent_name}/invoke", response_model=InvokeResponse)
+async def invoke_agent_with_namespace_path(
+    agent_namespace: str,
+    agent_name: str,
+    request: InvokeRequest,
+    raw_request: Request,
+    namespace: str | None = None,
+    user=Depends(verify_token),
+):
+    resolved_agent_name, resolved_namespace = resolve_invoke_agent_reference(
+        agent_name,
+        namespace,
+        path_namespace=agent_namespace,
+    )
+    return await invoke_agent(resolved_agent_name, request, raw_request, resolved_namespace, user)
+
+
 @app.post("/api/agents/{agent_name}/invoke/stream")
 async def invoke_agent_stream(
     agent_name: str,
@@ -5885,10 +9361,22 @@ async def invoke_agent_stream(
     namespace: str = "default",
     user=Depends(verify_token),
 ):
+    agent_name, namespace = resolve_invoke_agent_reference(agent_name, namespace)
     ensure_namespace_access(user, namespace)
-    agent = await asyncio.to_thread(read_agent, agent_name, namespace)
+    agent = await asyncio.to_thread(read_agent_cached, agent_name, namespace)
     validate_invoke_runtime_compatibility(runtime_kind_from_spec(agent.get("spec", {})), request)
-    request_payload = request.model_dump()
+    if request.factory_mode and not is_factory_agent_resource(agent_name, agent):
+        raise HTTPException(status_code=400, detail="factory_mode is only supported for the KubeSynth factory agent.")
+    request_payload = request.model_dump(exclude={"factory_mode"})
+    append_system_note(request_payload, build_agent_collaboration_system_note(agent_name, namespace, agent))
+    # Auto-inject intelligence context for intelligence-aware agents
+    if _agent_wants_intelligence(agent):
+        intel_ctx = _build_auto_intelligence_context(namespace)
+        if intel_ctx:
+            existing_system = str(request_payload.get("system") or "").strip()
+            request_payload["system"] = f"{existing_system}\n\n{intel_ctx}" if existing_system else intel_ctx
+    if request.factory_mode:
+        append_system_note(request_payload, FACTORY_MODE_SYSTEM_NOTES.get(request.factory_mode))
     request_id = raw_request.headers.get("x-request-id") or str(uuid.uuid4())
 
     async def event_generator():
@@ -5941,6 +9429,23 @@ async def invoke_agent_stream(
             yield sse_event("response.error", {"error": str(exc)})
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+@app.post("/api/agents/{agent_namespace}/{agent_name}/invoke/stream")
+async def invoke_agent_stream_with_namespace_path(
+    agent_namespace: str,
+    agent_name: str,
+    request: InvokeRequest,
+    raw_request: Request,
+    namespace: str | None = None,
+    user=Depends(verify_token),
+):
+    resolved_agent_name, resolved_namespace = resolve_invoke_agent_reference(
+        agent_name,
+        namespace,
+        path_namespace=agent_namespace,
+    )
+    return await invoke_agent_stream(resolved_agent_name, request, raw_request, resolved_namespace, user)
 
 
 @app.get("/api/agents/{agent_name}/todo")
@@ -7781,3 +11286,1919 @@ def system_health(
         "checks": checks,
         "timestamp": now_iso(),
     }
+
+
+# --------------------------------------------------------------------------- #
+#  AIOps Observability — targets, policies, reports, connectors                #
+# --------------------------------------------------------------------------- #
+
+OBSERVATION_PLURALS = {
+    "targets": "observationtargets",
+    "policies": "observationpolicies",
+    "reports": "observationreports",
+    "connectors": "connectorplugins",
+}
+
+OBSERVATION_TARGET_TYPES = {"prometheus", "kubernetes-api", "snmp", "gnmi", "nats", "custom"}
+OBSERVATION_PROTOCOLS = {"grpc", "http"}
+OBSERVATION_CAPABILITIES = OBSERVATION_TARGET_TYPES
+OBSERVATION_ALERT_SEVERITIES = {"info", "warning", "critical"}
+OBSERVATION_ALGORITHMS = {"isolation-forest", "prophet", "ensemble"}
+
+
+def merge_resource_spec(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
+    merged = copy.deepcopy(base)
+    for key, value in patch.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = merge_resource_spec(cast(dict[str, Any], merged[key]), cast(dict[str, Any], value))
+        else:
+            merged[key] = value
+    return merged
+
+
+def replace_custom_resource_spec_patch(plural: str, name: str, namespace: str, patch: dict[str, Any]) -> dict[str, Any]:
+    current = read_custom_resource(plural, name, namespace, "Resource")
+    current_spec = cast(dict[str, Any], current.get("spec") or {})
+    merged_spec = merge_resource_spec(current_spec, patch)
+    return replace_custom_resource_spec(plural, name, namespace, merged_spec)
+
+
+def extract_observation_spec(
+    body: dict[str, Any],
+    *,
+    require_name: bool,
+    required_fields: tuple[str, ...] = (),
+) -> tuple[str | None, dict[str, Any]]:
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Request body must be a JSON object")
+
+    name: str | None = None
+    raw_name = body.get("name")
+    if require_name:
+        if not isinstance(raw_name, str) or not raw_name.strip():
+            raise HTTPException(status_code=400, detail="Missing 'name'")
+        name = raw_name.strip()
+    elif raw_name is not None:
+        if not isinstance(raw_name, str) or not raw_name.strip():
+            raise HTTPException(status_code=400, detail="Field 'name' must be a non-empty string when provided")
+        name = raw_name.strip()
+
+    reserved_fields = {"name", "apiVersion", "kind", "metadata", "status"}
+    spec = {key: value for key, value in body.items() if key not in reserved_fields}
+
+    for field in required_fields:
+        value = spec.get(field)
+        if not isinstance(value, str) or not value.strip():
+            raise HTTPException(status_code=400, detail=f"Missing '{field}'")
+
+    return name, spec
+
+
+def validate_observation_target_spec(spec: dict[str, Any], *, partial: bool) -> dict[str, Any]:
+    target_type = spec.get("targetType")
+    if target_type is not None:
+        if not isinstance(target_type, str) or target_type not in OBSERVATION_TARGET_TYPES:
+            raise HTTPException(status_code=400, detail="Field 'targetType' must be a valid observation target type")
+    elif not partial:
+        raise HTTPException(status_code=400, detail="Missing 'targetType'")
+
+    connector_ref = spec.get("connectorRef")
+    if connector_ref is not None:
+        if not isinstance(connector_ref, str) or not connector_ref.strip():
+            raise HTTPException(status_code=400, detail="Field 'connectorRef' must be a non-empty string")
+    elif not partial:
+        raise HTTPException(status_code=400, detail="Missing 'connectorRef'")
+
+    for optional_string_field in ("description", "endpoint", "scrapeInterval", "policyRef"):
+        if optional_string_field in spec and spec[optional_string_field] is not None and not isinstance(spec[optional_string_field], str):
+            raise HTTPException(status_code=400, detail=f"Field '{optional_string_field}' must be a string")
+
+    if "selector" in spec and spec["selector"] is not None and not isinstance(spec["selector"], dict):
+        raise HTTPException(status_code=400, detail="Field 'selector' must be an object")
+    if "credentials" in spec and spec["credentials"] is not None and not isinstance(spec["credentials"], dict):
+        raise HTTPException(status_code=400, detail="Field 'credentials' must be an object")
+    if "tlsConfig" in spec and spec["tlsConfig"] is not None and not isinstance(spec["tlsConfig"], dict):
+        raise HTTPException(status_code=400, detail="Field 'tlsConfig' must be an object")
+    if "labels" in spec and spec["labels"] is not None:
+        labels = spec["labels"]
+        if not isinstance(labels, dict) or not all(isinstance(key, str) and isinstance(value, str) for key, value in labels.items()):
+            raise HTTPException(status_code=400, detail="Field 'labels' must be an object of string values")
+
+    return spec
+
+
+def validate_observation_policy_spec(spec: dict[str, Any], *, partial: bool) -> dict[str, Any]:
+    if "description" in spec and spec["description"] is not None and not isinstance(spec["description"], str):
+        raise HTTPException(status_code=400, detail="Field 'description' must be a string")
+
+    retention = spec.get("retention")
+    if retention is not None:
+        if not isinstance(retention, dict):
+            raise HTTPException(status_code=400, detail="Field 'retention' must be an object")
+        days = retention.get("days")
+        if days is not None and (not isinstance(days, int) or days < 1 or days > 365):
+            raise HTTPException(status_code=400, detail="Field 'retention.days' must be an integer between 1 and 365")
+
+    alert_rules = spec.get("alertRules")
+    if alert_rules is not None:
+        if not isinstance(alert_rules, list):
+            raise HTTPException(status_code=400, detail="Field 'alertRules' must be an array")
+        for index, rule in enumerate(alert_rules):
+            if not isinstance(rule, dict):
+                raise HTTPException(status_code=400, detail=f"alertRules[{index}] must be an object")
+            name = rule.get("name")
+            expr = rule.get("expr")
+            severity = rule.get("severity")
+            if not isinstance(name, str) or not name.strip():
+                raise HTTPException(status_code=400, detail=f"alertRules[{index}].name must be a non-empty string")
+            if not isinstance(expr, str) or not expr.strip():
+                raise HTTPException(status_code=400, detail=f"alertRules[{index}].expr must be a non-empty string")
+            if severity is not None and (not isinstance(severity, str) or severity not in OBSERVATION_ALERT_SEVERITIES):
+                raise HTTPException(status_code=400, detail=f"alertRules[{index}].severity must be one of {sorted(OBSERVATION_ALERT_SEVERITIES)}")
+
+    anomaly_detection = spec.get("anomalyDetection")
+    if anomaly_detection is not None:
+        if not isinstance(anomaly_detection, dict):
+            raise HTTPException(status_code=400, detail="Field 'anomalyDetection' must be an object")
+        algorithm = anomaly_detection.get("algorithm")
+        sensitivity = anomaly_detection.get("sensitivity")
+        metrics = anomaly_detection.get("metrics")
+        if algorithm is not None and (not isinstance(algorithm, str) or algorithm not in OBSERVATION_ALGORITHMS):
+            raise HTTPException(status_code=400, detail=f"Field 'anomalyDetection.algorithm' must be one of {sorted(OBSERVATION_ALGORITHMS)}")
+        if sensitivity is not None and not isinstance(sensitivity, (int, float)):
+            raise HTTPException(status_code=400, detail="Field 'anomalyDetection.sensitivity' must be numeric")
+        if metrics is not None and (not isinstance(metrics, list) or not all(isinstance(item, str) for item in metrics)):
+            raise HTTPException(status_code=400, detail="Field 'anomalyDetection.metrics' must be an array of strings")
+
+    notifications = spec.get("notifications")
+    if notifications is not None and not isinstance(notifications, dict):
+        raise HTTPException(status_code=400, detail="Field 'notifications' must be an object")
+
+    return spec
+
+
+def validate_connector_plugin_spec(spec: dict[str, Any], *, partial: bool) -> dict[str, Any]:
+    image = spec.get("image")
+    if image is not None:
+        if not isinstance(image, str) or not image.strip():
+            raise HTTPException(status_code=400, detail="Field 'image' must be a non-empty string")
+    elif not partial:
+        raise HTTPException(status_code=400, detail="Missing 'image'")
+
+    protocol = spec.get("protocol")
+    if protocol is not None:
+        if not isinstance(protocol, str) or protocol not in OBSERVATION_PROTOCOLS:
+            raise HTTPException(status_code=400, detail=f"Field 'protocol' must be one of {sorted(OBSERVATION_PROTOCOLS)}")
+    elif not partial:
+        raise HTTPException(status_code=400, detail="Missing 'protocol'")
+
+    capabilities = spec.get("capabilities")
+    if capabilities is not None:
+        if not isinstance(capabilities, list) or not capabilities:
+            raise HTTPException(status_code=400, detail="Field 'capabilities' must be a non-empty array")
+        if not all(isinstance(item, str) and item in OBSERVATION_CAPABILITIES for item in capabilities):
+            raise HTTPException(status_code=400, detail=f"Field 'capabilities' must contain only {sorted(OBSERVATION_CAPABILITIES)}")
+    elif not partial:
+        raise HTTPException(status_code=400, detail="Missing 'capabilities'")
+
+    port = spec.get("port")
+    if port is not None and (not isinstance(port, int) or port < 1024 or port > 65535):
+        raise HTTPException(status_code=400, detail="Field 'port' must be an integer between 1024 and 65535")
+
+    for optional_string_field in ("description", "healthEndpoint", "secretRef"):
+        if optional_string_field in spec and spec[optional_string_field] is not None and not isinstance(spec[optional_string_field], str):
+            raise HTTPException(status_code=400, detail=f"Field '{optional_string_field}' must be a string")
+
+    if "resources" in spec and spec["resources"] is not None and not isinstance(spec["resources"], dict):
+        raise HTTPException(status_code=400, detail="Field 'resources' must be an object")
+    if "env" in spec and spec["env"] is not None and not isinstance(spec["env"], list):
+        raise HTTPException(status_code=400, detail="Field 'env' must be an array")
+
+    return spec
+
+
+@app.get("/api/observability/overview")
+def observability_overview(
+    namespace: str = "default",
+    user=Depends(verify_token),
+):
+    """Aggregated observability dashboard data — targets, policies, reports, connectors."""
+    ensure_namespace_access(user, namespace)
+    from kubernetes import client as k8s_client
+
+    custom_api = k8s_client.CustomObjectsApi()
+    data: dict[str, Any] = {}
+
+    for label, plural in OBSERVATION_PLURALS.items():
+        try:
+            items = custom_api.list_namespaced_custom_object(
+                group=RESOURCE_GROUP,
+                version=RESOURCE_VERSION,
+                namespace=namespace,
+                plural=plural,
+            ).get("items", [])
+            data[label] = items
+        except Exception:
+            data[label] = []
+
+    # ----- Derive summary stats -----
+    targets = data.get("targets", [])
+    reports = data.get("reports", [])
+    connectors = data.get("connectors", [])
+
+    active_targets = sum(
+        1 for t in targets
+        if (t.get("status") or {}).get("phase") == "Active"
+    )
+    degraded_targets = sum(
+        1 for t in targets
+        if (t.get("status") or {}).get("phase") == "Degraded"
+    )
+    failed_targets = sum(
+        1 for t in targets
+        if (t.get("status") or {}).get("phase") == "Failed"
+    )
+    total_findings = sum(
+        (r.get("status") or {}).get("findingsCount", 0) for r in reports
+    )
+    avg_health = 0
+    scores = [
+        (r.get("status") or {}).get("healthScore", -1) for r in reports
+        if (r.get("status") or {}).get("healthScore") is not None
+    ]
+    valid_scores = [s for s in scores if s >= 0]
+    if valid_scores:
+        avg_health = round(sum(valid_scores) / len(valid_scores))
+
+    ready_connectors = sum(
+        1 for c in connectors
+        if (c.get("status") or {}).get("ready") == "True"
+    )
+
+    # ----- Agent metrics summary (from K8s pod status) -----
+    agent_pod_summary: dict[str, Any] = {"total": 0, "ready": 0, "notReady": 0}
+    try:
+        v1 = k8s_client.CoreV1Api()
+        pods = v1.list_namespaced_pod(
+            namespace=namespace,
+            label_selector="kubesynth.ai/managed-by=kubesynth-operator",
+        )
+        agent_pod_summary["total"] = len(pods.items)
+        for pod in pods.items:
+            ready = all(
+                cs.ready for cs in (pod.status.container_statuses or [])
+            ) if pod.status and pod.status.container_statuses else False
+            if ready:
+                agent_pod_summary["ready"] += 1
+            else:
+                agent_pod_summary["notReady"] += 1
+    except Exception:
+        pass
+
+    return {
+        "summary": {
+            "targets": {
+                "total": len(targets),
+                "active": active_targets,
+                "degraded": degraded_targets,
+                "failed": failed_targets,
+            },
+            "reports": {
+                "total": len(reports),
+                "totalFindings": total_findings,
+                "avgHealthScore": avg_health,
+            },
+            "connectors": {
+                "total": len(connectors),
+                "ready": ready_connectors,
+            },
+            "policies": {
+                "total": len(data.get("policies", [])),
+            },
+            "agents": agent_pod_summary,
+        },
+        "targets": [
+            {
+                "name": t["metadata"]["name"],
+                "namespace": t["metadata"].get("namespace", namespace),
+                "description": t.get("spec", {}).get("description", ""),
+                "targetType": t.get("spec", {}).get("targetType", "unknown"),
+                "connectorRef": t.get("spec", {}).get("connectorRef", ""),
+                "policyRef": t.get("spec", {}).get("policyRef"),
+                "endpoint": t.get("spec", {}).get("endpoint", ""),
+                "scrapeInterval": t.get("spec", {}).get("scrapeInterval", "30s"),
+                "phase": (t.get("status") or {}).get("phase", "Pending"),
+                "lastScrapeTime": (t.get("status") or {}).get("lastScrapeTime"),
+                "metricsCollected": (t.get("status") or {}).get("metricsCollected", 0),
+                "connectorHealth": (t.get("status") or {}).get("connectorHealth", "Unknown"),
+                "createdAt": t["metadata"].get("creationTimestamp", ""),
+            }
+            for t in targets
+        ],
+        "reports": [
+            {
+                "name": r["metadata"]["name"],
+                "targetRef": r.get("spec", {}).get("targetRef", ""),
+                "reportType": r.get("spec", {}).get("reportType", "anomaly"),
+                "phase": (r.get("status") or {}).get("phase", "Pending"),
+                "healthScore": (r.get("status") or {}).get("healthScore"),
+                "findingsCount": (r.get("status") or {}).get("findingsCount", 0),
+                "lastEvaluated": (r.get("status") or {}).get("lastEvaluated"),
+                "findings": (r.get("status") or {}).get("findings", []),
+                "summary": (r.get("status") or {}).get("summary", ""),
+                "createdAt": r["metadata"].get("creationTimestamp", ""),
+            }
+            for r in reports
+        ],
+        "connectors": [
+            {
+                "name": c["metadata"]["name"],
+                "description": c.get("spec", {}).get("description", ""),
+                "image": c.get("spec", {}).get("image", ""),
+                "protocol": c.get("spec", {}).get("protocol", "grpc"),
+                "port": c.get("spec", {}).get("port", 9090),
+                "capabilities": c.get("spec", {}).get("capabilities", []),
+                "ready": (c.get("status") or {}).get("ready", "Unknown"),
+                "lastHealthCheck": (c.get("status") or {}).get("lastHealthCheck"),
+                "createdAt": c["metadata"].get("creationTimestamp", ""),
+            }
+            for c in connectors
+        ],
+        "policies": [
+            {
+                "name": p["metadata"]["name"],
+                "description": p.get("spec", {}).get("description", ""),
+                "retentionDays": p.get("spec", {}).get("retention", {}).get("days", 30),
+                "anomalyEnabled": p.get("spec", {}).get("anomalyDetection", {}).get("enabled", False),
+                "anomalyAlgorithm": p.get("spec", {}).get("anomalyDetection", {}).get("algorithm", "ensemble"),
+                "alertRulesCount": len(p.get("spec", {}).get("alertRules", [])),
+                "activeAlerts": (p.get("status") or {}).get("activeAlerts", 0),
+                "createdAt": p["metadata"].get("creationTimestamp", ""),
+            }
+            for p in data.get("policies", [])
+        ],
+        "timestamp": now_iso(),
+    }
+
+
+@app.post("/api/observability/targets")
+def create_observation_target(
+    body: dict[str, Any] = Body(...),
+    namespace: str = "default",
+    user=Depends(verify_token),
+):
+    """Create a new ObservationTarget CR."""
+    ensure_namespace_access(user, namespace)
+    ensure_role(user, "operator")
+    name, spec = extract_observation_spec(body, require_name=True, required_fields=("targetType", "connectorRef"))
+    spec = validate_observation_target_spec(spec, partial=False)
+    return create_custom_resource("observationtargets", namespace, name, spec)
+
+
+@app.get("/api/observability/targets/{name}")
+def get_observation_target(
+    name: str,
+    namespace: str = "default",
+    user=Depends(verify_token),
+):
+    """Return the full ObservationTarget resource."""
+    ensure_namespace_access(user, namespace)
+    return read_custom_resource("observationtargets", name, namespace, "ObservationTarget")
+
+
+@app.patch("/api/observability/targets/{name}")
+def update_observation_target(
+    name: str,
+    body: dict[str, Any] = Body(...),
+    namespace: str = "default",
+    user=Depends(verify_token),
+):
+    """Patch an ObservationTarget spec."""
+    ensure_namespace_access(user, namespace)
+    ensure_role(user, "operator")
+    provided_name, spec = extract_observation_spec(body, require_name=False)
+    if provided_name and provided_name != name:
+        raise HTTPException(status_code=400, detail="Body name does not match path name")
+    spec = validate_observation_target_spec(spec, partial=True)
+    return replace_custom_resource_spec_patch("observationtargets", name, namespace, spec)
+
+
+@app.delete("/api/observability/targets/{name}")
+def delete_observation_target(
+    name: str,
+    namespace: str = "default",
+    user=Depends(verify_token),
+):
+    """Delete an ObservationTarget CR."""
+    ensure_namespace_access(user, namespace)
+    ensure_role(user, "operator")
+    return delete_custom_resource("observationtargets", name, namespace, "ObservationTarget")
+
+
+@app.post("/api/observability/policies")
+def create_observation_policy(
+    body: dict[str, Any] = Body(...),
+    namespace: str = "default",
+    user=Depends(verify_token),
+):
+    """Create a new ObservationPolicy CR."""
+    ensure_namespace_access(user, namespace)
+    ensure_role(user, "operator")
+    name, spec = extract_observation_spec(body, require_name=True)
+    spec = validate_observation_policy_spec(spec, partial=False)
+    return create_custom_resource("observationpolicies", namespace, name, spec)
+
+
+@app.get("/api/observability/policies/{name}")
+def get_observation_policy(
+    name: str,
+    namespace: str = "default",
+    user=Depends(verify_token),
+):
+    """Return the full ObservationPolicy resource."""
+    ensure_namespace_access(user, namespace)
+    return read_custom_resource("observationpolicies", name, namespace, "ObservationPolicy")
+
+
+@app.patch("/api/observability/policies/{name}")
+def update_observation_policy(
+    name: str,
+    body: dict[str, Any] = Body(...),
+    namespace: str = "default",
+    user=Depends(verify_token),
+):
+    """Patch an ObservationPolicy spec."""
+    ensure_namespace_access(user, namespace)
+    ensure_role(user, "operator")
+    provided_name, spec = extract_observation_spec(body, require_name=False)
+    if provided_name and provided_name != name:
+        raise HTTPException(status_code=400, detail="Body name does not match path name")
+    spec = validate_observation_policy_spec(spec, partial=True)
+    return replace_custom_resource_spec_patch("observationpolicies", name, namespace, spec)
+
+
+@app.delete("/api/observability/policies/{name}")
+def delete_observation_policy(
+    name: str,
+    namespace: str = "default",
+    user=Depends(verify_token),
+):
+    """Delete an ObservationPolicy CR."""
+    ensure_namespace_access(user, namespace)
+    ensure_role(user, "operator")
+    return delete_custom_resource("observationpolicies", name, namespace, "ObservationPolicy")
+
+
+@app.post("/api/observability/connectors")
+def create_connector_plugin(
+    body: dict[str, Any] = Body(...),
+    namespace: str = "default",
+    user=Depends(verify_token),
+):
+    """Create a new ConnectorPlugin CR."""
+    ensure_namespace_access(user, namespace)
+    ensure_role(user, "operator")
+    name, spec = extract_observation_spec(body, require_name=True, required_fields=("image", "protocol"))
+    spec = validate_connector_plugin_spec(spec, partial=False)
+    return create_custom_resource("connectorplugins", namespace, name, spec)
+
+
+@app.get("/api/observability/connectors/{name}")
+def get_connector_plugin(
+    name: str,
+    namespace: str = "default",
+    user=Depends(verify_token),
+):
+    """Return the full ConnectorPlugin resource."""
+    ensure_namespace_access(user, namespace)
+    return read_custom_resource("connectorplugins", name, namespace, "ConnectorPlugin")
+
+
+@app.patch("/api/observability/connectors/{name}")
+def update_connector_plugin(
+    name: str,
+    body: dict[str, Any] = Body(...),
+    namespace: str = "default",
+    user=Depends(verify_token),
+):
+    """Patch a ConnectorPlugin spec."""
+    ensure_namespace_access(user, namespace)
+    ensure_role(user, "operator")
+    provided_name, spec = extract_observation_spec(body, require_name=False)
+    if provided_name and provided_name != name:
+        raise HTTPException(status_code=400, detail="Body name does not match path name")
+    spec = validate_connector_plugin_spec(spec, partial=True)
+    return replace_custom_resource_spec_patch("connectorplugins", name, namespace, spec)
+
+
+@app.delete("/api/observability/connectors/{name}")
+def delete_connector_plugin(
+    name: str,
+    namespace: str = "default",
+    user=Depends(verify_token),
+):
+    """Delete a ConnectorPlugin CR."""
+    ensure_namespace_access(user, namespace)
+    ensure_role(user, "operator")
+    return delete_custom_resource("connectorplugins", name, namespace, "ConnectorPlugin")
+
+
+# =========================================================================
+# Intelligence Collector API
+# =========================================================================
+
+# In-memory cache of collectors — authoritative source is DB (IntelligenceCollectorRow)
+_collector_registry: dict[str, dict[str, dict[str, Any]]] = {}
+_collection_tasks: dict[str, dict[str, Any]] = {}
+_ALERT_HISTORY_CAP = 500
+_COLLECTION_TASKS_CAP = 200
+
+# Thread-safety locks for in-memory intelligence dicts
+_collector_lock = threading.Lock()
+_tasks_lock = threading.Lock()
+
+COLLECTOR_TIMEOUT = int(os.environ.get("COLLECTOR_TIMEOUT", "45"))
+
+# ─── SSRF protection for collector URLs ───────────────────────────────────
+import ipaddress as _ipaddress
+
+_SSRF_BLOCKED_NETS = [
+    _ipaddress.ip_network("169.254.0.0/16"),   # AWS / cloud metadata
+    _ipaddress.ip_network("100.100.100.0/24"), # Alibaba metadata
+]
+_INTELLIGENCE_SCRIPT_TYPES = {"bash", "python"}
+_INTELLIGENCE_ALERT_CONDITION_TYPES = {"contains", "not_contains", "exit_code", "regex"}
+_INTELLIGENCE_ALERT_ACTIONS = {"notify", "invoke_agent"}
+_INTELLIGENCE_BUILTINS = {
+    "cluster_overview",
+    "node_health",
+    "pod_resources",
+    "logs_collector",
+    "helm_releases",
+    "network_info",
+    "storage_info",
+    "configmap_secrets",
+    "security_posture",
+    "crd_inventory",
+}
+
+_DEFAULT_COLLECTOR_TOKEN = "collector-dev-token"
+_DEFAULT_COLLECTOR_TOKEN_HASH = hashlib.sha256(_DEFAULT_COLLECTOR_TOKEN.encode("utf-8")).hexdigest()
+_COLLECTOR_TOKEN_MISSING_ERROR = "Collector token is unavailable in the gateway. Re-register this collector with a valid token."
+_collector_secret_warning_emitted = False
+
+
+def _collector_token_secret() -> str:
+    global _collector_secret_warning_emitted
+
+    explicit_secret = os.getenv("INTELLIGENCE_COLLECTOR_TOKEN_KEY", "").strip()
+    if explicit_secret:
+        return explicit_secret
+
+    explicit_secret = os.getenv("JWT_SECRET", "").strip() or os.getenv("API_GATEWAY_SHARED_TOKEN", "").strip()
+    if explicit_secret:
+        return explicit_secret
+
+    if not _collector_secret_warning_emitted:
+        logger.warning(
+            "INTELLIGENCE_COLLECTOR_TOKEN_KEY, JWT_SECRET, and API_GATEWAY_SHARED_TOKEN are unset. "
+            "Collector tokens are encrypted with an ephemeral process secret and will not survive gateway restarts."
+        )
+        _collector_secret_warning_emitted = True
+    return JWT_SECRET
+
+
+def _collector_fernet():
+    from cryptography.fernet import Fernet
+
+    digest = hashlib.sha256(_collector_token_secret().encode("utf-8")).digest()
+    return Fernet(base64.urlsafe_b64encode(digest))
+
+
+def _encrypt_collector_token(token: str) -> str:
+    normalized = str(token or "").strip()
+    if not normalized:
+        raise ValueError("Collector token cannot be empty")
+    return _collector_fernet().encrypt(normalized.encode("utf-8")).decode("utf-8")
+
+
+def _decrypt_collector_token(encrypted_token: str | None) -> str | None:
+    if not encrypted_token:
+        return None
+    try:
+        from cryptography.fernet import InvalidToken
+
+        return _collector_fernet().decrypt(encrypted_token.encode("utf-8")).decode("utf-8")
+    except InvalidToken:
+        logger.warning("Failed to decrypt a persisted collector token. Re-register the collector to restore task execution.")
+    except Exception:
+        logger.exception("Unexpected error while decrypting a persisted collector token.")
+    return None
+
+
+def _recover_collector_token(row: IntelligenceCollectorRow) -> str | None:
+    decrypted = _decrypt_collector_token(getattr(row, "encrypted_token", None))
+    if decrypted:
+        return decrypted
+    if getattr(row, "token_hash", None) == _DEFAULT_COLLECTOR_TOKEN_HASH:
+        return _DEFAULT_COLLECTOR_TOKEN
+    return None
+
+
+def _collector_auth_headers(token: str | None) -> dict[str, str]:
+    normalized = str(token or "").strip()
+    if not normalized:
+        return {}
+    return {"Authorization": f"Bearer {normalized}"}
+
+def _validate_collector_url(url: str) -> str:
+    """Validate a collector URL: must be http/https, no cloud-metadata IPs."""
+    from urllib.parse import urlparse
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise HTTPException(status_code=400, detail="Collector URL must use http or https scheme")
+    hostname = parsed.hostname or ""
+    try:
+        addr = _ipaddress.ip_address(hostname)
+        for net in _SSRF_BLOCKED_NETS:
+            if addr in net:
+                raise HTTPException(status_code=400, detail=f"Collector URL targets a blocked IP range ({net})")
+    except ValueError:
+        pass  # hostname is a DNS name, not a raw IP — allowed
+    return url.rstrip("/")
+
+
+def _normalize_intelligence_namespace(namespace: str | None) -> str:
+    normalized = str(namespace or "default").strip()
+    return normalized or "default"
+
+
+def _slugify_identifier(value: str, fallback: str = "item") -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+    return slug or fallback
+
+
+def _build_namespace_scoped_collector_id(namespace: str, name: str) -> str:
+    namespace_slug = _slugify_identifier(namespace, "default")
+    collector_slug = _slugify_identifier(name, "collector")
+    candidate = f"{namespace_slug}-{collector_slug}"
+    if len(candidate) <= 128:
+        return candidate
+    digest = hashlib.sha256(f"{namespace}:{name}".encode("utf-8")).hexdigest()[:8]
+    head = max(1, 128 - len(namespace_slug) - len(digest) - 2)
+    trimmed_slug = collector_slug[:head].rstrip("-") or "collector"
+    return f"{namespace_slug}-{trimmed_slug}-{digest}"
+
+
+def _get_namespaced_collectors(namespace: str) -> dict[str, dict[str, Any]]:
+    normalized = _normalize_intelligence_namespace(namespace)
+    with _collector_lock:
+        return {
+            collector_id: copy.deepcopy(info)
+            for collector_id, info in _collector_registry.get(normalized, {}).items()
+        }
+
+
+def _set_namespaced_collector(namespace: str, collector_id: str, info: dict[str, Any]) -> None:
+    normalized = _normalize_intelligence_namespace(namespace)
+    with _collector_lock:
+        bucket = _collector_registry.setdefault(normalized, {})
+        bucket[collector_id] = {**copy.deepcopy(info), "namespace": normalized}
+
+
+def _remove_namespaced_collector(namespace: str, collector_id: str) -> None:
+    normalized = _normalize_intelligence_namespace(namespace)
+    with _collector_lock:
+        bucket = _collector_registry.get(normalized, {})
+        bucket.pop(collector_id, None)
+        if not bucket and normalized in _collector_registry:
+            del _collector_registry[normalized]
+
+
+def _list_namespaced_tasks(namespace: str) -> list[dict[str, Any]]:
+    normalized = _normalize_intelligence_namespace(namespace)
+    with _tasks_lock:
+        tasks = [
+            copy.deepcopy(task)
+            for task in _collection_tasks.values()
+            if _normalize_intelligence_namespace(task.get("namespace")) == normalized
+        ]
+    return sorted(tasks, key=lambda task: task.get("submitted_at", ""), reverse=True)
+
+
+def _validate_intelligence_builtin(builtin: Any) -> str:
+    normalized = str(builtin or "").strip()
+    if normalized not in _INTELLIGENCE_BUILTINS:
+        allowed = ", ".join(sorted(_INTELLIGENCE_BUILTINS))
+        raise HTTPException(status_code=400, detail=f"Unknown built-in script '{normalized}'. Allowed values: {allowed}")
+    return normalized
+
+
+def _normalize_intelligence_timeout(value: Any, default: int = 30) -> int:
+    try:
+        timeout = int(default if value is None else value)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="Timeout must be an integer between 1 and 60 seconds") from exc
+    return max(1, min(timeout, 60))
+
+
+def _normalize_intelligence_script_type(value: Any) -> str:
+    normalized = str(value or "bash").strip().lower() or "bash"
+    if normalized not in _INTELLIGENCE_SCRIPT_TYPES:
+        raise HTTPException(status_code=400, detail="Script type must be 'bash' or 'python'")
+    return normalized
+
+
+def _normalize_collection_payload(body: dict[str, Any], *, require_execution: bool = True) -> dict[str, Any]:
+    builtin = str(body.get("builtin") or "").strip()
+    script = str(body.get("script") or "").strip()
+    if builtin and script:
+        raise HTTPException(status_code=400, detail="Specify either 'builtin' or 'script', not both")
+    if require_execution and not builtin and not script:
+        raise HTTPException(status_code=400, detail="'builtin' or 'script' required")
+
+    payload: dict[str, Any] = {"timeout": _normalize_intelligence_timeout(body.get("timeout"), 30)}
+    if builtin:
+        payload["builtin"] = _validate_intelligence_builtin(builtin)
+        return payload
+    if script:
+        if len(script) > 10000:
+            raise HTTPException(status_code=400, detail="Script too large (max 10000 chars)")
+        payload["script"] = script
+        payload["type"] = _normalize_intelligence_script_type(body.get("type") or body.get("script_type"))
+    return payload
+
+
+def _resolve_collection_targets(namespace: str, collector_id: str) -> dict[str, dict[str, Any]]:
+    collectors = _get_namespaced_collectors(namespace)
+    if collector_id == "all":
+        if not collectors:
+            raise HTTPException(status_code=404, detail=f"No collectors registered in namespace '{namespace}'")
+        return collectors
+    if collector_id not in collectors:
+        raise HTTPException(status_code=404, detail=f"Collector '{collector_id}' not found in namespace '{namespace}'")
+    return {collector_id: collectors[collector_id]}
+
+
+def _ensure_intelligence_agent_exists(agent_name: Any, namespace: str) -> str | None:
+    normalized = str(agent_name or "").strip() or None
+    if normalized:
+        read_agent(normalized, namespace)
+    return normalized
+
+
+def _task_matches_request(task: dict[str, Any], collector_id: str, payload: dict[str, Any]) -> bool:
+    if collector_id != "all" and task.get("collector_id") != collector_id:
+        return False
+    task_payload = task.get("payload") or {}
+    builtin = payload.get("builtin")
+    if builtin:
+        return task_payload.get("builtin") == builtin
+    return (
+        task_payload.get("script") == payload.get("script")
+        and str(task_payload.get("type") or "bash") == str(payload.get("type") or "bash")
+    )
+
+
+def _build_intelligence_task_record(
+    namespace: str,
+    *,
+    task_id: str,
+    collector_id: str,
+    payload: dict[str, Any],
+    results: dict[str, Any],
+    submitted_by: str,
+) -> dict[str, Any]:
+    return {
+        "task_id": task_id,
+        "namespace": _normalize_intelligence_namespace(namespace),
+        "collector_id": collector_id,
+        "payload": payload,
+        "results": results,
+        "submitted_by": submitted_by,
+        "submitted_at": datetime.now(timezone.utc).isoformat(),
+        "total": len(results),
+        "completed": sum(1 for result in results.values() if result.get("status") == "completed"),
+    }
+
+
+def _load_collectors_from_db() -> None:
+    """Populate the in-memory collector cache from the database at startup."""
+    with db_session() as ses:
+        rows = ses.query(IntelligenceCollectorRow).all()
+        for row in rows:
+            recovered_token = _recover_collector_token(row)
+            _set_namespaced_collector(
+                row.namespace,
+                row.id,
+                {
+                    "id": row.id,
+                    "name": row.name,
+                    "url": row.url,
+                    "token": recovered_token,
+                    "cluster": row.cluster,
+                    "registered_at": row.registered_at.isoformat() if row.registered_at else None,
+                    "tags": row.tags or [],
+                },
+            )
+    logger.info("Loaded %d collectors from database.", len(_collector_registry))
+
+
+def _load_tasks_from_db() -> None:
+    """Populate the in-memory task cache from the database at startup."""
+    with db_session() as ses:
+        rows = (
+            ses.query(IntelligenceTaskRow)
+            .order_by(IntelligenceTaskRow.submitted_at.desc())
+            .limit(_COLLECTION_TASKS_CAP)
+            .all()
+        )
+        for row in rows:
+            _collection_tasks[row.task_id] = {
+                "task_id": row.task_id,
+                "namespace": row.namespace,
+                "collector_id": row.collector_id,
+                "payload": row.payload or {},
+                "results": row.results or {},
+                "submitted_by": row.submitted_by,
+                "submitted_at": row.submitted_at.isoformat() if row.submitted_at else None,
+                "total": row.total or 0,
+                "completed": row.completed or 0,
+            }
+    logger.info("Loaded %d tasks from database.", len(_collection_tasks))
+
+
+def _persist_task(task_record: dict[str, Any]) -> None:
+    """Write a task record to the database."""
+    with db_session() as ses:
+        ses.add(IntelligenceTaskRow(
+            task_id=task_record["task_id"],
+            namespace=_normalize_intelligence_namespace(task_record.get("namespace")),
+            collector_id=task_record.get("collector_id"),
+            payload=task_record.get("payload"),
+            results=task_record.get("results"),
+            submitted_by=task_record.get("submitted_by"),
+            submitted_at=datetime.fromisoformat(task_record["submitted_at"]) if task_record.get("submitted_at") else datetime.now(timezone.utc),
+            total=task_record.get("total", 0),
+            completed=task_record.get("completed", 0),
+        ))
+
+
+def _enforce_collection_tasks_cap() -> None:
+    """Evict oldest tasks when the in-memory dict exceeds _COLLECTION_TASKS_CAP."""
+    if len(_collection_tasks) <= _COLLECTION_TASKS_CAP:
+        return
+    sorted_ids = sorted(
+        _collection_tasks,
+        key=lambda tid: _collection_tasks[tid].get("submitted_at", ""),
+    )
+    to_remove = len(_collection_tasks) - _COLLECTION_TASKS_CAP
+    for tid in sorted_ids[:to_remove]:
+        del _collection_tasks[tid]
+    # Also trim the DB
+    with db_session() as ses:
+        total = ses.query(IntelligenceTaskRow).count()
+        if total > _COLLECTION_TASKS_CAP:
+            oldest = (
+                ses.query(IntelligenceTaskRow)
+                .order_by(IntelligenceTaskRow.submitted_at.asc())
+                .limit(total - _COLLECTION_TASKS_CAP)
+                .all()
+            )
+            for old in oldest:
+                ses.delete(old)
+
+
+def _delete_collection_tasks(namespace: str, task_ids: list[Any]) -> tuple[list[str], list[str]]:
+    normalized = _normalize_intelligence_namespace(namespace)
+    requested: list[str] = []
+    seen: set[str] = set()
+    for value in task_ids:
+        task_id = str(value or "").strip()
+        if task_id and task_id not in seen:
+            requested.append(task_id)
+            seen.add(task_id)
+    if not requested:
+        raise HTTPException(status_code=400, detail="'task_ids' must contain at least one task id")
+
+    deleted: set[str] = set()
+    with db_session() as ses:
+        rows = (
+            ses.query(IntelligenceTaskRow)
+            .filter(
+                IntelligenceTaskRow.namespace == normalized,
+                IntelligenceTaskRow.task_id.in_(requested),
+            )
+            .all()
+        )
+        for row in rows:
+            deleted.add(row.task_id)
+            ses.delete(row)
+
+    with _tasks_lock:
+        for task_id in requested:
+            task = _collection_tasks.get(task_id)
+            if task and _normalize_intelligence_namespace(task.get("namespace")) == normalized:
+                deleted.add(task_id)
+                _collection_tasks.pop(task_id, None)
+
+    deleted_ids = [task_id for task_id in requested if task_id in deleted]
+    missing_ids = [task_id for task_id in requested if task_id not in deleted]
+    return deleted_ids, missing_ids
+
+# ─── Auto-inject intelligence context into agent invocations ─────────────
+
+_INTELLIGENCE_SYSTEM_KEYWORDS = {"cluster intelligence", "intelligence data", "sre assistant", "cluster intel"}
+
+def _agent_wants_intelligence(agent: dict[str, Any]) -> bool:
+    """Return True if the agent's system prompt indicates it uses intelligence."""
+    sys_prompt = (agent.get("spec", {}).get("systemPrompt") or "").lower()
+    return any(kw in sys_prompt for kw in _INTELLIGENCE_SYSTEM_KEYWORDS)
+
+
+def _build_auto_intelligence_context(
+    namespace: str,
+    max_scripts: int = 5,
+    max_chars: int = 6000,
+    max_age_minutes: int = 30,
+) -> str:
+    """Build a condensed intelligence context from recent collection tasks.
+    Skips tasks older than max_age_minutes to avoid injecting stale data."""
+    recent_tasks = _list_namespaced_tasks(namespace)
+    if not recent_tasks:
+        return ""
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=max_age_minutes)
+    # Group by builtin script, keep most recent per script
+    latest_by_script: dict[str, dict[str, Any]] = {}
+    for task in recent_tasks:
+        # Staleness check
+        submitted_str = task.get("submitted_at", "")
+        if submitted_str:
+            try:
+                submitted = datetime.fromisoformat(submitted_str)
+                if submitted.tzinfo is None:
+                    submitted = submitted.replace(tzinfo=timezone.utc)
+                if submitted < cutoff:
+                    continue
+            except (ValueError, TypeError):
+                pass
+        builtin = task.get("payload", {}).get("builtin", "")
+        if not builtin or builtin in latest_by_script:
+            continue
+        latest_by_script[builtin] = task
+        if len(latest_by_script) >= max_scripts:
+            break
+    if not latest_by_script:
+        return ""
+    parts = ["## Auto-injected Cluster Intelligence Summary", ""]
+    total_len = 0
+    for builtin, task in latest_by_script.items():
+        section = [f"### {builtin} (collected {task.get('submitted_at', 'unknown')})"]
+        for cid, result in task.get("results", {}).items():
+            if result.get("status") == "completed":
+                stdout = (result.get("stdout") or "").strip()
+                if stdout:
+                    remaining = max_chars - total_len
+                    if remaining <= 200:
+                        break
+                    snippet = stdout[:remaining]
+                    section.append(f"```\n{snippet}\n```")
+                    total_len += len(snippet)
+        parts.extend(section)
+        parts.append("")
+        if total_len >= max_chars:
+            break
+    return "\n".join(parts)
+
+
+@app.get("/api/intelligence/collectors")
+async def list_intelligence_collectors(namespace: str = "default", user=Depends(verify_token)):
+    """List all registered collector agents and their status (tokens redacted)."""
+    namespace = _normalize_intelligence_namespace(namespace)
+    ensure_namespace_access(user, namespace)
+    collectors = []
+    async with httpx.AsyncClient(timeout=10, trust_env=False) as client:
+        for cid, info in _get_namespaced_collectors(namespace).items():
+            entry = {
+                "id": cid,
+                "namespace": namespace,
+                "name": info.get("name", cid),
+                "url": info.get("url", ""),
+                "token": "***",
+                "cluster": info.get("cluster", "unknown"),
+                "registered_at": info.get("registered_at"),
+                "tags": info.get("tags", []),
+            }
+            try:
+                health = await client.get(f"{info['url']}/healthz")
+                if health.status_code != 200:
+                    entry["status"] = "degraded"
+                    entry["error"] = f"Health check returned {health.status_code}"
+                    collectors.append(entry)
+                    continue
+
+                token = str(info.get("token") or "").strip()
+                if not token:
+                    entry["status"] = "degraded"
+                    entry["error"] = _COLLECTOR_TOKEN_MISSING_ERROR
+                    collectors.append(entry)
+                    continue
+
+                try:
+                    metadata = await client.get(
+                        f"{info['url']}/info",
+                        headers=_collector_auth_headers(token),
+                    )
+                    metadata.raise_for_status()
+                    payload = metadata.json()
+                    metadata_payload = payload if isinstance(payload, dict) else {}
+                    entry["status"] = "online"
+                    for field in ("node", "version", "capabilities", "builtin_scripts", "max_timeout", "cluster"):
+                        value = metadata_payload.get(field)
+                        if value not in (None, ""):
+                            entry[field] = value
+                except Exception as exc:
+                    entry["status"] = "degraded"
+                    entry["error"] = str(exc)
+            except Exception as exc:
+                entry["status"] = "offline"
+                entry["error"] = str(exc)
+            collectors.append(entry)
+    return {"collectors": collectors, "total": len(collectors)}
+
+
+@app.post("/api/intelligence/collectors")
+def register_intelligence_collector(
+    body: dict[str, Any] = Body(...),
+    namespace: str = "default",
+    user=Depends(verify_token),
+):
+    """Register a new collector agent (persisted to DB, cached in memory)."""
+    namespace = _normalize_intelligence_namespace(namespace)
+    ensure_namespace_access(user, namespace, "operator")
+    name = body.get("name")
+    url = body.get("url")
+    if not name or not url:
+        raise HTTPException(status_code=400, detail="'name' and 'url' required")
+    validated_url = _validate_collector_url(url)
+    token = str(body.get("token", "")).strip()
+    if not token:
+        raise HTTPException(status_code=400, detail="'token' is required")
+    expected_id = _build_namespace_scoped_collector_id(namespace, name)
+    now = datetime.now(timezone.utc)
+    # Persist to DB (hash the token)
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    encrypted_token = _encrypt_collector_token(token)
+    with db_session() as ses:
+        existing = ses.query(IntelligenceCollectorRow).filter_by(namespace=namespace, id=expected_id).first()
+        if existing is None:
+            existing = ses.query(IntelligenceCollectorRow).filter_by(namespace=namespace, name=name).first()
+        if existing:
+            cid = existing.id
+            existing.name = name
+            existing.namespace = namespace
+            existing.url = validated_url
+            existing.token_hash = token_hash
+            existing.encrypted_token = encrypted_token
+            existing.cluster = body.get("cluster", "unknown")
+            existing.tags = body.get("tags", [])
+            existing.registered_by = user.get("sub", "unknown") if isinstance(user, dict) else "unknown"
+        else:
+            cid = expected_id
+            if ses.query(IntelligenceCollectorRow).filter_by(id=cid).first():
+                raise HTTPException(status_code=409, detail="Collector identifier collision. Rename the collector and try again.")
+            ses.add(IntelligenceCollectorRow(
+                id=cid, namespace=namespace, name=name, url=validated_url, token_hash=token_hash, encrypted_token=encrypted_token,
+                cluster=body.get("cluster", "unknown"), tags=body.get("tags", []),
+                registered_at=now,
+                registered_by=user.get("sub", "unknown") if isinstance(user, dict) else "unknown",
+            ))
+    # Update in-memory cache (plaintext token kept for outbound requests)
+    _set_namespaced_collector(namespace, cid, {
+        "id": cid,
+        "name": name,
+        "url": validated_url,
+        "token": token,
+        "cluster": body.get("cluster", "unknown"),
+        "registered_at": now.isoformat(),
+        "tags": body.get("tags", []),
+    })
+    safe_record_audit(
+        action="intelligence.collector.register",
+        principal=user,
+        resource_kind="intelligence-collector",
+        resource_name=cid,
+        resource_namespace=namespace,
+        detail={"collector_name": name, "cluster": body.get("cluster", "unknown")},
+    )
+    return {"id": cid, "namespace": namespace, "status": "registered", "name": name, "url": validated_url, "token": "***"}
+
+
+@app.delete("/api/intelligence/collectors/{collector_id}")
+def unregister_intelligence_collector(
+    collector_id: str,
+    namespace: str = "default",
+    user=Depends(verify_token),
+):
+    """Unregister a collector agent (removes from DB and cache)."""
+    namespace = _normalize_intelligence_namespace(namespace)
+    ensure_namespace_access(user, namespace, "operator")
+    collectors = _get_namespaced_collectors(namespace)
+    if collector_id not in collectors:
+        raise HTTPException(status_code=404, detail="Collector not found")
+    # Remove from DB
+    with db_session() as ses:
+        row = ses.query(IntelligenceCollectorRow).filter_by(id=collector_id, namespace=namespace).first()
+        if row:
+            ses.delete(row)
+    # Remove from cache
+    _remove_namespaced_collector(namespace, collector_id)
+    safe_record_audit(
+        action="intelligence.collector.unregister",
+        principal=user,
+        resource_kind="intelligence-collector",
+        resource_name=collector_id,
+        resource_namespace=namespace,
+    )
+    return {"status": "unregistered", "id": collector_id, "namespace": namespace}
+
+
+@app.post("/api/intelligence/collect")
+async def submit_collection_task(
+    body: dict[str, Any] = Body(...),
+    namespace: str = "default",
+    user=Depends(verify_token),
+):
+    """
+    Submit a collection task to one or more collectors.
+
+    Body:
+    {
+        "collector_id": "my-cluster",      # or "all" for fan-out
+        "script": "kubectl get pods -A",   # custom script
+        "builtin": "cluster_overview",     # OR use a built-in script
+        "type": "bash",                    # bash or python
+        "timeout": 30
+    }
+    """
+    namespace = _normalize_intelligence_namespace(namespace)
+    ensure_namespace_access(user, namespace, "operator")
+
+    collector_id = str(body.get("collector_id") or "").strip()
+    if not collector_id:
+        raise HTTPException(status_code=400, detail="'collector_id' required")
+    task_id = str(uuid.uuid4())[:8]
+    payload = _normalize_collection_payload(body)
+
+    # Determine targets
+    targets = _resolve_collection_targets(namespace, collector_id)
+
+    # Execute
+    results = {}
+    async with httpx.AsyncClient(timeout=COLLECTOR_TIMEOUT, trust_env=False) as client:
+        for cid, info in targets.items():
+            token = str(info.get("token") or "").strip()
+            if not token:
+                results[cid] = {"status": "error", "error": _COLLECTOR_TOKEN_MISSING_ERROR}
+                continue
+            try:
+                resp = await client.post(
+                    f"{info['url']}/collect",
+                    headers=_collector_auth_headers(token),
+                    json=payload,
+                )
+                resp.raise_for_status()
+                results[cid] = resp.json()
+            except Exception as e:
+                results[cid] = {"status": "error", "error": str(e)}
+
+    task_record = _build_intelligence_task_record(
+        namespace,
+        task_id=task_id,
+        collector_id=collector_id,
+        payload=payload,
+        results=results,
+        submitted_by=user.get("sub", "unknown") if isinstance(user, dict) else "unknown",
+    )
+    with _tasks_lock:
+        _collection_tasks[task_id] = task_record
+    _enforce_collection_tasks_cap()
+    _persist_task(task_record)
+    safe_record_audit(
+        action="intelligence.task.submit",
+        principal=user,
+        resource_kind="intelligence-task",
+        resource_name=task_id,
+        resource_namespace=namespace,
+        detail={"collector_id": collector_id, "builtin": payload.get("builtin")},
+    )
+    return task_record
+
+
+@app.get("/api/intelligence/tasks")
+def list_collection_tasks(
+    limit: int = 50,
+    namespace: str = "default",
+    user=Depends(verify_token),
+):
+    """List recent collection tasks."""
+    namespace = _normalize_intelligence_namespace(namespace)
+    ensure_namespace_access(user, namespace)
+    with db_session() as ses:
+        rows = (
+            ses.query(IntelligenceTaskRow)
+            .filter_by(namespace=namespace)
+            .order_by(IntelligenceTaskRow.submitted_at.desc())
+            .limit(limit)
+            .all()
+        )
+        tasks = [row.to_dict() for row in rows]
+        total = ses.query(IntelligenceTaskRow).filter_by(namespace=namespace).count()
+    return {"tasks": tasks, "total": total}
+
+
+@app.get("/api/intelligence/tasks/{task_id}")
+def get_collection_task(
+    task_id: str,
+    namespace: str = "default",
+    user=Depends(verify_token),
+):
+    """Get a specific collection task and its results."""
+    namespace = _normalize_intelligence_namespace(namespace)
+    ensure_namespace_access(user, namespace)
+    with db_session() as ses:
+        row = ses.query(IntelligenceTaskRow).filter_by(task_id=task_id, namespace=namespace).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return row.to_dict()
+
+
+@app.delete("/api/intelligence/tasks/{task_id}", response_model=DeleteResponse)
+def delete_collection_task(
+    task_id: str,
+    namespace: str = "default",
+    user=Depends(verify_token),
+):
+    """Delete a specific collection task and remove it from intelligence context caches."""
+    namespace = _normalize_intelligence_namespace(namespace)
+    ensure_namespace_access(user, namespace, "operator")
+    deleted_ids, _missing_ids = _delete_collection_tasks(namespace, [task_id])
+    if not deleted_ids:
+        raise HTTPException(status_code=404, detail="Task not found")
+    safe_record_audit(
+        action="intelligence.task.delete",
+        principal=user,
+        resource_kind="intelligence-task",
+        resource_name=task_id,
+        resource_namespace=namespace,
+    )
+    return {"status": "deleted", "kind": "intelligence-task", "name": task_id, "namespace": namespace}
+
+
+@app.post("/api/intelligence/tasks/delete")
+def bulk_delete_collection_tasks(
+    body: dict[str, Any] = Body(...),
+    namespace: str = "default",
+    user=Depends(verify_token),
+):
+    """Delete multiple collection tasks in one request."""
+    namespace = _normalize_intelligence_namespace(namespace)
+    ensure_namespace_access(user, namespace, "operator")
+    task_ids = body.get("task_ids")
+    if not isinstance(task_ids, list):
+        raise HTTPException(status_code=400, detail="'task_ids' must be a list")
+    deleted_ids, missing_ids = _delete_collection_tasks(namespace, task_ids)
+    if not deleted_ids:
+        raise HTTPException(status_code=404, detail="No matching tasks found")
+    safe_record_audit(
+        action="intelligence.task.delete.bulk",
+        principal=user,
+        resource_kind="intelligence-task",
+        resource_name="bulk",
+        resource_namespace=namespace,
+        detail={"deleted_ids": deleted_ids[:20], "missing_ids": missing_ids[:20], "deleted": len(deleted_ids)},
+    )
+    return {
+        "status": "deleted",
+        "kind": "intelligence-task",
+        "namespace": namespace,
+        "deleted": len(deleted_ids),
+        "requested": len(deleted_ids) + len(missing_ids),
+        "deleted_ids": deleted_ids,
+        "missing_ids": missing_ids,
+    }
+
+
+# =========================================================================
+# Intelligence Schedules & Alerts API  (PostgreSQL-backed)
+# =========================================================================
+
+
+def _normalize_schedule_configuration(
+    body: dict[str, Any],
+    *,
+    namespace: str,
+    current: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    merged: dict[str, Any] = dict(current or {})
+    merged.update(body)
+
+    name = str(merged.get("name") or "").strip()
+    cron_expr = str(merged.get("cron") or "").strip()
+    if not name or not cron_expr:
+        raise HTTPException(status_code=400, detail="'name' and 'cron' required")
+    try:
+        from croniter import croniter
+
+        croniter(cron_expr)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid cron expression: {exc}") from exc
+
+    payload = _normalize_collection_payload(merged)
+    collector_id = str(merged.get("collector_id") or "all").strip() or "all"
+    if collector_id != "all":
+        _resolve_collection_targets(namespace, collector_id)
+    agent_name = _ensure_intelligence_agent_exists(merged.get("agent_name"), namespace)
+    return {
+        "name": name,
+        "cron": cron_expr,
+        "collector_id": collector_id,
+        "builtin": payload.get("builtin"),
+        "script": payload.get("script"),
+        "script_type": payload.get("type", "bash"),
+        "timeout": payload.get("timeout", 30),
+        "agent_name": agent_name,
+        "enabled": bool(merged.get("enabled", True)),
+    }
+
+
+def _normalize_alert_configuration(
+    body: dict[str, Any],
+    *,
+    namespace: str,
+    current: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    merged: dict[str, Any] = dict(current or {})
+    merged.update(body)
+
+    name = str(merged.get("name") or "").strip()
+    condition_type = str(merged.get("condition_type") or "").strip()
+    if not name or condition_type not in _INTELLIGENCE_ALERT_CONDITION_TYPES:
+        raise HTTPException(status_code=400, detail="'name' and valid 'condition_type' required")
+
+    condition_value = str(merged.get("condition_value") or "")
+    if condition_type == "regex":
+        try:
+            re.compile(condition_value)
+        except re.error as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid regex: {exc}") from exc
+
+    action = str(merged.get("action") or "notify").strip() or "notify"
+    if action not in _INTELLIGENCE_ALERT_ACTIONS:
+        raise HTTPException(status_code=400, detail="Action must be 'notify' or 'invoke_agent'")
+
+    schedule_id = str(merged.get("schedule_id") or "").strip() or None
+    if schedule_id:
+        with db_session() as ses:
+            linked_schedule = ses.query(IntelligenceScheduleRow).filter_by(id=schedule_id, namespace=namespace).first()
+        if linked_schedule is None:
+            raise HTTPException(status_code=400, detail=f"Schedule '{schedule_id}' was not found in namespace '{namespace}'")
+
+    agent_name = _ensure_intelligence_agent_exists(merged.get("agent_name"), namespace)
+    if action == "invoke_agent" and not agent_name:
+        raise HTTPException(status_code=400, detail="'agent_name' is required when action is 'invoke_agent'")
+
+    prompt_template = str(merged.get("prompt_template") or "").strip() or None
+    if action == "invoke_agent" and not prompt_template:
+        prompt_template = "Intelligence alert:\n\n{{output}}"
+
+    return {
+        "name": name,
+        "schedule_id": schedule_id,
+        "condition_type": condition_type,
+        "condition_value": condition_value,
+        "action": action,
+        "agent_name": agent_name,
+        "prompt_template": prompt_template if action == "invoke_agent" else None,
+        "enabled": bool(merged.get("enabled", True)),
+    }
+
+@app.get("/api/intelligence/schedules")
+def list_intelligence_schedules(namespace: str = "default", user=Depends(verify_token)):
+    """List all collection schedules."""
+    namespace = _normalize_intelligence_namespace(namespace)
+    ensure_namespace_access(user, namespace)
+    with db_session() as ses:
+        rows = (
+            ses.query(IntelligenceScheduleRow)
+            .filter_by(namespace=namespace)
+            .order_by(IntelligenceScheduleRow.created_at.desc())
+            .all()
+        )
+        items = [r.to_dict() for r in rows]
+    return {"schedules": items, "total": len(items)}
+
+
+@app.post("/api/intelligence/schedules")
+def create_intelligence_schedule(body: dict[str, Any] = Body(...), namespace: str = "default", user=Depends(verify_token)):
+    """Create a recurring collection schedule."""
+    namespace = _normalize_intelligence_namespace(namespace)
+    ensure_namespace_access(user, namespace, "operator")
+    config = _normalize_schedule_configuration(body, namespace=namespace)
+    sid = str(uuid.uuid4())[:8]
+    from croniter import croniter as _croniter
+    nxt = _croniter(config["cron"], datetime.now(timezone.utc)).get_next(datetime)
+    row = IntelligenceScheduleRow(
+        id=sid,
+        namespace=namespace,
+        name=config["name"],
+        cron=config["cron"],
+        collector_id=config["collector_id"],
+        builtin=config["builtin"],
+        script=config["script"],
+        script_type=config["script_type"],
+        timeout=config["timeout"],
+        agent_name=config["agent_name"],
+        enabled=config["enabled"],
+        created_by=user.get("sub", "unknown") if isinstance(user, dict) else "unknown",
+        next_run=nxt,
+    )
+    with db_session() as ses:
+        ses.add(row)
+        ses.flush()
+        result = row.to_dict()
+    safe_record_audit(
+        action="intelligence.schedule.create",
+        principal=user,
+        resource_kind="intelligence-schedule",
+        resource_name=sid,
+        resource_namespace=namespace,
+        detail={"collector_id": config["collector_id"], "builtin": config["builtin"]},
+    )
+    return result
+
+
+@app.put("/api/intelligence/schedules/{schedule_id}")
+def update_intelligence_schedule(
+    schedule_id: str,
+    body: dict[str, Any] = Body(...),
+    namespace: str = "default",
+    user=Depends(verify_token),
+):
+    """Update a collection schedule."""
+    namespace = _normalize_intelligence_namespace(namespace)
+    ensure_namespace_access(user, namespace, "operator")
+    with db_session() as ses:
+        row = ses.query(IntelligenceScheduleRow).filter_by(id=schedule_id, namespace=namespace).first()
+        if not row:
+            raise HTTPException(status_code=404, detail="Schedule not found")
+        config = _normalize_schedule_configuration(body, namespace=namespace, current=row.to_dict())
+        row.name = config["name"]
+        row.cron = config["cron"]
+        row.collector_id = config["collector_id"]
+        row.builtin = config["builtin"]
+        row.script = config["script"]
+        row.script_type = config["script_type"]
+        row.timeout = config["timeout"]
+        row.agent_name = config["agent_name"]
+        row.enabled = config["enabled"]
+        try:
+            from croniter import croniter
+
+            row.next_run = croniter(config["cron"], datetime.now(timezone.utc)).get_next(datetime)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid cron expression: {exc}") from exc
+        result = row.to_dict()
+    safe_record_audit(
+        action="intelligence.schedule.update",
+        principal=user,
+        resource_kind="intelligence-schedule",
+        resource_name=schedule_id,
+        resource_namespace=namespace,
+        detail={"collector_id": result.get("collector_id"), "builtin": result.get("builtin")},
+    )
+    return result
+
+
+@app.delete("/api/intelligence/schedules/{schedule_id}")
+def delete_intelligence_schedule(schedule_id: str, namespace: str = "default", user=Depends(verify_token)):
+    """Delete a collection schedule."""
+    namespace = _normalize_intelligence_namespace(namespace)
+    ensure_namespace_access(user, namespace, "operator")
+    with db_session() as ses:
+        row = ses.query(IntelligenceScheduleRow).filter_by(id=schedule_id, namespace=namespace).first()
+        if not row:
+            raise HTTPException(status_code=404, detail="Schedule not found")
+        ses.delete(row)
+    safe_record_audit(
+        action="intelligence.schedule.delete",
+        principal=user,
+        resource_kind="intelligence-schedule",
+        resource_name=schedule_id,
+        resource_namespace=namespace,
+    )
+    return {"status": "deleted", "id": schedule_id, "namespace": namespace}
+
+
+@app.get("/api/intelligence/alerts")
+def list_intelligence_alerts(agent_name: str | None = None, namespace: str = "default", user=Depends(verify_token)):
+    """List alert rules, optionally filtered by agent_name."""
+    namespace = _normalize_intelligence_namespace(namespace)
+    ensure_namespace_access(user, namespace)
+    with db_session() as ses:
+        q = ses.query(IntelligenceAlertRow).filter_by(namespace=namespace)
+        if agent_name:
+            q = q.filter_by(agent_name=agent_name)
+        rows = q.order_by(IntelligenceAlertRow.created_at.desc()).all()
+        items = [r.to_dict() for r in rows]
+    return {"alerts": items, "total": len(items)}
+
+
+@app.post("/api/intelligence/alerts")
+def create_intelligence_alert(body: dict[str, Any] = Body(...), namespace: str = "default", user=Depends(verify_token)):
+    """Create an alert rule on collection output."""
+    namespace = _normalize_intelligence_namespace(namespace)
+    ensure_namespace_access(user, namespace, "operator")
+    config = _normalize_alert_configuration(body, namespace=namespace)
+    aid = str(uuid.uuid4())[:8]
+    row = IntelligenceAlertRow(
+        id=aid,
+        namespace=namespace,
+        name=config["name"],
+        schedule_id=config["schedule_id"],
+        condition_type=config["condition_type"],
+        condition_value=config["condition_value"],
+        action=config["action"],
+        agent_name=config["agent_name"],
+        prompt_template=config["prompt_template"],
+        enabled=config["enabled"],
+        created_by=user.get("sub", "unknown") if isinstance(user, dict) else "unknown",
+    )
+    with db_session() as ses:
+        ses.add(row)
+        ses.flush()
+        result = row.to_dict()
+    safe_record_audit(
+        action="intelligence.alert.create",
+        principal=user,
+        resource_kind="intelligence-alert",
+        resource_name=aid,
+        resource_namespace=namespace,
+        detail={"schedule_id": config["schedule_id"], "action": config["action"]},
+    )
+    return result
+
+
+@app.put("/api/intelligence/alerts/{alert_id}")
+def update_intelligence_alert(
+    alert_id: str,
+    body: dict[str, Any] = Body(...),
+    namespace: str = "default",
+    user=Depends(verify_token),
+):
+    """Update an alert rule."""
+    namespace = _normalize_intelligence_namespace(namespace)
+    ensure_namespace_access(user, namespace, "operator")
+    with db_session() as ses:
+        row = ses.query(IntelligenceAlertRow).filter_by(id=alert_id, namespace=namespace).first()
+        if not row:
+            raise HTTPException(status_code=404, detail="Alert not found")
+        config = _normalize_alert_configuration(body, namespace=namespace, current=row.to_dict())
+        row.name = config["name"]
+        row.schedule_id = config["schedule_id"]
+        row.condition_type = config["condition_type"]
+        row.condition_value = config["condition_value"]
+        row.action = config["action"]
+        row.agent_name = config["agent_name"]
+        row.prompt_template = config["prompt_template"]
+        row.enabled = config["enabled"]
+        result = row.to_dict()
+    safe_record_audit(
+        action="intelligence.alert.update",
+        principal=user,
+        resource_kind="intelligence-alert",
+        resource_name=alert_id,
+        resource_namespace=namespace,
+        detail={"schedule_id": result.get("schedule_id"), "action": result.get("action")},
+    )
+    return result
+
+
+@app.delete("/api/intelligence/alerts/{alert_id}")
+def delete_intelligence_alert(alert_id: str, namespace: str = "default", user=Depends(verify_token)):
+    """Delete an alert rule."""
+    namespace = _normalize_intelligence_namespace(namespace)
+    ensure_namespace_access(user, namespace, "operator")
+    with db_session() as ses:
+        row = ses.query(IntelligenceAlertRow).filter_by(id=alert_id, namespace=namespace).first()
+        if not row:
+            raise HTTPException(status_code=404, detail="Alert not found")
+        ses.delete(row)
+    safe_record_audit(
+        action="intelligence.alert.delete",
+        principal=user,
+        resource_kind="intelligence-alert",
+        resource_name=alert_id,
+        resource_namespace=namespace,
+    )
+    return {"status": "deleted", "id": alert_id, "namespace": namespace}
+
+
+@app.get("/api/intelligence/alerts/history")
+def list_alert_history(limit: int = 50, namespace: str = "default", user=Depends(verify_token)):
+    """Get recent alert trigger history."""
+    namespace = _normalize_intelligence_namespace(namespace)
+    ensure_namespace_access(user, namespace)
+    with db_session() as ses:
+        rows = (
+            ses.query(AlertHistoryRow)
+            .filter_by(namespace=namespace)
+            .order_by(AlertHistoryRow.triggered_at.desc())
+            .limit(min(limit, 500))
+            .all()
+        )
+        items = [r.to_dict() for r in rows]
+    return {"history": items, "total": len(items)}
+
+
+@app.post("/api/intelligence/prompt-context")
+async def get_intelligence_prompt_context(
+    body: dict[str, Any] = Body(...),
+    namespace: str = "default",
+    user=Depends(verify_token),
+):
+    """
+    Fetch the latest intelligence output formatted as a prompt context string.
+    Optionally runs a fresh collection if no recent tasks exist.
+    """
+    namespace = _normalize_intelligence_namespace(namespace)
+    ensure_namespace_access(user, namespace, "operator")
+    collector_id = str(body.get("collector_id") or "all").strip() or "all"
+    payload = _normalize_collection_payload(body)
+    # Try to find a recent matching task
+    matching = [
+        task
+        for task in _list_namespaced_tasks(namespace)
+        if _task_matches_request(task, collector_id, payload)
+    ][:1]
+    if matching:
+        task = matching[0]
+    else:
+        # Run a fresh collection
+        targets = _resolve_collection_targets(namespace, collector_id)
+        results: dict[str, Any] = {}
+        async with httpx.AsyncClient(timeout=COLLECTOR_TIMEOUT, trust_env=False) as client:
+            for cid, info in targets.items():
+                try:
+                    resp = await client.post(
+                        f"{info['url']}/collect",
+                        headers={"Authorization": f"Bearer {info.get('token', '')}"},
+                        json=payload,
+                    )
+                    resp.raise_for_status()
+                    results[cid] = resp.json()
+                except Exception as e:
+                    results[cid] = {"status": "error", "error": str(e)}
+        tid = str(uuid.uuid4())[:8]
+        task = _build_intelligence_task_record(
+            namespace,
+            task_id=tid,
+            collector_id=collector_id,
+            payload=payload,
+            results=results,
+            submitted_by=str(user.get("sub") or "prompt-context") if isinstance(user, dict) else "prompt-context",
+        )
+        with _tasks_lock:
+            _collection_tasks[tid] = task
+        _enforce_collection_tasks_cap()
+        _persist_task(task)
+        safe_record_audit(
+            action="intelligence.prompt-context.collect",
+            principal=user,
+            resource_kind="intelligence-task",
+            resource_name=tid,
+            resource_namespace=namespace,
+            detail={"collector_id": collector_id, "builtin": payload.get("builtin")},
+        )
+    # Format as prompt context
+    parts = [f"## Cluster Intelligence ({payload.get('builtin') or 'custom script'})"]
+    parts.append(f"Collected at: {task.get('submitted_at', 'unknown')}")
+    parts.append("")
+    for cid, result in task.get("results", {}).items():
+        parts.append(f"### Collector: {cid}")
+        if result.get("status") == "completed":
+            stdout = result.get("stdout", "").strip()
+            if stdout:
+                parts.append(f"```\n{stdout[:8000]}\n```")
+            else:
+                parts.append("*(no output)*")
+        else:
+            parts.append(f"Status: {result.get('status', 'unknown')}")
+            if result.get("error"):
+                parts.append(f"Error: {result['error']}")
+        parts.append("")
+    return {
+        "context": "\n".join(parts),
+        "task_id": task.get("task_id"),
+        "collector_id": collector_id,
+        "namespace": namespace,
+    }
+
+
+# ─── Background intelligence scheduler ───────────────────────────────────
+
+def _evaluate_alert_condition(alert: dict[str, Any], result: dict[str, Any]) -> bool:
+    """Check whether a collection result triggers the alert condition."""
+    ctype = alert.get("condition_type", "")
+    cvalue = str(alert.get("condition_value", ""))
+    stdout = result.get("stdout", "")
+    if ctype == "contains":
+        return cvalue in stdout
+    if ctype == "not_contains":
+        return cvalue not in stdout
+    if ctype == "exit_code":
+        try:
+            return result.get("exit_code") == int(cvalue)
+        except (ValueError, TypeError):
+            return False
+    if ctype == "regex":
+        try:
+            return bool(re.search(cvalue, stdout))
+        except re.error:
+            return False
+    return False
+
+
+async def _run_scheduled_collection(schedule: dict[str, Any]) -> dict[str, Any] | None:
+    """Execute a collection for a schedule entry and return the task record."""
+    namespace = _normalize_intelligence_namespace(schedule.get("namespace"))
+    collector_id = schedule.get("collector_id", "all")
+    payload: dict[str, Any] = {"timeout": schedule.get("timeout", 30)}
+    if schedule.get("builtin"):
+        payload["builtin"] = schedule["builtin"]
+    elif schedule.get("script"):
+        payload["script"] = schedule["script"]
+        payload["type"] = schedule.get("script_type", "bash")
+    else:
+        return None
+    try:
+        targets = _resolve_collection_targets(namespace, collector_id)
+    except HTTPException:
+        return None
+    results: dict[str, Any] = {}
+    async with httpx.AsyncClient(timeout=COLLECTOR_TIMEOUT, trust_env=False) as client:
+        for cid, info in targets.items():
+            try:
+                resp = await client.post(
+                    f"{info['url']}/collect",
+                    headers={"Authorization": f"Bearer {info.get('token', '')}"},
+                    json=payload,
+                )
+                resp.raise_for_status()
+                results[cid] = resp.json()
+            except Exception as e:
+                results[cid] = {"status": "error", "error": str(e)}
+    tid = str(uuid.uuid4())[:8]
+    task = _build_intelligence_task_record(
+        namespace,
+        task_id=tid,
+        collector_id=collector_id,
+        payload=payload,
+        results=results,
+        submitted_by=f"schedule:{schedule.get('id', 'unknown')}",
+    )
+    with _tasks_lock:
+        _collection_tasks[tid] = task
+    _enforce_collection_tasks_cap()
+    _persist_task(task)
+    return task
+
+
+async def _fire_alert(alert_dict: dict[str, Any], task: dict[str, Any], matching_output: str):
+    """Process a fired alert — log to history (DB) and optionally invoke an agent."""
+    namespace = _normalize_intelligence_namespace(alert_dict.get("namespace"))
+    now = datetime.now(timezone.utc)
+    snippet = matching_output[:500] if matching_output else ""
+    hid = str(uuid.uuid4())[:8]
+    history_entry = AlertHistoryRow(
+        id=hid,
+        namespace=namespace,
+        alert_id=alert_dict["id"],
+        alert_name=alert_dict["name"],
+        triggered_at=now,
+        condition_matched=f"{alert_dict['condition_type']}:{alert_dict['condition_value']}",
+        action_taken=alert_dict.get("action", "notify"),
+        task_id=task.get("task_id"),
+        snippet=snippet,
+    )
+    if alert_dict.get("action") == "invoke_agent" and alert_dict.get("agent_name"):
+        agent_name = alert_dict["agent_name"]
+        template = alert_dict.get("prompt_template", "Intelligence alert:\n\n{{output}}")
+        prompt = template.replace("{{output}}", matching_output[:4000])
+        try:
+            # Direct in-process call to agent runtime — avoids HTTP round-trip,
+            # hardcoded port, and fake auth token.
+            agent = await asyncio.to_thread(read_agent, agent_name, namespace)
+            runtime_url = agent_runtime_url(agent_name, namespace)
+            request_payload = {"prompt": prompt, "autonomous": True}
+            async with httpx.AsyncClient(timeout=60, trust_env=False) as client:
+                resp = await client.post(
+                    f"{runtime_url}/invoke",
+                    json=request_payload,
+                    headers={"x-request-id": str(uuid.uuid4())},
+                )
+                history_entry.agent_invoked = agent_name
+                history_entry.invoke_status = resp.status_code
+        except Exception as exc:
+            history_entry.agent_invoked = agent_name
+            history_entry.invoke_error = str(exc)
+            logger.warning("Alert auto-invoke failed for agent %s: %s", agent_name, exc)
+    with db_session() as ses:
+        # Update alert row
+        alert_row = ses.query(IntelligenceAlertRow).filter_by(id=alert_dict["id"], namespace=namespace).first()
+        if alert_row:
+            alert_row.last_triggered = now
+            alert_row.trigger_count = (alert_row.trigger_count or 0) + 1
+        ses.add(history_entry)
+        # Trim old history
+        total = ses.query(AlertHistoryRow).filter_by(namespace=namespace).count()
+        if total > _ALERT_HISTORY_CAP:
+            oldest = (
+                ses.query(AlertHistoryRow)
+                .filter_by(namespace=namespace)
+                .order_by(AlertHistoryRow.triggered_at.asc())
+                .limit(total - _ALERT_HISTORY_CAP)
+                .all()
+            )
+            for old in oldest:
+                ses.delete(old)
+    logger.info("Alert '%s' triggered (task %s)", alert_dict["name"], task.get("task_id"))
+
+
+async def _intelligence_scheduler_loop():
+    """Background loop that polls schedules every 30s and fires due collections."""
+    logger.info("Intelligence scheduler started.")
+    while not _SHUTDOWN.is_set():
+        try:
+            await asyncio.sleep(30)
+            now = datetime.now(timezone.utc)
+            # Load schedules from DB
+            with db_session() as ses:
+                schedules = ses.query(IntelligenceScheduleRow).filter_by(enabled=True).all()
+                sched_dicts = [r.to_dict() for r in schedules]
+            for sched in sched_dicts:
+                next_run_str = sched.get("next_run")
+                if not next_run_str:
+                    continue
+                try:
+                    next_run = datetime.fromisoformat(next_run_str)
+                    if next_run.tzinfo is None:
+                        next_run = next_run.replace(tzinfo=timezone.utc)
+                except (ValueError, TypeError):
+                    continue
+                if now < next_run:
+                    continue
+                sid = sched["id"]
+                schedule_namespace = _normalize_intelligence_namespace(sched.get("namespace"))
+                # Re-check enabled right before execution (may have been toggled since loop start)
+                with db_session() as ses:
+                    still_enabled = ses.query(IntelligenceScheduleRow).filter_by(
+                        id=sid,
+                        namespace=schedule_namespace,
+                        enabled=True,
+                    ).first()
+                if not still_enabled:
+                    logger.info("Schedule '%s' (id=%s) was disabled since loop start, skipping.", sched.get("name"), sid)
+                    continue
+                logger.info("Scheduled collection '%s' (id=%s) is due.", sched.get("name"), sid)
+                task = await _run_scheduled_collection(sched)
+                # Update schedule row in DB
+                try:
+                    from croniter import croniter
+                    nxt = croniter(sched["cron"], now).get_next(datetime)
+                except Exception:
+                    nxt = None
+                with db_session() as ses:
+                    row = ses.query(IntelligenceScheduleRow).filter_by(id=sid, namespace=schedule_namespace).first()
+                    if row:
+                        row.last_run = now
+                        row.next_run = nxt
+                if not task:
+                    continue
+                # Load alerts from DB and evaluate
+                with db_session() as ses:
+                    alerts = ses.query(IntelligenceAlertRow).filter_by(enabled=True, namespace=schedule_namespace).all()
+                    alert_dicts = [a.to_dict() for a in alerts]
+                for alert in alert_dicts:
+                    linked_schedule = alert.get("schedule_id")
+                    if linked_schedule and linked_schedule != sid:
+                        continue
+                    for cid, result in task.get("results", {}).items():
+                        if _evaluate_alert_condition(alert, result):
+                            await _fire_alert(alert, task, result.get("stdout", ""))
+                            break
+        except asyncio.CancelledError:
+            break
+        except Exception:
+            logger.exception("Error in intelligence scheduler loop")
+    logger.info("Intelligence scheduler stopped.")

@@ -22,6 +22,12 @@ rules:
   - apiGroups: ["kubesynth.ai"]
     resources: [aiagents/status, agentapprovals/status, agentworkflows/status, agentevals/status, agenttenants/status]
     verbs: [get, patch, update]
+  - apiGroups: ["kubesynth.ai"]
+    resources: [observationtargets, observationpolicies, observationreports, connectorplugins]
+    verbs: [create, delete, get, list, patch, update, watch]
+  - apiGroups: ["kubesynth.ai"]
+    resources: [observationtargets/status, observationpolicies/status, observationreports/status, connectorplugins/status]
+    verbs: [get, patch, update]
   - apiGroups: ["apiextensions.k8s.io"]
     resources: [customresourcedefinitions]
     verbs: [get, list, watch]
@@ -31,15 +37,33 @@ rules:
   - apiGroups: ["batch"]
     resources: [jobs]
     verbs: [create, delete, get, list, watch, patch, update]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: [leases]
+    verbs: [create, delete, get, list, watch, patch, update]
   - apiGroups: [""]
     resources: [pods, services, persistentvolumeclaims, serviceaccounts, namespaces, resourcequotas, limitranges, configmaps]
     verbs: [create, delete, get, list, watch, patch, update]
   - apiGroups: [""]
-    resources: [events]
-    verbs: [create, patch]
+    resources: [nodes, endpoints, events]
+    verbs: [create, get, list, watch, patch]
+  - apiGroups: [""]
+    resources: [pods/log]
+    verbs: [get]
   - apiGroups: ["rbac.authorization.k8s.io"]
-    resources: [roles, rolebindings]
+    resources: [roles, rolebindings, clusterrolebindings]
     verbs: [create, delete, get, list, watch, patch, update]
+  - apiGroups: ["apps"]
+    resources: [deployments, daemonsets, replicasets]
+    verbs: [get, list, watch]
+  - apiGroups: ["batch"]
+    resources: [cronjobs]
+    verbs: [get, list, watch]
+  - apiGroups: ["networking.k8s.io"]
+    resources: [ingresses]
+    verbs: [get, list, watch]
+  - apiGroups: ["autoscaling"]
+    resources: [horizontalpodautoscalers]
+    verbs: [get, list, watch]
   - apiGroups: ["external-secrets.io"]
     resources: [externalsecrets]
     verbs: [create, delete, get, list, watch, patch, update]
@@ -77,7 +101,7 @@ rules:
     verbs: [create, delete, get, list, patch, update, watch]
   - apiGroups: ["kubesynth.ai"]
     resources: [agentpolicies]
-    verbs: [get, list, watch]
+    verbs: [create, delete, get, list, patch, update, watch]
   - apiGroups: ["kubesynth.ai"]
     resources: [agentapprovals]
     verbs: [get, list, watch]
@@ -86,6 +110,12 @@ rules:
     verbs: [patch, update]
   - apiGroups: ["kubesynth.ai"]
     resources: [agentworkflows/status]
+    verbs: [patch, update]
+  - apiGroups: ["kubesynth.ai"]
+    resources: [observationtargets, observationpolicies, observationreports, connectorplugins]
+    verbs: [create, delete, get, list, patch, update, watch]
+  - apiGroups: ["kubesynth.ai"]
+    resources: [observationtargets/status, observationpolicies/status, observationreports/status, connectorplugins/status]
     verbs: [patch, update]
   - apiGroups: [""]
     resources: [pods]
@@ -118,9 +148,52 @@ kind: ClusterRole
 metadata:
   name: {{ include "kubesynth.fullname" . }}-runtime-role
 rules:
-  - apiGroups: ["kubesynth.ai"]
-    resources: [agentpolicies]
+  # Kubernetes MCP sidecar — read-only access to cluster resources
+  - apiGroups: [""]
+    resources: [pods, services, nodes, events, configmaps, endpoints, persistentvolumeclaims, namespaces, resourcequotas, limitranges]
     verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [create, patch, update]
+  - apiGroups: [""]
+    resources: [pods/log]
+    verbs: [get]
+  - apiGroups: [apps]
+    resources: [deployments, statefulsets, daemonsets, replicasets]
+    verbs: [get, list, watch]
+  - apiGroups: [batch]
+    resources: [jobs, cronjobs]
+    verbs: [get, list, watch]
+  - apiGroups: [networking.k8s.io]
+    resources: [ingresses, networkpolicies]
+    verbs: [get, list, watch]
+  - apiGroups: [autoscaling]
+    resources: [horizontalpodautoscalers]
+    verbs: [get, list, watch]
+  - apiGroups: ["kubesynth.ai"]
+    resources: [agentpolicies, aiagents, agentworkflows]
+    verbs: [get, list, watch]
+  - apiGroups: ["kubesynth.ai"]
+    resources: [agentpolicies, aiagents, agentworkflows]
+    verbs: [create, patch, update]
   - apiGroups: ["kubesynth.ai"]
     resources: [agentapprovals]
     verbs: [create, get, list, watch]
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.runtimeServiceAccount.name | quote }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "kubesynth.fullname" . }}-runtime-rolebinding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "kubesynth.fullname" . }}-runtime-role
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.runtimeServiceAccount.name | quote }}
+    namespace: {{ .Release.Namespace | default "default" }}

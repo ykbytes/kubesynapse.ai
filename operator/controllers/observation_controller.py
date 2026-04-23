@@ -1,0 +1,547 @@
+"""AIOps Observability reconciler — ObservationTarget, ObservationPolicy,
+ObservationReport, and ConnectorPlugin handlers.
+
+Watches the four observability CRDs and reconciles status.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import logging
+from datetime import datetime, timezone
+from typing import Any
+
+import kopf
+import kubernetes.client  # type: ignore[import-untyped]
+from kubernetes.client.rest import ApiException  # type: ignore[import-untyped]
+
+logger = logging.getLogger("operator.controllers.observation")
+
+GROUP = "kubesynth.ai"
+VERSION = "v1alpha1"
+REPORT_PLURAL = "observationreports"
+POLICY_PLURAL = "observationpolicies"
+CONNECTOR_PLURAL = "connectorplugins"
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _parse_namespaced_ref(raw_ref: str | None) -> tuple[str | None, str | None]:
+    value = str(raw_ref or "").strip()
+    if not value:
+        return None, None
+    if "/" not in value:
+        return None, value
+    ref_namespace, ref_name = value.split("/", 1)
+    return ref_namespace.strip() or None, ref_name.strip() or None
+
+
+def _get_demo_mode(meta: dict[str, Any], spec: dict[str, Any]) -> str:
+    annotations = meta.get("annotations") or {}
+    labels = spec.get("labels") or {}
+    raw_mode = (
+        annotations.get("observability.kubesynth.ai/demo-mode")
+        or labels.get("demoMode")
+        or labels.get("demo-mode")
+        or "healthy"
+    )
+    mode = str(raw_mode).strip().lower()
+    if mode == "firing":
+        return "critical"
+    if mode in {"healthy", "warning", "critical", "failed"}:
+        return mode
+    return "healthy"
+
+
+def _metric_seed(name: str) -> int:
+    digest = hashlib.sha256(name.encode("utf-8")).hexdigest()
+    return int(digest[:8], 16)
+
+
+def _select_metric_name(policy_spec: dict[str, Any], target_name: str) -> str:
+    metrics = ((policy_spec.get("anomalyDetection") or {}).get("metrics") or [])
+    if metrics:
+        first_metric = metrics[0]
+        if isinstance(first_metric, str) and first_metric.strip():
+            return first_metric.strip()
+    return f"{target_name.replace('-', '_')}_health_signal"
+
+
+def _build_findings(
+    *,
+    target_name: str,
+    target_type: str,
+    metric_name: str,
+    algorithm: str,
+    demo_mode: str,
+) -> list[dict[str, Any]]:
+    now = _now_iso()
+    if demo_mode == "healthy":
+        return []
+
+    base_findings = [
+        {
+            "id": f"{target_name}-latency",
+            "severity": "warning" if demo_mode == "warning" else "critical",
+            "metric": metric_name,
+            "algorithm": algorithm,
+            "timestamp": now,
+            "value": 4.2 if demo_mode == "warning" else 9.7,
+            "expected": 1.1,
+            "deviation": 2.4 if demo_mode == "warning" else 5.1,
+            "description": (
+                f"Synthetic {demo_mode} finding for {target_name}. "
+                f"This target uses the {target_type} connector path and is intentionally configured "
+                "to show what a surfaced anomaly looks like in the dashboard."
+            ),
+            "recommendation": (
+                "Open the report in the Observability workspace, inspect the finding details, and then "
+                "switch the target annotation 'observability.kubesynth.ai/demo-mode' back to 'healthy' "
+                "when you no longer want the demo alert to fire."
+            ),
+        }
+    ]
+    if demo_mode in {"critical", "failed"}:
+        base_findings.append(
+            {
+                "id": f"{target_name}-availability",
+                "severity": "critical",
+                "metric": f"{target_name.replace('-', '_')}_availability",
+                "algorithm": "demo-rule",
+                "timestamp": now,
+                "value": 0,
+                "expected": 1,
+                "deviation": 1,
+                "description": (
+                    f"Availability check for {target_name} is also marked unhealthy so the policy shows multiple findings, "
+                    "which makes the overall purpose of targets, policies, and reports easier to understand in one pass."
+                ),
+                "recommendation": (
+                    "Treat this as the policy output layer: in a real implementation the connector would collect data, "
+                    "the policy would evaluate it, and this report would capture the result."
+                ),
+            }
+        )
+    return base_findings
+
+
+def _build_report_status(
+    *,
+    target_name: str,
+    target_spec: dict[str, Any],
+    target_status: dict[str, Any],
+    policy_spec: dict[str, Any],
+    demo_mode: str,
+) -> dict[str, Any]:
+    algorithm = ((policy_spec.get("anomalyDetection") or {}).get("algorithm") or "demo-evaluator")
+    metric_name = _select_metric_name(policy_spec, target_name)
+    findings = _build_findings(
+        target_name=target_name,
+        target_type=str(target_spec.get("targetType") or "custom"),
+        metric_name=metric_name,
+        algorithm=str(algorithm),
+        demo_mode=demo_mode,
+    )
+    health_score = {
+        "healthy": 96,
+        "warning": 74,
+        "critical": 38,
+        "failed": 18,
+    }.get(demo_mode, 96)
+    summary = {
+        "healthy": (
+            f"{target_name} is currently healthy. The connector is collecting telemetry, the policy is attached, "
+            "and this report exists so you can see where future anomalies would appear."
+        ),
+        "warning": (
+            f"{target_name} is intentionally simulating a warning scenario. The report demonstrates how a policy turns "
+            "observed signals into a finding before the situation becomes critical."
+        ),
+        "critical": (
+            f"{target_name} is intentionally simulating a firing alert. This is the visible outcome of the observability flow: "
+            "target defines what to watch, connector defines how to collect, policy defines evaluation rules, and the report carries the result."
+        ),
+        "failed": (
+            f"{target_name} is intentionally simulating a hard failure so you can inspect a worst-case report with multiple critical findings."
+        ),
+    }.get(demo_mode, "Observability report generated.")
+
+    return {
+        "phase": "Complete",
+        "healthScore": health_score,
+        "findingsCount": len(findings),
+        "lastEvaluated": _now_iso(),
+        "findings": findings,
+        "summary": summary,
+        "sourcePhase": target_status.get("phase", "Pending"),
+    }
+
+
+def _ensure_report_for_target(
+    *,
+    name: str,
+    namespace: str,
+    spec: dict[str, Any],
+    status: dict[str, Any],
+    meta: dict[str, Any],
+    logger: logging.Logger,
+) -> None:
+    custom_api = kubernetes.client.CustomObjectsApi()
+    report_name = f"{name}-report"
+    policy_ref = str(spec.get("policyRef") or "").strip()
+    policy_namespace, policy_name = _parse_namespaced_ref(policy_ref)
+    resolved_policy_namespace = policy_namespace or namespace
+    policy_spec: dict[str, Any] = {}
+    if policy_name:
+        try:
+            policy = custom_api.get_namespaced_custom_object(
+                group=GROUP,
+                version=VERSION,
+                namespace=resolved_policy_namespace,
+                plural=POLICY_PLURAL,
+                name=policy_name,
+            )
+            policy_spec = policy.get("spec") or {}
+        except ApiException as exc:
+            if exc.status != 404:
+                raise
+
+    demo_mode = _get_demo_mode(meta, spec)
+    report_spec = {
+        "targetRef": name,
+        "policyRef": policy_ref or None,
+        "reportType": "anomaly" if demo_mode != "healthy" else "health-check",
+    }
+    report_body = {
+        "apiVersion": f"{GROUP}/{VERSION}",
+        "kind": "ObservationReport",
+        "metadata": {
+            "name": report_name,
+            "namespace": namespace,
+            "labels": {
+                "kubesynth.ai/managed-by": "observation-controller",
+                "kubesynth.ai/observation-target": name,
+            },
+        },
+        "spec": report_spec,
+    }
+
+    try:
+        custom_api.create_namespaced_custom_object(
+            group=GROUP,
+            version=VERSION,
+            namespace=namespace,
+            plural=REPORT_PLURAL,
+            body=report_body,
+        )
+        logger.info("ObservationReport %s/%s created for target %s", namespace, report_name, name)
+    except ApiException as exc:
+        if exc.status == 409:
+            custom_api.patch_namespaced_custom_object(
+                group=GROUP,
+                version=VERSION,
+                namespace=namespace,
+                plural=REPORT_PLURAL,
+                name=report_name,
+                body={"spec": report_spec},
+            )
+        else:
+            raise
+
+    report_status = _build_report_status(
+        target_name=name,
+        target_spec=spec,
+        target_status=status,
+        policy_spec=policy_spec,
+        demo_mode=demo_mode,
+    )
+    custom_api.patch_namespaced_custom_object_status(
+        group=GROUP,
+        version=VERSION,
+        namespace=namespace,
+        plural=REPORT_PLURAL,
+        name=report_name,
+        body={"status": report_status},
+    )
+
+
+def _reconcile_policy_status(namespace: str, policy_ref: str | None) -> None:
+    policy_namespace, policy_name = _parse_namespaced_ref(policy_ref)
+    if not policy_name:
+        return
+
+    resolved_policy_namespace = policy_namespace or namespace
+    custom_api = kubernetes.client.CustomObjectsApi()
+    try:
+        reports = custom_api.list_namespaced_custom_object(
+            group=GROUP,
+            version=VERSION,
+            namespace=namespace,
+            plural=REPORT_PLURAL,
+        ).get("items", [])
+    except ApiException:
+        return
+
+    matching_reports = [
+        item for item in reports
+        if str((item.get("spec") or {}).get("policyRef") or "") == str(policy_ref or policy_name)
+    ]
+    active_alerts = sum(int((item.get("status") or {}).get("findingsCount", 0)) for item in matching_reports)
+    last_evaluated = None
+    for item in matching_reports:
+        candidate = (item.get("status") or {}).get("lastEvaluated")
+        if candidate and (last_evaluated is None or str(candidate) > str(last_evaluated)):
+            last_evaluated = candidate
+
+    try:
+        custom_api.patch_namespaced_custom_object_status(
+            group=GROUP,
+            version=VERSION,
+            namespace=resolved_policy_namespace,
+            plural=POLICY_PLURAL,
+            name=policy_name,
+            body={
+                "status": {
+                    "activeAlerts": active_alerts,
+                    "lastEvaluated": last_evaluated or _now_iso(),
+                }
+            },
+        )
+    except ApiException as exc:
+        if exc.status != 404:
+            raise
+
+
+def _reconcile_connector_status(namespace: str, connector_ref: str | None) -> None:
+    connector_name = str(connector_ref or "").strip()
+    if not connector_name:
+        return
+
+    custom_api = kubernetes.client.CustomObjectsApi()
+    try:
+        connector = custom_api.get_namespaced_custom_object(
+            group=GROUP,
+            version=VERSION,
+            namespace=namespace,
+            plural=CONNECTOR_PLURAL,
+            name=connector_name,
+        )
+    except ApiException as exc:
+        if exc.status == 404:
+            return
+        raise
+
+    image = str((connector.get("spec") or {}).get("image") or "")
+    version = image.rsplit(":", 1)[1] if ":" in image else "unknown"
+    custom_api.patch_namespaced_custom_object_status(
+        group=GROUP,
+        version=VERSION,
+        namespace=namespace,
+        plural=CONNECTOR_PLURAL,
+        name=connector_name,
+        body={
+            "status": {
+                "ready": "True",
+                "version": version,
+                "lastHealthCheck": _now_iso(),
+            }
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# ObservationTarget handlers
+# ---------------------------------------------------------------------------
+
+@kopf.on.create("kubesynth.ai", "v1alpha1", "observationtargets")  # type: ignore[arg-type]
+def create_observation_target(
+    spec: dict[str, Any], name: str, namespace: str, patch: kopf.Patch,
+    logger: logging.Logger, **kwargs: Any,
+) -> dict[str, Any]:
+    del kwargs
+    logger.info("ObservationTarget %s/%s created (type=%s, connector=%s)",
+                namespace, name, spec.get("targetType"), spec.get("connectorRef"))
+    patch.status["phase"] = "Pending"
+    patch.status["metricsCollected"] = 0
+    patch.status["connectorHealth"] = "Unknown"
+    return {"message": f"ObservationTarget {name} accepted, awaiting connector readiness."}
+
+
+@kopf.on.update("kubesynth.ai", "v1alpha1", "observationtargets")  # type: ignore[arg-type]
+def update_observation_target(
+    spec: dict[str, Any], name: str, namespace: str, patch: kopf.Patch,
+    logger: logging.Logger, **kwargs: Any,
+) -> dict[str, Any]:
+    del kwargs
+    logger.info("ObservationTarget %s/%s updated", namespace, name)
+    return {"message": f"ObservationTarget {name} spec updated."}
+
+
+@kopf.on.delete("kubesynth.ai", "v1alpha1", "observationtargets")  # type: ignore[arg-type]
+def delete_observation_target(
+    name: str, namespace: str, logger: logging.Logger, **kwargs: Any,
+) -> None:
+    del kwargs
+    logger.info("ObservationTarget %s/%s deleted", namespace, name)
+
+
+# ---------------------------------------------------------------------------
+# ObservationPolicy handlers
+# ---------------------------------------------------------------------------
+
+@kopf.on.create("kubesynth.ai", "v1alpha1", "observationpolicies")  # type: ignore[arg-type]
+def create_observation_policy(
+    spec: dict[str, Any], name: str, namespace: str, patch: kopf.Patch,
+    logger: logging.Logger, **kwargs: Any,
+) -> dict[str, Any]:
+    del kwargs
+    anomaly = spec.get("anomalyDetection", {})
+    logger.info("ObservationPolicy %s/%s created (anomaly=%s, algorithm=%s)",
+                namespace, name, anomaly.get("enabled", False), anomaly.get("algorithm", "ensemble"))
+    patch.status["activeAlerts"] = 0
+    return {"message": f"ObservationPolicy {name} accepted."}
+
+
+@kopf.on.update("kubesynth.ai", "v1alpha1", "observationpolicies")  # type: ignore[arg-type]
+def update_observation_policy(
+    spec: dict[str, Any], name: str, namespace: str,
+    logger: logging.Logger, **kwargs: Any,
+) -> dict[str, Any]:
+    del kwargs
+    logger.info("ObservationPolicy %s/%s updated", namespace, name)
+    return {"message": f"ObservationPolicy {name} spec updated."}
+
+
+@kopf.on.delete("kubesynth.ai", "v1alpha1", "observationpolicies")  # type: ignore[arg-type]
+def delete_observation_policy(
+    name: str, namespace: str, logger: logging.Logger, **kwargs: Any,
+) -> None:
+    del kwargs
+    logger.info("ObservationPolicy %s/%s deleted", namespace, name)
+
+
+# ---------------------------------------------------------------------------
+# ObservationReport handlers
+# ---------------------------------------------------------------------------
+
+@kopf.on.create("kubesynth.ai", "v1alpha1", "observationreports")  # type: ignore[arg-type]
+def create_observation_report(
+    spec: dict[str, Any], name: str, namespace: str, patch: kopf.Patch,
+    logger: logging.Logger, **kwargs: Any,
+) -> dict[str, Any]:
+    del kwargs
+    logger.info("ObservationReport %s/%s created (target=%s, type=%s)",
+                namespace, name, spec.get("targetRef"), spec.get("reportType"))
+    patch.status["phase"] = "Pending"
+    patch.status["healthScore"] = None
+    patch.status["findingsCount"] = 0
+    patch.status["findings"] = []
+    return {"message": f"ObservationReport {name} accepted, awaiting evaluation."}
+
+
+@kopf.on.update("kubesynth.ai", "v1alpha1", "observationreports")  # type: ignore[arg-type]
+def update_observation_report(
+    spec: dict[str, Any], name: str, namespace: str,
+    logger: logging.Logger, **kwargs: Any,
+) -> dict[str, Any]:
+    del kwargs
+    logger.info("ObservationReport %s/%s updated", namespace, name)
+    return {"message": f"ObservationReport {name} spec updated."}
+
+
+@kopf.on.delete("kubesynth.ai", "v1alpha1", "observationreports")  # type: ignore[arg-type]
+def delete_observation_report(
+    name: str, namespace: str, logger: logging.Logger, **kwargs: Any,
+) -> None:
+    del kwargs
+    logger.info("ObservationReport %s/%s deleted", namespace, name)
+
+
+# ---------------------------------------------------------------------------
+# ConnectorPlugin handlers
+# ---------------------------------------------------------------------------
+
+@kopf.on.create("kubesynth.ai", "v1alpha1", "connectorplugins")  # type: ignore[arg-type]
+def create_connector_plugin(
+    spec: dict[str, Any], name: str, namespace: str, patch: kopf.Patch,
+    logger: logging.Logger, **kwargs: Any,
+) -> dict[str, Any]:
+    del kwargs
+    logger.info("ConnectorPlugin %s/%s created (image=%s, protocol=%s)",
+                namespace, name, spec.get("image"), spec.get("protocol"))
+    patch.status["ready"] = "Unknown"
+    return {"message": f"ConnectorPlugin {name} accepted, awaiting health check."}
+
+
+@kopf.on.update("kubesynth.ai", "v1alpha1", "connectorplugins")  # type: ignore[arg-type]
+def update_connector_plugin(
+    spec: dict[str, Any], name: str, namespace: str,
+    logger: logging.Logger, **kwargs: Any,
+) -> dict[str, Any]:
+    del kwargs
+    logger.info("ConnectorPlugin %s/%s updated", namespace, name)
+    return {"message": f"ConnectorPlugin {name} spec updated."}
+
+
+@kopf.on.delete("kubesynth.ai", "v1alpha1", "connectorplugins")  # type: ignore[arg-type]
+def delete_connector_plugin(
+    name: str, namespace: str, logger: logging.Logger, **kwargs: Any,
+) -> None:
+    del kwargs
+    logger.info("ConnectorPlugin %s/%s deleted", namespace, name)
+
+
+# ---------------------------------------------------------------------------
+# Periodic timer — target scrape status reconciler
+# ---------------------------------------------------------------------------
+
+@kopf.timer("kubesynth.ai", "v1alpha1", "observationtargets", interval=60)  # type: ignore[arg-type]
+def reconcile_target_status(
+    spec: dict[str, Any], status: dict[str, Any], meta: dict[str, Any], name: str, namespace: str,
+    patch: kopf.Patch, logger: logging.Logger, **kwargs: Any,
+) -> None:
+    """Periodic reconciliation of ObservationTarget status.
+
+    In production this would query the connector sidecar health endpoint
+    and update scrape statistics. For now it transitions Pending → Active.
+    """
+    del kwargs
+    demo_mode = _get_demo_mode(meta, spec)
+    current_metrics = int(status.get("metricsCollected") or 0)
+    phase = "Active"
+    connector_health = "Healthy"
+    if demo_mode == "warning":
+        phase = "Degraded"
+    elif demo_mode == "critical":
+        phase = "Degraded"
+    elif demo_mode == "failed":
+        phase = "Failed"
+
+    patch.status["phase"] = phase
+    patch.status["connectorHealth"] = connector_health
+    patch.status["lastScrapeTime"] = _now_iso()
+    patch.status["metricsCollected"] = current_metrics + 12 + (_metric_seed(name) % 5)
+
+    _reconcile_connector_status(namespace, spec.get("connectorRef"))
+    _ensure_report_for_target(
+        name=name,
+        namespace=namespace,
+        spec=spec,
+        status={
+            **status,
+            "phase": phase,
+            "connectorHealth": connector_health,
+        },
+        meta=meta,
+        logger=logger,
+    )
+    _reconcile_policy_status(namespace, spec.get("policyRef"))
+    logger.info(
+        "ObservationTarget %s/%s reconciled (mode=%s, phase=%s)",
+        namespace,
+        name,
+        demo_mode,
+        phase,
+    )

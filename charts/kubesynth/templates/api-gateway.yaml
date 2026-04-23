@@ -79,13 +79,19 @@ spec:
                 secretKeyRef:
                   name: {{ include "kubesynth.fullname" . }}-llm-api-keys
                   key: API_GATEWAY_SHARED_TOKEN
-                  optional: true
+                  optional: false
             - name: JWT_SECRET
               valueFrom:
                 secretKeyRef:
                   name: {{ include "kubesynth.fullname" . }}-llm-api-keys
                   key: JWT_SECRET
-                  optional: true
+                  optional: false
+            - name: INTELLIGENCE_COLLECTOR_TOKEN_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kubesynth.fullname" . }}-llm-api-keys
+                  key: JWT_SECRET
+                  optional: false
             - name: AUTH_BOOTSTRAP_ADMIN_PASSWORD
               valueFrom:
                 secretKeyRef:

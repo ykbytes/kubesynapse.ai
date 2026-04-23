@@ -15,7 +15,9 @@ from typing import Any
 import httpx
 
 from config import (
+    DEFAULT_PROVIDER,
     HOME_DIR,
+    LITELLM_API_KEY,
     OPENCODE_BIN,
     OPENCODE_CONFIG_DIR,
     OPENCODE_SERVER_HOST,
@@ -25,6 +27,7 @@ from config import (
     SERVER_STARTUP_TIMEOUT_SECONDS,
     XDG_CONFIG_HOME,
     XDG_DATA_HOME,
+    build_litellm_base_url,
     server_base_url,
 )
 
@@ -87,6 +90,12 @@ def build_server_env(config_content: dict[str, Any]) -> dict[str, str]:
             "OPENCODE_SERVER_PASSWORD": env.get("OPENCODE_SERVER_PASSWORD", ""),
         }
     )
+    if DEFAULT_PROVIDER.lower() == "litellm":
+        base_url = build_litellm_base_url()
+        if base_url:
+            env["OPENAI_BASE_URL"] = base_url
+        if LITELLM_API_KEY:
+            env["OPENAI_API_KEY"] = LITELLM_API_KEY
     return env
 
 

@@ -1,4 +1,4 @@
-# AI Agent Sandbox — Installation, Usage & Operations Guide
+# KubeSynth — Installation, Usage & Operations Guide
 
 ## Table of Contents
 
@@ -47,7 +47,17 @@
 
 ## Overview
 
-**AI Agent Sandbox** is a Kubernetes-native platform for deploying, governing, and orchestrating AI agents at enterprise scale. It lets you define agents, policies, multi-agent workflows, and evaluation suites as Kubernetes custom resources — and a Kopf-based operator reconciles them into running infrastructure.
+This guide is the detailed install and operations reference for KubeSynth.
+
+For the most current deployment entry points, prefer these docs first:
+
+- `docs/deployment-readme.md` for the current deployment paths
+- `docs/architecture-overview.md` for the current platform architecture
+- `docs/walkthrough.md` for the current implementation model
+
+**KubeSynth** is a Kubernetes-native platform for deploying, governing, and orchestrating AI agents at enterprise scale. It lets you define agents, policies, multi-agent workflows, evaluation suites, and observability resources as Kubernetes custom resources while a Python operator reconciles them into running infrastructure.
+
+The current supported runtime is OpenCode. Older references in the repository to LangGraph, Goose, or Codex describe earlier architecture phases rather than the primary runtime path used by the current code.
 
 Key capabilities:
 
@@ -56,7 +66,7 @@ Key capabilities:
 - **File-backed skills** — `spec.skills.files` stores Markdown skill documents that steer prompts and grant scoped runtime capabilities
 - **Guardrails** — prompt injection detection, PII masking, and per-request token caps
 - **Human-in-the-Loop** — async approval gates for high-risk actions
-- **Agent-to-agent delegation** — explicit A2A calls plus specialist-team orchestration for LangGraph agents
+- **Agent-to-agent delegation** — explicit A2A calls with policy-enforced peer discovery through the gateway
 - **Multi-agent workflows** — DAG-based pipelines with step dependencies
 - **Automated evaluations** — scheduled test suites with relevance/toxicity/latency thresholds
 - **Model gateway** — LiteLLM proxies all LLM calls with caching (Redis) and key management
@@ -87,7 +97,7 @@ Key capabilities:
 ┌───────────────────────────┐       ┌──────────────────────────┐
 │  API Gateway (FastAPI)    │──────▶│  Agent Runtime           │
 │  Auth, routing, CRUD      │       │  (StatefulSet per agent) │
-│  /api/agents/*/invoke     │       │  LangGraph + Guardrails  │
+│  /api/agents/*/invoke     │       │  OpenCode + Guardrails   │
 └───────────┬───────────────┘       │  + HITL + RAG + MCP      │
             │                       └──────┬───────────────────┘
             │                              │
@@ -120,7 +130,7 @@ Key capabilities:
 | Component | What it does |
 |-----------|-------------|
 | **API Gateway** | Authenticates callers (shared token or OIDC), routes requests to the correct agent runtime, exposes CRUD + invoke + streaming endpoints |
-| **Agent Runtime** | Per-agent FastAPI process running LangGraph state machine with durable SQLite checkpoints, guardrails, HITL approval, RAG retrieval, and MCP tool calls |
+| **Agent Runtime** | Per-agent FastAPI process running the OpenCode execution surface with session persistence, guardrails, HITL approval, RAG retrieval, and MCP tool calls |
 | **LiteLLM** | Central model proxy — routes to OpenAI, Anthropic, Azure, etc. with key management and Redis-backed caching |
 | **Qdrant** | Vector database for RAG document retrieval |
 | **Redis** | Backs LiteLLM response caching |
@@ -144,7 +154,7 @@ Key capabilities:
 3. Gateway forwards the request to the agent runtime's `/invoke` endpoint
 4. Runtime applies **input guardrails** (prompt injection check, blocked patterns, token limits)
 5. Runtime checks if **HITL approval** is required → creates an `AgentApproval` CR if needed → pauses
-6. Runtime executes the **LangGraph state machine**: RAG retrieval → LLM call → tool calls → output
+6. Runtime executes the **OpenCode request flow**: system prompt assembly → optional RAG retrieval → LLM/tool loop → output
 7. Runtime applies **output guardrails** (PII masking, output patterns, token limits)
 8. Response returned to client with the agent's answer, thread ID, and status
 
@@ -249,9 +259,6 @@ All images live under `docker.io/yakdhane`:
 | Image | Description |
 |---|---|
 | `yakdhane/ai-operator` | Kopf-based operator + worker |
-| `yakdhane/ai-agent-runtime` | LangGraph agent runtime |
-| `yakdhane/ai-goose-runtime` | Goose HTTP adapter |
-| `yakdhane/ai-codex-runtime` | Codex HTTP adapter |
 | `yakdhane/ai-opencode-runtime` | OpenCode HTTP adapter |
 | `yakdhane/ai-api-gateway` | FastAPI gateway |
 | `yakdhane/kubesynth-web-ui` | React web console |
@@ -306,15 +313,12 @@ kind create cluster --name ai-sandbox
 ### 2. Build the platform images
 
 ```bash
-# From the repository root (builds all platform + sidecar images)
+# From the repository root (builds the platform images and bundled sidecars)
 make docker-build REGISTRY=localhost/kubesynthai VERSION=dev CONTAINER_CLI=docker
-# Produces:
-#   localhost/kubesynthai/ai-operator:dev
-#   localhost/kubesynthai/ai-agent-runtime:dev
-#   localhost/kubesynthai/ai-goose-runtime:dev
-#   localhost/kubesynthai/ai-codex-runtime:dev
-#   localhost/kubesynthai/ai-opencode-runtime:dev
-#   localhost/kubesynthai/ai-api-gateway:dev
+# Produces platform images such as:
+#   localhost/kubesynthai/kubesynth-operator:dev
+#   localhost/kubesynthai/kubesynth-opencode-runtime:dev
+#   localhost/kubesynthai/kubesynth-api-gateway:dev
 #   localhost/kubesynthai/kubesynth-web-ui:dev
 #   localhost/kubesynthai/mcp-code-exec:dev
 #   localhost/kubesynthai/mcp-web-search:dev
@@ -325,12 +329,9 @@ make docker-build REGISTRY=localhost/kubesynthai VERSION=dev CONTAINER_CLI=docke
 Or build individual components with Docker:
 
 ```bash
-docker build -t localhost/kubesynthai/ai-operator:dev ./operator
-docker build -t localhost/kubesynthai/ai-agent-runtime:dev ./agent-runtime
-docker build -t localhost/kubesynthai/ai-goose-runtime:dev ./goose-runtime
-docker build -t localhost/kubesynthai/ai-codex-runtime:dev ./codex-runtime
-docker build -t localhost/kubesynthai/ai-opencode-runtime:dev ./opencode-runtime
-docker build -t localhost/kubesynthai/ai-api-gateway:dev ./api-gateway
+docker build -t localhost/kubesynthai/kubesynth-operator:dev ./operator
+docker build -t localhost/kubesynthai/kubesynth-opencode-runtime:dev ./opencode-runtime
+docker build -t localhost/kubesynthai/kubesynth-api-gateway:dev ./api-gateway
 docker build -t localhost/kubesynthai/kubesynth-web-ui:dev ./web-ui
 ```
 
@@ -341,19 +342,13 @@ The Makefile builds all of them in one pass and is the recommended approach.
 
 ```bash
 mkdir -p dist
-docker save -o dist/ai-operator.tar localhost/kubesynthai/ai-operator:dev
-docker save -o dist/ai-agent-runtime.tar localhost/kubesynthai/ai-agent-runtime:dev
-docker save -o dist/ai-goose-runtime.tar localhost/kubesynthai/ai-goose-runtime:dev
-docker save -o dist/ai-codex-runtime.tar localhost/kubesynthai/ai-codex-runtime:dev
-docker save -o dist/ai-opencode-runtime.tar localhost/kubesynthai/ai-opencode-runtime:dev
-docker save -o dist/ai-api-gateway.tar localhost/kubesynthai/ai-api-gateway:dev
+docker save -o dist/kubesynth-operator.tar localhost/kubesynthai/kubesynth-operator:dev
+docker save -o dist/kubesynth-opencode-runtime.tar localhost/kubesynthai/kubesynth-opencode-runtime:dev
+docker save -o dist/kubesynth-api-gateway.tar localhost/kubesynthai/kubesynth-api-gateway:dev
 docker save -o dist/kubesynth-web-ui.tar localhost/kubesynthai/kubesynth-web-ui:dev
-kind load image-archive dist/ai-operator.tar --name ai-sandbox
-kind load image-archive dist/ai-agent-runtime.tar --name ai-sandbox
-kind load image-archive dist/ai-goose-runtime.tar --name ai-sandbox
-kind load image-archive dist/ai-codex-runtime.tar --name ai-sandbox
-kind load image-archive dist/ai-opencode-runtime.tar --name ai-sandbox
-kind load image-archive dist/ai-api-gateway.tar --name ai-sandbox
+kind load image-archive dist/kubesynth-operator.tar --name ai-sandbox
+kind load image-archive dist/kubesynth-opencode-runtime.tar --name ai-sandbox
+kind load image-archive dist/kubesynth-api-gateway.tar --name ai-sandbox
 kind load image-archive dist/kubesynth-web-ui.tar --name ai-sandbox
 ```
 
@@ -456,9 +451,6 @@ export REGISTRY=ghcr.io/your-org
 export VERSION=1.0.0
 
 docker build -t $REGISTRY/ai-operator:$VERSION           ./operator
-docker build -t $REGISTRY/ai-agent-runtime:$VERSION      ./agent-runtime
-docker build -t $REGISTRY/ai-goose-runtime:$VERSION      ./goose-runtime
-docker build -t $REGISTRY/ai-codex-runtime:$VERSION      ./codex-runtime
 docker build -t $REGISTRY/ai-opencode-runtime:$VERSION   ./opencode-runtime
 docker build -t $REGISTRY/ai-api-gateway:$VERSION        ./api-gateway
 docker build -t $REGISTRY/kubesynth-web-ui:$VERSION ./web-ui
@@ -487,17 +479,13 @@ docker build -t $REGISTRY/mcp-github-adapter:$VERSION -f mcp-sidecars/github-ada
   -Push
 ```
 
-This builds all 17 images (7 platform + 10 MCP sidecars), generates a `values-generated.yaml` with pinned
-image references, and optionally pushes everything to the registry.
+This builds the platform images referenced by the chart plus all bundled MCP sidecars, generates a `values-generated.yaml` with pinned image references, and optionally pushes everything to the registry.
 
 ### 2. Push to Registry
 
 ```bash
 docker login ghcr.io
 docker push $REGISTRY/ai-operator:$VERSION
-docker push $REGISTRY/ai-agent-runtime:$VERSION
-docker push $REGISTRY/ai-goose-runtime:$VERSION
-docker push $REGISTRY/ai-codex-runtime:$VERSION
 docker push $REGISTRY/ai-opencode-runtime:$VERSION
 docker push $REGISTRY/ai-api-gateway:$VERSION
 docker push $REGISTRY/kubesynth-web-ui:$VERSION
@@ -521,41 +509,6 @@ operator:
   clusterSecretStoreName: "mycompany-vault-store"
   image:
     repository: ghcr.io/your-org/ai-operator
-    tag: "1.0.0"
-
-agentRuntime:
-  image:
-    repository: ghcr.io/your-org/ai-agent-runtime
-    tag: "1.0.0"
-
-gooseRuntime:
-  image:
-    repository: ghcr.io/your-org/ai-goose-runtime
-    tag: "1.0.0"
-  env:
-    GOOSE_MAX_TURNS: 40
-    GOOSE_CONTEXT_STRATEGY: summarize
-    GOOSE_MOIM_MESSAGE_TEXT: "Run tests before writing files."
-    CONTEXT_FILE_NAMES:
-      - AGENTS.md
-      - .goosehints
-    GOOSE_RUNTIME_BUILTINS:
-      - developer
-    GOOSE_RUNTIME_CONFIG_FILES_JSON:
-      config.yaml: |
-        GOOSE_MODE: smart_approve
-        GOOSE_AUTO_COMPACT_THRESHOLD: 0.8
-        GOOSE_SEARCH_PATHS:
-          - /workspace/bin
-        slash_commands:
-          - command: run-tests
-            recipe_path: /workspace/.goose/recipes/run-tests.yaml
-      prompts/review.md: |
-        Review code conservatively, explain risks first, and avoid destructive actions.
-
-codexRuntime:
-  image:
-    repository: ghcr.io/your-org/ai-codex-runtime
     tag: "1.0.0"
 
 opencodeRuntime:
@@ -641,19 +594,46 @@ telemetry:
   otlpEndpoint: "http://otel-collector.monitoring:4318"
 ```
 
+### Google managed sign-in
+
+For Google browser sign-in, keep the gateway in `hybrid` or `oidc` mode, set `apiGateway.publicBaseUrl` to the externally reachable HTTPS URL for the gateway, and publish one OIDC provider entry through `OIDC_PROVIDERS_JSON`. The gateway uses that base URL to derive the callback path `/api/auth/oidc/callback/<provider_id>` when `redirect_uri` is omitted.
+
+Use the checked-in example overlay as a starting point:
+
+```bash
+helm upgrade --install kubesynth ./charts/kubesynth \
+  -f ./deploy/values.cluster.example.yaml \
+  -f ./deploy/values.google-oidc.example.yaml
+```
+
+If you use native chart-managed secrets, populate `platformSecrets.native.oidcProvidersJson` with a JSON array like this:
+
+```yaml
+apiGateway:
+  publicBaseUrl: "https://agents.example.com"
+  auth:
+    mode: hybrid
+    localAuthEnabled: true
+
+platformSecrets:
+  mode: native
+  native:
+    oidcProvidersJson: >-
+      [{"id":"google","name":"Google","issuer":"https://accounts.google.com","client_id":"YOUR_GOOGLE_CLIENT_ID","client_secret":"YOUR_GOOGLE_CLIENT_SECRET","scopes":["openid","email","profile"]}]
+```
+
+Register this redirect URI in Google Cloud:
+
+```text
+https://agents.example.com/api/auth/oidc/callback/google
+```
+
+If you use External Secrets instead, store the same JSON array at the secret key backing `kubesynth/oidc-providers-json` and keep `apiGateway.publicBaseUrl` aligned with the public gateway URL.
+
 The chart intentionally deploys no shared MCP servers by default. The GitHub
 entry above is a real upstream image reference, but the current runtime still
 expects an internal `/tools/<tool>` HTTP bridge before agents can invoke a
 stock MCP server successfully.
-
-`GOOSE_RUNTIME_CONFIG_FILES_JSON` lets the Goose adapter write native Goose
-config files into `XDG_CONFIG_HOME/goose` before invoking `goose run`. That is
-the cleanest place to keep durable Goose defaults such as `config.yaml`, prompt
-templates under `prompts/`, search paths, and slash-command recipes, while the
-shared invoke API stays focused on per-request controls. Keep secrets in
-Kubernetes `Secret`-backed env vars instead of writing `secrets.yaml`, and do
-not preseed `permissions/tool_permissions.json` because Goose manages that file
-itself at runtime.
 
 `OPENCODE_RUNTIME_CONFIG_FILES_JSON` does the same for the OpenCode adapter. It
 lets the chart preseed native OpenCode files such as `opencode.json`, agent
@@ -886,10 +866,9 @@ spec:
         allowedA2ATargets:
           - name: analysis-agent
             namespace: agent-tenant-my-team
-        allowSubagents: true
         ---
         Use this skill when the request needs evidence gathering, repository inspection,
-        or a handoff to a specialist reviewer.
+        or a handoff to a peer reviewer.
 ```
 
 Skill files must use relative Markdown paths. The frontmatter is optional, but when present it controls the runtime capability envelope for that skill.
@@ -905,24 +884,7 @@ curl -X POST http://localhost:8080/api/agents/my-assistant/invoke?namespace=agen
   -d '{"prompt": "Explain Kubernetes namespaces in simple terms"}'
 ```
 
-Goose agents also accept Goose-native `run` controls through the same payload, for example `system`, `max_turns`, `no_session`, `working_directory`, `builtin_extensions`, `stdio_extensions`, and `streamable_http_extensions`. The `agentctl invoke` command exposes matching flags for those fields.
-
-For durable Goose defaults that should live with a specific agent rather than the
-chart, add `spec.runtime.goose.configFiles` to the `AIAgent`. Those files are
-merged over chart-wide `GOOSE_RUNTIME_CONFIG_FILES_JSON` entries by relative
-path before the Goose runtime starts.
-
-```yaml
-runtime:
-  kind: goose
-  goose:
-    configFiles:
-      config.yaml: |
-        GOOSE_MODE: smart_approve
-        GOOSE_AUTO_COMPACT_THRESHOLD: 0.8
-      "prompts/review.md": |
-        Review code conservatively and call out operational risks first.
-```
+OpenCode agents also accept OpenCode-native runtime controls through the same payload, for example `system`, `max_turns`, `max_retries`, `no_session`, `working_directory`, `output_format`, and `output_schema`. The `agentctl invoke` command exposes matching flags for the supported fields.
 
 OpenCode agents support the same per-agent pattern through
 `spec.runtime.opencode.configFiles`. Those files are merged over chart-wide
@@ -942,32 +904,6 @@ runtime:
         mode: subagent
         ---
         Focus on regressions, operational risk, and missing tests.
-```
-
-To inspect the effective Goose configuration for a running Goose agent without
-entering the container, port-forward the runtime pod or StatefulSet and query
-its debug endpoint:
-
-```bash
-kubectl port-forward statefulset/goose-assistant-sandbox 18080:8080
-curl http://localhost:18080/debug/goose-info
-```
-
-Response:
-
-```json
-{
-  "status": "ok",
-  "command": ["goose", "info", "-v"],
-  "returncode": 0,
-  "stdout": "Goose version 0.x.y\nProvider: openai ...",
-  "stderr": "",
-  "goose_binary": "goose",
-  "goose_binary_path": "/usr/local/bin/goose",
-  "goose_config_root": "/home/agentuser/.config/goose",
-  "config_files": {},
-  "workspace_root": "/workspace"
-}
 ```
 
 For **streaming responses** (Server-Sent Events):
@@ -1194,10 +1130,6 @@ agentctl invoke my-assistant --stream "Summarize the latest deployment status"
 # Route a request through a specific peer over A2A
 agentctl invoke my-assistant "Ask the reviewer for a second opinion" --a2a-target-agent reviewer --a2a-target-namespace team-b --a2a-timeout-seconds 20
 
-# Launch a specialist team inline or from a file
-agentctl invoke my-assistant --subagent "team-a/reviewer|Code Review|Review the latest patch" --subagent "team-a/docs|Docs|Summarize API changes" --subagent-strategy parallel
-agentctl invoke my-assistant --subagents-file examples/sample-subagents.yaml
-
 # Invoke an agent interactively (reads from stdin)
 agentctl invoke my-assistant
 
@@ -1214,12 +1146,12 @@ agentctl get agents
 
 The file-based commands accept either full Kubernetes custom resource manifests like `AIAgent`, `AgentWorkflow`, and `AgentEval`, or direct API payload documents in JSON/YAML using snake_case fields.
 
-Goose-specific agent updates can also be patched without replacing the full manifest:
+OpenCode-specific agent updates can also be patched without replacing the full manifest:
 
 ```bash
-agentctl agents update goose-assistant --goose-config-file config.yaml=.goose/config.yaml
-agentctl agents update goose-assistant --goose-config-text prompts/review.md="Review changes conservatively."
-agentctl agents update goose-assistant --clear-goose-config-files
+agentctl agents update my-assistant --opencode-config-file opencode.json=.opencode/opencode.json
+agentctl agents update my-assistant --opencode-config-text prompts/review.md="Review changes conservatively."
+agentctl agents update my-assistant --clear-opencode-config-files
 ```
 
 ---
@@ -1241,15 +1173,15 @@ kubectl port-forward svc/kubesynth-web-ui 3000:80
 
 Features:
 - Browse and create agents
-- Create and edit agent skill bundles and Goose config bundles with structured file editors
-- Invoke agents with a chat interface, explicit A2A targets, or specialist teams
+- Create and edit agent skill bundles and OpenCode config bundles with structured file editors
+- Invoke agents with a chat interface or explicit A2A targets
 - View agent status, parsed skill summaries, discovered peers, activity, and logs
 - Manage workflows and evaluations
 - Review and act on pending approvals
 
 Operational notes:
 - the agent inspector surfaces parsed skill grants, inbound A2A callers, and peer reachability for the selected agent
-- Goose agents expose the safe chat controls already available through the runtime (`max_turns` and workspace-relative `working_directory`), while approval retry and gateway-routed tool continuity remain LangGraph-focused
+- OpenCode agents expose the safe chat controls already available through the runtime (`system`, `max_turns`, and workspace-relative `working_directory`), alongside approval retry and gateway-backed inspection workflows
 - the UI uses the same bearer token and namespace model as `agentctl`, so it maps cleanly to production ingress and local port-forwarding workflows
 
 For local development of the Web UI:
@@ -1259,6 +1191,25 @@ cd web-ui
 npm install
 npm run dev        # Vite dev server at http://localhost:5173
 ```
+
+For local browser QA with the API gateway:
+
+```powershell
+cd api-gateway
+$env:API_GATEWAY_AUTH_MODE = "local"
+$env:LOCAL_AUTH_ENABLED = "true"
+$env:API_GATEWAY_SHARED_TOKEN = "dev-shared-token"
+$env:API_GATEWAY_CORS_ORIGINS = "http://localhost:5173,http://127.0.0.1:5173"
+$env:DATABASE_SQLITE_PATH = "C:/path/to/kubemininions/api-gateway/.local/kubesynth-gateway.db"
+python -m uvicorn main:app --host 127.0.0.1 --port 8080
+```
+
+Notes:
+
+- `web-ui/.env.example` already points the Vite proxy at `http://127.0.0.1:8080`.
+- `npm run dev` uses port `5173`, which matches the gateway's default browser CORS allowlist.
+- `npm run preview` uses port `4173`; if you use preview against the local gateway, set `API_GATEWAY_CORS_ORIGINS` to include that origin.
+- The local SQLite path is for browser bootstrap and session persistence during QA only; keep `api-gateway/.local/` out of version control.
 
 ---
 
@@ -1653,14 +1604,15 @@ kubesynthai/
 │   ├── Dockerfile
 │   └── requirements.txt
 │
-├── agent-runtime/                  ← Per-agent runtime (Python/FastAPI)
-│   ├── agent_logic.py              ← LangGraph state machine (monolithic, ~5,800 lines)
-│   ├── guardrails.py               ← Input/output guardrails engine
+├── opencode-runtime/               ← Per-agent runtime (Python/FastAPI)
+│   ├── main.py                     ← FastAPI app, routes, and lifecycle
+│   ├── invoke.py                   ← OpenCode request orchestration and streaming
+│   ├── analysis.py                 ← Response parsing and autonomy helpers
+│   ├── session.py                  ← Session persistence and recovery
+│   ├── skills.py                   ← Skill materialization and config overlay support
 │   ├── hitl.py                     ← Human-in-the-loop approval module
-│   ├── opensandbox_tools.py        ← OpenSandbox code execution tools
-│   ├── env_utils.py                ← Safe environment variable parsing
-│   ├── memory/                     ← Session state management
-│   ├── tests/                      ← Agent runtime tests
+│   ├── memory.py                   ← Cross-session memory support
+│   ├── tests/                      ← OpenCode runtime tests
 │   ├── Dockerfile
 │   └── requirements.txt
 │
@@ -1718,11 +1670,10 @@ kubesynthai/
 
 ```bash
 make all                  # lint + test + docker-build + helm-package
-make docker-build         # Build 7 platform images + 10 bundled MCP sidecars (17 total)
-make docker-push          # Push 7 platform images + 10 bundled MCP sidecars to REGISTRY
+make docker-build         # Build platform images and 10 bundled MCP sidecars
+make docker-push          # Push platform images and 10 bundled MCP sidecars to REGISTRY
 make lint                 # Run flake8 on all Python components
 make test                 # Run pytest on all components
-make test-goose-runtime-e2e # Build the Goose runtime image and run Docker-backed E2E coverage
 make helm-lint            # Lint the Helm chart
 make helm-package         # Package chart to dist/
 make helm-template        # Render templates to stdout

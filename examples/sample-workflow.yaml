@@ -8,6 +8,18 @@ spec:
   input: "Add request rate limiting to the API gateway"
   contextRef: project-rules
   messageBus: in-memory
+  autoRetry:
+    enabled: true
+    maxAttempts: 1
+    retryableFailureClasses:
+      - TimeoutError
+      - ConnectTimeout
+      - ReadTimeout
+      - PoolTimeout
+      - RemoteProtocolError
+      - ConnectError
+      - ReadError
+      - ApiException
   steps:
     - name: research
       agentRef: research-assistant

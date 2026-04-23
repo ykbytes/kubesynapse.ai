@@ -261,7 +261,10 @@ def agent_baseline_egress_rules() -> list[dict[str, Any]]:
             "ports": [{"protocol": "TCP", "port": 6333}],
         },
         {
-            "ports": [{"protocol": "TCP", "port": 443}],
+            "ports": [
+                {"protocol": "TCP", "port": 443},
+                {"protocol": "TCP", "port": 6443},
+            ],
         },
     ]
     if OTEL_ENDPOINT:

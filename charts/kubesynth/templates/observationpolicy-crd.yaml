@@ -1,0 +1,145 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: observationpolicies.kubesynth.ai
+spec:
+  group: kubesynth.ai
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Retention
+          type: string
+          jsonPath: .spec.retention.days
+        - name: Anomaly
+          type: string
+          jsonPath: .spec.anomalyDetection.algorithm
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                description:
+                  type: string
+                  description: "Human-readable explanation of how this policy interprets collected telemetry."
+                retention:
+                  type: object
+                  description: "Data retention configuration."
+                  properties:
+                    days:
+                      type: integer
+                      default: 30
+                      minimum: 1
+                      maximum: 365
+                    downsampling:
+                      type: object
+                      properties:
+                        after:
+                          type: string
+                          default: "7d"
+                        resolution:
+                          type: string
+                          default: "5m"
+                alertRules:
+                  type: array
+                  description: "Alert rules evaluated against collected metrics."
+                  items:
+                    type: object
+                    required:
+                      - name
+                      - expr
+                    properties:
+                      name:
+                        type: string
+                      expr:
+                        type: string
+                      for:
+                        type: string
+                        default: "5m"
+                      severity:
+                        type: string
+                        enum: [info, warning, critical]
+                        default: warning
+                      annotations:
+                        type: object
+                        additionalProperties:
+                          type: string
+                anomalyDetection:
+                  type: object
+                  description: "ML-based anomaly detection configuration."
+                  properties:
+                    enabled:
+                      type: boolean
+                      default: false
+                    algorithm:
+                      type: string
+                      enum:
+                        - isolation-forest
+                        - prophet
+                        - ensemble
+                      default: ensemble
+                    sensitivity:
+                      type: number
+                      minimum: 0.0
+                      maximum: 1.0
+                      default: 0.7
+                    windowSize:
+                      type: string
+                      default: "1h"
+                    evaluationInterval:
+                      type: string
+                      default: "5m"
+                    metrics:
+                      type: array
+                      items:
+                        type: string
+                notifications:
+                  type: object
+                  description: "Notification channels for alerts and anomaly findings."
+                  properties:
+                    webhookUrl:
+                      type: string
+                    natsSubject:
+                      type: string
+                      default: "aiops.alerts"
+            status:
+              type: object
+              properties:
+                activeAlerts:
+                  type: integer
+                lastEvaluated:
+                  type: string
+                  format: date-time
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                        enum: ["True", "False", "Unknown"]
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      reason:
+                        type: string
+                      message:
+                        type: string
+  scope: Namespaced
+  names:
+    plural: observationpolicies
+    singular: observationpolicy
+    kind: ObservationPolicy
+    shortNames:
+      - obp
+      - opolicy

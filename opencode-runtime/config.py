@@ -69,17 +69,17 @@ def _safe_float(env_name: str, default: float) -> float:
 # ---------------------------------------------------------------------------
 # Request / field limits
 # ---------------------------------------------------------------------------
-MAX_PROMPT_CHARS = max(_safe_int("OPENCODE_MAX_PROMPT_CHARS", 64000), 1024)
+MAX_PROMPT_CHARS = max(_safe_int("OPENCODE_MAX_PROMPT_CHARS", 256000), 1024)
 MAX_THREAD_ID_CHARS = max(_safe_int("OPENCODE_MAX_THREAD_ID_CHARS", 128), 16)
 MAX_MODEL_CHARS = max(_safe_int("OPENCODE_MAX_MODEL_CHARS", 256), 32)
-MAX_SYSTEM_PROMPT_CHARS = max(_safe_int("OPENCODE_MAX_SYSTEM_PROMPT_CHARS", 32000), 512)
-MAX_TEAM_CONTEXT_CHARS = max(_safe_int("OPENCODE_MAX_TEAM_CONTEXT_CHARS", 16000), 512)
+MAX_SYSTEM_PROMPT_CHARS = max(_safe_int("OPENCODE_MAX_SYSTEM_PROMPT_CHARS", 64000), 512)
+MAX_TEAM_CONTEXT_CHARS = max(_safe_int("OPENCODE_MAX_TEAM_CONTEXT_CHARS", 32000), 512)
 HTTP_TIMEOUT_SECONDS = max(_safe_float("OPENCODE_HTTP_TIMEOUT_SECONDS", 300.0), 1.0)
 SERVER_STARTUP_TIMEOUT_SECONDS = max(_safe_float("OPENCODE_STARTUP_TIMEOUT_SECONDS", 60.0), 5.0)
 SERVER_POLL_INTERVAL_SECONDS = max(_safe_float("OPENCODE_STARTUP_POLL_SECONDS", 0.5), 0.1)
 DEFAULT_AGENT_STEPS = max(_safe_int("OPENCODE_AGENT_STEPS", 128), 1)
-MODEL_CONTEXT_LIMIT = max(_safe_int("OPENCODE_MODEL_CONTEXT_LIMIT", 128000), 2048)
-MODEL_OUTPUT_LIMIT = max(_safe_int("OPENCODE_MODEL_OUTPUT_LIMIT", 8192), 256)
+MODEL_CONTEXT_LIMIT = max(_safe_int("OPENCODE_MODEL_CONTEXT_LIMIT", 256000), 2048)
+MODEL_OUTPUT_LIMIT = max(_safe_int("OPENCODE_MODEL_OUTPUT_LIMIT", 16384), 16)
 
 # ---------------------------------------------------------------------------
 # Service identity
@@ -137,6 +137,14 @@ AUTONOMOUS_MAX_TURNS = max(_safe_int("OPENCODE_AUTONOMOUS_MAX_TURNS", 50), 1)
 ARTIFACT_COLLECTION_MAX_FILES = max(_safe_int("OPENCODE_ARTIFACT_MAX_FILES", 200), 1)
 SESSION_IDLE_TIMEOUT_SECONDS = max(_safe_float("OPENCODE_SESSION_IDLE_TIMEOUT_SECONDS", 15.0), 1.0)
 SESSION_IDLE_POLL_SECONDS = max(_safe_float("OPENCODE_SESSION_IDLE_POLL_SECONDS", 0.5), 0.1)
+SESSION_IDLE_MAX_POLL_SECONDS = max(
+    _safe_float("OPENCODE_SESSION_IDLE_MAX_POLL_SECONDS", 1.0),
+    SESSION_IDLE_POLL_SECONDS,
+)
+LIVE_UPDATE_TIMEOUT_SECONDS = max(
+    _safe_float("OPENCODE_LIVE_UPDATE_TIMEOUT_SECONDS", max(HTTP_TIMEOUT_SECONDS, 300.0)),
+    SESSION_IDLE_TIMEOUT_SECONDS,
+)
 STRUCTURED_OUTPUT_RETRY_COUNT = max(_safe_int("OPENCODE_STRUCTURED_OUTPUT_RETRY_COUNT", 2), 0)
 COMPACTION_TOKEN_THRESHOLD = min(max(_safe_float("OPENCODE_COMPACTION_TOKEN_THRESHOLD", 0.75), 0.1), 0.99)
 COMPACTION_PRUNE_THRESHOLD = min(max(_safe_float("OPENCODE_COMPACTION_PRUNE_THRESHOLD", 0.50), 0.1), 0.99)
@@ -159,7 +167,7 @@ SESSION_MAX_AGE_SECONDS = max(_safe_int("OPENCODE_SESSION_MAX_AGE_SECONDS", 8640
 SESSION_MAX_ENTRIES = max(_safe_int("OPENCODE_SESSION_MAX_ENTRIES", 1000), 10)
 MAX_COMPACTION_ATTEMPTS = max(_safe_int("OPENCODE_MAX_COMPACTION_ATTEMPTS", 2), 1)
 COMPACTION_MIN_TURN_SPACING = max(_safe_int("OPENCODE_COMPACTION_MIN_TURN_SPACING", 3), 1)
-SESSION_INIT_ON_CREATE = os.getenv("OPENCODE_SESSION_INIT_ON_CREATE", "true").strip().lower() in {
+SESSION_INIT_ON_CREATE = os.getenv("OPENCODE_SESSION_INIT_ON_CREATE", "false").strip().lower() in {
     "1",
     "true",
     "yes",
@@ -245,8 +253,14 @@ SKILL_NAME_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 # Environment variable names
 # ---------------------------------------------------------------------------
 A2A_ALLOWED_CALLERS_ENV = "A2A_ALLOWED_CALLERS_JSON"
+A2A_ALLOWED_TARGETS_ENV = "A2A_ALLOWED_TARGETS_JSON"
+A2A_REQUIRE_HITL_ENV = "A2A_REQUIRE_HITL"
+A2A_MAX_TIMEOUT_SECONDS_ENV = "A2A_MAX_TIMEOUT_SECONDS"
+API_GATEWAY_INTERNAL_URL_ENV = "API_GATEWAY_INTERNAL_URL"
+API_GATEWAY_SHARED_TOKEN_ENV = "API_GATEWAY_SHARED_TOKEN"
 AGENT_SKILL_FILES_ENV = "AGENT_SKILL_FILES_JSON"
 OPENCODE_RUNTIME_CONFIG_FILES_ENV = "OPENCODE_RUNTIME_CONFIG_FILES_JSON"
+OPENCODE_MCP_CONNECTIONS_ENV = "OPENCODE_MCP_CONNECTIONS_JSON"
 OPENCODE_MCP_SIDECARS_ENV = "OPENCODE_MCP_SIDECARS_JSON"
 
 # ---------------------------------------------------------------------------
@@ -294,7 +308,28 @@ def _parse_allowed_callers() -> set[tuple[str, str]]:
     return allowed
 
 
+def _parse_allowed_targets() -> set[tuple[str, str]]:
+    """Parse the A2A allowed targets environment variable."""
+    payload = _parse_json_env(A2A_ALLOWED_TARGETS_ENV)
+    allowed: set[tuple[str, str]] = set()
+    if not isinstance(payload, list):
+        return allowed
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        namespace = str(item.get("namespace") or "").strip()
+        name = str(item.get("name") or "").strip()
+        if namespace and name:
+            allowed.add((namespace, name))
+    return allowed
+
+
 A2A_ALLOWED_CALLERS = _parse_allowed_callers()
+A2A_ALLOWED_TARGETS = _parse_allowed_targets()
+A2A_REQUIRE_HITL = os.getenv(A2A_REQUIRE_HITL_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
+A2A_MAX_TIMEOUT_SECONDS = max(_safe_float(A2A_MAX_TIMEOUT_SECONDS_ENV, 30.0), 1.0)
+API_GATEWAY_INTERNAL_URL = os.getenv(API_GATEWAY_INTERNAL_URL_ENV, "").strip().rstrip("/")
+API_GATEWAY_SHARED_TOKEN = os.getenv(API_GATEWAY_SHARED_TOKEN_ENV, "").strip()
 
 
 def build_litellm_base_url() -> str:

@@ -1,8 +1,10 @@
-import "@fontsource/space-grotesk/400.css";
-import "@fontsource/space-grotesk/500.css";
-import "@fontsource/space-grotesk/700.css";
+import "@fontsource/ibm-plex-sans/400.css";
+import "@fontsource/ibm-plex-sans/500.css";
+import "@fontsource/ibm-plex-sans/600.css";
+import "@fontsource/ibm-plex-mono/400.css";
+import "@fontsource/ibm-plex-mono/500.css";
 
-import { PanelLeftClose, PanelLeftOpen, PanelRightOpen, AlertTriangle, RefreshCw } from "lucide-react";
+import { AlertTriangle, Bot, MessageSquare, PanelRightOpen, RefreshCw } from "lucide-react";
 import React, { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import { Toaster } from "sonner";
 
@@ -31,8 +33,11 @@ const TopBar = lazy(() => import("./components/TopBar").then((m) => ({ default: 
 const CommandPalette = lazy(() => import("./components/CommandPalette").then((m) => ({ default: m.CommandPalette })));
 const MobileNav = lazy(() => import("./components/MobileNav").then((m) => ({ default: m.MobileNav })));
 const WorkflowManager = lazy(() => import("./components/WorkflowManager").then((m) => ({ default: m.WorkflowManager })));
+const IntelligenceDashboard = lazy(() => import("./components/IntelligenceDashboard").then((m) => ({ default: m.IntelligenceDashboard })));
+const McpManagementPanel = lazy(() => import("./components/McpManagementPanel").then((m) => ({ default: m.McpManagementPanel })));
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { EmptyState } from "@/components/EmptyState";
 
 const WorkflowComposer = lazy(() =>
   import("./components/WorkflowComposer").then((m) => ({ default: m.WorkflowComposer })),
@@ -45,7 +50,7 @@ import { ThemeProvider } from "./contexts/ThemeContext";
 import { NotificationProvider } from "./contexts/NotificationContext";
 
 import type { EvalInfo, UiMessage, WorkflowInfo, WorkspaceView } from "./types";
-import { cloneAgent, downloadAgentArtifact, exportBundleUrl, importBundle, listAgentArtifacts, previewAgentArtifact } from "./lib/api";
+import { cloneAgent, downloadAgentArtifact, downloadAgentArtifactZip, exportBundleUrl, importBundle, listAgentArtifacts, previewAgentArtifact } from "./lib/api";
 import { toast } from "sonner";
 
 // ── Pure utility functions ──
@@ -85,7 +90,7 @@ function evalStatusFromResource(resource: EvalInfo | null): Record<string, unkno
 }
 
 function supportsInspector(view: WorkspaceView): boolean {
-  return view === "agents" || view === "workflows" || view === "composer" || view === "evals";
+  return view === "agents" || view === "chat" || view === "workflows" || view === "composer" || view === "evals";
 }
 
 // ── NotificationShell — NotificationProvider needs Connection values ──
@@ -111,7 +116,7 @@ function LoadingPanel() {
 }
 
 function SidebarShell({ children }: { children: React.ReactNode }) {
-  return <Suspense fallback={<div className="w-16 border-r border-border bg-background" />}>{children}</Suspense>;
+  return <Suspense fallback={<div className="h-full w-full border-r border-border bg-background" />}>{children}</Suspense>;
 }
 
 function ContentShell({ children }: { children: React.ReactNode }) {
@@ -199,6 +204,47 @@ function AppLayout() {
     setSidebarDeleteTarget({ id, view: ws.activeView });
   }, [ws.activeView]);
 
+  const handleOpenChatView = useCallback((agentName?: string) => {
+    const nextAgentName = agentName || ws.selectedAgentName || ws.agents[0]?.name || "";
+    ws.navigateToResource("chat", nextAgentName);
+  }, [ws]);
+
+  const handleWorkspaceViewChange = useCallback((view: WorkspaceView) => {
+    if (view === "chat") {
+      handleOpenChatView();
+      return;
+    }
+    ws.setActiveView(view);
+  }, [handleOpenChatView, ws]);
+
+  const handleListSelectedAgentArtifacts = useCallback(async () => {
+    if (!ws.selectedAgentName) {
+      return { files: [], truncated: false, roots: [] };
+    }
+    return listAgentArtifacts(conn.token, conn.namespace, ws.selectedAgentName);
+  }, [conn.namespace, conn.token, ws.selectedAgentName]);
+
+  const handlePreviewSelectedAgentArtifact = useCallback(async (path: string) => {
+    if (!ws.selectedAgentName) {
+      throw new Error("Select an agent before previewing files.");
+    }
+    return previewAgentArtifact(conn.token, conn.namespace, ws.selectedAgentName, path);
+  }, [conn.namespace, conn.token, ws.selectedAgentName]);
+
+  const handleDownloadSelectedAgentArtifact = useCallback(async (path: string, filename?: string) => {
+    if (!ws.selectedAgentName) {
+      throw new Error("Select an agent before downloading files.");
+    }
+    await downloadAgentArtifact(conn.token, conn.namespace, ws.selectedAgentName, path, filename);
+  }, [conn.namespace, conn.token, ws.selectedAgentName]);
+
+  const handleDownloadSelectedAgentWorkspaceZip = useCallback(async () => {
+    if (!ws.selectedAgentName) {
+      throw new Error("Select an agent before downloading the workspace.");
+    }
+    await downloadAgentArtifactZip(conn.token, conn.namespace, ws.selectedAgentName);
+  }, [conn.namespace, conn.token, ws.selectedAgentName]);
+
   // Gate: show loading spinner while auth initializes
   if (!conn.authReady) {
     return (
@@ -233,7 +279,7 @@ function AppLayout() {
     const { id, view } = sidebarDeleteTarget;
     setSidebarDeleteTarget(null);
     try {
-      if (view === "agents") {
+      if (view === "agents" || view === "chat") {
         // Select the agent first so handleDeleteAgent knows which one
         ws.handleSelectResource(id);
         const deletedName = await ws.handleDeleteAgent();
@@ -258,6 +304,7 @@ function AppLayout() {
             ? current
             : [{ id: createId(), role: "system" as const, content: "Agent created. Wait until the runtime status turns running, then start chatting.", status: "complete" as const }],
         );
+        handleOpenChatView(created.name);
       }
     } catch (err) {
       ws.setWorkspaceError(err instanceof Error ? err.message : String(err));
@@ -275,47 +322,68 @@ function AppLayout() {
   }
 
   // Derived display values
-  const gatewayStatus = conn.gatewayError ? "offline" : conn.health?.status ?? "loading";
-
-  const heroTitle =
-    ws.activeView === "agents"
-      ? ws.selectedAgent
-        ? `${ws.selectedAgent.name} is ready for chat and management.`
-        : ws.agentCreateMode
-          ? "Create and provision a new agent."
-          : "Connect, create, and manage your agents."
-      : ws.activeView === "workflows" || ws.activeView === "composer"
-        ? ws.selectedWorkflow
-          ? `${ws.selectedWorkflow.name} workflow orchestration.`
-          : ws.workflowCreateMode || ws.workflows.length === 0
-            ? "Create a workflow and let the operator queue it."
-            : "Select a workflow to inspect it."
-        : ws.activeView === "catalog"
-          ? "Browse pre-built skills and MCP tool sidecars."
-          : ws.activeView === "settings"
-            ? "Manage LLM providers, model routes, and API keys."
-            : ws.selectedEval
-            ? `${ws.selectedEval.name} evaluation suite.`
-            : ws.evalCreateMode || ws.evals.length === 0
-              ? "Create an evaluation suite and let the operator run it."
-              : "Select an evaluation to inspect it.";
-
-  const selectedResourceStatus =
-    ws.activeView === "agents"
-      ? ws.selectedAgent?.status ?? (ws.agentCreateMode ? "draft" : "none")
-      : ws.activeView === "workflows" || ws.activeView === "composer"
-        ? ws.selectedWorkflow?.phase ?? (ws.workflowCreateMode ? "draft" : "none")
-        : ws.activeView === "catalog"
-          ? "browse"
-          : ws.activeView === "settings"
-            ? "config"
-            : ws.selectedEval?.phase ?? (ws.evalCreateMode ? "draft" : "none");
-
   const displayError = ws.workspaceError || conn.connectionError || conn.gatewayError;
+  const pageHeader =
+    ws.activeView === "agents"
+      ? {
+          title: "Agents",
+          description: "Create agents, tune runtime behavior, and manage attached capabilities.",
+        }
+      : ws.activeView === "chat"
+        ? {
+            title: "Chat",
+            description: "Use the dedicated conversation workspace for sessions, files, memory, and run details.",
+          }
+        : ws.activeView === "workflows" || ws.activeView === "composer"
+          ? {
+              title: "Workflows",
+              description: "Design orchestration paths, inspect runs, and manage approval gates.",
+            }
+          : ws.activeView === "catalog"
+            ? {
+                title: "Catalog",
+                description: "Browse reusable skills, templates, and MCP-ready building blocks.",
+              }
+            : ws.activeView === "policies"
+              ? {
+                  title: "Policies",
+                  description: "Manage model access, guardrails, and runtime control policies.",
+                }
+              : ws.activeView === "intelligence"
+                ? {
+                    title: "Intelligence",
+                    description: "Collect read-only cluster intelligence and attach that context to agents.",
+                  }
+                : ws.activeView === "mcp"
+                  ? {
+                      title: "MCP Servers",
+                      description: "Discover, configure, and manage Model Context Protocol integrations across remote, hub, and sidecar transports.",
+                    }
+                  : ws.activeView === "settings"
+                  ? {
+                      title: "Settings",
+                      description: "Manage providers, model routes, and workspace defaults.",
+                    }
+                  : ws.activeView === "admin"
+                    ? {
+                        title: "Admin",
+                        description: "Inspect users, audit activity, usage, and platform health.",
+                      }
+                    : {
+                        title: "Evaluations",
+                        description: "Create evaluation suites and track regression coverage.",
+                      };
+  const showCompactPageHeader = ws.activeView !== "composer" && !(ws.activeView === "chat" && ws.selectedAgentName);
+  const mainContentClasses = ws.activeView === "composer"
+    ? "flex flex-1 flex-col overflow-hidden pb-20 md:pb-0"
+    : ws.activeView === "chat" && ws.selectedAgentName
+      ? "flex flex-1 overflow-hidden pb-20 md:pb-0"
+      : "flex min-w-0 flex-1 flex-col gap-3 overflow-auto p-3 pb-20 sm:p-4 md:pb-0";
+
   return (
     <div className="flex h-screen flex-col bg-background text-foreground">
       {/* ── TopBar ── */}
-      <Suspense fallback={<div className="h-14 border-b border-border bg-background" />}>
+      <Suspense fallback={<div className="h-12 border-b border-border bg-background" />}>
         <TopBar
           health={conn.health}
           gatewayError={conn.gatewayError}
@@ -354,7 +422,11 @@ function AppLayout() {
 
       <div className="flex flex-1 overflow-hidden">
         {/* ── Sidebar ── */}
-        <div className="hidden md:flex">
+        <div
+          className={`hidden shrink-0 overflow-hidden transition-[width] duration-200 ease-productive md:flex ${ws.sidebarCollapsed
+            ? "md:w-14"
+            : "md:w-[clamp(13.5rem,18vw,17rem)] xl:w-[clamp(14.25rem,18.5vw,18rem)]"}`}
+        >
           <SidebarShell>
             <AppSidebar
               collapsed={ws.sidebarCollapsed}
@@ -366,13 +438,13 @@ function AppLayout() {
               loading={ws.catalogLoading}
               emptyMessage={ws.emptySidebarMessage}
               isAdmin={conn.isAdmin}
-              onViewChange={ws.setActiveView}
+              onViewChange={handleWorkspaceViewChange}
               onRefresh={() => void ws.refreshWorkspaceData({ silent: false })}
               onSelect={ws.handleSelectResource}
               onCreateNew={ws.handleCreateNew}
               onQuickRun={
                 ws.activeView === "agents"
-                  ? (id) => { ws.handleSelectResource(id); ws.setAgentViewTab("chat"); }
+                  ? (id) => { ws.handleSelectResource(id); handleOpenChatView(id); }
                   : ws.activeView === "workflows" || ws.activeView === "composer"
                     ? (id) => {
                         ws.handleSelectResource(id);
@@ -389,7 +461,7 @@ function AppLayout() {
                     : undefined
               }
               onDeleteItem={
-                ws.activeView === "agents" || ws.activeView === "workflows" || ws.activeView === "composer" || ws.activeView === "evals"
+                ws.activeView === "agents" || ws.activeView === "chat" || ws.activeView === "workflows" || ws.activeView === "composer" || ws.activeView === "evals"
                   ? handleSidebarDeleteRequest
                   : undefined
               }
@@ -398,42 +470,25 @@ function AppLayout() {
         </div>
 
         {/* ── Main content ── */}
-        <main className={`flex flex-1 flex-col pb-16 md:pb-0 ${ws.activeView === "composer" ? "overflow-hidden" : "p-4 gap-4"} ${ws.activeView === "agents" && ws.selectedAgentName && !ws.agentCreateMode ? "overflow-hidden" : "overflow-auto"}`}>
-          {ws.activeView !== "composer" && (
-            <>
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Workspace Status</p>
-                  <h2 className="text-lg font-semibold text-foreground">{heroTitle}</h2>
-                </div>
+        <main className={mainContentClasses}>
+          {showCompactPageHeader && (
+            <div className="flex min-w-0 items-start justify-between gap-3">
+              <div className="min-w-0">
+                <h2 className="break-words text-base font-semibold leading-tight text-foreground">{pageHeader.title}</h2>
+                <p className="mt-1 text-xs leading-5 text-muted-foreground">{pageHeader.description}</p>
+              </div>
+              {inspectorSupported ? (
                 <Button
                   variant="outline"
                   size="sm"
-                  className="gap-1.5"
+                  className="h-8 shrink-0 gap-1.5"
                   onClick={() => ws.setInspectorOpen(true)}
-                  disabled={!inspectorSupported}
-                  title={inspectorSupported ? undefined : "Inspector is available for agents, workflows, composer, and evaluations."}
                 >
                   <PanelRightOpen className="h-4 w-4" />
                   Inspector
                 </Button>
-              </div>
-
-              <div className="flex flex-wrap gap-2 text-xs">
-                <span className="rounded-md border border-border bg-card px-3 py-1.5">
-                  Gateway: <strong className="text-foreground">{gatewayStatus}</strong>
-                </span>
-                <span className="rounded-md border border-border bg-card px-3 py-1.5">
-                  Auth: <strong className="text-foreground">{conn.health?.auth_mode ?? "unknown"}</strong>
-                </span>
-                <span className="rounded-md border border-border bg-card px-3 py-1.5">
-                  View: <strong className="text-foreground">{ws.activeView}</strong>
-                </span>
-                <span className="rounded-md border border-border bg-card px-3 py-1.5">
-                  Selected: <strong className="text-foreground">{selectedResourceStatus}</strong>
-                </span>
-              </div>
-            </>
+              ) : null}
+            </div>
           )}
 
           {displayError && (
@@ -458,204 +513,188 @@ function AppLayout() {
                 <ContentShell>
                   <CreateAgentPanel
                     token={conn.token}
+                    namespace={conn.namespace}
                     isEmptyWorkspace={ws.agents.length === 0}
                     name={ws.createAgentName}
                     model={ws.createAgentModel}
                     systemPrompt={ws.createAgentSystemPrompt}
                     runtimeKind={ws.createAgentRuntimeKind}
+                    mcpConnectionIds={ws.createAgentMcpConnectionIds}
                     mcpServersText={ws.createAgentMcpServersText}
                     mcpSidecarsText={ws.createAgentMcpSidecarsText}
                     a2aAllowedCallersText={ws.createAgentA2AAllowedCallersText}
                     agents={ws.agents}
                     workflows={ws.workflows}
                     skillFileDrafts={ws.createAgentSkillFileDrafts}
-                    gooseConfigFileDrafts={ws.createAgentGooseConfigFileDrafts}
                     opencodeConfigFileDrafts={ws.createAgentOpenCodeConfigFileDrafts}
                     isCreating={ws.isCreatingAgent}
                     error={ws.createError}
+                    onMcpConnectionIdsChange={ws.setCreateAgentMcpConnectionIds}
                     onMcpServersTextChange={ws.setCreateAgentMcpServersText}
                     onMcpSidecarsTextChange={ws.setCreateAgentMcpSidecarsText}
                     onNameChange={ws.setCreateAgentName}
                     onModelChange={ws.setCreateAgentModel}
                     onSystemPromptChange={ws.setCreateAgentSystemPrompt}
-                    onRuntimeKindChange={ws.setCreateAgentRuntimeKind}
                     onA2AAllowedCallersTextChange={ws.setCreateAgentA2AAllowedCallersText}
                     onSkillFileDraftsChange={ws.setCreateAgentSkillFileDrafts}
-                    onGooseConfigFileDraftsChange={ws.setCreateAgentGooseConfigFileDrafts}
                     onOpenCodeConfigFileDraftsChange={ws.setCreateAgentOpenCodeConfigFileDrafts}
                     gitForm={ws.createAgentGitForm}
                     onGitFormChange={ws.setCreateAgentGitForm}
-                    githubForm={ws.createAgentGitHubForm}
-                    onGitHubFormChange={ws.setCreateAgentGitHubForm}
                     onCreate={() => void handleCreateAgentFull()}
                   />
                 </ContentShell>
               </div>
             ) : (
-              <>
-                {ws.selectedAgentName && !ws.chatFocused && (
-                  <div className="mb-2 flex gap-1 2xl:hidden">
-                    <Button
-                      variant={ws.agentViewTab === "config" ? "secondary" : "ghost"}
-                      size="sm" className="h-7 text-xs"
-                      onClick={() => ws.setAgentViewTab("config")}
-                    >Config</Button>
-                    <Button
-                      variant={ws.agentViewTab === "chat" ? "secondary" : "ghost"}
-                      size="sm" className="h-7 text-xs"
-                      onClick={() => ws.setAgentViewTab("chat")}
-                    >Chat</Button>
-                  </div>
-                )}
-
-                <div className="flex min-h-0 flex-1 min-w-0 gap-0 overflow-hidden">
-                  <div className={`${ws.selectedAgentName ? "hidden 2xl:flex" : "flex"} ${ws.agentViewTab === "config" ? "flex" : "hidden 2xl:flex"} ${ws.configPanelCollapsed || ws.chatFocused ? "2xl:hidden" : "w-full 2xl:max-w-[48rem] 2xl:basis-[44%]"} min-w-0 flex-col overflow-auto`}>
-                    {ws.selectedAgentDetail ? (
-                      <ContentShell>
-                        <AgentManagementPanel
-                          token={conn.token}
-                          agent={ws.selectedAgentDetail}
-                          policies={ws.policies}
-                          agents={ws.agents}
-                          workflows={ws.workflows}
-                          isSaving={ws.savingAgent}
-                          isDeleting={ws.deletingAgent}
-                          error={ws.agentManageError}
-                          onSave={(payload, a2aText, skills, gooseFiles, opencodeFiles) => void ws.handleSaveAgent(payload, a2aText, skills, gooseFiles, opencodeFiles)}
-                          onDelete={() => void handleDeleteAgentFull()}
-                          onClone={async () => {
-                            try {
-                              await cloneAgent(conn.token, conn.namespace, ws.selectedAgentDetail!.name);
-                              toast.success(`Cloned "${ws.selectedAgentDetail!.name}"`);
-                              void ws.refreshWorkspaceData({ silent: true });
-                            } catch (err) {
-                              toast.error(err instanceof Error ? err.message : "Clone failed");
-                            }
-                          }}
-                        />
-                      </ContentShell>
-                    ) : (
-                      <div className="flex flex-1 items-center justify-center">
-                        <p className="text-sm text-muted-foreground">Loading the selected agent settings...</p>
-                      </div>
-                    )}
-                  </div>
-
-                  {ws.selectedAgentName && (
-                    <div className={`${ws.agentViewTab === "chat" ? "flex" : "hidden 2xl:flex"} w-full min-w-0 ${ws.configPanelCollapsed || ws.chatFocused ? "2xl:w-full" : "2xl:flex-1"} flex-row min-h-0`}>
-                      {!ws.chatFocused && (
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="hidden 2xl:flex h-full w-6 shrink-0 rounded-none border-r border-border hover:bg-muted/50 items-center justify-center"
-                        onClick={() => ws.setConfigPanelCollapsed(!ws.configPanelCollapsed)}
-                        title={ws.configPanelCollapsed ? "Show agent config" : "Hide agent config"}
-                      >
-                        {ws.configPanelCollapsed ? <PanelLeftOpen className="h-3.5 w-3.5" /> : <PanelLeftClose className="h-3.5 w-3.5" />}
-                      </Button>
-                      )}
-                      {!ws.chatFocused && (
-                      <ContentShell>
-                        <ChatSessionPanel
-                          sessions={chat.chatSessions}
-                          activeSessionId={chat.activeSessionId}
-                          loading={chat.sessionsLoading}
-                          search={chat.sessionSearch}
-                          onSearchChange={chat.setSessionSearch}
-                          sessionDirty={chat.sessionDirty}
-                          sessionSaving={chat.sessionSaving}
-                          lastSessionSaveAt={chat.lastSessionSaveAt}
-                          onNewSession={() => void chat.handleNewSession()}
-                          onLoadSession={(id) => void chat.handleLoadSession(id)}
-                          onDeleteSession={(id) => void chat.handleDeleteSession(id)}
-                          onRenameSession={(id, title) => void chat.handleRenameSession(id, title)}
-                          onSaveCurrent={() => void chat.handleSaveCurrentSession()}
-                        />
-                      </ContentShell>
-                      )}
-                      <ContentShell>
-                        <ChatWorkbench
-                          agentName={ws.selectedAgentName}
-                          runtimeKind={ws.selectedRuntimeKind}
-                          prompt={chat.prompt}
-                          messages={chat.messages}
-                          activity={chat.activity}
-                          todos={chat.todos}
-                          phase={chat.phase}
-                          isSending={chat.isSending}
-                          tokenReady={Boolean(conn.token.trim())}
-                          streamMode={chat.streamMode}
-                          requireApproval={chat.requireApproval}
-                          approvalSupported={chat.approvalSupported}
-                          a2aTargetAgent={chat.a2aTargetAgent}
-                          a2aTargetNamespace={chat.a2aTargetNamespace}
-                          a2aTimeoutSeconds={chat.a2aTimeoutSeconds}
-                          specialistSubagents={chat.specialistSubagents}
-                          specialistTeamConfigured={chat.specialistTeamConfigured}
-                          subagentStrategy={chat.subagentStrategy}
-                          discoveryPeers={ws.discoverablePeers}
-                          discoveryLoading={ws.discoveryLoading}
-                          discoveryError={ws.discoveryError}
-                          gooseMaxTurns={chat.selectedGooseChatSettings.maxTurns}
-                          gooseWorkingDirectory={chat.selectedGooseChatSettings.workingDirectory}
-                          gooseSystemPrompt={chat.gooseSystemPromptPreview}
-                          emptyMessage={chat.chatEmptyMessage}
-                          error={chat.chatError}
-                          onPromptChange={chat.setPrompt}
-                          onToggleStreamMode={chat.setStreamMode}
-                          onToggleRequireApproval={chat.setRequireApproval}
-                          onA2ATargetAgentChange={(v) => { chat.setChatError(""); chat.setA2ATargetAgent(v); }}
-                          onA2ATargetNamespaceChange={(v) => { chat.setChatError(""); chat.setA2ATargetNamespace(v); }}
-                          onA2ATimeoutSecondsChange={(v) => { chat.setChatError(""); chat.setA2ATimeoutSeconds(v); }}
-                          onSubagentStrategyChange={(v) => { chat.setChatError(""); chat.setSubagentStrategy(v); }}
-                          onAddSpecialistSubagent={chat.addSpecialistSubagent}
-                          onUpdateSpecialistSubagent={(id, patch) => chat.updateSpecialistSubagent(id, patch)}
-                          onRemoveSpecialistSubagent={(id) => chat.removeSpecialistSubagent(id)}
-                          onClearSpecialistTeam={chat.clearSpecialistTeam}
-                          onGooseMaxTurnsChange={chat.setGooseMaxTurns}
-                          onGooseWorkingDirectoryChange={chat.setGooseWorkingDirectory}
-                          opencodeOutputFormat={chat.selectedOpenCodeChatSettings.outputFormat}
-                          opencodeAutonomous={chat.selectedOpenCodeChatSettings.autonomous}
-                          opencodeMaxTurns={chat.selectedOpenCodeChatSettings.maxTurns}
-                          opencodeWorkingDirectory={chat.selectedOpenCodeChatSettings.workingDirectory}
-                          summary={chat.summary}
-                          activeSessionId={chat.activeSessionId}
-                          sessionDirty={chat.sessionDirty}
-                          sessionSaving={chat.sessionSaving}
-                          lastSessionSaveAt={chat.lastSessionSaveAt}
-                          activeSessionSummary={chat.activeSessionSummary}
-                          activeMemoryRecords={chat.activeMemoryRecords}
-                          agentMemoryRecords={chat.agentMemoryRecords}
-                          onPromoteMemoryRecord={(recordId, promoted) => void chat.handlePromoteMemoryRecord(recordId, promoted)}
-                          onEditMemoryRecord={(recordId, patch) => void chat.handleEditMemoryRecord(recordId, patch)}
-                          onDeleteMemoryRecord={(recordId) => void chat.handleDeleteMemoryRecord(recordId)}
-                          onDownloadArtifact={(path, filename) => downloadAgentArtifact(conn.token, conn.namespace, ws.selectedAgentName, path, filename)}
-                          onListArtifacts={() => listAgentArtifacts(conn.token, conn.namespace, ws.selectedAgentName)}
-                          onPreviewArtifact={(path) => previewAgentArtifact(conn.token, conn.namespace, ws.selectedAgentName, path)}
-                          onOpenCodeOutputFormatChange={chat.setOpenCodeOutputFormat}
-                          onOpenCodeAutonomousChange={chat.setOpenCodeAutonomous}
-                          onOpenCodeMaxTurnsChange={chat.setOpenCodeMaxTurns}
-                          onOpenCodeWorkingDirectoryChange={chat.setOpenCodeWorkingDirectory}
-                          onSaveSession={() => void chat.handleSaveCurrentSession()}
-                          canSubmit={chat.canSubmitChat}
-                          onSubmit={() => void chat.handleSubmit()}
-                          onCancel={chat.cancelStream}
-                        />
-                      </ContentShell>
-                      <ContentShell>
-                        <TeamView
-                          specialistSubagents={chat.specialistSubagents}
-                          specialistTeamConfigured={chat.specialistTeamConfigured}
-                          subagentStrategy={chat.subagentStrategy}
-                          summary={chat.summary}
-                          isSending={chat.isSending}
-                          activity={chat.activity}
-                        />
-                      </ContentShell>
+              <div className="flex min-h-0 flex-1 flex-col gap-4">
+                <div className="min-h-0 flex-1 overflow-auto">
+                  {ws.selectedAgentDetail ? (
+                    <ContentShell>
+                      <AgentManagementPanel
+                        token={conn.token}
+                        agent={ws.selectedAgentDetail}
+                        policies={ws.policies}
+                        agents={ws.agents}
+                        workflows={ws.workflows}
+                        isSaving={ws.savingAgent}
+                        isDeleting={ws.deletingAgent}
+                        error={ws.agentManageError}
+                        onSave={(payload, a2aText, skills, opencodeFiles) => void ws.handleSaveAgent(payload, a2aText, skills, opencodeFiles)}
+                        onDelete={() => void handleDeleteAgentFull()}
+                        onClone={async () => {
+                          try {
+                            await cloneAgent(conn.token, conn.namespace, ws.selectedAgentDetail!.name);
+                            toast.success(`Cloned "${ws.selectedAgentDetail!.name}"`);
+                            void ws.refreshWorkspaceData({ silent: true });
+                          } catch (err) {
+                            toast.error(err instanceof Error ? err.message : "Clone failed");
+                          }
+                        }}
+                        onInjectPrompt={(text) => { chat.setPrompt(text); handleOpenChatView(ws.selectedAgentName); }}
+                      />
+                    </ContentShell>
+                  ) : (
+                    <div className="flex flex-1 items-center justify-center">
+                      <p className="text-sm text-muted-foreground">Loading the selected agent settings...</p>
                     </div>
                   )}
                 </div>
-              </>
+              </div>
+            )
+          ) : ws.activeView === "chat" ? (
+            ws.agents.length === 0 ? (
+              <div className="flex flex-1 items-center justify-center rounded-3xl border border-dashed border-border/70 bg-card/30">
+                <EmptyState
+                  icon={MessageSquare}
+                  title="Chat needs an agent"
+                  description={conn.canMutate ? "Create an agent in the management view, then return here for a roomier conversation workspace." : "Ask an admin to provision an agent, then select it from the sidebar to start chatting."}
+                  action={conn.canMutate ? { label: "Create Agent", onClick: ws.handleCreateNew } : undefined}
+                />
+              </div>
+            ) : !ws.selectedAgentName ? (
+              <div className="flex flex-1 items-center justify-center rounded-3xl border border-dashed border-border/70 bg-card/30">
+                <EmptyState
+                  icon={Bot}
+                  title="Select an agent"
+                  description="Choose an agent from the sidebar to open the full chat workspace."
+                />
+              </div>
+            ) : (
+              <div className="flex min-h-0 flex-1 min-w-0 flex-col overflow-hidden">
+                <div className="flex min-h-0 flex-1 min-w-0 flex-col gap-4 overflow-hidden lg:flex-row">
+                  <ContentShell>
+                    <ChatSessionPanel
+                      sessions={chat.chatSessions}
+                      activeSessionId={chat.activeSessionId}
+                      loading={chat.sessionsLoading}
+                      search={chat.sessionSearch}
+                      onSearchChange={chat.setSessionSearch}
+                      sessionDirty={chat.sessionDirty}
+                      sessionSaving={chat.sessionSaving}
+                      lastSessionSaveAt={chat.lastSessionSaveAt}
+                      onNewSession={() => void chat.handleNewSession()}
+                      onLoadSession={(id) => void chat.handleLoadSession(id)}
+                      onDeleteSession={(id) => void chat.handleDeleteSession(id)}
+                      onRenameSession={(id, title) => void chat.handleRenameSession(id, title)}
+                      onSaveCurrent={() => void chat.handleSaveCurrentSession()}
+                    />
+                  </ContentShell>
+
+                  <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-[1.75rem] border border-border/70 bg-card/55 shadow-[0_18px_48px_-28px_rgba(15,23,42,0.45)] 2xl:flex-row">
+                    <ContentShell>
+                      <ChatWorkbench
+                        agentName={ws.selectedAgentName}
+                        runtimeKind={ws.selectedRuntimeKind}
+                        prompt={chat.prompt}
+                        messages={chat.messages}
+                        activity={chat.activity}
+                        todos={chat.todos}
+                        phase={chat.phase}
+                        isSending={chat.isSending}
+                        tokenReady={Boolean(conn.token.trim())}
+                        streamMode={chat.streamMode}
+                        requireApproval={chat.requireApproval}
+                        approvalSupported={chat.approvalSupported}
+                        a2aTargetAgent={chat.a2aTargetAgent}
+                        a2aTargetNamespace={chat.a2aTargetNamespace}
+                        a2aTimeoutSeconds={chat.a2aTimeoutSeconds}
+                        specialistSubagents={chat.specialistSubagents}
+                        specialistTeamConfigured={chat.specialistTeamConfigured}
+                        discoveryPeers={ws.discoverablePeers}
+                        discoveryLoading={ws.discoveryLoading}
+                        discoveryError={ws.discoveryError}
+                        emptyMessage={chat.chatEmptyMessage}
+                        error={chat.chatError}
+                        onPromptChange={chat.setPrompt}
+                        onToggleStreamMode={chat.setStreamMode}
+                        onToggleRequireApproval={chat.setRequireApproval}
+                        onA2ATargetAgentChange={(v) => { chat.setChatError(""); chat.setA2ATargetAgent(v); }}
+                        onA2ATargetNamespaceChange={(v) => { chat.setChatError(""); chat.setA2ATargetNamespace(v); }}
+                        onA2ATimeoutSecondsChange={(v) => { chat.setChatError(""); chat.setA2ATimeoutSeconds(v); }}
+                        opencodeOutputFormat={chat.selectedOpenCodeChatSettings.outputFormat}
+                        opencodeAutonomous={chat.selectedOpenCodeChatSettings.autonomous}
+                        opencodeMaxTurns={chat.selectedOpenCodeChatSettings.maxTurns}
+                        opencodeWorkingDirectory={chat.selectedOpenCodeChatSettings.workingDirectory}
+                        factoryMode={chat.selectedFactoryMode}
+                        summary={chat.summary}
+                        activeSessionId={chat.activeSessionId}
+                        sessionDirty={chat.sessionDirty}
+                        sessionSaving={chat.sessionSaving}
+                        lastSessionSaveAt={chat.lastSessionSaveAt}
+                        activeSessionSummary={chat.activeSessionSummary}
+                        activeMemoryRecords={chat.activeMemoryRecords}
+                        agentMemoryRecords={chat.agentMemoryRecords}
+                        onPromoteMemoryRecord={(recordId, promoted) => void chat.handlePromoteMemoryRecord(recordId, promoted)}
+                        onEditMemoryRecord={(recordId, patch) => void chat.handleEditMemoryRecord(recordId, patch)}
+                        onDeleteMemoryRecord={(recordId) => void chat.handleDeleteMemoryRecord(recordId)}
+                        onDownloadArtifact={handleDownloadSelectedAgentArtifact}
+                        onDownloadArtifactZip={handleDownloadSelectedAgentWorkspaceZip}
+                        onListArtifacts={handleListSelectedAgentArtifacts}
+                        onPreviewArtifact={handlePreviewSelectedAgentArtifact}
+                        onOpenCodeOutputFormatChange={chat.setOpenCodeOutputFormat}
+                        onOpenCodeAutonomousChange={chat.setOpenCodeAutonomous}
+                        onOpenCodeMaxTurnsChange={chat.setOpenCodeMaxTurns}
+                        onOpenCodeWorkingDirectoryChange={chat.setOpenCodeWorkingDirectory}
+                        onFactoryModeChange={chat.setSelectedFactoryMode}
+                        onSaveSession={() => void chat.handleSaveCurrentSession()}
+                        canSubmit={chat.canSubmitChat}
+                        onSubmit={() => void chat.handleSubmit()}
+                        onCancel={chat.cancelStream}
+                      />
+                    </ContentShell>
+                    <ContentShell>
+                      <TeamView
+                        specialistSubagents={chat.specialistSubagents}
+                        specialistTeamConfigured={chat.specialistTeamConfigured}
+                        subagentStrategy={chat.subagentStrategy}
+                        summary={chat.summary}
+                        isSending={chat.isSending}
+                        activity={chat.activity}
+                        discoverablePeers={ws.discoverablePeers}
+                      />
+                    </ContentShell>
+                  </div>
+                </div>
+              </div>
             )
           ) : ws.activeView === "workflows" ? (
             <ContentShell>
@@ -669,11 +708,13 @@ function AppLayout() {
                 onCreate={(payload) => void ws.handleCreateWorkflow(payload)}
                 onUpdate={(name, payload) => void ws.handleUpdateWorkflow(name, payload)}
                 onDelete={(name) => void ws.handleDeleteWorkflow(name)}
-                onTrigger={(name, input) => void ws.handleTriggerWorkflow(name, input)}
+                onTrigger={(name, input, factoryMode) => void ws.handleTriggerWorkflow(name, input, factoryMode)}
                 onCancel={(name) => void ws.handleCancelWorkflow(name)}
                 isCancelling={ws.cancellingWorkflow}
                 onRetryFailed={(name) => void ws.handleRetryFailedSteps(name)}
                 isRetrying={ws.retryingWorkflow}
+                factoryMode={ws.selectedFactoryWorkflowMode}
+                onFactoryModeChange={ws.setSelectedFactoryWorkflowMode}
                 approvalReason={chat.approvalReason}
                 approvalBusy={chat.approvalBusy}
                 onApprovalReasonChange={chat.setApprovalReason}
@@ -716,6 +757,14 @@ function AppLayout() {
           ) : ws.activeView === "policies" ? (
             <ContentShell>
               <PolicyEditor selectedPolicyName={ws.sidebarSelectedId || null} />
+            </ContentShell>
+          ) : ws.activeView === "intelligence" ? (
+            <ContentShell>
+              <IntelligenceDashboard />
+            </ContentShell>
+          ) : ws.activeView === "mcp" ? (
+            <ContentShell>
+              <McpManagementPanel token={conn.token} namespace={conn.namespace} />
             </ContentShell>
           ) : ws.activeView === "settings" ? (
             <ContentShell>
@@ -768,7 +817,7 @@ function AppLayout() {
       </div>
 
       {/* ── Inspector drawers ── */}
-      {ws.activeView === "agents" ? (
+      {ws.activeView === "agents" || ws.activeView === "chat" ? (
         <AgentInspectorDrawer
           open={ws.inspectorOpen}
           onOpenChange={ws.setInspectorOpen}
@@ -830,7 +879,7 @@ function AppLayout() {
       <Suspense fallback={null}>
         <MobileNav
           activeView={ws.activeView}
-          onViewChange={ws.setActiveView}
+          onViewChange={handleWorkspaceViewChange}
           sidebarContent={
             <AppSidebar
               collapsed={false}
@@ -842,12 +891,12 @@ function AppLayout() {
               loading={ws.catalogLoading}
               emptyMessage={ws.emptySidebarMessage}
               isAdmin={conn.isAdmin}
-              onViewChange={ws.setActiveView}
+              onViewChange={handleWorkspaceViewChange}
               onRefresh={() => void ws.refreshWorkspaceData({ silent: false })}
               onSelect={ws.handleSelectResource}
               onCreateNew={ws.handleCreateNew}
               onDeleteItem={
-                ws.activeView === "agents" || ws.activeView === "workflows" || ws.activeView === "composer" || ws.activeView === "evals"
+                ws.activeView === "agents" || ws.activeView === "chat" || ws.activeView === "workflows" || ws.activeView === "composer" || ws.activeView === "evals"
                   ? handleSidebarDeleteRequest
                   : undefined
               }
@@ -859,7 +908,7 @@ function AppLayout() {
       <Toaster position="bottom-right" theme="dark" richColors />
       <Suspense fallback={null}>
         <CommandPalette
-          onNavigate={ws.setActiveView}
+          onNavigate={handleWorkspaceViewChange}
           onCreateAgent={() => { ws.setActiveView("agents"); ws.setAgentCreateMode(true); }}
           onCreateWorkflow={() => { ws.setActiveView("workflows"); ws.setWorkflowCreateMode(true); }}
           onCreateEval={() => { ws.setActiveView("evals"); ws.setEvalCreateMode(true); }}

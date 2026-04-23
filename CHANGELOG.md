@@ -29,6 +29,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Repository reorganized: docs moved to `docs/`, tests to `tests/`, scripts to `scripts/`
 - README.md rewritten to reflect current state
 - .gitignore updated for all project languages
+- .gitignore now excludes transient local gateway state under `api-gateway/.local/` and ad-hoc `.pytest-*.txt` result captures
 - Makefile updated with all 17 container image targets
 - Goose runtime base image updated from removed `v1.0.18` tag to `latest`
 - Documentation updated to remove 33 false completion checkmarks in road-to-prod-audit.md
@@ -36,6 +37,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - architecture-overview.md updated with all 4 runtimes and complete directory map
 - INSTALL.md corrected to show 7 platform + 10 sidecar images (17 total)
 - Kubernetes version requirement updated to 1.25+ across all docs
+- INSTALL.md and `web-ui/README.md` now document the current local browser-QA flow: Vite dev on `5173`, gateway on `8080`, preview on `4173`, and local-auth + SQLite bootstrap for self-contained UI testing
+- The desktop web-ui shell now uses an elastic sidebar width instead of a fixed wide MCP/resource column on narrow desktop panes
 
 ### Removed
 - 15+ junk/temporary files from repository root

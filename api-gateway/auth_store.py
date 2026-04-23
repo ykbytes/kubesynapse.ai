@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import re
 import secrets
 import threading
 import time
+import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterator
@@ -27,6 +29,8 @@ from sqlalchemy import (
     UniqueConstraint,
     create_engine,
     func,
+    inspect,
+    text,
 )
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, declarative_base, relationship, sessionmaker
@@ -45,6 +49,14 @@ ACCOUNT_LOCKOUT_MINUTES = max(int(os.getenv("AUTH_ACCOUNT_LOCKOUT_MINUTES", "15"
 
 _LOGIN_RATE_LIMIT_LOCK = threading.Lock()
 _LOGIN_ATTEMPTS: dict[str, list[float]] = {}
+_DEFAULT_INTELLIGENCE_NAMESPACE = "default"
+_INTELLIGENCE_NAMESPACE_TABLES = (
+    "intelligence_collectors",
+    "intelligence_tasks",
+    "intelligence_schedules",
+    "intelligence_alerts",
+    "alert_history",
+)
 
 
 def utc_now() -> datetime:
@@ -57,6 +69,12 @@ def ensure_utc(value: datetime | None) -> datetime | None:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
+
+
+def _json_clone(value: Any) -> Any:
+    if value is None:
+        return None
+    return json.loads(json.dumps(value, ensure_ascii=False, default=str))
 
 
 def _build_database_url() -> str:
@@ -135,6 +153,28 @@ class UserSession(Base):
     user = relationship("User", back_populates="sessions")
 
 
+class McpConnectionRow(Base):
+    __tablename__ = "mcp_connections"
+    __table_args__ = (UniqueConstraint("namespace", "slug", name="uq_mcp_connections_namespace_slug"),)
+
+    id = Column(String(64), primary_key=True)
+    namespace = Column(String(128), nullable=False, index=True)
+    name = Column(String(128), nullable=False)
+    slug = Column(String(128), nullable=False)
+    server_id = Column(String(128), nullable=False, index=True)
+    transport = Column(String(32), nullable=False)
+    auth_type = Column(String(64), nullable=False, default="none")
+    config_json = Column(JSON, nullable=False, default=dict)
+    credential_metadata_json = Column(JSON, nullable=False, default=list)
+    secret_name = Column(String(253), nullable=True)
+    validation_status = Column(String(32), nullable=False, default="draft")
+    validation_message = Column(String(1024), nullable=True)
+    validation_detail_json = Column(JSON, nullable=True)
+    last_validated_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
+
+
 class AuditLog(Base):
     __tablename__ = "audit_logs"
 
@@ -189,6 +229,10 @@ class WorkflowRun(Base):
     journal_path = Column(String(512), nullable=True)
     worker_job_name = Column(String(128), nullable=True)
     pending_approval_name = Column(String(128), nullable=True)
+    log_archive_text = Column(String, nullable=True)
+    log_archive_source = Column(String(64), nullable=True)
+    log_archive_truncated = Column(Boolean, nullable=False, default=False)
+    log_archive_captured_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
     completed_at = Column(DateTime(timezone=True), nullable=True)
@@ -769,8 +813,210 @@ class WorkflowRunHistory(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
 
 
+# ─── Intelligence persistence models ─────────────────────────────────────
+
+
+class IntelligenceCollectorRow(Base):
+    __tablename__ = "intelligence_collectors"
+
+    id = Column(String(128), primary_key=True)
+    namespace = Column(String(256), nullable=False, default=_DEFAULT_INTELLIGENCE_NAMESPACE, index=True)
+    name = Column(String(256), nullable=False)
+    url = Column(String(1024), nullable=False, unique=True)
+    token_hash = Column(String(128), nullable=False)
+    encrypted_token = Column(String(4096), nullable=True)
+    cluster = Column(String(256), nullable=False, default="unknown")
+    tags = Column(JSON, nullable=False, default=list)
+    registered_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+    registered_by = Column(String(256), nullable=False, default="unknown")
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "namespace": self.namespace,
+            "name": self.name,
+            "url": self.url,
+            "cluster": self.cluster,
+            "tags": self.tags or [],
+            "registered_at": self.registered_at.isoformat() if self.registered_at else None,
+            "registered_by": self.registered_by,
+        }
+
+
+class IntelligenceTaskRow(Base):
+    __tablename__ = "intelligence_tasks"
+
+    task_id = Column(String(16), primary_key=True)
+    namespace = Column(String(256), nullable=False, default=_DEFAULT_INTELLIGENCE_NAMESPACE, index=True)
+    collector_id = Column(String(128), nullable=False, default="all")
+    payload = Column(JSON, nullable=False, default=dict)
+    results = Column(JSON, nullable=False, default=dict)
+    submitted_by = Column(String(256), nullable=False, default="unknown")
+    submitted_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+    total = Column(Integer, nullable=False, default=0)
+    completed = Column(Integer, nullable=False, default=0)
+
+    def to_dict(self) -> dict:
+        return {
+            "task_id": self.task_id,
+            "namespace": self.namespace,
+            "collector_id": self.collector_id,
+            "payload": self.payload or {},
+            "results": self.results or {},
+            "submitted_by": self.submitted_by,
+            "submitted_at": self.submitted_at.isoformat() if self.submitted_at else None,
+            "total": self.total,
+            "completed": self.completed,
+        }
+
+
+class IntelligenceScheduleRow(Base):
+    __tablename__ = "intelligence_schedules"
+
+    id = Column(String(16), primary_key=True)
+    namespace = Column(String(256), nullable=False, default=_DEFAULT_INTELLIGENCE_NAMESPACE, index=True)
+    name = Column(String(256), nullable=False)
+    cron = Column(String(128), nullable=False)
+    collector_id = Column(String(128), nullable=False, default="all")
+    builtin = Column(String(128), nullable=True)
+    script = Column(String, nullable=True)
+    script_type = Column(String(16), nullable=False, default="bash")
+    timeout = Column(Integer, nullable=False, default=30)
+    agent_name = Column(String(256), nullable=True)
+    enabled = Column(Boolean, nullable=False, default=True)
+    created_by = Column(String(256), nullable=False, default="unknown")
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+    last_run = Column(DateTime(timezone=True), nullable=True)
+    next_run = Column(DateTime(timezone=True), nullable=True)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id, "namespace": self.namespace, "name": self.name, "cron": self.cron,
+            "collector_id": self.collector_id, "builtin": self.builtin,
+            "script": self.script, "script_type": self.script_type,
+            "timeout": self.timeout, "agent_name": self.agent_name,
+            "enabled": self.enabled, "created_by": self.created_by,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "last_run": self.last_run.isoformat() if self.last_run else None,
+            "next_run": self.next_run.isoformat() if self.next_run else None,
+        }
+
+
+class IntelligenceAlertRow(Base):
+    __tablename__ = "intelligence_alerts"
+
+    id = Column(String(16), primary_key=True)
+    namespace = Column(String(256), nullable=False, default=_DEFAULT_INTELLIGENCE_NAMESPACE, index=True)
+    name = Column(String(256), nullable=False)
+    schedule_id = Column(String(16), nullable=True)
+    condition_type = Column(String(32), nullable=False)
+    condition_value = Column(String(1024), nullable=False, default="")
+    action = Column(String(32), nullable=False, default="notify")
+    agent_name = Column(String(256), nullable=True)
+    prompt_template = Column(String, nullable=True)
+    enabled = Column(Boolean, nullable=False, default=True)
+    created_by = Column(String(256), nullable=False, default="unknown")
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+    last_triggered = Column(DateTime(timezone=True), nullable=True)
+    trigger_count = Column(Integer, nullable=False, default=0)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id, "namespace": self.namespace, "name": self.name, "schedule_id": self.schedule_id,
+            "condition_type": self.condition_type, "condition_value": self.condition_value,
+            "action": self.action, "agent_name": self.agent_name,
+            "prompt_template": self.prompt_template, "enabled": self.enabled,
+            "created_by": self.created_by,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "last_triggered": self.last_triggered.isoformat() if self.last_triggered else None,
+            "trigger_count": self.trigger_count,
+        }
+
+
+class AlertHistoryRow(Base):
+    __tablename__ = "alert_history"
+
+    id = Column(String(16), primary_key=True)
+    namespace = Column(String(256), nullable=False, default=_DEFAULT_INTELLIGENCE_NAMESPACE, index=True)
+    alert_id = Column(String(16), nullable=False, index=True)
+    alert_name = Column(String(256), nullable=False)
+    triggered_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+    condition_matched = Column(String(512), nullable=False, default="")
+    action_taken = Column(String(32), nullable=False, default="notify")
+    agent_invoked = Column(String(256), nullable=True)
+    invoke_status = Column(Integer, nullable=True)
+    invoke_error = Column(String, nullable=True)
+    task_id = Column(String(16), nullable=True)
+    snippet = Column(String(1024), nullable=True)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id, "namespace": self.namespace, "alert_id": self.alert_id, "alert_name": self.alert_name,
+            "triggered_at": self.triggered_at.isoformat() if self.triggered_at else None,
+            "condition_matched": self.condition_matched, "action_taken": self.action_taken,
+            "agent_invoked": self.agent_invoked, "invoke_status": self.invoke_status,
+            "invoke_error": self.invoke_error, "task_id": self.task_id, "snippet": self.snippet,
+        }
+
+
+def _ensure_intelligence_namespace_columns() -> None:
+    with ENGINE.begin() as connection:
+        inspector = inspect(connection)
+        for table_name in _INTELLIGENCE_NAMESPACE_TABLES:
+            columns = {column["name"] for column in inspector.get_columns(table_name)}
+            if "namespace" not in columns:
+                connection.execute(
+                    text(
+                        f"ALTER TABLE {table_name} ADD COLUMN namespace VARCHAR(256) NOT NULL DEFAULT '{_DEFAULT_INTELLIGENCE_NAMESPACE}'"
+                    )
+                )
+            connection.execute(text(f"CREATE INDEX IF NOT EXISTS ix_{table_name}_namespace ON {table_name} (namespace)"))
+
+
+def _ensure_intelligence_collector_secret_columns() -> None:
+    with ENGINE.begin() as connection:
+        inspector = inspect(connection)
+        if "intelligence_collectors" not in inspector.get_table_names():
+            return
+        columns = {column["name"] for column in inspector.get_columns("intelligence_collectors")}
+        if "encrypted_token" not in columns:
+            connection.execute(text("ALTER TABLE intelligence_collectors ADD COLUMN encrypted_token VARCHAR(4096)"))
+
+
+def _compile_type_sql(column_type: Any, dialect: Any) -> str:
+    return str(column_type.compile(dialect=dialect))
+
+
+def _ensure_workflow_run_archive_columns() -> None:
+    with ENGINE.begin() as connection:
+        inspector = inspect(connection)
+        if "workflow_runs" not in inspector.get_table_names():
+            return
+        columns = {column["name"] for column in inspector.get_columns("workflow_runs")}
+        archive_source_type = _compile_type_sql(String(64), connection.dialect)
+        archive_truncated_type = _compile_type_sql(Boolean(), connection.dialect)
+        archive_captured_at_type = _compile_type_sql(DateTime(timezone=True), connection.dialect)
+        if "log_archive_text" not in columns:
+            connection.execute(text("ALTER TABLE workflow_runs ADD COLUMN log_archive_text TEXT"))
+        if "log_archive_source" not in columns:
+            connection.execute(text(f"ALTER TABLE workflow_runs ADD COLUMN log_archive_source {archive_source_type}"))
+        if "log_archive_truncated" not in columns:
+            connection.execute(
+                text(
+                    f"ALTER TABLE workflow_runs ADD COLUMN log_archive_truncated {archive_truncated_type} NOT NULL DEFAULT FALSE"
+                )
+            )
+        if "log_archive_captured_at" not in columns:
+            connection.execute(
+                text(f"ALTER TABLE workflow_runs ADD COLUMN log_archive_captured_at {archive_captured_at_type}")
+            )
+
+
 def init_database() -> None:
     Base.metadata.create_all(bind=ENGINE)
+    _ensure_intelligence_collector_secret_columns()
+    _ensure_intelligence_namespace_columns()
+    _ensure_workflow_run_archive_columns()
 
 
 @contextmanager
@@ -850,6 +1096,211 @@ def serialize_user(user: User) -> dict[str, Any]:
         "updated_at": ensure_utc(user.updated_at).isoformat() if user.updated_at else None,
         "last_login_at": ensure_utc(user.last_login_at).isoformat() if user.last_login_at else None,
     }
+
+
+_MCP_CONNECTION_SLUG_RE = re.compile(r"[^a-z0-9]+")
+
+
+def slugify_mcp_connection_name(name: str) -> str:
+    lowered = str(name or "").strip().lower()
+    slug = _MCP_CONNECTION_SLUG_RE.sub("-", lowered).strip("-")
+    return slug[:128] if slug else "mcp-connection"
+
+
+def serialize_mcp_connection(row: McpConnectionRow) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "namespace": row.namespace,
+        "name": row.name,
+        "slug": row.slug,
+        "server_id": row.server_id,
+        "transport": row.transport,
+        "auth_type": row.auth_type,
+        "config": _json_clone(row.config_json) or {},
+        "credential_metadata": _json_clone(row.credential_metadata_json) or [],
+        "secret_name": row.secret_name,
+        "validation": {
+            "status": row.validation_status,
+            "message": row.validation_message,
+            "detail": _json_clone(row.validation_detail_json),
+            "last_validated_at": ensure_utc(row.last_validated_at).isoformat() if row.last_validated_at else None,
+        },
+        "created_at": ensure_utc(row.created_at).isoformat() if row.created_at else None,
+        "updated_at": ensure_utc(row.updated_at).isoformat() if row.updated_at else None,
+    }
+
+
+def list_mcp_connections(namespace: str) -> list[dict[str, Any]]:
+    normalized_namespace = str(namespace or "default").strip() or "default"
+    with db_session() as session:
+        rows = (
+            session.query(McpConnectionRow)
+            .filter(McpConnectionRow.namespace == normalized_namespace)
+            .order_by(McpConnectionRow.name.asc(), McpConnectionRow.created_at.asc())
+            .all()
+        )
+        return [serialize_mcp_connection(row) for row in rows]
+
+
+def get_mcp_connection(namespace: str, connection_id: str) -> dict[str, Any] | None:
+    normalized_namespace = str(namespace or "default").strip() or "default"
+    normalized_id = str(connection_id or "").strip()
+    if not normalized_id:
+        return None
+    with db_session() as session:
+        row = (
+            session.query(McpConnectionRow)
+            .filter(McpConnectionRow.namespace == normalized_namespace, McpConnectionRow.id == normalized_id)
+            .one_or_none()
+        )
+        return serialize_mcp_connection(row) if row is not None else None
+
+
+def get_mcp_connection_rows_by_ids(namespace: str, connection_ids: list[str]) -> list[McpConnectionRow]:
+    normalized_namespace = str(namespace or "default").strip() or "default"
+    normalized_ids = [str(item).strip() for item in connection_ids if str(item).strip()]
+    if not normalized_ids:
+        return []
+    with db_session() as session:
+        rows = (
+            session.query(McpConnectionRow)
+            .filter(McpConnectionRow.namespace == normalized_namespace, McpConnectionRow.id.in_(normalized_ids))
+            .all()
+        )
+        by_id = {row.id: row for row in rows}
+        return [by_id[item_id] for item_id in normalized_ids if item_id in by_id]
+
+
+def create_mcp_connection(
+    *,
+    namespace: str,
+    name: str,
+    server_id: str,
+    transport: str,
+    auth_type: str,
+    config: dict[str, Any] | None = None,
+    credential_metadata: list[dict[str, Any]] | None = None,
+    secret_name: str | None = None,
+    validation_status: str = "draft",
+    validation_message: str | None = None,
+    validation_detail: dict[str, Any] | None = None,
+    last_validated_at: datetime | None = None,
+) -> dict[str, Any]:
+    normalized_namespace = str(namespace or "default").strip() or "default"
+    normalized_name = str(name or "").strip()
+    normalized_server_id = str(server_id or "").strip()
+    normalized_transport = str(transport or "").strip().lower() or "remote"
+    normalized_auth_type = str(auth_type or "").strip().lower() or "none"
+    if not normalized_name:
+        raise ValueError("Connection name is required.")
+    if not normalized_server_id:
+        raise ValueError("Connection server_id is required.")
+
+    row = McpConnectionRow(
+        id=uuid.uuid4().hex,
+        namespace=normalized_namespace,
+        name=normalized_name,
+        slug=slugify_mcp_connection_name(normalized_name),
+        server_id=normalized_server_id,
+        transport=normalized_transport,
+        auth_type=normalized_auth_type,
+        config_json=_json_clone(config) or {},
+        credential_metadata_json=_json_clone(credential_metadata) or [],
+        secret_name=str(secret_name or "").strip() or None,
+        validation_status=str(validation_status or "draft").strip() or "draft",
+        validation_message=str(validation_message or "").strip() or None,
+        validation_detail_json=_json_clone(validation_detail),
+        last_validated_at=ensure_utc(last_validated_at),
+    )
+    with db_session() as session:
+        session.add(row)
+        try:
+            session.flush()
+        except IntegrityError as exc:
+            session.rollback()
+            raise ValueError(f"An MCP connection named '{normalized_name}' already exists in namespace '{normalized_namespace}'.") from exc
+        session.refresh(row)
+        return serialize_mcp_connection(row)
+
+
+def update_mcp_connection(
+    namespace: str,
+    connection_id: str,
+    *,
+    name: str | None = None,
+    transport: str | None = None,
+    auth_type: str | None = None,
+    config: dict[str, Any] | None = None,
+    credential_metadata: list[dict[str, Any]] | None = None,
+    secret_name: str | None = None,
+    validation_status: str | None = None,
+    validation_message: str | None = None,
+    validation_detail: dict[str, Any] | None = None,
+    last_validated_at: datetime | None = None,
+) -> dict[str, Any]:
+    normalized_namespace = str(namespace or "default").strip() or "default"
+    normalized_id = str(connection_id or "").strip()
+    if not normalized_id:
+        raise ValueError("Connection id is required.")
+
+    with db_session() as session:
+        row = (
+            session.query(McpConnectionRow)
+            .filter(McpConnectionRow.namespace == normalized_namespace, McpConnectionRow.id == normalized_id)
+            .one_or_none()
+        )
+        if row is None:
+            raise ValueError(f"MCP connection '{normalized_id}' was not found.")
+
+        if name is not None:
+            normalized_name = str(name).strip()
+            if not normalized_name:
+                raise ValueError("Connection name is required.")
+            row.name = normalized_name
+            row.slug = slugify_mcp_connection_name(normalized_name)
+        if transport is not None:
+            row.transport = str(transport or row.transport).strip().lower() or row.transport
+        if auth_type is not None:
+            row.auth_type = str(auth_type or row.auth_type).strip().lower() or row.auth_type
+        if config is not None:
+            row.config_json = _json_clone(config) or {}
+        if credential_metadata is not None:
+            row.credential_metadata_json = _json_clone(credential_metadata) or []
+        if secret_name is not None:
+            row.secret_name = str(secret_name).strip() or None
+        if validation_status is not None:
+            row.validation_status = str(validation_status or "draft").strip() or "draft"
+        if validation_message is not None:
+            row.validation_message = str(validation_message).strip() or None
+        if validation_detail is not None:
+            row.validation_detail_json = _json_clone(validation_detail)
+        if last_validated_at is not None:
+            row.last_validated_at = ensure_utc(last_validated_at)
+        row.updated_at = utc_now()
+
+        try:
+            session.flush()
+        except IntegrityError as exc:
+            session.rollback()
+            raise ValueError(
+                f"An MCP connection named '{row.name}' already exists in namespace '{normalized_namespace}'."
+            ) from exc
+        session.refresh(row)
+        return serialize_mcp_connection(row)
+
+
+def delete_mcp_connection(namespace: str, connection_id: str) -> bool:
+    normalized_namespace = str(namespace or "default").strip() or "default"
+    normalized_id = str(connection_id or "").strip()
+    if not normalized_id:
+        return False
+    with db_session() as session:
+        deleted = (
+            session.query(McpConnectionRow)
+            .filter(McpConnectionRow.namespace == normalized_namespace, McpConnectionRow.id == normalized_id)
+            .delete()
+        )
+        return bool(deleted)
 
 
 def count_users() -> int:
@@ -1724,6 +2175,120 @@ def record_workflow_run(
         }
 
 
+def record_workflow_run_log_archive(
+    *,
+    workflow_name: str,
+    namespace: str = "default",
+    run_id: str,
+    log_text: str,
+    source: str,
+    truncated: bool = False,
+    captured_at: datetime | None = None,
+) -> None:
+    with db_session() as session:
+        record = (
+            session.query(WorkflowRun)
+            .filter(
+                WorkflowRun.namespace == namespace,
+                WorkflowRun.resource_name == workflow_name,
+                WorkflowRun.run_id == run_id,
+            )
+            .one_or_none()
+        )
+        if record is None:
+            return
+        record.log_archive_text = log_text
+        record.log_archive_source = source[:64] if source else None
+        record.log_archive_truncated = bool(truncated)
+        record.log_archive_captured_at = captured_at or utc_now()
+        record.updated_at = utc_now()
+
+
+def get_workflow_run_trace(
+    workflow_name: str,
+    namespace: str = "default",
+    run_id: str | None = None,
+    *,
+    history_id: int | None = None,
+    include_logs: bool = False,
+) -> dict[str, Any] | None:
+    with db_session() as session:
+        history_row: WorkflowRunHistory | None = None
+        if run_id:
+            history_row = (
+                session.query(WorkflowRunHistory)
+                .filter(
+                    WorkflowRunHistory.workflow_name == workflow_name,
+                    WorkflowRunHistory.namespace == namespace,
+                    WorkflowRunHistory.run_id == run_id,
+                )
+                .order_by(WorkflowRunHistory.created_at.desc())
+                .first()
+            )
+        elif history_id is not None:
+            history_row = (
+                session.query(WorkflowRunHistory)
+                .filter(
+                    WorkflowRunHistory.id == history_id,
+                    WorkflowRunHistory.workflow_name == workflow_name,
+                    WorkflowRunHistory.namespace == namespace,
+                )
+                .one_or_none()
+            )
+            if history_row is not None:
+                run_id = history_row.run_id
+
+        mirror_row: WorkflowRun | None = None
+        if run_id:
+            mirror_row = (
+                session.query(WorkflowRun)
+                .filter(
+                    WorkflowRun.namespace == namespace,
+                    WorkflowRun.resource_name == workflow_name,
+                    WorkflowRun.run_id == run_id,
+                )
+                .one_or_none()
+            )
+
+        if history_row is None and mirror_row is None:
+            return None
+
+        created_at = ensure_utc(mirror_row.created_at).isoformat() if mirror_row and mirror_row.created_at else (
+            ensure_utc(history_row.created_at).isoformat() if history_row and history_row.created_at else None
+        )
+        completed_at = ensure_utc(mirror_row.completed_at).isoformat() if mirror_row and mirror_row.completed_at else (
+            ensure_utc(history_row.completed_at).isoformat() if history_row and history_row.completed_at else None
+        )
+
+        return {
+            "workflow_name": workflow_name,
+            "namespace": namespace,
+            "history_id": history_row.id if history_row else None,
+            "run_id": run_id,
+            "generation": mirror_row.generation if mirror_row else None,
+            "phase": mirror_row.phase if mirror_row else (history_row.phase if history_row else None),
+            "spec": _json_clone(mirror_row.spec_json) if mirror_row else None,
+            "status": _json_clone(mirror_row.status_json) if mirror_row else None,
+            "summary": _json_clone(mirror_row.summary_json) if mirror_row else None,
+            "step_results": _json_clone(mirror_row.step_results_json) if mirror_row else None,
+            "step_states": _json_clone(mirror_row.step_states_json) if mirror_row else None,
+            "artifact_path": mirror_row.artifact_path if mirror_row else None,
+            "journal_path": mirror_row.journal_path if mirror_row else None,
+            "worker_job_name": mirror_row.worker_job_name if mirror_row else None,
+            "pending_approval_name": mirror_row.pending_approval_name if mirror_row else None,
+            "triggered_by": history_row.triggered_by if history_row else None,
+            "input_text": history_row.input_text if history_row else None,
+            "created_at": created_at,
+            "updated_at": ensure_utc(mirror_row.updated_at).isoformat() if mirror_row and mirror_row.updated_at else None,
+            "completed_at": completed_at,
+            "archived_log_available": bool(mirror_row and mirror_row.log_archive_text),
+            "archived_log_source": mirror_row.log_archive_source if mirror_row else None,
+            "archived_log_truncated": bool(mirror_row.log_archive_truncated) if mirror_row else False,
+            "archived_log_captured_at": ensure_utc(mirror_row.log_archive_captured_at).isoformat() if mirror_row and mirror_row.log_archive_captured_at else None,
+            **({"logs": mirror_row.log_archive_text if mirror_row else None} if include_logs else {}),
+        }
+
+
 def list_workflow_runs(
     workflow_name: str,
     namespace: str = "default",
@@ -1738,6 +2303,52 @@ def list_workflow_runs(
             .limit(min(limit, 100))
             .all()
         )
+
+        mirror_by_run_id: dict[str, WorkflowRun] = {}
+        run_ids = [str(row.run_id) for row in rows if row.run_id]
+        if run_ids:
+            mirror_rows = (
+                session.query(WorkflowRun)
+                .filter(
+                    WorkflowRun.namespace == namespace,
+                    WorkflowRun.resource_name == workflow_name,
+                    WorkflowRun.run_id.in_(run_ids),
+                )
+                .all()
+            )
+            mirror_by_run_id = {str(row.run_id): row for row in mirror_rows if row.run_id}
+
+        if not rows:
+            mirror_rows = (
+                session.query(WorkflowRun)
+                .filter(
+                    WorkflowRun.namespace == namespace,
+                    WorkflowRun.resource_name == workflow_name,
+                )
+                .order_by(WorkflowRun.created_at.desc())
+                .limit(min(limit, 100))
+                .all()
+            )
+            return [
+                {
+                    "id": row.id,
+                    "run_id": row.run_id,
+                    "phase": row.phase,
+                    "total_steps": (row.summary_json or {}).get("totalSteps") if isinstance(row.summary_json, dict) else None,
+                    "completed_steps": (row.summary_json or {}).get("completedSteps") if isinstance(row.summary_json, dict) else None,
+                    "failed_steps": (row.summary_json or {}).get("failedSteps") if isinstance(row.summary_json, dict) else None,
+                    "started_at": None,
+                    "completed_at": ensure_utc(row.completed_at).isoformat() if row.completed_at else None,
+                    "triggered_by": None,
+                    "input_text": (row.spec_json or {}).get("input") if isinstance(row.spec_json, dict) else None,
+                    "created_at": ensure_utc(row.created_at).isoformat() if row.created_at else None,
+                    "trace_available": True,
+                    "archived_log_available": bool(row.log_archive_text),
+                    "journal_available": bool(row.journal_path),
+                }
+                for row in mirror_rows
+            ]
+
         return [
             {
                 "id": r.id,
@@ -1751,6 +2362,9 @@ def list_workflow_runs(
                 "triggered_by": r.triggered_by,
                 "input_text": r.input_text,
                 "created_at": ensure_utc(r.created_at).isoformat() if r.created_at else None,
+                "trace_available": bool(r.run_id and str(r.run_id) in mirror_by_run_id),
+                "archived_log_available": bool(r.run_id and mirror_by_run_id.get(str(r.run_id)) and mirror_by_run_id[str(r.run_id)].log_archive_text),
+                "journal_available": bool(r.run_id and mirror_by_run_id.get(str(r.run_id)) and mirror_by_run_id[str(r.run_id)].journal_path),
             }
             for r in rows
         ]

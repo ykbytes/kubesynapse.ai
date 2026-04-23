@@ -1,6 +1,6 @@
 # agentctl
 
-**Modern CLI for the AI Agent Sandbox** — a Kubernetes-native multi-runtime AI agent orchestration platform.
+**Modern CLI for KubeSynth** — a Kubernetes-native OpenCode-first AI agent orchestration platform.
 
 `agentctl` provides full control over agents, workflows, evaluations, policies, approvals, credentials, authentication, and the skills catalog from the terminal.
 
@@ -130,21 +130,11 @@ agentctl agents show my-agent --json
 # Update from a file
 agentctl agents update my-agent -f updated-agent.yaml
 
-# Update Goose runtime config files
-agentctl agents update goose-assistant --goose-config-file config.yaml=.goose/config.yaml
-agentctl agents update goose-assistant --goose-config-text prompts/review.md="Review changes conservatively."
-agentctl agents update goose-assistant --clear-goose-config-files
-
 # Update OpenCode runtime config files
 agentctl agents update opencode-assistant --opencode-config-file opencode.json=.opencode/opencode.json
-agentctl agents update opencode-assistant --opencode-config-text agents/reviewer.md="---\ndescription: Review only\nmode: subagent\n---\nReview conservatively."
+agentctl agents update opencode-assistant --opencode-config-text prompts/review.md="Review changes conservatively and return only the defects."
 agentctl agents update opencode-assistant --clear-opencode-config-files
 ```
-
-**Goose config flags:**
-- `--goose-config-file RELATIVE_PATH=FILE` — Map a Goose config-root path to a local file
-- `--goose-config-text RELATIVE_PATH=TEXT` — Set a config file from inline text
-- `--clear-goose-config-files` — Remove all existing config files before applying overrides
 
 **OpenCode config flags:**
 - `--opencode-config-file RELATIVE_PATH=FILE` — Map an OpenCode config-root path to a local file
@@ -204,62 +194,22 @@ agentctl invoke my-agent "Ask the reviewer for feedback" \
   --a2a-timeout-seconds 30
 ```
 
-### Specialist Teams (Subagent Orchestration)
-
-```bash
-# Inline specification
-agentctl invoke my-agent \
-  --subagent "team-a/reviewer|Code Review|Review the latest patch" \
-  --subagent "team-a/docs|Documentation|Summarize API changes" \
-  --subagent-strategy parallel
-
-# From a file
-agentctl invoke my-agent --subagents-file examples/sample-subagents.yaml
-
-# Combined with a prompt
-agentctl invoke coordinator "Coordinate the team" \
-  --subagent "team-a/coder|Engineer|Implement the feature" \
-  --subagent-strategy sequential
-```
-
-**Subagent shorthand format:** `namespace/name|role|task`
-
-**Subagents file format (YAML):**
-
-```yaml
-subagent_strategy: parallel
-subagents:
-  - namespace: team-a
-    name: reviewer
-    role: Code Review
-    task: Review the implementation and list defects.
-    input_files:
-      - path: /workspace/README.md
-        purpose: Current public documentation
-  - ref: team-a/docs
-    role: Docs
-    task: Draft release notes for the same change.
-    result_file_path: /workspace/artifacts/docs-summary.md
-```
-
-**Subagent input files** support `include_content` (boolean) and `max_chars` (integer) to control embedding.
-
 ### Runtime-Specific Options
 
 | Option | Runtime | Description |
 |--------|---------|-------------|
-| `--system TEXT` | Goose | Additional system instructions |
-| `--max-turns N` | Goose | Limit autonomous turns |
-| `--no-session` | Goose | Disable session persistence |
-| `--debug` | Goose | Enable debug output |
-| `--working-directory DIR` | Goose | Run from a subdirectory in workspace |
-| `--builtin NAME` | Goose | Enable a builtin extension (repeatable) |
-| `--extension CMD` | Goose | Add a stdio extension command (repeatable) |
-| `--http-extension URL` | Goose | Add a Streamable HTTP extension (repeatable) |
+| `--system TEXT` | OpenCode | Additional system instructions |
+| `--max-turns N` | OpenCode | Limit autonomous turns |
+| `--no-session` | OpenCode | Disable session persistence |
+| `--debug` | OpenCode | Enable debug output |
+| `--working-directory DIR` | OpenCode | Run from a subdirectory in workspace |
 | `--max-retries N` | OpenCode | Limit autonomous retries |
 | `--no-autonomous` | OpenCode | Disable autonomous completion prompt |
-| `--output-format FMT` | All | Preferred output: json, code, markdown, text |
+| `--output-format FMT` | OpenCode | Preferred output: json, code, markdown, text |
 | `--output-schema-file FILE` | OpenCode | JSON/YAML schema for structured output |
+| `--a2a-target-agent NAME` | A2A | Route the request to another agent explicitly |
+| `--a2a-target-namespace NS` | A2A | Namespace of the explicit A2A target |
+| `--a2a-timeout-seconds N` | A2A | Caller-side timeout for the outbound A2A request |
 
 ### Approval Workflow
 
@@ -618,7 +568,7 @@ spec:
   model: gpt-4
   systemPrompt: "You are a research assistant."
   runtime:
-    kind: langgraph
+    kind: opencode
   storage:
     size: 2Gi
   enableGVisor: false
@@ -648,7 +598,7 @@ spec:
 name: research-assistant
 model: gpt-4
 system_prompt: "You are a research assistant."
-runtime_kind: langgraph
+runtime_kind: opencode
 storage_size: 2Gi
 enable_gvisor: false
 mcp_servers:
@@ -767,17 +717,16 @@ agentctl approvals list
 agentctl approvals approve approval-xyz --reason "Looks good"
 agentctl workflows cancel research-report-pipeline --yes
 
-# Specialist team invocation
-agentctl invoke coordinator "Build and review a new feature" \
-  --subagent "dev/coder|Engineer|Implement the REST endpoint" \
-  --subagent "dev/reviewer|Reviewer|Review the implementation" \
-  --subagent-strategy sequential
+# Explicit A2A invocation
+agentctl invoke coordinator "Ask the reviewer for feedback" \
+  --a2a-target-agent reviewer \
+  --a2a-target-namespace dev \
+  --a2a-timeout-seconds 30
 
-# Goose runtime with extensions
-agentctl invoke goose-assistant "Summarize /workspace notes" \
+# OpenCode runtime controls
+agentctl invoke opencode-assistant "Summarize /workspace notes" \
   --max-turns 20 \
   --system "Stay read-only" \
-  --builtin developer \
   --working-directory "/workspace/project"
 
 # OpenCode with structured output

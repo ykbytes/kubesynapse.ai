@@ -94,6 +94,107 @@ class StateStoreTests(unittest.TestCase):
         self.assertEqual(records[0].worker_job_name, "workflow-worker")
         self.assertIsNotNone(records[0].completed_at)
 
+    def test_safe_record_workflow_state_supersedes_previous_active_run_same_generation(self) -> None:
+        self.state_store.safe_record_workflow_state(
+            namespace="team-a",
+            resource_name="workflow-one",
+            generation=5,
+            run_id="workflow-one-5-old",
+            phase="queued",
+            spec={"steps": [{"name": "draft"}]},
+            status={"summary": {"phase": "queued"}},
+        )
+
+        self.state_store.safe_record_workflow_state(
+            namespace="team-a",
+            resource_name="workflow-one",
+            generation=5,
+            run_id="workflow-one-5-new",
+            phase="queued",
+            spec={"steps": [{"name": "draft"}]},
+            status={"summary": {"phase": "queued"}},
+        )
+
+        with self.state_store.db_session() as session:
+            records = (
+                session.query(self.state_store.WorkflowRun)
+                .filter(self.state_store.WorkflowRun.namespace == "team-a")
+                .order_by(self.state_store.WorkflowRun.run_id)
+                .all()
+            )
+
+        self.assertEqual(len(records), 2)
+        self.assertEqual(records[0].run_id, "workflow-one-5-new")
+        self.assertEqual(records[0].phase, "queued")
+        self.assertEqual(records[1].run_id, "workflow-one-5-old")
+        self.assertEqual(records[1].phase, "cancelled")
+        self.assertIsNotNone(records[1].completed_at)
+
+    def test_record_workflow_log_archive_updates_existing_run(self) -> None:
+        self.state_store.safe_record_workflow_state(
+            namespace="team-a",
+            resource_name="workflow-one",
+            generation=5,
+            run_id="workflow-one-5-new",
+            phase="completed",
+            spec={"steps": [{"name": "draft"}]},
+            status={
+                "summary": {"phase": "completed", "completedAt": "2026-03-12T00:00:00Z"},
+                "workerJob": {"name": "workflow-worker"},
+            },
+        )
+
+        self.state_store.record_workflow_log_archive(
+            namespace="team-a",
+            resource_name="workflow-one",
+            run_id="workflow-one-5-new",
+            log_text="2026-03-12T00:00:00Z INFO completed",
+            source="worker-pod",
+            truncated=False,
+        )
+
+        with self.state_store.db_session() as session:
+            record = (
+                session.query(self.state_store.WorkflowRun)
+                .filter(self.state_store.WorkflowRun.run_id == "workflow-one-5-new")
+                .one()
+            )
+
+        self.assertEqual(record.log_archive_text, "2026-03-12T00:00:00Z INFO completed")
+        self.assertEqual(record.log_archive_source, "worker-pod")
+        self.assertFalse(record.log_archive_truncated)
+        self.assertIsNotNone(record.log_archive_captured_at)
+
+    def test_check_workflow_run_conflict_ignores_superseded_active_run(self) -> None:
+        self.state_store.safe_record_workflow_state(
+            namespace="team-a",
+            resource_name="workflow-one",
+            generation=5,
+            run_id="workflow-one-5-old",
+            phase="queued",
+            spec={"steps": [{"name": "draft"}]},
+            status={"summary": {"phase": "queued"}},
+        )
+
+        self.state_store.safe_record_workflow_state(
+            namespace="team-a",
+            resource_name="workflow-one",
+            generation=5,
+            run_id="workflow-one-5-new",
+            phase="queued",
+            spec={"steps": [{"name": "draft"}]},
+            status={"summary": {"phase": "queued"}},
+        )
+
+        conflict = self.state_store.check_workflow_run_conflict(
+            "team-a",
+            "workflow-one",
+            5,
+            "workflow-one-5-new",
+        )
+
+        self.assertIsNone(conflict)
+
     def test_safe_record_eval_state_persists_summary_and_pass_fail(self) -> None:
         self.state_store.safe_record_eval_state(
             namespace="team-b",

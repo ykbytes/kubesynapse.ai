@@ -4,8 +4,11 @@ import sys
 import tempfile
 import unittest
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
+
+from sqlalchemy import inspect
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "auth_store.py"
@@ -113,6 +116,164 @@ class AuthStoreTests(unittest.TestCase):
         self.assertIsNotNone(stored_user)
         self.assertTrue(self.auth_store.verify_password("NewPassw0rd", stored_user.password_hash))
         self.assertFalse(self.auth_store.verify_password("OldPassw0rd", stored_user.password_hash))
+
+    def test_init_database_adds_namespace_columns_to_legacy_intelligence_tables(self) -> None:
+        database_path = Path(self.temp_dir.name) / "legacy-auth-store.db"
+        module_name, auth_store = load_auth_store(database_path)
+        self.addCleanup(auth_store.ENGINE.dispose)
+        self.addCleanup(lambda: sys.modules.pop(module_name, None))
+
+        with auth_store.ENGINE.begin() as connection:
+            connection.exec_driver_sql(
+                """
+                CREATE TABLE intelligence_collectors (
+                    id VARCHAR(128) PRIMARY KEY,
+                    name VARCHAR(256) NOT NULL,
+                    url VARCHAR(1024) NOT NULL,
+                    token_hash VARCHAR(128) NOT NULL,
+                    cluster VARCHAR(256) NOT NULL DEFAULT 'unknown',
+                    tags JSON NOT NULL,
+                    registered_at DATETIME NOT NULL,
+                    registered_by VARCHAR(256) NOT NULL DEFAULT 'unknown'
+                )
+                """
+            )
+            connection.exec_driver_sql(
+                """
+                CREATE TABLE intelligence_tasks (
+                    task_id VARCHAR(16) PRIMARY KEY,
+                    collector_id VARCHAR(128) NOT NULL DEFAULT 'all',
+                    payload JSON NOT NULL,
+                    results JSON NOT NULL,
+                    submitted_by VARCHAR(256) NOT NULL DEFAULT 'unknown',
+                    submitted_at DATETIME NOT NULL,
+                    total INTEGER NOT NULL DEFAULT 0,
+                    completed INTEGER NOT NULL DEFAULT 0
+                )
+                """
+            )
+            connection.exec_driver_sql(
+                """
+                INSERT INTO intelligence_tasks (
+                    task_id, collector_id, payload, results, submitted_by, submitted_at, total, completed
+                ) VALUES (
+                    'task-1', 'collector-1', '{}', '{}', 'tester', '2026-04-06T00:00:00+00:00', 1, 1
+                )
+                """
+            )
+            connection.exec_driver_sql(
+                """
+                CREATE TABLE intelligence_schedules (
+                    id VARCHAR(16) PRIMARY KEY,
+                    name VARCHAR(256) NOT NULL,
+                    cron VARCHAR(128) NOT NULL,
+                    collector_id VARCHAR(128) NOT NULL DEFAULT 'all',
+                    builtin VARCHAR(128),
+                    script VARCHAR,
+                    script_type VARCHAR(16) NOT NULL DEFAULT 'bash',
+                    timeout INTEGER NOT NULL DEFAULT 30,
+                    agent_name VARCHAR(256),
+                    enabled BOOLEAN NOT NULL DEFAULT 1,
+                    created_by VARCHAR(256) NOT NULL DEFAULT 'unknown',
+                    created_at DATETIME NOT NULL,
+                    last_run DATETIME,
+                    next_run DATETIME
+                )
+                """
+            )
+            connection.exec_driver_sql(
+                """
+                CREATE TABLE intelligence_alerts (
+                    id VARCHAR(16) PRIMARY KEY,
+                    name VARCHAR(256) NOT NULL,
+                    schedule_id VARCHAR(16),
+                    condition_type VARCHAR(32) NOT NULL,
+                    condition_value VARCHAR(1024) NOT NULL DEFAULT '',
+                    action VARCHAR(32) NOT NULL DEFAULT 'notify',
+                    agent_name VARCHAR(256),
+                    prompt_template VARCHAR,
+                    enabled BOOLEAN NOT NULL DEFAULT 1,
+                    created_by VARCHAR(256) NOT NULL DEFAULT 'unknown',
+                    created_at DATETIME NOT NULL,
+                    last_triggered DATETIME,
+                    trigger_count INTEGER NOT NULL DEFAULT 0
+                )
+                """
+            )
+            connection.exec_driver_sql(
+                """
+                CREATE TABLE alert_history (
+                    id VARCHAR(16) PRIMARY KEY,
+                    alert_id VARCHAR(16) NOT NULL,
+                    alert_name VARCHAR(256) NOT NULL,
+                    triggered_at DATETIME NOT NULL,
+                    condition_matched VARCHAR(512) NOT NULL DEFAULT '',
+                    action_taken VARCHAR(32) NOT NULL DEFAULT 'notify',
+                    agent_invoked VARCHAR(256),
+                    invoke_status INTEGER,
+                    invoke_error VARCHAR,
+                    task_id VARCHAR(16),
+                    snippet VARCHAR(1024)
+                )
+                """
+            )
+
+        auth_store.init_database()
+
+        inspector = inspect(auth_store.ENGINE)
+        for table_name in (
+            "intelligence_collectors",
+            "intelligence_tasks",
+            "intelligence_schedules",
+            "intelligence_alerts",
+            "alert_history",
+        ):
+            columns = {column["name"] for column in inspector.get_columns(table_name)}
+            self.assertIn("namespace", columns)
+
+        collector_columns = {column["name"] for column in inspector.get_columns("intelligence_collectors")}
+        self.assertIn("encrypted_token", collector_columns)
+
+        with auth_store.ENGINE.begin() as connection:
+            namespace = connection.exec_driver_sql(
+                "SELECT namespace FROM intelligence_tasks WHERE task_id = 'task-1'"
+            ).scalar_one()
+        self.assertEqual(namespace, "default")
+
+    def test_workflow_archive_migration_uses_dialect_specific_datetime_ddl(self) -> None:
+        from sqlalchemy.dialects import postgresql
+
+        executed_sql: list[str] = []
+
+        class FakeConnection:
+            def __init__(self) -> None:
+                self.dialect = postgresql.dialect()
+
+            def execute(self, statement: object) -> None:
+                executed_sql.append(str(statement))
+
+        class FakeInspector:
+            def get_table_names(self) -> list[str]:
+                return ["workflow_runs"]
+
+            def get_columns(self, table_name: str) -> list[dict[str, str]]:
+                return []
+
+        class FakeEngine:
+            @contextmanager
+            def begin(self) -> object:
+                yield FakeConnection()
+
+        with patch.object(self.auth_store, "ENGINE", FakeEngine()), patch.object(
+            self.auth_store,
+            "inspect",
+            new=lambda _connection: FakeInspector(),
+        ):
+            self.auth_store._ensure_workflow_run_archive_columns()
+
+        archive_timestamp_sql = next(sql for sql in executed_sql if "log_archive_captured_at" in sql)
+        self.assertIn("TIMESTAMP WITH TIME ZONE", archive_timestamp_sql)
+        self.assertNotIn("DATETIME", archive_timestamp_sql)
 
     # -- Password policy tests ------------------------------------------------
 
@@ -412,3 +573,137 @@ class AuthStoreTests(unittest.TestCase):
         after_records = self.auth_store.list_memory_records("default", "reviewer", session_id="reviewer-eval")
         after = max(float(record["score"]) for record in after_records)
         self.assertGreaterEqual(after, before)
+
+    def test_workflow_run_trace_helpers_expose_archived_logs(self) -> None:
+        with self.auth_store.db_session() as session:
+            session.add(
+                self.auth_store.WorkflowRun(
+                    namespace="default",
+                    resource_name="feature-pipeline",
+                    run_id="run-123",
+                    generation=7,
+                    phase="failed",
+                    spec_json={
+                        "description": "Workflow trace",
+                        "input": "Investigate the production regression",
+                        "steps": [{"name": "draft-plan", "agentRef": "planner", "prompt": "Draft a recovery plan"}],
+                    },
+                    status_json={
+                        "phase": "failed",
+                        "runId": "run-123",
+                        "summary": {"totalSteps": 1, "failedSteps": 1},
+                        "stepStates": {
+                            "draft-plan": {"stepName": "draft-plan", "agentRef": "planner", "status": "failed"}
+                        },
+                    },
+                    summary_json={"totalSteps": 1, "failedSteps": 1},
+                    step_states_json={
+                        "draft-plan": {"stepName": "draft-plan", "agentRef": "planner", "status": "failed"}
+                    },
+                    artifact_path="/artifacts/feature-pipeline/run-123",
+                    journal_path="/artifacts/feature-pipeline/run-123/journal.ndjson",
+                    worker_job_name="worker-job-run-123",
+                )
+            )
+
+        self.auth_store.record_workflow_run(
+            workflow_name="feature-pipeline",
+            namespace="default",
+            run_id="run-123",
+            phase="failed",
+            total_steps=1,
+            completed_steps=0,
+            failed_steps=1,
+            triggered_by="alice",
+            input_text="Investigate the production regression",
+        )
+        self.auth_store.record_workflow_run_log_archive(
+            workflow_name="feature-pipeline",
+            namespace="default",
+            run_id="run-123",
+            log_text="2026-04-09T10:00:00Z INFO start\n2026-04-09T10:00:05Z ERROR crash",
+            source="operator-terminal-archive",
+            truncated=False,
+        )
+
+        trace = self.auth_store.get_workflow_run_trace(
+            "feature-pipeline",
+            "default",
+            "run-123",
+            include_logs=True,
+        )
+        self.assertIsNotNone(trace)
+        assert trace is not None
+        self.assertEqual(trace["workflow_name"], "feature-pipeline")
+        self.assertEqual(trace["run_id"], "run-123")
+        self.assertTrue(trace["archived_log_available"])
+        self.assertEqual(trace["archived_log_source"], "operator-terminal-archive")
+        self.assertIn("ERROR crash", trace["logs"])
+
+        runs = self.auth_store.list_workflow_runs("feature-pipeline", "default", limit=5)
+        self.assertEqual(len(runs), 1)
+        self.assertTrue(runs[0]["trace_available"])
+        self.assertTrue(runs[0]["archived_log_available"])
+        self.assertTrue(runs[0]["journal_available"])
+
+    def test_list_workflow_runs_falls_back_to_mirrored_rows_when_history_missing(self) -> None:
+        with self.auth_store.db_session() as session:
+            session.add(
+                self.auth_store.WorkflowRun(
+                    namespace="default",
+                    resource_name="mirror-only-workflow",
+                    run_id="run-mirror-only",
+                    generation=3,
+                    phase="completed",
+                    spec_json={"input": "Deploy the mirrored bundle"},
+                    summary_json={"totalSteps": 2, "completedSteps": 2, "failedSteps": 0},
+                    journal_path="/artifacts/mirror-only-workflow/run-mirror-only/journal.ndjson",
+                    log_archive_text="2026-04-09T11:00:00Z INFO archived",
+                    log_archive_source="operator-terminal-archive",
+                )
+            )
+
+        runs = self.auth_store.list_workflow_runs("mirror-only-workflow", "default", limit=5)
+
+        self.assertEqual(len(runs), 1)
+        self.assertEqual(runs[0]["run_id"], "run-mirror-only")
+        self.assertTrue(runs[0]["trace_available"])
+        self.assertTrue(runs[0]["archived_log_available"])
+        self.assertTrue(runs[0]["journal_available"])
+        self.assertEqual(runs[0]["input_text"], "Deploy the mirrored bundle")
+
+    def test_create_update_and_delete_mcp_connection(self) -> None:
+        created = self.auth_store.create_mcp_connection(
+            namespace="default",
+            name="Qdrant Prod",
+            server_id="qdrant",
+            transport="sidecar",
+            auth_type="api_key",
+            config={"url": "http://qdrant:6333", "sidecar_port": 9101},
+            credential_metadata=[{"key": "api_key", "configured": True}],
+            secret_name="mcp-conn-test",
+            validation_status="draft",
+        )
+
+        self.assertEqual(created["name"], "Qdrant Prod")
+        self.assertEqual(created["slug"], "qdrant-prod")
+        self.assertEqual(created["server_id"], "qdrant")
+
+        listed = self.auth_store.list_mcp_connections("default")
+        self.assertEqual(len(listed), 1)
+        self.assertEqual(listed[0]["id"], created["id"])
+
+        updated = self.auth_store.update_mcp_connection(
+            "default",
+            created["id"],
+            name="Qdrant Primary",
+            config={"url": "http://qdrant.internal:6333", "sidecar_port": 9102},
+            validation_status="valid",
+            validation_message="Reachable",
+        )
+        self.assertEqual(updated["name"], "Qdrant Primary")
+        self.assertEqual(updated["config"]["sidecar_port"], 9102)
+        self.assertEqual(updated["validation"]["status"], "valid")
+
+        self.assertTrue(self.auth_store.delete_mcp_connection("default", created["id"]))
+        self.assertEqual(self.auth_store.list_mcp_connections("default"), [])

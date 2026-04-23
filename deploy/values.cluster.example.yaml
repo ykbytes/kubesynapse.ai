@@ -7,41 +7,35 @@ global:
 operator:
   image:
     repository: docker.io/yakdhane/kubesynth-operator
-    tag: latest
+    tag: deploy-20260401-225700-hotfix
     pullPolicy: IfNotPresent
   workerImage:
     repository: docker.io/yakdhane/kubesynth-operator
-    tag: latest
-    pullPolicy: IfNotPresent
-
-agentRuntime:
-  image:
-    repository: docker.io/yakdhane/kubesynth-agent-runtime
-    tag: latest
-    pullPolicy: IfNotPresent
-
-gooseRuntime:
-  image:
-    repository: docker.io/yakdhane/kubesynth-goose-runtime
-    tag: latest
-    pullPolicy: IfNotPresent
-
-codexRuntime:
-  image:
-    repository: docker.io/yakdhane/kubesynth-codex-runtime
-    tag: latest
+    tag: deploy-20260401-225700-hotfix
     pullPolicy: IfNotPresent
 
 opencodeRuntime:
   image:
     repository: docker.io/yakdhane/kubesynth-opencode-runtime
-    tag: latest
+    tag: deploy-20260401-212102-opencode
     pullPolicy: IfNotPresent
+  limits:
+    maxPromptChars: 256000
+    maxSystemPromptChars: 64000
+    maxTeamContextChars: 32000
+    modelContextLimit: 256000
+    modelOutputLimit: 16384
+  autonomy:
+    sessionInitOnCreate: false
+    maxRetries: 3
+    compactionTokenThreshold: 0.7
+    planThresholdChars: 4096
+    structuredOutputRetryCount: 3
 
 apiGateway:
   image:
     repository: docker.io/yakdhane/kubesynth-api-gateway
-    tag: latest
+    tag: deploy-20260401-212102
     pullPolicy: IfNotPresent
   ingressClassName: ""
   ingressHost: ""
@@ -58,7 +52,7 @@ webUi:
   enabled: true
   image:
     repository: docker.io/yakdhane/kubesynth-web-ui
-    tag: latest
+    tag: deploy-20260401-225700-hotfix
     pullPolicy: IfNotPresent
 
 litellm:
@@ -91,33 +85,33 @@ mcpHub:
   servers:
     github:
       enabled: true
-      image: docker.io/yakdhane/mcp-github-adapter:latest
+      image: docker.io/yakdhane/mcp-github-adapter:deploy-20260401-212102
 
 mcpToolSidecars:
   codeExec:
     image: docker.io/yakdhane/mcp-code-exec
-    tag: latest
+    tag: deploy-20260401-212102
   webSearch:
     image: docker.io/yakdhane/mcp-web-search
-    tag: latest
+    tag: deploy-20260401-212102
   documents:
     image: docker.io/yakdhane/mcp-documents
-    tag: latest
+    tag: deploy-20260401-212102
   browser:
     image: docker.io/yakdhane/mcp-browser
-    tag: latest
+    tag: deploy-20260401-212102
   database:
     image: docker.io/yakdhane/mcp-database
-    tag: latest
+    tag: deploy-20260401-212102
   git:
     image: docker.io/yakdhane/mcp-git
-    tag: latest
+    tag: deploy-20260401-212102
   githubAdapter:
     image: docker.io/yakdhane/mcp-github-adapter
-    tag: latest
+    tag: deploy-20260401-212102
   kubernetes:
     image: docker.io/yakdhane/mcp-kubernetes
-    tag: latest
+    tag: deploy-20260401-212102
   messaging:
     image: docker.io/yakdhane/mcp-messaging
     tag: latest

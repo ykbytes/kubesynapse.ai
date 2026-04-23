@@ -73,6 +73,9 @@ function statusTone(configured: boolean | null): string {
   return "bg-amber-500/10 text-amber-400 border-amber-500/30";
 }
 
+const PANEL_CARD_CLASS = "border-border/70 bg-background/75 shadow-sm backdrop-blur-sm";
+const METRIC_CARD_CLASS = "rounded-[1.15rem] border px-3 py-3 shadow-sm backdrop-blur-sm";
+
 export function SettingsPanel({ token, canManageProviders }: SettingsPanelProps) {
   const [providers, setProviders] = useState<LLMProvider[]>([]);
   const [health, setHealth] = useState<{ status: string; litellm_status?: number; error?: string } | null>(null);
@@ -160,6 +163,10 @@ export function SettingsPanel({ token, canManageProviders }: SettingsPanelProps)
 
   const configuredCount = useMemo(
     () => providers.filter((p) => p.is_configured === true).length,
+    [providers],
+  );
+  const totalModels = useMemo(
+    () => providers.reduce((count, provider) => count + provider.models.length, 0),
     [providers],
   );
 
@@ -317,7 +324,7 @@ export function SettingsPanel({ token, canManageProviders }: SettingsPanelProps)
 
   return (
     <ScrollArea className="flex-1">
-      <div className="mx-auto w-full max-w-7xl space-y-6 p-6">
+      <div className="mx-auto w-full max-w-[84rem] space-y-6 p-6">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h1 className="text-2xl font-semibold tracking-tight">LLM Providers</h1>
@@ -331,7 +338,7 @@ export function SettingsPanel({ token, canManageProviders }: SettingsPanelProps)
           </Button>
         </div>
 
-        <Card>
+        <Card className="overflow-hidden border-border/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.04),rgba(255,255,255,0.01))] shadow-[0_24px_80px_-48px_rgba(0,0,0,0.65)]">
           <CardHeader className="pb-3">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
@@ -359,9 +366,32 @@ export function SettingsPanel({ token, canManageProviders }: SettingsPanelProps)
           </CardContent>
         </Card>
 
+        <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-4">
+          <div className={`${METRIC_CARD_CLASS} border-primary/20 bg-primary/5`}>
+            <p className="text-[10px] uppercase tracking-[0.16em] text-primary/75">Configured keys</p>
+            <p className="mt-1 text-xl font-semibold text-foreground">{configuredCount}</p>
+            <p className="mt-1 text-xs text-muted-foreground">Providers ready to serve traffic.</p>
+          </div>
+          <div className={`${METRIC_CARD_CLASS} border-sky-500/20 bg-sky-500/5`}>
+            <p className="text-[10px] uppercase tracking-[0.16em] text-sky-300/80">Providers</p>
+            <p className="mt-1 text-xl font-semibold text-foreground">{providers.length}</p>
+            <p className="mt-1 text-xs text-muted-foreground">Catalogued gateways and vendor routes.</p>
+          </div>
+          <div className={`${METRIC_CARD_CLASS} border-violet-500/20 bg-violet-500/5`}>
+            <p className="text-[10px] uppercase tracking-[0.16em] text-violet-300/80">Enabled models</p>
+            <p className="mt-1 text-xl font-semibold text-foreground">{totalModels}</p>
+            <p className="mt-1 text-xs text-muted-foreground">Active model IDs visible to agent authors.</p>
+          </div>
+          <div className={`${METRIC_CARD_CLASS} border-emerald-500/20 bg-emerald-500/5`}>
+            <p className="text-[10px] uppercase tracking-[0.16em] text-emerald-300/80">Proxy health</p>
+            <p className="mt-1 text-xl font-semibold text-foreground capitalize">{health?.status ?? "unknown"}</p>
+            <p className="mt-1 text-xs text-muted-foreground">LiteLLM control plane status for provider routing.</p>
+          </div>
+        </div>
+
         {loading ? (
           <div className="grid gap-4 lg:grid-cols-[340px_1fr]">
-            <Card className="h-[540px]">
+            <Card className={`h-[540px] ${PANEL_CARD_CLASS}`}>
               <CardHeader className="pb-2">
                 <Skeleton className="h-8 w-full rounded" />
               </CardHeader>
@@ -371,7 +401,7 @@ export function SettingsPanel({ token, canManageProviders }: SettingsPanelProps)
                 ))}
               </CardContent>
             </Card>
-            <Card className="h-[540px]">
+            <Card className={`h-[540px] ${PANEL_CARD_CLASS}`}>
               <CardHeader className="pb-2">
                 <Skeleton className="h-6 w-52 rounded" />
               </CardHeader>
@@ -386,7 +416,7 @@ export function SettingsPanel({ token, canManageProviders }: SettingsPanelProps)
             </Card>
           </div>
         ) : providers.length === 0 ? (
-          <Card>
+          <Card className={PANEL_CARD_CLASS}>
             <CardContent className="flex flex-col items-center gap-2 py-12">
               <Server className="h-8 w-8 text-muted-foreground/40" />
               <p className="text-sm text-muted-foreground">No providers found</p>
@@ -394,7 +424,7 @@ export function SettingsPanel({ token, canManageProviders }: SettingsPanelProps)
           </Card>
         ) : (
           <div className="grid gap-4 lg:grid-cols-[340px_1fr]">
-            <Card className="h-[540px] flex flex-col">
+            <Card className={`h-[540px] flex flex-col ${PANEL_CARD_CLASS}`}>
               <CardHeader className="pb-3">
                 <CardTitle className="text-base">Providers</CardTitle>
                 <div className="relative mt-1">
@@ -422,10 +452,10 @@ export function SettingsPanel({ token, canManageProviders }: SettingsPanelProps)
                             key={prov.key_name}
                             type="button"
                             onClick={() => setSelectedProviderKey(prov.key_name)}
-                            className={`w-full rounded-lg border px-3 py-2.5 text-left transition-colors ${
+                            className={`w-full rounded-[1rem] border px-3 py-3 text-left transition-all duration-200 ${
                               isSelected
-                                ? "border-primary/40 bg-primary/5"
-                                : "border-border bg-background hover:bg-muted/40"
+                                ? "border-primary/35 bg-primary/10 shadow-sm shadow-primary/10"
+                                : "border-border/70 bg-background/70 hover:-translate-y-px hover:border-primary/20 hover:bg-primary/5"
                             }`}
                           >
                             <div className="flex items-center justify-between gap-2">
@@ -444,6 +474,9 @@ export function SettingsPanel({ token, canManageProviders }: SettingsPanelProps)
                               <Badge variant="secondary" className="text-[10px]">
                                 {prov.model_count} model{prov.model_count !== 1 ? "s" : ""}
                               </Badge>
+                              <Badge variant="outline" className="text-[10px] capitalize">
+                                {prov.is_configured ? "ready" : "needs key"}
+                              </Badge>
                             </div>
                           </button>
                         );
@@ -454,7 +487,7 @@ export function SettingsPanel({ token, canManageProviders }: SettingsPanelProps)
               </CardContent>
             </Card>
 
-            <Card className="min-h-[540px]">
+            <Card className={`min-h-[540px] ${PANEL_CARD_CLASS}`}>
               {!selectedProvider ? (
                 <CardContent className="flex h-full min-h-[540px] flex-col items-center justify-center gap-2 text-center">
                   <Info className="h-8 w-8 text-muted-foreground/40" />
@@ -467,6 +500,10 @@ export function SettingsPanel({ token, canManageProviders }: SettingsPanelProps)
                       <div>
                         <CardTitle className="text-lg">{selectedProvider.label}</CardTitle>
                         <p className="text-xs text-muted-foreground">{selectedProvider.key_name}</p>
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          <Badge variant="outline" className="text-[10px] uppercase tracking-[0.14em]">{selectedProvider.models.length} enabled</Badge>
+                          <Badge variant="outline" className="text-[10px] uppercase tracking-[0.14em]">{selectedProvider.is_configured ? "Key installed" : "Awaiting secret"}</Badge>
+                        </div>
                       </div>
                       <div className="flex flex-wrap items-center gap-2">
                         <Badge
@@ -609,9 +646,10 @@ export function SettingsPanel({ token, canManageProviders }: SettingsPanelProps)
                           {selectedProvider.models.map((m) => (
                             <div
                               key={m.id || m.model_name}
-                              className="flex items-center gap-2 rounded-md border px-3 py-2 text-sm"
+                              className="flex items-center gap-2 rounded-[1rem] border border-border/70 bg-background/70 px-3 py-2.5 text-sm shadow-sm"
                             >
                               <span className="flex-1 truncate font-medium">{m.model_name}</span>
+                              <Badge variant="outline" className="text-[10px] uppercase tracking-[0.12em]">Enabled</Badge>
                               {canManageProviders && m.id && (
                                 <Button
                                   variant="ghost"

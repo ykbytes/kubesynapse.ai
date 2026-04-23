@@ -1,3 +1,4 @@
+import asyncio
 import importlib.util
 import json
 import os
@@ -9,7 +10,6 @@ from unittest.mock import patch, MagicMock
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "main.py"
-sys.path.insert(0, str(MODULE_PATH.parent))
 SPEC = importlib.util.spec_from_file_location("opencode_runtime_main", MODULE_PATH)
 if SPEC is None or SPEC.loader is None:
     raise RuntimeError("Failed to load opencode-runtime main module for tests")
@@ -18,11 +18,13 @@ sys.modules[SPEC.name] = opencode_runtime_main
 SPEC.loader.exec_module(opencode_runtime_main)
 
 # Sub-module references for patching at the correct resolution site
-skills_mod = sys.modules["skills"]
-opencode_client_mod = sys.modules["opencode_client"]
-invoke_mod = sys.modules["invoke"]
-analysis_mod = sys.modules["analysis"]
-supervisor_mod = sys.modules["supervisor"]
+runtime_modules = opencode_runtime_main.RUNTIME_IMPORTED_MODULES
+config_mod = opencode_runtime_main.RUNTIME_IMPORTED_MODULES["config"]
+skills_mod = opencode_runtime_main.RUNTIME_IMPORTED_MODULES["skills"]
+opencode_client_mod = opencode_runtime_main.RUNTIME_IMPORTED_MODULES["opencode_client"]
+invoke_mod = opencode_runtime_main.RUNTIME_IMPORTED_MODULES["invoke"]
+analysis_mod = opencode_runtime_main.RUNTIME_IMPORTED_MODULES["analysis"]
+supervisor_mod = opencode_runtime_main.RUNTIME_IMPORTED_MODULES["supervisor"]
 
 
 class OpenCodeRuntimeTests(unittest.TestCase):
@@ -30,7 +32,7 @@ class OpenCodeRuntimeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             opencode_runtime_main.InvokeRequest(prompt="hello", thread_id="thread-1", no_session=True)
 
-    def test_materialize_opencode_config_files_writes_into_config_dir(self) -> None:
+    def test_materialize_opencode_config_files_merges_base_config_into_opencode_json(self) -> None:
         with (
             tempfile.TemporaryDirectory() as temp_dir,
             patch.object(
@@ -51,15 +53,54 @@ class OpenCodeRuntimeTests(unittest.TestCase):
                 clear=False,
             ),
         ):
-            written = opencode_runtime_main.materialize_opencode_config_files()
+            written = opencode_runtime_main.materialize_opencode_config_files(
+                {
+                    "model": "litellm/gpt-4",
+                    "provider": {
+                        "litellm": {
+                            "options": {
+                                "baseURL": "http://litellm.internal/v1",
+                                "apiKey": "test-key",
+                            }
+                        }
+                    },
+                    "default_agent": "plan",
+                }
+            )
             root = Path(skills_mod.OPENCODE_CONFIG_DIR)
+            config = json.loads((root / "opencode.json").read_text(encoding="utf-8"))
 
             self.assertEqual(written, ["opencode.json", "plugins/custom.ts"])
-            self.assertEqual(
-                json.loads((root / "opencode.json").read_text(encoding="utf-8")),
-                {"default_agent": "build"},
-            )
+            self.assertEqual(config["default_agent"], "build")
+            self.assertEqual(config["model"], "litellm/gpt-4")
+            self.assertEqual(config["provider"]["litellm"]["options"]["baseURL"], "http://litellm.internal/v1")
             self.assertIn("Plugin", (root / "plugins" / "custom.ts").read_text(encoding="utf-8"))
+
+    def test_build_generated_config_preserves_provider_when_overrides_are_partial(self) -> None:
+        config, warnings = opencode_runtime_main.build_generated_config(
+            [],
+            config_overrides={
+                "default_agent": "build",
+                "permission": "allow",
+            },
+        )
+
+        self.assertEqual(config["default_agent"], "build")
+        self.assertEqual(config["permission"], "allow")
+        self.assertIn("litellm", config["provider"])
+        self.assertEqual(config["provider"]["litellm"]["models"]["gpt-4"]["name"], "gpt-4")
+        self.assertEqual(warnings, [])
+
+    def test_build_server_env_sets_openai_compat_env_for_litellm(self) -> None:
+        with (
+            patch.object(supervisor_mod, "DEFAULT_PROVIDER", "litellm"),
+            patch.object(supervisor_mod, "LITELLM_API_KEY", "test-key"),
+            patch.object(supervisor_mod, "build_litellm_base_url", return_value="http://litellm.internal/v1"),
+        ):
+            env = supervisor_mod.build_server_env({"model": "litellm/gpt-4"})
+
+        self.assertEqual(env["OPENAI_BASE_URL"], "http://litellm.internal/v1")
+        self.assertEqual(env["OPENAI_API_KEY"], "test-key")
 
     def test_materialize_skill_files_maps_platform_skills_to_opencode_layout(self) -> None:
         skill_text = (
@@ -153,6 +194,62 @@ class OpenCodeRuntimeTests(unittest.TestCase):
         self.assertEqual(config["mcp"]["documents"]["headers"]["Authorization"], "Bearer token-123")
         self.assertTrue(any("GitHub MCP" in warning for warning in warnings))
 
+    def test_build_mcp_config_prefers_structured_connections_over_legacy_inputs(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                config_mod.OPENCODE_MCP_CONNECTIONS_ENV: json.dumps(
+                    [
+                        {
+                            "slug": "docs-remote",
+                            "serverId": "docs",
+                            "runtime": {
+                                "kind": "remote",
+                                "configKey": "docs-remote",
+                                "url": "https://docs.example.com/mcp",
+                                "headers": [
+                                    {
+                                        "name": "Authorization",
+                                        "envVar": "MCP_DOCS_TOKEN",
+                                        "prefix": "Bearer ",
+                                    }
+                                ],
+                            },
+                        }
+                    ]
+                ),
+                "MCP_DOCS_TOKEN": "secret-token",
+                "MCP_SERVERS": "documents",
+            },
+            clear=False,
+        ):
+            config, warnings = skills_mod.build_mcp_config([{"name": "browser", "port": 8081}])
+
+        self.assertEqual(list(config.keys()), ["docs-remote"])
+        self.assertEqual(config["docs-remote"]["url"], "https://docs.example.com/mcp")
+        self.assertEqual(config["docs-remote"]["headers"]["Authorization"], "Bearer secret-token")
+        self.assertEqual(warnings, [])
+
+    def test_build_structured_mcp_config_maps_sidecar_runtime_to_localhost(self) -> None:
+        config, warnings = skills_mod.build_structured_mcp_config(
+            [
+                {
+                    "slug": "qdrant-sidecar",
+                    "runtime": {
+                        "kind": "sidecar",
+                        "configKey": "qdrant-sidecar",
+                        "sidecar": {
+                            "port": 9102,
+                            "endpointPath": "/rpc",
+                        },
+                    },
+                }
+            ]
+        )
+
+        self.assertEqual(config["qdrant-sidecar"]["url"], "http://127.0.0.1:9102/rpc")
+        self.assertEqual(warnings, [])
+
     def test_session_registry_persists_logical_thread_mapping(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             registry = opencode_runtime_main.SessionRegistry(Path(temp_dir) / "sessions.json")
@@ -229,6 +326,52 @@ class ExtractToolCallsTests(unittest.TestCase):
         ]
         tool_calls = opencode_runtime_main.extract_tool_calls_from_messages(messages)
         self.assertLessEqual(len(tool_calls[0]["output"]), 2003)
+
+
+class BuildToolOnlyResponseTests(unittest.TestCase):
+    """Tests for build_tool_only_response fallback formatting."""
+
+    def test_returns_empty_string_without_tool_calls(self) -> None:
+        self.assertEqual(opencode_runtime_main.build_tool_only_response([]), "")
+
+    def test_formats_basic_completed_tool_outputs(self) -> None:
+        response = opencode_runtime_main.build_tool_only_response([
+            {"tool": "bash", "status": "completed", "output": "hello from bash"},
+            {"tool": "read", "status": "completed", "output": "file contents"},
+        ])
+
+        self.assertIn("Tool results:", response)
+        self.assertIn("- bash: hello from bash", response)
+        self.assertIn("- read: file contents", response)
+
+    def test_summarizes_structured_list_outputs(self) -> None:
+        response = opencode_runtime_main.build_tool_only_response([
+            {
+                "tool": "kubernetes_list_pods",
+                "status": "completed",
+                "output": json.dumps([
+                    {"metadata": {"name": "api-gateway"}},
+                    {"metadata": {"name": "collector"}},
+                ]),
+            }
+        ])
+
+        self.assertIn("kubernetes_list_pods", response)
+        self.assertIn("returned 2 items", response)
+        self.assertIn("api-gateway", response)
+
+    def test_uses_input_preview_when_completed_output_is_empty(self) -> None:
+        response = opencode_runtime_main.build_tool_only_response([
+            {
+                "tool": "kubernetes_kubectl_get",
+                "status": "completed",
+                "input": {"resource_type": "nodes"},
+                "output": "",
+            }
+        ])
+
+        self.assertIn("completed with no textual output", response)
+        self.assertIn("resource_type", response)
 
 
 class ExtractArtifactsTests(unittest.TestCase):
@@ -458,6 +601,42 @@ class FormatInstructionsTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             opencode_runtime_main.InvokeRequest(prompt="hello", output_schema=["bad"])
 
+    def test_request_accepts_outbound_a2a_fields(self) -> None:
+        request = opencode_runtime_main.InvokeRequest(
+            prompt="hello",
+            a2a_target_agent=" analysis-agent ",
+            a2a_target_namespace=" team-b ",
+            a2a_timeout_seconds=15,
+        )
+
+        self.assertEqual(request.a2a_target_agent, "analysis-agent")
+        self.assertEqual(request.a2a_target_namespace, "team-b")
+        self.assertEqual(request.a2a_timeout_seconds, 15)
+
+    def test_request_rejects_a2a_timeout_without_target(self) -> None:
+        with self.assertRaises(ValueError) as ctx:
+            opencode_runtime_main.InvokeRequest(prompt="hello", a2a_timeout_seconds=15)
+        self.assertIn("a2a_timeout_seconds", str(ctx.exception))
+
+    def test_parse_allowed_targets_ignores_invalid_entries(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                config_mod.A2A_ALLOWED_TARGETS_ENV: json.dumps(
+                    [
+                        {"namespace": "team-b", "name": "analysis-agent"},
+                        {"namespace": " ", "name": "skip-me"},
+                        {"namespace": "team-c", "name": "reviewer"},
+                        "invalid",
+                    ]
+                )
+            },
+            clear=False,
+        ):
+            allowed_targets = config_mod._parse_allowed_targets()
+
+        self.assertEqual(allowed_targets, {("team-b", "analysis-agent"), ("team-c", "reviewer")})
+
     def test_build_prompt_format_returns_json_schema_for_json_output(self) -> None:
         request = opencode_runtime_main.InvokeRequest(prompt="hello", output_format="json")
         prompt_format = opencode_runtime_main.build_prompt_format(request)
@@ -554,14 +733,32 @@ class StructuredOutputExtractionTests(unittest.TestCase):
         payload = {"info": {"finish": "error"}}
         self.assertEqual(opencode_runtime_main.detect_completion_status(payload), "error")
 
-    def test_get_latest_assistant_payload_returns_last_assistant(self) -> None:
+    def test_get_latest_assistant_payload_prefers_latest_meaningful_assistant(self) -> None:
         messages = [
             {"info": {"role": "user"}, "parts": []},
             {"info": {"role": "assistant", "finish": "stop"}, "parts": [{"type": "text", "text": "first"}]},
-            {"info": {"role": "assistant", "finish": "stop"}, "parts": [{"type": "text", "text": "second"}]},
+            {"info": {"role": "assistant", "finish": "stop"}, "parts": [{"type": "step-start"}, {"type": "step-finish"}]},
         ]
         payload = opencode_runtime_main.get_latest_assistant_payload(messages)
-        self.assertEqual(payload["parts"][0]["text"], "second")
+        self.assertEqual(payload["parts"][0]["text"], "first")
+
+    def test_get_latest_assistant_payload_can_filter_by_parent_id(self) -> None:
+        messages = [
+            {
+                "info": {"role": "assistant", "parentID": "msg_a", "finish": "stop"},
+                "parts": [{"type": "text", "text": "first"}],
+            },
+            {
+                "info": {"role": "assistant", "parentID": "msg_b", "finish": "stop"},
+                "parts": [{"type": "text", "text": "second"}],
+            },
+            {
+                "info": {"role": "assistant", "parentID": "msg_a", "finish": "stop"},
+                "parts": [{"type": "step-start"}, {"type": "step-finish"}],
+            },
+        ]
+        payload = opencode_runtime_main.get_latest_assistant_payload(messages, parent_message_id="msg_a")
+        self.assertEqual(payload["parts"][0]["text"], "first")
 
     def test_runtime_capabilities_exposes_native_tools_and_formats(self) -> None:
         capabilities = opencode_runtime_main.runtime_capabilities()
@@ -757,6 +954,62 @@ class GetSessionMessagesTests(unittest.TestCase):
         with patch.object(opencode_client_mod, "runtime_http_client", return_value=mock_client):
             result = opencode_runtime_main.get_session_messages("ses_abc")
         self.assertEqual(len(result), 2)
+
+
+class GetSessionMessageTests(unittest.TestCase):
+    """Tests for get_session_message."""
+
+    def test_returns_none_on_404(self) -> None:
+        mock_response = MagicMock()
+        mock_response.status_code = 404
+        mock_client = MagicMock()
+        mock_client.get.return_value = mock_response
+        mock_client.__enter__ = MagicMock(return_value=mock_client)
+        mock_client.__exit__ = MagicMock(return_value=False)
+
+        with patch.object(opencode_client_mod, "runtime_http_client", return_value=mock_client):
+            result = opencode_runtime_main.get_session_message("ses_abc", "msg_missing")
+        self.assertIsNone(result)
+
+    def test_returns_parsed_message(self) -> None:
+        sample_message = {
+            "info": {"id": "msg_1", "role": "assistant", "finish": "stop"},
+            "parts": [{"type": "text", "text": "Hi!"}, "bad"],
+        }
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = sample_message
+        mock_response.raise_for_status = MagicMock()
+        mock_client = MagicMock()
+        mock_client.get.return_value = mock_response
+        mock_client.__enter__ = MagicMock(return_value=mock_client)
+        mock_client.__exit__ = MagicMock(return_value=False)
+
+        with patch.object(opencode_client_mod, "runtime_http_client", return_value=mock_client):
+            result = opencode_runtime_main.get_session_message("ses_abc", "msg_1")
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["info"]["id"], "msg_1")
+        self.assertEqual(len(result["parts"]), 1)
+
+
+class GetSessionStatusTests(unittest.TestCase):
+    """Tests for get_session_status."""
+
+    def test_returns_idle_when_status_entry_is_null(self) -> None:
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"ses_abc": None}
+        mock_response.raise_for_status = MagicMock()
+        mock_client = MagicMock()
+        mock_client.get.return_value = mock_response
+        mock_client.__enter__ = MagicMock(return_value=mock_client)
+        mock_client.__exit__ = MagicMock(return_value=False)
+
+        with patch.object(opencode_client_mod, "runtime_http_client", return_value=mock_client):
+            result = opencode_runtime_main.get_session_status("ses_abc")
+
+        self.assertEqual(result, {"type": "idle"})
 
 
 class FullWorkflowExtractionTests(unittest.TestCase):
@@ -977,6 +1230,25 @@ class ErrorRecoveryWorkflowTests(unittest.TestCase):
         self.assertEqual(len(artifacts), 1)
         self.assertEqual(artifacts[0]["path"], "/workspace/fix.sh")
 
+    def test_detect_errors_prefers_nested_error_message(self) -> None:
+        messages = [
+            {
+                "info": {
+                    "role": "assistant",
+                    "error": {
+                        "name": "APIError",
+                        "data": {
+                            "message": "This request requires more credits.",
+                            "statusCode": 402,
+                        },
+                    },
+                },
+                "parts": [],
+            }
+        ]
+        errors = opencode_runtime_main.detect_task_errors(messages)
+        self.assertEqual(errors, ["This request requires more credits."])
+
 
 # ---------------------------------------------------------------------------
 # Phase 6 â€“ Session management helper tests
@@ -1015,6 +1287,27 @@ class AbortSessionTests(unittest.TestCase):
         mc.__exit__ = MagicMock(return_value=False)
         with patch.object(opencode_client_mod, "runtime_http_client", return_value=mc):
             self.assertFalse(opencode_runtime_main.abort_session("ses_err"))
+
+
+class WaitForSessionIdleTests(unittest.TestCase):
+    """Tests for wait_for_session_idle backoff behavior."""
+
+    def test_uses_capped_backoff_until_idle(self) -> None:
+        sleep_intervals: list[float] = []
+        with (
+            patch.object(
+                opencode_client_mod,
+                "get_session_status",
+                side_effect=[{"type": "busy"}, {"type": "busy"}, {"type": "idle"}],
+            ),
+            patch.object(opencode_client_mod, "SESSION_IDLE_POLL_SECONDS", 0.5),
+            patch.object(opencode_client_mod, "SESSION_IDLE_MAX_POLL_SECONDS", 1.0),
+            patch.object(opencode_client_mod.time, "sleep", side_effect=lambda seconds: sleep_intervals.append(seconds)),
+        ):
+            status = opencode_runtime_main.wait_for_session_idle("ses_1", timeout_seconds=5.0)
+
+        self.assertEqual(status.get("type"), "idle")
+        self.assertEqual(sleep_intervals, [0.25, 0.5])
 
 
 class SummarizeSessionTests(unittest.TestCase):
@@ -1372,6 +1665,141 @@ class RuntimeCapabilitiesEnhancedTests(unittest.TestCase):
         for tool in ("webfetch", "websearch", "codesearch", "skill", "question", "task", "todowrite"):
             self.assertIn(tool, caps["native_tools"])
 
+    def test_a2a_section_reports_outbound_support(self) -> None:
+        with (
+            patch.object(analysis_mod, "A2A_ALLOWED_TARGETS", {("team-b", "analysis-agent")}),
+            patch.object(analysis_mod, "A2A_MAX_TIMEOUT_SECONDS", 45.0),
+            patch.object(analysis_mod, "A2A_REQUIRE_HITL", True),
+            patch.object(analysis_mod, "API_GATEWAY_INTERNAL_URL", "http://gateway.internal"),
+            patch.object(analysis_mod, "API_GATEWAY_SHARED_TOKEN", "shared-token"),
+        ):
+            caps = opencode_runtime_main.runtime_capabilities()
+
+        self.assertIn("a2a", caps)
+        self.assertTrue(caps["a2a"]["outbound_supported"])
+        self.assertTrue(caps["a2a"]["gateway_configured"])
+        self.assertEqual(caps["a2a"]["allowed_target_count"], 1)
+        self.assertEqual(caps["a2a"]["allowed_targets"], [{"namespace": "team-b", "name": "analysis-agent"}])
+        self.assertEqual(caps["a2a"]["max_timeout_seconds"], 45.0)
+        self.assertTrue(caps["a2a"]["requires_hitl"])
+
+
+class OpenCodeOutboundA2ATests(unittest.TestCase):
+    def test_invoke_outbound_a2a_request_forwards_gateway_payload(self) -> None:
+        request = opencode_runtime_main.InvokeRequest(
+            prompt="Summarize the deployment findings.",
+            system="Return only the final answer.",
+            model="gpt-4o",
+            a2a_target_agent="analysis-agent",
+            a2a_target_namespace="team-b",
+            a2a_timeout_seconds=12,
+            caller_agent_name="planner",
+            caller_agent_namespace="default",
+            parent_thread_id="thread-parent",
+            caller_request_id="req-123",
+            team_context={"workflow": "incident-review"},
+        )
+
+        with (
+            patch.object(invoke_mod, "A2A_ALLOWED_TARGETS", {("team-b", "analysis-agent")}),
+            patch.object(invoke_mod, "A2A_MAX_TIMEOUT_SECONDS", 30.0),
+            patch.object(invoke_mod, "API_GATEWAY_INTERNAL_URL", "http://gateway.internal"),
+            patch.object(invoke_mod, "API_GATEWAY_SHARED_TOKEN", "shared-token"),
+            patch.object(invoke_mod, "build_invoke_warnings", return_value=["base warning"]),
+            patch.object(
+                invoke_mod,
+                "invoke_gateway_a2a_target",
+                return_value={
+                    "response": "Peer analysis complete.",
+                    "model": "gpt-4o-mini",
+                    "status": "completed",
+                    "warnings": ["peer warning"],
+                    "metadata": {"source": "peer"},
+                },
+            ) as mock_gateway,
+        ):
+            response = invoke_mod.invoke_outbound_a2a_request(
+                request,
+                logical_thread_id="thread-1",
+                selected_model="gpt-4o",
+            )
+
+        self.assertEqual(response.response, "Peer analysis complete.")
+        self.assertEqual(response.model, "gpt-4o-mini")
+        self.assertEqual(response.status, "completed")
+        self.assertEqual(response.a2a["callerAgent"], "planner")
+        self.assertIn("base warning", response.warnings)
+        self.assertIn("peer warning", response.warnings)
+        self.assertEqual(response.metadata["source"], "peer")
+        self.assertEqual(response.metadata["a2aTarget"]["agent"], "analysis-agent")
+        self.assertEqual(response.metadata["a2aTarget"]["namespace"], "team-b")
+        self.assertEqual(response.metadata["a2aTarget"]["requestId"], "req-123")
+
+        call_args = mock_gateway.call_args.args
+        self.assertEqual(call_args[0], "analysis-agent")
+        self.assertEqual(call_args[1], "team-b")
+        payload = call_args[2]
+        self.assertEqual(payload["prompt"], "Summarize the deployment findings.")
+        self.assertEqual(payload["system"], "Return only the final answer.")
+        self.assertEqual(payload["model"], "gpt-4o")
+        self.assertEqual(payload["caller_agent_name"], opencode_runtime_main.SERVICE_NAME)
+        self.assertEqual(payload["caller_agent_namespace"], opencode_runtime_main.SERVICE_NAMESPACE)
+        self.assertEqual(payload["parent_thread_id"], "thread-1")
+        self.assertEqual(payload["caller_request_id"], "req-123")
+        self.assertEqual(payload["team_context"]["workflow"], "incident-review")
+        self.assertEqual(payload["team_context"]["delegation"]["target"]["name"], "analysis-agent")
+        self.assertEqual(payload["team_context"]["upstreamCaller"]["name"], "planner")
+
+    def test_invoke_opencode_short_circuits_explicit_outbound_a2a(self) -> None:
+        request = opencode_runtime_main.InvokeRequest(
+            prompt="Ask a peer for help.",
+            a2a_target_agent="analysis-agent",
+            a2a_target_namespace="team-b",
+        )
+        expected = opencode_runtime_main.InvokeResponse(
+            thread_id="thread-1",
+            response="Peer result",
+            model="gpt-4o",
+        )
+
+        with (
+            patch.object(invoke_mod, "A2A_REQUIRE_HITL", False),
+            patch.object(invoke_mod, "invoke_outbound_a2a_request", return_value=expected) as mock_outbound,
+            patch.object(invoke_mod, "ensure_server_running") as mock_server,
+        ):
+            actual = opencode_runtime_main.invoke_opencode(request)
+
+        self.assertIs(actual, expected)
+        mock_outbound.assert_called_once()
+        mock_server.assert_not_called()
+
+    def test_invoke_opencode_requires_hitl_for_outbound_a2a(self) -> None:
+        request = opencode_runtime_main.InvokeRequest(
+            prompt="Ask a peer for help.",
+            a2a_target_agent="analysis-agent",
+            a2a_target_namespace="team-b",
+        )
+
+        with (
+            patch.object(invoke_mod, "A2A_REQUIRE_HITL", True),
+            patch.object(
+                invoke_mod,
+                "hitl_gate",
+                return_value={"decision": "pending", "approval_name": "peer-call-approval"},
+            ) as mock_hitl,
+            patch.object(invoke_mod, "invoke_outbound_a2a_request") as mock_outbound,
+        ):
+            response = opencode_runtime_main.invoke_opencode(request)
+
+        self.assertEqual(response.status, "approval_pending")
+        self.assertEqual(response.approval_name, "peer-call-approval")
+        self.assertTrue(response.thread_id)
+        self.assertEqual(response.model, opencode_runtime_main.DEFAULT_MODEL)
+        self.assertFalse(response.response)
+        self.assertIn("analysis-agent", mock_hitl.call_args.kwargs["action_description"])
+        self.assertIn("team-b", mock_hitl.call_args.kwargs["action_description"])
+        mock_outbound.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # Phase 6 â€“ invoke_opencode loop integration tests (mocked)
@@ -1468,6 +1896,24 @@ class InvokeOpenCodeLoopTests(unittest.TestCase):
         resp = self._run_invoke({"prompt": "Task", "max_retries": 3}, payloads)
         self.assertEqual(resp.status, "completed")
         self.assertTrue(any("retrying" in w.lower() for w in resp.warnings))
+
+    def test_non_retryable_api_error_stops_without_retry(self) -> None:
+        payload = self._make_payload(
+            "",
+            "error",
+            error={
+                "name": "APIError",
+                "data": {
+                    "message": "This request requires more credits.",
+                    "isRetryable": False,
+                    "statusCode": 402,
+                },
+            },
+        )
+        resp = self._run_invoke({"prompt": "Task", "max_retries": 3}, [payload])
+        self.assertEqual(resp.status, "error")
+        self.assertTrue(any("non-retryable" in w.lower() for w in resp.warnings))
+        self.assertFalse(any("retrying" in w.lower() for w in resp.warnings))
 
     def test_plan_agent_switch_to_build(self) -> None:
         """When plan agent finishes, loop should switch to build agent."""
@@ -1679,6 +2125,32 @@ class InvokeOpenCodeLoopTests(unittest.TestCase):
             mock_summarize.assert_not_called()
             self.assertEqual(resp.status, "completed")
 
+    def test_prefers_current_message_over_latest_session_assistant(self) -> None:
+        payload = {
+            "info": {"id": "msg_current", "role": "assistant", "finish": "tool-calls"},
+            "parts": [{"type": "text", "text": "Still working"}],
+        }
+        exact_message = {
+            "info": {"id": "msg_current", "role": "assistant", "finish": "stop"},
+            "parts": [{"type": "text", "text": "Hello"}],
+        }
+        stale_history = [
+            {"info": {"id": "msg_old", "role": "assistant", "finish": "stop"}, "parts": [{"type": "text", "text": "I updated AGENTS.md"}]},
+        ]
+        req = opencode_runtime_main.InvokeRequest(prompt="hello", max_turns=1)
+        with self._patch_server_running(), self._patch_create_session(), self._patch_send_prompt([payload]):
+            with (
+                patch.object(invoke_mod, "get_session_message", return_value=exact_message),
+                patch.object(invoke_mod, "get_session_messages", return_value=stale_history),
+                patch.object(invoke_mod, "get_session_todos", return_value=[]),
+                patch.object(invoke_mod, "wait_for_session_idle", return_value={"type": "idle"}),
+                patch.object(invoke_mod, "abort_session", return_value=True),
+                patch.object(invoke_mod, "summarize_session", return_value=True),
+            ):
+                resp = opencode_runtime_main.invoke_opencode(req)
+
+        self.assertEqual(resp.response, "Hello")
+
 
 class StructuredOutputMetadataTests(unittest.TestCase):
     """Tests for _extract_structured_output and metadata enrichment."""
@@ -1864,6 +2336,74 @@ class SendPromptWithSessionRecoveryTests(unittest.TestCase):
             with self.assertRaises(_HTTPException) as ctx:
                 opencode_runtime_main._send_prompt_with_session_recovery(**kwargs)
         self.assertEqual(ctx.exception.status_code, 404)
+
+
+class SendPromptTests(unittest.TestCase):
+    """Tests for direct OpenCode prompt submission helpers."""
+
+    def test_empty_body_falls_back_to_session_history(self) -> None:
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.content = b""
+        mock_response.text = ""
+        mock_response.raise_for_status = MagicMock()
+        mock_client = MagicMock()
+        mock_client.post.return_value = mock_response
+        mock_client.__enter__ = MagicMock(return_value=mock_client)
+        mock_client.__exit__ = MagicMock(return_value=False)
+
+        assistant_payload = {
+            "info": {"role": "assistant", "parentID": "msg_test", "finish": "stop"},
+            "parts": [{"type": "text", "text": "OK"}],
+        }
+
+        with (
+            patch.object(opencode_client_mod, "runtime_http_client", return_value=mock_client),
+            patch.object(opencode_client_mod, "_ascending_message_id", return_value="msg_test"),
+            patch.object(opencode_client_mod, "wait_for_session_idle", return_value={"type": "idle"}),
+            patch.object(opencode_client_mod, "get_session_messages", return_value=[assistant_payload]),
+        ):
+            payload = opencode_runtime_main.send_prompt(
+                session_id="ses_test",
+                prompt="hello",
+                model="gpt-4",
+                system_prompt=None,
+                prompt_format=None,
+                working_directory="/workspace",
+                agent="build",
+            )
+
+        self.assertEqual(payload, assistant_payload)
+        post_body = mock_client.post.call_args.kwargs["json"]
+        self.assertEqual(post_body["messageID"], "msg_test")
+
+    def test_invalid_json_body_raises_gateway_error(self) -> None:
+        from fastapi import HTTPException as _HTTPException
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.content = b"not-json"
+        mock_response.text = "not-json"
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json.side_effect = ValueError("bad json")
+        mock_client = MagicMock()
+        mock_client.post.return_value = mock_response
+        mock_client.__enter__ = MagicMock(return_value=mock_client)
+        mock_client.__exit__ = MagicMock(return_value=False)
+
+        with patch.object(opencode_client_mod, "runtime_http_client", return_value=mock_client):
+            with self.assertRaises(_HTTPException) as ctx:
+                opencode_runtime_main.send_prompt(
+                    session_id="ses_test",
+                    prompt="hello",
+                    model="gpt-4",
+                    system_prompt=None,
+                    prompt_format=None,
+                    working_directory="/workspace",
+                    agent="build",
+                )
+
+        self.assertEqual(ctx.exception.status_code, 502)
 
 
 class StructuredOutputFormatRetryTests(unittest.TestCase):
@@ -2223,10 +2763,67 @@ class ContextBudgetEndpointTests(unittest.TestCase):
 class StreamingEventsTests(unittest.TestCase):
     """Tests for per-turn SSE streaming events."""
 
+    def test_live_updates_wait_for_terminal_assistant_payload(self) -> None:
+        """Live-update polling should ignore intermediate tool-call assistant messages."""
+        intermediate_payload = {
+            "info": {
+                "id": "msg_assistant_tool",
+                "role": "assistant",
+                "parentID": "msg_user",
+                "finish": "tool-calls",
+                "time": {"completed": 1},
+            },
+            "parts": [{"type": "text", "text": "Working..."}],
+        }
+        final_payload = {
+            "info": {
+                "id": "msg_assistant_final",
+                "role": "assistant",
+                "parentID": "msg_user",
+                "finish": "stop",
+                "time": {"completed": 2},
+            },
+            "parts": [{"type": "text", "text": "Done!"}],
+        }
+        snapshots = [
+            [intermediate_payload],
+            [intermediate_payload],
+            [final_payload],
+        ]
+        poll_count = {"n": 0}
+
+        def mock_get_session_messages(session_id):
+            idx = min(poll_count["n"], len(snapshots) - 1)
+            poll_count["n"] += 1
+            return snapshots[idx]
+
+        with (
+            patch.object(invoke_mod, "send_prompt_async", return_value="msg_user"),
+            patch.object(invoke_mod, "get_session_messages", side_effect=mock_get_session_messages),
+            patch.object(invoke_mod, "get_session_status", return_value={"type": "idle"}),
+            patch.object(invoke_mod.time, "sleep", return_value=None),
+        ):
+            session_id, payload = invoke_mod._send_prompt_with_live_updates_and_recovery(
+                session_id="ses_test",
+                prompt="Do something",
+                model="gpt-4",
+                system_prompt=None,
+                prompt_format=None,
+                working_directory="/workspace",
+                agent="build",
+                logical_thread_id="thread-1",
+                allow_session_recovery=False,
+                turn=0,
+                emit=lambda *_args, **_kwargs: None,
+            )
+
+        self.assertEqual(session_id, "ses_test")
+        self.assertEqual(payload["info"]["finish"], "stop")
+        self.assertEqual(payload["parts"][0]["text"], "Done!")
+        self.assertGreaterEqual(poll_count["n"], 3)
+
     def test_stream_emits_multiple_events(self) -> None:
         """Streaming endpoint should emit turn events for multi-turn invocation."""
-        from fastapi.testclient import TestClient
-
         payload1 = {
             "info": {"role": "assistant", "finish": "tool-calls"},
             "parts": [{"type": "text", "text": "Working..."}],
@@ -2240,28 +2837,259 @@ class StreamingEventsTests(unittest.TestCase):
             call_count["n"] += 1
             return kwargs.get("session_id", "ses_test"), [payload1, payload2][idx]
 
-        client = TestClient(opencode_runtime_main.app, raise_server_exceptions=False)
+        async def collect_stream() -> tuple[int, str]:
+            response = await opencode_runtime_main.invoke_stream(
+                opencode_runtime_main.InvokeRequest(prompt="Do something", autonomous=True)
+            )
+            chunks: list[str] = []
+            async for chunk in response.body_iterator:
+                chunks.append(chunk)
+            return response.status_code, "".join(chunks)
+
         with (
             patch.object(supervisor_mod, "_runtime_ready", True),
             patch.object(invoke_mod, "ensure_server_running"),
             patch.object(invoke_mod, "create_remote_session", return_value="ses_test"),
-            patch.object(invoke_mod, "_send_prompt_with_session_recovery", side_effect=mock_send),
+            patch.object(invoke_mod, "_send_prompt_with_live_updates_and_recovery", side_effect=mock_send),
             patch.object(invoke_mod, "get_session_messages", return_value=[]),
             patch.object(invoke_mod, "get_session_todos", return_value=[]),
             patch.object(invoke_mod, "wait_for_session_idle", return_value={"type": "idle"}),
             patch.object(invoke_mod, "abort_session", return_value=True),
             patch.object(invoke_mod, "summarize_session", return_value=True),
         ):
-            resp = client.post(
-                "/invoke/stream",
-                json={"prompt": "Do something", "autonomous": True},
-            )
-        self.assertEqual(resp.status_code, 200)
-        text = resp.text
+            status_code, text = asyncio.run(collect_stream())
+        self.assertEqual(status_code, 200)
         self.assertIn("event: response.started", text)
         self.assertIn("event: response.completed", text)
         self.assertIn("response.turn_started", text)
         self.assertIn("response.turn_completed", text)
+
+    def test_stream_emits_live_reasoning_snapshots(self) -> None:
+        """Streaming endpoint should forward live reasoning snapshots from async OpenCode prompts."""
+        final_payload = {
+            "info": {
+                "id": "msg_assistant",
+                "role": "assistant",
+                "parentID": "msg_user",
+                "finish": "stop",
+                "time": {"completed": 1},
+            },
+            "parts": [
+                {"type": "reasoning", "text": "Plan the change"},
+                {"type": "text", "text": "Done!"},
+            ],
+        }
+        snapshots = [
+            [],
+            [
+                {
+                    "info": {"id": "msg_assistant", "role": "assistant", "parentID": "msg_user", "time": {}},
+                    "parts": [{"type": "reasoning", "text": "Plan the change"}],
+                }
+            ],
+            [final_payload],
+            [final_payload],
+        ]
+        poll_count = {"n": 0}
+
+        def mock_send_prompt_async(**kwargs):
+            return "msg_user"
+
+        def mock_get_session_messages(session_id):
+            idx = min(poll_count["n"], len(snapshots) - 1)
+            poll_count["n"] += 1
+            return snapshots[idx]
+
+        def mock_get_session_status(session_id):
+            return {"type": "idle"} if poll_count["n"] >= 3 else {"type": "busy"}
+
+        async def collect_stream() -> tuple[int, str]:
+            response = await opencode_runtime_main.invoke_stream(
+                opencode_runtime_main.InvokeRequest(prompt="Do something")
+            )
+            chunks: list[str] = []
+            async for chunk in response.body_iterator:
+                chunks.append(chunk)
+            return response.status_code, "".join(chunks)
+
+        with (
+            patch.object(supervisor_mod, "_runtime_ready", True),
+            patch.object(invoke_mod, "ensure_server_running"),
+            patch.object(invoke_mod, "create_remote_session", return_value="ses_test"),
+            patch.object(invoke_mod, "send_prompt_async", side_effect=mock_send_prompt_async),
+            patch.object(invoke_mod, "get_session_messages", side_effect=mock_get_session_messages),
+            patch.object(invoke_mod, "get_session_message", return_value=final_payload),
+            patch.object(invoke_mod, "get_session_status", side_effect=mock_get_session_status),
+            patch.object(invoke_mod, "get_session_todos", return_value=[]),
+            patch.object(invoke_mod.time, "sleep", return_value=None),
+        ):
+            status_code, text = asyncio.run(collect_stream())
+
+        self.assertEqual(status_code, 200)
+        self.assertIn("event: response.reasoning", text)
+        self.assertIn("Plan the change", text)
+        self.assertIn("event: response.delta", text)
+        self.assertIn("Done!", text)
+
+    def test_stream_prefers_meaningful_assistant_over_trailing_empty_payloads(self) -> None:
+        """Streaming should ignore trailing empty assistant payloads for the same user message."""
+        meaningful_payload = {
+            "info": {
+                "id": "msg_assistant_text",
+                "role": "assistant",
+                "parentID": "msg_user",
+                "finish": "stop",
+                "time": {"completed": 1},
+            },
+            "parts": [
+                {"type": "step-start"},
+                {"type": "text", "text": "Done!"},
+                {"type": "step-finish"},
+            ],
+        }
+        trailing_empty_payload = {
+            "info": {
+                "id": "msg_assistant_empty",
+                "role": "assistant",
+                "parentID": "msg_user",
+                "finish": "stop",
+                "time": {"completed": 2},
+            },
+            "parts": [
+                {"type": "step-start"},
+                {"type": "step-finish"},
+            ],
+        }
+
+        def mock_send_prompt_async(**kwargs):
+            return "msg_user"
+
+        def mock_get_session_messages(session_id):
+            return [meaningful_payload, trailing_empty_payload]
+
+        def mock_get_session_status(session_id):
+            return {"type": "idle"}
+
+        def mock_get_session_message(session_id, message_id):
+            if message_id == "msg_assistant_text":
+                return meaningful_payload
+            if message_id == "msg_assistant_empty":
+                return trailing_empty_payload
+            return None
+
+        async def collect_stream() -> tuple[int, str]:
+            response = await opencode_runtime_main.invoke_stream(
+                opencode_runtime_main.InvokeRequest(prompt="Do something")
+            )
+            chunks: list[str] = []
+            async for chunk in response.body_iterator:
+                chunks.append(chunk)
+            return response.status_code, "".join(chunks)
+
+        with (
+            patch.object(supervisor_mod, "_runtime_ready", True),
+            patch.object(invoke_mod, "ensure_server_running"),
+            patch.object(invoke_mod, "create_remote_session", return_value="ses_test"),
+            patch.object(invoke_mod, "init_session", return_value=True),
+            patch.object(invoke_mod, "send_prompt_async", side_effect=mock_send_prompt_async),
+            patch.object(invoke_mod, "get_session_messages", side_effect=mock_get_session_messages),
+            patch.object(invoke_mod, "get_session_message", side_effect=mock_get_session_message),
+            patch.object(invoke_mod, "get_session_status", side_effect=mock_get_session_status),
+            patch.object(invoke_mod, "get_session_todos", return_value=[]),
+            patch.object(invoke_mod.time, "sleep", return_value=None),
+        ):
+            status_code, text = asyncio.run(collect_stream())
+
+        self.assertEqual(status_code, 200)
+        self.assertIn("event: response.delta", text)
+        self.assertIn("Done!", text)
+        self.assertIn("event: response.completed", text)
+        self.assertIn('"response": "Done!"', text)
+
+    def test_stream_idle_retry_resends_prompt(self) -> None:
+        """When the sidecar drops a prompt (idle with no assistant), the runtime should retry."""
+        assistant_payload = {
+            "info": {
+                "id": "msg_assistant_retry",
+                "role": "assistant",
+                "parentID": "msg_user_retry",
+                "finish": "stop",
+                "time": {"completed": 1},
+            },
+            "parts": [
+                {"type": "step-start"},
+                {"type": "text", "text": "Retried!"},
+                {"type": "step-finish"},
+            ],
+        }
+
+        send_call_count = 0
+
+        def mock_send_prompt_async(**kwargs):
+            nonlocal send_call_count
+            send_call_count += 1
+            if send_call_count == 1:
+                return "msg_user_dropped"
+            return "msg_user_retry"
+
+        call_count = 0
+
+        def mock_get_session_messages(session_id):
+            nonlocal call_count
+            call_count += 1
+            # First several polls: no assistant (prompt was dropped)
+            if send_call_count <= 1:
+                return []
+            # After retry: assistant appears
+            return [assistant_payload]
+
+        def mock_get_session_status(session_id):
+            return {"type": "idle"}
+
+        def mock_get_session_message(session_id, message_id):
+            if message_id == "msg_assistant_retry":
+                return assistant_payload
+            return None
+
+        real_monotonic = invoke_mod.time.monotonic
+        time_offset = [0.0]
+
+        def mock_monotonic():
+            return real_monotonic() + time_offset[0]
+
+        def mock_sleep(seconds):
+            # Advance mock time past the 5s grace period
+            time_offset[0] += 6.0
+
+        async def collect_stream() -> tuple[int, str]:
+            response = await opencode_runtime_main.invoke_stream(
+                opencode_runtime_main.InvokeRequest(prompt="Do something")
+            )
+            chunks: list[str] = []
+            async for chunk in response.body_iterator:
+                chunks.append(chunk)
+            return response.status_code, "".join(chunks)
+
+        with (
+            patch.object(supervisor_mod, "_runtime_ready", True),
+            patch.object(invoke_mod, "ensure_server_running"),
+            patch.object(invoke_mod, "create_remote_session", return_value="ses_test"),
+            patch.object(invoke_mod, "init_session", return_value=True),
+            patch.object(invoke_mod, "send_prompt_async", side_effect=mock_send_prompt_async),
+            patch.object(invoke_mod, "get_session_messages", side_effect=mock_get_session_messages),
+            patch.object(invoke_mod, "get_session_message", side_effect=mock_get_session_message),
+            patch.object(invoke_mod, "get_session_status", side_effect=mock_get_session_status),
+            patch.object(invoke_mod, "get_session_todos", return_value=[]),
+            patch.object(invoke_mod.time, "sleep", side_effect=mock_sleep),
+            patch.object(invoke_mod.time, "monotonic", side_effect=mock_monotonic),
+        ):
+            status_code, text = asyncio.run(collect_stream())
+
+        self.assertEqual(status_code, 200)
+        self.assertGreater(send_call_count, 1, "prompt_async should have been retried")
+        self.assertIn("Retried!", text)
+        self.assertIn("event: response.completed", text)
+
 
 
 if __name__ == "__main__":
@@ -2273,9 +3101,9 @@ if __name__ == "__main__":
 # ---------------------------------------------------------------------------
 
 # Sub-module references for new modules
-memory_mod = sys.modules["memory"]
-workspace_mod = sys.modules["workspace"]
-prompts_mod = sys.modules["prompts"]
+memory_mod = runtime_modules["memory"]
+workspace_mod = runtime_modules["workspace"]
+prompts_mod = runtime_modules["prompts"]
 
 
 class EstimateMessageTokensTests(unittest.TestCase):
@@ -2818,9 +3646,6 @@ class EnsureRuntimeDirectoriesTests(unittest.TestCase):
 # Robustness fix tests — Phases 1-3
 # ---------------------------------------------------------------------------
 
-config_mod = sys.modules["config"]
-
-
 class SafeIntFloatTests(unittest.TestCase):
     """Tests for _safe_int and _safe_float helpers in config.py."""
 
@@ -2864,6 +3689,23 @@ class SafeIntFloatTests(unittest.TestCase):
     def test_safe_float_integer_string_accepted(self) -> None:
         with patch.dict(os.environ, {"_TEST_FLOAT": "3"}, clear=False):
             self.assertAlmostEqual(opencode_runtime_main._safe_float("_TEST_FLOAT", 1.0), 3.0)
+
+
+class ModelOutputLimitTests(unittest.TestCase):
+    def test_model_output_limit_allows_small_positive_override(self) -> None:
+        module_path = Path(__file__).resolve().parents[1] / "config.py"
+        spec = importlib.util.spec_from_file_location("opencode_runtime_config_low_output_limit", module_path)
+        if spec is None or spec.loader is None:
+            self.fail("Failed to load opencode-runtime config module")
+
+        module = importlib.util.module_from_spec(spec)
+        try:
+            with patch.dict(os.environ, {"OPENCODE_MODEL_OUTPUT_LIMIT": "64"}, clear=False):
+                sys.modules[spec.name] = module
+                spec.loader.exec_module(module)
+            self.assertEqual(module.MODEL_OUTPUT_LIMIT, 64)
+        finally:
+            sys.modules.pop(spec.name, None)
 
 
 class ThresholdClampingTests(unittest.TestCase):
@@ -3097,9 +3939,8 @@ class OpenCodeClientStaleImportTests(unittest.TestCase):
 
     def test_ensure_server_running_uses_dynamic_access(self) -> None:
         """ensure_server_running should see the current value of _runtime_process, not a stale import."""
-        import importlib
-        import opencode_client as oc_mod
-        import supervisor as sv_mod
+        oc_mod = opencode_client_mod
+        sv_mod = supervisor_mod
 
         # Simulate: _runtime_process is None initially, then assigned to a mock
         mock_proc = MagicMock()

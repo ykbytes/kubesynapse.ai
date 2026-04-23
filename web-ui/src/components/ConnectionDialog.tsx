@@ -1,7 +1,13 @@
-import { useEffect, useState } from "react";
-import { AlertCircle, Loader2, RefreshCw, Shield, UserPlus } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { AlertCircle, Loader2, RefreshCw, Shield, ShieldCheck, UserPlus } from "lucide-react";
 import { toast } from "sonner";
 import { changePassword, createUser, listUsers, updateUser } from "@/lib/api";
+import {
+  AuthProviderBrandIcon,
+  buildAuthProviderOptions,
+  launchAuthProvider,
+  recommendedAuthCopy,
+} from "@/lib/authProviders";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -322,6 +328,9 @@ export function ConnectionDialog({
   const passwordProviders = authConfig?.password_providers ?? [];
   const oidcProviders = authConfig?.oidc_providers ?? [];
   const samlProviders = authConfig?.saml_providers ?? [];
+  const ssoProviders = useMemo(() => buildAuthProviderOptions(oidcProviders, samlProviders), [oidcProviders, samlProviders]);
+  const primarySsoProvider = ssoProviders[0] ?? null;
+  const secondarySsoProviders = ssoProviders.slice(1);
 
   return (
     <Dialog open={open} onOpenChange={(nextOpen) => { setOpen(nextOpen); if (nextOpen) onClearConnectionError(); }}>
@@ -335,7 +344,7 @@ export function ConnectionDialog({
         <DialogHeader>
           <DialogTitle>Gateway Access</DialogTitle>
           <DialogDescription>
-            Use a bearer token, sign in with a managed account, or launch an enterprise identity provider.
+            Use managed sign-in for interactive access. Keep bearer tokens for scripts, CI, and automation.
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-4 py-4">
@@ -385,6 +394,21 @@ export function ConnectionDialog({
           {!currentUser && (authConfig?.browser_auth_enabled || passwordProviders.length > 0 || oidcProviders.length > 0 || samlProviders.length > 0) && (
             <>
               <Separator />
+              {ssoProviders.length > 0 && (
+                <div className="rounded-lg border border-primary/20 bg-primary/5 p-3 text-sm">
+                  <div className="flex items-start gap-3">
+                    <div className="rounded-lg bg-background/90 p-2 text-primary shadow-sm">
+                      <ShieldCheck className="h-4 w-4" />
+                    </div>
+                    <div>
+                      <div className="font-medium text-foreground">Recommended for browser access</div>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {recommendedAuthCopy(primarySsoProvider)}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
               {passwordProviders.length > 0 && (
                 <div className="grid gap-3">
                   {isBootstrapping && (
@@ -495,21 +519,46 @@ export function ConnectionDialog({
                   </Button>
                 </div>
               )}
-              {(oidcProviders.length > 0 || samlProviders.length > 0) && (
-                <div className="grid gap-2">
-                  <div className="text-sm font-medium">Enterprise SSO</div>
-                  <div className="flex flex-wrap gap-2">
-                    {oidcProviders.map((provider) => (
-                      <Button key={provider.id} variant="outline" size="sm" onClick={() => onStartOidc(provider.id)}>
-                        {provider.name}
-                      </Button>
-                    ))}
-                    {samlProviders.map((provider) => (
-                      <Button key={provider.id} variant="outline" size="sm" onClick={() => onStartSaml(provider.id)}>
-                        {provider.name} SAML
-                      </Button>
-                    ))}
+              {ssoProviders.length > 0 && (
+                <div className="grid gap-3">
+                  <div>
+                    <div className="text-sm font-medium">Managed sign-in</div>
+                    <div className="text-xs text-muted-foreground">
+                      Browser flow for people. Returns here after authentication.
+                    </div>
                   </div>
+                  {primarySsoProvider && (
+                    <Button
+                      variant="outline"
+                      className="h-11 w-full justify-center gap-3 rounded-xl"
+                      onClick={() => launchAuthProvider(primarySsoProvider, {
+                        onOidcStart: onStartOidc,
+                        onSamlStart: onStartSaml,
+                      })}
+                    >
+                      <AuthProviderBrandIcon brand={primarySsoProvider.brand} />
+                      {primarySsoProvider.label}
+                    </Button>
+                  )}
+                  {secondarySsoProviders.length > 0 && (
+                    <div className="flex flex-wrap gap-2">
+                      {secondarySsoProviders.map((provider) => (
+                        <Button
+                          key={`${provider.kind}:${provider.id}`}
+                          variant="outline"
+                          size="sm"
+                          className="justify-start gap-3"
+                          onClick={() => launchAuthProvider(provider, {
+                            onOidcStart: onStartOidc,
+                            onSamlStart: onStartSaml,
+                          })}
+                        >
+                          <AuthProviderBrandIcon brand={provider.brand} />
+                          {provider.label}
+                        </Button>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
             </>

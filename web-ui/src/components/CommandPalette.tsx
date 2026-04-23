@@ -4,6 +4,7 @@ import {
   FlaskConical,
   GitBranch,
   Blocks,
+  MessageSquare,
   Package,
   ShieldAlert,
   Settings,
@@ -46,6 +47,7 @@ interface CommandPaletteProps {
 
 const NAV_ITEMS: { view: WorkspaceView; label: string; icon: LucideIcon; keywords: string }[] = [
   { view: "agents", label: "Go to Agents", icon: Bot, keywords: "agent list bots" },
+  { view: "chat", label: "Go to Chat", icon: MessageSquare, keywords: "chat conversation messages agent" },
   { view: "workflows", label: "Go to Workflows", icon: GitBranch, keywords: "workflow pipeline" },
   { view: "composer", label: "Go to Composer", icon: Blocks, keywords: "compose dag" },
   { view: "evals", label: "Go to Evals", icon: FlaskConical, keywords: "eval evaluation test" },

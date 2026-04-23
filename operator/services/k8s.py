@@ -504,10 +504,11 @@ def ensure_network_policy(namespace: str, manifest: dict[str, Any]) -> None:
 
 
 def ensure_runtime_access(namespace: str) -> None:
-    """Create or patch a ServiceAccount and RoleBinding for agent runtimes."""
+    """Create or patch a ServiceAccount, RoleBinding, and ClusterRoleBinding for agent runtimes."""
     core_api = kubernetes.client.CoreV1Api()
     rbac_api = kubernetes.client.RbacAuthorizationV1Api()
     binding_name = f"{RUNTIME_SERVICE_ACCOUNT}-binding"
+    cluster_binding_name = f"{RUNTIME_SERVICE_ACCOUNT}-{namespace}-cluster-binding"
 
     service_account = kubernetes.client.V1ServiceAccount(
         metadata=kubernetes.client.V1ObjectMeta(name=RUNTIME_SERVICE_ACCOUNT, namespace=namespace),
@@ -566,6 +567,47 @@ def ensure_runtime_access(namespace: str) -> None:
                     )
                     rbac_api.delete_namespaced_role_binding(name=binding_name, namespace=namespace)
                     rbac_api.create_namespaced_role_binding(namespace=namespace, body=binding)
+                else:
+                    raise
+        else:
+            raise
+
+    # Also create a ClusterRoleBinding so agents can access cluster-wide
+    # resources (nodes, pods across namespaces, etc.) via the kubernetes
+    # MCP sidecar.
+    cluster_binding = kubernetes.client.V1ClusterRoleBinding(
+        metadata=kubernetes.client.V1ObjectMeta(name=cluster_binding_name),
+        role_ref=kubernetes.client.V1RoleRef(
+            api_group="rbac.authorization.k8s.io",
+            kind="ClusterRole",
+            name=RUNTIME_CLUSTER_ROLE,
+        ),
+        subjects=[
+            kubernetes.client.V1Subject(
+                kind="ServiceAccount",
+                name=RUNTIME_SERVICE_ACCOUNT,
+                namespace=namespace,
+            )
+        ],
+    )
+    try:
+        rbac_api.create_cluster_role_binding(body=cluster_binding)
+    except ApiException as exc:
+        if exc.status == 409:
+            try:
+                rbac_api.patch_cluster_role_binding(
+                    name=cluster_binding_name,
+                    body=cluster_binding,
+                )
+            except ApiException as patch_exc:
+                patch_body = str(getattr(patch_exc, "body", "") or "")
+                if patch_exc.status == 422 and "cannot change roleRef" in patch_body:
+                    logger.warning(
+                        "ClusterRoleBinding '%s' has an immutable roleRef mismatch; recreating it.",
+                        cluster_binding_name,
+                    )
+                    rbac_api.delete_cluster_role_binding(name=cluster_binding_name)
+                    rbac_api.create_cluster_role_binding(body=cluster_binding)
                 else:
                     raise
         else:

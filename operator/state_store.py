@@ -132,6 +132,10 @@ class WorkflowRun(Base):
     journal_path = Column(String(512), nullable=True)
     worker_job_name = Column(String(128), nullable=True)
     pending_approval_name = Column(String(128), nullable=True)
+    log_archive_text = Column(String, nullable=True)
+    log_archive_source = Column(String(64), nullable=True)
+    log_archive_truncated = Column(Boolean, nullable=False, default=False)
+    log_archive_captured_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
     completed_at = Column(DateTime(timezone=True), nullable=True)
@@ -300,6 +304,30 @@ def safe_record_workflow_state(
         return
     try:
         with db_session() as session:
+            superseded_at = utc_now()
+            stale_records = (
+                session.query(WorkflowRun)
+                .filter(
+                    WorkflowRun.namespace == namespace,
+                    WorkflowRun.resource_name == resource_name,
+                    WorkflowRun.generation == generation,
+                    WorkflowRun.run_id != run_id,
+                    WorkflowRun.phase.in_(["queued", "running"]),
+                )
+                .all()
+            )
+            for stale_record in stale_records:
+                stale_status = _json_clone(stale_record.status_json) or {}
+                stale_summary = _json_clone(stale_record.summary_json) or {}
+                stale_record.phase = "cancelled"
+                stale_status["phase"] = "cancelled"
+                stale_summary.setdefault("error", f"Superseded by run {run_id}")
+                stale_summary["cancelledAt"] = superseded_at.isoformat()
+                stale_record.status_json = stale_status
+                stale_record.summary_json = stale_summary
+                stale_record.completed_at = superseded_at
+                stale_record.updated_at = superseded_at
+
             record = (
                 session.query(WorkflowRun)
                 .filter(
@@ -350,6 +378,30 @@ def safe_record_eval_state(
         return
     try:
         with db_session() as session:
+            superseded_at = utc_now()
+            stale_records = (
+                session.query(EvalRun)
+                .filter(
+                    EvalRun.namespace == namespace,
+                    EvalRun.resource_name == resource_name,
+                    EvalRun.generation == generation,
+                    EvalRun.run_id != run_id,
+                    EvalRun.phase.in_(["queued", "running"]),
+                )
+                .all()
+            )
+            for stale_record in stale_records:
+                stale_status = _json_clone(stale_record.status_json) or {}
+                stale_summary = _json_clone(stale_record.summary_json) or {}
+                stale_record.phase = "cancelled"
+                stale_status["phase"] = "cancelled"
+                stale_summary.setdefault("error", f"Superseded by run {run_id}")
+                stale_summary["cancelledAt"] = superseded_at.isoformat()
+                stale_record.status_json = stale_status
+                stale_record.summary_json = stale_summary
+                stale_record.completed_at = superseded_at
+                stale_record.updated_at = superseded_at
+
             record = (
                 session.query(EvalRun)
                 .filter(
@@ -378,6 +430,49 @@ def safe_record_eval_state(
             record.updated_at = utc_now()
     except Exception:
         logger.exception("Failed to mirror eval state for %s/%s run %s.", namespace, resource_name, run_id)
+
+
+def record_workflow_log_archive(
+    *,
+    namespace: str,
+    resource_name: str,
+    run_id: str,
+    log_text: str,
+    source: str,
+    truncated: bool = False,
+    captured_at: datetime | None = None,
+) -> None:
+    if not STATE_DB_ENABLED or not run_id:
+        return
+
+    archive_timestamp = captured_at or utc_now()
+    try:
+        with db_session() as session:
+            record = (
+                session.query(WorkflowRun)
+                .filter(
+                    WorkflowRun.namespace == namespace,
+                    WorkflowRun.resource_name == resource_name,
+                    WorkflowRun.run_id == run_id,
+                )
+                .one_or_none()
+            )
+            if record is None:
+                logger.debug(
+                    "Skipping workflow log archive for %s/%s run %s because the mirrored run row does not exist yet.",
+                    namespace,
+                    resource_name,
+                    run_id,
+                )
+                return
+
+            record.log_archive_text = log_text
+            record.log_archive_source = source[:64] if source else None
+            record.log_archive_truncated = bool(truncated)
+            record.log_archive_captured_at = archive_timestamp
+            record.updated_at = utc_now()
+    except Exception:
+        logger.exception("Failed to persist workflow log archive for %s/%s run %s.", namespace, resource_name, run_id)
 
 
 def safe_record_agent_session(snapshot: dict[str, Any]) -> None:

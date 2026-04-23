@@ -3,7 +3,7 @@ import { ArrowUpDown, Check, Pencil, Plus, Search, Shield, ShieldCheck, UserCog,
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -34,18 +34,18 @@ const EMPTY_CREATE: CreateUserPayload = {
 function roleBadge(role: UserRole) {
   switch (role) {
     case "admin":
-      return <Badge variant="default" className="gap-1"><ShieldCheck className="h-3 w-3" />Admin</Badge>;
+      return <Badge variant="outline" className="gap-1 border-sky-500/25 bg-sky-500/10 text-sky-500"><ShieldCheck className="h-3 w-3" />Admin</Badge>;
     case "operator":
-      return <Badge variant="secondary" className="gap-1"><Shield className="h-3 w-3" />Operator</Badge>;
+      return <Badge variant="outline" className="gap-1 border-amber-500/25 bg-amber-500/10 text-amber-500"><Shield className="h-3 w-3" />Operator</Badge>;
     default:
-      return <Badge variant="outline">Viewer</Badge>;
+      return <Badge variant="outline" className="border-border/60 bg-background/80 text-foreground/70">Viewer</Badge>;
   }
 }
 
 function statusBadge(active: boolean) {
   return active
-    ? <Badge variant="outline" className="border-emerald-500/40 text-emerald-500">Active</Badge>
-    : <Badge variant="outline" className="border-red-500/40 text-red-500">Locked</Badge>;
+    ? <Badge variant="outline" className="border-emerald-500/25 bg-emerald-500/10 text-emerald-500">Active</Badge>
+    : <Badge variant="outline" className="border-red-500/25 bg-red-500/10 text-red-500">Locked</Badge>;
 }
 
 function formatDate(iso: string | null | undefined): string {
@@ -110,6 +110,13 @@ export function AdminPanel({ token }: AdminPanelProps) {
     });
     return list;
   }, [users, filter, sortField, sortDir]);
+
+  const summary = useMemo(() => ({
+    total: users.length,
+    active: users.filter((user) => user.is_active).length,
+    admins: users.filter((user) => user.role === "admin").length,
+    operators: users.filter((user) => user.role === "operator").length,
+  }), [users]);
 
   const toggleSort = (field: SortField) => {
     if (sortField === field) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
@@ -184,37 +191,81 @@ export function AdminPanel({ token }: AdminPanelProps) {
   );
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-lg font-semibold text-foreground flex items-center gap-2">
-            <UserCog className="h-5 w-5" />
-            User Management
-          </h2>
-          <p className="text-xs text-muted-foreground mt-0.5">{users.length} user{users.length !== 1 ? "s" : ""} registered</p>
+    <div className="space-y-6">
+      <div className="rounded-3xl border border-border/60 bg-gradient-to-br from-background/95 via-background/90 to-muted/35 p-5 shadow-sm shadow-black/5">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant="outline" className="border-border/60 bg-background/80">Identity and access</Badge>
+              <Badge variant="outline" className="border-emerald-500/25 bg-emerald-500/10 text-emerald-500">{summary.active} active accounts</Badge>
+            </div>
+            <div>
+              <h2 className="flex items-center gap-2 text-xl font-semibold tracking-tight text-foreground">
+                <UserCog className="h-5 w-5" />
+                User Management
+              </h2>
+              <p className="mt-1 text-sm leading-6 text-muted-foreground">
+                Manage platform access, roles, and namespace scope for each account from one operational surface.
+              </p>
+            </div>
+          </div>
+          <Button size="sm" className="gap-1.5" onClick={() => setCreateOpen(true)}>
+            <Plus className="h-3.5 w-3.5" />
+            Create User
+          </Button>
         </div>
-        <Button size="sm" className="gap-1.5" onClick={() => setCreateOpen(true)}>
-          <Plus className="h-3.5 w-3.5" />
-          Create User
-        </Button>
+
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <Card className="border-border/60 bg-background/80 shadow-sm shadow-black/5">
+            <CardContent className="space-y-1 p-4">
+              <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">Total users</div>
+              <div className="text-2xl font-semibold text-foreground">{summary.total}</div>
+            </CardContent>
+          </Card>
+          <Card className="border-border/60 bg-background/80 shadow-sm shadow-black/5">
+            <CardContent className="space-y-1 p-4">
+              <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">Active</div>
+              <div className="text-2xl font-semibold text-foreground">{summary.active}</div>
+            </CardContent>
+          </Card>
+          <Card className="border-border/60 bg-background/80 shadow-sm shadow-black/5">
+            <CardContent className="space-y-1 p-4">
+              <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">Admins</div>
+              <div className="text-2xl font-semibold text-foreground">{summary.admins}</div>
+            </CardContent>
+          </Card>
+          <Card className="border-border/60 bg-background/80 shadow-sm shadow-black/5">
+            <CardContent className="space-y-1 p-4">
+              <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">Operators</div>
+              <div className="text-2xl font-semibold text-foreground">{summary.operators}</div>
+            </CardContent>
+          </Card>
+        </div>
       </div>
 
       {/* Search */}
-      <div className="relative max-w-sm">
-        <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-        <Input
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
-          placeholder="Search users..."
-          className="h-8 pl-8 text-xs"
-        />
-      </div>
+      <Card className="border-border/60 bg-background/80 shadow-sm shadow-black/5">
+        <CardContent className="flex flex-col gap-3 p-4 md:flex-row md:items-center md:justify-between">
+          <div className="relative max-w-sm flex-1">
+            <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              placeholder="Search users..."
+              className="h-9 bg-background/90 pl-8 text-xs"
+            />
+          </div>
+          <div className="text-xs text-muted-foreground">
+            Showing {filteredUsers.length} of {users.length} account{users.length === 1 ? "" : "s"}
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Table */}
-      <Card className="overflow-hidden">
-        <ScrollArea className="max-h-[calc(100vh-280px)]">
-          <table className="w-full text-sm">
-            <thead className="border-b border-border bg-muted/50 sticky top-0">
+      <Card className="overflow-hidden border-border/60 bg-background/80 shadow-sm shadow-black/5">
+        <ScrollArea className="w-full max-h-[calc(100vh-280px)]">
+          <table className="min-w-[960px] w-full text-sm">
+            <thead className="sticky top-0 border-b border-border bg-background/95 backdrop-blur">
               <tr>
                 <th className="px-4 py-2.5 text-left"><SortButton field="username">Username</SortButton></th>
                 <th className="px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wider text-muted-foreground">Email</th>
@@ -246,7 +297,7 @@ export function AdminPanel({ token }: AdminPanelProps) {
                 </tr>
               )}
               {filteredUsers.map((u) => (
-                <tr key={u.id} className="hover:bg-muted/30 transition-colors">
+                <tr key={u.id} className="transition-colors hover:bg-accent/30">
                   <td className="px-4 py-2.5 font-medium text-foreground">{u.username}</td>
                   <td className="px-4 py-2.5 text-muted-foreground">{u.email ?? "—"}</td>
                   <td className="px-4 py-2.5">{roleBadge(u.role)}</td>
@@ -254,7 +305,7 @@ export function AdminPanel({ token }: AdminPanelProps) {
                   <td className="px-4 py-2.5">
                     <div className="flex flex-wrap gap-1">
                       {u.allowed_namespaces.map((ns) => (
-                        <Badge key={ns} variant="outline" className="text-[10px] px-1.5 py-0">{ns}</Badge>
+                        <Badge key={ns} variant="outline" className="border-border/60 bg-background/90 px-1.5 py-0 text-[10px]">{ns}</Badge>
                       ))}
                     </div>
                   </td>
@@ -285,11 +336,11 @@ export function AdminPanel({ token }: AdminPanelProps) {
 
       {/* ── Create User Dialog ── */}
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className="border-border/60 bg-background/95 shadow-2xl sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Create User</DialogTitle>
           </DialogHeader>
-          <div className="space-y-3">
+          <div className="space-y-3 pt-2">
             <div className="space-y-1">
               <Label className="text-xs">Username</Label>
               <Input
@@ -361,11 +412,11 @@ export function AdminPanel({ token }: AdminPanelProps) {
 
       {/* ── Edit User Dialog ── */}
       <Dialog open={!!editUser} onOpenChange={(open) => { if (!open) setEditUser(null); }}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className="border-border/60 bg-background/95 shadow-2xl sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Edit User — {editUser?.username}</DialogTitle>
           </DialogHeader>
-          <div className="space-y-3">
+          <div className="space-y-3 pt-2">
             <div className="space-y-1">
               <Label className="text-xs">Display Name</Label>
               <Input

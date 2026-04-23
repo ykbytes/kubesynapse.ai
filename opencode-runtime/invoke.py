@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import os
+import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -13,6 +16,7 @@ from fastapi import HTTPException
 
 from analysis import (
     _build_response_metadata,
+    build_tool_only_response,
     build_compaction_hints,
     check_context_overflow,
     classify_error_type,
@@ -21,11 +25,14 @@ from analysis import (
     derive_task_status,
     detect_anti_patterns,
     detect_completion_status,
+    extract_error_message,
     extract_artifacts_from_messages,
     extract_reasoning_from_parts,
     extract_response_text,
+    extract_text_from_parts,
     extract_tool_calls_from_messages,
     get_latest_assistant_payload,
+    is_error_retryable,
     detect_task_errors,
     build_prompt_format,
     recommend_compaction_strategy,
@@ -34,6 +41,11 @@ from analysis import (
 )
 from config import (
     A2A_ALLOWED_CALLERS,
+    A2A_ALLOWED_TARGETS,
+    A2A_MAX_TIMEOUT_SECONDS,
+    A2A_REQUIRE_HITL,
+    API_GATEWAY_INTERNAL_URL,
+    API_GATEWAY_SHARED_TOKEN,
     ARTIFACT_COLLECTION_MAX_FILES,
     AUTONOMOUS_MAX_RETRIES,
     AUTONOMOUS_MAX_TURNS,
@@ -41,13 +53,16 @@ from config import (
     DEFAULT_AGENT,
     DEFAULT_MODEL,
     DEFAULT_SYSTEM_PROMPT,
+    LIVE_UPDATE_TIMEOUT_SECONDS,
     MAX_COMPACTION_ATTEMPTS,
     MAX_PROMPT_CHARS,
+    MAX_THREAD_ID_CHARS,
     MEMORY_ENABLED,
     OPENCODE_WORKDIR,
     SERVICE_NAME,
     SERVICE_NAMESPACE,
     SESSION_ABORT_TIMEOUT_SECONDS,
+    SESSION_IDLE_TIMEOUT_SECONDS,
     SESSION_INIT_ON_CREATE,
     WORKSPACE_SNAPSHOT_ENABLED,
 )
@@ -63,9 +78,12 @@ from opencode_client import (
     abort_session,
     create_remote_session,
     ensure_server_running,
+    get_session_message,
     get_session_messages,
+    get_session_status,
     get_session_todos,
     init_session,
+    send_prompt_async,
     summarize_session,
     wait_for_session_idle,
 )
@@ -83,6 +101,7 @@ from prompts import (
     get_continuation_prompt,
     get_task_type_prompt,
 )
+from sanitize_secrets import redact_secrets
 from session import SESSION_REGISTRY
 from skills import SKILL_RUNTIME_CONFIG
 from utils import dedupe_items, truncate_text
@@ -91,6 +110,7 @@ from workspace import get_or_refresh_snapshot
 logger = logging.getLogger("opencode-runtime")
 
 StreamCallback = Any  # Callable[[str, dict[str, Any]], None] | None
+LIVE_UPDATE_POLL_SECONDS = 0.15
 
 
 def validate_inbound_a2a_request(request: InvokeRequest) -> None:
@@ -121,6 +141,365 @@ def a2a_response_metadata(request: InvokeRequest) -> dict[str, Any] | None:
         "parentThreadId": request.parent_thread_id,
         "callerRequestId": request.caller_request_id,
     }
+
+
+def gateway_a2a_available() -> bool:
+    """Return True when the runtime can reach the internal gateway for A2A calls."""
+    return bool(API_GATEWAY_INTERNAL_URL and API_GATEWAY_SHARED_TOKEN)
+
+
+def validate_outbound_a2a_request(request: InvokeRequest) -> None:
+    """Validate outbound A2A targets against the injected policy configuration."""
+    target_agent = (request.a2a_target_agent or "").strip()
+    target_namespace = (request.a2a_target_namespace or "").strip()
+    if not target_agent and not target_namespace:
+        return
+    if not gateway_a2a_available():
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Outbound A2A invocation is not configured for this OpenCode runtime. "
+                "API_GATEWAY_INTERNAL_URL and API_GATEWAY_SHARED_TOKEN must be set."
+            ),
+        )
+    if not A2A_ALLOWED_TARGETS:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "This agent has no outbound A2A targets configured. "
+                "Update AgentPolicy.spec.a2a.allowedTargets to grant access."
+            ),
+        )
+    if (target_namespace, target_agent) not in A2A_ALLOWED_TARGETS:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"Agent '{SERVICE_NAME}' in namespace '{SERVICE_NAMESPACE}' is not allowed to invoke "
+                f"agent '{target_agent}' in namespace '{target_namespace}'."
+            ),
+        )
+    requested_timeout = request.a2a_timeout_seconds
+    if requested_timeout is not None and float(requested_timeout) > A2A_MAX_TIMEOUT_SECONDS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Requested A2A timeout {requested_timeout} exceeds policy limit of "
+                f"{A2A_MAX_TIMEOUT_SECONDS} seconds."
+            ),
+        )
+
+
+def build_outbound_a2a_thread_id(logical_thread_id: str, target_agent: str, target_namespace: str) -> str:
+    """Build a stable target thread identifier for outbound A2A calls."""
+    seed = f"{SERVICE_NAMESPACE}:{SERVICE_NAME}:{target_namespace}:{target_agent}:{logical_thread_id}"
+    digest = hashlib.sha256(seed.encode("utf-8")).hexdigest()[:20]
+    thread_id = f"a2a-{target_namespace}-{target_agent}-{digest}"
+    return thread_id[:MAX_THREAD_ID_CHARS]
+
+
+def build_outbound_a2a_team_context(
+    request: InvokeRequest,
+    *,
+    target_agent: str,
+    target_namespace: str,
+    target_thread_id: str,
+    logical_thread_id: str,
+) -> dict[str, Any] | None:
+    """Build a minimal collaboration context for a delegated peer call."""
+    base_context = dict(request.team_context or {})
+    base_context["delegation"] = {
+        "caller": {"name": SERVICE_NAME, "namespace": SERVICE_NAMESPACE, "threadId": logical_thread_id},
+        "target": {"name": target_agent, "namespace": target_namespace, "threadId": target_thread_id},
+        "transport": "a2a-jsonrpc",
+    }
+    if request.caller_agent_name and request.caller_agent_namespace:
+        base_context["upstreamCaller"] = {
+            "name": request.caller_agent_name,
+            "namespace": request.caller_agent_namespace,
+            "threadId": request.parent_thread_id,
+            "requestId": request.caller_request_id,
+        }
+    return base_context or None
+
+
+def build_gateway_a2a_jsonrpc_payload(payload: dict[str, Any], request_id: str) -> dict[str, Any]:
+    kubesynth_invoke: dict[str, Any] = {}
+    thread_id = str(payload.get("thread_id") or "").strip()
+    if thread_id:
+        kubesynth_invoke["threadId"] = thread_id
+
+    for source_key, target_key in (
+        ("system", "system"),
+        ("model", "model"),
+        ("caller_agent_name", "callerAgentName"),
+        ("caller_agent_namespace", "callerAgentNamespace"),
+        ("parent_thread_id", "parentThreadId"),
+        ("caller_request_id", "callerRequestId"),
+    ):
+        value = str(payload.get(source_key) or "").strip()
+        if value:
+            kubesynth_invoke[target_key] = value
+
+    team_context = payload.get("team_context")
+    if isinstance(team_context, dict) and team_context:
+        kubesynth_invoke["teamContext"] = team_context
+
+    params: dict[str, Any] = {
+        "message": {
+            "messageId": request_id,
+            "role": "ROLE_USER",
+            "parts": [{"text": str(payload.get("prompt") or ""), "mediaType": "text/plain"}],
+        }
+    }
+    if kubesynth_invoke:
+        params["metadata"] = {"kubesynthInvoke": kubesynth_invoke}
+
+    return {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "method": "SendMessage",
+        "params": params,
+    }
+
+
+def extract_text_from_a2a_parts(parts: Any) -> str:
+    if not isinstance(parts, list):
+        return ""
+
+    chunks: list[str] = []
+    for raw_part in parts:
+        if not isinstance(raw_part, dict):
+            continue
+        text = raw_part.get("text")
+        if isinstance(text, str) and text.strip():
+            chunks.append(text)
+            continue
+        if "data" in raw_part:
+            try:
+                rendered = json.dumps(raw_part.get("data"), ensure_ascii=False, default=str)
+            except TypeError:
+                rendered = str(raw_part.get("data"))
+            if rendered.strip():
+                chunks.append(rendered)
+    return "\n\n".join(chunk for chunk in chunks if chunk.strip()).strip()
+
+
+def extract_response_text_from_a2a_task(task: dict[str, Any]) -> str:
+    artifacts = task.get("artifacts")
+    if isinstance(artifacts, list):
+        for artifact in artifacts:
+            if not isinstance(artifact, dict):
+                continue
+            text = extract_text_from_a2a_parts(artifact.get("parts"))
+            if text:
+                return text
+
+    status = task.get("status")
+    if isinstance(status, dict):
+        message = status.get("message")
+        if isinstance(message, dict):
+            text = extract_text_from_a2a_parts(message.get("parts"))
+            if text:
+                return text
+
+    history = task.get("history")
+    if isinstance(history, list):
+        for message in reversed(history):
+            if not isinstance(message, dict):
+                continue
+            role = str(message.get("role") or "").strip().upper()
+            if role not in {"ROLE_AGENT", "AGENT"}:
+                continue
+            text = extract_text_from_a2a_parts(message.get("parts"))
+            if text:
+                return text
+
+    return ""
+
+
+def invoke_status_from_a2a_task(task: dict[str, Any]) -> str:
+    metadata = task.get("metadata")
+    if isinstance(metadata, dict):
+        explicit_status = str(metadata.get("status") or "").strip()
+        if explicit_status:
+            return explicit_status
+
+    state = str(((task.get("status") if isinstance(task.get("status"), dict) else {}) or {}).get("state") or "").strip()
+    return {
+        "TASK_STATE_COMPLETED": "completed",
+        "TASK_STATE_FAILED": "failed",
+        "TASK_STATE_CANCELED": "failed",
+        "TASK_STATE_REJECTED": "blocked",
+        "TASK_STATE_AUTH_REQUIRED": "approval_pending",
+        "TASK_STATE_INPUT_REQUIRED": "blocked",
+        "TASK_STATE_WORKING": "partial",
+        "TASK_STATE_SUBMITTED": "partial",
+    }.get(state, "completed")
+
+
+def flatten_gateway_a2a_task_response(response_payload: dict[str, Any], request_id: str) -> dict[str, Any]:
+    error = response_payload.get("error")
+    if isinstance(error, dict):
+        message = str(error.get("message") or "A2A request failed").strip() or "A2A request failed"
+        raise RuntimeError(message)
+
+    result = response_payload.get("result")
+    if not isinstance(result, dict):
+        raise RuntimeError("Outbound A2A target returned an invalid JSON-RPC result")
+
+    message = result.get("message")
+    if isinstance(message, dict):
+        return {
+            "response": extract_text_from_a2a_parts(message.get("parts")),
+            "model": "",
+            "status": "completed",
+            "warnings": [],
+            "artifacts": [],
+            "tool_calls": [],
+            "metadata": {},
+            "thread_id": request_id,
+        }
+
+    task = result.get("task")
+    if not isinstance(task, dict):
+        raise RuntimeError("Outbound A2A target did not return a task or message result")
+
+    task_metadata = task.get("metadata")
+    task_metadata = task_metadata if isinstance(task_metadata, dict) else {}
+    nested_metadata = task_metadata.get("metadata")
+    flattened_metadata = dict(nested_metadata) if isinstance(nested_metadata, dict) else {}
+    task_id = str(task.get("id") or "").strip()
+    context_id = str(task.get("contextId") or "").strip()
+    if task_id:
+        flattened_metadata.setdefault("a2aTaskId", task_id)
+    if context_id:
+        flattened_metadata.setdefault("a2aContextId", context_id)
+
+    return {
+        "response": extract_response_text_from_a2a_task(task),
+        "model": str(task_metadata.get("model") or ""),
+        "status": invoke_status_from_a2a_task(task),
+        "approval_name": task_metadata.get("approvalName"),
+        "retry_after_seconds": task_metadata.get("retryAfterSeconds"),
+        "warnings": list(task_metadata.get("warnings") or []),
+        "artifacts": list(task.get("artifacts") or []),
+        "tool_calls": list(task_metadata.get("toolCalls") or []),
+        "continuity": task_metadata.get("continuity") if isinstance(task_metadata.get("continuity"), dict) else None,
+        "metadata": flattened_metadata,
+        "a2a": task_metadata.get("a2a") if isinstance(task_metadata.get("a2a"), dict) else None,
+        "thread_id": str(task_metadata.get("threadId") or request_id or "").strip(),
+    }
+
+
+def invoke_gateway_a2a_target(
+    target_agent: str,
+    target_namespace: str,
+    payload: dict[str, Any],
+    request_id: str,
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    """Invoke another agent through the internal API gateway."""
+    jsonrpc_payload = build_gateway_a2a_jsonrpc_payload(payload, request_id)
+    with httpx.Client(
+        timeout=timeout_seconds,
+        transport=httpx.HTTPTransport(retries=2),
+        trust_env=False,
+    ) as client:
+        response = client.post(
+            f"{API_GATEWAY_INTERNAL_URL}/a2a/{target_agent}",
+            params={"namespace": target_namespace},
+            json=jsonrpc_payload,
+            headers={
+                "Authorization": f"Bearer {API_GATEWAY_SHARED_TOKEN}",
+                "A2A-Version": "1.0",
+                "Accept": "application/json",
+                "x-request-id": request_id,
+            },
+        )
+        response.raise_for_status()
+        try:
+            return flatten_gateway_a2a_task_response(response.json(), request_id)
+        except ValueError as exc:
+            raise RuntimeError("Outbound A2A target returned invalid JSON") from exc
+
+
+def invoke_outbound_a2a_request(
+    request: InvokeRequest,
+    *,
+    logical_thread_id: str,
+    selected_model: str,
+) -> InvokeResponse:
+    """Invoke an allowed peer agent through the internal API gateway."""
+    validate_outbound_a2a_request(request)
+    target_agent = str(request.a2a_target_agent or "").strip()
+    target_namespace = str(request.a2a_target_namespace or "").strip()
+    timeout_seconds = float(request.a2a_timeout_seconds or A2A_MAX_TIMEOUT_SECONDS)
+    request_id = str(request.caller_request_id or logical_thread_id or uuid.uuid4()).strip() or str(uuid.uuid4())
+    target_thread_id = build_outbound_a2a_thread_id(logical_thread_id, target_agent, target_namespace)
+    warnings = build_invoke_warnings(request)
+    payload: dict[str, Any] = {
+        "prompt": request.prompt,
+        "thread_id": target_thread_id,
+        "caller_agent_name": SERVICE_NAME,
+        "caller_agent_namespace": SERVICE_NAMESPACE,
+        "parent_thread_id": logical_thread_id,
+        "caller_request_id": request_id,
+        "team_context": build_outbound_a2a_team_context(
+            request,
+            target_agent=target_agent,
+            target_namespace=target_namespace,
+            target_thread_id=target_thread_id,
+            logical_thread_id=logical_thread_id,
+        ),
+    }
+    if request.system:
+        payload["system"] = request.system
+    if request.model:
+        payload["model"] = request.model
+
+    try:
+        data = invoke_gateway_a2a_target(target_agent, target_namespace, payload, request_id, timeout_seconds)
+    except httpx.HTTPStatusError as exc:
+        detail = redact_secrets(exc.response.text.strip() or f"HTTP {exc.response.status_code}")
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                f"Outbound A2A invocation failed for {target_namespace}/{target_agent}: "
+                f"HTTP {exc.response.status_code} {detail}"
+            ),
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=redact_secrets(f"Outbound A2A invocation failed for {target_namespace}/{target_agent}: {exc}"),
+        ) from exc
+
+    metadata: dict[str, Any] = {}
+    raw_metadata = data.get("metadata")
+    if isinstance(raw_metadata, dict):
+        metadata.update(raw_metadata)
+    metadata["a2aTarget"] = {
+        "agent": target_agent,
+        "namespace": target_namespace,
+        "threadId": target_thread_id,
+        "requestId": request_id,
+        "transport": "a2a-jsonrpc",
+        "timeoutSeconds": timeout_seconds,
+    }
+    return InvokeResponse(
+        thread_id=logical_thread_id,
+        response=str(data.get("response") or ""),
+        model=str(data.get("model") or selected_model),
+        status=str(data.get("status") or "completed"),
+        approval_name=data.get("approval_name"),
+        retry_after_seconds=data.get("retry_after_seconds"),
+        a2a=a2a_response_metadata(request),
+        warnings=dedupe_items(warnings + [str(item) for item in (data.get("warnings") or []) if str(item).strip()]),
+        artifacts=list(data.get("artifacts") or []),
+        tool_calls=list(data.get("tool_calls") or []),
+        continuity=data.get("continuity") if isinstance(data.get("continuity"), dict) else None,
+        metadata=metadata or None,
+    )
 
 
 def build_invoke_warnings(request: InvokeRequest) -> list[str]:
@@ -197,22 +576,177 @@ def _capture_pre_compaction_state(
     return state
 
 
+def _find_assistant_payload_for_parent(
+    messages: list[dict[str, Any]],
+    parent_message_id: str,
+) -> dict[str, Any] | None:
+    """Return the latest meaningful assistant payload that replies to *parent_message_id*."""
+    return get_latest_assistant_payload(messages, parent_message_id=parent_message_id)
+
+
+def _emit_live_snapshot_updates(
+    turn: int,
+    payload: dict[str, Any],
+    last_snapshots: dict[str, str],
+    emit: Any,
+) -> None:
+    """Emit snapshot-style text and reasoning updates for the current assistant payload."""
+    parts = payload.get("parts")
+    if not isinstance(parts, list):
+        return
+
+    filtered_parts = [item for item in parts if isinstance(item, dict)]
+    text = extract_text_from_parts(filtered_parts)
+    if text and text != last_snapshots.get("text", ""):
+        emit("response.delta", {"turn": turn + 1, "delta": text, "source": "opencode"})
+        last_snapshots["text"] = text
+
+    reasoning = extract_reasoning_from_parts(filtered_parts)
+    if reasoning and reasoning != last_snapshots.get("reasoning", ""):
+        emit("response.reasoning", {"turn": turn + 1, "reasoning": reasoning})
+        last_snapshots["reasoning"] = reasoning
+
+
+def _send_prompt_with_live_updates_and_recovery(
+    *,
+    session_id: str,
+    prompt: str,
+    model: str,
+    system_prompt: str | None,
+    prompt_format: dict[str, Any] | None,
+    working_directory: str,
+    agent: str,
+    logical_thread_id: str,
+    allow_session_recovery: bool,
+    turn: int,
+    emit: Any,
+) -> tuple[str, dict[str, Any]]:
+    """Send a streamed prompt via OpenCode's async endpoint and poll live message snapshots."""
+    recovered = False
+    max_idle_retries = 3
+    idle_retry_count = 0
+
+    def _do_send(sid: str) -> str:
+        return send_prompt_async(
+            session_id=sid,
+            prompt=prompt,
+            model=model,
+            system_prompt=system_prompt,
+            prompt_format=prompt_format,
+            working_directory=working_directory,
+            agent=agent,
+        )
+
+    try:
+        user_message_id = _do_send(session_id)
+        logger.info(
+            "prompt_async sent: session=%s user_msg=%s turn=%d",
+            session_id, user_message_id, turn + 1,
+        )
+    except HTTPException as exc:
+        if exc.status_code == 404 and allow_session_recovery:
+            session_id = create_remote_session(working_directory)
+            SESSION_REGISTRY.set(logical_thread_id, session_id)
+            user_message_id = _do_send(session_id)
+            logger.info(
+                "prompt_async sent (recovered session): session=%s user_msg=%s turn=%d",
+                session_id, user_message_id, turn + 1,
+            )
+            recovered = True
+        else:
+            raise
+
+    deadline = time.monotonic() + LIVE_UPDATE_TIMEOUT_SECONDS
+    last_snapshots = {"text": "", "reasoning": ""}
+    latest_payload: dict[str, Any] | None = None
+    # Grace period: after sending prompt_async, wait a short time before
+    # treating "idle + no assistant" as a dropped prompt.  The sidecar needs
+    # a moment to transition from idle → busy → generating.
+    idle_grace_until = time.monotonic() + 5.0
+
+    while True:
+        messages = get_session_messages(session_id)
+        latest_payload = _find_assistant_payload_for_parent(messages, user_message_id)
+        if latest_payload is not None:
+            _emit_live_snapshot_updates(turn, latest_payload, last_snapshots, emit)
+            completion = detect_completion_status(latest_payload)
+            completed = completion in (
+                "completed",
+                "context_overflow",
+                "error",
+            )
+            session_status = get_session_status(session_id)
+            if str(session_status.get("type", "idle")) == "idle" and completed:
+                payload = dict(latest_payload)
+                payload["_session_recovered"] = recovered
+                payload["_live_streamed"] = bool(last_snapshots["text"] or last_snapshots["reasoning"])
+                return session_id, payload
+        else:
+            # No assistant reply yet.  If the session went idle, the sidecar
+            # silently dropped our prompt (e.g. after a pod restart, transient
+            # LLM error, or race condition).  Re-send the prompt.
+            if time.monotonic() > idle_grace_until:
+                session_status = get_session_status(session_id)
+                if str(session_status.get("type", "idle")) == "idle":
+                    if idle_retry_count < max_idle_retries:
+                        idle_retry_count += 1
+                        logger.warning(
+                            "Session %s went idle without assistant reply for msg %s — "
+                            "re-sending prompt (retry %d/%d)",
+                            session_id, user_message_id, idle_retry_count, max_idle_retries,
+                        )
+                        try:
+                            user_message_id = _do_send(session_id)
+                            logger.info(
+                                "prompt_async re-sent: session=%s user_msg=%s retry=%d",
+                                session_id, user_message_id, idle_retry_count,
+                            )
+                        except Exception:
+                            logger.warning(
+                                "Failed to re-send prompt_async to %s (retry %d)",
+                                session_id, idle_retry_count, exc_info=True,
+                            )
+                        idle_grace_until = time.monotonic() + 5.0
+                        latest_payload = None
+                        last_snapshots = {"text": "", "reasoning": ""}
+
+        if time.monotonic() >= deadline:
+            if latest_payload is not None:
+                payload = dict(latest_payload)
+                payload["_session_recovered"] = recovered
+                payload["_live_streamed"] = bool(last_snapshots["text"] or last_snapshots["reasoning"])
+                return session_id, payload
+            raise HTTPException(status_code=504, detail="Timed out waiting for OpenCode response")
+
+        time.sleep(LIVE_UPDATE_POLL_SECONDS)
+
+
 def invoke_opencode(request: InvokeRequest, stream_callback: StreamCallback = None) -> InvokeResponse:
     """Execute the autonomous multi-turn invocation loop."""
-    ensure_server_running()
     validate_inbound_a2a_request(request)
+    logical_thread_id = request.thread_id or str(uuid.uuid4())
 
-    if request.require_approval:
+    approval_required = request.require_approval or bool(
+        request.a2a_target_agent and request.a2a_target_namespace and A2A_REQUIRE_HITL
+    )
+
+    if approval_required:
+        approval_action = request.approval_action
+        if not approval_action and request.a2a_target_agent and request.a2a_target_namespace:
+            approval_action = (
+                f"Invoke agent {request.a2a_target_agent} in namespace {request.a2a_target_namespace} "
+                f"from OpenCode agent '{SERVICE_NAME}'"
+            )
         try:
             approval = hitl_gate(
-                action_description=request.approval_action or f"Invoke OpenCode agent '{SERVICE_NAME}'",
-                request_id=request.thread_id or str(uuid.uuid4()),
+                action_description=approval_action or f"Invoke OpenCode agent '{SERVICE_NAME}'",
+                request_id=logical_thread_id,
             )
         except PermissionError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
         if approval.get("decision") == "pending":
             return InvokeResponse(
-                thread_id=request.thread_id or str(uuid.uuid4()),
+                thread_id=logical_thread_id,
                 response="",
                 model=request.model or DEFAULT_MODEL,
                 status="approval_pending",
@@ -221,9 +755,17 @@ def invoke_opencode(request: InvokeRequest, stream_callback: StreamCallback = No
                 warnings=build_invoke_warnings(request),
             )
 
+    if request.a2a_target_agent and request.a2a_target_namespace:
+        return invoke_outbound_a2a_request(
+            request,
+            logical_thread_id=logical_thread_id,
+            selected_model=request.model or DEFAULT_MODEL,
+        )
+
+    ensure_server_running()
+
     working_directory = resolve_working_directory(request.working_directory)
     selected_model = request.model or DEFAULT_MODEL
-    logical_thread_id = request.thread_id or str(uuid.uuid4())
     created_new_session = False
     if request.no_session:
         session_id = create_remote_session(working_directory)
@@ -341,18 +883,34 @@ def invoke_opencode(request: InvokeRequest, stream_callback: StreamCallback = No
         _emit("response.turn_started", {"turn": turn + 1, "max_turns": effective_max_turns, "agent": current_agent})
         use_system = system_prompt if turn == 0 else None
         try:
-            session_id, payload = _send_prompt_with_session_recovery(
-                session_id=session_id,
-                prompt=current_prompt,
-                model=selected_model,
-                system_prompt=use_system,
-                prompt_format=prompt_format if (turn == 0 or _resend_format) else None,
-                working_directory=working_directory,
-                agent=current_agent,
-                logical_thread_id=logical_thread_id,
-                allow_session_recovery=(not request.no_session),
-            )
+            if stream_callback is not None:
+                session_id, payload = _send_prompt_with_live_updates_and_recovery(
+                    session_id=session_id,
+                    prompt=current_prompt,
+                    model=selected_model,
+                    system_prompt=use_system,
+                    prompt_format=prompt_format if (turn == 0 or _resend_format) else None,
+                    working_directory=working_directory,
+                    agent=current_agent,
+                    logical_thread_id=logical_thread_id,
+                    allow_session_recovery=(not request.no_session),
+                    turn=turn,
+                    emit=_emit,
+                )
+            else:
+                session_id, payload = _send_prompt_with_session_recovery(
+                    session_id=session_id,
+                    prompt=current_prompt,
+                    model=selected_model,
+                    system_prompt=use_system,
+                    prompt_format=prompt_format if (turn == 0 or _resend_format) else None,
+                    working_directory=working_directory,
+                    agent=current_agent,
+                    logical_thread_id=logical_thread_id,
+                    allow_session_recovery=(not request.no_session),
+                )
             recovered = bool(payload.pop("_session_recovered", False)) if isinstance(payload, dict) else False
+            live_streamed = bool(payload.pop("_live_streamed", False)) if isinstance(payload, dict) else False
             session_recovered = session_recovered or recovered
         except httpx.HTTPError as exc:
             is_permanent = (
@@ -398,15 +956,16 @@ def invoke_opencode(request: InvokeRequest, stream_callback: StreamCallback = No
                 "context_budget_status": current_budget_status,
             },
         )
-        if turn_text:
+        if turn_text and not live_streamed:
             _emit("response.delta", {"turn": turn + 1, "delta": turn_text, "source": "opencode"})
 
         # Emit reasoning/thinking content if present
         parts = payload.get("parts")
         if isinstance(parts, list):
-            reasoning_text = extract_reasoning_from_parts(parts)
-            if reasoning_text:
-                _emit("response.reasoning", {"turn": turn + 1, "reasoning": reasoning_text})
+            if not live_streamed:
+                reasoning_text = extract_reasoning_from_parts(parts)
+                if reasoning_text:
+                    _emit("response.reasoning", {"turn": turn + 1, "reasoning": reasoning_text})
 
             # Emit structured tool call and patch events
             for part in parts:
@@ -515,6 +1074,8 @@ def invoke_opencode(request: InvokeRequest, stream_callback: StreamCallback = No
 
         if completion == "error":
             error_type = classify_error_type(payload)
+            retryable_error = is_error_retryable(payload)
+            error_message = truncate_text(extract_error_message(payload), 240)
             if error_type == "context_overflow" and _can_compact:
                 compaction_attempts += 1
                 last_compaction_turn = turn
@@ -560,6 +1121,12 @@ def invoke_opencode(request: InvokeRequest, stream_callback: StreamCallback = No
                 continue
             if error_type == "auth":
                 all_warnings.append(f"Turn {turn + 1}: authentication error, cannot retry.")
+                break
+            if retryable_error is False:
+                warning = f"Turn {turn + 1}: non-retryable {error_type or 'error'}"
+                if error_message:
+                    warning = f"{warning}: {error_message}"
+                all_warnings.append(warning)
                 break
             if retries_used < max_retries:
                 retries_used += 1
@@ -613,6 +1180,10 @@ def invoke_opencode(request: InvokeRequest, stream_callback: StreamCallback = No
     collected_artifacts: list[dict[str, Any]] = []
     collected_todos: list[dict[str, Any]] = []
     authoritative_payload = dict(last_payload)
+    current_message_id = ""
+    last_payload_info = last_payload.get("info") if isinstance(last_payload.get("info"), dict) else None
+    if isinstance(last_payload_info, dict):
+        current_message_id = str(last_payload_info.get("id") or "").strip()
     try:
         if detect_completion_status(last_payload) not in ("completed",):
             final_status = wait_for_session_idle(session_id)
@@ -620,6 +1191,11 @@ def invoke_opencode(request: InvokeRequest, stream_callback: StreamCallback = No
                 abort_session(session_id)
                 all_warnings.append(f"Session {session_id} remained {final_status.get('type', 'busy')}, aborted.")
                 wait_for_session_idle(session_id, timeout_seconds=5.0)
+
+        if current_message_id:
+            exact_message = get_session_message(session_id, current_message_id)
+            if exact_message is not None:
+                authoritative_payload = exact_message
 
         messages = get_session_messages(session_id)
         collected_tool_calls = extract_tool_calls_from_messages(messages)
@@ -629,9 +1205,14 @@ def invoke_opencode(request: InvokeRequest, stream_callback: StreamCallback = No
             all_warnings.append(
                 f"Artifact collection limited to {ARTIFACT_COLLECTION_MAX_FILES} files; some may have been omitted."
             )
-        latest_assistant = get_latest_assistant_payload(messages)
-        if latest_assistant is not None:
-            authoritative_payload = latest_assistant
+        authoritative_info = authoritative_payload.get("info") if isinstance(authoritative_payload.get("info"), dict) else None
+        authoritative_parent_id = ""
+        if isinstance(authoritative_info, dict):
+            authoritative_parent_id = str(authoritative_info.get("parentID") or "").strip()
+        if detect_completion_status(authoritative_payload) not in ("completed",) or not extract_response_text(authoritative_payload).strip():
+            latest_assistant = get_latest_assistant_payload(messages, parent_message_id=authoritative_parent_id or None)
+            if latest_assistant is not None:
+                authoritative_payload = latest_assistant
 
         residual_errors = detect_task_errors(messages)
         for err in residual_errors[:5]:
@@ -639,7 +1220,14 @@ def invoke_opencode(request: InvokeRequest, stream_callback: StreamCallback = No
     except Exception as exc:
         logger.warning("Failed to collect session history for %s: %s", session_id, exc)
 
-    response_text = extract_response_text(authoritative_payload).strip() or "(no output)"
+    response_text = extract_response_text(authoritative_payload).strip()
+    if not response_text and collected_tool_calls:
+        response_text = build_tool_only_response(collected_tool_calls)
+    if not response_text:
+        response_text = "(no output)"
+    # Defense-in-depth: redact any leaked secrets from the response text and warnings
+    response_text = redact_secrets(response_text)
+    all_warnings = [redact_secrets(w) for w in all_warnings]
     final_status_str = detect_completion_status(authoritative_payload)
     response_metadata = _build_response_metadata(authoritative_payload)
     if response_metadata is None:

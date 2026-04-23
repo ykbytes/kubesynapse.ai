@@ -1,9 +1,3 @@
-agentRuntime:
-  image:
-    repository: localhost/kubesynthai/kubesynth-agent-runtime
-    tag: dev
-    pullPolicy: IfNotPresent
-
 operator:
   image:
     repository: localhost/kubesynthai/kubesynth-operator
@@ -14,23 +8,23 @@ operator:
     tag: dev
     pullPolicy: IfNotPresent
 
-gooseRuntime:
-  image:
-    repository: localhost/kubesynthai/kubesynth-goose-runtime
-    tag: dev
-    pullPolicy: IfNotPresent
-
-codexRuntime:
-  image:
-    repository: localhost/kubesynthai/kubesynth-codex-runtime
-    tag: dev
-    pullPolicy: IfNotPresent
-
 opencodeRuntime:
   image:
     repository: localhost/kubesynthai/kubesynth-opencode-runtime
     tag: dev6
     pullPolicy: IfNotPresent
+  limits:
+    maxPromptChars: 256000
+    maxSystemPromptChars: 64000
+    maxTeamContextChars: 32000
+    modelContextLimit: 256000
+    modelOutputLimit: 16384
+  autonomy:
+    sessionInitOnCreate: false
+    maxRetries: 3
+    compactionTokenThreshold: 0.7
+    planThresholdChars: 4096
+    structuredOutputRetryCount: 3
 
 apiGateway:
   image:

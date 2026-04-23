@@ -22,18 +22,18 @@ jobs:
       - name: Install linters
         run: pip install ruff mypy pydantic sqlalchemy types-PyYAML types-croniter
       - name: Ruff check
-        run: ruff check operator/ agent-runtime/ api-gateway/ goose-runtime/
+        run: ruff check operator/ api-gateway/ opencode-runtime/
       - name: Ruff format check
-        run: ruff format --check operator/ agent-runtime/ api-gateway/ goose-runtime/
+        run: ruff format --check operator/ api-gateway/ opencode-runtime/
       - name: Mypy operator
         run: cd operator && mypy --config-file ../pyproject.toml . --ignore-missing-imports || true
-      - name: Mypy agent-runtime
-        run: cd agent-runtime && mypy --config-file ../pyproject.toml . --ignore-missing-imports || true
       - name: Mypy api-gateway
         run: cd api-gateway && mypy --config-file ../pyproject.toml . --ignore-missing-imports || true
+      - name: Mypy opencode-runtime
+        run: cd opencode-runtime && mypy --config-file ../pyproject.toml . --ignore-missing-imports || true
       - name: SHA-1 ban check
         run: |
-          if grep -rn 'hashlib\.sha1' operator/ agent-runtime/ api-gateway/ --include='*.py'; then
+          if grep -rn 'hashlib\.sha1' operator/ api-gateway/ opencode-runtime/ --include='*.py'; then
             echo "ERROR: hashlib.sha1 usage found. Use sha256 instead."
             exit 1
           fi
@@ -49,9 +49,8 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -r operator/requirements.txt
-          pip install -r agent-runtime/requirements.txt
-          pip install -r goose-runtime/requirements.txt
           pip install -r api-gateway/requirements.txt
+          pip install -r opencode-runtime/requirements.txt
           pip install pytest
       - name: Run Operator Tests
         run: |
@@ -60,19 +59,12 @@ jobs:
           else
             echo "No operator tests found"
           fi
-      - name: Run Agent Runtime Tests
+      - name: Run OpenCode Runtime Tests
         run: |
-          if [ -d agent-runtime/tests ]; then
-            cd agent-runtime && python -m pytest tests/ -v
+          if [ -d opencode-runtime/tests ]; then
+            cd opencode-runtime && python -m pytest tests/ -v
           else
-            echo "No agent-runtime tests found"
-          fi
-      - name: Run Goose Runtime Tests
-        run: |
-          if [ -d goose-runtime/tests ]; then
-            cd goose-runtime && python -m pytest tests/ -v
-          else
-            echo "No goose-runtime tests found"
+            echo "No opencode-runtime tests found"
           fi
       - name: Run API Gateway Tests
         run: |
@@ -118,15 +110,10 @@ jobs:
           podman build --format docker -t ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynth-operator:${{ env.VERSION }} ./operator
           podman push ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynth-operator:${{ env.VERSION }}
 
-      - name: Build & Push Agent Runtime
+      - name: Build & Push OpenCode Runtime
         run: |
-          podman build --format docker -t ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynth-agent-runtime:${{ env.VERSION }} ./agent-runtime
-          podman push ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynth-agent-runtime:${{ env.VERSION }}
-
-      - name: Build & Push Goose Runtime
-        run: |
-          podman build --format docker -t ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynth-goose-runtime:${{ env.VERSION }} ./goose-runtime
-          podman push ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynth-goose-runtime:${{ env.VERSION }}
+          podman build --format docker -t ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynth-opencode-runtime:${{ env.VERSION }} ./opencode-runtime
+          podman push ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynth-opencode-runtime:${{ env.VERSION }}
 
       - name: Build & Push API Gateway
         run: |
@@ -145,10 +132,8 @@ jobs:
             --set operator.image.tag=${{ env.VERSION }} \
             --set operator.workerImage.repository=${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynth-operator \
             --set operator.workerImage.tag=${{ env.VERSION }} \
-            --set agentRuntime.image.repository=${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynth-agent-runtime \
-            --set agentRuntime.image.tag=${{ env.VERSION }} \
-            --set gooseRuntime.image.repository=${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynth-goose-runtime \
-            --set gooseRuntime.image.tag=${{ env.VERSION }} \
+            --set opencodeRuntime.image.repository=${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynth-opencode-runtime \
+            --set opencodeRuntime.image.tag=${{ env.VERSION }} \
             --set apiGateway.image.repository=${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynth-api-gateway \
             --set apiGateway.image.tag=${{ env.VERSION }} \
             --set webUi.image.repository=${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynth-web-ui \

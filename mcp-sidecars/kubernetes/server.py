@@ -115,7 +115,9 @@ def kubectl_get(resource_type: str, namespace: str = "default", name: str = "") 
 
     Restricted to safe resource types only — secrets and RBAC objects are blocked.
     """
-    import subprocess
+    from kubernetes import client, config, dynamic
+    from kubernetes.client import api_client
+
     rt_err = _validate_resource_type(resource_type)
     if rt_err:
         return f"BLOCKED: {rt_err}"
@@ -123,15 +125,69 @@ def kubectl_get(resource_type: str, namespace: str = "default", name: str = "") 
     if ns_err:
         return f"BLOCKED: {ns_err}"
     try:
-        cmd = ["kubectl", "get", resource_type, "-n", namespace, "-o", "wide"]
+        try:
+            config.load_incluster_config()
+        except config.ConfigException:
+            config.load_kube_config()
+
+        api = api_client.ApiClient()
+        dyn = dynamic.DynamicClient(api)
+
+        # Map common plural names to API groups
+        _RESOURCE_API_MAP = {
+            "pods": ("", "v1"), "services": ("", "v1"), "nodes": ("", "v1"),
+            "events": ("", "v1"), "configmaps": ("", "v1"), "endpoints": ("", "v1"),
+            "persistentvolumeclaims": ("", "v1"), "namespaces": ("", "v1"),
+            "resourcequotas": ("", "v1"), "limitranges": ("", "v1"),
+            "deployments": ("apps", "v1"), "statefulsets": ("apps", "v1"),
+            "daemonsets": ("apps", "v1"), "replicasets": ("apps", "v1"),
+            "jobs": ("batch", "v1"), "cronjobs": ("batch", "v1"),
+            "ingresses": ("networking.k8s.io", "v1"),
+            "networkpolicies": ("networking.k8s.io", "v1"),
+            "horizontalpodautoscalers": ("autoscaling", "v2"),
+        }
+
+        rt = resource_type.lower().strip()
+        group, version = _RESOURCE_API_MAP.get(rt, ("", "v1"))
+        api_version = f"{group}/{version}" if group else version
+
+        resource = None
+        for r in dyn.resources.search(api_version=api_version):
+            if r.name.lower() == rt:
+                resource = r
+                break
+        if resource is None:
+            return f"ERROR: Unknown resource type '{resource_type}'"
+
+        cluster_scoped = rt in ("nodes", "namespaces")
         if name:
-            cmd.insert(3, name)
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
-        output = result.stdout + result.stderr
-        return output[:MAX_OUTPUT_CHARS] if output.strip() else "(no output)"
+            if cluster_scoped:
+                obj = resource.get(name=name)
+            else:
+                obj = resource.get(name=name, namespace=namespace)
+            lines = [f"NAME: {obj.metadata.name}"]
+            if hasattr(obj, 'status') and hasattr(obj.status, 'phase'):
+                lines.append(f"STATUS: {obj.status.phase}")
+            return "\n".join(lines)
+        else:
+            if cluster_scoped:
+                items = resource.get()
+            else:
+                items = resource.get(namespace=namespace)
+            lines = []
+            for item in items.items:
+                meta = item.metadata
+                parts = [meta.name]
+                if hasattr(item, 'status'):
+                    if hasattr(item.status, 'phase'):
+                        parts.append(item.status.phase)
+                    elif hasattr(item.status, 'readyReplicas'):
+                        parts.append(f"ready={item.status.readyReplicas or 0}")
+                lines.append("\t".join(str(p) for p in parts))
+            return "\n".join(lines) if lines else "(no resources found)"
     except Exception as e:
         log.exception("kubectl_get failed")
-        return "ERROR: kubectl get failed"
+        return f"ERROR: kubectl get failed: {e}"
 
 
 @server.tool()
@@ -140,7 +196,9 @@ def kubectl_describe(resource_type: str, name: str, namespace: str = "default") 
 
     Restricted to safe resource types only — secrets and RBAC objects are blocked.
     """
-    import subprocess
+    from kubernetes import client, config, dynamic
+    from kubernetes.client import api_client
+
     rt_err = _validate_resource_type(resource_type)
     if rt_err:
         return f"BLOCKED: {rt_err}"
@@ -148,15 +206,69 @@ def kubectl_describe(resource_type: str, name: str, namespace: str = "default") 
     if ns_err:
         return f"BLOCKED: {ns_err}"
     try:
-        result = subprocess.run(
-            ["kubectl", "describe", resource_type, name, "-n", namespace],
-            capture_output=True, text=True, timeout=15,
-        )
-        output = result.stdout + result.stderr
-        return output[:MAX_OUTPUT_CHARS] if output.strip() else "(no output)"
+        try:
+            config.load_incluster_config()
+        except config.ConfigException:
+            config.load_kube_config()
+
+        api = api_client.ApiClient()
+        dyn = dynamic.DynamicClient(api)
+
+        _RESOURCE_API_MAP = {
+            "pods": ("", "v1"), "services": ("", "v1"), "nodes": ("", "v1"),
+            "events": ("", "v1"), "configmaps": ("", "v1"), "endpoints": ("", "v1"),
+            "persistentvolumeclaims": ("", "v1"), "namespaces": ("", "v1"),
+            "deployments": ("apps", "v1"), "statefulsets": ("apps", "v1"),
+            "daemonsets": ("apps", "v1"), "replicasets": ("apps", "v1"),
+            "jobs": ("batch", "v1"), "cronjobs": ("batch", "v1"),
+            "ingresses": ("networking.k8s.io", "v1"),
+            "networkpolicies": ("networking.k8s.io", "v1"),
+            "horizontalpodautoscalers": ("autoscaling", "v2"),
+        }
+
+        rt = resource_type.lower().strip()
+        group, version = _RESOURCE_API_MAP.get(rt, ("", "v1"))
+        api_version = f"{group}/{version}" if group else version
+
+        resource = None
+        for r in dyn.resources.search(api_version=api_version):
+            if r.name.lower() == rt:
+                resource = r
+                break
+        if resource is None:
+            return f"ERROR: Unknown resource type '{resource_type}'"
+
+        cluster_scoped = rt in ("nodes", "namespaces")
+        if cluster_scoped:
+            obj = resource.get(name=name)
+        else:
+            obj = resource.get(name=name, namespace=namespace)
+
+        # Format a human-readable description
+        lines = [f"Name: {obj.metadata.name}"]
+        if obj.metadata.namespace:
+            lines.append(f"Namespace: {obj.metadata.namespace}")
+        if obj.metadata.labels:
+            lines.append(f"Labels: {dict(obj.metadata.labels)}")
+        if obj.metadata.annotations:
+            ann = dict(obj.metadata.annotations)
+            lines.append(f"Annotations: {ann}")
+        if hasattr(obj, 'status'):
+            import json
+            status_dict = obj.status.to_dict() if hasattr(obj.status, 'to_dict') else str(obj.status)
+            status_str = json.dumps(status_dict, indent=2, default=str) if isinstance(status_dict, dict) else str(status_dict)
+            lines.append(f"Status:\n{status_str}")
+        if hasattr(obj, 'spec'):
+            import json
+            spec_dict = obj.spec.to_dict() if hasattr(obj.spec, 'to_dict') else str(obj.spec)
+            spec_str = json.dumps(spec_dict, indent=2, default=str) if isinstance(spec_dict, dict) else str(spec_dict)
+            lines.append(f"Spec:\n{spec_str}")
+
+        output = "\n".join(lines)
+        return output[:MAX_OUTPUT_CHARS] if output else "(no output)"
     except Exception as e:
         log.exception("kubectl_describe failed")
-        return "ERROR: kubectl describe failed"
+        return f"ERROR: kubectl describe failed: {e}"
 
 
 if __name__ == "__main__":

@@ -23,8 +23,7 @@ Each chart exposes the main `AIAgent` fields through `values.yaml`, including:
 - `agent.allowedNamespaces`
 
 Current defaults in these starter charts target the `opencode` runtime, which
-matches the current repo's bundled specialist agent setup. Override
-`agent.runtime` if you want to target `langgraph`, `goose`, or `codex` instead.
+matches the current repo's bundled specialist agent setup.
 
 ## Install examples
 

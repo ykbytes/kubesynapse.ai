@@ -11,11 +11,11 @@ def run(cmd):
 
 
 print("FLAKE8:")
-run(f"{PYTHON} -m flake8 api-gateway agent-runtime operator --max-line-length=120")
+run(f"{PYTHON} -m flake8 api-gateway opencode-runtime operator --max-line-length=120")
 
 print("\nMYPY:")
 run(
     f"{PYTHON} -m mypy "
-    "api-gateway/main.py agent-runtime/agent_logic.py agent-runtime/guardrails.py "
-    "agent-runtime/hitl.py operator/main.py operator/worker.py --ignore-missing-imports --explicit-package-bases"
+    "api-gateway/main.py opencode-runtime/main.py opencode-runtime/hitl.py "
+    "operator/main.py operator/worker.py --ignore-missing-imports --explicit-package-bases"
 )

@@ -11,6 +11,7 @@ import os
 import shutil
 import signal
 import subprocess
+import sys
 import threading
 import uuid
 from collections.abc import AsyncIterator
@@ -19,8 +20,67 @@ from typing import Any
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
+
+_RUNTIME_DIR = Path(__file__).resolve().parent
+_RUNTIME_LOCAL_MODULES = (
+    "analysis",
+    "config",
+    "invoke",
+    "memory",
+    "models",
+    "opencode_client",
+    "prompts",
+    "sanitize_secrets",
+    "session",
+    "skills",
+    "supervisor",
+    "tracing",
+    "utils",
+    "workspace",
+)
+_RUNTIME_PRESERVE_MODULES = {"analysis", "invoke", "sanitize_secrets"}
+
+
+def _prefer_local_runtime_modules() -> tuple[list[str], dict[str, Any]]:
+    """Ensure sibling runtime modules win over same-named modules from other services."""
+    previous_path = list(sys.path)
+    runtime_dir_str = str(_RUNTIME_DIR)
+    while runtime_dir_str in sys.path:
+        sys.path.remove(runtime_dir_str)
+    sys.path.insert(0, runtime_dir_str)
+
+    previous_modules: dict[str, Any] = {}
+    for module_name in _RUNTIME_LOCAL_MODULES:
+        existing = sys.modules.get(module_name)
+        previous_modules[module_name] = existing
+        module_file = getattr(existing, "__file__", None)
+        if not module_file:
+            continue
+        try:
+            if Path(module_file).resolve().parent == _RUNTIME_DIR:
+                continue
+        except OSError:
+            pass
+        sys.modules.pop(module_name, None)
+
+    return previous_path, previous_modules
+
+
+def _restore_runtime_modules(previous_path: list[str], previous_modules: dict[str, Any]) -> None:
+    """Restore the caller's import state after local runtime modules are loaded."""
+    sys.path[:] = previous_path
+    for module_name, previous in previous_modules.items():
+        if previous is not None:
+            sys.modules[module_name] = previous
+            continue
+        if module_name in _RUNTIME_PRESERVE_MODULES:
+            continue
+        sys.modules.pop(module_name, None)
+
+
+_RUNTIME_PREVIOUS_PATH, _RUNTIME_PREVIOUS_MODULES = _prefer_local_runtime_modules()
 
 # ---------------------------------------------------------------------------
 # Re-exports for backward compatibility (tests import from main.py)
@@ -103,6 +163,7 @@ from skills import (  # noqa: F401 — re-exported
     build_mcp_config,
     build_shared_mcp_config,
     configure_git_credentials,
+    load_opencode_config_overrides,
     ensure_runtime_directories,
     load_opencode_sidecars,
     materialize_opencode_config_files,
@@ -117,6 +178,7 @@ from opencode_client import (  # noqa: F401 — re-exported
     ensure_remote_session,
     ensure_server_running,
     get_session_diff,
+    get_session_message,
     get_session_messages,
     get_session_status,
     get_session_todos,
@@ -126,6 +188,7 @@ from opencode_client import (  # noqa: F401 — re-exported
     reply_to_question,
     runtime_http_client,
     send_prompt,
+    send_prompt_async,
     summarize_session,
     wait_for_session_idle,
 )
@@ -137,6 +200,7 @@ from analysis import (  # noqa: F401 — re-exported
     _extract_structured_output,
     _iter_artifact_paths,
     _select_agent_simple,
+    build_tool_only_response,
     build_compaction_hints,
     build_json_output_schema,
     build_prompt_format,
@@ -200,6 +264,13 @@ _path_is_within = path_is_within
 # Backward compat: mutable globals need to be visible from this module
 import supervisor as _supervisor_mod  # noqa: E402
 
+RUNTIME_IMPORTED_MODULES = {
+    module_name: sys.modules[module_name]
+    for module_name in _RUNTIME_LOCAL_MODULES
+    if module_name in sys.modules
+}
+_restore_runtime_modules(_RUNTIME_PREVIOUS_PATH, _RUNTIME_PREVIOUS_MODULES)
+
 
 def resolve_download_path(raw_value: str) -> Path:
     """Validate and resolve an artifact download path."""
@@ -230,10 +301,11 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     ensure_runtime_directories()
     configure_git_credentials()
     validate_runtime_startup()
-    config_files = materialize_opencode_config_files()
     skill_files, skill_meta, skill_warnings = materialize_skill_files()
     sidecars = load_opencode_sidecars()
-    generated_config, generated_warnings = build_generated_config(sidecars)
+    config_overrides = load_opencode_config_overrides()
+    generated_config, generated_warnings = build_generated_config(sidecars, config_overrides=config_overrides)
+    config_files = materialize_opencode_config_files(generated_config)
 
     env = build_server_env(generated_config)
     process = _start_opencode_process(env)
@@ -471,7 +543,7 @@ def get_todo_state(thread_id: str | None = None, request: Request = None) -> JSO
     if request is not None:
         client_etag = request.headers.get("if-none-match", "").strip(' "')
         if client_etag and client_etag == etag:
-            return JSONResponse(status_code=304, content=None, headers={"ETag": f'"{etag}"'})
+            return Response(status_code=304, headers={"ETag": f'"{etag}"'})
     return JSONResponse(content=body, headers={"ETag": f'"{etag}"'})
 
 

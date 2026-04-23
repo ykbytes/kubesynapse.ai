@@ -1,5 +1,7 @@
 """Tests for OpenCode workflow integration fixes in worker.py."""
 
+import importlib.util
+import json
 import sys
 import types
 import unittest
@@ -18,6 +20,7 @@ _k8s_rest.ApiException = type("ApiException", (Exception,), {"status": None})
 _k8s_config.ConfigException = type("ConfigException", (Exception,), {})
 _k8s.client = _k8s_client
 _k8s.config = _k8s_config
+_k8s_client.ApiException = _k8s_rest.ApiException
 _k8s_client.rest = _k8s_rest
 for _name, _mod in [
     ("kubernetes", _k8s),
@@ -26,6 +29,35 @@ for _name, _mod in [
     ("kubernetes.client.rest", _k8s_rest),
 ]:
     sys.modules.setdefault(_name, _mod)
+
+sys.modules["kubernetes"].client = sys.modules["kubernetes.client"]
+sys.modules["kubernetes"].config = sys.modules["kubernetes.config"]
+sys.modules["kubernetes.client"].rest = sys.modules["kubernetes.client.rest"]
+sys.modules["kubernetes.client"].ApiException = sys.modules["kubernetes.client.rest"].ApiException
+
+CONFIG_PATH = Path(__file__).resolve().parents[1] / "config.py"
+CONFIG_SPEC = importlib.util.spec_from_file_location("operator_config_under_test", CONFIG_PATH)
+if CONFIG_SPEC is None or CONFIG_SPEC.loader is None:
+    raise RuntimeError("Failed to load operator config module for tests")
+operator_config = importlib.util.module_from_spec(CONFIG_SPEC)
+previous_config = sys.modules.get("config")
+sys.modules[CONFIG_SPEC.name] = operator_config
+sys.modules["config"] = operator_config
+CONFIG_SPEC.loader.exec_module(operator_config)
+
+UTILS_PATH = Path(__file__).resolve().parents[1] / "utils.py"
+UTILS_SPEC = importlib.util.spec_from_file_location("operator_utils_under_test", UTILS_PATH)
+if UTILS_SPEC is None or UTILS_SPEC.loader is None:
+    raise RuntimeError("Failed to load operator utils module for tests")
+operator_utils = importlib.util.module_from_spec(UTILS_SPEC)
+sys.modules[UTILS_SPEC.name] = operator_utils
+try:
+    UTILS_SPEC.loader.exec_module(operator_utils)
+finally:
+    if previous_config is not None:
+        sys.modules["config"] = previous_config
+    else:
+        sys.modules.pop("config", None)
 
 
 class PreviousOutputForDependenciesTests(unittest.TestCase):
@@ -151,6 +183,47 @@ class PreviousOutputForDependenciesTests(unittest.TestCase):
             {"step": {"response": "ok", "output": {"json": None}, "tool_calls": []}},
         )
         self.assertNotIn("Tool Calls", result)
+
+
+class AcquireWorkerLeaseTests(unittest.TestCase):
+    def test_acquire_worker_lease_takes_over_orphaned_holder_job(self) -> None:
+        import worker
+
+        conflict = worker.kubernetes.client.ApiException()
+        conflict.status = 409
+        missing_job = worker.kubernetes.client.ApiException()
+        missing_job.status = 404
+
+        coord_api = MagicMock()
+        coord_api.create_namespaced_lease.side_effect = conflict
+        coord_api.read_namespaced_lease.return_value = types.SimpleNamespace(
+            spec=types.SimpleNamespace(
+                holder_identity="stale-worker-job",
+                acquire_time=None,
+                renew_time=None,
+                lease_duration_seconds=600,
+            )
+        )
+        batch_api = MagicMock()
+        batch_api.read_namespaced_job.side_effect = missing_job
+
+        simple_obj = lambda **kwargs: types.SimpleNamespace(**kwargs)
+
+        with (
+            patch.object(worker.kubernetes.client, "CoordinationV1Api", return_value=coord_api, create=True),
+            patch.object(worker.kubernetes.client, "BatchV1Api", return_value=batch_api, create=True),
+            patch.object(worker.kubernetes.client, "V1Lease", side_effect=simple_obj, create=True),
+            patch.object(worker.kubernetes.client, "V1ObjectMeta", side_effect=simple_obj, create=True),
+            patch.object(worker.kubernetes.client, "V1LeaseSpec", side_effect=simple_obj, create=True),
+        ):
+            acquired = worker.acquire_worker_lease("workflow", "default", "factory", 7)
+
+        self.assertTrue(acquired)
+        batch_api.read_namespaced_job.assert_called_once_with(
+            name="stale-worker-job",
+            namespace=worker.OPERATOR_NAMESPACE,
+        )
+        coord_api.replace_namespaced_lease.assert_called_once()
 
 
 class ExecuteWorkflowStepOpenCodeTests(unittest.TestCase):
@@ -295,6 +368,72 @@ class ExecuteWorkflowStepOpenCodeTests(unittest.TestCase):
         self.assertEqual(sr["output"]["json"], {"score": 95, "verdict": "pass"})
         self.assertEqual(sr["output"]["type"], "json")
 
+    @patch("worker.cancel_agent_session")
+    @patch("worker.wait_for_agent_runtime_ready")
+    @patch("worker.append_journal_event")
+    @patch("worker.invoke_agent_runtime_stream")
+    def test_contract_failure_preserves_partial_artifacts_and_tool_calls(
+        self,
+        mock_invoke: MagicMock,
+        _mock_journal: MagicMock,
+        _mock_ready: MagicMock,
+        _mock_cancel: MagicMock,
+    ) -> None:
+        """Failed JSON contracts should still surface the files and tool activity that happened."""
+        mock_invoke.return_value = {
+            "response": "Saved /workspace/questions_part2.json with partial output, but returned prose instead of raw JSON.",
+            "thread_id": "t-contract-fail",
+            "model": "gpt-4o",
+            "status": "completed",
+            "artifacts": [
+                {"path": "/workspace/questions_part2.json", "tool": "write", "status": "completed"},
+            ],
+            "tool_calls": [
+                {"tool": "write", "status": "completed", "input": {"path": "/workspace/questions_part2.json"}},
+            ],
+            "warnings": ["Writer emitted prose instead of raw JSON."],
+            "metadata": None,
+        }
+        execute = self._patch_env_and_import()
+        step = {
+            "name": "generate-questions-part2",
+            "agentRef": "opencode-agent",
+            "prompt": "Return the generated questions as JSON.",
+            "execution": {
+                "requiredJsonPaths": [
+                    "questions.0.id",
+                    "questions.0.correct_answer",
+                    "questions.0.explanation",
+                    "questions.0.source_urls.0",
+                ],
+            },
+        }
+
+        outcome = execute(
+            step,
+            workflow_input="generate the second batch of questions",
+            step_results={},
+            run_id="run-contract-fail",
+            pending_approval=None,
+            worker_job={"name": "job-contract", "namespace": "ns"},
+        )
+
+        self.assertEqual(outcome["state"], "failed")
+        step_result = outcome["stepResult"]
+        self.assertIn("questions_part2.json", step_result["response"])
+        self.assertEqual(step_result["output"]["type"], "text")
+        self.assertEqual(step_result["artifacts"][0]["path"], "/workspace/questions_part2.json")
+        self.assertEqual(step_result["tool_calls"][0]["tool"], "write")
+        self.assertIn("raw JSON", step_result["warnings"][0])
+
+        step_state = outcome["stepState"]
+        self.assertEqual(step_state["artifactCount"], 1)
+        self.assertEqual(step_state["toolCallCount"], 1)
+        self.assertIn("questions_part2.json", step_state["responsePreview"])
+        self.assertEqual(step_state["artifacts"][0]["path"], "/workspace/questions_part2.json")
+        self.assertEqual(step_state["toolCalls"][0]["tool"], "write")
+        self.assertIn("questions_part2.json", step_state["toolCalls"][0]["inputPreview"])
+
     @patch("worker.wait_for_agent_runtime_ready")
     @patch("worker.append_journal_event")
     @patch("worker.invoke_agent_runtime_stream")
@@ -334,6 +473,344 @@ class ExecuteWorkflowStepOpenCodeTests(unittest.TestCase):
         self.assertIn("Artifact collection limited", event_data["warnings"])
         self.assertIn("artifactCount", event_data)
         self.assertIn("toolCallCount", event_data)
+
+    @patch("worker.cancel_agent_session")
+    @patch("worker.wait_for_agent_runtime_ready")
+    @patch("worker.append_journal_event")
+    @patch("worker.invoke_agent_runtime_stream")
+    def test_required_json_retry_uses_contract_repair_prompt(
+        self,
+        mock_invoke: MagicMock,
+        _mock_journal: MagicMock,
+        _mock_ready: MagicMock,
+        mock_cancel: MagicMock,
+    ) -> None:
+        """JSON-constrained retries should repair missing fields instead of switching to prose."""
+        captured_payloads: list[dict[str, Any]] = []
+
+        first_response = json.dumps(
+            {
+                "factory_mode": "lightweight-draft",
+                "expanded_spec": {"objective": "Ship dashboard", "requirements": ["req-1"]},
+                "intent_summary": "status dashboard",
+                "demand_model": {"users": ["engineering managers"]},
+                "architecture_decision": {"pattern": "single-service"},
+                "delivery_plan": {"phases": ["draft"]},
+                "resources_to_create": [{"kind": "Deployment", "name": "dashboard"}],
+                "manifests": {"combined_yaml": "apiVersion: apps/v1\nkind: Deployment\n"},
+                "supporting_deliverables": {},
+                "execution_plan": {"execution_mode": "design-only", "runnable": False},
+                "deploy_and_verify": {"success_checks": ["render manifests"]},
+                "review_status": {"final_verdict": "draft-only"},
+                "approval_required": {"items": []},
+                "resource_names": ["dashboard"],
+            }
+        )
+        second_response = json.dumps(
+            {
+                "factory_mode": "lightweight-draft",
+                "expanded_spec": {"objective": "Ship dashboard", "requirements": ["req-1"]},
+                "intent_summary": "status dashboard",
+                "demand_model": {"users": ["engineering managers"]},
+                "architecture_decision": {"pattern": "single-service"},
+                "delivery_plan": {"phases": ["draft"]},
+                "resources_to_create": [{"kind": "Deployment", "name": "dashboard"}],
+                "manifests": {"combined_yaml": "apiVersion: apps/v1\nkind: Deployment\n"},
+                "supporting_deliverables": {
+                    "operator_readme_markdown": "# Operator Notes",
+                    "verification_runbook_markdown": "# Verification",
+                },
+                "execution_plan": {"execution_mode": "design-only", "runnable": False},
+                "deploy_and_verify": {"verification_checks": ["render manifests"]},
+                "review_status": {"final_verdict": "draft-only"},
+                "approval_required": {"reason": "No deployment in lightweight-draft mode."},
+                "resource_names": ["dashboard"],
+            }
+        )
+
+        def _side_effect(*args: Any, **kwargs: Any) -> dict[str, Any]:
+            payload = dict(args[2])
+            captured_payloads.append(payload)
+            response = first_response if len(captured_payloads) == 1 else second_response
+            return {
+                "response": response,
+                "thread_id": "t-json-retry",
+                "model": "gpt-4o",
+                "status": "completed",
+            }
+
+        mock_invoke.side_effect = _side_effect
+
+        execute = self._patch_env_and_import()
+        step = {
+            "name": "draft-blueprint",
+            "agentRef": "opencode-agent",
+            "prompt": "Return the draft blueprint as JSON.",
+            "execution": {
+                "maxAttempts": 2,
+                "backoffSeconds": 0,
+                "requiredJsonPaths": [
+                    "factory_mode",
+                    "expanded_spec.objective",
+                    "expanded_spec.requirements",
+                    "supporting_deliverables.operator_readme_markdown",
+                    "supporting_deliverables.verification_runbook_markdown",
+                    "deploy_and_verify.verification_checks",
+                    "approval_required.reason",
+                ],
+            },
+        }
+        outcome = execute(
+            step,
+            workflow_input="make a dashboard",
+            step_results={},
+            run_id="run-json-retry",
+            pending_approval=None,
+            worker_job={"name": "job-json", "namespace": "ns"},
+        )
+
+        self.assertEqual(outcome["state"], "completed")
+        self.assertEqual(len(captured_payloads), 2)
+        retry_prompt = captured_payloads[1]["prompt"]
+        self.assertIn("The previous attempt failed JSON validation", retry_prompt)
+        self.assertIn("Missing required JSON paths", retry_prompt)
+        self.assertIn("supporting_deliverables.operator_readme_markdown", retry_prompt)
+        self.assertIn("approval_required.reason", retry_prompt)
+        self.assertIn("Return ONLY a single valid JSON object", retry_prompt)
+        self.assertNotIn("List files/changes from the previous attempt", retry_prompt)
+        mock_cancel.assert_called_once()
+
+    @patch("worker.cancel_agent_session")
+    @patch("worker.wait_for_agent_runtime_ready")
+    @patch("worker.append_journal_event")
+    @patch("worker.invoke_agent_runtime_stream")
+    def test_timeout_retry_uses_transport_recovery_prompt(
+        self,
+        mock_invoke: MagicMock,
+        _mock_journal: MagicMock,
+        _mock_ready: MagicMock,
+        mock_cancel: MagicMock,
+    ) -> None:
+        captured_payloads: list[dict[str, Any]] = []
+
+        def _side_effect(*args: Any, **kwargs: Any) -> dict[str, Any]:
+            payload = dict(args[2])
+            captured_payloads.append(payload)
+            if len(captured_payloads) == 1:
+                raise TimeoutError("agent runtime timed out")
+            return {
+                "response": "Recovered successfully.",
+                "thread_id": "t-timeout-retry",
+                "model": "gpt-4o",
+                "status": "completed",
+            }
+
+        mock_invoke.side_effect = _side_effect
+
+        execute = self._patch_env_and_import()
+        step = {
+            "name": "implement",
+            "agentRef": "opencode-agent",
+            "prompt": "Implement the requested change.",
+            "execution": {"maxAttempts": 2, "backoffSeconds": 0},
+        }
+        outcome = execute(
+            step,
+            workflow_input="add retries",
+            step_results={},
+            run_id="run-timeout-retry",
+            pending_approval=None,
+            worker_job={"name": "job-timeout", "namespace": "ns"},
+        )
+
+        self.assertEqual(outcome["state"], "completed")
+        self.assertEqual(len(captured_payloads), 2)
+        retry_prompt = captured_payloads[1]["prompt"]
+        self.assertIn("timeout or transport failure", retry_prompt)
+        self.assertIn("Inspect the current workspace and session state", retry_prompt)
+        self.assertNotIn("failed JSON validation", retry_prompt)
+        self.assertIsNone(outcome["stepState"]["error"])
+        self.assertIsNone(outcome["stepState"]["failureClass"])
+        mock_cancel.assert_called_once()
+
+    @patch("worker.cancel_agent_session")
+    @patch("worker.wait_for_agent_runtime_ready")
+    @patch("worker.append_journal_event")
+    @patch("worker.invoke_agent_runtime_stream")
+    def test_runtime_status_retry_uses_runtime_recovery_prompt(
+        self,
+        mock_invoke: MagicMock,
+        _mock_journal: MagicMock,
+        _mock_ready: MagicMock,
+        mock_cancel: MagicMock,
+    ) -> None:
+        captured_payloads: list[dict[str, Any]] = []
+
+        def _side_effect(*args: Any, **kwargs: Any) -> dict[str, Any]:
+            payload = dict(args[2])
+            captured_payloads.append(payload)
+            if len(captured_payloads) == 1:
+                return {
+                    "response": "Context overflow.",
+                    "thread_id": "t-runtime-retry",
+                    "model": "gpt-4o",
+                    "status": "error",
+                }
+            return {
+                "response": "Recovered after runtime failure.",
+                "thread_id": "t-runtime-retry",
+                "model": "gpt-4o",
+                "status": "completed",
+            }
+
+        mock_invoke.side_effect = _side_effect
+
+        execute = self._patch_env_and_import()
+        step = {
+            "name": "implement",
+            "agentRef": "opencode-agent",
+            "prompt": "Implement the requested change.",
+            "execution": {"maxAttempts": 2, "backoffSeconds": 0},
+        }
+        outcome = execute(
+            step,
+            workflow_input="fix the build",
+            step_results={},
+            run_id="run-runtime-retry",
+            pending_approval=None,
+            worker_job={"name": "job-runtime", "namespace": "ns"},
+        )
+
+        self.assertEqual(outcome["state"], "completed")
+        self.assertEqual(len(captured_payloads), 2)
+        retry_prompt = captured_payloads[1]["prompt"]
+        self.assertIn("non-completed status or runtime error", retry_prompt)
+        self.assertIn("Diagnose the specific runtime or status failure", retry_prompt)
+        self.assertNotIn("timeout or transport failure", retry_prompt)
+        mock_cancel.assert_called_once()
+
+    @patch("worker.cancel_agent_session")
+    @patch("worker.wait_for_agent_runtime_ready")
+    @patch("worker.append_journal_event")
+    @patch("worker.invoke_agent_runtime")
+    @patch("worker.invoke_agent_runtime_stream")
+    def test_verification_retry_uses_verification_recovery_prompt(
+        self,
+        mock_invoke_stream: MagicMock,
+        mock_invoke_verify: MagicMock,
+        _mock_journal: MagicMock,
+        _mock_ready: MagicMock,
+        mock_cancel: MagicMock,
+    ) -> None:
+        captured_payloads: list[dict[str, Any]] = []
+
+        def _stream_side_effect(*args: Any, **kwargs: Any) -> dict[str, Any]:
+            payload = dict(args[2])
+            captured_payloads.append(payload)
+            return {
+                "response": "Implementation completed.",
+                "thread_id": "t-verify-retry",
+                "model": "gpt-4o",
+                "status": "completed",
+            }
+
+        verify_call_count = 0
+
+        def _verify_side_effect(*args: Any, **kwargs: Any) -> dict[str, Any]:
+            nonlocal verify_call_count
+            verify_call_count += 1
+            if verify_call_count == 1:
+                return {"response": "FAIL\nMissing test evidence.", "thread_id": "verify-1", "status": "completed"}
+            return {"response": "PASS\nAll verification criteria satisfied.", "thread_id": "verify-2", "status": "completed"}
+
+        mock_invoke_stream.side_effect = _stream_side_effect
+        mock_invoke_verify.side_effect = _verify_side_effect
+
+        execute = self._patch_env_and_import()
+        step = {
+            "name": "implement",
+            "agentRef": "opencode-agent",
+            "prompt": "Implement the requested change.",
+            "verify": "Check that the tests pass and the change is complete.",
+            "execution": {"maxAttempts": 2, "backoffSeconds": 0},
+        }
+        outcome = execute(
+            step,
+            workflow_input="finish the feature",
+            step_results={},
+            run_id="run-verify-retry",
+            pending_approval=None,
+            worker_job={"name": "job-verify", "namespace": "ns"},
+        )
+
+        self.assertEqual(outcome["state"], "completed")
+        self.assertEqual(len(captured_payloads), 2)
+        retry_prompt = captured_payloads[1]["prompt"]
+        self.assertIn("failed verification", retry_prompt)
+        self.assertIn("Revise only what is needed to satisfy the failed criteria", retry_prompt)
+        self.assertNotIn("failed JSON validation", retry_prompt)
+        mock_cancel.assert_called_once()
+
+
+class WorkflowStatusLifecycleTests(unittest.TestCase):
+    def test_patch_workflow_status_clears_failure_fields_on_completion(self) -> None:
+        import worker
+
+        with (
+            patch.object(worker, "patch_custom_status") as patch_status_mock,
+            patch.object(worker, "artifact_ref", return_value={"generation": 7}),
+            patch.object(worker, "journal_ref", return_value={"generation": 7}),
+            patch.object(worker, "now_iso", return_value="2026-04-09T12:00:00Z"),
+        ):
+            payload = worker.patch_workflow_status(
+                plural="agentworkflows",
+                phase="completed",
+                generation=7,
+                run_id="wf-run-default-kubesynth-factory-pipeline-7-new",
+                total_steps=2,
+                current_step="",
+                started_at="2026-04-09T11:55:00Z",
+                step_states={"draft": {"status": "completed"}},
+                worker_job={"name": "job-7", "namespace": "ai-agent-sandbox"},
+                pending_approval=None,
+                extra_summary={"completedAt": "2026-04-09T12:00:00Z"},
+            )
+
+        self.assertEqual(payload["summary"]["completedAt"], "2026-04-09T12:00:00Z")
+        self.assertIsNone(payload["summary"]["error"])
+        self.assertIsNone(payload["summary"]["failedAt"])
+        patch_status_mock.assert_called_once()
+
+    def test_patch_workflow_status_clears_completion_fields_on_failure(self) -> None:
+        import worker
+
+        with (
+            patch.object(worker, "patch_custom_status") as patch_status_mock,
+            patch.object(worker, "artifact_ref", return_value={"generation": 8}),
+            patch.object(worker, "journal_ref", return_value={"generation": 8}),
+            patch.object(worker, "now_iso", return_value="2026-04-09T12:05:00Z"),
+        ):
+            payload = worker.patch_workflow_status(
+                plural="agentworkflows",
+                phase="failed",
+                generation=8,
+                run_id="wf-run-default-kubesynth-factory-pipeline-8-new",
+                total_steps=2,
+                current_step="deploy",
+                started_at="2026-04-09T12:00:00Z",
+                step_states={"deploy": {"status": "failed"}},
+                worker_job={"name": "job-8", "namespace": "ai-agent-sandbox"},
+                pending_approval=None,
+                extra_summary={
+                    "failedAt": "2026-04-09T12:05:00Z",
+                    "error": "verification failed",
+                },
+            )
+
+        self.assertEqual(payload["summary"]["failedAt"], "2026-04-09T12:05:00Z")
+        self.assertEqual(payload["summary"]["error"], "verification failed")
+        self.assertIsNone(payload["summary"]["completedAt"])
+        patch_status_mock.assert_called_once()
 
 
 class ExecuteReviewStepTests(unittest.TestCase):
@@ -601,12 +1078,10 @@ class DetectIterationSignalsTests(unittest.TestCase):
 class InvokeAgentRuntimeTimeoutTests(unittest.TestCase):
     """Bug 7: each retry gets fresh timeout budget."""
 
-    @patch("utils.httpx.Client")
+    @patch.object(operator_utils.httpx, "Client")
     def test_creates_new_client_per_attempt(
         self, mock_client_cls: MagicMock
     ) -> None:
-        from utils import invoke_agent_runtime
-
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {"response": "ok"}
@@ -617,17 +1092,15 @@ class InvokeAgentRuntimeTimeoutTests(unittest.TestCase):
         mock_client.__exit__ = MagicMock(return_value=False)
         mock_client_cls.return_value = mock_client
 
-        invoke_agent_runtime("agent-1", "ns", {"prompt": "hi"}, timeout_seconds=120.0)
+        operator_utils.invoke_agent_runtime("agent-1", "ns", {"prompt": "hi"}, timeout_seconds=120.0)
 
         # Client should be constructed with the full timeout per request
         mock_client_cls.assert_called_once_with(timeout=120.0)
 
-    @patch("utils.httpx.Client")
+    @patch.object(operator_utils.httpx, "Client")
     def test_retries_on_500_with_fresh_client(
         self, mock_client_cls: MagicMock
     ) -> None:
-        from utils import invoke_agent_runtime
-
         # First two calls: 500. Third: 200.
         mock_500 = MagicMock()
         mock_500.status_code = 500
@@ -647,11 +1120,12 @@ class InvokeAgentRuntimeTimeoutTests(unittest.TestCase):
             def _post(*a: Any, **k: Any) -> MagicMock:
                 call_count[0] += 1
                 return mock_500 if call_count[0] <= 2 else mock_200
+
             client.post = _post
             return client
 
         mock_client_cls.side_effect = _make_client
-        result = invoke_agent_runtime("a", "ns", {"prompt": "x"}, timeout_seconds=60.0)
+        result = operator_utils.invoke_agent_runtime("a", "ns", {"prompt": "x"}, timeout_seconds=60.0)
         self.assertEqual(result, {"response": "ok"})
         # Should have created a new client for each of the 3 attempts
         self.assertEqual(mock_client_cls.call_count, 3)
@@ -820,39 +1294,118 @@ class LoadArtifactCorruptTests(unittest.TestCase):
             worker.ARTIFACT_PATH = original
 
 
+class ResumeWorkflowStateFromArtifactTests(unittest.TestCase):
+    def test_same_generation_retry_with_new_run_id_preserves_completed_work(self) -> None:
+        from worker import resume_workflow_state_from_artifact
+
+        artifact_matches_generation, step_results, step_states, pending_approval, started_at = (
+            resume_workflow_state_from_artifact(
+                status={
+                    "runId": "wf-run-new",
+                    "stepStates": {
+                        "draft-blueprint": {"status": "completed"},
+                        "deploy-bundle": {"status": "pending"},
+                    },
+                    "pendingApproval": None,
+                },
+                artifact={
+                    "generation": 5,
+                    "runId": "wf-run-old",
+                    "startedAt": "2026-04-06T20:00:00Z",
+                    "stepResults": {
+                        "draft-blueprint": {"status": "completed", "response": "done"},
+                    },
+                    "stepStates": {
+                        "draft-blueprint": {"status": "completed"},
+                        "deploy-bundle": {"status": "failed"},
+                    },
+                    "pendingApproval": {"stepName": "deploy-bundle"},
+                },
+                generation=5,
+                run_id="wf-run-new",
+            )
+        )
+
+        self.assertTrue(artifact_matches_generation)
+        self.assertEqual(step_results["draft-blueprint"]["status"], "completed")
+        self.assertEqual(step_states["deploy-bundle"]["status"], "pending")
+        self.assertEqual(pending_approval, {})
+        self.assertEqual(started_at, "2026-04-06T20:00:00Z")
+
+    def test_new_run_id_without_preserved_progress_starts_fresh(self) -> None:
+        from worker import resume_workflow_state_from_artifact
+
+        artifact_matches_generation, step_results, step_states, pending_approval, _started_at = (
+            resume_workflow_state_from_artifact(
+                status={
+                    "runId": "wf-run-new",
+                    "stepStates": {
+                        "draft-blueprint": {"status": "pending"},
+                    },
+                },
+                artifact={
+                    "generation": 5,
+                    "runId": "wf-run-old",
+                    "stepResults": {
+                        "draft-blueprint": {"status": "completed", "response": "done"},
+                    },
+                },
+                generation=5,
+                run_id="wf-run-new",
+            )
+        )
+
+        self.assertFalse(artifact_matches_generation)
+        self.assertEqual(step_results, {})
+        self.assertEqual(step_states, {})
+        self.assertEqual(pending_approval, {})
+
+
+class ResolveWorkflowRunIdForWorkerTests(unittest.TestCase):
+    def test_prefers_job_run_id_over_stale_status(self) -> None:
+        import worker
+
+        original = worker.WORKFLOW_RUN_ID
+        worker.WORKFLOW_RUN_ID = "wf-run-new"
+        try:
+            resolved = worker.resolve_workflow_run_id_for_worker(
+                status={"runId": "wf-run-old"},
+                artifact={"runId": "wf-run-older"},
+                generation=5,
+            )
+        finally:
+            worker.WORKFLOW_RUN_ID = original
+
+        self.assertEqual(resolved, "wf-run-new")
+
+
 class InvokeAgentRuntimeValidationTests(unittest.TestCase):
     """invoke_agent_runtime should reject invalid agent names and namespaces."""
 
     def test_rejects_invalid_agent_name(self) -> None:
-        from utils import invoke_agent_runtime
-
         with self.assertRaises(ValueError):
-            invoke_agent_runtime("agent name with spaces", "ns", {"prompt": "hi"})
+            operator_utils.invoke_agent_runtime("agent name with spaces", "ns", {"prompt": "hi"})
 
     def test_rejects_empty_namespace(self) -> None:
-        from utils import invoke_agent_runtime
-
         with self.assertRaises(ValueError):
-            invoke_agent_runtime("agent", "", {"prompt": "hi"})
+            operator_utils.invoke_agent_runtime("agent", "", {"prompt": "hi"})
 
 
 class ValidateWorkflowStepLimitTests(unittest.TestCase):
     """validate_workflow_graph should reject workflows exceeding step limit."""
 
     def test_rejects_too_many_steps(self) -> None:
-        from utils import validate_workflow_graph
-        import utils
-        original = utils.MAX_WORKFLOW_STEPS
-        utils.MAX_WORKFLOW_STEPS = 3
+        original = operator_utils.MAX_WORKFLOW_STEPS
+        operator_utils.MAX_WORKFLOW_STEPS = 3
         try:
             steps = [
                 {"name": f"step-{i}", "agentRef": "agent", "dependsOn": [f"step-{i-1}"] if i > 0 else []}
                 for i in range(5)
             ]
             with self.assertRaisesRegex(ValueError, "exceeding the limit"):
-                validate_workflow_graph(steps)
+                operator_utils.validate_workflow_graph(steps)
         finally:
-            utils.MAX_WORKFLOW_STEPS = original
+            operator_utils.MAX_WORKFLOW_STEPS = original
 
 
 class ReviewCriteriaActionableDetectionTests(unittest.TestCase):

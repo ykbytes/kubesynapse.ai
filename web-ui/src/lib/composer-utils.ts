@@ -6,6 +6,7 @@ import type {
   WorkflowStepState,
   AgentInfo,
   LoopConfig,
+  RuntimeKind,
 } from "@/types";
 
 /* ── Constants ── */
@@ -37,7 +38,7 @@ export interface AgentStepNodeData extends Record<string, unknown> {
   verify?: string | null;
   reviewCriteria?: string | null;
   stepState?: WorkflowStepState | null;
-  runtimeKind?: string | null;
+  runtimeKind?: RuntimeKind | null;
 }
 
 /* ── Composite type for all composer nodes ── */
@@ -270,13 +271,10 @@ export function hasCycle(
 
 /* ── Runtime kind → display helpers ── */
 
-export type RuntimeKindKey = "langgraph" | "goose" | "opencode" | "codex" | string;
+export type RuntimeKindKey = "opencode" | string;
 
 const RUNTIME_COLORS: Record<string, string> = {
-  langgraph: "border-l-violet-500",
-  goose: "border-l-amber-500",
   opencode: "border-l-sky-500",
-  codex: "border-l-emerald-500",
 };
 
 export function runtimeAccentClass(kind?: string | null): string {

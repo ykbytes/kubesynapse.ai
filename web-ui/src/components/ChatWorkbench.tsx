@@ -1,7 +1,9 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Activity,
   AlertTriangle,
   ArrowUp,
+  ArrowUpRight,
   Brain,
   Bot,
   CheckCircle2,
@@ -22,6 +24,7 @@ import {
   Pin,
   PanelRightClose,
   PanelRightOpen,
+  Plus,
   RotateCcw,
   Search,
   Square,
@@ -35,26 +38,28 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Textarea } from "@/components/ui/textarea";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { CopyButton } from "./CopyButton";
 import { EmptyState } from "./EmptyState";
 import { StatusBadge } from "./StatusBadge";
 import { ActivityTimeline } from "./ActivityTimeline";
 import { MessageToolbar } from "./MessageToolbar";
-import { ExecutionTimeline } from "./ExecutionTimeline";
 import { ChatSettingsDrawer } from "./ChatSettingsDrawer";
-import type { AgentDiscoveryPeer, InvocationSummary, RuntimeKind, SpecialistSubagentDraft, UiActivity, UiMessage } from "../types";
+import type { AgentDiscoveryPeer, FactoryMode, InvocationSummary, RuntimeKind, SpecialistSubagentDraft, UiActivity, UiMessage } from "../types";
 import type { UiTodo } from "../types";
 import { OperationLog } from "./OperationLog";
 import { FileExplorer } from "./FileExplorer";
 import type { AgentArtifactPreview, AgentFileListResult, ChatSessionSummary, MemoryRecordInfo } from "@/lib/api";
 import { fetchSessionDiff } from "@/lib/api";
+import { extractAgentCallsFromSummary, parseAgentInvokeCommand, sanitizeText, type AgentCallSummary } from "@/lib/agentCalls";
+import { factoryModeShortLabel, isFactoryAgentName } from "@/lib/factoryModes";
 import { usePlanDock } from "@/hooks/usePlanDock";
 import { useChat } from "@/contexts/ChatContext";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { useConnection } from "@/contexts/ConnectionContext";
 import { QuestionDock } from "./QuestionDock";
-import { FollowupDock } from "./FollowupDock";
 import { MarkdownRenderer } from "./MarkdownRenderer";
+import { extractMcpCapabilityIds, getCapabilitySignal } from "@/lib/agentSignals";
 
 interface ChatWorkbenchProps {
   agentName: string;
@@ -74,17 +79,14 @@ interface ChatWorkbenchProps {
   a2aTimeoutSeconds: string;
   specialistSubagents: SpecialistSubagentDraft[];
   specialistTeamConfigured: boolean;
-  subagentStrategy: "sequential" | "parallel";
   discoveryPeers: AgentDiscoveryPeer[];
   discoveryLoading: boolean;
   discoveryError: string;
-  gooseMaxTurns: string;
-  gooseWorkingDirectory: string;
-  gooseSystemPrompt: string;
   opencodeOutputFormat: string;
   opencodeAutonomous: boolean;
   opencodeMaxTurns: string;
   opencodeWorkingDirectory: string;
+  factoryMode: FactoryMode;
   summary: InvocationSummary | null;
   activeSessionId: string | null;
   sessionDirty: boolean;
@@ -99,6 +101,7 @@ interface ChatWorkbenchProps {
   emptyMessage: string;
   error: string;
   onDownloadArtifact: (path: string, filename?: string) => Promise<void>;
+  onDownloadArtifactZip: () => Promise<void>;
   onListArtifacts: () => Promise<AgentFileListResult>;
   onPreviewArtifact: (path: string) => Promise<AgentArtifactPreview>;
   onPromptChange: (value: string) => void;
@@ -107,22 +110,19 @@ interface ChatWorkbenchProps {
   onA2ATargetAgentChange: (value: string) => void;
   onA2ATargetNamespaceChange: (value: string) => void;
   onA2ATimeoutSecondsChange: (value: string) => void;
-  onSubagentStrategyChange: (value: "sequential" | "parallel") => void;
-  onAddSpecialistSubagent: () => void;
-  onUpdateSpecialistSubagent: (id: string, patch: Partial<SpecialistSubagentDraft>) => void;
-  onRemoveSpecialistSubagent: (id: string) => void;
-  onClearSpecialistTeam: () => void;
-  onGooseMaxTurnsChange: (value: string) => void;
-  onGooseWorkingDirectoryChange: (value: string) => void;
   onOpenCodeOutputFormatChange: (value: string) => void;
   onOpenCodeAutonomousChange: (value: boolean) => void;
   onOpenCodeMaxTurnsChange: (value: string) => void;
   onOpenCodeWorkingDirectoryChange: (value: string) => void;
+  onFactoryModeChange: (value: FactoryMode) => void;
   onSaveSession: () => void;
   canSubmit: boolean;
   onSubmit: () => void;
   onCancel: () => void;
 }
+
+const DRAWER_PANEL_CLASS = "absolute inset-y-3 right-3 z-10 flex flex-col overflow-hidden rounded-[1.4rem] border border-border/80 bg-background/96 shadow-2xl shadow-black/30 backdrop-blur-xl";
+const SURFACE_PANEL_CLASS = "rounded-[1.35rem] border border-border/70 bg-background/80 shadow-sm backdrop-blur-sm";
 
 /* ------------------------------------------------------------------ */
 /*  Message bubble — ChatGPT-style layout                             */
@@ -134,17 +134,26 @@ const MessageBubble = memo(function MessageBubble({
   onEditPrompt,
   onRegeneratePrompt,
   promptForRegenerate,
+  operationSummary,
+  liveActivity = [],
+  phase = "idle",
 }: {
   message: UiMessage;
   index: number;
   onEditPrompt?: (text: string) => void;
   onRegeneratePrompt?: (text?: string) => Promise<void>;
   promptForRegenerate?: string | null;
+  operationSummary?: InvocationSummary | null;
+  liveActivity?: UiActivity[];
+  phase?: "plan" | "build" | "idle";
 }) {
   const [thinkingOpen, setThinkingOpen] = useState(false);
   const isStreaming = message.status === "streaming";
   const isUser = message.role === "user";
   const isSystem = message.role === "system";
+  const streamingStatus = isStreaming ? describeStreamingStatus(message, operationSummary, liveActivity, phase) : "";
+  const showInlineActivity = liveActivity.length > 0 && (isStreaming || !operationSummary);
+  const agentCalls = useMemo(() => extractAgentCallsFromSummary(operationSummary ?? null), [operationSummary]);
 
   // ── User message: right-aligned solid bubble ──
   if (isUser) {
@@ -154,7 +163,7 @@ const MessageBubble = memo(function MessageBubble({
         style={{ animationDelay: `${Math.min(index * 30, 300)}ms`, animationFillMode: "backwards" }}
       >
         <div className="max-w-[75%]">
-          <div className="rounded-2xl rounded-br-md bg-primary px-4 py-2.5 text-primary-foreground shadow-sm">
+          <div className="rounded-[1.35rem] rounded-br-lg border border-primary/35 bg-primary px-4 py-3 text-primary-foreground shadow-sm shadow-primary/20">
             <div className="whitespace-pre-wrap break-words text-sm leading-relaxed">
               {message.content || ""}
             </div>
@@ -176,7 +185,7 @@ const MessageBubble = memo(function MessageBubble({
         className="flex justify-center animate-slide-up"
         style={{ animationDelay: `${Math.min(index * 30, 300)}ms`, animationFillMode: "backwards" }}
       >
-        <div className="flex items-center gap-2 rounded-full border border-amber-500/20 bg-amber-500/10 px-4 py-1.5 text-xs text-amber-400">
+        <div className="flex items-center gap-2 rounded-full border border-amber-500/25 bg-amber-500/10 px-4 py-2 text-[11px] text-amber-300 shadow-sm shadow-amber-950/20 backdrop-blur-sm">
           <Zap className="h-3 w-3" />
           <span>{message.content || "System message"}</span>
         </div>
@@ -193,12 +202,12 @@ const MessageBubble = memo(function MessageBubble({
       aria-live={isStreaming ? "polite" : undefined}
     >
       {/* Avatar */}
-      <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-primary/20 to-primary/5 border border-primary/15 mt-0.5">
+      <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-2xl border border-primary/20 bg-primary/10 shadow-sm shadow-primary/10">
         <Bot className="h-3.5 w-3.5 text-primary" />
       </div>
 
       {/* Content */}
-      <div className="min-w-0 flex-1">
+      <div className="min-w-0 flex-1 rounded-[1.35rem] border border-border/70 bg-background/75 px-4 py-3 shadow-sm backdrop-blur-sm">
         {/* Thinking section */}
         {message.reasoning && (
           <div className="mb-2">
@@ -209,33 +218,40 @@ const MessageBubble = memo(function MessageBubble({
             >
               <Brain className="h-3 w-3" aria-hidden="true" />
               {thinkingOpen ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-              <span>Thinking</span>
+              <span>Reasoning</span>
             </button>
             {thinkingOpen && (
-              <div className="mt-1.5 rounded-lg border border-border/50 bg-muted/40 px-3 py-2 text-xs text-muted-foreground italic whitespace-pre-wrap break-words leading-relaxed max-h-64 overflow-y-auto">
+              <div className="mt-1.5 max-h-64 overflow-y-auto rounded-[1rem] border border-border/60 bg-muted/30 px-3 py-2 text-xs italic leading-relaxed text-muted-foreground whitespace-pre-wrap break-words shadow-inner">
                 {message.reasoning}
               </div>
             )}
           </div>
         )}
 
+        {agentCalls.length > 0 ? <AgentCallBanner calls={agentCalls} isStreaming={isStreaming} /> : null}
+
         {/* Streaming placeholder */}
         {isStreaming && !message.content ? (
-          <div className="streaming-dots flex items-center gap-1.5 py-1 text-muted-foreground" aria-label="Thinking">
-            <span /><span /><span />
-            <span className="text-[11px] ml-1">Thinking...</span>
+          <div className="py-1.5" aria-label={streamingStatus}>
+            <StreamingIndicator label={streamingStatus} />
           </div>
         ) : (
-          <MarkdownRenderer content={message.content || ""} />
+          <>
+            <MarkdownRenderer content={message.content || ""} />
+            {isStreaming && (
+              <div className="mt-2">
+                <StreamingIndicator label={streamingStatus} compact />
+              </div>
+            )}
+          </>
         )}
 
+        {showInlineActivity ? <LiveActivityFeed activity={liveActivity} isStreaming={isStreaming} /> : null}
+
         {/* Execution timeline — replaces flat tool cards */}
-        {(message.toolCalls?.length || message.patches?.length) ? (
+        {!isStreaming && operationSummary ? (
           <div className="mt-2.5">
-            <ExecutionTimeline
-              toolCalls={message.toolCalls ?? []}
-              patches={message.patches}
-            />
+            <OperationLog summary={operationSummary} />
           </div>
         ) : null}
 
@@ -263,9 +279,25 @@ type StarterPrompt = {
 type DownloadableArtifact = {
   path: string;
   filename: string;
+  source: "artifact" | "result";
 };
 
-const DOWNLOADABLE_PATH_PATTERN = /(?:^|[\s\"'`(])((?:\/[A-Za-z0-9._\-/]+|[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)+)(?:\.pdf|\.md|\.txt|\.json|\.yaml|\.yml|\.csv|\.html|\.svg|\.png|\.jpg|\.jpeg|\.gif|\.doc|\.docx))(?=$|[\s\"'`),])/gi;
+type DownloadablePathSource = DownloadableArtifact["source"];
+
+type TeamRunSummary = {
+  status: "ready" | "running" | "complete" | "needs-review";
+  memberCount: number;
+  completedCount: number;
+  failedCount: number;
+  runningCount: number;
+  queuedCount: number;
+  resultFileCount: number;
+  sharedFileCount: number;
+  sharedSandboxSession: boolean;
+};
+
+const DOWNLOADABLE_FILE_RE = /\.(pdf|md|txt|json|yaml|yml|csv|html|svg|png|jpg|jpeg|gif|doc|docx)$/i;
+const FILE_OUTPUT_TOOL_NAMES = new Set(["write", "edit", "patch", "create_file", "apply_patch"]);
 
 function basename(path: string): string {
   return path.replace(/\\/g, "/").split("/").filter(Boolean).pop() || path;
@@ -276,6 +308,601 @@ function truncateText(value: string | null | undefined, maxChars = 120): string 
   if (!text) return "";
   if (text.length <= maxChars) return text;
   return `${text.slice(0, maxChars - 1).trimEnd()}…`;
+}
+
+function formatAgentIdentity(agentName: string, namespace: string | null): string {
+  return namespace && namespace !== "default" ? `${namespace}/${agentName}` : agentName;
+}
+
+function formatAgentPeerLabel(call: AgentCallSummary): string {
+  return formatAgentIdentity(call.agentName, call.namespace);
+}
+
+function agentCallIsRunning(status: string): boolean {
+  return ["running", "working", "in_progress", "approval_pending"].includes(status.trim().toLowerCase());
+}
+
+function agentCallIsError(status: string): boolean {
+  return ["error", "failed", "blocked", "denied"].includes(status.trim().toLowerCase());
+}
+
+function formatAgentCallStatus(status: string): string {
+  const normalized = status.trim().toLowerCase();
+  if (!normalized) return "completed";
+  return normalized.replace(/_/g, " ");
+}
+
+interface GroupedAgentCall {
+  label: string;
+  count: number;
+  worstStatus: string;
+  calls: AgentCallSummary[];
+}
+
+function groupAgentCalls(calls: AgentCallSummary[]): GroupedAgentCall[] {
+  const map = new Map<string, GroupedAgentCall>();
+  for (const call of calls) {
+    const label = formatAgentPeerLabel(call);
+    const existing = map.get(label);
+    if (existing) {
+      existing.count += 1;
+      existing.calls.push(call);
+      // Promote worst status: error > running > completed
+      if (agentCallIsError(call.status)) existing.worstStatus = call.status;
+      else if (agentCallIsRunning(call.status) && !agentCallIsError(existing.worstStatus)) existing.worstStatus = call.status;
+    } else {
+      map.set(label, { label, count: 1, worstStatus: call.status, calls: [call] });
+    }
+  }
+  return Array.from(map.values());
+}
+
+function AgentCallBanner({ calls, isStreaming }: { calls: AgentCallSummary[]; isStreaming: boolean }) {
+  const lastResponse = [...calls].reverse().find((c) => c.responsePreview);
+  const [expanded, setExpanded] = useState(!isStreaming && !!lastResponse);
+  const groups = useMemo(() => groupAgentCalls(calls), [calls]);
+  const uniqueNames = groups.map((g) => g.label);
+  const headerLabel = calls.every((call) => call.kind === "explicit-a2a") ? "Delegated to" : "Contacted";
+
+  return (
+    <div className="mb-3 rounded-[1.2rem] border border-primary/20 bg-primary/[0.06] px-3.5 py-3 shadow-sm shadow-primary/10">
+      {/* Header — lists unique agent names */}
+      <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-primary">
+        <ArrowUpRight className="h-3.5 w-3.5" />
+        <span className="truncate">
+          {headerLabel}{" "}
+          {uniqueNames.length <= 3
+            ? uniqueNames.join(", ")
+            : `${uniqueNames.slice(0, 2).join(", ")} +${uniqueNames.length - 2}`}
+        </span>
+        {isStreaming ? (
+          <Badge variant="outline" className="ml-auto shrink-0 border-primary/20 bg-primary/10 px-1.5 py-0 text-[10px] text-primary">
+            live
+          </Badge>
+        ) : null}
+      </div>
+
+      {/* Timeline rows — grouped by unique agent */}
+      <div className="mt-2 border-l-2 border-primary/25 ml-[6px] space-y-0">
+        {groups.map((group, i) => {
+          const isError = agentCallIsError(group.worstStatus);
+          const isRunning = !isError && agentCallIsRunning(group.worstStatus);
+          const dotColor = isError
+            ? "bg-red-400"
+            : isRunning
+              ? "bg-amber-400 animate-pulse"
+              : "bg-emerald-400";
+          const statusColor = isError ? "text-red-400" : isRunning ? "text-amber-400" : "text-emerald-400";
+          const isLast = i === groups.length - 1;
+          return (
+            <div key={group.label} className="relative flex items-center gap-2.5 py-1 pl-4">
+              <span className={`absolute left-[-5px] top-1/2 -translate-y-1/2 h-2 w-2 rounded-full ${dotColor} ring-2 ring-background`} />
+              <ArrowUpRight className="h-3 w-3 shrink-0 text-primary/60" />
+              <span className="text-[13px] font-medium text-foreground">{group.label}</span>
+              {group.count > 1 ? (
+                <span className="rounded-full bg-primary/15 px-1.5 text-[10px] font-semibold tabular-nums text-primary">
+                  {group.count} calls
+                </span>
+              ) : null}
+              <span className={`text-[10px] font-medium ${statusColor}`}>
+                {formatAgentCallStatus(group.worstStatus)}
+              </span>
+              {isLast && isRunning ? (
+                <LoaderCircle className="h-3 w-3 animate-spin text-amber-400 ml-auto" />
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Expandable response preview — auto-expanded when done */}
+      {lastResponse?.responsePreview ? (
+        <div className="mt-1.5 ml-[6px] pl-4 border-l-2 border-transparent">
+          <button
+            type="button"
+            onClick={() => setExpanded((o) => !o)}
+            className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+          >
+            {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+            <span>Latest peer response</span>
+          </button>
+          {expanded ? (
+            <p className="mt-1 whitespace-pre-wrap break-words text-xs leading-relaxed text-muted-foreground">
+              {lastResponse.responsePreview}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function formatStreamingTarget(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  if (trimmed === "." || trimmed === "./") return "workspace";
+  if (!trimmed.includes("/") && !trimmed.includes("\\")) return truncateText(trimmed, 48);
+  const parts = trimmed.replace(/\\/g, "/").split("/").filter(Boolean);
+  const compact = parts.length > 3 ? parts.slice(-3).join("/") : parts.join("/");
+  return truncateText(compact, 48);
+}
+
+function extractStreamingTarget(input: unknown, depth = 0): string {
+  if (depth > 2 || !input || typeof input !== "object") return "";
+  const record = input as Record<string, unknown>;
+
+  for (const key of ["filePath", "file", "path", "directory", "cwd", "pattern"]) {
+    const candidate = record[key];
+    if (typeof candidate === "string" && candidate.trim()) return formatStreamingTarget(candidate);
+  }
+
+  for (const key of ["command", "cmd"]) {
+    const candidate = record[key];
+    if (typeof candidate === "string" && candidate.trim()) return truncateText(candidate, 48);
+  }
+
+  for (const key of ["tool_args", "args", "input"]) {
+    const candidate = record[key];
+    if (candidate && typeof candidate === "object") {
+      const nested = extractStreamingTarget(candidate, depth + 1);
+      if (nested) return nested;
+    }
+  }
+
+  return "";
+}
+
+function extractStreamingAgentInvoke(input: unknown, depth = 0): { namespace: string | null; agentName: string } | null {
+  if (depth > 2 || !input || typeof input !== "object") return null;
+  const record = input as Record<string, unknown>;
+
+  for (const key of ["command", "cmd"]) {
+    const candidate = record[key];
+    if (typeof candidate === "string" && candidate.trim()) {
+      const parsed = parseAgentInvokeCommand(candidate);
+      if (parsed) return parsed;
+    }
+  }
+
+  for (const key of ["tool_args", "args", "input"]) {
+    const candidate = record[key];
+    if (candidate && typeof candidate === "object") {
+      const nested = extractStreamingAgentInvoke(candidate, depth + 1);
+      if (nested) return nested;
+    }
+  }
+
+  return null;
+}
+
+function extractStreamingArtifactTarget(message: UiMessage, operationSummary?: InvocationSummary | null): string {
+  const artifacts = operationSummary?.artifacts ?? [];
+  for (let index = artifacts.length - 1; index >= 0; index -= 1) {
+    const artifact = artifacts[index];
+    if (!artifact || typeof artifact !== "object") continue;
+    const path = (artifact as Record<string, unknown>).path;
+    if (typeof path === "string" && path.trim()) return formatStreamingTarget(path);
+  }
+
+  const patches = message.patches ?? [];
+  for (let patchIndex = patches.length - 1; patchIndex >= 0; patchIndex -= 1) {
+    const files = patches[patchIndex]?.files ?? [];
+    for (let fileIndex = files.length - 1; fileIndex >= 0; fileIndex -= 1) {
+      const path = files[fileIndex];
+      if (typeof path === "string" && path.trim()) return formatStreamingTarget(path);
+    }
+  }
+
+  return "";
+}
+
+type LiveActivityTone = "running" | "success" | "error" | "info";
+
+type LiveActivityEntry = {
+  id: string;
+  label: string;
+  detail?: string;
+  tone: LiveActivityTone;
+  icon: typeof Cog;
+};
+
+const TOOL_NODE_LABELS: Record<string, string> = {
+  sandbox_tool: "Sandbox tool",
+  mcp_tool: "MCP tool",
+  retrieval: "Knowledge lookup",
+  output_guard: "Output guard",
+};
+
+const LIVE_ACTIVITY_STYLES: Record<LiveActivityTone, { badge: string; icon: string }> = {
+  running: {
+    badge: "border-primary/25 bg-primary/10 text-primary",
+    icon: "bg-primary/10 text-primary",
+  },
+  success: {
+    badge: "border-emerald-500/25 bg-emerald-500/10 text-emerald-400",
+    icon: "bg-emerald-500/10 text-emerald-400",
+  },
+  error: {
+    badge: "border-destructive/25 bg-destructive/10 text-destructive",
+    icon: "bg-destructive/10 text-destructive",
+  },
+  info: {
+    badge: "border-border/70 bg-muted/40 text-muted-foreground",
+    icon: "bg-muted/40 text-muted-foreground",
+  },
+};
+
+function humanizeEventLabel(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return "Operation";
+  return trimmed
+    .split(/[_\-/]+/)
+    .filter(Boolean)
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+    .join(" ");
+}
+
+function formatBytes(value: unknown): string {
+  const raw = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(raw) || raw <= 0) return "";
+  const units = ["B", "KB", "MB", "GB"];
+  let size = raw;
+  let unitIndex = 0;
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024;
+    unitIndex += 1;
+  }
+  const precision = size >= 10 || unitIndex === 0 ? 0 : 1;
+  return `${size.toFixed(precision)} ${units[unitIndex]}`;
+}
+
+function joinDetail(parts: Array<string | null | undefined>): string | undefined {
+  const values = parts.map((part) => String(part || "").trim()).filter(Boolean);
+  if (values.length === 0) return undefined;
+  return values.join(" · ");
+}
+
+function summarizeTodoProgress(payload: Record<string, unknown>): string | undefined {
+  const todos = Array.isArray(payload.todos) ? payload.todos : [];
+  if (todos.length === 0) return undefined;
+  const completed = todos.filter((item) => {
+    if (!item || typeof item !== "object") return false;
+    const status = String((item as Record<string, unknown>).status ?? "").trim().toLowerCase();
+    return status === "completed" || status === "cancelled";
+  }).length;
+  return `${completed} of ${todos.length} tasks done`;
+}
+
+function createLiveActivityEntry(item: UiActivity): LiveActivityEntry | null {
+  const payload = item.payload;
+
+  if (item.event === "response.started") {
+    return {
+      id: item.id,
+      label: "Connected to runtime",
+      detail: typeof payload.thread_id === "string" && payload.thread_id.trim() ? `thread ${payload.thread_id.slice(0, 8)}` : undefined,
+      tone: "info",
+      icon: Activity,
+    };
+  }
+
+  if (item.event === "response.turn_started") {
+    const agent = String(payload.agent ?? "").trim().toLowerCase();
+    const turn = typeof payload.turn === "number" ? `turn ${payload.turn}` : "";
+    const maxTurns = typeof payload.max_turns === "number" ? `${payload.max_turns} max turns` : "";
+    return {
+      id: item.id,
+      label: agent === "plan" ? "Planning the response" : agent === "build" ? "Executing the plan" : "Starting a new turn",
+      detail: joinDetail([turn, maxTurns]),
+      tone: "running",
+      icon: agent === "plan" ? Brain : Bot,
+    };
+  }
+
+  if (item.event === "response.turn_completed") {
+    const status = String(payload.status ?? "").trim().toLowerCase();
+    const turn = typeof payload.turn === "number" ? `turn ${payload.turn}` : "";
+    const responseLength = typeof payload.response_length === "number" ? `${payload.response_length} chars` : "";
+    return {
+      id: item.id,
+      label: status === "incomplete" ? "Turn paused for another pass" : "Completed a turn",
+      detail: joinDetail([turn, responseLength]),
+      tone: status === "incomplete" ? "running" : "success",
+      icon: status === "incomplete" ? LoaderCircle : CheckCircle2,
+    };
+  }
+
+  if (item.event === "graph.node") {
+    const node = String(payload.node ?? "").trim();
+    const status = String(payload.status ?? "").trim().toLowerCase();
+    const baseLabel = TOOL_NODE_LABELS[node] ?? humanizeEventLabel(node);
+    return {
+      id: item.id,
+      label: status === "started"
+        ? `Running ${baseLabel.toLowerCase()}`
+        : status === "failed"
+          ? `${baseLabel} failed`
+          : `${baseLabel} completed`,
+      detail: joinDetail([
+        typeof payload.invoke_status === "string" ? sanitizeText(payload.invoke_status) : undefined,
+        typeof payload.error === "string" ? sanitizeText(payload.error) : undefined,
+      ]),
+      tone: status === "failed" ? "error" : status === "started" ? "running" : "success",
+      icon: status === "failed" ? AlertTriangle : status === "started" ? LoaderCircle : CheckCircle2,
+    };
+  }
+
+  if (item.event === "mcp.result") {
+    const serverType = String(payload.serverType ?? "").trim();
+    const toolName = String(payload.toolName ?? "").trim();
+    const label = serverType || toolName ? `${serverType ? `${serverType}/` : ""}${toolName || "tool"}` : "MCP tool";
+    return {
+      id: item.id,
+      label: `Completed ${label}`,
+      detail: formatBytes(payload.bytes) || undefined,
+      tone: "success",
+      icon: CheckCircle2,
+    };
+  }
+
+  if (item.event === "subagent.call") {
+    const targetAgent = String(payload.targetAgent ?? "subagent").trim();
+    const status = String(payload.status ?? "").trim().toLowerCase();
+    return {
+      id: item.id,
+      label: status === "started"
+        ? `Calling ${targetAgent}`
+        : status === "failed"
+          ? `${targetAgent} failed`
+          : `${targetAgent} completed`,
+      detail: joinDetail([
+        typeof payload.targetNamespace === "string" ? payload.targetNamespace : undefined,
+        formatBytes(payload.bytes),
+        typeof payload.resultFilePath === "string" ? payload.resultFilePath : undefined,
+        typeof payload.error === "string" ? sanitizeText(payload.error) : undefined,
+      ]),
+      tone: status === "failed" ? "error" : status === "started" ? "running" : "success",
+      icon: status === "failed" ? AlertTriangle : status === "started" ? LoaderCircle : CheckCircle2,
+    };
+  }
+
+  if (item.event === "response.tool_call") {
+    const tool = String(payload.tool ?? "").trim();
+    const status = String(payload.status ?? "unknown").trim().toLowerCase();
+    const agentInvokeTarget = (tool === "bash" || tool === "shell") ? extractStreamingAgentInvoke(payload.input) : null;
+    if (agentInvokeTarget) {
+      const peerLabel = formatAgentIdentity(agentInvokeTarget.agentName, agentInvokeTarget.namespace);
+      return {
+        id: item.id,
+        label: status === "completed"
+          ? `${peerLabel} replied`
+          : status === "failed" || status === "error"
+            ? `${peerLabel} failed`
+            : `Calling ${peerLabel}`,
+        detail: typeof payload.output === "string" && payload.output.trim() ? truncateText(sanitizeText(payload.output), 84) : undefined,
+        tone: status === "completed" ? "success" : status === "failed" || status === "error" ? "error" : "running",
+        icon: status === "completed" ? CheckCircle2 : status === "failed" || status === "error" ? AlertTriangle : ArrowUpRight,
+      };
+    }
+    const target = extractStreamingTarget(payload.input);
+    const toolLabel = tool ? humanizeEventLabel(tool) : "Tool call";
+    return {
+      id: item.id,
+      label: status === "completed"
+        ? `${toolLabel} finished`
+        : status === "failed" || status === "error"
+          ? `${toolLabel} failed`
+          : `${toolLabel} running`,
+      detail: joinDetail([
+        target,
+        typeof payload.output === "string" && payload.output.trim() ? truncateText(sanitizeText(payload.output), 84) : undefined,
+      ]),
+      tone: status === "completed" ? "success" : status === "failed" || status === "error" ? "error" : "running",
+      icon: status === "completed" ? CheckCircle2 : status === "failed" || status === "error" ? AlertTriangle : Cog,
+    };
+  }
+
+  if (item.event === "response.patch") {
+    const files = Array.isArray(payload.files) ? payload.files.map((file) => String(file)).filter(Boolean) : [];
+    return {
+      id: item.id,
+      label: files.length === 1 ? "Patched 1 file" : `Patched ${files.length} files`,
+      detail: files.length > 0 ? truncateText(files.join(", "), 84) : undefined,
+      tone: "success",
+      icon: FileDiff,
+    };
+  }
+
+  if (item.event === "todo.updated") {
+    return {
+      id: item.id,
+      label: "Updated the execution plan",
+      detail: summarizeTodoProgress(payload),
+      tone: "info",
+      icon: Circle,
+    };
+  }
+
+  if (item.event === "question.asked") {
+    const questions = Array.isArray(payload.questions) ? payload.questions : [];
+    const firstQuestion = questions[0] && typeof questions[0] === "object"
+      ? String((questions[0] as Record<string, unknown>).question ?? "").trim()
+      : "";
+    return {
+      id: item.id,
+      label: "Waiting for your input",
+      detail: firstQuestion ? truncateText(firstQuestion, 84) : questions.length > 0 ? `${questions.length} question${questions.length > 1 ? "s" : ""}` : undefined,
+      tone: "running",
+      icon: MessageSquare,
+    };
+  }
+
+  if (item.event === "response.error_recovery") {
+    const retry = typeof payload.retry === "number" ? `retry ${payload.retry}` : "";
+    const maxRetries = typeof payload.max_retries === "number" ? `${payload.max_retries} max` : "";
+    return {
+      id: item.id,
+      label: "Recovering from a transient error",
+      detail: joinDetail([retry, maxRetries]),
+      tone: "info",
+      icon: RotateCcw,
+    };
+  }
+
+  if (item.event === "response.completed") {
+    const status = String(payload.status ?? "completed").trim().toLowerCase();
+    return {
+      id: item.id,
+      label: status === "approval_pending" ? "Waiting for approval" : "Response completed",
+      detail: typeof payload.policy_name === "string" ? payload.policy_name : undefined,
+      tone: status === "blocked" ? "error" : status === "approval_pending" ? "running" : "success",
+      icon: status === "blocked" ? AlertTriangle : status === "approval_pending" ? LoaderCircle : CheckCircle2,
+    };
+  }
+
+  return null;
+}
+
+function buildLiveActivityEntries(activity: UiActivity[], limit = 6): LiveActivityEntry[] {
+  const entries: LiveActivityEntry[] = [];
+  for (const item of activity) {
+    const entry = createLiveActivityEntry(item);
+    if (entry) entries.push(entry);
+  }
+  return entries.slice(-limit);
+}
+
+function LiveActivityFeed({ activity, isStreaming }: { activity: UiActivity[]; isStreaming: boolean }) {
+  const entries = useMemo(() => buildLiveActivityEntries(activity), [activity]);
+
+  if (entries.length === 0) return null;
+
+  return (
+    <div className="mt-3 rounded-2xl border border-border/60 bg-muted/15 px-3 py-2.5">
+      <div className="mb-2 flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
+        {isStreaming ? <LoaderCircle className="h-3.5 w-3.5 animate-spin text-primary" /> : <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />}
+        <span>{isStreaming ? "Live activity" : "Run activity"}</span>
+        <Badge variant="outline" className="ml-auto px-1 py-0 text-[10px]">
+          {entries.length}
+        </Badge>
+      </div>
+      <div className="space-y-1.5">
+        {entries.map((entry) => {
+          const styles = LIVE_ACTIVITY_STYLES[entry.tone];
+          const Icon = entry.icon;
+          const iconClassName = entry.tone === "running" && (entry.icon === LoaderCircle || entry.icon === Cog)
+            ? "h-3.5 w-3.5 animate-spin"
+            : "h-3.5 w-3.5";
+          return (
+            <div key={entry.id} className="flex items-start gap-2 rounded-xl border border-border/60 bg-background/70 px-2.5 py-2">
+              <div className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full ${styles.icon}`}>
+                <Icon className={iconClassName} />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="min-w-0 flex-1 break-words text-[12px] font-medium text-foreground">{entry.label}</span>
+                  <span className={`rounded-full border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.14em] ${styles.badge}`}>
+                    {entry.tone === "running" ? "live" : entry.tone === "success" ? "done" : entry.tone === "error" ? "error" : "info"}
+                  </span>
+                </div>
+                {entry.detail && (
+                  <div className="mt-0.5 break-words text-[11px] leading-relaxed text-muted-foreground">{entry.detail}</div>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function StreamingIndicator({ label, compact = false }: { label: string; compact?: boolean }) {
+  return (
+    <div className={`inline-flex max-w-full items-center gap-2 rounded-full border border-primary/20 bg-primary/5 text-foreground/85 shadow-sm ${compact ? "px-2.5 py-1" : "px-3 py-1.5"}`}>
+      <span className="streaming-loader text-primary" aria-hidden="true">
+        <span />
+        <span />
+        <span />
+      </span>
+      <span className="min-w-0 truncate text-[11px] font-medium">{label}</span>
+      {compact ? <span className="streaming-caret text-primary" aria-hidden="true" /> : null}
+    </div>
+  );
+}
+
+function describeStreamingStatus(
+  message: UiMessage,
+  operationSummary?: InvocationSummary | null,
+  activity: UiActivity[] = [],
+  phase: "plan" | "build" | "idle" = "idle",
+): string {
+  const liveEntries = buildLiveActivityEntries(activity, 6);
+  for (let index = liveEntries.length - 1; index >= 0; index -= 1) {
+    const entry = liveEntries[index];
+    if (entry.tone === "running" || entry.tone === "info") return entry.label;
+  }
+  if (liveEntries.length > 0) return liveEntries[liveEntries.length - 1].label;
+
+  if (phase === "plan") return "Planning the response";
+  if (phase === "build") return "Continuing the response";
+
+  const toolCalls = message.toolCalls ?? [];
+  for (let index = toolCalls.length - 1; index >= 0; index -= 1) {
+    const toolCall = toolCalls[index];
+    if (toolCall.status !== "running" && toolCall.status !== "unknown") continue;
+    if (toolCall.tool.trim().toLowerCase() === "bash" || toolCall.tool.trim().toLowerCase() === "shell") {
+      const agentInvokeTarget = extractStreamingAgentInvoke(toolCall.input);
+      if (agentInvokeTarget) return `Calling ${formatAgentIdentity(agentInvokeTarget.agentName, agentInvokeTarget.namespace)}`;
+    }
+    const target = extractStreamingTarget(toolCall.input);
+    switch (toolCall.tool.trim().toLowerCase()) {
+      case "read":
+        return target ? `Reading ${target}` : "Reading files";
+      case "glob":
+      case "ls":
+        return target ? `Scanning ${target}` : "Scanning files";
+      case "grep":
+        return target ? `Searching ${target}` : "Searching code";
+      case "write":
+        return target ? `Writing ${target}` : "Writing files";
+      case "edit":
+        return target ? `Editing ${target}` : "Editing files";
+      case "patch":
+        return target ? `Updating ${target}` : "Applying patch";
+      case "bash":
+      case "shell":
+        return target ? `Running ${target}` : "Running command";
+      default:
+        return "Running operations";
+    }
+  }
+
+  const artifactTarget = extractStreamingArtifactTarget(message, operationSummary);
+  if (artifactTarget) return `Updating ${artifactTarget}`;
+  if (message.reasoning?.trim()) return "Reasoning live";
+  if (toolCalls.length > 0) return "Processing tool results";
+  return "Preparing response";
 }
 
 function formatRelativeTime(iso: string | null): string {
@@ -426,48 +1053,185 @@ const MemoryRecordCard = memo(function MemoryRecordCard({
   );
 });
 
-function collectPathsFromUnknown(value: unknown): string[] {
-  if (typeof value === "string") {
-    return Array.from(value.matchAll(DOWNLOADABLE_PATH_PATTERN), (match) => match[1]);
+function normalizeDownloadablePath(rawPath: unknown): string | null {
+  if (typeof rawPath !== "string") return null;
+  const path = rawPath.trim().replace(/\\/g, "/");
+  if (!path || !DOWNLOADABLE_FILE_RE.test(path)) return null;
+  if (/^(?:https?:)?\/\//i.test(path)) return null;
+  return path;
+}
+
+function collectStructuredPaths(record: unknown, fields: string[]): string[] {
+  if (!record || typeof record !== "object") return [];
+  const value = record as Record<string, unknown>;
+  return fields
+    .map((field) => normalizeDownloadablePath(value[field]))
+    .filter((item): item is string => Boolean(item));
+}
+
+function collectFileToolPaths(toolCalls: Array<Record<string, unknown>> | null | undefined): string[] {
+  const paths = new Set<string>();
+  for (const toolCall of toolCalls ?? []) {
+    if (!toolCall || typeof toolCall !== "object") continue;
+    const tool = String(toolCall.tool ?? "").trim().toLowerCase();
+    if (!FILE_OUTPUT_TOOL_NAMES.has(tool)) continue;
+    for (const path of collectStructuredPaths(toolCall.input, ["filePath", "path", "file"])) {
+      paths.add(path);
+    }
+    for (const path of collectStructuredPaths(toolCall.output, ["filePath", "path", "file", "resultFilePath"])) {
+      paths.add(path);
+    }
   }
-  if (Array.isArray(value)) {
-    return value.flatMap((item) => collectPathsFromUnknown(item));
+  return Array.from(paths);
+}
+
+function collectSubagentResultPaths(metadata: InvocationSummary["subagents"] | UiMessage["subagents"] | null | undefined): string[] {
+  const paths = new Set<string>();
+  for (const rawPath of metadata?.resultFiles ?? []) {
+    const normalized = normalizeDownloadablePath(rawPath);
+    if (normalized) paths.add(normalized);
   }
-  if (value && typeof value === "object") {
-    return Object.values(value).flatMap((item) => collectPathsFromUnknown(item));
+  for (const result of metadata?.results ?? []) {
+    const normalized = normalizeDownloadablePath(result.resultFilePath);
+    if (normalized) paths.add(normalized);
   }
-  return [];
+  return Array.from(paths);
+}
+
+function countUniqueSharedFiles(metadata: InvocationSummary["subagents"] | null | undefined): number {
+  const identities = new Set<string>();
+  for (const file of metadata?.sharedFiles ?? []) {
+    const path = String(file.path ?? "").trim();
+    if (!path) continue;
+    identities.add(`${path}|${String(file.purpose ?? "").trim()}`);
+  }
+  return identities.size;
+}
+
+function isSubagentSuccess(status: string): boolean {
+  const normalized = status.trim().toLowerCase();
+  return normalized === "completed" || normalized === "success";
+}
+
+function isSubagentFailure(status: string): boolean {
+  const normalized = status.trim().toLowerCase();
+  return normalized === "failed" || normalized === "error" || normalized === "blocked";
+}
+
+function isSubagentRunning(status: string): boolean {
+  const normalized = status.trim().toLowerCase();
+  return normalized === "running" || normalized === "streaming" || normalized === "in_progress" || normalized === "working";
+}
+
+function summarizeTeamRun(
+  metadata: InvocationSummary["subagents"] | null | undefined,
+  specialistSubagents: SpecialistSubagentDraft[],
+  isSending: boolean,
+): TeamRunSummary | null {
+  const memberCount = specialistSubagents.filter((item) => item.name.trim()).length;
+  if (!metadata && memberCount === 0) return null;
+
+  const results = metadata?.results ?? [];
+  const completedCount = results.filter((item) => isSubagentSuccess(item.status)).length;
+  const failedCount = results.filter((item) => isSubagentFailure(item.status)).length;
+  const runningCount = results.filter((item) => isSubagentRunning(item.status)).length;
+  const queuedCount = Math.max(memberCount - completedCount - failedCount - runningCount, 0);
+  const resultFileCount = collectSubagentResultPaths(metadata).length;
+  const sharedFileCount = countUniqueSharedFiles(metadata);
+
+  let status: TeamRunSummary["status"] = "ready";
+  if (isSending || runningCount > 0) {
+    status = "running";
+  } else if (failedCount > 0) {
+    status = "needs-review";
+  } else if (results.length > 0) {
+    status = "complete";
+  }
+
+  return {
+    status,
+    memberCount,
+    completedCount,
+    failedCount,
+    runningCount,
+    queuedCount,
+    resultFileCount,
+    sharedFileCount,
+    sharedSandboxSession: Boolean(metadata?.sharedSandboxSession),
+  };
 }
 
 function collectDownloadableArtifacts(summary: InvocationSummary | null, messages: UiMessage[]): DownloadableArtifact[] {
   const paths = new Map<string, DownloadableArtifact>();
 
-  const addPath = (rawPath: string | null | undefined) => {
-    const path = String(rawPath || "").trim().replace(/\\/g, "/");
-    if (!path || !/\.(pdf|md|txt|json|yaml|yml|csv|html|svg|png|jpg|jpeg|gif|doc|docx)$/i.test(path)) return;
-    if (!paths.has(path)) {
-      paths.set(path, { path, filename: basename(path) });
+  const addPath = (rawPath: unknown, source: DownloadablePathSource) => {
+    const path = normalizeDownloadablePath(rawPath);
+    if (!path) return;
+    const existing = paths.get(path);
+    if (!existing) {
+      paths.set(path, { path, filename: basename(path), source });
+      return;
+    }
+    if (existing.source !== "result" && source === "result") {
+      paths.set(path, { ...existing, source });
     }
   };
 
   for (const artifact of summary?.artifacts ?? []) {
-    if (artifact && typeof artifact === "object") {
-      addPath(String((artifact as Record<string, unknown>).path ?? ""));
-      for (const candidate of collectPathsFromUnknown(artifact)) addPath(candidate);
-    }
+    for (const path of collectStructuredPaths(artifact, ["path", "filePath", "resultFilePath"])) addPath(path, "artifact");
   }
-  for (const toolCall of summary?.toolCalls ?? []) {
-    if (toolCall && typeof toolCall === "object") {
-      for (const candidate of collectPathsFromUnknown(toolCall)) addPath(candidate);
-    }
+  for (const path of collectFileToolPaths(summary?.toolCalls as Array<Record<string, unknown>> | null | undefined)) {
+    addPath(path, "artifact");
   }
+  for (const path of collectSubagentResultPaths(summary?.subagents)) addPath(path, "result");
+
   for (const message of messages) {
-    if (message.role === "assistant" || message.role === "tool") {
-      for (const candidate of collectPathsFromUnknown(message.content)) addPath(candidate);
+    for (const artifact of message.artifacts ?? []) {
+      for (const path of collectStructuredPaths(artifact, ["path", "filePath", "resultFilePath"])) addPath(path, "artifact");
     }
+    for (const patch of message.patches ?? []) {
+      for (const file of patch.files) addPath(file, "artifact");
+    }
+    for (const path of collectFileToolPaths(message.toolCalls as unknown as Array<Record<string, unknown>> | null | undefined)) {
+      addPath(path, "artifact");
+    }
+    for (const path of collectSubagentResultPaths(message.subagents)) addPath(path, "result");
   }
 
   return Array.from(paths.values());
+}
+
+function buildInlineOperationSummary(message: UiMessage, fallbackSummary?: InvocationSummary | null): InvocationSummary | null {
+  const hasMessageOperations = Boolean(
+    (message.toolCalls && message.toolCalls.length > 0)
+    || (message.artifacts && message.artifacts.length > 0)
+    || (message.patches && message.patches.length > 0)
+    || message.a2a
+    || message.subagents
+    || message.metadata,
+  );
+
+  if (!hasMessageOperations) {
+    return fallbackSummary ?? null;
+  }
+
+  const artifacts = message.artifacts && message.artifacts.length > 0
+    ? message.artifacts
+    : (message.patches ?? []).flatMap((patch) =>
+        patch.files.map((path) => ({ path, tool: "patch", status: message.status === "error" ? "error" : "completed" })),
+      );
+
+  return {
+    threadId: `message-${message.id}`,
+    status: message.status === "error" ? "blocked" : message.status === "streaming" ? "running" : "completed",
+    warnings: [],
+    toolCalls: (message.toolCalls as Array<Record<string, unknown>> | undefined) ?? null,
+    artifacts,
+    a2a: message.a2a ?? fallbackSummary?.a2a ?? null,
+    subagents: message.subagents ?? fallbackSummary?.subagents ?? null,
+    metadata: message.metadata ?? fallbackSummary?.metadata ?? null,
+    continuity: fallbackSummary?.continuity ?? null,
+  };
 }
 
 /* ------------------------------------------------------------------ */
@@ -772,17 +1536,14 @@ export function ChatWorkbench({
   a2aTimeoutSeconds,
   specialistSubagents,
   specialistTeamConfigured,
-  subagentStrategy,
   discoveryPeers,
   discoveryLoading,
   discoveryError,
-  gooseMaxTurns,
-  gooseWorkingDirectory,
-  gooseSystemPrompt,
   opencodeOutputFormat,
   opencodeAutonomous,
   opencodeMaxTurns,
   opencodeWorkingDirectory,
+  factoryMode,
   summary,
   activeSessionId,
   sessionDirty,
@@ -797,6 +1558,7 @@ export function ChatWorkbench({
   emptyMessage,
   error,
   onDownloadArtifact,
+  onDownloadArtifactZip,
   onListArtifacts,
   onPreviewArtifact,
   onPromptChange,
@@ -805,17 +1567,11 @@ export function ChatWorkbench({
   onA2ATargetAgentChange,
   onA2ATargetNamespaceChange,
   onA2ATimeoutSecondsChange,
-  onSubagentStrategyChange,
-  onAddSpecialistSubagent,
-  onUpdateSpecialistSubagent,
-  onRemoveSpecialistSubagent,
-  onClearSpecialistTeam,
-  onGooseMaxTurnsChange,
-  onGooseWorkingDirectoryChange,
   onOpenCodeOutputFormatChange,
   onOpenCodeAutonomousChange,
   onOpenCodeMaxTurnsChange,
   onOpenCodeWorkingDirectoryChange,
+  onFactoryModeChange,
   onSaveSession,
   canSubmit,
   onSubmit,
@@ -823,11 +1579,10 @@ export function ChatWorkbench({
 }: ChatWorkbenchProps) {
   const {
     pendingQuestion, questionResponding, handleQuestionReply, handleQuestionReject,
-    followupSuggestions, followupSending, handleFollowupSend, handleFollowupEdit,
     lastUserPrompt, handleReusePrompt, handleRegeneratePrompt,
   } = useChat();
-  const { chatFocused, setChatFocused } = useWorkspace();
-  const { token, namespace } = useConnection();
+  const { chatFocused, setChatFocused, selectedAgentDetail, selectedAgent, navigateToResource, handleCreateNew } = useWorkspace();
+  const { token, namespace, canMutate } = useConnection();
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const isAtBottomRef = useRef(true);
   const scrollContainerRef = useRef<HTMLElement | null>(null);
@@ -848,10 +1603,15 @@ export function ChatWorkbench({
   const [fileExplorerView, setFileExplorerView] = useState<"all" | "changed">("all");
   const a2aMode = Boolean(a2aTargetAgent && a2aTargetNamespace);
   const specialistMode = specialistTeamConfigured;
+  const showFactoryMode = isFactoryAgentName(agentName);
   const detailCount = (summary ? 1 : 0) + (activity.length > 0 ? 1 : 0);
   const planCount = todos.length;
   const memoryCount = agentMemoryRecords.length + activeMemoryRecords.length;
   const downloadableArtifacts = useMemo(() => collectDownloadableArtifacts(summary, messages), [summary, messages]);
+  const teamRunSummary = useMemo(
+    () => summarizeTeamRun(summary?.subagents ?? null, specialistSubagents, isSending),
+    [isSending, specialistSubagents, summary?.subagents],
+  );
   const filteredAgentMemoryRecords = useMemo(() => {
     const query = memorySearch.trim().toLowerCase();
     return agentMemoryRecords.filter((record) => {
@@ -867,80 +1627,48 @@ export function ChatWorkbench({
     });
   }, [agentMemoryRecords, memoryFilter, memorySearch]);
   const continuityHighlights = useMemo(() => buildContinuityHighlights(summary), [summary]);
+  const chatMcpCapabilities = useMemo(() => {
+    if (!selectedAgentDetail) {
+      return [];
+    }
+    return extractMcpCapabilityIds(selectedAgentDetail)
+      .map((id) => getCapabilitySignal(id))
+      .sort((left, right) => right.priority - left.priority || left.label.localeCompare(right.label));
+  }, [selectedAgentDetail]);
+  const visibleChatMcpCapabilities = chatMcpCapabilities.slice(0, 4);
+  const overflowChatMcpCapabilities = chatMcpCapabilities.slice(4);
   const visibleSessionMemoryRecords = sessionMemoryExpanded ? activeMemoryRecords : activeMemoryRecords.slice(0, 4);
   const visibleAgentMemoryRecords = agentMemoryExpanded ? filteredAgentMemoryRecords : filteredAgentMemoryRecords.slice(0, 8);
+  const lastAssistantMessageId = useMemo(() => {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      if (messages[index]?.role === "assistant") return messages[index].id;
+    }
+    return null;
+  }, [messages]);
   const starterPrompts = useMemo<StarterPrompt[]>(() => {
-    if (runtimeKind === "opencode") {
-      return [
-        {
-          label: "Ship a scoped change",
-          description: "Inspect the codebase, make a tight plan, and implement the highest-leverage fix safely.",
-          prompt: `Inspect the current ${agentName || "workspace"} codebase, propose a concise plan, then implement the highest-leverage improvement with minimal unrelated changes.`,
-        },
-        {
-          label: "Trace a regression",
-          description: "Walk the failure path end-to-end, isolate root cause, and patch it with validation.",
-          prompt: "Trace the latest regression end-to-end, identify the root cause, and patch it with the smallest safe change. Explain what broke and how you verified the fix.",
-        },
-        {
-          label: "Review operational risk",
-          description: "Prioritize bugs, missing guardrails, and test gaps like a production review.",
-          prompt: "Review this code like a production readiness pass. Prioritize the highest-risk bugs, behavioral regressions, and missing tests, then fix the top issue.",
-        },
-        {
-          label: "Summarize the session",
-          description: "Capture current context, changed files, and the next three best moves for this thread.",
-          prompt: "Summarize the current session state, important files, open risks, and the next three best moves to keep momentum.",
-        },
-      ];
-    }
-    if (runtimeKind === "goose") {
-      return [
-        {
-          label: "Plan the approach",
-          description: "Ask for a structured execution plan before taking action in the sandbox.",
-          prompt: "Review the current task, outline the safest execution plan, and identify any assumptions or blockers before making changes.",
-        },
-        {
-          label: "Inspect the workspace",
-          description: "Map the relevant files, dependencies, and runtime constraints before moving.",
-          prompt: "Inspect this workspace and summarize the important files, runtime dependencies, and constraints that matter for the next change.",
-        },
-        {
-          label: "Prepare a handoff",
-          description: "Create a concise state summary with next actions for another operator.",
-          prompt: "Create a concise handoff covering current state, important findings, and the next concrete actions to take.",
-        },
-        {
-          label: "Audit for drift",
-          description: "Compare intent versus current state and flag the highest-signal mismatches.",
-          prompt: "Audit the current workspace for drift, inconsistencies, or likely integration gaps and explain the highest-priority issues.",
-        },
-      ];
-    }
     return [
       {
-        label: "Map the architecture",
-        description: "Summarize how the system fits together before asking for deeper changes.",
-        prompt: "Explain the current architecture, important services, and where the key integration points live in this project.",
+        label: "Ship a scoped change",
+        description: "Inspect the codebase, make a tight plan, and implement the highest-leverage fix safely.",
+        prompt: `Inspect the current ${agentName || "workspace"} codebase, propose a concise plan, then implement the highest-leverage improvement with minimal unrelated changes.`,
       },
       {
-        label: "Plan the next move",
-        description: "Ask for a sequence of concrete actions with clear tradeoffs.",
-        prompt: "Given the current state, propose the next three highest-leverage actions and explain the tradeoffs for each.",
+        label: "Trace a regression",
+        description: "Walk the failure path end-to-end, isolate root cause, and patch it with validation.",
+        prompt: "Trace the latest regression end-to-end, identify the root cause, and patch it with the smallest safe change. Explain what broke and how you verified the fix.",
       },
       {
-        label: "Stress the design",
-        description: "Look for edge cases, operational risk, and quality gaps before shipping.",
-        prompt: "Review the current implementation for operational risks, edge cases, and UX gaps that could hurt production quality.",
+        label: "Review operational risk",
+        description: "Prioritize bugs, missing guardrails, and test gaps like a production review.",
+        prompt: "Review this code like a production readiness pass. Prioritize the highest-risk bugs, behavioral regressions, and missing tests, then fix the top issue.",
       },
       {
-        label: "Create a concise brief",
-        description: "Turn the current objective into a scoped execution brief the agent can follow.",
-        prompt: "Convert the current goal into a concise execution brief with success criteria, constraints, and the smallest useful first step.",
+        label: "Summarize the session",
+        description: "Capture current context, changed files, and the next three best moves for this thread.",
+        prompt: "Summarize the current session state, important files, open risks, and the next three best moves to keep momentum.",
       },
     ];
-  }, [agentName, runtimeKind]);
+  }, [agentName]);
 
   // Resolve the Radix ScrollArea Viewport (the actual scrollable container)
   const scrollAreaRef = useRef<HTMLDivElement | null>(null);
@@ -1013,6 +1741,7 @@ export function ChatWorkbench({
     (path: string, filename?: string) => onDownloadArtifact(path, filename),
     [onDownloadArtifact],
   );
+  const stableDownloadArtifactZip = useCallback(() => onDownloadArtifactZip(), [onDownloadArtifactZip]);
   const stablePreviewArtifact = useCallback((path: string) => onPreviewArtifact(path), [onPreviewArtifact]);
   const stableLoadSessionDiff = useCallback(() => {
     if (!token || !summary?.threadId) return Promise.resolve("");
@@ -1029,16 +1758,78 @@ export function ChatWorkbench({
   }
 
   return (
-    <div className="flex h-full min-w-0 flex-1 flex-col overflow-hidden rounded-l-[1.25rem] bg-[linear-gradient(180deg,rgba(255,255,255,0.02),transparent_12rem)]">
+    <div className="flex h-full min-w-0 flex-1 flex-col overflow-hidden rounded-l-[1.35rem] border border-border/60 bg-[linear-gradient(180deg,rgba(255,255,255,0.04),rgba(255,255,255,0.01)_14rem)] shadow-[0_26px_70px_-48px_rgba(0,0,0,0.8)]">
       {/* Header */}
-      <div className="flex items-center justify-between border-b border-border/70 px-4 py-3">
-        <div>
-          <p className="text-[11px] uppercase tracking-wider text-muted-foreground">
-            Conversation surface
-          </p>
-          <h2 className="text-sm font-semibold tracking-tight">
-            {agentName ? `${agentName} Console` : "Choose an agent"}
+      <div className="flex items-center justify-between border-b border-border/70 bg-background/80 px-4 py-3 backdrop-blur-md">
+        <div className="flex items-center gap-2">
+          {agentName && (
+            <span className={`h-2 w-2 shrink-0 rounded-full ${
+              selectedAgent?.status === "running" ? "bg-emerald-400" :
+              selectedAgent?.status === "pending" || selectedAgent?.status === "creating" ? "bg-amber-400" :
+              selectedAgent?.status === "error" || selectedAgent?.status === "failed" ? "bg-red-400" :
+              "bg-muted-foreground/40"
+            }`} />
+          )}
+          <h2 className="text-[13px] font-semibold tracking-tight">
+            {agentName ?? "Choose an agent"}
           </h2>
+          {agentName && selectedAgent?.status && (
+            <span className="rounded-full border border-border/60 bg-muted/30 px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+              {selectedAgent.status}
+            </span>
+          )}
+          {agentName && selectedAgent?.model && (
+            <span className="hidden text-[11px] text-muted-foreground/70 xl:block">{selectedAgent.model}</span>
+          )}
+          {agentName && canMutate && (
+            <Button variant="ghost" size="sm" className="h-7 gap-1 rounded-full px-2 text-xs" onClick={handleCreateNew}>
+              <Plus className="h-3.5 w-3.5" />
+              New
+            </Button>
+          )}
+          {agentName && (
+            <Button variant="ghost" size="sm" className="h-7 gap-1 rounded-full px-2 text-xs" onClick={() => navigateToResource("agents", agentName)}>
+              <Cog className="h-3.5 w-3.5" />
+              Manage
+            </Button>
+          )}
+          {agentName && visibleChatMcpCapabilities.length > 0 && (
+            <TooltipProvider delayDuration={120}>
+              <div className="flex flex-wrap items-center gap-1.5">
+                {visibleChatMcpCapabilities.map((capability) => (
+                  <Tooltip key={capability.id}>
+                    <TooltipTrigger asChild>
+                      <Badge variant="outline" className={`h-6 rounded-full px-2 text-[10px] ${capability.tone}`}>
+                        <capability.icon className="mr-1 h-3 w-3" />
+                        {capability.shortLabel}
+                      </Badge>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom" className="max-w-[220px]">
+                      <p className="text-xs font-medium text-foreground">{capability.label}</p>
+                      <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                        Attached through the MCP registry using saved connections, shared hub routes, or managed sidecars.
+                      </p>
+                    </TooltipContent>
+                  </Tooltip>
+                ))}
+                {overflowChatMcpCapabilities.length > 0 ? (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Badge variant="outline" className="h-6 rounded-full border-border/60 bg-background/70 px-2 text-[10px] text-muted-foreground">
+                        +{overflowChatMcpCapabilities.length}
+                      </Badge>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom" className="max-w-[220px]">
+                      <p className="text-xs font-medium text-foreground">Additional MCP capabilities</p>
+                      <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                        {overflowChatMcpCapabilities.map((capability) => capability.label).join(", ")}
+                      </p>
+                    </TooltipContent>
+                  </Tooltip>
+                ) : null}
+              </div>
+            </TooltipProvider>
+          )}
         </div>
         <div className="flex items-center gap-2">
           {activeSessionId && (
@@ -1170,7 +1961,7 @@ export function ChatWorkbench({
             }
           }}
         >
-          <div className="mx-auto flex w-full max-w-4xl flex-col gap-5 px-4 py-6" aria-label="Conversation history" aria-live="polite" aria-atomic="false">
+          <div className="mx-auto flex w-full max-w-6xl flex-col gap-5 px-5 py-5" aria-label="Conversation history" aria-live="polite" aria-atomic="false">
             {messages.length === 0 && (
               <div className="space-y-4">
                 <EmptyState
@@ -1178,7 +1969,7 @@ export function ChatWorkbench({
                   title="No messages yet"
                   description={emptyMessage || "Send your first message to start a conversation. Try asking the agent to analyze code, fix a bug, or build a new feature."}
                 />
-                <div className="rounded-2xl border border-border/70 bg-card/70 p-3 shadow-sm backdrop-blur-sm">
+                <div className={`${SURFACE_PANEL_CLASS} p-3`}>
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div>
                       <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">Starter prompts</div>
@@ -1192,7 +1983,7 @@ export function ChatWorkbench({
                         key={item.label}
                         type="button"
                         onClick={() => handlePromptReuse(item.prompt)}
-                        className="group rounded-2xl border border-border/70 bg-background/70 px-3 py-3 text-left transition-all duration-200 hover:-translate-y-px hover:border-primary/30 hover:bg-primary/5"
+                        className="group rounded-[1.15rem] border border-border/70 bg-background/70 px-3 py-3 text-left shadow-sm transition-all duration-200 hover:-translate-y-px hover:border-primary/30 hover:bg-primary/5"
                         style={{ animationDelay: `${index * 45}ms`, animationFillMode: "backwards" }}
                       >
                         <div className="flex items-center gap-2 text-sm font-medium text-foreground">
@@ -1207,17 +1998,96 @@ export function ChatWorkbench({
               </div>
             )}
 
+            {teamRunSummary && (
+              <div className="rounded-[1.35rem] border border-primary/20 bg-primary/[0.06] p-3 shadow-sm shadow-primary/10 backdrop-blur-sm">
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div>
+                    <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.16em] text-primary">
+                      <Activity className="h-3.5 w-3.5" />
+                      Team coordination
+                    </div>
+                    <div className="mt-1 text-sm font-medium text-foreground">
+                      {teamRunSummary.status === "running"
+                        ? "Agents are actively coordinating on this request."
+                        : teamRunSummary.status === "complete"
+                          ? "The team run finished and left structured handoff data."
+                          : teamRunSummary.status === "needs-review"
+                            ? "The team run completed with failures or blocked steps."
+                            : "The specialist team is configured and ready for the next request."}
+                    </div>
+                    <div className="mt-1 text-xs text-muted-foreground">
+                      Watch live delegation in the Team panel beside the chat, or below it on narrower screens. Open Files for result artifacts and Details for the full execution log.
+                    </div>
+                  </div>
+                  <Badge
+                    variant={teamRunSummary.status === "needs-review" ? "destructive" : teamRunSummary.status === "running" ? "secondary" : "outline"}
+                    className="text-[10px] uppercase tracking-[0.12em]"
+                  >
+                    {teamRunSummary.status === "needs-review"
+                      ? "needs review"
+                      : teamRunSummary.status === "complete"
+                        ? "complete"
+                        : teamRunSummary.status}
+                  </Badge>
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2 text-[10px]">
+                  <Badge variant="outline">{teamRunSummary.memberCount} member{teamRunSummary.memberCount === 1 ? "" : "s"}</Badge>
+                  {teamRunSummary.completedCount > 0 && <Badge variant="outline">{teamRunSummary.completedCount} done</Badge>}
+                  {teamRunSummary.runningCount > 0 && <Badge variant="outline">{teamRunSummary.runningCount} running</Badge>}
+                  {teamRunSummary.queuedCount > 0 && <Badge variant="outline">{teamRunSummary.queuedCount} queued</Badge>}
+                  {teamRunSummary.failedCount > 0 && <Badge variant="outline">{teamRunSummary.failedCount} failed</Badge>}
+                  {teamRunSummary.resultFileCount > 0 && <Badge variant="outline">{teamRunSummary.resultFileCount} result file{teamRunSummary.resultFileCount === 1 ? "" : "s"}</Badge>}
+                  {teamRunSummary.sharedFileCount > 0 && <Badge variant="outline">{teamRunSummary.sharedFileCount} shared input{teamRunSummary.sharedFileCount === 1 ? "" : "s"}</Badge>}
+                  {teamRunSummary.sharedSandboxSession && <Badge variant="outline">shared sandbox</Badge>}
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    className="h-7 gap-1.5 px-2 text-[10px]"
+                    onClick={() => {
+                      setFileExplorerView("all");
+                      setFilesOpen(true);
+                      setDetailsOpen(false);
+                      if (planOpen) planDock.toggle();
+                      setMemoryOpen(false);
+                    }}
+                  >
+                    <FolderOpen className="h-3.5 w-3.5" />
+                    Open files
+                  </Button>
+                  {detailCount > 0 && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-7 gap-1.5 px-2 text-[10px]"
+                      onClick={() => {
+                        setDetailsOpen(true);
+                        if (planOpen) planDock.toggle();
+                        setFilesOpen(false);
+                        setMemoryOpen(false);
+                      }}
+                    >
+                      <PanelRightOpen className="h-3.5 w-3.5" />
+                      Open details
+                    </Button>
+                  )}
+                </div>
+              </div>
+            )}
+
             {downloadableArtifacts.length > 0 && (
-              <div className="rounded-2xl border border-border/70 bg-background/80 p-3 shadow-sm backdrop-blur-sm">
+              <div className={`${SURFACE_PANEL_CLASS} p-3`}>
                 <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
                     <FileText className="h-3.5 w-3.5" />
-                    Generated files
+                    Run files
                   </div>
                   <Badge variant="outline" className="text-[10px]">{downloadableArtifacts.length} ready</Badge>
                 </div>
                 <div className="mb-3 text-xs text-muted-foreground">
-                  Files detected from structured artifacts, tool results, and assistant responses in this run.
+                  Workspace files produced or explicitly handed off during this run.
                 </div>
                 <div className="flex flex-wrap gap-2">
                   {downloadableArtifacts.map((artifact) => {
@@ -1233,7 +2103,12 @@ export function ChatWorkbench({
                           {isLoading ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
                         </div>
                         <div className="min-w-0 flex-1">
-                          <div className="truncate text-sm font-medium text-foreground">{artifact.filename}</div>
+                          <div className="flex items-center gap-2">
+                            <div className="truncate text-sm font-medium text-foreground">{artifact.filename}</div>
+                            <Badge variant="outline" className="h-5 px-1.5 text-[9px] uppercase tracking-[0.12em]">
+                              {artifact.source === "result" ? "team output" : "artifact"}
+                            </Badge>
+                          </div>
                           <div className="truncate text-[11px] text-muted-foreground">{artifact.path}</div>
                         </div>
                       </button>
@@ -1254,6 +2129,11 @@ export function ChatWorkbench({
                   onEditPrompt={handlePromptReuse}
                   onRegeneratePrompt={handleRegeneratePrompt}
                   promptForRegenerate={message.role === "assistant" ? findPromptForRegenerate(i) : null}
+                  liveActivity={message.id === lastAssistantMessageId ? activity : []}
+                  phase={message.id === lastAssistantMessageId ? phase : "idle"}
+                  operationSummary={message.role === "assistant"
+                    ? buildInlineOperationSummary(message, message.id === lastAssistantMessageId ? summary : null)
+                    : null}
                 />
               ),
             )}
@@ -1262,7 +2142,7 @@ export function ChatWorkbench({
         </ScrollArea>
 
         {runtimeKind === "opencode" && planOpen && agentName && (
-          <aside className="absolute inset-y-3 right-3 z-10 flex w-[min(24rem,calc(100%-1.5rem))] flex-col overflow-hidden rounded-2xl border border-border/80 bg-background/96 shadow-2xl backdrop-blur-md">
+          <aside className={`${DRAWER_PANEL_CLASS} w-[min(24rem,calc(100%-1.5rem))]`}>
             <div className="flex items-center justify-between border-b border-border/60 px-3 py-2.5">
               <div>
                 <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">OpenCode</div>
@@ -1285,7 +2165,7 @@ export function ChatWorkbench({
         )}
 
         {detailsOpen && detailCount > 0 && (
-          <aside className="absolute inset-y-3 right-3 z-10 flex w-[min(24rem,calc(100%-1.5rem))] flex-col overflow-hidden rounded-2xl border border-border/80 bg-background/96 shadow-2xl backdrop-blur-md">
+          <aside className={`${DRAWER_PANEL_CLASS} w-[min(24rem,calc(100%-1.5rem))]`}>
             <div className="flex items-center justify-between border-b border-border/60 px-3 py-2.5">
               <div>
                 <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">Inspector</div>
@@ -1297,9 +2177,9 @@ export function ChatWorkbench({
             </div>
             <ScrollArea className="min-h-0 flex-1">
               <div className="space-y-3 p-3">
-                {summary && <OperationLog summary={summary} />}
+                {summary && <OperationLog summary={summary} className="mx-3 mb-2" />}
                 {activeSessionSummary && (
-                  <div className="rounded-2xl border border-border/70 bg-muted/20 p-3 space-y-3">
+                  <div className={`${SURFACE_PANEL_CLASS} space-y-3 p-3`}>
                     <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
                       <Brain className="h-3.5 w-3.5" />
                       Session memory
@@ -1392,7 +2272,7 @@ export function ChatWorkbench({
         )}
 
         {filesOpen && agentName && (
-          <aside className="absolute inset-y-3 right-3 z-10 flex w-[min(76rem,calc(100%-1.5rem))] flex-col overflow-hidden rounded-2xl border border-border/80 bg-background/96 shadow-2xl backdrop-blur-md">
+          <aside className={`${DRAWER_PANEL_CLASS} w-[min(76rem,calc(100%-1.5rem))]`}>
             <div className="flex items-center justify-between border-b border-border/60 px-3 py-2.5">
               <div>
                 <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">Workspace</div>
@@ -1406,6 +2286,7 @@ export function ChatWorkbench({
               agentName={agentName}
               onLoad={stableListArtifacts}
               onDownload={stableDownloadArtifact}
+              onDownloadAll={stableDownloadArtifactZip}
               onPreview={stablePreviewArtifact}
               onLoadDiff={runtimeKind === "opencode" && summary?.threadId ? stableLoadSessionDiff : undefined}
               preferredView={fileExplorerView}
@@ -1415,7 +2296,7 @@ export function ChatWorkbench({
         )}
 
         {memoryOpen && agentName && (
-          <aside className="absolute inset-y-3 right-3 z-10 flex w-[min(30rem,calc(100%-1.5rem))] flex-col overflow-hidden rounded-2xl border border-border/80 bg-background/96 shadow-2xl backdrop-blur-md">
+          <aside className={`${DRAWER_PANEL_CLASS} w-[min(30rem,calc(100%-1.5rem))]`}>
             <div className="flex items-center justify-between border-b border-border/60 px-3 py-2.5">
               <div>
                 <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">Memory workspace</div>
@@ -1428,7 +2309,7 @@ export function ChatWorkbench({
             <ScrollArea className="min-h-0 flex-1">
               <div className="space-y-4 p-3">
                 {activeSessionSummary && (
-                  <div className="space-y-3 rounded-2xl border border-border/70 bg-muted/20 p-3">
+                  <div className={`${SURFACE_PANEL_CLASS} space-y-3 p-3`}>
                     <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
                       <Brain className="h-3.5 w-3.5" />
                       Session memory
@@ -1480,7 +2361,7 @@ export function ChatWorkbench({
                   </div>
                 )}
 
-                <div className="space-y-3 rounded-2xl border border-border/70 bg-muted/20 p-3">
+                <div className={`${SURFACE_PANEL_CLASS} space-y-3 p-3`}>
                   <div className="flex items-center justify-between gap-2">
                     <div>
                       <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">Durable memory manager</div>
@@ -1557,56 +2438,16 @@ export function ChatWorkbench({
       </div>
 
       {/* Composer */}
-      <div className="border-t border-border/40 bg-background/95 px-4 py-3 backdrop-blur-md space-y-2">
-        {!chatFocused && (
-          <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-border/70 bg-muted/15 px-3 py-2 text-[11px] text-muted-foreground">
-            <Badge variant="outline" className="text-[10px] uppercase">{runtimeKind}</Badge>
-            <Badge variant={tokenReady ? "outline" : "secondary"} className="text-[10px]">
-              {tokenReady ? "Gateway ready" : "Token required"}
-            </Badge>
-            <Badge variant={streamMode ? "default" : "secondary"} className="text-[10px]">
-              {streamMode ? "Streaming" : "Single-shot"}
-            </Badge>
-            <Badge variant={requireApproval ? "secondary" : "outline"} className="text-[10px]">
-              {requireApproval ? "Approval on" : "Approval off"}
-            </Badge>
-            <Badge variant="outline" className="text-[10px] text-primary">
-              {specialistMode ? "Specialist team" : a2aMode ? "A2A route" : "Direct run"}
-            </Badge>
-            {activeSessionId ? (
-              <>
-                <Brain className="ml-1 h-3.5 w-3.5 text-primary" />
-                <span className="font-mono text-[10px] text-foreground/85">{activeSessionId.slice(0, 8)}</span>
-                <Badge variant={sessionSaving ? "default" : sessionDirty ? "secondary" : "outline"} className="text-[10px]">
-                  {sessionSaving ? "Saving" : sessionDirty ? "Unsaved" : "Saved"}
-                </Badge>
-                {lastSessionSaveAt && <span>Saved {formatRelativeTime(lastSessionSaveAt)}</span>}
-                {continuityHighlights.slice(0, 2).map((item) => (
-                  <Badge key={item} variant="outline" className="text-[10px] text-primary">
-                    {item}
-                  </Badge>
-                ))}
-              </>
-            ) : (
-              <span>A saved session will appear after the first completed run.</span>
-            )}
-            <div className="ml-auto flex flex-wrap items-center gap-2">
-              {lastUserPrompt && (
-                <Button type="button" variant="ghost" size="sm" className="h-7 gap-1 px-2 text-[10px]" onClick={() => handlePromptReuse(lastUserPrompt)}>
-                  <Pencil className="h-3 w-3" />
-                  Reuse last prompt
-                </Button>
-              )}
-              <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-[10px]" onClick={onSaveSession} disabled={!messages.length || sessionSaving || !tokenReady}>
-                Save session
-              </Button>
-            </div>
-          </div>
-        )}
+      <div className="space-y-2 border-t border-border/60 bg-background/92 px-4 py-3 backdrop-blur-xl">
         {!chatFocused && (
           <>
         {/* Compact controls row: toggles + settings drawer */}
         <div className="flex flex-wrap items-center gap-2">
+          {showFactoryMode && (
+            <Badge variant="outline" className="h-6 rounded-full border-primary/25 bg-primary/5 px-2 text-[10px] uppercase tracking-[0.14em] text-primary/80">
+              Factory {factoryModeShortLabel(factoryMode)}
+            </Badge>
+          )}
           <label className="flex items-center gap-1.5 cursor-pointer text-xs">
             <input
               type="checkbox"
@@ -1626,42 +2467,33 @@ export function ChatWorkbench({
             />
             {approvalSupported
               ? "Require approval"
-              : <span className="opacity-60">Approval (LangGraph / OpenCode)</span>
+              : <span className="opacity-60">Approval unavailable</span>
             }
           </label>
           <div className="ml-auto">
             <ChatSettingsDrawer
               runtimeKind={runtimeKind}
+              signalSource={selectedAgentDetail ?? { runtime_kind: runtimeKind }}
               a2aTargetAgent={a2aTargetAgent}
               a2aTargetNamespace={a2aTargetNamespace}
               a2aTimeoutSeconds={a2aTimeoutSeconds}
               onA2ATargetAgentChange={onA2ATargetAgentChange}
               onA2ATargetNamespaceChange={onA2ATargetNamespaceChange}
               onA2ATimeoutSecondsChange={onA2ATimeoutSecondsChange}
-              specialistSubagents={specialistSubagents}
-              specialistTeamConfigured={specialistTeamConfigured}
-              subagentStrategy={subagentStrategy}
-              onSubagentStrategyChange={onSubagentStrategyChange}
-              onAddSpecialistSubagent={onAddSpecialistSubagent}
-              onUpdateSpecialistSubagent={onUpdateSpecialistSubagent}
-              onRemoveSpecialistSubagent={onRemoveSpecialistSubagent}
-              onClearSpecialistTeam={onClearSpecialistTeam}
               discoveryPeers={discoveryPeers}
               discoveryLoading={discoveryLoading}
               discoveryError={discoveryError}
-              gooseMaxTurns={gooseMaxTurns}
-              gooseWorkingDirectory={gooseWorkingDirectory}
-              gooseSystemPrompt={gooseSystemPrompt}
-              onGooseMaxTurnsChange={onGooseMaxTurnsChange}
-              onGooseWorkingDirectoryChange={onGooseWorkingDirectoryChange}
               opencodeOutputFormat={opencodeOutputFormat}
               opencodeAutonomous={opencodeAutonomous}
               opencodeMaxTurns={opencodeMaxTurns}
               opencodeWorkingDirectory={opencodeWorkingDirectory}
+              showFactoryMode={showFactoryMode}
+              factoryMode={factoryMode}
               onOpenCodeOutputFormatChange={onOpenCodeOutputFormatChange}
               onOpenCodeAutonomousChange={onOpenCodeAutonomousChange}
               onOpenCodeMaxTurnsChange={onOpenCodeMaxTurnsChange}
               onOpenCodeWorkingDirectoryChange={onOpenCodeWorkingDirectoryChange}
+              onFactoryModeChange={onFactoryModeChange}
             />
           </div>
         </div>
@@ -1678,19 +2510,9 @@ export function ChatWorkbench({
           />
         )}
 
-        {/* Followup suggestions — quick-reply buttons */}
-        {!pendingQuestion && followupSuggestions.length > 0 && !isSending && (
-          <FollowupDock
-            items={followupSuggestions}
-            sending={followupSending}
-            onSend={handleFollowupSend}
-            onEdit={handleFollowupEdit}
-          />
-        )}
-
         {/* Prompt input */}
-        <div className="relative mx-auto w-full max-w-4xl">
-          <div className="relative rounded-2xl border border-border/60 bg-muted/20 shadow-lg shadow-black/5 transition-colors focus-within:border-primary/30 focus-within:bg-muted/30">
+        <div className="relative mx-auto w-full max-w-6xl">
+          <div className="relative rounded-[1.35rem] border border-border/70 bg-background/80 shadow-sm transition-colors focus-within:border-primary/30 focus-within:bg-primary/5">
             <Textarea
               ref={textareaRef}
               autoFocus
@@ -1765,7 +2587,7 @@ export function ChatWorkbench({
         </div>
 
         {error && (
-          <div role="alert" className="flex items-center gap-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-1.5 text-xs text-destructive">
+          <div role="alert" className="flex items-center gap-2 rounded-[1rem] border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive shadow-sm">
             <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
             <span className="flex-1">{error}</span>
             <Button

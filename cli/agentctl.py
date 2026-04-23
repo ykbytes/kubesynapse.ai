@@ -386,46 +386,6 @@ def render_a2a_metadata(payload: Any) -> None:
         render_info_table("A2A", rows)
 
 
-def render_subagent_metadata(payload: Any) -> None:
-    if not isinstance(payload, dict) or not payload:
-        return
-
-    results = payload.get("results") if isinstance(payload.get("results"), list) else []
-    render_info_table(
-        "Specialist Team",
-        [
-            ("Strategy", str(payload.get("strategy") or "sequential")),
-            ("Members", str(payload.get("count") or len(results))),
-            ("Shared Session", "yes" if bool(payload.get("sharedSandboxSession")) else "no"),
-            ("Artifacts", str(len(payload.get("resultFiles") or []))),
-        ],
-    )
-
-    if not results:
-        return
-
-    table = Table(title="Subagent Results", box=box.ROUNDED)
-    table.add_column("Target", style="title")
-    table.add_column("Role", style="accent")
-    table.add_column("Status")
-    table.add_column("Transport", style="accent")
-    table.add_column("Thread", style="muted")
-    table.add_column("Artifact", style="accent")
-    for item in results:
-        if not isinstance(item, dict):
-            continue
-        target = f"{item.get('namespace', '')}/{item.get('name', '')}".strip("/")
-        table.add_row(
-            target or "-",
-            str(item.get("role") or "-"),
-            styled_status(str(item.get("status") or "unknown")),
-            str(item.get("transport") or "-"),
-            str(item.get("threadId") or "-"),
-            str(item.get("resultFilePath") or "-"),
-        )
-    console.print(table)
-
-
 def render_invoke_result(data: dict[str, Any], json_output: bool) -> None:
     if json_output:
         print_json(data)
@@ -449,7 +409,6 @@ def render_invoke_result(data: dict[str, Any], json_output: bool) -> None:
     if sandbox_session:
         console.print(Panel(Pretty(sandbox_session), title="Sandbox Session", border_style="accent"))
     render_a2a_metadata(data.get("a2a"))
-    render_subagent_metadata(data.get("subagents"))
     artifacts = data.get("artifacts")
     if artifacts:
         console.print(Panel(Pretty(artifacts), title="Artifacts", border_style="accent"))
@@ -552,169 +511,6 @@ def normalize_list_of_strings(values: Any, field_name: str) -> list[str]:
     return [str(item) for item in values if str(item).strip()]
 
 
-def normalize_subagent_strategy_text(value: str | None) -> str | None:
-    if value is None:
-        return None
-    strategy = value.strip().lower()
-    if not strategy:
-        return None
-    if strategy not in {"sequential", "parallel"}:
-        fatal("--subagent-strategy must be either 'sequential' or 'parallel'.")
-    return strategy
-
-
-def parse_subagent_ref_text(value: str, source: str) -> tuple[str, str]:
-    raw_value = value.strip()
-    namespace, separator, name = raw_value.partition("/")
-    if not separator or not namespace.strip() or not name.strip():
-        fatal(f"{source} must use namespace/name syntax. Invalid value: {value}")
-    namespace = namespace.strip()
-    name = name.strip()
-    if not K8S_NAME_RE.fullmatch(namespace):
-        fatal(f"{source} namespace must be a valid lowercase Kubernetes name. Invalid value: {namespace}")
-    if not K8S_NAME_RE.fullmatch(name):
-        fatal(f"{source} name must be a valid lowercase Kubernetes name. Invalid value: {name}")
-    return namespace, name
-
-
-def normalize_subagent_input_files(values: Any, source: str) -> list[dict[str, Any]]:
-    if values in (None, "", []):
-        return []
-    if not isinstance(values, list):
-        fatal(f"{source} must be a list when provided.")
-
-    normalized: list[dict[str, Any]] = []
-    for index, item in enumerate(values):
-        label = f"{source}[{index}]"
-        if isinstance(item, str):
-            path = item.strip()
-            if not path:
-                continue
-            normalized.append({"path": path})
-            continue
-        if not isinstance(item, dict):
-            fatal(f"{label} must be a string path or object.")
-
-        path = str(snake_or_camel(item, "path", "path", "") or "").strip()
-        if not path:
-            fatal(f"{label}.path is required.")
-        entry: dict[str, Any] = {"path": path}
-        purpose = str(snake_or_camel(item, "purpose", "purpose", "") or "").strip()
-        if purpose:
-            entry["purpose"] = purpose
-        include_content = snake_or_camel(item, "include_content", "includeContent")
-        if include_content is not None:
-            if not isinstance(include_content, bool):
-                fatal(f"{label}.include_content must be a boolean when provided.")
-            entry["include_content"] = include_content
-        max_chars = snake_or_camel(item, "max_chars", "maxChars")
-        if max_chars is not None:
-            try:
-                parsed_max_chars = int(max_chars)
-            except (TypeError, ValueError):
-                fatal(f"{label}.max_chars must be an integer when provided.")
-            if parsed_max_chars < 1:
-                fatal(f"{label}.max_chars must be greater than or equal to 1.")
-            entry["max_chars"] = parsed_max_chars
-        normalized.append(entry)
-    return normalized
-
-
-def normalize_subagent_payload_item(item: Any, source: str) -> dict[str, Any]:
-    if not isinstance(item, dict):
-        fatal(f"{source} must be an object.")
-
-    name = str(snake_or_camel(item, "name", "name", "") or "").strip()
-    namespace = str(snake_or_camel(item, "namespace", "namespace", "") or "").strip()
-    if not name or not namespace:
-        raw_ref = str(snake_or_camel(item, "ref", "agentRef", "") or "").strip()
-        if raw_ref:
-            namespace, name = parse_subagent_ref_text(raw_ref, f"{source}.ref")
-    if not name or not namespace:
-        fatal(f"{source} requires name and namespace fields, or ref/agentRef using namespace/name syntax.")
-    if not K8S_NAME_RE.fullmatch(namespace):
-        fatal(f"{source}.namespace must be a valid lowercase Kubernetes name.")
-    if not K8S_NAME_RE.fullmatch(name):
-        fatal(f"{source}.name must be a valid lowercase Kubernetes name.")
-
-    normalized: dict[str, Any] = {
-        "name": name,
-        "namespace": namespace,
-    }
-    role = str(snake_or_camel(item, "role", "role", "") or "").strip()
-    if role:
-        normalized["role"] = role
-    task = str(snake_or_camel(item, "task", "task", "") or "").strip()
-    if task:
-        normalized["task"] = task
-    result_file_path = str(snake_or_camel(item, "result_file_path", "resultFilePath", "") or "").strip()
-    if result_file_path:
-        normalized["result_file_path"] = result_file_path
-    input_files = normalize_subagent_input_files(
-        snake_or_camel(item, "input_files", "inputFiles", []),
-        f"{source}.input_files",
-    )
-    if input_files:
-        normalized["input_files"] = input_files
-    share_sandbox_session = snake_or_camel(item, "share_sandbox_session", "shareSandboxSession", True)
-    if not isinstance(share_sandbox_session, bool):
-        fatal(f"{source}.share_sandbox_session must be a boolean when provided.")
-    normalized["share_sandbox_session"] = share_sandbox_session
-    timeout_seconds = snake_or_camel(item, "timeout_seconds", "timeoutSeconds")
-    if timeout_seconds is not None:
-        try:
-            parsed_timeout = float(timeout_seconds)
-        except (TypeError, ValueError):
-            fatal(f"{source}.timeout_seconds must be numeric when provided.")
-        if parsed_timeout < 1:
-            fatal(f"{source}.timeout_seconds must be greater than or equal to 1.")
-        normalized["timeout_seconds"] = parsed_timeout
-    metadata = snake_or_camel(item, "metadata", "metadata")
-    if metadata is not None:
-        if not isinstance(metadata, dict):
-            fatal(f"{source}.metadata must be an object when provided.")
-        normalized["metadata"] = metadata
-    return normalized
-
-
-def parse_subagent_shorthand(value: str, source: str) -> dict[str, Any]:
-    ref_text, role_text, task_text = [part.strip() for part in (value.split("|", 2) + ["", ""])[:3]]
-    namespace, name = parse_subagent_ref_text(ref_text, source)
-    payload: dict[str, Any] = {
-        "name": name,
-        "namespace": namespace,
-        "share_sandbox_session": True,
-    }
-    if role_text:
-        payload["role"] = role_text
-    if task_text:
-        payload["task"] = task_text
-    return payload
-
-
-def load_subagents_file(file_path: Path) -> tuple[list[dict[str, Any]], str | None]:
-    loaded = read_any_structured_file(file_path)
-    strategy: str | None = None
-    raw_subagents: Any = loaded
-    if isinstance(loaded, dict):
-        if "subagents" in loaded or "subagent_strategy" in loaded or "subagentStrategy" in loaded:
-            raw_subagents = snake_or_camel(loaded, "subagents", "subagents", [])
-            strategy = normalize_subagent_strategy_text(
-                str(snake_or_camel(loaded, "subagent_strategy", "subagentStrategy", "") or "")
-            )
-        else:
-            raw_subagents = [loaded]
-
-    if not isinstance(raw_subagents, list):
-        fatal(f"{file_path} must contain either a subagents array or a single subagent object.")
-
-    normalized = [
-        normalize_subagent_payload_item(item, f"{file_path}.subagents[{index}]")
-        for index, item in enumerate(raw_subagents)
-    ]
-    return normalized, strategy
-
-
 def snake_or_camel(payload: dict[str, Any], snake_key: str, camel_key: str, default: Any = None) -> Any:
     if snake_key in payload:
         return payload[snake_key]
@@ -723,12 +519,30 @@ def snake_or_camel(payload: dict[str, Any], snake_key: str, camel_key: str, defa
     return default
 
 
-def normalize_goose_config_files_value(value: Any, field_name: str) -> dict[str, Any]:
-    if value is None:
-        return {}
-    if not isinstance(value, dict):
-        raise ValueError(f"{field_name} must be an object keyed by relative Goose config file paths.")
-    return dict(value)
+def require_explicit_opencode_runtime_kind(value: Any, field_name: str) -> str:
+    runtime_kind = str(value or "").strip().lower()
+    if not runtime_kind:
+        fatal(f"{field_name} is required and must be set to 'opencode'.")
+    if runtime_kind != "opencode":
+        fatal(f"{field_name} must be 'opencode'. Legacy runtimes are no longer supported.")
+    return runtime_kind
+
+
+def normalize_field_name(value: str) -> str:
+    return re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", value).replace("-", "_").lower()
+
+
+def reject_unsupported_runtime_config_keys(payload: dict[str, Any]) -> None:
+    unsupported_keys = [
+        key
+        for key in payload
+        if normalize_field_name(key).endswith("_config_files") and normalize_field_name(key) != "opencode_config_files"
+    ]
+    if unsupported_keys:
+        joined = ", ".join(sorted(unsupported_keys))
+        fatal(
+            f"Unsupported runtime config file fields: {joined}. Only opencode_config_files is supported."
+        )
 
 
 def normalize_opencode_config_files_value(value: Any, field_name: str) -> dict[str, Any]:
@@ -810,41 +624,11 @@ def normalize_a2a_config_value(value: Any, field_name: str) -> dict[str, Any]:
     }
 
 
-def parse_goose_config_assignment(spec: str, *, field_name: str) -> tuple[str, str]:
+def parse_config_assignment(spec: str, *, field_name: str) -> tuple[str, str]:
     relative_path, separator, raw_value = spec.partition("=")
     if not separator or not relative_path.strip() or not raw_value.strip():
         raise ValueError(f"{field_name} entries must use RELATIVE_PATH=VALUE syntax.")
     return relative_path.strip(), raw_value.strip()
-
-
-def build_goose_config_files_payload(
-    current: Any,
-    *,
-    clear_existing: bool = False,
-    file_assignments: list[str] | None = None,
-    text_assignments: list[str] | None = None,
-) -> dict[str, Any]:
-    merged = {} if clear_existing else normalize_goose_config_files_value(current, "goose_config_files")
-
-    for assignment in file_assignments or []:
-        relative_path, source_path_text = parse_goose_config_assignment(
-            assignment,
-            field_name="--goose-config-file",
-        )
-        source_path = Path(source_path_text)
-        try:
-            merged[relative_path] = source_path.read_text(encoding="utf-8")
-        except OSError as exc:
-            raise ValueError(f"Failed to read Goose config source file {source_path}: {exc}") from exc
-
-    for assignment in text_assignments or []:
-        relative_path, inline_text = parse_goose_config_assignment(
-            assignment,
-            field_name="--goose-config-text",
-        )
-        merged[relative_path] = inline_text
-
-    return merged
 
 
 def build_opencode_config_files_payload(
@@ -857,7 +641,7 @@ def build_opencode_config_files_payload(
     merged = {} if clear_existing else normalize_opencode_config_files_value(current, "opencode_config_files")
 
     for assignment in file_assignments or []:
-        relative_path, source_path_text = parse_goose_config_assignment(
+        relative_path, source_path_text = parse_config_assignment(
             assignment,
             field_name="--opencode-config-file",
         )
@@ -868,7 +652,7 @@ def build_opencode_config_files_payload(
             raise ValueError(f"Failed to read OpenCode config source file {source_path}: {exc}") from exc
 
     for assignment in text_assignments or []:
-        relative_path, inline_text = parse_goose_config_assignment(
+        relative_path, inline_text = parse_config_assignment(
             assignment,
             field_name="--opencode-config-text",
         )
@@ -878,21 +662,18 @@ def build_opencode_config_files_payload(
 
 
 def agent_payload_from_detail(detail: dict[str, Any]) -> dict[str, Any]:
+    reject_unsupported_runtime_config_keys(detail)
     return {
         "model": str(detail.get("model", "")),
         "system_prompt": str(detail.get("system_prompt", "")),
         "policy_ref": detail.get("policy_ref"),
         "storage_size": detail.get("storage_size") or "1Gi",
-        "runtime_kind": str(detail.get("runtime_kind") or "langgraph"),
+        "runtime_kind": require_explicit_opencode_runtime_kind(detail.get("runtime_kind"), "runtime_kind"),
         "enable_gvisor": bool(detail.get("enable_gvisor", False)),
         "mcp_servers": normalize_list_of_strings(detail.get("mcp_servers"), "mcp_servers"),
         "mcp_sidecars": normalize_sidecars(detail.get("mcp_sidecars")),
         "a2a_config": normalize_a2a_config_value(detail.get("a2a_config"), "a2a_config"),
         "skills": normalize_agent_skills_value(detail.get("skills"), "skills"),
-        "goose_config_files": normalize_goose_config_files_value(
-            detail.get("goose_config_files"),
-            "goose_config_files",
-        ),
         "opencode_config_files": normalize_opencode_config_files_value(
             detail.get("opencode_config_files"),
             "opencode_config_files",
@@ -906,23 +687,28 @@ def coerce_agent_payload(document: dict[str, Any], *, for_update: bool) -> tuple
         spec = document["spec"]
         storage = spec.get("storage") if isinstance(spec.get("storage"), dict) else {}
         runtime = spec.get("runtime") if isinstance(spec.get("runtime"), dict) else {}
-        goose_runtime = runtime.get("goose") if isinstance(runtime.get("goose"), dict) else {}
         opencode_runtime = runtime.get("opencode") if isinstance(runtime.get("opencode"), dict) else {}
+        unsupported_runtime_blocks = [
+            f"spec.runtime.{key}"
+            for key in runtime
+            if key not in {"kind", "opencode"}
+        ]
+        if unsupported_runtime_blocks:
+            fatal(
+                "Unsupported legacy runtime configuration blocks are present: "
+                f"{', '.join(sorted(unsupported_runtime_blocks))}. Keep only spec.runtime.kind and spec.runtime.opencode."
+            )
         payload: dict[str, Any] = {
             "model": str(spec.get("model", "")),
             "system_prompt": str(spec.get("systemPrompt", "")),
             "policy_ref": spec.get("policyRef"),
             "storage_size": storage.get("size", "1Gi"),
-            "runtime_kind": str(runtime.get("kind", "langgraph") or "langgraph"),
+            "runtime_kind": require_explicit_opencode_runtime_kind(runtime.get("kind"), "spec.runtime.kind"),
             "enable_gvisor": bool(spec.get("enableGVisor", False)),
             "mcp_servers": normalize_list_of_strings(spec.get("mcpServers"), "mcpServers"),
             "mcp_sidecars": normalize_sidecars(spec.get("mcpSidecars")),
             "a2a_config": normalize_a2a_config_value(spec.get("a2a"), "spec.a2a"),
             "skills": normalize_agent_skills_value(spec.get("skills"), "spec.skills"),
-            "goose_config_files": normalize_goose_config_files_value(
-                goose_runtime.get("configFiles"),
-                "runtime.goose.configFiles",
-            ),
             "opencode_config_files": normalize_opencode_config_files_value(
                 opencode_runtime.get("configFiles"),
                 "runtime.opencode.configFiles",
@@ -933,12 +719,16 @@ def coerce_agent_payload(document: dict[str, Any], *, for_update: bool) -> tuple
         return payload, str(metadata.get("name", "") or "")
 
     payload = dict(document)
+    reject_unsupported_runtime_config_keys(payload)
     normalized = {
         "model": str(snake_or_camel(payload, "model", "model", "")),
         "system_prompt": str(snake_or_camel(payload, "system_prompt", "systemPrompt", "")),
         "policy_ref": snake_or_camel(payload, "policy_ref", "policyRef"),
         "storage_size": snake_or_camel(payload, "storage_size", "storageSize", "1Gi"),
-        "runtime_kind": str(snake_or_camel(payload, "runtime_kind", "runtimeKind", "langgraph") or "langgraph"),
+        "runtime_kind": require_explicit_opencode_runtime_kind(
+            snake_or_camel(payload, "runtime_kind", "runtimeKind"),
+            "runtime_kind",
+        ),
         "enable_gvisor": bool(snake_or_camel(payload, "enable_gvisor", "enableGVisor", False)),
         "mcp_servers": normalize_list_of_strings(
             snake_or_camel(payload, "mcp_servers", "mcpServers", []),
@@ -952,10 +742,6 @@ def coerce_agent_payload(document: dict[str, Any], *, for_update: bool) -> tuple
         "skills": normalize_agent_skills_value(
             snake_or_camel(payload, "skills", "skills", {}),
             "skills",
-        ),
-        "goose_config_files": normalize_goose_config_files_value(
-            snake_or_camel(payload, "goose_config_files", "gooseConfigFiles", {}),
-            "goose_config_files",
         ),
         "opencode_config_files": normalize_opencode_config_files_value(
             snake_or_camel(payload, "opencode_config_files", "opencodeConfigFiles", {}),
@@ -1251,13 +1037,13 @@ def invoke(
     stream: bool = typer.Option(False, "--stream", "-s", help="Use SSE streaming output."),
     prompt_file: Path | None = typer.Option(None, "--file", exists=True, file_okay=True, dir_okay=False),
     thread_id: str | None = typer.Option(None, "--thread-id", help="Reuse an existing thread id."),
-    system: str | None = typer.Option(None, "--system", help="Additional Goose system instructions."),
+    system: str | None = typer.Option(None, "--system", help="Additional OpenCode system instructions."),
     require_approval: bool = typer.Option(False, "--require-approval", help="Request HITL approval."),
     approval_action: str | None = typer.Option(None, "--approval-action", help="Approval action label."),
-    no_session: bool = typer.Option(False, "--no-session", help="Disable Goose session persistence for this invoke."),
-    max_turns: int | None = typer.Option(None, "--max-turns", min=1, help="Limit Goose autonomous turns for this invoke."),
+    no_session: bool = typer.Option(False, "--no-session", help="Disable OpenCode session persistence for this invoke."),
+    max_turns: int | None = typer.Option(None, "--max-turns", min=1, help="Limit OpenCode autonomous turns for this invoke."),
     max_retries: int | None = typer.Option(None, "--max-retries", min=0, help="Limit OpenCode autonomous retries for this invoke."),
-    debug: bool = typer.Option(False, "--debug", help="Enable Goose debug output for this invoke."),
+    debug: bool = typer.Option(False, "--debug", help="Enable OpenCode debug output for this invoke."),
     output_format: str | None = typer.Option(
         None,
         "--output-format",
@@ -1279,22 +1065,7 @@ def invoke(
     working_directory: str | None = typer.Option(
         None,
         "--working-directory",
-        help="Run Goose from a subdirectory inside the runtime workspace.",
-    ),
-    builtin: list[str] | None = typer.Option(
-        None,
-        "--builtin",
-        help="Enable a Goose builtin extension for this invoke. Can be repeated.",
-    ),
-    extension: list[str] | None = typer.Option(
-        None,
-        "--extension",
-        help="Add a Goose stdio extension command for this invoke. Can be repeated.",
-    ),
-    http_extension: list[str] | None = typer.Option(
-        None,
-        "--http-extension",
-        help="Add a Goose Streamable HTTP extension URL for this invoke. Can be repeated.",
+        help="Run OpenCode from a subdirectory inside the runtime workspace.",
     ),
     a2a_target_agent: str | None = typer.Option(
         None,
@@ -1312,44 +1083,16 @@ def invoke(
         min=1.0,
         help="Maximum time the caller should wait for the callee response.",
     ),
-    subagent: list[str] | None = typer.Option(
-        None,
-        "--subagent",
-        help="Add a specialist using namespace/name|role|task. Can be repeated.",
-    ),
-    subagents_file: Path | None = typer.Option(
-        None,
-        "--subagents-file",
-        exists=True,
-        file_okay=True,
-        dir_okay=False,
-        help="Load specialist-team definitions from a JSON or YAML file.",
-    ),
-    subagent_strategy: str | None = typer.Option(
-        None,
-        "--subagent-strategy",
-        help="Execution strategy for specialists: sequential or parallel.",
-    ),
 ) -> None:
     """Invoke an agent with a prompt."""
     settings = ctx_settings(ctx)
 
-    subagent_payloads: list[dict[str, Any]] = []
-    file_strategy: str | None = None
-    if subagents_file is not None:
-        subagent_payloads, file_strategy = load_subagents_file(subagents_file)
-    for index, item in enumerate(subagent or []):
-        subagent_payloads.append(parse_subagent_shorthand(item, f"--subagent[{index}]"))
-    resolved_subagent_strategy = normalize_subagent_strategy_text(subagent_strategy) or file_strategy
-
     try:
-        prompt = load_prompt(prompt_parts or [], prompt_file, allow_empty=bool(subagent_payloads))
+        prompt = load_prompt(prompt_parts or [], prompt_file)
     except OSError as exc:
         fatal(f"Failed to read prompt file: {exc}")
-    if not prompt and not subagent_payloads:
+    if not prompt:
         fatal("Prompt must not be empty.")
-    if not prompt and not any(item.get("task") for item in subagent_payloads):
-        fatal("Provide a prompt or set at least one specialist task when using specialist teams.")
     if no_session and thread_id:
         fatal("--thread-id cannot be combined with --no-session.")
     if output_format and output_format.strip().lower() not in {"json", "code", "markdown", "text"}:
@@ -1358,14 +1101,10 @@ def invoke(
         fatal("--output-schema-file can only be used with --output-format json.")
     if bool(a2a_target_agent) != bool(a2a_target_namespace):
         fatal("Pass both --a2a-target-agent and --a2a-target-namespace together.")
-    if subagent_payloads and a2a_target_agent:
-        fatal("Specialist teams cannot be combined with explicit A2A routing in a single invoke.")
     if a2a_target_agent and not K8S_NAME_RE.fullmatch(a2a_target_agent.strip()):
         fatal("--a2a-target-agent must be a valid lowercase Kubernetes resource name.")
     if a2a_target_namespace and not K8S_NAME_RE.fullmatch(a2a_target_namespace.strip()):
         fatal("--a2a-target-namespace must be a valid lowercase Kubernetes namespace name.")
-    if resolved_subagent_strategy and not subagent_payloads:
-        fatal("--subagent-strategy requires at least one specialist definition.")
 
     payload: dict[str, Any] = {"prompt": prompt}
     if thread_id:
@@ -1399,21 +1138,11 @@ def invoke(
         payload["autonomous"] = False
     if working_directory:
         payload["working_directory"] = working_directory
-    if builtin:
-        payload["builtin_extensions"] = builtin
-    if extension:
-        payload["stdio_extensions"] = extension
-    if http_extension:
-        payload["streamable_http_extensions"] = http_extension
     if a2a_target_agent and a2a_target_namespace:
         payload["a2a_target_agent"] = a2a_target_agent.strip()
         payload["a2a_target_namespace"] = a2a_target_namespace.strip()
     if a2a_timeout_seconds is not None:
         payload["a2a_timeout_seconds"] = a2a_timeout_seconds
-    if subagent_payloads:
-        payload["subagents"] = subagent_payloads
-    if resolved_subagent_strategy:
-        payload["subagent_strategy"] = resolved_subagent_strategy
 
     if stream:
         try:
@@ -1477,7 +1206,6 @@ def invoke(
                     ],
                 )
                 render_a2a_metadata(completed_payload.get("a2a"))
-                render_subagent_metadata(completed_payload.get("subagents"))
                 render_warnings(list(completed_payload.get("warnings") or []))
         return
 
@@ -1634,21 +1362,6 @@ def agents_update(
     ctx: typer.Context,
     agent_name: str | None = typer.Argument(None, help="Agent name. Optional when the file contains metadata.name."),
     file_path: Path | None = typer.Option(None, "--file", "-f", exists=True, file_okay=True, dir_okay=False),
-    goose_config_file: list[str] | None = typer.Option(
-        None,
-        "--goose-config-file",
-        help="Map a Goose config-root path to a local file using RELATIVE_PATH=FILE. Can be repeated.",
-    ),
-    goose_config_text: list[str] | None = typer.Option(
-        None,
-        "--goose-config-text",
-        help="Set a Goose config-root file from inline text using RELATIVE_PATH=TEXT. Can be repeated.",
-    ),
-    clear_goose_config_files: bool = typer.Option(
-        False,
-        "--clear-goose-config-files",
-        help="Remove all existing agent-specific Goose config files before applying overrides.",
-    ),
     opencode_config_file: list[str] | None = typer.Option(
         None,
         "--opencode-config-file",
@@ -1670,12 +1383,8 @@ def agents_update(
     document: dict[str, Any] = {}
     inferred_name: str | None = None
     namespace = settings.namespace
-    goose_override_requested = clear_goose_config_files or bool(goose_config_file) or bool(goose_config_text)
     opencode_override_requested = clear_opencode_config_files or bool(opencode_config_file) or bool(opencode_config_text)
-    override_requested = goose_override_requested or opencode_override_requested
-
-    if goose_override_requested and opencode_override_requested:
-        fatal("Choose either Goose or OpenCode config override flags in a single update command, not both.")
+    override_requested = opencode_override_requested
 
     if file_path is not None:
         document = read_structured_file(file_path)
@@ -1683,7 +1392,7 @@ def agents_update(
         namespace = resolve_namespace(settings, document)
     else:
         if not override_requested:
-            fatal("Pass --file or at least one runtime config override flag.")
+            fatal("Pass --file or at least one OpenCode config override flag.")
         if not agent_name or not agent_name.strip():
             fatal("Agent name is required when updating without --file.")
         resolved_name = resolve_resource_name(agent_name, None, None, "agent")
@@ -1705,24 +1414,8 @@ def agents_update(
     resolved_name = resolve_resource_name(agent_name, file_path, inferred_name, "agent")
 
     try:
-        if goose_override_requested:
-            runtime_kind = str(payload.get("runtime_kind", "langgraph") or "langgraph").strip().lower() or "langgraph"
-            if runtime_kind != "goose":
-                fatal(
-                    "Goose config overrides require a Goose agent/runtime. Switch the agent to runtime_kind=goose first or update from a file that sets it."
-                )
-            payload["goose_config_files"] = build_goose_config_files_payload(
-                payload.get("goose_config_files"),
-                clear_existing=clear_goose_config_files,
-                file_assignments=goose_config_file,
-                text_assignments=goose_config_text,
-            )
         if opencode_override_requested:
-            runtime_kind = str(payload.get("runtime_kind", "langgraph") or "langgraph").strip().lower() or "langgraph"
-            if runtime_kind != "opencode":
-                fatal(
-                    "OpenCode config overrides require an OpenCode agent/runtime. Switch the agent to runtime_kind=opencode first or update from a file that sets it."
-                )
+            require_explicit_opencode_runtime_kind(payload.get("runtime_kind"), "runtime_kind")
             payload["opencode_config_files"] = build_opencode_config_files_payload(
                 payload.get("opencode_config_files"),
                 clear_existing=clear_opencode_config_files,

@@ -1,42 +1,36 @@
-agentRuntime:
-  image:
-    repository: localhost/kubesynthai/kubesynth-agent-runtime
-    tag: dev
-    pullPolicy: IfNotPresent
-
 operator:
   replicaCount: 1
   image:
     repository: localhost/kubesynthai/kubesynth-operator
-    tag: dev4
+    tag: dev5
     pullPolicy: IfNotPresent
   workerImage:
     repository: localhost/kubesynthai/kubesynth-operator
-    tag: dev4
-    pullPolicy: IfNotPresent
-
-gooseRuntime:
-  image:
-    repository: localhost/kubesynthai/kubesynth-goose-runtime
-    tag: dev
-    pullPolicy: IfNotPresent
-
-codexRuntime:
-  image:
-    repository: localhost/kubesynthai/kubesynth-codex-runtime
-    tag: dev
+    tag: dev5
     pullPolicy: IfNotPresent
 
 opencodeRuntime:
   image:
     repository: localhost/kubesynthai/kubesynth-opencode-runtime
-    tag: dev10
+    tag: dev13
     pullPolicy: IfNotPresent
+  limits:
+    maxPromptChars: 256000
+    maxSystemPromptChars: 64000
+    maxTeamContextChars: 32000
+    modelContextLimit: 256000
+    modelOutputLimit: 16384
+  autonomy:
+    sessionInitOnCreate: false
+    maxRetries: 3
+    compactionTokenThreshold: 0.7
+    planThresholdChars: 4096
+    structuredOutputRetryCount: 3
 
 apiGateway:
   image:
     repository: localhost/kubesynthai/kubesynth-api-gateway
-    tag: dev8
+    tag: collector-1
     pullPolicy: IfNotPresent
   auth:
     mode: shared_token
@@ -45,7 +39,7 @@ webUi:
   enabled: true
   image:
     repository: localhost/kubesynthai/kubesynth-web-ui
-    tag: dev10
+    tag: redeploy-20260409-ui-1
     pullPolicy: IfNotPresent
 
 platformSecrets:

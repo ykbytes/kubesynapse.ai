@@ -10,10 +10,7 @@ import {
   LoaderCircle,
   Clock,
   Bot,
-  Brain,
-  Bird,
   Code,
-  Terminal,
   ShieldAlert,
   ShieldCheck,
   AlertTriangle,
@@ -25,20 +22,20 @@ import {
 function RuntimeIcon({ kind, className }: { kind?: string | null; className?: string }) {
   const cls = className ?? "h-3.5 w-3.5";
   switch (kind) {
-    case "langgraph":
-      return <Brain className={cn(cls, "text-violet-400")} />;
-    case "goose":
-      return <Bird className={cn(cls, "text-amber-400")} />;
     case "opencode":
       return <Code className={cn(cls, "text-sky-400")} />;
-    case "codex":
-      return <Terminal className={cn(cls, "text-emerald-400")} />;
     default:
       return <Bot className={cn(cls, "text-muted-foreground")} />;
   }
 }
 
 /* ── Status helpers ── */
+
+function humanizeStepStatus(status: string): string {
+  return status
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (match) => match.toUpperCase());
+}
 
 function stepStatusRing(status?: string | null): string {
   switch (status) {
@@ -47,9 +44,16 @@ function stepStatusRing(status?: string | null): string {
     case "running":
       return "ring-amber-500/50";
     case "failed":
+    case "denied":
       return "ring-red-500/50";
     case "waiting_approval":
       return "ring-orange-500/50";
+    case "continued":
+      return "ring-amber-500/50";
+    case "cancelled":
+      return "ring-orange-500/40";
+    case "skipped":
+      return "ring-border/40";
     default:
       return "";
   }
@@ -62,9 +66,16 @@ function stepStatusBorder(status?: string | null): string {
     case "running":
       return "border-amber-500/40";
     case "failed":
+    case "denied":
       return "border-red-500/40";
     case "waiting_approval":
       return "border-orange-500/40";
+    case "continued":
+      return "border-amber-500/40";
+    case "cancelled":
+      return "border-orange-500/30";
+    case "skipped":
+      return "border-border/60";
     default:
       return "border-border/60";
   }
@@ -88,6 +99,11 @@ function StatusBadge({ status }: { status?: string | null }) {
       label: "Failed",
       cls: "text-red-400 bg-red-500/10 border-red-500/20",
     },
+    denied: {
+      icon: <ShieldAlert className="h-3 w-3" />,
+      label: "Denied",
+      cls: "text-red-400 bg-red-500/10 border-red-500/20",
+    },
     waiting_approval: {
       icon: <ShieldAlert className="h-3 w-3" />,
       label: "Approval",
@@ -103,9 +119,17 @@ function StatusBadge({ status }: { status?: string | null }) {
       label: "Cancelled",
       cls: "text-orange-400 bg-orange-500/10 border-orange-500/20",
     },
+    skipped: {
+      icon: <Clock className="h-3 w-3" />,
+      label: "Skipped",
+      cls: "text-muted-foreground bg-muted/50 border-border",
+    },
   };
-  const info = map[status];
-  if (!info) return null;
+  const info = map[status] ?? {
+    icon: <Clock className="h-3 w-3" />,
+    label: humanizeStepStatus(status),
+    cls: "text-muted-foreground bg-muted/50 border-border",
+  };
   return (
     <span className={cn("inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[9px] font-medium leading-none", info.cls)}>
       {info.icon}
@@ -244,6 +268,16 @@ export function AgentNode({ data, selected }: NodeProps<AgentStepNode>) {
           {data.stepType === "conditional" && (
             <span className="inline-flex items-center gap-0.5 rounded-full bg-purple-500/10 border border-purple-500/20 px-1.5 py-0.5 text-[9px] text-purple-400 font-medium">
               <GitBranch className="h-2.5 w-2.5" /> Conditional
+            </span>
+          )}
+          {data.stepType === "review" && !data.stepState?.reviewResult && (
+            <span className="inline-flex items-center gap-0.5 rounded-full bg-rose-500/10 border border-rose-500/20 px-1.5 py-0.5 text-[9px] text-rose-400 font-medium">
+              <ShieldCheck className="h-2.5 w-2.5" /> Review
+            </span>
+          )}
+          {data.verify && !data.stepState?.verificationResult && (
+            <span className="inline-flex items-center gap-0.5 rounded-full bg-muted/60 border border-border/60 px-1.5 py-0.5 text-[9px] text-muted-foreground font-medium">
+              <ShieldCheck className="h-2.5 w-2.5" /> Will Verify
             </span>
           )}
           {data.stepState?.verificationResult && (

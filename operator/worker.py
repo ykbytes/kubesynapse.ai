@@ -1,10 +1,12 @@
 import concurrent.futures
+import importlib
 import json
 import logging
 import os
 import random
 import re
 import signal
+import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -16,31 +18,60 @@ import httpx
 import kubernetes.client  # type: ignore[import-untyped]
 import kubernetes.config  # type: ignore[import-untyped]
 
-from utils import (
-    build_eval_run_id,
-    build_thread_id,
-    build_workflow_run_id,
-    cancel_agent_session,
-    compute_execution_waves,
-    estimate_toxicity,
-    exact_match_score,
-    invoke_agent_runtime,
-    invoke_agent_runtime_stream,
-    normalize_step_execution,
-    now_iso,
-    parse_json_output,
-    ready_workflow_steps,
-    render_prompt,
-    runtime_url,
-    validate_workflow_graph,
-    workflow_journal_path,
-)
-from state_store import (
-    check_eval_run_conflict,
-    check_workflow_run_conflict,
-    init_database as init_state_database,
-)
-from tracing import init_tracing
+def _prefer_local_worker_modules() -> dict[str, Any]:
+    worker_dir = Path(__file__).resolve().parent
+    worker_dir_str = str(worker_dir)
+    module_names = ("config", "utils", "state_store", "tracing")
+    previous_path = list(sys.path)
+    previous_modules = {module_name: sys.modules.get(module_name) for module_name in module_names}
+
+    while worker_dir_str in sys.path:
+        sys.path.remove(worker_dir_str)
+    sys.path.insert(0, worker_dir_str)
+
+    try:
+        local_modules: dict[str, Any] = {}
+        for module_name in module_names:
+            sys.modules.pop(module_name, None)
+            local_modules[module_name] = importlib.import_module(module_name)
+        return local_modules
+    finally:
+        sys.path[:] = previous_path
+        for module_name, previous_module in previous_modules.items():
+            if previous_module is None:
+                sys.modules.pop(module_name, None)
+            else:
+                sys.modules[module_name] = previous_module
+
+
+LOCAL_WORKER_MODULES = _prefer_local_worker_modules()
+worker_utils = LOCAL_WORKER_MODULES["utils"]
+worker_state_store = LOCAL_WORKER_MODULES["state_store"]
+worker_tracing = LOCAL_WORKER_MODULES["tracing"]
+
+build_eval_run_id = worker_utils.build_eval_run_id
+build_thread_id = worker_utils.build_thread_id
+build_workflow_run_id = worker_utils.build_workflow_run_id
+cancel_agent_session = worker_utils.cancel_agent_session
+compute_execution_waves = worker_utils.compute_execution_waves
+estimate_toxicity = worker_utils.estimate_toxicity
+exact_match_score = worker_utils.exact_match_score
+invoke_agent_runtime = worker_utils.invoke_agent_runtime
+invoke_agent_runtime_stream = worker_utils.invoke_agent_runtime_stream
+missing_json_paths = worker_utils.missing_json_paths
+normalize_step_execution = worker_utils.normalize_step_execution
+now_iso = worker_utils.now_iso
+parse_json_output = worker_utils.parse_json_output
+ready_workflow_steps = worker_utils.ready_workflow_steps
+render_prompt = worker_utils.render_prompt
+runtime_url = worker_utils.runtime_url
+validate_workflow_graph = worker_utils.validate_workflow_graph
+workflow_journal_path = worker_utils.workflow_journal_path
+
+check_eval_run_conflict = worker_state_store.check_eval_run_conflict
+check_workflow_run_conflict = worker_state_store.check_workflow_run_conflict
+init_state_database = worker_state_store.init_database
+init_tracing = worker_tracing.init_tracing
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("operator-worker")
@@ -109,6 +140,40 @@ signal.signal(signal.SIGTERM, _worker_sigterm_handler)
 _LEASE_HOLDER_IDENTITY = WORKER_JOB_NAME or f"worker-{os.getpid()}"
 
 
+def lease_holder_job_is_active(holder_identity: str) -> bool:
+    holder = str(holder_identity or "").strip()
+    if not holder:
+        return False
+    if holder == _LEASE_HOLDER_IDENTITY:
+        return True
+    if holder.startswith("worker-"):
+        return True
+
+    try:
+        job = kubernetes.client.BatchV1Api().read_namespaced_job(
+            name=holder,
+            namespace=OPERATOR_NAMESPACE,
+        )
+    except kubernetes.client.ApiException as exc:
+        if exc.status == 404:
+            return False
+        logger.warning("Failed to inspect lease holder job '%s': %s", holder, exc)
+        return True
+    except Exception as exc:
+        logger.warning("Unexpected error inspecting lease holder job '%s': %s", holder, exc)
+        return True
+
+    job_status = getattr(job, "status", None)
+    active = int(getattr(job_status, "active", 0) or 0)
+    succeeded = int(getattr(job_status, "succeeded", 0) or 0)
+    failed = int(getattr(job_status, "failed", 0) or 0)
+    if active > 0:
+        return True
+    if succeeded > 0 or failed > 0:
+        return False
+    return True
+
+
 def acquire_worker_lease(kind: str, namespace: str, name: str, generation: int) -> bool:
     """Acquire a Kubernetes Lease for this worker run. Returns True on success."""
     lease_name = f"{name}-gen-{generation}-{kind}"[:253]
@@ -153,6 +218,27 @@ def acquire_worker_lease(kind: str, namespace: str, name: str, generation: int) 
                         body=existing,
                     )
                     logger.info("Took over expired lease %s.", lease_name)
+                    return True
+                holder_identity = str(existing.spec.holder_identity or "").strip()
+                if holder_identity == _LEASE_HOLDER_IDENTITY:
+                    existing.spec.renew_time = now
+                    coord_api.replace_namespaced_lease(
+                        name=lease_name,
+                        namespace=OPERATOR_NAMESPACE,
+                        body=existing,
+                    )
+                    logger.info("Re-acquired existing lease %s for this worker.", lease_name)
+                    return True
+                if holder_identity and not lease_holder_job_is_active(holder_identity):
+                    existing.spec.holder_identity = _LEASE_HOLDER_IDENTITY
+                    existing.spec.acquire_time = now
+                    existing.spec.renew_time = now
+                    coord_api.replace_namespaced_lease(
+                        name=lease_name,
+                        namespace=OPERATOR_NAMESPACE,
+                        body=existing,
+                    )
+                    logger.warning("Took over orphaned lease %s from missing holder %s.", lease_name, holder_identity)
                     return True
                 logger.warning(
                     "Lease %s is held by %s (not expired). Refusing to start.",
@@ -364,6 +450,65 @@ def write_artifact(payload: dict[str, Any]) -> None:
     temp_path.replace(path)
 
 
+def resume_workflow_state_from_artifact(
+    status: dict[str, Any],
+    artifact: dict[str, Any],
+    generation: int,
+    run_id: str,
+) -> tuple[bool, dict[str, Any], dict[str, Any], dict[str, Any], str]:
+    artifact_generation_matches = artifact.get("generation") == generation
+    status_step_states = dict(status.get("stepStates") or {})
+    preserved_status_progress = any(
+        isinstance(state, dict)
+        and str(state.get("status") or "").strip() not in {"", "pending"}
+        for state in status_step_states.values()
+    )
+    artifact_matches_generation = artifact_generation_matches and (
+        artifact.get("runId") == run_id or preserved_status_progress
+    )
+
+    if not artifact_matches_generation:
+        return False, {}, {}, {}, str(artifact.get("startedAt") or now_iso())
+
+    step_results = dict(artifact.get("stepResults", {}) or {})
+    if "stepStates" in status:
+        step_states = status_step_states
+    else:
+        step_states = dict(artifact.get("stepStates", {}) or {})
+    if "pendingApproval" in status:
+        pending_approval = dict(status.get("pendingApproval") or {})
+    else:
+        pending_approval = dict(artifact.get("pendingApproval", {}) or {})
+    started_at = str(artifact.get("startedAt") or now_iso())
+    return artifact_matches_generation, step_results, step_states, pending_approval, started_at
+
+
+def resolve_workflow_run_id_for_worker(
+    status: dict[str, Any],
+    artifact: dict[str, Any],
+    generation: int,
+) -> str:
+    """Resolve the worker run ID, preferring the Job-provided value.
+
+    The controller passes the intended run ID via WORKFLOW_RUN_ID when it
+    creates the Job. Prefer that over status.runId so a fast-starting worker
+    cannot race against a stale status patch from the previous generation.
+    """
+    return (
+        str(
+            WORKFLOW_RUN_ID
+            or status.get("runId")
+            or artifact.get("runId")
+            or ""
+        ).strip()
+        or build_workflow_run_id(
+            TARGET_NAMESPACE,
+            TARGET_NAME,
+            generation,
+        )
+    )
+
+
 def append_journal_event(event_type: str, payload: dict[str, Any]) -> None:
     try:
         path = Path(ARTIFACT_JOURNAL_PATH)
@@ -422,6 +567,14 @@ def workflow_summary(
     }
 
 
+def clear_workflow_summary_lifecycle_fields(summary: dict[str, Any]) -> dict[str, Any]:
+    """Explicitly null lifecycle fields so status merge patches clear stale data."""
+    cleared = dict(summary)
+    for field_name in ("error", "failedAt", "completedAt"):
+        cleared[field_name] = None
+    return cleared
+
+
 def workflow_snapshot(
     *,
     generation: int,
@@ -470,7 +623,9 @@ def patch_workflow_status(
     pending_approval: dict[str, Any] | None = None,
     extra_summary: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    summary = workflow_summary(step_states, total_steps, run_id)
+    summary = clear_workflow_summary_lifecycle_fields(
+        workflow_summary(step_states, total_steps, run_id)
+    )
     summary["startedAt"] = started_at
     if extra_summary:
         summary.update(extra_summary)
@@ -594,7 +749,15 @@ def build_step_state(
     error: str | None = None,
     failure_class: str | None = None,
     approval_wait_ms: int | None = None,
+    response_preview: str | None = None,
+    artifact_count: int | None = None,
+    tool_call_count: int | None = None,
+    artifacts: list[dict[str, Any]] | None = None,
+    tool_calls: list[dict[str, Any]] | None = None,
+    warnings: list[str] | None = None,
 ) -> dict[str, Any]:
+    # Explicit nulls ensure merge-patched CRD status clears stale failure
+    # fields after a later successful attempt for the same step name.
     state = {
         "stepName": step_name,
         "agentRef": step.get("agentRef", ""),
@@ -606,14 +769,98 @@ def build_step_state(
         "latencyMs": latency_ms,
         "workerJob": worker_job,
         "execution": execution_policy,
+        "error": error,
+        "failureClass": failure_class,
+        "approvalWaitMs": approval_wait_ms,
+        "responsePreview": response_preview,
+        "artifactCount": artifact_count,
+        "toolCallCount": tool_call_count,
+        "artifacts": artifacts,
+        "toolCalls": tool_calls,
+        "warnings": warnings,
     }
-    if error:
-        state["error"] = error
-    if failure_class:
-        state["failureClass"] = failure_class
-    if approval_wait_ms is not None:
-        state["approvalWaitMs"] = approval_wait_ms
     return state
+
+
+def summarize_preview_text(value: Any, *, limit: int = 280) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    collapsed = re.sub(r"\s+", " ", text)
+    if len(collapsed) <= limit:
+        return collapsed
+    return f"{collapsed[: max(limit - 3, 1)].rstrip()}..."
+
+
+def summarize_tool_input(tool_input: Any) -> str | None:
+    if isinstance(tool_input, dict):
+        for key in (
+            "command",
+            "path",
+            "filePath",
+            "file_path",
+            "target_dir",
+            "workingDirectory",
+            "working_directory",
+            "query",
+            "url",
+            "repo",
+            "name",
+        ):
+            preview = summarize_preview_text(tool_input.get(key), limit=160)
+            if preview:
+                return preview
+        return summarize_preview_text(json.dumps(tool_input, sort_keys=True, default=str), limit=160)
+    if isinstance(tool_input, list):
+        return summarize_preview_text(json.dumps(tool_input, sort_keys=True, default=str), limit=160)
+    return summarize_preview_text(tool_input, limit=160)
+
+
+def summarize_step_artifacts(artifacts: Any, *, limit: int = 8) -> list[dict[str, Any]]:
+    summaries: list[dict[str, Any]] = []
+    for artifact in artifacts or []:
+        if not isinstance(artifact, dict):
+            continue
+        summary: dict[str, Any] = {}
+        for field in ("path", "name", "tool", "status", "type"):
+            value = artifact.get(field)
+            if value not in (None, "", [], {}):
+                summary[field] = value
+        if not summary:
+            preview = summarize_preview_text(json.dumps(artifact, sort_keys=True, default=str), limit=200)
+            if preview:
+                summary["preview"] = preview
+        if summary:
+            summaries.append(summary)
+        if len(summaries) >= limit:
+            break
+    return summaries
+
+
+def summarize_step_tool_calls(tool_calls: Any, *, limit: int = 8) -> list[dict[str, Any]]:
+    summaries: list[dict[str, Any]] = []
+    for tool_call in tool_calls or []:
+        if not isinstance(tool_call, dict):
+            continue
+        summary: dict[str, Any] = {}
+        tool_name = str(tool_call.get("tool") or tool_call.get("name") or "").strip()
+        status_name = str(tool_call.get("status") or "").strip()
+        input_preview = summarize_tool_input(tool_call.get("input") or tool_call.get("args"))
+        if tool_name:
+            summary["tool"] = tool_name
+        if status_name:
+            summary["status"] = status_name
+        if input_preview:
+            summary["inputPreview"] = input_preview
+        if not summary:
+            preview = summarize_preview_text(json.dumps(tool_call, sort_keys=True, default=str), limit=200)
+            if preview:
+                summary["preview"] = preview
+        if summary:
+            summaries.append(summary)
+        if len(summaries) >= limit:
+            break
+    return summaries
 
 
 # ---------------------------------------------------------------------------
@@ -621,6 +868,38 @@ def build_step_state(
 # visible even when the model doesn't call todowrite.
 # ---------------------------------------------------------------------------
 _HEADER_RE = re.compile(r"^##\s+(.+?)$", re.MULTILINE)
+TIMEOUT_TRANSPORT_FAILURE_CLASSES = frozenset(
+    {
+        "TimeoutError",
+        "ConnectTimeout",
+        "ReadTimeout",
+        "PoolTimeout",
+        "RemoteProtocolError",
+        "ConnectError",
+        "ReadError",
+    }
+)
+TIMEOUT_TRANSPORT_ERROR_FRAGMENTS = (
+    "timed out",
+    "timeout",
+    "connection reset",
+    "connection aborted",
+    "connection refused",
+    "connect error",
+    "read error",
+    "remote protocol error",
+)
+VERIFICATION_ERROR_FRAGMENTS = (
+    "verification failed",
+    "verification invocation failed",
+)
+RUNTIME_STATUS_ERROR_FRAGMENTS = (
+    "returned status '",
+    "request blocked",
+    "unprocessable entity",
+    "status code ",
+)
+QUALITY_GATE_FAILURE_CLASSES = frozenset({"ReviewRejectedError"})
 
 
 def extract_plan_items(prompt: str) -> list[dict[str, Any]]:
@@ -635,6 +914,105 @@ def extract_plan_items(prompt: str) -> list[dict[str, Any]]:
             seen.add(text)
             items.append({"content": text, "status": "pending"})
     return items[:20]
+
+
+def classify_retry_failure(
+    failure_class: str,
+    error_text: str,
+    missing_paths: list[str] | None = None,
+) -> str:
+    normalized_class = str(failure_class or "").strip()
+    normalized_error = str(error_text or "").strip().lower()
+    if missing_paths or "missing required json paths" in normalized_error or "did not return json output" in normalized_error:
+        return "json_contract"
+    if normalized_class in QUALITY_GATE_FAILURE_CLASSES:
+        return "quality_gate"
+    if any(fragment in normalized_error for fragment in VERIFICATION_ERROR_FRAGMENTS):
+        return "verification"
+    if normalized_class in TIMEOUT_TRANSPORT_FAILURE_CLASSES:
+        return "timeout_transport"
+    if any(fragment in normalized_error for fragment in TIMEOUT_TRANSPORT_ERROR_FRAGMENTS):
+        return "timeout_transport"
+    if normalized_class in {"RuntimeError", "HTTPStatusError"}:
+        return "runtime_status"
+    if any(fragment in normalized_error for fragment in RUNTIME_STATUS_ERROR_FRAGMENTS):
+        return "runtime_status"
+    return "generic"
+
+
+def build_retry_prompt(
+    *,
+    base_prompt: str,
+    attempt: int,
+    step_name: str,
+    failure_class: str,
+    error_text: str,
+    missing_paths: list[str] | None = None,
+) -> str:
+    failure_kind = classify_retry_failure(failure_class, error_text, missing_paths)
+    if failure_kind == "json_contract":
+        missing_paths_note = (
+            "Missing required JSON paths from the previous attempt:\n- "
+            + "\n- ".join(missing_paths or [])
+            + "\n\n"
+            if missing_paths
+            else ""
+        )
+        failure_note = error_text.strip() or (
+            f"Workflow step '{step_name}' failed JSON contract validation."
+        )
+        return (
+            f"[RETRY ATTEMPT {attempt}] The previous attempt failed JSON validation.\n"
+            f"Failure details: {failure_note}\n\n"
+            f"{missing_paths_note}"
+            "Retry requirements:\n"
+            "1. Return ONLY a single valid JSON object. No markdown fences, no prose, no status summary.\n"
+            "2. Preserve the intended blueprint content from the prior attempt, but fix every missing or invalid required field.\n"
+            "3. Ensure every required JSON path is present with a non-empty value before you finish.\n"
+            "4. If a field cannot be fully populated, include the best concrete value you can and explain blockers inside the JSON itself, not outside it.\n\n"
+            + base_prompt
+        )
+    if failure_kind == "timeout_transport":
+        return (
+            f"[RETRY ATTEMPT {attempt}] The previous attempt was interrupted by a timeout or transport failure.\n"
+            f"Failure details: {error_text}\n\n"
+            "Recovery strategy:\n"
+            "1. Inspect the current workspace and session state before making new changes.\n"
+            "2. Resume from the last completed work instead of starting over.\n"
+            "3. Reuse any valid files, artifacts, or structured output that were already produced.\n"
+            "4. Redo only the incomplete or inconsistent parts.\n\n"
+            + base_prompt
+        )
+    if failure_kind == "verification":
+        return (
+            f"[RETRY ATTEMPT {attempt}] The previous attempt failed verification.\n"
+            f"Failure details: {error_text}\n\n"
+            "Recovery strategy:\n"
+            "1. Identify the exact gap between the delivered output and the verification criteria.\n"
+            "2. Preserve the valid parts of the previous attempt.\n"
+            "3. Revise only what is needed to satisfy the failed criteria.\n"
+            "4. Produce a result that will pass verification without adding unrelated changes.\n\n"
+            + base_prompt
+        )
+    if failure_kind == "runtime_status":
+        return (
+            f"[RETRY ATTEMPT {attempt}] The previous attempt failed after the runtime returned a non-completed status or runtime error.\n"
+            f"Failure details: {error_text}\n\n"
+            "Recovery strategy:\n"
+            "1. Review what was already produced before making new changes.\n"
+            "2. Diagnose the specific runtime or status failure.\n"
+            "3. Continue from the last good state instead of restarting from scratch.\n"
+            "4. Avoid repeating the exact failing action unless you have corrected the cause.\n\n"
+            + base_prompt
+        )
+    return (
+        f"[RETRY ATTEMPT {attempt}] The previous attempt failed. "
+        "Before restarting, check what was already accomplished:\n"
+        "1. List files/changes from the previous attempt.\n"
+        "2. Identify what failed and why.\n"
+        "3. Continue from where you left off rather than starting over.\n\n"
+        + base_prompt
+    )
 
 
 def execute_workflow_step(
@@ -674,6 +1052,10 @@ def execute_workflow_step(
     started_at = now_iso()
     approval_wait_ms: int | None = None
     agent_ref = str(step.get("agentRef", ""))
+    required_json_paths = list(execution_policy.get("requiredJsonPaths") or [])
+    previous_failure_class = ""
+    previous_error_text = ""
+    previous_missing_paths: list[str] = []
 
     if (
         pending_approval
@@ -690,6 +1072,7 @@ def execute_workflow_step(
 
     for attempt in range(1, int(execution_policy["maxAttempts"]) + 1):
         started = time.perf_counter()
+        latest_result: dict[str, Any] | None = None
         # On retry attempts, prepend context about the previous failure
         # so the agent can resume rather than restart from scratch.
         effective_prompt = prompt
@@ -702,13 +1085,13 @@ def execute_workflow_step(
         )
         effective_prompt = planning_preamble + effective_prompt
         if attempt > 1:
-            effective_prompt = (
-                f"[RETRY ATTEMPT {attempt}] The previous attempt failed. "
-                "Before restarting, check what was already accomplished:\n"
-                "1. List files/changes from the previous attempt.\n"
-                "2. Identify what failed and why.\n"
-                "3. Continue from where you left off rather than starting over.\n\n"
-                + prompt
+            effective_prompt = build_retry_prompt(
+                base_prompt=prompt,
+                attempt=attempt,
+                step_name=step_name,
+                failure_class=previous_failure_class,
+                error_text=previous_error_text,
+                missing_paths=previous_missing_paths,
             )
         append_journal_event(
             "workflow.step.attempt.started",
@@ -755,6 +1138,7 @@ def execute_workflow_step(
                 iteration=attempt,
                 on_todo_update=on_todo_update,
             )
+            latest_result = result
             latency_ms = int((time.perf_counter() - started) * 1000)
             response_text = str(result.get("response", ""))
             result_status = str(
@@ -832,6 +1216,26 @@ def execute_workflow_step(
             )
             if structured_output is None:
                 structured_output = parse_json_output(response_text)
+            if required_json_paths:
+                if structured_output is None:
+                    previous_missing_paths = []
+                    previous_error_text = (
+                        f"Workflow step '{step_name}' did not return JSON output; required JSON paths: {required_json_paths}"
+                    )
+                    raise RuntimeError(
+                        f"Workflow step '{step_name}' did not return JSON output; required JSON paths: {required_json_paths}"
+                    )
+                missing_paths = missing_json_paths(structured_output, required_json_paths)
+                if missing_paths:
+                    previous_missing_paths = list(missing_paths)
+                    previous_error_text = (
+                        f"Workflow step '{step_name}' missing required JSON paths: {missing_paths}"
+                    )
+                    raise RuntimeError(
+                        f"Workflow step '{step_name}' missing required JSON paths: {missing_paths}"
+                    )
+                previous_missing_paths = []
+                previous_error_text = ""
             step_result = {
                 "agentRef": step.get("agentRef", ""),
                 "response": response_text,
@@ -963,6 +1367,12 @@ def execute_workflow_step(
                 worker_job=worker_job,
                 execution_policy=execution_policy,
                 approval_wait_ms=approval_wait_ms,
+                response_preview=summarize_preview_text(response_text, limit=400),
+                artifact_count=len(step_result["artifacts"]),
+                tool_call_count=len(step_result["tool_calls"]),
+                artifacts=summarize_step_artifacts(step_result["artifacts"]),
+                tool_calls=summarize_step_tool_calls(step_result["tool_calls"]),
+                warnings=step_warnings,
             )
             if verification_result:
                 completed_step_state["verificationResult"] = verification_result
@@ -977,6 +1387,10 @@ def execute_workflow_step(
             completed_at = now_iso()
             error_text = str(exc)
             failure_class = type(exc).__name__
+            previous_failure_class = failure_class
+            previous_error_text = error_text
+            if classify_retry_failure(failure_class, error_text, previous_missing_paths) != "json_contract":
+                previous_missing_paths = []
 
             # Attempt to cancel the running session to prevent orphaned
             # agent processes from consuming resources after a timeout.
@@ -1027,14 +1441,42 @@ def execute_workflow_step(
                 if bool(execution_policy["continueOnError"])
                 else "failed"
             )
+            partial_response = ""
+            partial_structured_output = None
+            partial_artifacts: list[dict[str, Any]] = []
+            partial_tool_calls: list[dict[str, Any]] = []
+            partial_metadata = None
+            partial_warnings: list[str] = []
+            if isinstance(latest_result, dict):
+                partial_response = str(latest_result.get("response", ""))
+                partial_artifacts = list(latest_result.get("artifacts") or [])
+                partial_tool_calls = list(latest_result.get("tool_calls") or [])
+                partial_metadata = latest_result.get("metadata")
+                partial_warnings = list(latest_result.get("warnings") or [])
+                if isinstance(partial_metadata, dict):
+                    partial_structured_output = partial_metadata.get("structured_output")
+                if partial_structured_output is None and partial_response:
+                    partial_structured_output = parse_json_output(partial_response)
             step_result = {
                 "agentRef": step.get("agentRef", ""),
-                "response": "",
+                "response": partial_response,
                 "thread_id": thread_id,
                 "status": terminal_state,
                 "error": error_text,
-                "output": {"text": "", "json": None, "type": "empty"},
+                "output": {
+                    "text": partial_response,
+                    "json": partial_structured_output,
+                    "type": (
+                        "json"
+                        if partial_structured_output is not None
+                        else ("text" if partial_response else "empty")
+                    ),
+                },
                 "attempts": attempt,
+                "artifacts": partial_artifacts,
+                "tool_calls": partial_tool_calls,
+                "metadata": partial_metadata,
+                "warnings": partial_warnings,
             }
             append_journal_event(
                 f"workflow.step.{terminal_state}",
@@ -1063,6 +1505,12 @@ def execute_workflow_step(
                     error=error_text,
                     failure_class=failure_class,
                     approval_wait_ms=approval_wait_ms,
+                    response_preview=summarize_preview_text(partial_response, limit=400),
+                    artifact_count=len(partial_artifacts),
+                    tool_call_count=len(partial_tool_calls),
+                    artifacts=summarize_step_artifacts(partial_artifacts),
+                    tool_calls=summarize_step_tool_calls(partial_tool_calls),
+                    warnings=partial_warnings,
                 ),
             }
 
@@ -1920,6 +2368,8 @@ def execute_review_step(
     execution_policy = normalize_step_execution(step)
     started_at = now_iso()
     agent_ref = str(step.get("agentRef", ""))
+    previous_failure_class = ""
+    previous_error_text = ""
 
     actionable = _review_criteria_is_actionable(review_criteria)
     if actionable:
@@ -1956,8 +2406,18 @@ def execute_review_step(
         try:
             wait_for_agent_runtime_ready(agent_ref, TARGET_NAMESPACE)
             thread_id = build_thread_id("review", TARGET_NAME, run_id, step_name)
+            effective_review_prompt = review_prompt
+            if attempt > 1:
+                effective_review_prompt = build_retry_prompt(
+                    base_prompt=review_prompt,
+                    attempt=attempt,
+                    step_name=step_name,
+                    failure_class=previous_failure_class,
+                    error_text=previous_error_text,
+                    missing_paths=[],
+                )
             review_invoke_payload: dict[str, Any] = {
-                    "prompt": review_prompt,
+                    "prompt": effective_review_prompt,
                     "thread_id": thread_id,
                     "caller_agent_name": TARGET_NAME,
                     "caller_agent_namespace": TARGET_NAMESPACE,
@@ -2031,6 +2491,8 @@ def execute_review_step(
             latency_ms = int((time.perf_counter() - started_perf) * 1000)
             completed_at = now_iso()
             thread_id = build_thread_id("review", TARGET_NAME, run_id, step_name)
+            previous_failure_class = type(exc).__name__
+            previous_error_text = str(exc)
 
             # Cancel the running session to prevent orphaned agent
             # processes from consuming resources after a timeout.
@@ -2124,43 +2586,19 @@ def run_workflow_worker() -> None:
 
     generation = int(metadata.get("generation", 1))
     artifact = load_artifact()
-    run_id = (
-        str(
-            status.get("runId")
-            or artifact.get("runId")
-            or WORKFLOW_RUN_ID
-            or ""
-        )
-        or build_workflow_run_id(
-            TARGET_NAMESPACE,
-            TARGET_NAME,
-            generation,
-        )
-    )
+    run_id = resolve_workflow_run_id_for_worker(status, artifact, generation)
     worker_job = {
         "name": WORKER_JOB_NAME,
         "namespace": OPERATOR_NAMESPACE,
     }
-    artifact_matches_generation = (
-        artifact.get("generation") == generation
-        and artifact.get("runId") == run_id
+    artifact_matches_generation, step_results, step_states, pending_approval, started_at = (
+        resume_workflow_state_from_artifact(
+            status,
+            artifact,
+            generation,
+            run_id,
+        )
     )
-    step_results = (
-        dict(artifact.get("stepResults", {}) or {})
-        if artifact_matches_generation
-        else {}
-    )
-    step_states = (
-        dict(artifact.get("stepStates", {}) or {})
-        if artifact_matches_generation
-        else {}
-    )
-    pending_approval = (
-        dict(artifact.get("pendingApproval", {}) or {})
-        if artifact_matches_generation
-        else {}
-    )
-    started_at = str(artifact.get("startedAt") or now_iso())
     completed = {
         step_name
         for step_name, result in step_results.items()
@@ -2734,9 +3172,9 @@ def run_eval_worker() -> None:
     generation = int(metadata.get("generation", 1))
     artifact = load_artifact()
     run_id = str(
-        resource.get("status", {}).get("runId")
+        EVAL_RUN_ID
+        or resource.get("status", {}).get("runId")
         or artifact.get("runId")
-        or EVAL_RUN_ID
         or build_eval_run_id(TARGET_NAMESPACE, TARGET_NAME, generation)
     ).strip()
     failure_threshold = spec.get("failureThreshold", {})
@@ -2987,10 +3425,12 @@ def main() -> int:
     resource = get_resource(resource_plural())
     generation = int((resource.get("metadata", {}).get("generation", 1)))
     run_id = (
-        str((resource.get("status", {}) or {}).get("runId") or "")
-        or WORKFLOW_RUN_ID
-        or EVAL_RUN_ID
-        or ""
+        str(
+            WORKFLOW_RUN_ID
+            or EVAL_RUN_ID
+            or (resource.get("status", {}) or {}).get("runId")
+            or ""
+        ).strip()
     )
 
     if run_id:

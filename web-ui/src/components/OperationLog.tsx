@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import {
+  Bot,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
@@ -9,6 +10,7 @@ import {
   FileCode,
   FileSearch,
   GitCommitHorizontal,
+  LoaderCircle,
   Mail,
   Package,
   Terminal,
@@ -16,13 +18,14 @@ import {
   XCircle,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { extractAgentCallFromToolCall, extractAgentCallsFromSummary, sanitizeText, type AgentCallSummary } from "@/lib/agentCalls";
 import type { InvocationSummary } from "@/types";
 
 /* ------------------------------------------------------------------ */
 /*  Operation classification                                          */
 /* ------------------------------------------------------------------ */
 
-type OpKind = "file-create" | "file-edit" | "file-read" | "git-commit" | "git-push" | "deploy" | "notify" | "shell" | "tool";
+type OpKind = "agent-call" | "file-create" | "file-edit" | "file-read" | "git-commit" | "git-push" | "deploy" | "notify" | "shell" | "tool";
 
 interface ClassifiedOp {
   kind: OpKind;
@@ -34,6 +37,7 @@ interface ClassifiedOp {
 }
 
 const KIND_STYLES: Record<OpKind, { icon: typeof Cog; text: string; bg: string }> = {
+  "agent-call": { icon: Bot, text: "text-primary", bg: "bg-primary/10" },
   "file-create": { icon: FileCode, text: "text-emerald-400", bg: "bg-emerald-500/10" },
   "file-edit": { icon: FileCode, text: "text-blue-400", bg: "bg-blue-500/10" },
   "file-read": { icon: FileSearch, text: "text-muted-foreground", bg: "bg-muted/30" },
@@ -66,10 +70,10 @@ function classifyToolCall(tc: Record<string, unknown>): ClassifiedOp {
   const status = String(tc.status ?? "unknown");
   const inputRaw = tc.input;
   const outputRaw = tc.output;
-  const inputStr = typeof inputRaw === "string" ? inputRaw : typeof inputRaw === "object" ? JSON.stringify(inputRaw) : "";
-  const outputStr = typeof outputRaw === "string" ? outputRaw : "";
+  const inputStr = sanitizeText(typeof inputRaw === "string" ? inputRaw : typeof inputRaw === "object" ? JSON.stringify(inputRaw) : "");
+  const outputStr = sanitizeText(typeof outputRaw === "string" ? outputRaw : "");
   const path = extractPath(inputRaw);
-  const cmd = extractCommand(inputRaw);
+  const cmd = sanitizeText(extractCommand(inputRaw));
   const cmdLower = cmd.toLowerCase();
 
   if (tool === "write") {
@@ -105,6 +109,22 @@ function classifyToolCall(tc: Record<string, unknown>): ClassifiedOp {
   return { kind: "tool", label: tool || "Tool call", detail: truncate(inputStr, 80), status, input: truncate(inputStr, 200), output: truncate(outputStr, 200) };
 }
 
+function classifyAgentCall(call: AgentCallSummary): ClassifiedOp {
+  const peer = call.namespace && call.namespace !== "default" ? `${call.namespace}/${call.agentName}` : call.agentName;
+  const route = call.kind === "explicit-a2a" ? "Direct A2A" : "Gateway tool call";
+  // Only include transport if it differs from what the route already implies
+  const transport = call.transport && call.transport !== "gateway" ? call.transport : null;
+  const detailParts = [route, transport, call.threadId].filter((value): value is string => Boolean(value));
+  return {
+    kind: "agent-call",
+    label: `Agent response: ${peer}`,
+    detail: detailParts.join(" · "),
+    status: call.status,
+    input: call.commandPreview ? sanitizeText(call.commandPreview) : undefined,
+    output: call.responsePreview ? sanitizeText(call.responsePreview) : undefined,
+  };
+}
+
 function classifyArtifact(art: Record<string, unknown>): ClassifiedOp {
   const path = String(art.path ?? "").trim();
   const tool = String(art.tool ?? "").toLowerCase();
@@ -116,6 +136,25 @@ function classifyArtifact(art: Record<string, unknown>): ClassifiedOp {
     return { kind: "file-edit", label: `File edited: ${basename(path)}`, detail: path, status };
   }
   return { kind: "file-create", label: `Artifact: ${basename(path)}`, detail: path, status };
+}
+
+function classifySubagentResultFile(path: string): ClassifiedOp {
+  return {
+    kind: "file-create",
+    label: `Team result: ${basename(path)}`,
+    detail: path,
+    status: "completed",
+  };
+}
+
+function classifySharedTeamFile(path: string, purpose: string | null | undefined): ClassifiedOp {
+  return {
+    kind: "file-read",
+    label: `Shared with team: ${basename(path)}`,
+    detail: path,
+    status: "completed",
+    output: purpose ? sanitizeText(purpose) : undefined,
+  };
 }
 
 function basename(p: string): string {
@@ -138,10 +177,32 @@ function buildOperations(summary: InvocationSummary): ClassifiedOp[] {
   const ops: ClassifiedOp[] = [];
   const artifactPaths = new Set<string>();
 
+  for (const agentCall of extractAgentCallsFromSummary(summary)) {
+    ops.push(classifyAgentCall(agentCall));
+  }
+
+  const seenSharedTeamFiles = new Set<string>();
+  for (const path of summary.subagents?.resultFiles ?? []) {
+    const normalized = String(path || "").trim();
+    if (!normalized || artifactPaths.has(normalized)) continue;
+    ops.push(classifySubagentResultFile(normalized));
+    artifactPaths.add(normalized);
+  }
+  for (const sharedFile of summary.subagents?.sharedFiles ?? []) {
+    const path = String(sharedFile.path ?? "").trim();
+    if (!path) continue;
+    const purpose = typeof sharedFile.purpose === "string" ? sharedFile.purpose : undefined;
+    const identity = `${path}|${purpose ?? ""}`;
+    if (seenSharedTeamFiles.has(identity)) continue;
+    seenSharedTeamFiles.add(identity);
+    ops.push(classifySharedTeamFile(path, purpose));
+  }
+
   // Artifacts first (higher fidelity for file ops)
   for (const art of summary.artifacts ?? []) {
     if (!art || typeof art !== "object") continue;
     const op = classifyArtifact(art);
+    if (op.detail && artifactPaths.has(op.detail)) continue;
     ops.push(op);
     if (op.detail) artifactPaths.add(op.detail);
   }
@@ -149,6 +210,7 @@ function buildOperations(summary: InvocationSummary): ClassifiedOp[] {
   // Tool calls, dedup file-create/file-edit if already covered by artifacts
   for (const tc of summary.toolCalls ?? []) {
     if (!tc || typeof tc !== "object") continue;
+    if (extractAgentCallFromToolCall(tc)) continue;
     const op = classifyToolCall(tc);
     if ((op.kind === "file-create" || op.kind === "file-edit") && op.detail && artifactPaths.has(op.detail)) continue;
     ops.push(op);
@@ -166,11 +228,15 @@ function OpRow({ op }: { op: ClassifiedOp }) {
   const style = KIND_STYLES[op.kind];
   const Icon = style.icon;
   const isFailed = op.status === "error" || op.status === "failed";
-  const StatusIcon = isFailed ? XCircle : CheckCircle2;
-  const statusColor = isFailed ? "text-red-400" : "text-emerald-400";
+  const isRunning = op.status === "running" || op.status === "working" || op.status === "in_progress";
+  const StatusIcon = isFailed ? XCircle : isRunning ? LoaderCircle : CheckCircle2;
+  const statusColor = isFailed ? "text-red-400" : isRunning ? "text-amber-400" : "text-emerald-400";
+  const rootClassName = op.kind === "agent-call"
+    ? `rounded border border-primary/20 bg-primary/[0.06] text-xs`
+    : `rounded border border-border/40 ${style.bg} text-xs`;
 
   return (
-    <div className={`rounded border border-border/40 ${style.bg} text-xs`}>
+    <div className={rootClassName}>
       <button
         type="button"
         onClick={() => setExpanded((o) => !o)}
@@ -183,7 +249,7 @@ function OpRow({ op }: { op: ClassifiedOp }) {
             {op.detail}
           </span>
         )}
-        <StatusIcon className={`h-3 w-3 shrink-0 ${statusColor}`} />
+        <StatusIcon className={`h-3 w-3 shrink-0 ${statusColor} ${isRunning ? "animate-spin" : ""}`} />
         {(op.input || op.output) && (
           <span className="transition-transform duration-150" style={{ transform: expanded ? "rotate(90deg)" : "rotate(0deg)" }}>
             <ChevronRight className="h-3 w-3 text-muted-foreground" />
@@ -274,9 +340,10 @@ function ContinuityFooter({ summary }: { summary: InvocationSummary }) {
 
 interface OperationLogProps {
   summary: InvocationSummary | null;
+  className?: string;
 }
 
-export function OperationLog({ summary }: OperationLogProps) {
+export function OperationLog({ summary, className }: OperationLogProps) {
   if (!summary) return null;
 
   const ops = useMemo(() => buildOperations(summary), [summary]);
@@ -285,18 +352,20 @@ export function OperationLog({ summary }: OperationLogProps) {
   const defaultOpen = ops.length <= 10;
   const [collapsed, setCollapsed] = useState(!defaultOpen);
 
-  const { fileOps, otherOps, readOps, badgeParts } = useMemo(() => {
+  const { agentOps, fileOps, otherOps, readOps, badgeParts } = useMemo(() => {
+    const agent = ops.filter((o) => o.kind === "agent-call");
     const f = ops.filter((o) => o.kind === "file-create" || o.kind === "file-edit");
-    const other = ops.filter((o) => o.kind !== "file-create" && o.kind !== "file-edit" && o.kind !== "file-read");
+    const other = ops.filter((o) => o.kind !== "agent-call" && o.kind !== "file-create" && o.kind !== "file-edit" && o.kind !== "file-read");
     const reads = ops.filter((o) => o.kind === "file-read");
     const parts: string[] = [];
+    if (agent.length > 0) parts.push(`${agent.length} agent call${agent.length > 1 ? "s" : ""}`);
     if (f.length > 0) parts.push(`${f.length} file${f.length > 1 ? "s" : ""}`);
     if (other.length > 0) parts.push(`${other.length} action${other.length > 1 ? "s" : ""}`);
     if (reads.length > 0) parts.push(`${reads.length} read${reads.length > 1 ? "s" : ""}`);
-    return { fileOps: f, otherOps: other, readOps: reads, badgeParts: parts };
+    return { agentOps: agent, fileOps: f, otherOps: other, readOps: reads, badgeParts: parts };
   }, [ops]);
   return (
-    <div className="mx-3 mb-2 rounded-md border border-border/60 bg-muted/20 overflow-hidden animate-slide-up">
+    <div className={`rounded-md border border-border/60 bg-muted/20 overflow-hidden animate-slide-up ${className ?? ""}`.trim()}>
       {/* Header */}
       <button
         type="button"
@@ -316,6 +385,14 @@ export function OperationLog({ summary }: OperationLogProps) {
 
       {!collapsed && (
         <div className="border-t border-border/40 px-2 py-1.5 space-y-1 max-h-96 overflow-y-auto">
+          {agentOps.length > 0 && (
+            <div className="space-y-1">
+              <div className="px-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-primary/85">Agent calls</div>
+              {agentOps.map((op, i) => (
+                <OpRow key={`agent-${i}-${op.label}-${op.detail}`} op={op} />
+              ))}
+            </div>
+          )}
           {/* File write/edit operations first */}
           {fileOps.map((op, i) => (
             <OpRow key={`file-${i}-${op.kind}-${op.detail}`} op={op} />

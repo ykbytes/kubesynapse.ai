@@ -1,0 +1,112 @@
+$ErrorActionPreference = "Stop"
+
+if ($PSVersionTable.PSVersion.Major -ge 7) {
+    $PSNativeCommandUseErrorActionPreference = $true
+}
+
+$ns = "default"
+$dir = Split-Path -Parent $MyInvocation.MyCommand.Path
+
+$manifestFiles = @(
+    "project-context.yaml",
+    "policy.yaml",
+    "agents.yaml",
+    "workflow.yaml"
+)
+
+$activeAgents = @(
+    "kubesynth-factory-analyst",
+    "kubesynth-factory",
+    "kubesynth-factory-reviewer",
+    "kubesynth-factory-deployer"
+)
+
+$obsoleteAgents = @(
+    "kubesynth-factory-materializer",
+    "kubesynth-factory-quality-reviewer"
+)
+
+function Assert-LastExitCode {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$CommandName
+    )
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "$CommandName failed with exit code $LASTEXITCODE"
+    }
+}
+
+function Wait-ForStatefulSet {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Name
+    )
+
+    kubectl rollout status "statefulset/$Name" -n $ns --timeout=180s | Out-Host
+    Assert-LastExitCode "kubectl rollout status statefulset/$Name"
+}
+
+function Wait-ForStatefulSetDeletion {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Name
+    )
+
+    $exists = kubectl get "statefulset/$Name" -n $ns --ignore-not-found -o name
+    Assert-LastExitCode "kubectl get statefulset/$Name"
+    if ($exists) {
+        kubectl wait --for=delete "statefulset/$Name" -n $ns --timeout=180s | Out-Host
+        Assert-LastExitCode "kubectl wait --for=delete statefulset/$Name"
+    }
+}
+
+Write-Host "=== Deploying lean KubeSynth factory example ===" -ForegroundColor Cyan
+
+Write-Host "`n[1/5] Removing obsolete factory agents..." -ForegroundColor Yellow
+foreach ($agent in $obsoleteAgents) {
+    kubectl delete aiagent $agent -n $ns --ignore-not-found | Out-Host
+    Assert-LastExitCode "kubectl delete aiagent $agent"
+    Wait-ForStatefulSetDeletion -Name "${agent}-sandbox"
+}
+
+Write-Host "`n[2/5] Validating manifests..." -ForegroundColor Yellow
+foreach ($file in $manifestFiles) {
+    kubectl apply --dry-run=server -f (Join-Path $dir $file) -n $ns | Out-Host
+    Assert-LastExitCode "kubectl apply --dry-run=server -f $file"
+}
+
+Write-Host "`n[3/5] Applying context, policy, agents, and workflow..." -ForegroundColor Yellow
+foreach ($file in $manifestFiles) {
+    kubectl apply -f (Join-Path $dir $file) -n $ns | Out-Host
+    Assert-LastExitCode "kubectl apply -f $file"
+}
+
+Write-Host "`n[4/5] Waiting for active sandboxes..." -ForegroundColor Yellow
+foreach ($agent in $activeAgents) {
+    Wait-ForStatefulSet -Name "${agent}-sandbox"
+}
+
+Write-Host "`n[5/5] Verifying live resources..." -ForegroundColor Yellow
+kubectl get aiagent -n $ns | Out-Host
+Assert-LastExitCode "kubectl get aiagent"
+kubectl get agentworkflow kubesynth-factory-pipeline -n $ns | Out-Host
+Assert-LastExitCode "kubectl get agentworkflow kubesynth-factory-pipeline"
+
+foreach ($agent in $activeAgents) {
+    kubectl get aiagent $agent -n $ns | Out-Host
+    Assert-LastExitCode "kubectl get aiagent $agent"
+}
+
+foreach ($agent in $obsoleteAgents) {
+    $remaining = kubectl get aiagent $agent -n $ns --ignore-not-found -o name
+    Assert-LastExitCode "kubectl get aiagent $agent"
+    if ($remaining) {
+        throw "Obsolete agent still present: $agent"
+    }
+}
+
+Write-Host "`nFactory example deployed." -ForegroundColor Green
+Write-Host "Workflow: kubesynth-factory-pipeline" -ForegroundColor Cyan
+Write-Host "Trigger examples: ./invoke-examples.sh" -ForegroundColor Cyan
+Write-Host "Approvals: monitor with 'kubectl get agentapprovals -n $ns' or the web UI" -ForegroundColor Cyan

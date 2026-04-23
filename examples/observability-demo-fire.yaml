@@ -1,0 +1,81 @@
+##
+## Demo observability stack that intentionally produces a visible report.
+## Apply this file to ai-agent-sandbox, wait about 60 seconds, then open the
+## Observability workspace and inspect demo-fire-target and demo-fire-target-report.
+##
+apiVersion: kubesynth.ai/v1alpha1
+kind: ConnectorPlugin
+metadata:
+  name: demo-kubernetes-connector
+  namespace: ai-agent-sandbox
+spec:
+  description: Demo connector used to explain the collection layer. In the current product this acts as the declared collection plugin for Kubernetes-style telemetry and gives the target a concrete connector to point at.
+  image: kubesynth/connector-kubernetes:v1.0
+  protocol: grpc
+  port: 9090
+  capabilities:
+    - kubernetes-api
+  healthEndpoint: /healthz
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "64Mi"
+    limits:
+      cpu: "200m"
+      memory: "256Mi"
+---
+apiVersion: kubesynth.ai/v1alpha1
+kind: ObservationPolicy
+metadata:
+  name: demo-fire-policy
+  namespace: ai-agent-sandbox
+spec:
+  description: Demo policy used to explain the evaluation layer. It says how long data should be kept, which anomaly style is being simulated, and where an alert would normally be routed after evaluation.
+  retention:
+    days: 14
+    downsampling:
+      after: "3d"
+      resolution: "5m"
+  anomalyDetection:
+    enabled: true
+    algorithm: ensemble
+    sensitivity: 0.9
+    windowSize: "30m"
+    evaluationInterval: "2m"
+    metrics:
+      - agent_step_duration_seconds
+      - kube_deployment_status_replicas_unavailable
+  alertRules:
+    - name: DemoLatencySpike
+      expr: "agent_step_duration_seconds > 5"
+      for: "2m"
+      severity: critical
+      annotations:
+        summary: "Demo alert showing how a policy turns observed drift into a finding"
+        action: "Inspect the report card and compare the observed value with the expected value"
+  notifications:
+    natsSubject: "aiops.alerts.demo"
+---
+apiVersion: kubesynth.ai/v1alpha1
+kind: ObservationTarget
+metadata:
+  name: demo-fire-target
+  namespace: ai-agent-sandbox
+  annotations:
+    # This annotation is what makes the current controller synthesize a visible finding.
+    observability.kubesynth.ai/demo-mode: firing
+spec:
+  description: Demo target used to explain the scope layer. It represents the thing being watched, points to the connector that would collect telemetry, and attaches the policy that decides whether the observed behavior is healthy or firing.
+  targetType: kubernetes-api
+  connectorRef: demo-kubernetes-connector
+  endpoint: "https://kubernetes.default.svc.cluster.local:443"
+  scrapeInterval: "30s"
+  policyRef: demo-fire-policy
+  selector:
+    matchLabels:
+      app.kubernetes.io/managed-by: Helm
+  labels:
+    tier: demo
+    purpose: make-observability-visible
+  tlsConfig:
+    insecureSkipVerify: true

@@ -32,6 +32,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { CopyButton } from "./CopyButton";
@@ -40,17 +41,21 @@ import { JsonBlock } from "./JsonBlock";
 import { WorkflowLogPanel } from "./WorkflowLogPanel";
 import { FileExplorer } from "./FileExplorer";
 import { useConnection } from "@/contexts/ConnectionContext";
-import { fetchWorkflowNextAction, listAgentArtifacts, downloadAgentArtifact, downloadAgentArtifactZip, previewAgentArtifact } from "@/lib/api";
+import { fetchWorkflowNextAction, listAgentArtifacts, downloadAgentArtifact, downloadAgentArtifactZip, previewAgentArtifact, type WorkflowRunRecord } from "@/lib/api";
+import { FACTORY_MODE_OPTIONS, factoryModeLabel, isFactoryWorkflowName } from "@/lib/factoryModes";
 import { RunHistoryPanel } from "./composer/RunHistoryPanel";
 import type {
   AgentInfo,
+  FactoryMode,
   LoopProgress,
   PlanProgress,
   WorkflowInfo,
   WorkflowNextAction,
   WorkflowPayload,
   WorkflowStep,
+  WorkflowStepArtifactSummary,
   WorkflowStepState,
+  WorkflowStepToolCallSummary,
   WorkflowSummary,
   WorkflowUpdatePayload,
 } from "../types";
@@ -67,11 +72,13 @@ interface WorkflowManagerProps {
   onCreate: (payload: WorkflowPayload) => void;
   onUpdate: (name: string, payload: WorkflowUpdatePayload) => void;
   onDelete: (name: string) => void;
-  onTrigger: (name: string, input?: string) => void;
+  onTrigger: (name: string, input?: string, factoryMode?: FactoryMode) => void;
   onCancel?: (name: string) => void;
   isCancelling?: boolean;
   onRetryFailed?: (name: string) => void;
   isRetrying?: boolean;
+  factoryMode: FactoryMode;
+  onFactoryModeChange: (value: FactoryMode) => void;
   approvalReason: string;
   approvalBusy: boolean;
   onApprovalReasonChange: (value: string) => void;
@@ -110,6 +117,9 @@ function formatElapsed(startedAt?: string | null): string {
   const elapsed = Date.now() - start;
   return formatMs(Math.max(0, elapsed));
 }
+
+const WORKSPACE_PANEL_CLASS = "border-border/65 bg-background/75 shadow-sm backdrop-blur-sm";
+const SIGNAL_PANEL_CLASS = "rounded-[1.15rem] border p-3 shadow-sm backdrop-blur-sm";
 
 function stepStatusIcon(status: string, isApprovalWaiting: boolean): { icon: React.ReactNode; ring: string } {
   if (isApprovalWaiting) {
@@ -178,6 +188,88 @@ function statusBadgeVariant(status: string): "default" | "secondary" | "destruct
       return "secondary";
     default:
       return "outline";
+  }
+}
+
+function isJsonContractFailure(error?: string | null): boolean {
+  const normalized = (error ?? "").toLowerCase();
+  return normalized.includes("did not return json output") || normalized.includes("missing required json paths");
+}
+
+function requiredJsonPathsForStep(step: WorkflowStep, state?: WorkflowStepState): string[] {
+  const stateExecution = state?.execution as Record<string, unknown> | null | undefined;
+  const stepExecution = step.execution as Record<string, unknown> | null | undefined;
+  const rawPaths = stateExecution?.requiredJsonPaths ?? stepExecution?.requiredJsonPaths;
+  if (!Array.isArray(rawPaths)) return [];
+  return rawPaths.filter((path): path is string => typeof path === "string" && path.trim().length > 0);
+}
+
+function artifactSummaryLabel(artifact: WorkflowStepArtifactSummary, index: number): string {
+  return artifact.path?.trim() || artifact.name?.trim() || artifact.preview?.trim() || `Artifact ${index + 1}`;
+}
+
+function artifactSummaryMeta(artifact: WorkflowStepArtifactSummary): string {
+  return [artifact.tool, artifact.status, artifact.type]
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .join(" · ");
+}
+
+function toolCallSummaryLabel(toolCall: WorkflowStepToolCallSummary, index: number): string {
+  return toolCall.tool?.trim() || toolCall.preview?.trim() || `Tool ${index + 1}`;
+}
+
+function toolCallSummaryMeta(toolCall: WorkflowStepToolCallSummary): string {
+  const parts = [toolCall.status, toolCall.inputPreview]
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+  if (parts.length > 0) return parts.join(" · ");
+  return toolCall.preview?.trim() || "";
+}
+
+type StepViewFilter = "all" | "active" | "attention" | "activity" | "complete";
+
+interface WorkflowSignalStep {
+  name: string;
+  reasons: string[];
+  toolCallCount: number;
+  artifactCount: number;
+  warningCount: number;
+}
+
+function isStepActive(status: string, isApprovalWaiting: boolean): boolean {
+  return isApprovalWaiting || status === "running" || status === "queued";
+}
+
+function isStepComplete(status: string): boolean {
+  return status === "succeeded" || status === "completed" || status === "skipped";
+}
+
+function hasStepActivity(state?: WorkflowStepState): boolean {
+  return (state?.toolCallCount ?? 0) > 0 || (state?.artifactCount ?? 0) > 0;
+}
+
+function needsStepAttention(state?: WorkflowStepState, isApprovalWaiting = false): boolean {
+  if (isApprovalWaiting) return true;
+  if (!state) return false;
+  if (state.status === "failed" || state.status === "continued") return true;
+  if (state.verificationResult && !state.verificationResult.passed) return true;
+  if (state.reviewResult && !state.reviewResult.approved) return true;
+  if ((state.warnings?.length ?? 0) > 0) return true;
+  return isJsonContractFailure(state.error);
+}
+
+function stepMatchesViewFilter(filter: StepViewFilter, state: WorkflowStepState | undefined, isApprovalWaiting: boolean): boolean {
+  const status = state?.status ?? "pending";
+  switch (filter) {
+    case "active":
+      return isStepActive(status, isApprovalWaiting);
+    case "attention":
+      return needsStepAttention(state, isApprovalWaiting);
+    case "activity":
+      return hasStepActivity(state);
+    case "complete":
+      return isStepComplete(status);
+    default:
+      return true;
   }
 }
 
@@ -382,15 +474,27 @@ function StepDetailCard({
   const [expanded, setExpanded] = useState(false);
   const status = state?.status ?? "pending";
   const { icon, ring } = stepStatusIcon(status, isApprovalWaiting);
+  const jsonContractFailure = isJsonContractFailure(state?.error);
+  const requiredJsonPaths = requiredJsonPathsForStep(step, state);
+  const artifactSummaries = state?.artifacts ?? [];
+  const toolCallSummaries = state?.toolCalls ?? [];
+  const warnings = state?.warnings ?? [];
+  const warningCount = warnings.length;
+
+  useEffect(() => {
+    if (isApprovalWaiting || status === "running" || status === "failed" || jsonContractFailure || warningCount > 0) {
+      setExpanded(true);
+    }
+  }, [isApprovalWaiting, jsonContractFailure, status, step.name, warningCount]);
 
   return (
-    <div className="flex gap-3">
+    <div className="group relative flex gap-3">
       {/* connector + icon */}
       <div className="flex flex-col items-center">
         <button
           type="button"
           onClick={() => setExpanded((v) => !v)}
-          className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full border transition-all duration-300 ${ring} hover:brightness-110 hover:scale-105 active:scale-95 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none`}
+          className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-2xl border bg-background/80 shadow-sm transition-all duration-300 ${ring} hover:brightness-110 hover:scale-105 active:scale-95 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none`}
           title={expanded ? "Collapse" : "Expand"}
         >
           {icon}
@@ -459,6 +563,21 @@ function StepDetailCard({
               {state.planProgress.completedItems}/{state.planProgress.totalItems} tasks
             </span>
           )}
+          {state?.toolCallCount != null && state.toolCallCount > 0 && (
+            <span className="text-[10px] tabular-nums text-sky-300">
+              {state.toolCallCount} tool{state.toolCallCount === 1 ? "" : "s"}
+            </span>
+          )}
+          {state?.artifactCount != null && state.artifactCount > 0 && (
+            <span className="text-[10px] tabular-nums text-emerald-300">
+              {state.artifactCount} file{state.artifactCount === 1 ? "" : "s"}
+            </span>
+          )}
+          {warningCount > 0 && (
+            <span className="text-[10px] tabular-nums text-amber-300">
+              {warningCount} warning{warningCount === 1 ? "" : "s"}
+            </span>
+          )}
           {state?.latencyMs != null && (
             <span className="ml-auto text-[10px] tabular-nums text-muted-foreground">{formatMs(state.latencyMs)}</span>
           )}
@@ -466,7 +585,7 @@ function StepDetailCard({
 
         {/* expanded detail */}
         {expanded && (
-          <div className="mt-2 space-y-2 rounded-xl border border-border/50 bg-background/50 p-3 text-xs animate-slide-down">
+          <div className="mt-2 space-y-2 rounded-[1.15rem] border border-border/60 bg-background/70 p-3 text-xs shadow-sm backdrop-blur-sm animate-slide-down">
             {/* timing & attempts */}
             <div className="flex flex-wrap gap-4 text-muted-foreground">
               {state?.startedAt && (
@@ -474,6 +593,9 @@ function StepDetailCard({
               )}
               {state?.completedAt && (
                 <span>Completed: {new Date(state.completedAt).toLocaleTimeString()}</span>
+              )}
+              {state?.updatedAt && !state?.completedAt && (
+                <span>Last update: {new Date(state.updatedAt).toLocaleTimeString()}</span>
               )}
               {state?.latencyMs != null && (
                 <span>Duration: {formatMs(state.latencyMs)}</span>
@@ -485,6 +607,26 @@ function StepDetailCard({
                 <span>Approval wait: {formatMs(state.approvalWaitMs)}</span>
               )}
             </div>
+
+            {(state?.toolCallCount != null && state.toolCallCount > 0) || (state?.artifactCount != null && state.artifactCount > 0) || warnings.length > 0 ? (
+              <div className="flex flex-wrap gap-2">
+                {state?.toolCallCount != null && state.toolCallCount > 0 && (
+                  <Badge variant="outline" className="border-sky-500/30 bg-sky-500/10 text-[10px] text-sky-300">
+                    {state.toolCallCount} tool call{state.toolCallCount === 1 ? "" : "s"}
+                  </Badge>
+                )}
+                {state?.artifactCount != null && state.artifactCount > 0 && (
+                  <Badge variant="outline" className="border-emerald-500/30 bg-emerald-500/10 text-[10px] text-emerald-300">
+                    {state.artifactCount} artifact{state.artifactCount === 1 ? "" : "s"}
+                  </Badge>
+                )}
+                {warnings.length > 0 && (
+                  <Badge variant="outline" className="border-amber-500/30 bg-amber-500/10 text-[10px] text-amber-300">
+                    {warnings.length} warning{warnings.length === 1 ? "" : "s"}
+                  </Badge>
+                )}
+              </div>
+            ) : null}
 
             {/* loop progress */}
             {state?.loopProgress && (
@@ -552,6 +694,29 @@ function StepDetailCard({
               </details>
             )}
 
+            {jsonContractFailure && (
+              <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-amber-100">
+                <div className="font-medium text-amber-300">JSON contract failure</div>
+                <div className="mt-1 text-[11px] leading-relaxed text-amber-100/80">
+                  The agent may still have written files or completed tool calls, but the workflow only marks the step successful when the final response returns valid JSON with every required path.
+                </div>
+                {requiredJsonPaths.length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {requiredJsonPaths.map((path) => (
+                      <Badge key={path} variant="outline" className="border-amber-500/30 bg-background/60 text-[10px] text-amber-200">
+                        {path}
+                      </Badge>
+                    ))}
+                  </div>
+                )}
+                {state?.responsePreview && (
+                  <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap rounded-lg bg-background/70 p-2 text-[11px] leading-relaxed text-foreground">
+                    {state.responsePreview}
+                  </pre>
+                )}
+              </div>
+            )}
+
             {/* error */}
             {state?.error && (
               <div className="group relative rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-destructive">
@@ -563,11 +728,75 @@ function StepDetailCard({
               </div>
             )}
 
-            {/* execution output */}
+            {!jsonContractFailure && state?.responsePreview && (
+              <details>
+                <summary className="cursor-pointer text-xs font-medium text-muted-foreground hover:text-foreground">
+                  Last response preview
+                </summary>
+                <pre className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap rounded-lg bg-background p-2 text-[11px] leading-relaxed text-muted-foreground">
+                  {state.responsePreview}
+                </pre>
+              </details>
+            )}
+
+            {toolCallSummaries.length > 0 && (
+              <details>
+                <summary className="cursor-pointer text-xs font-medium text-muted-foreground hover:text-foreground">
+                  Recent tool activity
+                </summary>
+                <div className="mt-1 space-y-1">
+                  {toolCallSummaries.map((toolCall, index) => {
+                    const meta = toolCallSummaryMeta(toolCall);
+                    return (
+                      <div key={`${toolCall.tool ?? toolCall.preview ?? index}-${index}`} className="rounded-md border border-sky-500/20 bg-sky-500/5 px-2 py-1 text-[11px]">
+                        <div className="font-medium text-sky-200">{toolCallSummaryLabel(toolCall, index)}</div>
+                        {meta && <div className="mt-0.5 text-muted-foreground">{meta}</div>}
+                      </div>
+                    );
+                  })}
+                </div>
+              </details>
+            )}
+
+            {artifactSummaries.length > 0 && (
+              <details>
+                <summary className="cursor-pointer text-xs font-medium text-muted-foreground hover:text-foreground">
+                  Artifacts observed
+                </summary>
+                <div className="mt-1 space-y-1">
+                  {artifactSummaries.map((artifact, index) => {
+                    const meta = artifactSummaryMeta(artifact);
+                    return (
+                      <div key={`${artifact.path ?? artifact.name ?? artifact.preview ?? index}-${index}`} className="rounded-md border border-emerald-500/20 bg-emerald-500/5 px-2 py-1 text-[11px]">
+                        <div className="font-medium text-emerald-200">{artifactSummaryLabel(artifact, index)}</div>
+                        {meta && <div className="mt-0.5 text-muted-foreground">{meta}</div>}
+                      </div>
+                    );
+                  })}
+                </div>
+              </details>
+            )}
+
+            {warnings.length > 0 && (
+              <details>
+                <summary className="cursor-pointer text-xs font-medium text-muted-foreground hover:text-foreground">
+                  Warnings
+                </summary>
+                <div className="mt-1 space-y-1">
+                  {warnings.map((warning, index) => (
+                    <div key={`${warning.slice(0, 48)}-${index}`} className="rounded-md border border-amber-500/20 bg-amber-500/5 px-2 py-1 text-[11px] text-amber-100">
+                      {warning}
+                    </div>
+                  ))}
+                </div>
+              </details>
+            )}
+
+            {/* execution policy */}
             {state?.execution && Object.keys(state.execution).length > 0 && (
               <details>
                 <summary className="cursor-pointer text-xs font-medium text-muted-foreground hover:text-foreground">
-                  Execution output
+                  Execution policy
                 </summary>
                 <div className="mt-1">
                   <JsonBlock data={state.execution} maxHeight="max-h-48" />
@@ -743,6 +972,8 @@ export function WorkflowManager({
   isCancelling,
   onRetryFailed,
   isRetrying,
+  factoryMode,
+  onFactoryModeChange,
   approvalReason,
   approvalBusy,
   onApprovalReasonChange,
@@ -757,7 +988,9 @@ export function WorkflowManager({
   const [messageBus, setMessageBus] = useState("in-memory");
   const [steps, setSteps] = useState<WorkflowStep[]>(() => defaultStepsForAgent(agents[0]?.name));
   const [nextAction, setNextAction] = useState<WorkflowNextAction | null>(null);
-  const [runHistoryCollapsed, setRunHistoryCollapsed] = useState(true);
+  const [stepViewFilter, setStepViewFilter] = useState<StepViewFilter>("all");
+  const [workspaceTab, setWorkspaceTab] = useState<"live" | "history" | "definition">("definition");
+  const [selectedHistoryRun, setSelectedHistoryRun] = useState<WorkflowRunRecord | null>(null);
 
   // Trigger confirmation input (separate from workflow spec input)
   const [triggerInput, setTriggerInput] = useState("");
@@ -810,6 +1043,14 @@ export function WorkflowManager({
       cancelled = true;
     };
   }, [workflow?.name, workflow?.phase, workflow?.current_step, token, namespace]);
+
+  useEffect(() => {
+    setStepViewFilter("all");
+  }, [workflow?.name, workflow?.run_id]);
+
+  useEffect(() => {
+    setSelectedHistoryRun(null);
+  }, [workflow?.name]);
 
   function updateStep(index: number, updater: (current: WorkflowStep) => WorkflowStep) {
     setSteps((current) => current.map((step, stepIndex) => (stepIndex === index ? updater(step) : step)));
@@ -927,12 +1168,116 @@ export function WorkflowManager({
       body: "Run the workflow once to capture the first execution baseline, then refine failure handling, approvals, and run-to-run consistency from real results.",
     };
   }, [completedStepCount, currentFocus, failedStepCount, steps.length, wfSummary?.totalSteps, workflow,]);
-  const [showEditor, setShowEditor] = useState(false);
+  const workflowSignals = useMemo(() => {
+    const attentionSteps: WorkflowSignalStep[] = [];
+    const activitySteps: WorkflowSignalStep[] = [];
+    let activeSteps = 0;
+    let completedSteps = 0;
+    let totalToolCalls = 0;
+    let totalArtifacts = 0;
+    let totalWarnings = 0;
+    let verificationFailures = 0;
+    let reviewRejections = 0;
+    let jsonContractFailures = 0;
+
+    for (const step of steps) {
+      const state = workflow?.step_states?.[step.name];
+      const isApprovalWaiting = pendingApprovalStep === step.name;
+      const status = state?.status ?? "pending";
+      const warningCount = state?.warnings?.length ?? 0;
+      const toolCallCount = state?.toolCallCount ?? 0;
+      const artifactCount = state?.artifactCount ?? 0;
+      const reasons: string[] = [];
+
+      if (isApprovalWaiting) reasons.push("approval");
+      if (status === "failed") reasons.push("failed");
+      if (status === "continued") reasons.push("continued");
+      if (state?.verificationResult && !state.verificationResult.passed) {
+        verificationFailures += 1;
+        reasons.push("verify");
+      }
+      if (state?.reviewResult && !state.reviewResult.approved) {
+        reviewRejections += 1;
+        reasons.push("review");
+      }
+      if (isJsonContractFailure(state?.error)) {
+        jsonContractFailures += 1;
+        reasons.push("json");
+      }
+      if (warningCount > 0) {
+        reasons.push(`${warningCount} warning${warningCount === 1 ? "" : "s"}`);
+      }
+
+      if (isStepActive(status, isApprovalWaiting)) activeSteps += 1;
+      if (isStepComplete(status)) completedSteps += 1;
+      if (needsStepAttention(state, isApprovalWaiting)) {
+        attentionSteps.push({
+          name: step.name,
+          reasons,
+          toolCallCount,
+          artifactCount,
+          warningCount,
+        });
+      }
+      if (hasStepActivity(state)) {
+        activitySteps.push({
+          name: step.name,
+          reasons,
+          toolCallCount,
+          artifactCount,
+          warningCount,
+        });
+      }
+
+      totalToolCalls += toolCallCount;
+      totalArtifacts += artifactCount;
+      totalWarnings += warningCount;
+    }
+
+    return {
+      attentionSteps,
+      activitySteps,
+      activeSteps,
+      completedSteps,
+      totalToolCalls,
+      totalArtifacts,
+      totalWarnings,
+      verificationFailures,
+      reviewRejections,
+      jsonContractFailures,
+    };
+  }, [pendingApprovalStep, steps, workflow?.step_states]);
+  const stepFilterOptions = useMemo(() => ([
+    { value: "all" as const, label: "All", count: steps.length },
+    { value: "active" as const, label: "Active", count: workflowSignals.activeSteps },
+    { value: "attention" as const, label: "Attention", count: workflowSignals.attentionSteps.length },
+    { value: "activity" as const, label: "Activity", count: workflowSignals.activitySteps.length },
+    { value: "complete" as const, label: "Done", count: workflowSignals.completedSteps },
+  ]), [steps.length, workflowSignals.activeSteps, workflowSignals.activitySteps.length, workflowSignals.attentionSteps.length, workflowSignals.completedSteps]);
+  const visibleSteps = useMemo(() => (
+    steps.filter((step) => stepMatchesViewFilter(stepViewFilter, workflow?.step_states?.[step.name], pendingApprovalStep === step.name))
+  ), [pendingApprovalStep, stepViewFilter, steps, workflow?.step_states]);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const isFactoryWorkflow = isFactoryWorkflowName(workflow?.name);
+  const activeRunAgents = useMemo(() => {
+    if (!workflow) return [] as string[];
+    const result = new Set<string>();
+    for (const step of workflow.steps) {
+      const state = workflow.step_states?.[step.name];
+      if (state && state.status !== "pending" && step.agent_ref) {
+        result.add(step.agent_ref);
+      }
+    }
+    return Array.from(result);
+  }, [workflow]);
+
+  useEffect(() => {
+    setWorkspaceTab(workflow && hasBeenTriggered ? "live" : "definition");
+  }, [hasBeenTriggered, workflow?.name, workflow?.run_id]);
 
   function handleTrigger() {
     if (!workflow) return;
-    onTrigger(workflow.name, triggerInput.trim() || undefined);
+    onTrigger(workflow.name, triggerInput.trim() || undefined, isFactoryWorkflow ? factoryMode : undefined);
     setShowTriggerConfirm(false);
   }
 
@@ -951,30 +1296,37 @@ export function WorkflowManager({
                 : "Compose a multi-step agent pipeline with clearer sequencing, dependencies, and review gates."}
             </CardDescription>
           </div>
-          <Badge variant={isActive ? "default" : (workflow?.phase === "failed" || workflow?.phase === "cancelled") ? "destructive" : "secondary"}>
-            {workflow?.phase ?? "draft"}
-          </Badge>
+          <div className="flex items-center gap-2">
+            {isFactoryWorkflow && (
+              <Badge variant="outline" className="border-primary/20 bg-primary/5 text-primary/80">
+                {factoryModeLabel(factoryMode)}
+              </Badge>
+            )}
+            <Badge variant={isActive ? "default" : (workflow?.phase === "failed" || workflow?.phase === "cancelled") ? "destructive" : "secondary"}>
+              {workflow?.phase ?? "draft"}
+            </Badge>
+          </div>
         </div>
       </CardHeader>
       <CardContent className="space-y-5">
         {/* ── Summary counters ── */}
         <div className="grid gap-3 md:grid-cols-4">
-          <div className="rounded-2xl border border-border/60 bg-background/60 p-3">
-            <p className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground/70">Status</p>
+          <div className={`${SIGNAL_PANEL_CLASS} border-primary/20 bg-primary/5`}>
+            <p className="text-[11px] uppercase tracking-[0.16em] text-primary/75">Status</p>
             <p className="mt-1 text-xl font-semibold text-foreground">{workflow?.phase ?? "draft"}</p>
           </div>
-          <div className="rounded-2xl border border-border/60 bg-background/60 p-3">
-            <p className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground/70">Steps</p>
+          <div className={`${SIGNAL_PANEL_CLASS} border-sky-500/20 bg-sky-500/5`}>
+            <p className="text-[11px] uppercase tracking-[0.16em] text-sky-300/80">Steps</p>
             <p className="mt-1 text-xl font-semibold text-foreground">
               {wfSummary ? `${(wfSummary.completedSteps ?? 0) + (wfSummary.failedSteps ?? 0)}/${wfSummary.totalSteps ?? steps.length}` : steps.length}
             </p>
           </div>
-          <div className="rounded-2xl border border-border/60 bg-background/60 p-3">
-            <p className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground/70">Agents</p>
+          <div className={`${SIGNAL_PANEL_CLASS} border-violet-500/20 bg-violet-500/5`}>
+            <p className="text-[11px] uppercase tracking-[0.16em] text-violet-300/80">Agents</p>
             <p className="mt-1 text-xl font-semibold text-foreground">{uniqueAgentCount}</p>
           </div>
-          <div className="rounded-2xl border border-border/60 bg-background/60 p-3">
-            <p className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground/70">
+          <div className={`${SIGNAL_PANEL_CLASS} border-amber-500/20 bg-amber-500/5`}>
+            <p className="text-[11px] uppercase tracking-[0.16em] text-amber-300/80">
               {isActive ? "Elapsed" : "Approvals"}
             </p>
             <p className="mt-1 text-xl font-semibold text-foreground">
@@ -983,10 +1335,10 @@ export function WorkflowManager({
           </div>
         </div>
 
-        <Card className="shadow-none">
+        <Card className={WORKSPACE_PANEL_CLASS}>
           <CardContent className="p-4">
             <div className="grid gap-4 xl:grid-cols-[minmax(0,1.45fr)_minmax(18rem,1fr)]">
-              <div className={workflowBrief.tone + " rounded-2xl border px-4 py-4"}>
+              <div className={workflowBrief.tone + " rounded-[1.35rem] border px-4 py-4 shadow-sm backdrop-blur-sm"}>
                 <div className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground/80">Execution brief</div>
                 <div className="mt-2 text-sm font-semibold text-foreground">{workflowBrief.title}</div>
                 <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{workflowBrief.body}</p>
@@ -999,22 +1351,22 @@ export function WorkflowManager({
                 )}
               </div>
               <div className="grid gap-2 sm:grid-cols-2">
-                <div className="rounded-2xl border border-border/60 bg-background/60 px-3 py-3">
+                <div className={`${SIGNAL_PANEL_CLASS} border-border/60 bg-background/70 px-3 py-3`}>
                   <div className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground/70">Current focus</div>
                   <div className="mt-1 text-sm font-medium text-foreground">{currentFocus}</div>
                   <div className="mt-1 text-xs text-muted-foreground">Current step, frontier, or the highest-signal failure target.</div>
                 </div>
-                <div className="rounded-2xl border border-border/60 bg-background/60 px-3 py-3">
+                <div className={`${SIGNAL_PANEL_CLASS} border-border/60 bg-background/70 px-3 py-3`}>
                   <div className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground/70">Governance</div>
                   <div className="mt-1 text-sm font-medium text-foreground">{approvalStepCount} gate{approvalStepCount === 1 ? "" : "s"}</div>
                   <div className="mt-1 text-xs text-muted-foreground">{waitingApprovalCount > 0 ? `${waitingApprovalCount} waiting for approval right now.` : "Approval boundaries are configured into the workflow graph."}</div>
                 </div>
-                <div className="rounded-2xl border border-border/60 bg-background/60 px-3 py-3">
+                <div className={`${SIGNAL_PANEL_CLASS} border-border/60 bg-background/70 px-3 py-3`}>
                   <div className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground/70">Execution model</div>
                   <div className="mt-1 text-sm font-medium text-foreground">{messageBus}</div>
                   <div className="mt-1 text-xs text-muted-foreground">{loopStepCount > 0 ? `${loopStepCount} loop step${loopStepCount === 1 ? "" : "s"}` : "No autonomous loop steps"} · {reviewStepCount} review step{reviewStepCount === 1 ? "" : "s"}</div>
                 </div>
-                <div className="rounded-2xl border border-border/60 bg-background/60 px-3 py-3">
+                <div className={`${SIGNAL_PANEL_CLASS} border-border/60 bg-background/70 px-3 py-3`}>
                   <div className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground/70">Run posture</div>
                   <div className="mt-1 text-sm font-medium text-foreground">{completedStepCount} complete / {failedStepCount} failed</div>
                   <div className="mt-1 text-xs text-muted-foreground">{uniqueAgentCount} agent{uniqueAgentCount === 1 ? "" : "s"} participating across {steps.length} step{steps.length === 1 ? "" : "s"}.</div>
@@ -1026,16 +1378,49 @@ export function WorkflowManager({
 
         {/* ── Live progress bar (when summary exists) ── */}
         {workflow && wfSummary && (wfSummary.totalSteps ?? 0) > 0 && (
-          <Card className="shadow-none">
+          <Card className={WORKSPACE_PANEL_CLASS}>
             <CardContent className="p-4">
               <ProgressSummaryBar summary={wfSummary} phase={workflow.phase} />
             </CardContent>
           </Card>
         )}
 
+        <Tabs
+          value={workflow && hasBeenTriggered ? workspaceTab : "definition"}
+          onValueChange={(value) => setWorkspaceTab(value as "live" | "history" | "definition")}
+          className="space-y-4"
+        >
+          {workflow && hasBeenTriggered && (
+            <div className="rounded-[1.25rem] border border-border/60 bg-[linear-gradient(135deg,rgba(59,130,246,0.08),transparent_58%),linear-gradient(180deg,rgba(255,255,255,0.03),transparent)] p-2">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                <div className="px-2 py-1">
+                  <div className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground/70">Workflow workspace</div>
+                  <div className="mt-1 text-sm font-semibold text-foreground">Operate the live run, investigate history and trace, or switch into definition mode without leaving this page.</div>
+                </div>
+                <TabsList className="h-auto w-full flex-wrap justify-start gap-2 rounded-[1rem] bg-transparent p-0 lg:w-auto">
+                  <TabsTrigger value="live" className="gap-2 rounded-xl border border-border/60 bg-background/70 px-3 py-2 text-xs data-[state=active]:border-primary/30 data-[state=active]:bg-primary/10 data-[state=active]:text-foreground data-[state=active]:shadow-none">
+                    <Clock className="h-3.5 w-3.5" />
+                    Live run
+                  </TabsTrigger>
+                  <TabsTrigger value="history" className="gap-2 rounded-xl border border-border/60 bg-background/70 px-3 py-2 text-xs data-[state=active]:border-primary/30 data-[state=active]:bg-primary/10 data-[state=active]:text-foreground data-[state=active]:shadow-none">
+                    <FolderOpen className="h-3.5 w-3.5" />
+                    History and trace
+                  </TabsTrigger>
+                  <TabsTrigger value="definition" className="gap-2 rounded-xl border border-border/60 bg-background/70 px-3 py-2 text-xs data-[state=active]:border-primary/30 data-[state=active]:bg-primary/10 data-[state=active]:text-foreground data-[state=active]:shadow-none">
+                    <Pencil className="h-3.5 w-3.5" />
+                    Definition
+                  </TabsTrigger>
+                </TabsList>
+              </div>
+            </div>
+          )}
+
+          {workflow && hasBeenTriggered && (
+            <TabsContent value="live" className="mt-0 space-y-4 animate-fade-in">
+
         {/* ── Cross-agent pipeline overview ── */}
         {workflow && hasBeenTriggered && steps.length > 1 && (
-          <Card className="shadow-none">
+          <Card className={WORKSPACE_PANEL_CLASS}>
             <CardContent className="p-4">
               <div className="text-[10px] font-medium text-muted-foreground/80 uppercase tracking-wide mb-3">Agent pipeline</div>
               <div className="flex items-center gap-1 overflow-x-auto pb-1">
@@ -1106,7 +1491,7 @@ export function WorkflowManager({
 
         {/* ── Suggested next action ── */}
         {workflow && nextAction && (
-          <Card className="shadow-none border-primary/20 bg-primary/5">
+          <Card className="border-primary/20 bg-primary/5 shadow-sm backdrop-blur-sm">
             <CardContent className="p-4">
               <div className="flex items-start gap-3">
                 <Sparkles className="h-4 w-4 mt-0.5 text-primary" />
@@ -1120,9 +1505,84 @@ export function WorkflowManager({
           </Card>
         )}
 
+        {workflow && hasBeenTriggered && (
+          <Card className={WORKSPACE_PANEL_CLASS}>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm">Operator signals</CardTitle>
+              <CardDescription>High-signal blockers and evidence from the current run without opening every step.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                <div className="rounded-2xl border border-amber-500/20 bg-amber-500/5 p-3">
+                  <div className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground/70">Attention</div>
+                  <div className="mt-1 text-xl font-semibold text-foreground">{workflowSignals.attentionSteps.length}</div>
+                  <div className="mt-1 text-xs text-muted-foreground">{workflowSignals.verificationFailures} verify · {workflowSignals.reviewRejections} review · {workflowSignals.jsonContractFailures} JSON</div>
+                </div>
+                <div className="rounded-2xl border border-primary/20 bg-primary/5 p-3">
+                  <div className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground/70">Active now</div>
+                  <div className="mt-1 text-xl font-semibold text-foreground">{workflowSignals.activeSteps}</div>
+                  <div className="mt-1 text-xs text-muted-foreground">{waitingApprovalCount} approval wait · focus on {currentFocus}</div>
+                </div>
+                <div className="rounded-2xl border border-sky-500/20 bg-sky-500/5 p-3">
+                  <div className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground/70">Tool activity</div>
+                  <div className="mt-1 text-xl font-semibold text-foreground">{workflowSignals.totalToolCalls}</div>
+                  <div className="mt-1 text-xs text-muted-foreground">{workflowSignals.activitySteps.length} step{workflowSignals.activitySteps.length === 1 ? "" : "s"} produced runtime actions</div>
+                </div>
+                <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-3">
+                  <div className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground/70">Files observed</div>
+                  <div className="mt-1 text-xl font-semibold text-foreground">{workflowSignals.totalArtifacts}</div>
+                  <div className="mt-1 text-xs text-muted-foreground">{workflowSignals.totalWarnings} warning{workflowSignals.totalWarnings === 1 ? "" : "s"} logged across the run</div>
+                </div>
+              </div>
+
+              {workflowSignals.attentionSteps.length > 0 ? (
+                <div className="space-y-2">
+                  <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/80">Needs attention</div>
+                  <div className="flex flex-wrap gap-2">
+                    {workflowSignals.attentionSteps.slice(0, 8).map((signal) => (
+                      <div key={signal.name} className="rounded-full border border-amber-500/20 bg-amber-500/5 px-3 py-1.5 text-[11px]">
+                        <span className="font-medium text-foreground">{signal.name}</span>
+                        {signal.reasons.length > 0 && <span className="ml-2 text-muted-foreground">{signal.reasons.join(" · ")}</span>}
+                      </div>
+                    ))}
+                    {workflowSignals.attentionSteps.length > 8 && (
+                      <Badge variant="outline" className="border-amber-500/20 bg-amber-500/5 text-[10px] text-amber-200">
+                        +{workflowSignals.attentionSteps.length - 8} more
+                      </Badge>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-3 py-2 text-xs text-emerald-300">
+                  No failed steps, approval blockers, or warning signals are active right now.
+                </div>
+              )}
+
+              {workflowSignals.activitySteps.length > 0 && (
+                <div className="space-y-2">
+                  <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/80">Observed activity</div>
+                  <div className="flex flex-wrap gap-2">
+                    {workflowSignals.activitySteps.slice(0, 8).map((signal) => (
+                      <div key={`${signal.name}-activity`} className="rounded-full border border-sky-500/20 bg-sky-500/5 px-3 py-1.5 text-[11px] text-muted-foreground">
+                        <span className="font-medium text-foreground">{signal.name}</span>
+                        <span className="ml-2">{signal.toolCallCount} tools · {signal.artifactCount} files{signal.warningCount > 0 ? ` · ${signal.warningCount} warnings` : ""}</span>
+                      </div>
+                    ))}
+                    {workflowSignals.activitySteps.length > 8 && (
+                      <Badge variant="outline" className="border-sky-500/20 bg-sky-500/5 text-[10px] text-sky-200">
+                        +{workflowSignals.activitySteps.length - 8} more
+                      </Badge>
+                    )}
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
+
         {/* ── Step pipeline (live view + expandable detail) ── */}
         {workflow && steps.length > 0 && (
-          <Card className="shadow-none">
+          <Card className={WORKSPACE_PANEL_CLASS}>
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
@@ -1170,6 +1630,26 @@ export function WorkflowManager({
                     <Play className="h-4 w-4 text-primary" />
                     Confirm workflow execution
                   </div>
+                  {isFactoryWorkflow && (
+                    <div className="rounded-xl border border-border/60 bg-background/70 p-3 space-y-2">
+                      <div className="space-y-1">
+                        <Label className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">Factory mode</Label>
+                        <Select value={factoryMode} onValueChange={(value) => onFactoryModeChange(value as FactoryMode)}>
+                          <SelectTrigger className="h-9 text-xs"><SelectValue placeholder="Select a factory mode" /></SelectTrigger>
+                          <SelectContent>
+                            {FACTORY_MODE_OPTIONS.map((option) => (
+                              <SelectItem key={option.value} value={option.value}>
+                                <div className="flex flex-col gap-0.5 py-0.5 text-left">
+                                  <span className="text-xs font-medium">{option.label}</span>
+                                  <span className="text-[10px] text-muted-foreground">{option.description}</span>
+                                </div>
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+                  )}
                   <ExpandableMarkdownEditor
                     value={triggerInput}
                     onChange={setTriggerInput}
@@ -1222,9 +1702,48 @@ export function WorkflowManager({
                 </div>
               )}
 
+              <div className="mb-4 flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
+                <div className="flex flex-wrap gap-1">
+                  {stepFilterOptions.map((option) => (
+                    <Button
+                      key={option.value}
+                      type="button"
+                      size="sm"
+                      variant={stepViewFilter === option.value ? "secondary" : "ghost"}
+                      className="h-7 rounded-lg px-2 text-[11px]"
+                      onClick={() => setStepViewFilter(option.value)}
+                    >
+                      {option.label}
+                      <Badge variant="outline" className="ml-1.5 text-[10px]">{option.count}</Badge>
+                    </Button>
+                  ))}
+                </div>
+                <div className="text-[11px] text-muted-foreground">
+                  {visibleSteps.length === steps.length
+                    ? `Showing all ${steps.length} step${steps.length === 1 ? "" : "s"}`
+                    : `Showing ${visibleSteps.length} of ${steps.length} step${steps.length === 1 ? "" : "s"}`}
+                </div>
+              </div>
+
               {/* step list */}
+              {visibleSteps.length === 0 ? (
+                <div className="rounded-xl border border-border/60 bg-background/60 px-3 py-3 text-xs text-muted-foreground">
+                  No steps match the current filter.
+                  {stepViewFilter !== "all" && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      className="ml-2 h-6 rounded-lg px-2 text-[11px]"
+                      onClick={() => setStepViewFilter("all")}
+                    >
+                      Show all
+                    </Button>
+                  )}
+                </div>
+              ) : (
               <div className="space-y-0">
-                {steps.map((step, idx) => {
+                {visibleSteps.map((step, idx) => {
                   const state = workflow.step_states?.[step.name];
                   const isStepApprovalWaiting = pendingApprovalStep === step.name;
 
@@ -1240,13 +1759,14 @@ export function WorkflowManager({
                         onApprovalDecision={onApprovalDecision}
                       />
                       {/* connector line between steps */}
-                      {idx < steps.length - 1 && (
+                      {idx < visibleSteps.length - 1 && (
                         <div className="ml-4 h-3 w-px bg-border/50" />
                       )}
                     </div>
                   );
                 })}
               </div>
+              )}
 
               {/* workflow result summary */}
               {(workflow.phase === "succeeded" || workflow.phase === "completed") && (() => {
@@ -1362,59 +1882,76 @@ export function WorkflowManager({
           </Card>
         )}
 
-        {workflow && hasBeenTriggered && <WorkflowLogPanel workflow={workflow} />}
+            </TabsContent>
+          )}
 
-        {/* ── Agent File Browsers ── */}
-        {workflow && hasBeenTriggered && (() => {
-          const activeAgents = new Set<string>();
-          for (const step of workflow.steps) {
-            const state = workflow.step_states?.[step.name];
-            if (state && (state.status === "running" || state.status === "succeeded" || state.status === "completed" || state.status === "continued")) {
-              if (step.agent_ref) activeAgents.add(step.agent_ref);
-            }
-          }
-          if (activeAgents.size === 0) return null;
-          return (
-            <Card className="shadow-none">
-              <CardHeader className="pb-2">
-                <CardTitle className="flex items-center gap-2 text-sm">
-                  <FolderOpen className="h-4 w-4" />
-                  Agent workspace files
-                </CardTitle>
-                <CardDescription>Browse files created by agents during this workflow run.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <AgentFileBrowserTabs agents={Array.from(activeAgents)} token={token} namespace={namespace ?? "default"} liveUpdatesEnabled={isRunning} />
-              </CardContent>
-            </Card>
-          );
-        })()}
+          {workflow && hasBeenTriggered && (
+            <TabsContent value="history" className="mt-0 animate-fade-in">
+              <div className="grid gap-4 2xl:grid-cols-[minmax(0,1.14fr)_minmax(24rem,0.86fr)]">
+                <RunHistoryPanel workflowName={workflow.name} collapsible={false} onSelectRun={setSelectedHistoryRun} />
 
-        {/* ── Run History ── */}
-        {workflow && hasBeenTriggered && (
-          <RunHistoryPanel
-            workflowName={workflow.name}
-            collapsed={runHistoryCollapsed}
-            onToggle={() => setRunHistoryCollapsed((p) => !p)}
-          />
-        )}
+                <div className="space-y-4">
+                  <WorkflowLogPanel workflow={workflow} selectedRun={selectedHistoryRun} />
 
-        {/* ── Editor toggle for triggered workflows ── */}
-        {hasBeenTriggered && (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-8 self-start rounded-xl text-xs text-muted-foreground"
-            onClick={() => setShowEditor((v) => !v)}
-          >
-            {showEditor ? <ChevronDown className="mr-1.5 h-3.5 w-3.5" /> : <Pencil className="mr-1.5 h-3.5 w-3.5" />}
-            {showEditor ? "Hide step editor" : "Edit workflow steps"}
-          </Button>
-        )}
+                  {activeRunAgents.length > 0 && (
+                    <Card className={WORKSPACE_PANEL_CLASS}>
+                      <CardHeader className="pb-2">
+                        <CardTitle className="flex items-center gap-2 text-sm">
+                          <FolderOpen className="h-4 w-4" />
+                          Agent workspace files
+                        </CardTitle>
+                        <CardDescription>Browse files created during this workflow run, including evidence written before a step failed its final JSON contract.</CardDescription>
+                      </CardHeader>
+                      <CardContent>
+                        <AgentFileBrowserTabs agents={activeRunAgents} token={token} namespace={namespace ?? "default"} liveUpdatesEnabled={isActive} />
+                      </CardContent>
+                    </Card>
+                  )}
+                </div>
+              </div>
+            </TabsContent>
+          )}
+
+          <TabsContent value="definition" className="mt-0 space-y-4 animate-fade-in">
+            {workflow && (
+              <Card className={WORKSPACE_PANEL_CLASS}>
+                <CardContent className="flex flex-col gap-3 p-4 lg:flex-row lg:items-center lg:justify-between">
+                  <div className="space-y-1">
+                    <div className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground/70">Definition studio</div>
+                    <div className="text-sm font-semibold text-foreground">Refine the workflow contract, step graph, and execution policy with the authoring controls below.</div>
+                    <p className="text-xs leading-relaxed text-muted-foreground">This keeps the operational workspace separate from authoring, so run investigation does not get buried under the editor.</p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {hasBeenTriggered && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-8 rounded-xl text-xs"
+                        onClick={() => setWorkspaceTab("live")}
+                      >
+                        <Clock className="mr-1.5 h-3.5 w-3.5" />
+                        Back to live run
+                      </Button>
+                    )}
+                    {workflow && onOpenComposer && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 rounded-xl text-xs"
+                        onClick={onOpenComposer}
+                      >
+                        <Blocks className="mr-1.5 h-3.5 w-3.5" />
+                        Edit in Composer
+                      </Button>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            )}
 
         {/* ── Workflow details + execution profile (editor) ── */}
-        {(!hasBeenTriggered || showEditor) && <div className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
-          <Card className="shadow-none">
+        <div className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
+          <Card className={WORKSPACE_PANEL_CLASS}>
             <CardHeader className="pb-3">
               <CardTitle className="text-sm">Workflow details</CardTitle>
               <CardDescription>Name the flow, describe its purpose, and define the initial instruction payload.</CardDescription>
@@ -1459,7 +1996,7 @@ export function WorkflowManager({
             </CardContent>
           </Card>
 
-          <Card className="shadow-none">
+          <Card className={WORKSPACE_PANEL_CLASS}>
             <CardHeader className="pb-3">
               <div className="flex items-center gap-2">
                 <div className="flex h-8 w-8 items-center justify-center rounded-xl border border-emerald-500/20 bg-emerald-500/10 text-emerald-300">
@@ -1485,16 +2022,16 @@ export function WorkflowManager({
                 <p className="text-[11px] text-muted-foreground">The current gateway API supports the in-memory workflow bus only.</p>
               </div>
               <Separator />
-              <div className="rounded-2xl border border-border/60 bg-background/60 p-3 text-sm text-muted-foreground">
+              <div className={`${SIGNAL_PANEL_CLASS} border-border/60 bg-background/70 p-3 text-sm text-muted-foreground`}>
                 <p className="font-medium text-foreground">Operator-friendly defaults</p>
                 <p className="mt-1 leading-6">Each step is independently targetable, dependencies stay explicit, and approval gates are visible directly on the step card instead of hidden in free-form text.</p>
               </div>
             </CardContent>
           </Card>
-        </div>}
+        </div>
 
         {/* ── Step editor ── */}
-        {(!hasBeenTriggered || showEditor) && <div className="flex items-center justify-between border-t border-border pt-4">
+        <div className="flex items-center justify-between border-t border-border pt-4">
           <div>
             <h3 className="text-sm font-medium text-foreground">Workflow steps</h3>
             <p className="text-xs text-muted-foreground">Model the sequence, assign each step to an agent, and toggle dependencies with buttons instead of comma parsing.</p>
@@ -1519,11 +2056,11 @@ export function WorkflowManager({
             <PlusCircle className="mr-1 h-3 w-3" />
             Add step
           </Button>
-        </div>}
+        </div>
 
-        {(!hasBeenTriggered || showEditor) && <div className="space-y-3">
+        <div className="space-y-3">
           {steps.map((step, index) => (
-            <Card key={index} className="shadow-none">
+            <Card key={index} className={WORKSPACE_PANEL_CLASS}>
               <CardContent className="space-y-4 p-4">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div className="flex items-center gap-2">
@@ -1802,7 +2339,10 @@ export function WorkflowManager({
               </CardContent>
             </Card>
           ))}
-        </div>}
+        </div>
+
+          </TabsContent>
+        </Tabs>
 
         {error && (
           <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">

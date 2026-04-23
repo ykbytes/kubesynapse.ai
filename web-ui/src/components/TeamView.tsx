@@ -9,7 +9,10 @@ import { Button } from "./ui/button";
 import { ScrollArea } from "./ui/scroll-area";
 import { Separator } from "./ui/separator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
+import { deriveAgentVisualSignals, type AgentSignalSource } from "@/lib/agentSignals";
+import { cn } from "@/lib/utils";
 import type {
+  AgentDiscoveryPeer,
   InvocationSummary,
   SpecialistSubagentDraft,
   SubagentInvocationMetadata,
@@ -150,6 +153,16 @@ function buildActivityFeed(
         });
       }
 
+      if (result.resultFilePath) {
+        events.push({
+          id: `result-file-${idx++}`,
+          timestamp: new Date().toISOString(),
+          icon: "tool",
+          agent: name,
+          description: `Wrote ${truncateText(result.resultFilePath, 80)}`,
+        });
+      }
+
       if (result.error) {
         events.push({
           id: `err-${idx++}`,
@@ -223,15 +236,21 @@ function SubagentCard({
   draft,
   result,
   isSending,
+  signalSource,
+  reachable,
 }: {
   draft: SpecialistSubagentDraft;
   result: SubagentInvocationResult | undefined;
   isSending: boolean;
+  signalSource?: AgentSignalSource;
+  reachable?: boolean;
 }) {
   const status = deriveStatus(result, isSending);
   const [expanded, setExpanded] = useState(false);
   const displayName = draft.name || "Unnamed Agent";
   const hasContent = result?.responsePreview || result?.error || draft.task;
+  const signals = deriveAgentVisualSignals(signalSource ?? {});
+  const RuntimeIcon = signals.runtime.icon;
 
   return (
     <div className="rounded-lg border border-border bg-card p-2.5 space-y-1.5">
@@ -246,6 +265,22 @@ function SubagentCard({
           {draft.role && (
             <p className="text-[10px] text-muted-foreground truncate">{draft.role}</p>
           )}
+          <div className="mt-1 flex flex-wrap items-center gap-1">
+            <span className={cn("inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px]", signals.runtime.tone)}>
+              <RuntimeIcon className="h-3 w-3" />
+              {signals.runtime.shortLabel}
+            </span>
+            {reachable !== undefined && (
+              <span className={cn(
+                "inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px]",
+                reachable
+                  ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-200"
+                  : "border-red-500/25 bg-red-500/10 text-red-200",
+              )}>
+                {reachable ? "reachable" : "unreachable"}
+              </span>
+            )}
+          </div>
         </div>
         <StatusIcon status={status} />
         <Badge variant={statusBadgeVariant(status)} className="text-[10px] px-1.5 py-0">
@@ -265,11 +300,39 @@ function SubagentCard({
               <span className="font-medium">Task:</span> {draft.task}
             </p>
           )}
+          {(result?.transport || result?.threadId) && (
+            <div className="flex flex-wrap gap-1">
+              {result.transport && <Badge variant="outline" className="px-1 py-0 text-[10px]">{result.transport}</Badge>}
+              {result.threadId && <Badge variant="outline" className="px-1 py-0 font-mono text-[10px]">{truncateText(result.threadId, 16)}</Badge>}
+            </div>
+          )}
           {result?.responsePreview && (
             <div className="rounded border border-border bg-muted/40 p-2 text-[11px] whitespace-pre-wrap max-h-32 overflow-auto">
               {result.responsePreview}
             </div>
           )}
+          {result?.resultFilePath && (
+            <div className="rounded border border-border bg-background/70 p-2 text-[10px]">
+              <div className="font-medium text-foreground/85">Result file</div>
+              <div className="mt-0.5 break-all font-mono text-muted-foreground">{result.resultFilePath}</div>
+            </div>
+          )}
+          {result?.sharedFiles?.length ? (
+            <div className="rounded border border-border bg-background/70 p-2 text-[10px]">
+              <div className="font-medium text-foreground/85">Shared files</div>
+              <div className="mt-1 space-y-1">
+                {result.sharedFiles.slice(0, 4).map((file, index) => (
+                  <div key={`${file.path ?? "shared"}-${index}`} className="rounded border border-border/60 bg-muted/40 px-2 py-1">
+                    <div className="break-all font-mono text-muted-foreground">{file.path || "workspace file"}</div>
+                    {file.purpose && <div className="mt-0.5 text-muted-foreground/80">{file.purpose}</div>}
+                  </div>
+                ))}
+                {result.sharedFiles.length > 4 && (
+                  <div className="text-muted-foreground">+{result.sharedFiles.length - 4} more shared file(s)</div>
+                )}
+              </div>
+            </div>
+          ) : null}
           {result?.error && (
             <p className="text-[11px] text-destructive">{result.error}</p>
           )}
@@ -297,6 +360,7 @@ interface TeamViewProps {
   summary: InvocationSummary | null;
   isSending: boolean;
   activity: UiActivity[];
+  discoverablePeers: AgentDiscoveryPeer[];
 }
 
 export function TeamView({
@@ -306,6 +370,7 @@ export function TeamView({
   summary,
   isSending,
   activity,
+  discoverablePeers,
 }: TeamViewProps) {
   const [collapsed, setCollapsed] = useState(false);
 
@@ -320,11 +385,32 @@ export function TeamView({
     }
     return map;
   }, [results]);
+  const peerByIdentity = useMemo(() => {
+    const exact = new Map<string, AgentDiscoveryPeer>();
+    const byName = new Map<string, AgentDiscoveryPeer>();
+    for (const peer of discoverablePeers) {
+      exact.set(`${peer.namespace}/${peer.name}`, peer);
+      if (!byName.has(peer.name)) byName.set(peer.name, peer);
+    }
+    return { exact, byName };
+  }, [discoverablePeers]);
 
   const activityFeed = useMemo(
     () => buildActivityFeed(specialistSubagents, metadata, activity),
     [specialistSubagents, metadata, activity],
   );
+  const resultFileCount = useMemo(() => {
+    const files = new Set<string>();
+    for (const path of metadata?.resultFiles ?? []) {
+      const normalized = path.trim();
+      if (normalized) files.add(normalized);
+    }
+    for (const result of results) {
+      const normalized = result.resultFilePath?.trim();
+      if (normalized) files.add(normalized);
+    }
+    return files.size;
+  }, [metadata?.resultFiles, results]);
 
   // Summary stats
   const total = specialistSubagents.filter((s) => s.name.trim()).length;
@@ -335,7 +421,11 @@ export function TeamView({
 
   if (collapsed) {
     return (
-      <div className="flex flex-col items-center border-l border-border bg-card px-1 py-3">
+      <div className="flex items-center justify-between gap-3 border-t border-border bg-card px-3 py-2 2xl:flex-col 2xl:items-center 2xl:justify-start 2xl:border-t-0 2xl:border-l 2xl:px-1 2xl:py-3">
+        <div className="flex items-center gap-2 2xl:mt-2 2xl:flex-col 2xl:gap-1">
+          <Users className="h-4 w-4 text-muted-foreground" />
+          <span className="text-[10px] text-muted-foreground">{total}</span>
+        </div>
         <Tooltip>
           <TooltipTrigger asChild>
             <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setCollapsed(false)}>
@@ -344,16 +434,12 @@ export function TeamView({
           </TooltipTrigger>
           <TooltipContent side="left">Show team panel</TooltipContent>
         </Tooltip>
-        <div className="mt-2 flex flex-col items-center gap-1">
-          <Users className="h-4 w-4 text-muted-foreground" />
-          <span className="text-[10px] text-muted-foreground">{total}</span>
-        </div>
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col w-64 shrink-0 border-l border-border bg-card">
+    <div className="flex w-full shrink-0 flex-col border-t border-border bg-card 2xl:w-64 2xl:border-t-0 2xl:border-l">
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-2 border-b border-border">
         <div className="flex items-center gap-1.5">
@@ -373,6 +459,8 @@ export function TeamView({
         <div className="flex items-center gap-3 px-3 py-1.5 border-b border-border text-[10px] text-muted-foreground">
           <span className="text-emerald-500">{completed} done</span>
           {failed > 0 && <span className="text-red-500">{failed} failed</span>}
+          {resultFileCount > 0 && <span>{resultFileCount} file{resultFileCount === 1 ? "" : "s"}</span>}
+          {metadata?.sharedSandboxSession && <span>shared sandbox</span>}
           <span>{total} total</span>
         </div>
       )}
@@ -392,14 +480,19 @@ export function TeamView({
             ) : (
               specialistSubagents
                 .filter((s) => s.name.trim())
-                .map((sa) => (
-                  <SubagentCard
-                    key={sa.id}
-                    draft={sa}
-                    result={resultsByName.get(sa.name)}
-                    isSending={isSending}
-                  />
-                ))
+                .map((sa) => {
+                  const peer = peerByIdentity.exact.get(`${sa.namespace}/${sa.name}`) ?? peerByIdentity.byName.get(sa.name);
+                  return (
+                    <SubagentCard
+                      key={sa.id}
+                      draft={sa}
+                      result={resultsByName.get(sa.name)}
+                      isSending={isSending}
+                      signalSource={peer ? { runtime_kind: peer.runtime_kind } : undefined}
+                      reachable={peer?.reachable}
+                    />
+                  );
+                })
             )}
           </div>
 
@@ -413,24 +506,29 @@ export function TeamView({
                 </p>
                 {results
                   .filter((r) => !specialistSubagents.some((s) => s.name === r.name))
-                  .map((r, i) => (
-                    <SubagentCard
-                      key={`extra-${i}`}
-                      draft={{
-                        id: `extra-${i}`,
-                        name: r.name,
-                        namespace: r.namespace,
-                        role: r.role ?? "",
-                        task: r.task ?? "",
-                        inputFilesText: "",
-                        resultFilePath: r.resultFilePath ?? "",
-                        shareSandboxSession: false,
-                        timeoutSeconds: "",
-                      }}
-                      result={r}
-                      isSending={false}
-                    />
-                  ))}
+                  .map((r, i) => {
+                    const peer = peerByIdentity.exact.get(`${r.namespace}/${r.name}`) ?? peerByIdentity.byName.get(r.name);
+                    return (
+                      <SubagentCard
+                        key={`extra-${i}`}
+                        draft={{
+                          id: `extra-${i}`,
+                          name: r.name,
+                          namespace: r.namespace,
+                          role: r.role ?? "",
+                          task: r.task ?? "",
+                          inputFilesText: "",
+                          resultFilePath: r.resultFilePath ?? "",
+                          shareSandboxSession: false,
+                          timeoutSeconds: "",
+                        }}
+                        result={r}
+                        isSending={false}
+                        signalSource={peer ? { runtime_kind: peer.runtime_kind } : undefined}
+                        reachable={peer?.reachable}
+                      />
+                    );
+                  })}
               </div>
             </>
           )}

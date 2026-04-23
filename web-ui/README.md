@@ -1,6 +1,6 @@
-# Agent Sandbox Console
+# KubeSynth Console
 
-Vite + React + TypeScript frontend for the kubesynthai API gateway.
+Vite + React + TypeScript frontend for the KubeSynth API gateway.
 
 ## Local development
 
@@ -8,7 +8,16 @@ Vite + React + TypeScript frontend for the kubesynthai API gateway.
 2. Install dependencies with `npm install`.
 3. Start the dev server with `npm run dev`.
 
+Default local dev shape:
+
+- Vite serves the app on `http://127.0.0.1:5173` and proxies `/api/*` to `http://127.0.0.1:8080`.
+- `npm run preview` serves the production bundle on `http://127.0.0.1:4173`.
+- The gateway's default browser CORS allowlist already matches the dev server port `5173`, so local browser QA is cleanest when the UI runs there.
+- For a self-contained browser QA session, run the gateway with local auth enabled and a file-backed SQLite path under `api-gateway/.local/` so the first account bootstrap and refresh session flow survive restarts.
+
 By default the Vite dev server proxies `/api/*` to `http://127.0.0.1:8080`.
+
+The desktop workspace shell now sizes the left sidebar from the app shell instead of forcing a fixed internal width. On narrower desktop panes the sidebar clamps down before content gets squeezed, while the mobile sheet still renders the sidebar full-width.
 
 ## Build
 
@@ -25,10 +34,10 @@ The image serves the Vite bundle through Nginx with SPA fallback enabled. In the
 - Agent discovery through the API gateway
 - Empty-namespace bootstrap by creating an agent from the UI
 - Template-based agent creation and cloning/export-import driven resource bootstrap
-- Agent editing and deletion with structured editors for file-backed skills and Goose config files
+- Agent editing and deletion with structured editors for file-backed skills and OpenCode config files
 - Chat invoke and SSE streaming invoke
-- Explicit A2A routing, chat session persistence, and specialist-team orchestration for LangGraph agents from the chat workbench
-- Goose runtime remains chat-first in the UI; approvals, gateway-routed MCP tools, and sandbox session continuity remain LangGraph-only, while a limited safe subset of Goose-native run controls is exposed for chat (`max_turns`, workspace-relative `working_directory`, and a read-only system prompt preview)
+- Explicit A2A routing, chat session persistence, and OpenCode-focused chat workbench flows
+- OpenCode chat controls for safe runtime tuning, including `system`, `max_turns`, and workspace-relative `working_directory`
 - Thread continuity per selected agent
 - Approval decisions and retry from the UI
 - Per-agent conversation, activity state, and saved session history
@@ -44,9 +53,9 @@ The image serves the Vite bundle through Nginx with SPA fallback enabled. In the
 The UI is built around the same production surfaces exposed by the API gateway and operator:
 
 - connect once with a namespace and bearer token, then browse agents, workflows, and evaluations from the same session
-- create and edit agents without raw JSON for `skills.files` or Goose config bundles
+- create and edit agents without raw JSON for `skills.files` or OpenCode config bundles
 - inspect runtime-facing configuration, parsed skill summaries, tool and A2A metadata, logs, and approval state side-by-side with chat
-- use the chat workbench for standard prompts, explicit A2A delegation, or specialist-team requests
+- use the chat workbench for standard prompts or explicit A2A delegation
 
 ## Admin and operations
 

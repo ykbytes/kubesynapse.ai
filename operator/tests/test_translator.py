@@ -43,7 +43,7 @@ def _croniter(*args, **kwargs):
 
 croniter_module.CroniterBadCronError = _CroniterBadCronError
 croniter_module.croniter = _croniter
-sys.modules.setdefault("croniter", croniter_module)
+sys.modules["croniter"] = croniter_module
 
 kopf_module = types.ModuleType("kopf")
 kopf_module.on = types.SimpleNamespace(
@@ -60,7 +60,7 @@ kopf_module.adopt = lambda *args, **kwargs: None
 kopf_module.PermanentError = _PermanentError
 kopf_module.TemporaryError = _TemporaryError
 kopf_module.OperatorSettings = type("OperatorSettings", (), {})
-sys.modules.setdefault("kopf", kopf_module)
+sys.modules["kopf"] = kopf_module
 
 kubernetes_module = types.ModuleType("kubernetes")
 client_module = types.ModuleType("kubernetes.client")
@@ -78,10 +78,18 @@ client_module.NetworkingV1Api = MagicMock
 client_module.BatchV1Api = MagicMock
 client_module.RbacAuthorizationV1Api = MagicMock
 client_module.ApiTypeError = TypeError
-sys.modules.setdefault("kubernetes", kubernetes_module)
-sys.modules.setdefault("kubernetes.client", client_module)
-sys.modules.setdefault("kubernetes.config", config_module)
-sys.modules.setdefault("kubernetes.client.rest", rest_module)
+sys.modules["kubernetes"] = kubernetes_module
+sys.modules["kubernetes.client"] = client_module
+sys.modules["kubernetes.config"] = config_module
+sys.modules["kubernetes.client.rest"] = rest_module
+
+for module_name in [
+    "builders.translator",
+    "builders.manifests",
+    "builders.helpers",
+    "builders",
+]:
+    sys.modules.pop(module_name, None)
 
 from builders.translator import AgentOutputs, translate_agent  # noqa: E402
 from builders.helpers import sandbox_name  # noqa: E402
@@ -102,7 +110,7 @@ class TestAgentOutputsDataclass(unittest.TestCase):
             agent_name="test",
             agent_namespace="ns-test",
             policy_name="my-policy",
-            runtime_kind="langgraph",
+            runtime_kind="opencode",
             allowed_mcp_servers=["github"] if with_secret else [],
             has_tenant=True,
         )
@@ -152,7 +160,7 @@ class TestAgentOutputsDataclass(unittest.TestCase):
         self.assertEqual(outputs.agent_name, "")
         self.assertEqual(outputs.agent_namespace, "")
         self.assertIsNone(outputs.policy_name)
-        self.assertEqual(outputs.runtime_kind, "langgraph")
+        self.assertEqual(outputs.runtime_kind, "opencode")
         self.assertEqual(outputs.allowed_mcp_servers, [])
         self.assertFalse(outputs.has_tenant)
         self.assertIsNone(outputs.mcp_auth_secret)
@@ -161,8 +169,12 @@ class TestAgentOutputsDataclass(unittest.TestCase):
 class TestTranslateAgent(unittest.TestCase):
     """Tests for the translate_agent() function."""
 
-    def test_translate_langgraph_agent_without_policy(self) -> None:
-        spec = {"model": "gpt-4", "systemPrompt": "You are helpful."}
+    def test_translate_opencode_agent_without_policy(self) -> None:
+        spec = {
+            "model": "gpt-4",
+            "systemPrompt": "You are helpful.",
+            "runtime": {"kind": "opencode"},
+        }
         outputs = translate_agent(
             spec=spec,
             name="my-agent",
@@ -174,7 +186,7 @@ class TestTranslateAgent(unittest.TestCase):
         self.assertEqual(outputs.agent_name, "my-agent")
         self.assertEqual(outputs.agent_namespace, "team-alpha")
         self.assertIsNone(outputs.policy_name)
-        self.assertEqual(outputs.runtime_kind, "langgraph")
+        self.assertEqual(outputs.runtime_kind, "opencode")
         self.assertFalse(outputs.has_tenant)
         self.assertEqual(outputs.allowed_mcp_servers, [])
         self.assertIsNone(outputs.mcp_auth_secret)
@@ -194,7 +206,11 @@ class TestTranslateAgent(unittest.TestCase):
         self.assertEqual(outputs.a2a_ingress_network_policy["kind"], "NetworkPolicy")
 
     def test_translate_agent_with_policy_and_mcp(self) -> None:
-        spec = {"model": "gpt-4o", "systemPrompt": "Test"}
+        spec = {
+            "model": "gpt-4o",
+            "systemPrompt": "Test",
+            "runtime": {"kind": "opencode"},
+        }
         policy_spec = {"allowedMcpServers": ["github", "jira"]}
 
         # Mock the K8s API call inside create_mcp_auth_secret_manifest
@@ -221,8 +237,44 @@ class TestTranslateAgent(unittest.TestCase):
         self.assertIsNotNone(outputs.mcp_auth_secret)
         self.assertEqual(outputs.mcp_auth_secret["kind"], "Secret")
 
+    def test_translate_agent_with_saved_mcp_connections_mirrors_auth_secret(self) -> None:
+        spec = {
+            "model": "gpt-4o",
+            "systemPrompt": "Test",
+            "runtime": {"kind": "opencode"},
+            "mcpConnections": [
+                {
+                    "connectionId": "conn-123",
+                    "serverId": "context7",
+                    "transport": "remote",
+                }
+            ],
+            "mcpServers": ["context7"],
+        }
+
+        mock_secret = MagicMock()
+        mock_secret.data = {"bearer-token": "dG9rZW4="}
+        mock_secret.type = "Opaque"
+
+        mock_core_api = MagicMock()
+        mock_core_api.read_namespaced_secret.return_value = mock_secret
+
+        kube_client = sys.modules["kubernetes.client"]
+        with patch.object(kube_client, "CoreV1Api", return_value=mock_core_api, create=True):
+            outputs = translate_agent(
+                spec=spec,
+                name="saved-mcp-agent",
+                namespace="team-gamma",
+                policy_name=None,
+                policy_spec=None,
+            )
+
+        self.assertEqual(outputs.allowed_mcp_servers, [])
+        self.assertIsNotNone(outputs.mcp_auth_secret)
+        self.assertEqual(outputs.mcp_auth_secret["metadata"]["namespace"], "team-gamma")
+
     def test_translate_agent_with_tenant(self) -> None:
-        spec = {"model": "gpt-4"}
+        spec = {"model": "gpt-4", "runtime": {"kind": "opencode"}}
         outputs = translate_agent(
             spec=spec,
             name="t-agent",
@@ -233,20 +285,33 @@ class TestTranslateAgent(unittest.TestCase):
         )
         self.assertTrue(outputs.has_tenant)
 
-    def test_translate_goose_runtime(self) -> None:
+    def test_translate_agent_requires_explicit_runtime_kind(self) -> None:
+        spec = {"model": "gpt-4", "systemPrompt": "You are helpful."}
+
+        with self.assertRaises(kopf_module.PermanentError) as context:
+            translate_agent(
+                spec=spec,
+                name="my-agent",
+                namespace="team-alpha",
+                policy_name=None,
+                policy_spec=None,
+            )
+
+        self.assertIn("AIAgent.spec.runtime.kind must be explicitly set to 'opencode'", str(context.exception))
+
+    def test_translate_goose_runtime_is_rejected(self) -> None:
         spec = {"model": "gpt-4", "runtime": {"kind": "goose"}}
-        outputs = translate_agent(
-            spec=spec,
-            name="goose-agent",
-            namespace="ns-goose",
-            policy_name=None,
-            policy_spec=None,
-        )
-        self.assertEqual(outputs.runtime_kind, "goose")
-        # StatefulSet should use goose image
-        sts = outputs.statefulset
-        containers = sts["spec"]["template"]["spec"]["containers"]
-        self.assertTrue(any("goose" in c["image"].lower() for c in containers))
+
+        with self.assertRaises(kopf_module.PermanentError) as context:
+            translate_agent(
+                spec=spec,
+                name="goose-agent",
+                namespace="ns-goose",
+                policy_name=None,
+                policy_spec=None,
+            )
+
+        self.assertIn("Only 'opencode' is supported", str(context.exception))
 
     def test_translate_opencode_runtime(self) -> None:
         spec = {"model": "gpt-4", "runtime": {"kind": "opencode"}}
@@ -259,19 +324,22 @@ class TestTranslateAgent(unittest.TestCase):
         )
         self.assertEqual(outputs.runtime_kind, "opencode")
 
-    def test_translate_codex_runtime(self) -> None:
+    def test_translate_codex_runtime_is_rejected(self) -> None:
         spec = {"model": "gpt-4", "runtime": {"kind": "codex"}}
-        outputs = translate_agent(
-            spec=spec,
-            name="cx-agent",
-            namespace="ns-cx",
-            policy_name=None,
-            policy_spec=None,
-        )
-        self.assertEqual(outputs.runtime_kind, "codex")
+
+        with self.assertRaises(kopf_module.PermanentError) as context:
+            translate_agent(
+                spec=spec,
+                name="cx-agent",
+                namespace="ns-cx",
+                policy_name=None,
+                policy_spec=None,
+            )
+
+        self.assertIn("Only 'opencode' is supported", str(context.exception))
 
     def test_translate_agent_owned_manifests_count(self) -> None:
-        spec = {"model": "gpt-4"}
+        spec = {"model": "gpt-4", "runtime": {"kind": "opencode"}}
         outputs = translate_agent(
             spec=spec,
             name="count-agent",
@@ -283,7 +351,7 @@ class TestTranslateAgent(unittest.TestCase):
         self.assertEqual(len(outputs.owned_manifests()), 5)
 
     def test_translate_agent_desired_names_consistent(self) -> None:
-        spec = {"model": "gpt-4"}
+        spec = {"model": "gpt-4", "runtime": {"kind": "opencode"}}
         outputs = translate_agent(
             spec=spec,
             name="named-agent",

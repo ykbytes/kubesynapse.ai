@@ -1,7 +1,13 @@
 import { useState, useMemo } from "react";
-import { AlertCircle, ArrowLeft, Check, KeyRound, LayoutPanelTop, Loader2, UserPlus, X } from "lucide-react";
+import { AlertCircle, ArrowLeft, Check, KeyRound, LayoutPanelTop, Loader2, ShieldCheck, UserPlus, X } from "lucide-react";
 import { useConnection } from "@/contexts/ConnectionContext";
 import { BRAND } from "@/lib/brand";
+import {
+  AuthProviderBrandIcon,
+  buildAuthProviderOptions,
+  launchAuthProvider,
+  recommendedAuthCopy,
+} from "@/lib/authProviders";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -25,6 +31,9 @@ export function AuthPage({ onBack }: AuthPageProps) {
   const samlProviders = conn.authConfig?.saml_providers ?? [];
   const hasPasswordProviders = passwordProviders.length > 0;
   const hasSsoProviders = oidcProviders.length > 0 || samlProviders.length > 0;
+  const ssoProviders = useMemo(() => buildAuthProviderOptions(oidcProviders, samlProviders), [oidcProviders, samlProviders]);
+  const primarySsoProvider = ssoProviders[0] ?? null;
+  const secondarySsoProviders = ssoProviders.slice(1);
 
   const isBootstrapping =
     conn.authConfig != null &&
@@ -295,17 +304,56 @@ export function AuthPage({ onBack }: AuthPageProps) {
                       <Separator className="flex-1" />
                     </div>
                   )}
-                  <div className="flex flex-wrap gap-2">
-                    {oidcProviders.map((p) => (
-                      <Button key={p.id} variant="outline" className="flex-1" onClick={() => conn.handleOidcStart(p.id)}>
-                        {p.name}
+                  <div className="grid gap-3">
+                    <div className="rounded-lg border border-primary/20 bg-primary/5 p-3">
+                      <div className="flex items-start gap-3">
+                        <div className="rounded-lg bg-background/90 p-2 text-primary shadow-sm">
+                          <ShieldCheck className="h-4 w-4" />
+                        </div>
+                        <div>
+                          <div className="text-sm font-semibold text-foreground">Recommended sign-in</div>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            {recommendedAuthCopy(primarySsoProvider)}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                    {primarySsoProvider && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="h-11 w-full justify-center gap-3 rounded-xl"
+                        onClick={() => launchAuthProvider(primarySsoProvider, {
+                          onOidcStart: conn.handleOidcStart,
+                          onSamlStart: conn.handleSamlStart,
+                        })}
+                      >
+                        <AuthProviderBrandIcon brand={primarySsoProvider.brand} />
+                        {primarySsoProvider.label}
                       </Button>
-                    ))}
-                    {samlProviders.map((p) => (
-                      <Button key={p.id} variant="outline" className="flex-1" onClick={() => conn.handleSamlStart(p.id)}>
-                        {p.name} (SAML)
-                      </Button>
-                    ))}
+                    )}
+                    {secondarySsoProviders.length > 0 && (
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        {secondarySsoProviders.map((provider) => (
+                          <Button
+                            key={`${provider.kind}:${provider.id}`}
+                            type="button"
+                            variant="outline"
+                            className="justify-start gap-3"
+                            onClick={() => launchAuthProvider(provider, {
+                              onOidcStart: conn.handleOidcStart,
+                              onSamlStart: conn.handleSamlStart,
+                            })}
+                          >
+                            <AuthProviderBrandIcon brand={provider.brand} />
+                            {provider.label}
+                          </Button>
+                        ))}
+                      </div>
+                    )}
+                    <p className="text-[11px] text-muted-foreground">
+                      Managed sign-in opens in a browser and returns to this session automatically.
+                    </p>
                   </div>
                 </>
               )}

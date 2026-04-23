@@ -38,42 +38,6 @@ litellm:
       database_url: "os.environ/DATABASE_URL"
 
 agentRuntime:
-  image:
-    repository: docker.io/yakdhane/ai-agent-runtime
-    tag: deploy-20260401-212102
-    pullPolicy: IfNotPresent
-  env: {}
-  allowedModels: []
-  autonomy:
-    maxSteps: 4
-    maxStepsLimit: 12
-    doomLoopThreshold: 3
-    supervisorHistoryLimit: 8
-    supervisorResponseChars: 12000
-    continueOnActionError: true
-    retryLimit: 2
-    retryBackoffSeconds: 1.0
-    failureHistoryLimit: 6
-  localTools:
-    mountWorkspace: true
-    discoveryEnabled: true
-    allowlist:
-      - curl
-      - wget
-      - jq
-      - git
-      - rg
-      - tar
-      - unzip
-      - zip
-    allowedRoots:
-      - /app/state
-      - /workspace
-    timeoutSeconds: 20
-    maxOutputChars: 12000
-    maxArgs: 32
-    maxArgChars: 512
-    listLimit: 32
   storage:
     size: 1Gi
   resources:
@@ -83,95 +47,37 @@ agentRuntime:
     limits:
       cpu: "1"
       memory: "1Gi"
-  qdrantCollection: agent-knowledge
   hitl:
     mode: enforce
     notificationWebhookUrl: ""
-  openSandbox:
-    domain: ""
-    protocol: "http"
-    useServerProxy: false
-    requestTimeoutSeconds: 300
-    connectTimeoutSeconds: 30
-    defaultTtlSeconds: 600
-    secureRuntimeType: ""
-    auth:
-      apiKeySecretName: ""
-      apiKeySecretKey: "api-key"
-    images:
-      default: "python:3.11"
-      code: "opensandbox/code-interpreter:latest"
-      browser: "opensandbox/chrome:latest"
-      editor: "opensandbox/vscode:latest"
-    languages:
-      pythonVersion: "3.11"
-      javaVersion: "17"
-      nodeVersion: "20"
-      goVersion: "1.24"
 
-gooseRuntime:
-  image:
-    repository: docker.io/yakdhane/ai-goose-runtime
-    tag: deploy-20260401-212102
-    pullPolicy: IfNotPresent
-  provider: litellm
-  env: {}
-  # Example native Goose settings:
-  # env:
-  #   GOOSE_MAX_TURNS: 40
-  #   GOOSE_CONTEXT_STRATEGY: summarize
-  #   GOOSE_MOIM_MESSAGE_TEXT: "Run tests before writing files."
-  #   CONTEXT_FILE_NAMES:
-  #     - AGENTS.md
-  #     - .goosehints
-  #   GOOSE_RUNTIME_BUILTINS:
-  #     - developer
-  #   GOOSE_RUNTIME_CONFIG_FILES_JSON:
-  #     config.yaml: |
-  #       GOOSE_MODE: smart_approve
-  #       GOOSE_AUTO_COMPACT_THRESHOLD: 0.8
-  #       GOOSE_SEARCH_PATHS:
-  #         - /workspace/bin
-  #       slash_commands:
-  #         - command: run-tests
-  #           recipe_path: /workspace/.goose/recipes/run-tests.yaml
-  #     prompts/review.md: |
-  #       Review changes conservatively and call out regression risks.
-
-codexRuntime:
-  image:
-    repository: docker.io/yakdhane/ai-codex-runtime
-    tag: deploy-20260401-212102
-    pullPolicy: IfNotPresent
-  provider: litellm
-  env: {}
-  # Example Codex settings:
-  # env:
-  #   CODEX_COMMAND_TIMEOUT_SECONDS: 600
-  #   CODEX_MAX_PROMPT_CHARS: 16000
-  # To use Codex-managed OpenAI or ChatGPT auth instead of LiteLLM, set:
-  # provider: openai
-  # env:
-  #   CODEX_AUTH_JSON: |
-  #     {"auth_mode":"apikey","OPENAI_API_KEY":"sk-..."}
-  # Or paste the contents of ~/.codex/auth.json from a supported Codex login.
-  # GitHub Copilot / VS Code Copilot credentials are not supported by upstream Codex auth.
+runtimeServiceAccount:
+  name: kubesynth-agent-runtime
 
 opencodeRuntime:
   image:
-    repository: docker.io/yakdhane/ai-agent-sandbox-codex-runtime
+    repository: docker.io/yakdhane/ai-opencode-runtime
     tag: deploy-20260401-212102-opencode
     pullPolicy: IfNotPresent
   provider: litellm
+  limits:
+    maxPromptChars: 256000
+    maxSystemPromptChars: 64000
+    maxTeamContextChars: 32000
+    modelContextLimit: 256000
+    modelOutputLimit: 16384
+  autonomy: {}
   env: {}
   # Example OpenCode settings:
+  # autonomy:
+  #   sessionInitOnCreate: false
+  #   maxRetries: 3
+  #   maxTurns: 8
+  #   agentSteps: 128
+  #   compactionTokenThreshold: 0.70
+  #   planThresholdChars: 4096
+  #   structuredOutputRetryCount: 3
   # env:
-  #   OPENCODE_AGENT_STEPS: 24
-  #   OPENCODE_SESSION_INIT_ON_CREATE: "true"
-  #   OPENCODE_AUTONOMOUS_MAX_RETRIES: "4"
-  #   OPENCODE_AUTONOMOUS_MAX_TURNS: "14"
-  #   OPENCODE_COMPACTION_TOKEN_THRESHOLD: "0.75"
-  #   OPENCODE_PLAN_THRESHOLD_CHARS: "500"
   #   OPENCODE_RUNTIME_CONFIG_FILES_JSON:
   #     agents/reviewer.md: |
   #       ---
@@ -381,7 +287,7 @@ platformSecrets:
     litellmMasterKey: "replace-me"
     apiGatewaySharedToken: "replace-me-with-a-long-random-bearer-token"
     databasePassword: "replace-me-with-a-long-random-database-password"
-    jwtSecret: "replace-me-with-a-long-random-jwt-secret"
+    jwtSecret: "replace-me-with-a-long-random-jwt-secret" # also used as the default INTELLIGENCE_COLLECTOR_TOKEN_KEY in the gateway
     authBootstrapAdminPassword: ""
     ldapBindPassword: ""
     # JSON array of OIDC provider objects, for example:
@@ -543,3 +449,23 @@ mcpToolSidecars:
     image: docker.io/yakdhane/mcp-rag
     tag: deploy-20260401-212102
     port: 8099
+  collector:
+    image: docker.io/yakdhane/mcp-collector
+    tag: dev
+    port: 8100
+
+# Intelligence Collector Agent (DaemonSet on target clusters)
+collector:
+  enabled: true
+  image:
+    repository: localhost/kubesynthai/collector-agent
+    tag: dev
+  port: 9100
+  token: collector-dev-token
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi

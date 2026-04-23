@@ -1,5 +1,5 @@
 import { Check, CheckCircle2, ChevronDown, LayoutPanelTop, Loader2, Palette, XCircle } from "lucide-react";
-import { useRef, useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -48,52 +48,44 @@ interface TopBarProps {
 }
 
 const THEME_SWATCHES: Record<string, string> = {
-  dark: "bg-zinc-700",
-  light: "bg-zinc-200",
-  midnight: "bg-blue-700",
-  forest: "bg-emerald-700",
+  dark: "bg-zinc-500",
+  light: "bg-stone-100",
+  midnight: "bg-sky-500",
+  forest: "bg-emerald-500",
 };
 
 function ThemePicker() {
   const { theme, setTheme, labelFor } = useTheme();
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    function handleClick(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    }
-    document.addEventListener("mousedown", handleClick);
-    return () => document.removeEventListener("mousedown", handleClick);
-  }, [open]);
 
   return (
-    <div ref={ref} className="relative">
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button variant="outline" size="icon" className="h-8 w-8 border-border/60 text-foreground hover:bg-accent" onClick={() => setOpen((v) => !v)} aria-label="Change theme">
-            <Palette className="h-4 w-4" />
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent side="bottom">Theme</TooltipContent>
-      </Tooltip>
-      {open && (
-        <div className="absolute right-0 top-full mt-1.5 z-50 min-w-[160px] rounded-xl border border-border/50 bg-popover/95 backdrop-blur-md p-1.5 shadow-lg animate-scale-in">
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button variant="outline" size="sm" className="h-8 gap-1.5 rounded-xl border-border/70 bg-card/72 px-2.5 text-xs text-foreground hover:bg-accent/70 sm:h-9 sm:gap-2 sm:px-3">
+          <span className={`inline-block h-3.5 w-3.5 rounded-full border border-white/40 shadow-sm ${THEME_SWATCHES[theme]}`} aria-hidden="true" />
+          <Palette className="h-3.5 w-3.5" />
+          <span className="hidden sm:inline">{labelFor(theme)}</span>
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-56 rounded-[calc(var(--radius-xl)+2px)] border border-border/70 bg-popover/96 p-2 shadow-lg backdrop-blur-xl" sideOffset={8}>
+        <div className="px-2 pb-2">
+          <p className="text-[10px] font-medium uppercase tracking-[0.24em] text-muted-foreground">Theme</p>
+        </div>
+        <div className="space-y-1">
           {THEMES.map((t) => (
             <button
               key={t}
-              className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-xs text-popover-foreground transition-all duration-150 hover:bg-accent ${t === theme ? "bg-accent font-medium shadow-sm" : ""}`}
-              onClick={() => { setTheme(t); setOpen(false); }}
+              className={`flex w-full items-center gap-3 rounded-xl border px-3 py-2 text-left text-xs transition-colors duration-150 ease-productive ${t === theme ? "border-border bg-accent/78 text-accent-foreground shadow-sm" : "border-transparent text-popover-foreground hover:bg-accent/72 hover:text-accent-foreground"}`}
+              onClick={() => setTheme(t)}
               aria-label={`Select ${labelFor(t)} theme`}
             >
-              <span className={`inline-block h-4 w-4 rounded-full border-2 border-border shadow-sm transition-transform duration-200 hover:scale-125 ${THEME_SWATCHES[t]}`} />
-              {labelFor(t)}
+              <span className={`inline-block h-4 w-4 rounded-full border border-white/40 shadow-sm ${THEME_SWATCHES[t]}`} aria-hidden="true" />
+              <span className="flex-1">{labelFor(t)}</span>
+              {t === theme ? <Check className="h-3.5 w-3.5 text-primary" /> : null}
             </button>
           ))}
         </div>
-      )}
-    </div>
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -139,13 +131,13 @@ function NamespaceSwitcher({
       <PopoverTrigger asChild>
         <button
           type="button"
-          className="inline-flex items-center gap-1 rounded-md border border-border/60 bg-muted/30 px-2 py-1 font-mono text-xs text-foreground transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          className="inline-flex h-9 max-w-[9rem] min-w-0 items-center gap-1.5 rounded-xl border border-border/70 bg-card/72 px-3 font-mono text-[11px] text-foreground transition-colors duration-150 ease-productive hover:bg-accent/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/35 sm:max-w-[12rem]"
         >
-          {namespace}
+          <span className="truncate">{namespace}</span>
           <ChevronDown className="h-3 w-3 text-muted-foreground" />
         </button>
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-52 p-1" sideOffset={6}>
+      <PopoverContent align="end" className="w-56 rounded-[calc(var(--radius-xl)+2px)] border border-border/70 bg-popover/96 p-1.5 shadow-lg backdrop-blur-xl" sideOffset={8}>
         {loading ? (
           <div className="flex items-center justify-center py-4">
             <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
@@ -158,8 +150,8 @@ function NamespaceSwitcher({
               <button
                 key={ns}
                 type="button"
-                className={`flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-accent ${
-                  ns === namespace ? "bg-accent font-medium" : ""
+                className={`flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-xs transition-colors duration-150 ease-productive hover:bg-accent/72 ${
+                  ns === namespace ? "bg-accent/82 font-medium shadow-sm" : ""
                 }`}
                 onClick={() => {
                   onNamespaceChange(ns);
@@ -216,45 +208,49 @@ export function TopBar({
   const gatewayStatus = gatewayError ? "offline" : health?.status ?? "loading";
   const isHealthy = gatewayStatus === "ok" || gatewayStatus === "healthy";
   const isLoading = gatewayStatus === "loading";
+  const gatewayLabel = isHealthy ? "Healthy" : gatewayStatus === "offline" ? "Offline" : isLoading ? "Checking" : "Degraded";
 
   const healthStatusVariant = isHealthy ? "success" : gatewayStatus === "offline" ? "error" : isLoading ? "neutral" : "warning";
   const HealthIcon = isHealthy ? CheckCircle2 : gatewayStatus === "offline" ? XCircle : Loader2;
 
   return (
     <TooltipProvider delayDuration={200}>
-      <header className="sticky top-0 z-50 flex h-14 items-center justify-between border-b border-border/50 bg-sidebar/80 backdrop-blur-md px-4 shadow-sm animate-slide-from-left">
-        <div className="flex items-center gap-3">
-          <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-primary/20 to-primary/5 text-primary shadow-md shadow-primary/15 transition-transform duration-300 hover:scale-110 hover:rotate-3">
-            <LayoutPanelTop className="h-5 w-5" />
+      <header className="sticky top-0 z-50 flex min-h-14 flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b border-sidebar-border/80 bg-sidebar/88 px-3 py-2 shadow-sm backdrop-blur-xl animate-slide-from-left md:h-14 md:flex-nowrap md:px-5 md:py-0">
+        <div className="flex min-w-0 flex-1 items-center gap-3">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[calc(var(--radius-lg)+2px)] border border-border/70 bg-card/72 text-primary shadow-sm">
+            <LayoutPanelTop className="h-4.5 w-4.5" />
           </div>
-          <div className="flex flex-col">
-            <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-              {BRAND.name}
-            </span>
-            <span className="text-sm font-semibold text-foreground">{BRAND.tagline}</span>
+          <div className="min-w-0">
+            <p className="text-[10px] font-medium uppercase tracking-[0.24em] text-muted-foreground">Operations Console</p>
+            <div className="flex min-w-0 items-center gap-2">
+              <span className="truncate text-sm font-semibold text-foreground">{BRAND.name}</span>
+              <span className="hidden truncate text-xs text-muted-foreground lg:inline">{BRAND.tagline}</span>
+            </div>
           </div>
         </div>
 
-        <div className="flex items-center gap-2.5">
+        <div className="ml-auto flex max-w-full flex-wrap items-center justify-end gap-1.5 sm:gap-2">
           <Tooltip>
             <TooltipTrigger asChild>
               <span>
-                <StatusBadge icon={HealthIcon} status={healthStatusVariant} className={isLoading ? "[&>svg]:animate-spin" : ""} aria-label={`Gateway status: ${gatewayStatus}`}>
-                  {gatewayStatus}
+                <StatusBadge icon={HealthIcon} status={healthStatusVariant} className={isLoading ? "[&>svg]:animate-spin" : ""} aria-label={`Gateway status: ${gatewayLabel}`}>
+                  {gatewayLabel}
                 </StatusBadge>
               </span>
             </TooltipTrigger>
             <TooltipContent side="bottom">Gateway health: {gatewayStatus}</TooltipContent>
           </Tooltip>
           {token.trim() && (
-            <NamespaceSwitcher
-              token={token}
-              namespace={namespace}
-              currentUser={currentUser}
-              onNamespaceChange={onNamespaceChange}
-            />
+            <div className="min-w-0 max-w-full">
+              <NamespaceSwitcher
+                token={token}
+                namespace={namespace}
+                currentUser={currentUser}
+                onNamespaceChange={onNamespaceChange}
+              />
+            </div>
           )}
-          {currentUser ? <Badge variant="secondary">{currentUser.role}</Badge> : null}
+          {currentUser ? <Badge variant="outline" className="hidden bg-card/72 text-muted-foreground sm:inline-flex">{currentUser.role}</Badge> : null}
           <ThemePicker />
           <NotificationCenter />
           <ConnectionDialog

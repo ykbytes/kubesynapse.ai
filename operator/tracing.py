@@ -31,7 +31,7 @@ try:
     StatusCode = trace.StatusCode
 
     _OTEL_AVAILABLE = True
-except ModuleNotFoundError:
+except (ModuleNotFoundError, ImportError, AttributeError):
     _OTEL_AVAILABLE = False
     trace = None
     StatusCode = None

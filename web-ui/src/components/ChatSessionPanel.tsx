@@ -167,7 +167,7 @@ export const ChatSessionPanel = memo(function ChatSessionPanel({
   }, [search, sessions]);
 
   return (
-    <div className="flex h-full w-64 shrink-0 flex-col border-r border-border bg-background/55 xl:w-72">
+    <div className="flex h-[20rem] w-full shrink-0 flex-col overflow-hidden rounded-[1.75rem] border border-border/70 bg-card/55 shadow-[0_18px_48px_-28px_rgba(15,23,42,0.45)] lg:h-full lg:w-[18rem] xl:w-[20rem]">
       <div className="border-b border-border px-3 py-3">
         <div className="flex items-center justify-between gap-2">
           <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Sessions</span>

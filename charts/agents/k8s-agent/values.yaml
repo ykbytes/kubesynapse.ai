@@ -6,9 +6,16 @@ agent:
   model: gpt-4
   policyRef: ""
   systemPrompt: |
-    You are a Kubernetes platform engineer. Help operators and developers
-    understand cluster resources, troubleshoot workloads, inspect manifests,
-    and propose safe, incremental changes.
+    You are a Kubernetes platform engineer with direct access to live cluster
+    state through the kubernetes MCP tools.
+
+    When users ask about cluster health, incidents, workloads, manifests, or
+    operational risk:
+    - inspect the live cluster first using the kubernetes MCP tools
+    - explain findings clearly with evidence and likely impact
+    - recommend safe, incremental changes with rollback awareness
+    - ask for manual kubectl output only if the live tool path is unavailable
+      or insufficient
 
     Prefer practical debugging steps, explain likely causes clearly, and avoid
     destructive actions unless explicitly requested.
@@ -20,7 +27,10 @@ agent:
     size: 2Gi
   enableGVisor: true
   mcpServers: []
-  mcpSidecars: []
+  mcpSidecars:
+    - name: kubernetes
+      image: docker.io/yakdhane/mcp-kubernetes:deploy-20260401-212102
+      port: 8097
   githubConfig: {}
   gitConfig: {}
   allowedNamespaces: {}

@@ -132,7 +132,7 @@ class OperatorManifestTests(unittest.TestCase):
             "default",
             {
                 "model": "gpt-4",
-                "runtime": {"kind": "goose", "goose": {}},
+                "runtime": {"kind": "opencode", "opencode": {}},
                 "storage": {"size": "1Gi"},
                 "systemPrompt": "Be precise.",
             },
@@ -147,13 +147,40 @@ class OperatorManifestTests(unittest.TestCase):
 
         init_container = pod_spec["initContainers"][0]
         self.assertEqual(init_container["name"], "init-state-volume")
-        self.assertEqual(init_container["image"], _config.GOOSE_RUNTIME_IMAGE)
+        self.assertEqual(init_container["image"], _config.OPENCODE_RUNTIME_IMAGE)
         self.assertEqual(init_container["securityContext"]["runAsUser"], 0)
         self.assertEqual(
             init_container["volumeMounts"],
             [{"name": "state-volume", "mountPath": "/app/state"}],
         )
-        self.assertIn("chown -R 1000:1000 /app/state", init_container["command"][2])
+        self.assertIn("set -e;", init_container["command"][2])
+        self.assertIn("chown -R 1000:1000 /app/state || true", init_container["command"][2])
+        self.assertIn("chmod -R ug+rwX /app/state || true", init_container["command"][2])
+
+    def test_statefulset_manifest_honors_partial_agent_resource_overrides(self) -> None:
+        manifest = _builders_manifests.create_agent_statefulset_manifest(
+            "workspace-assistant",
+            "default",
+            {
+                "model": "gpt-4",
+                "runtime": {"kind": "opencode", "opencode": {}},
+                "storage": {"size": "1Gi"},
+                "resources": {
+                    "requests": {"memory": "512Mi"},
+                    "limits": {"memory": "2Gi"},
+                },
+                "systemPrompt": "Be precise.",
+            },
+            None,
+            {},
+        )
+
+        resources = manifest["spec"]["template"]["spec"]["containers"][0]["resources"]
+
+        self.assertEqual(resources["requests"]["cpu"], _config.AGENT_CPU_REQUEST)
+        self.assertEqual(resources["requests"]["memory"], "512Mi")
+        self.assertEqual(resources["limits"]["cpu"], _config.AGENT_CPU_LIMIT)
+        self.assertEqual(resources["limits"]["memory"], "2Gi")
 
     def test_statefulset_manifest_includes_a2a_env(self) -> None:
         manifest = _builders_manifests.create_agent_statefulset_manifest(
@@ -161,7 +188,7 @@ class OperatorManifestTests(unittest.TestCase):
             "default",
             {
                 "model": "gpt-4",
-                "runtime": {"kind": "langgraph"},
+                "runtime": {"kind": "opencode", "opencode": {}},
                 "storage": {"size": "1Gi"},
                 "systemPrompt": "Be precise.",
                 "a2a": {
@@ -212,44 +239,59 @@ class OperatorManifestTests(unittest.TestCase):
             "API_GATEWAY_SHARED_TOKEN",
         )
 
-    def test_statefulset_manifest_includes_autonomy_and_model_env(self) -> None:
-        with (
-            patch.object(
-                _builders_manifests,
-                "AGENT_ALLOWED_MODELS",
-                ["gpt-4", "openrouter-gpt-4o-mini"],
-            ),
-            patch.object(_builders_manifests, "AGENT_MAX_STEPS", "6"),
-            patch.object(
-                _builders_manifests,
-                "AGENT_MAX_STEPS_LIMIT",
-                "16",
-            ),
-            patch.object(_builders_manifests, "AGENT_DOOM_LOOP_THRESHOLD", "4"),
-            patch.object(
-                _builders_manifests,
-                "AGENT_SUPERVISOR_HISTORY_LIMIT",
-                "10",
-            ),
-            patch.object(_builders_manifests, "AGENT_SUPERVISOR_RESPONSE_CHARS", "8000"),
-            patch.object(
-                _builders_manifests,
-                "AGENT_AUTONOMY_CONTINUE_ON_ACTION_ERROR",
-                "false",
-            ),
+    def test_statefulset_manifest_prefers_policy_output_token_limit(self) -> None:
+        with patch.object(
+            _builders_manifests,
+            "OPENCODE_RUNTIME_EXTRA_ENV",
+            {"OPENCODE_MODEL_OUTPUT_LIMIT": "16384", "OPENCODE_PLAN_THRESHOLD_CHARS": "4096"},
         ):
             manifest = _builders_manifests.create_agent_statefulset_manifest(
                 "workspace-assistant",
                 "default",
                 {
-                    "model": "gpt-4",
-                    "runtime": {"kind": "langgraph"},
+                    "model": "openrouter-gpt-4o-mini",
+                    "runtime": {"kind": "opencode", "opencode": {}},
                     "storage": {"size": "1Gi"},
                     "systemPrompt": "Be precise.",
                 },
-                "team-policy",
-                {},
+                "budget-policy",
+                {"outputGuardrails": {"maxOutputTokens": 64}},
             )
+
+        env_items = [
+            item
+            for item in manifest["spec"]["template"]["spec"]["containers"][0]["env"]
+            if item.get("name") == "OPENCODE_MODEL_OUTPUT_LIMIT"
+        ]
+
+        self.assertEqual(env_items, [{"name": "OPENCODE_MODEL_OUTPUT_LIMIT", "value": "64"}])
+
+    def test_statefulset_manifest_includes_skill_files_env(self) -> None:
+        manifest = _builders_manifests.create_agent_statefulset_manifest(
+            "workspace-assistant",
+            "default",
+            {
+                "model": "gpt-4",
+                "runtime": {"kind": "opencode", "opencode": {}},
+                "storage": {"size": "1Gi"},
+                "systemPrompt": "Be precise.",
+                "skills": {
+                    "files": {
+                        ".github/skills/repo-review/SKILL.md": (
+                            "---\n"
+                            "name: repo-review\n"
+                            "description: Review code changes carefully.\n"
+                            "allowedSandboxTools:\n"
+                            "  - sandbox.filesystem.read\n"
+                            "---\n"
+                            "Inspect the repository before making changes.\n"
+                        )
+                    }
+                },
+            },
+            None,
+            {},
+        )
 
         env = {
             item["name"]: item["value"]
@@ -257,110 +299,21 @@ class OperatorManifestTests(unittest.TestCase):
             if "value" in item
         }
 
-        self.assertEqual(env["AGENT_MODEL"], "gpt-4")
-        self.assertEqual(env["AGENT_DEFAULT_MODEL"], "gpt-4")
-        self.assertEqual(env["AGENT_ALLOWED_MODELS"], "gpt-4,openrouter-gpt-4o-mini")
-        self.assertEqual(env["AGENT_MAX_STEPS"], "6")
-        self.assertEqual(env["AGENT_MAX_STEPS_LIMIT"], "16")
-        self.assertEqual(env["AGENT_DOOM_LOOP_THRESHOLD"], "4")
-        self.assertEqual(env["AGENT_SUPERVISOR_HISTORY_LIMIT"], "10")
-        self.assertEqual(env["AGENT_SUPERVISOR_RESPONSE_CHARS"], "8000")
-        self.assertEqual(env["AGENT_AUTONOMY_CONTINUE_ON_ACTION_ERROR"], "false")
-
-    def test_langgraph_manifest_includes_local_tool_env_and_workspace_mount(self) -> None:
-        with (
-            patch.object(_builders_manifests, "AGENT_LOCAL_TOOL_MOUNT_WORKSPACE", True),
-            patch.object(
-                _builders_manifests,
-                "AGENT_LOCAL_TOOL_DISCOVERY_ENABLED",
-                "false",
-            ),
-            patch.object(_builders_manifests, "AGENT_LOCAL_TOOL_ALLOWLIST", "curl,rg"),
-            patch.object(
-                _builders_manifests,
-                "AGENT_LOCAL_TOOL_ALLOWED_ROOTS",
-                "/app/state,/workspace,/tmp",
-            ),
-            patch.object(_builders_manifests, "AGENT_LOCAL_TOOL_TIMEOUT_SECONDS", "45.0"),
-            patch.object(
-                _builders_manifests,
-                "AGENT_LOCAL_TOOL_MAX_OUTPUT_CHARS",
-                "20000",
-            ),
-            patch.object(_builders_manifests, "AGENT_LOCAL_TOOL_MAX_ARGS", "12"),
-            patch.object(
-                _builders_manifests,
-                "AGENT_LOCAL_TOOL_MAX_ARG_CHARS",
-                "1024",
-            ),
-            patch.object(_builders_manifests, "AGENT_LOCAL_TOOL_LIST_LIMIT", "18"),
-            patch.object(
-                _builders_manifests,
-                "AGENT_AUTONOMY_ACTION_RETRY_LIMIT",
-                "4",
-            ),
-            patch.object(_builders_manifests, "AGENT_AUTONOMY_ACTION_RETRY_BACKOFF_SECONDS", "2.5"),
-            patch.object(
-                _builders_manifests,
-                "AGENT_AUTONOMY_FAILURE_HISTORY_LIMIT",
-                "9",
-            ),
-        ):
-            manifest = _builders_manifests.create_agent_statefulset_manifest(
-                "workspace-assistant",
-                "default",
-                {
-                    "model": "gpt-4",
-                    "runtime": {"kind": "langgraph"},
-                    "storage": {"size": "1Gi"},
-                    "systemPrompt": "Be precise.",
-                },
-                None,
-                {},
-            )
-
-        pod_spec = manifest["spec"]["template"]["spec"]
-        env = {item["name"]: item["value"] for item in pod_spec["containers"][0]["env"] if "value" in item}
-        volume_mounts = pod_spec["containers"][0]["volumeMounts"]
-        volumes = pod_spec["volumes"]
-
-        self.assertIn({"name": "workspace-volume", "mountPath": "/workspace"}, volume_mounts)
-        workspace_vol = next((v for v in volumes if v.get("name") == "workspace-volume"), None)
-        self.assertIsNotNone(workspace_vol)
-        self.assertIn("emptyDir", workspace_vol)
-        self.assertEqual(env["AGENT_LOCAL_TOOL_DISCOVERY_ENABLED"], "false")
-        self.assertEqual(env["AGENT_LOCAL_TOOL_ALLOWLIST"], "curl,rg")
-        self.assertEqual(env["AGENT_LOCAL_TOOL_ALLOWED_ROOTS"], "/app/state,/workspace,/tmp")
-        self.assertEqual(env["AGENT_LOCAL_TOOL_TIMEOUT_SECONDS"], "45.0")
-        self.assertEqual(env["AGENT_LOCAL_TOOL_MAX_OUTPUT_CHARS"], "20000")
-        self.assertEqual(env["AGENT_LOCAL_TOOL_MAX_ARGS"], "12")
-        self.assertEqual(env["AGENT_LOCAL_TOOL_MAX_ARG_CHARS"], "1024")
-        self.assertEqual(env["AGENT_LOCAL_TOOL_LIST_LIMIT"], "18")
-        self.assertEqual(env["AGENT_AUTONOMY_ACTION_RETRY_LIMIT"], "4")
-        self.assertEqual(env["AGENT_AUTONOMY_ACTION_RETRY_BACKOFF_SECONDS"], "2.5")
-        self.assertEqual(env["AGENT_AUTONOMY_FAILURE_HISTORY_LIMIT"], "9")
-
-    def test_langgraph_manifest_skips_workspace_mount_when_disabled(self) -> None:
-        with patch.object(_builders_manifests, "AGENT_LOCAL_TOOL_MOUNT_WORKSPACE", False):
-            manifest = _builders_manifests.create_agent_statefulset_manifest(
-                "workspace-assistant",
-                "default",
-                {
-                    "model": "gpt-4",
-                    "runtime": {"kind": "langgraph"},
-                    "storage": {"size": "1Gi"},
-                    "systemPrompt": "Be precise.",
-                },
-                None,
-                {},
-            )
-
-        pod_spec = manifest["spec"]["template"]["spec"]
-        volume_mounts = pod_spec["containers"][0]["volumeMounts"]
-        volume_names = {item["name"] for item in pod_spec["volumes"]}
-
-        self.assertNotIn({"name": "workspace-volume", "mountPath": "/workspace"}, volume_mounts)
-        self.assertNotIn("workspace-volume", volume_names)
+        self.assertIn(_config.AGENT_SKILL_FILES_ENV, env)
+        self.assertEqual(
+            json.loads(env[_config.AGENT_SKILL_FILES_ENV]),
+            {
+                ".github/skills/repo-review/SKILL.md": (
+                    "---\n"
+                    "name: repo-review\n"
+                    "description: Review code changes carefully.\n"
+                    "allowedSandboxTools:\n"
+                    "  - sandbox.filesystem.read\n"
+                    "---\n"
+                    "Inspect the repository before making changes.\n"
+                )
+            },
+        )
 
     def test_opencode_manifest_mounts_trust_bundle_when_configured(self) -> None:
         trust_bundle_path = "/etc/ssl/certs/custom-ca-bundle.pem"
@@ -431,7 +384,7 @@ class OperatorManifestTests(unittest.TestCase):
             "default",
             {
                 "model": "gpt-4",
-                "runtime": {"kind": "langgraph"},
+                "runtime": {"kind": "opencode", "opencode": {}},
                 "storage": {"size": "1Gi"},
                 "systemPrompt": "Be precise.",
                 "skills": {
@@ -474,75 +427,6 @@ class OperatorManifestTests(unittest.TestCase):
             },
         )
 
-    def test_codex_runtime_extra_env_allows_auth_json_but_not_codex_home(self) -> None:
-        with patch.object(
-            _builders_manifests,
-            "CODEX_RUNTIME_EXTRA_ENV",
-            {
-                "CODEX_AUTH_JSON": {"auth_mode": "apikey", "OPENAI_API_KEY": "sk-test-key"},
-                "CODEX_HOME": "/tmp/custom-codex-home",
-            },
-        ):
-            items = _builders_manifests.codex_runtime_extra_env_items()
-
-        self.assertEqual(
-            items,
-            [
-                {
-                    "name": "CODEX_AUTH_JSON",
-                    "value": '{"auth_mode": "apikey", "OPENAI_API_KEY": "sk-test-key"}',
-                }
-            ],
-        )
-
-    def test_codex_statefulset_manifest_includes_sidecar_env_and_containers(self) -> None:
-        sidecars = [{"name": "browser", "image": "example/browser:latest", "port": 8081}]
-        manifest = _builders_manifests.create_agent_statefulset_manifest(
-            "workspace-assistant",
-            "default",
-            {
-                "model": "gpt-4",
-                "runtime": {"kind": "codex", "codex": {"configFiles": {"config.toml": 'model = "gpt-4"'}}},
-                "storage": {"size": "1Gi"},
-                "systemPrompt": "Be precise.",
-                "mcpSidecars": sidecars,
-            },
-            None,
-            {},
-        )
-
-        pod_spec = manifest["spec"]["template"]["spec"]
-        env = {item["name"]: item["value"] for item in pod_spec["containers"][0]["env"] if "value" in item}
-
-        self.assertEqual(env[_config.CODEX_MCP_SIDECARS_ENV], json.dumps(sidecars, ensure_ascii=False, sort_keys=True))
-        self.assertEqual(json.loads(env[_config.CODEX_RUNTIME_CONFIG_FILES_ENV]), {"config.toml": 'model = "gpt-4"'})
-        self.assertEqual(pod_spec["containers"][1]["name"], "mcp-browser")
-        self.assertEqual(pod_spec["containers"][1]["ports"], [{"containerPort": 8081, "protocol": "TCP"}])
-        self.assertEqual(
-            pod_spec["containers"][1]["env"],
-            [{"name": "MCP_LISTEN_PORT", "value": "8081"}],
-        )
-        self.assertEqual(
-            pod_spec["containers"][1]["readinessProbe"],
-            {
-                "tcpSocket": {"port": 8081},
-                "initialDelaySeconds": 1,
-                "periodSeconds": 5,
-                "timeoutSeconds": 3,
-                "failureThreshold": 6,
-            },
-        )
-        self.assertEqual(
-            pod_spec["containers"][1]["livenessProbe"],
-            {
-                "tcpSocket": {"port": 8081},
-                "initialDelaySeconds": 15,
-                "periodSeconds": 20,
-                "timeoutSeconds": 3,
-                "failureThreshold": 3,
-            },
-        )
-
     def test_statefulset_manifest_rejects_duplicate_sidecar_ports(self) -> None:
         with self.assertRaises(operator_main.kopf.PermanentError):
             _builders_manifests.create_agent_statefulset_manifest(
@@ -550,7 +434,7 @@ class OperatorManifestTests(unittest.TestCase):
                 "default",
                 {
                     "model": "gpt-4",
-                    "runtime": {"kind": "codex", "codex": {}},
+                    "runtime": {"kind": "opencode", "opencode": {}},
                     "storage": {"size": "1Gi"},
                     "systemPrompt": "Be precise.",
                     "mcpSidecars": [
@@ -569,7 +453,7 @@ class OperatorManifestTests(unittest.TestCase):
                 "default",
                 {
                     "model": "gpt-4",
-                    "runtime": {"kind": "codex", "codex": {}},
+                    "runtime": {"kind": "opencode", "opencode": {}},
                     "storage": {"size": "1Gi"},
                     "systemPrompt": "Be precise.",
                     "mcpSidecars": [
@@ -587,7 +471,7 @@ class OperatorManifestTests(unittest.TestCase):
                 "default",
                 {
                     "model": "gpt-4",
-                    "runtime": {"kind": "codex", "codex": {}},
+                    "runtime": {"kind": "opencode", "opencode": {}},
                     "storage": {"size": "1Gi"},
                     "systemPrompt": "Be precise.",
                     "mcpSidecars": [
@@ -605,7 +489,7 @@ class OperatorManifestTests(unittest.TestCase):
                 "default",
                 {
                     "model": "gpt-4",
-                    "runtime": {"kind": "langgraph"},
+                    "runtime": {"kind": "opencode", "opencode": {}},
                     "storage": {"size": "1Gi"},
                     "systemPrompt": "Be precise.",
                     "mcpSidecars": [{"name": "browser", "port": 8081}],
@@ -622,7 +506,7 @@ class OperatorManifestTests(unittest.TestCase):
                     "default",
                     {
                         "model": "gpt-4",
-                        "runtime": {"kind": "codex", "codex": {}},
+                        "runtime": {"kind": "opencode", "opencode": {}},
                         "storage": {"size": "1Gi"},
                         "systemPrompt": "Be precise.",
                         "skills": {
@@ -645,13 +529,13 @@ class OperatorManifestTests(unittest.TestCase):
     def test_statefulset_manifest_sets_revision_hash_annotation_and_changes_with_storage(self) -> None:
         base_spec = {
             "model": "gpt-4",
-            "runtime": {"kind": "langgraph"},
+            "runtime": {"kind": "opencode", "opencode": {}},
             "storage": {"size": "1Gi"},
             "systemPrompt": "Be precise.",
         }
         updated_spec = {
             "model": "gpt-4",
-            "runtime": {"kind": "langgraph"},
+            "runtime": {"kind": "opencode", "opencode": {}},
             "storage": {"size": "2Gi"},
             "systemPrompt": "Be precise.",
         }
@@ -697,7 +581,12 @@ class OperatorManifestTests(unittest.TestCase):
         ingress_rule = next(
             peer for peer in ingress_sources if peer["podSelector"]["matchLabels"].get("agent-name") == "research-agent"
         )
-        egress_rule = egress["spec"]["egress"][0]["to"][0]
+        egress_rule = next(
+            rule["to"][0]
+            for rule in egress["spec"]["egress"]
+            if rule.get("to")
+            and rule["to"][0].get("podSelector", {}).get("matchLabels", {}).get("agent-name") == "analysis-agent"
+        )
 
         self.assertEqual(ingress["metadata"]["labels"]["kubesynth.ai/policy-type"], "a2a-ingress")
         self.assertEqual(egress["metadata"]["labels"]["kubesynth.ai/policy-type"], "a2a-egress")
@@ -785,7 +674,7 @@ class OperatorManifestTests(unittest.TestCase):
             "default",
             {
                 "model": "gpt-4",
-                "runtime": {"kind": "langgraph"},
+                "runtime": {"kind": "opencode", "opencode": {}},
                 "storage": {"size": "1Gi"},
                 "systemPrompt": "Be precise.",
             },
@@ -825,9 +714,9 @@ class StatefulSetReconcileTests(unittest.TestCase):
             "default",
             {
                 "model": "gpt-4",
-                "runtime": {"kind": "langgraph"},
+                "runtime": {"kind": "opencode", "opencode": {}},
                 "storage": {"size": "1Gi"},
-                "systemPrompt": "Use langgraph.",
+                "systemPrompt": "Use opencode.",
             },
             None,
             {},
@@ -837,9 +726,9 @@ class StatefulSetReconcileTests(unittest.TestCase):
             "default",
             {
                 "model": "gpt-4",
-                "runtime": {"kind": "codex", "codex": {"configFiles": {"config.toml": 'model = "gpt-4"'}}},
+                "runtime": {"kind": "opencode", "opencode": {"configFiles": {"opencode.json": {"default_agent": "build"}}}},
                 "storage": {"size": "4Gi"},
-                "systemPrompt": "Use codex.",
+                "systemPrompt": "Use opencode with sidecars.",
                 "mcpSidecars": [{"name": "browser", "image": "example/browser:latest", "port": 8081}],
             },
             None,
@@ -877,7 +766,7 @@ class StatefulSetReconcileTests(unittest.TestCase):
             patched_statefulset["spec"]["volumeClaimTemplates"][0]["spec"]["resources"]["requests"]["storage"],
             "1Gi",
         )
-        self.assertEqual(patched_statefulset["spec"]["template"]["metadata"]["labels"]["runtime-kind"], "codex")
+        self.assertEqual(patched_statefulset["spec"]["template"]["metadata"]["labels"]["runtime-kind"], "opencode")
         self.assertEqual(
             patched_statefulset["spec"]["template"]["metadata"]["annotations"][
                 _builders_manifests.POD_TEMPLATE_REVISION_ANNOTATION
@@ -888,7 +777,7 @@ class StatefulSetReconcileTests(unittest.TestCase):
         )
         self.assertEqual(
             patched_statefulset["spec"]["template"]["spec"]["containers"][0]["image"],
-            _config.CODEX_RUNTIME_IMAGE,
+            _config.OPENCODE_RUNTIME_IMAGE,
         )
         self.assertEqual(patched_statefulset["spec"]["template"]["spec"]["containers"][1]["name"], "mcp-browser")
 
@@ -903,9 +792,9 @@ class StatefulSetReconcileTests(unittest.TestCase):
             "default",
             {
                 "model": "gpt-4",
-                "runtime": {"kind": "langgraph"},
+                "runtime": {"kind": "opencode", "opencode": {}},
                 "storage": {"size": "1Gi"},
-                "systemPrompt": "Use langgraph.",
+                "systemPrompt": "Use opencode.",
             },
             None,
             {},
@@ -948,9 +837,9 @@ class StatefulSetReconcileTests(unittest.TestCase):
             "default",
             {
                 "model": "gpt-4",
-                "runtime": {"kind": "codex", "codex": {}},
+                "runtime": {"kind": "opencode", "opencode": {}},
                 "storage": {"size": "1Gi"},
-                "systemPrompt": "Use codex.",
+                "systemPrompt": "Use opencode.",
                 "mcpSidecars": [{"name": "browser", "image": "example/browser:latest", "port": 8081}],
             },
             None,
@@ -1074,7 +963,7 @@ class AgentControllerTests(unittest.TestCase):
         outputs.policy_name = None
         outputs.allowed_mcp_servers = []
         outputs.has_tenant = False
-        outputs.runtime_kind = "langgraph"
+        outputs.runtime_kind = "opencode"
         outputs.mcp_auth_secret = None
         outputs.service = {"metadata": {"name": "workspace-assistant-sandbox"}}
         outputs.statefulset = {"metadata": {"name": "workspace-assistant-sandbox"}}
@@ -1141,7 +1030,7 @@ class AgentControllerTests(unittest.TestCase):
             ) as log_operator_event,
         ):
             _agent_ctrl.create_agent_resources(
-                {"model": "gpt-4", "runtime": {"kind": "langgraph"}},
+                {"model": "gpt-4", "runtime": {"kind": "opencode"}},
                 "workspace-assistant",
                 "default",
                 logger,
@@ -1315,9 +1204,9 @@ class AllowedNamespacesTests(unittest.TestCase):
             "default",
             {
                 "model": "gpt-4",
-                "runtime": {"kind": "langgraph"},
+                "runtime": {"kind": "opencode", "opencode": {}},
                 "storage": {"size": "1Gi"},
-                "systemPrompt": "Use langgraph.",
+                "systemPrompt": "Use opencode.",
             },
             None,
             {},
@@ -1327,9 +1216,9 @@ class AllowedNamespacesTests(unittest.TestCase):
             "default",
             {
                 "model": "gpt-4",
-                "runtime": {"kind": "codex", "codex": {"configFiles": {"config.toml": 'model = "gpt-4"'}}},
+                "runtime": {"kind": "opencode", "opencode": {"configFiles": {"opencode.json": {"default_agent": "build"}}}},
                 "storage": {"size": "4Gi"},
-                "systemPrompt": "Use codex.",
+                "systemPrompt": "Use opencode.",
             },
             None,
             {},
@@ -1372,9 +1261,9 @@ class AllowedNamespacesTests(unittest.TestCase):
             "default",
             {
                 "model": "gpt-4",
-                "runtime": {"kind": "codex", "codex": {}},
+                "runtime": {"kind": "opencode", "opencode": {}},
                 "storage": {"size": "1Gi"},
-                "systemPrompt": "Use codex.",
+                "systemPrompt": "Use opencode.",
                 "mcpSidecars": [
                     {"name": "browser", "image": "example/browser:latest", "port": 8081},
                     {"name": "documents", "image": "example/documents:latest", "port": 8092},
@@ -1388,9 +1277,9 @@ class AllowedNamespacesTests(unittest.TestCase):
             "default",
             {
                 "model": "gpt-4",
-                "runtime": {"kind": "codex", "codex": {}},
+                "runtime": {"kind": "opencode", "opencode": {}},
                 "storage": {"size": "1Gi"},
-                "systemPrompt": "Use codex.",
+                "systemPrompt": "Use opencode.",
                 "mcpSidecars": [{"name": "browser", "image": "example/browser:latest", "port": 8081}],
             },
             None,
@@ -1424,7 +1313,7 @@ class AllowedNamespacesTests(unittest.TestCase):
             "default",
             {
                 "model": "gpt-4",
-                "runtime": {"kind": "langgraph"},
+                "runtime": {"kind": "opencode", "opencode": {}},
                 "storage": {"size": "4Gi"},
                 "systemPrompt": "Original prompt.",
             },
@@ -1436,7 +1325,7 @@ class AllowedNamespacesTests(unittest.TestCase):
             "default",
             {
                 "model": "gpt-4",
-                "runtime": {"kind": "langgraph"},
+                "runtime": {"kind": "opencode", "opencode": {}},
                 "storage": {"size": "1Gi"},
                 "systemPrompt": "Updated prompt.",
             },
@@ -1529,7 +1418,7 @@ class AllowedNamespacesTests(unittest.TestCase):
                 {},
             )
 
-        self.assertIn("shared GitHub hub service", str(context.exception))
+        self.assertIn("sidecar-based GitHub MCP", str(context.exception))
 
     # ------------------------------------------------------------------
     # §2.7 — MAX_PARALLEL_STEPS env injected into worker job manifest

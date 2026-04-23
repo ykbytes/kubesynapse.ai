@@ -34,7 +34,6 @@ module = [
     "opensandbox_code_interpreter.*",
     "prometheus_fastapi_instrumentator.*",
     "pythonjsonlogger.*",
-    "langgraph.*",
     "langchain_core.*",
     "langchain_openai.*",
 ]

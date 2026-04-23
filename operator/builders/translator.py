@@ -21,6 +21,7 @@ from builders.manifests import (
     create_agent_statefulset_manifest,
     create_mcp_auth_secret_manifest,
     create_mcp_network_policy_manifest,
+    resolve_runtime_kind,
 )
 from utils import (
     parse_a2a_peer_refs,
@@ -55,7 +56,7 @@ class AgentOutputs:
     agent_name: str = ""
     agent_namespace: str = ""
     policy_name: str | None = None
-    runtime_kind: str = "langgraph"
+    runtime_kind: str = "opencode"
     allowed_mcp_servers: list[str] = field(default_factory=list)
     has_tenant: bool = False
 
@@ -144,6 +145,10 @@ def translate_agent(
     allowed_mcp: list[str] = sorted(
         {str(item).strip() for item in (policy_spec.get("allowedMcpServers") or []) if str(item).strip()}
     )
+    requested_mcp_servers: list[str] = sorted(
+        {str(item).strip() for item in (spec.get("mcpServers") or []) if str(item).strip()}
+    )
+    has_structured_mcp_connections = bool(spec.get("mcpConnections") or [])
 
     # --- Build manifests (reuse existing builder functions) ---
     service_manifest = create_agent_service_manifest(name, namespace)
@@ -161,14 +166,10 @@ def translate_agent(
     )
 
     mcp_auth_secret: dict[str, Any] | None = None
-    if allowed_mcp:
+    if allowed_mcp or requested_mcp_servers or has_structured_mcp_connections:
         mcp_auth_secret = create_mcp_auth_secret_manifest(namespace)
 
-    # Resolve runtime kind for metadata (best-effort, don't fail here)
-    runtime_spec = spec.get("runtime") or {}
-    runtime_kind = "langgraph"
-    if isinstance(runtime_spec, dict):
-        runtime_kind = str(runtime_spec.get("kind") or "langgraph").strip().lower() or "langgraph"
+    runtime_kind = resolve_runtime_kind(spec)
 
     return AgentOutputs(
         service=service_manifest,

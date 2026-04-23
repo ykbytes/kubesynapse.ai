@@ -1,7 +1,9 @@
-export type RuntimeKind = "langgraph" | "goose" | "codex" | "opencode";
+export type RuntimeKind = "opencode";
+
+export type FactoryMode = "lightweight-draft" | "governed-bundle" | "fully-autonomous";
 
 /** Runtimes still under active development — shown with a red "Alpha" badge in the UI. */
-export const ALPHA_RUNTIMES: ReadonlySet<RuntimeKind> = new Set<RuntimeKind>(["langgraph", "goose", "codex"]);
+export const ALPHA_RUNTIMES: ReadonlySet<RuntimeKind> = new Set<RuntimeKind>();
 
 export interface A2APeerRef {
   name: string;
@@ -127,9 +129,6 @@ export interface AgentSkillSummary {
   allowed_mcp_servers: string[];
   allowed_a2a_targets: A2APeerRef[];
   allow_subagents: boolean;
-  goose_builtin_extensions: string[];
-  goose_stdio_extensions: string[];
-  goose_streamable_http_extensions: string[];
   valid: boolean;
   warnings: string[];
 }
@@ -236,7 +235,7 @@ export interface AgentInfo {
   runtime_kind?: RuntimeKind;
 }
 
-export type WorkspaceView = "agents" | "workflows" | "evals" | "catalog" | "composer" | "policies" | "settings" | "admin";
+export type WorkspaceView = "agents" | "chat" | "workflows" | "evals" | "catalog" | "composer" | "policies" | "intelligence" | "mcp" | "settings" | "admin";
 
 /* ── LLM Provider types ── */
 
@@ -354,6 +353,183 @@ export interface McpHubServer {
   config_schema?: ConfigField[];
 }
 
+/* ── MCP Registry types ── */
+
+export type McpTransport = "remote" | "hub" | "sidecar";
+export type McpAuthType = "none" | "bearer" | "api_key" | "oauth" | "connection_string" | "kubeconfig";
+export type McpSupportLevel = "ready" | "limited" | "planned";
+export type McpConnectionValidationStatus = "draft" | "valid" | "warning" | "invalid";
+export type McpConnectionOAuthState = "required" | "connected" | "expired";
+
+export interface McpConnectionCredentialField {
+  key: string;
+  label: string;
+  type: string;
+  group: string;
+  required: boolean;
+  configured: boolean;
+}
+
+export interface McpConnectionValidation {
+  status: McpConnectionValidationStatus;
+  message?: string | null;
+  detail?: Record<string, unknown> | null;
+  last_validated_at?: string | null;
+}
+
+export interface McpConnectionRuntimeHeader {
+  name: string;
+  envVar?: string | null;
+  prefix?: string | null;
+}
+
+export interface McpConnectionRuntimeSidecar {
+  name: string;
+  image: string;
+  port: number;
+  endpointPath?: string | null;
+  env: Array<Record<string, unknown>>;
+}
+
+export interface McpConnectionRuntimePreview {
+  kind: "remote" | "sidecar";
+  configKey: string;
+  url?: string | null;
+  headers?: McpConnectionRuntimeHeader[];
+  sidecar?: McpConnectionRuntimeSidecar | null;
+}
+
+export interface McpConnectionOAuth {
+  connected: boolean;
+  state: McpConnectionOAuthState;
+  expires_at?: string | null;
+  refresh_available: boolean;
+  scope: string[];
+}
+
+export interface McpConnectionOAuthStart {
+  authorization_url: string;
+  expires_at?: string | null;
+}
+
+export interface McpConnection {
+  id: string;
+  namespace: string;
+  name: string;
+  slug: string;
+  server_id: string;
+  server_name?: string | null;
+  transport: McpTransport;
+  auth_type: McpAuthType;
+  config: Record<string, unknown>;
+  credential_metadata: McpConnectionCredentialField[];
+  validation: McpConnectionValidation;
+  support_level: McpSupportLevel;
+  attachable: boolean;
+  status_reason?: string | null;
+  runtime_preview?: McpConnectionRuntimePreview | null;
+  oauth?: McpConnectionOAuth | null;
+  binding_count: number;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface McpConnectionBinding {
+  agent_name: string;
+  namespace: string;
+  connection_id: string;
+  connection_name: string;
+  server_id: string;
+  transport: string;
+}
+
+export interface AgentMcpConnection {
+  connection_id?: string | null;
+  name: string;
+  slug: string;
+  server_id: string;
+  server_name?: string | null;
+  transport: McpTransport;
+  support_level: McpSupportLevel;
+  attachable: boolean;
+  status_reason?: string | null;
+  source: string;
+  config: Record<string, unknown>;
+  credential_metadata: McpConnectionCredentialField[];
+  validation: McpConnectionValidation;
+  runtime: McpConnectionRuntimePreview;
+}
+
+export interface McpRegistryServer {
+  id: string;
+  name: string;
+  description: string;
+  icon: string;
+  category: string;
+  transport: McpTransport;
+  endpoint?: string | null;
+  suggested_endpoint?: string | null;
+  protocol_label?: string | null;
+  deployment_model?: string | null;
+  docs_url?: string | null;
+  repository_url?: string | null;
+  connection_notes?: string | null;
+  hub_server_name?: string | null;
+  auth_type: McpAuthType;
+  oauth_scopes?: string[];
+  auth_header_name?: string | null;
+  auth_header_prefix?: string | null;
+  enabled: boolean;
+  tags: string[];
+  tools_count: number;
+  tool_names: string[];
+  config_schema: ConfigField[];
+  sidecar_image?: string | null;
+  sidecar_port?: number | null;
+  support_level: McpSupportLevel;
+  attachable: boolean;
+  status_reason?: string | null;
+}
+
+export interface McpProfileServer {
+  id: string;
+  name: string;
+  transport: McpTransport;
+  support_level: McpSupportLevel;
+  attachable: boolean;
+  status_reason?: string | null;
+}
+
+export interface McpProfile {
+  id: string;
+  name: string;
+  description: string;
+  icon: string;
+  color: string;
+  servers: string[];
+  resolved_servers: McpProfileServer[];
+  attachable_servers: McpProfileServer[];
+  blocked_servers: McpProfileServer[];
+  can_apply: boolean;
+  support_level: McpSupportLevel;
+  total_tools: number;
+  tags: string[];
+}
+
+export interface McpCategory {
+  id: string;
+  name: string;
+  count: number;
+}
+
+export interface McpStats {
+  total_servers: number;
+  total_tools: number;
+  total_profiles: number;
+  by_transport: Record<string, number>;
+  categories: number;
+}
+
 export interface SkillsCatalogResponse {
   skills: CatalogSkill[];
   total: number;
@@ -407,12 +583,12 @@ export interface AgentDetail extends AgentInfo {
   storage_size?: string | null;
   runtime_kind: RuntimeKind;
   enable_gvisor: boolean;
+  mcp_connections: AgentMcpConnection[];
   mcp_servers: string[];
   mcp_sidecars: Array<Record<string, unknown>>;
   a2a_config: AgentA2AConfig;
   skills: AgentSkillsConfig;
   skill_summaries: AgentSkillSummary[];
-  goose_config_files: Record<string, unknown>;
   opencode_config_files: Record<string, unknown>;
   git_config?: GitConfig | null;
   github_config?: GitHubConfig | null;
@@ -427,11 +603,11 @@ export interface CreateAgentPayload {
   storage_size?: string;
   runtime_kind?: RuntimeKind;
   enable_gvisor?: boolean;
+  mcp_connection_ids?: string[];
   mcp_servers?: string[];
   mcp_sidecars?: Array<Record<string, unknown>>;
   a2a_config?: AgentA2AConfig;
   skills?: AgentSkillsConfig;
-  goose_config_files?: Record<string, unknown>;
   opencode_config_files?: Record<string, unknown>;
   git_config?: GitConfig | null;
   github_config?: GitHubConfig | null;
@@ -444,11 +620,11 @@ export interface UpdateAgentPayload {
   storage_size?: string;
   runtime_kind?: RuntimeKind;
   enable_gvisor?: boolean;
+  mcp_connection_ids?: string[];
   mcp_servers?: string[];
   mcp_sidecars?: Array<Record<string, unknown>>;
   a2a_config?: AgentA2AConfig;
   skills?: AgentSkillsConfig;
-  goose_config_files?: Record<string, unknown>;
   opencode_config_files?: Record<string, unknown>;
   git_config?: GitConfig | null;
   github_config?: GitHubConfig | null;
@@ -498,6 +674,7 @@ export interface AuthProviderSummary {
   id: string;
   name: string;
   kind: string;
+  brand?: string | null;
   supported?: boolean;
 }
 
@@ -567,6 +744,7 @@ export interface InvokePayload {
   autonomous?: boolean;
   max_retries?: number;
   output_schema?: Record<string, unknown>;
+  factory_mode?: FactoryMode;
 }
 
 export interface InvokeResponse {
@@ -597,8 +775,14 @@ export interface AgentLogsResponse {
 
 export interface WorkflowLogsResponse {
   workflow_name: string;
+  run_id?: string | null;
   job_name?: string;
   pod_name?: string;
+  source?: string;
+  archived_log_available?: boolean;
+  archived_log_source?: string | null;
+  archived_log_truncated?: boolean;
+  archived_log_captured_at?: string | null;
   logs: string;
 }
 
@@ -678,6 +862,22 @@ export interface IterationFailure {
   failureClass: string;
 }
 
+export interface WorkflowStepArtifactSummary {
+  path?: string | null;
+  name?: string | null;
+  tool?: string | null;
+  status?: string | null;
+  type?: string | null;
+  preview?: string | null;
+}
+
+export interface WorkflowStepToolCallSummary {
+  tool?: string | null;
+  status?: string | null;
+  inputPreview?: string | null;
+  preview?: string | null;
+}
+
 export interface WorkflowStepState {
   stepName: string;
   agentRef: string;
@@ -697,6 +897,12 @@ export interface WorkflowStepState {
   verificationResult?: VerificationResult | null;
   reviewResult?: ReviewResult | null;
   iterationFailures?: IterationFailure[] | null;
+  responsePreview?: string | null;
+  artifactCount?: number | null;
+  toolCallCount?: number | null;
+  artifacts?: WorkflowStepArtifactSummary[] | null;
+  toolCalls?: WorkflowStepToolCallSummary[] | null;
+  warnings?: string[] | null;
 }
 
 export interface WorkflowSummary {
@@ -836,6 +1042,10 @@ export interface UiMessage {
   /** Structured parts from OpenCode */
   toolCalls?: UiToolCall[];
   patches?: UiPatch[];
+  artifacts?: Array<Record<string, unknown>>;
+  a2a?: A2AInvocationMetadata | null;
+  subagents?: SubagentInvocationMetadata | null;
+  metadata?: Record<string, unknown> | null;
 }
 
 export interface UiActivity {

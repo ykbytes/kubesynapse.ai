@@ -9,6 +9,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@fontsource/ibm-plex-mono": "^5.2.7",
+    "@fontsource/ibm-plex-sans": "^5.2.8",
     "@fontsource/newsreader": "^5.1.1",
     "@fontsource/space-grotesk": "^5.1.1",
     "@microsoft/fetch-event-source": "^2.0.1",
@@ -30,6 +32,7 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.0.0",
+    "framer-motion": "^12.38.0",
     "highlight.js": "^11.11.1",
     "lucide-react": "^0.511.0",
     "monaco-editor": "^0.55.1",

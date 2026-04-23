@@ -84,6 +84,7 @@ export function ToolConfigDrawer({
 
   const schema = tool?.config_schema ?? [];
   const credentialType = tool?.credential_type ?? null;
+  const githubConfigUnsupported = credentialType === "github" && agent.runtime_kind === "opencode";
 
   // Initialize form values when drawer opens
   useEffect(() => {
@@ -195,6 +196,9 @@ export function ToolConfigDrawer({
           onConfigSaved();
         }
       } else if (credentialType === "github") {
+        if (githubConfigUnsupported) {
+          throw new Error("GitHub MCP credentials are not supported for OpenCode agents.");
+        }
         if (formValues.token?.trim()) {
           await createGitHubCredentials(token, agent.name, {
             token: formValues.token,
@@ -301,6 +305,11 @@ export function ToolConfigDrawer({
         </SheetHeader>
 
         <ScrollArea className="-mx-6 flex-1 px-6">
+          {githubConfigUnsupported ? (
+            <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+              The OpenCode-only gateway contract no longer accepts per-agent GitHub credential secrets. Use standard git repository credentials or shared MCP routing instead.
+            </div>
+          ) : null}
           {schema.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-12 text-center">
               <div className="flex h-12 w-12 items-center justify-center rounded-full border border-border/60 bg-background/60">
@@ -363,7 +372,7 @@ export function ToolConfigDrawer({
             <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
               Cancel
             </Button>
-            <Button onClick={handleSave} disabled={saving}>
+            <Button onClick={handleSave} disabled={saving || githubConfigUnsupported}>
               {saving ? (
                 <>
                   <LoaderCircle className="mr-2 h-4 w-4 animate-spin" />

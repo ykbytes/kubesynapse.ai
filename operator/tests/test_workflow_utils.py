@@ -1,24 +1,49 @@
+import importlib.util
 import sys
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from utils import (  # noqa: E402
-    compute_execution_waves,
-    merge_goose_config_files,
-    normalize_step_execution,
-    parse_agent_a2a_config,
-    parse_memory_policy_config,
-    parse_policy_a2a_config,
-    parse_tool_policy_config,
-    parse_goose_config_files,
-    ready_workflow_steps,
-    render_prompt,
-    validate_supported_policy_spec,
-    validate_workflow_graph,
-    invoke_agent_runtime,
-)
+MODULE_ROOT = Path(__file__).resolve().parents[1]
+CONFIG_PATH = MODULE_ROOT / "config.py"
+CONFIG_SPEC = importlib.util.spec_from_file_location("operator_config_under_test", CONFIG_PATH)
+if CONFIG_SPEC is None or CONFIG_SPEC.loader is None:
+    raise RuntimeError("Failed to load operator config module for tests")
+operator_config = importlib.util.module_from_spec(CONFIG_SPEC)
+previous_config = sys.modules.get("config")
+sys.modules[CONFIG_SPEC.name] = operator_config
+sys.modules["config"] = operator_config
+CONFIG_SPEC.loader.exec_module(operator_config)
+
+MODULE_PATH = MODULE_ROOT / "utils.py"
+SPEC = importlib.util.spec_from_file_location("operator_utils_under_test", MODULE_PATH)
+if SPEC is None or SPEC.loader is None:
+    raise RuntimeError("Failed to load operator utils module for tests")
+operator_utils = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = operator_utils
+try:
+    SPEC.loader.exec_module(operator_utils)
+finally:
+    if previous_config is not None:
+        sys.modules["config"] = previous_config
+    else:
+        sys.modules.pop("config", None)
+
+compute_execution_waves = operator_utils.compute_execution_waves
+invoke_agent_runtime = operator_utils.invoke_agent_runtime
+merge_runtime_config_files = operator_utils.merge_runtime_config_files
+missing_json_paths = operator_utils.missing_json_paths
+normalize_step_execution = operator_utils.normalize_step_execution
+parse_agent_a2a_config = operator_utils.parse_agent_a2a_config
+parse_json_output = operator_utils.parse_json_output
+parse_memory_policy_config = operator_utils.parse_memory_policy_config
+parse_policy_a2a_config = operator_utils.parse_policy_a2a_config
+parse_runtime_config_files = operator_utils.parse_runtime_config_files
+parse_tool_policy_config = operator_utils.parse_tool_policy_config
+ready_workflow_steps = operator_utils.ready_workflow_steps
+render_prompt = operator_utils.render_prompt
+validate_supported_policy_spec = operator_utils.validate_supported_policy_spec
+validate_workflow_graph = operator_utils.validate_workflow_graph
 
 
 class WorkflowUtilsTests(unittest.TestCase):
@@ -48,7 +73,7 @@ class WorkflowUtilsTests(unittest.TestCase):
 
     def test_render_prompt_supports_structured_placeholders(self) -> None:
         rendered = render_prompt(
-            ("Topic: {{input}}\nSummary: {{research.output.json.summary}}\nPrior: {{previous_output}}"),
+            "Topic: {{input}}\nSummary: {{research.output.json.summary}}\nPrior: {{previous_output}}",
             "private 5G",
             "Detailed prior output",
             {
@@ -56,7 +81,7 @@ class WorkflowUtilsTests(unittest.TestCase):
                     "response": "Detailed prior output",
                     "output": {
                         "json": {
-                            "summary": ("Factories adopt private 5G for low-latency robotics."),
+                            "summary": "Factories adopt private 5G for low-latency robotics.",
                         }
                     },
                 }
@@ -112,12 +137,11 @@ class WorkflowUtilsTests(unittest.TestCase):
 
         waves = compute_execution_waves(steps)
         self.assertEqual(
-            [[step["name"] for step in wave] for wave in waves], [["research", "finance"], ["analysis"], ["report"]]
+            [[step["name"] for step in wave] for wave in waves],
+            [["research", "finance"], ["analysis"], ["report"]],
         )
 
-    def test_normalize_step_execution_applies_defaults_and_overrides(
-        self,
-    ) -> None:
+    def test_normalize_step_execution_applies_defaults_and_overrides(self) -> None:
         execution = normalize_step_execution(
             {
                 "execution": {
@@ -135,6 +159,31 @@ class WorkflowUtilsTests(unittest.TestCase):
         self.assertEqual(execution["backoffSeconds"], 1.5)
         self.assertFalse(execution["retryable"])
         self.assertTrue(execution["continueOnError"])
+
+    def test_normalize_step_execution_preserves_required_json_paths(self) -> None:
+        execution = normalize_step_execution(
+            {
+                "execution": {
+                    "requiredJsonPaths": ["intent_summary", "resource_names", "execution_plan.generated_workflow_name"],
+                }
+            }
+        )
+
+        self.assertEqual(
+            execution["requiredJsonPaths"],
+            ["intent_summary", "resource_names", "execution_plan.generated_workflow_name"],
+        )
+
+    def test_missing_json_paths_reports_blank_or_absent_paths(self) -> None:
+        payload = {
+            "intent_summary": {"goal": "ok"},
+            "execution_plan": {"generated_workflow_name": ""},
+        }
+
+        self.assertEqual(
+            missing_json_paths(payload, ["intent_summary", "resource_names", "execution_plan.generated_workflow_name"]),
+            ["resource_names", "execution_plan.generated_workflow_name"],
+        )
 
     def test_validate_supported_policy_spec_rejects_budget_fields(self) -> None:
         with self.assertRaisesRegex(ValueError, "reserved for future distributed enforcement"):
@@ -255,49 +304,42 @@ class WorkflowUtilsTests(unittest.TestCase):
             },
         )
 
-    def test_parse_goose_config_files_normalizes_relative_paths(self) -> None:
-        parsed = parse_goose_config_files(
+    def test_parse_runtime_config_files_normalizes_relative_paths(self) -> None:
+        parsed = parse_runtime_config_files(
             {
-                " config.yaml ": {"GOOSE_MODE": "smart_approve"},
+                " config.yaml ": {"default_agent": "build"},
                 "prompts\\review.md": "Review conservatively.",
             },
-            source="AIAgent.spec.runtime.goose.configFiles",
+            source="AIAgent.spec.runtime.opencode.configFiles",
         )
 
         self.assertEqual(
             parsed,
             {
-                "config.yaml": {"GOOSE_MODE": "smart_approve"},
+                "config.yaml": {"default_agent": "build"},
                 "prompts/review.md": "Review conservatively.",
             },
         )
 
-    def test_parse_goose_config_files_rejects_runtime_managed_paths(self) -> None:
-        with self.assertRaisesRegex(ValueError, "runtime-managed"):
-            parse_goose_config_files(
-                {"permissions/tool_permissions.json": {}},
-                source="AIAgent.spec.runtime.goose.configFiles",
+    def test_parse_runtime_config_files_rejects_parent_traversal(self) -> None:
+        with self.assertRaisesRegex(ValueError, "must stay within the runtime config root"):
+            parse_runtime_config_files(
+                {"../secrets.json": {}},
+                source="AIAgent.spec.runtime.opencode.configFiles",
             )
 
-    def test_parse_goose_config_files_rejects_secrets_yaml(self) -> None:
-        with self.assertRaisesRegex(ValueError, "environment variables"):
-            parse_goose_config_files(
-                {"secrets.yaml": {"OPENAI_API_KEY": "secret"}},
-                source="AIAgent.spec.runtime.goose.configFiles",
-            )
-
-    def test_merge_goose_config_files_prefers_later_entries(self) -> None:
-        merged = merge_goose_config_files(
+    def test_merge_runtime_config_files_prefers_later_entries(self) -> None:
+        merged = merge_runtime_config_files(
             (
                 {
-                    "config.yaml": {"GOOSE_MODE": "approve"},
+                    "config.yaml": {"default_agent": "plan"},
                     "prompts/review.md": "Base review prompt.",
                 },
                 "chart",
             ),
             (
                 {
-                    "config.yaml": {"GOOSE_MODE": "smart_approve"},
+                    "config.yaml": {"default_agent": "build"},
                 },
                 "agent",
             ),
@@ -306,16 +348,14 @@ class WorkflowUtilsTests(unittest.TestCase):
         self.assertEqual(
             merged,
             {
-                "config.yaml": {"GOOSE_MODE": "smart_approve"},
+                "config.yaml": {"default_agent": "build"},
                 "prompts/review.md": "Base review prompt.",
             },
         )
 
     def test_validate_workflow_graph_rejects_too_many_steps(self) -> None:
-        import utils
-
-        original = utils.MAX_WORKFLOW_STEPS
-        utils.MAX_WORKFLOW_STEPS = 2
+        original = operator_utils.MAX_WORKFLOW_STEPS
+        operator_utils.MAX_WORKFLOW_STEPS = 2
         try:
             steps = [
                 {"name": "a", "agentRef": "agent"},
@@ -325,7 +365,7 @@ class WorkflowUtilsTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "exceeding the limit"):
                 validate_workflow_graph(steps)
         finally:
-            utils.MAX_WORKFLOW_STEPS = original
+            operator_utils.MAX_WORKFLOW_STEPS = original
 
     def test_invoke_agent_runtime_rejects_invalid_names(self) -> None:
         with self.assertRaises(ValueError):
@@ -340,67 +380,46 @@ class ParseJsonOutputTests(unittest.TestCase):
     """parse_json_output extracts JSON from raw text and markdown fences."""
 
     def test_pure_json_object(self) -> None:
-        from utils import parse_json_output
-
         result = parse_json_output('{"key": "value"}')
         self.assertEqual(result, {"key": "value"})
 
     def test_pure_json_array(self) -> None:
-        from utils import parse_json_output
-
         result = parse_json_output("[1, 2, 3]")
         self.assertEqual(result, [1, 2, 3])
 
     def test_empty_string_returns_none(self) -> None:
-        from utils import parse_json_output
-
         self.assertIsNone(parse_json_output(""))
         self.assertIsNone(parse_json_output("   "))
 
     def test_plain_text_returns_none(self) -> None:
-        from utils import parse_json_output
-
         self.assertIsNone(parse_json_output("Just some text output."))
 
     def test_markdown_fenced_json_object(self) -> None:
-        from utils import parse_json_output
-
         text = 'Here is the specification:\n```json\n{"feature_name": "auth", "spec_markdown": "# Auth"}\n```\nDone.'
         result = parse_json_output(text)
         self.assertEqual(result, {"feature_name": "auth", "spec_markdown": "# Auth"})
 
     def test_markdown_fenced_without_json_tag(self) -> None:
-        from utils import parse_json_output
-
         text = 'Result:\n```\n{"score": 95}\n```'
         result = parse_json_output(text)
         self.assertEqual(result, {"score": 95})
 
     def test_multiple_fenced_blocks_prefers_last(self) -> None:
-        from utils import parse_json_output
-
         text = 'Draft:\n```json\n{"version": 1}\n```\nFinal:\n```json\n{"version": 2}\n```'
         result = parse_json_output(text)
         self.assertEqual(result, {"version": 2})
 
     def test_fenced_invalid_json_skipped(self) -> None:
-        from utils import parse_json_output
-
         text = 'Bad block:\n```json\n{invalid json}\n```\nGood block:\n```json\n{"ok": true}\n```'
         result = parse_json_output(text)
         self.assertEqual(result, {"ok": True})
 
     def test_fenced_non_json_content_ignored(self) -> None:
-        from utils import parse_json_output
-
         text = "```\nsome plain text\n```"
         result = parse_json_output(text)
         self.assertIsNone(result)
 
     def test_invalid_json_whole_text_falls_through_to_fences(self) -> None:
-        from utils import parse_json_output
-
-        # Starts with { but isn't valid JSON — should try fence extraction
         text = '{not valid json}\n```json\n{"fallback": true}\n```'
         result = parse_json_output(text)
         self.assertEqual(result, {"fallback": True})

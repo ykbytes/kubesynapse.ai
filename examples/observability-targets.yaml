@@ -1,0 +1,182 @@
+##
+## ConnectorPlugin — built-in Kubernetes API connector
+##
+apiVersion: kubesynth.ai/v1alpha1
+kind: ConnectorPlugin
+metadata:
+  name: kubernetes-connector
+  namespace: default
+spec:
+  # Human-readable purpose shown in the UI so operators understand why this connector exists.
+  description: Connects to the Kubernetes API and translates cluster objects, conditions, and events into observability signals that policies and reports can evaluate.
+  image: kubesynth/connector-kubernetes:v1.0
+  protocol: grpc
+  port: 9090
+  capabilities:
+    - kubernetes-api
+  healthEndpoint: /healthz
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "64Mi"
+    limits:
+      cpu: "200m"
+      memory: "256Mi"
+---
+##
+## ObservationPolicy — cluster monitoring policy with anomaly detection
+##
+apiVersion: kubesynth.ai/v1alpha1
+kind: ObservationPolicy
+metadata:
+  name: cluster-monitoring-policy
+  namespace: default
+spec:
+  # Human-readable purpose shown in the UI so operators understand what the policy is protecting.
+  description: Defines how KubeSynth should retain Kubernetes telemetry, detect unusual cluster behavior, and publish alerts when health or capacity drifts from normal.
+  retention:
+    days: 30
+    downsampling:
+      after: "7d"
+      resolution: "5m"
+  anomalyDetection:
+    enabled: true
+    algorithm: ensemble
+    sensitivity: 0.7
+    windowSize: "1h"
+    evaluationInterval: "5m"
+    metrics:
+      - kube_pod_container_status_restarts_total
+      - kube_pod_status_phase
+      - kube_node_status_condition
+      - container_cpu_usage_seconds_total
+      - container_memory_working_set_bytes
+      - kube_deployment_status_replicas_unavailable
+  alertRules:
+    - name: PodCrashLooping
+      expr: "rate(kube_pod_container_status_restarts_total[15m]) > 0.1"
+      for: "5m"
+      severity: critical
+      annotations:
+        summary: "Pod {{ $labels.namespace }}/{{ $labels.pod }} is crash-looping"
+        action: "Check pod logs, inspect events, review resource limits"
+    - name: NodeNotReady
+      expr: "kube_node_status_condition{condition='Ready',status='true'} == 0"
+      for: "2m"
+      severity: critical
+      annotations:
+        summary: "Node {{ $labels.node }} is not ready"
+        action: "Check kubelet logs, drain and investigate node"
+    - name: HighMemoryPressure
+      expr: "container_memory_working_set_bytes / container_spec_memory_limit_bytes > 0.9"
+      for: "5m"
+      severity: warning
+      annotations:
+        summary: "Container {{ $labels.container }} in {{ $labels.namespace }}/{{ $labels.pod }} close to memory limit"
+        action: "Consider increasing memory limits or optimizing the workload"
+    - name: DeploymentReplicasMismatch
+      expr: "kube_deployment_status_replicas_available != kube_deployment_spec_replicas"
+      for: "10m"
+      severity: warning
+      annotations:
+        summary: "Deployment {{ $labels.namespace }}/{{ $labels.deployment }} has unavailable replicas"
+        action: "Check pod scheduling, resource quotas, and node capacity"
+  notifications:
+    natsSubject: "aiops.alerts.cluster"
+---
+##
+## ObservationTarget — Kubernetes API server & control plane
+##
+apiVersion: kubesynth.ai/v1alpha1
+kind: ObservationTarget
+metadata:
+  name: k8s-control-plane
+  namespace: default
+spec:
+  # Human-readable purpose shown in the UI so operators know what this target covers.
+  description: Watches the Kubernetes control plane so the platform can detect API-server health issues, control-plane instability, and readiness drift early.
+  targetType: kubernetes-api
+  connectorRef: kubernetes-connector
+  endpoint: "https://kubernetes.default.svc.cluster.local:443"
+  scrapeInterval: "30s"
+  policyRef: cluster-monitoring-policy
+  selector:
+    matchLabels:
+      component: kube-apiserver
+  credentials:
+    spiffeEnabled: false
+  labels:
+    tier: control-plane
+    environment: development
+  tlsConfig:
+    insecureSkipVerify: true
+---
+##
+## ObservationTarget — all workloads across namespaces
+##
+apiVersion: kubesynth.ai/v1alpha1
+kind: ObservationTarget
+metadata:
+  name: k8s-workloads
+  namespace: default
+spec:
+  description: Watches workloads across namespaces so the platform can spot pod failures, deployment drift, and unhealthy application rollouts.
+  targetType: kubernetes-api
+  connectorRef: kubernetes-connector
+  endpoint: "https://kubernetes.default.svc.cluster.local:443"
+  scrapeInterval: "30s"
+  policyRef: cluster-monitoring-policy
+  selector:
+    matchLabels: {}
+  labels:
+    tier: workload
+    scope: all-namespaces
+  tlsConfig:
+    insecureSkipVerify: true
+---
+##
+## ObservationTarget — node health & resources
+##
+apiVersion: kubesynth.ai/v1alpha1
+kind: ObservationTarget
+metadata:
+  name: k8s-node-health
+  namespace: default
+spec:
+  description: Watches node conditions and infrastructure capacity so the platform can surface pressure, readiness, and resource exhaustion before workloads are impacted.
+  targetType: kubernetes-api
+  connectorRef: kubernetes-connector
+  endpoint: "https://kubernetes.default.svc.cluster.local:443"
+  scrapeInterval: "60s"
+  policyRef: cluster-monitoring-policy
+  selector:
+    matchLabels: {}
+  labels:
+    tier: infrastructure
+    metric-class: node
+  tlsConfig:
+    insecureSkipVerify: true
+---
+##
+## ObservationTarget — AI agent sandbox namespace
+##
+apiVersion: kubesynth.ai/v1alpha1
+kind: ObservationTarget
+metadata:
+  name: k8s-agent-sandbox
+  namespace: default
+spec:
+  description: Focuses on the AI agent platform namespace so operators can track the health of the sandbox control plane and the workloads it manages.
+  targetType: kubernetes-api
+  connectorRef: kubernetes-connector
+  endpoint: "https://kubernetes.default.svc.cluster.local:443"
+  scrapeInterval: "15s"
+  policyRef: cluster-monitoring-policy
+  selector:
+    matchLabels:
+      app.kubernetes.io/managed-by: Helm
+  labels:
+    tier: platform
+    scope: ai-agent-sandbox
+  tlsConfig:
+    insecureSkipVerify: true

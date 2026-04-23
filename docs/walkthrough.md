@@ -1,168 +1,198 @@
-# AI Agent Sandbox — Implementation Walkthrough
+# KubeSynth Implementation Walkthrough
 
-This document narrates the implementation journey of the AI Agent Sandbox platform. It covers the core scaffolding decisions, enterprise feature phases, and the current production-ready state of the platform.
+This document is a current implementation walkthrough of the platform that exists in this repository today. It replaces the earlier multi-runtime narrative with the actual OpenCode-first architecture, current operator model, and the new observability surfaces now shipped in the chart and UI.
 
----
+## Platform Snapshot
 
-## Platform Status (March 2026)
+As of April 2026, the shipped platform is centered on these paths:
 
-All P0 and P1 roadmap items from the original plan have been implemented and are deployed as pre-built images on DockerHub (`docker.io/yakdhane`). The platform also ships with the major console-side P2 upgrades already delivered: command palette, mobile shell, onboarding tour, clone/export-import flows, and the admin health dashboard. The platform ships as a single self-contained Helm chart covering 7 platform services + 10 bundled MCP sidecars.
+- `AIAgent`, `AgentPolicy`, `AgentWorkflow`, `AgentEval`, `AgentApproval`, and `AgentTenant` remain the core control-plane CRDs
+- `ConnectorPlugin`, `ObservationTarget`, `ObservationPolicy`, and `ObservationReport` extend the control plane with an observability model
+- the runtime surface is now OpenCode-only: `runtime.kind: opencode`
+- the operator provisions singleton runtime sandboxes and worker Jobs from Kubernetes resources instead of maintaining an external workflow service
+- the gateway owns auth, CRUD, invoke, session persistence, memory persistence, and MCP connection management
+- the web UI exposes agents, chat, workflows, evaluations, MCP management, intelligence, and observability
 
-**Deploy in one command:**
-```bash
-helm upgrade --install kubesynth ./charts/kubesynth \
-  -f ./deploy/values.dockerhub.local.yaml
-```
+## 1. Helm Chart Foundation
 
-See [INSTALL.md](../INSTALL.md) for the full installation guide.
+The platform chart in `charts/kubesynth` is still the entry point for the full stack, but the scope has grown beyond the original sandbox core.
 
----
+What the chart installs now:
 
-## Phase 1 — Helm Chart Foundation (`charts/kubesynth/`)
+- the control-plane CRDs for agents, policies, workflows, evals, approvals, tenants, and observability
+- the operator deployment and worker configuration
+- the API gateway, web UI, LiteLLM, Redis, Qdrant, NATS, and PostgreSQL
+- the shared MCP hub namespace and hub-server deployment model
+- a collector DaemonSet path for cluster intelligence gathering
 
-- Created standard `Chart.yaml` and `values.yaml` with portable defaults (`pullPolicy: IfNotPresent`, ingress disabled by default).
-- Added **LiteLLM Gateway** Deployment, Service, ConfigMap, and Secrets to centralize LLM routing, authentication, and authorization across all runtimes.
-- Drafted the `AIAgent` Custom Resource Definition (CRD) — agents are defined and versioned as Kubernetes manifests.
-- Added a strict `NetworkPolicy` to ensure agent pods are fully isolated and can only egress to the AI Gateway and declared MCP servers.
-- Added a generic, opt-in **MCP server deployment template** for real upstream images.
-- Added `AgentPolicy`, `AgentTenant`, `AgentWorkflow`, `AgentEval`, and `AgentApproval` CRDs.
+Important current chart characteristics:
 
----
+- OpenCode is the only runtime the CRD allows
+- bundled MCP sidecars are still defined in values for per-agent local tools
+- the chart includes both shared MCP hub servers and structured MCP connection support
+- local Kind refresh is now a first-class path through `scripts/deploy-ai-sandbox-kind.ps1` and `deploy/values.ai-sandbox.kind-local.yaml`
 
-## Phase 2 — Control Plane: Kubernetes Operator (`operator/`)
+## 2. Operator and Reconciliation Model
 
-- **Python/Kopf-based** operator that watches all six CRDs and reconciles them into running infrastructure.
-- Reconciliation loop (`operator/main.py`) provisions namespaces, StatefulSets, Services, PVCs, RBAC, NetworkPolicies, and worker Jobs per agent.
-- Worker Jobs (`operator/worker.py`) execute workflow DAG steps and evaluation test suites in short-lived Kubernetes Jobs.
-- State store (`operator/state_store.py`) tracks workflow run state, step outputs, and approval gates.
+The operator has moved to a more modular controller layout under `operator/controllers`, `operator/builders`, and `operator/services`.
 
----
+Current responsibilities:
 
-## Phase 3 — Data Plane: Agent Runtime (`agent-runtime/`)
+- reconcile `AIAgent` resources into singleton StatefulSets, Services, service accounts, and runtime wiring
+- queue worker Jobs for `AgentWorkflow` and `AgentEval` execution
+- project compact workflow and eval state back into CRD status while keeping detailed artifacts on PVC-backed JSON files
+- reconcile approval decisions so waiting workflows resume or fail deterministically
+- conditionally register optional controllers when their CRDs are installed
+- reconcile the observability CRDs when `observationtargets.kubesynth.ai` exists
 
-- Secure Dockerfile: non-root user (`agentuser`), read-only filesystem, all Linux capabilities dropped.
-- `agent_logic.py` — LangGraph `StateGraph` with durable `SqliteSaver` checkpoints. If a pod crashes, the agent resumes from its last checkpoint on restart.
-- Full guardrails pipeline: prompt injection detection, PII masking, blocked pattern matching, per-request input/output token caps.
-- Human-in-the-Loop (HITL) approval mechanism: agent pauses execution and creates an `AgentApproval` CR; webhook notifications are optional.
-- RAG pipeline: Qdrant vector database integration via LangGraph retrieval nodes.
-- OpenTelemetry tracing: agent exports token/span metrics to a standard OTLP endpoint (Jaeger, Prometheus, Grafana).
+Notable implementation changes relative to the old docs:
 
----
+- the controller package now loads optional controllers dynamically based on installed CRDs
+- observability is implemented in `operator/controllers/observation_controller.py`
+- workflow execution state is more artifact-oriented than before, with status holding summaries and references instead of full payload blobs
 
-## Phase 4 — Additional Runtimes
+## 3. Runtime Path: OpenCode Only
 
-### Goose Runtime (`goose-runtime/`)
-- HTTP adapter that wraps the Goose CLI for agents using `runtime.kind: goose`.
-- Supports per-agent `spec.runtime.goose.configFiles` to pre-seed native Goose config files (`config.yaml`, prompt templates, recipes) before `goose run` is invoked.
-- Chart-wide Goose defaults set via `GOOSE_RUNTIME_CONFIG_FILES_JSON`; per-agent files merge over those by relative path.
-- Exposes a `/debug/goose-info` endpoint for inspecting the effective Goose configuration without entering the container.
+The old LangGraph, Goose, and Codex runtime paths are no longer the active architecture described by this repository. The supported runtime is now the OpenCode runtime under `opencode-runtime/`.
 
-### Codex Runtime (`codex-runtime/`)
-- HTTP adapter for Codex-native agent execution.
-- Powers the Spec Kit example pipeline (`examples/speckit-agents.yaml`): 5-agent spec writing → scrum review → planning → task generation → implementation chain.
+What the runtime does today:
 
-### OpenCode Runtime (`opencode-runtime/`)
-- HTTP adapter for OpenCode sessions, agents, plugins, and MCP-native workflows.
-- Per-agent `spec.runtime.opencode.configFiles` pre-seeds `opencode.json`, agent profiles under `agents/`, and Markdown skills under `skills/` before `opencode serve` starts.
-- Chart-wide defaults via `OPENCODE_RUNTIME_CONFIG_FILES_JSON`; per-agent files merge over those.
+- exposes `/invoke`, `/invoke/stream`, `/health`, and `/ready`
+- assembles system prompt, project context, skills, and OpenCode config files from the agent spec
+- manages bounded concurrency and resumable sessions
+- performs HITL approval preflight before execution when required
+- supports structured outputs, multi-turn autonomy, working directories, and tool-call capture
+- persists runtime state locally on PVC-backed storage
+- sanitizes secrets before tool inputs and outputs are surfaced back to users
 
----
+Key runtime design points:
 
-## Phase 5 — Enterprise Enhancements
+- `spec.runtime.opencode.configFiles` is the supported per-agent config injection model
+- skill files and config files are both materialized into the runtime workspace
+- direct A2A delegation is validated through policy and gateway reachability data
+- runtime memory and session behavior are now part of the gateway and runtime contract, not just an internal checkpoint mechanism
 
-### Security & Zero-Trust MCP
-- Operator injects robust Container Security Contexts: all capabilities dropped, read-only file systems, privilege escalation blocked.
-- `enableGVisor` flag on `AIAgent` triggers `runsc` runtime class for kernel-level sandbox isolation.
-- **Sidecar-based MCP servers**: tools run as sidecar containers in the agent pod, communicating securely over `localhost` — no cluster-network exposure.
-- MCP `NetworkPolicy` default-deny + controlled ingress per the 3-tier model described in `architecture-overview.md`.
+## 4. API Gateway Surface
 
-### Multi-Tenancy & Namespace Isolation
-- `AgentTenant` CRD with auto-provisioned `ResourceQuota`, `LimitRange`, namespaced `ServiceAccount`, RBAC, and runtime secrets per tenant.
-- Teams cannot see each other's agents; all API operations are scoped by namespace.
+The gateway in `api-gateway/main.py` has expanded beyond simple agent CRUD and invoke routing.
 
-### Secrets Management
-- `platformSecrets.mode: native` for development (chart-managed Kubernetes `Secret` objects).
-- `platformSecrets.mode: external-secrets` for production — integrates with HashiCorp Vault, Azure Key Vault, AWS Secrets Manager via External Secrets Operator.
+Current responsibilities include:
 
-### Agent-to-Agent (A2A) Delegation
-- Explicit A2A routing via `spec.a2a.allowedCallers` on the receiving agent.
-- Specialist-team orchestration: `agentctl invoke --subagent` or `--subagents-file` launches parallel or sequential sub-task teams.
-- `AgentWorkflow` CRD for DAG-based multi-agent pipelines with approval gates, artifact snapshots, and append-only execution journals.
-- Workflow intelligence features: verification gates (`verify`), review steps (`type: review`), project context injection (`contextRef`), wave-based parallel execution, and next-action suggestions.
+- bearer-token, local-auth, LDAP, OIDC, and SAML integration points through the auth stack
+- bootstrap admin creation and Postgres-backed auth/session state
+- agent, workflow, eval, approval, policy, and admin endpoints
+- chat session persistence and memory APIs
+- MCP connection CRUD and runtime-preview shaping for the UI
+- observability and intelligence-facing API surfaces used by the modern web UI
 
-### Workflow Intelligence
+This means the gateway is now both the public invoke edge and the platform application backend.
 
-The `AgentWorkflow` CRD supports several intelligence features that improve execution quality and trust:
+## 5. Web UI Scope
 
-- **Verification gates** — Any step can include a `verify` field. After the step completes, the operator sends a verification prompt to the same agent and marks the step as failed if verification does not pass.
-- **Review steps** — Steps with `type: review` auto-construct a review prompt from `reviewCriteria` and the previous step output. The reviewing agent returns APPROVED or REJECTED with structured findings.
-- **Context injection** — The workflow-level `contextRef` field references a ConfigMap in the same namespace. Its `context` key is prepended to every step prompt as a `[Project Context]` block, providing consistent project rules to all agents.
-- **Wave execution** — The operator computes dependency-aware execution waves via `compute_execution_waves()`. Steps in the same wave run in parallel via `ThreadPoolExecutor`, while waves execute sequentially.
-- **Next-action suggestions** — The API endpoint `GET /api/v1/agents/{ns}/{name}/next-action` recommends the next thing to do based on workflow state (retry failed step, run evaluation, deploy, etc.). The web UI renders this as a suggestion card.
+The web UI is no longer just a simple agent invoke console.
 
-### API Gateway (`api-gateway/`)
-- FastAPI service exposing CRUD, invoke, and SSE streaming endpoints for all CRD types.
-- Dual auth: shared bearer token (development) or OIDC JWT (production via `apiGateway.auth.mode: oidc`).
-- Enterprise auth store with per-user roles, namespace scoping, and password management (`api-gateway/enterprise_auth.py`).
+Current major surfaces:
 
-### Web UI (`web-ui/`)
-- React + TypeScript + Vite console built with Tailwind CSS.
-- Full feature set: agent discovery, chat invoke with SSE streaming, session persistence, A2A routing, specialist-team orchestration, skill/config editors, workflow and evaluation management, approval decisions, runtime log inspection, policy/admin operations, provider settings management, notifications, and health visibility.
-- Deployed as part of the Helm chart when `webUi.enabled: true`.
+- agent management with file-backed skills and OpenCode config editing
+- chat workbench with streaming, sessions, tool calls, artifacts, and explicit A2A routing
+- workflow management and composer with run history and execution-state views
+- eval management and result inspection
+- provider-centric settings and admin views
+- MCP registry and connection management
+- intelligence and observability dashboards
 
-### CLI (`cli/agentctl.py`)
-- Python CLI built on Typer + Rich with colored tables, streaming response rendering, and JSON output mode for scripting.
-- Full command coverage: agents, workflows, evals, approvals, policies, auth, admin, credentials, skills, tools.
-- File-based commands accept both Kubernetes CRD manifests and direct API payload docs.
+The observability dashboard now understands:
 
-### MCP Sidecars (`mcp-sidecars/`)
-- 10 production-ready MCP sidecar images bundled in the repository:
-  `code-exec`, `web-search`, `documents`, `browser`, `database`, `git`, `kubernetes`, `messaging`, `rag`, `github-adapter`.
-- Each sidecar has its own `Dockerfile` and is built+published as `docker.io/yakdhane/mcp-<name>`.
-- Chart configures them via `mcpToolSidecars.*` values; agents opt in via `spec.mcpSidecars`.
+- connectors
+- observation targets
+- observation policies
+- observation reports
 
----
+This is backed by the new CRDs and controller, not just mock UI state.
 
-## Platform Feature Matrix (Current State)
+## 6. MCP Model
 
-| Feature | Status | Notes |
-|---|---|---|
-| AIAgent CRD | ✅ Implemented | StatefulSet, Service, PVC, NetworkPolicy per agent |
-| AgentPolicy CRD | ✅ Implemented | Input/output guardrails, model allow-list |
-| AgentTenant CRD | ✅ Implemented | Namespace isolation, resource quotas |
-| AgentWorkflow CRD | ✅ Implemented | DAG executor with approval gates, artifact journals, verify/review/contextRef/waves |
-| AgentEval CRD | ✅ Implemented | Scheduled test suites with quality thresholds |
-| AgentApproval CRD | ✅ Implemented | Async HITL approval with optional webhook |
-| LangGraph runtime | ✅ Implemented | Durable SQLite checkpoints, OTel tracing |
-| Goose runtime | ✅ Implemented | Per-agent config files, debug endpoint |
-| Codex runtime | ✅ Implemented | Spec Kit pipeline example |
-| OpenCode runtime | ✅ Implemented | Per-agent config files, plugin/agent pre-seeding |
-| LiteLLM model proxy | ✅ Implemented | Redis-backed semantic cache, multi-provider routing |
-| Qdrant RAG | ✅ Implemented | Vector retrieval in agent execution loop |
-| MCP sidecars (10) | ✅ Implemented | All published to DockerHub |
-| API Gateway | ✅ Implemented | REST+SSE, bearer + OIDC auth |
-| Web UI | ✅ Implemented | Full workflow + approval + evaluation management |
-| CLI (agentctl) | ✅ Implemented | Full CRD coverage, streaming, JSON mode |
-| Helm chart | ✅ Implemented | Self-contained, portable, ingress opt-in |
-| DockerHub images | ✅ Published | `docker.io/yakdhane/*` — ready to deploy |
-| External Secrets Operator | ✅ Supported | `platformSecrets.mode: external-secrets` |
-| gVisor support | ✅ Supported | `enableGVisor: true` on AIAgent |
-| A2A delegation | ✅ Implemented | `allowedCallers`, specialist teams |
-| Skills catalog | ✅ Implemented | File-backed SKILL.md with capability grants |
-| OpenSandbox | ✅ Integrated | `agentRuntime.openSandbox.*` in values |
+The MCP story has become more structured.
 
----
+There are now two main patterns:
 
-## Remaining Roadmap
+1. Per-agent sidecars declared on the agent spec for localhost-only tool access.
+2. Shared MCP hub servers plus structured MCP connection records managed through the gateway and shown in the UI.
 
-### 🟢 P2 — Polish & Scale
+The bundled tool sidecars still cover:
 
-| Feature | Notes |
-|---|---|
-| **GitOps / ArgoCD integration** | Store AIAgent manifests in Git, auto-sync via ArgoCD or FluxCD |
-| **KEDA event-driven scaling** | Scale agent pods on request queue depth (beyond built-in HPA) |
-| **Agent marketplace / template registry** | Versioned, shareable agent configs as OCI artifacts or Helm sub-charts |
-| **Distributed token/cost budgets** | Cross-namespace token caps and cost attribution (chargeback/showback) |
-| **Cross-region state replication** | PV snapshot backups for SQLite checkpoint data, DR runbooks |
-| **Istio / service-mesh support** | mTLS between all platform components, traffic policies |
-| **Full e2e CI pipeline** | Kind cluster spin-up in GitHub Actions, integration test suite against all CRDs |
+- code execution
+- web search
+- documents
+- browser
+- database
+- git
+- GitHub adapter
+- Kubernetes
+- messaging
+- RAG
+
+The repository also includes an MCP collector sidecar that can talk to deployed collector agents.
+
+## 7. Observability Module
+
+The observability work is no longer only a proposal. The current codebase includes:
+
+- new CRDs for `ConnectorPlugin`, `ObservationTarget`, `ObservationPolicy`, and `ObservationReport`
+- a controller that synthesizes status and report data for targets and policies
+- a collector agent image intended to run as a DaemonSet and gather read-only cluster intelligence
+- example manifests that intentionally produce visible reports in the UI
+- UI panels for viewing and editing the observability resources
+
+Current practical model:
+
+- a connector describes how telemetry is collected
+- a target describes what is being watched
+- a policy describes how telemetry should be interpreted
+- a report is the resulting visible status artifact
+
+The current implementation intentionally includes demo-driven report generation so the end-to-end flow is visible before a full external telemetry backend is wired in.
+
+## 8. Deployment and Operations Paths
+
+There are now three real ways operators use this repository:
+
+1. Deploy published images with Helm and values overrides.
+2. Build core images and the bundled MCP sidecars locally using the `Makefile`.
+3. Refresh the existing local Kind release with `scripts/deploy-ai-sandbox-kind.ps1`.
+
+Operationally important files:
+
+- `deploy/values.dockerhub.local.yaml`
+- `deploy/values.cluster.example.yaml`
+- `deploy/values.ai-sandbox.kind-local.yaml`
+- `scripts/deploy-ai-sandbox-kind.ps1`
+- `scripts/observability-smoke-test.ps1`
+
+## 9. What Changed from the Older Walkthrough
+
+The earlier walkthrough was no longer accurate in several important ways.
+
+It described or implied:
+
+- `agent-runtime/` as the main runtime path
+- LangGraph as the primary execution engine
+- Goose and Codex runtimes as current platform runtimes
+- the pre-observability product surface
+
+The current code instead reflects:
+
+- `opencode-runtime/` as the supported runtime path
+- gateway-managed auth, sessions, memory, and MCP connections
+- worker-artifact-first workflow and eval execution
+- observability CRDs, collector support, and related UI views
+
+## 10. Recommended Companion Docs
+
+For more precise detail, read these alongside this walkthrough:
+
+- `docs/architecture-overview.md` for the up-to-date system model
+- `docs/observability-explained.md` for the practical observability flow
+- `docs/deployment-readme.md` for current deployment entry points
+- `web-ui/README.md` for the console feature map
+- `cli/README.md` for the current `agentctl` command surface

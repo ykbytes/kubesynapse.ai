@@ -19,8 +19,15 @@ function edgeColor(status?: string | null): string {
       return "oklch(0.65 0.17 155)"; // emerald
     case "running":
       return "oklch(0.75 0.15 85)"; // amber
+    case "continued":
+      return "oklch(0.72 0.16 78)"; // amber/orange
+    case "waiting_approval":
+      return "oklch(0.72 0.18 58)"; // orange
     case "failed":
+    case "denied":
       return "oklch(0.6 0.22 27)"; // red
+    case "cancelled":
+      return "oklch(0.68 0.14 52)"; // muted orange
     default:
       return "oklch(0.30 0.012 274)"; // border color
   }
@@ -29,7 +36,9 @@ function edgeColor(status?: string | null): string {
 export function DependencyEdge(props: EdgeProps) {
   const edgeData = props.data as DependencyEdgeData | undefined;
   const sourceStatus = edgeData?.sourceStatus;
-  const isFlowing = sourceStatus === "running" || sourceStatus === "completed";
+  const isResolved = sourceStatus === "completed" || sourceStatus === "continued";
+  const isFlowing = sourceStatus === "running" || isResolved;
+  const isHighlighted = isFlowing || sourceStatus === "waiting_approval" || sourceStatus === "failed" || sourceStatus === "denied" || sourceStatus === "cancelled";
   const color = edgeColor(sourceStatus);
 
   const [edgePath, labelX, labelY] = getBezierPath({
@@ -61,9 +70,9 @@ export function DependencyEdge(props: EdgeProps) {
         path={edgePath}
         style={{
           stroke: color,
-          strokeWidth: isFlowing ? 2.5 : 1.5,
-          strokeDasharray: isFlowing ? undefined : "6 4",
-          opacity: isFlowing ? 1 : 0.6,
+          strokeWidth: isHighlighted ? 2.5 : 1.5,
+          strokeDasharray: isFlowing ? undefined : sourceStatus === "waiting_approval" ? "4 3" : "6 4",
+          opacity: isHighlighted ? 1 : 0.6,
           transition: "stroke 0.3s ease, stroke-width 0.3s ease, opacity 0.3s ease",
         }}
         markerEnd="url(#dependency-arrow)"

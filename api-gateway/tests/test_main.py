@@ -1,14 +1,21 @@
 import asyncio
+import copy
+import hashlib
 import importlib.util
 import json
 import sys
 import types
 import unittest
+from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import httpx
 from fastapi import HTTPException
+from pydantic import ValidationError
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 
 try:
@@ -36,141 +43,67 @@ SPEC.loader.exec_module(api_gateway_main)
 
 
 class GatewayRuntimeValidationTests(unittest.TestCase):
-    def test_codex_agent_rejects_mcp_servers(self) -> None:
+    def test_unsupported_agent_runtime_is_rejected(self) -> None:
         with self.assertRaises(HTTPException) as context:
             api_gateway_main.validate_agent_runtime_compatibility(
                 {
-                    "runtime": {"kind": "codex"},
+                    "runtime": {"kind": "legacy"},
                     "mcpServers": ["github"],
                     "mcpSidecars": [],
                 }
             )
 
         self.assertEqual(context.exception.status_code, 400)
-        self.assertIn("mcp_servers", str(context.exception.detail))
+        self.assertIn("runtime kind must be 'opencode'", str(context.exception.detail))
 
-    def test_codex_agent_allows_mcp_sidecars(self) -> None:
-        api_gateway_main.validate_agent_runtime_compatibility(
-            {
-                "runtime": {"kind": "codex"},
-                "mcpServers": [],
-                "mcpSidecars": [{"name": "browser", "port": 8081}],
-            }
-        )
-
-    def test_goose_agent_rejects_mcp_servers(self) -> None:
+    def test_opencode_agent_rejects_github_config(self) -> None:
         with self.assertRaises(HTTPException) as context:
             api_gateway_main.validate_agent_runtime_compatibility(
                 {
-                    "runtime": {"kind": "goose"},
-                    "mcpServers": ["github"],
-                    "mcpSidecars": [],
+                    "runtime": {"kind": "opencode"},
+                    "githubConfig": {"credentialSecretRef": "github-creds"},
                 }
             )
 
         self.assertEqual(context.exception.status_code, 400)
-        self.assertIn("mcp_servers", str(context.exception.detail))
+        self.assertIn("github_config", str(context.exception.detail))
 
-    def test_goose_agent_rejects_mcp_sidecars(self) -> None:
+    def test_unsupported_invoke_runtime_is_rejected(self) -> None:
+        request = api_gateway_main.InvokeRequest(prompt="hello")
+
         with self.assertRaises(HTTPException) as context:
-            api_gateway_main.validate_agent_runtime_compatibility(
-                {
-                    "runtime": {"kind": "goose"},
-                    "mcpServers": [],
-                    "mcpSidecars": [{"name": "tool-bridge", "port": 8081}],
-                }
-            )
+            api_gateway_main.validate_invoke_runtime_compatibility("legacy", request)
 
         self.assertEqual(context.exception.status_code, 400)
-        self.assertIn("mcp_sidecars", str(context.exception.detail))
+        self.assertIn("Unsupported AIAgent runtime kind", str(context.exception.detail))
 
-    def test_goose_invoke_rejects_unsupported_fields(self) -> None:
+    def test_opencode_invoke_rejects_tool_style_fields(self) -> None:
         request = api_gateway_main.InvokeRequest(
             prompt="hello",
-            require_approval=True,
             tool_name="tool.run",
             mcp_server="github",
             sandbox_session={"id": "session-1"},
         )
 
         with self.assertRaises(HTTPException) as context:
-            api_gateway_main.validate_invoke_runtime_compatibility("goose", request)
+            api_gateway_main.validate_invoke_runtime_compatibility("opencode", request)
 
         self.assertEqual(context.exception.status_code, 400)
-        self.assertIn("require_approval", str(context.exception.detail))
         self.assertIn("tool_name", str(context.exception.detail))
         self.assertIn("mcp_server", str(context.exception.detail))
         self.assertIn("sandbox_session", str(context.exception.detail))
 
-    def test_goose_invoke_rejects_subagents(self) -> None:
+    def test_opencode_invoke_rejects_subagents(self) -> None:
         request = api_gateway_main.InvokeRequest(
             prompt="Coordinate the investigation",
             subagents=[{"name": "analysis-agent", "namespace": "team-b"}],
         )
 
         with self.assertRaises(HTTPException) as context:
-            api_gateway_main.validate_invoke_runtime_compatibility("goose", request)
+            api_gateway_main.validate_invoke_runtime_compatibility("opencode", request)
 
         self.assertEqual(context.exception.status_code, 400)
         self.assertIn("subagents", str(context.exception.detail))
-
-    def test_goose_invoke_rejects_a2a_fields(self) -> None:
-        request = api_gateway_main.InvokeRequest(
-            prompt="hello",
-            a2a_target_agent="analysis-agent",
-            a2a_target_namespace="team-b",
-            a2a_timeout_seconds=15,
-        )
-
-        with self.assertRaises(HTTPException) as context:
-            api_gateway_main.validate_invoke_runtime_compatibility("goose", request)
-
-        self.assertEqual(context.exception.status_code, 400)
-        self.assertIn("a2a_target", str(context.exception.detail))
-        self.assertIn("a2a_timeout_seconds", str(context.exception.detail))
-
-    def test_langgraph_invoke_keeps_extended_fields(self) -> None:
-        request = api_gateway_main.InvokeRequest(
-            prompt="hello",
-            require_approval=True,
-            tool_name="tool.run",
-            mcp_server="github",
-            sandbox_session={"id": "session-1"},
-        )
-
-        api_gateway_main.validate_invoke_runtime_compatibility("langgraph", request)
-
-    def test_goose_invoke_allows_goose_run_controls(self) -> None:
-        request = api_gateway_main.InvokeRequest(
-            prompt="hello",
-            system="stay read-only",
-            no_session=True,
-            max_turns=12,
-            debug=True,
-            working_directory="nested/project",
-            builtin_extensions=["developer"],
-            stdio_extensions=["echo custom-tool"],
-            streamable_http_extensions=["https://example.com/mcp"],
-        )
-
-        api_gateway_main.validate_invoke_runtime_compatibility("goose", request)
-
-    def test_goose_invoke_rejects_opencode_only_fields(self) -> None:
-        request = api_gateway_main.InvokeRequest(
-            prompt="hello",
-            output_format="json",
-            output_schema={"type": "object"},
-            max_retries=2,
-            autonomous=False,
-        )
-
-        with self.assertRaises(HTTPException) as context:
-            api_gateway_main.validate_invoke_runtime_compatibility("goose", request)
-
-        self.assertIn("output_format", str(context.exception.detail))
-        self.assertIn("output_schema", str(context.exception.detail))
-        self.assertIn("max_retries", str(context.exception.detail))
-        self.assertIn("autonomous", str(context.exception.detail))
 
     def test_opencode_invoke_allows_opencode_only_fields(self) -> None:
         request = api_gateway_main.InvokeRequest(
@@ -184,15 +117,36 @@ class GatewayRuntimeValidationTests(unittest.TestCase):
 
         api_gateway_main.validate_invoke_runtime_compatibility("opencode", request)
 
-    def test_goose_invoke_rejects_structured_output_retry_count(self) -> None:
+    def test_opencode_invoke_allows_a2a_fields(self) -> None:
         request = api_gateway_main.InvokeRequest(
             prompt="hello",
-            structured_output_retry_count=3,
+            a2a_target_agent="analysis-agent",
+            a2a_target_namespace="team-b",
+            a2a_timeout_seconds=15,
         )
-        with self.assertRaises(HTTPException) as ctx:
-            api_gateway_main.validate_invoke_runtime_compatibility("goose", request)
-        self.assertEqual(ctx.exception.status_code, 400)
-        self.assertIn("structured_output_retry_count", ctx.exception.detail)
+
+        api_gateway_main.validate_invoke_runtime_compatibility("opencode", request)
+
+    def test_resolve_invoke_agent_reference_accepts_namespace_path(self) -> None:
+        agent_name, namespace = api_gateway_main.resolve_invoke_agent_reference(
+            "analysis-agent",
+            "team-b",
+            path_namespace="team-b",
+        )
+
+        self.assertEqual(agent_name, "analysis-agent")
+        self.assertEqual(namespace, "team-b")
+
+    def test_resolve_invoke_agent_reference_rejects_namespace_mismatch(self) -> None:
+        with self.assertRaises(HTTPException) as context:
+            api_gateway_main.resolve_invoke_agent_reference(
+                "analysis-agent",
+                "team-a",
+                path_namespace="team-b",
+            )
+
+        self.assertEqual(context.exception.status_code, 400)
+        self.assertIn("namespace query parameter must match", str(context.exception.detail))
 
     def test_delete_is_allowed_for_cors(self) -> None:
         cors_middleware = next(
@@ -374,6 +328,445 @@ class GatewayRuntimeValidationTests(unittest.TestCase):
         apply_memory_feedback.assert_called_once()
 
 
+class IntelligenceNamespaceIsolationTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self.engine = create_engine(
+            "sqlite:///:memory:",
+            future=True,
+            connect_args={"check_same_thread": False},
+        )
+        api_gateway_main.IntelligenceCollectorRow.metadata.create_all(bind=self.engine)
+        self.SessionLocal = sessionmaker(
+            bind=self.engine,
+            autoflush=False,
+            autocommit=False,
+            expire_on_commit=False,
+            future=True,
+        )
+        self.db_patcher = patch.object(api_gateway_main, "db_session", self._db_session)
+        self.audit_patcher = patch.object(api_gateway_main, "safe_record_audit")
+        self.db_patcher.start()
+        self.audit_patcher.start()
+        self.addCleanup(self.db_patcher.stop)
+        self.addCleanup(self.audit_patcher.stop)
+        self.addCleanup(self.engine.dispose)
+
+        api_gateway_main._collector_registry.clear()
+        api_gateway_main._collection_tasks.clear()
+        self.addCleanup(api_gateway_main._collector_registry.clear)
+        self.addCleanup(api_gateway_main._collection_tasks.clear)
+
+        self.operator_user = {
+            "sub": "operator-1",
+            "role": "operator",
+            "allowed_namespaces": ["team-a", "team-b"],
+        }
+
+    @contextmanager
+    def _db_session(self):
+        session = self.SessionLocal()
+        try:
+            yield session
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    def test_build_auto_intelligence_context_filters_by_namespace(self) -> None:
+        now = datetime.now(timezone.utc)
+        api_gateway_main._collection_tasks.update(
+            {
+                "task-a": {
+                    "task_id": "task-a",
+                    "namespace": "team-a",
+                    "collector_id": "collector-a",
+                    "payload": {"builtin": "cluster_overview"},
+                    "results": {"collector-a": {"status": "completed", "stdout": "team-a-output"}},
+                    "submitted_by": "operator-1",
+                    "submitted_at": (now - timedelta(minutes=1)).isoformat(),
+                    "total": 1,
+                    "completed": 1,
+                },
+                "task-b": {
+                    "task_id": "task-b",
+                    "namespace": "team-b",
+                    "collector_id": "collector-b",
+                    "payload": {"builtin": "cluster_overview"},
+                    "results": {"collector-b": {"status": "completed", "stdout": "team-b-output"}},
+                    "submitted_by": "operator-1",
+                    "submitted_at": now.isoformat(),
+                    "total": 1,
+                    "completed": 1,
+                },
+            }
+        )
+
+        context = api_gateway_main._build_auto_intelligence_context("team-a")
+
+        self.assertIn("team-a-output", context)
+        self.assertNotIn("team-b-output", context)
+
+    def test_register_intelligence_collectors_are_namespaced(self) -> None:
+        first = api_gateway_main.register_intelligence_collector(
+            body={
+                "name": "Shared Collector",
+                "url": "https://collector-a.example.test",
+                "token": "token-a",
+            },
+            namespace="team-a",
+            user=self.operator_user,
+        )
+        second = api_gateway_main.register_intelligence_collector(
+            body={
+                "name": "Shared Collector",
+                "url": "https://collector-b.example.test",
+                "token": "token-b",
+            },
+            namespace="team-b",
+            user=self.operator_user,
+        )
+
+        self.assertNotEqual(first["id"], second["id"])
+        with self._db_session() as session:
+            team_a = session.query(api_gateway_main.IntelligenceCollectorRow).filter_by(namespace="team-a").all()
+            team_b = session.query(api_gateway_main.IntelligenceCollectorRow).filter_by(namespace="team-b").all()
+        self.assertEqual(len(team_a), 1)
+        self.assertEqual(len(team_b), 1)
+
+    def test_register_intelligence_collector_persists_encrypted_token(self) -> None:
+        collector = api_gateway_main.register_intelligence_collector(
+            body={
+                "name": "Persistent Collector",
+                "url": "https://collector-persist.example.test",
+                "token": "super-secret-token",
+            },
+            namespace="team-a",
+            user=self.operator_user,
+        )
+
+        with self._db_session() as session:
+            row = session.query(api_gateway_main.IntelligenceCollectorRow).filter_by(id=collector["id"]).one()
+
+        self.assertIsNotNone(row.encrypted_token)
+        self.assertNotEqual(row.encrypted_token, "super-secret-token")
+        self.assertEqual(api_gateway_main._decrypt_collector_token(row.encrypted_token), "super-secret-token")
+
+    def test_load_collectors_from_db_recovers_legacy_default_dev_token(self) -> None:
+        collector_id = api_gateway_main._build_namespace_scoped_collector_id("team-a", "Legacy Collector")
+        with self._db_session() as session:
+            session.add(
+                api_gateway_main.IntelligenceCollectorRow(
+                    id=collector_id,
+                    namespace="team-a",
+                    name="Legacy Collector",
+                    url="https://collector-legacy.example.test",
+                    token_hash=hashlib.sha256("collector-dev-token".encode("utf-8")).hexdigest(),
+                    encrypted_token=None,
+                    cluster="legacy",
+                    tags=[],
+                    registered_at=datetime.now(timezone.utc),
+                    registered_by="operator-1",
+                )
+            )
+
+        api_gateway_main._collector_registry.clear()
+        api_gateway_main._load_collectors_from_db()
+
+        recovered = api_gateway_main._get_namespaced_collectors("team-a")
+        self.assertEqual(recovered[collector_id]["token"], "collector-dev-token")
+
+    def test_create_alert_rejects_cross_namespace_schedule(self) -> None:
+        with self._db_session() as session:
+            session.add(
+                api_gateway_main.IntelligenceScheduleRow(
+                    id="sched-b",
+                    namespace="team-b",
+                    name="Foreign Schedule",
+                    cron="*/5 * * * *",
+                    collector_id="all",
+                    builtin="node_health",
+                    timeout=30,
+                    created_by="operator-1",
+                )
+            )
+
+        with self.assertRaises(HTTPException) as context:
+            api_gateway_main.create_intelligence_alert(
+                body={
+                    "name": "Cross Namespace Alert",
+                    "schedule_id": "sched-b",
+                    "condition_type": "contains",
+                    "condition_value": "error",
+                },
+                namespace="team-a",
+                user=self.operator_user,
+            )
+
+        self.assertEqual(context.exception.status_code, 400)
+        self.assertIn("namespace 'team-a'", str(context.exception.detail))
+
+    async def test_submit_collection_task_persists_namespace(self) -> None:
+        class FakeResponse:
+            status_code = 200
+
+            def raise_for_status(self) -> None:
+                return None
+
+            def json(self) -> dict[str, str]:
+                return {"status": "completed", "stdout": "healthy"}
+
+        class FakeAsyncClient:
+            def __init__(self, *args, **kwargs) -> None:
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb) -> bool:
+                return False
+
+            async def post(self, url, headers=None, json=None):
+                return FakeResponse()
+
+        api_gateway_main._set_namespaced_collector(
+            "team-a",
+            "team-a-shared-collector",
+            {
+                "id": "team-a-shared-collector",
+                "name": "Shared Collector",
+                "url": "https://collector-a.example.test",
+                "token": "token-a",
+                "cluster": "test",
+                "registered_at": "2026-04-06T00:00:00+00:00",
+                "tags": [],
+            },
+        )
+
+        with patch.object(api_gateway_main.httpx, "AsyncClient", FakeAsyncClient):
+            task = await api_gateway_main.submit_collection_task(
+                body={"collector_id": "team-a-shared-collector", "builtin": "node_health"},
+                namespace="team-a",
+                user=self.operator_user,
+            )
+
+        self.assertEqual(task["namespace"], "team-a")
+        team_a_tasks = api_gateway_main.list_collection_tasks(namespace="team-a", user=self.operator_user)
+        team_b_tasks = api_gateway_main.list_collection_tasks(namespace="team-b", user=self.operator_user)
+        self.assertEqual(team_a_tasks["total"], 1)
+        self.assertEqual(team_a_tasks["tasks"][0]["task_id"], task["task_id"])
+        self.assertEqual(team_b_tasks["total"], 0)
+
+    def test_delete_collection_task_removes_persisted_and_cached_task(self) -> None:
+        task_record = {
+            "task_id": "task-delete-one",
+            "namespace": "team-a",
+            "collector_id": "team-a-shared-collector",
+            "payload": {"builtin": "node_health"},
+            "results": {"team-a-shared-collector": {"status": "completed", "stdout": "healthy"}},
+            "submitted_by": "operator-1",
+            "submitted_at": datetime.now(timezone.utc).isoformat(),
+            "total": 1,
+            "completed": 1,
+        }
+
+        with self._db_session() as session:
+            session.add(
+                api_gateway_main.IntelligenceTaskRow(
+                    task_id=task_record["task_id"],
+                    namespace=task_record["namespace"],
+                    collector_id=task_record["collector_id"],
+                    payload=task_record["payload"],
+                    results=task_record["results"],
+                    submitted_by=task_record["submitted_by"],
+                    submitted_at=datetime.fromisoformat(task_record["submitted_at"]),
+                    total=task_record["total"],
+                    completed=task_record["completed"],
+                )
+            )
+
+        api_gateway_main._collection_tasks[task_record["task_id"]] = dict(task_record)
+
+        response = api_gateway_main.delete_collection_task(
+            task_record["task_id"],
+            namespace="team-a",
+            user=self.operator_user,
+        )
+
+        self.assertEqual(response["status"], "deleted")
+        self.assertNotIn(task_record["task_id"], api_gateway_main._collection_tasks)
+        with self._db_session() as session:
+            row = session.query(api_gateway_main.IntelligenceTaskRow).filter_by(task_id=task_record["task_id"], namespace="team-a").first()
+        self.assertIsNone(row)
+
+    def test_bulk_delete_collection_tasks_deletes_selected_namespace_tasks(self) -> None:
+        task_records = [
+            {
+                "task_id": "task-bulk-a1",
+                "namespace": "team-a",
+                "collector_id": "collector-a",
+                "payload": {"builtin": "cluster_overview"},
+                "results": {"collector-a": {"status": "completed", "stdout": "ok"}},
+                "submitted_by": "operator-1",
+                "submitted_at": datetime.now(timezone.utc).isoformat(),
+                "total": 1,
+                "completed": 1,
+            },
+            {
+                "task_id": "task-bulk-a2",
+                "namespace": "team-a",
+                "collector_id": "collector-a",
+                "payload": {"builtin": "node_health"},
+                "results": {"collector-a": {"status": "completed", "stdout": "ok"}},
+                "submitted_by": "operator-1",
+                "submitted_at": datetime.now(timezone.utc).isoformat(),
+                "total": 1,
+                "completed": 1,
+            },
+            {
+                "task_id": "task-bulk-b1",
+                "namespace": "team-b",
+                "collector_id": "collector-b",
+                "payload": {"builtin": "pod_resources"},
+                "results": {"collector-b": {"status": "completed", "stdout": "ok"}},
+                "submitted_by": "operator-1",
+                "submitted_at": datetime.now(timezone.utc).isoformat(),
+                "total": 1,
+                "completed": 1,
+            },
+        ]
+
+        with self._db_session() as session:
+            for task_record in task_records:
+                session.add(
+                    api_gateway_main.IntelligenceTaskRow(
+                        task_id=task_record["task_id"],
+                        namespace=task_record["namespace"],
+                        collector_id=task_record["collector_id"],
+                        payload=task_record["payload"],
+                        results=task_record["results"],
+                        submitted_by=task_record["submitted_by"],
+                        submitted_at=datetime.fromisoformat(task_record["submitted_at"]),
+                        total=task_record["total"],
+                        completed=task_record["completed"],
+                    )
+                )
+                api_gateway_main._collection_tasks[task_record["task_id"]] = dict(task_record)
+
+        response = api_gateway_main.bulk_delete_collection_tasks(
+            body={"task_ids": ["task-bulk-a1", "task-bulk-a2", "task-bulk-b1", "task-bulk-missing"]},
+            namespace="team-a",
+            user=self.operator_user,
+        )
+
+        self.assertEqual(response["deleted"], 2)
+        self.assertEqual(response["deleted_ids"], ["task-bulk-a1", "task-bulk-a2"])
+        self.assertEqual(response["missing_ids"], ["task-bulk-b1", "task-bulk-missing"])
+        self.assertNotIn("task-bulk-a1", api_gateway_main._collection_tasks)
+        self.assertNotIn("task-bulk-a2", api_gateway_main._collection_tasks)
+        self.assertIn("task-bulk-b1", api_gateway_main._collection_tasks)
+
+        with self._db_session() as session:
+            team_a_remaining = session.query(api_gateway_main.IntelligenceTaskRow).filter_by(namespace="team-a").all()
+            team_b_remaining = session.query(api_gateway_main.IntelligenceTaskRow).filter_by(namespace="team-b").all()
+
+        self.assertEqual(team_a_remaining, [])
+        self.assertEqual(len(team_b_remaining), 1)
+
+    async def test_list_collectors_marks_missing_token_degraded_without_info_probe(self) -> None:
+        calls: list[tuple[str, dict[str, str] | None]] = []
+
+        class FakeResponse:
+            def __init__(self, status_code: int, payload: dict[str, object] | None = None) -> None:
+                self.status_code = status_code
+                self._payload = payload or {}
+
+            def raise_for_status(self) -> None:
+                if self.status_code >= 400:
+                    request = httpx.Request("GET", "https://collector-a.example.test/info")
+                    response = httpx.Response(self.status_code, request=request)
+                    raise httpx.HTTPStatusError("collector info failed", request=request, response=response)
+
+            def json(self) -> dict[str, object]:
+                return self._payload
+
+        class FakeAsyncClient:
+            def __init__(self, *args, **kwargs) -> None:
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb) -> bool:
+                return False
+
+            async def get(self, url, headers=None):
+                calls.append((url, headers))
+                if url.endswith("/healthz"):
+                    return FakeResponse(200)
+                raise AssertionError("Collector metadata probe should not run when the token is unavailable")
+
+        api_gateway_main._set_namespaced_collector(
+            "team-a",
+            "team-a-missing-token",
+            {
+                "id": "team-a-missing-token",
+                "name": "Missing Token",
+                "url": "https://collector-a.example.test",
+                "token": None,
+                "cluster": "test",
+                "registered_at": "2026-04-06T00:00:00+00:00",
+                "tags": [],
+            },
+        )
+
+        with patch.object(api_gateway_main.httpx, "AsyncClient", FakeAsyncClient):
+            result = await api_gateway_main.list_intelligence_collectors(namespace="team-a", user=self.operator_user)
+
+        self.assertEqual(result["collectors"][0]["status"], "degraded")
+        self.assertIn("Re-register", result["collectors"][0]["error"])
+        self.assertEqual(calls, [("https://collector-a.example.test/healthz", None)])
+
+    async def test_submit_collection_task_reports_missing_token_without_request(self) -> None:
+        class FakeAsyncClient:
+            def __init__(self, *args, **kwargs) -> None:
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb) -> bool:
+                return False
+
+            async def post(self, url, headers=None, json=None):
+                raise AssertionError("Collector task request should not run when the token is unavailable")
+
+        api_gateway_main._set_namespaced_collector(
+            "team-a",
+            "team-a-missing-token",
+            {
+                "id": "team-a-missing-token",
+                "name": "Missing Token",
+                "url": "https://collector-a.example.test",
+                "token": "",
+                "cluster": "test",
+                "registered_at": "2026-04-06T00:00:00+00:00",
+                "tags": [],
+            },
+        )
+
+        with patch.object(api_gateway_main.httpx, "AsyncClient", FakeAsyncClient):
+            task = await api_gateway_main.submit_collection_task(
+                body={"collector_id": "team-a-missing-token", "builtin": "node_health"},
+                namespace="team-a",
+                user=self.operator_user,
+            )
+
+        self.assertEqual(task["results"]["team-a-missing-token"]["status"], "error")
+        self.assertIn("Re-register", task["results"]["team-a-missing-token"]["error"])
+
+
 class WorkflowSchemaTests(unittest.TestCase):
     def test_build_workflow_spec_preserves_context_and_review_fields(self) -> None:
         body = api_gateway_main.WorkflowRequest(
@@ -469,32 +862,13 @@ class WorkflowSchemaTests(unittest.TestCase):
 
         self.assertEqual(payload, {"error": "runtime cold start"})
 
-    def test_parse_goose_config_files_normalizes_relative_paths(self) -> None:
-        parsed = api_gateway_main.parse_goose_config_files(
-            {
-                " config.yaml ": {"GOOSE_MODE": "smart_approve"},
-                "prompts\\review.md": "Review conservatively.",
-            },
-            source="goose_config_files",
+    def test_error_payload_from_body_sanitizes_html_error_page(self) -> None:
+        payload = api_gateway_main.error_payload_from_body(
+            b"<!DOCTYPE html><html><head><title>502 Bad Gateway</title></head><body><h1>502 Bad Gateway</h1><p>nginx</p></body></html>",
+            "fallback",
         )
 
-        self.assertEqual(
-            parsed,
-            {
-                "config.yaml": {"GOOSE_MODE": "smart_approve"},
-                "prompts/review.md": "Review conservatively.",
-            },
-        )
-
-    def test_parse_goose_config_files_rejects_runtime_managed_paths(self) -> None:
-        with self.assertRaises(HTTPException) as context:
-            api_gateway_main.parse_goose_config_files(
-                {"permissions/tool_permissions.json": {}},
-                source="goose_config_files",
-            )
-
-        self.assertEqual(context.exception.status_code, 400)
-        self.assertIn("permissions", str(context.exception.detail))
+        self.assertEqual(payload, {"error": "Upstream service error: 502 Bad Gateway"})
 
     def test_parse_opencode_config_files_normalizes_relative_paths(self) -> None:
         parsed = api_gateway_main.parse_opencode_config_files(
@@ -544,22 +918,6 @@ class WorkflowSchemaTests(unittest.TestCase):
         self.assertEqual(context.exception.status_code, 400)
         self.assertIn(".md", str(context.exception.detail))
 
-    def test_build_agent_spec_includes_goose_config_files(self) -> None:
-        request = api_gateway_main.CreateAgentRequest(
-            name="goose-agent",
-            model="gpt-4",
-            runtime_kind="goose",
-            goose_config_files={"config.yaml": {"GOOSE_MODE": "smart_approve"}},
-        )
-
-        spec = api_gateway_main.build_agent_spec(request)
-
-        self.assertEqual(spec["runtime"]["kind"], "goose")
-        self.assertEqual(
-            spec["runtime"]["goose"]["configFiles"],
-            {"config.yaml": {"GOOSE_MODE": "smart_approve"}},
-        )
-
     def test_build_agent_spec_includes_opencode_config_files(self) -> None:
         request = api_gateway_main.CreateAgentRequest(
             name="opencode-agent",
@@ -578,8 +936,9 @@ class WorkflowSchemaTests(unittest.TestCase):
 
     def test_build_agent_spec_includes_a2a_config(self) -> None:
         request = api_gateway_main.CreateAgentRequest(
-            name="langgraph-agent",
+            name="opencode-agent",
             model="gpt-4",
+            runtime_kind="opencode",
             a2a_config={
                 "allowed_callers": [
                     {"name": "research-agent", "namespace": "team-a"},
@@ -594,10 +953,32 @@ class WorkflowSchemaTests(unittest.TestCase):
             {"allowedCallers": [{"name": "research-agent", "namespace": "team-a"}]},
         )
 
+    def test_create_agent_request_accepts_system_prompt_up_to_shared_limit(self) -> None:
+        prompt = "x" * api_gateway_main.AGENT_SYSTEM_PROMPT_MAX_CHARS
+
+        request = api_gateway_main.CreateAgentRequest(
+            name="long-prompt-agent",
+            model="gpt-4",
+            runtime_kind="opencode",
+            system_prompt=prompt,
+        )
+
+        self.assertEqual(request.system_prompt, prompt)
+
+    def test_update_agent_request_rejects_system_prompt_above_shared_limit(self) -> None:
+        prompt = "x" * (api_gateway_main.AGENT_SYSTEM_PROMPT_MAX_CHARS + 1)
+
+        with self.assertRaises(ValidationError):
+            api_gateway_main.UpdateAgentRequest(
+                model="gpt-4",
+                system_prompt=prompt,
+            )
+
     def test_build_agent_spec_includes_skill_files(self) -> None:
         request = api_gateway_main.CreateAgentRequest(
-            name="langgraph-agent",
+            name="opencode-agent",
             model="gpt-4",
+            runtime_kind="opencode",
             skills={
                 "files": {
                     ".github/skills/research/SKILL.md": (
@@ -618,6 +999,73 @@ class WorkflowSchemaTests(unittest.TestCase):
         self.assertIn("skills", spec)
         self.assertIn(".github/skills/research/SKILL.md", spec["skills"]["files"])
 
+    def test_build_agent_spec_includes_structured_mcp_connections(self) -> None:
+        request = api_gateway_main.CreateAgentRequest(
+            name="opencode-agent",
+            model="gpt-4",
+            runtime_kind="opencode",
+            mcp_connection_ids=["conn-docs"],
+        )
+
+        with patch.object(
+            api_gateway_main,
+            "_build_saved_agent_mcp_connections",
+            return_value=[
+                {
+                    "connectionId": "conn-docs",
+                    "name": "Docs Remote",
+                    "slug": "docs-remote",
+                    "serverId": "docs",
+                    "transport": "remote",
+                    "source": "saved",
+                    "runtime": {
+                        "kind": "remote",
+                        "configKey": "docs-remote",
+                        "url": "https://docs.example.com/mcp",
+                        "headers": [],
+                    },
+                }
+            ],
+        ):
+            spec = api_gateway_main.build_agent_spec(request, namespace="team-a")
+
+        self.assertEqual(spec["mcpConnections"][0]["connectionId"], "conn-docs")
+        self.assertEqual(spec["mcpServers"], ["docs"])
+        self.assertEqual(spec["mcpSidecars"], [])
+
+    def test_build_agent_spec_validates_policy_reference(self) -> None:
+        request = api_gateway_main.CreateAgentRequest(
+            name="opencode-agent",
+            model="gpt-4",
+            runtime_kind="opencode",
+            policy_ref="shared-policies/planner-policy",
+        )
+
+        with patch.object(api_gateway_main, "read_custom_resource", return_value={"spec": {}}) as mock_read:
+            spec = api_gateway_main.build_agent_spec(request, namespace="team-a")
+
+        self.assertEqual(spec["policyRef"], "shared-policies/planner-policy")
+        mock_read.assert_called_once_with("agentpolicies", "planner-policy", "shared-policies", "Policy")
+
+    def test_build_agent_spec_rejects_missing_policy_reference(self) -> None:
+        request = api_gateway_main.CreateAgentRequest(
+            name="opencode-agent",
+            model="gpt-4",
+            runtime_kind="opencode",
+            policy_ref="missing-policy",
+        )
+
+        with patch.object(
+            api_gateway_main,
+            "read_custom_resource",
+            side_effect=HTTPException(status_code=404, detail="Policy 'missing-policy' not found"),
+        ):
+            with self.assertRaises(HTTPException) as context:
+                api_gateway_main.build_agent_spec(request, namespace="team-a")
+
+        self.assertEqual(context.exception.status_code, 404)
+        self.assertIn("missing-policy", str(context.exception.detail))
+
     def test_build_agent_spec_preserves_existing_a2a_config_on_update(self) -> None:
         request = api_gateway_main.UpdateAgentRequest(model="gpt-4")
 
@@ -626,7 +1074,7 @@ class WorkflowSchemaTests(unittest.TestCase):
             existing_spec={
                 "model": "gpt-4",
                 "a2a": {"allowedCallers": [{"name": "research-agent", "namespace": "team-a"}]},
-                "runtime": {"kind": "langgraph"},
+                "runtime": {"kind": "opencode"},
             },
         )
 
@@ -635,25 +1083,22 @@ class WorkflowSchemaTests(unittest.TestCase):
             {"allowedCallers": [{"name": "research-agent", "namespace": "team-a"}]},
         )
 
-    def test_build_agent_spec_preserves_existing_goose_config_files_on_update(self) -> None:
+    def test_build_agent_spec_rejects_existing_unsupported_runtime_on_update(self) -> None:
         request = api_gateway_main.UpdateAgentRequest(model="gpt-4")
 
-        spec = api_gateway_main.build_agent_spec(
-            request,
-            existing_spec={
-                "model": "gpt-4",
-                "runtime": {
-                    "kind": "goose",
-                    "goose": {"configFiles": {"config.yaml": {"GOOSE_MODE": "smart_approve"}}},
+        with self.assertRaises(HTTPException) as context:
+            api_gateway_main.build_agent_spec(
+                request,
+                existing_spec={
+                    "model": "gpt-4",
+                    "runtime": {
+                        "kind": "legacy",
+                    },
                 },
-            },
-        )
+            )
 
-        self.assertEqual(spec["runtime"]["kind"], "goose")
-        self.assertEqual(
-            spec["runtime"]["goose"]["configFiles"],
-            {"config.yaml": {"GOOSE_MODE": "smart_approve"}},
-        )
+        self.assertEqual(context.exception.status_code, 400)
+        self.assertIn("runtime kind must be 'opencode'", str(context.exception.detail))
 
     def test_build_agent_spec_preserves_existing_opencode_config_files_on_update(self) -> None:
         request = api_gateway_main.UpdateAgentRequest(model="gpt-4")
@@ -682,7 +1127,7 @@ class WorkflowSchemaTests(unittest.TestCase):
             request,
             existing_spec={
                 "model": "gpt-4",
-                "runtime": {"kind": "langgraph"},
+                "runtime": {"kind": "opencode"},
                 "skills": {
                     "files": {
                         ".github/skills/research/SKILL.md": "---\nname: research\n---\nRead first.\n",
@@ -700,54 +1145,50 @@ class WorkflowSchemaTests(unittest.TestCase):
             },
         )
 
-    def test_build_agent_spec_rejects_goose_config_files_for_langgraph(self) -> None:
-        request = api_gateway_main.CreateAgentRequest(
-            name="langgraph-agent",
-            model="gpt-4",
-            runtime_kind="langgraph",
-            goose_config_files={"config.yaml": {"GOOSE_MODE": "smart_approve"}},
-        )
-
-        with self.assertRaises(HTTPException) as context:
-            api_gateway_main.build_agent_spec(request)
-
-        self.assertEqual(context.exception.status_code, 400)
-        self.assertIn("runtime_kind", str(context.exception.detail))
-
-    def test_build_agent_spec_rejects_opencode_config_files_for_langgraph(self) -> None:
-        request = api_gateway_main.CreateAgentRequest(
-            name="langgraph-agent",
-            model="gpt-4",
-            runtime_kind="langgraph",
-            opencode_config_files={"opencode.json": {"default_agent": "build"}},
-        )
-
-        with self.assertRaises(HTTPException) as context:
-            api_gateway_main.build_agent_spec(request)
-
-        self.assertEqual(context.exception.status_code, 400)
-        self.assertIn("runtime_kind", str(context.exception.detail))
-
-    def test_agent_detail_from_resource_exposes_goose_config_files(self) -> None:
-        detail = api_gateway_main.agent_detail_from_resource(
+    def test_build_agent_spec_preserves_existing_mcp_connections_on_update(self) -> None:
+        existing_connections = [
             {
-                "metadata": {
-                    "name": "goose-agent",
-                    "namespace": "default",
-                    "creationTimestamp": "2026-03-11T00:00:00Z",
-                },
-                "spec": {
-                    "model": "gpt-4",
-                    "systemPrompt": "stay read-only",
-                    "runtime": {
-                        "kind": "goose",
-                        "goose": {"configFiles": {"config.yaml": {"GOOSE_MODE": "smart_approve"}}},
-                    },
+                "connectionId": "conn-docs",
+                "name": "Docs Remote",
+                "slug": "docs-remote",
+                "serverId": "docs",
+                "transport": "remote",
+                "source": "saved",
+                "runtime": {
+                    "kind": "remote",
+                    "configKey": "docs-remote",
+                    "url": "https://docs.example.com/mcp",
+                    "headers": [],
                 },
             }
+        ]
+
+        spec = api_gateway_main.build_agent_spec(
+            api_gateway_main.UpdateAgentRequest(model="gpt-4"),
+            existing_spec={
+                "model": "gpt-4",
+                "runtime": {"kind": "opencode"},
+                "mcpConnections": existing_connections,
+            },
+            namespace="team-a",
         )
 
-        self.assertEqual(detail.goose_config_files, {"config.yaml": {"GOOSE_MODE": "smart_approve"}})
+        self.assertEqual(spec["mcpConnections"], existing_connections)
+        self.assertEqual(spec["mcpServers"], ["docs"])
+
+    def test_create_agent_request_requires_explicit_runtime_kind(self) -> None:
+        with self.assertRaises(ValidationError):
+            api_gateway_main.CreateAgentRequest(
+                name="opencode-agent",
+                model="gpt-4",
+            )
+
+    def test_runtime_kind_from_spec_requires_explicit_kind(self) -> None:
+        with self.assertRaises(HTTPException) as context:
+            api_gateway_main.runtime_kind_from_spec({"model": "gpt-4"})
+
+        self.assertEqual(context.exception.status_code, 400)
+        self.assertIn("runtime.kind must be explicitly set", str(context.exception.detail))
 
     def test_agent_detail_from_resource_exposes_opencode_config_files(self) -> None:
         detail = api_gateway_main.agent_detail_from_resource(
@@ -774,14 +1215,14 @@ class WorkflowSchemaTests(unittest.TestCase):
         detail = api_gateway_main.agent_detail_from_resource(
             {
                 "metadata": {
-                    "name": "langgraph-agent",
+                    "name": "opencode-agent",
                     "namespace": "default",
                     "creationTimestamp": "2026-03-11T00:00:00Z",
                 },
                 "spec": {
                     "model": "gpt-4",
                     "a2a": {"allowedCallers": [{"name": "research-agent", "namespace": "team-a"}]},
-                    "runtime": {"kind": "langgraph"},
+                    "runtime": {"kind": "opencode"},
                 },
             }
         )
@@ -791,17 +1232,52 @@ class WorkflowSchemaTests(unittest.TestCase):
             {"allowedCallers": [{"name": "research-agent", "namespace": "team-a"}]},
         )
 
-    def test_agent_detail_from_resource_exposes_skill_summaries(self) -> None:
+    def test_agent_detail_from_resource_exposes_structured_mcp_connections(self) -> None:
         detail = api_gateway_main.agent_detail_from_resource(
             {
                 "metadata": {
-                    "name": "langgraph-agent",
+                    "name": "opencode-agent",
                     "namespace": "default",
                     "creationTimestamp": "2026-03-11T00:00:00Z",
                 },
                 "spec": {
                     "model": "gpt-4",
-                    "runtime": {"kind": "langgraph"},
+                    "runtime": {"kind": "opencode"},
+                    "mcpConnections": [
+                        {
+                            "connectionId": "conn-docs",
+                            "name": "Docs Remote",
+                            "slug": "docs-remote",
+                            "serverId": "docs",
+                            "transport": "remote",
+                            "source": "saved",
+                            "runtime": {
+                                "kind": "remote",
+                                "configKey": "docs-remote",
+                                "url": "https://docs.example.com/mcp",
+                                "headers": [],
+                            },
+                        }
+                    ],
+                },
+            }
+        )
+
+        self.assertEqual(detail.mcp_connections[0]["connectionId"], "conn-docs")
+        self.assertEqual(detail.mcp_servers, ["docs"])
+        self.assertEqual(detail.mcp_sidecars, [])
+
+    def test_agent_detail_from_resource_exposes_skill_summaries(self) -> None:
+        detail = api_gateway_main.agent_detail_from_resource(
+            {
+                "metadata": {
+                    "name": "opencode-agent",
+                    "namespace": "default",
+                    "creationTimestamp": "2026-03-11T00:00:00Z",
+                },
+                "spec": {
+                    "model": "gpt-4",
+                    "runtime": {"kind": "opencode"},
                     "skills": {
                         "files": {
                             ".github/skills/research/SKILL.md": (
@@ -908,7 +1384,7 @@ class GatewayAgentDiscoveryTests(unittest.TestCase):
             "spec": {
                 "model": "gpt-4",
                 "policyRef": "planner-policy",
-                "runtime": {"kind": "langgraph"},
+                "runtime": {"kind": "opencode"},
             },
         }
         policy = {
@@ -926,7 +1402,7 @@ class GatewayAgentDiscoveryTests(unittest.TestCase):
             "metadata": {"name": "researcher", "namespace": "team-b"},
             "spec": {
                 "model": "gpt-4o",
-                "runtime": {"kind": "langgraph"},
+                "runtime": {"kind": "opencode"},
                 "a2a": {"allowedCallers": [{"name": "planner", "namespace": "default"}]},
             },
         }
@@ -934,7 +1410,7 @@ class GatewayAgentDiscoveryTests(unittest.TestCase):
             "metadata": {"name": "reviewer", "namespace": "team-b"},
             "spec": {
                 "model": "gpt-4o-mini",
-                "runtime": {"kind": "goose"},
+                "runtime": {"kind": "opencode"},
                 "a2a": {"allowedCallers": [{"name": "someone-else", "namespace": "default"}]},
             },
         }
@@ -971,7 +1447,7 @@ class GatewayAgentDiscoveryTests(unittest.TestCase):
         self.assertEqual(len(response.peers), 3)
         self.assertTrue(response.peers[0].reachable)
         self.assertEqual(response.peers[0].name, "researcher")
-        self.assertEqual(response.peers[0].runtime_kind, "langgraph")
+        self.assertEqual(response.peers[0].runtime_kind, "opencode")
         self.assertFalse(response.peers[1].reachable)
         self.assertFalse(response.peers[1].accepts_caller)
         self.assertIn("allowedCallers", response.peers[1].reason or "")
@@ -984,7 +1460,7 @@ class GatewayAgentDiscoveryTests(unittest.TestCase):
             "spec": {
                 "model": "gpt-4",
                 "policyRef": "planner-policy",
-                "runtime": {"kind": "langgraph"},
+                "runtime": {"kind": "opencode"},
             },
         }
         policy = {
@@ -1000,7 +1476,7 @@ class GatewayAgentDiscoveryTests(unittest.TestCase):
             "metadata": {"name": "researcher", "namespace": "team-b"},
             "spec": {
                 "model": "gpt-4o",
-                "runtime": {"kind": "langgraph"},
+                "runtime": {"kind": "opencode"},
                 "a2a": {"allowedCallers": [{"name": "planner", "namespace": "default"}]},
             },
         }
@@ -1047,7 +1523,7 @@ class GatewayA2AProtocolTests(unittest.TestCase):
                 "model": "gpt-4o",
                 "systemPrompt": "Plan research tasks and delegate specialized work when needed.",
                 "policyRef": "planner-policy",
-                "runtime": {"kind": "langgraph"},
+                "runtime": {"kind": "opencode"},
                 "mcpServers": ["github"],
             },
         }
@@ -1077,10 +1553,12 @@ class GatewayA2AProtocolTests(unittest.TestCase):
             )
 
         self.assertEqual(card["name"], "planner")
-        self.assertEqual(card["url"], "http://gateway.local/a2a/planner?namespace=default")
-        self.assertEqual(card["protocolVersion"], api_gateway_main.A2A_PROTOCOL_VERSION)
-        self.assertEqual(card["preferredTransport"], "JSONRPC")
+        self.assertNotIn("url", card)
+        self.assertNotIn("protocolVersion", card)
+        self.assertNotIn("preferredTransport", card)
+        self.assertEqual(card["supportedInterfaces"][0]["url"], "http://gateway.local/a2a/planner?namespace=default")
         self.assertEqual(card["supportedInterfaces"][0]["protocolBinding"], "JSONRPC")
+        self.assertEqual(card["supportedInterfaces"][0]["protocolVersion"], api_gateway_main.A2A_PROTOCOL_VERSION)
         self.assertEqual(card["supportedInterfaces"][0]["tenant"], "default")
         self.assertTrue(card["capabilities"]["streaming"])
         self.assertFalse(card["capabilities"]["pushNotifications"])
@@ -1105,7 +1583,7 @@ class GatewayA2AProtocolAsyncTests(unittest.IsolatedAsyncioTestCase):
             status="completed",
         )
 
-        with patch.object(api_gateway_main, "invoke_agent", AsyncMock(return_value=invoke_response)):
+        with patch.object(api_gateway_main, "invoke_agent", AsyncMock(return_value=invoke_response)) as mock_invoke:
             response = await api_gateway_main.handle_a2a_send_message(
                 "planner",
                 "default",
@@ -1114,20 +1592,45 @@ class GatewayA2AProtocolAsyncTests(unittest.IsolatedAsyncioTestCase):
                         "messageId": "msg-1",
                         "role": "ROLE_USER",
                         "parts": [{"text": "Summarize the research"}],
+                    },
+                    "metadata": {
+                        "kubesynthInvoke": {
+                            "threadId": "peer-thread-1",
+                            "system": "Return only the final answer.",
+                            "model": "gpt-4.1",
+                            "callerAgentName": "orchestrator",
+                            "callerAgentNamespace": "team-a",
+                            "parentThreadId": "root-thread",
+                            "callerRequestId": "caller-req-9",
+                            "sandboxSession": {"id": "shared-session"},
+                            "teamContext": {"workflow": "incident-review"},
+                        }
                     }
                 },
                 "req-1",
                 "gateway-req-1",
             )
 
+        forwarded_request = mock_invoke.await_args.args[1]
+        self.assertEqual(forwarded_request.thread_id, "peer-thread-1")
+        self.assertEqual(forwarded_request.system, "Return only the final answer.")
+        self.assertEqual(forwarded_request.model, "gpt-4.1")
+        self.assertEqual(forwarded_request.caller_agent_name, "orchestrator")
+        self.assertEqual(forwarded_request.caller_agent_namespace, "team-a")
+        self.assertEqual(forwarded_request.parent_thread_id, "root-thread")
+        self.assertEqual(forwarded_request.caller_request_id, "caller-req-9")
+        self.assertEqual(forwarded_request.sandbox_session, {"id": "shared-session"})
+        self.assertEqual(forwarded_request.team_context["workflow"], "incident-review")
+        self.assertEqual(forwarded_request.team_context["mode"], "a2a-jsonrpc")
+
         task = response["result"]["task"]
-        self.assertEqual(task["kind"], "task")
+        self.assertNotIn("kind", task)
         self.assertEqual(task["status"]["state"], "TASK_STATE_COMPLETED")
-        self.assertEqual(task["history"][0]["kind"], "message")
-        self.assertEqual(task["history"][0]["parts"][0]["kind"], "text")
+        self.assertNotIn("kind", task["history"][0])
+        self.assertNotIn("kind", task["history"][0]["parts"][0])
         self.assertEqual(task["artifacts"][0]["parts"][0]["text"], "Delegated summary")
-        self.assertEqual(task["artifacts"][0]["kind"], "artifact")
-        self.assertEqual(task["artifacts"][0]["parts"][0]["kind"], "text")
+        self.assertNotIn("kind", task["artifacts"][0])
+        self.assertNotIn("kind", task["artifacts"][0]["parts"][0])
         self.assertEqual(len(task["history"]), 2)
 
         get_response = api_gateway_main.handle_a2a_get_task(
@@ -1172,8 +1675,8 @@ class GatewayA2AProtocolAsyncTests(unittest.IsolatedAsyncioTestCase):
         payload = "".join(chunks)
         self.assertIn('"artifactUpdate"', payload)
         self.assertIn('"statusUpdate"', payload)
-        self.assertIn('"kind": "artifact-update"', payload)
-        self.assertIn('"kind": "status-update"', payload)
+        self.assertNotIn('"kind": "artifact-update"', payload)
+        self.assertNotIn('"kind": "status-update"', payload)
         self.assertIn("TASK_STATE_COMPLETED", payload)
 
         stored_record = next(iter(api_gateway_main.A2A_TASK_STORE.values()))
@@ -1221,6 +1724,49 @@ class GatewayA2AProtocolAsyncTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["result"]["task"]["id"], "task-1")
 
 
+class AgentReadCacheTests(unittest.TestCase):
+    def tearDown(self) -> None:
+        api_gateway_main.invalidate_agent_read_cache()
+
+    def test_read_agent_cached_reuses_recent_result(self) -> None:
+        api_gateway_main.invalidate_agent_read_cache()
+        with (
+            patch.object(api_gateway_main, "AGENT_READ_CACHE_TTL_SECONDS", 2.0),
+            patch.object(
+                api_gateway_main,
+                "read_agent",
+                side_effect=[{"spec": {"model": "gpt-4", "runtime": {"kind": "opencode"}}}],
+            ) as read_agent,
+        ):
+            first = api_gateway_main.read_agent_cached("demo", "default")
+            first["spec"]["model"] = "mutated"
+            second = api_gateway_main.read_agent_cached("demo", "default")
+
+        self.assertEqual(read_agent.call_count, 1)
+        self.assertEqual(second["spec"]["model"], "gpt-4")
+
+    def test_invalidate_agent_read_cache_evicts_matching_entry(self) -> None:
+        api_gateway_main.invalidate_agent_read_cache()
+        with (
+            patch.object(api_gateway_main, "AGENT_READ_CACHE_TTL_SECONDS", 2.0),
+            patch.object(
+                api_gateway_main,
+                "read_agent",
+                side_effect=[
+                    {"spec": {"model": "gpt-4", "runtime": {"kind": "opencode"}}},
+                    {"spec": {"model": "gpt-4.1", "runtime": {"kind": "opencode"}}},
+                ],
+            ) as read_agent,
+        ):
+            first = api_gateway_main.read_agent_cached("demo", "default")
+            api_gateway_main.invalidate_agent_read_cache(agent_name="demo", namespace="default")
+            second = api_gateway_main.read_agent_cached("demo", "default")
+
+        self.assertEqual(read_agent.call_count, 2)
+        self.assertEqual(first["spec"]["model"], "gpt-4")
+        self.assertEqual(second["spec"]["model"], "gpt-4.1")
+
+
 class GatewayInvokeProxyTests(unittest.IsolatedAsyncioTestCase):
     async def test_download_agent_artifact_proxies_runtime_file_response(self) -> None:
         response = httpx.Response(
@@ -1247,7 +1793,11 @@ class GatewayInvokeProxyTests(unittest.IsolatedAsyncioTestCase):
         fake_client = FakeAsyncClient()
 
         with (
-            patch.object(api_gateway_main.asyncio, "to_thread", return_value={"spec": {"model": "gpt-4"}}),
+            patch.object(
+                api_gateway_main.asyncio,
+                "to_thread",
+                return_value={"spec": {"model": "gpt-4", "runtime": {"kind": "opencode"}}},
+            ),
             patch.object(
                 api_gateway_main.httpx,
                 "AsyncClient",
@@ -1282,7 +1832,11 @@ class GatewayInvokeProxyTests(unittest.IsolatedAsyncioTestCase):
                 return response
 
         with (
-            patch.object(api_gateway_main.asyncio, "to_thread", return_value={"spec": {"model": "gpt-4"}}),
+            patch.object(
+                api_gateway_main.asyncio,
+                "to_thread",
+                return_value={"spec": {"model": "gpt-4", "runtime": {"kind": "opencode"}}},
+            ),
             patch.object(
                 api_gateway_main.httpx,
                 "AsyncClient",
@@ -1294,6 +1848,43 @@ class GatewayInvokeProxyTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(context.exception.status_code, 502)
         self.assertIn("invalid JSON", str(context.exception.detail))
+
+    async def test_invoke_agent_uses_cached_agent_lookup(self) -> None:
+        request = api_gateway_main.InvokeRequest(prompt="hello")
+        raw_request = types.SimpleNamespace(headers={})
+        response = httpx.Response(
+            200,
+            json={
+                "response": "done",
+                "thread_id": "thread-1",
+                "model": "gpt-4",
+                "status": "completed",
+            },
+        )
+        captured: dict[str, object] = {}
+
+        class FakeAsyncClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def post(self, *args, **kwargs):
+                return response
+
+        async def fake_to_thread(func, *args, **kwargs):
+            captured["func"] = func
+            return {"spec": {"model": "gpt-4", "runtime": {"kind": "opencode"}}}
+
+        with (
+            patch.object(api_gateway_main.asyncio, "to_thread", side_effect=fake_to_thread),
+            patch.object(api_gateway_main.httpx, "AsyncClient", return_value=FakeAsyncClient()),
+            patch.object(api_gateway_main, "list_promoted_memory_records", return_value=[]),
+        ):
+            await api_gateway_main.invoke_agent("demo", request, raw_request, "default", user={})
+
+        self.assertIs(captured["func"], api_gateway_main.read_agent_cached)
 
     async def test_invoke_agent_returns_a2a_metadata(self) -> None:
         request = api_gateway_main.InvokeRequest(
@@ -1332,7 +1923,7 @@ class GatewayInvokeProxyTests(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 api_gateway_main.asyncio,
                 "to_thread",
-                return_value={"spec": {"model": "gpt-4", "runtime": {"kind": "langgraph"}}},
+                return_value={"spec": {"model": "gpt-4", "runtime": {"kind": "opencode"}}},
             ),
             patch.object(api_gateway_main.httpx, "AsyncClient", return_value=FakeAsyncClient()),
         ):
@@ -1378,7 +1969,7 @@ class GatewayInvokeProxyTests(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 api_gateway_main.asyncio,
                 "to_thread",
-                return_value={"spec": {"model": "gpt-4", "runtime": {"kind": "langgraph"}}},
+                return_value={"spec": {"model": "gpt-4", "runtime": {"kind": "opencode"}}},
             ),
             patch.object(api_gateway_main.httpx, "AsyncClient", return_value=FakeAsyncClient()),
         ):
@@ -1424,7 +2015,7 @@ class GatewayInvokeProxyTests(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 api_gateway_main.asyncio,
                 "to_thread",
-                return_value={"spec": {"model": "gpt-4", "runtime": {"kind": "langgraph"}}},
+                return_value={"spec": {"model": "gpt-4", "runtime": {"kind": "opencode"}}},
             ),
             patch.object(api_gateway_main.httpx, "AsyncClient", return_value=FakeAsyncClient()),
             patch.object(api_gateway_main, "record_runtime_memory") as record_runtime_memory,
@@ -1463,7 +2054,7 @@ class GatewayInvokeProxyTests(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 api_gateway_main.asyncio,
                 "to_thread",
-                return_value={"spec": {"model": "gpt-4", "runtime": {"kind": "langgraph"}}},
+                return_value={"spec": {"model": "gpt-4", "runtime": {"kind": "opencode"}}},
             ),
             patch.object(api_gateway_main.httpx, "AsyncClient", return_value=FakeAsyncClient()),
             patch.object(
@@ -1478,20 +2069,8 @@ class GatewayInvokeProxyTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Promoted memory from prior work", forwarded["system"])
         self.assertIn("Use the repo root Make targets first.", forwarded["system"])
 
-    async def test_invoke_agent_forwards_and_returns_subagent_metadata(self) -> None:
-        request = api_gateway_main.InvokeRequest(
-            prompt="Coordinate a root-cause analysis",
-            subagent_strategy="parallel",
-            subagents=[
-                {
-                    "name": "analysis-agent",
-                    "namespace": "team-b",
-                    "role": "incident analyst",
-                    "task": "Inspect the failing workflow.",
-                    "result_file_path": "artifacts/analysis.md",
-                }
-            ],
-        )
+    async def test_invoke_agent_injects_collaboration_context_into_system_prompt(self) -> None:
+        request = api_gateway_main.InvokeRequest(prompt="Who can I collaborate with?")
         raw_request = types.SimpleNamespace(headers={})
         captured: dict[str, object] = {}
         response = httpx.Response(
@@ -1501,18 +2080,6 @@ class GatewayInvokeProxyTests(unittest.IsolatedAsyncioTestCase):
                 "thread_id": "thread-1",
                 "model": "gpt-4",
                 "status": "completed",
-                "subagents": {
-                    "strategy": "parallel",
-                    "count": 1,
-                    "results": [
-                        {
-                            "name": "analysis-agent",
-                            "namespace": "team-b",
-                            "status": "completed",
-                            "resultFilePath": "artifacts/analysis.md",
-                        }
-                    ],
-                },
             },
         )
 
@@ -1523,69 +2090,70 @@ class GatewayInvokeProxyTests(unittest.IsolatedAsyncioTestCase):
             async def __aexit__(self, exc_type, exc, tb):
                 return False
 
-            async def post(self, url, **kwargs):
-                captured["url"] = url
+            async def post(self, _url, **kwargs):
                 captured["json"] = kwargs.get("json")
                 return response
 
+        agent_resource = {
+            "spec": {
+                "model": "gpt-4",
+                "runtime": {"kind": "opencode"},
+                "a2a": {
+                    "allowedCallers": [
+                        {"name": "reviewer", "namespace": "default"},
+                        {"name": "researcher", "namespace": "default"},
+                    ]
+                },
+            }
+        }
+
         with (
-            patch.object(
-                api_gateway_main.asyncio,
-                "to_thread",
-                return_value={"spec": {"model": "gpt-4", "runtime": {"kind": "langgraph"}}},
-            ),
+            patch.object(api_gateway_main.asyncio, "to_thread", return_value=agent_resource),
             patch.object(api_gateway_main.httpx, "AsyncClient", return_value=FakeAsyncClient()),
         ):
-            invoke_response = await api_gateway_main.invoke_agent("planner", request, raw_request, "default", user={})
+            await api_gateway_main.invoke_agent("planner", request, raw_request, "default", user={"sub": "alice"})
 
         forwarded = captured["json"]
-        self.assertEqual(forwarded["subagent_strategy"], "parallel")
-        self.assertEqual(forwarded["subagents"][0]["name"], "analysis-agent")
-        self.assertEqual(forwarded["subagents"][0]["result_file_path"], "artifacts/analysis.md")
-        self.assertEqual(invoke_response.subagents["strategy"], "parallel")
-        self.assertEqual(invoke_response.subagents["results"][0]["resultFilePath"], "artifacts/analysis.md")
+        self.assertIn("COLLABORATION CONTEXT:", forwarded["system"])
+        self.assertIn("default/reviewer", forwarded["system"])
+        self.assertIn("default/researcher", forwarded["system"])
+        self.assertIn("outbound policy targets): none", forwarded["system"])
+        self.assertIn("OpenCode supports explicit outbound A2A through the internal API gateway", forwarded["system"])
+        self.assertIn("callerAgentName='planner'", forwarded["system"])
+        self.assertIn("put only the agent name in the /a2a/<agent> path", forwarded["system"])
+        self.assertIn("/a2a/peer-agent?namespace=default", forwarded["system"])
+        self.assertIn("SendMessage", forwarded["system"])
+        self.assertIn("metadata.kubesynthInvoke.threadId", forwarded["system"])
 
-    async def test_invoke_agent_preserves_non_object_tool_result(self) -> None:
-        request = api_gateway_main.InvokeRequest(
-            prompt="Call the reporting tool",
-            tool_name="report.generate",
-            mcp_server="reporting",
-        )
+    async def test_invoke_agent_with_namespace_path_alias_uses_canonical_handler(self) -> None:
+        request = api_gateway_main.InvokeRequest(prompt="Who are you?")
         raw_request = types.SimpleNamespace(headers={})
-        response = httpx.Response(
-            200,
-            json={
-                "response": "done",
-                "thread_id": "thread-1",
-                "model": "gpt-4",
-                "status": "completed",
-                "tool_name": "report.generate",
-                "tool_result": ["row-1", "row-2"],
-            },
+        expected = api_gateway_main.InvokeResponse(
+            agent_name="analysis-agent",
+            response="done",
+            thread_id="thread-1",
+            model="gpt-4",
+            status="completed",
         )
 
-        class FakeAsyncClient:
-            async def __aenter__(self):
-                return self
+        with patch.object(api_gateway_main, "invoke_agent", AsyncMock(return_value=expected)) as invoke_agent:
+            result = await api_gateway_main.invoke_agent_with_namespace_path(
+                "default",
+                "analysis-agent",
+                request,
+                raw_request,
+                namespace="default",
+                user={"sub": "alice"},
+            )
 
-            async def __aexit__(self, exc_type, exc, tb):
-                return False
-
-            async def post(self, *args, **kwargs):
-                return response
-
-        with (
-            patch.object(
-                api_gateway_main.asyncio,
-                "to_thread",
-                return_value={"spec": {"model": "gpt-4", "runtime": {"kind": "langgraph"}}},
-            ),
-            patch.object(api_gateway_main.httpx, "AsyncClient", return_value=FakeAsyncClient()),
-        ):
-            invoke_response = await api_gateway_main.invoke_agent("planner", request, raw_request, "default", user={})
-
-        self.assertEqual(invoke_response.tool_name, "report.generate")
-        self.assertEqual(invoke_response.tool_result, ["row-1", "row-2"])
+        invoke_agent.assert_awaited_once_with(
+            "analysis-agent",
+            request,
+            raw_request,
+            "default",
+            {"sub": "alice"},
+        )
+        self.assertIs(result, expected)
 
     async def test_invoke_agent_stream_emits_response_error_event_for_upstream_failure(self) -> None:
         request = api_gateway_main.InvokeRequest(prompt="hello")
@@ -1610,7 +2178,11 @@ class GatewayInvokeProxyTests(unittest.IsolatedAsyncioTestCase):
                 return FakeStreamContext()
 
         with (
-            patch.object(api_gateway_main.asyncio, "to_thread", return_value={"spec": {"model": "gpt-4"}}),
+            patch.object(
+                api_gateway_main.asyncio,
+                "to_thread",
+                return_value={"spec": {"model": "gpt-4", "runtime": {"kind": "opencode"}}},
+            ),
             patch.object(
                 api_gateway_main.httpx,
                 "AsyncClient",
@@ -1658,7 +2230,11 @@ class GatewayInvokeProxyTests(unittest.IsolatedAsyncioTestCase):
                 return FakeStreamContext()
 
         with (
-            patch.object(api_gateway_main.asyncio, "to_thread", return_value={"spec": {"model": "gpt-4"}}),
+            patch.object(
+                api_gateway_main.asyncio,
+                "to_thread",
+                return_value={"spec": {"model": "gpt-4", "runtime": {"kind": "opencode"}}},
+            ),
             patch.object(
                 api_gateway_main.httpx,
                 "AsyncClient",
@@ -1774,6 +2350,513 @@ class LogStreamTests(unittest.TestCase):
             self.assertEqual(ctx.exception.status_code, 404)
 
 
+class WorkflowRetryFailedTests(unittest.TestCase):
+    @classmethod
+    def _ensure_k8s_mock(cls):
+        if "kubernetes" not in sys.modules:
+            k8s_mod = types.ModuleType("kubernetes")
+            k8s_client_mod = types.ModuleType("kubernetes.client")
+            k8s_mod.client = k8s_client_mod
+            sys.modules["kubernetes"] = k8s_mod
+            sys.modules["kubernetes.client"] = k8s_client_mod
+
+    def setUp(self) -> None:
+        from unittest.mock import MagicMock
+
+        self._ensure_k8s_mock()
+        self._mock_custom_objects = MagicMock()
+        self._custom_objects_patcher = patch.object(
+            sys.modules["kubernetes.client"],
+            "CustomObjectsApi",
+            return_value=self._mock_custom_objects,
+            create=True,
+        )
+        self._custom_objects_patcher.start()
+
+    def tearDown(self) -> None:
+        self._custom_objects_patcher.stop()
+
+    async def _read_stream(self, response) -> str:
+        chunks: list[str] = []
+        async for chunk in response.body_iterator:
+            chunks.append(chunk.decode() if isinstance(chunk, bytes) else chunk)
+        return "".join(chunks)
+
+    def test_trigger_workflow_replaces_input_and_resets_status(self) -> None:
+        workflow = {
+            "metadata": {
+                "name": "feature-pipeline",
+                "namespace": "default",
+                "generation": 3,
+                "resourceVersion": "17",
+            },
+            "spec": {
+                "description": "desc",
+                "input": "old input",
+                "steps": [{"name": "draft-blueprint", "agentRef": "planner", "prompt": "Draft it"}],
+            },
+            "status": {
+                "phase": "failed",
+                "pendingApproval": {"name": "approval-one"},
+                "observedGeneration": 3,
+                "runId": "wf-run-default-feature-pipeline-3-old",
+                "summary": {"totalSteps": 1},
+            },
+        }
+        updated = copy.deepcopy(workflow)
+        updated["spec"]["input"] = "fresh input"
+        updated["status"] = {
+            "phase": "pending",
+            "pendingApproval": None,
+            "observedGeneration": None,
+            "runId": "wf-run-default-feature-pipeline-3-new",
+            "summary": {"totalSteps": 1},
+        }
+        self._mock_custom_objects.get_namespaced_custom_object.side_effect = [workflow, updated]
+        self._mock_custom_objects.replace_namespaced_custom_object.return_value = updated
+
+        with (
+            patch.object(api_gateway_main, "ensure_namespace_access"),
+            patch.object(api_gateway_main, "record_workflow_run") as record_mock,
+        ):
+            result = api_gateway_main.trigger_workflow(
+                workflow_name="feature-pipeline",
+                body=api_gateway_main.WorkflowTriggerRequest(input="fresh input"),
+                namespace="default",
+                user={"sub": "user-1", "namespaces": ["default"]},
+            )
+
+        replace_kwargs = self._mock_custom_objects.replace_namespaced_custom_object.call_args.kwargs
+        self.assertEqual(replace_kwargs["body"]["spec"]["input"], "fresh input")
+        self.assertEqual(replace_kwargs["body"]["spec"]["description"], "desc")
+        patch_kwargs = self._mock_custom_objects.patch_namespaced_custom_object_status.call_args.kwargs
+        self.assertEqual(
+            patch_kwargs["body"],
+            {"status": {"phase": "pending", "observedGeneration": None, "pendingApproval": None}},
+        )
+        record_mock.assert_called_once()
+        self.assertEqual(result.input, "fresh input")
+        self.assertEqual(result.phase, "pending")
+        self.assertEqual(result.run_id, "wf-run-default-feature-pipeline-3-new")
+
+    def test_cancel_workflow_clears_pending_approval(self) -> None:
+        workflow = {
+            "metadata": {"name": "feature-pipeline", "namespace": "default", "generation": 4},
+            "spec": {
+                "description": "desc",
+                "input": "input",
+                "steps": [{"name": "deploy-bundle", "agentRef": "deployer", "prompt": "Deploy it"}],
+            },
+            "status": {
+                "phase": "waiting-approval",
+                "pendingApproval": {"name": "approval-one", "stepName": "deploy-bundle"},
+                "summary": {"totalSteps": 1},
+            },
+        }
+        updated = copy.deepcopy(workflow)
+        updated["status"]["phase"] = "cancelled"
+        updated["status"]["pendingApproval"] = None
+        self._mock_custom_objects.get_namespaced_custom_object.side_effect = [workflow, updated]
+
+        with patch.object(api_gateway_main, "ensure_namespace_access"):
+            result = api_gateway_main.cancel_workflow(
+                workflow_name="feature-pipeline",
+                namespace="default",
+                user={"sub": "user-1", "namespaces": ["default"]},
+            )
+
+        patch_kwargs = self._mock_custom_objects.patch_namespaced_custom_object_status.call_args.kwargs
+        self.assertEqual(patch_kwargs["body"], {"status": {"phase": "cancelled", "pendingApproval": None}})
+        self.assertEqual(result.phase, "cancelled")
+        self.assertIsNone(result.pending_approval)
+
+    def test_get_workflow_next_action_recommends_retry_for_failed_steps(self) -> None:
+        workflow = {
+            "metadata": {"name": "feature-pipeline", "namespace": "default"},
+            "spec": {},
+            "status": {
+                "phase": "failed",
+                "stepStates": {
+                    "draft": {"status": "completed"},
+                    "deploy": {"status": "failed"},
+                },
+            },
+        }
+
+        with (
+            patch.object(api_gateway_main, "ensure_namespace_access"),
+            patch.object(api_gateway_main, "read_custom_resource", return_value=workflow),
+        ):
+            result = api_gateway_main.get_workflow_next_action(
+                workflow_name="feature-pipeline",
+                namespace="default",
+                user={"sub": "user-1", "namespaces": ["default"]},
+            )
+
+        self.assertEqual(result["action"], "Retry failed steps")
+        self.assertEqual(result["failedSteps"], ["deploy"])
+        self.assertTrue(result["retryAvailable"])
+
+    def test_get_workflow_next_action_recommends_approval_decision(self) -> None:
+        workflow = {
+            "metadata": {"name": "feature-pipeline", "namespace": "default"},
+            "spec": {},
+            "status": {
+                "phase": "waiting-approval",
+                "pendingApproval": {"stepName": "deploy-bundle"},
+                "stepStates": {},
+            },
+        }
+
+        with (
+            patch.object(api_gateway_main, "ensure_namespace_access"),
+            patch.object(api_gateway_main, "read_custom_resource", return_value=workflow),
+        ):
+            result = api_gateway_main.get_workflow_next_action(
+                workflow_name="feature-pipeline",
+                namespace="default",
+                user={"sub": "user-1", "namespaces": ["default"]},
+            )
+
+        self.assertEqual(result["action"], "Approve or reject step 'deploy-bundle'")
+        self.assertEqual(result["reason"], "Workflow is waiting for human approval.")
+
+    def test_get_workflow_next_action_recommends_eval_after_success(self) -> None:
+        workflow = {
+            "metadata": {"name": "feature-pipeline", "namespace": "default"},
+            "spec": {},
+            "status": {
+                "phase": "completed",
+                "stepStates": {"deploy": {"status": "completed"}},
+            },
+        }
+
+        with (
+            patch.object(api_gateway_main, "ensure_namespace_access"),
+            patch.object(api_gateway_main, "read_custom_resource", return_value=workflow),
+            patch.object(api_gateway_main, "list_custom_resources", return_value=[]),
+        ):
+            result = api_gateway_main.get_workflow_next_action(
+                workflow_name="feature-pipeline",
+                namespace="default",
+                user={"sub": "user-1", "namespaces": ["default"]},
+            )
+
+        self.assertEqual(result, {"action": "Run evaluation", "reason": "Workflow completed successfully but has no evaluation."})
+
+    def test_stream_workflow_status_emits_status_and_done_events(self) -> None:
+        workflow = {
+            "metadata": {"name": "feature-pipeline", "namespace": "default"},
+            "spec": {
+                "description": "desc",
+                "input": "input",
+                "steps": [{"name": "deploy-bundle", "agentRef": "deployer", "prompt": "Deploy it"}],
+            },
+            "status": {
+                "phase": "completed",
+                "summary": {"totalSteps": 1},
+                "stepStates": {"deploy-bundle": {"status": "completed"}},
+            },
+        }
+        self._mock_custom_objects.get_namespaced_custom_object.return_value = workflow
+
+        with (
+            patch.object(api_gateway_main, "ensure_namespace_access"),
+            patch.object(api_gateway_main, "_sync_workflow_run_history"),
+        ):
+            response = api_gateway_main.stream_workflow_status(
+                workflow_name="feature-pipeline",
+                namespace="default",
+                user={"sub": "user-1", "namespaces": ["default"]},
+            )
+            payload = asyncio.run(self._read_stream(response))
+
+        self.assertIn("event: status", payload)
+        self.assertIn('"phase": "completed"', payload)
+        self.assertIn("event: done", payload)
+
+    def test_stream_workflow_logs_emits_started_line_and_stopped_events(self) -> None:
+        class FakeRequest:
+            async def is_disconnected(self) -> bool:
+                return False
+
+        class FakeWatch:
+            def __init__(self):
+                self.stopped = False
+
+            def stream(self, *_args, **_kwargs):
+                return iter([
+                    "2026-04-07T00:00:00Z INFO starting",
+                    "2026-04-07T00:00:01Z INFO ready",
+                ])
+
+            def stop(self):
+                self.stopped = True
+
+        fake_watch = FakeWatch()
+        fake_pod = types.SimpleNamespace(metadata=types.SimpleNamespace(name="workflow-pod-0"))
+        sys.modules["kubernetes"].watch = types.SimpleNamespace(Watch=lambda: fake_watch)
+
+        with (
+            patch.object(api_gateway_main, "ensure_namespace_access"),
+            patch.object(
+                api_gateway_main,
+                "read_custom_resource",
+                return_value={"status": {"workerJob": {"name": "worker-job", "namespace": "default"}}},
+            ),
+            patch.object(api_gateway_main, "list_job_pods", return_value=[fake_pod]),
+            patch.object(
+                sys.modules["kubernetes.client"],
+                "CoreV1Api",
+                return_value=types.SimpleNamespace(read_namespaced_pod_log=lambda **_kwargs: None),
+                create=True,
+            ),
+        ):
+            response = asyncio.run(
+                api_gateway_main.stream_workflow_logs(
+                    workflow_name="feature-pipeline",
+                    request=FakeRequest(),
+                    namespace="default",
+                    user={"sub": "user-1", "namespaces": ["default"]},
+                )
+            )
+            payload = asyncio.run(self._read_stream(response))
+
+        self.assertIn("event: log.started", payload)
+        self.assertIn("event: log.line", payload)
+        self.assertIn("event: log.stopped", payload)
+        self.assertTrue(fake_watch.stopped)
+
+    def test_get_workflow_run_trace_endpoint_returns_archived_snapshot(self) -> None:
+        trace_row = {
+            "workflow_name": "feature-pipeline",
+            "namespace": "default",
+            "history_id": 17,
+            "run_id": "run-archived-1",
+            "generation": 4,
+            "phase": "failed",
+            "spec": {
+                "description": "Deploy feature pipeline",
+                "input": "Ship the validated bundle",
+                "steps": [{"name": "deploy-bundle", "agentRef": "deployer", "prompt": "Deploy it"}],
+            },
+            "status": {
+                "phase": "failed",
+                "runId": "run-archived-1",
+                "summary": {"totalSteps": 1, "failedSteps": 1},
+                "stepStates": {
+                    "deploy-bundle": {"stepName": "deploy-bundle", "agentRef": "deployer", "status": "failed"}
+                },
+            },
+            "summary": {"totalSteps": 1, "failedSteps": 1},
+            "step_states": {
+                "deploy-bundle": {"stepName": "deploy-bundle", "agentRef": "deployer", "status": "failed"}
+            },
+            "artifact_path": "/artifacts/feature-pipeline/run-archived-1",
+            "journal_path": "/artifacts/feature-pipeline/run-archived-1/journal.ndjson",
+            "worker_job_name": "worker-job-archived-1",
+            "pending_approval_name": None,
+            "triggered_by": "alice",
+            "input_text": "Ship the validated bundle",
+            "created_at": "2026-04-09T10:00:00+00:00",
+            "updated_at": "2026-04-09T10:03:00+00:00",
+            "completed_at": "2026-04-09T10:03:00+00:00",
+            "archived_log_available": True,
+            "archived_log_source": "operator-terminal-archive",
+            "archived_log_truncated": False,
+            "archived_log_captured_at": "2026-04-09T10:03:01+00:00",
+            "logs": "2026-04-09T10:00:00Z INFO start\n2026-04-09T10:03:00Z ERROR failed",
+        }
+
+        with (
+            patch.object(api_gateway_main, "ensure_namespace_access"),
+            patch.object(api_gateway_main, "load_workflow_run_trace", return_value=trace_row),
+        ):
+            payload = api_gateway_main.get_workflow_run_trace_endpoint(
+                workflow_name="feature-pipeline",
+                run_id="run-archived-1",
+                namespace="default",
+                user={"sub": "user-1", "namespaces": ["default"]},
+            )
+
+        self.assertEqual(payload["source"], "archived")
+        self.assertEqual(payload["workflow"]["name"], "feature-pipeline")
+        self.assertEqual(payload["workflow"]["run_id"], "run-archived-1")
+        self.assertIn("ERROR failed", payload["logs"])
+
+    def test_resolve_workflow_run_trace_payload_captures_live_fallback_logs(self) -> None:
+        trace_row = {
+            "workflow_name": "feature-pipeline",
+            "namespace": "default",
+            "history_id": 18,
+            "run_id": "run-live-fallback-1",
+            "generation": 5,
+            "phase": "completed",
+            "spec": {
+                "description": "Deploy feature pipeline",
+                "input": "Promote the bundle",
+                "steps": [{"name": "deploy-bundle", "agentRef": "deployer", "prompt": "Deploy it"}],
+            },
+            "status": {
+                "phase": "completed",
+                "runId": "run-live-fallback-1",
+                "summary": {"totalSteps": 1, "completedSteps": 1},
+                "stepStates": {
+                    "deploy-bundle": {"stepName": "deploy-bundle", "agentRef": "deployer", "status": "completed"}
+                },
+            },
+            "summary": {"totalSteps": 1, "completedSteps": 1},
+            "step_states": {
+                "deploy-bundle": {"stepName": "deploy-bundle", "agentRef": "deployer", "status": "completed"}
+            },
+            "artifact_path": "/artifacts/feature-pipeline/run-live-fallback-1",
+            "journal_path": "/artifacts/feature-pipeline/run-live-fallback-1/journal.ndjson",
+            "worker_job_name": "worker-job-live-fallback-1",
+            "pending_approval_name": None,
+            "triggered_by": "alice",
+            "input_text": "Promote the bundle",
+            "created_at": "2026-04-09T11:00:00+00:00",
+            "updated_at": "2026-04-09T11:02:00+00:00",
+            "completed_at": "2026-04-09T11:02:00+00:00",
+            "archived_log_available": False,
+            "archived_log_source": None,
+            "archived_log_truncated": False,
+            "archived_log_captured_at": None,
+            "logs": None,
+        }
+
+        with (
+            patch.object(api_gateway_main, "load_workflow_run_trace", return_value=trace_row),
+            patch.object(api_gateway_main, "_read_workflow_job_logs", return_value=("2026-04-09T11:00:00Z INFO deployed", "worker-pod-1")),
+            patch.object(api_gateway_main, "record_workflow_run_log_archive") as archive_mock,
+        ):
+            payload = api_gateway_main._resolve_workflow_run_trace_payload(
+                "feature-pipeline",
+                "default",
+                "run-live-fallback-1",
+                tail=200,
+                persist_live_fallback=True,
+            )
+
+        self.assertEqual(payload["source"], "live-worker")
+        self.assertEqual(payload["pod_name"], "worker-pod-1")
+        self.assertIn("INFO deployed", payload["logs"])
+        archive_mock.assert_called_once()
+
+    def test_get_workflow_logs_falls_back_to_archived_trace(self) -> None:
+        archived_payload = {
+            "workflow_name": "feature-pipeline",
+            "run_id": "run-archived-2",
+            "job_name": "worker-job-archived-2",
+            "pod_name": None,
+            "source": "archived",
+            "archived_log_available": True,
+            "archived_log_source": "operator-terminal-archive",
+            "archived_log_truncated": False,
+            "archived_log_captured_at": "2026-04-09T12:00:00+00:00",
+            "logs": "2026-04-09T11:59:59Z INFO archived snapshot",
+        }
+
+        with (
+            patch.object(api_gateway_main, "ensure_namespace_access"),
+            patch.object(
+                api_gateway_main,
+                "read_custom_resource",
+                return_value={"status": {"runId": "run-archived-2", "workerJob": {}}},
+            ),
+            patch.object(api_gateway_main, "_fallback_workflow_logs_from_run", return_value=archived_payload),
+        ):
+            payload = api_gateway_main.get_workflow_logs(
+                workflow_name="feature-pipeline",
+                namespace="default",
+                user={"sub": "user-1", "namespaces": ["default"]},
+            )
+
+        self.assertEqual(payload["source"], "archived")
+        self.assertEqual(payload["run_id"], "run-archived-2")
+        self.assertIn("archived snapshot", payload["logs"])
+
+    def test_retry_failed_workflow_steps_assigns_fresh_run_id(self) -> None:
+        workflow = {
+            "metadata": {"name": "feature-pipeline", "namespace": "default", "generation": 5},
+            "spec": {
+                "description": "desc",
+                "input": "input",
+                "steps": [
+                    {"name": "draft-blueprint", "agentRef": "planner", "prompt": "Draft it"},
+                    {"name": "deploy-bundle", "agentRef": "deployer", "prompt": "Deploy it"},
+                ],
+            },
+            "status": {
+                "phase": "failed",
+                "runId": "wf-run-default-feature-pipeline-5-old",
+                "currentStep": "deploy-bundle",
+                "stepStates": {
+                    "draft-blueprint": {"status": "completed", "completedAt": "2026-04-06T00:00:00Z"},
+                    "deploy-bundle": {
+                        "status": "failed",
+                        "error": "Forbidden",
+                        "failureClass": "verification",
+                        "startedAt": "2026-04-06T00:01:00Z",
+                        "completedAt": "2026-04-06T00:02:00Z",
+                    },
+                },
+                "summary": {
+                    "totalSteps": 2,
+                    "completedSteps": 1,
+                    "failedSteps": 1,
+                    "error": "deploy failed",
+                    "runId": "wf-run-default-feature-pipeline-5-old",
+                },
+            },
+        }
+        updated = copy.deepcopy(workflow)
+        updated["status"]["phase"] = "pending"
+        updated["status"]["runId"] = "wf-run-default-feature-pipeline-5-new"
+        updated["status"]["stepStates"]["deploy-bundle"] = {
+            "status": "pending",
+            "error": None,
+            "failureClass": None,
+            "startedAt": None,
+            "completedAt": None,
+            "iterationFailures": None,
+        }
+        updated["status"]["summary"] = {
+            **updated["status"]["summary"],
+            "runId": "wf-run-default-feature-pipeline-5-new",
+            "failedSteps": 0,
+            "waitingApprovalSteps": 0,
+            "error": None,
+        }
+        self._mock_custom_objects.get_namespaced_custom_object.side_effect = [workflow, updated]
+
+        with (
+            patch.object(api_gateway_main, "ensure_namespace_access"),
+            patch.object(
+                api_gateway_main,
+                "build_retry_workflow_run_id",
+                return_value="wf-run-default-feature-pipeline-5-new",
+            ),
+            patch.object(api_gateway_main, "record_workflow_run"),
+        ):
+            result = api_gateway_main.retry_failed_workflow_steps(
+                workflow_name="feature-pipeline",
+                namespace="default",
+                user={"sub": "user-1", "namespaces": ["default"]},
+            )
+
+        patch_kwargs = self._mock_custom_objects.patch_namespaced_custom_object_status.call_args.kwargs
+        self.assertEqual(patch_kwargs["body"]["status"]["runId"], "wf-run-default-feature-pipeline-5-new")
+        self.assertEqual(
+            patch_kwargs["body"]["status"]["summary"]["runId"],
+            "wf-run-default-feature-pipeline-5-new",
+        )
+        self.assertEqual(patch_kwargs["body"]["status"]["stepStates"]["draft-blueprint"]["status"], "completed")
+        self.assertEqual(patch_kwargs["body"]["status"]["stepStates"]["deploy-bundle"]["status"], "pending")
+        self.assertEqual(result.run_id, "wf-run-default-feature-pipeline-5-new")
+        self.assertEqual(result.phase, "pending")
+
+
 class GatewayProviderModelTests(unittest.IsolatedAsyncioTestCase):
     async def test_add_copilot_model_falls_back_when_token_exchange_fails(self) -> None:
         class FakeSecret:
@@ -1826,6 +2909,115 @@ class GatewayProviderModelTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["litellm_params"]["api_key"], "gh-oauth-token")
         self.assertEqual(payload["litellm_params"]["api_base"], "https://api.githubcopilot.com")
         self.assertEqual(payload["litellm_params"]["extra_headers"], {"Copilot-Integration-Id": "vscode-chat"})
+
+
+class McpOAuthSupportTests(unittest.TestCase):
+    def tearDown(self) -> None:
+        api_gateway_main._MCP_OAUTH_PENDING_FLOWS.clear()
+
+    def test_oauth_registry_entries_reflect_attachability(self) -> None:
+        registry = {entry["id"]: entry for entry in api_gateway_main._build_mcp_registry_results()}
+
+        self.assertTrue(registry["notion-remote"]["attachable"])
+        self.assertEqual(registry["notion-remote"]["support_level"], "ready")
+        self.assertTrue(registry["gmail"]["attachable"])
+        self.assertEqual(registry["gmail"]["support_level"], "limited")
+        self.assertFalse(registry["figma"]["attachable"])
+
+    def test_serialize_saved_mcp_connection_includes_oauth_status_and_runtime_header(self) -> None:
+        connection_record = {
+            "id": "conn-gmail",
+            "namespace": "default",
+            "name": "Gmail Remote",
+            "slug": "gmail-remote",
+            "server_id": "gmail",
+            "transport": "remote",
+            "auth_type": "oauth",
+            "config": {
+                "endpoint_url": "https://mcp.example.test/mcp",
+                "client_id": "client-123",
+            },
+            "credential_metadata": [
+                {
+                    "key": "client_secret",
+                    "label": "OAuth Client Secret",
+                    "type": "password",
+                    "group": "credentials",
+                    "required": True,
+                    "configured": True,
+                }
+            ],
+            "secret_name": "mcp-conn-conn-gmail",
+            "validation": {"status": "draft", "message": "Saved but not validated yet.", "detail": None},
+        }
+        future_expiry = (datetime.now(timezone.utc) + timedelta(minutes=45)).isoformat()
+
+        with patch.object(
+            api_gateway_main,
+            "_read_mcp_connection_secret_values",
+            return_value={
+                "client_secret": "top-secret",
+                "access_token": "ya29.token",
+                "refresh_token": "refresh-token",
+                "token_type": "Bearer",
+                "expires_at": future_expiry,
+                "scope": "openid email profile https://www.googleapis.com/auth/gmail.modify",
+            },
+        ):
+            serialized = api_gateway_main._serialize_saved_mcp_connection_record(connection_record)
+
+        self.assertEqual(serialized["oauth"]["state"], "connected")
+        self.assertTrue(serialized["oauth"]["connected"])
+        runtime_headers = serialized["runtime_preview"]["headers"]
+        self.assertEqual(runtime_headers[0]["name"], "Authorization")
+        self.assertEqual(runtime_headers[0]["prefix"], "Bearer ")
+
+    def test_start_saved_mcp_connection_oauth_builds_browser_authorization_url(self) -> None:
+        connection_record = {
+            "id": "conn-gmail",
+            "namespace": "team-a",
+            "name": "Gmail Remote",
+            "slug": "gmail-remote",
+            "server_id": "gmail",
+            "transport": "remote",
+            "auth_type": "oauth",
+            "config": {
+                "endpoint_url": "https://mcp.example.test/mcp",
+                "client_id": "client-123",
+            },
+            "credential_metadata": [
+                {
+                    "key": "client_secret",
+                    "label": "OAuth Client Secret",
+                    "type": "password",
+                    "group": "credentials",
+                    "required": True,
+                    "configured": True,
+                }
+            ],
+            "secret_name": "mcp-conn-conn-gmail",
+            "validation": {"status": "draft", "message": "Saved but not validated yet.", "detail": None},
+        }
+
+        with (
+            patch.object(api_gateway_main, "ensure_namespace_access", return_value=None),
+            patch.object(api_gateway_main, "get_mcp_connection", return_value=connection_record),
+            patch.object(api_gateway_main, "_read_mcp_connection_secret_values", return_value={"client_secret": "top-secret"}),
+        ):
+            response = api_gateway_main.start_saved_mcp_connection_oauth(
+                "conn-gmail",
+                raw_request=types.SimpleNamespace(base_url="https://kubesynth.example.test/"),
+                namespace="team-a",
+                user={"sub": "user-1", "role": "operator"},
+            )
+
+        self.assertIn("https://accounts.google.com/o/oauth2/v2/auth?", response["authorization_url"])
+        self.assertIn("client_id=client-123", response["authorization_url"])
+        self.assertIn("state=", response["authorization_url"])
+        self.assertIn(
+            "redirect_uri=https%3A%2F%2Fkubesynth.example.test%2Fapi%2Fmcp%2Fconnections%2Fconn-gmail%2Foauth%2Fcallback",
+            response["authorization_url"],
+        )
 
 
 if __name__ == "__main__":

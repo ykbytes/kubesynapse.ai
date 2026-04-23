@@ -3,53 +3,40 @@ global:
     - dockerhub-regcred
 
 trustBundle:
-  enabled: true
-
-agentRuntime:
-  image:
-    repository: docker.io/yakdhane/ai-agent-runtime
-    tag: deploy-20260401-212102
-    pullPolicy: Always
+  enabled: false
 
 operator:
   replicaCount: 1
   image:
-    repository: docker.io/yakdhane/ai-operator
+    repository: docker.io/yakdhane/kubesynth-operator
     tag: deploy-20260401-225700-hotfix
     pullPolicy: Always
   workerImage:
-    repository: docker.io/yakdhane/ai-operator
+    repository: docker.io/yakdhane/kubesynth-operator
     tag: deploy-20260401-225700-hotfix
-    pullPolicy: Always
-
-gooseRuntime:
-  image:
-    repository: docker.io/yakdhane/ai-goose-runtime
-    tag: deploy-20260401-212102
-    pullPolicy: Always
-
-codexRuntime:
-  image:
-    repository: docker.io/yakdhane/ai-codex-runtime
-    tag: deploy-20260401-212102
     pullPolicy: Always
 
 opencodeRuntime:
   image:
-    repository: docker.io/yakdhane/ai-agent-sandbox-codex-runtime
+    repository: docker.io/yakdhane/ai-opencode-runtime
     tag: deploy-20260401-212102-opencode
     pullPolicy: Always
-  env:
-    OPENCODE_SESSION_INIT_ON_CREATE: "false"
-    OPENCODE_AUTONOMOUS_MAX_RETRIES: "2"
-    OPENCODE_AUTONOMOUS_MAX_TURNS: "5"
-    OPENCODE_AGENT_STEPS: "200"
-    OPENCODE_COMPACTION_TOKEN_THRESHOLD: "0.75"
-    OPENCODE_PLAN_THRESHOLD_CHARS: "99999"
+  limits:
+    maxPromptChars: 256000
+    maxSystemPromptChars: 64000
+    maxTeamContextChars: 32000
+    modelContextLimit: 256000
+    modelOutputLimit: 16384
+  autonomy:
+    sessionInitOnCreate: false
+    maxRetries: 3
+    compactionTokenThreshold: 0.7
+    planThresholdChars: 4096
+    structuredOutputRetryCount: 3
 
 apiGateway:
   image:
-    repository: docker.io/yakdhane/ai-api-gateway
+    repository: docker.io/yakdhane/kubesynth-api-gateway
     tag: deploy-20260401-212102
     pullPolicy: Always
   auth:
@@ -60,7 +47,7 @@ apiGateway:
 webUi:
   enabled: true
   image:
-    repository: docker.io/yakdhane/ai-web-ui
+    repository: docker.io/yakdhane/kubesynth-web-ui
     tag: deploy-20260401-225700-hotfix
     pullPolicy: Always
 

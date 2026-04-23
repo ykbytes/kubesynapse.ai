@@ -389,11 +389,12 @@ function ComposerCanvas({
     if (!approvalName || !token.trim()) return;
     try {
       await decideApproval(token, namespace, approvalName, decision);
+      await ws.refreshWorkspaceData({ silent: false });
       toast.success(`Workflow step ${decision}`);
     } catch (err) {
       toast.error(`Failed to ${decision === "approved" ? "approve" : "deny"}: ${err instanceof Error ? err.message : String(err)}`);
     }
-  }, [workflow?.pending_approval?.name, token, namespace]);
+  }, [workflow?.pending_approval?.name, token, namespace, ws]);
 
   // Back — warn if unsaved changes
   const handleBack = useCallback(() => {
@@ -538,7 +539,11 @@ function ComposerCanvas({
                 const state = (n.data as AgentStepNodeData)?.stepState?.status;
                 if (state === "completed") return "#22c55e";
                 if (state === "running") return "#eab308";
+                if (state === "continued") return "#f59e0b";
+                if (state === "waiting_approval") return "#f97316";
                 if (state === "failed") return "#ef4444";
+                if (state === "denied") return "#ef4444";
+                if (state === "cancelled") return "#fb923c";
                 return "oklch(0.65 0.015 274)";
               }}
               maskColor="oklch(0.145 0.008 274 / 0.7)"

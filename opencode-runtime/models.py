@@ -79,10 +79,15 @@ class InvokeRequest(BaseModel):
             raise ValueError("opencode runtime does not support direct tool_name execution")
         if self.mcp_server:
             raise ValueError("opencode runtime does not support gateway-routed mcp_server execution")
-        if self.a2a_target_agent or self.a2a_target_namespace or self.a2a_timeout_seconds is not None:
-            raise ValueError("opencode runtime does not support outbound A2A invocation")
         if self.sandbox_session is not None:
             raise ValueError("opencode runtime does not support sandbox_session continuity")
+        if self.a2a_target_agent or self.a2a_target_namespace:
+            if not self.a2a_target_agent or not self.a2a_target_namespace:
+                raise ValueError("a2a_target_agent and a2a_target_namespace must be provided together")
+            normalize_identifier(self.a2a_target_agent, source="a2a_target_agent")
+            normalize_identifier(self.a2a_target_namespace, source="a2a_target_namespace")
+        elif self.a2a_timeout_seconds is not None:
+            raise ValueError("a2a_timeout_seconds requires both a2a_target_agent and a2a_target_namespace")
         if self.caller_agent_name or self.caller_agent_namespace:
             if not self.caller_agent_name or not self.caller_agent_namespace:
                 raise ValueError("caller_agent_name and caller_agent_namespace must be provided together")

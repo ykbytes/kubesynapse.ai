@@ -35,6 +35,34 @@ from utils import build_workflow_run_id, now_iso, validate_workflow_graph, workf
 
 logger = logging.getLogger("operator.controllers.workflow")
 
+AUTO_RETRY_SPEC_FIELD = "autoRetry"
+AUTO_RETRY_FAILED_ANNOTATION = "kubesynth.ai/auto-retry-failed"
+AUTO_RETRY_LIMIT_ANNOTATION = "kubesynth.ai/auto-retry-limit"
+AUTO_RETRY_FAILURE_CLASSES_ANNOTATION = "kubesynth.ai/auto-retry-failure-classes"
+DEFAULT_AUTO_RETRY_LIMIT = 1
+DEFAULT_AUTO_RETRY_FAILURE_CLASSES = frozenset(
+    {
+        "TimeoutError",
+        "ConnectTimeout",
+        "ReadTimeout",
+        "PoolTimeout",
+        "RemoteProtocolError",
+        "ConnectError",
+        "ReadError",
+        "ApiException",
+    }
+)
+NON_RETRYABLE_FAILURE_CLASSES = frozenset({"reviewrejectederror", "approval_denied"})
+NON_RETRYABLE_ERROR_FRAGMENTS = (
+    "verification failed",
+    "did not return json output",
+    "missing required json paths",
+    "request blocked",
+    "unprocessable entity",
+    "status code 422",
+    " 422 ",
+)
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -72,6 +100,241 @@ def validate_workflow_spec(spec: dict[str, Any]) -> dict[str, Any]:
         return validate_workflow_graph(spec.get("steps") or [])
     except ValueError as exc:
         raise kopf.PermanentError(str(exc)) from exc
+
+
+def parse_bool_annotation(value: Any) -> bool:
+    normalized = str(value or "").strip().lower()
+    return normalized in {"1", "true", "yes", "on"}
+
+
+def parse_bool_value(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, (int, float)):
+        return bool(value)
+    normalized = str(value).strip().lower()
+    if not normalized:
+        return default
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def parse_int_annotation(value: Any, default: int, *, minimum: int = 0) -> int:
+    try:
+        return max(int(str(value).strip()), minimum)
+    except (TypeError, ValueError):
+        return max(default, minimum)
+
+
+def parse_int_value(value: Any, default: int, *, minimum: int = 0) -> int:
+    if value is None:
+        return max(default, minimum)
+    try:
+        return max(int(value), minimum)
+    except (TypeError, ValueError):
+        return max(default, minimum)
+
+
+def parse_csv_annotation(value: Any) -> set[str]:
+    items: set[str] = set()
+    for raw_item in str(value or "").split(","):
+        item = raw_item.strip()
+        if item:
+            items.add(item)
+    return items
+
+
+def parse_string_set(value: Any) -> set[str]:
+    if value is None:
+        return set()
+    if isinstance(value, str):
+        return parse_csv_annotation(value)
+    if isinstance(value, (list, tuple, set, frozenset)):
+        items: set[str] = set()
+        for raw_item in value:
+            item = str(raw_item).strip()
+            if item:
+                items.add(item)
+        return items
+    return parse_csv_annotation(value)
+
+
+def resolve_auto_retry_config(spec: dict[str, Any], annotations: dict[str, Any]) -> dict[str, Any]:
+    raw_config = spec.get(AUTO_RETRY_SPEC_FIELD) or {}
+    if not isinstance(raw_config, dict):
+        raw_config = {}
+
+    enabled = (
+        parse_bool_value(raw_config.get("enabled"), default=False)
+        if "enabled" in raw_config
+        else parse_bool_annotation(annotations.get(AUTO_RETRY_FAILED_ANNOTATION))
+    )
+    max_attempts = (
+        parse_int_value(raw_config.get("maxAttempts"), DEFAULT_AUTO_RETRY_LIMIT, minimum=0)
+        if "maxAttempts" in raw_config
+        else parse_int_annotation(
+            annotations.get(AUTO_RETRY_LIMIT_ANNOTATION),
+            DEFAULT_AUTO_RETRY_LIMIT,
+            minimum=0,
+        )
+    )
+    retryable_failure_classes = (
+        parse_string_set(raw_config.get("retryableFailureClasses"))
+        if "retryableFailureClasses" in raw_config
+        else parse_csv_annotation(annotations.get(AUTO_RETRY_FAILURE_CLASSES_ANNOTATION))
+    )
+    if not retryable_failure_classes:
+        retryable_failure_classes = set(DEFAULT_AUTO_RETRY_FAILURE_CLASSES)
+
+    non_retryable_failure_classes = {item.lower() for item in NON_RETRYABLE_FAILURE_CLASSES}
+    non_retryable_failure_classes.update(
+        item.lower() for item in parse_string_set(raw_config.get("nonRetryableFailureClasses"))
+    )
+
+    return {
+        "enabled": enabled,
+        "maxAttempts": max_attempts,
+        "retryableFailureClasses": retryable_failure_classes,
+        "nonRetryableFailureClasses": non_retryable_failure_classes,
+    }
+
+
+def is_non_retryable_failure(
+    failure_class: str,
+    error_text: str,
+    *,
+    non_retryable_failure_classes: set[str] | None = None,
+) -> bool:
+    normalized_class = failure_class.strip().lower()
+    blocked_classes = non_retryable_failure_classes or {item.lower() for item in NON_RETRYABLE_FAILURE_CLASSES}
+    if normalized_class in blocked_classes:
+        return True
+
+    normalized_error = error_text.strip().lower()
+    return any(fragment in normalized_error for fragment in NON_RETRYABLE_ERROR_FRAGMENTS)
+
+
+def resolve_failed_workflow_auto_retry_plan(
+    *,
+    spec: dict[str, Any],
+    status: dict[str, Any],
+    meta: dict[str, Any],
+    name: str,
+    namespace: str,
+) -> dict[str, Any] | None:
+
+    if str(status.get("phase", "") or "") != "failed":
+        return None
+
+    annotations = (meta or {}).get("annotations") or {}
+    auto_retry_config = resolve_auto_retry_config(spec, annotations)
+    if not auto_retry_config["enabled"]:
+        return None
+
+    step_states = status.get("stepStates") or {}
+    if not isinstance(step_states, dict):
+        return None
+
+    failed_steps: list[tuple[str, dict[str, Any]]] = []
+    for step_name, raw_state in step_states.items():
+        if not isinstance(raw_state, dict):
+            continue
+        step_status = str(raw_state.get("status", "") or "").strip().lower()
+        if step_status in {"failed", "denied"}:
+            failed_steps.append((str(step_name), raw_state))
+
+    if not failed_steps:
+        return None
+
+    summary = status.get("summary", {}) or {}
+    retry_limit = int(auto_retry_config["maxAttempts"])
+    auto_retry_count = parse_int_annotation(summary.get("autoRetryCount"), 0, minimum=0)
+    if auto_retry_count >= retry_limit:
+        return None
+
+    allowed_failure_classes = set(auto_retry_config["retryableFailureClasses"])
+    allowed_failure_classes_lower = {item.lower() for item in allowed_failure_classes}
+    allow_all_failure_classes = "*" in allowed_failure_classes_lower
+
+    blocked_failures: list[str] = []
+    retryable_failed_steps: list[str] = []
+    for step_name, state in failed_steps:
+        failure_class = str(state.get("failureClass") or "").strip()
+        error_text = str(state.get("error") or "").strip()
+        if is_non_retryable_failure(
+            failure_class,
+            error_text,
+            non_retryable_failure_classes=set(auto_retry_config["nonRetryableFailureClasses"]),
+        ):
+            blocked_failures.append(f"{step_name}={failure_class or 'unknown'}")
+            continue
+
+        if allow_all_failure_classes or failure_class.lower() in allowed_failure_classes_lower:
+            retryable_failed_steps.append(step_name)
+            continue
+
+        blocked_failures.append(f"{step_name}={failure_class or 'unknown'}")
+
+    if blocked_failures or not retryable_failed_steps:
+        return None
+
+    generation = int((meta or {}).get("generation", 1) or 1)
+    retry_run_id = build_workflow_run_id(namespace, name, generation)
+    retry_started_at = now_iso()
+
+    patched_step_states: dict[str, Any] = {}
+    retryable_step_set = set(retryable_failed_steps)
+    for step_name, raw_state in step_states.items():
+        if not isinstance(raw_state, dict):
+            patched_step_states[step_name] = raw_state
+            continue
+        if str(step_name) not in retryable_step_set:
+            patched_step_states[step_name] = raw_state
+            continue
+        patched_step_states[step_name] = {
+            **raw_state,
+            "status": "pending",
+            "error": None,
+            "failureClass": None,
+            "startedAt": None,
+            "completedAt": None,
+            "iterationFailures": None,
+            "planProgress": None,
+            "loopProgress": None,
+            "updatedAt": retry_started_at,
+        }
+
+    reason = (
+        "auto-retry failed steps after recoverable failures: "
+        + ", ".join(retryable_failed_steps)
+    )
+    patched_summary = {
+        **clear_summary_lifecycle_fields(summary),
+        "runId": retry_run_id,
+        "failedSteps": 0,
+        "waitingApprovalSteps": 0,
+        "error": None,
+        "updatedAt": retry_started_at,
+        "autoRetryCount": auto_retry_count + 1,
+        "lastAutoRetryAt": retry_started_at,
+        "lastAutoRetryRunId": retry_run_id,
+        "lastAutoRetryFailedSteps": retryable_failed_steps,
+        "lastAutoRetryReason": reason,
+    }
+
+    return {
+        "reason": reason,
+        "runId": retry_run_id,
+        "failedSteps": retryable_failed_steps,
+        "stepStates": patched_step_states,
+        "summary": patched_summary,
+        "autoRetryCount": auto_retry_count + 1,
+    }
 
 
 def workflow_should_requeue(status: dict[str, Any], job_state: str) -> str | None:
@@ -115,6 +378,52 @@ def workflow_should_requeue(status: dict[str, Any], job_state: str) -> str | Non
     return None
 
 
+def workflow_status_matches_generation(workflow_status: dict[str, Any], generation: int) -> bool:
+    """Return True when status and artifact state belong to the requested generation."""
+    observed_generation = int((workflow_status or {}).get("observedGeneration", 0) or 0)
+    if observed_generation == generation:
+        return True
+
+    artifact_ref = (workflow_status or {}).get("artifactRef", {}) or {}
+    artifact_generation = int(artifact_ref.get("generation", 0) or 0)
+    return artifact_generation == generation
+
+
+def resolve_workflow_run_id(
+    namespace: str,
+    workflow_name: str,
+    generation: int,
+    *,
+    workflow_status: dict[str, Any] | None = None,
+    run_id: str | None = None,
+) -> str:
+    """Resolve the run ID for a workflow enqueue.
+
+    New workflow generations must mint a fresh run ID so session-aware runtimes
+    cannot reuse stale threads. Same-generation retries may intentionally carry a
+    fresh status.runId while reusing the same artifact generation.
+    """
+    explicit_run_id = str(run_id or "").strip()
+    if explicit_run_id:
+        return explicit_run_id
+
+    current_status = workflow_status or {}
+    status_run_id = str(current_status.get("runId") or "").strip()
+    if status_run_id and workflow_status_matches_generation(current_status, generation):
+        return status_run_id
+
+    return build_workflow_run_id(namespace, workflow_name, generation)
+
+
+def clear_summary_lifecycle_fields(summary: dict[str, Any]) -> dict[str, Any]:
+    """Clear summary lifecycle fields that would otherwise survive merge patches."""
+    cleared = dict(summary or {})
+    for field_name in ("completedAt", "failedAt", "error"):
+        if field_name in cleared:
+            cleared[field_name] = None
+    return cleared
+
+
 def enqueue_workflow_job(
     spec: dict[str, Any],
     meta: dict[str, Any],
@@ -131,6 +440,7 @@ def enqueue_workflow_job(
     steps = spec.get("steps") or []
     generation = int((meta or {}).get("generation", 1))
     workflow_status = current_status or {}
+    preserve_generation_state = workflow_status_matches_generation(workflow_status, generation)
 
     # Cancel any stale worker job from a previous run before creating a new one.
     previous_job = workflow_status.get("workerJob", {}) or {}
@@ -138,14 +448,12 @@ def enqueue_workflow_job(
     if previous_job_name:
         cancel_worker_job(previous_job_name, str(previous_job.get("namespace") or OPERATOR_NAMESPACE))
 
-    resolved_run_id = (
-        run_id
-        or str(workflow_status.get("runId") or "")
-        or build_workflow_run_id(
-            namespace,
-            name,
-            generation,
-        )
+    resolved_run_id = resolve_workflow_run_id(
+        namespace,
+        name,
+        generation,
+        workflow_status=workflow_status,
+        run_id=run_id,
     )
     artifact_pvc_name = ensure_worker_artifact_storage("workflow", namespace, name)
     artifact_path = artifact_file_path("workflow", namespace, name, generation)
@@ -176,17 +484,22 @@ def enqueue_workflow_job(
         max_parallel_steps=max_parallel_steps,
     )
     existing_summary = workflow_status.get("summary", {}) or {}
+    preserved_summary = clear_summary_lifecycle_fields(existing_summary) if preserve_generation_state else {}
     summary: dict[str, Any] = {
-        **existing_summary,
+        **preserved_summary,
         "queuedAt": now_iso(),
         "updatedAt": now_iso(),
-        "completedSteps": int(existing_summary.get("completedSteps", 0) or 0),
+        "completedSteps": int(preserved_summary.get("completedSteps", 0) or 0),
         "totalSteps": len(steps),
         "rootSteps": graph.get("roots") or [],
         "runId": resolved_run_id,
     }
     if requeue_reason:
         summary["lastRequeueReason"] = requeue_reason
+
+    current_step = str(workflow_status.get("currentStep", "") or "") if preserve_generation_state else ""
+    pending_approval = workflow_status.get("pendingApproval") if preserve_generation_state else None
+    step_states = workflow_status.get("stepStates", {}) or {} if preserve_generation_state else {}
 
     patch_custom_status(
         "agentworkflows",
@@ -196,7 +509,7 @@ def enqueue_workflow_job(
             {
                 "phase": "queued",
                 "runId": resolved_run_id,
-                "currentStep": str(workflow_status.get("currentStep", "") or ""),
+                "currentStep": current_step,
                 "observedGeneration": generation,
                 "artifactRef": build_artifact_ref(
                     artifact_pvc_name,
@@ -207,8 +520,8 @@ def enqueue_workflow_job(
                 "journalRef": build_journal_ref(artifact_pvc_name, journal_path, generation),
                 "workerJob": {"name": job_name, "namespace": OPERATOR_NAMESPACE},
                 "summary": summary,
-                "pendingApproval": None,
-                "stepStates": workflow_status.get("stepStates", {}) or {},
+                "pendingApproval": pending_approval,
+                "stepStates": step_states,
             }
         ),
     )
@@ -295,7 +608,7 @@ def run_workflow(
                     {
                         **current_status,
                         "summary": {
-                            **(current_status.get("summary", {}) or {}),
+                            **clear_summary_lifecycle_fields(current_status.get("summary", {}) or {}),
                             "totalSteps": len(steps),
                             "rootSteps": graph.get("roots") or [],
                             "updatedAt": now_iso(),
@@ -346,15 +659,68 @@ def run_workflow_watchdog(
         str(worker_job.get("namespace") or OPERATOR_NAMESPACE),
     )
     reason = workflow_should_requeue(current_status, job_state)
-    if reason is None:
+    if reason is not None:
+        logger.warning(
+            "Workflow '%s/%s' will be re-enqueued by watchdog: %s",
+            namespace,
+            name,
+            reason,
+        )
+        execute_reconcile(
+            lambda: enqueue_workflow_job(
+                spec,
+                meta,
+                name,
+                namespace,
+                logger,
+                current_status=current_status,
+                run_id=str(current_status.get("runId") or "") or None,
+                requeue_reason=reason,
+            ),
+            logger=logger,
+            action="watchdog-requeue-workflow",
+            resource_kind="AgentWorkflow",
+            name=name,
+            namespace=namespace,
+            meta=meta,
+            default_delay=10,
+            retry=retry,
+            start_message="Re-enqueueing stale AgentWorkflow from watchdog.",
+            success_message="Watchdog re-enqueued AgentWorkflow.",
+            reason=reason,
+            phase=str(current_status.get("phase", "") or ""),
+            workerJob=current_status.get("workerJob", {}) or {},
+            jobState=job_state,
+        )
+        return
+
+    auto_retry_plan = resolve_failed_workflow_auto_retry_plan(
+        spec=spec,
+        status=current_status,
+        meta=meta,
+        name=name,
+        namespace=namespace,
+    )
+    if auto_retry_plan is None:
         return
 
     logger.warning(
-        "Workflow '%s/%s' will be re-enqueued by watchdog: %s",
+        "Workflow '%s/%s' will auto-retry failed steps: %s",
         namespace,
         name,
-        reason,
+        auto_retry_plan["reason"],
     )
+
+    retry_status = {
+        **current_status,
+        "phase": "pending",
+        "runId": auto_retry_plan["runId"],
+        "observedGeneration": None,
+        "pendingApproval": None,
+        "stepStates": auto_retry_plan["stepStates"],
+        "summary": auto_retry_plan["summary"],
+    }
+
     execute_reconcile(
         lambda: enqueue_workflow_job(
             spec,
@@ -362,24 +728,26 @@ def run_workflow_watchdog(
             name,
             namespace,
             logger,
-            current_status=current_status,
-            run_id=str(current_status.get("runId") or "") or None,
-            requeue_reason=reason,
+            current_status=retry_status,
+            run_id=str(auto_retry_plan["runId"]),
+            requeue_reason=str(auto_retry_plan["reason"]),
         ),
         logger=logger,
-        action="watchdog-requeue-workflow",
+        action="watchdog-auto-retry-failed-workflow",
         resource_kind="AgentWorkflow",
         name=name,
         namespace=namespace,
         meta=meta,
         default_delay=10,
         retry=retry,
-        start_message="Re-enqueueing stale AgentWorkflow from watchdog.",
-        success_message="Watchdog re-enqueued AgentWorkflow.",
-        reason=reason,
+        start_message="Auto-retrying recoverable AgentWorkflow failures.",
+        success_message="Watchdog auto-retried failed AgentWorkflow steps.",
+        reason=auto_retry_plan["reason"],
         phase=str(current_status.get("phase", "") or ""),
         workerJob=current_status.get("workerJob", {}) or {},
         jobState=job_state,
+        failedSteps=auto_retry_plan["failedSteps"],
+        autoRetryCount=auto_retry_plan["autoRetryCount"],
     )
 
 

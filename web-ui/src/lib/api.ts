@@ -1,5 +1,7 @@
 import { fetchEventSource } from "@microsoft/fetch-event-source";
 
+import { SYSTEM_PROMPT_MAX_CHARS } from "./agentPrompt";
+
 import type {
   A2AInvocationMetadata,
   A2APeerRef,
@@ -31,6 +33,7 @@ import type {
   EvalPayload,
   EvalTestCase,
   EvalUpdatePayload,
+  FactoryMode,
   GatewayHealth,
   GitCredentialInfo,
   GitCredentialRequest,
@@ -48,6 +51,22 @@ import type {
   ModelSuggestion,
   McpHubServer,
   McpToolCategory,
+  McpRegistryServer,
+  McpProfile,
+  McpProfileServer,
+  McpCategory,
+  McpConnection,
+  McpConnectionBinding,
+  McpConnectionCredentialField,
+  McpConnectionOAuth,
+  McpConnectionOAuthStart,
+  McpConnectionRuntimeHeader,
+  McpConnectionRuntimePreview,
+  McpConnectionRuntimeSidecar,
+  McpConnectionValidation,
+  McpConnectionValidationStatus,
+  McpStats,
+  McpSupportLevel,
   PolicyInfo,
   PolicyInputGuardrails,
   PolicyMemoryPolicy,
@@ -69,6 +88,7 @@ import type {
   WorkflowStepState,
   WorkflowSummary,
   WorkflowUpdatePayload,
+  AgentMcpConnection,
 } from "../types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL?.trim() ?? "";
@@ -104,15 +124,79 @@ export function isApiError(err: unknown): err is ApiError {
   return err instanceof ApiError;
 }
 
+const HTML_ERROR_MARKUP_RE = /<(?:!doctype\s+html|html|body|title|h1)\b/i;
+const HTML_TITLE_RE = /<title[^>]*>([\s\S]*?)<\/title>/i;
+const HTML_H1_RE = /<h1[^>]*>([\s\S]*?)<\/h1>/i;
+const HTML_TAG_RE = /<[^>]+>/g;
+const ERROR_WHITESPACE_RE = /\s+/g;
+const MAX_ERROR_MESSAGE_CHARS = 400;
+
+function normalizeErrorWhitespace(value: string): string {
+  return value.replace(ERROR_WHITESPACE_RE, " ").trim();
+}
+
+function clampErrorMessage(value: string, fallback: string): string {
+  const normalized = normalizeErrorWhitespace(value);
+  if (!normalized) return fallback;
+  if (normalized.length <= MAX_ERROR_MESSAGE_CHARS) return normalized;
+  return `${normalized.slice(0, MAX_ERROR_MESSAGE_CHARS - 3)}...`;
+}
+
+function decodeHtmlEntities(value: string): string {
+  if (typeof document === "undefined") {
+    return value
+      .replace(/&nbsp;/gi, " ")
+      .replace(/&amp;/gi, "&")
+      .replace(/&lt;/gi, "<")
+      .replace(/&gt;/gi, ">")
+      .replace(/&quot;/gi, '"')
+      .replace(/&#39;/gi, "'");
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.innerHTML = value;
+  return textarea.value;
+}
+
+function extractHtmlErrorHeadline(value: string): string | null {
+  for (const pattern of [HTML_TITLE_RE, HTML_H1_RE]) {
+    const match = pattern.exec(value);
+    if (!match?.[1]) continue;
+    const decoded = normalizeErrorWhitespace(decodeHtmlEntities(match[1].replace(HTML_TAG_RE, " ")));
+    if (decoded) return decoded;
+  }
+  return null;
+}
+
+export function sanitizeErrorMessage(value: string | null | undefined, fallback = "Request failed."): string {
+  const trimmed = value?.trim() ?? "";
+  if (!trimmed) return fallback;
+
+  if (HTML_ERROR_MARKUP_RE.test(trimmed)) {
+    const headline = extractHtmlErrorHeadline(trimmed);
+    if (headline) {
+      return clampErrorMessage(`Upstream service error: ${headline}`, fallback);
+    }
+
+    const plainText = normalizeErrorWhitespace(decodeHtmlEntities(trimmed.replace(HTML_TAG_RE, " ")));
+    if (plainText) {
+      return clampErrorMessage(`Upstream service error: ${plainText}`, fallback);
+    }
+    return fallback;
+  }
+
+  return clampErrorMessage(trimmed, fallback);
+}
+
 export function apiErrorMessage(err: unknown): string {
-  if (err instanceof ApiError) return err.detail || err.message;
-  if (err instanceof Error) return err.message;
-  return String(err);
+  if (err instanceof ApiError) return sanitizeErrorMessage(err.detail || err.message, "Request failed.");
+  if (err instanceof Error) return sanitizeErrorMessage(err.message, "Request failed.");
+  return sanitizeErrorMessage(String(err), "Request failed.");
 }
 
 function formatApiErrorDetail(detail: unknown): string {
   if (typeof detail === "string") {
-    return detail;
+    return sanitizeErrorMessage(detail, "Request failed.");
   }
   if (Array.isArray(detail)) {
     const parts = detail
@@ -122,6 +206,10 @@ function formatApiErrorDetail(detail: unknown): string {
             ? item.loc.filter((segment): segment is string | number => typeof segment === "string" || typeof segment === "number").join(".")
             : "";
           const msg = typeof item.msg === "string" ? item.msg : "Validation error";
+          const normalizedPath = path.replace(/^body\./, "");
+          if (normalizedPath === "system_prompt" && /at most\s+\d+\s+characters/i.test(msg)) {
+            return `System prompt must be ${SYSTEM_PROMPT_MAX_CHARS} characters or fewer. Shorten it before saving.`;
+          }
           return path ? `${path}: ${msg}` : msg;
         }
         return typeof item === "string" ? item : "Validation error";
@@ -352,6 +440,71 @@ function readOptionalRecord(record: JsonRecord, key: string, label: string): Jso
   return expectRecord(value, `${label}.${key}`);
 }
 
+function readOptionalRecordArray(record: JsonRecord, key: string, label: string): JsonRecord[] | null {
+  const value = record[key];
+  if (value === undefined || value === null) {
+    return null;
+  }
+  if (!Array.isArray(value)) {
+    throw new Error(`${label}.${key} must be an array when present.`);
+  }
+  return value.map((item, index) => expectRecord(item, `${label}.${key}[${index}]`));
+}
+
+function normalizeWorkflowStepStatus(status: string | null | undefined): string {
+  const normalized = status?.trim().toLowerCase() ?? "";
+  switch (normalized) {
+    case "":
+      return "pending";
+    case "succeeded":
+      return "completed";
+    case "waiting-approval":
+    case "waitingapproval":
+    case "waiting approval":
+      return "waiting_approval";
+    default:
+      return normalized;
+  }
+}
+
+function parseWorkflowStepStatePayload(
+  payload: unknown,
+  fallbackStepName: string,
+  label = "WorkflowStepState",
+): WorkflowStepState {
+  const record = expectRecord(payload, label);
+  const warnings = record.warnings === undefined || record.warnings === null
+    ? null
+    : readStringArray(record, "warnings", label);
+
+  return {
+    stepName: readString(record, "stepName", label, fallbackStepName),
+    agentRef: readString(record, "agentRef", label, ""),
+    status: normalizeWorkflowStepStatus(readString(record, "status", label, "pending")),
+    attempts: readOptionalNumber(record, "attempts", label) ?? undefined,
+    startedAt: readOptionalString(record, "startedAt", label),
+    completedAt: readOptionalString(record, "completedAt", label),
+    updatedAt: readOptionalString(record, "updatedAt", label),
+    latencyMs: readOptionalNumber(record, "latencyMs", label),
+    error: readOptionalString(record, "error", label),
+    failureClass: readOptionalString(record, "failureClass", label),
+    approvalWaitMs: readOptionalNumber(record, "approvalWaitMs", label),
+    workerJob: readOptionalRecord(record, "workerJob", label),
+    execution: readOptionalRecord(record, "execution", label),
+    loopProgress: readOptionalRecord(record, "loopProgress", label) as WorkflowStepState["loopProgress"],
+    planProgress: readOptionalRecord(record, "planProgress", label) as WorkflowStepState["planProgress"],
+    verificationResult: readOptionalRecord(record, "verificationResult", label) as WorkflowStepState["verificationResult"],
+    reviewResult: readOptionalRecord(record, "reviewResult", label) as WorkflowStepState["reviewResult"],
+    iterationFailures: readOptionalRecordArray(record, "iterationFailures", label) as WorkflowStepState["iterationFailures"],
+    responsePreview: readOptionalString(record, "responsePreview", label),
+    artifactCount: readOptionalNumber(record, "artifactCount", label),
+    toolCallCount: readOptionalNumber(record, "toolCallCount", label),
+    artifacts: readOptionalRecordArray(record, "artifacts", label) as WorkflowStepState["artifacts"],
+    toolCalls: readOptionalRecordArray(record, "toolCalls", label) as WorkflowStepState["toolCalls"],
+    warnings,
+  };
+}
+
 function readOptionalJsonValue(record: JsonRecord, key: string): unknown {
   const value = record[key];
   return value === undefined ? null : value;
@@ -368,8 +521,8 @@ function readRecord(record: JsonRecord, key: string, label: string, fallback: Js
 function readRuntimeKind(record: JsonRecord, key: string, label: string, fallback?: RuntimeKind): RuntimeKind {
   const value = record[key];
   const runtimeKind = value === undefined && fallback !== undefined ? fallback : value;
-  if (runtimeKind !== "langgraph" && runtimeKind !== "goose" && runtimeKind !== "codex" && runtimeKind !== "opencode") {
-    throw new Error(`${label}.${key} must be 'langgraph', 'goose', 'codex', or 'opencode'.`);
+  if (runtimeKind !== "opencode") {
+    throw new Error(`${label}.${key} must be 'opencode'.`);
   }
   return runtimeKind;
 }
@@ -461,6 +614,181 @@ function parseGitHubConfigPayload(payload: unknown, label: string): GitHubConfig
   };
 }
 
+function parseMcpConnectionValidationStatus(
+  value: string,
+  label: string,
+): McpConnectionValidationStatus {
+  if (value === "draft" || value === "valid" || value === "warning" || value === "invalid") {
+    return value;
+  }
+  throw new Error(`${label} must be draft, valid, warning, or invalid.`);
+}
+
+function parseMcpConnectionOAuthState(
+  value: string,
+  label: string,
+): McpConnectionOAuth["state"] {
+  if (value === "required" || value === "connected" || value === "expired") {
+    return value;
+  }
+  throw new Error(`${label} must be required, connected, or expired.`);
+}
+
+function parseMcpConnectionCredentialFieldPayload(
+  payload: unknown,
+  label: string,
+): McpConnectionCredentialField {
+  const record = expectRecord(payload, label);
+  return {
+    key: readString(record, "key", label),
+    label: readString(record, "label", label),
+    type: readString(record, "type", label),
+    group: readString(record, "group", label, "credentials"),
+    required: readBoolean(record, "required", label, false),
+    configured: readBoolean(record, "configured", label, false),
+  };
+}
+
+function parseMcpConnectionValidationPayload(payload: unknown, label: string): McpConnectionValidation {
+  const record = expectRecord(payload, label);
+  return {
+    status: parseMcpConnectionValidationStatus(readString(record, "status", label, "draft"), `${label}.status`),
+    message: readOptionalString(record, "message", label),
+    detail: readOptionalRecord(record, "detail", label),
+    last_validated_at: readOptionalString(record, "last_validated_at", label),
+  };
+}
+
+function parseMcpConnectionRuntimeHeaderPayload(payload: unknown, label: string): McpConnectionRuntimeHeader {
+  const record = expectRecord(payload, label);
+  return {
+    name: readString(record, "name", label),
+    envVar: readOptionalString(record, "envVar", label),
+    prefix: readOptionalString(record, "prefix", label),
+  };
+}
+
+function parseMcpConnectionRuntimeSidecarPayload(payload: unknown, label: string): McpConnectionRuntimeSidecar {
+  const record = expectRecord(payload, label);
+  return {
+    name: readString(record, "name", label),
+    image: readString(record, "image", label),
+    port: readNumber(record, "port", label),
+    endpointPath: readOptionalString(record, "endpointPath", label),
+    env: record.env === undefined ? [] : readRecordArray(record, "env", label),
+  };
+}
+
+function parseMcpConnectionRuntimePreviewPayload(payload: unknown, label: string): McpConnectionRuntimePreview {
+  const record = expectRecord(payload, label);
+  const kind = readString(record, "kind", label);
+  if (kind !== "remote" && kind !== "sidecar") {
+    throw new Error(`${label}.kind must be remote or sidecar.`);
+  }
+  const rawHeaders = record.headers;
+  if (rawHeaders !== undefined && !Array.isArray(rawHeaders)) {
+    throw new Error(`${label}.headers must be an array when present.`);
+  }
+  return {
+    kind,
+    configKey: readString(record, "configKey", label),
+    url: readOptionalString(record, "url", label),
+    headers: (rawHeaders ?? []).map((item, index) =>
+      parseMcpConnectionRuntimeHeaderPayload(item, `${label}.headers[${index}]`),
+    ),
+    sidecar:
+      record.sidecar === undefined || record.sidecar === null
+        ? null
+        : parseMcpConnectionRuntimeSidecarPayload(record.sidecar, `${label}.sidecar`),
+  };
+}
+
+function parseMcpConnectionOAuthPayload(payload: unknown, label: string): McpConnectionOAuth {
+  const record = expectRecord(payload, label);
+  return {
+    connected: readBoolean(record, "connected", label, false),
+    state: parseMcpConnectionOAuthState(readString(record, "state", label), `${label}.state`),
+    expires_at: readOptionalString(record, "expires_at", label),
+    refresh_available: readBoolean(record, "refresh_available", label, false),
+    scope: readStringArray(record, "scope", label, []),
+  };
+}
+
+function parseMcpConnectionPayload(payload: unknown, label = "McpConnection"): McpConnection {
+  const record = expectRecord(payload, label);
+  const rawCredentialMetadata = record.credential_metadata;
+  if (rawCredentialMetadata !== undefined && !Array.isArray(rawCredentialMetadata)) {
+    throw new Error(`${label}.credential_metadata must be an array.`);
+  }
+  return {
+    id: readString(record, "id", label),
+    namespace: readString(record, "namespace", label),
+    name: readString(record, "name", label),
+    slug: readString(record, "slug", label),
+    server_id: readString(record, "server_id", label),
+    server_name: readOptionalString(record, "server_name", label),
+    transport: readString(record, "transport", label) as McpConnection["transport"],
+    auth_type: readString(record, "auth_type", label) as McpConnection["auth_type"],
+    config: readRecord(record, "config", label),
+    credential_metadata: (rawCredentialMetadata ?? []).map((item, index) =>
+      parseMcpConnectionCredentialFieldPayload(item, `${label}.credential_metadata[${index}]`),
+    ),
+    validation: parseMcpConnectionValidationPayload(record.validation ?? {}, `${label}.validation`),
+    support_level: parseMcpSupportLevel(readString(record, "support_level", label), `${label}.support_level`),
+    attachable: readBoolean(record, "attachable", label, false),
+    status_reason: readOptionalString(record, "status_reason", label),
+    runtime_preview:
+      record.runtime_preview === undefined || record.runtime_preview === null
+        ? null
+        : parseMcpConnectionRuntimePreviewPayload(record.runtime_preview, `${label}.runtime_preview`),
+    oauth:
+      record.oauth === undefined || record.oauth === null
+        ? null
+        : parseMcpConnectionOAuthPayload(record.oauth, `${label}.oauth`),
+    binding_count: readNumber(record, "binding_count", label),
+    created_at: readOptionalString(record, "created_at", label),
+    updated_at: readOptionalString(record, "updated_at", label),
+  };
+}
+
+function parseMcpConnectionBindingPayload(payload: unknown, label = "McpConnectionBinding"): McpConnectionBinding {
+  const record = expectRecord(payload, label);
+  return {
+    agent_name: readString(record, "agent_name", label),
+    namespace: readString(record, "namespace", label),
+    connection_id: readString(record, "connection_id", label),
+    connection_name: readString(record, "connection_name", label),
+    server_id: readString(record, "server_id", label),
+    transport: readString(record, "transport", label),
+  };
+}
+
+function parseAgentMcpConnectionPayload(payload: unknown, label = "AgentMcpConnection"): AgentMcpConnection {
+  const record = expectRecord(payload, label);
+  const rawCredentialMetadata = record.credentialMetadata;
+  if (rawCredentialMetadata !== undefined && !Array.isArray(rawCredentialMetadata)) {
+    throw new Error(`${label}.credentialMetadata must be an array.`);
+  }
+  return {
+    connection_id: readOptionalString(record, "connectionId", label),
+    name: readString(record, "name", label),
+    slug: readString(record, "slug", label),
+    server_id: readString(record, "serverId", label),
+    server_name: readOptionalString(record, "serverName", label),
+    transport: readString(record, "transport", label) as AgentMcpConnection["transport"],
+    support_level: parseMcpSupportLevel(readString(record, "supportLevel", label), `${label}.supportLevel`),
+    attachable: readBoolean(record, "attachable", label, false),
+    status_reason: readOptionalString(record, "statusReason", label),
+    source: readString(record, "source", label, "saved"),
+    config: readRecord(record, "config", label),
+    credential_metadata: (rawCredentialMetadata ?? []).map((item, index) =>
+      parseMcpConnectionCredentialFieldPayload(item, `${label}.credentialMetadata[${index}]`),
+    ),
+    validation: parseMcpConnectionValidationPayload(record.validation ?? {}, `${label}.validation`),
+    runtime: parseMcpConnectionRuntimePreviewPayload(record.runtime ?? {}, `${label}.runtime`),
+  };
+}
+
 function parseAgentSkillSummaryPayload(payload: unknown, label: string): AgentSkillSummary {
   const record = expectRecord(payload, label);
   return {
@@ -472,9 +800,6 @@ function parseAgentSkillSummaryPayload(payload: unknown, label: string): AgentSk
     allowed_mcp_servers: readStringArray(record, "allowed_mcp_servers", label, []),
     allowed_a2a_targets: parseA2APeerRefArrayPayload(record.allowed_a2a_targets ?? [], `${label}.allowed_a2a_targets`),
     allow_subagents: readBoolean(record, "allow_subagents", label, false),
-    goose_builtin_extensions: readStringArray(record, "goose_builtin_extensions", label, []),
-    goose_stdio_extensions: readStringArray(record, "goose_stdio_extensions", label, []),
-    goose_streamable_http_extensions: readStringArray(record, "goose_streamable_http_extensions", label, []),
     valid: readBoolean(record, "valid", label, true),
     warnings: readStringArray(record, "warnings", label, []),
   };
@@ -597,16 +922,23 @@ function parseAgentDetailPayload(payload: unknown): AgentDetail {
   const base = parseAgentInfoPayload(payload, "AgentDetail");
   const record = expectRecord(payload, "AgentDetail");
   const rawSkillSummaries = record.skill_summaries;
+  const rawMcpConnections = record.mcp_connections;
   if (rawSkillSummaries !== undefined && !Array.isArray(rawSkillSummaries)) {
     throw new Error("AgentDetail.skill_summaries must be an array.");
+  }
+  if (rawMcpConnections !== undefined && !Array.isArray(rawMcpConnections)) {
+    throw new Error("AgentDetail.mcp_connections must be an array.");
   }
   return {
     ...base,
     system_prompt: readString(record, "system_prompt", "AgentDetail", ""),
     policy_ref: readOptionalString(record, "policy_ref", "AgentDetail"),
     storage_size: readOptionalString(record, "storage_size", "AgentDetail"),
-    runtime_kind: readRuntimeKind(record, "runtime_kind", "AgentDetail", "langgraph"),
+    runtime_kind: readRuntimeKind(record, "runtime_kind", "AgentDetail", "opencode"),
     enable_gvisor: readBoolean(record, "enable_gvisor", "AgentDetail", false),
+    mcp_connections: (rawMcpConnections ?? []).map((item, index) =>
+      parseAgentMcpConnectionPayload(item, `AgentDetail.mcp_connections[${index}]`),
+    ),
     mcp_servers: readStringArray(record, "mcp_servers", "AgentDetail"),
     mcp_sidecars: readRecordArray(record, "mcp_sidecars", "AgentDetail"),
     a2a_config: parseAgentA2AConfigPayload(record.a2a_config, "AgentDetail.a2a_config"),
@@ -614,7 +946,6 @@ function parseAgentDetailPayload(payload: unknown): AgentDetail {
     skill_summaries: (rawSkillSummaries ?? []).map((item, index) =>
       parseAgentSkillSummaryPayload(item, `AgentDetail.skill_summaries[${index}]`),
     ),
-    goose_config_files: readRecord(record, "goose_config_files", "AgentDetail"),
     opencode_config_files: readRecord(record, "opencode_config_files", "AgentDetail"),
     git_config: parseGitConfigPayload(record.git_config, "AgentDetail.git_config"),
     github_config: parseGitHubConfigPayload(record.github_config, "AgentDetail.github_config"),
@@ -679,6 +1010,7 @@ function parseAuthProviderSummaryPayload(payload: unknown, label: string): AuthP
     id: readString(record, "id", label),
     name: readString(record, "name", label),
     kind: readString(record, "kind", label),
+    brand: readOptionalString(record, "brand", label) ?? undefined,
     supported: readOptionalBoolean(record, "supported", label) ?? undefined,
   };
 }
@@ -794,6 +1126,7 @@ function parseWorkflowStepPayload(payload: unknown, label = "WorkflowStep"): Wor
 
 function parseWorkflowInfoPayload(payload: unknown, label = "WorkflowInfo"): WorkflowInfo {
   const record = expectRecord(payload, label);
+  const rawStepStates = readOptionalRecord(record, "step_states", label);
   return {
     name: readString(record, "name", label),
     namespace: readString(record, "namespace", label),
@@ -828,7 +1161,14 @@ function parseWorkflowInfoPayload(payload: unknown, label = "WorkflowInfo"): Wor
       return null;
     })(),
     run_id: readOptionalString(record, "run_id", label),
-    step_states: readOptionalRecord(record, "step_states", label) as Record<string, WorkflowStepState> | null,
+    step_states: rawStepStates
+      ? Object.fromEntries(
+          Object.entries(rawStepStates).map(([stepName, state]) => [
+            stepName,
+            parseWorkflowStepStatePayload(state, stepName, `${label}.step_states.${stepName}`),
+          ]),
+        )
+      : null,
     worker_job: readOptionalRecord(record, "worker_job", label),
     created_at: readOptionalString(record, "created_at", label),
   };
@@ -889,9 +1229,102 @@ function parseWorkflowLogsResponsePayload(payload: unknown): WorkflowLogsRespons
   const record = expectRecord(payload, "WorkflowLogsResponse");
   return {
     workflow_name: readString(record, "workflow_name", "WorkflowLogsResponse"),
+    run_id: readOptionalString(record, "run_id", "WorkflowLogsResponse"),
     job_name: readOptionalString(record, "job_name", "WorkflowLogsResponse") ?? undefined,
     pod_name: readOptionalString(record, "pod_name", "WorkflowLogsResponse") ?? undefined,
+    source: readOptionalString(record, "source", "WorkflowLogsResponse") ?? undefined,
+    archived_log_available: readOptionalBoolean(record, "archived_log_available", "WorkflowLogsResponse") ?? undefined,
+    archived_log_source: readOptionalString(record, "archived_log_source", "WorkflowLogsResponse"),
+    archived_log_truncated: readOptionalBoolean(record, "archived_log_truncated", "WorkflowLogsResponse") ?? undefined,
+    archived_log_captured_at: readOptionalString(record, "archived_log_captured_at", "WorkflowLogsResponse"),
     logs: readString(record, "logs", "WorkflowLogsResponse", ""),
+  };
+}
+
+function parseWorkflowRunRecordPayload(payload: unknown, label = "WorkflowRunRecord"): WorkflowRunRecord {
+  const record = expectRecord(payload, label);
+  return {
+    id: readNumber(record, "id", label),
+    run_id: readOptionalString(record, "run_id", label),
+    phase: readString(record, "phase", label, "pending"),
+    total_steps: readOptionalNumber(record, "total_steps", label),
+    completed_steps: readOptionalNumber(record, "completed_steps", label),
+    failed_steps: readOptionalNumber(record, "failed_steps", label),
+    started_at: readOptionalString(record, "started_at", label),
+    completed_at: readOptionalString(record, "completed_at", label),
+    triggered_by: readOptionalString(record, "triggered_by", label),
+    input_text: readOptionalString(record, "input_text", label),
+    created_at: readOptionalString(record, "created_at", label),
+    trace_available: readOptionalBoolean(record, "trace_available", label) ?? false,
+    archived_log_available: readOptionalBoolean(record, "archived_log_available", label) ?? false,
+    journal_available: readOptionalBoolean(record, "journal_available", label) ?? false,
+  };
+}
+
+export interface WorkflowRunTraceResponse {
+  workflow_name: string;
+  namespace: string;
+  history_id: number | null;
+  run_id: string;
+  phase: string | null;
+  source: string;
+  logs: string;
+  pod_name?: string;
+  worker_job_name?: string;
+  workflow: WorkflowInfo;
+  summary: Record<string, unknown> | null;
+  step_states: Record<string, WorkflowStepState> | null;
+  triggered_by: string | null;
+  input_text: string | null;
+  artifact_path: string | null;
+  journal_path: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  completed_at: string | null;
+  archived_log_available: boolean;
+  archived_log_source: string | null;
+  archived_log_truncated: boolean;
+  archived_log_captured_at: string | null;
+  live_log_error: string | null;
+}
+
+function parseWorkflowRunTraceResponsePayload(payload: unknown): WorkflowRunTraceResponse {
+  const record = expectRecord(payload, "WorkflowRunTraceResponse");
+  const rawStepStates = readOptionalRecord(record, "step_states", "WorkflowRunTraceResponse");
+  const parsedStepStates = rawStepStates
+    ? Object.fromEntries(
+        Object.entries(rawStepStates).map(([stepName, state]) => [
+          stepName,
+          parseWorkflowStepStatePayload(state, stepName, `WorkflowRunTraceResponse.step_states.${stepName}`),
+        ]),
+      )
+    : null;
+
+  return {
+    workflow_name: readString(record, "workflow_name", "WorkflowRunTraceResponse"),
+    namespace: readString(record, "namespace", "WorkflowRunTraceResponse"),
+    history_id: readOptionalNumber(record, "history_id", "WorkflowRunTraceResponse"),
+    run_id: readString(record, "run_id", "WorkflowRunTraceResponse"),
+    phase: readOptionalString(record, "phase", "WorkflowRunTraceResponse"),
+    source: readString(record, "source", "WorkflowRunTraceResponse", "unavailable"),
+    logs: readString(record, "logs", "WorkflowRunTraceResponse", ""),
+    pod_name: readOptionalString(record, "pod_name", "WorkflowRunTraceResponse") ?? undefined,
+    worker_job_name: readOptionalString(record, "worker_job_name", "WorkflowRunTraceResponse") ?? undefined,
+    workflow: parseWorkflowInfoPayload(record.workflow, "WorkflowRunTraceResponse.workflow"),
+    summary: readOptionalRecord(record, "summary", "WorkflowRunTraceResponse"),
+    step_states: parsedStepStates,
+    triggered_by: readOptionalString(record, "triggered_by", "WorkflowRunTraceResponse"),
+    input_text: readOptionalString(record, "input_text", "WorkflowRunTraceResponse"),
+    artifact_path: readOptionalString(record, "artifact_path", "WorkflowRunTraceResponse"),
+    journal_path: readOptionalString(record, "journal_path", "WorkflowRunTraceResponse"),
+    created_at: readOptionalString(record, "created_at", "WorkflowRunTraceResponse"),
+    updated_at: readOptionalString(record, "updated_at", "WorkflowRunTraceResponse"),
+    completed_at: readOptionalString(record, "completed_at", "WorkflowRunTraceResponse"),
+    archived_log_available: readBoolean(record, "archived_log_available", "WorkflowRunTraceResponse", false),
+    archived_log_source: readOptionalString(record, "archived_log_source", "WorkflowRunTraceResponse"),
+    archived_log_truncated: readBoolean(record, "archived_log_truncated", "WorkflowRunTraceResponse", false),
+    archived_log_captured_at: readOptionalString(record, "archived_log_captured_at", "WorkflowRunTraceResponse"),
+    live_log_error: readOptionalString(record, "live_log_error", "WorkflowRunTraceResponse"),
   };
 }
 
@@ -2066,10 +2499,14 @@ export async function triggerWorkflow(
   namespace: string,
   workflowName: string,
   input?: string,
+  factoryMode?: FactoryMode,
 ): Promise<WorkflowInfo> {
   const payload: Record<string, unknown> = {};
   if (input !== undefined) {
     payload.input = input;
+  }
+  if (factoryMode !== undefined) {
+    payload.factory_mode = factoryMode;
   }
   const response = await fetchAuthenticated(buildUrl(`/api/workflows/${workflowName}/trigger`, namespace), token, {
     method: "POST",
@@ -2126,6 +2563,9 @@ export interface WorkflowRunRecord {
   triggered_by: string | null;
   input_text: string | null;
   created_at: string | null;
+  trace_available: boolean;
+  archived_log_available: boolean;
+  journal_available: boolean;
 }
 
 export async function fetchWorkflowRuns(
@@ -2140,8 +2580,43 @@ export async function fetchWorkflowRuns(
   );
   return parseJsonResponse(response, (payload) => {
     if (!Array.isArray(payload)) throw new Error("Expected array of workflow runs");
-    return payload as WorkflowRunRecord[];
+    return payload.map((item, index) => parseWorkflowRunRecordPayload(item, `WorkflowRunRecord[${index}]`));
   });
+}
+
+export async function fetchWorkflowRunTrace(
+  token: string,
+  namespace: string,
+  workflowName: string,
+  runId: string,
+  tail = 4000,
+): Promise<WorkflowRunTraceResponse> {
+  const url = buildUrl(`/api/workflows/${workflowName}/runs/${runId}/trace`, namespace);
+  const fullUrl = `${url}${url.includes("?") ? "&" : "?"}tail=${tail}`;
+  const response = await fetchAuthenticated(fullUrl, token);
+  return parseJsonResponse(response, parseWorkflowRunTraceResponsePayload);
+}
+
+export async function downloadWorkflowRunTraceExport(
+  token: string,
+  namespace: string,
+  workflowName: string,
+  runId: string,
+): Promise<void> {
+  const response = await fetchAuthenticated(
+    buildUrl(`/api/workflows/${workflowName}/runs/${runId}/export`, namespace),
+    token,
+  );
+  if (!response.ok) {
+    const text = await response.text();
+    throw new ApiError(response.status, "Failed to export workflow run trace", text);
+  }
+  const blob = await response.blob();
+  const filename = extractFilenameFromDisposition(
+    response.headers.get("content-disposition"),
+    `${workflowName}-${runId}-trace.json`,
+  );
+  triggerBrowserDownload(blob, filename);
 }
 
 export async function fetchWorkflowNextAction(
@@ -2363,7 +2838,15 @@ export async function streamAgentInvoke(options: StreamHandlers): Promise<void> 
     openWhenHidden: true,
     async onopen(response) {
       if (!response.ok) {
-        throw new Error(`Streaming request failed with status ${response.status}`);
+        const detail = sanitizeErrorMessage(
+          await response.text(),
+          `Streaming request failed with status ${response.status}`,
+        );
+        throw new ApiError(
+          response.status,
+          `Streaming request failed with status ${response.status}`,
+          detail,
+        );
       }
     },
     onmessage(message) {
@@ -2444,6 +2927,82 @@ function parseMcpToolCategoryPayload(payload: unknown, label: string): McpToolCa
     sidecar_image: readOptionalString(record, "sidecar_image", label),
     config_schema: Array.isArray(record.config_schema) ? (record.config_schema as ConfigField[]) : [],
     credential_type: readOptionalString(record, "credential_type", label),
+  };
+}
+
+function parseMcpSupportLevel(value: string, label: string): McpSupportLevel {
+  if (value === "ready" || value === "limited" || value === "planned") {
+    return value;
+  }
+  throw new Error(`${label} must be one of ready, limited, or planned.`);
+}
+
+function parseMcpRegistryServerPayload(payload: unknown, label: string): McpRegistryServer {
+  const record = expectRecord(payload, label);
+  return {
+    id: readString(record, "id", label),
+    name: readString(record, "name", label),
+    description: readString(record, "description", label),
+    icon: readString(record, "icon", label),
+    category: readString(record, "category", label),
+    transport: readString(record, "transport", label) as McpRegistryServer["transport"],
+    endpoint: readOptionalString(record, "endpoint", label),
+    suggested_endpoint: readOptionalString(record, "suggested_endpoint", label),
+    hub_server_name: readOptionalString(record, "hub_server_name", label),
+    auth_type: readString(record, "auth_type", label) as McpRegistryServer["auth_type"],
+    oauth_scopes: readStringArray(record, "oauth_scopes", label, []),
+    auth_header_name: readOptionalString(record, "auth_header_name", label),
+    auth_header_prefix: readOptionalString(record, "auth_header_prefix", label),
+    enabled: readBoolean(record, "enabled", label),
+    tags: readStringArray(record, "tags", label, []),
+    tools_count: readNumber(record, "tools_count", label),
+    tool_names: readStringArray(record, "tool_names", label, []),
+    config_schema: Array.isArray(record.config_schema) ? (record.config_schema as ConfigField[]) : [],
+    sidecar_image: readOptionalString(record, "sidecar_image", label),
+    sidecar_port: readOptionalNumber(record, "sidecar_port", label),
+    support_level: parseMcpSupportLevel(readString(record, "support_level", label), `${label}.support_level`),
+    attachable: readBoolean(record, "attachable", label),
+    status_reason: readOptionalString(record, "status_reason", label),
+  };
+}
+
+function parseMcpProfileServerPayload(payload: unknown, label: string): McpProfileServer {
+  const record = expectRecord(payload, label);
+  return {
+    id: readString(record, "id", label),
+    name: readString(record, "name", label),
+    transport: readString(record, "transport", label) as McpProfileServer["transport"],
+    support_level: parseMcpSupportLevel(readString(record, "support_level", label), `${label}.support_level`),
+    attachable: readBoolean(record, "attachable", label),
+    status_reason: readOptionalString(record, "status_reason", label),
+  };
+}
+
+function parseMcpProfilePayload(payload: unknown, label: string): McpProfile {
+  const record = expectRecord(payload, label);
+  const resolvedServers = readRecordArray(record, "resolved_servers", label).map((item, index) =>
+    parseMcpProfileServerPayload(item, `${label}.resolved_servers[${index}]`),
+  );
+  const attachableServers = readRecordArray(record, "attachable_servers", label).map((item, index) =>
+    parseMcpProfileServerPayload(item, `${label}.attachable_servers[${index}]`),
+  );
+  const blockedServers = readRecordArray(record, "blocked_servers", label).map((item, index) =>
+    parseMcpProfileServerPayload(item, `${label}.blocked_servers[${index}]`),
+  );
+  return {
+    id: readString(record, "id", label),
+    name: readString(record, "name", label),
+    description: readString(record, "description", label),
+    icon: readString(record, "icon", label),
+    color: readString(record, "color", label),
+    servers: readStringArray(record, "servers", label, []),
+    resolved_servers: resolvedServers,
+    attachable_servers: attachableServers,
+    blocked_servers: blockedServers,
+    can_apply: readBoolean(record, "can_apply", label),
+    support_level: parseMcpSupportLevel(readString(record, "support_level", label), `${label}.support_level`),
+    total_tools: readNumber(record, "total_tools", label),
+    tags: readStringArray(record, "tags", label, []),
   };
 }
 
@@ -2583,6 +3142,173 @@ export async function fetchMcpHubServers(token: string): Promise<McpHubServer[]>
   return parseJsonResponse(response, (payload) => {
     if (Array.isArray(payload)) return payload as McpHubServer[];
     throw new Error("Invalid MCP hub servers response");
+  });
+}
+
+/* ── MCP Registry API ── */
+
+export async function fetchMcpRegistry(
+  token: string,
+  options?: { category?: string; transport?: string; search?: string },
+): Promise<McpRegistryServer[]> {
+  const query = new URLSearchParams();
+  if (options?.category) query.set("category", options.category);
+  if (options?.transport) query.set("transport", options.transport);
+  if (options?.search) query.set("search", options.search);
+  const baseUrl = buildUrl("/api/mcp/registry");
+  const requestUrl = query.size > 0 ? `${baseUrl}${baseUrl.includes("?") ? "&" : "?"}${query.toString()}` : baseUrl;
+  const response = await fetchAuthenticated(requestUrl, token);
+  return parseJsonResponse(response, (payload) => {
+    if (Array.isArray(payload)) {
+      return payload.map((item, index) => parseMcpRegistryServerPayload(item, `mcp_registry[${index}]`));
+    }
+    throw new Error("Invalid MCP registry response");
+  });
+}
+
+export async function fetchMcpProfiles(token: string): Promise<McpProfile[]> {
+  const response = await fetchAuthenticated(buildUrl("/api/mcp/profiles"), token);
+  return parseJsonResponse(response, (payload) => {
+    if (Array.isArray(payload)) {
+      return payload.map((item, index) => parseMcpProfilePayload(item, `mcp_profiles[${index}]`));
+    }
+    throw new Error("Invalid MCP profiles response");
+  });
+}
+
+export async function fetchMcpServerDetail(token: string, serverId: string): Promise<McpRegistryServer> {
+  const response = await fetchAuthenticated(buildUrl(`/api/mcp/registry/${serverId}`), token);
+  return parseJsonResponse(response, (payload) => parseMcpRegistryServerPayload(payload, "mcp_registry_detail"));
+}
+
+export async function fetchMcpCategories(token: string): Promise<McpCategory[]> {
+  const response = await fetchAuthenticated(buildUrl("/api/mcp/categories"), token);
+  return parseJsonResponse(response, (payload) => {
+    if (Array.isArray(payload)) return payload as McpCategory[];
+    throw new Error("Invalid MCP categories response");
+  });
+}
+
+export async function fetchMcpStats(token: string): Promise<McpStats> {
+  const response = await fetchAuthenticated(buildUrl("/api/mcp/stats"), token);
+  return parseJsonResponse(response, (payload) => payload as McpStats);
+}
+
+export async function fetchMcpConnections(token: string, namespace: string): Promise<McpConnection[]> {
+  const response = await fetchAuthenticated(buildUrl("/api/mcp/connections", namespace), token);
+  return parseJsonResponse(response, (payload) => {
+    if (!Array.isArray(payload)) {
+      throw new Error("Invalid MCP connections response");
+    }
+    return payload.map((item, index) => parseMcpConnectionPayload(item, `mcp_connections[${index}]`));
+  });
+}
+
+export async function fetchMcpConnection(token: string, namespace: string, connectionId: string): Promise<McpConnection> {
+  const response = await fetchAuthenticated(buildUrl(`/api/mcp/connections/${connectionId}`, namespace), token);
+  return parseJsonResponse(response, (payload) => parseMcpConnectionPayload(payload, "mcp_connection"));
+}
+
+export async function createMcpConnection(
+  token: string,
+  namespace: string,
+  payload: {
+    name: string;
+    server_id: string;
+    config?: Record<string, unknown>;
+    credentials?: Record<string, string>;
+    validate_on_save?: boolean;
+  },
+): Promise<McpConnection> {
+  const response = await fetchAuthenticated(buildUrl("/api/mcp/connections", namespace), token, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return parseJsonResponse(response, (data) => parseMcpConnectionPayload(data, "mcp_connection_created"));
+}
+
+export async function updateMcpConnection(
+  token: string,
+  namespace: string,
+  connectionId: string,
+  payload: {
+    name?: string;
+    server_id?: string;
+    config?: Record<string, unknown>;
+    credentials?: Record<string, string>;
+    validate_on_save?: boolean;
+  },
+): Promise<McpConnection> {
+  const response = await fetchAuthenticated(buildUrl(`/api/mcp/connections/${connectionId}`, namespace), token, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return parseJsonResponse(response, (data) => parseMcpConnectionPayload(data, "mcp_connection_updated"));
+}
+
+export async function validateMcpConnection(
+  token: string,
+  namespace: string,
+  connectionId: string,
+): Promise<McpConnection> {
+  const response = await fetchAuthenticated(buildUrl(`/api/mcp/connections/${connectionId}/validate`, namespace), token, {
+    method: "POST",
+  });
+  return parseJsonResponse(response, (data) => parseMcpConnectionPayload(data, "mcp_connection_validated"));
+}
+
+export async function startMcpConnectionOAuth(
+  token: string,
+  namespace: string,
+  connectionId: string,
+): Promise<McpConnectionOAuthStart> {
+  const response = await fetchAuthenticated(buildUrl(`/api/mcp/connections/${connectionId}/oauth/start`, namespace), token, {
+    method: "POST",
+  });
+  return parseJsonResponse(response, (payload) => {
+    const record = expectRecord(payload, "mcp_connection_oauth_start");
+    return {
+      authorization_url: readString(record, "authorization_url", "mcp_connection_oauth_start"),
+      expires_at: readOptionalString(record, "expires_at", "mcp_connection_oauth_start"),
+    };
+  });
+}
+
+export async function refreshMcpConnectionOAuth(
+  token: string,
+  namespace: string,
+  connectionId: string,
+): Promise<McpConnection> {
+  const response = await fetchAuthenticated(buildUrl(`/api/mcp/connections/${connectionId}/oauth/refresh`, namespace), token, {
+    method: "POST",
+  });
+  return parseJsonResponse(response, (data) => parseMcpConnectionPayload(data, "mcp_connection_oauth_refreshed"));
+}
+
+export async function deleteMcpConnection(
+  token: string,
+  namespace: string,
+  connectionId: string,
+): Promise<DeleteResponse> {
+  const response = await fetchAuthenticated(buildUrl(`/api/mcp/connections/${connectionId}`, namespace), token, {
+    method: "DELETE",
+  });
+  return parseJsonResponse(response, parseDeleteResponsePayload);
+}
+
+export async function fetchMcpConnectionBindings(
+  token: string,
+  namespace: string,
+  connectionId: string,
+): Promise<McpConnectionBinding[]> {
+  const response = await fetchAuthenticated(buildUrl(`/api/mcp/connections/${connectionId}/bindings`, namespace), token);
+  return parseJsonResponse(response, (payload) => {
+    if (!Array.isArray(payload)) {
+      throw new Error("Invalid MCP connection bindings response");
+    }
+    return payload.map((item, index) => parseMcpConnectionBindingPayload(item, `mcp_connection_bindings[${index}]`));
   });
 }
 
@@ -2928,4 +3654,658 @@ export async function deleteChatSession(token: string, sessionId: string): Promi
     { method: "DELETE" },
   );
   if (!response.ok) { const text = await response.text(); throw new ApiError(response.status, "Failed to delete session", text); }
+}
+
+// --------------------------------------------------------------------------- //
+//  AIOps Observability API                                                      //
+// --------------------------------------------------------------------------- //
+
+export interface ObservabilityTargetSummary {
+  name: string;
+  namespace: string;
+  description?: string;
+  targetType: string;
+  connectorRef: string;
+  policyRef?: string;
+  endpoint: string;
+  scrapeInterval: string;
+  phase: string;
+  lastScrapeTime: string | null;
+  metricsCollected: number;
+  connectorHealth: string;
+  createdAt: string;
+}
+
+export interface ObservabilityFinding {
+  id: string;
+  severity: string;
+  metric: string;
+  algorithm: string;
+  timestamp: string;
+  value: number;
+  expected: number;
+  deviation: number;
+  description: string;
+  recommendation: string;
+}
+
+export interface ObservabilityResourceMetadata {
+  name: string;
+  namespace?: string;
+  creationTimestamp?: string;
+  resourceVersion?: string;
+  labels?: Record<string, string>;
+  annotations?: Record<string, string>;
+  [key: string]: unknown;
+}
+
+export interface ObservabilityCondition {
+  type?: string;
+  status?: string;
+  lastTransitionTime?: string;
+  reason?: string;
+  message?: string;
+}
+
+export interface ObservationTargetSelectorExpression {
+  key: string;
+  operator: string;
+  values?: string[];
+}
+
+export interface ObservationTargetSelector {
+  matchLabels?: Record<string, string>;
+  matchExpressions?: ObservationTargetSelectorExpression[];
+}
+
+export interface ObservationTargetCredentials {
+  secretRef?: string;
+  vaultPath?: string;
+  spiffeEnabled?: boolean;
+}
+
+export interface ObservationTargetTlsConfig {
+  insecureSkipVerify?: boolean;
+  caSecretRef?: string;
+}
+
+export interface ObservabilityTargetSpec {
+  description?: string;
+  targetType: string;
+  connectorRef: string;
+  endpoint?: string;
+  scrapeInterval?: string;
+  policyRef?: string;
+  selector?: ObservationTargetSelector;
+  credentials?: ObservationTargetCredentials;
+  labels?: Record<string, string>;
+  tlsConfig?: ObservationTargetTlsConfig;
+}
+
+export interface ObservabilityTargetStatus {
+  phase?: string;
+  lastScrapeTime?: string;
+  lastScrapeError?: string;
+  metricsCollected?: number;
+  connectorHealth?: string;
+  conditions?: ObservabilityCondition[];
+}
+
+export interface ObservabilityTargetDetail {
+  apiVersion: string;
+  kind: string;
+  metadata: ObservabilityResourceMetadata;
+  spec: ObservabilityTargetSpec;
+  status?: ObservabilityTargetStatus;
+}
+
+export interface ObservationRetentionSpec {
+  days?: number;
+  downsampling?: {
+    after?: string;
+    resolution?: string;
+  };
+}
+
+export interface ObservationAlertRule {
+  name: string;
+  expr: string;
+  for?: string;
+  severity?: string;
+  annotations?: Record<string, string>;
+}
+
+export interface ObservationAnomalyDetectionSpec {
+  enabled?: boolean;
+  algorithm?: string;
+  sensitivity?: number;
+  windowSize?: string;
+  evaluationInterval?: string;
+  metrics?: string[];
+}
+
+export interface ObservationNotificationsSpec {
+  webhookUrl?: string;
+  natsSubject?: string;
+}
+
+export interface ObservabilityPolicySpec {
+  description?: string;
+  retention?: ObservationRetentionSpec;
+  alertRules?: ObservationAlertRule[];
+  anomalyDetection?: ObservationAnomalyDetectionSpec;
+  notifications?: ObservationNotificationsSpec;
+}
+
+export interface ObservabilityPolicyStatus {
+  activeAlerts?: number;
+  lastEvaluated?: string;
+  conditions?: ObservabilityCondition[];
+}
+
+export interface ObservabilityPolicyDetail {
+  apiVersion: string;
+  kind: string;
+  metadata: ObservabilityResourceMetadata;
+  spec: ObservabilityPolicySpec;
+  status?: ObservabilityPolicyStatus;
+}
+
+export interface ConnectorPluginEnvVar {
+  name?: string;
+  value?: string;
+  valueFrom?: Record<string, unknown>;
+}
+
+export interface ConnectorPluginResources {
+  requests?: { cpu?: string; memory?: string };
+  limits?: { cpu?: string; memory?: string };
+}
+
+export interface ObservabilityConnectorSpec {
+  description?: string;
+  image: string;
+  protocol: string;
+  port?: number;
+  capabilities: string[];
+  healthEndpoint?: string;
+  resources?: ConnectorPluginResources;
+  secretRef?: string;
+  env?: ConnectorPluginEnvVar[];
+}
+
+export interface ObservabilityConnectorStatus {
+  ready?: string;
+  version?: string;
+  lastHealthCheck?: string;
+  conditions?: ObservabilityCondition[];
+}
+
+export interface ObservabilityConnectorDetail {
+  apiVersion: string;
+  kind: string;
+  metadata: ObservabilityResourceMetadata;
+  spec: ObservabilityConnectorSpec;
+  status?: ObservabilityConnectorStatus;
+}
+
+export interface CreateObservationTargetPayload extends ObservabilityTargetSpec {
+  name: string;
+}
+
+export type UpdateObservationTargetPayload = Partial<ObservabilityTargetSpec>;
+
+export interface CreateObservationPolicyPayload extends ObservabilityPolicySpec {
+  name: string;
+}
+
+export type UpdateObservationPolicyPayload = Partial<ObservabilityPolicySpec>;
+
+export interface CreateConnectorPluginPayload extends ObservabilityConnectorSpec {
+  name: string;
+}
+
+export type UpdateConnectorPluginPayload = Partial<ObservabilityConnectorSpec>;
+
+export interface ObservabilityReport {
+  name: string;
+  targetRef: string;
+  reportType: string;
+  phase: string;
+  healthScore: number | null;
+  findingsCount: number;
+  lastEvaluated: string | null;
+  findings: ObservabilityFinding[];
+  summary: string;
+  createdAt: string;
+}
+
+export interface ObservabilityConnector {
+  name: string;
+  description?: string;
+  image: string;
+  protocol: string;
+  port: number;
+  capabilities: string[];
+  ready: string;
+  lastHealthCheck: string | null;
+  createdAt: string;
+}
+
+export interface ObservabilityPolicy {
+  name: string;
+  description?: string;
+  retentionDays: number;
+  anomalyEnabled: boolean;
+  anomalyAlgorithm: string;
+  alertRulesCount: number;
+  activeAlerts: number;
+  createdAt: string;
+}
+
+export interface ObservabilityOverview {
+  summary: {
+    targets: { total: number; active: number; degraded: number; failed: number };
+    reports: { total: number; totalFindings: number; avgHealthScore: number };
+    connectors: { total: number; ready: number };
+    policies: { total: number };
+    agents: { total: number; ready: number; notReady: number };
+  };
+  targets: ObservabilityTargetSummary[];
+  reports: ObservabilityReport[];
+  connectors: ObservabilityConnector[];
+  policies: ObservabilityPolicy[];
+  timestamp: string;
+}
+
+export async function fetchObservabilityOverview(token: string, namespace: string): Promise<ObservabilityOverview> {
+  const response = await fetchAuthenticated(buildUrl("/api/observability/overview", namespace), token);
+  return parseJsonResponse(response, (p) => p as ObservabilityOverview);
+}
+
+export async function createObservationTarget(token: string, namespace: string, body: Record<string, unknown>): Promise<ObservabilityTargetDetail> {
+  const response = await fetchAuthenticated(buildUrl("/api/observability/targets", namespace), token, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return parseJsonResponse(response, (p) => p as ObservabilityTargetDetail);
+}
+
+export async function fetchObservationTarget(token: string, namespace: string, name: string): Promise<ObservabilityTargetDetail> {
+  const response = await fetchAuthenticated(buildUrl(`/api/observability/targets/${encodeURIComponent(name)}`, namespace), token);
+  return parseJsonResponse(response, (p) => p as ObservabilityTargetDetail);
+}
+
+export async function updateObservationTarget(token: string, namespace: string, name: string, body: UpdateObservationTargetPayload): Promise<ObservabilityTargetDetail> {
+  const response = await fetchAuthenticated(buildUrl(`/api/observability/targets/${encodeURIComponent(name)}`, namespace), token, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return parseJsonResponse(response, (p) => p as ObservabilityTargetDetail);
+}
+
+export async function deleteObservationTarget(token: string, namespace: string, name: string): Promise<void> {
+  const response = await fetchAuthenticated(buildUrl(`/api/observability/targets/${encodeURIComponent(name)}`, namespace), token, { method: "DELETE" });
+  if (!response.ok) { const text = await response.text(); throw new ApiError(response.status, "Failed to delete target", text); }
+}
+
+export async function createObservationPolicy(token: string, namespace: string, body: Record<string, unknown>): Promise<ObservabilityPolicyDetail> {
+  const response = await fetchAuthenticated(buildUrl("/api/observability/policies", namespace), token, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return parseJsonResponse(response, (p) => p as ObservabilityPolicyDetail);
+}
+
+export async function fetchObservationPolicy(token: string, namespace: string, name: string): Promise<ObservabilityPolicyDetail> {
+  const response = await fetchAuthenticated(buildUrl(`/api/observability/policies/${encodeURIComponent(name)}`, namespace), token);
+  return parseJsonResponse(response, (p) => p as ObservabilityPolicyDetail);
+}
+
+export async function updateObservationPolicy(token: string, namespace: string, name: string, body: UpdateObservationPolicyPayload): Promise<ObservabilityPolicyDetail> {
+  const response = await fetchAuthenticated(buildUrl(`/api/observability/policies/${encodeURIComponent(name)}`, namespace), token, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return parseJsonResponse(response, (p) => p as ObservabilityPolicyDetail);
+}
+
+export async function deleteObservationPolicy(token: string, namespace: string, name: string): Promise<void> {
+  const response = await fetchAuthenticated(buildUrl(`/api/observability/policies/${encodeURIComponent(name)}`, namespace), token, { method: "DELETE" });
+  if (!response.ok) { const text = await response.text(); throw new ApiError(response.status, "Failed to delete policy", text); }
+}
+
+export async function createConnectorPlugin(token: string, namespace: string, body: Record<string, unknown>): Promise<ObservabilityConnectorDetail> {
+  const response = await fetchAuthenticated(buildUrl("/api/observability/connectors", namespace), token, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return parseJsonResponse(response, (p) => p as ObservabilityConnectorDetail);
+}
+
+export async function fetchConnectorPlugin(token: string, namespace: string, name: string): Promise<ObservabilityConnectorDetail> {
+  const response = await fetchAuthenticated(buildUrl(`/api/observability/connectors/${encodeURIComponent(name)}`, namespace), token);
+  return parseJsonResponse(response, (p) => p as ObservabilityConnectorDetail);
+}
+
+export async function updateConnectorPlugin(token: string, namespace: string, name: string, body: UpdateConnectorPluginPayload): Promise<ObservabilityConnectorDetail> {
+  const response = await fetchAuthenticated(buildUrl(`/api/observability/connectors/${encodeURIComponent(name)}`, namespace), token, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return parseJsonResponse(response, (p) => p as ObservabilityConnectorDetail);
+}
+
+export async function deleteConnectorPlugin(token: string, namespace: string, name: string): Promise<void> {
+  const response = await fetchAuthenticated(buildUrl(`/api/observability/connectors/${encodeURIComponent(name)}`, namespace), token, { method: "DELETE" });
+  if (!response.ok) { const text = await response.text(); throw new ApiError(response.status, "Failed to delete connector", text); }
+}
+
+// ── Intelligence Collector API ──
+
+export interface IntelligenceCollector {
+  id: string;
+  name: string;
+  url: string;
+  cluster: string;
+  status: "online" | "offline" | "degraded";
+  registered_at: string;
+  tags: string[];
+  version?: string;
+  capabilities?: string[];
+  builtin_scripts?: string[];
+  node?: string;
+  max_timeout?: number;
+  error?: string;
+}
+
+export interface IntelligenceCollectorList {
+  collectors: IntelligenceCollector[];
+  total: number;
+}
+
+export interface CollectionTaskResult {
+  status: "completed" | "error" | "timeout" | "rejected";
+  exit_code?: number;
+  stdout?: string;
+  stderr?: string;
+  error?: string;
+  duration_ms?: number;
+  node?: string;
+  cluster?: string;
+  timestamp?: string;
+  builtin?: string;
+}
+
+export interface CollectionTask {
+  task_id: string;
+  collector_id: string;
+  payload: Record<string, unknown>;
+  results: Record<string, CollectionTaskResult>;
+  submitted_by: string;
+  submitted_at: string;
+  total: number;
+  completed: number;
+}
+
+export interface CollectionTaskList {
+  tasks: CollectionTask[];
+  total: number;
+}
+
+export interface DeleteCollectionTasksResponse {
+  status: string;
+  kind: string;
+  namespace: string;
+  deleted: number;
+  requested: number;
+  deleted_ids: string[];
+  missing_ids: string[];
+}
+
+export interface RegisterCollectorPayload {
+  name: string;
+  url: string;
+  token?: string;
+  cluster?: string;
+  tags?: string[];
+}
+
+export interface SubmitCollectionPayload {
+  collector_id: string;
+  script?: string;
+  builtin?: string;
+  type?: "bash" | "python";
+  timeout?: number;
+}
+
+export async function fetchIntelligenceCollectors(token: string, namespace?: string): Promise<IntelligenceCollectorList> {
+  const response = await fetchAuthenticated(buildUrl("/api/intelligence/collectors", namespace), token);
+  return parseJsonResponse(response, (p) => p as IntelligenceCollectorList);
+}
+
+export async function registerIntelligenceCollector(token: string, body: RegisterCollectorPayload, namespace?: string): Promise<IntelligenceCollector> {
+  const response = await fetchAuthenticated(buildUrl("/api/intelligence/collectors", namespace), token, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return parseJsonResponse(response, (p) => p as IntelligenceCollector);
+}
+
+export async function unregisterIntelligenceCollector(token: string, collectorId: string, namespace?: string): Promise<void> {
+  const response = await fetchAuthenticated(buildUrl(`/api/intelligence/collectors/${encodeURIComponent(collectorId)}`, namespace), token, { method: "DELETE" });
+  if (!response.ok) { const text = await response.text(); throw new ApiError(response.status, "Failed to unregister collector", text); }
+}
+
+export async function submitCollectionTask(token: string, body: SubmitCollectionPayload, namespace?: string): Promise<CollectionTask> {
+  const response = await fetchAuthenticated(buildUrl("/api/intelligence/collect", namespace), token, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return parseJsonResponse(response, (p) => p as CollectionTask);
+}
+
+export async function fetchCollectionTasks(token: string, limit = 50, namespace?: string): Promise<CollectionTaskList> {
+  const response = await fetchAuthenticated(buildUrl(`/api/intelligence/tasks?limit=${limit}`, namespace), token);
+  return parseJsonResponse(response, (p) => p as CollectionTaskList);
+}
+
+export async function fetchCollectionTask(token: string, taskId: string, namespace?: string): Promise<CollectionTask> {
+  const response = await fetchAuthenticated(buildUrl(`/api/intelligence/tasks/${encodeURIComponent(taskId)}`, namespace), token);
+  return parseJsonResponse(response, (p) => p as CollectionTask);
+}
+
+export async function deleteCollectionTask(token: string, taskId: string, namespace?: string): Promise<void> {
+  const response = await fetchAuthenticated(buildUrl(`/api/intelligence/tasks/${encodeURIComponent(taskId)}`, namespace), token, { method: "DELETE" });
+  if (!response.ok) { const text = await response.text(); throw new ApiError(response.status, "Failed to delete collection task", text); }
+}
+
+export async function deleteCollectionTasks(token: string, taskIds: string[], namespace?: string): Promise<DeleteCollectionTasksResponse> {
+  const response = await fetchAuthenticated(buildUrl("/api/intelligence/tasks/delete", namespace), token, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ task_ids: taskIds }),
+  });
+  return parseJsonResponse(response, (p) => p as DeleteCollectionTasksResponse);
+}
+
+// ─── Intelligence Schedules & Alerts ──────────────────────────────────────
+
+export interface IntelligenceSchedule {
+  id: string;
+  name: string;
+  cron: string;
+  collector_id: string;
+  builtin?: string;
+  script?: string;
+  script_type?: "bash" | "python";
+  timeout: number;
+  agent_name?: string;
+  enabled: boolean;
+  created_by: string;
+  created_at: string;
+  last_run?: string | null;
+  next_run?: string | null;
+}
+
+export interface IntelligenceScheduleList {
+  schedules: IntelligenceSchedule[];
+  total: number;
+}
+
+export interface CreateSchedulePayload {
+  name: string;
+  cron: string;
+  collector_id?: string;
+  builtin?: string;
+  script?: string;
+  script_type?: "bash" | "python";
+  timeout?: number;
+  agent_name?: string;
+  enabled?: boolean;
+}
+
+export interface IntelligenceAlert {
+  id: string;
+  name: string;
+  schedule_id?: string | null;
+  condition_type: "contains" | "not_contains" | "exit_code" | "regex";
+  condition_value: string;
+  action: "notify" | "invoke_agent";
+  agent_name?: string;
+  prompt_template?: string;
+  enabled: boolean;
+  created_by: string;
+  created_at: string;
+  last_triggered?: string | null;
+  trigger_count: number;
+}
+
+export interface IntelligenceAlertList {
+  alerts: IntelligenceAlert[];
+  total: number;
+}
+
+export interface CreateAlertPayload {
+  name: string;
+  schedule_id?: string;
+  condition_type: "contains" | "not_contains" | "exit_code" | "regex";
+  condition_value: string;
+  action?: "notify" | "invoke_agent";
+  agent_name?: string;
+  prompt_template?: string;
+  enabled?: boolean;
+}
+
+export interface AlertHistoryEntry {
+  id: string;
+  alert_id: string;
+  alert_name: string;
+  triggered_at: string;
+  condition_matched: string;
+  action_taken: string;
+  agent_invoked?: string;
+  invoke_status?: number;
+  invoke_error?: string;
+  task_id?: string;
+  snippet: string;
+}
+
+export interface AlertHistoryList {
+  history: AlertHistoryEntry[];
+  total: number;
+}
+
+export interface PromptContextResponse {
+  context: string;
+  task_id?: string;
+  collector_id?: string;
+  namespace?: string;
+}
+
+// ── Schedule CRUD ─────────────────────────────────────────────────────────
+
+export async function fetchIntelligenceSchedules(token: string, namespace?: string): Promise<IntelligenceScheduleList> {
+  const response = await fetchAuthenticated(buildUrl("/api/intelligence/schedules", namespace), token);
+  return parseJsonResponse(response, (p) => p as IntelligenceScheduleList);
+}
+
+export async function createIntelligenceSchedule(token: string, body: CreateSchedulePayload, namespace?: string): Promise<IntelligenceSchedule> {
+  const response = await fetchAuthenticated(buildUrl("/api/intelligence/schedules", namespace), token, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return parseJsonResponse(response, (p) => p as IntelligenceSchedule);
+}
+
+export async function updateIntelligenceSchedule(token: string, id: string, body: Partial<CreateSchedulePayload>, namespace?: string): Promise<IntelligenceSchedule> {
+  const response = await fetchAuthenticated(buildUrl(`/api/intelligence/schedules/${encodeURIComponent(id)}`, namespace), token, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return parseJsonResponse(response, (p) => p as IntelligenceSchedule);
+}
+
+export async function deleteIntelligenceSchedule(token: string, id: string, namespace?: string): Promise<void> {
+  const response = await fetchAuthenticated(buildUrl(`/api/intelligence/schedules/${encodeURIComponent(id)}`, namespace), token, { method: "DELETE" });
+  if (!response.ok) { const text = await response.text(); throw new ApiError(response.status, "Failed to delete schedule", text); }
+}
+
+// ── Alert CRUD ────────────────────────────────────────────────────────────
+
+export async function fetchIntelligenceAlerts(token: string, agentName?: string, namespace?: string): Promise<IntelligenceAlertList> {
+  const url = agentName
+    ? buildUrl(`/api/intelligence/alerts?agent_name=${encodeURIComponent(agentName)}`, namespace)
+    : buildUrl("/api/intelligence/alerts", namespace);
+  const response = await fetchAuthenticated(url, token);
+  return parseJsonResponse(response, (p) => p as IntelligenceAlertList);
+}
+
+export async function createIntelligenceAlert(token: string, body: CreateAlertPayload, namespace?: string): Promise<IntelligenceAlert> {
+  const response = await fetchAuthenticated(buildUrl("/api/intelligence/alerts", namespace), token, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return parseJsonResponse(response, (p) => p as IntelligenceAlert);
+}
+
+export async function updateIntelligenceAlert(token: string, id: string, body: Partial<CreateAlertPayload>, namespace?: string): Promise<IntelligenceAlert> {
+  const response = await fetchAuthenticated(buildUrl(`/api/intelligence/alerts/${encodeURIComponent(id)}`, namespace), token, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return parseJsonResponse(response, (p) => p as IntelligenceAlert);
+}
+
+export async function deleteIntelligenceAlert(token: string, id: string, namespace?: string): Promise<void> {
+  const response = await fetchAuthenticated(buildUrl(`/api/intelligence/alerts/${encodeURIComponent(id)}`, namespace), token, { method: "DELETE" });
+  if (!response.ok) { const text = await response.text(); throw new ApiError(response.status, "Failed to delete alert", text); }
+}
+
+export async function fetchAlertHistory(token: string, limit = 50, namespace?: string): Promise<AlertHistoryList> {
+  const response = await fetchAuthenticated(buildUrl(`/api/intelligence/alerts/history?limit=${limit}`, namespace), token);
+  return parseJsonResponse(response, (p) => p as AlertHistoryList);
+}
+
+// ── Prompt context ────────────────────────────────────────────────────────
+
+export async function fetchPromptContext(token: string, body: { collector_id?: string; builtin?: string; script?: string; type?: string; timeout?: number }, namespace?: string): Promise<PromptContextResponse> {
+  const response = await fetchAuthenticated(buildUrl("/api/intelligence/prompt-context", namespace), token, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return parseJsonResponse(response, (p) => p as PromptContextResponse);
 }

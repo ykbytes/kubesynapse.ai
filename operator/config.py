@@ -114,17 +114,6 @@ def with_trust_bundle_env(raw_env: Any) -> Any:
 LITELLM_SVC: str = os.getenv("LITELLM_SVC_NAME", "kubesynth-litellm")
 SECRET_NAME: str = os.getenv("LLM_SECRET_NAME", "kubesynth-llm-api-keys")
 
-RUNTIME_IMAGE: str = os.getenv("AGENT_RUNTIME_IMAGE", "ghcr.io/your-org/ai-agent-runtime:latest")
-RUNTIME_IMAGE_PULL_POLICY: str = get_string_env("AGENT_RUNTIME_IMAGE_PULL_POLICY", "IfNotPresent")
-
-GOOSE_RUNTIME_IMAGE: str = os.getenv("GOOSE_RUNTIME_IMAGE", "ghcr.io/your-org/ai-goose-runtime:latest")
-GOOSE_RUNTIME_IMAGE_PULL_POLICY: str = get_string_env("GOOSE_RUNTIME_IMAGE_PULL_POLICY", "IfNotPresent")
-GOOSE_DEFAULT_PROVIDER: str = get_string_env("GOOSE_DEFAULT_PROVIDER", "litellm")
-
-CODEX_RUNTIME_IMAGE: str = os.getenv("CODEX_RUNTIME_IMAGE", "ghcr.io/your-org/ai-codex-runtime:latest")
-CODEX_RUNTIME_IMAGE_PULL_POLICY: str = get_string_env("CODEX_RUNTIME_IMAGE_PULL_POLICY", "IfNotPresent")
-CODEX_DEFAULT_PROVIDER: str = get_string_env("CODEX_DEFAULT_PROVIDER", "litellm")
-
 OPENCODE_RUNTIME_IMAGE: str = os.getenv("OPENCODE_RUNTIME_IMAGE", "yakdhane/kubesynth-opencode-runtime:latest")
 OPENCODE_RUNTIME_IMAGE_PULL_POLICY: str = get_string_env("OPENCODE_RUNTIME_IMAGE_PULL_POLICY", "IfNotPresent")
 OPENCODE_DEFAULT_PROVIDER: str = get_string_env("OPENCODE_DEFAULT_PROVIDER", "litellm")
@@ -137,7 +126,6 @@ RUNTIME_CLUSTER_ROLE: str = os.getenv("RUNTIME_CLUSTER_ROLE", "kubesynth-agent-r
 # ---------------------------------------------------------------------------
 
 QDRANT_SVC: str = os.getenv("QDRANT_SVC_NAME", "kubesynth-qdrant")
-QDRANT_COLLECTION: str = os.getenv("QDRANT_COLLECTION", "agent-knowledge")
 OTEL_ENDPOINT: str = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "").strip()
 
 # ---------------------------------------------------------------------------
@@ -160,7 +148,7 @@ TRUST_BUNDLE_MOUNT_PATH: str = os.getenv("TRUST_BUNDLE_MOUNT_PATH", "").strip()
 API_PORT: int = 8080
 PROTECTED_NAMESPACES: frozenset[str] = frozenset({"default", "kube-system", "kube-public", "kube-node-lease"})
 ARTIFACT_MOUNT_PATH: str = "/artifacts"
-SUPPORTED_RUNTIME_KINDS: frozenset[str] = frozenset({"langgraph", "goose", "codex", "opencode"})
+SUPPORTED_RUNTIME_KINDS: frozenset[str] = frozenset({"opencode"})
 
 # ---------------------------------------------------------------------------
 # Operator & worker settings
@@ -211,43 +199,6 @@ AGENT_CPU_REQUEST: str = os.getenv("AGENT_CPU_REQUEST", "100m").strip() or "100m
 AGENT_MEMORY_REQUEST: str = os.getenv("AGENT_MEMORY_REQUEST", "256Mi").strip() or "256Mi"
 AGENT_CPU_LIMIT: str = os.getenv("AGENT_CPU_LIMIT", "1").strip() or "1"
 AGENT_MEMORY_LIMIT: str = os.getenv("AGENT_MEMORY_LIMIT", "1Gi").strip() or "1Gi"
-AGENT_ALLOWED_MODELS: list[str] = get_csv_env("AGENT_ALLOWED_MODELS")
-
-# ---------------------------------------------------------------------------
-# Agent execution parameters (passed as container env strings)
-# ---------------------------------------------------------------------------
-
-AGENT_MAX_STEPS: str = str(get_int_env("AGENT_MAX_STEPS", 4, minimum=1))
-AGENT_MAX_STEPS_LIMIT: str = str(get_int_env("AGENT_MAX_STEPS_LIMIT", 12, minimum=1))
-AGENT_DOOM_LOOP_THRESHOLD: str = str(get_int_env("AGENT_DOOM_LOOP_THRESHOLD", 3, minimum=2))
-AGENT_SUPERVISOR_HISTORY_LIMIT: str = str(get_int_env("AGENT_SUPERVISOR_HISTORY_LIMIT", 8, minimum=1))
-AGENT_SUPERVISOR_RESPONSE_CHARS: str = str(get_int_env("AGENT_SUPERVISOR_RESPONSE_CHARS", 12000, minimum=256))
-AGENT_AUTONOMY_CONTINUE_ON_ACTION_ERROR: str = serialize_env_value(
-    get_bool_env("AGENT_AUTONOMY_CONTINUE_ON_ACTION_ERROR", True)
-)
-AGENT_AUTONOMY_ACTION_RETRY_LIMIT: str = str(get_int_env("AGENT_AUTONOMY_ACTION_RETRY_LIMIT", 2, minimum=0))
-AGENT_AUTONOMY_ACTION_RETRY_BACKOFF_SECONDS: str = str(
-    get_float_env("AGENT_AUTONOMY_ACTION_RETRY_BACKOFF_SECONDS", 1.0, minimum=0.0)
-)
-AGENT_AUTONOMY_FAILURE_HISTORY_LIMIT: str = str(get_int_env("AGENT_AUTONOMY_FAILURE_HISTORY_LIMIT", 6, minimum=1))
-
-# ---------------------------------------------------------------------------
-# Local tool execution
-# ---------------------------------------------------------------------------
-
-DEFAULT_AGENT_LOCAL_TOOL_ALLOWLIST: str = "curl,wget,jq,git,rg,tar,unzip,zip"
-DEFAULT_AGENT_LOCAL_TOOL_ALLOWED_ROOTS: str = "/app/state,/workspace"
-AGENT_LOCAL_TOOL_MOUNT_WORKSPACE: bool = get_bool_env("AGENT_LOCAL_TOOL_MOUNT_WORKSPACE", True)
-AGENT_LOCAL_TOOL_DISCOVERY_ENABLED: str = serialize_env_value(get_bool_env("AGENT_LOCAL_TOOL_DISCOVERY_ENABLED", True))
-AGENT_LOCAL_TOOL_ALLOWLIST: str = os.getenv("AGENT_LOCAL_TOOL_ALLOWLIST", DEFAULT_AGENT_LOCAL_TOOL_ALLOWLIST).strip()
-AGENT_LOCAL_TOOL_TIMEOUT_SECONDS: str = str(get_float_env("AGENT_LOCAL_TOOL_TIMEOUT_SECONDS", 20.0, minimum=1.0))
-AGENT_LOCAL_TOOL_MAX_OUTPUT_CHARS: str = str(get_int_env("AGENT_LOCAL_TOOL_MAX_OUTPUT_CHARS", 12000, minimum=512))
-AGENT_LOCAL_TOOL_MAX_ARGS: str = str(get_int_env("AGENT_LOCAL_TOOL_MAX_ARGS", 32, minimum=1))
-AGENT_LOCAL_TOOL_MAX_ARG_CHARS: str = str(get_int_env("AGENT_LOCAL_TOOL_MAX_ARG_CHARS", 512, minimum=32))
-AGENT_LOCAL_TOOL_ALLOWED_ROOTS: str = os.getenv(
-    "AGENT_LOCAL_TOOL_ALLOWED_ROOTS", DEFAULT_AGENT_LOCAL_TOOL_ALLOWED_ROOTS
-).strip()
-AGENT_LOCAL_TOOL_LIST_LIMIT: str = str(get_int_env("AGENT_LOCAL_TOOL_LIST_LIMIT", 32, minimum=1))
 
 # ---------------------------------------------------------------------------
 # A2A (Agent-to-Agent) communication
@@ -271,44 +222,12 @@ MCP_AUTH_SECRET_NAME: str = os.getenv("MCP_AUTH_SECRET_NAME", "kubesynth-mcp-aut
 HELM_RELEASE_NAME: str = os.getenv("HELM_RELEASE_NAME", "kubesynth").strip() or "kubesynth"
 
 # ---------------------------------------------------------------------------
-# OpenSandbox runtime env block (forwarded to agent containers)
-# ---------------------------------------------------------------------------
-
-OPEN_SANDBOX_RUNTIME_ENV: dict[str, str] = {
-    "OPEN_SANDBOX_DOMAIN": os.getenv("OPEN_SANDBOX_DOMAIN", "").strip(),
-    "OPEN_SANDBOX_PROTOCOL": os.getenv("OPEN_SANDBOX_PROTOCOL", "http").strip() or "http",
-    "OPEN_SANDBOX_USE_SERVER_PROXY": os.getenv("OPEN_SANDBOX_USE_SERVER_PROXY", "false").strip() or "false",
-    "OPEN_SANDBOX_REQUEST_TIMEOUT_SECONDS": os.getenv("OPEN_SANDBOX_REQUEST_TIMEOUT_SECONDS", "300").strip() or "300",
-    "OPEN_SANDBOX_CONNECT_TIMEOUT_SECONDS": os.getenv("OPEN_SANDBOX_CONNECT_TIMEOUT_SECONDS", "30").strip() or "30",
-    "OPEN_SANDBOX_DEFAULT_TTL_SECONDS": os.getenv("OPEN_SANDBOX_DEFAULT_TTL_SECONDS", "600").strip() or "600",
-    "OPEN_SANDBOX_DEFAULT_IMAGE": os.getenv("OPEN_SANDBOX_DEFAULT_IMAGE", "python:3.11").strip() or "python:3.11",
-    "OPEN_SANDBOX_CODE_IMAGE": os.getenv("OPEN_SANDBOX_CODE_IMAGE", "opensandbox/code-interpreter:latest").strip()
-    or "opensandbox/code-interpreter:latest",
-    "OPEN_SANDBOX_BROWSER_IMAGE": os.getenv("OPEN_SANDBOX_BROWSER_IMAGE", "opensandbox/chrome:latest").strip()
-    or "opensandbox/chrome:latest",
-    "OPEN_SANDBOX_EDITOR_IMAGE": os.getenv("OPEN_SANDBOX_EDITOR_IMAGE", "opensandbox/vscode:latest").strip()
-    or "opensandbox/vscode:latest",
-    "OPEN_SANDBOX_PYTHON_VERSION": os.getenv("OPEN_SANDBOX_PYTHON_VERSION", "3.11").strip() or "3.11",
-    "OPEN_SANDBOX_JAVA_VERSION": os.getenv("OPEN_SANDBOX_JAVA_VERSION", "17").strip() or "17",
-    "OPEN_SANDBOX_NODE_VERSION": os.getenv("OPEN_SANDBOX_NODE_VERSION", "20").strip() or "20",
-    "OPEN_SANDBOX_GO_VERSION": os.getenv("OPEN_SANDBOX_GO_VERSION", "1.24").strip() or "1.24",
-    "OPEN_SANDBOX_SECURE_RUNTIME_TYPE": os.getenv("OPEN_SANDBOX_SECURE_RUNTIME_TYPE", "").strip(),
-}
-OPEN_SANDBOX_API_KEY_SECRET_NAME: str = os.getenv("OPEN_SANDBOX_API_KEY_SECRET_NAME", "").strip()
-OPEN_SANDBOX_API_KEY_SECRET_KEY: str = os.getenv("OPEN_SANDBOX_API_KEY_SECRET_KEY", "api-key").strip() or "api-key"
-
-# ---------------------------------------------------------------------------
 # Runtime extra env & config file env-var names
 # ---------------------------------------------------------------------------
 
-AGENT_RUNTIME_EXTRA_ENV: Any = with_trust_bundle_env(get_json_env("AGENT_RUNTIME_EXTRA_ENV_JSON", {}))
-GOOSE_RUNTIME_EXTRA_ENV: Any = with_trust_bundle_env(get_json_env("GOOSE_RUNTIME_EXTRA_ENV_JSON", {}))
-GOOSE_RUNTIME_CONFIG_FILES_ENV: str = "GOOSE_RUNTIME_CONFIG_FILES_JSON"
-CODEX_RUNTIME_EXTRA_ENV: Any = with_trust_bundle_env(get_json_env("CODEX_RUNTIME_EXTRA_ENV_JSON", {}))
-CODEX_RUNTIME_CONFIG_FILES_ENV: str = "CODEX_RUNTIME_CONFIG_FILES_JSON"
-CODEX_MCP_SIDECARS_ENV: str = "CODEX_MCP_SIDECARS_JSON"
 OPENCODE_RUNTIME_EXTRA_ENV: Any = with_trust_bundle_env(get_json_env("OPENCODE_RUNTIME_EXTRA_ENV_JSON", {}))
 OPENCODE_RUNTIME_CONFIG_FILES_ENV: str = "OPENCODE_RUNTIME_CONFIG_FILES_JSON"
+OPENCODE_MCP_CONNECTIONS_ENV: str = "OPENCODE_MCP_CONNECTIONS_JSON"
 OPENCODE_MCP_SIDECARS_ENV: str = "OPENCODE_MCP_SIDECARS_JSON"
 AGENT_SKILL_FILES_ENV: str = "AGENT_SKILL_FILES_JSON"
 

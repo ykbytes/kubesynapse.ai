@@ -14,9 +14,6 @@ $outputPath = Join-Path $repoRoot $OutputDir
 
 $images = @(
     @{ Name = "ai-operator"; Context = "operator" },
-    @{ Name = "ai-agent-runtime"; Context = "agent-runtime" },
-  @{ Name = "ai-goose-runtime"; Context = "goose-runtime" },
-    @{ Name = "ai-codex-runtime"; Context = "codex-runtime" },
     @{ Name = "ai-opencode-runtime"; Context = "opencode-runtime" },
     @{ Name = "ai-api-gateway"; Context = "api-gateway" },
     @{ Name = "kubesynth-web-ui"; Context = "web-ui" },
@@ -70,21 +67,6 @@ operator:
     tag: "$Version"
   workerImage:
     repository: "$Registry/ai-operator"
-    tag: "$Version"
-
-agentRuntime:
-  image:
-    repository: "$Registry/ai-agent-runtime"
-    tag: "$Version"
-
-gooseRuntime:
-  image:
-    repository: "$Registry/ai-goose-runtime"
-    tag: "$Version"
-
-codexRuntime:
-  image:
-    repository: "$Registry/ai-codex-runtime"
     tag: "$Version"
 
 opencodeRuntime:

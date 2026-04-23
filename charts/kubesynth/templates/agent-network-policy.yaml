@@ -59,6 +59,8 @@ spec:
               - 169.254.169.254/32
       ports:
         - protocol: TCP
+          port: 443
+        - protocol: TCP
           port: 6443
     # 6. Allow MCP servers in the dedicated mcp-hub namespace.
     #    namespaceSelector + podSelector are ANDed: only mcp-server pods in

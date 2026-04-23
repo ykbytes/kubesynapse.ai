@@ -1,17 +1,39 @@
 """Tests for Codex runtime integration and Spec Kit workflow patterns."""
 
+import importlib.util
 import json
 import sys
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+MODULE_ROOT = Path(__file__).resolve().parents[1]
+CONFIG_PATH = MODULE_ROOT / "config.py"
+CONFIG_SPEC = importlib.util.spec_from_file_location("operator_config_under_test", CONFIG_PATH)
+if CONFIG_SPEC is None or CONFIG_SPEC.loader is None:
+    raise RuntimeError("Failed to load operator config module for tests")
+operator_config = importlib.util.module_from_spec(CONFIG_SPEC)
+previous_config = sys.modules.get("config")
+sys.modules[CONFIG_SPEC.name] = operator_config
+sys.modules["config"] = operator_config
+CONFIG_SPEC.loader.exec_module(operator_config)
 
-from utils import (  # noqa: E402
-    parse_goose_config_files,
-    render_prompt,
-    validate_workflow_graph,
-)
+MODULE_PATH = MODULE_ROOT / "utils.py"
+SPEC = importlib.util.spec_from_file_location("operator_utils_under_test", MODULE_PATH)
+if SPEC is None or SPEC.loader is None:
+    raise RuntimeError("Failed to load operator utils module for tests")
+operator_utils = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = operator_utils
+try:
+    SPEC.loader.exec_module(operator_utils)
+finally:
+    if previous_config is not None:
+        sys.modules["config"] = previous_config
+    else:
+        sys.modules.pop("config", None)
+
+parse_goose_config_files = operator_utils.parse_goose_config_files
+render_prompt = operator_utils.render_prompt
+validate_workflow_graph = operator_utils.validate_workflow_graph
 
 
 class CodexConfigFileTests(unittest.TestCase):

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -26,6 +27,7 @@ from config import (
     MODEL_CONTEXT_LIMIT,
     MODEL_OUTPUT_LIMIT,
     OPENCODE_CONFIG_DIR,
+    OPENCODE_MCP_CONNECTIONS_ENV,
     OPENCODE_MCP_SIDECARS_ENV,
     OPENCODE_RUNTIME_CONFIG_FILES_ENV,
     OPENCODE_SERVER_HOST,
@@ -101,22 +103,67 @@ def parse_skill_frontmatter(path: str, content: str) -> tuple[str, str, list[str
     return name or default_name, description, warnings
 
 
-def materialize_opencode_config_files() -> list[str]:
+def deep_merge_config(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    """Recursively merge *override* into *base* and return a new dict."""
+    merged: dict[str, Any] = {key: value for key, value in base.items()}
+    for key, value in override.items():
+        existing = merged.get(key)
+        if isinstance(existing, dict) and isinstance(value, dict):
+            merged[key] = deep_merge_config(existing, value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def load_opencode_config_overrides() -> dict[str, Any]:
+    """Load any user-provided opencode.json override from the injected config payload."""
+    payload = _parse_json_env(OPENCODE_RUNTIME_CONFIG_FILES_ENV)
+    if payload is None:
+        return {}
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"{OPENCODE_RUNTIME_CONFIG_FILES_ENV} must be a JSON object")
+
+    raw_content = payload.get("opencode.json")
+    if raw_content is None:
+        return {}
+    if isinstance(raw_content, dict):
+        return raw_content
+    if isinstance(raw_content, str):
+        parsed = json.loads(raw_content)
+        if isinstance(parsed, dict):
+            return parsed
+    raise RuntimeError("opencode.json must decode to a JSON object")
+
+
+def materialize_opencode_config_files(base_config: dict[str, Any] | None = None) -> list[str]:
     """Write operator-injected config files to the OpenCode config directory."""
     payload = _parse_json_env(OPENCODE_RUNTIME_CONFIG_FILES_ENV)
     if payload is None:
-        return []
+        payload = {}
     if not isinstance(payload, dict):
         raise RuntimeError(f"{OPENCODE_RUNTIME_CONFIG_FILES_ENV} must be a JSON object")
+
+    merged_base_config = base_config
+    if base_config is not None:
+        merged_base_config = deep_merge_config(base_config, load_opencode_config_overrides())
 
     written_files: list[str] = []
     root = Path(OPENCODE_CONFIG_DIR)
     for raw_path, raw_content in payload.items():
         relative_path = normalize_relative_path(str(raw_path), source=OPENCODE_RUNTIME_CONFIG_FILES_ENV)
+        if relative_path == "opencode.json" and merged_base_config is not None:
+            continue
         target = root / relative_path
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(f"{serialize_file_content(raw_content).rstrip()}\n", encoding="utf-8")
         written_files.append(relative_path)
+
+    if merged_base_config is not None:
+        target = root / "opencode.json"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(f"{serialize_file_content(merged_base_config).rstrip()}\n", encoding="utf-8")
+        written_files.append("opencode.json")
+
     return sorted(written_files)
 
 
@@ -195,6 +242,16 @@ def load_opencode_sidecars() -> list[dict[str, Any]]:
     return sidecars
 
 
+def load_opencode_mcp_connections() -> list[dict[str, Any]]:
+    """Load structured MCP connections passed in by the operator."""
+    payload = _parse_json_env(OPENCODE_MCP_CONNECTIONS_ENV)
+    if payload is None:
+        return []
+    if not isinstance(payload, list):
+        raise RuntimeError(f"{OPENCODE_MCP_CONNECTIONS_ENV} must decode to a JSON array")
+    return [item for item in payload if isinstance(item, dict)]
+
+
 def build_shared_mcp_config() -> tuple[dict[str, Any], list[str]]:
     """Build MCP server entries from the shared MCP hub."""
     entries: dict[str, Any] = {}
@@ -225,6 +282,10 @@ def build_shared_mcp_config() -> tuple[dict[str, Any], list[str]]:
 
 def build_mcp_config(sidecars: list[dict[str, Any]]) -> tuple[dict[str, Any], list[str]]:
     """Merge sidecar and shared MCP configurations."""
+    structured_connections = load_opencode_mcp_connections()
+    if structured_connections:
+        return build_structured_mcp_config(structured_connections)
+
     config: dict[str, Any] = {}
     warnings: list[str] = []
     for item in sidecars:
@@ -239,7 +300,69 @@ def build_mcp_config(sidecars: list[dict[str, Any]]) -> tuple[dict[str, Any], li
     return config, dedupe_items(warnings)
 
 
-def build_generated_config(sidecars: list[dict[str, Any]]) -> tuple[dict[str, Any], list[str]]:
+def build_structured_mcp_config(connections: list[dict[str, Any]]) -> tuple[dict[str, Any], list[str]]:
+    """Build MCP config entries from the structured operator contract."""
+    config: dict[str, Any] = {}
+    warnings: list[str] = []
+
+    for connection in connections:
+        runtime = connection.get("runtime") if isinstance(connection.get("runtime"), dict) else {}
+        runtime_kind = str(runtime.get("kind") or "remote").strip().lower() or "remote"
+        config_key = str(runtime.get("configKey") or connection.get("slug") or connection.get("name") or connection.get("serverId") or "").strip()
+        if not config_key:
+            warnings.append("Skipping MCP connection with no config key.")
+            continue
+
+        if runtime_kind == "sidecar":
+            sidecar = runtime.get("sidecar") if isinstance(runtime.get("sidecar"), dict) else {}
+            try:
+                port = int(sidecar.get("port", 8080))
+            except (TypeError, ValueError):
+                warnings.append(f"Skipping MCP sidecar '{config_key}' because its port is invalid.")
+                continue
+            endpoint_path = str(sidecar.get("endpointPath") or "/mcp").strip() or "/mcp"
+            config[config_key] = {
+                "type": "remote",
+                "url": f"http://127.0.0.1:{port}{endpoint_path}",
+                "enabled": True,
+            }
+            continue
+
+        url = str(runtime.get("url") or "").strip()
+        if not url:
+            warnings.append(f"Skipping MCP connection '{config_key}' because no runtime URL was provided.")
+            continue
+        headers: dict[str, str] = {}
+        for header in runtime.get("headers") or []:
+            if not isinstance(header, dict):
+                continue
+            header_name = str(header.get("name") or "").strip()
+            if not header_name:
+                continue
+            value = str(header.get("value") or "").strip()
+            if not value:
+                env_var = str(header.get("envVar") or "").strip()
+                if env_var:
+                    env_value = os.getenv(env_var, "").strip()
+                    prefix = str(header.get("prefix") or "")
+                    value = f"{prefix}{env_value}" if env_value else ""
+            if value:
+                headers[header_name] = value
+        config[config_key] = {
+            "type": "remote",
+            "url": url,
+            "enabled": True,
+        }
+        if headers:
+            config[config_key]["headers"] = headers
+
+    return config, dedupe_items(warnings)
+
+
+def build_generated_config(
+    sidecars: list[dict[str, Any]],
+    config_overrides: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], list[str]]:
     """Generate the full OpenCode configuration object."""
     mcp_config, warnings = build_mcp_config(sidecars)
     model_ref = f"{DEFAULT_PROVIDER}/{DEFAULT_MODEL}"
@@ -291,6 +414,8 @@ def build_generated_config(sidecars: list[dict[str, Any]]) -> tuple[dict[str, An
     }
     if mcp_config:
         config["mcp"] = mcp_config
+    if config_overrides:
+        config = deep_merge_config(config, config_overrides)
     return config, warnings
 
 

@@ -1,4 +1,4 @@
-import { useRef, useMemo } from "react";
+import { useRef, useMemo, useState, useEffect } from "react";
 import {
   type ComposerNode,
   type AgentStepNodeData,
@@ -40,7 +40,20 @@ import {
   PanelRightClose,
   PanelRightOpen,
   Info,
+  CheckCircle2,
+  XCircle,
+  LoaderCircle,
+  ChevronDown,
+  ChevronRight,
+  FileText,
+  Wrench,
+  ListChecks,
+  Circle,
+  Timer,
+  Zap,
+  Package,
 } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import {
@@ -49,6 +62,7 @@ import {
   getTransitiveUpstream,
   availablePlaceholders,
 } from "@/lib/template-utils";
+import { getRuntimeSignal } from "@/lib/agentSignals";
 
 interface PropertiesPanelProps {
   selectedNode: ComposerNode | null;
@@ -59,6 +73,86 @@ interface PropertiesPanelProps {
   onToggleCollapse: () => void;
   onNodeDataChange: (nodeId: string, patch: Partial<AgentStepNodeData>) => void;
   onSelectNode?: (nodeId: string) => void;
+}
+
+function humanizeStepStatus(status: string): string {
+  return status
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (match) => match.toUpperCase());
+}
+
+function shouldAutoOpenExecutionTab(status?: string | null): boolean {
+  return status === "running" || status === "failed" || status === "denied" || status === "waiting_approval";
+}
+
+function shouldPreferExecutionTab(status?: string | null): boolean {
+  return Boolean(status && status !== "pending");
+}
+
+function getStepStatusBadge(status?: string | null): { label: string; className: string; icon: React.ReactNode | null } | null {
+  if (!status) return null;
+  switch (status) {
+    case "completed":
+      return {
+        label: "Completed",
+        className: "text-emerald-400 bg-emerald-500/10 border-emerald-500/20",
+        icon: <CheckCircle2 className="h-2.5 w-2.5" />,
+      };
+    case "running":
+      return {
+        label: "Running",
+        className: "text-amber-400 bg-amber-500/10 border-amber-500/20",
+        icon: <LoaderCircle className="h-2.5 w-2.5 animate-spin" />,
+      };
+    case "failed":
+      return {
+        label: "Failed",
+        className: "text-red-400 bg-red-500/10 border-red-500/20",
+        icon: <XCircle className="h-2.5 w-2.5" />,
+      };
+    case "denied":
+      return {
+        label: "Denied",
+        className: "text-red-400 bg-red-500/10 border-red-500/20",
+        icon: <AlertTriangle className="h-2.5 w-2.5" />,
+      };
+    case "waiting_approval":
+      return {
+        label: "Waiting Approval",
+        className: "text-orange-400 bg-orange-500/10 border-orange-500/20",
+        icon: <UserCheck className="h-2.5 w-2.5" />,
+      };
+    case "continued":
+      return {
+        label: "Continued",
+        className: "text-amber-400 bg-amber-500/10 border-amber-500/20",
+        icon: <AlertTriangle className="h-2.5 w-2.5" />,
+      };
+    case "cancelled":
+      return {
+        label: "Cancelled",
+        className: "text-orange-400 bg-orange-500/10 border-orange-500/20",
+        icon: <XCircle className="h-2.5 w-2.5" />,
+      };
+    case "skipped":
+      return {
+        label: "Skipped",
+        className: "text-muted-foreground bg-muted/50 border-border/40",
+        icon: <Circle className="h-2.5 w-2.5" />,
+      };
+    case "queued":
+      return {
+        label: "Queued",
+        className: "text-muted-foreground bg-muted/50 border-border/40",
+        icon: <Clock className="h-2.5 w-2.5" />,
+      };
+    default:
+      return {
+        label: humanizeStepStatus(status),
+        className: "text-muted-foreground bg-muted/50 border-border/40",
+        icon: null,
+      };
+  }
 }
 
 /* ── Config Tab ── */
@@ -78,6 +172,9 @@ function ConfigTab({
 }) {
   const promptRef = useRef<HTMLTextAreaElement>(null);
   const backdropRef = useRef<HTMLDivElement>(null);
+  const selectedAgent = agents.find((agent) => agent.name === data.agentRef);
+  const selectedRuntimeSignal = getRuntimeSignal(selectedAgent?.runtime_kind ?? data.runtimeKind);
+  const SelectedRuntimeIcon = selectedRuntimeSignal.icon;
 
   // Compute upstream steps for this node
   const upstreamSteps = useMemo(
@@ -177,18 +274,34 @@ function ConfigTab({
             <SelectValue placeholder="Select agent" />
           </SelectTrigger>
           <SelectContent>
-            {agents.map((a) => (
-              <SelectItem key={a.name} value={a.name}>
-                <span className="flex items-center gap-2">
-                  {a.name}
-                  {a.runtime_kind && (
-                    <span className="text-[9px] text-muted-foreground font-mono">{a.runtime_kind}</span>
-                  )}
-                </span>
-              </SelectItem>
-            ))}
+            {agents.map((a) => {
+              const runtimeSignal = getRuntimeSignal(a.runtime_kind);
+              const RuntimeIcon = runtimeSignal.icon;
+              return (
+                <SelectItem key={a.name} value={a.name}>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="truncate">{a.name}</span>
+                    <span className={cn("inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[9px]", runtimeSignal.tone)}>
+                      <RuntimeIcon className="h-3 w-3" />
+                      {runtimeSignal.shortLabel}
+                    </span>
+                  </div>
+                </SelectItem>
+              );
+            })}
           </SelectContent>
         </Select>
+        {selectedAgent && (
+          <div className="flex items-center gap-1.5 pt-1">
+            <span className={cn("inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[9px]", selectedRuntimeSignal.tone)}>
+              <SelectedRuntimeIcon className="h-3 w-3" />
+              {selectedRuntimeSignal.shortLabel}
+            </span>
+            {selectedAgent.model && (
+              <span className="text-[10px] text-muted-foreground font-mono truncate">{selectedAgent.model}</span>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Prompt */}
@@ -444,30 +557,555 @@ function ConfigTab({
           </div>
         </div>
       )}
+
+      {/* Review Configuration */}
+      {data.stepType === "review" && (
+        <div className="space-y-2 border rounded-md p-2 bg-rose-500/10">
+          <Label className="text-[10px] text-rose-400 font-semibold">Review Config</Label>
+          <div className="space-y-1">
+            <Label className="text-[10px]">Review Criteria</Label>
+            <Textarea
+              value={data.reviewCriteria ?? ""}
+              onChange={(e) =>
+                onNodeDataChange(node.id, { reviewCriteria: e.target.value || null })
+              }
+              className="text-xs min-h-[56px]"
+              rows={3}
+              placeholder="Describe what the reviewing agent should evaluate, e.g. 'Ensure the output is valid YAML and all required keys are present.'"
+            />
+            <p className="text-[9px] text-muted-foreground/60 leading-tight">
+              The review agent evaluates the previous step output against these criteria and returns an approved / rejected verdict.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Verify Output */}
+      <Button
+        variant={data.verify ? "secondary" : "outline"}
+        size="sm"
+        className="h-7 text-xs gap-1.5 w-full justify-start cursor-pointer"
+        onClick={() => onNodeDataChange(node.id, { verify: data.verify ? null : "" })}
+      >
+        <ShieldCheck className="h-3 w-3" />
+        {data.verify != null ? "Verify Output" : "No Verification"}
+      </Button>
+      {data.verify != null && (
+        <div className="space-y-1">
+          <Textarea
+            value={data.verify}
+            onChange={(e) =>
+              onNodeDataChange(node.id, { verify: e.target.value })
+            }
+            className="text-xs min-h-[48px]"
+            rows={2}
+            placeholder="Describe what to verify about this step's output, e.g. 'Confirm the generated YAML contains a valid Deployment manifest.'"
+          />
+          <p className="text-[9px] text-muted-foreground/60 leading-tight">
+            An additional verification pass runs after this step. Leave the prompt specific so the verifier can make a clear pass/fail decision.
+          </p>
+        </div>
+      )}
     </div>
   );
 }
 
 /* ── Execution Tab ── */
 
+/* ── Collapsible section wrapper with framer-motion animation ── */
+function ExecSection({
+  icon: Icon,
+  label,
+  count,
+  defaultOpen = false,
+  tone,
+  children,
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  label: string;
+  count?: number | null;
+  defaultOpen?: boolean;
+  tone?: string;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className={cn("border rounded-lg overflow-hidden", tone ?? "border-border/40")}>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="flex items-center gap-1.5 w-full px-2.5 py-1.5 text-[10px] font-semibold text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+      >
+        <Icon className="h-3 w-3 shrink-0" />
+        <span className="flex-1 text-left">{label}</span>
+        {count != null && count > 0 && (
+          <span className="rounded-full bg-muted px-1.5 py-0.5 text-[9px] font-mono leading-none tabular-nums">
+            {count}
+          </span>
+        )}
+        <motion.span
+          animate={{ rotate: open ? 180 : 0 }}
+          transition={{ duration: 0.2 }}
+          className="shrink-0"
+        >
+          <ChevronDown className="h-3 w-3" />
+        </motion.span>
+      </button>
+      <AnimatePresence initial={false}>
+        {open && (
+          <motion.div
+            key="content"
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.25, ease: [0.4, 0, 0.2, 1] }}
+            className="overflow-hidden"
+          >
+            <div className="px-2.5 pb-2.5 pt-0.5">
+              {children}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+/* ── Live elapsed timer hook ── */
+function useElapsedTimer(startedAt?: string | null, isRunning?: boolean): string {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!startedAt || !isRunning) return;
+    const id = setInterval(() => setTick((t) => t + 1), 1000);
+    return () => clearInterval(id);
+  }, [startedAt, isRunning]);
+  if (!startedAt) return "—";
+  const start = new Date(startedAt).getTime();
+  if (Number.isNaN(start)) return "—";
+  const elapsed = Date.now() - start;
+  const ms = Math.max(0, elapsed);
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
+  const m = Math.floor(ms / 60_000);
+  const s = Math.round((ms % 60_000) / 1000);
+  return `${m}m ${s}s`;
+}
+
+/* ── Status icon component ── */
+function StatusIndicator({ status }: { status: string }) {
+  const config: Record<string, { icon: React.ReactNode; ring: string; bg: string; label: string }> = {
+    running: {
+      icon: <LoaderCircle className="h-5 w-5 text-amber-400 animate-spin" />,
+      ring: "ring-amber-500/30",
+      bg: "bg-amber-500/10",
+      label: "Running",
+    },
+    completed: {
+      icon: <CheckCircle2 className="h-5 w-5 text-emerald-400" style={{ animation: "task-check-pop 0.4s ease-out both" }} />,
+      ring: "ring-emerald-500/30",
+      bg: "bg-emerald-500/10",
+      label: "Completed",
+    },
+    failed: {
+      icon: <XCircle className="h-5 w-5 text-red-400" />,
+      ring: "ring-red-500/30",
+      bg: "bg-red-500/10",
+      label: "Failed",
+    },
+    denied: {
+      icon: <AlertTriangle className="h-5 w-5 text-red-400" />,
+      ring: "ring-red-500/30",
+      bg: "bg-red-500/10",
+      label: "Denied",
+    },
+    waiting_approval: {
+      icon: <UserCheck className="h-5 w-5 text-orange-400" />,
+      ring: "ring-orange-500/30",
+      bg: "bg-orange-500/10",
+      label: "Waiting Approval",
+    },
+    continued: {
+      icon: <AlertTriangle className="h-5 w-5 text-amber-400" />,
+      ring: "ring-amber-500/30",
+      bg: "bg-amber-500/10",
+      label: "Continued",
+    },
+    cancelled: {
+      icon: <XCircle className="h-5 w-5 text-orange-400" />,
+      ring: "ring-orange-500/30",
+      bg: "bg-orange-500/10",
+      label: "Cancelled",
+    },
+    skipped: {
+      icon: <Circle className="h-5 w-5 text-muted-foreground/50" />,
+      ring: "ring-border/30",
+      bg: "bg-muted/30",
+      label: "Skipped",
+    },
+    pending: {
+      icon: <Circle className="h-5 w-5 text-muted-foreground/40" />,
+      ring: "ring-border/30",
+      bg: "bg-muted/30",
+      label: "Pending",
+    },
+    queued: {
+      icon: <Clock className="h-5 w-5 text-muted-foreground" />,
+      ring: "ring-border/30",
+      bg: "bg-muted/30",
+      label: "Queued",
+    },
+  };
+  const c = config[status] ?? {
+    icon: <Circle className="h-5 w-5 text-muted-foreground/40" />,
+    ring: "ring-border/30",
+    bg: "bg-muted/30",
+    label: humanizeStepStatus(status),
+  };
+  return (
+    <motion.div
+      key={status}
+      initial={{ scale: 0.8, opacity: 0 }}
+      animate={{ scale: 1, opacity: 1 }}
+      transition={{ type: "spring", stiffness: 400, damping: 25 }}
+      className={cn("flex items-center gap-2.5 rounded-xl p-2.5 ring-1", c.ring, c.bg)}
+    >
+      <div className="relative">
+        {c.icon}
+        {status === "running" && (
+          <span
+            className="absolute inset-0 rounded-full text-amber-500/40"
+            style={{ animation: "status-pulse-ring 1.5s ease-out infinite" }}
+          />
+        )}
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="text-xs font-semibold capitalize">{c.label}</div>
+      </div>
+    </motion.div>
+  );
+}
+
+/* ── Timing bar ── */
+function TimingBar({ state, elapsed }: { state: { status: string; startedAt?: string | null; completedAt?: string | null; latencyMs?: number | null; approvalWaitMs?: number | null; attempts?: number }; elapsed: string }) {
+  const isRunning = state.status === "running";
+  const isDone = state.status === "completed";
+  const isContinued = state.status === "continued";
+  const isFailed = state.status === "failed" || state.status === "denied";
+  const isStopped = state.status === "cancelled" || state.status === "skipped";
+  const isTerminal = isDone || isContinued || isFailed || isStopped;
+  const barColor = isDone
+    ? "bg-emerald-500"
+    : isFailed
+      ? "bg-red-500"
+      : isStopped
+        ? "bg-orange-500"
+        : "bg-amber-500";
+
+  // Estimate progress (indeterminate for running, 100% for done/failed)
+  const pct = isTerminal ? 100 : undefined;
+
+  return (
+    <div className="space-y-1.5">
+      {/* Progress bar */}
+      <div className="h-1.5 w-full rounded-full bg-muted/50 overflow-hidden">
+        {pct != null ? (
+          <motion.div
+            className={cn("h-full rounded-full", barColor)}
+            initial={{ width: 0 }}
+            animate={{ width: `${pct}%` }}
+            transition={{ duration: 0.6, ease: "easeOut" }}
+          />
+        ) : (
+          <div
+            className={cn("h-full rounded-full w-full", barColor)}
+            style={{
+              backgroundImage: `linear-gradient(90deg, transparent 0%, oklch(0.75 0.15 85 / 0.6) 50%, transparent 100%)`,
+              backgroundSize: "200% 100%",
+              animation: "running-shimmer 1.5s linear infinite",
+            }}
+          />
+        )}
+      </div>
+
+      {/* Timing details */}
+      <div className="flex items-center justify-between text-[10px]">
+        <div className="flex items-center gap-1 text-muted-foreground">
+          <Timer className="h-3 w-3 shrink-0" />
+          {state.startedAt && (
+            <span className="font-mono">{new Date(state.startedAt).toLocaleTimeString()}</span>
+          )}
+        </div>
+        <div className="flex items-center gap-1.5">
+          {state.attempts != null && state.attempts > 1 && (
+            <span className="text-[9px] text-amber-400 font-medium">attempt {state.attempts}</span>
+          )}
+          <span className={cn("font-mono font-semibold tabular-nums", isRunning ? "text-amber-400" : isDone ? "text-emerald-400" : isFailed ? "text-red-400" : isTerminal ? "text-orange-400" : "text-muted-foreground")}>
+            {state.latencyMs != null && !isRunning
+              ? state.latencyMs < 1000 ? `${state.latencyMs}ms` : `${(state.latencyMs / 1000).toFixed(1)}s`
+              : elapsed}
+          </span>
+        </div>
+      </div>
+
+      {/* Approval wait segment */}
+      {state.approvalWaitMs != null && (
+        <div className="flex items-center gap-1 text-[9px] text-orange-400">
+          <UserCheck className="h-2.5 w-2.5 shrink-0" />
+          <span>Approval wait: <span className="font-mono">{(state.approvalWaitMs / 1000).toFixed(1)}s</span></span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ── Plan tasks checklist ── */
+function PlanChecklist({ planProgress }: { planProgress: { items: { text: string; done: boolean }[]; completedItems: number; totalItems: number } }) {
+  const pct = planProgress.totalItems > 0 ? Math.round((planProgress.completedItems / planProgress.totalItems) * 100) : 0;
+  // Find the first non-done item (currently executing)
+  const activeIdx = planProgress.items.findIndex((i) => !i.done);
+
+  return (
+    <div className="space-y-2">
+      {/* Mini progress bar */}
+      <div className="flex items-center gap-2">
+        <div className="h-1 flex-1 rounded-full bg-muted/50 overflow-hidden">
+          <motion.div
+            className="h-full rounded-full bg-sky-500"
+            initial={{ width: 0 }}
+            animate={{ width: `${pct}%` }}
+            transition={{ duration: 0.4, ease: "easeOut" }}
+          />
+        </div>
+        <span className="text-[9px] font-mono text-muted-foreground tabular-nums">{planProgress.completedItems}/{planProgress.totalItems}</span>
+      </div>
+
+      {/* Task list */}
+      <div className="space-y-0.5">
+        {planProgress.items.map((item, i) => {
+          const isActive = i === activeIdx;
+          return (
+            <motion.div
+              key={i}
+              initial={{ opacity: 0, x: 8 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ delay: i * 0.03, duration: 0.2 }}
+              className={cn(
+                "flex items-start gap-1.5 rounded-md px-1.5 py-1 text-[10px] transition-colors",
+                isActive && "bg-sky-500/10",
+              )}
+            >
+              {item.done ? (
+                <CheckCircle2
+                  className="h-3 w-3 shrink-0 mt-px text-emerald-400"
+                  style={{ animation: "task-check-pop 0.3s ease-out both" }}
+                />
+              ) : isActive ? (
+                <LoaderCircle className="h-3 w-3 shrink-0 mt-px text-sky-400 animate-spin" />
+              ) : (
+                <Circle className="h-3 w-3 shrink-0 mt-px text-muted-foreground/30" />
+              )}
+              <span className={cn(
+                "leading-tight",
+                item.done ? "text-muted-foreground line-through" : isActive ? "text-foreground font-medium" : "text-muted-foreground/60",
+              )}>
+                {item.text}
+              </span>
+            </motion.div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* ── Tool call timeline ── */
+function ToolCallTimeline({ toolCalls }: { toolCalls: { tool?: string | null; status?: string | null; inputPreview?: string | null; preview?: string | null }[] }) {
+  const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
+
+  return (
+    <div className="relative pl-4">
+      {/* Timeline line */}
+      <div className="absolute left-[5px] top-1 bottom-1 w-px bg-border/50" />
+
+      <div className="space-y-1">
+        {toolCalls.map((tc, i) => {
+          const isCompleted = tc.status === "completed";
+          const isError = tc.status === "error";
+          const isRunning = tc.status === "running";
+          const isExpanded = expandedIdx === i;
+
+          return (
+            <motion.div
+              key={i}
+              initial={{ opacity: 0, x: 12 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ delay: i * 0.04, duration: 0.25 }}
+              className="relative"
+            >
+              {/* Timeline dot */}
+              <div className={cn(
+                "absolute -left-4 top-1.5 h-2.5 w-2.5 rounded-full border-2 border-background z-[1]",
+                isCompleted ? "bg-emerald-500" : isError ? "bg-red-500" : isRunning ? "bg-amber-500" : "bg-muted-foreground/40",
+              )}>
+                {isRunning && (
+                  <span className="absolute inset-0 rounded-full bg-amber-500 animate-ping opacity-50" />
+                )}
+              </div>
+
+              {/* Tool call card */}
+              <button
+                type="button"
+                onClick={() => setExpandedIdx(isExpanded ? null : i)}
+                className={cn(
+                  "w-full text-left rounded-md border p-1.5 transition-colors cursor-pointer",
+                  isExpanded ? "bg-card border-border" : "bg-transparent border-transparent hover:bg-card/50 hover:border-border/40",
+                )}
+              >
+                <div className="flex items-center gap-1.5">
+                  {isCompleted && <CheckCircle2 className="h-2.5 w-2.5 text-emerald-400 shrink-0" />}
+                  {isError && <XCircle className="h-2.5 w-2.5 text-red-400 shrink-0" />}
+                  {isRunning && <LoaderCircle className="h-2.5 w-2.5 text-amber-400 animate-spin shrink-0" />}
+                  {!isCompleted && !isError && !isRunning && <Circle className="h-2.5 w-2.5 text-muted-foreground/40 shrink-0" />}
+                  <span className="text-[10px] font-mono font-medium truncate flex-1">
+                    {tc.tool ?? "unknown"}
+                  </span>
+                  {(tc.inputPreview || tc.preview) && (
+                    <ChevronRight className={cn("h-2.5 w-2.5 text-muted-foreground/40 shrink-0 transition-transform", isExpanded && "rotate-90")} />
+                  )}
+                </div>
+              </button>
+
+              {/* Expanded details */}
+              <AnimatePresence>
+                {isExpanded && (tc.inputPreview || tc.preview) && (
+                  <motion.div
+                    initial={{ height: 0, opacity: 0 }}
+                    animate={{ height: "auto", opacity: 1 }}
+                    exit={{ height: 0, opacity: 0 }}
+                    transition={{ duration: 0.2 }}
+                    className="overflow-hidden"
+                  >
+                    <div className="ml-0 mt-0.5 space-y-1">
+                      {tc.inputPreview && (
+                        <div className="rounded border bg-muted/20 p-1.5">
+                          <div className="text-[8px] uppercase tracking-wider text-muted-foreground/50 mb-0.5">Input</div>
+                          <pre className="text-[9px] font-mono text-muted-foreground whitespace-pre-wrap break-words max-h-16 overflow-auto">{tc.inputPreview}</pre>
+                        </div>
+                      )}
+                      {tc.preview && (
+                        <div className="rounded border bg-muted/20 p-1.5">
+                          <div className="text-[8px] uppercase tracking-wider text-muted-foreground/50 mb-0.5">Output</div>
+                          <pre className="text-[9px] font-mono text-muted-foreground whitespace-pre-wrap break-words max-h-16 overflow-auto">{tc.preview}</pre>
+                        </div>
+                      )}
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </motion.div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* ── Artifacts list ── */
+function ArtifactsList({ artifacts }: { artifacts: { path?: string | null; name?: string | null; tool?: string | null; status?: string | null; type?: string | null; preview?: string | null }[] }) {
+  const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
+
+  function typeIcon(type?: string | null, path?: string | null) {
+    const ext = path?.split(".").pop()?.toLowerCase();
+    if (type === "code" || ext === "ts" || ext === "tsx" || ext === "py" || ext === "js") return <FileText className="h-3 w-3 text-sky-400" />;
+    if (type === "report" || ext === "md") return <FileText className="h-3 w-3 text-violet-400" />;
+    if (ext === "json" || ext === "yaml" || ext === "yml") return <FileText className="h-3 w-3 text-amber-400" />;
+    return <Package className="h-3 w-3 text-muted-foreground" />;
+  }
+
+  return (
+    <div className="space-y-1">
+      {artifacts.map((a, i) => {
+        const isExpanded = expandedIdx === i;
+        const displayName = a.name || a.path?.split("/").pop() || "artifact";
+        return (
+          <motion.div
+            key={i}
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{ delay: i * 0.03, duration: 0.2 }}
+          >
+            <button
+              type="button"
+              onClick={() => setExpandedIdx(isExpanded ? null : i)}
+              className={cn(
+                "w-full text-left rounded-md border p-1.5 transition-colors cursor-pointer",
+                isExpanded ? "bg-card border-border" : "border-border/30 hover:border-border hover:bg-card/50",
+              )}
+            >
+              <div className="flex items-center gap-1.5">
+                {typeIcon(a.type, a.path)}
+                <span className="text-[10px] font-medium truncate flex-1">{displayName}</span>
+                {a.status && (
+                  <span className={cn(
+                    "text-[8px] uppercase tracking-wider font-semibold px-1 py-0.5 rounded",
+                    a.status === "created" ? "text-emerald-400 bg-emerald-500/10" : "text-muted-foreground bg-muted/50",
+                  )}>
+                    {a.status}
+                  </span>
+                )}
+                {a.preview && (
+                  <ChevronRight className={cn("h-2.5 w-2.5 text-muted-foreground/40 shrink-0 transition-transform", isExpanded && "rotate-90")} />
+                )}
+              </div>
+              {a.path && a.path !== displayName && (
+                <div className="text-[9px] font-mono text-muted-foreground/40 truncate mt-0.5">{a.path}</div>
+              )}
+              {a.tool && (
+                <div className="text-[9px] text-muted-foreground/40 mt-0.5">via {a.tool}</div>
+              )}
+            </button>
+            <AnimatePresence>
+              {isExpanded && a.preview && (
+                <motion.div
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: "auto", opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  transition={{ duration: 0.2 }}
+                  className="overflow-hidden"
+                >
+                  <pre className="mt-0.5 rounded border bg-muted/20 p-1.5 text-[9px] font-mono text-muted-foreground whitespace-pre-wrap break-words max-h-24 overflow-auto">
+                    {a.preview}
+                  </pre>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </motion.div>
+        );
+      })}
+    </div>
+  );
+}
+
 function ExecutionTab({ data }: { data: AgentStepNodeData }) {
   const state = data.stepState;
+  const isRunning = state?.status === "running";
+  const elapsed = useElapsedTimer(state?.startedAt, isRunning);
+
   if (!state?.status) {
     return (
-      <div className="flex flex-col items-center justify-center py-8 text-center text-muted-foreground/60">
-        <Activity className="h-5 w-5 mb-2" />
+      <div className="flex flex-col items-center justify-center py-10 text-center text-muted-foreground/60">
+        <motion.div
+          initial={{ scale: 0.8, opacity: 0 }}
+          animate={{ scale: 1, opacity: 1 }}
+          transition={{ type: "spring", stiffness: 300, damping: 25 }}
+        >
+          <Activity className="h-6 w-6 mb-3 mx-auto" />
+        </motion.div>
         <p className="text-[10px]">No execution data yet.</p>
-        <p className="text-[10px]">Run the workflow to see step progress here.</p>
+        <p className="text-[10px] mt-0.5">Run the workflow to see live step progress.</p>
       </div>
     );
   }
-
-  const statusMap: Record<string, string> = {
-    completed: "text-emerald-400 bg-emerald-500/10 border-emerald-500/20",
-    running: "text-amber-400 bg-amber-500/10 border-amber-500/20",
-    failed: "text-red-400 bg-red-500/10 border-red-500/20",
-    waiting_approval: "text-orange-400 bg-orange-500/10 border-orange-500/20",
-  };
 
   const copyError = () => {
     if (state.error) {
@@ -476,132 +1114,218 @@ function ExecutionTab({ data }: { data: AgentStepNodeData }) {
     }
   };
 
+  const hasToolCalls = state.toolCalls && state.toolCalls.length > 0;
+  const hasArtifacts = state.artifacts && state.artifacts.length > 0;
+  const hasPlan = state.planProgress && state.planProgress.items.length > 0;
+  const hasLoop = data.loopConfig && state.loopProgress;
+  const hasVerification = !!state.verificationResult;
+  const hasReview = !!state.reviewResult;
+  const hasError = !!state.error;
+  const hasIterFailures = state.iterationFailures && state.iterationFailures.length > 0;
+  const hasOutput = state.execution && Object.keys(state.execution).length > 0;
+  const hasWarnings = state.warnings && state.warnings.length > 0;
+
   return (
-    <div className="p-3 space-y-3">
-      {/* Status badge */}
-      <div className="flex items-center gap-2">
-        <span className={cn("rounded-full border px-2 py-1 text-xs font-medium", statusMap[state.status] ?? "text-muted-foreground bg-muted/50")}>
-          {state.status}
-        </span>
-        {state.attempts != null && state.attempts > 1 && (
-          <span className="text-[10px] text-muted-foreground">attempt {state.attempts}</span>
-        )}
-      </div>
+    <div className="p-2.5 space-y-2">
+      {/* ── Animated Status Header ── */}
+      <StatusIndicator status={state.status} />
 
-      {/* Timing */}
-      <div className="space-y-1.5 text-[10px]">
-        {state.startedAt && (
-          <div className="flex items-center gap-1.5 text-muted-foreground">
-            <Clock className="h-3 w-3 shrink-0" />
-            <span>Started: <span className="font-mono">{new Date(state.startedAt).toLocaleTimeString()}</span></span>
-          </div>
-        )}
-        {state.completedAt && (
-          <div className="flex items-center gap-1.5 text-muted-foreground">
-            <Clock className="h-3 w-3 shrink-0" />
-            <span>Completed: <span className="font-mono">{new Date(state.completedAt).toLocaleTimeString()}</span></span>
-          </div>
-        )}
-        {state.latencyMs != null && (
-          <div className="flex items-center gap-1.5 text-muted-foreground">
-            <Clock className="h-3 w-3 shrink-0" />
-            <span>Latency: <span className="font-mono font-medium text-foreground/80">{state.latencyMs < 1000 ? `${state.latencyMs}ms` : `${(state.latencyMs / 1000).toFixed(1)}s`}</span></span>
-          </div>
-        )}
-        {state.approvalWaitMs != null && (
-          <div className="flex items-center gap-1.5 text-orange-400">
-            <UserCheck className="h-3 w-3 shrink-0" />
-            <span>Approval wait: <span className="font-mono">{(state.approvalWaitMs / 1000).toFixed(1)}s</span></span>
-          </div>
-        )}
-      </div>
-
-      {/* Error */}
-      {state.error && (
-        <div className="space-y-1">
-          <div className="flex items-center justify-between">
-            <span className="text-[10px] font-medium text-red-400 flex items-center gap-1">
-              <AlertTriangle className="h-3 w-3" /> Error
-            </span>
-            <button
-              type="button"
-              onClick={copyError}
-              className="text-[9px] text-muted-foreground hover:text-foreground flex items-center gap-0.5 cursor-pointer"
-              title="Copy error to clipboard"
-            >
-              <Copy className="h-2.5 w-2.5" /> Copy
-            </button>
-          </div>
-          <div className="rounded-md border border-red-500/20 bg-red-500/5 p-2 text-[10px] text-red-300 font-mono max-h-24 overflow-auto break-words">
-            {state.error}
-          </div>
-        </div>
+      {/* ── Timing Bar ── */}
+      {state.startedAt && (
+        <TimingBar state={state} elapsed={elapsed} />
       )}
 
-      {/* Loop progress */}
-      {data.loopConfig && state.loopProgress && (
-        <div className="space-y-1.5 border rounded-md p-2 bg-blue-500/5">
-          <Label className="text-[10px] text-blue-400 font-semibold">Loop Progress</Label>
-          <div className="grid grid-cols-2 gap-1.5 text-[10px]">
-            <span className="text-muted-foreground">Iteration</span>
-            <span className="font-mono text-right">{state.loopProgress.iteration}/{state.loopProgress.maxIterations}</span>
-            <span className="text-muted-foreground">Items</span>
-            <span className="font-mono text-right">{state.loopProgress.completedItems}/{state.loopProgress.totalItems}</span>
+      {/* ── Failure class badge ── */}
+      {state.failureClass && (
+        <motion.div
+          initial={{ opacity: 0, y: -4 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="flex items-center gap-1.5 text-[9px]"
+        >
+          <span className="rounded-full border border-red-500/20 bg-red-500/10 px-1.5 py-0.5 font-mono text-red-400">
+            {state.failureClass}
+          </span>
+        </motion.div>
+      )}
+
+      {/* ── Error Section ── */}
+      {hasError && (
+        <ExecSection icon={AlertTriangle} label="Error" defaultOpen tone="border-red-500/30">
+          <div className="space-y-1">
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={copyError}
+                className="text-[9px] text-muted-foreground hover:text-foreground flex items-center gap-0.5 cursor-pointer"
+                title="Copy error to clipboard"
+              >
+                <Copy className="h-2.5 w-2.5" /> Copy
+              </button>
+            </div>
+            <div className="rounded-md border border-red-500/20 bg-red-500/5 p-2 text-[10px] text-red-300 font-mono max-h-28 overflow-auto break-words">
+              {state.error}
+            </div>
           </div>
-          {state.loopProgress.circuitBreakerState && (
-            <div className="text-[9px] text-amber-400 mt-1">
-              Circuit breaker: {state.loopProgress.circuitBreakerState.state} ({state.loopProgress.circuitBreakerState.consecutiveNoProgress}/{state.loopProgress.circuitBreakerState.threshold})
+        </ExecSection>
+      )}
+
+      {/* ── Plan Progress ── */}
+      {hasPlan && (
+        <ExecSection
+          icon={ListChecks}
+          label="Plan Progress"
+          count={state.planProgress!.totalItems}
+          defaultOpen={isRunning || state.planProgress!.completedItems < state.planProgress!.totalItems}
+        >
+          <PlanChecklist planProgress={state.planProgress!} />
+        </ExecSection>
+      )}
+
+      {/* ── Tool Calls Timeline ── */}
+      {(hasToolCalls || (state.toolCallCount != null && state.toolCallCount > 0)) && (
+        <ExecSection
+          icon={Wrench}
+          label="Tool Calls"
+          count={state.toolCallCount ?? state.toolCalls?.length ?? 0}
+          defaultOpen={isRunning}
+        >
+          {hasToolCalls ? (
+            <ToolCallTimeline toolCalls={state.toolCalls!} />
+          ) : (
+            <div className="text-[10px] text-muted-foreground/50 text-center py-2">
+              <Wrench className="h-3.5 w-3.5 mx-auto mb-1 opacity-40" />
+              {state.toolCallCount} tool call{state.toolCallCount !== 1 ? "s" : ""} recorded
             </div>
           )}
-          {state.loopProgress.exitReason && (
-            <div className="text-[9px] text-muted-foreground mt-1">
-              Exit: {state.loopProgress.exitReason}
+        </ExecSection>
+      )}
+
+      {/* ── Artifacts ── */}
+      {(hasArtifacts || (state.artifactCount != null && state.artifactCount > 0)) && (
+        <ExecSection
+          icon={Package}
+          label="Artifacts"
+          count={state.artifactCount ?? state.artifacts?.length ?? 0}
+          defaultOpen={false}
+        >
+          {hasArtifacts ? (
+            <ArtifactsList artifacts={state.artifacts!} />
+          ) : (
+            <div className="text-[10px] text-muted-foreground/50 text-center py-2">
+              <Package className="h-3.5 w-3.5 mx-auto mb-1 opacity-40" />
+              {state.artifactCount} artifact{state.artifactCount !== 1 ? "s" : ""} generated
             </div>
           )}
-        </div>
+        </ExecSection>
       )}
 
-      {/* Verification result */}
-      {state.verificationResult && (
-        <div className={cn("space-y-1 border rounded-md p-2", state.verificationResult.passed ? "bg-emerald-500/5 border-emerald-500/20" : "bg-red-500/5 border-red-500/20")}>
-          <Label className={cn("text-[10px] font-semibold", state.verificationResult.passed ? "text-emerald-400" : "text-red-400")}>
-            Verification: {state.verificationResult.passed ? "PASSED" : "FAILED"}
-          </Label>
-          {state.verificationResult.criteria && (
-            <div className="text-[9px] text-muted-foreground">Criteria: {state.verificationResult.criteria}</div>
-          )}
-          {state.verificationResult.response && (
-            <div className="text-[9px] whitespace-pre-wrap max-h-24 overflow-auto">{state.verificationResult.response}</div>
-          )}
-          {state.verificationResult.verifyAttempt != null && state.verificationResult.verifyAttempt > 1 && (
-            <div className="text-[9px] text-muted-foreground">Attempt: {state.verificationResult.verifyAttempt}</div>
-          )}
-        </div>
+      {/* ── Loop Progress ── */}
+      {hasLoop && (
+        <ExecSection icon={Repeat} label="Loop Progress" defaultOpen={isRunning} tone="border-blue-500/30">
+          <div className="space-y-1.5">
+            <div className="grid grid-cols-2 gap-1.5 text-[10px]">
+              <span className="text-muted-foreground">Iteration</span>
+              <span className="font-mono text-right">{state.loopProgress!.iteration}/{state.loopProgress!.maxIterations}</span>
+              <span className="text-muted-foreground">Items</span>
+              <span className="font-mono text-right">{state.loopProgress!.completedItems}/{state.loopProgress!.totalItems}</span>
+            </div>
+            {/* Loop progress bar */}
+            <div className="h-1 w-full rounded-full bg-muted/50 overflow-hidden">
+              <motion.div
+                className="h-full rounded-full bg-blue-500"
+                initial={{ width: 0 }}
+                animate={{ width: `${state.loopProgress!.totalItems > 0 ? Math.round((state.loopProgress!.completedItems / state.loopProgress!.totalItems) * 100) : 0}%` }}
+                transition={{ duration: 0.4 }}
+              />
+            </div>
+            {/* Checklist items if present */}
+            {state.loopProgress!.checklistItems && state.loopProgress!.checklistItems.length > 0 && (
+              <div className="space-y-0.5 mt-1">
+                {state.loopProgress!.checklistItems.map((ci, i) => (
+                  <div key={i} className="flex items-center gap-1.5 text-[9px]">
+                    {ci.done ? (
+                      <CheckCircle2 className="h-2.5 w-2.5 text-emerald-400 shrink-0" />
+                    ) : (
+                      <Circle className="h-2.5 w-2.5 text-muted-foreground/30 shrink-0" />
+                    )}
+                    <span className={cn(ci.done ? "text-muted-foreground line-through" : "text-foreground/80")}>{ci.text}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {state.loopProgress!.circuitBreakerState && (
+              <div className="text-[9px] text-amber-400 flex items-center gap-1 mt-1">
+                <Zap className="h-2.5 w-2.5 shrink-0" />
+                Circuit breaker: {state.loopProgress!.circuitBreakerState.state} ({state.loopProgress!.circuitBreakerState.consecutiveNoProgress}/{state.loopProgress!.circuitBreakerState.threshold})
+              </div>
+            )}
+            {state.loopProgress!.exitReason && (
+              <div className="text-[9px] text-muted-foreground mt-1">Exit: {state.loopProgress!.exitReason}</div>
+            )}
+          </div>
+        </ExecSection>
       )}
 
-      {/* Review result */}
-      {state.reviewResult && (
-        <div className={cn("space-y-1 border rounded-md p-2", state.reviewResult.approved ? "bg-emerald-500/5 border-emerald-500/20" : "bg-amber-500/5 border-amber-500/20")}>
-          <Label className={cn("text-[10px] font-semibold", state.reviewResult.approved ? "text-emerald-400" : "text-amber-400")}>
-            Review: {state.reviewResult.verdict}
-          </Label>
-          {state.reviewResult.criteria && (
-            <div className="text-[9px] text-muted-foreground">Criteria: {state.reviewResult.criteria}</div>
-          )}
-          {state.reviewResult.response && (
-            <div className="text-[9px] whitespace-pre-wrap max-h-24 overflow-auto">{state.reviewResult.response}</div>
-          )}
-        </div>
+      {/* ── Verification ── */}
+      {hasVerification && (
+        <ExecSection
+          icon={ShieldCheck}
+          label={`Verification: ${state.verificationResult!.passed ? "PASSED" : "FAILED"}`}
+          defaultOpen={!state.verificationResult!.passed}
+          tone={state.verificationResult!.passed ? "border-emerald-500/30" : "border-red-500/30"}
+        >
+          <div className="space-y-1">
+            {state.verificationResult!.criteria && (
+              <div className="text-[9px] text-muted-foreground">Criteria: {state.verificationResult!.criteria}</div>
+            )}
+            {state.verificationResult!.response && (
+              <div className="text-[9px] whitespace-pre-wrap max-h-24 overflow-auto rounded border bg-muted/20 p-1.5">{state.verificationResult!.response}</div>
+            )}
+            {state.verificationResult!.verifyAttempt != null && state.verificationResult!.verifyAttempt > 1 && (
+              <div className="text-[9px] text-muted-foreground">Attempt: {state.verificationResult!.verifyAttempt}</div>
+            )}
+          </div>
+        </ExecSection>
       )}
 
-      {/* Iteration failures */}
-      {state.iterationFailures && state.iterationFailures.length > 0 && (
-        <div className="space-y-1 border rounded-md p-2 bg-red-500/5 border-red-500/20">
-          <Label className="text-[10px] text-red-400 font-semibold">
-            Iteration Failures ({state.iterationFailures.length})
-          </Label>
+      {/* ── Review ── */}
+      {hasReview && (
+        <ExecSection
+          icon={ShieldCheck}
+          label={`Review: ${state.reviewResult!.verdict}`}
+          defaultOpen={!state.reviewResult!.approved}
+          tone={state.reviewResult!.approved ? "border-emerald-500/30" : "border-amber-500/30"}
+        >
+          <div className="space-y-1">
+            {state.reviewResult!.criteria && (
+              <div className="text-[9px] text-muted-foreground">Criteria: {state.reviewResult!.criteria}</div>
+            )}
+            {state.reviewResult!.response && (
+              <div className="text-[9px] whitespace-pre-wrap max-h-24 overflow-auto rounded border bg-muted/20 p-1.5">{state.reviewResult!.response}</div>
+            )}
+          </div>
+        </ExecSection>
+      )}
+
+      {/* ── Warnings ── */}
+      {hasWarnings && (
+        <ExecSection icon={AlertTriangle} label="Warnings" count={state.warnings!.length} defaultOpen tone="border-amber-500/30">
+          <div className="space-y-0.5">
+            {state.warnings!.map((w, i) => (
+              <div key={i} className="flex items-start gap-1 text-[9px] text-amber-400">
+                <AlertTriangle className="h-2.5 w-2.5 shrink-0 mt-px" />
+                <span className="break-words">{w}</span>
+              </div>
+            ))}
+          </div>
+        </ExecSection>
+      )}
+
+      {/* ── Iteration Failures ── */}
+      {hasIterFailures && (
+        <ExecSection icon={XCircle} label="Iteration Failures" count={state.iterationFailures!.length} defaultOpen={false} tone="border-red-500/30">
           <div className="space-y-1 max-h-32 overflow-auto">
-            {state.iterationFailures.map((f, i) => (
+            {state.iterationFailures!.map((f, i) => (
               <div key={i} className="text-[9px] border-b border-red-500/10 pb-1 last:border-0">
                 <span className="text-muted-foreground">#{f.iteration}</span>
                 {f.failureClass && <span className="ml-1 text-red-400">({f.failureClass})</span>}
@@ -609,13 +1333,12 @@ function ExecutionTab({ data }: { data: AgentStepNodeData }) {
               </div>
             ))}
           </div>
-        </div>
+        </ExecSection>
       )}
 
-      {/* Step output / execution data */}
-      {state.execution && Object.keys(state.execution).length > 0 && (
-        <div className="space-y-1">
-          <Label className="text-[10px] text-muted-foreground font-semibold">Output</Label>
+      {/* ── Output ── */}
+      {hasOutput && (
+        <ExecSection icon={FileText} label="Output" defaultOpen={false}>
           <div className="relative">
             <pre className="rounded-md border bg-muted/30 p-2 text-[10px] font-mono max-h-40 overflow-auto break-words whitespace-pre-wrap">
               {typeof state.execution === "string" ? state.execution : JSON.stringify(state.execution, null, 2)}
@@ -634,16 +1357,14 @@ function ExecutionTab({ data }: { data: AgentStepNodeData }) {
               <Copy className="h-2.5 w-2.5" /> Copy
             </button>
           </div>
-        </div>
+        </ExecSection>
       )}
 
-      {/* Worker job info */}
-      {state.workerJob && Object.keys(state.workerJob).length > 0 && (
-        <div className="space-y-1">
-          <Label className="text-[10px] text-muted-foreground font-semibold">Worker Job</Label>
-          <pre className="rounded-md border bg-muted/30 p-2 text-[10px] font-mono max-h-24 overflow-auto break-words whitespace-pre-wrap">
-            {JSON.stringify(state.workerJob, null, 2)}
-          </pre>
+      {/* ── Empty state when no rich data ── */}
+      {!hasToolCalls && !state.toolCallCount && !hasArtifacts && !state.artifactCount && !hasPlan && !hasLoop && !hasError && !hasVerification && !hasReview && !hasWarnings && !hasOutput && (
+        <div className="flex flex-col items-center py-3 text-center">
+          <Zap className="h-4 w-4 text-muted-foreground/30 mb-1.5" />
+          <p className="text-[10px] text-muted-foreground/50">Waiting for execution data…</p>
         </div>
       )}
     </div>
@@ -768,7 +1489,7 @@ export function PropertiesPanel({
 
   if (!selectedNode || selectedNode.id === TRIGGER_NODE_ID) {
     return (
-      <div className="w-72 border-l bg-muted/20 flex flex-col items-center justify-center p-4 shrink-0 gap-2 transition-[width] duration-200 ease-out">
+      <div className="w-80 border-l bg-muted/20 flex flex-col items-center justify-center p-4 shrink-0 gap-2 transition-[width] duration-200 ease-out">
         <MousePointerClick className="h-6 w-6 text-muted-foreground/40" />
         <p className="text-xs text-muted-foreground text-center">
           Click a step node on the canvas to edit its properties
@@ -779,12 +1500,51 @@ export function PropertiesPanel({
 
   const d = selectedNode.data as AgentStepNodeData;
 
+  /* Auto-switch to Execution tab when step starts running or fails */
+  const stepStatus = d.stepState?.status;
+  const [activeTab, setActiveTab] = useState(() => (shouldPreferExecutionTab(stepStatus) ? "execution" : "config"));
+  const prevStatusRef = useRef<string | undefined>(undefined);
+  const nodeId = selectedNode.id;
+  const prevNodeRef = useRef(nodeId);
+
+  useEffect(() => {
+    if (prevNodeRef.current !== nodeId) {
+      prevNodeRef.current = nodeId;
+      prevStatusRef.current = undefined;
+      setActiveTab(shouldPreferExecutionTab(stepStatus) ? "execution" : "config");
+      return;
+    }
+
+    const prev = prevStatusRef.current;
+    prevStatusRef.current = stepStatus ?? undefined;
+    if (activeTab === "config" && stepStatus && shouldAutoOpenExecutionTab(stepStatus) && prev !== stepStatus) {
+      setActiveTab("execution");
+    }
+  }, [nodeId, stepStatus, activeTab]);
+
+  const statusBadge = getStepStatusBadge(stepStatus);
+  const showExecutionDot = stepStatus === "running" || stepStatus === "waiting_approval" || stepStatus === "failed" || stepStatus === "denied";
+  const executionDotClass = stepStatus === "failed" || stepStatus === "denied"
+    ? "bg-red-500"
+    : stepStatus === "waiting_approval"
+      ? "bg-orange-500"
+      : "bg-amber-500";
+
   return (
-    <div className="w-72 border-l bg-muted/20 flex flex-col overflow-hidden shrink-0 transition-[width] duration-200 ease-out">
+    <div className="w-80 border-l bg-muted/20 flex flex-col overflow-hidden shrink-0 transition-[width] duration-200 ease-out">
       {/* Header */}
       <div className="px-3 py-2 text-xs font-semibold border-b flex items-center gap-2">
         <Settings className="h-3.5 w-3.5 text-muted-foreground" />
         <span className="truncate flex-1">{d.stepName}</span>
+        {statusBadge && (
+          <span className={cn(
+            "inline-flex items-center gap-0.5 rounded-full border px-1.5 py-0.5 text-[8px] font-medium leading-none",
+            statusBadge.className,
+          )}>
+            {statusBadge.icon}
+            {statusBadge.label}
+          </span>
+        )}
         <Button
           variant="ghost"
           size="icon"
@@ -796,13 +1556,16 @@ export function PropertiesPanel({
         </Button>
       </div>
 
-      <Tabs defaultValue="config" className="flex-1 flex flex-col min-h-0">
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col min-h-0">
         <TabsList className="bg-secondary/30 mx-2 mt-2 rounded-lg p-0.5 h-auto shrink-0">
           <TabsTrigger value="config" className="text-[10px] px-2 py-1 gap-1 cursor-pointer">
             <Settings className="h-3 w-3" /> Config
           </TabsTrigger>
-          <TabsTrigger value="execution" className="text-[10px] px-2 py-1 gap-1 cursor-pointer">
+          <TabsTrigger value="execution" className="text-[10px] px-2 py-1 gap-1 cursor-pointer relative">
             <Activity className="h-3 w-3" /> Execution
+            {showExecutionDot && (
+              <span className={cn("absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full animate-pulse", executionDotClass)} />
+            )}
           </TabsTrigger>
           <TabsTrigger value="connections" className="text-[10px] px-2 py-1 gap-1 cursor-pointer">
             <GitBranch className="h-3 w-3" /> Links

@@ -24,6 +24,27 @@ spec:
                 contextRef:
                   type: string
                   description: "Name of a ConfigMap in the same namespace containing project context injected into all step prompts"
+                autoRetry:
+                  type: object
+                  description: "Workflow-level policy for watchdog-driven failed-step retries on recoverable failures"
+                  properties:
+                    enabled:
+                      type: boolean
+                      description: "If true, the workflow watchdog may retry failed steps that match the retryable failure policy"
+                    maxAttempts:
+                      type: integer
+                      minimum: 0
+                      description: "Maximum number of watchdog-driven failed-step retry attempts for the current workflow generation"
+                    retryableFailureClasses:
+                      type: array
+                      items:
+                        type: string
+                      description: "Failure classes eligible for workflow-level failed-step auto-retry"
+                    nonRetryableFailureClasses:
+                      type: array
+                      items:
+                        type: string
+                      description: "Additional failure classes that must never be auto-retried, even if they appear in the retryable set"
                 steps:
                   type: array
                   items:
@@ -149,6 +170,11 @@ spec:
                             type: integer
                             minimum: 0
                             description: "Number of retry attempts for the verification gate before failing the step"
+                          requiredJsonPaths:
+                            type: array
+                            items:
+                              type: string
+                            description: "Structured output paths that must be present and non-empty in the step JSON result"
                     required:
                       - name
                       - agentRef
