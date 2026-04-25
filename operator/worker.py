@@ -10,7 +10,7 @@ import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -18,10 +18,16 @@ import httpx
 import kubernetes.client  # type: ignore[import-untyped]
 import kubernetes.config  # type: ignore[import-untyped]
 
+try:
+    from pythonjsonlogger import jsonlogger as _jsonlogger  # type: ignore[import-untyped]
+except ModuleNotFoundError:  # pragma: no cover
+    _jsonlogger = None
+
+
 def _prefer_local_worker_modules() -> dict[str, Any]:
     worker_dir = Path(__file__).resolve().parent
     worker_dir_str = str(worker_dir)
-    module_names = ("config", "utils", "state_store", "tracing")
+    module_names = ("config", "utils", "state_store", "tracing", "trace_client")
     previous_path = list(sys.path)
     previous_modules = {module_name: sys.modules.get(module_name) for module_name in module_names}
 
@@ -73,8 +79,33 @@ check_workflow_run_conflict = worker_state_store.check_workflow_run_conflict
 init_state_database = worker_state_store.init_database
 init_tracing = worker_tracing.init_tracing
 
-logging.basicConfig(level=logging.INFO)
+TraceClient = LOCAL_WORKER_MODULES["trace_client"].TraceClient
+worker_config = LOCAL_WORKER_MODULES["config"]
+
+# ---------------------------------------------------------------------------
+# §8.1 — Structured JSON logging
+# ---------------------------------------------------------------------------
+
+_LOG_LEVEL = os.getenv("WORKER_LOG_LEVEL", "INFO").upper()
+_handler = logging.StreamHandler()
+if os.getenv("JSON_LOGS", "true").lower() in {"1", "true"} and _jsonlogger is not None:
+    _handler.setFormatter(_jsonlogger.JsonFormatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+else:
+    _handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+logging.basicConfig(level=_LOG_LEVEL, handlers=[_handler], force=True)
 logger = logging.getLogger("operator-worker")
+
+_trace_token = os.getenv("WORKER_TRACE_TOKEN") or os.getenv("API_GATEWAY_SHARED_TOKEN") or os.getenv("DEFAULT_API_GATEWAY_SHARED_TOKEN")
+trace_client = TraceClient(
+    gateway_url=worker_config.GATEWAY_URL,
+    token=_trace_token,
+    batch_size=worker_config.WORKER_TRACE_BATCH_SIZE,
+    flush_interval_sec=worker_config.WORKER_TRACE_FLUSH_INTERVAL_SEC,
+    enabled=worker_config.WORKER_TRACE_ENABLED,
+)
+
+_CURRENT_EXECUTION_ID: str | None = None
+_trace_context = threading.local()
 
 GROUP = "kubesynth.ai"
 VERSION = "v1alpha1"
@@ -104,6 +135,15 @@ EVAL_RUN_ID = os.getenv("EVAL_RUN_ID", "").strip()
 AGENT_RUNTIME_READY_TIMEOUT_SECONDS = max(
     float(os.getenv("AGENT_RUNTIME_READY_TIMEOUT_SECONDS", "180")),
     5.0,
+)
+
+# ---------------------------------------------------------------------------
+# §8.2 — Worker execution timeout with configurable limits
+# ---------------------------------------------------------------------------
+
+WORKER_EXECUTION_TIMEOUT_SECONDS = max(
+    float(os.getenv("WORKER_EXECUTION_TIMEOUT_SECONDS", "14400")),
+    60.0,
 )
 
 # ---------------------------------------------------------------------------
@@ -169,16 +209,14 @@ def lease_holder_job_is_active(holder_identity: str) -> bool:
     failed = int(getattr(job_status, "failed", 0) or 0)
     if active > 0:
         return True
-    if succeeded > 0 or failed > 0:
-        return False
-    return True
+    return not (succeeded > 0 or failed > 0)
 
 
 def acquire_worker_lease(kind: str, namespace: str, name: str, generation: int) -> bool:
     """Acquire a Kubernetes Lease for this worker run. Returns True on success."""
     lease_name = f"{name}-gen-{generation}-{kind}"[:253]
     coord_api = kubernetes.client.CoordinationV1Api()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     lease_body = kubernetes.client.V1Lease(
         metadata=kubernetes.client.V1ObjectMeta(
             name=lease_name,
@@ -326,7 +364,7 @@ def wait_for_agent_runtime_ready(
     raise RuntimeError(
         f"Agent runtime '{agent_name}' in namespace '{namespace}' did not become ready within "
         f"{timeout_seconds:.0f}s: {last_error}"
-    )
+    ) from None
 
 
 def patch_custom_status(plural: str, status: dict[str, Any]) -> None:
@@ -344,7 +382,7 @@ def patch_custom_status(plural: str, status: dict[str, Any]) -> None:
             return
         except kubernetes.client.ApiException as exc:
             if exc.status == 409 and attempt < max_retries - 1:
-                backoff = (2 ** attempt) + random.uniform(0, 1)
+                backoff = (2 ** attempt) + random.uniform(0, 1)  # noqa: S311 — non-cryptographic jitter for retry backoff
                 logging.getLogger(__name__).warning(
                     "Conflict patching %s/%s status (409), retry %d/%d in %.1fs.",
                     plural, TARGET_NAME, attempt + 1, max_retries, backoff,
@@ -383,6 +421,7 @@ def _patch_pending_approval_label(pending_approval_name: str | None) -> None:
         )
         raise
     except Exception:
+        # Intentionally broad: any failure patching the label must not crash the worker.
         logging.getLogger(__name__).warning(
             "Failed to patch pending-approval label on %s/%s, approval lookup will use full scan.",
             "agentworkflows", TARGET_NAME,
@@ -433,7 +472,7 @@ def load_artifact() -> dict[str, Any]:
             raise ValueError(f"Expected JSON object, got {type(data).__name__}")
         return data
     except Exception as exc:
-        logger.error("Failed to read artifact '%s': %s", path, exc)
+        logger.exception("Failed to read artifact '%s': %s", path, exc)
         raise RuntimeError(f"Corrupt or unreadable artifact at {path}: {exc}") from exc
 
 
@@ -444,7 +483,7 @@ def write_artifact(payload: dict[str, Any]) -> None:
     try:
         serialized = json.dumps(payload, indent=2, sort_keys=True, default=str)
     except (TypeError, ValueError) as exc:
-        logger.error("Failed to serialize artifact payload: %s", exc)
+        logger.exception("Failed to serialize artifact payload: %s", exc)
         raise RuntimeError(f"Artifact serialization failed: {exc}") from exc
     temp_path.write_text(serialized, encoding="utf-8")
     temp_path.replace(path)
@@ -471,10 +510,7 @@ def resume_workflow_state_from_artifact(
         return False, {}, {}, {}, str(artifact.get("startedAt") or now_iso())
 
     step_results = dict(artifact.get("stepResults", {}) or {})
-    if "stepStates" in status:
-        step_states = status_step_states
-    else:
-        step_states = dict(artifact.get("stepStates", {}) or {})
+    step_states = status_step_states if "stepStates" in status else dict(artifact.get("stepStates", {}) or {})
     if "pendingApproval" in status:
         pending_approval = dict(status.get("pendingApproval") or {})
     else:
@@ -528,6 +564,7 @@ def append_journal_event(event_type: str, payload: dict[str, Any]) -> None:
             handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True))
             handle.write("\n")
     except Exception:
+        # Intentionally broad: journal is best-effort; never crash the worker for I/O errors.
         logging.getLogger(__name__).warning(
             "Failed to write journal event '%s' for %s/%s",
             event_type, TARGET_NAMESPACE, TARGET_NAME,
@@ -731,7 +768,7 @@ def parse_iso_timestamp(value: Any) -> float | None:
     except ValueError:
         return None
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
+        parsed = parsed.replace(tzinfo=UTC)
     return parsed.timestamp()
 
 
@@ -1015,6 +1052,42 @@ def build_retry_prompt(
     )
 
 
+def _emit_traces_from_result(result: dict[str, Any]) -> None:
+    """Emit tool-call and LLM-call trace events from a runtime result."""
+    execution_id = getattr(_trace_context, "execution_id", None)
+    step_id = getattr(_trace_context, "step_id", None)
+    if not execution_id or not step_id:
+        return
+    try:
+        for tc in result.get("tool_calls") or []:
+            if isinstance(tc, dict):
+                trace_client.record_tool_call(
+                    execution_id=execution_id,
+                    step_id=step_id,
+                    tool_name=str(tc.get("tool") or tc.get("name") or "unknown"),
+                    tool_args=tc.get("input") or tc.get("arguments") or {},
+                    tool_result=tc.get("output") or tc.get("result") or {},
+                    error_message=tc.get("error") or None,
+                    duration_ms=tc.get("duration_ms") or tc.get("duration") or None,
+                )
+        metadata = result.get("metadata") or {}
+        if isinstance(metadata, dict) and result.get("model"):
+            trace_client.record_llm_call(
+                execution_id=execution_id,
+                step_id=step_id,
+                model=str(result.get("model")),
+                prompt=str(result.get("prompt", "")),
+                response=str(result.get("response", "")),
+                prompt_tokens=int(metadata.get("prompt_tokens") or metadata.get("promptTokens") or 0),
+                completion_tokens=int(metadata.get("completion_tokens") or metadata.get("completionTokens") or 0),
+                cost_usd=float(metadata.get("cost_usd") or metadata.get("costUsd") or 0.0) or None,
+                latency_ms=float(metadata.get("latency_ms") or metadata.get("latency") or 0.0) or None,
+                provider=str(metadata.get("provider") or result.get("provider") or "") or None,
+            )
+    except Exception:
+        logger.debug("Trace emission failed", exc_info=True)
+
+
 def execute_workflow_step(
     step: dict[str, Any],
     workflow_input: str,
@@ -1139,6 +1212,7 @@ def execute_workflow_step(
                 on_todo_update=on_todo_update,
             )
             latest_result = result
+            _emit_traces_from_result(result)
             latency_ms = int((time.perf_counter() - started) * 1000)
             response_text = str(result.get("response", ""))
             result_status = str(
@@ -1400,8 +1474,8 @@ def execute_workflow_step(
                     TARGET_NAMESPACE,
                     thread_id,
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Failed to cancel agent session during step cleanup: %s", exc, exc_info=True)
 
             append_journal_event(
                 "workflow.step.attempt.failed",
@@ -1644,7 +1718,7 @@ def build_loop_iteration_prompt(
     commit_after = loop_config.get("commitAfterEachItem", True)
     parts.extend([
         "### Requirements:",
-        f"- Work on the current task item only — complete it fully before moving on",
+        "- Work on the current task item only — complete it fully before moving on",
         f"- {'Commit your changes after completing the task' if commit_after else 'Do not commit yet'}",
         "- Before marking done: verify the change actually works (run it, test it, read it back)",
         "- If the task cannot be completed as planned, explain what changed and how you are adapting",
@@ -1755,9 +1829,10 @@ def execute_loop_step(
                 },
                 timeout_seconds=float(execution_policy.get("timeoutSeconds", 300)),
             )
+            _emit_traces_from_result(plan_result)
             plan_text = str(plan_result.get("response", ""))
         except Exception as exc:
-            logger.error("Failed to generate plan for loop step '%s': %s", step_name, exc)
+            logger.exception("Failed to generate plan for loop step '%s': %s", step_name, exc)
             return {
                 "state": "failed",
                 "stepName": step_name,
@@ -1807,7 +1882,7 @@ def execute_loop_step(
     try:
         wait_for_agent_runtime_ready(agent_ref, TARGET_NAMESPACE)
     except Exception as exc:
-        logger.error("Agent runtime not ready for loop step '%s': %s", step_name, exc)
+        logger.exception("Agent runtime not ready for loop step '%s': %s", step_name, exc)
         return {
             "state": "failed",
             "stepName": step_name,
@@ -1879,6 +1954,7 @@ def execute_loop_step(
                 step_name=step_name,
                 iteration=iteration,
             )
+            _emit_traces_from_result(result)
             response_text = str(result.get("response", ""))
             successful_iterations += 1
             all_responses.append(response_text)
@@ -1897,8 +1973,8 @@ def execute_loop_step(
             # Cancel the agent session to prevent orphaned processes.
             try:
                 cancel_agent_session(agent_ref, TARGET_NAMESPACE, thread_id)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Failed to cancel agent session after loop iteration failure: %s", exc, exc_info=True)
             circuit_breaker.record_progress(False)
             loop_progress["circuitBreakerState"] = circuit_breaker.to_dict()
             failure_entry = {
@@ -1957,8 +2033,8 @@ def execute_loop_step(
         if on_iteration_complete:
             try:
                 on_iteration_complete(loop_progress)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("on_iteration_complete callback failed: %s", exc, exc_info=True)
 
         # Check exit conditions
         all_done = all(c.get("done") for c in checklist)
@@ -2183,12 +2259,11 @@ def _split_connective(expr: str, connective: str) -> list[str]:
             depth += 1
         elif ch == ")":
             depth -= 1
-        elif depth == 0 and in_quote is None:
-            if lowered[i: i + len(connective)] == connective:
-                parts.append(expr[start:i].strip())
-                i += len(connective)
-                start = i
-                continue
+        elif depth == 0 and in_quote is None and lowered[i: i + len(connective)] == connective:
+            parts.append(expr[start:i].strip())
+            i += len(connective)
+            start = i
+            continue
         i += 1
     parts.append(expr[start:].strip())
     return parts
@@ -2235,7 +2310,7 @@ def execute_conditional_step(
     except Exception as exc:
         latency_ms = int((time.perf_counter() - started_perf) * 1000)
         completed_at = now_iso()
-        logger.error("Conditional expression evaluation failed for step '%s': %s", step_name, exc)
+        logger.exception("Conditional expression evaluation failed for step '%s': %s", step_name, exc)
         append_journal_event(
             "workflow.conditional.error",
             {"runId": run_id, "step": step_name, "error": str(exc)},
@@ -2498,8 +2573,8 @@ def execute_review_step(
             # processes from consuming resources after a timeout.
             try:
                 cancel_agent_session(agent_ref, TARGET_NAMESPACE, thread_id)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Failed to cancel agent session during review attempt cleanup: %s", exc, exc_info=True)
 
             append_journal_event(
                 "workflow.review.attempt.failed",
@@ -2659,7 +2734,7 @@ def run_workflow_worker() -> None:
     current_step = str(status.get("currentStep", "") or "")
     if str(status.get("phase", "") or "") == "waiting-approval":
         _patch_pending_approval_label(None)
-    workflow_status_payload = patch_workflow_status(
+    patch_workflow_status(
         plural=plural,
         phase="running",
         generation=generation,
@@ -2673,7 +2748,23 @@ def run_workflow_worker() -> None:
     )
     # §2.5 — DB mirroring is now handled by the status projection controller.
 
+    execution_id = ""
     try:
+        try:
+            execution_id = trace_client.start_execution(
+                namespace=TARGET_NAMESPACE,
+                workflow_name=TARGET_NAME,
+                agent_name=TARGET_NAME,
+                run_id=run_id,
+                inputs={"input": spec.get("input")},
+                triggered_by="workflow-worker",
+            )
+        except Exception:
+            logger.warning("Trace start_execution failed", exc_info=True)
+            execution_id = ""
+        if execution_id:
+            _CURRENT_EXECUTION_ID = execution_id
+
         # Compute execution waves for logging and progress visibility
         waves = compute_execution_waves(steps, completed, skipped)
         wave_names = [
@@ -2692,44 +2783,86 @@ def run_workflow_worker() -> None:
             on_iteration_complete: Any = None,
             on_todo_update: Any = None,
         ) -> dict[str, Any]:
+            step_name = str(step.get("name", "")).strip()
             step_type = str(step.get("type", "agent")).strip()
-            if step_type == "loop":
-                return execute_loop_step(
-                    step,
-                    str(spec.get("input", "")),
-                    step_results,
-                    run_id,
-                    worker_job,
-                    on_iteration_complete=on_iteration_complete,
-                    project_context=project_context,
+            _trace_step_id = ""
+            if _CURRENT_EXECUTION_ID:
+                try:
+                    _trace_step_id = trace_client.start_step(
+                        execution_id=_CURRENT_EXECUTION_ID,
+                        step_name=step_name,
+                        step_type=step_type,
+                        step_index=0,
+                        inputs={"step": step_name, "type": step_type},
+                    )
+                except Exception:
+                    logger.warning("Trace start_step failed", exc_info=True)
+            if _CURRENT_EXECUTION_ID and _trace_step_id:
+                _trace_context.execution_id = _CURRENT_EXECUTION_ID
+                _trace_context.step_id = _trace_step_id
+            _trace_status = "failed"
+            _trace_error: str | None = None
+            try:
+                if step_type == "loop":
+                    outcome = execute_loop_step(
+                        step,
+                        str(spec.get("input", "")),
+                        step_results,
+                        run_id,
+                        worker_job,
+                        on_iteration_complete=on_iteration_complete,
+                        project_context=project_context,
+                    )
+                elif step_type == "review":
+                    outcome = execute_review_step(
+                        step,
+                        str(spec.get("input", "")),
+                        step_results,
+                        run_id,
+                        worker_job,
+                        project_context=project_context,
+                    )
+                elif step_type == "conditional":
+                    outcome = execute_conditional_step(
+                        step,
+                        str(spec.get("input", "")),
+                        step_results,
+                        run_id,
+                        worker_job,
+                    )
+                else:
+                    outcome = execute_workflow_step(
+                        step,
+                        str(spec.get("input", "")),
+                        step_results,
+                        run_id,
+                        pending,
+                        worker_job,
+                        project_context=project_context,
+                        on_todo_update=on_todo_update,
+                    )
+                _trace_status = "completed" if outcome.get("state") in {"completed", "continued"} else (
+                    "cancelled" if outcome.get("state") == "approval_pending" else "failed"
                 )
-            if step_type == "review":
-                return execute_review_step(
-                    step,
-                    str(spec.get("input", "")),
-                    step_results,
-                    run_id,
-                    worker_job,
-                    project_context=project_context,
-                )
-            if step_type == "conditional":
-                return execute_conditional_step(
-                    step,
-                    str(spec.get("input", "")),
-                    step_results,
-                    run_id,
-                    worker_job,
-                )
-            return execute_workflow_step(
-                step,
-                str(spec.get("input", "")),
-                step_results,
-                run_id,
-                pending,
-                worker_job,
-                project_context=project_context,
-                on_todo_update=on_todo_update,
-            )
+                return outcome
+            except Exception as _step_exc:
+                _trace_error = str(_step_exc)
+                raise
+            finally:
+                if hasattr(_trace_context, "execution_id"):
+                    delattr(_trace_context, "execution_id")
+                if hasattr(_trace_context, "step_id"):
+                    delattr(_trace_context, "step_id")
+                if _CURRENT_EXECUTION_ID and _trace_step_id:
+                    try:
+                        trace_client.end_step(
+                            execution_id=_CURRENT_EXECUTION_ID,
+                            step_id=_trace_step_id,
+                            status=_trace_status,
+                            error_message=_trace_error,
+                        )
+                    except Exception:
+                        logger.warning("Trace end_step failed", exc_info=True)
 
         while len(completed) + len(skipped) < len(steps):
             if is_shutting_down():
@@ -2779,7 +2912,7 @@ def run_workflow_worker() -> None:
                     "startedAt": existing.get("startedAt") or now_iso(),
                     "updatedAt": now_iso(),
                 }
-            workflow_status_payload = patch_workflow_status(
+            patch_workflow_status(
                 plural=plural,
                 phase="running",
                 generation=generation,
@@ -2802,9 +2935,13 @@ def run_workflow_worker() -> None:
             _todo_first_seen: dict[str, bool] = {}
 
             def _make_todo_callback(sn: str):
-                _todo_first_seen[sn] = False
+                _todo_first_seen[sn] = False  # noqa: B023 — _todo_first_seen is initialized once, not a loop var
 
-                def _on_todo(todos: list[dict[str, Any]]) -> None:
+                def _on_todo(
+                    todos: list[dict[str, Any]],
+                    _sn: str = sn,
+                    _seen: dict[str, bool] = _todo_first_seen,  # noqa: B023 � initialized once, not a loop var
+                ) -> None:
                     checklist = [
                         {"text": str(t.get("content", t.get("text", ""))), "done": str(t.get("status", "")).lower() in {"done", "completed"}}
                         for t in todos
@@ -2815,8 +2952,8 @@ def run_workflow_worker() -> None:
                     # On the very first callback for this step, if ALL items
                     # are already done this is stale data from a previous step
                     # in the same shared session — skip it.
-                    if not _todo_first_seen.get(sn):
-                        _todo_first_seen[sn] = True
+                    if not _seen.get(_sn):
+                        _seen[_sn] = True
                         if all(c["done"] for c in checklist):
                             return
                     done_count = sum(1 for c in checklist if c["done"])
@@ -2884,22 +3021,31 @@ def run_workflow_worker() -> None:
                 _progress_lock = threading.Lock()
 
                 def _make_parallel_on_iteration(step_name: str):
-                    def _on_iter(progress: dict[str, Any]) -> None:
-                        with _progress_lock:
-                            step_states[step_name] = step_states.get(step_name, {})
-                            step_states[step_name]["loopProgress"] = progress
+                    def _on_iter(
+                        progress: dict[str, Any],
+                        _sn: str = step_name,
+                        _lock: threading.Lock = _progress_lock,  # noqa: B023 — initialized once, not a loop var
+                    ) -> None:
+                        with _lock:
+                            step_states[_sn] = step_states.get(_sn, {})
+                            step_states[_sn]["loopProgress"] = progress
                             patch_workflow_status(
                                 plural=plural, phase="running", generation=generation,
-                                run_id=run_id, total_steps=len(steps), current_step=step_name,
+                                run_id=run_id, total_steps=len(steps), current_step=_sn,
                                 started_at=started_at, step_states=step_states, worker_job=worker_job,
                                 pending_approval=None, extra_summary={"loopProgress": progress},
                             )
                     return _on_iter
 
                 def _make_parallel_todo_callback(step_name: str):
-                    _todo_first_seen[step_name] = False
+                    _todo_first_seen[step_name] = False  # noqa: B023 — initialized once, not a loop var
 
-                    def _on_todo(todos: list[dict[str, Any]]) -> None:
+                    def _on_todo(
+                        todos: list[dict[str, Any]],
+                        _sn: str = step_name,
+                        _seen: dict[str, bool] = _todo_first_seen,  # noqa: B023 — initialized once, not a loop var
+                        _lock: threading.Lock = _progress_lock,  # noqa: B023 — initialized once, not a loop var
+                    ) -> None:
                         checklist = [
                             {"text": str(t.get("content", t.get("text", ""))), "done": str(t.get("status", "")).lower() in {"done", "completed"}}
                             for t in todos
@@ -2908,12 +3054,12 @@ def run_workflow_worker() -> None:
                         if not checklist:
                             return
                         # Skip stale todos from a previous step in a shared session.
-                        if not _todo_first_seen.get(step_name):
-                            _todo_first_seen[step_name] = True
-                            if all(c["done"] for c in checklist):
-                                return
-                        done_count = sum(1 for c in checklist if c["done"])
-                        with _progress_lock:
+                        with _lock:
+                            if not _seen.get(_sn):
+                                _seen[_sn] = True
+                                if all(c["done"] for c in checklist):
+                                    return
+                            done_count = sum(1 for c in checklist if c["done"])
                             step_states[step_name] = step_states.get(step_name, {})
                             step_states[step_name]["planProgress"] = {
                                 "items": checklist,
@@ -2966,7 +3112,7 @@ def run_workflow_worker() -> None:
                         if first_exception is not None:
                             for f in not_done:
                                 f.cancel()
-                            raise first_exception
+                            raise first_exception from None
                         # If FIRST_EXCEPTION returned but some are still pending, gather remaining.
                         if not_done:
                             done2, timed_out = concurrent.futures.wait(
@@ -2975,7 +3121,7 @@ def run_workflow_worker() -> None:
                             for future in done2:
                                 exc = future.exception()
                                 if exc is not None:
-                                    raise exc
+                                    raise exc from None
                                 outcome = future.result()
                                 outcome_by_name[outcome["stepName"]] = outcome
                             if timed_out:
@@ -2989,7 +3135,7 @@ def run_workflow_worker() -> None:
                             f.cancel()
                         raise RuntimeError(
                             f"Parallel frontier [{frontier_label}] timed out after {frontier_timeout:.0f}s"
-                        )
+                        ) from None
 
             pending_approval = {}
             fatal_failures: list[dict[str, Any]] = []
@@ -3018,7 +3164,7 @@ def run_workflow_worker() -> None:
                         pending_approval=pending_approval,
                     )
                     write_artifact(snapshot)
-                    workflow_status_payload = patch_workflow_status(
+                    patch_workflow_status(
                         plural=plural,
                         phase="waiting-approval",
                         generation=generation,
@@ -3065,7 +3211,7 @@ def run_workflow_worker() -> None:
                 step_states=step_states,
             )
             write_artifact(snapshot)
-            workflow_status_payload = patch_workflow_status(
+            patch_workflow_status(
                 plural=plural,
                 phase="running",
                 generation=generation,
@@ -3107,11 +3253,25 @@ def run_workflow_worker() -> None:
             completed_at=completed_at,
         )
         write_artifact(payload)
+        if execution_id:
+            try:
+                trace_client.end_execution(
+                    execution_id=execution_id,
+                    status="completed",
+                    outputs={"completedAt": completed_at},
+                    metrics={
+                        "total_steps": len(steps),
+                        "completed_steps": len(completed),
+                        "failed_steps": len(fatal_failures) if fatal_failures else 0,
+                    },
+                )
+            except Exception:
+                logger.warning("Trace end_execution failed", exc_info=True)
         append_journal_event(
             "workflow.completed",
             {"runId": run_id, "completedAt": completed_at},
         )
-        workflow_status_payload = patch_workflow_status(
+        patch_workflow_status(
             plural=plural,
             phase="completed",
             generation=generation,
@@ -3126,6 +3286,15 @@ def run_workflow_worker() -> None:
         )
         # §2.5 — DB mirroring is now handled by the status projection controller.
     except Exception as exc:
+        if execution_id:
+            try:
+                trace_client.end_execution(
+                    execution_id=execution_id,
+                    status="failed",
+                    error_message=str(exc),
+                )
+            except Exception:
+                logger.warning("Trace end_execution failed", exc_info=True)
         _patch_pending_approval_label(None)
         failed_at = now_iso()
         failure_payload = workflow_snapshot(
@@ -3143,7 +3312,7 @@ def run_workflow_worker() -> None:
             "workflow.failed",
             {"runId": run_id, "failedAt": failed_at, "error": str(exc)},
         )
-        workflow_status_payload = patch_workflow_status(
+        patch_workflow_status(
             plural=plural,
             phase="failed",
             generation=generation,
@@ -3158,6 +3327,12 @@ def run_workflow_worker() -> None:
         )
         # §2.5 — DB mirroring is now handled by the status projection controller.
         raise
+    finally:
+        _CURRENT_EXECUTION_ID = None
+        try:
+            trace_client.flush()
+        except Exception:
+            logger.warning("Trace flush failed", exc_info=True)
 
 
 def run_eval_worker() -> None:
@@ -3241,7 +3416,7 @@ def run_eval_worker() -> None:
                     result_status = "blocked"
                     passed = False
             except Exception as exc:
-                logger.error("Eval step failed: %s", exc)
+                logger.exception("Eval step failed: %s", exc)
                 error_msg = str(exc)
                 result_status = "failed"
                 passed = False
@@ -3410,6 +3585,67 @@ def run_eval_worker() -> None:
         raise
 
 
+# ---------------------------------------------------------------------------
+# §8.3 — Dead-letter queue for failed jobs
+# ---------------------------------------------------------------------------
+
+
+def record_dead_letter(
+    kind: str,
+    namespace: str,
+    name: str,
+    generation: int,
+    run_id: str,
+    error: str,
+) -> None:
+    """Append a dead-letter entry to the artifact so failed jobs are trackable."""
+    try:
+        dlq_path = Path(ARTIFACT_PATH).with_suffix(".dlq.json")
+        dlq_entries: list[dict[str, Any]] = []
+        if dlq_path.exists():
+            try:
+                data = json.loads(dlq_path.read_text(encoding="utf-8"))
+                if isinstance(data, list):
+                    dlq_entries = data
+            except Exception:
+                logger.warning("Failed to read existing DLQ file %s", dlq_path, exc_info=True)
+        dlq_entries.append({
+            "timestamp": now_iso(),
+            "kind": kind,
+            "namespace": namespace,
+            "name": name,
+            "generation": generation,
+            "runId": run_id,
+            "error": error,
+            "workerJob": WORKER_JOB_NAME,
+        })
+        # Keep last 50 entries
+        dlq_entries = dlq_entries[-50:]
+        dlq_path.write_text(json.dumps(dlq_entries, indent=2, default=str), encoding="utf-8")
+    except Exception:
+        logger.warning("Failed to write dead-letter queue entry", exc_info=True)
+
+
+# ---------------------------------------------------------------------------
+# §8.4 — Job cancellation with proper cleanup
+# ---------------------------------------------------------------------------
+
+
+def cancel_running_sessions(step_results: dict[str, dict[str, Any]], steps: list[dict[str, Any]]) -> None:
+    """Cancel any active agent sessions referenced by step results."""
+    for step in steps:
+        step_name = str(step.get("name", "")).strip()
+        result = step_results.get(step_name, {})
+        thread_id = str(result.get("thread_id", "")).strip()
+        agent_ref = str(step.get("agentRef", "")).strip()
+        if agent_ref and thread_id:
+            try:
+                cancel_agent_session(agent_ref, TARGET_NAMESPACE, thread_id)
+                logger.info("Cancelled agent session for step '%s' (thread=%s)", step_name, thread_id)
+            except Exception as exc:
+                logger.debug("Failed to cancel agent session for step '%s': %s", step_name, exc)
+
+
 def main() -> int:
     if not WORKER_KIND or not TARGET_NAMESPACE or not TARGET_NAME:
         logger.error(
@@ -3423,7 +3659,7 @@ def main() -> int:
 
     # §2.6 — Acquire distributed lease before execution
     resource = get_resource(resource_plural())
-    generation = int((resource.get("metadata", {}).get("generation", 1)))
+    generation = int(resource.get("metadata", {}).get("generation", 1))
     run_id = (
         str(
             WORKFLOW_RUN_ID
@@ -3445,13 +3681,43 @@ def main() -> int:
         return 1
 
     try:
-        if WORKER_KIND == "workflow":
-            run_workflow_worker()
-        elif WORKER_KIND == "eval":
-            run_eval_worker()
-        else:
-            raise ValueError(f"Unsupported WORKER_KIND '{WORKER_KIND}'")
-    except Exception:
+        # §8.2 — Run worker with a global execution timeout
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(
+                run_workflow_worker if WORKER_KIND == "workflow" else run_eval_worker
+            )
+            try:
+                future.result(timeout=WORKER_EXECUTION_TIMEOUT_SECONDS)
+            except concurrent.futures.TimeoutError:
+                logger.error(
+                    "Worker timed out after %.0fs for %s '%s/%s'",
+                    WORKER_EXECUTION_TIMEOUT_SECONDS,
+                    WORKER_KIND,
+                    TARGET_NAMESPACE,
+                    TARGET_NAME,
+                )
+                # Cancel active agent sessions before exiting
+                try:
+                    resource = get_resource(resource_plural())
+                    spec = resource.get("spec", {})
+                    steps = spec.get("steps") or []
+                    artifact = load_artifact()
+                    step_results = dict(artifact.get("stepResults", {}) or {})
+                    cancel_running_sessions(step_results, steps)
+                except Exception:
+                    logger.debug("Failed to cancel sessions during timeout cleanup", exc_info=True)
+                record_dead_letter(
+                    WORKER_KIND,
+                    TARGET_NAMESPACE,
+                    TARGET_NAME,
+                    generation,
+                    run_id,
+                    f"Worker timed out after {WORKER_EXECUTION_TIMEOUT_SECONDS:.0f}s",
+                )
+                return 1
+    except Exception as exc:
+        # Intentionally broad: catch-all so the worker exits cleanly and releases its lease.
+        error_text = str(exc)
         if is_shutting_down():
             logger.warning(
                 "Worker interrupted by shutdown for %s '%s/%s'",
@@ -3459,6 +3725,7 @@ def main() -> int:
                 TARGET_NAMESPACE,
                 TARGET_NAME,
             )
+            record_dead_letter(WORKER_KIND, TARGET_NAMESPACE, TARGET_NAME, generation, run_id, error_text)
             return 1
         logger.exception(
             "Worker failed for %s '%s/%s'",
@@ -3466,6 +3733,7 @@ def main() -> int:
             TARGET_NAMESPACE,
             TARGET_NAME,
         )
+        record_dead_letter(WORKER_KIND, TARGET_NAMESPACE, TARGET_NAME, generation, run_id, error_text)
         return 1
     finally:
         release_worker_lease(WORKER_KIND, TARGET_NAME, generation)

@@ -63,6 +63,18 @@ def _validate_namespace(namespace: str) -> str | None:
     return None
 
 
+def _redact_sensitive_output(text: str, resource_type: str) -> str:
+    """Redact secret data and ConfigMap values from kubectl output."""
+    import re
+    rt = resource_type.lower().strip()
+    if rt == "secrets":
+        return "[REDACTED: secret data withheld]"
+    if rt == "configmaps":
+        # Defensively redact lines that look like key: value pairs in data sections
+        text = re.sub(r"(?m)^(\s+[^:]+:\s).*", r"\1[REDACTED]", text)
+    return text
+
+
 def _get_k8s_client():
     """Load Kubernetes config and return CoreV1Api."""
     from kubernetes import client, config
@@ -168,7 +180,7 @@ def kubectl_get(resource_type: str, namespace: str = "default", name: str = "") 
             lines = [f"NAME: {obj.metadata.name}"]
             if hasattr(obj, 'status') and hasattr(obj.status, 'phase'):
                 lines.append(f"STATUS: {obj.status.phase}")
-            return "\n".join(lines)
+            return _redact_sensitive_output("\n".join(lines), resource_type)
         else:
             if cluster_scoped:
                 items = resource.get()
@@ -184,7 +196,7 @@ def kubectl_get(resource_type: str, namespace: str = "default", name: str = "") 
                     elif hasattr(item.status, 'readyReplicas'):
                         parts.append(f"ready={item.status.readyReplicas or 0}")
                 lines.append("\t".join(str(p) for p in parts))
-            return "\n".join(lines) if lines else "(no resources found)"
+            return _redact_sensitive_output("\n".join(lines) if lines else "(no resources found)", resource_type)
     except Exception as e:
         log.exception("kubectl_get failed")
         return f"ERROR: kubectl get failed: {e}"
@@ -265,7 +277,7 @@ def kubectl_describe(resource_type: str, name: str, namespace: str = "default") 
             lines.append(f"Spec:\n{spec_str}")
 
         output = "\n".join(lines)
-        return output[:MAX_OUTPUT_CHARS] if output else "(no output)"
+        return _redact_sensitive_output(output[:MAX_OUTPUT_CHARS] if output else "(no output)", resource_type)
     except Exception as e:
         log.exception("kubectl_describe failed")
         return f"ERROR: kubectl describe failed: {e}"

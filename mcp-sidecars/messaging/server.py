@@ -1,10 +1,17 @@
 """MCP Messaging sidecar — send emails and Slack messages."""
 
 import os
+import re
 import sys
+import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "base"))
-from mcp_base import create_mcp_server, run_server
+from mcp_base import create_mcp_server, run_server, check_egress_url
+
+# Basic rate-limiting state: last send timestamp per recipient.
+_last_sent: dict[str, float] = {}
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+_SMTP_HOST_ALLOWLIST = os.environ.get("ALLOWED_SMTP_HOSTS", "").strip()
 
 server = create_mcp_server(
     "mcp-messaging",
@@ -33,6 +40,19 @@ def send_email(
         return "ERROR: SMTP_HOST not configured"
     if not user:
         return "ERROR: SMTP_USER not configured"
+
+    if not _EMAIL_RE.match(to):
+        return "ERROR: Invalid recipient email address"
+
+    if _SMTP_HOST_ALLOWLIST:
+        allowed_hosts = {h.strip() for h in _SMTP_HOST_ALLOWLIST.split(",") if h.strip()}
+        if host not in allowed_hosts:
+            return f"ERROR: SMTP host '{host}' is not in the allowlist"
+
+    now = time.time()
+    if now - _last_sent.get(to, 0) < 10:
+        return f"ERROR: Rate limit exceeded for {to}. Please wait before retrying."
+    _last_sent[to] = now
 
     try:
         msg = MIMEText(body)

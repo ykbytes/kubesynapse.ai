@@ -1,0 +1,16 @@
+{
+  "sidecarName": "browser",
+  "version": "1.0.0",
+  "allowedTools": ["browse_url", "screenshot", "click_element", "fill_form"],
+  "networkEgress": {
+    "domains": ["*"],
+    "ips": [],
+    "ports": [80, 443]
+  },
+  "resourceLimits": {
+    "cpuRequest": "100m",
+    "cpuLimit": "1000m",
+    "memoryRequest": "128Mi",
+    "memoryLimit": "512Mi"
+  }
+}

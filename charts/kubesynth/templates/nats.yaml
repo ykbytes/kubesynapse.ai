@@ -1,9 +1,12 @@
+{{- if .Values.nats.enabled }}
 # NATS deployment for Agent-to-Agent message bus
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ include "kubesynth.fullname" . }}-nats
   labels:
+    {{- include "kubesynth.labels" . | nindent 4 }}
+    app.kubernetes.io/component: nats
     app: nats
 spec:
   replicas: 1
@@ -13,12 +16,15 @@ spec:
   template:
     metadata:
       labels:
+        {{- include "kubesynth.labels" . | nindent 8 }}
+        app.kubernetes.io/component: nats
         app: nats
     spec:
 {{- with (include "kubesynth.imagePullSecrets" .) }}
 {{ . | nindent 6 }}
 {{- end }}
       automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
@@ -43,12 +49,21 @@ spec:
           args: ["-js", "-m", "8222"]  # JetStream + HTTP monitoring port for health probes
           resources:
 {{ toYaml .Values.nats.resources | indent 12 }}
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: 8222
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 18
           livenessProbe:
             httpGet:
               path: /healthz
               port: 8222
             initialDelaySeconds: 10
             periodSeconds: 15
+            timeoutSeconds: 3
             failureThreshold: 3
           readinessProbe:
             httpGet:
@@ -56,6 +71,7 @@ spec:
               port: 8222
             initialDelaySeconds: 5
             periodSeconds: 10
+            timeoutSeconds: 3
             failureThreshold: 3
           volumeMounts:
             - name: tmp
@@ -68,6 +84,10 @@ apiVersion: v1
 kind: Service
 metadata:
   name: {{ include "kubesynth.fullname" . }}-nats
+  labels:
+    {{- include "kubesynth.labels" . | nindent 4 }}
+    app.kubernetes.io/component: nats
+    app: nats
 spec:
   selector:
     app: nats
@@ -80,3 +100,4 @@ spec:
       port: 8222
       targetPort: 8222
       name: monitor
+{{- end }}

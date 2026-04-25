@@ -4,14 +4,14 @@ Provides the ability for agents to pause execution and wait for human approval
 via Kubernetes AgentApproval CRD before executing high-risk actions.
 """
 
-import json
 import hashlib
+import json
 import logging
 import os
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from threading import Lock
-from typing import Any, Optional, TypedDict
+from typing import Any, TypedDict
 
 import httpx
 
@@ -20,7 +20,8 @@ logger = logging.getLogger("hitl")
 client: Any
 config: Any
 try:
-    from kubernetes import client as _k8s_client, config as _k8s_config  # type: ignore[import-untyped]
+    from kubernetes import client as _k8s_client  # type: ignore[import-untyped]
+    from kubernetes import config as _k8s_config
 
     client = _k8s_client
     config = _k8s_config
@@ -64,13 +65,13 @@ def _slugify_k8s_name(value: str, max_length: int = 63) -> str:
 
 
 def _build_approval_name(agent_name: str, request_id: str, action: str, tool_name: str) -> str:
-    digest = hashlib.sha256(f"{request_id}:{action}:{tool_name}".encode("utf-8")).hexdigest()[:12]
+    digest = hashlib.sha256(f"{request_id}:{action}:{tool_name}".encode()).hexdigest()[:12]
     base_max_length = max(1, 63 - len(digest) - 1)
     base = _slugify_k8s_name(agent_name, max_length=base_max_length)
     return f"{base}-{digest}"
 
 
-def _serialize_tool_args(tool_args: Optional[dict[str, Any]]) -> str:
+def _serialize_tool_args(tool_args: dict[str, Any] | None) -> str:
     payload = json.dumps(tool_args or {}, default=str, sort_keys=True)
     if len(payload.encode("utf-8")) <= HITL_MAX_TOOL_ARGS_BYTES:
         return payload
@@ -141,9 +142,9 @@ def request_approval(
     agent_name: str,
     action: str,
     tool_name: str = "",
-    tool_args: Optional[dict[str, Any]] = None,
+    tool_args: dict[str, Any] | None = None,
     request_id: str = "",
-    namespace: Optional[str] = None,
+    namespace: str | None = None,
 ) -> ApprovalResult:
     if not request_id.strip():
         raise ValueError("request_id must not be empty")
@@ -175,7 +176,7 @@ def request_approval(
             "toolName": tool_name,
             "toolArgs": _serialize_tool_args(tool_args),
             "requestId": request_id,
-            "requestedAt": datetime.now(timezone.utc).isoformat(),
+            "requestedAt": datetime.now(UTC).isoformat(),
         },
         "status": {
             "decision": "pending",
@@ -262,7 +263,7 @@ def request_approval(
 def hitl_gate(
     action_description: str,
     tool_name: str = "",
-    tool_args: Optional[dict[str, Any]] = None,
+    tool_args: dict[str, Any] | None = None,
     request_id: str = "",
 ) -> ApprovalResult:
     agent_name = os.getenv("AGENT_NAME", "unknown-agent")

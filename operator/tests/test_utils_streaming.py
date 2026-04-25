@@ -6,7 +6,6 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 CONFIG_PATH = Path(__file__).resolve().parents[1] / "config.py"
 CONFIG_SPEC = importlib.util.spec_from_file_location("operator_config_under_test", CONFIG_PATH)
@@ -65,7 +64,7 @@ class InvokeAgentRuntimeStreamTests(unittest.TestCase):
         client.__exit__ = MagicMock(return_value=False)
 
         with (
-            patch.object(operator_utils.httpx, "Client", return_value=client) as mock_client_cls,
+            patch.object(operator_utils.httpx, "Client", return_value=client),
             patch.object(operator_utils, "invoke_agent_runtime") as mock_invoke,
             self.assertLogs("operator-utils", level="INFO") as logs,
         ):

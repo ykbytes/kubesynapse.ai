@@ -2,22 +2,20 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import logging
-import os
 import time
 import uuid
 from pathlib import Path
 from typing import Any
 
 import httpx
-from fastapi import HTTPException
-
 from analysis import (
     _build_response_metadata,
+    build_prompt_format,
     build_tool_only_response,
-    build_compaction_hints,
     check_context_overflow,
     classify_error_type,
     classify_task_type,
@@ -25,18 +23,16 @@ from analysis import (
     derive_task_status,
     detect_anti_patterns,
     detect_completion_status,
-    extract_error_message,
+    detect_task_errors,
     extract_artifacts_from_messages,
+    extract_error_message,
     extract_reasoning_from_parts,
     extract_response_text,
     extract_text_from_parts,
     extract_tool_calls_from_messages,
     get_latest_assistant_payload,
     is_error_retryable,
-    detect_task_errors,
-    build_prompt_format,
     recommend_compaction_strategy,
-    runtime_capabilities,
     select_agent_for_prompt,
 )
 from config import (
@@ -62,11 +58,10 @@ from config import (
     SERVICE_NAME,
     SERVICE_NAMESPACE,
     SESSION_ABORT_TIMEOUT_SECONDS,
-    SESSION_IDLE_TIMEOUT_SECONDS,
     SESSION_INIT_ON_CREATE,
     WORKSPACE_SNAPSHOT_ENABLED,
 )
-from hitl import hitl_gate
+from fastapi import HTTPException
 from memory import (
     SESSION_MEMORY,
     build_handoff_entry,
@@ -88,7 +83,6 @@ from opencode_client import (
     wait_for_session_idle,
 )
 from prompts import (
-    AUTONOMY_CONTINUATION_PROMPT,
     AUTONOMY_SYSTEM_PROMPT,
     build_format_system_prompt,
     build_handoff_resumption_prompt,
@@ -104,8 +98,10 @@ from prompts import (
 from sanitize_secrets import redact_secrets
 from session import SESSION_REGISTRY
 from skills import SKILL_RUNTIME_CONFIG
-from utils import dedupe_items, truncate_text
 from workspace import get_or_refresh_snapshot
+
+from hitl import hitl_gate
+from utils import dedupe_items, truncate_text
 
 logger = logging.getLogger("opencode-runtime")
 
@@ -687,7 +683,7 @@ def _send_prompt_with_live_updates_and_recovery(
             # LLM error, or race condition).  Re-send the prompt.
             if time.monotonic() > idle_grace_until:
                 session_status = get_session_status(session_id)
-                if str(session_status.get("type", "idle")) == "idle":
+                if str(session_status.get("type", "idle")) == "idle":  # noqa: SIM102 — nested if for readability
                     if idle_retry_count < max_idle_retries:
                         idle_retry_count += 1
                         logger.warning(
@@ -779,7 +775,7 @@ def invoke_opencode(request: InvokeRequest, stream_callback: StreamCallback = No
             session_id = SESSION_REGISTRY.get_or_set(logical_thread_id, session_id)
             created_new_session = True
 
-    if created_new_session and request.autonomous and SESSION_INIT_ON_CREATE:
+    if created_new_session and request.autonomous and SESSION_INIT_ON_CREATE:  # noqa: SIM102 — nested if for readability
         if not init_session(session_id, selected_model):
             logger.warning("Session init failed for %s", session_id)
 
@@ -874,10 +870,8 @@ def invoke_opencode(request: InvokeRequest, stream_callback: StreamCallback = No
 
     def _emit(event_type: str, data: dict[str, Any]) -> None:
         if stream_callback is not None:
-            try:
+            with contextlib.suppress(Exception):
                 stream_callback(event_type, data)
-            except Exception:
-                pass
 
     for turn in range(effective_max_turns):
         _emit("response.turn_started", {"turn": turn + 1, "max_turns": effective_max_turns, "agent": current_agent})

@@ -1,0 +1,16 @@
+{
+  "sidecarName": "rag",
+  "version": "1.0.0",
+  "allowedTools": ["index_documents", "semantic_search", "collection_info"],
+  "networkEgress": {
+    "domains": [],
+    "ips": [],
+    "ports": [6333]
+  },
+  "resourceLimits": {
+    "cpuRequest": "100m",
+    "cpuLimit": "1000m",
+    "memoryRequest": "256Mi",
+    "memoryLimit": "1Gi"
+  }
+}

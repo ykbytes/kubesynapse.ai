@@ -11,7 +11,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY main.py auth_store.py enterprise_auth.py jwt_utils.py auth_middleware.py ./
+COPY main.py auth_store.py enterprise_auth.py jwt_utils.py auth_middleware.py trace_store.py traces_router.py constants.py utils.py ./
 RUN chown -R gatewayuser:gateway /app
 
 USER gatewayuser

@@ -191,9 +191,9 @@ export function AdminPanel({ token }: AdminPanelProps) {
   );
 
   return (
-    <div className="space-y-6">
-      <div className="rounded-3xl border border-border/60 bg-gradient-to-br from-background/95 via-background/90 to-muted/35 p-5 shadow-sm shadow-black/5">
-        <div className="flex flex-wrap items-start justify-between gap-4">
+    <div className="space-y-3">
+      <div className="rounded-3xl border border-border/60 bg-gradient-to-br from-background/95 via-background/90 to-muted/35 p-3 shadow-sm shadow-black/5">
+        <div className="flex flex-wrap items-start justify-between gap-2">
           <div className="space-y-2">
             <div className="flex flex-wrap items-center gap-2">
               <Badge variant="outline" className="border-border/60 bg-background/80">Identity and access</Badge>
@@ -263,8 +263,9 @@ export function AdminPanel({ token }: AdminPanelProps) {
 
       {/* Table */}
       <Card className="overflow-hidden border-border/60 bg-background/80 shadow-sm shadow-black/5">
-        <ScrollArea className="w-full max-h-[calc(100vh-280px)]">
-          <table className="min-w-[960px] w-full text-sm">
+        <ScrollArea className="w-full max-h-[calc(100vh-280px)]" type="auto">
+          <div className="overflow-x-auto">
+            <table className="min-w-[960px] w-full text-sm">
             <thead className="sticky top-0 border-b border-border bg-background/95 backdrop-blur">
               <tr>
                 <th className="px-4 py-2.5 text-left"><SortButton field="username">Username</SortButton></th>
@@ -313,7 +314,7 @@ export function AdminPanel({ token }: AdminPanelProps) {
                   <td className="px-4 py-2.5 text-muted-foreground text-xs">{formatDate(u.last_login_at)}</td>
                   <td className="px-4 py-2.5 text-right">
                     <div className="flex items-center justify-end gap-1">
-                      <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openEdit(u)} title="Edit user">
+                      <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openEdit(u)} title="Edit user" aria-label="Edit user">
                         <Pencil className="h-3.5 w-3.5" />
                       </Button>
                       <Button
@@ -322,6 +323,7 @@ export function AdminPanel({ token }: AdminPanelProps) {
                         className={`h-7 w-7 ${u.is_active ? "text-red-500 hover:text-red-600" : "text-emerald-500 hover:text-emerald-600"}`}
                         onClick={() => void handleToggleActive(u)}
                         title={u.is_active ? "Lock user" : "Activate user"}
+                        aria-label={u.is_active ? "Lock user" : "Activate user"}
                       >
                         {u.is_active ? <X className="h-3.5 w-3.5" /> : <Check className="h-3.5 w-3.5" />}
                       </Button>
@@ -331,6 +333,7 @@ export function AdminPanel({ token }: AdminPanelProps) {
               ))}
             </tbody>
           </table>
+          </div>
         </ScrollArea>
       </Card>
 

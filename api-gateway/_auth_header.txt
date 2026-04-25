@@ -1,0 +1,90 @@
+"""Authentication, admin, and usage routers."""
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+from fastapi import (
+    APIRouter,
+    Cookie,
+    Depends,
+    Header,
+    HTTPException,
+    JSONResponse,
+    RedirectResponse,
+    Request,
+    Response,
+    status,
+)
+
+from auth_middleware import (
+    AUTH_MODE,
+    OIDC_TRANSACTION_COOKIE_NAME,
+    auth_configuration_payload,
+    authenticate_bearer_token,
+    browser_auth_enabled,
+    clear_oidc_transaction_cookie,
+    clear_refresh_cookie,
+    ensure_role,
+    issue_session_response,
+    local_access_enabled,
+    principal_from_local_user,
+    registration_allowed,
+    request_client_ip,
+    safe_record_audit,
+    set_oidc_transaction_cookie,
+    set_refresh_cookie,
+    verify_token,
+)
+from auth_store import (
+    change_user_password,
+    consume_password_reset_token,
+    count_users,
+    create_local_user,
+    create_password_reset_token,
+    create_session_for_user,
+    get_active_user_context,
+    get_user_by_username,
+    is_user_locked,
+    list_users as list_local_users,
+    login_rate_limit_key,
+    login_rate_limited,
+    note_login_attempt,
+    purge_old_audit_logs,
+    query_audit_logs,
+    record_audit_log,
+    reset_failed_logins,
+    revoke_refresh_token,
+    rotate_refresh_session,
+    serialize_user,
+    update_user_fields,
+    upsert_external_user,
+    validate_email,
+    verify_password,
+)
+from enterprise_auth import (
+    authenticate_ldap_user,
+    build_oidc_authorization_request,
+    build_saml_authorization_request,
+    exchange_oidc_code,
+    exchange_saml_response,
+    get_oidc_provider,
+    get_saml_provider,
+    ldap_enabled,
+    sanitize_redirect_path,
+    saml_metadata_xml,
+)
+from jwt_utils import REFRESH_COOKIE_NAME, REFRESH_TOKEN_TTL_SECONDS
+from models import (
+    AuthLoginRequest,
+    AuthRegisterRequest,
+    ChangePasswordRequest,
+    CreateUserRequest,
+    DeleteResponse,
+    ForgotPasswordRequest,
+    ResetPasswordRequest,
+    UpdateUserRequest,
+)
+
+router = APIRouter()
+logger = logging.getLogger("api-gateway.auth")

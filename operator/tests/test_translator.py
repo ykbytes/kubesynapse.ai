@@ -3,12 +3,11 @@
 §kagent-pattern-2 test coverage.
 """
 
-import json
 import sys
 import types
 import unittest
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -91,8 +90,8 @@ for module_name in [
 ]:
     sys.modules.pop(module_name, None)
 
-from builders.translator import AgentOutputs, translate_agent  # noqa: E402
 from builders.helpers import sandbox_name  # noqa: E402
+from builders.translator import AgentOutputs, translate_agent  # noqa: E402
 
 
 class TestAgentOutputsDataclass(unittest.TestCase):

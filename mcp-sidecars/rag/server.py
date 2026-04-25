@@ -57,7 +57,7 @@ def index_documents(texts: list[str], metadata: list[str] | None = None) -> str:
         _ensure_collection(client, len(embeddings[0]))
         points = []
         for i, (text, emb) in enumerate(zip(texts, embeddings)):
-            point_id = hashlib.md5(text.encode()).hexdigest()[:16]
+            point_id = hashlib.sha256(text.encode()).hexdigest()[:32]
             payload = {"text": text}
             if metadata and i < len(metadata):
                 payload["source"] = metadata[i]

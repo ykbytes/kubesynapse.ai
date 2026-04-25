@@ -14,8 +14,8 @@ import os
 from typing import Any
 
 import kopf
-
 from services import crd_exists
+
 from state_store import record_workflow_log_archive, safe_record_eval_state, safe_record_workflow_state
 
 logger = logging.getLogger("operator.controllers.status_projection")

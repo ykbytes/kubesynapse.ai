@@ -5,8 +5,6 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from pydantic import BaseModel, Field, model_validator
-
 from config import (
     MAX_MODEL_CHARS,
     MAX_PROMPT_CHARS,
@@ -15,6 +13,8 @@ from config import (
     MAX_THREAD_ID_CHARS,
 )
 from prompts import FORMAT_INSTRUCTIONS
+from pydantic import BaseModel, Field, model_validator
+
 from utils import normalize_identifier
 
 
@@ -49,7 +49,7 @@ class InvokeRequest(BaseModel):
     pre_authorized_actions: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def validate_request(self) -> "InvokeRequest":
+    def validate_request(self) -> InvokeRequest:
         self.prompt = self.prompt.strip()
         self.thread_id = self.thread_id.strip() or None if self.thread_id is not None else None
         self.model = self.model.strip() or None if self.model is not None else None

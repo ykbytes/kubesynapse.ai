@@ -235,7 +235,7 @@ export interface AgentInfo {
   runtime_kind?: RuntimeKind;
 }
 
-export type WorkspaceView = "agents" | "chat" | "workflows" | "evals" | "catalog" | "composer" | "policies" | "intelligence" | "mcp" | "settings" | "admin";
+export type WorkspaceView = "agents" | "chat" | "workflows" | "evals" | "catalog" | "composer" | "policies" | "intelligence" | "mcp" | "settings" | "admin" | "observatory";
 
 /* ── LLM Provider types ── */
 
@@ -1113,4 +1113,120 @@ export interface InvocationSummary {
 export interface StreamEvent {
   event: string;
   payload: Record<string, unknown>;
+}
+
+/* ── Execution Trace types ── */
+
+export type TraceEventType =
+  | "EXECUTION_STARTED"
+  | "EXECUTION_COMPLETED"
+  | "EXECUTION_FAILED"
+  | "STEP_STARTED"
+  | "STEP_COMPLETED"
+  | "STEP_FAILED"
+  | "LLM_CALL_COMPLETED"
+  | "TOOL_CALL_COMPLETED"
+  | "DECISION"
+  | "ERROR"
+  | "WARNING"
+  | "PROGRESS"
+  | "ARTIFACT_CREATED"
+  | "CUSTOM";
+
+export interface TraceEvent {
+  id: string;
+  execution_id: string;
+  event_type: TraceEventType;
+  timestamp: string;
+  step_id?: string | null;
+  payload: Record<string, unknown>;
+}
+
+export interface LLMCallRecord {
+  id: string;
+  step_id?: string | null;
+  execution_id: string;
+  model: string;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  estimated_cost_usd?: number | null;
+  latency_ms: number;
+  prompt_preview?: string | null;
+  response_preview?: string | null;
+  created_at: string;
+}
+
+export interface ToolCallRecord {
+  id: string;
+  step_id?: string | null;
+  execution_id: string;
+  tool_name: string;
+  args_preview?: string | null;
+  result_preview?: string | null;
+  latency_ms: number;
+  status: string;
+  created_at: string;
+}
+
+export interface StepTrace {
+  id: string;
+  execution_id: string;
+  name: string;
+  status: string;
+  started_at?: string | null;
+  completed_at?: string | null;
+  latency_ms?: number | null;
+  error?: string | null;
+  llm_calls: LLMCallRecord[];
+  tool_calls: ToolCallRecord[];
+  input_preview?: string | null;
+  output_preview?: string | null;
+}
+
+export interface ExecutionTrace {
+  id: string;
+  workflow_name: string;
+  namespace: string;
+  agent_name?: string | null;
+  run_id?: string | null;
+  status: string;
+  started_at?: string | null;
+  completed_at?: string | null;
+  duration_ms?: number | null;
+  input_preview?: string | null;
+  output_preview?: string | null;
+  step_count: number;
+  llm_call_count: number;
+  tool_call_count: number;
+  total_tokens: number;
+  total_cost_usd?: number | null;
+  steps: StepTrace[];
+  llm_calls: LLMCallRecord[];
+  tool_calls: ToolCallRecord[];
+  events: TraceEvent[];
+}
+
+export interface ExecutionListItem {
+  id: string;
+  workflow_name: string;
+  namespace: string;
+  agent_name?: string | null;
+  run_id?: string | null;
+  status: string;
+  started_at?: string | null;
+  completed_at?: string | null;
+  duration_ms?: number | null;
+  step_count: number;
+  llm_call_count: number;
+  tool_call_count: number;
+  total_tokens: number;
+  total_cost_usd?: number | null;
+}
+
+export interface ExecutionListResponse {
+  items: ExecutionListItem[];
+  total: number;
+  limit: number;
+  offset: number;
 }

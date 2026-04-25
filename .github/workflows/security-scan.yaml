@@ -1,0 +1,69 @@
+name: Security Scan
+
+on:
+  push:
+    branches: [main, preprod]
+  pull_request:
+    branches: [main, preprod]
+  schedule:
+    # Run weekly on Sundays at 00:00 UTC
+    - cron: "0 0 * * 0"
+
+jobs:
+  bandit:
+    name: Bandit Security Linter
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install bandit
+        run: pip install bandit
+      - name: Run bandit scan
+        run: bandit -r api-gateway/ operator/ opencode-runtime/ cli/ -c .bandit.yaml -f json -o bandit-report.json || true
+      - name: Upload bandit report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bandit-report
+          path: bandit-report.json
+      - name: Check for HIGH severity issues
+        run: bandit -r api-gateway/ operator/ opencode-runtime/ cli/ -c .bandit.yaml -ll
+
+  dependency-audit:
+    name: Dependency Vulnerability Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install pip-audit
+        run: pip install pip-audit
+      - name: Audit Python dependencies
+        run: |
+          pip-audit --requirement api-gateway/requirements.txt
+          pip-audit --requirement operator/requirements.txt
+          pip-audit --requirement opencode-runtime/requirements.txt
+      - name: Audit npm dependencies
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: cd web-ui && npm audit --audit-level=moderate
+        continue-on-error: true
+
+  secret-scan:
+    name: Secret Detection
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Scan for secrets
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: ./
+          base: main
+          head: HEAD
+          extra_args: --debug --only-verified

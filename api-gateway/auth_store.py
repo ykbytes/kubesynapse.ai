@@ -11,20 +11,21 @@ import secrets
 import threading
 import time
 import uuid
+from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
-from typing import Any, Iterator
+from datetime import UTC, datetime, timedelta
+from typing import Any
 from urllib.parse import quote_plus
 
 from passlib.context import CryptContext
 from sqlalchemy import (
+    JSON,
     Boolean,
     Column,
     DateTime,
     Float,
     ForeignKey,
     Integer,
-    JSON,
     String,
     UniqueConstraint,
     create_engine,
@@ -46,9 +47,14 @@ LOGIN_RATE_LIMIT_ATTEMPTS = max(int(os.getenv("AUTH_LOGIN_RATE_LIMIT_ATTEMPTS", 
 LOGIN_RATE_LIMIT_WINDOW_SECONDS = max(int(os.getenv("AUTH_LOGIN_RATE_LIMIT_WINDOW_SECONDS", "60")), 1)
 ACCOUNT_LOCKOUT_THRESHOLD = max(int(os.getenv("AUTH_ACCOUNT_LOCKOUT_THRESHOLD", "10")), 1)
 ACCOUNT_LOCKOUT_MINUTES = max(int(os.getenv("AUTH_ACCOUNT_LOCKOUT_MINUTES", "15")), 1)
+LOGIN_EXPONENTIAL_BACKOFF_BASE_SECONDS = max(int(os.getenv("AUTH_LOGIN_EXPONENTIAL_BACKOFF_BASE", "2")), 1)
+LOGIN_EXPONENTIAL_BACKOFF_MAX_SECONDS = max(int(os.getenv("AUTH_LOGIN_EXPONENTIAL_BACKOFF_MAX", "3600")), 1)
+PASSWORD_RESET_TOKEN_TTL_MINUTES = max(int(os.getenv("AUTH_PASSWORD_RESET_TTL_MINUTES", "60")), 5)
 
 _LOGIN_RATE_LIMIT_LOCK = threading.Lock()
 _LOGIN_ATTEMPTS: dict[str, list[float]] = {}
+_LOGIN_CONSECUTIVE_FAILURES: dict[str, int] = {}
+_LOGIN_LAST_ATTEMPT: dict[str, float] = {}
 _DEFAULT_INTELLIGENCE_NAMESPACE = "default"
 _INTELLIGENCE_NAMESPACE_TABLES = (
     "intelligence_collectors",
@@ -60,15 +66,15 @@ _INTELLIGENCE_NAMESPACE_TABLES = (
 
 
 def utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def ensure_utc(value: datetime | None) -> datetime | None:
     if value is None:
         return None
     if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc)
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 def _json_clone(value: Any) -> Any:
@@ -93,7 +99,8 @@ def _build_database_url() -> str:
             return f"{driver}://{quote_plus(username)}:{quote_plus(password)}@{host}:{port}/{quote_plus(database_name)}"
         return f"{driver}://{quote_plus(username)}@{host}:{port}/{quote_plus(database_name)}"
 
-    sqlite_path = os.getenv("DATABASE_SQLITE_PATH", "/tmp/kubesynth-gateway.db").strip()
+    import tempfile
+    sqlite_path = os.getenv("DATABASE_SQLITE_PATH", f"{tempfile.gettempdir()}/kubesynth-gateway.db").strip()
     if sqlite_path.startswith("sqlite:///"):
         return sqlite_path
     if sqlite_path == ":memory:":
@@ -104,12 +111,26 @@ def _build_database_url() -> str:
 
 
 DATABASE_URL = _build_database_url()
-ENGINE = create_engine(
-    DATABASE_URL,
-    future=True,
-    pool_pre_ping=True,
-    connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {},
-)
+
+# Connection pool tuning for production PostgreSQL
+# SQLite uses NullPool by default (no connection pooling needed)
+_engine_kwargs: dict[str, Any] = {
+    "future": True,
+    "pool_pre_ping": True,
+}
+if DATABASE_URL.startswith("sqlite"):
+    _engine_kwargs["connect_args"] = {"check_same_thread": False}
+else:
+    # PostgreSQL production pool settings
+    _engine_kwargs["pool_size"] = max(int(os.getenv("DB_POOL_SIZE", "10")), 2)
+    _engine_kwargs["max_overflow"] = max(int(os.getenv("DB_MAX_OVERFLOW", "20")), 0)
+    _engine_kwargs["pool_recycle"] = max(int(os.getenv("DB_POOL_RECYCLE", "1800")), 300)
+    _engine_kwargs["pool_timeout"] = max(float(os.getenv("DB_POOL_TIMEOUT", "30")), 5.0)
+    _engine_kwargs["connect_args"] = {
+        "options": f"-c statement_timeout={max(int(os.getenv('DB_STATEMENT_TIMEOUT_MS', '30000')), 5000)}ms",
+    }
+
+ENGINE = create_engine(DATABASE_URL, **_engine_kwargs)
 SessionLocal = sessionmaker(bind=ENGINE, autoflush=False, autocommit=False, expire_on_commit=False, future=True)
 
 
@@ -191,6 +212,17 @@ class AuditLog(Base):
     ip_address = Column(String(128), nullable=True)
     request_id = Column(String(128), nullable=True, index=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now, index=True)
+
+
+class PasswordResetToken(Base):
+    __tablename__ = "password_reset_tokens"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    token_hash = Column(String(128), nullable=False, unique=True, index=True)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    used_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
 
 
 class UsageRecord(Base):
@@ -420,6 +452,9 @@ def record_memory_items(
             entries = memory_candidates.get(memory_type)
             if not isinstance(entries, list):
                 continue
+
+            # Prepare all items first to enable batched lookup (eliminates N+1)
+            items_to_process: list[tuple[dict[str, Any], str, str, str, float, str | None]] = []
             for item in entries:
                 if not isinstance(item, dict):
                     continue
@@ -431,18 +466,30 @@ def record_memory_items(
                 score, promote_reason = _memory_score(
                     memory_type, topic, content, item if isinstance(item, dict) else None
                 )
-                existing = (
-                    session.query(MemoryRecord)
-                    .filter(
-                        MemoryRecord.namespace == namespace,
-                        MemoryRecord.agent_name == agent_name,
-                        MemoryRecord.session_id == session_id,
-                        MemoryRecord.memory_type == memory_type,
-                        MemoryRecord.topic == topic,
-                        MemoryRecord.content_hash == content_hash,
-                    )
-                    .one_or_none()
+                items_to_process.append((item, content, topic, content_hash, score, promote_reason))
+
+            if not items_to_process:
+                continue
+
+            # Single batched query for all records (eliminates N+1)
+            content_hashes = [t[3] for t in items_to_process]
+            existing_records = (
+                session.query(MemoryRecord)
+                .filter(
+                    MemoryRecord.namespace == namespace,
+                    MemoryRecord.agent_name == agent_name,
+                    MemoryRecord.session_id == session_id,
+                    MemoryRecord.memory_type == memory_type,
+                    MemoryRecord.content_hash.in_(content_hashes),
                 )
+                .all()
+            )
+            existing_by_hash: dict[str, MemoryRecord] = {
+                r.content_hash: r for r in existing_records if r.content_hash
+            }
+
+            for item, content, topic, content_hash, score, promote_reason in items_to_process:
+                existing = existing_by_hash.get(content_hash)
                 if existing is not None:
                     existing.detail_json = item
                     existing.username = username or existing.username
@@ -959,6 +1006,66 @@ class AlertHistoryRow(Base):
         }
 
 
+# Schema version tracking for migration integrity checks
+_SCHEMA_VERSION = 1  # Increment when schema changes require migration
+
+
+class SchemaVersion(Base):
+    __tablename__ = "schema_version"
+
+    id = Column(Integer, primary_key=True)
+    version = Column(Integer, nullable=False, default=0)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+
+def _verify_schema_version() -> None:
+    """Verify the database schema version matches the expected version.
+
+    If the schema_version table does not exist or the version is outdated,
+    this function logs a warning. In production, this should be enforced
+    by proper Alembic migrations.
+    """
+    try:
+        with ENGINE.begin() as connection:
+            inspector = inspect(connection)
+            if "schema_version" not in inspector.get_table_names():
+                # First boot — seed the version
+                connection.execute(
+                    text("INSERT INTO schema_version (id, version, updated_at) VALUES (1, :version, NOW())")
+                    .bindparams(version=_SCHEMA_VERSION)
+                )
+                logger.info("Initialized schema_version at %d", _SCHEMA_VERSION)
+                return
+
+            result = connection.execute(text("SELECT version FROM schema_version WHERE id = 1"))
+            row = result.fetchone()
+            if row is None:
+                connection.execute(
+                    text("INSERT INTO schema_version (id, version, updated_at) VALUES (1, :version, NOW())")
+                    .bindparams(version=_SCHEMA_VERSION)
+                )
+                logger.info("Initialized schema_version at %d", _SCHEMA_VERSION)
+                return
+
+            current_version = row[0]
+            if current_version < _SCHEMA_VERSION:
+                logger.warning(
+                    "Schema version mismatch: database=%d, expected=%d. "
+                    "Run migrations before starting the application.",
+                    current_version,
+                    _SCHEMA_VERSION,
+                )
+            elif current_version > _SCHEMA_VERSION:
+                logger.warning(
+                    "Schema version ahead of application: database=%d, expected=%d. "
+                    "Application may be outdated.",
+                    current_version,
+                    _SCHEMA_VERSION,
+                )
+    except Exception as exc:
+        logger.warning("Schema version check failed (non-fatal): %s", exc)
+
+
 def _ensure_intelligence_namespace_columns() -> None:
     with ENGINE.begin() as connection:
         inspector = inspect(connection)
@@ -1012,11 +1119,21 @@ def _ensure_workflow_run_archive_columns() -> None:
             )
 
 
+def _ensure_password_reset_token_table() -> None:
+    with ENGINE.begin() as connection:
+        inspector = inspect(connection)
+        if "password_reset_tokens" not in inspector.get_table_names():
+            Base.metadata.create_all(bind=ENGINE, tables=[PasswordResetToken.__table__])
+            logger.info("Created password_reset_tokens table")
+
+
 def init_database() -> None:
     Base.metadata.create_all(bind=ENGINE)
     _ensure_intelligence_collector_secret_columns()
     _ensure_intelligence_namespace_columns()
     _ensure_workflow_run_archive_columns()
+    _ensure_password_reset_token_table()
+    _verify_schema_version()
 
 
 @contextmanager
@@ -1525,19 +1642,39 @@ def is_user_locked(user: User) -> bool:
     return bool(locked_until and locked_until > utc_now())
 
 
-def record_failed_login(username: str) -> None:
+def record_failed_login(username: str, *, ip_address: str | None = None) -> None:
     normalized_username = username.strip().lower()
     if not normalized_username:
         return
     with db_session() as session:
         user = session.query(User).filter(User.username == normalized_username).one_or_none()
         if user is None:
+            # Audit even when user does not exist (prevents user enumeration via timing,
+            # but still logs the attempt).
+            record_audit_log(
+                action="auth.login-failed",
+                actor_sub=None,
+                actor_username=normalized_username,
+                auth_provider="local",
+                detail={"reason": "user_not_found"},
+                ip_address=ip_address,
+            )
             return
         user.failed_login_attempts = int(user.failed_login_attempts or 0) + 1
+        locked = False
         if user.failed_login_attempts >= ACCOUNT_LOCKOUT_THRESHOLD:
             user.locked_until = utc_now() + timedelta(minutes=ACCOUNT_LOCKOUT_MINUTES)
             user.failed_login_attempts = 0
+            locked = True
         user.updated_at = utc_now()
+    record_audit_log(
+        action="auth.login-failed",
+        actor_sub=str(user.id) if user else None,
+        actor_username=normalized_username,
+        auth_provider=str(user.auth_provider) if user else "local",
+        detail={"reason": "invalid_password", "account_locked": locked},
+        ip_address=ip_address,
+    )
 
 
 def reset_failed_logins(user_id: int) -> None:
@@ -1549,6 +1686,122 @@ def reset_failed_logins(user_id: int) -> None:
         user.locked_until = None
         user.last_login_at = utc_now()
         user.updated_at = utc_now()
+
+
+# ── Password reset ──
+
+
+def create_password_reset_token(user_id: int) -> str:
+    """Generate a single-use, time-limited password reset token."""
+    token = secrets.token_urlsafe(32)
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    expires_at = utc_now() + timedelta(minutes=PASSWORD_RESET_TOKEN_TTL_MINUTES)
+    with db_session() as session:
+        # Invalidate any existing active tokens for this user
+        session.query(PasswordResetToken).filter(
+            PasswordResetToken.user_id == user_id,
+            PasswordResetToken.used_at.is_(None),
+            PasswordResetToken.expires_at > utc_now(),
+        ).update({"used_at": utc_now()})
+        session.add(
+            PasswordResetToken(
+                user_id=user_id,
+                token_hash=token_hash,
+                expires_at=expires_at,
+            )
+        )
+        session.flush()
+    return token
+
+
+def verify_password_reset_token(token: str) -> dict[str, Any] | None:
+    """Return the user dict if the token is valid and unused, else None."""
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    with db_session() as session:
+        record = (
+            session.query(PasswordResetToken)
+            .filter(
+                PasswordResetToken.token_hash == token_hash,
+                PasswordResetToken.used_at.is_(None),
+                PasswordResetToken.expires_at > utc_now(),
+            )
+            .one_or_none()
+        )
+        if record is None:
+            return None
+        user = session.get(User, record.user_id)
+        if user is None or not user.is_active:
+            return None
+        return serialize_user(user)
+
+
+def consume_password_reset_token(token: str, new_password: str) -> dict[str, Any]:
+    """Validate token, update password, and mark token consumed."""
+    if not password_meets_policy(new_password):
+        raise ValueError(
+            "Password must be at least 8 characters and include an uppercase letter, a lowercase letter, and a digit."
+        )
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    with db_session() as session:
+        record = (
+            session.query(PasswordResetToken)
+            .filter(
+                PasswordResetToken.token_hash == token_hash,
+                PasswordResetToken.used_at.is_(None),
+                PasswordResetToken.expires_at > utc_now(),
+            )
+            .one_or_none()
+        )
+        if record is None:
+            raise ValueError("Invalid or expired password reset token.")
+        user = session.get(User, record.user_id)
+        if user is None:
+            raise ValueError("User not found.")
+        if not user.is_active:
+            raise ValueError("User account is inactive.")
+        user.password_hash = hash_password(new_password)
+        user.updated_at = utc_now()
+        record.used_at = utc_now()
+        session.flush()
+        session.refresh(user)
+        return serialize_user(user)
+
+
+# ── Audit helpers ──
+
+
+def audit_login_success(
+    *,
+    username: str,
+    auth_provider: str,
+    ip_address: str | None,
+    user_id: int | None = None,
+) -> None:
+    record_audit_log(
+        action="auth.login",
+        actor_sub=str(user_id) if user_id else None,
+        actor_username=username,
+        auth_provider=auth_provider,
+        detail={"success": True},
+        ip_address=ip_address,
+    )
+
+
+def audit_login_failure(
+    *,
+    username: str,
+    auth_provider: str,
+    reason: str,
+    ip_address: str | None,
+) -> None:
+    record_audit_log(
+        action="auth.login-failed",
+        actor_sub=None,
+        actor_username=username,
+        auth_provider=auth_provider,
+        detail={"reason": reason},
+        ip_address=ip_address,
+    )
 
 
 def get_active_user_context(user_id: int) -> dict[str, Any] | None:
@@ -1628,9 +1881,7 @@ def is_session_active(session_id: str, *, user_id: int | None = None) -> bool:
             revoked_at = ensure_utc(record.revoked_at)
             if revoked_at is None or utc_now() > revoked_at + timedelta(seconds=_SESSION_REVOKE_GRACE_SECONDS):
                 return False
-        if user_id is not None and int(record.user_id) != int(user_id):
-            return False
-        return True
+        return not (user_id is not None and int(record.user_id) != int(user_id))
 
 
 def verify_refresh_session(refresh_token: str) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -1688,20 +1939,37 @@ def login_rate_limit_key(ip_address: str | None, username: str) -> str:
 
 
 def login_rate_limited(key: str) -> bool:
+    """Return True if the key is rate-limited (window limit or exponential backoff)."""
     now = time.time()
     with _LOGIN_RATE_LIMIT_LOCK:
         attempts = [item for item in _LOGIN_ATTEMPTS.get(key, []) if now - item <= LOGIN_RATE_LIMIT_WINDOW_SECONDS]
         _LOGIN_ATTEMPTS[key] = attempts
-        return len(attempts) >= LOGIN_RATE_LIMIT_ATTEMPTS
+        if len(attempts) >= LOGIN_RATE_LIMIT_ATTEMPTS:
+            return True
+        # Exponential backoff after consecutive failures exceed the window threshold
+        consecutive = _LOGIN_CONSECUTIVE_FAILURES.get(key, 0)
+        if consecutive >= LOGIN_RATE_LIMIT_ATTEMPTS:
+            backoff = min(
+                LOGIN_EXPONENTIAL_BACKOFF_BASE_SECONDS * (2 ** (consecutive - LOGIN_RATE_LIMIT_ATTEMPTS)),
+                LOGIN_EXPONENTIAL_BACKOFF_MAX_SECONDS,
+            )
+            last_attempt = _LOGIN_LAST_ATTEMPT.get(key, 0)
+            if now - last_attempt < backoff:
+                return True
+        return False
 
 
 def note_login_attempt(key: str, *, success: bool) -> None:
     with _LOGIN_RATE_LIMIT_LOCK:
         if success:
             _LOGIN_ATTEMPTS.pop(key, None)
+            _LOGIN_CONSECUTIVE_FAILURES.pop(key, None)
+            _LOGIN_LAST_ATTEMPT.pop(key, None)
             return
         attempts = _LOGIN_ATTEMPTS.setdefault(key, [])
         attempts.append(time.time())
+        _LOGIN_LAST_ATTEMPT[key] = time.time()
+        _LOGIN_CONSECUTIVE_FAILURES[key] = _LOGIN_CONSECUTIVE_FAILURES.get(key, 0) + 1
 
 
 def record_audit_log(
@@ -1815,10 +2083,8 @@ _DEFAULT_PRICING: dict[str, dict[str, float]] = {
     "claude-3-5-haiku-20241022": {"prompt_per_1k": 0.001, "completion_per_1k": 0.005},
 }
 
-import json as _json
-
 _pricing_override = os.getenv("MODEL_PRICING_JSON", "").strip()
-MODEL_PRICING: dict[str, dict[str, float]] = _json.loads(_pricing_override) if _pricing_override else _DEFAULT_PRICING
+MODEL_PRICING: dict[str, dict[str, float]] = json.loads(_pricing_override) if _pricing_override else _DEFAULT_PRICING
 
 
 def estimate_cost(model: str | None, prompt_tokens: int, completion_tokens: int) -> float | None:

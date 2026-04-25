@@ -9,8 +9,8 @@ import logging
 from typing import Any
 
 import kopf
-
 from reconcile import execute_reconcile
+
 from utils import validate_supported_policy_spec
 
 logger = logging.getLogger("operator.controllers.policy")

@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-
 from config import (
     AGENT_SKILL_FILES_ENV,
     DEFAULT_AGENT,
@@ -41,6 +40,7 @@ from config import (
     _parse_json_env,
     build_litellm_base_url,
 )
+
 from utils import dedupe_items, normalize_relative_path, serialize_file_content
 
 logger = logging.getLogger("opencode-runtime")
@@ -105,7 +105,7 @@ def parse_skill_frontmatter(path: str, content: str) -> tuple[str, str, list[str
 
 def deep_merge_config(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
     """Recursively merge *override* into *base* and return a new dict."""
-    merged: dict[str, Any] = {key: value for key, value in base.items()}
+    merged: dict[str, Any] = dict(base.items())
     for key, value in override.items():
         existing = merged.get(key)
         if isinstance(existing, dict) and isinstance(value, dict):

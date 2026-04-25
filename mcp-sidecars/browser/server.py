@@ -9,7 +9,7 @@ import tempfile
 from urllib.parse import urlparse
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "base"))
-from mcp_base import create_mcp_server, run_server
+from mcp_base import create_mcp_server, run_server, check_egress_url
 
 log = logging.getLogger("mcp-browser")
 
@@ -79,6 +79,9 @@ def browse_url(url: str, wait_seconds: int = 3) -> str:
     url_err = _validate_url(url)
     if url_err:
         return f"BLOCKED: {url_err}"
+    egress_err = check_egress_url(url)
+    if egress_err:
+        return f"BLOCKED: {egress_err}"
     try:
         from playwright.sync_api import sync_playwright
         with sync_playwright() as p:
@@ -102,6 +105,9 @@ def screenshot(url: str, full_page: bool = False) -> str:
     url_err = _validate_url(url)
     if url_err:
         return f"BLOCKED: {url_err}"
+    egress_err = check_egress_url(url)
+    if egress_err:
+        return f"BLOCKED: {egress_err}"
     try:
         from playwright.sync_api import sync_playwright
         out_path = os.path.join(WORK_DIR, "screenshot.png")
@@ -126,6 +132,9 @@ def click_element(url: str, selector: str) -> str:
     url_err = _validate_url(url)
     if url_err:
         return f"BLOCKED: {url_err}"
+    egress_err = check_egress_url(url)
+    if egress_err:
+        return f"BLOCKED: {egress_err}"
     try:
         from playwright.sync_api import sync_playwright
         with sync_playwright() as p:
@@ -149,6 +158,9 @@ def fill_form(url: str, selector: str, value: str) -> str:
     url_err = _validate_url(url)
     if url_err:
         return f"BLOCKED: {url_err}"
+    egress_err = check_egress_url(url)
+    if egress_err:
+        return f"BLOCKED: {egress_err}"
     try:
         from playwright.sync_api import sync_playwright
         with sync_playwright() as p:

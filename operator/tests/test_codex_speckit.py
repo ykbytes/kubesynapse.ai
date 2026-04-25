@@ -31,17 +31,17 @@ finally:
     else:
         sys.modules.pop("config", None)
 
-parse_goose_config_files = operator_utils.parse_goose_config_files
+parse_runtime_config_files = operator_utils.parse_runtime_config_files
 render_prompt = operator_utils.render_prompt
 validate_workflow_graph = operator_utils.validate_workflow_graph
 
 
 class CodexConfigFileTests(unittest.TestCase):
-    """Validates that parse_goose_config_files (reused for codex) handles
+    """Validates that parse_runtime_config_files (reused for codex) handles
     codex-specific configFiles the same way as goose config files."""
 
     def test_accepts_valid_codex_config_files(self) -> None:
-        parsed = parse_goose_config_files(
+        parsed = parse_runtime_config_files(
             {
                 "config.yaml": {"CODEX_MODE": "auto"},
                 "prompts/system.md": "You are a helpful assistant.",
@@ -52,7 +52,7 @@ class CodexConfigFileTests(unittest.TestCase):
         self.assertEqual(parsed["prompts/system.md"], "You are a helpful assistant.")
 
     def test_accepts_none_config_files(self) -> None:
-        parsed = parse_goose_config_files(
+        parsed = parse_runtime_config_files(
             None,
             source="AIAgent.spec.runtime.codex.configFiles",
         )
@@ -60,7 +60,7 @@ class CodexConfigFileTests(unittest.TestCase):
 
     def test_rejects_secrets_yaml_in_codex_config(self) -> None:
         with self.assertRaisesRegex(ValueError, "environment variables"):
-            parse_goose_config_files(
+            parse_runtime_config_files(
                 {"secrets.yaml": {"API_KEY": "secret"}},
                 source="AIAgent.spec.runtime.codex.configFiles",
             )
@@ -69,7 +69,7 @@ class CodexConfigFileTests(unittest.TestCase):
 class SpecKitWorkflowGraphTests(unittest.TestCase):
     """Validates the DAG structure of the Spec Kit pipeline workflow."""
 
-    SPECKIT_STEPS = [
+    SPECKIT_STEPS = [  # noqa: RUF012 — mutable default in test/class attr
         {"name": "write-spec", "agentRef": "spec-writer"},
         {
             "name": "scrum-review",
@@ -111,7 +111,7 @@ class SpecKitPromptRenderingTests(unittest.TestCase):
     """Validates that structured JSON placeholders resolve correctly
     through the five Spec Kit pipeline stages."""
 
-    MOCK_STEP_RESULTS = {
+    MOCK_STEP_RESULTS = {  # noqa: RUF012 — mutable default in test/class attr
         "write-spec": {
             "output": {
                 "json": {

@@ -8,7 +8,6 @@ import uuid
 from pathlib import Path
 from unittest.mock import patch
 
-
 MODULE_PATH = Path(__file__).resolve().parents[1] / "enterprise_auth.py"
 
 

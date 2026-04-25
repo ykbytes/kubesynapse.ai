@@ -14,10 +14,7 @@ import time
 from typing import Any
 
 import kopf
-
 import kubernetes.client  # type: ignore[import-untyped]
-from kubernetes.client.rest import ApiException  # type: ignore[import-untyped]
-
 from config import (
     A2A_ALLOWED_CALLERS_ENV,
     A2A_ALLOWED_TARGETS_ENV,
@@ -41,7 +38,6 @@ from config import (
     MCP_AUTH_SECRET_NAME,
     MCP_HUB_NAMESPACE,
     MCP_SIDECAR_CATALOG,
-    OTEL_ENDPOINT,
     OPENCODE_DEFAULT_PROVIDER,
     OPENCODE_MCP_CONNECTIONS_ENV,
     OPENCODE_MCP_SIDECARS_ENV,
@@ -50,17 +46,17 @@ from config import (
     OPENCODE_RUNTIME_IMAGE,
     OPENCODE_RUNTIME_IMAGE_PULL_POLICY,
     OPERATOR_NAMESPACE,
-    QDRANT_SVC,
+    OTEL_ENDPOINT,
     RUNTIME_SERVICE_ACCOUNT,
     SECRET_NAME,
     SUPPORTED_RUNTIME_KINDS,
     TRUST_BUNDLE_CONFIGMAP_NAME,
     TRUST_BUNDLE_MOUNT_PATH,
     WORKER_ACTIVE_DEADLINE_SECONDS,
-    WORKER_CPU_LIMIT,
-    WORKER_CPU_REQUEST,
     WORKER_ARTIFACT_SIZE,
     WORKER_ARTIFACT_STORAGE_CLASS,
+    WORKER_CPU_LIMIT,
+    WORKER_CPU_REQUEST,
     WORKER_IMAGE,
     WORKER_IMAGE_PULL_POLICY,
     WORKER_MEMORY_LIMIT,
@@ -69,14 +65,7 @@ from config import (
     WORKER_TTL_SECONDS_AFTER_FINISHED,
     serialize_env_value,
 )
-from utils import (
-    parse_agent_a2a_config,
-    parse_agent_skills_config,
-    merge_runtime_config_files,
-    parse_policy_a2a_config,
-    parse_runtime_config_files,
-    workflow_journal_path,
-)
+from kubernetes.client.rest import ApiException  # type: ignore[import-untyped]
 
 from builders.helpers import (
     KUBERNETES_RESOURCE_NAME_PATTERN,
@@ -86,11 +75,18 @@ from builders.helpers import (
     agent_owner_labels,
     build_pvc_spec,
     hashed_resource_name,
-    platform_namespace_selector,
     resolved_api_gateway_internal_url,
     sandbox_name,
     worker_artifact_pvc_name,
     worker_passthrough_env,
+)
+from utils import (
+    merge_runtime_config_files,
+    parse_agent_a2a_config,
+    parse_agent_skills_config,
+    parse_policy_a2a_config,
+    parse_runtime_config_files,
+    workflow_journal_path,
 )
 
 logger = logging.getLogger("operator.builders")
@@ -300,8 +296,8 @@ def _extract_skill_mcp_servers(skills_config: dict[str, Any]) -> set[str]:
                         mcp = fm.get("allowedMcpServers") or fm.get("allowed_mcp_servers") or []
                         if isinstance(mcp, list):
                             servers.update(s for s in mcp if isinstance(s, str))
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("Failed to parse YAML frontmatter for MCP servers: %s", exc, exc_info=True)
     return servers
 
 
@@ -510,10 +506,10 @@ def _validate_mcp_sidecars(sidecars: list[dict[str, Any]]) -> list[dict[str, Any
             )
         if not KUBERNETES_RESOURCE_NAME_PATTERN.fullmatch(raw_name):
             raise kopf.PermanentError(
-                (
+
                     f"AIAgent.spec.mcpSidecars[{index}].name '{raw_name}' is invalid. "
                     "Use lowercase letters, numbers, and hyphens only."
-                )
+
             )
 
         raw_image = str(sidecar.get("image") or "").strip()
@@ -544,18 +540,18 @@ def _validate_mcp_sidecars(sidecars: list[dict[str, Any]]) -> list[dict[str, Any
         previous_name_index = seen_names.get(raw_name)
         if previous_name_index is not None:
             raise kopf.PermanentError(
-                (
+
                     f"AIAgent.spec.mcpSidecars[{index}].name '{raw_name}' duplicates "
                     f"AIAgent.spec.mcpSidecars[{previous_name_index}].name."
-                )
+
             )
         previous_port_index = seen_ports.get(port)
         if previous_port_index is not None:
             raise kopf.PermanentError(
-                (
+
                     f"AIAgent.spec.mcpSidecars[{index}].port {port} duplicates "
                     f"AIAgent.spec.mcpSidecars[{previous_port_index}].port."
-                )
+
             )
 
         normalized_sidecar: dict[str, Any] = {"name": raw_name, "image": raw_image, "port": port}
@@ -628,7 +624,60 @@ def _build_sidecar_env_items(sidecar_spec: dict[str, Any]) -> list[dict[str, Any
             continue
         if item.get("value") is not None:
             env_items.append({"name": name, "value": str(item.get("value"))})
+    # Inject egress allowlists from sidecar spec capabilities
+    egress = sidecar_spec.get("networkEgress") or {}
+    if isinstance(egress, dict):
+        domains = egress.get("domains")
+        if isinstance(domains, list):
+            env_items.append({"name": "MCP_EGRESS_DOMAINS", "value": ",".join(str(d) for d in domains)})
+        cidrs = egress.get("ips")
+        if isinstance(cidrs, list):
+            env_items.append({"name": "MCP_EGRESS_CIDRS", "value": ",".join(str(c) for c in cidrs)})
     return env_items
+
+
+def _resolve_sidecar_resources(sidecar_spec: dict[str, Any]) -> dict[str, dict[str, str]]:
+    """Resolve per-sidecar resource overrides with safe defaults."""
+    resources = sidecar_spec.get("resources") or {}
+    if not isinstance(resources, dict):
+        resources = {}
+    requests_spec = resources.get("requests") or {}
+    limits_spec = resources.get("limits") or {}
+    return {
+        "requests": {
+            "cpu": str(requests_spec.get("cpu", "50m")),
+            "memory": str(requests_spec.get("memory", "64Mi")),
+        },
+        "limits": {
+            "cpu": str(limits_spec.get("cpu", "500m")),
+            "memory": str(limits_spec.get("memory", "256Mi")),
+        },
+    }
+
+
+def _build_sidecar_egress_init_container(allowed_cidrs: list[str]) -> dict[str, Any]:
+    """Build an init container that restricts pod egress via iptables."""
+    rules = [
+        "iptables -P OUTPUT DROP",
+        "iptables -A OUTPUT -o lo -j ACCEPT",
+        "iptables -A OUTPUT -p udp --dport 53 -j ACCEPT",
+        "iptables -A OUTPUT -p tcp --dport 53 -j ACCEPT",
+        "iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT",
+    ]
+    for cidr in allowed_cidrs:
+        rules.append(f"iptables -A OUTPUT -d {cidr} -j ACCEPT")
+    return {
+        "name": "sidecar-egress-init",
+        "image": "alpine:3.19",
+        "command": ["sh", "-c", f"apk add -U --no-cache iptables && {' && '.join(rules)}"],
+        "securityContext": {
+            "runAsUser": 0,
+            "runAsNonRoot": False,
+            "allowPrivilegeEscalation": False,
+            "capabilities": {"add": ["NET_ADMIN", "NET_RAW"], "drop": ["ALL"]},
+            "seccompProfile": {"type": "RuntimeDefault"},
+        },
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -982,7 +1031,7 @@ def create_agent_statefulset_manifest(
     env.extend(_build_mcp_runtime_secret_env_bindings(mcp_connections))
 
     volume_mounts = [
-        {"name": "tmp-volume", "mountPath": "/tmp"},
+        {"name": "tmp-volume", "mountPath": "/tmp"},  # noqa: S108 — standard container tmp mount
         {"name": "state-volume", "mountPath": "/app/state"},
     ]
     volumes: list[dict[str, Any]] = [{"name": "tmp-volume", "emptyDir": {"sizeLimit": "1Gi"}}]
@@ -1145,7 +1194,11 @@ def create_agent_statefulset_manifest(
             sidecar_name = sidecar_spec.get("name", f"tool-{index}")
             sidecar_port = sidecar_spec.get("port", 8080)
             sidecar_env = _build_sidecar_env_items(sidecar_spec)
-            sidecar_vol_mounts = [{"name": "tmp-volume", "mountPath": "/tmp"}]
+            sidecar_vol_mounts = [{"name": "tmp-volume", "mountPath": "/tmp"}]  # noqa: S108 — standard container tmp mount
+            # Add egress init container if network restrictions are declared
+            egress_cidrs = sidecar_spec.get("networkEgress", {}).get("ips", [])
+            if egress_cidrs:
+                init_containers.append(_build_sidecar_egress_init_container(egress_cidrs))
             # Inject git-specific env vars and volume mounts
             if sidecar_name == "git" and git_sidecar_env:
                 sidecar_env.extend(git_sidecar_env)
@@ -1177,10 +1230,7 @@ def create_agent_statefulset_manifest(
                         "failureThreshold": 3,
                     },
                     "securityContext": container_security_context,
-                    "resources": {
-                        "requests": {"cpu": "50m", "memory": "64Mi"},
-                        "limits": {"cpu": "500m", "memory": "256Mi"},
-                    },
+                    "resources": _resolve_sidecar_resources(sidecar_spec),
                     "volumeMounts": sidecar_vol_mounts,
                 }
             )
@@ -1523,7 +1573,7 @@ def create_worker_job_manifest(
                             ],
                             "volumeMounts": [
                                 {"name": "artifacts", "mountPath": ARTIFACT_MOUNT_PATH},
-                                {"name": "tmp", "mountPath": "/tmp"},
+                                {"name": "tmp", "mountPath": "/tmp"},  # noqa: S108 — standard container tmp mount
                             ],
                         }
                     ],

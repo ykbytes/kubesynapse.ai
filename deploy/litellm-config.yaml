@@ -1,0 +1,54 @@
+# LiteLLM Proxy configuration for local development
+# 
+# Docs: https://docs.litellm.ai/docs/proxy/configs
+# 
+# This is a minimal config. In production, use the Helm chart values
+# or mount a real config with your actual model API keys.
+
+model_list:
+  - model_name: gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+      tpm: 100000
+      rpm: 1000
+
+  - model_name: gpt-4o-mini
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+      tpm: 200000
+      rpm: 2000
+
+  - model_name: claude-3-5-sonnet
+    litellm_params:
+      model: anthropic/claude-3-5-sonnet-20241022
+      api_key: os.environ/ANTHROPIC_API_KEY
+      tpm: 80000
+      rpm: 500
+
+  - model_name: claude-3-haiku
+    litellm_params:
+      model: anthropic/claude-3-haiku-20240307
+      api_key: os.environ/ANTHROPIC_API_KEY
+      tpm: 200000
+      rpm: 2000
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  database_url: os.environ/DATABASE_URL
+  store_model_in_db: true
+  proxy_batch_write_at: 60
+
+litellm_settings:
+  drop_params: true
+  success_callback: ["prometheus"]
+  failure_callback: ["prometheus"]
+
+router_settings:
+  routing_strategy: simple-shuffle
+  timeout: 60
+  num_retries: 2
+  retry_after: 1
+  allowed_fails: 3
+  cooldown_time: 30

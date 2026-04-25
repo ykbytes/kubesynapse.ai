@@ -23,7 +23,12 @@ export class ErrorBoundary extends Component<Props, State> {
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
-    console.error("[ErrorBoundary]", error, info.componentStack);
+    // In production, wire this to an error reporting service (Sentry, Datadog, etc.)
+    // rather than logging to the browser console.
+    if (process.env.NODE_ENV !== "production") {
+      // eslint-disable-next-line no-console
+      console.error("[ErrorBoundary]", error, info.componentStack);
+    }
   }
 
   handleReset = () => {

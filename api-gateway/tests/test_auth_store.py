@@ -10,7 +10,6 @@ from unittest.mock import patch
 
 from sqlalchemy import inspect
 
-
 MODULE_PATH = Path(__file__).resolve().parents[1] / "auth_store.py"
 
 

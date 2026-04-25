@@ -292,6 +292,7 @@ const TreeNodeRow = memo(function TreeNodeRow({
         disabled={isDownloading}
         className="shrink-0 rounded p-0.5 text-primary opacity-0 transition-opacity hover:bg-primary/10 group-hover:opacity-100 disabled:opacity-50"
         title="Download"
+        aria-label="Download file"
       >
         {isDownloading ? <LoaderCircle className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />}
       </button>
@@ -665,6 +666,7 @@ export const FileExplorer = memo(function FileExplorer({
           onClick={handleRefresh}
           disabled={loading || refreshing || diffLoading || diffRefreshing}
           title="Refresh"
+          aria-label="Refresh files"
         >
           <RefreshCw className={`h-3.5 w-3.5 ${loading || refreshing || diffLoading || diffRefreshing ? "animate-spin" : ""}`} />
         </Button>

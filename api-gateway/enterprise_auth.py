@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import contextlib
 import hashlib
 import hmac
 import json
@@ -14,7 +15,6 @@ from typing import Any
 from urllib.parse import urlencode, urlparse
 
 import httpx
-from jose import jwt
 
 ROLE_PRIORITY = {"viewer": 1, "operator": 2, "admin": 3}
 logger = logging.getLogger("api-gateway.enterprise-auth")
@@ -217,15 +217,11 @@ def authenticate_ldap_user(username: str, password: str) -> dict[str, Any]:
             "groups": sorted(set(group_values)),
         }
     finally:
-        try:
+        with contextlib.suppress(Exception):
             connection.unbind_s()
-        except Exception:
-            pass
         if user_connection is not None:
-            try:
+            with contextlib.suppress(Exception):
                 user_connection.unbind_s()
-            except Exception:
-                pass
 
 
 def oidc_providers() -> list[dict[str, Any]]:
@@ -602,8 +598,9 @@ def _fetch_oidc_jwks(jwks_url: str) -> list[dict[str, Any]]:
 
 def _verify_oidc_id_token(id_token: str, discovered: dict[str, Any]) -> dict[str, Any]:
     """Verify the OIDC ID token signature using the provider's JWKS, then return claims."""
-    from jose import jwk as jose_jwk, jwt as jose_jwt, JWTError
-    from jose.utils import base64url_decode as _b64decode
+    from jose import JWTError
+    from jose import jwk as jose_jwk
+    from jose import jwt as jose_jwt
 
     jwks_url = str(discovered.get("jwks_url") or "").strip()
     client_id = str(discovered.get("client_id") or "").strip()

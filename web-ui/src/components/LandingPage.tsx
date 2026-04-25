@@ -1,24 +1,10 @@
 import { useEffect, useRef, useState } from "react";
+import { motion, useInView, AnimatePresence } from "framer-motion";
 import {
-  ArrowRight,
-  Bot,
-  BrainCircuit,
-  CheckCircle2,
-  Database,
-  Eye,
-  GitBranch,
-  Globe,
-  LayoutPanelTop,
-  Lock,
-  MessageSquare,
-  Network,
-  Play,
-  RefreshCw,
-  Server,
-  Shield,
-  Timer,
-  Workflow,
-  Zap,
+  ArrowRight, Bot, BrainCircuit, CheckCircle2, Database, GitBranch,
+  Globe, LayoutPanelTop, Lock, MessageSquare, Network, Play, RefreshCw,
+  Server, Shield, Timer, Workflow, Zap, Terminal, Copy,
+  Boxes, Code, Puzzle, Moon, Sun,
 } from "lucide-react";
 import { BRAND } from "@/lib/brand";
 
@@ -28,67 +14,104 @@ interface LandingPageProps {
   onLogin: () => void;
 }
 
-// ─── Reusable sub-components ───
+// ─── Animation Variants ───
 
-function AnnouncementBar() {
-  return (
-    <div className="border-b border-border/20 bg-card/30 px-4 py-2 text-center">
-      <a
-        href="#features"
-        className="group inline-flex items-center gap-2 text-xs text-muted-foreground transition-colors hover:text-foreground"
-      >
-        <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary">New</span>
-        <span>Durable Memory, Session Continuity & Tool Governance are live</span>
-        <ArrowRight className="h-3 w-3 text-primary transition-transform group-hover:translate-x-0.5" />
-      </a>
-    </div>
-  );
+const containerVariants = {
+  hidden: { opacity: 0 },
+  visible: {
+    opacity: 1,
+    transition: { staggerChildren: 0.08, delayChildren: 0.05 },
+  },
+} as const;
+
+const itemVariants = {
+  hidden: { opacity: 0, y: 24 },
+  visible: {
+    opacity: 1,
+    y: 0,
+    transition: { duration: 0.55, ease: "easeOut" as const },
+  },
+};
+
+const fadeIn = {
+  hidden: { opacity: 0 },
+  visible: { opacity: 1, transition: { duration: 0.5 } },
+};
+
+// ─── Terminal Component ───
+
+interface TerminalLine {
+  text: string;
+  color?: string;
+  prefix?: string;
+  type?: "input" | "output" | "blank";
 }
 
-function Navbar({ onLogin }: { onLogin: () => void }) {
+
+
+// ─── Navbar ───
+
+function Navbar({ onLogin, darkMode, onToggleDark }: { onLogin: () => void; darkMode: boolean; onToggleDark: () => void }) {
   const [scrolled, setScrolled] = useState(false);
 
   useEffect(() => {
-    const onScroll = () => setScrolled(window.scrollY > 20);
-    window.addEventListener("scroll", onScroll, { passive: true });
-    return () => window.removeEventListener("scroll", onScroll);
+    const handleScroll = () => setScrolled(window.scrollY > 12);
+    window.addEventListener("scroll", handleScroll, { passive: true });
+    return () => window.removeEventListener("scroll", handleScroll);
   }, []);
 
   return (
     <nav
-      className={`glass-navbar sticky top-0 z-50 transition-all duration-300 ${scrolled ? "shadow-lg" : ""}`}
+      className={`sticky top-0 z-50 border-b transition-all duration-300 ${
+        scrolled
+          ? darkMode
+            ? "border-slate-700/80 bg-slate-900/90 shadow-sm backdrop-blur-md"
+            : "border-slate-200/80 bg-white/90 shadow-sm backdrop-blur-md"
+          : darkMode
+            ? "border-transparent bg-slate-900/60 backdrop-blur-sm"
+            : "border-transparent bg-white/60 backdrop-blur-sm"
+      }`}
     >
       <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-3.5">
-        <div className="flex items-center gap-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
+        <div className="flex items-center gap-2.5">
+          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-600 text-white shadow-sm">
             <LayoutPanelTop className="h-5 w-5" />
           </div>
-          <div>
-            <span className="text-base font-bold tracking-tight text-foreground">
+          <div className="flex items-baseline gap-2">
+            <span className="text-lg font-bold tracking-tight text-slate-900">
               {BRAND.name}
             </span>
-            <span className="ml-2 hidden text-xs font-medium text-muted-foreground sm:inline">
+            <span className="hidden text-xs font-medium text-slate-500 sm:inline">
               {BRAND.tagline}
             </span>
           </div>
         </div>
 
-        <div className="hidden items-center gap-8 text-sm font-medium text-muted-foreground md:flex">
-          <a href="#features" className="transition-colors hover:text-foreground">Features</a>
-          <a href="#scenarios" className="transition-colors hover:text-foreground">Use Cases</a>
-          <a href="#workflows" className="transition-colors hover:text-foreground">Workflows</a>
+        <div className="hidden items-center gap-8 text-sm font-medium text-slate-600 md:flex">
+          <a href="#features" className="transition-colors hover:text-slate-900">Features</a>
+          <a href="#architecture" className="transition-colors hover:text-slate-900">Architecture</a>
+          <a href="#workflows" className="transition-colors hover:text-slate-900">Workflows</a>
+          <a href="#install" className="transition-colors hover:text-slate-900">Install</a>
         </div>
 
         <div className="flex items-center gap-3">
           <button
+            onClick={onToggleDark}
+            className={`rounded-lg p-2 text-sm font-medium transition-colors ${darkMode ? "text-slate-300 hover:text-white" : "text-slate-600 hover:text-slate-900"}`}
+            aria-label={darkMode ? "Switch to light mode" : "Switch to dark mode"}
+            title={darkMode ? "Switch to light mode" : "Switch to dark mode"}
+          >
+            {darkMode ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
+          </button>
+          <button
             onClick={onLogin}
-            className="rounded-lg px-4 py-2 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
+            className={`rounded-lg px-4 py-2 text-sm font-medium transition-colors ${darkMode ? "text-slate-300 hover:text-white" : "text-slate-600 hover:text-slate-900"}`}
           >
             Sign In
           </button>
           <button
             onClick={onLogin}
-            className="glow-button rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground"
+            className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition-all hover:bg-blue-700 hover:shadow-md active:scale-[0.98]"
           >
             Get Started
           </button>
@@ -102,635 +125,1141 @@ function Navbar({ onLogin }: { onLogin: () => void }) {
 
 function HeroSection({ onLogin }: { onLogin: () => void }) {
   return (
-    <section className="relative overflow-hidden px-6 pb-20 pt-24 md:pb-32 md:pt-36">
-      {/* Decorative glow orbs — teal brand palette only */}
-      <div
-        className="glow-orb -top-32 left-1/4 h-[500px] w-[500px]"
+    <section className="relative overflow-hidden bg-white px-6 pb-20 pt-20 md:pb-28 md:pt-32">
+      {/* Subtle grid background */}
+      <div className="pointer-events-none absolute inset-0 opacity-[0.03]"
         style={{
-          background: "oklch(0.65 0.13 175 / 0.12)",
-          animation: "glow-breathe 8s ease-in-out infinite",
-        }}
-      />
-      <div
-        className="glow-orb -right-20 top-20 h-[350px] w-[350px]"
-        style={{
-          background: "oklch(0.60 0.10 190 / 0.08)",
-          animation: "glow-breathe 10s ease-in-out infinite 3s",
+          backgroundImage:
+            "linear-gradient(to right, #0f172a 1px, transparent 1px), linear-gradient(to bottom, #0f172a 1px, transparent 1px)",
+          backgroundSize: "40px 40px",
         }}
       />
 
       <div className="relative mx-auto max-w-5xl text-center">
-        {/* Pill badge */}
-        <div className="mb-8 inline-flex items-center gap-2 rounded-full border border-border/50 bg-card/50 px-4 py-1.5 text-xs font-medium text-muted-foreground backdrop-blur-sm animate-fade-in">
-          <span className="flex h-2 w-2 rounded-full bg-emerald-500" />
-          Kubernetes-native AI Agent Orchestration
-        </div>
+        <motion.div
+          initial={{ opacity: 0, y: 16 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5 }}
+          className="mb-6 inline-flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-4 py-1.5 text-xs font-semibold text-slate-600 shadow-sm"
+        >
+          <span className="flex h-2 w-2 rounded-full bg-emerald-500 ring-2 ring-emerald-500/20" />
+          Kubernetes-Native AI Agent Orchestration
+        </motion.div>
 
-        {/* Main heading */}
-        <h1 className="text-4xl font-bold tracking-tight text-foreground sm:text-5xl md:text-6xl lg:text-7xl animate-slide-up">
-          Orchestrate{" "}
-          <span className="text-shimmer">AI Agents</span>
+        <motion.h1
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.6, delay: 0.1 }}
+          className="text-4xl font-extrabold tracking-tight text-slate-900 sm:text-5xl md:text-6xl lg:text-7xl"
+        >
+          Deploy AI Agents on{" "}
+          <span className="bg-gradient-to-r from-blue-600 to-cyan-500 bg-clip-text text-transparent">
+            Kubernetes
+          </span>
           <br />
-          <span className="text-gradient-hero">That Actually Ship</span>
-        </h1>
+          <span className="text-slate-700">That Actually Ship</span>
+        </motion.h1>
 
-        {/* Subtitle */}
-        <p className="mx-auto mt-6 max-w-2xl text-base text-muted-foreground sm:text-lg md:text-xl animate-slide-up" style={{ animationDelay: "0.1s" }}>
-          Deploy autonomous AI agents on Kubernetes with durable memory, governance guardrails,
-          and workflow orchestration — from incident response to compliance.
-        </p>
+        <motion.p
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.6, delay: 0.2 }}
+          className="mx-auto mt-6 max-w-2xl text-base text-slate-600 sm:text-lg md:text-xl leading-relaxed"
+        >
+          The production-grade platform for running autonomous AI agents as StatefulSets.
+          Declarative CRDs, policy-driven governance, A2A-ready workflows — installed with Helm.
+        </motion.p>
 
-        {/* CTAs */}
-        <div className="mt-10 flex flex-col items-center gap-4 sm:flex-row sm:justify-center animate-slide-up" style={{ animationDelay: "0.2s" }}>
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.6, delay: 0.3 }}
+          className="mt-10 flex flex-col items-center gap-4 sm:flex-row sm:justify-center"
+        >
           <button
             onClick={onLogin}
-            className="glow-button group flex items-center gap-2 rounded-xl bg-primary px-6 py-3 text-sm font-semibold text-primary-foreground transition-all"
+            className="group flex items-center gap-2 rounded-xl bg-blue-600 px-7 py-3.5 text-sm font-semibold text-white shadow-lg shadow-blue-600/20 transition-all hover:bg-blue-700 hover:shadow-xl active:scale-[0.98]"
           >
             Initialize Workspace
             <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
           </button>
-          <button
-            onClick={() => document.getElementById("workflows")?.scrollIntoView({ behavior: "smooth" })}
-            className="flex items-center gap-2 rounded-xl border border-border/50 bg-card/30 px-6 py-3 text-sm font-medium text-foreground backdrop-blur-sm transition-colors hover:bg-card/60"
+          <a
+            href="#install"
+            className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-7 py-3.5 text-sm font-semibold text-slate-700 shadow-sm transition-all hover:bg-slate-50 hover:border-slate-300"
           >
-            <Play className="h-4 w-4 text-primary" />
-            Watch Demo
-          </button>
+            <Terminal className="h-4 w-4 text-blue-600" />
+            Deploy with Helm
+          </a>
+        </motion.div>
+      </div>
+    </section>
+  );
+}
+
+// ─── Ecosystem Cloud ───
+
+function EcosystemCloud() {
+  const tools = [
+    { name: "Kubernetes", icon: Server },
+    { name: "Helm", icon: Boxes },
+    { name: "OpenCode", icon: Code },
+    { name: "LiteLLM", icon: BrainCircuit },
+    { name: "NATS", icon: Network },
+    { name: "PostgreSQL", icon: Database },
+    { name: "Redis", icon: Zap },
+    { name: "Qdrant", icon: Database },
+  ];
+
+  return (
+    <section className="border-y border-slate-100 bg-slate-50/50 px-6 py-12">
+      <div className="mx-auto max-w-6xl">
+        <p className="mb-8 text-center text-xs font-semibold uppercase tracking-widest text-slate-400">
+          Built for the Kubernetes Ecosystem
+        </p>
+        <div className="flex flex-wrap items-center justify-center gap-x-10 gap-y-6">
+          {tools.map((tool) => {
+            const Icon = tool.icon;
+            return (
+              <div key={tool.name} className="flex items-center gap-2 text-slate-400">
+                <Icon className="h-5 w-5" />
+                <span className="text-sm font-medium">{tool.name}</span>
+              </div>
+            );
+          })}
         </div>
       </div>
     </section>
   );
 }
 
-// ─── Mock UI Preview ───
+// ─── Problem Section ───
 
-function MockUIPreview() {
-  const [activeChat, setActiveChat] = useState(0);
-  const chatMessages = [
-    { role: "user", text: "Deploy the incident-triage agent to production namespace" },
-    { role: "agent", text: "Deploying agent 'incident-triage' with MCP sidecars: kubernetes, messaging, git. Runtime: opencode. Memory policy: persistent." },
-    { role: "system", text: "Agent running. 3 tools loaded. Session recovered from checkpoint #47." },
+function ProblemSection() {
+  const problems = [
+    {
+      icon: Server,
+      title: "Stateful Agents Are Hard",
+      description:
+        "AI agents need memory, sessions, and checkpoints. Running them as ephemeral pods loses state on every restart.",
+    },
+    {
+      icon: Lock,
+      title: "No Built-In Governance",
+      description:
+        "Tool usage, token budgets, and output guardrails are afterthoughts. You need policy-as-code at the cluster level.",
+    },
+    {
+      icon: GitBranch,
+      title: "Orchestration Is Manual",
+      description:
+        "Multi-agent workflows require complex DAG logic, approval gates, and failure recovery — none of which come out-of-the-box.",
+    },
   ];
+
+  const ref = useRef(null);
+  const inView = useInView(ref, { once: true, margin: "-80px" });
+
+  return (
+    <section className="bg-white px-6 py-24 md:py-32" ref={ref}>
+      <div className="mx-auto max-w-7xl">
+        <motion.div
+          initial="hidden"
+          animate={inView ? "visible" : "hidden"}
+          variants={containerVariants}
+          className="mb-16 text-center"
+        >
+          <motion.p variants={itemVariants} className="text-xs font-semibold uppercase tracking-widest text-blue-600">
+            The Challenge
+          </motion.p>
+          <motion.h2 variants={itemVariants} className="mt-3 text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl md:text-5xl">
+            Managing AI Agents on K8s Is <span className="text-slate-500">Hard</span>
+          </motion.h2>
+        </motion.div>
+
+        <div className="grid gap-6 md:grid-cols-3">
+          {problems.map((p, i) => {
+            const Icon = p.icon;
+            return (
+              <motion.div
+                key={p.title}
+                variants={itemVariants}
+                initial="hidden"
+                animate={inView ? "visible" : "hidden"}
+                transition={{ delay: i * 0.1 }}
+                className="group rounded-2xl border border-slate-200 bg-white p-8 shadow-sm transition-all hover:border-blue-200 hover:shadow-md"
+              >
+                <div className="mb-5 flex h-12 w-12 items-center justify-center rounded-xl bg-blue-50 text-blue-600 ring-1 ring-blue-100 transition-colors group-hover:bg-blue-100">
+                  <Icon className="h-6 w-6" />
+                </div>
+                <h3 className="text-lg font-semibold text-slate-900">{p.title}</h3>
+                <p className="mt-3 text-sm leading-relaxed text-slate-600">{p.description}</p>
+              </motion.div>
+            );
+          })}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+// ─── Install / Terminal Showcase ───
+
+type TabKey = "install" | "agent" | "workflow" | "operate";
+
+function InstallSection() {
+  const ref = useRef(null);
+  const inView = useInView(ref, { once: true, margin: "-60px" });
+  const [activeTab, setActiveTab] = useState<TabKey>("install");
+  const [hasTyped, setHasTyped] = useState<Record<TabKey, boolean>>({ install: false, agent: false, workflow: false, operate: false });
+
+  const tabs: { key: TabKey; label: string; icon: typeof Terminal }[] = [
+    { key: "install", label: "Install", icon: Terminal },
+    { key: "agent", label: "AIAgent", icon: Bot },
+    { key: "workflow", label: "Workflow", icon: Workflow },
+    { key: "operate", label: "Operate", icon: Play },
+  ];
+
+  const tabLines: Record<TabKey, TerminalLine[]> = {
+    install: [
+      { text: "helm repo add kubesynth https://charts.kubesynth.ai", color: "command", prefix: "$", type: "input" },
+      { text: "helm repo update", color: "command", prefix: "$", type: "input" },
+      { text: "helm install kubesynth kubesynth/kubesynth \\", color: "command", prefix: "$", type: "input" },
+      { text: "  --namespace kubesynth --create-namespace \\", color: "command", prefix: "", type: "input" },
+      { text: "  --set gateway.replicas=2", color: "command", prefix: "", type: "input" },
+      { text: "", type: "blank" },
+      { text: "NAME: kubesynth", color: "output", type: "output" },
+      { text: "NAMESPACE: kubesynth", color: "output", type: "output" },
+      { text: "STATUS: deployed", color: "string", type: "output" },
+      { text: "REVISION: 1", color: "output", type: "output" },
+    ],
+    agent: [
+      { text: "apiVersion: kubesynth.ai/v1alpha1", color: "yamlKey", type: "input" },
+      { text: "kind: AIAgent", color: "yamlKey", type: "input" },
+      { text: "metadata:", color: "yamlKey", type: "input" },
+      { text: "  name: incident-triage", color: "yamlVal", type: "input" },
+      { text: "  namespace: production", color: "yamlVal", type: "input" },
+      { text: "spec:", color: "yamlKey", type: "input" },
+      { text: "  runtime:", color: "yamlKey", type: "input" },
+      { text: "    name: opencode", color: "yamlVal", type: "input" },
+      { text: "    model: claude-sonnet-4", color: "yamlVal", type: "input" },
+      { text: "    temperature: 0.1", color: "yamlVal", type: "input" },
+      { text: "  systemPrompt: |", color: "yamlKey", type: "input" },
+      { text: "    You are an expert SRE agent. When an alert", color: "string", type: "input" },
+      { text: "    fires, correlate logs, check pod status, and", color: "string", type: "input" },
+      { text: "    suggest remediation steps. Always ask before", color: "string", type: "input" },
+      { text: "    executing destructive commands.", color: "string", type: "input" },
+      { text: "  memory:", color: "yamlKey", type: "input" },
+      { text: "    strategy: persistent", color: "yamlVal", type: "input" },
+      { text: "    ttl: 24h", color: "yamlVal", type: "input" },
+      { text: "  mcpSidecars:", color: "yamlKey", type: "input" },
+      { text: "    - name: kubernetes", color: "yamlVal", type: "input" },
+      { text: "      config:", color: "yamlVal", type: "input" },
+      { text: "        namespace: production", color: "yamlVal", type: "input" },
+      { text: "    - name: web-search", color: "yamlVal", type: "input" },
+      { text: "    - name: messaging", color: "yamlVal", type: "input" },
+      { text: "  governance:", color: "yamlKey", type: "input" },
+      { text: "    approvalRequired:", color: "yamlVal", type: "input" },
+      { text: "      - kubectl delete", color: "list", type: "input" },
+      { text: "      - kubectl exec", color: "list", type: "input" },
+      { text: "    maxTokensPerRun: 50000", color: "yamlVal", type: "input" },
+    ],
+    workflow: [
+      { text: "apiVersion: kubesynth.ai/v1alpha1", color: "yamlKey", type: "input" },
+      { text: "kind: AgentWorkflow", color: "yamlKey", type: "input" },
+      { text: "metadata:", color: "yamlKey", type: "input" },
+      { text: "  name: incident-response", color: "yamlVal", type: "input" },
+      { text: "  namespace: production", color: "yamlVal", type: "input" },
+      { text: "spec:", color: "yamlKey", type: "input" },
+      { text: "  trigger:", color: "yamlKey", type: "input" },
+      { text: "    type: webhook", color: "yamlVal", type: "input" },
+      { text: "    source: prometheus", color: "yamlVal", type: "input" },
+      { text: "  dag:", color: "yamlKey", type: "input" },
+      { text: "    - id: triage", color: "yamlVal", type: "input" },
+      { text: "      agentRef:", color: "yamlVal", type: "input" },
+      { text: "        name: incident-triage", color: "yamlVal", type: "input" },
+      { text: "      inputs:", color: "yamlVal", type: "input" },
+      { text: "        alert: ${{ trigger.payload }}", color: "string", type: "input" },
+      { text: "      next: [correlate, notify]", color: "yamlVal", type: "input" },
+      { text: "", type: "blank" },
+      { text: "    - id: correlate", color: "yamlVal", type: "input" },
+      { text: "      agentRef:", color: "yamlVal", type: "input" },
+      { text: "        name: log-analyzer", color: "yamlVal", type: "input" },
+      { text: "      next: [remediate]", color: "yamlVal", type: "input" },
+      { text: "", type: "blank" },
+      { text: "    - id: remediate", color: "yamlVal", type: "input" },
+      { text: "      agentRef:", color: "yamlVal", type: "input" },
+      { text: "        name: incident-triage", color: "yamlVal", type: "input" },
+      { text: "      approvalGate:", color: "yamlVal", type: "input" },
+      { text: "        timeout: 10m", color: "yamlVal", type: "input" },
+      { text: "      next: [notify]", color: "yamlVal", type: "input" },
+      { text: "", type: "blank" },
+      { text: "    - id: notify", color: "yamlVal", type: "input" },
+      { text: "      agentRef:", color: "yamlVal", type: "input" },
+      { text: "        name: slack-bot", color: "yamlVal", type: "input" },
+      { text: "      inputs:", color: "yamlVal", type: "input" },
+      { text: "        channel: #incidents", color: "string", type: "input" },
+    ],
+    operate: [
+      { text: "kubectl apply -f agent.yaml", color: "command", prefix: "$", type: "input" },
+      { text: "aiagent.kubesynth.ai/incident-triage created", color: "string", type: "output" },
+      { text: "", type: "blank" },
+      { text: "kubectl apply -f workflow.yaml", color: "command", prefix: "$", type: "input" },
+      { text: "agentworkflow.kubesynth.ai/incident-response created", color: "string", type: "output" },
+      { text: "", type: "blank" },
+      { text: "kubectl get aiagents -n production", color: "command", prefix: "$", type: "input" },
+      { text: "NAME            STATUS    AGE", color: "output", type: "output" },
+      { text: "incident-triage Running   3m", color: "string", type: "output" },
+      { text: "", type: "blank" },
+      { text: "agentctl workflow run incident-response --watch", color: "command", prefix: "$", type: "input" },
+      { text: "▶ Trigger: Alert received from Prometheus", color: "output", type: "output" },
+      { text: "▶ TriageAgent: Correlating logs...", color: "output", type: "output" },
+      { text: "▶ ApprovalGate: Waiting for human review", color: "flag", type: "output" },
+    ],
+  };
+
+  const handleTabChange = (tab: TabKey) => {
+    setActiveTab(tab);
+    if (!hasTyped[tab]) {
+      setHasTyped((prev) => ({ ...prev, [tab]: true }));
+    }
+  };
+
+  // Auto-start typing for first tab when in view
+  useEffect(() => {
+    if (inView && !hasTyped.install) {
+      const timer = setTimeout(() => {
+        setHasTyped((prev) => ({ ...prev, install: true }));
+      }, 800);
+      return () => clearTimeout(timer);
+    }
+  }, [inView, hasTyped.install]);
+
+  return (
+    <section id="install" className="bg-slate-50 px-4 py-24 sm:px-6 md:py-32" ref={ref}>
+      <div className="mx-auto max-w-5xl">
+        <motion.div
+          initial="hidden"
+          animate={inView ? "visible" : "hidden"}
+          variants={containerVariants}
+          className="mb-12 text-center"
+        >
+          <motion.p variants={itemVariants} className="text-xs font-semibold uppercase tracking-widest text-blue-600">
+            Quick Start
+          </motion.p>
+          <motion.h2 variants={itemVariants} className="mt-3 text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl md:text-5xl">
+            Deploy in <span className="text-blue-600">5 Minutes</span>
+          </motion.h2>
+          <motion.p variants={itemVariants} className="mx-auto mt-4 max-w-2xl text-base text-slate-600">
+            One Helm install gives you the entire control plane. Then declare agents with YAML and control them with kubectl.
+          </motion.p>
+        </motion.div>
+
+        {/* Tabbed Terminal */}
+        <motion.div
+          variants={itemVariants}
+          initial="hidden"
+          animate={inView ? "visible" : "hidden"}
+          className="overflow-hidden rounded-xl bg-slate-900 shadow-2xl shadow-slate-900/30 ring-1 ring-slate-700/50"
+        >
+          {/* Tabs */}
+          <div className="flex border-b border-slate-700/50 bg-slate-800/80">
+            {tabs.map((tab) => {
+              const Icon = tab.icon;
+              const isActive = activeTab === tab.key;
+              return (
+                <button
+                  key={tab.key}
+                  onClick={() => handleTabChange(tab.key)}
+                  className={`flex items-center gap-2 px-5 py-3 text-sm font-medium transition-all ${
+                    isActive
+                      ? "bg-slate-900 text-sky-400 border-t-2 border-t-sky-500"
+                      : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/50"
+                  }`}
+                >
+                  <Icon className="h-4 w-4" />
+                  {tab.label}
+                </button>
+              );
+            })}
+            <div className="flex-1" />
+            <button
+              onClick={() => {
+                const text = tabLines[activeTab].map((l) => `${l.prefix || ""}${l.text}`).join("\n");
+                navigator.clipboard.writeText(text).catch(() => {});
+              }}
+              className="px-4 py-3 text-slate-500 hover:text-slate-300 transition-colors"
+              title="Copy"
+            >
+              <Copy className="h-4 w-4" />
+            </button>
+          </div>
+
+          {/* Terminal Content */}
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={activeTab}
+              className="p-5 font-mono text-[13px] leading-6"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.2 }}
+            >
+              {tabLines[activeTab].map((line, i) => (
+                <motion.div
+                  key={i}
+                  initial={{ opacity: 0, x: -8 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ delay: i * 0.06, duration: 0.3 }}
+                  className="min-h-[1.5rem]"
+                >
+                  {line.text === "" ? (
+                    <span>&nbsp;</span>
+                  ) : (
+                    <span className={`whitespace-pre ${colorMap[line.color || "output"] || "text-slate-300"}`}>
+                      {line.prefix && (
+                        <span className="select-none text-emerald-500/80">{line.prefix} </span>
+                      )}
+                      {line.text}
+                    </span>
+                  )}
+                </motion.div>
+              ))}
+            </motion.div>
+          </AnimatePresence>
+        </motion.div>
+
+        {/* Feature pills below terminal */}
+        <motion.div
+          variants={itemVariants}
+          initial="hidden"
+          animate={inView ? "visible" : "hidden"}
+          className="mt-8 flex flex-wrap justify-center gap-3"
+        >
+          {["Helm Chart", "CRDs", "kubectl", "agentctl CLI", "A2A JSON-RPC"].map((item) => (
+            <span
+              key={item}
+              className="rounded-full border border-slate-200 bg-white px-4 py-1.5 text-xs font-medium text-slate-600 shadow-sm"
+            >
+              {item}
+            </span>
+          ))}
+        </motion.div>
+      </div>
+    </section>
+  );
+}
+
+const colorMap: Record<string, string> = {
+  comment: "text-slate-500",
+  command: "text-sky-400",
+  string: "text-emerald-400",
+  flag: "text-amber-400",
+  output: "text-slate-400",
+  yamlKey: "text-fuchsia-400",
+  yamlVal: "text-slate-300",
+  prompt: "text-emerald-500",
+  list: "text-slate-300",
+};
+
+// ─── Features Grid ───
+
+function FeaturesSection() {
+  const features = [
+    {
+      icon: Server,
+      title: "Kubernetes-Native Orchestration",
+      description:
+        "Agents, policies, workflows, and tenants are first-class CRDs reconciled by a production Kopf operator.",
+      tags: ["CRDs", "Operator", "Helm"],
+    },
+    {
+      icon: MessageSquare,
+      title: "A2A Protocol Support",
+      description:
+        "Native JSON-RPC and Server-Sent Events for agent-to-agent delegation, streaming, and real-time collaboration.",
+      tags: ["JSON-RPC", "SSE", "A2A"],
+    },
+    {
+      icon: Terminal,
+      title: "OpenCode Runtime",
+      description:
+        "Purpose-built FastAPI wrapper around opencode serve with session persistence and checkpoint recovery.",
+      tags: ["StatefulSet", "PVC", "Checkpoints"],
+    },
+    {
+      icon: Puzzle,
+      title: "MCP Tool Ecosystem",
+      description:
+        "Attach Model Context Protocol servers as sidecars. Kubernetes ops, web search, browser automation, RAG, and more.",
+      tags: ["11 Sidecars", "Hot Attach", "Tools"],
+    },
+    {
+      icon: Shield,
+      title: "Policy-Driven Governance",
+      description:
+        "AgentPolicy CRDs enforce input/output guardrails, token caps, PII masking, and allowed model lists.",
+      tags: ["Guardrails", "RBAC", "Approval"],
+    },
+    {
+      icon: Workflow,
+      title: "Visual Workflow Engine",
+      description:
+        "Build multi-agent pipelines with a drag-and-drop DAG editor. Approval gates, parallel execution, and retries.",
+      tags: ["DAG", "Retries", "Approval Gates"],
+    },
+  ];
+
+  const ref = useRef(null);
+  const inView = useInView(ref, { once: true, margin: "-80px" });
+
+  return (
+    <section id="features" className="bg-white px-6 py-24 md:py-32" ref={ref}>
+      <div className="mx-auto max-w-7xl">
+        <motion.div
+          initial="hidden"
+          animate={inView ? "visible" : "hidden"}
+          variants={containerVariants}
+          className="mb-16 text-center"
+        >
+          <motion.p variants={itemVariants} className="text-xs font-semibold uppercase tracking-widest text-blue-600">
+            Platform Features
+          </motion.p>
+          <motion.h2 variants={itemVariants} className="mt-3 text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl md:text-5xl">
+            Everything You Need to <span className="text-blue-600">Ship Agents</span>
+          </motion.h2>
+          <motion.p variants={itemVariants} className="mx-auto mt-4 max-w-2xl text-base text-slate-600">
+            From development to production. A complete control plane for Kubernetes-native AI agent operations.
+          </motion.p>
+        </motion.div>
+
+        <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+          {features.map((feature, i) => {
+            const Icon = feature.icon;
+            return (
+              <motion.div
+                key={feature.title}
+                variants={itemVariants}
+                initial="hidden"
+                animate={inView ? "visible" : "hidden"}
+                transition={{ delay: i * 0.08 }}
+                className="group rounded-2xl border border-slate-200 bg-white p-7 shadow-sm transition-all hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-md"
+              >
+                <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-xl bg-blue-50 text-blue-600 ring-1 ring-blue-100 transition-colors group-hover:bg-blue-100">
+                  <Icon className="h-5 w-5" />
+                </div>
+                <h3 className="text-base font-semibold text-slate-900">{feature.title}</h3>
+                <p className="mt-2 text-sm leading-relaxed text-slate-600">{feature.description}</p>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {feature.tags.map((tag) => (
+                    <span
+                      key={tag}
+                      className="rounded-full bg-slate-100 px-2.5 py-0.5 text-[11px] font-medium text-slate-600"
+                    >
+                      {tag}
+                    </span>
+                  ))}
+                </div>
+              </motion.div>
+            );
+          })}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+// ─── How It Works ───
+
+function HowItWorks() {
+  const steps = [
+    {
+      num: "01",
+      icon: GitBranch,
+      title: "Declare",
+      description: "Write an AIAgent CRD with your system prompt, model, memory policy, and MCP sidecars. Apply it with kubectl.",
+      gradient: "from-blue-500 to-indigo-600",
+      bgGradient: "from-blue-50 to-indigo-50",
+    },
+    {
+      num: "02",
+      icon: RefreshCw,
+      title: "Reconcile",
+      description: "The Kopf operator watches your CRD and provisions a StatefulSet, Service, PVC, and ConfigMap automatically.",
+      gradient: "from-indigo-500 to-purple-600",
+      bgGradient: "from-indigo-50 to-purple-50",
+    },
+    {
+      num: "03",
+      icon: Bot,
+      title: "Execute",
+      description: "Invoke via agentctl, the web UI, or A2A JSON-RPC. The runtime persists memory, enforces policies, and routes model calls through LiteLLM.",
+      gradient: "from-purple-500 to-pink-600",
+      bgGradient: "from-purple-50 to-pink-50",
+    },
+  ];
+
+  const ref = useRef(null);
+  const inView = useInView(ref, { once: true, margin: "-80px" });
+
+  return (
+    <section className="bg-white px-6 py-24 md:py-32" ref={ref}>
+      <div className="mx-auto max-w-7xl">
+        <motion.div
+          initial="hidden"
+          animate={inView ? "visible" : "hidden"}
+          variants={containerVariants}
+          className="mb-16 text-center"
+        >
+          <motion.p variants={itemVariants} className="text-xs font-semibold uppercase tracking-widest text-blue-600">
+            How It Works
+          </motion.p>
+          <motion.h2 variants={itemVariants} className="mt-3 text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl md:text-5xl">
+            From YAML to <span className="bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">Running Agent</span>
+          </motion.h2>
+        </motion.div>
+
+        <div className="grid gap-6 lg:grid-cols-3">
+          {steps.map((step, i) => {
+            const Icon = step.icon;
+            return (
+              <motion.div
+                key={step.num}
+                variants={itemVariants}
+                initial="hidden"
+                animate={inView ? "visible" : "hidden"}
+                transition={{ delay: i * 0.15 }}
+                className="group relative"
+              >
+                {/* Connection line */}
+                {i < steps.length - 1 && (
+                  <div className="absolute -right-3 top-16 hidden lg:block">
+                    <motion.div
+                      className="flex items-center gap-1"
+                      initial={{ opacity: 0, x: -10 }}
+                      animate={inView ? { opacity: 1, x: 0 } : {}}
+                      transition={{ delay: i * 0.15 + 0.3, duration: 0.5 }}
+                    >
+                      <div className="h-px w-6 bg-gradient-to-r from-slate-300 to-slate-200" />
+                      <motion.div
+                        className="h-2 w-2 rounded-full bg-blue-400"
+                        animate={{ scale: [1, 1.3, 1], opacity: [0.5, 1, 0.5] }}
+                        transition={{ duration: 2, repeat: Infinity, delay: i * 0.5 }}
+                      />
+                    </motion.div>
+                  </div>
+                )}
+
+                <div className="relative overflow-hidden rounded-2xl border border-slate-200 bg-white p-8 transition-all duration-300 hover:shadow-xl hover:shadow-blue-900/5 hover:-translate-y-1">
+                  {/* Background gradient blob */}
+                  <div className={`absolute -right-10 -top-10 h-32 w-32 rounded-full bg-gradient-to-br ${step.bgGradient} opacity-60 blur-2xl transition-opacity group-hover:opacity-100`} />
+
+                  {/* Step number badge */}
+                  <div className="relative mb-6 flex items-center justify-between">
+                    <div className={`flex h-14 w-14 items-center justify-center rounded-xl bg-gradient-to-br ${step.gradient} text-white shadow-lg shadow-blue-500/20`}>
+                      <Icon className="h-7 w-7" />
+                    </div>
+                    <span className={`text-5xl font-black bg-gradient-to-br ${step.gradient} bg-clip-text text-transparent opacity-20`}>
+                      {step.num}
+                    </span>
+                  </div>
+
+                  {/* Content */}
+                  <div className="relative">
+                    <h3 className="text-xl font-bold text-slate-900">{step.title}</h3>
+                    <p className="mt-3 text-sm leading-relaxed text-slate-600">
+                      {step.description}
+                    </p>
+                  </div>
+
+                  {/* Bottom accent line */}
+                  <div className={`absolute bottom-0 left-0 h-1 w-0 bg-gradient-to-r ${step.gradient} transition-all duration-500 group-hover:w-full rounded-b-2xl`} />
+                </div>
+              </motion.div>
+            );
+          })}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+// ─── Stunning Workflow Animation ───
+
+function WorkflowAnimation() {
+  const [stage, setStage] = useState(0);
+  const totalStages = 6;
 
   useEffect(() => {
     const interval = setInterval(() => {
-      setActiveChat((prev) => (prev < chatMessages.length - 1 ? prev + 1 : prev));
-    }, 2000);
+      setStage((s) => (s + 1) % totalStages);
+    }, 2800);
     return () => clearInterval(interval);
-  }, [chatMessages.length]);
+  }, []);
+
+  const nodes = [
+    { id: "ingress", label: "Ingress", sub: "A2A / Webhook", x: 60, y: 140, icon: Globe },
+    { id: "gateway", label: "API Gateway", sub: "FastAPI + Auth", x: 220, y: 140, icon: Server },
+    { id: "operator", label: "Operator", sub: "Kopf Engine", x: 400, y: 140, icon: RefreshCw },
+    { id: "runtime", label: "Runtime", sub: "OpenCode STS", x: 580, y: 70, icon: Bot },
+    { id: "mcp", label: "MCP Sidecars", sub: "Tool Pods", x: 580, y: 210, icon: Puzzle },
+    { id: "llm", label: "LiteLLM", sub: "Model Router", x: 760, y: 140, icon: BrainCircuit },
+  ];
+
+  const edges = [
+    { from: "ingress", to: "gateway", id: 0 },
+    { from: "gateway", to: "operator", id: 1 },
+    { from: "operator", to: "runtime", id: 2 },
+    { from: "operator", to: "mcp", id: 3 },
+    { from: "runtime", to: "llm", id: 4 },
+    { from: "mcp", to: "llm", id: 5 },
+  ];
+
+  const stageMap: Record<number, { active: string[]; packet?: { edgeId: number } }> = {
+    0: { active: ["ingress"], packet: { edgeId: 0 } },
+    1: { active: ["gateway"], packet: { edgeId: 1 } },
+    2: { active: ["operator"], packet: { edgeId: 2 } },
+    3: { active: ["runtime"], packet: { edgeId: 4 } },
+    4: { active: ["llm"], packet: { edgeId: 4 } },
+    5: { active: ["runtime", "mcp"], packet: { edgeId: 5 } },
+  };
+
+  const activeIds = stageMap[stage]?.active || [];
+  const packetEdge = stageMap[stage]?.packet;
+
+  const getNode = (id: string) => nodes.find((n) => n.id === id)!;
+
+  const getPathPoints = (edgeId: number) => {
+    const edge = edges[edgeId];
+    const from = getNode(edge.from);
+    const to = getNode(edge.to);
+    // Node dimensions in SVG coords
+    const nw = 120;
+    const nh = 56;
+    const startX = from.x + nw;
+    const startY = from.y + nh / 2;
+    const endX = to.x;
+    const endY = to.y + nh / 2;
+    const midX = (startX + endX) / 2;
+    return [
+      { x: startX, y: startY },
+      { x: midX, y: startY },
+      { x: midX, y: endY },
+      { x: endX, y: endY },
+    ];
+  };
 
   return (
-    <section className="relative px-6 pb-20 md:pb-32">
-      <div className="mx-auto max-w-5xl">
-        <p className="mb-6 text-center text-xs font-semibold uppercase tracking-widest text-primary animate-fade-in">
-          Live Preview
-        </p>
-        <div
-          className="mock-window animate-scale-in"
-          style={{ animationDelay: "0.3s" }}
+    <section id="workflows" className="bg-white px-6 py-24 md:py-32">
+      <div className="mx-auto max-w-7xl">
+        <motion.div
+          initial="hidden"
+          whileInView="visible"
+          viewport={{ once: true, margin: "-80px" }}
+          variants={containerVariants}
+          className="mb-16 text-center"
         >
-          {/* Title bar */}
-          <div className="mock-titlebar">
-            <div className="mock-dot bg-muted-foreground/30" />
-            <div className="mock-dot bg-muted-foreground/30" />
-            <div className="mock-dot bg-muted-foreground/30" />
-            <div className="ml-4 flex-1 rounded-md bg-background/50 px-3 py-1 text-[11px] text-muted-foreground">
-              kubesynth.io/workspace
-            </div>
-          </div>
+          <motion.p variants={itemVariants} className="text-xs font-semibold uppercase tracking-widest text-blue-600">
+            Live Pipeline
+          </motion.p>
+          <motion.h2 variants={itemVariants} className="mt-3 text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl md:text-5xl">
+            Kubernetes Pipeline <span className="text-blue-600">in Motion</span>
+          </motion.h2>
+          <motion.p variants={itemVariants} className="mx-auto mt-4 max-w-2xl text-base text-slate-600">
+            Watch requests flow from ingress to runtime. Every node is a real Kubernetes resource
+            reconciled by the operator.
+          </motion.p>
+        </motion.div>
 
-          {/* Mock UI content */}
-          <div className="flex min-h-[340px] md:min-h-[420px]">
-            {/* Sidebar */}
-            <div className="hidden w-14 flex-shrink-0 flex-col items-center gap-3 border-r border-border/30 bg-sidebar/50 py-4 sm:flex">
-              <div className="h-7 w-7 rounded-lg bg-primary/15 p-1 text-primary"><Bot className="h-full w-full" /></div>
-              <div className="h-7 w-7 rounded-lg bg-muted/50 p-1 text-muted-foreground"><Workflow className="h-full w-full" /></div>
-              <div className="h-7 w-7 rounded-lg bg-muted/50 p-1 text-muted-foreground"><Shield className="h-full w-full" /></div>
-              <div className="h-7 w-7 rounded-lg bg-muted/50 p-1 text-muted-foreground"><Eye className="h-full w-full" /></div>
-            </div>
+        <motion.div
+          variants={fadeIn}
+          initial="hidden"
+          whileInView="visible"
+          viewport={{ once: true }}
+          className="relative overflow-hidden rounded-2xl border border-slate-200 bg-slate-50 p-6 shadow-sm md:p-10"
+        >
+          <svg
+            viewBox="0 0 900 300"
+            className="mx-auto h-auto w-full max-w-[900px]"
+            fill="none"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <defs>
+              <linearGradient id="connGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                <stop offset="0%" stopColor="#3b82f6">
+                  <animate attributeName="stop-color" values="#3b82f6;#06b6d4;#3b82f6" dur="3s" repeatCount="indefinite" />
+                </stop>
+                <stop offset="100%" stopColor="#06b6d4">
+                  <animate attributeName="stop-color" values="#06b6d4;#3b82f6;#06b6d4" dur="3s" repeatCount="indefinite" />
+                </stop>
+              </linearGradient>
+              <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+                <feGaussianBlur stdDeviation="3" result="blur" />
+                <feMerge>
+                  <feMergeNode in="blur" />
+                  <feMergeNode in="SourceGraphic" />
+                </feMerge>
+              </filter>
+            </defs>
 
-            {/* Agent list */}
-            <div className="hidden w-48 flex-shrink-0 flex-col border-r border-border/30 bg-card/30 md:flex">
-              <div className="border-b border-border/20 px-3 py-2.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                Agents
-              </div>
-              {["incident-triage", "compliance-auditor", "cost-optimizer", "deploy-guardian"].map((name, i) => (
-                <div
-                  key={name}
-                  className={`flex items-center gap-2 border-b border-border/10 px-3 py-2 text-[11px] ${i === 0 ? "bg-primary/5 text-foreground border-l-2 border-l-primary" : "text-muted-foreground"}`}
-                >
-                  <span className={`h-1.5 w-1.5 rounded-full ${i === 0 ? "bg-emerald-500" : i === 3 ? "bg-amber-500" : "bg-muted-foreground/50"}`} />
-                  {name}
-                </div>
-              ))}
-            </div>
+            {/* Connection Lines */}
+            {edges.map((edge) => {
+              const from = getNode(edge.from);
+              const to = getNode(edge.to);
+              const nw = 120;
+              const nh = 56;
+              const x1 = from.x + nw;
+              const y1 = from.y + nh / 2;
+              const x2 = to.x;
+              const y2 = to.y + nh / 2;
+              const mx = (x1 + x2) / 2;
+              const isPacketActive = packetEdge?.edgeId === edge.id;
 
-            {/* Chat area */}
-            <div className="flex flex-1 flex-col">
-              <div className="flex items-center gap-2 border-b border-border/20 px-4 py-2.5">
-                <Bot className="h-3.5 w-3.5 text-primary" />
-                <span className="text-[11px] font-semibold text-foreground">incident-triage</span>
-                <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[9px] font-medium text-emerald-400">
-                  <span className="h-1 w-1 rounded-full bg-emerald-500" /> running
-                </span>
-              </div>
-              <div className="flex-1 space-y-3 overflow-hidden p-4">
-                {chatMessages.slice(0, activeChat + 1).map((msg, i) => (
-                  <div key={i} className={`flex gap-2 animate-slide-up ${msg.role === "user" ? "justify-end" : ""}`} style={{ animationDelay: `${i * 0.15}s` }}>
-                    {msg.role !== "user" && (
-                      <div className={`mt-0.5 flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-md ${msg.role === "agent" ? "bg-primary/15 text-primary" : "bg-muted text-muted-foreground"}`}>
-                        {msg.role === "agent" ? <Bot className="h-3 w-3" /> : <Server className="h-3 w-3" />}
+              return (
+                <g key={edge.id}>
+                  <path
+                    d={`M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`}
+                    stroke="#cbd5e1"
+                    strokeWidth={2}
+                    fill="none"
+                  />
+                  <motion.path
+                    d={`M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`}
+                    stroke="url(#connGradient)"
+                    strokeWidth={2.5}
+                    fill="none"
+                    strokeDasharray="8 5"
+                    initial={{ strokeDashoffset: 0 }}
+                    animate={{ strokeDashoffset: isPacketActive ? -26 : 0 }}
+                    transition={isPacketActive ? { duration: 0.8, repeat: Infinity, ease: "linear" } : {}}
+                    opacity={isPacketActive ? 1 : 0.6}
+                  />
+                </g>
+              );
+            })}
+
+            {/* Data Packet */}
+            {packetEdge && (
+              <PacketCircle path={getPathPoints(packetEdge.edgeId)} />
+            )}
+
+            {/* Nodes */}
+            {nodes.map((node) => {
+              const Icon = node.icon;
+              const isActive = activeIds.includes(node.id);
+              return (
+                <g key={node.id}>
+                  {/* Pulse ring */}
+                  {isActive && (
+                    <motion.rect
+                      x={node.x - 4}
+                      y={node.y - 4}
+                      width={128}
+                      height={64}
+                      rx={14}
+                      fill="none"
+                      stroke="#3b82f6"
+                      strokeWidth={2}
+                      initial={{ opacity: 0.6, scale: 1 }}
+                      animate={{ opacity: 0, scale: 1.15 }}
+                      transition={{ duration: 1.5, repeat: Infinity }}
+                      style={{ transformOrigin: `${node.x + 60}px ${node.y + 28}px` }}
+                    />
+                  )}
+                  {/* Node body */}
+                  <foreignObject x={node.x} y={node.y} width={120} height={56}>
+                    <motion.div
+                      className={`flex h-full w-full flex-col items-center justify-center rounded-xl border bg-white shadow-sm ${
+                        isActive ? "border-blue-400 shadow-blue-200" : "border-slate-200"
+                      }`}
+                      animate={
+                        isActive
+                          ? {
+                              boxShadow: [
+                                "0 0 0 0 rgba(59,130,246,0)",
+                                "0 0 20px 2px rgba(59,130,246,0.25)",
+                                "0 0 0 0 rgba(59,130,246,0)",
+                              ],
+                            }
+                          : {}
+                      }
+                      transition={{ duration: 2, repeat: Infinity }}
+                    >
+                      <div className="flex items-center gap-2">
+                        <Icon className={`h-4 w-4 ${isActive ? "text-blue-600" : "text-slate-500"}`} />
+                        <div className="flex flex-col">
+                          <span className="text-[11px] font-bold text-slate-900 leading-tight">{node.label}</span>
+                          <span className="text-[9px] text-slate-500 leading-tight">{node.sub}</span>
+                        </div>
                       </div>
+                    </motion.div>
+                  </foreignObject>
+                  {/* Status dot */}
+                  <circle
+                    cx={node.x + 112}
+                    cy={node.y + 10}
+                    r={3}
+                    fill={isActive ? "#10b981" : "#cbd5e1"}
+                  >
+                    {isActive && (
+                      <animate attributeName="opacity" values="1;0.4;1" dur="2s" repeatCount="indefinite" />
                     )}
-                    <div className={`max-w-[85%] rounded-lg px-3 py-2 text-[11px] leading-relaxed ${msg.role === "user" ? "bg-primary/15 text-foreground" : "bg-muted/50 text-muted-foreground"}`}>
-                      {msg.text}
-                    </div>
+                  </circle>
+                </g>
+              );
+            })}
+          </svg>
+
+          {/* Status bar */}
+          <div className="mt-8 flex flex-wrap items-center justify-between gap-4 rounded-xl border border-slate-200 bg-white px-5 py-3.5 shadow-sm">
+            <div className="flex flex-wrap items-center gap-6 text-xs text-slate-600">
+              <span className="flex items-center gap-1.5">
+                <Timer className="h-3.5 w-3.5 text-blue-600" />
+                Reconcile: 1.2s
+              </span>
+              <span className="flex items-center gap-1.5">
+                <Bot className="h-3.5 w-3.5 text-blue-600" />
+                3 agents active
+              </span>
+              <span className="flex items-center gap-1.5">
+                <Shield className="h-3.5 w-3.5 text-amber-500" />
+                1 approval gate
+              </span>
+            </div>
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-3 py-1 text-[11px] font-semibold text-emerald-700 ring-1 ring-emerald-200">
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+              Pipeline Healthy
+            </span>
+          </div>
+        </motion.div>
+      </div>
+    </section>
+  );
+}
+
+function PacketCircle({ path }: { path: { x: number; y: number }[] }) {
+  return (
+    <motion.circle
+      r={5}
+      fill="#06b6d4"
+      filter="url(#glow)"
+      initial={{ cx: path[0].x, cy: path[0].y, opacity: 0 }}
+      animate={{
+        cx: path.map((p) => p.x),
+        cy: path.map((p) => p.y),
+        opacity: [0, 1, 1, 0],
+      }}
+      transition={{ duration: 1.4, ease: "easeInOut" }}
+    />
+  );
+}
+
+// ─── Architecture Preview ───
+
+function ArchitectureSection() {
+  const ref = useRef(null);
+  const inView = useInView(ref, { once: true, margin: "-80px" });
+
+  const components = [
+    { label: "Control Plane", items: ["Kubernetes API", "Operator (Kopf)", "API Gateway", "CRDs v1alpha1"] },
+    { label: "Execution Plane", items: ["OpenCode Runtime", "MCP Sidecars", "Worker Jobs", "StatefulSets"] },
+    { label: "Shared Services", items: ["LiteLLM Proxy", "Qdrant", "Redis", "PostgreSQL", "NATS"] },
+  ];
+
+  return (
+    <section id="architecture" className="bg-slate-50 px-6 py-24 md:py-32" ref={ref}>
+      <div className="mx-auto max-w-7xl">
+        <motion.div
+          initial="hidden"
+          animate={inView ? "visible" : "hidden"}
+          variants={containerVariants}
+          className="mb-16 text-center"
+        >
+          <motion.p variants={itemVariants} className="text-xs font-semibold uppercase tracking-widest text-blue-600">
+            Architecture
+          </motion.p>
+          <motion.h2 variants={itemVariants} className="mt-3 text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl md:text-5xl">
+            Built for <span className="text-blue-600">Production</span>
+          </motion.h2>
+          <motion.p variants={itemVariants} className="mx-auto mt-4 max-w-2xl text-base text-slate-600">
+            Separation of control plane and execution plane. Every agent is an isolated StatefulSet
+            with its own persistent volume and policy envelope.
+          </motion.p>
+        </motion.div>
+
+        <div className="grid gap-6 md:grid-cols-3">
+          {components.map((col, i) => (
+            <motion.div
+              key={col.label}
+              variants={itemVariants}
+              initial="hidden"
+              animate={inView ? "visible" : "hidden"}
+              transition={{ delay: i * 0.1 }}
+              className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm"
+            >
+              <h3 className="mb-4 text-sm font-bold uppercase tracking-wider text-slate-500">{col.label}</h3>
+              <div className="space-y-3">
+                {col.items.map((item) => (
+                  <div
+                    key={item}
+                    className="flex items-center gap-3 rounded-lg border border-slate-100 bg-slate-50 px-4 py-3 text-sm font-medium text-slate-700"
+                  >
+                    <CheckCircle2 className="h-4 w-4 flex-shrink-0 text-blue-600" />
+                    {item}
                   </div>
                 ))}
-                {activeChat < chatMessages.length - 1 && (
-                  <div className="flex gap-2">
-                    <div className="mt-0.5 flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-md bg-primary/15 text-primary">
-                      <Bot className="h-3 w-3" />
-                    </div>
-                    <div className="streaming-dots flex items-center gap-1 rounded-lg bg-muted/50 px-3 py-2">
-                      <span /><span /><span />
-                    </div>
-                  </div>
+              </div>
+            </motion.div>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+// ─── Testimonials ───
+
+function TestimonialsSection() {
+  const quotes = [
+    {
+      quote:
+        "KubeSynth finally let us treat AI agents like any other Kubernetes workload. CRDs, Helm, kubectl — it fits into our existing GitOps pipeline without friction.",
+      role: "Platform Engineer",
+      org: "Fortune 500 Infrastructure Team",
+    },
+    {
+      quote:
+        "The policy engine is a game changer. We can enforce token budgets and tool guardrails at the cluster level. No more worrying about runaway agent spend.",
+      role: "SRE Lead",
+      org: "Cloud-Native SaaS Startup",
+    },
+    {
+      quote:
+        "Running agents as StatefulSets with persistent memory means our incident-response bot actually remembers previous outages. The checkpoint recovery is rock solid.",
+      role: "Kubernetes Contributor",
+      org: "Open Source Community",
+    },
+  ];
+
+  const ref = useRef(null);
+  const inView = useInView(ref, { once: true, margin: "-80px" });
+
+  return (
+    <section className="bg-white px-6 py-24 md:py-32" ref={ref}>
+      <div className="mx-auto max-w-7xl">
+        <motion.div
+          initial="hidden"
+          animate={inView ? "visible" : "hidden"}
+          variants={containerVariants}
+          className="mb-16 text-center"
+        >
+          <motion.p variants={itemVariants} className="text-xs font-semibold uppercase tracking-widest text-blue-600">
+            Community
+          </motion.p>
+          <motion.h2 variants={itemVariants} className="mt-3 text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl md:text-5xl">
+            Trusted by <span className="text-blue-600">Operators</span>
+          </motion.h2>
+        </motion.div>
+
+        <div className="grid gap-6 md:grid-cols-3">
+          {quotes.map((q, i) => (
+            <motion.div
+              key={i}
+              variants={itemVariants}
+              initial="hidden"
+              animate={inView ? "visible" : "hidden"}
+              transition={{ delay: i * 0.1 }}
+              className="relative rounded-2xl border border-slate-200 bg-white p-7 shadow-sm"
+            >
+              <div className="mb-4 text-blue-600">
+                <MessageSquare className="h-6 w-6" />
+              </div>
+              <p className="text-sm leading-relaxed text-slate-700">&ldquo;{q.quote}&rdquo;</p>
+              <div className="mt-6 border-t border-slate-100 pt-4">
+                <p className="text-sm font-semibold text-slate-900">{q.role}</p>
+                <p className="text-xs text-slate-500">{q.org}</p>
+              </div>
+            </motion.div>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+// ─── Comparison Strip ───
+
+function ComparisonStrip() {
+  const ref = useRef(null);
+  const inView = useInView(ref, { once: true, margin: "-40px" });
+
+  const rows = [
+    { label: "Kubernetes Native", kubesynth: true, others: false },
+    { label: "Self-Hosted via Helm", kubesynth: true, others: "partial" },
+    { label: "A2A Protocol (JSON-RPC/SSE)", kubesynth: true, others: false },
+    { label: "MCP Tool Ecosystem", kubesynth: true, others: "partial" },
+    { label: "Policy & Governance CRDs", kubesynth: true, others: false },
+    { label: "Human-in-the-Loop Approval", kubesynth: true, others: "partial" },
+  ];
+
+  return (
+    <section className="bg-slate-900 px-6 py-24 md:py-32" ref={ref}>
+      <div className="mx-auto max-w-5xl">
+        <motion.div
+          initial="hidden"
+          animate={inView ? "visible" : "hidden"}
+          variants={containerVariants}
+          className="mb-12 text-center"
+        >
+          <motion.p variants={itemVariants} className="text-xs font-semibold uppercase tracking-widest text-blue-400">
+            Why KubeSynth
+          </motion.p>
+          <motion.h2 variants={itemVariants} className="mt-3 text-3xl font-bold tracking-tight text-white sm:text-4xl">
+            Built for K8s. Not Bolted On.
+          </motion.h2>
+        </motion.div>
+
+        <motion.div
+          variants={fadeIn}
+          initial="hidden"
+          animate={inView ? "visible" : "hidden"}
+          className="overflow-hidden rounded-2xl border border-slate-700 bg-slate-800/50"
+        >
+          <div className="grid grid-cols-3 gap-4 border-b border-slate-700 px-6 py-4 text-xs font-semibold uppercase tracking-wider text-slate-400">
+            <div>Capability</div>
+            <div className="text-center text-blue-400">KubeSynth</div>
+            <div className="text-center">Other Platforms</div>
+          </div>
+          {rows.map((row, i) => (
+            <div
+              key={row.label}
+              className={`grid grid-cols-3 items-center gap-4 px-6 py-4 text-sm ${
+                i < rows.length - 1 ? "border-b border-slate-700/50" : ""
+              }`}
+            >
+              <div className="text-slate-300">{row.label}</div>
+              <div className="flex justify-center">
+                {row.kubesynth === true ? (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2.5 py-1 text-xs font-semibold text-emerald-400 ring-1 ring-emerald-500/20">
+                    <CheckCircle2 className="h-3 w-3" /> Yes
+                  </span>
+                ) : (
+                  <span className="text-slate-400">{row.kubesynth}</span>
+                )}
+              </div>
+              <div className="flex justify-center">
+                {row.others === true ? (
+                  <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+                ) : row.others === false ? (
+                  <span className="text-slate-500">—</span>
+                ) : (
+                  <span className="rounded-full bg-amber-500/10 px-2.5 py-1 text-xs font-semibold text-amber-400 ring-1 ring-amber-500/20">
+                    Partial
+                  </span>
                 )}
               </div>
             </div>
-
-            {/* Inspector panel */}
-            <div className="hidden w-56 flex-shrink-0 flex-col border-l border-border/30 bg-card/20 lg:flex">
-              <div className="border-b border-border/20 px-3 py-2.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                Inspector
-              </div>
-              <div className="space-y-3 p-3">
-                <div>
-                  <div className="text-[9px] font-medium uppercase tracking-wider text-muted-foreground">Memory</div>
-                  <div className="mt-1 space-y-1">
-                    <div className="flex items-center gap-1.5 rounded bg-muted/30 px-2 py-1 text-[10px] text-muted-foreground">
-                      <Database className="h-3 w-3 text-primary/60" /> 23 records persisted
-                    </div>
-                    <div className="flex items-center gap-1.5 rounded bg-muted/30 px-2 py-1 text-[10px] text-muted-foreground">
-                      <RefreshCw className="h-3 w-3 text-emerald-500/60" /> Session #47 recovered
-                    </div>
-                  </div>
-                </div>
-                <div>
-                  <div className="text-[9px] font-medium uppercase tracking-wider text-muted-foreground">Tools</div>
-                  <div className="mt-1 space-y-1">
-                    {["kubernetes", "messaging", "git"].map((tool) => (
-                      <div key={tool} className="flex items-center gap-1.5 rounded bg-muted/30 px-2 py-1 text-[10px] text-muted-foreground">
-                        <CheckCircle2 className="h-3 w-3 text-emerald-500/60" /> {tool}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-                <div>
-                  <div className="text-[9px] font-medium uppercase tracking-wider text-muted-foreground">Governance</div>
-                  <div className="mt-1 rounded bg-amber-500/5 border border-amber-500/20 px-2 py-1 text-[10px] text-amber-400">
-                    <Lock className="mr-1 inline h-3 w-3" /> Approval required for kubectl exec
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-// ─── Enterprise Scenarios ───
-
-const SCENARIOS = [
-  {
-    icon: Zap,
-    title: "Incident Response Automation",
-    description: "Agents query Kubernetes clusters, search logs, correlate alerts via web-search, and execute remediation runbooks — with human approval gates for destructive actions.",
-    tags: ["kubernetes", "messaging", "web-search", "code-exec"],
-    metrics: { label: "MTTR reduction", value: "80%" },
-  },
-  {
-    icon: Shield,
-    title: "Continuous Compliance Auditing",
-    description: "Deploy agents that scan cluster configurations, diff against policy baselines in Git, generate remediation PRs, and maintain audit trails with durable memory.",
-    tags: ["git", "kubernetes", "documents", "rag"],
-    metrics: { label: "Coverage", value: "24/7" },
-  },
-  {
-    icon: GitBranch,
-    title: "CI/CD Pipeline Intelligence",
-    description: "Agents monitor GitHub repositories, analyze build patterns with code-exec, auto-rollback bad deploys via Kubernetes, and notify teams with root cause analysis.",
-    tags: ["github-adapter", "git", "code-exec"],
-    metrics: { label: "Pipelines", value: "Multi-Stage" },
-  },
-  {
-    icon: Database,
-    title: "Cost Optimization at Scale",
-    description: "Agents analyze resource utilization across clusters, query usage databases, research pricing with browser, and track savings over time with persistent memory.",
-    tags: ["kubernetes", "database", "browser"],
-    metrics: { label: "Savings tracked", value: "Ongoing" },
-  },
-];
-
-function EnterpriseScenariosSection() {
-  return (
-    <section id="scenarios" className="relative px-6 py-20 md:py-32">
-      <div className="mx-auto max-w-7xl">
-        <div className="mb-16 text-center">
-          <p className="text-xs font-semibold uppercase tracking-widest text-primary">Enterprise Use Cases</p>
-          <h2 className="mt-3 text-3xl font-bold tracking-tight text-foreground sm:text-4xl md:text-5xl">
-            Built for <span className="text-primary">Real Operations</span>
-          </h2>
-          <p className="mx-auto mt-4 max-w-2xl text-base text-muted-foreground">
-            Not another chatbot wrapper. These are autonomous agents designed for the workflows
-            that keep enterprises running — with memory, governance, and accountability baked in.
-          </p>
-        </div>
-
-        <div className="grid gap-6 md:grid-cols-2">
-          {SCENARIOS.map((scenario, i) => {
-            const Icon = scenario.icon;
-            return (
-              <div
-                key={scenario.title}
-                className="landing-card group relative rounded-xl p-6 animate-slide-up"
-                style={{ animationDelay: `${i * 0.08}s` }}
-              >
-                <div className="flex items-start gap-4">
-                  <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary transition-colors group-hover:bg-primary/20">
-                    <Icon className="h-5 w-5" aria-hidden="true" />
-                  </div>
-                  <div className="flex-1">
-                    <div className="flex items-center justify-between gap-3">
-                      <h3 className="text-lg font-semibold text-foreground">{scenario.title}</h3>
-                      <span className="flex-shrink-0 rounded-full border border-primary/20 bg-primary/5 px-2.5 py-0.5 text-[10px] font-semibold text-primary">
-                        {scenario.metrics.value}
-                      </span>
-                    </div>
-                    <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{scenario.description}</p>
-                    <div className="mt-4 flex flex-wrap gap-1.5">
-                      {scenario.tags.map((tag) => (
-                        <span key={tag} className="rounded-full border border-border/40 bg-muted/30 px-2.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-                          {tag}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    </section>
-  );
-}
-
-// ─── Feature Bento Grid ───
-
-const FEATURES = [
-  {
-    icon: BrainCircuit,
-    title: "Durable Memory",
-    description: "Agents persist knowledge across sessions. Memory records survive restarts, pod evictions, and cluster upgrades. Promote, edit, or revoke any memory.",
-    span: "md:col-span-2",
-  },
-  {
-    icon: RefreshCw,
-    title: "Session Continuity",
-    description: "Pause an agent mid-conversation, come back hours later. The exact state, context window, and tool results are restored from checkpoint.",
-  },
-  {
-    icon: Lock,
-    title: "Tool Governance",
-    description: "Define fine-grained policies: which tools an agent can invoke, which require human approval, and which are forbidden. RBAC at the tool level.",
-  },
-  {
-    icon: Network,
-    title: "MCP Sidecar Ecosystem",
-    description: "Attach Model Context Protocol servers as sidecars. Kubernetes, Git, GitHub, Messaging, Browser, RAG — agents compose tools at runtime.",
-  },
-  {
-    icon: Workflow,
-    title: "Visual Workflow Composer",
-    description: "Build multi-agent pipelines with a drag-and-drop DAG editor. Chain agents, add approval gates, fan-out parallel steps.",
-  },
-  {
-    icon: Eye,
-    title: "Real-Time Observability",
-    description: "Stream logs, inspect memory, trace tool calls, and monitor token usage. Every agent action is auditable and attributable.",
-    span: "md:col-span-2",
-  },
-];
-
-function FeatureBentoSection() {
-  return (
-    <section id="features" className="relative px-6 py-20 md:py-32">
-      {/* Background glow */}
-      <div
-        className="glow-orb left-1/2 top-1/2 h-[500px] w-[500px] -translate-x-1/2 -translate-y-1/2"
-        style={{ background: "oklch(0.65 0.13 175 / 0.03)" }}
-      />
-
-      <div className="relative mx-auto max-w-7xl">
-        <div className="mb-16 text-center">
-          <p className="text-xs font-semibold uppercase tracking-widest text-primary">Platform Features</p>
-          <h2 className="mt-3 text-3xl font-bold tracking-tight text-foreground sm:text-4xl md:text-5xl">
-            Everything You Need to <span className="text-primary">Ship Agents</span>
-          </h2>
-          <p className="mx-auto mt-4 max-w-2xl text-base text-muted-foreground">
-            From development to production. A complete control plane for Kubernetes-native AI agent operations.
-          </p>
-        </div>
-
-        <div className="grid gap-4 md:grid-cols-3">
-          {FEATURES.map((feature, i) => {
-            const Icon = feature.icon;
-            const isHero = !!feature.span;
-            return (
-              <div
-                key={feature.title}
-                className={`landing-card group rounded-xl p-6 ${feature.span || ""} animate-slide-up ${isHero ? "border-primary/10" : ""}`}
-                style={{ animationDelay: `${i * 0.08}s` }}
-              >
-                <div className="flex items-start gap-4">
-                  <div className={`flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg transition-colors group-hover:bg-primary/20 ${isHero ? "bg-primary/15 ring-1 ring-primary/20" : "bg-primary/10"} text-primary`}>
-                    <Icon className="h-5 w-5" aria-hidden="true" />
-                  </div>
-                  <div className="flex-1">
-                    <h3 className="text-base font-semibold text-foreground">{feature.title}</h3>
-                    <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{feature.description}</p>
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    </section>
-  );
-}
-
-// ─── Animated Workflow Demo ───
-
-interface WorkflowStep {
-  id: string;
-  label: string;
-  sublabel: string;
-  icon: typeof Bot;
-  x: number;
-  y: number;
-  kind: "trigger" | "agent" | "gate" | "action";
-}
-
-const NODE_W = 175;
-const NODE_H = 66;
-
-const WORKFLOW_STEPS: WorkflowStep[] = [
-  { id: "trigger", label: "Alert Received", sublabel: "Webhook trigger", icon: Zap, x: 20, y: 122, kind: "trigger" },
-  { id: "triage", label: "Triage Agent", sublabel: "Analyze & correlate", icon: BrainCircuit, x: 250, y: 30, kind: "agent" },
-  { id: "metrics", label: "Fetch Logs", sublabel: "kubernetes + web-search", icon: Eye, x: 250, y: 214, kind: "agent" },
-  { id: "decision", label: "Approval Gate", sublabel: "Human review required", icon: Shield, x: 500, y: 122, kind: "gate" },
-  { id: "remediate", label: "Remediate", sublabel: "Execute runbook", icon: Workflow, x: 760, y: 42, kind: "action" },
-  { id: "notify", label: "Notify Team", sublabel: "messaging sidecar", icon: MessageSquare, x: 760, y: 202, kind: "action" },
-];
-
-const WORKFLOW_EDGES: [string, string][] = [
-  ["trigger", "triage"],
-  ["trigger", "metrics"],
-  ["triage", "decision"],
-  ["metrics", "decision"],
-  ["decision", "remediate"],
-  ["decision", "notify"],
-];
-
-const NODE_COLORS: Record<WorkflowStep["kind"], { bg: string; bgActive: string; border: string; borderActive: string }> = {
-  trigger:  { bg: "oklch(0.185 0.011 274)", bgActive: "oklch(0.22 0.018 274)", border: "oklch(0.30 0.012 274 / 0.6)", borderActive: "oklch(0.65 0.13 175 / 0.7)" },
-  agent:    { bg: "oklch(0.185 0.011 274)", bgActive: "oklch(0.22 0.018 274)", border: "oklch(0.30 0.012 274 / 0.6)", borderActive: "oklch(0.65 0.13 175 / 0.7)" },
-  gate:     { bg: "oklch(0.19 0.015 50)",   bgActive: "oklch(0.23 0.025 50)",  border: "oklch(0.35 0.03 50 / 0.5)",   borderActive: "oklch(0.72 0.12 85 / 0.6)" },
-  action:   { bg: "oklch(0.185 0.011 274)", bgActive: "oklch(0.22 0.018 274)", border: "oklch(0.30 0.012 274 / 0.6)", borderActive: "oklch(0.65 0.13 175 / 0.7)" },
-};
-
-function WorkflowDemo() {
-  const [activeStep, setActiveStep] = useState(0);
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  useEffect(() => {
-    timerRef.current = setInterval(() => {
-      setActiveStep((prev) => (prev + 1) % WORKFLOW_STEPS.length);
-    }, 2500);
-    return () => { if (timerRef.current) clearInterval(timerRef.current); };
-  }, []);
-
-  const stepMap = new Map(WORKFLOW_STEPS.map((s) => [s.id, s]));
-
-  return (
-    <section id="workflows" className="relative px-6 py-20 md:py-32">
-      <div className="mx-auto max-w-7xl">
-        <div className="mb-16 text-center">
-          <p className="text-xs font-semibold uppercase tracking-widest text-primary">Workflow Orchestration</p>
-          <h2 className="mt-3 text-3xl font-bold tracking-tight text-foreground sm:text-4xl md:text-5xl">
-            Agent Pipelines <span className="text-primary">in Action</span>
-          </h2>
-          <p className="mx-auto mt-4 max-w-2xl text-base text-muted-foreground">
-            Real incident response workflow: from alert to resolution. Each node is an autonomous
-            agent with its own memory, tools, and governance policy.
-          </p>
-        </div>
-
-        <div className="landing-card mx-auto max-w-5xl overflow-hidden rounded-2xl p-6 md:p-10">
-          {/* SVG workflow diagram */}
-          <div className="relative overflow-x-auto">
-            <svg
-              viewBox="0 0 960 310"
-              className="mx-auto h-auto w-full max-w-[960px]"
-              fill="none"
-              xmlns="http://www.w3.org/2000/svg"
-              role="img"
-              aria-label="Animated workflow diagram showing an incident response pipeline with 6 steps"
-            >
-              <defs>
-                <filter id="node-glow">
-                  <feGaussianBlur in="SourceGraphic" stdDeviation="6" result="blur" />
-                  <feMerge>
-                    <feMergeNode in="blur" />
-                    <feMergeNode in="SourceGraphic" />
-                  </feMerge>
-                </filter>
-              </defs>
-
-              {/* Edges */}
-              {WORKFLOW_EDGES.map(([fromId, toId]) => {
-                const from = stepMap.get(fromId)!;
-                const to = stepMap.get(toId)!;
-                const fromX = from.x + NODE_W;
-                const fromY = from.y + NODE_H / 2;
-                const toX = to.x;
-                const toY = to.y + NODE_H / 2;
-                const midX = (fromX + toX) / 2;
-                const isActive =
-                  WORKFLOW_STEPS[activeStep]?.id === fromId ||
-                  WORKFLOW_STEPS[activeStep]?.id === toId;
-
-                return (
-                  <g key={`${fromId}-${toId}`}>
-                    {/* Base edge */}
-                    <path
-                      d={`M ${fromX} ${fromY} C ${midX} ${fromY}, ${midX} ${toY}, ${toX} ${toY}`}
-                      stroke="oklch(0.28 0.010 274)"
-                      strokeWidth={2}
-                      opacity={0.6}
-                    />
-                    {/* Active glow overlay */}
-                    {isActive && (
-                      <path
-                        d={`M ${fromX} ${fromY} C ${midX} ${fromY}, ${midX} ${toY}, ${toX} ${toY}`}
-                        stroke="oklch(0.65 0.13 175)"
-                        strokeWidth={2.5}
-                        strokeDasharray="8 6"
-                        className="connector-animated"
-                        opacity={0.8}
-                      />
-                    )}
-                  </g>
-                );
-              })}
-
-              {/* Nodes */}
-              {WORKFLOW_STEPS.map((step, i) => {
-                const Icon = step.icon;
-                const isActive = activeStep === i;
-                const colors = NODE_COLORS[step.kind];
-                const isGate = step.kind === "gate";
-
-                return (
-                  <g key={step.id}>
-                    {/* Active glow shadow */}
-                    {isActive && (
-                      <rect
-                        x={step.x - 2}
-                        y={step.y - 2}
-                        width={NODE_W + 4}
-                        height={NODE_H + 4}
-                        rx={14}
-                        fill="none"
-                        stroke={isGate ? "oklch(0.72 0.12 85 / 0.3)" : "oklch(0.65 0.13 175 / 0.3)"}
-                        strokeWidth={2}
-                        filter="url(#node-glow)"
-                      />
-                    )}
-
-                    {/* Node body */}
-                    <rect
-                      x={step.x}
-                      y={step.y}
-                      width={NODE_W}
-                      height={NODE_H}
-                      rx={12}
-                      fill={isActive ? colors.bgActive : colors.bg}
-                      stroke={isActive ? colors.borderActive : colors.border}
-                      strokeWidth={isActive ? 1.5 : 1}
-                    />
-
-                    {/* Icon circle */}
-                    <circle
-                      cx={step.x + 24}
-                      cy={step.y + NODE_H / 2 - 3}
-                      r={14}
-                      fill={isActive
-                        ? (isGate ? "oklch(0.72 0.12 85 / 0.12)" : "oklch(0.65 0.13 175 / 0.12)")
-                        : "oklch(0.25 0.010 274 / 0.6)"}
-                    />
-                    <foreignObject x={step.x + 14} y={step.y + NODE_H / 2 - 13} width={20} height={20}>
-                      <Icon
-                        className={`h-5 w-5 ${isActive ? (isGate ? "text-amber-400" : "text-primary") : "text-muted-foreground"}`}
-                        style={{ display: "block" }}
-                      />
-                    </foreignObject>
-
-                    {/* Label */}
-                    <text
-                      x={step.x + 46}
-                      y={step.y + 27}
-                      fill={isActive ? "oklch(0.95 0.006 274)" : "oklch(0.72 0.012 274)"}
-                      fontSize={11.5}
-                      fontWeight={600}
-                      fontFamily="var(--font-sans)"
-                    >
-                      {step.label}
-                    </text>
-
-                    {/* Sublabel */}
-                    <text
-                      x={step.x + 46}
-                      y={step.y + 44}
-                      fill={isActive ? "oklch(0.55 0.010 274)" : "oklch(0.45 0.008 274)"}
-                      fontSize={9.5}
-                      fontFamily="var(--font-sans)"
-                    >
-                      {step.sublabel}
-                    </text>
-                  </g>
-                );
-              })}
-            </svg>
-          </div>
-
-          {/* Status bar */}
-          <div className="mt-8 flex flex-wrap items-center justify-between gap-4 rounded-xl border border-border/20 bg-background/40 px-5 py-3.5">
-            <div className="flex items-center gap-6 text-xs text-muted-foreground">
-              <span className="flex items-center gap-1.5">
-                <Timer className="h-3.5 w-3.5 text-primary" />
-                Execution: 4m 23s
-              </span>
-              <span className="flex items-center gap-1.5">
-                <Bot className="h-3.5 w-3.5 text-primary" />
-                4 agents active
-              </span>
-              <span className="flex items-center gap-1.5">
-                <Lock className="h-3.5 w-3.5 text-amber-500" />
-                1 approval pending
-              </span>
-            </div>
-            <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/10 px-3 py-1 text-[11px] font-medium text-emerald-400">
-              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-breathe-pulse" />
-              Pipeline Running
-            </span>
-          </div>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-// ─── Metrics Strip ───
-
-const METRICS = [
-  { value: "10+", label: "MCP Sidecars", icon: Server },
-  { value: "42+", label: "Tools Available", icon: Zap },
-  { value: "4", label: "Kubernetes CRDs", icon: Network },
-  { value: "100%", label: "Open Source", icon: Globe },
-];
-
-function MetricsStrip() {
-  return (
-    <section className="relative border-y border-border/30 px-6 py-16">
-      <div className="mx-auto grid max-w-5xl grid-cols-2 gap-8 md:grid-cols-4">
-        {METRICS.map((metric, i) => {
-          const Icon = metric.icon;
-          return (
-            <div key={metric.label} className="text-center animate-slide-up" style={{ animationDelay: `${i * 0.08}s` }}>
-              <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
-                <Icon className="h-5 w-5" />
-              </div>
-              <div className="text-3xl font-bold tracking-tight text-foreground md:text-4xl">{metric.value}</div>
-              <div className="mt-1 text-xs font-medium text-muted-foreground">{metric.label}</div>
-            </div>
-          );
-        })}
+          ))}
+        </motion.div>
       </div>
     </section>
   );
@@ -740,42 +1269,44 @@ function MetricsStrip() {
 
 function BottomCTA({ onLogin }: { onLogin: () => void }) {
   return (
-    <section className="relative overflow-hidden px-6 py-24 md:py-36">
-      {/* Glow */}
-      <div
-        className="glow-orb left-1/2 top-1/2 h-[400px] w-[400px] -translate-x-1/2 -translate-y-1/2"
-        style={{ background: "oklch(0.65 0.13 175 / 0.06)" }}
-      />
-
-      <div className="relative mx-auto max-w-3xl text-center">
-        <div className="mx-auto mb-6 flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/10 text-primary">
-          <Workflow className="h-7 w-7" />
-        </div>
-        <h2 className="text-3xl font-bold tracking-tight text-foreground sm:text-4xl md:text-5xl">
-          Ready to <span className="text-primary">Orchestrate</span>?
-        </h2>
-        <p className="mx-auto mt-4 max-w-xl text-base text-muted-foreground">
-          Initialize your workspace and deploy your first agent in minutes.
-          Start with incident triage, compliance, or bring your own workflow.
-        </p>
-        <div className="mt-10 flex flex-col items-center gap-4 sm:flex-row sm:justify-center">
-          <button
-            onClick={onLogin}
-            className="glow-button group flex items-center gap-2 rounded-xl bg-primary px-8 py-3.5 text-sm font-semibold text-primary-foreground"
-          >
-            Get Started Free
-            <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
-          </button>
-          <a
-            href="https://github.com/kubemininions/kubemininions"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center gap-2 rounded-xl border border-border/50 bg-card/30 px-6 py-3.5 text-sm font-medium text-foreground backdrop-blur-sm transition-colors hover:bg-card/60"
-          >
-            <GitBranch className="h-4 w-4 text-primary" />
-            View on GitHub
-          </a>
-        </div>
+    <section className="bg-white px-6 py-24 md:py-32">
+      <div className="mx-auto max-w-4xl text-center">
+        <motion.div
+          initial={{ opacity: 0, scale: 0.95 }}
+          whileInView={{ opacity: 1, scale: 1 }}
+          viewport={{ once: true }}
+          transition={{ duration: 0.6 }}
+          className="rounded-3xl border border-slate-200 bg-slate-50 p-10 md:p-16 shadow-sm"
+        >
+          <div className="mx-auto mb-6 flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-600 text-white shadow-lg shadow-blue-600/20">
+            <Workflow className="h-7 w-7" />
+          </div>
+          <h2 className="text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl md:text-5xl">
+            Ready to <span className="text-blue-600">Orchestrate</span>?
+          </h2>
+          <p className="mx-auto mt-4 max-w-xl text-base text-slate-600">
+            Initialize your workspace and deploy your first agent in minutes.
+            Start with incident triage, compliance auditing, or bring your own workflow.
+          </p>
+          <div className="mt-10 flex flex-col items-center gap-4 sm:flex-row sm:justify-center">
+            <button
+              onClick={onLogin}
+              className="group flex items-center gap-2 rounded-xl bg-slate-900 px-8 py-3.5 text-sm font-semibold text-white shadow-lg transition-all hover:bg-slate-800 hover:shadow-xl active:scale-[0.98]"
+            >
+              Get Started Free
+              <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
+            </button>
+            <a
+              href="https://github.com/kubesynth/kubesynth"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-8 py-3.5 text-sm font-semibold text-slate-700 shadow-sm transition-all hover:bg-slate-50 hover:border-slate-300"
+            >
+              <GitBranch className="h-4 w-4 text-blue-600" />
+              View on GitHub
+            </a>
+          </div>
+        </motion.div>
       </div>
     </section>
   );
@@ -785,56 +1316,59 @@ function BottomCTA({ onLogin }: { onLogin: () => void }) {
 
 function Footer() {
   return (
-    <footer className="border-t border-border/30 px-6 py-12">
+    <footer className="border-t border-slate-200 bg-white px-6 py-14">
       <div className="mx-auto max-w-7xl">
-        <div className="grid gap-8 sm:grid-cols-2 lg:grid-cols-4">
-          {/* Brand */}
+        <div className="grid gap-10 sm:grid-cols-2 lg:grid-cols-4">
           <div className="sm:col-span-2 lg:col-span-1">
             <div className="flex items-center gap-2">
-              <LayoutPanelTop className="h-4 w-4 text-primary" />
-              <span className="text-sm font-semibold text-foreground">{BRAND.name}</span>
+              <LayoutPanelTop className="h-5 w-5 text-blue-600" />
+              <span className="text-sm font-bold text-slate-900">{BRAND.name}</span>
             </div>
-            <p className="mt-2 text-xs leading-relaxed text-muted-foreground max-w-[240px]">
-              Kubernetes-native AI agent orchestration with durable memory, governance, and enterprise workflow automation.
+            <p className="mt-3 max-w-[260px] text-xs leading-relaxed text-slate-500">
+              Kubernetes-native AI agent orchestration with durable memory, governance,
+              and enterprise workflow automation. Open source under Apache 2.0.
             </p>
           </div>
 
-          {/* Product */}
           <div>
-            <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Product</h4>
-            <ul className="mt-3 space-y-2 text-xs text-muted-foreground">
-              <li><a href="#features" className="transition-colors hover:text-foreground">Features</a></li>
-              <li><a href="#scenarios" className="transition-colors hover:text-foreground">Use Cases</a></li>
-              <li><a href="#workflows" className="transition-colors hover:text-foreground">Workflows</a></li>
+            <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400">Product</h4>
+            <ul className="mt-4 space-y-2.5 text-sm text-slate-600">
+              <li><a href="#features" className="transition-colors hover:text-slate-900">Features</a></li>
+              <li><a href="#architecture" className="transition-colors hover:text-slate-900">Architecture</a></li>
+              <li><a href="#workflows" className="transition-colors hover:text-slate-900">Workflows</a></li>
+              <li><a href="#install" className="transition-colors hover:text-slate-900">Quick Start</a></li>
             </ul>
           </div>
 
-          {/* Resources */}
           <div>
-            <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Resources</h4>
-            <ul className="mt-3 space-y-2 text-xs text-muted-foreground">
-              <li><a href="#" className="transition-colors hover:text-foreground">Documentation</a></li>
-              <li><a href="https://github.com/kubemininions/kubemininions" target="_blank" rel="noopener noreferrer" className="transition-colors hover:text-foreground">GitHub</a></li>
-              <li><a href="#" className="transition-colors hover:text-foreground">Changelog</a></li>
+            <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400">Resources</h4>
+            <ul className="mt-4 space-y-2.5 text-sm text-slate-600">
+              <li><a href="#" className="transition-colors hover:text-slate-900">Documentation</a></li>
+              <li><a href="https://github.com/kubesynth/kubesynth" target="_blank" rel="noopener noreferrer" className="transition-colors hover:text-slate-900">GitHub</a></li>
+              <li><a href="#" className="transition-colors hover:text-slate-900">Changelog</a></li>
+              <li><a href="#" className="transition-colors hover:text-slate-900">Helm Charts</a></li>
             </ul>
           </div>
 
-          {/* Community */}
           <div>
-            <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Community</h4>
-            <ul className="mt-3 space-y-2 text-xs text-muted-foreground">
-              <li><a href="#" className="transition-colors hover:text-foreground">Contributing</a></li>
-              <li><a href="#" className="transition-colors hover:text-foreground">Security</a></li>
-              <li><a href="#" className="transition-colors hover:text-foreground">License</a></li>
+            <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400">Community</h4>
+            <ul className="mt-4 space-y-2.5 text-sm text-slate-600">
+              <li><a href="#" className="transition-colors hover:text-slate-900">Contributing</a></li>
+              <li><a href="#" className="transition-colors hover:text-slate-900">Security</a></li>
+              <li><a href="#" className="transition-colors hover:text-slate-900">License</a></li>
+              <li><a href="#" className="transition-colors hover:text-slate-900">Status</a></li>
             </ul>
           </div>
         </div>
 
-        <div className="mt-10 flex items-center justify-between border-t border-border/20 pt-6">
-          <p className="text-xs text-muted-foreground">
+        <div className="mt-12 flex flex-col items-center justify-between gap-4 border-t border-slate-100 pt-8 sm:flex-row">
+          <p className="text-xs text-slate-500">
             &copy; {new Date().getFullYear()} {BRAND.name}. Open source under Apache 2.0.
           </p>
-          <a href="#" className="text-xs text-muted-foreground transition-colors hover:text-foreground">Status</a>
+          <div className="flex items-center gap-6 text-xs text-slate-500">
+            <a href="#" className="transition-colors hover:text-slate-900">Privacy</a>
+            <a href="#" className="transition-colors hover:text-slate-900">Terms</a>
+          </div>
         </div>
       </div>
     </footer>
@@ -844,23 +1378,40 @@ function Footer() {
 // ─── Main LandingPage ───
 
 export function LandingPage({ onLogin }: LandingPageProps) {
+  const [darkMode, setDarkMode] = useState(() => {
+    if (typeof window !== "undefined") {
+      return window.matchMedia("(prefers-color-scheme: dark)").matches;
+    }
+    return false;
+  });
+
+  useEffect(() => {
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const handler = (e: MediaQueryListEvent) => setDarkMode(e.matches);
+    mq.addEventListener("change", handler);
+    return () => mq.removeEventListener("change", handler);
+  }, []);
+
   return (
-    <div className="min-h-screen bg-background text-foreground">
-      <a href="#main-content" className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-[100] focus:rounded-lg focus:bg-primary focus:px-4 focus:py-2 focus:text-primary-foreground focus:text-sm focus:font-medium">
+    <div className={`min-h-screen transition-colors duration-300 ${darkMode ? "bg-slate-900 text-slate-100" : "bg-white text-slate-900"}`}>
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-[100] focus:rounded-lg focus:bg-blue-600 focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:text-white"
+      >
         Skip to main content
       </a>
-      <AnnouncementBar />
-      <Navbar onLogin={onLogin} />
+      <Navbar onLogin={onLogin} darkMode={darkMode} onToggleDark={() => setDarkMode((v) => !v)} />
       <main id="main-content">
         <HeroSection onLogin={onLogin} />
-        <MockUIPreview />
-        <div className="mx-auto max-w-5xl px-6"><hr className="border-border/15" /></div>
-        <EnterpriseScenariosSection />
-        <div className="mx-auto max-w-5xl px-6"><hr className="border-border/15" /></div>
-        <FeatureBentoSection />
-        <div className="mx-auto max-w-5xl px-6"><hr className="border-border/15" /></div>
-        <WorkflowDemo />
-        <MetricsStrip />
+        <EcosystemCloud />
+        <ProblemSection />
+        <InstallSection />
+        <FeaturesSection />
+        <HowItWorks />
+        <WorkflowAnimation />
+        <ArchitectureSection />
+        <TestimonialsSection />
+        <ComparisonStrip />
         <BottomCTA onLogin={onLogin} />
       </main>
       <Footer />

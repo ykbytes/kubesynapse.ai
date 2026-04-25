@@ -10,11 +10,11 @@ logger = logging.getLogger("opencode-runtime")
 _OTEL_AVAILABLE = False
 try:
     from opentelemetry import trace  # type: ignore[import-untyped]
+    from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter  # type: ignore[import-untyped]
     from opentelemetry.sdk.resources import Resource  # type: ignore[import-untyped]
     from opentelemetry.sdk.trace import TracerProvider  # type: ignore[import-untyped]
     from opentelemetry.sdk.trace.export import BatchSpanProcessor  # type: ignore[import-untyped]
-    from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter  # type: ignore[import-untyped]
-    from opentelemetry.trace import StatusCode  # type: ignore[import-untyped]  # noqa: F401 — re-exported
+    from opentelemetry.trace import StatusCode  # type: ignore[import-untyped]
     _OTEL_AVAILABLE = True
 except ImportError:
     StatusCode = None  # type: ignore[assignment,misc]

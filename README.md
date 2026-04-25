@@ -1,185 +1,167 @@
-<div align="center">
+# KubeSynth
 
-  <h1>KubeSynth</h1>
+<p align="center">
+  <a href="https://github.com/kubesynth/kubesynth/stargazers"><img src="https://img.shields.io/github/stars/kubesynth/kubesynth" alt="GitHub Stars"></a>
+  <a href="https://github.com/kubesynth/kubesynth/blob/main/LICENSE"><img src="https://img.shields.io/github/license/kubesynth/kubesynth" alt="License"></a>
+  <a href="https://github.com/kubesynth/kubesynth/releases"><img src="https://img.shields.io/github/v/release/kubesynth/kubesynth" alt="Release"></a>
+  <a href="https://kubernetes.io/"><img src="https://img.shields.io/badge/Kubernetes-1.25%2B-326CE5" alt="Kubernetes 1.25+"></a>
+</p>
 
-  <h3>Kubernetes-native AI agents, packaged as one sleek platform</h3>
-
-  <p>
-    Build, deploy, and operate AI agents with a unified control plane, runtimes,
-    API gateway, Helm chart, and web console &mdash; all from a single repository.
-  </p>
-
-  <img src="https://img.shields.io/badge/Kubernetes-Native-326CE5?style=for-the-badge&logo=kubernetes&logoColor=white" alt="Kubernetes Native" />
-  <img src="https://img.shields.io/badge/Helm-Ready-0F1689?style=for-the-badge&logo=helm&logoColor=white" alt="Helm Ready" />
-  <img src="https://img.shields.io/badge/Python-Services-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python Services" />
-  <img src="https://img.shields.io/badge/React-Web_UI-61DAFB?style=for-the-badge&logo=react&logoColor=0B1020" alt="React Web UI" />
-  <img src="https://img.shields.io/badge/TypeScript-Frontend-3178C6?style=for-the-badge&logo=typescript&logoColor=white" alt="TypeScript Frontend" />
-
-</div>
+**The production-grade, Kubernetes-native AI agent platform.**
+Deploy, orchestrate, and govern AI agents using declarative custom resources. KubeSynth unifies an operator-driven control plane, A2A-ready API gateway, OpenCode runtime, and an extensible MCP tool ecosystem into a single Helm install.
 
 ---
 
-## Why this repo
+## Architecture
 
-KubeSynth is a **shareable, end-to-end AI agent platform** for Kubernetes:
+KubeSynth separates the **control plane** (CRDs, operator, gateway) from the **execution plane** (per-agent runtimes and sidecars).
 
-- **OpenCode-first runtime path** &mdash; the gateway, operator, CLI, and web UI now target a single supported runtime: `runtime.kind: opencode`
-- **File-backed skills and config** &mdash; agent behavior, capability grants, and OpenCode config files are versioned directly in manifests
-- **Delegation built in** &mdash; explicit A2A routing and policy-enforced peer discovery via gateway, CLI, and web UI
-- **Platform-first governance** &mdash; policies, approvals, workflows, evals, tenants, and audit-friendly control-plane resources live with the app stack
-- **Integrated observability module** &mdash; connector, target, policy, and report CRDs plus a collector path for cluster intelligence and dashboard visibility
-- **Deployment friendly** &mdash; Helm chart, deploy overrides, packaging scripts, and a live Kind redeploy script are built in
+```mermaid
+graph LR
+    subgraph "Clients"
+        UI[Web UI<br/>React 18 + Vite + Tailwind v4]
+        CLI[agentctl CLI<br/>Typer-based]
+        EXT[External API Clients]
+    end
 
-## Repository layout
+    subgraph "Control Plane"
+        GW[API Gateway<br/>FastAPI monolith<br/>A2A JSON-RPC + SSE]
+        K8S[Kubernetes API Server]
+        OP[Operator<br/>Kopf-based engine<br/>~3,500-line worker]
+        CRD[CRDs: kubesynth.ai/v1alpha1<br/>AIAgent, AgentWorkflow, AgentEval,<br/>AgentPolicy, AgentApproval, AgentTenant]
+    end
 
-```
-kubesynth/
-├── operator/            # K8s operator, controller modules, worker job engine
-├── opencode-runtime/    # OpenCode runtime service and invoke pipeline
-├── api-gateway/         # FastAPI gateway: auth, CRUD, invoke, streaming, chat state
-├── web-ui/              # React + TypeScript console
-├── mcp-sidecars/        # Bundled MCP tool images + optional collector sidecar
-│   ├── base/
-│   ├── browser/
-│   ├── code-exec/
-│   ├── collector/
-│   ├── database/
-│   ├── documents/
-│   ├── git/
-│   ├── github-adapter/
-│   ├── kubernetes/
-│   ├── messaging/
-│   ├── rag/
-│   └── web-search/
-├── collector-agent/     # Read-only cluster intelligence collector DaemonSet image
-├── charts/              # Helm charts and CRD templates
-├── catalog/             # Agent templates and skills catalog
-├── cli/                 # agentctl CLI tool
-├── deploy/              # Helm values overrides per environment
-├── docs/                # Architecture, deployment, observability, and design docs
-├── examples/            # Sample YAML manifests and scripts
-├── scripts/             # Build, packaging, deploy, and lint scripts
-├── tests/               # Cross-cutting integration tests
-├── .github/             # CI workflows and agent prompts
-├── Makefile             # Build, test, lint, Helm, and live Kind redeploy targets
-├── pyproject.toml       # Python project config
-└── README.md            # This file
+    subgraph "Execution Plane"
+        RT[OpenCode Runtime<br/>FastAPI wrapper<br/>around opencode serve]
+        MCP[MCP Sidecars<br/>Bundled tool containers]
+    end
+
+    UI -->|HTTP| GW
+    CLI -->|HTTP| GW
+    EXT -->|A2A JSON-RPC / SSE| GW
+    GW -->|CRUD / Watch| K8S
+    K8S -->|Stores| CRD
+    OP -->|Reconciles| K8S
+    OP -->|Manages| RT
+    RT -->|Localhost| MCP
 ```
 
-## Quick start
+---
 
-### Option A &mdash; Deploy from pre-built DockerHub images (fastest)
+## Quick Start
 
-**1. Set your LLM API key**
+### Production Install (Helm + DockerHub)
 
-Edit `deploy/values.dockerhub.local.yaml` (or pass `--set`):
-
-```yaml
-platformSecrets:
-  native:
-    openaiApiKey: "sk-your-key"
-    apiGatewaySharedToken: "my-secret-bearer-token"
-```
-
-**2. Create an image-pull secret (DockerHub rate limits)**
+The fastest path uses pre-built images. Requires Kubernetes 1.25+, Helm 3.12+, and an LLM API key.
 
 ```bash
-kubectl create secret docker-registry dockerhub-regcred \
-  --docker-username=YOUR_DOCKERHUB_USERNAME \
-  --docker-password=YOUR_DOCKERHUB_TOKEN \
-  --docker-email=you@example.com
-```
+# 1. Clone
+git clone https://github.com/kubesynth/kubesynth.git && cd kubesynth
 
-**3. Deploy**
+# 2. Set secrets (edit file; never commit keys)
+# deploy/values.dockerhub.local.yaml
+#   platformSecrets.native.openaiApiKey: "sk-..."
 
-```bash
+# 3. Deploy
 helm upgrade --install kubesynth ./charts/kubesynth \
   -f ./deploy/values.dockerhub.local.yaml
-```
 
-**4. Verify**
-
-```bash
+# 4. Verify
 kubectl port-forward svc/kubesynth-api-gateway 8080:8080
 curl http://localhost:8080/api/health
 ```
 
----
+### Local Development (Kind)
 
-### Option B &mdash; Build and deploy your own images
-
-**1. Build the core platform images and bundled MCP sidecars**
+Build locally and load into a Kind cluster. No registry required.
 
 ```bash
-make docker-build REGISTRY=ghcr.io/your-org VERSION=latest CONTAINER_CLI=docker
-```
+# 1. Create cluster
+kind create cluster --name kubesynth-dev
 
-**2. Or use the packaging script**
+# 2. Build platform images + MCP sidecars
+make docker-build REGISTRY=localhost/kubesynthai VERSION=dev CONTAINER_CLI=docker
 
-```bash
-./scripts/package-self-contained.ps1 -Registry ghcr.io/your-org -Version 0.1.0 -Push
-```
-
-**3. Deploy**
-
-```bash
+# 3. Install
 helm upgrade --install kubesynth ./charts/kubesynth \
-  -f ./deploy/values.cluster.example.yaml
+  -f ./deploy/values.local-images.example.yaml
+
+# 4. Port-forward
+kubectl port-forward svc/kubesynth-api-gateway 8080:8080
+kubectl port-forward svc/kubesynth-web-ui 3000:80
+
+# 5. Install CLI
+pip install ./cli
+agentctl health
 ```
-
-To enable managed Google sign-in, fill in [deploy/values.google-oidc.example.yaml](deploy/values.google-oidc.example.yaml) and layer it with an extra `-f` during Helm upgrade.
-
-### Option C &mdash; Refresh the live local Kind release
-
-If you already have the `ai-sandbox` release running in `ai-agent-sandbox`, use the checked-in image override file and redeploy script instead of replaying the broader example values files:
-
-```powershell
-pwsh -File ./scripts/deploy-ai-sandbox-kind.ps1 -DryRun
-pwsh -File ./scripts/deploy-ai-sandbox-kind.ps1
-```
-
-This path uses `--reuse-values --server-side=true --force-conflicts` and only refreshes the image references declared in `deploy/values.ai-sandbox.kind-local.yaml`.
-
-## Documentation
-
-| Document | Content |
-|---|---|
-| [`INSTALL.md`](INSTALL.md) | Full install guide: prerequisites, dev setup, production deployment, secrets, troubleshooting |
-| [`docs/architecture-overview.md`](docs/architecture-overview.md) | System architecture, CRD model, control/data plane design, security model |
-| [`docs/walkthrough.md`](docs/walkthrough.md) | Current implementation walkthrough for the OpenCode runtime, gateway, operator, UI, and observability stack |
-| [`docs/observability-explained.md`](docs/observability-explained.md) | How the observability CRDs fit together and how to make reports visible in the UI |
-| [`docs/aiops-observability-architecture.md`](docs/aiops-observability-architecture.md) | Detailed observability architecture notes and design background |
-| [`docs/deployment-readme.md`](docs/deployment-readme.md) | Deployment entry points, validation flow, and local Kind redeploy guidance |
-| [`docs/execution-plan.md`](docs/execution-plan.md) | Phased project execution plan and progress tracker |
-| [`web-ui/README.md`](web-ui/README.md) | Frontend local dev workflow and feature map |
-| [`cli/README.md`](cli/README.md) | Full `agentctl` command reference |
-| [`docs/upstream-reference-repos.md`](docs/upstream-reference-repos.md) | Optional local research checkouts |
-
-## Make targets
-
-```
-make docker-build                # Build operator, runtime, gateway, UI, and bundled MCP sidecars
-make docker-push                 # Push those images to the configured registry
-make test                        # Run service and integration tests
-make lint                        # Run flake8 across Python services
-make helm-lint                   # Lint the Helm chart
-make helm-package                # Package the Helm chart
-make deploy                      # Install/upgrade via Helm
-make deploy-ai-sandbox-kind      # Refresh the live local ai-sandbox release with local images
-make deploy-sample               # Apply sample agent, tenant, and policy
-make clean                       # Remove build artifacts and images
-```
-
-## Notes
-
-- The checked-in chart defaults currently target published images under `docker.io/yakdhane`
-- The packaging script defaults to `docker`; pass `-ContainerCli podman` for Podman
-- Ingress is disabled by default in the Helm chart; enable it per environment with values overrides
-- The platform chart now includes the observability CRDs and the cluster intelligence collector DaemonSet path
-- The repository contains an optional MCP collector sidecar and collector-agent image in addition to the default `docker-build` set
 
 ---
 
-<div align="center">
-  <strong>Modern platform. Kubernetes-native workflows. One repository.</strong>
-</div>
+## Features
+
+| # | Capability | What it means |
+|---|------------|---------------|
+| 1 | **Kubernetes-Native Orchestration** | Agents, policies, workflows, and tenants are `kubesynth.ai/v1alpha1` CRDs reconciled by a production Kopf operator. |
+| 2 | **A2A Protocol Support** | Native JSON-RPC and Server-Sent Events (SSE) streaming for agent-to-agent delegation and real-time responses. |
+| 3 | **OpenCode Runtime** | Purpose-built FastAPI wrapper around `opencode serve` with session persistence and checkpoint recovery. |
+| 4 | **MCP Tool Ecosystem** | 11 bundled sidecar containers including code execution, web search, browser automation, database, git, Kubernetes ops, RAG, messaging, and more. |
+| 5 | **Policy-Driven Governance** | `AgentPolicy` CRDs enforce input/output guardrails, token caps, PII masking, prompt-injection detection, and allowed model lists. |
+| 6 | **Multi-Tenant Isolation** | `AgentTenant` CRDs provision isolated namespaces, resource quotas, RBAC, and network policies per team. |
+| 7 | **Workflow Engine** | `AgentWorkflow` CRDs define DAG-based multi-agent pipelines with dependency chains, parallel execution, and human-in-the-loop approval gates. |
+| 8 | **Continuous Evaluation** | `AgentEval` CRDs run scheduled test suites measuring relevance, toxicity, latency, and exact-match thresholds against live agents. |
+
+---
+
+## Comparison
+
+| Capability | KubeSynth | LangChain | AutoGen | CrewAI | Dify | LangFlow |
+|------------|-----------|-----------|---------|--------|------|----------|
+| **Kubernetes Native** | Yes (Operator + CRDs) | No | No | No | Partial | Partial |
+| **Self-Hosted** | Yes (Full stack via Helm) | Library only | Partial | Partial | Yes | Yes |
+| **Multi-Agent Orchestration** | Yes (CRD-based DAGs) | LangGraph | Code-based | Code-based | Yes | Yes |
+| **A2A Protocol (JSON-RPC/SSE)** | Yes (Native gateway) | No | No | No | No | No |
+| **MCP Tool Ecosystem** | Yes (11 sidecars) | Requires setup | Requires setup | Requires setup | Limited | Limited |
+| **Policy & Governance** | Yes (CRD guardrails) | Manual | Manual | Manual | Basic | Basic |
+| **Human-in-the-Loop** | Yes (AgentApproval CRD) | External | External | External | Basic | Basic |
+| **Eval Framework** | Yes (Built-in CRD) | External | External | External | Limited | Limited |
+| **Primary Model** | Platform | Library | Framework | Framework | Platform | Platform |
+
+---
+
+## Screenshots
+
+> **Dashboard Overview** — Real-time agent status, tenant utilization, and system health.
+> ![KubeSynth Dashboard](docs/screenshots/dashboard-overview.png)
+
+> **Agent Workflow Editor** — Visual DAG builder for multi-agent pipelines with approval gates.
+> ![Workflow Editor](docs/screenshots/workflow-editor.png)
+
+> **Policy Governance Panel** — Guardrail configuration, blocked patterns, and audit logs.
+> ![Policy Panel](docs/screenshots/policy-governance.png)
+
+---
+
+## Contributing
+
+We welcome contributions. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full guide.
+
+```bash
+# Fork, clone, and build
+git clone https://github.com/your-username/kubesynth.git
+cd kubesynth
+
+# Run the test suite
+make test
+
+# Lint Python services
+make lint
+
+# Deploy to local Kind
+make deploy-ai-sandbox-kind
+```
+
+---
+
+## License
+
+KubeSynth is licensed under the Apache License 2.0. See [LICENSE](LICENSE) for details.

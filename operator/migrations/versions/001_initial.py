@@ -6,10 +6,10 @@ Create Date: 2026-03-22
 """
 from __future__ import annotations
 
-from typing import Sequence
+from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "001_initial"
@@ -36,6 +36,10 @@ def upgrade() -> None:
         sa.Column("journal_path", sa.String(512), nullable=True),
         sa.Column("worker_job_name", sa.String(128), nullable=True),
         sa.Column("pending_approval_name", sa.String(128), nullable=True),
+        sa.Column("log_archive_text", sa.String(), nullable=True),
+        sa.Column("log_archive_source", sa.String(64), nullable=True),
+        sa.Column("log_archive_truncated", sa.Boolean(), nullable=False, default=False),
+        sa.Column("log_archive_captured_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),

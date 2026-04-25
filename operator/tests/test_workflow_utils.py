@@ -3,7 +3,6 @@ import sys
 import unittest
 from pathlib import Path
 
-
 MODULE_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = MODULE_ROOT / "config.py"
 CONFIG_SPEC = importlib.util.spec_from_file_location("operator_config_under_test", CONFIG_PATH)

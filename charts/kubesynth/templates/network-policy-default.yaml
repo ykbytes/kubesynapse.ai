@@ -1,0 +1,348 @@
+{{- if .Values.networkPolicy.enabled }}
+# ---------------------------------------------------------------------------
+# Default Deny All Ingress
+# ---------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kubesynth.fullname" . }}-default-deny-ingress
+  labels:
+    {{- include "kubesynth.labels" . | nindent 4 }}
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+---
+# ---------------------------------------------------------------------------
+# Default Deny All Egress
+# ---------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kubesynth.fullname" . }}-default-deny-egress
+  labels:
+    {{- include "kubesynth.labels" . | nindent 4 }}
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+---
+# ---------------------------------------------------------------------------
+# Allow DNS Resolution (UDP/TCP 53)
+# Required by all pods for service discovery and external lookups.
+# ---------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kubesynth.fullname" . }}-allow-dns-egress
+  labels:
+    {{- include "kubesynth.labels" . | nindent 4 }}
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        # TRADE-OFF: kube-dns may reside in different namespaces depending on the
+        # Kubernetes distribution (kube-system, openshift-dns, etc.). We select
+        # by pod label rather than namespace to avoid portability issues.
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+# ---------------------------------------------------------------------------
+# Allow Ingress to API Gateway
+# ---------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kubesynth.fullname" . }}-allow-gateway-ingress
+  labels:
+    {{- include "kubesynth.labels" . | nindent 4 }}
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector:
+    matchLabels:
+      app: api-gateway
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        {{- if .Values.networkPolicy.ingressNamespaces }}
+        {{- range .Values.networkPolicy.ingressNamespaces }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ . | quote }}
+        {{- end }}
+        {{- else }}
+        # SECURITY TRADE-OFF: namespaceSelector: {} allows traffic from ANY namespace.
+        # This is kept for backward compatibility when ingressNamespaces is empty.
+        # In production, set networkPolicy.ingressNamespaces to restrict ingress
+        # to specific namespaces (e.g., ["ingress-nginx", "traefik"]).
+        - namespaceSelector: {}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+# ---------------------------------------------------------------------------
+# Allow Ingress to Web UI
+# ---------------------------------------------------------------------------
+{{- if .Values.webUi.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kubesynth.fullname" . }}-allow-webui-ingress
+  labels:
+    {{- include "kubesynth.labels" . | nindent 4 }}
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector:
+    matchLabels:
+      app: web-ui
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        {{- if .Values.networkPolicy.ingressNamespaces }}
+        {{- range .Values.networkPolicy.ingressNamespaces }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ . | quote }}
+        {{- end }}
+        {{- else }}
+        # SECURITY TRADE-OFF: namespaceSelector: {} allows traffic from ANY namespace.
+        # This is kept for backward compatibility when ingressNamespaces is empty.
+        # In production, set networkPolicy.ingressNamespaces to restrict ingress
+        # to specific namespaces (e.g., ["ingress-nginx", "traefik"]).
+        - namespaceSelector: {}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+{{- end }}
+# ---------------------------------------------------------------------------
+# Allow Ingress to Operator (webhook / metrics)
+# ---------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kubesynth.fullname" . }}-allow-operator-ingress
+  labels:
+    {{- include "kubesynth.labels" . | nindent 4 }}
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector:
+    matchLabels:
+      app: operator
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        {{- if .Values.networkPolicy.ingressNamespaces }}
+        {{- range .Values.networkPolicy.ingressNamespaces }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ . | quote }}
+        {{- end }}
+        {{- else }}
+        # SECURITY TRADE-OFF: namespaceSelector: {} allows traffic from ANY namespace.
+        # This is kept for backward compatibility when ingressNamespaces is empty.
+        # In production, set networkPolicy.ingressNamespaces to restrict ingress
+        # to specific namespaces (e.g., ["ingress-nginx", "traefik"]).
+        - namespaceSelector: {}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+# ---------------------------------------------------------------------------
+# Allow Ingress to LiteLLM
+# ---------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kubesynth.fullname" . }}-allow-litellm-ingress
+  labels:
+    {{- include "kubesynth.labels" . | nindent 4 }}
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector:
+    matchLabels:
+      app: litellm
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: api-gateway
+        - podSelector:
+            matchLabels:
+              app: operator
+        - podSelector:
+            matchLabels:
+              app: collector-agent
+      ports:
+        - protocol: TCP
+          port: 4000
+---
+# ---------------------------------------------------------------------------
+# Allow Egress from Operator to Kubernetes API
+# ---------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kubesynth.fullname" . }}-allow-operator-k8s-egress
+  labels:
+    {{- include "kubesynth.labels" . | nindent 4 }}
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector:
+    matchLabels:
+      app: operator
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 6443
+---
+# ---------------------------------------------------------------------------
+# Allow Egress from API Gateway to Dependencies
+# ---------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kubesynth.fullname" . }}-allow-gateway-deps-egress
+  labels:
+    {{- include "kubesynth.labels" . | nindent 4 }}
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector:
+    matchLabels:
+      app: api-gateway
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: postgresql
+      ports:
+        - protocol: TCP
+          port: 5432
+    - to:
+        - podSelector:
+            matchLabels:
+              app: redis
+      ports:
+        - protocol: TCP
+          port: 6379
+    - to:
+        - podSelector:
+            matchLabels:
+              app: nats
+      ports:
+        - protocol: TCP
+          port: 4222
+    - to:
+        - podSelector:
+            matchLabels:
+              app: litellm
+      ports:
+        - protocol: TCP
+          port: 4000
+    - to:
+        - podSelector:
+            matchLabels:
+              app: qdrant
+      ports:
+        - protocol: TCP
+          port: 6333
+---
+# ---------------------------------------------------------------------------
+# Allow Egress from Web UI to API Gateway
+# ---------------------------------------------------------------------------
+{{- if .Values.webUi.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kubesynth.fullname" . }}-allow-webui-gateway-egress
+  labels:
+    {{- include "kubesynth.labels" . | nindent 4 }}
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector:
+    matchLabels:
+      app: web-ui
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: api-gateway
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+{{- end }}
+# ---------------------------------------------------------------------------
+# Allow Egress from Collector to API Gateway and K8s API
+# ---------------------------------------------------------------------------
+{{- if .Values.collector.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kubesynth.fullname" . }}-allow-collector-egress
+  labels:
+    {{- include "kubesynth.labels" . | nindent 4 }}
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector:
+    matchLabels:
+      app: collector-agent
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: api-gateway
+      ports:
+        - protocol: TCP
+          port: 8080
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 6443
+{{- end }}
+{{- end }}

@@ -35,6 +35,7 @@ const MobileNav = lazy(() => import("./components/MobileNav").then((m) => ({ def
 const WorkflowManager = lazy(() => import("./components/WorkflowManager").then((m) => ({ default: m.WorkflowManager })));
 const IntelligenceDashboard = lazy(() => import("./components/IntelligenceDashboard").then((m) => ({ default: m.IntelligenceDashboard })));
 const McpManagementPanel = lazy(() => import("./components/McpManagementPanel").then((m) => ({ default: m.McpManagementPanel })));
+const ExecutionObservatory = lazy(() => import("./components/ExecutionObservatory").then((m) => ({ default: m.ExecutionObservatory })));
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EmptyState } from "@/components/EmptyState";
@@ -369,16 +370,21 @@ function AppLayout() {
                         title: "Admin",
                         description: "Inspect users, audit activity, usage, and platform health.",
                       }
-                    : {
-                        title: "Evaluations",
-                        description: "Create evaluation suites and track regression coverage.",
-                      };
+                    : ws.activeView === "observatory"
+                      ? {
+                          title: "Observatory",
+                          description: "Inspect, replay, and compare workflow execution traces.",
+                        }
+                      : {
+                          title: "Evaluations",
+                          description: "Create evaluation suites and track regression coverage.",
+                        };
   const showCompactPageHeader = ws.activeView !== "composer" && !(ws.activeView === "chat" && ws.selectedAgentName);
   const mainContentClasses = ws.activeView === "composer"
     ? "flex flex-1 flex-col overflow-hidden pb-20 md:pb-0"
     : ws.activeView === "chat" && ws.selectedAgentName
       ? "flex flex-1 overflow-hidden pb-20 md:pb-0"
-      : "flex min-w-0 flex-1 flex-col gap-3 overflow-auto p-3 pb-20 sm:p-4 md:pb-0";
+      : "flex min-w-0 flex-1 flex-col gap-2 overflow-auto p-2 pb-20 sm:p-3 md:pb-0";
 
   return (
     <div className="flex h-screen flex-col bg-background text-foreground">
@@ -425,7 +431,7 @@ function AppLayout() {
         <div
           className={`hidden shrink-0 overflow-hidden transition-[width] duration-200 ease-productive md:flex ${ws.sidebarCollapsed
             ? "md:w-14"
-            : "md:w-[clamp(13.5rem,18vw,17rem)] xl:w-[clamp(14.25rem,18.5vw,18rem)]"}`}
+            : "md:w-[clamp(11.5rem,15vw,14.5rem)] xl:w-[clamp(12rem,16vw,15.5rem)]"}`}
         >
           <SidebarShell>
             <AppSidebar
@@ -474,8 +480,7 @@ function AppLayout() {
           {showCompactPageHeader && (
             <div className="flex min-w-0 items-start justify-between gap-3">
               <div className="min-w-0">
-                <h2 className="break-words text-base font-semibold leading-tight text-foreground">{pageHeader.title}</h2>
-                <p className="mt-1 text-xs leading-5 text-muted-foreground">{pageHeader.description}</p>
+                <h2 className="break-words text-sm font-semibold leading-tight text-foreground">{pageHeader.title}</h2>
               </div>
               {inspectorSupported ? (
                 <Button
@@ -799,6 +804,10 @@ function AppLayout() {
                   </ContentShell>
                 </TabsContent>
               </Tabs>
+          ) : ws.activeView === "observatory" ? (
+            <ContentShell>
+              <ExecutionObservatory />
+            </ContentShell>
           ) : (
             <ContentShell>
               <EvalManager

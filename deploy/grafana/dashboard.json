@@ -1,0 +1,236 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": "-- Grafana --",
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "gnetId": null,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "datasource": "${prometheus_datasource}",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {"legend": false, "tooltip": false, "viz": false},
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {"type": "linear"},
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "mappings": [],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 80}]},
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "id": 1,
+      "options": {
+        "legend": {"calcs": [], "displayMode": "list", "placement": "bottom"},
+        "tooltip": {"mode": "single"}
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(kubesynth_gateway_request_total[5m])) by (handler)",
+          "refId": "A"
+        }
+      ],
+      "title": "API Gateway Request Rate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "${prometheus_datasource}",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "custom": {"align": "auto", "displayMode": "auto"},
+          "mappings": [],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 5}]}
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "id": 2,
+      "options": {"showHeader": true},
+      "targets": [
+        {
+          "expr": "sum(rate(kubesynth_gateway_request_latency_seconds_count{status=~\"5..\"}[5m])) / sum(rate(kubesynth_gateway_request_latency_seconds_count[5m])) * 100",
+          "refId": "A"
+        }
+      ],
+      "title": "API Gateway Error Rate (%)",
+      "type": "stat"
+    },
+    {
+      "datasource": "${prometheus_datasource}",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never"
+          },
+          "unit": "s"
+        }
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+      "id": 3,
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(kubesynth_gateway_request_latency_seconds_bucket[5m])) by (le, handler))",
+          "refId": "A"
+        }
+      ],
+      "title": "API Gateway P95 Latency",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "${prometheus_datasource}",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"drawStyle": "line", "fillOpacity": 10, "lineWidth": 1, "showPoints": "never"},
+          "unit": "reconciliations/s"
+        }
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+      "id": 4,
+      "targets": [
+        {
+          "expr": "sum(rate(kubesynth_operator_reconcile_total[5m])) by (resource_type)",
+          "refId": "A"
+        }
+      ],
+      "title": "Operator Reconciliation Rate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "${prometheus_datasource}",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "mappings": [],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}
+        }
+      },
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 16},
+      "id": 5,
+      "targets": [
+        {
+          "expr": "sum(kubesynth_operator_reconcile_errors_total)",
+          "refId": "A"
+        }
+      ],
+      "title": "Operator Reconcile Errors",
+      "type": "stat"
+    },
+    {
+      "datasource": "${prometheus_datasource}",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "mappings": [],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 1}, {"color": "red", "value": 2}]}
+        }
+      },
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 16},
+      "id": 6,
+      "targets": [
+        {
+          "expr": "sum(kubesynth_circuit_breaker_state{state=\"open\"})",
+          "refId": "A"
+        }
+      ],
+      "title": "Open Circuit Breakers",
+      "type": "stat"
+    },
+    {
+      "datasource": "${prometheus_datasource}",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"drawStyle": "line", "fillOpacity": 10, "lineWidth": 1, "showPoints": "never"},
+          "unit": "bytes"
+        }
+      },
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 16},
+      "id": 7,
+      "targets": [
+        {
+          "expr": "sum(container_memory_working_set_bytes{namespace=~\"$namespace\", pod=~\"kubesynth-.*\"}) by (pod)",
+          "refId": "A"
+        }
+      ],
+      "title": "Memory Usage by Pod",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 30,
+  "style": "dark",
+  "tags": ["kubesynth"],
+  "templating": {
+    "list": [
+      {
+        "current": {"selected": false, "text": "Prometheus", "value": "Prometheus"},
+        "hide": 0,
+        "includeAll": false,
+        "label": "Datasource",
+        "multi": false,
+        "name": "prometheus_datasource",
+        "options": [],
+        "query": "prometheus",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "type": "datasource"
+      },
+      {
+        "current": {"selected": false, "text": "All", "value": "$__all"},
+        "hide": 0,
+        "includeAll": true,
+        "label": "Namespace",
+        "multi": true,
+        "name": "namespace",
+        "options": [],
+        "query": "label_values(kubernetes_namespace_labels, namespace)",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 0,
+        "type": "query"
+      }
+    ]
+  },
+  "time": {"from": "now-1h", "to": "now"},
+  "timepicker": {},
+  "timezone": "utc",
+  "title": "KubeSynth Platform Overview",
+  "uid": "kubesynth-overview",
+  "version": 1
+}

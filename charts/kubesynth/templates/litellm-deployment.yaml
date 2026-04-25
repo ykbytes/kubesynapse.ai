@@ -1,8 +1,11 @@
+{{- if .Values.litellm.enabled }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ include "kubesynth.fullname" . }}-litellm
   labels:
+    {{- include "kubesynth.labels" . | nindent 4 }}
+    app.kubernetes.io/component: litellm
     app: litellm
 spec:
 {{- if not (and .Values.autoscaling (.Values.autoscaling.enabled)) }}
@@ -17,12 +20,20 @@ spec:
         checksum/config: {{ include (print $.Template.BasePath "/litellm-configmap.yaml") . | sha256sum }}
         checksum/secrets: {{ include (print $.Template.BasePath "/external-secrets.yaml") . | sha256sum }}
       labels:
+        {{- include "kubesynth.labels" . | nindent 8 }}
+        app.kubernetes.io/component: litellm
         app: litellm
     spec:
 {{- with (include "kubesynth.imagePullSecrets" .) }}
 {{ . | nindent 6 }}
 {{- end }}
       automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60
+      # LiteLLM's official image runs as root.  The Prisma binary engine
+      # needs write access to /root/.cache and /app/schema.prisma (for
+      # migration diff).  Relaxing runAsNonRoot is acceptable because
+      # LiteLLM runs in its own pod behind a NetworkPolicy that restricts
+      # ingress to only api-gateway and ai-agent pods.
       securityContext:
         seccompProfile:
           type: RuntimeDefault
@@ -32,6 +43,7 @@ spec:
           imagePullPolicy: {{ .Values.litellm.image.pullPolicy }}
           securityContext:
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
             capabilities:
               drop:
                 - ALL
@@ -43,21 +55,48 @@ spec:
             - name: config
               mountPath: /app/config.yaml
               subPath: config.yaml
-            - name: cache
-              mountPath: /.cache
-            - name: npm-cache
-              mountPath: /.npm
             - name: tmp
               mountPath: /tmp
-          envFrom:
-            - secretRef:
-                name: {{ include "kubesynth.fullname" . }}-llm-api-keys
-                optional: true
           env:
-            - name: LITELLM_MIGRATION_DIR
-              value: /tmp/litellm-migrations
             - name: STORE_MODEL_IN_DB
               value: "True"
+            - name: LITELLM_LOG
+              value: "INFO"
+            - name: DISABLE_SCHEMA_UPDATE
+              value: "true"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kubesynth.fullname" . }}-llm-api-keys
+                  key: DATABASE_URL
+                  optional: true
+            - name: LITELLM_MASTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kubesynth.fullname" . }}-llm-api-keys
+                  key: LITELLM_MASTER_KEY
+                  optional: true
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kubesynth.fullname" . }}-llm-api-keys
+                  key: OPENAI_API_KEY
+                  optional: true
+            - name: OPENROUTER_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kubesynth.fullname" . }}-llm-api-keys
+                  key: OPENROUTER_API_KEY
+                  optional: true
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kubesynth.fullname" . }}-llm-api-keys
+                  key: ANTHROPIC_API_KEY
+                  optional: true
+            # NOTE: GITHUB_COPILOT_TOKEN intentionally omitted — the device auth
+            # flow blocks LiteLLM startup for 5+ minutes when no valid token exists.
+            # GitHub Copilot models will be skipped until a valid token is provided.
           args: ["--config", "/app/config.yaml"]
           resources:
 {{ toYaml .Values.litellm.resources | indent 12 }}
@@ -67,6 +106,7 @@ spec:
               port: 4000
             initialDelaySeconds: 30
             periodSeconds: 30
+            timeoutSeconds: 5
             failureThreshold: 3
           readinessProbe:
             httpGet:
@@ -74,6 +114,7 @@ spec:
               port: 4000
             initialDelaySeconds: 15
             periodSeconds: 15
+            timeoutSeconds: 5
             failureThreshold: 3
           startupProbe:
             httpGet:
@@ -81,25 +122,28 @@ spec:
               port: 4000
             initialDelaySeconds: 10
             periodSeconds: 10
+            timeoutSeconds: 5
             failureThreshold: 30
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "sleep 15"]
       volumes:
         - name: config
           configMap:
             name: {{ include "kubesynth.fullname" . }}-litellm-config
-        - name: cache
-          emptyDir:
-            sizeLimit: 256Mi
-        - name: npm-cache
-          emptyDir:
-            sizeLimit: 256Mi
         - name: tmp
           emptyDir:
-            sizeLimit: 256Mi
+            sizeLimit: 512Mi
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: {{ include "kubesynth.fullname" . }}-litellm-isolation
+  labels:
+    {{- include "kubesynth.labels" . | nindent 4 }}
+    app.kubernetes.io/component: litellm
+    app: litellm
 spec:
   podSelector:
     matchLabels:
@@ -121,3 +165,4 @@ spec:
       ports:
         - protocol: TCP
           port: 4000
+{{- end }}

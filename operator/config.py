@@ -248,6 +248,16 @@ ORPHAN_PRUNING_ENABLED: bool = os.getenv("ORPHAN_PRUNING_ENABLED", "true").strip
 MCP_SIDECAR_CATALOG: dict[str, dict[str, Any]] = {}
 
 
+# ---------------------------------------------------------------------------
+# Execution Observatory trace client settings
+# ---------------------------------------------------------------------------
+
+GATEWAY_URL: str = get_string_env("GATEWAY_URL", "http://api-gateway:8080")
+WORKER_TRACE_ENABLED: bool = get_bool_env("WORKER_TRACE_ENABLED", True)
+WORKER_TRACE_BATCH_SIZE: int = get_int_env("WORKER_TRACE_BATCH_SIZE", 50, minimum=1)
+WORKER_TRACE_FLUSH_INTERVAL_SEC: int = get_int_env("WORKER_TRACE_FLUSH_INTERVAL_SEC", 5, minimum=1)
+
+
 def _load_mcp_sidecar_catalog() -> None:
     """Load the MCP sidecar catalog from the MCP_SIDECAR_CATALOG_JSON env var."""
     raw = os.getenv("MCP_SIDECAR_CATALOG_JSON", "").strip()

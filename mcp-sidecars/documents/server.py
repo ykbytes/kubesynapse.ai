@@ -115,10 +115,14 @@ def read_docx(file_path: str) -> str:
 @server.tool()
 def create_pdf(text: str, output_filename: str = "output.pdf") -> str:
     """Create a simple PDF from text content. Returns the file path."""
+    # Prevent path traversal via filename
+    safe_filename = os.path.basename(output_filename)
+    if not safe_filename or safe_filename != output_filename:
+        return "BLOCKED: Invalid output filename (path traversal detected)"
     try:
         from reportlab.lib.pagesizes import A4
         from reportlab.pdfgen import canvas
-        path = os.path.join(WORK_DIR, output_filename)
+        path = os.path.join(WORK_DIR, safe_filename)
         c = canvas.Canvas(path, pagesize=A4)
         width, height = A4
         y = height - 50

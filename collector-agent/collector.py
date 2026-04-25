@@ -38,7 +38,7 @@ import uvicorn
 # Config
 # ---------------------------------------------------------------------------
 COLLECTOR_PORT = int(os.environ.get("COLLECTOR_PORT", "9100"))
-COLLECTOR_TOKEN = os.environ.get("COLLECTOR_TOKEN", "collector-dev-token")
+COLLECTOR_TOKEN = os.environ.get("COLLECTOR_TOKEN", "").strip()
 NODE_NAME = os.environ.get("NODE_NAME", socket.gethostname())
 CLUSTER_NAME = os.environ.get("CLUSTER_NAME", "unknown")
 MAX_TIMEOUT = int(os.environ.get("MAX_TIMEOUT", "60"))

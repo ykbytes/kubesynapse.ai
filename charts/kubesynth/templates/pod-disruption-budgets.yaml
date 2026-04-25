@@ -1,0 +1,63 @@
+{{- if .Values.podDisruptionBudget.enabled }}
+---
+# PodDisruptionBudget for API Gateway — protects the external-facing control plane
+# during voluntary disruptions (node drains, cluster upgrades).
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "kubesynth.fullname" . }}-api-gateway
+  labels:
+    {{- include "kubesynth.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api-gateway
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: api-gateway
+---
+# PodDisruptionBudget for Operator — prevents eviction of the reconciliation loop.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "kubesynth.fullname" . }}-operator
+  labels:
+    {{- include "kubesynth.labels" . | nindent 4 }}
+    app.kubernetes.io/component: operator
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: operator
+---
+# PodDisruptionBudget for LiteLLM — keeps the LLM proxy available during disruptions.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "kubesynth.fullname" . }}-litellm
+  labels:
+    {{- include "kubesynth.labels" . | nindent 4 }}
+    app.kubernetes.io/component: litellm
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: litellm
+---
+{{- if .Values.postgresql.enabled }}
+# PodDisruptionBudget for PostgreSQL — guards the stateful database singleton.
+# In multi-replica HA setups, consider switching to maxUnavailable or a higher
+# minAvailable once Patroni / stacked replicas are introduced.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "kubesynth.fullname" . }}-postgresql
+  labels:
+    {{- include "kubesynth.labels" . | nindent 4 }}
+    app.kubernetes.io/component: postgresql
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: postgresql
+{{- end }}
+{{- end }}

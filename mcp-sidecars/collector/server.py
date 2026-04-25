@@ -18,7 +18,7 @@ import os
 from typing import Optional
 
 import httpx
-from mcp_base import create_mcp_server, run_server
+from mcp_base import create_mcp_server, run_server, check_egress_url
 
 log = logging.getLogger("mcp-collector")
 logging.basicConfig(level=logging.INFO)
@@ -29,7 +29,7 @@ logging.basicConfig(level=logging.INFO)
 # Collector agents register via env or K8s service discovery
 # Format: "name=http://host:port,name2=http://host2:port2"
 COLLECTOR_ENDPOINTS = os.environ.get("COLLECTOR_ENDPOINTS", "")
-COLLECTOR_TOKEN = os.environ.get("COLLECTOR_TOKEN", "collector-dev-token")
+COLLECTOR_TOKEN = os.environ.get("COLLECTOR_TOKEN", "").strip()
 COLLECTOR_TIMEOUT = int(os.environ.get("COLLECTOR_TIMEOUT", "45"))
 
 # Gateway URL for dynamic collector discovery
@@ -52,6 +52,14 @@ def _parse_endpoints() -> dict[str, str]:
 
 def _headers() -> dict[str, str]:
     return {"Authorization": f"Bearer {COLLECTOR_TOKEN}"}
+
+
+def _check_egress(url: str) -> str | None:
+    """Return error if url violates egress policy."""
+    err = check_egress_url(url)
+    if err:
+        log.warning("Egress blocked for %s: %s", url, err)
+    return err
 
 
 # ---------------------------------------------------------------------------
@@ -80,6 +88,15 @@ async def list_collectors() -> str:
     results = []
     async with httpx.AsyncClient(timeout=10) as client:
         for name, url in endpoints.items():
+            egress_err = check_egress_url(url)
+            if egress_err:
+                results.append({
+                    "name": name,
+                    "url": url,
+                    "status": "blocked",
+                    "error": egress_err,
+                })
+                continue
             try:
                 resp = await client.get(f"{url}/info", headers=_headers())
                 resp.raise_for_status()
@@ -118,6 +135,9 @@ async def list_builtin_scripts(collector_name: Optional[str] = None) -> str:
     if not url:
         return f"Collector '{name}' not found. Available: {list(endpoints.keys())}"
 
+    err = _check_egress(url)
+    if err:
+        return f"Error querying collector '{name}': {err}"
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.get(f"{url}/info", headers=_headers())
@@ -162,6 +182,9 @@ async def gather_info(
     if not url:
         return f"Collector '{name}' not found. Available: {list(endpoints.keys())}"
 
+    err = _check_egress(url)
+    if err:
+        return f"Error: {err}"
     try:
         async with httpx.AsyncClient(timeout=COLLECTOR_TIMEOUT) as client:
             resp = await client.post(
@@ -214,6 +237,9 @@ async def run_builtin_script(
     if not url:
         return f"Collector '{name}' not found. Available: {list(endpoints.keys())}"
 
+    err = _check_egress(url)
+    if err:
+        return f"Error: {err}"
     try:
         async with httpx.AsyncClient(timeout=COLLECTOR_TIMEOUT) as client:
             resp = await client.post(
@@ -251,6 +277,9 @@ async def get_system_info(collector_name: Optional[str] = None) -> str:
     if not url:
         return f"Collector '{name}' not found. Available: {list(endpoints.keys())}"
 
+    err = _check_egress(url)
+    if err:
+        return f"Error: {err}"
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.get(f"{url}/system-info", headers=_headers())
@@ -283,6 +312,10 @@ async def fan_out_collect(
     results = {}
     async with httpx.AsyncClient(timeout=COLLECTOR_TIMEOUT) as client:
         for name, url in endpoints.items():
+            err = _check_egress(url)
+            if err:
+                results[name] = {"status": "blocked", "error": err}
+                continue
             try:
                 resp = await client.post(
                     f"{url}/collect",

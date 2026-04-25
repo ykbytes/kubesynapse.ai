@@ -7,7 +7,7 @@ import sys
 from urllib.parse import urlparse
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "base"))
-from mcp_base import create_mcp_server, run_server
+from mcp_base import create_mcp_server, run_server, check_egress_url
 
 server = create_mcp_server(
     "mcp-web-search",
@@ -93,9 +93,13 @@ def fetch_url(url: str) -> str:
     url_err = _validate_url(url)
     if url_err:
         return f"BLOCKED: {url_err}"
+    egress_err = check_egress_url(url)
+    if egress_err:
+        return f"BLOCKED: {egress_err}"
     import requests
     try:
-        resp = requests.get(url, timeout=15, headers={"User-Agent": "MCP-WebSearch/1.0"})
+        # Security: disable redirects to prevent TOCTOU SSRF (redirect to internal IP after initial check)
+        resp = requests.get(url, timeout=15, headers={"User-Agent": "MCP-WebSearch/1.0"}, allow_redirects=False)
         resp.raise_for_status()
         return resp.text[:MAX_CONTENT_CHARS]
     except Exception as e:
@@ -108,10 +112,14 @@ def extract_text(url: str) -> str:
     url_err = _validate_url(url)
     if url_err:
         return f"BLOCKED: {url_err}"
+    egress_err = check_egress_url(url)
+    if egress_err:
+        return f"BLOCKED: {egress_err}"
     import requests
     try:
         from bs4 import BeautifulSoup
-        resp = requests.get(url, timeout=15, headers={"User-Agent": "MCP-WebSearch/1.0"})
+        # Security: disable redirects to prevent TOCTOU SSRF
+        resp = requests.get(url, timeout=15, headers={"User-Agent": "MCP-WebSearch/1.0"}, allow_redirects=False)
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "html.parser")
         for tag in soup(["script", "style", "nav", "footer", "header"]):

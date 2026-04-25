@@ -1,0 +1,74 @@
+groups:
+  - name: kubesynth
+    rules:
+      - alert: KubeSynthOperatorReconcileErrorsHigh
+        expr: sum(rate(kubesynth_operator_reconcile_errors_total[5m])) by (resource_type) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High reconciliation error rate for {{ $labels.resource_type }}"
+          description: "The KubeSynth operator is experiencing >0.1 errors/sec reconciling {{ $labels.resource_type }} resources."
+
+      - alert: KubeSynthOperatorCircuitBreakerOpen
+        expr: sum(kubesynth_circuit_breaker_state{state="open"}) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Circuit breaker is open"
+          description: "A KubeSynth circuit breaker is open, indicating repeated failures calling the Kubernetes API."
+
+      - alert: KubeSynthGatewayErrorRateHigh
+        expr: sum(rate(kubesynth_gateway_request_latency_seconds_count{status=~"5.."}[5m])) / sum(rate(kubesynth_gateway_request_latency_seconds_count[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High API gateway error rate"
+          description: "The KubeSynth API gateway 5xx error rate is >5% over the last 5 minutes."
+
+      - alert: KubeSynthGatewayLatencyHigh
+        expr: histogram_quantile(0.95, sum(rate(kubesynth_gateway_request_latency_seconds_bucket[5m])) by (le)) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High API gateway latency"
+          description: "The KubeSynth API gateway P95 latency is >5 seconds."
+
+      - alert: KubeSynthWorkerTimeout
+        expr: sum(rate(kubesynth_worker_timeout_total[5m])) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Worker job timed out"
+          description: "A KubeSynth worker job has exceeded its execution timeout."
+
+      - alert: KubeSynthMcpSidecarDown
+        expr: up{job=~"kubesynth-mcp-.*"} == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "MCP sidecar is down"
+          description: "The MCP sidecar {{ $labels.job }} has been down for more than 2 minutes."
+
+      - alert: KubeSynthMemoryHigh
+        expr: container_memory_working_set_bytes{pod=~"kubesynth-.*"} / container_spec_memory_limit_bytes{pod=~"kubesynth-.*"} > 0.85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High memory usage"
+          description: "Pod {{ $labels.pod }} is using >85% of its memory limit."
+
+      - alert: KubeSynthCpuThrottling
+        expr: rate(container_cpu_cfs_throttled_seconds_total{pod=~"kubesynth-.*"}[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: info
+        annotations:
+          summary: "CPU throttling detected"
+          description: "Pod {{ $labels.pod }} is being CPU throttled. Consider increasing CPU limits."

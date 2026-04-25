@@ -15,7 +15,7 @@ from sqlalchemy import create_engine, pool
 # Ensure the operator package is importable.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from state_store import Base  # noqa: E402
+from state_store import Base
 
 target_metadata = Base.metadata
 

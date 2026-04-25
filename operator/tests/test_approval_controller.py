@@ -7,7 +7,6 @@ import uuid
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-
 MODULE_PATH = Path(__file__).resolve().parents[1] / "controllers" / "approval_controller.py"
 STUB_MODULE_NAMES = [
     "kopf",
@@ -46,7 +45,7 @@ def _install_stub_modules() -> dict[str, object | None]:
     kubernetes_module.client = kubernetes_client_module
 
     builders_module = types.ModuleType("builders")
-    builders_module.artifact_file_path = lambda *_args, **_kwargs: "/tmp/workflow.json"
+    builders_module.artifact_file_path = lambda *_args, **_kwargs: "/tmp/workflow.json"  # noqa: S108
     builders_module.build_artifact_ref = lambda *args, **kwargs: {"args": args, "kwargs": kwargs}
     builders_module.build_journal_ref = lambda *args, **kwargs: {"args": args, "kwargs": kwargs}
 

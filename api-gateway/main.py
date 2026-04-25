@@ -4,8 +4,8 @@ import asyncio
 import base64
 import contextlib
 import copy
-import html
 import hashlib
+import html
 import json
 import logging
 import os
@@ -14,10 +14,10 @@ import sys
 import threading
 import time
 import uuid
-from datetime import datetime, timedelta, timezone
+from collections.abc import AsyncGenerator
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
-from collections.abc import AsyncGenerator
 from typing import Any, cast
 from urllib.parse import urlencode
 
@@ -35,102 +35,12 @@ if str(CURRENT_DIR) not in sys.path:
 MCP_HUB_NAMESPACE = os.getenv("MCP_HUB_NAMESPACE", "mcp-hub").strip() or "mcp-hub"
 HELM_RELEASE_NAME = os.getenv("HELM_RELEASE_NAME", "kubesynth").strip() or "kubesynth"
 
-from auth_store import (
-    ROLE_PRIORITY,
-    change_user_password,
-    count_users,
-    create_mcp_connection,
-    create_local_user,
-    create_session_for_user,
-    ensure_bootstrap_admin,
-    get_active_user_context,
-    get_mcp_connection,
-    get_mcp_connection_rows_by_ids,
-    get_user_by_username,
-    init_database,
-    is_session_active,
-    is_user_locked,
-    list_mcp_connections,
-    list_users as list_local_users,
-    login_rate_limit_key,
-    login_rate_limited,
-    normalize_namespaces,
-    note_login_attempt,
-    record_audit_log,
-    record_failed_login,
-    reset_failed_logins,
-    revoke_refresh_token,
-    rotate_refresh_session,
-    serialize_user,
-    slugify_mcp_connection_name,
-    update_user_fields,
-    update_mcp_connection,
-    upsert_external_user,
-    validate_email,
-    verify_password,
-    create_chat_session,
-    apply_memory_feedback,
-    delete_memory_record,
-    delete_chat_session,
-    get_chat_session_messages,
-    list_memory_records,
-    list_promoted_memory_records,
-    list_chat_sessions,
-    record_workflow_outcome_memory,
-    record_runtime_memory,
-    record_eval_outcome_memory,
-    save_chat_messages,
-    set_memory_record_promoted,
-    update_memory_record,
-    update_chat_session_title,
-    query_audit_logs,
-    purge_old_audit_logs,
-    record_usage,
-    query_usage_summary,
-    query_usage_detail,
-    record_workflow_run,
-    record_workflow_run_log_archive,
-    delete_mcp_connection,
-    list_workflow_runs,
-    get_workflow_run_trace as load_workflow_run_trace,
-    db_session,
-    IntelligenceCollectorRow,
-    IntelligenceTaskRow,
-    IntelligenceScheduleRow,
-    IntelligenceAlertRow,
-    AlertHistoryRow,
-)
-from enterprise_auth import (
-    auth_configuration,
-    authenticate_ldap_user,
-    build_oidc_authorization_request,
-    build_saml_authorization_request,
-    exchange_oidc_code,
-    exchange_saml_response,
-    get_oidc_provider,
-    get_saml_provider,
-    ldap_enabled,
-    oidc_providers,
-    resolve_role_mapping,
-    saml_metadata_xml,
-    saml_providers,
-    sanitize_redirect_path,
-)
-from jwt_utils import (
-    ACCESS_TOKEN_TTL_SECONDS,
-    REFRESH_COOKIE_NAME,
-    REFRESH_TOKEN_TTL_SECONDS,
-    JWT_SECRET,
-    create_access_token,
-    decode_access_token,
-)
 from auth_middleware import (  # §4.1 — extracted auth middleware
     AUTH_MODE,
     OIDC_TRANSACTION_COOKIE_NAME,
-    authenticate_bearer_token,
     auth_configuration_payload,
+    authenticate_bearer_token,
     browser_auth_enabled,
-    build_session_payload,
     clear_oidc_transaction_cookie,
     clear_refresh_cookie,
     ensure_namespace_access,
@@ -138,7 +48,6 @@ from auth_middleware import (  # §4.1 — extracted auth middleware
     issue_session_response,
     local_access_enabled,
     principal_from_local_user,
-    principal_from_oidc_claims,
     registration_allowed,
     request_client_ip,
     safe_record_audit,
@@ -147,6 +56,89 @@ from auth_middleware import (  # §4.1 — extracted auth middleware
     shared_token_enabled,
     verify_token,
     verify_token_or_query,
+)
+
+from auth_store import (
+    AlertHistoryRow,
+    IntelligenceAlertRow,
+    IntelligenceCollectorRow,
+    IntelligenceScheduleRow,
+    IntelligenceTaskRow,
+    apply_memory_feedback,
+    change_user_password,
+    count_users,
+    create_chat_session,
+    create_local_user,
+    create_mcp_connection,
+    create_session_for_user,
+    db_session,
+    delete_chat_session,
+    delete_mcp_connection,
+    delete_memory_record,
+    ensure_bootstrap_admin,
+    get_active_user_context,
+    get_chat_session_messages,
+    get_mcp_connection,
+    get_mcp_connection_rows_by_ids,
+    get_user_by_username,
+    init_database,
+    is_user_locked,
+    list_chat_sessions,
+    list_mcp_connections,
+    list_memory_records,
+    list_promoted_memory_records,
+    list_workflow_runs,
+    login_rate_limit_key,
+    login_rate_limited,
+    note_login_attempt,
+    purge_old_audit_logs,
+    query_audit_logs,
+    query_usage_detail,
+    query_usage_summary,
+    record_audit_log,
+    record_eval_outcome_memory,
+    record_failed_login,
+    record_runtime_memory,
+    record_usage,
+    record_workflow_outcome_memory,
+    record_workflow_run,
+    record_workflow_run_log_archive,
+    reset_failed_logins,
+    revoke_refresh_token,
+    rotate_refresh_session,
+    save_chat_messages,
+    serialize_user,
+    slugify_mcp_connection_name,
+    update_chat_session_title,
+    update_mcp_connection,
+    update_memory_record,
+    update_user_fields,
+    upsert_external_user,
+    validate_email,
+    verify_password,
+)
+from auth_store import (
+    get_workflow_run_trace as load_workflow_run_trace,
+)
+from auth_store import (
+    list_users as list_local_users,
+)
+from enterprise_auth import (
+    authenticate_ldap_user,
+    build_oidc_authorization_request,
+    build_saml_authorization_request,
+    exchange_oidc_code,
+    exchange_saml_response,
+    get_oidc_provider,
+    get_saml_provider,
+    ldap_enabled,
+    saml_metadata_xml,
+    sanitize_redirect_path,
+)
+from jwt_utils import (
+    JWT_SECRET,
+    REFRESH_COOKIE_NAME,
+    REFRESH_TOKEN_TTL_SECONDS,
 )
 
 try:
@@ -1109,10 +1101,7 @@ def parse_skill_frontmatter(frontmatter: str, *, source: str, strict: bool) -> t
         return {}, warnings
 
     try:
-        if yaml is not None:
-            parsed = yaml.safe_load(frontmatter)
-        else:
-            parsed = json.loads(frontmatter)
+        parsed = yaml.safe_load(frontmatter) if yaml is not None else json.loads(frontmatter)
     except Exception as exc:
         message = f"{source} frontmatter is invalid: {exc}"
         if strict:
@@ -1612,7 +1601,7 @@ def sse_keepalive_comment() -> str:
 
 
 def now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    return datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
 def build_retry_workflow_run_id(namespace: str, workflow_name: str, generation: int) -> str:
@@ -2274,7 +2263,7 @@ def _parse_iso_datetime(value: Any) -> datetime | None:
     if not raw_value:
         return None
     with contextlib.suppress(ValueError):
-        return datetime.fromisoformat(raw_value.replace("Z", "+00:00")).astimezone(timezone.utc)
+        return datetime.fromisoformat(raw_value.replace("Z", "+00:00")).astimezone(UTC)
     return None
 
 
@@ -2384,7 +2373,7 @@ def _build_mcp_oauth_token_request(
     if token_auth_method == "client_secret_basic":
         if not client_secret:
             raise HTTPException(status_code=400, detail="OAuth client_secret is required before completing this MCP sign-in.")
-        basic_token = base64.b64encode(f"{client_id}:{client_secret}".encode("utf-8")).decode("ascii")
+        basic_token = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode("ascii")
         headers["Authorization"] = f"Basic {basic_token}"
     else:
         data["client_id"] = client_id
@@ -2426,7 +2415,7 @@ def _extract_mcp_oauth_token_bundle(token_payload: Any, existing_secret_values: 
         with contextlib.suppress(TypeError, ValueError):
             ttl_seconds = int(float(expires_in))
             if ttl_seconds > 0:
-                bundle["expires_at"] = (datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)).isoformat()
+                bundle["expires_at"] = (datetime.now(UTC) + timedelta(seconds=ttl_seconds)).isoformat()
 
     return bundle
 
@@ -2458,7 +2447,7 @@ def _build_mcp_connection_oauth_status(
     access_token = str(resolved_secret_values.get("access_token") or "").strip()
     refresh_token = str(resolved_secret_values.get("refresh_token") or "").strip()
     expires_at = _parse_iso_datetime(resolved_secret_values.get("expires_at"))
-    expiry_cutoff = datetime.now(timezone.utc) + timedelta(seconds=_MCP_OAUTH_EXPIRY_SKEW_SECONDS)
+    expiry_cutoff = datetime.now(UTC) + timedelta(seconds=_MCP_OAUTH_EXPIRY_SKEW_SECONDS)
     if access_token and (expires_at is None or expires_at > expiry_cutoff):
         state = "connected"
     elif access_token or refresh_token:
@@ -3743,7 +3732,6 @@ async def handle_a2a_stream_message(
     )
 
     async def event_generator() -> AsyncGenerator[str, None]:
-        yielded_artifact = False
         try:
             upstream_response = await invoke_agent_stream(agent_name, invoke_request, raw_request, namespace, user={})
         except HTTPException as exc:
@@ -3786,7 +3774,6 @@ async def handle_a2a_stream_message(
                     if not delta:
                         continue
                     append_a2a_task_artifact_delta(record, delta)
-                    yielded_artifact = True
                     store_a2a_task_record(record)
                     yield jsonrpc_sse_message(
                         jsonrpc_success_response(
@@ -4066,7 +4053,7 @@ def build_workflow_spec(body: WorkflowRequest | WorkflowUpdateRequest) -> dict[s
 def _detect_workflow_cycles(steps: list[dict[str, Any]]) -> None:
     """Detect dependency cycles in workflow steps using Kahn's algorithm."""
     adj: dict[str, list[str]] = {s["name"]: list(s.get("dependsOn") or []) for s in steps}
-    in_degree: dict[str, int] = {name: 0 for name in adj}
+    in_degree: dict[str, int] = dict.fromkeys(adj, 0)
     for deps in adj.values():
         for dep in deps:
             if dep in in_degree:
@@ -5306,12 +5293,12 @@ def get_audit_logs(
         try:
             from_dt = datetime.fromisoformat(from_date)
         except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid from_date format")
+            raise HTTPException(status_code=400, detail="Invalid from_date format") from None
     if to_date:
         try:
             to_dt = datetime.fromisoformat(to_date)
         except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid to_date format")
+            raise HTTPException(status_code=400, detail="Invalid to_date format") from None
     return query_audit_logs(
         actor=actor,
         actor_type=actor_type,
@@ -5492,7 +5479,7 @@ async def finish_saml_login(
     if not oidc_transaction:
         raise HTTPException(status_code=400, detail="SAML login transaction cookie is missing")
 
-    query_data = {key: value for key, value in raw_request.query_params.multi_items()}
+    query_data = dict(raw_request.query_params.multi_items())
     form_data = await raw_request.form()
     post_data = {str(key): str(value) for key, value in form_data.multi_items()}
 
@@ -7026,7 +7013,7 @@ def get_skills_catalog(
             "allowed_mcp_servers": s.get("allowed_mcp_servers", []),
             "allowed_sandbox_tools": s.get("allowed_sandbox_tools", []),
             "bundled_assets": s.get("bundled_assets", []),
-            "files": {k: "" for k in s.get("files", {}).keys()} if isinstance(s.get("files"), dict) else {},
+            "files": dict.fromkeys(s.get("files", {}).keys(), "") if isinstance(s.get("files"), dict) else {},
         }
         for s in results
     ]
@@ -7209,7 +7196,7 @@ def get_mcp_stats(
         "total_tools": total_tools,
         "total_profiles": len(MCP_PROFILES),
         "by_transport": transport_counts,
-        "categories": len(set(e.get("category", "other") for e in MCP_REGISTRY)),
+        "categories": len({e.get("category", "other") for e in MCP_REGISTRY}),
     }
 
 
@@ -7258,7 +7245,7 @@ def create_saved_mcp_connection(
             validation_status, validation_message, validation_detail = _validate_saved_mcp_connection_record(
                 {**created, "secret_name": secret_name, "credential_metadata": credential_metadata}
             )
-            validated_at = datetime.now(timezone.utc)
+            validated_at = datetime.now(UTC)
         updated = update_mcp_connection(
             namespace,
             created["id"],
@@ -7369,7 +7356,7 @@ def update_saved_mcp_connection(
                 "secret_name": secret_name,
             }
         )
-        validated_at = datetime.now(timezone.utc)
+        validated_at = datetime.now(UTC)
 
     updated = update_mcp_connection(
         namespace,
@@ -7407,14 +7394,14 @@ def validate_saved_mcp_connection(
         validation_status=validation_status,
         validation_message=validation_message,
         validation_detail=validation_detail,
-        last_validated_at=datetime.now(timezone.utc),
+        last_validated_at=datetime.now(UTC),
     )
     bindings = _list_mcp_connection_bindings(namespace).get(connection_id, [])
     return _serialize_saved_mcp_connection_record(updated, binding_count=len(bindings))
 
 
 def _clean_expired_mcp_oauth_flows() -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     expired_states = [
         state
         for state, flow in _MCP_OAUTH_PENDING_FLOWS.items()
@@ -7517,7 +7504,7 @@ def start_saved_mcp_connection_oauth(
     params.update(metadata["authorize_params"])
 
     _clean_expired_mcp_oauth_flows()
-    expires_at = datetime.now(timezone.utc) + timedelta(seconds=_MCP_OAUTH_FLOW_TTL_SECONDS)
+    expires_at = datetime.now(UTC) + timedelta(seconds=_MCP_OAUTH_FLOW_TTL_SECONDS)
     _MCP_OAUTH_PENDING_FLOWS[state] = {
         "connection_id": connection_id,
         "namespace": namespace,
@@ -7594,7 +7581,7 @@ async def complete_saved_mcp_connection_oauth(
             validation_status=validation_status,
             validation_message=validation_message,
             validation_detail=validation_detail if isinstance(validation_detail, dict) else None,
-            last_validated_at=datetime.now(timezone.utc),
+            last_validated_at=datetime.now(UTC),
         )
         restarted_agents = _restart_bound_agents_for_mcp_connection(namespace, connection_id)
     except HTTPException as exc:
@@ -7644,7 +7631,7 @@ def refresh_saved_mcp_connection_oauth(
         validation_status=validation_status,
         validation_message=validation_message,
         validation_detail=validation_detail if isinstance(validation_detail, dict) else None,
-        last_validated_at=datetime.now(timezone.utc),
+        last_validated_at=datetime.now(UTC),
     )
     _restart_bound_agents_for_mcp_connection(namespace, connection_id)
     bindings = _list_mcp_connection_bindings(namespace).get(connection_id, [])
@@ -7734,8 +7721,9 @@ def ready(response: Response) -> dict[str, Any]:
         return {"status": "shutting-down", "gateway": "kubesynth"}
     checks: dict[str, str] = {}
     try:
-        from auth_store import ENGINE
         from sqlalchemy import text as _sa_text
+
+        from auth_store import ENGINE
 
         with ENGINE.connect() as conn:
             conn.execute(_sa_text("select 1"))
@@ -8007,7 +7995,7 @@ def decide_approval(
     spec = approval.get("spec", {})
 
     decided_by = str(user.get("sub", "unknown"))
-    decided_at = datetime.now(timezone.utc).isoformat()
+    decided_at = datetime.now(UTC).isoformat()
 
     try:
         from kubernetes import client
@@ -8378,16 +8366,12 @@ def _sync_workflow_run_history(info: WorkflowInfo) -> None:
         started_at = None
         completed_at = None
         if isinstance(summary.get("startedAt"), str):
-            try:
+            with contextlib.suppress(ValueError, TypeError):
                 started_at = datetime.fromisoformat(summary["startedAt"].replace("Z", "+00:00"))
-            except (ValueError, TypeError):
-                pass
         terminal = info.phase in {"completed", "failed", "cancelled"}
         if terminal and isinstance(summary.get("completedAt"), str):
-            try:
+            with contextlib.suppress(ValueError, TypeError):
                 completed_at = datetime.fromisoformat(summary["completedAt"].replace("Z", "+00:00"))
-            except (ValueError, TypeError):
-                pass
 
         record_workflow_run(
             workflow_name=info.name,
@@ -8597,7 +8581,7 @@ def trigger_workflow(
             ),
         )
     except Exception:
-        pass  # spec replace already succeeded; status reset is best-effort
+        logger.warning("Workflow status reset failed after spec replace (best-effort)", exc_info=True)
 
     result = workflow_info_from_resource(updated)
 
@@ -9032,8 +9016,10 @@ async def stream_workflow_logs(
         raise HTTPException(status_code=404, detail=f"No worker pod found for workflow '{workflow_name}'")
 
     async def log_event_generator():
-        from kubernetes import client as k8s_client, watch as k8s_watch
         import time
+
+        from kubernetes import client as k8s_client
+        from kubernetes import watch as k8s_watch
 
         yield sse_event("log.started", {"workflow_name": workflow_name, "job_name": job_name, "pod_name": pod_name})
 
@@ -9159,7 +9145,7 @@ def get_workflow_next_action(
                         "reason": f"Eval '{ev.get('metadata', {}).get('name', '')}' has failures.",
                     }
         except Exception:
-            pass
+            logger.warning("Eval status check failed (best-effort)", exc_info=True)
         return {"action": "Deploy or promote", "reason": "All steps completed and verified successfully."}
 
     if phase == "running":
@@ -9381,7 +9367,7 @@ async def invoke_agent_stream(
 
     async def event_generator():
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=10.0), trust_env=False) as client:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=10.0), trust_env=False) as client:  # noqa: SIM117
                 async with client.stream(
                     "POST",
                     f"{agent_runtime_url(agent_name, namespace)}/invoke/stream",
@@ -9758,8 +9744,10 @@ async def stream_agent_logs(
         raise HTTPException(status_code=404, detail=f"No runtime pod found for agent '{agent_name}'")
 
     async def log_event_generator():
-        from kubernetes import client as k8s_client, watch as k8s_watch
         import time
+
+        from kubernetes import client as k8s_client
+        from kubernetes import watch as k8s_watch
 
         yield sse_event("log.started", {"agent_name": agent_name, "pod_name": pod_name})
 
@@ -10062,10 +10050,8 @@ async def _fetch_openrouter_models(api_key: str | None = None) -> list[dict[str,
                             pass
                 ctx = m.get("context_length")
                 if ctx:
-                    try:
+                    with contextlib.suppress(ValueError, TypeError):
                         desc_parts.append(f"{int(ctx) // 1000}k ctx")
-                    except (ValueError, TypeError):
-                        pass
                 description = " · ".join(desc_parts) if desc_parts else ""
                 if model_id:
                     result.append(
@@ -10349,7 +10335,7 @@ def llm_list_keys(user=Depends(verify_token)):
         return {"keys": result}
     except Exception as exc:
         logger.error("Failed to read LLM secret: %s", exc)
-        raise HTTPException(status_code=502, detail=f"Failed to read secret") from exc
+        raise HTTPException(status_code=502, detail="Failed to read secret") from exc
 
 
 @app.put("/api/llm/keys")
@@ -10365,8 +10351,9 @@ def llm_update_keys(body: LLMKeyUpdate, user=Depends(verify_token)):
             raise HTTPException(status_code=400, detail=f"Key value for '{key_name}' is too long")
 
     try:
-        from kubernetes import client as k8s_client
         import base64
+
+        from kubernetes import client as k8s_client
 
         ns = os.getenv("POD_NAMESPACE", "ai-platform")
         api = k8s_client.CoreV1Api()
@@ -10384,7 +10371,7 @@ def llm_update_keys(body: LLMKeyUpdate, user=Depends(verify_token)):
         raise
     except Exception as exc:
         logger.error("Failed to update LLM secret: %s", exc)
-        raise HTTPException(status_code=502, detail=f"Failed to update secret") from exc
+        raise HTTPException(status_code=502, detail="Failed to update secret") from exc
 
 
 # ─────────────────────────────────────────────────────────────
@@ -10413,7 +10400,7 @@ async def llm_list_providers(response: Response, user=Depends(verify_token)):
             for m in raw_models:
                 litellm_model = str((m.get("litellm_params") or {}).get("model", ""))
                 model_api_base = str((m.get("litellm_params") or {}).get("api_base", "") or "")
-                # Match by api_base first (most specific – works even when
+                # Match by api_base first (most specific - works even when
                 # LiteLLM redacts the api_key from /model/info responses).
                 matched = False
                 for key_name, meta in _PROVIDER_META.items():
@@ -10566,8 +10553,9 @@ async def llm_provider_suggestions(provider: str, q: str = "", user=Depends(veri
     if provider == "GITHUB_COPILOT_TOKEN":
         cp_token: str | None = None
         try:
-            from kubernetes import client as k8s_client
             import base64
+
+            from kubernetes import client as k8s_client
 
             ns = os.getenv("POD_NAMESPACE", "ai-platform")
             secret = k8s_client.CoreV1Api().read_namespaced_secret(name=LLM_SECRET_NAME, namespace=ns)
@@ -10632,6 +10620,7 @@ async def llm_add_provider_model(provider: str, body: ProviderModelAdd, user=Dep
     if provider == "GITHUB_COPILOT_TOKEN":
         try:
             import base64
+
             from kubernetes import client as k8s_client
 
             ns = os.getenv("POD_NAMESPACE", "ai-platform")
@@ -10696,7 +10685,7 @@ async def llm_add_provider_model(provider: str, body: ProviderModelAdd, user=Dep
 
 
 # --------------------------------------------------------------------------- #
-#  GitHub Copilot – OAuth Device Flow                                          #
+#  GitHub Copilot - OAuth Device Flow                                          #
 # --------------------------------------------------------------------------- #
 
 _COPILOT_CLIENT_ID = "Ov23li8tweQw6odWQebz"
@@ -10857,6 +10846,7 @@ async def copilot_auth_poll(user=Depends(verify_token)):
     # Store token in K8s secret
     try:
         import base64
+
         from kubernetes import client as k8s_client
 
         ns = os.getenv("POD_NAMESPACE", "ai-platform")
@@ -11215,8 +11205,9 @@ def system_health(
 
     # Database
     try:
-        from auth_store import ENGINE
         from sqlalchemy import text as _sa_text
+
+        from auth_store import ENGINE
 
         with ENGINE.connect() as conn:
             conn.execute(_sa_text("select 1"))
@@ -11553,7 +11544,7 @@ def observability_overview(
             else:
                 agent_pod_summary["notReady"] += 1
     except Exception:
-        pass
+        logger.warning("Failed to list agent pods for observability summary", exc_info=True)
 
     return {
         "summary": {
@@ -11842,8 +11833,10 @@ _INTELLIGENCE_BUILTINS = {
     "crd_inventory",
 }
 
-_DEFAULT_COLLECTOR_TOKEN = "collector-dev-token"
-_DEFAULT_COLLECTOR_TOKEN_HASH = hashlib.sha256(_DEFAULT_COLLECTOR_TOKEN.encode("utf-8")).hexdigest()
+_DEFAULT_COLLECTOR_TOKEN = os.environ.get("KUBESYNTH_COLLECTOR_TOKEN", "")
+_DEFAULT_COLLECTOR_TOKEN_HASH = (
+    hashlib.sha256(_DEFAULT_COLLECTOR_TOKEN.encode("utf-8")).hexdigest() if _DEFAULT_COLLECTOR_TOKEN else ""
+)
 _COLLECTOR_TOKEN_MISSING_ERROR = "Collector token is unavailable in the gateway. Re-register this collector with a valid token."
 _collector_secret_warning_emitted = False
 
@@ -11944,7 +11937,7 @@ def _build_namespace_scoped_collector_id(namespace: str, name: str) -> str:
     candidate = f"{namespace_slug}-{collector_slug}"
     if len(candidate) <= 128:
         return candidate
-    digest = hashlib.sha256(f"{namespace}:{name}".encode("utf-8")).hexdigest()[:8]
+    digest = hashlib.sha256(f"{namespace}:{name}".encode()).hexdigest()[:8]
     head = max(1, 128 - len(namespace_slug) - len(digest) - 2)
     trimmed_slug = collector_slug[:head].rstrip("-") or "collector"
     return f"{namespace_slug}-{trimmed_slug}-{digest}"
@@ -12076,7 +12069,7 @@ def _build_intelligence_task_record(
         "payload": payload,
         "results": results,
         "submitted_by": submitted_by,
-        "submitted_at": datetime.now(timezone.utc).isoformat(),
+        "submitted_at": datetime.now(UTC).isoformat(),
         "total": len(results),
         "completed": sum(1 for result in results.values() if result.get("status") == "completed"),
     }
@@ -12138,7 +12131,7 @@ def _persist_task(task_record: dict[str, Any]) -> None:
             payload=task_record.get("payload"),
             results=task_record.get("results"),
             submitted_by=task_record.get("submitted_by"),
-            submitted_at=datetime.fromisoformat(task_record["submitted_at"]) if task_record.get("submitted_at") else datetime.now(timezone.utc),
+            submitted_at=datetime.fromisoformat(task_record["submitted_at"]) if task_record.get("submitted_at") else datetime.now(UTC),
             total=task_record.get("total", 0),
             completed=task_record.get("completed", 0),
         ))
@@ -12227,7 +12220,7 @@ def _build_auto_intelligence_context(
     recent_tasks = _list_namespaced_tasks(namespace)
     if not recent_tasks:
         return ""
-    cutoff = datetime.now(timezone.utc) - timedelta(minutes=max_age_minutes)
+    cutoff = datetime.now(UTC) - timedelta(minutes=max_age_minutes)
     # Group by builtin script, keep most recent per script
     latest_by_script: dict[str, dict[str, Any]] = {}
     for task in recent_tasks:
@@ -12237,7 +12230,7 @@ def _build_auto_intelligence_context(
             try:
                 submitted = datetime.fromisoformat(submitted_str)
                 if submitted.tzinfo is None:
-                    submitted = submitted.replace(tzinfo=timezone.utc)
+                    submitted = submitted.replace(tzinfo=UTC)
                 if submitted < cutoff:
                     continue
             except (ValueError, TypeError):
@@ -12254,7 +12247,7 @@ def _build_auto_intelligence_context(
     total_len = 0
     for builtin, task in latest_by_script.items():
         section = [f"### {builtin} (collected {task.get('submitted_at', 'unknown')})"]
-        for cid, result in task.get("results", {}).items():
+        for _cid, result in task.get("results", {}).items():
             if result.get("status") == "completed":
                 stdout = (result.get("stdout") or "").strip()
                 if stdout:
@@ -12345,7 +12338,7 @@ def register_intelligence_collector(
     if not token:
         raise HTTPException(status_code=400, detail="'token' is required")
     expected_id = _build_namespace_scoped_collector_id(namespace, name)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     # Persist to DB (hash the token)
     token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
     encrypted_token = _encrypt_collector_token(token)
@@ -12707,7 +12700,7 @@ def create_intelligence_schedule(body: dict[str, Any] = Body(...), namespace: st
     config = _normalize_schedule_configuration(body, namespace=namespace)
     sid = str(uuid.uuid4())[:8]
     from croniter import croniter as _croniter
-    nxt = _croniter(config["cron"], datetime.now(timezone.utc)).get_next(datetime)
+    nxt = _croniter(config["cron"], datetime.now(UTC)).get_next(datetime)
     row = IntelligenceScheduleRow(
         id=sid,
         namespace=namespace,
@@ -12765,7 +12758,7 @@ def update_intelligence_schedule(
         try:
             from croniter import croniter
 
-            row.next_run = croniter(config["cron"], datetime.now(timezone.utc)).get_next(datetime)
+            row.next_run = croniter(config["cron"], datetime.now(UTC)).get_next(datetime)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=f"Invalid cron expression: {exc}") from exc
         result = row.to_dict()
@@ -13077,7 +13070,7 @@ async def _run_scheduled_collection(schedule: dict[str, Any]) -> dict[str, Any] 
 async def _fire_alert(alert_dict: dict[str, Any], task: dict[str, Any], matching_output: str):
     """Process a fired alert — log to history (DB) and optionally invoke an agent."""
     namespace = _normalize_intelligence_namespace(alert_dict.get("namespace"))
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     snippet = matching_output[:500] if matching_output else ""
     hid = str(uuid.uuid4())[:8]
     history_entry = AlertHistoryRow(
@@ -13098,7 +13091,6 @@ async def _fire_alert(alert_dict: dict[str, Any], task: dict[str, Any], matching
         try:
             # Direct in-process call to agent runtime — avoids HTTP round-trip,
             # hardcoded port, and fake auth token.
-            agent = await asyncio.to_thread(read_agent, agent_name, namespace)
             runtime_url = agent_runtime_url(agent_name, namespace)
             request_payload = {"prompt": prompt, "autonomous": True}
             async with httpx.AsyncClient(timeout=60, trust_env=False) as client:
@@ -13141,7 +13133,7 @@ async def _intelligence_scheduler_loop():
     while not _SHUTDOWN.is_set():
         try:
             await asyncio.sleep(30)
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             # Load schedules from DB
             with db_session() as ses:
                 schedules = ses.query(IntelligenceScheduleRow).filter_by(enabled=True).all()
@@ -13153,7 +13145,7 @@ async def _intelligence_scheduler_loop():
                 try:
                     next_run = datetime.fromisoformat(next_run_str)
                     if next_run.tzinfo is None:
-                        next_run = next_run.replace(tzinfo=timezone.utc)
+                        next_run = next_run.replace(tzinfo=UTC)
                 except (ValueError, TypeError):
                     continue
                 if now < next_run:
@@ -13193,7 +13185,7 @@ async def _intelligence_scheduler_loop():
                     linked_schedule = alert.get("schedule_id")
                     if linked_schedule and linked_schedule != sid:
                         continue
-                    for cid, result in task.get("results", {}).items():
+                    for _cid, result in task.get("results", {}).items():
                         if _evaluate_alert_condition(alert, result):
                             await _fire_alert(alert, task, result.get("stdout", ""))
                             break

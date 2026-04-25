@@ -6,11 +6,10 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import kopf
-
 from builders import (
     artifact_file_path,
     build_artifact_ref,
@@ -22,15 +21,16 @@ from config import (
     WORKFLOW_QUEUE_STALE_SECONDS,
     WORKFLOW_RUNNING_STALE_SECONDS,
 )
-from controllers.agent_controller import resolve_tenant_for_namespace
 from reconcile import execute_reconcile, inject_conditions, log_operator_event
 from services import (
     cancel_worker_job,
-    ensure_worker_artifact_storage,
     enqueue_worker_job,
+    ensure_worker_artifact_storage,
     patch_custom_status,
     read_job_state,
 )
+
+from controllers.agent_controller import resolve_tenant_for_namespace
 from utils import build_workflow_run_id, now_iso, validate_workflow_graph, workflow_journal_path
 
 logger = logging.getLogger("operator.controllers.workflow")
@@ -84,8 +84,8 @@ def parse_iso_datetime(value: str | None) -> datetime | None:
         return None
 
     if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
 
 
 def validate_workflow_spec(spec: dict[str, Any]) -> dict[str, Any]:
@@ -344,7 +344,7 @@ def workflow_should_requeue(status: dict[str, Any], job_state: str) -> str | Non
         return None
 
     summary = status.get("summary", {}) or {}
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     if phase == "queued":
         queued_at = parse_iso_datetime(str(summary.get("queuedAt") or ""))
@@ -359,7 +359,7 @@ def workflow_should_requeue(status: dict[str, Any], job_state: str) -> str | Non
         if job_state in {"missing", "failed"}:
             return f"queued workflow lost worker job with state '{job_state}'"
         if job_state == "succeeded":
-            return f"queued workflow has succeeded worker job but phase is still 'queued'"
+            return "queued workflow has succeeded worker job but phase is still 'queued'"
         return None
 
     updated_at = parse_iso_datetime(str(summary.get("updatedAt") or summary.get("startedAt") or ""))
@@ -772,7 +772,7 @@ def on_workflow_phase_cancelled(
     log_operator_event(
         logger,
         logging.INFO,
-        "Cancelled worker Job %s (deleted=%s)." % (job_name or "<none>", cancelled),
+        "Cancelled worker Job {} (deleted={}).".format(job_name or "<none>", cancelled),
         resource_kind="AgentWorkflow",
         name=name,
         namespace=namespace,

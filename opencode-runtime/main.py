@@ -85,6 +85,37 @@ _RUNTIME_PREVIOUS_PATH, _RUNTIME_PREVIOUS_MODULES = _prefer_local_runtime_module
 # ---------------------------------------------------------------------------
 # Re-exports for backward compatibility (tests import from main.py)
 # ---------------------------------------------------------------------------
+from analysis import (  # noqa: F401 — re-exported
+    _ITER_ARTIFACT_MAX_DEPTH,
+    _KEYWORD_PATTERNS,
+    _build_response_metadata,
+    _compile_keyword_patterns,
+    _extract_structured_output,
+    _iter_artifact_paths,
+    _select_agent_simple,
+    build_compaction_hints,
+    build_json_output_schema,
+    build_prompt_format,
+    build_tool_only_response,
+    check_context_overflow,
+    classify_error_type,
+    classify_task_type,
+    compute_context_budget,
+    compute_context_priority,
+    derive_task_status,
+    detect_anti_patterns,
+    detect_completion_status,
+    detect_task_errors,
+    estimate_message_tokens,
+    extract_artifacts_from_messages,
+    extract_response_text,
+    extract_text_from_parts,
+    extract_tool_calls_from_messages,
+    get_latest_assistant_payload,
+    recommend_compaction_strategy,
+    runtime_capabilities,
+    select_agent_for_prompt,
+)
 from config import (  # noqa: F401 — re-exported
     A2A_ALLOWED_CALLERS,
     A2A_ALLOWED_CALLERS_ENV,
@@ -124,52 +155,22 @@ from config import (  # noqa: F401 — re-exported
     logger,
     server_base_url,
 )
-from tracing import (  # noqa: F401 — re-exported
-    StatusCode,
-    _OTEL_AVAILABLE,
-    get_tracer,
-    init_tracing,
+from invoke import (  # noqa: F401 — re-exported
+    StreamCallback,
+    a2a_response_metadata,
+    build_invoke_warnings,
+    invoke_opencode,
+    resolve_working_directory,
+    validate_inbound_a2a_request,
 )
-from utils import (  # noqa: F401 — re-exported
-    dedupe_items,
-    normalize_identifier,
-    normalize_relative_path,
-    path_is_within,
-    serialize_file_content,
-    sse_event,
-    truncate_text,
+from memory import (  # noqa: F401 — re-exported
+    MEMORY_ENTRY_TYPES,
+    SESSION_MEMORY,
+    SessionMemory,
+    build_handoff_entry,
+    build_task_summary_entry,
 )
-from prompts import (  # noqa: F401 — re-exported
-    AUTONOMY_CONTINUATION_PROMPT,
-    AUTONOMY_SYSTEM_PROMPT,
-    CONTEXT_AWARE_CONTINUATION_PROMPTS,
-    FORMAT_INSTRUCTIONS,
-    TASK_TYPE_PROMPTS,
-    build_format_system_prompt,
-    build_handoff_resumption_prompt,
-    build_recovery_prompt,
-    combine_system_prompt,
-    format_memory_context,
-    format_team_context_system_prompt,
-    format_workspace_system_prompt,
-    get_continuation_prompt,
-    get_task_type_prompt,
-)
-from models import InvokeRequest, InvokeResponse  # noqa: F401 — re-exported
-from session import SESSION_REGISTRY, SessionRegistry  # noqa: F401 — re-exported
-from skills import (  # noqa: F401 — re-exported
-    SKILL_RUNTIME_CONFIG,
-    build_generated_config,
-    build_mcp_config,
-    build_shared_mcp_config,
-    configure_git_credentials,
-    load_opencode_config_overrides,
-    ensure_runtime_directories,
-    load_opencode_sidecars,
-    materialize_opencode_config_files,
-    materialize_skill_files,
-    parse_skill_frontmatter,
-)
+from models import InvokeRequest, InvokeResponse
 from opencode_client import (  # noqa: F401 — re-exported
     _send_prompt_with_session_recovery,
     abort_session,
@@ -192,77 +193,74 @@ from opencode_client import (  # noqa: F401 — re-exported
     summarize_session,
     wait_for_session_idle,
 )
-from analysis import (  # noqa: F401 — re-exported
-    _ITER_ARTIFACT_MAX_DEPTH,
-    _KEYWORD_PATTERNS,
-    _build_response_metadata,
-    _compile_keyword_patterns,
-    _extract_structured_output,
-    _iter_artifact_paths,
-    _select_agent_simple,
-    build_tool_only_response,
-    build_compaction_hints,
-    build_json_output_schema,
-    build_prompt_format,
-    check_context_overflow,
-    classify_error_type,
-    classify_task_type,
-    compute_context_budget,
-    compute_context_priority,
-    derive_task_status,
-    detect_anti_patterns,
-    detect_completion_status,
-    detect_task_errors,
-    estimate_message_tokens,
-    extract_artifacts_from_messages,
-    extract_response_text,
-    extract_text_from_parts,
-    extract_tool_calls_from_messages,
-    get_latest_assistant_payload,
-    recommend_compaction_strategy,
-    runtime_capabilities,
-    select_agent_for_prompt,
+from prompts import (  # noqa: F401 — re-exported
+    AUTONOMY_CONTINUATION_PROMPT,
+    AUTONOMY_SYSTEM_PROMPT,
+    CONTEXT_AWARE_CONTINUATION_PROMPTS,
+    FORMAT_INSTRUCTIONS,
+    TASK_TYPE_PROMPTS,
+    build_format_system_prompt,
+    build_handoff_resumption_prompt,
+    build_recovery_prompt,
+    combine_system_prompt,
+    format_memory_context,
+    format_team_context_system_prompt,
+    format_workspace_system_prompt,
+    get_continuation_prompt,
+    get_task_type_prompt,
 )
-from invoke import (  # noqa: F401 — re-exported
-    StreamCallback,
-    a2a_response_metadata,
-    build_invoke_warnings,
-    invoke_opencode,
-    resolve_working_directory,
-    validate_inbound_a2a_request,
+from session import SESSION_REGISTRY, SessionRegistry  # noqa: F401 — re-exported
+from skills import (  # noqa: F401 — re-exported
+    SKILL_RUNTIME_CONFIG,
+    build_generated_config,
+    build_mcp_config,
+    build_shared_mcp_config,
+    configure_git_credentials,
+    ensure_runtime_directories,
+    load_opencode_config_overrides,
+    load_opencode_sidecars,
+    materialize_opencode_config_files,
+    materialize_skill_files,
+    parse_skill_frontmatter,
 )
-from memory import (  # noqa: F401 — re-exported
-    MEMORY_ENTRY_TYPES,
-    SESSION_MEMORY,
-    SessionMemory,
-    build_handoff_entry,
-    build_task_summary_entry,
+from supervisor import (
+    SUPERVISOR_MAX_RESTARTS,
+    _run_process_supervisor,
+    _runtime_lock,
+    _shutdown_event,
+    _sigterm_handler,
+    _start_opencode_process,
+    build_server_env,
+    is_shutting_down,
+    validate_runtime_startup,
+    wait_for_server_ready,
+)
+from tracing import (
+    _OTEL_AVAILABLE,
+    StatusCode,
+    get_tracer,
+    init_tracing,
 )
 from workspace import (  # noqa: F401 — re-exported
     capture_workspace_snapshot,
     get_or_refresh_snapshot,
 )
-from supervisor import (
-    SUPERVISOR_MAX_RESTARTS,
-    _runtime_lock,
-    _runtime_process,
-    _runtime_ready,
-    _run_process_supervisor,
-    _shutdown_event,
-    _sigterm_handler,
-    _start_opencode_process,
-    _supervisor_restart_count,
-    build_server_env,
-    is_shutting_down,
-    validate_runtime_startup,
-    wait_for_server_ready,
+
+from utils import (  # noqa: F401 — re-exported
+    dedupe_items,
+    normalize_identifier,
+    normalize_relative_path,
+    path_is_within,
+    serialize_file_content,
+    sse_event,
+    truncate_text,
 )
 
 # Backward compat: tests and old code may reference _path_is_within
 _path_is_within = path_is_within
 
 # Backward compat: mutable globals need to be visible from this module
-import supervisor as _supervisor_mod  # noqa: E402
+import supervisor as _supervisor_mod
 
 RUNTIME_IMPORTED_MODULES = {
     module_name: sys.modules[module_name]
@@ -278,7 +276,8 @@ def resolve_download_path(raw_value: str) -> Path:
     if not candidate:
         raise HTTPException(status_code=400, detail="artifact download path must not be blank")
     target = Path(candidate).expanduser().resolve()
-    allowed_roots = [Path(OPENCODE_WORKDIR).resolve(), Path(HOME_DIR).resolve(), Path("/tmp").resolve()]
+    import tempfile
+    allowed_roots = [Path(OPENCODE_WORKDIR).resolve(), Path(HOME_DIR).resolve(), Path(tempfile.gettempdir()).resolve()]
     if not any(path_is_within(target, root) for root in allowed_roots):
         raise HTTPException(status_code=400, detail=f"artifact path '{raw_value}' is outside the allowed runtime roots")
     if not target.exists() or not target.is_file():
@@ -415,12 +414,12 @@ def ready() -> dict[str, Any]:
             resp = probe.get(f"http://{OPENCODE_SERVER_HOST}:{OPENCODE_SERVER_PORT}/session")
             opencode_server_healthy = resp.status_code < 500
     except Exception:
-        pass
+        logger.debug("OpenCode server health probe failed", exc_info=True)
     session_registry_writable = False
     try:
         session_registry_writable = os.access(SESSION_REGISTRY.path.parent, os.W_OK)
     except Exception:
-        pass
+        logger.debug("Session registry writable check failed", exc_info=True)
     subprocess_alive = False
     with _runtime_lock:
         proc = _supervisor_mod._runtime_process
@@ -657,7 +656,7 @@ async def invoke_stream(request: InvokeRequest) -> StreamingResponse:
                                 }
                             )
                     except Exception:
-                        pass
+                        logger.debug("Todo poller callback failed", exc_info=True)
                 try:
                     await asyncio.wait_for(stop_todo_poller.wait(), timeout=0.5)
                 except TimeoutError:
@@ -685,7 +684,7 @@ async def invoke_stream(request: InvokeRequest) -> StreamingResponse:
                                 )
                     last_ids = current_ids
                 except Exception:
-                    pass
+                    logger.debug("Question poller callback failed", exc_info=True)
                 try:
                     await asyncio.wait_for(stop_todo_poller.wait(), timeout=0.3)
                 except TimeoutError:
@@ -726,7 +725,7 @@ async def invoke_stream(request: InvokeRequest) -> StreamingResponse:
                         {"thread_id": thread_id, "session_id": final_session, "todos": final_todos, "source": "opencode"},
                     )
         except Exception:
-            pass
+            logger.debug("Todo stream cleanup failed", exc_info=True)
 
         try:
             response = await task
@@ -774,7 +773,8 @@ def download_artifact(path: str) -> FileResponse:
 @app.get("/artifacts/list")
 def list_artifacts(root: str = "") -> dict[str, Any]:
     """Walk allowed directories and return a flat list of files."""
-    allowed_roots = [Path(OPENCODE_WORKDIR).resolve(), Path(HOME_DIR).resolve(), Path("/tmp").resolve()]
+    import tempfile
+    allowed_roots = [Path(OPENCODE_WORKDIR).resolve(), Path(HOME_DIR).resolve(), Path(tempfile.gettempdir()).resolve()]
     if root:
         target = Path(root).expanduser().resolve()
         if not any(path_is_within(target, r) for r in allowed_roots):

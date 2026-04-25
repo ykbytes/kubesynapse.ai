@@ -1,8 +1,11 @@
+{{- if .Values.redis.enabled }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ include "kubesynth.fullname" . }}-redis
   labels:
+    {{- include "kubesynth.labels" . | nindent 4 }}
+    app.kubernetes.io/component: redis
     app: redis
 spec:
   replicas: 1
@@ -12,12 +15,15 @@ spec:
   template:
     metadata:
       labels:
+        {{- include "kubesynth.labels" . | nindent 8 }}
+        app.kubernetes.io/component: redis
         app: redis
     spec:
 {{- with (include "kubesynth.imagePullSecrets" .) }}
 {{ . | nindent 6 }}
 {{- end }}
       automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
       securityContext:
         runAsNonRoot: true
         runAsUser: 999
@@ -41,6 +47,13 @@ spec:
           args: ["--save", "", "--appendonly", "no"]  # disable persistence by default; enable via PVC
           resources:
 {{ toYaml .Values.redis.resources | indent 12 }}
+          startupProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            initialDelaySeconds: 5
+            timeoutSeconds: 5
+            periodSeconds: 5
+            failureThreshold: 18
           livenessProbe:
             exec:
               command: ["redis-cli", "ping"]
@@ -92,6 +105,10 @@ apiVersion: v1
 kind: Service
 metadata:
   name: {{ include "kubesynth.fullname" . }}-redis
+  labels:
+    {{- include "kubesynth.labels" . | nindent 4 }}
+    app.kubernetes.io/component: redis
+    app: redis
 spec:
   selector:
     app: redis
@@ -100,3 +117,4 @@ spec:
       port: 6379
       targetPort: 6379
       name: redis
+{{- end }}

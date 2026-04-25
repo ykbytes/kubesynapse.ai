@@ -287,6 +287,10 @@ function ProgressSummaryBar({ summary, phase }: { summary: WorkflowSummary; phas
 
   const isActive = phase === "running" || phase === "queued";
 
+  const completedStyle = useMemo(() => ({ width: `${(completed / total) * 100}%` }), [completed, total]);
+  const failedStyle = useMemo(() => ({ left: `${(completed / total) * 100}%`, width: `${(failed / total) * 100}%` }), [completed, failed, total]);
+  const skippedStyle = useMemo(() => ({ left: `${((completed + failed) / total) * 100}%`, width: `${(skipped / total) * 100}%` }), [completed, failed, skipped, total]);
+
   return (
     <div className="space-y-3">
       {/* counters row */}
@@ -323,15 +327,15 @@ function ProgressSummaryBar({ summary, phase }: { summary: WorkflowSummary; phas
           <>
             <div
               className="absolute inset-y-0 left-0 rounded-full bg-emerald-500 transition-all duration-500"
-              style={{ width: `${(completed / total) * 100}%` }}
+              style={completedStyle}
             />
             <div
               className="absolute inset-y-0 rounded-full bg-destructive transition-all duration-500"
-              style={{ left: `${(completed / total) * 100}%`, width: `${(failed / total) * 100}%` }}
+              style={failedStyle}
             />
             <div
               className="absolute inset-y-0 rounded-full bg-muted-foreground/40 transition-all duration-500"
-              style={{ left: `${((completed + failed) / total) * 100}%`, width: `${(skipped / total) * 100}%` }}
+              style={skippedStyle}
             />
           </>
         )}
@@ -496,6 +500,7 @@ function StepDetailCard({
           onClick={() => setExpanded((v) => !v)}
           className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-2xl border bg-background/80 shadow-sm transition-all duration-300 ${ring} hover:brightness-110 hover:scale-105 active:scale-95 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none`}
           title={expanded ? "Collapse" : "Expand"}
+          aria-label={expanded ? "Collapse step details" : "Expand step details"}
         >
           {icon}
         </button>
@@ -1283,93 +1288,91 @@ export function WorkflowManager({
 
   return (
     <Card className="border-border/70 bg-card/95 shadow-[0_24px_80px_-48px_rgba(0,0,0,0.65)]">
-      <CardHeader className="pb-4">
-        <div className="flex items-center gap-3">
-          <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-primary/20 bg-primary/10 text-primary shadow-inner shadow-primary/10">
-            <Workflow className="h-5 w-5" />
+      <CardHeader className="pb-2">
+        <div className="flex items-center gap-2">
+          <div className="flex h-8 w-8 items-center justify-center rounded-xl border border-primary/20 bg-primary/10 text-primary shadow-inner shadow-primary/10">
+            <Workflow className="h-4 w-4" />
           </div>
-          <div className="flex-1 space-y-1">
-            <CardTitle className="text-lg">{workflow ? workflow.name : "Create workflow"}</CardTitle>
-            <CardDescription>
-              {workflow
-                ? "Refine the orchestration, approvals, and step wiring for this workflow."
-                : "Compose a multi-step agent pipeline with clearer sequencing, dependencies, and review gates."}
-            </CardDescription>
+          <div className="flex-1">
+            <CardTitle className="text-sm">{workflow ? workflow.name : "Create workflow"}</CardTitle>
           </div>
           <div className="flex items-center gap-2">
             {isFactoryWorkflow && (
-              <Badge variant="outline" className="border-primary/20 bg-primary/5 text-primary/80">
+              <Badge variant="outline" className="border-primary/20 bg-primary/5 text-primary/80 text-[10px]">
                 {factoryModeLabel(factoryMode)}
               </Badge>
             )}
-            <Badge variant={isActive ? "default" : (workflow?.phase === "failed" || workflow?.phase === "cancelled") ? "destructive" : "secondary"}>
+            <Badge variant={isActive ? "default" : (workflow?.phase === "failed" || workflow?.phase === "cancelled") ? "destructive" : "secondary"} className="text-[10px]">
               {workflow?.phase ?? "draft"}
             </Badge>
           </div>
         </div>
       </CardHeader>
-      <CardContent className="space-y-5">
-        {/* ── Summary counters ── */}
-        <div className="grid gap-3 md:grid-cols-4">
-          <div className={`${SIGNAL_PANEL_CLASS} border-primary/20 bg-primary/5`}>
-            <p className="text-[11px] uppercase tracking-[0.16em] text-primary/75">Status</p>
-            <p className="mt-1 text-xl font-semibold text-foreground">{workflow?.phase ?? "draft"}</p>
+      <CardContent className="space-y-3">
+        {/* ── Summary counters — single compact strip ── */}
+        <div className="grid grid-cols-4 gap-1.5">
+          <div className={`${SIGNAL_PANEL_CLASS} border-primary/20 bg-primary/5 px-2.5 py-1`}>
+            <div className="flex items-baseline justify-between gap-1">
+              <span className="text-[9px] uppercase tracking-widest text-primary/70">Status</span>
+              <span className="text-sm font-semibold text-foreground">{workflow?.phase ?? "draft"}</span>
+            </div>
           </div>
-          <div className={`${SIGNAL_PANEL_CLASS} border-sky-500/20 bg-sky-500/5`}>
-            <p className="text-[11px] uppercase tracking-[0.16em] text-sky-300/80">Steps</p>
-            <p className="mt-1 text-xl font-semibold text-foreground">
-              {wfSummary ? `${(wfSummary.completedSteps ?? 0) + (wfSummary.failedSteps ?? 0)}/${wfSummary.totalSteps ?? steps.length}` : steps.length}
-            </p>
+          <div className={`${SIGNAL_PANEL_CLASS} border-sky-500/20 bg-sky-500/5 px-2.5 py-1`}>
+            <div className="flex items-baseline justify-between gap-1">
+              <span className="text-[9px] uppercase tracking-widest text-sky-400/70">Steps</span>
+              <span className="text-sm font-semibold text-foreground">
+                {wfSummary ? `${(wfSummary.completedSteps ?? 0) + (wfSummary.failedSteps ?? 0)}/${wfSummary.totalSteps ?? steps.length}` : steps.length}
+              </span>
+            </div>
           </div>
-          <div className={`${SIGNAL_PANEL_CLASS} border-violet-500/20 bg-violet-500/5`}>
-            <p className="text-[11px] uppercase tracking-[0.16em] text-violet-300/80">Agents</p>
-            <p className="mt-1 text-xl font-semibold text-foreground">{uniqueAgentCount}</p>
+          <div className={`${SIGNAL_PANEL_CLASS} border-violet-500/20 bg-violet-500/5 px-2.5 py-1`}>
+            <div className="flex items-baseline justify-between gap-1">
+              <span className="text-[9px] uppercase tracking-widest text-violet-400/70">Agents</span>
+              <span className="text-sm font-semibold text-foreground">{uniqueAgentCount}</span>
+            </div>
           </div>
-          <div className={`${SIGNAL_PANEL_CLASS} border-amber-500/20 bg-amber-500/5`}>
-            <p className="text-[11px] uppercase tracking-[0.16em] text-amber-300/80">
-              {isActive ? "Elapsed" : "Approvals"}
-            </p>
-            <p className="mt-1 text-xl font-semibold text-foreground">
-              {isActive && wfSummary?.startedAt ? formatElapsed(wfSummary.startedAt) : approvalStepCount}
-            </p>
+          <div className={`${SIGNAL_PANEL_CLASS} border-amber-500/20 bg-amber-500/5 px-2.5 py-1`}>
+            <div className="flex items-baseline justify-between gap-1">
+              <span className="text-[9px] uppercase tracking-widest text-amber-400/70">{isActive ? "Elapsed" : "Approvals"}</span>
+              <span className="text-sm font-semibold text-foreground">
+                {isActive && wfSummary?.startedAt ? formatElapsed(wfSummary.startedAt) : approvalStepCount}
+              </span>
+            </div>
           </div>
         </div>
 
         <Card className={WORKSPACE_PANEL_CLASS}>
-          <CardContent className="p-4">
-            <div className="grid gap-4 xl:grid-cols-[minmax(0,1.45fr)_minmax(18rem,1fr)]">
-              <div className={workflowBrief.tone + " rounded-[1.35rem] border px-4 py-4 shadow-sm backdrop-blur-sm"}>
-                <div className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground/80">Execution brief</div>
-                <div className="mt-2 text-sm font-semibold text-foreground">{workflowBrief.title}</div>
-                <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{workflowBrief.body}</p>
+          <CardContent className="p-2">
+            <div className="grid gap-2 xl:grid-cols-[minmax(0,1.45fr)_minmax(16rem,1fr)]">
+              <div className={workflowBrief.tone + " rounded-xl border px-2.5 py-2 shadow-sm backdrop-blur-sm"}>
+                <div className="text-[9px] uppercase tracking-widest text-muted-foreground/70">Execution brief</div>
+                <div className="text-xs font-semibold text-foreground">{workflowBrief.title}</div>
+                <p className="text-[11px] leading-snug text-muted-foreground">{workflowBrief.body}</p>
                 {nextAction && (
-                  <div className="mt-3 rounded-xl border border-border/50 bg-background/60 px-3 py-2">
-                    <div className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Suggested next action</div>
-                    <div className="mt-1 text-sm font-medium text-foreground">{nextAction.action}</div>
-                    <div className="mt-1 text-xs leading-relaxed text-muted-foreground">{nextAction.reason}</div>
+                  <div className="mt-1.5 rounded-lg border border-border/50 bg-background/60 px-2 py-1">
+                    <div className="text-[9px] uppercase tracking-widest text-muted-foreground">Next</div>
+                    <div className="text-xs font-medium text-foreground">{nextAction.action}</div>
                   </div>
                 )}
               </div>
-              <div className="grid gap-2 sm:grid-cols-2">
-                <div className={`${SIGNAL_PANEL_CLASS} border-border/60 bg-background/70 px-3 py-3`}>
-                  <div className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground/70">Current focus</div>
-                  <div className="mt-1 text-sm font-medium text-foreground">{currentFocus}</div>
-                  <div className="mt-1 text-xs text-muted-foreground">Current step, frontier, or the highest-signal failure target.</div>
+              <div className="grid gap-1.5 sm:grid-cols-2">
+                <div className={`${SIGNAL_PANEL_CLASS} border-border/60 bg-background/70 px-2 py-1.5`}>
+                  <div className="text-[9px] uppercase tracking-widest text-muted-foreground/60">Focus</div>
+                  <div className="text-xs font-medium text-foreground">{currentFocus}</div>
                 </div>
-                <div className={`${SIGNAL_PANEL_CLASS} border-border/60 bg-background/70 px-3 py-3`}>
-                  <div className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground/70">Governance</div>
-                  <div className="mt-1 text-sm font-medium text-foreground">{approvalStepCount} gate{approvalStepCount === 1 ? "" : "s"}</div>
-                  <div className="mt-1 text-xs text-muted-foreground">{waitingApprovalCount > 0 ? `${waitingApprovalCount} waiting for approval right now.` : "Approval boundaries are configured into the workflow graph."}</div>
+                <div className={`${SIGNAL_PANEL_CLASS} border-border/60 bg-background/70 px-2 py-1.5`}>
+                  <div className="text-[9px] uppercase tracking-widest text-muted-foreground/60">Governance</div>
+                  <div className="text-xs font-medium text-foreground">{approvalStepCount} gate{approvalStepCount === 1 ? "" : "s"}</div>
                 </div>
-                <div className={`${SIGNAL_PANEL_CLASS} border-border/60 bg-background/70 px-3 py-3`}>
-                  <div className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground/70">Execution model</div>
-                  <div className="mt-1 text-sm font-medium text-foreground">{messageBus}</div>
-                  <div className="mt-1 text-xs text-muted-foreground">{loopStepCount > 0 ? `${loopStepCount} loop step${loopStepCount === 1 ? "" : "s"}` : "No autonomous loop steps"} · {reviewStepCount} review step{reviewStepCount === 1 ? "" : "s"}</div>
+                <div className={`${SIGNAL_PANEL_CLASS} border-border/60 bg-background/70 px-2 py-1.5`}>
+                  <div className="text-[9px] uppercase tracking-widest text-muted-foreground/60">Model</div>
+                  <div className="text-xs font-medium text-foreground">{messageBus}</div>
+                  <div className="text-[10px] text-muted-foreground">{loopStepCount > 0 ? `${loopStepCount} loop` : "No loops"} · {reviewStepCount} review</div>
                 </div>
-                <div className={`${SIGNAL_PANEL_CLASS} border-border/60 bg-background/70 px-3 py-3`}>
-                  <div className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground/70">Run posture</div>
-                  <div className="mt-1 text-sm font-medium text-foreground">{completedStepCount} complete / {failedStepCount} failed</div>
-                  <div className="mt-1 text-xs text-muted-foreground">{uniqueAgentCount} agent{uniqueAgentCount === 1 ? "" : "s"} participating across {steps.length} step{steps.length === 1 ? "" : "s"}.</div>
+                <div className={`${SIGNAL_PANEL_CLASS} border-border/60 bg-background/70 px-2 py-1.5`}>
+                  <div className="text-[9px] uppercase tracking-widest text-muted-foreground/60">Run posture</div>
+                  <div className="text-xs font-medium text-foreground">{completedStepCount} ok / {failedStepCount} fail</div>
+                  <div className="text-[10px] text-muted-foreground">{uniqueAgentCount} agent{uniqueAgentCount === 1 ? "" : "s"} · {steps.length} step{steps.length === 1 ? "" : "s"}</div>
                 </div>
               </div>
             </div>
@@ -1379,7 +1382,7 @@ export function WorkflowManager({
         {/* ── Live progress bar (when summary exists) ── */}
         {workflow && wfSummary && (wfSummary.totalSteps ?? 0) > 0 && (
           <Card className={WORKSPACE_PANEL_CLASS}>
-            <CardContent className="p-4">
+            <CardContent className="p-3">
               <ProgressSummaryBar summary={wfSummary} phase={workflow.phase} />
             </CardContent>
           </Card>
@@ -1388,14 +1391,14 @@ export function WorkflowManager({
         <Tabs
           value={workflow && hasBeenTriggered ? workspaceTab : "definition"}
           onValueChange={(value) => setWorkspaceTab(value as "live" | "history" | "definition")}
-          className="space-y-4"
+          className="space-y-3"
         >
           {workflow && hasBeenTriggered && (
             <div className="rounded-[1.25rem] border border-border/60 bg-[linear-gradient(135deg,rgba(59,130,246,0.08),transparent_58%),linear-gradient(180deg,rgba(255,255,255,0.03),transparent)] p-2">
-              <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+              <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
                 <div className="px-2 py-1">
                   <div className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground/70">Workflow workspace</div>
-                  <div className="mt-1 text-sm font-semibold text-foreground">Operate the live run, investigate history and trace, or switch into definition mode without leaving this page.</div>
+                  <div className="text-sm font-semibold text-foreground">Operate, trace, or edit without leaving this page.</div>
                 </div>
                 <TabsList className="h-auto w-full flex-wrap justify-start gap-2 rounded-[1rem] bg-transparent p-0 lg:w-auto">
                   <TabsTrigger value="live" className="gap-2 rounded-xl border border-border/60 bg-background/70 px-3 py-2 text-xs data-[state=active]:border-primary/30 data-[state=active]:bg-primary/10 data-[state=active]:text-foreground data-[state=active]:shadow-none">
@@ -1416,13 +1419,13 @@ export function WorkflowManager({
           )}
 
           {workflow && hasBeenTriggered && (
-            <TabsContent value="live" className="mt-0 space-y-4 animate-fade-in">
+            <TabsContent value="live" className="mt-0 space-y-3 animate-fade-in">
 
         {/* ── Cross-agent pipeline overview ── */}
         {workflow && hasBeenTriggered && steps.length > 1 && (
           <Card className={WORKSPACE_PANEL_CLASS}>
-            <CardContent className="p-4">
-              <div className="text-[10px] font-medium text-muted-foreground/80 uppercase tracking-wide mb-3">Agent pipeline</div>
+            <CardContent className="p-3">
+              <div className="text-[10px] font-medium text-muted-foreground/80 uppercase tracking-wide mb-2">Agent pipeline</div>
               <div className="flex items-center gap-1 overflow-x-auto pb-1">
                 {steps.map((step, idx) => {
                   const state = workflow.step_states?.[step.name];
@@ -1492,10 +1495,10 @@ export function WorkflowManager({
         {/* ── Suggested next action ── */}
         {workflow && nextAction && (
           <Card className="border-primary/20 bg-primary/5 shadow-sm backdrop-blur-sm">
-            <CardContent className="p-4">
-              <div className="flex items-start gap-3">
+            <CardContent className="p-3">
+              <div className="flex items-start gap-2">
                 <Sparkles className="h-4 w-4 mt-0.5 text-primary" />
-                <div className="space-y-1">
+                <div className="space-y-0.5">
                   <p className="text-xs uppercase tracking-[0.14em] text-primary/80">Suggested Next</p>
                   <p className="text-sm font-semibold text-foreground">{nextAction.action}</p>
                   <p className="text-xs text-muted-foreground">{nextAction.reason}</p>
@@ -1507,31 +1510,31 @@ export function WorkflowManager({
 
         {workflow && hasBeenTriggered && (
           <Card className={WORKSPACE_PANEL_CLASS}>
-            <CardHeader className="pb-3">
+            <CardHeader className="pb-2">
               <CardTitle className="text-sm">Operator signals</CardTitle>
-              <CardDescription>High-signal blockers and evidence from the current run without opening every step.</CardDescription>
+              <CardDescription>High-signal blockers from the current run.</CardDescription>
             </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                <div className="rounded-2xl border border-amber-500/20 bg-amber-500/5 p-3">
+            <CardContent className="space-y-3">
+              <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+                <div className="rounded-2xl border border-amber-500/20 bg-amber-500/5 p-2.5">
                   <div className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground/70">Attention</div>
-                  <div className="mt-1 text-xl font-semibold text-foreground">{workflowSignals.attentionSteps.length}</div>
-                  <div className="mt-1 text-xs text-muted-foreground">{workflowSignals.verificationFailures} verify · {workflowSignals.reviewRejections} review · {workflowSignals.jsonContractFailures} JSON</div>
+                  <div className="text-lg font-semibold text-foreground">{workflowSignals.attentionSteps.length}</div>
+                  <div className="text-[11px] text-muted-foreground">{workflowSignals.verificationFailures} verify · {workflowSignals.reviewRejections} review · {workflowSignals.jsonContractFailures} JSON</div>
                 </div>
-                <div className="rounded-2xl border border-primary/20 bg-primary/5 p-3">
+                <div className="rounded-2xl border border-primary/20 bg-primary/5 p-2.5">
                   <div className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground/70">Active now</div>
-                  <div className="mt-1 text-xl font-semibold text-foreground">{workflowSignals.activeSteps}</div>
-                  <div className="mt-1 text-xs text-muted-foreground">{waitingApprovalCount} approval wait · focus on {currentFocus}</div>
+                  <div className="text-lg font-semibold text-foreground">{workflowSignals.activeSteps}</div>
+                  <div className="text-[11px] text-muted-foreground">{waitingApprovalCount} wait · {currentFocus}</div>
                 </div>
-                <div className="rounded-2xl border border-sky-500/20 bg-sky-500/5 p-3">
+                <div className="rounded-2xl border border-sky-500/20 bg-sky-500/5 p-2.5">
                   <div className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground/70">Tool activity</div>
-                  <div className="mt-1 text-xl font-semibold text-foreground">{workflowSignals.totalToolCalls}</div>
-                  <div className="mt-1 text-xs text-muted-foreground">{workflowSignals.activitySteps.length} step{workflowSignals.activitySteps.length === 1 ? "" : "s"} produced runtime actions</div>
+                  <div className="text-lg font-semibold text-foreground">{workflowSignals.totalToolCalls}</div>
+                  <div className="text-[11px] text-muted-foreground">{workflowSignals.activitySteps.length} step{workflowSignals.activitySteps.length === 1 ? "" : "s"} with actions</div>
                 </div>
-                <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-3">
+                <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-2.5">
                   <div className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground/70">Files observed</div>
-                  <div className="mt-1 text-xl font-semibold text-foreground">{workflowSignals.totalArtifacts}</div>
-                  <div className="mt-1 text-xs text-muted-foreground">{workflowSignals.totalWarnings} warning{workflowSignals.totalWarnings === 1 ? "" : "s"} logged across the run</div>
+                  <div className="text-lg font-semibold text-foreground">{workflowSignals.totalArtifacts}</div>
+                  <div className="text-[11px] text-muted-foreground">{workflowSignals.totalWarnings} warning{workflowSignals.totalWarnings === 1 ? "" : "s"}</div>
                 </div>
               </div>
 
@@ -1583,7 +1586,7 @@ export function WorkflowManager({
         {/* ── Step pipeline (live view + expandable detail) ── */}
         {workflow && steps.length > 0 && (
           <Card className={WORKSPACE_PANEL_CLASS}>
-            <CardHeader className="pb-3">
+            <CardHeader className="pb-2">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <Clock className="h-4 w-4 text-muted-foreground" />
@@ -1599,7 +1602,7 @@ export function WorkflowManager({
                     <Button
                       size="sm"
                       variant="destructive"
-                      className="h-8 rounded-xl text-xs"
+                      className="h-7 rounded-xl text-xs"
                       disabled={isCancelling}
                       onClick={() => onCancel(workflow.name)}
                     >
@@ -1609,7 +1612,7 @@ export function WorkflowManager({
                   )}
                   <Button
                     size="sm"
-                    className="h-8 rounded-xl text-xs transition-transform duration-150 active:scale-95"
+                    className="h-7 rounded-xl text-xs transition-transform duration-150 active:scale-95"
                     disabled={isRunning || isActive}
                     onClick={() => {
                       setTriggerInput(workflow.input ?? "");
@@ -1617,7 +1620,7 @@ export function WorkflowManager({
                     }}
                   >
                     <Play className="mr-1.5 h-3.5 w-3.5" />
-                    Run workflow
+                    Run
                   </Button>
                 </div>
               </div>
@@ -1625,17 +1628,17 @@ export function WorkflowManager({
             <CardContent>
               {/* trigger confirmation with input editor */}
               {showTriggerConfirm && !isActive && (
-                <div className="mb-4 rounded-xl border border-primary/30 bg-primary/5 p-4 space-y-3">
+                <div className="mb-3 rounded-xl border border-primary/30 bg-primary/5 p-3 space-y-2">
                   <div className="flex items-center gap-2 text-sm font-medium text-foreground">
                     <Play className="h-4 w-4 text-primary" />
-                    Confirm workflow execution
+                    Confirm run
                   </div>
                   {isFactoryWorkflow && (
-                    <div className="rounded-xl border border-border/60 bg-background/70 p-3 space-y-2">
+                    <div className="rounded-xl border border-border/60 bg-background/70 p-2.5 space-y-1.5">
                       <div className="space-y-1">
                         <Label className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">Factory mode</Label>
                         <Select value={factoryMode} onValueChange={(value) => onFactoryModeChange(value as FactoryMode)}>
-                          <SelectTrigger className="h-9 text-xs"><SelectValue placeholder="Select a factory mode" /></SelectTrigger>
+                          <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Select a factory mode" /></SelectTrigger>
                           <SelectContent>
                             {FACTORY_MODE_OPTIONS.map((option) => (
                               <SelectItem key={option.value} value={option.value}>
@@ -1654,7 +1657,7 @@ export function WorkflowManager({
                     value={triggerInput}
                     onChange={setTriggerInput}
                     label="Input (editable before run)"
-                    rows={4}
+                    rows={3}
                     textareaClassName="text-xs"
                     placeholder="Describe the task, context, or parameters for this workflow run…"
                     dialogTitle="Workflow Run Input"
@@ -1663,7 +1666,7 @@ export function WorkflowManager({
                   <div className="flex gap-2">
                     <Button
                       size="sm"
-                      className="h-8 rounded-xl text-xs"
+                      className="h-7 rounded-xl text-xs"
                       disabled={isRunning}
                       onClick={handleTrigger}
                     >
@@ -1677,7 +1680,7 @@ export function WorkflowManager({
                     <Button
                       size="sm"
                       variant="ghost"
-                      className="h-8 rounded-xl text-xs"
+                      className="h-7 rounded-xl text-xs"
                       onClick={() => setShowTriggerConfirm(false)}
                     >
                       Cancel
@@ -1688,21 +1691,21 @@ export function WorkflowManager({
 
               {/* running indicator */}
               {isActive && (
-                <div className="mb-4 flex items-center gap-2 rounded-xl border border-primary/30 bg-primary/5 px-3 py-2 text-sm text-primary">
+                <div className="mb-3 flex items-center gap-2 rounded-xl border border-primary/30 bg-primary/5 px-3 py-2 text-sm text-primary">
                   <LoaderCircle className="h-4 w-4 animate-spin" />
-                  <span>Workflow is {workflow.phase}… polling for updates every 3 seconds.</span>
+                  <span>Workflow is {workflow.phase}…</span>
                 </div>
               )}
 
               {/* pending approval banner (global) */}
               {isActive && workflow.pending_approval && !pendingApprovalStep && (
-                <div className="mb-4 flex items-center gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-300">
+                <div className="mb-3 flex items-center gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-300">
                   <ShieldCheck className="h-4 w-4 shrink-0" />
                   <span>Waiting for approval at <strong>{workflow.current_step || "unknown step"}</strong></span>
                 </div>
               )}
 
-              <div className="mb-4 flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
+              <div className="mb-3 flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
                 <div className="flex flex-wrap gap-1">
                   {stepFilterOptions.map((option) => (
                     <Button
@@ -1777,10 +1780,10 @@ export function WorkflowManager({
                   : null;
 
                 return (
-                  <div className="mt-4 space-y-3">
-                    <div className="flex items-center gap-2 rounded-xl border border-emerald-500/30 bg-emerald-500/5 px-4 py-3 text-sm text-emerald-400">
-                      <CheckCircle2 className="h-5 w-5 shrink-0" />
-                      <span className="font-medium">Workflow completed successfully</span>
+                  <div className="mt-3 space-y-2">
+                    <div className="flex items-center gap-2 rounded-xl border border-emerald-500/30 bg-emerald-500/5 px-3 py-2 text-sm text-emerald-400">
+                      <CheckCircle2 className="h-4 w-4 shrink-0" />
+                      <span className="font-medium">Completed successfully</span>
                       {durationMs != null && (
                         <Badge variant="outline" className="ml-auto border-emerald-500/20 text-emerald-400 text-xs">
                           {formatMs(durationMs)}
@@ -1789,19 +1792,19 @@ export function WorkflowManager({
                     </div>
                     <div className="grid gap-2 sm:grid-cols-3">
                       {started && !Number.isNaN(started.getTime()) && (
-                        <div className="rounded-lg border border-border/40 bg-background/60 px-3 py-2">
+                        <div className="rounded-lg border border-border/40 bg-background/60 px-2.5 py-1.5">
                           <p className="text-[10px] uppercase tracking-wider text-muted-foreground/70">Started</p>
                           <p className="text-xs font-mono text-foreground">{started.toLocaleString()}</p>
                         </div>
                       )}
                       {ended && !Number.isNaN(ended.getTime()) && (
-                        <div className="rounded-lg border border-border/40 bg-background/60 px-3 py-2">
+                        <div className="rounded-lg border border-border/40 bg-background/60 px-2.5 py-1.5">
                           <p className="text-[10px] uppercase tracking-wider text-muted-foreground/70">Completed</p>
                           <p className="text-xs font-mono text-foreground">{ended.toLocaleString()}</p>
                         </div>
                       )}
                       {durationMs != null && (
-                        <div className="rounded-lg border border-border/40 bg-background/60 px-3 py-2">
+                        <div className="rounded-lg border border-border/40 bg-background/60 px-2.5 py-1.5">
                           <p className="text-[10px] uppercase tracking-wider text-muted-foreground/70">Duration</p>
                           <p className="text-xs font-mono text-foreground">{formatMs(durationMs)}</p>
                         </div>
@@ -1821,10 +1824,10 @@ export function WorkflowManager({
                   .map(([n]) => n);
 
                 return (
-                  <div className="mt-4 space-y-3">
-                    <div className="flex items-center gap-2 rounded-xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
-                      <AlertTriangle className="h-5 w-5 shrink-0" />
-                      <span className="font-medium">Workflow failed at step <strong>{workflow.current_step || "unknown"}</strong></span>
+                  <div className="mt-3 space-y-2">
+                    <div className="flex items-center gap-2 rounded-xl border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+                      <AlertTriangle className="h-4 w-4 shrink-0" />
+                      <span className="font-medium">Failed at <strong>{workflow.current_step || "unknown"}</strong></span>
                       {durationMs != null && (
                         <Badge variant="outline" className="ml-auto border-destructive/20 text-destructive text-xs">
                           after {formatMs(durationMs)}
@@ -1832,19 +1835,19 @@ export function WorkflowManager({
                       )}
                     </div>
                     {onRetryFailed && failedStepNames.length > 0 && (
-                      <div className="flex items-center gap-3 rounded-xl border border-amber-500/30 bg-amber-500/5 px-4 py-3">
-                        <div className="flex-1 space-y-1">
+                      <div className="flex items-center gap-3 rounded-xl border border-amber-500/30 bg-amber-500/5 px-3 py-2">
+                        <div className="flex-1 space-y-0.5">
                           <p className="text-sm font-medium text-foreground">Retry failed steps</p>
                           <p className="text-xs text-muted-foreground">
                             {failedStepNames.length === 1
-                              ? `Re-run step "${failedStepNames[0]}" — completed steps will be preserved.`
-                              : `Re-run ${failedStepNames.length} failed steps (${failedStepNames.join(", ")}) — completed steps will be preserved.`}
+                              ? `Re-run "${failedStepNames[0]}" — completed steps preserved.`
+                              : `Re-run ${failedStepNames.length} failed steps (${failedStepNames.join(", ")}) — completed steps preserved.`}
                           </p>
                         </div>
                         <Button
                           size="sm"
                           variant="outline"
-                          className="h-8 rounded-xl text-xs border-amber-500/40 hover:bg-amber-500/10"
+                          className="h-7 rounded-xl text-xs border-amber-500/40 hover:bg-amber-500/10"
                           disabled={isRetrying}
                           onClick={() => onRetryFailed(workflow.name)}
                         >
@@ -1856,13 +1859,13 @@ export function WorkflowManager({
                     {(started || ended) && (
                       <div className="grid gap-2 sm:grid-cols-2">
                         {started && !Number.isNaN(started.getTime()) && (
-                          <div className="rounded-lg border border-border/40 bg-background/60 px-3 py-2">
+                          <div className="rounded-lg border border-border/40 bg-background/60 px-2.5 py-1.5">
                             <p className="text-[10px] uppercase tracking-wider text-muted-foreground/70">Started</p>
                             <p className="text-xs font-mono text-foreground">{started.toLocaleString()}</p>
                           </div>
                         )}
                         {ended && !Number.isNaN(ended.getTime()) && (
-                          <div className="rounded-lg border border-border/40 bg-background/60 px-3 py-2">
+                          <div className="rounded-lg border border-border/40 bg-background/60 px-2.5 py-1.5">
                             <p className="text-[10px] uppercase tracking-wider text-muted-foreground/70">Failed at</p>
                             <p className="text-xs font-mono text-foreground">{ended.toLocaleString()}</p>
                           </div>
@@ -1873,9 +1876,9 @@ export function WorkflowManager({
                 );
               })()}
               {workflow.phase === "cancelled" && (
-                <div className="mt-4 flex items-center gap-2 rounded-xl border border-orange-500/30 bg-orange-500/5 px-3 py-2 text-sm text-orange-400">
+                <div className="mt-3 flex items-center gap-2 rounded-xl border border-orange-500/30 bg-orange-500/5 px-3 py-2 text-sm text-orange-400">
                   <XCircle className="h-4 w-4 shrink-0" />
-                  <span>Workflow was cancelled{workflow.current_step ? ` at step ${workflow.current_step}` : ""}.</span>
+                  <span>Cancelled{workflow.current_step ? ` at step ${workflow.current_step}` : ""}.</span>
                 </div>
               )}
             </CardContent>
@@ -1887,10 +1890,10 @@ export function WorkflowManager({
 
           {workflow && hasBeenTriggered && (
             <TabsContent value="history" className="mt-0 animate-fade-in">
-              <div className="grid gap-4 2xl:grid-cols-[minmax(0,1.14fr)_minmax(24rem,0.86fr)]">
+              <div className="grid gap-3 2xl:grid-cols-[minmax(0,1.14fr)_minmax(24rem,0.86fr)]">
                 <RunHistoryPanel workflowName={workflow.name} collapsible={false} onSelectRun={setSelectedHistoryRun} />
 
-                <div className="space-y-4">
+                <div className="space-y-3">
                   <WorkflowLogPanel workflow={workflow} selectedRun={selectedHistoryRun} />
 
                   {activeRunAgents.length > 0 && (
@@ -1900,9 +1903,9 @@ export function WorkflowManager({
                           <FolderOpen className="h-4 w-4" />
                           Agent workspace files
                         </CardTitle>
-                        <CardDescription>Browse files created during this workflow run, including evidence written before a step failed its final JSON contract.</CardDescription>
+                        <CardDescription className="text-xs">Browse files created during this workflow run.</CardDescription>
                       </CardHeader>
-                      <CardContent>
+                      <CardContent className="p-3">
                         <AgentFileBrowserTabs agents={activeRunAgents} token={token} namespace={namespace ?? "default"} liveUpdatesEnabled={isActive} />
                       </CardContent>
                     </Card>
@@ -1912,21 +1915,20 @@ export function WorkflowManager({
             </TabsContent>
           )}
 
-          <TabsContent value="definition" className="mt-0 space-y-4 animate-fade-in">
+          <TabsContent value="definition" className="mt-0 space-y-3 animate-fade-in">
             {workflow && (
               <Card className={WORKSPACE_PANEL_CLASS}>
-                <CardContent className="flex flex-col gap-3 p-4 lg:flex-row lg:items-center lg:justify-between">
-                  <div className="space-y-1">
+                <CardContent className="flex flex-col gap-2 p-3 lg:flex-row lg:items-center lg:justify-between">
+                  <div className="space-y-0.5">
                     <div className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground/70">Definition studio</div>
-                    <div className="text-sm font-semibold text-foreground">Refine the workflow contract, step graph, and execution policy with the authoring controls below.</div>
-                    <p className="text-xs leading-relaxed text-muted-foreground">This keeps the operational workspace separate from authoring, so run investigation does not get buried under the editor.</p>
+                    <div className="text-sm font-semibold text-foreground">Refine the workflow contract, step graph, and execution policy.</div>
                   </div>
                   <div className="flex flex-wrap gap-2">
                     {hasBeenTriggered && (
                       <Button
                         variant="ghost"
                         size="sm"
-                        className="h-8 rounded-xl text-xs"
+                        className="h-7 rounded-xl text-xs"
                         onClick={() => setWorkspaceTab("live")}
                       >
                         <Clock className="mr-1.5 h-3.5 w-3.5" />
@@ -1937,7 +1939,7 @@ export function WorkflowManager({
                       <Button
                         variant="outline"
                         size="sm"
-                        className="h-8 rounded-xl text-xs"
+                        className="h-7 rounded-xl text-xs"
                         onClick={onOpenComposer}
                       >
                         <Blocks className="mr-1.5 h-3.5 w-3.5" />
@@ -1950,34 +1952,36 @@ export function WorkflowManager({
             )}
 
         {/* ── Workflow details + execution profile (editor) ── */}
-        <div className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
+        <div className="grid gap-2 xl:grid-cols-[1.1fr_0.9fr]">
           <Card className={WORKSPACE_PANEL_CLASS}>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-sm">Workflow details</CardTitle>
-              <CardDescription>Name the flow, describe its purpose, and define the initial instruction payload.</CardDescription>
+            <CardHeader className="px-3 py-2 pb-1">
+              <CardTitle className="text-xs font-semibold">Workflow details</CardTitle>
             </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div className="space-y-1.5">
-                  <Label className="text-xs">Name</Label>
+            <CardContent className="space-y-2 px-3 pb-3 pt-0">
+              <div className="grid gap-2 sm:grid-cols-2">
+                <div className="space-y-0.5">
+                  <Label className="text-[11px]">Name</Label>
                   <Input
+                    className="h-8 text-xs"
                     value={name}
                     onChange={(e) => setName(e.target.value)}
                     placeholder="research-report-pipeline"
                     disabled={Boolean(workflow)}
                   />
                 </div>
-                <div className="space-y-1.5">
-                  <Label className="text-xs">Description</Label>
+                <div className="space-y-0.5">
+                  <Label className="text-[11px]">Description</Label>
                   <Input
+                    className="h-8 text-xs"
                     value={description}
                     onChange={(e) => setDescription(e.target.value)}
                     placeholder="Research to report pipeline"
                   />
                 </div>
-                <div className="space-y-1.5">
-                  <Label className="text-xs">Context ConfigMap</Label>
+                <div className="space-y-0.5">
+                  <Label className="text-[11px]">Context ConfigMap</Label>
                   <Input
+                    className="h-8 text-xs"
                     value={contextRef}
                     onChange={(e) => setContextRef(e.target.value)}
                     placeholder="project-rules"
@@ -1988,7 +1992,7 @@ export function WorkflowManager({
                 value={input}
                 onChange={setInput}
                 label="Workflow input"
-                rows={4}
+                rows={3}
                 placeholder="Describe the task, desired output, and constraints the first step should receive."
                 dialogTitle="Workflow Input"
                 dialogDescription="This value is available in step prompts as {{input}}. Supports full Markdown."
@@ -1997,22 +2001,17 @@ export function WorkflowManager({
           </Card>
 
           <Card className={WORKSPACE_PANEL_CLASS}>
-            <CardHeader className="pb-3">
-              <div className="flex items-center gap-2">
-                <div className="flex h-8 w-8 items-center justify-center rounded-xl border border-emerald-500/20 bg-emerald-500/10 text-emerald-300">
-                  <Sparkles className="h-4 w-4" />
-                </div>
-                <div>
-                  <CardTitle className="text-sm">Execution profile</CardTitle>
-                  <CardDescription>Keep orchestration simple, then add review gates only where the flow truly needs human control.</CardDescription>
-                </div>
+            <CardHeader className="px-3 py-2 pb-1">
+              <div className="flex items-center gap-1.5">
+                <Sparkles className="h-3.5 w-3.5 text-emerald-400" />
+                <CardTitle className="text-xs font-semibold">Execution profile</CardTitle>
               </div>
             </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="space-y-1.5">
+            <CardContent className="space-y-2 px-3 pb-3 pt-0">
+              <div className="space-y-1">
                 <Label className="text-xs">Message bus</Label>
                 <Select value={messageBus} onValueChange={setMessageBus}>
-                  <SelectTrigger className="h-9 text-sm">
+                  <SelectTrigger className="h-8 text-xs">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -2022,24 +2021,24 @@ export function WorkflowManager({
                 <p className="text-[11px] text-muted-foreground">The current gateway API supports the in-memory workflow bus only.</p>
               </div>
               <Separator />
-              <div className={`${SIGNAL_PANEL_CLASS} border-border/60 bg-background/70 p-3 text-sm text-muted-foreground`}>
+              <div className={`${SIGNAL_PANEL_CLASS} border-border/60 bg-background/70 p-2.5 text-xs text-muted-foreground`}>
                 <p className="font-medium text-foreground">Operator-friendly defaults</p>
-                <p className="mt-1 leading-6">Each step is independently targetable, dependencies stay explicit, and approval gates are visible directly on the step card instead of hidden in free-form text.</p>
+                <p className="mt-0.5 leading-5">Each step is independently targetable, dependencies stay explicit, and approval gates are visible directly on the step card.</p>
               </div>
             </CardContent>
           </Card>
         </div>
 
         {/* ── Step editor ── */}
-        <div className="flex items-center justify-between border-t border-border pt-4">
+        <div className="flex items-center justify-between border-t border-border pt-3">
           <div>
             <h3 className="text-sm font-medium text-foreground">Workflow steps</h3>
-            <p className="text-xs text-muted-foreground">Model the sequence, assign each step to an agent, and toggle dependencies with buttons instead of comma parsing.</p>
+            <p className="text-xs text-muted-foreground">Model the sequence, assign agents, and toggle dependencies.</p>
           </div>
           <Button
             variant="outline"
             size="sm"
-            className="h-8 rounded-xl text-xs"
+            className="h-7 rounded-xl text-xs"
             onClick={() =>
               setSteps((current) => [
                 ...current,
@@ -2058,10 +2057,10 @@ export function WorkflowManager({
           </Button>
         </div>
 
-        <div className="space-y-3">
+        <div className="space-y-2">
           {steps.map((step, index) => (
             <Card key={index} className={WORKSPACE_PANEL_CLASS}>
-              <CardContent className="space-y-4 p-4">
+              <CardContent className="space-y-3 p-3">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div className="flex items-center gap-2">
                     <Badge variant="secondary">Step {index + 1}</Badge>
@@ -2216,12 +2215,12 @@ export function WorkflowManager({
                 )}
 
                 {step.step_type === "loop" && (
-                  <div className="space-y-3 rounded-2xl border border-violet-500/30 bg-violet-500/5 p-4">
+                  <div className="space-y-2 rounded-2xl border border-violet-500/30 bg-violet-500/5 p-3">
                     <div className="flex items-center gap-2 text-sm font-medium text-violet-300">
                       <Repeat className="h-4 w-4" />
                       Loop configuration
                     </div>
-                    <div className="grid gap-3 sm:grid-cols-3">
+                    <div className="grid gap-2 sm:grid-cols-3">
                       <div className="space-y-1">
                         <Label className="text-[11px]">Max iterations</Label>
                         <Input
@@ -2316,16 +2315,16 @@ export function WorkflowManager({
                   </div>
                 )}
 
-                <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border/60 bg-background/50 p-3">
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border/60 bg-background/50 p-2.5">
                   <div>
                     <p className="text-sm font-medium text-foreground">Human approval</p>
-                    <p className="text-xs text-muted-foreground">Pause the workflow before this step starts and wait for an approval decision.</p>
+                    <p className="text-xs text-muted-foreground">Pause before this step and wait for approval.</p>
                   </div>
                   <Button
                     type="button"
                     variant={step.require_approval ? "default" : "outline"}
                     size="sm"
-                    className="rounded-xl"
+                    className="h-7 rounded-xl text-xs"
                     onClick={() =>
                       updateStep(index, (current) => ({
                         ...current,
@@ -2333,7 +2332,7 @@ export function WorkflowManager({
                       }))
                     }
                   >
-                    {step.require_approval ? "Approval enabled" : "Enable approval"}
+                    {step.require_approval ? "Enabled" : "Enable"}
                   </Button>
                 </div>
               </CardContent>
@@ -2345,32 +2344,36 @@ export function WorkflowManager({
         </Tabs>
 
         {error && (
-          <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive" role="alert">
             {error}
           </div>
         )}
 
-        <div className="flex items-center justify-end gap-2 border-t border-border pt-4">
+        <div className="flex items-center justify-end gap-2 border-t border-border pt-3">
           {workflow && (
             <div className="mr-auto flex items-center gap-2">
               <Button
                 variant="outline"
+                size="sm"
+                className="h-8 text-xs"
                 onClick={() => {
                   setTriggerInput(workflow.input ?? "");
                   setShowTriggerConfirm(true);
                 }}
                 disabled={isRunning}
               >
-                {isRunning ? <LoaderCircle className="mr-1.5 h-4 w-4 animate-spin" /> : <Play className="mr-1.5 h-4 w-4" />}
+                {isRunning ? <LoaderCircle className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Play className="mr-1.5 h-3.5 w-3.5" />}
                 {isRunning ? "Running…" : "Run"}
               </Button>
               {isActive && onCancel && (
                 <Button
                   variant="destructive"
+                  size="sm"
+                  className="h-8 text-xs"
                   disabled={isCancelling}
                   onClick={() => onCancel(workflow.name)}
                 >
-                  {isCancelling ? <LoaderCircle className="mr-1.5 h-4 w-4 animate-spin" /> : <Square className="mr-1.5 h-4 w-4" />}
+                  {isCancelling ? <LoaderCircle className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Square className="mr-1.5 h-3.5 w-3.5" />}
                   {isCancelling ? "Cancelling…" : "Cancel"}
                 </Button>
               )}
@@ -2378,6 +2381,8 @@ export function WorkflowManager({
           )}
           {canMutate && (
             <Button
+              size="sm"
+              className="h-8 text-xs"
               onClick={() => {
                 const payload = {
                   description,
@@ -2394,31 +2399,35 @@ export function WorkflowManager({
               }}
               disabled={!canSubmit || isSaving}
             >
-              {isSaving ? <LoaderCircle className="mr-1.5 h-4 w-4 animate-spin" /> : <Save className="mr-1.5 h-4 w-4" />}
-              {isSaving ? "Saving..." : workflow ? "Save workflow" : "Create workflow"}
+              {isSaving ? <LoaderCircle className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Save className="mr-1.5 h-3.5 w-3.5" />}
+              {isSaving ? "Saving..." : workflow ? "Save" : "Create"}
             </Button>
           )}
           {workflow && onOpenComposer && (
             <Button
               variant="outline"
+              size="sm"
+              className="h-8 text-xs"
               onClick={onOpenComposer}
             >
-              <Blocks className="mr-1.5 h-4 w-4" />
-              Edit in Composer
+              <Blocks className="mr-1.5 h-3.5 w-3.5" />
+              Composer
             </Button>
           )}
           {workflow && canMutate && (
             <Button
               variant="destructive"
+              size="sm"
+              className="h-8 text-xs"
               onClick={() => setDeleteDialogOpen(true)}
               disabled={isDeleting}
             >
-              {isDeleting ? <LoaderCircle className="mr-1.5 h-4 w-4 animate-spin" /> : <Trash2 className="mr-1.5 h-4 w-4" />}
+              {isDeleting ? <LoaderCircle className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Trash2 className="mr-1.5 h-3.5 w-3.5" />}
               {isDeleting ? "Deleting..." : "Delete"}
             </Button>
           )}
           {!canMutate && (
-            <p className="text-xs text-muted-foreground italic">Read-only — operator role required to edit</p>
+            <p className="text-xs text-muted-foreground italic">Read-only — operator role required</p>
           )}
         </div>
 

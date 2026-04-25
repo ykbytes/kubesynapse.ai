@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import kopf
@@ -25,7 +25,7 @@ CONNECTOR_PLURAL = "connectorplugins"
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _parse_namespaced_ref(raw_ref: str | None) -> tuple[str | None, str | None]:
@@ -512,9 +512,7 @@ def reconcile_target_status(
     current_metrics = int(status.get("metricsCollected") or 0)
     phase = "Active"
     connector_health = "Healthy"
-    if demo_mode == "warning":
-        phase = "Degraded"
-    elif demo_mode == "critical":
+    if demo_mode == "warning" or demo_mode == "critical":
         phase = "Degraded"
     elif demo_mode == "failed":
         phase = "Failed"

@@ -1021,6 +1021,7 @@ const MemoryRecordCard = memo(function MemoryRecordCard({
               className="h-7 w-7"
               onClick={() => onPromote(record.id, !record.promoted)}
               title={record.promoted ? "Unpin memory" : "Pin memory"}
+              aria-label={record.promoted ? "Unpin memory" : "Pin memory"}
             >
               <Pin className="h-3 w-3" />
             </Button>
@@ -1032,6 +1033,7 @@ const MemoryRecordCard = memo(function MemoryRecordCard({
                 className="h-7 w-7"
                 onClick={() => onStartEdit?.(record)}
                 title="Edit memory"
+                aria-label="Edit memory"
               >
                 <Pencil className="h-3 w-3" />
               </Button>
@@ -1043,6 +1045,7 @@ const MemoryRecordCard = memo(function MemoryRecordCard({
               className="h-7 w-7 text-destructive"
               onClick={() => onDelete(record.id)}
               title="Delete memory"
+              aria-label="Delete memory"
             >
               <X className="h-3 w-3" />
             </Button>
@@ -1724,17 +1727,24 @@ export function ChatWorkbench({
     return lastUserPrompt;
   }, [lastUserPrompt, messages]);
 
+  const onSaveSessionRef = useRef(onSaveSession);
+  const sessionSavingRef = useRef(sessionSaving);
+  const messagesLengthRef = useRef(messages.length);
+  useEffect(() => { onSaveSessionRef.current = onSaveSession; }, [onSaveSession]);
+  useEffect(() => { sessionSavingRef.current = sessionSaving; }, [sessionSaving]);
+  useEffect(() => { messagesLengthRef.current = messages.length; }, [messages.length]);
+
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "s") return;
-      if (!messages.length || sessionSaving) return;
+      if (!messagesLengthRef.current || sessionSavingRef.current) return;
       event.preventDefault();
-      onSaveSession();
+      onSaveSessionRef.current();
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [messages.length, onSaveSession, sessionSaving]);
+  }, []);
 
   const stableListArtifacts = useCallback(() => onListArtifacts(), [onListArtifacts]);
   const stableDownloadArtifact = useCallback(
@@ -1944,6 +1954,7 @@ export function ChatWorkbench({
             className="h-8 w-8 rounded-full"
             onClick={() => setChatFocused(!chatFocused)}
             title={chatFocused ? "Exit focused mode" : "Focused mode"}
+            aria-label={chatFocused ? "Exit focused mode" : "Enter focused mode"}
           >
             {chatFocused ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
           </Button>
@@ -2148,7 +2159,7 @@ export function ChatWorkbench({
                 <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">OpenCode</div>
                 <div className="text-sm font-semibold">Plan tracker</div>
               </div>
-              <Button type="button" variant="ghost" size="icon" className="h-7 w-7" onClick={() => planDock.toggle()}>
+              <Button type="button" variant="ghost" size="icon" className="h-7 w-7" onClick={() => planDock.toggle()} aria-label="Close plan panel">
                 <PanelRightClose className="h-3.5 w-3.5" />
               </Button>
             </div>
@@ -2171,7 +2182,7 @@ export function ChatWorkbench({
                 <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">Inspector</div>
                 <div className="text-sm font-semibold">Run details</div>
               </div>
-              <Button type="button" variant="ghost" size="icon" className="h-7 w-7" onClick={() => setDetailsOpen(false)}>
+              <Button type="button" variant="ghost" size="icon" className="h-7 w-7" onClick={() => setDetailsOpen(false)} aria-label="Close details panel">
                 <PanelRightClose className="h-3.5 w-3.5" />
               </Button>
             </div>
@@ -2278,7 +2289,7 @@ export function ChatWorkbench({
                 <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">Workspace</div>
                 <div className="text-sm font-semibold">Agent files</div>
               </div>
-              <Button type="button" variant="ghost" size="icon" className="h-7 w-7" onClick={() => setFilesOpen(false)}>
+              <Button type="button" variant="ghost" size="icon" className="h-7 w-7" onClick={() => setFilesOpen(false)} aria-label="Close files panel">
                 <PanelRightClose className="h-3.5 w-3.5" />
               </Button>
             </div>
@@ -2302,7 +2313,7 @@ export function ChatWorkbench({
                 <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">Memory workspace</div>
                 <div className="text-sm font-semibold">Session + durable memory</div>
               </div>
-              <Button type="button" variant="ghost" size="icon" className="h-7 w-7" onClick={() => setMemoryOpen(false)}>
+              <Button type="button" variant="ghost" size="icon" className="h-7 w-7" onClick={() => setMemoryOpen(false)} aria-label="Close memory panel">
                 <PanelRightClose className="h-3.5 w-3.5" />
               </Button>
             </div>

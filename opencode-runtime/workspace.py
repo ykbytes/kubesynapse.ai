@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import logging
@@ -196,9 +197,7 @@ def capture_workspace_snapshot(working_directory: str) -> dict[str, Any]:
                 return True
             if name.startswith("."):
                 return True
-            if any(name.endswith(suffix) for suffix in _SKIP_DIR_SUFFIXES):
-                return True
-            return False
+            return bool(any(name.endswith(suffix) for suffix in _SKIP_DIR_SUFFIXES))
 
         dirs = [e for e in entries if e.is_dir() and not _should_skip_dir(e.name)]
         # Include non-hidden files AND important hidden files
@@ -363,10 +362,8 @@ def get_or_refresh_snapshot(
                 os.replace(tmp_path, str(cache_path))
             except Exception:
                 # Clean up temp file on failure
-                try:
+                with contextlib.suppress(OSError):
                     os.unlink(tmp_path)
-                except OSError:
-                    pass
                 raise
             return snapshot
         except Exception as exc:

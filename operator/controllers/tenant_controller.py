@@ -10,11 +10,9 @@ import re
 from typing import Any
 
 import kopf
-
 import kubernetes.client  # type: ignore[import-untyped]
-from kubernetes.client.rest import ApiException  # type: ignore[import-untyped]
-
 from config import OPERATOR_NAMESPACE, PROTECTED_NAMESPACES
+from kubernetes.client.rest import ApiException  # type: ignore[import-untyped]
 from reconcile import execute_reconcile, log_operator_event, raise_reconcile_error
 from services import (
     describe_api_exception,

@@ -49,6 +49,15 @@ def _mask_secrets(text: str) -> str:
     return _SECRET_PATTERN.sub("[REDACTED]", text)
 
 
+def _validate_bash_command(command: str) -> str | None:
+    """Return an error message if the command is not allowed, else None."""
+    if "\x00" in command:
+        return "Null bytes are not allowed in commands"
+    if len(command) > 10000:
+        return "Command exceeds maximum length of 10000 characters"
+    return None
+
+
 @server.tool()
 def run_python(code: str, timeout: int = TIMEOUT_SECONDS) -> str:
     """Execute Python code and return stdout/stderr."""
@@ -75,6 +84,9 @@ def run_python(code: str, timeout: int = TIMEOUT_SECONDS) -> str:
 @server.tool()
 def run_bash(command: str, timeout: int = TIMEOUT_SECONDS) -> str:
     """Execute a Bash command and return stdout/stderr."""
+    cmd_err = _validate_bash_command(command)
+    if cmd_err:
+        return f"BLOCKED: {cmd_err}"
     try:
         result = subprocess.run(
             ["bash", "-c", command],

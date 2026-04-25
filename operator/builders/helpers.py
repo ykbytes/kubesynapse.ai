@@ -17,11 +17,10 @@ from config import (
     API_GATEWAY_INTERNAL_URL,
     API_PORT,
     ARTIFACT_MOUNT_PATH,
-    OTEL_ENDPOINT,
     OPERATOR_NAMESPACE,
-    WORKER_ARTIFACT_SIZE,
-    WORKER_ARTIFACT_STORAGE_CLASS,
+    OTEL_ENDPOINT,
 )
+
 from utils import now_iso
 
 logger = logging.getLogger("operator.builders")
@@ -94,7 +93,7 @@ def slugify_name(value: str, max_length: int = 63) -> str:
 
 def hashed_resource_name(prefix: str, namespace: str, name: str, suffix: str = "") -> str:
     """Build a deterministic K8s name with a truncated SHA-256 hash suffix."""
-    digest = hashlib.sha256(f"{prefix}:{namespace}:{name}:{suffix}".encode("utf-8")).hexdigest()[:10]
+    digest = hashlib.sha256(f"{prefix}:{namespace}:{name}:{suffix}".encode()).hexdigest()[:10]
     base = slugify_name(f"{prefix}-{namespace}-{name}", max_length=max(1, 63 - len(digest) - 1))
     return f"{base}-{digest}"
 
@@ -129,6 +128,12 @@ def worker_passthrough_env() -> list[dict[str, str]]:
         "DATABASE_PASSWORD",
         "DATABASE_DRIVER",
         "DATABASE_SQLITE_PATH",
+        "API_GATEWAY_SHARED_TOKEN",
+        "DEFAULT_API_GATEWAY_SHARED_TOKEN",
+        "GATEWAY_URL",
+        "WORKER_TRACE_ENABLED",
+        "WORKER_TRACE_BATCH_SIZE",
+        "WORKER_TRACE_FLUSH_INTERVAL_SEC",
     ):
         value = os.getenv(name, "")
         if value:

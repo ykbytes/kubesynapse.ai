@@ -1,0 +1,87 @@
+{
+  "name": "KubeSynth Dev Container",
+  "image": "mcr.microsoft.com/devcontainers/python:3.11",
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "20"
+    },
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {
+      "version": "latest",
+      "moby": true,
+      "dockerDashComposeVersion": "v2"
+    },
+    "ghcr.io/devcontainers/features/kubectl-helm-minikube:1": {
+      "version": "latest",
+      "helm": "latest",
+      "minikube": "none"
+    },
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "charliermarsh.ruff",
+        "ms-python.mypy-type-checker",
+        "esbenp.prettier-vscode",
+        "bradlc.vscode-tailwindcss",
+        "dbaeumer.vscode-eslint",
+        "ms-kubernetes-tools.vscode-kubernetes-tools",
+        "redhat.vscode-yaml",
+        "tamasfe.even-better-toml",
+        "GitHub.vscode-pull-request-github",
+        "eamodio.gitlens",
+        "streetsidesoftware.code-spell-checker"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "/usr/local/bin/python",
+        "python.analysis.typeCheckingMode": "basic",
+        "python.formatting.provider": "ruff",
+        "python.linting.enabled": true,
+        "editor.formatOnSave": true,
+        "editor.codeActionsOnSave": {
+          "source.fixAll": "explicit",
+          "source.organizeImports": "explicit"
+        },
+        "ruff.lint.run": "onSave",
+        "mypy-type-checker.args": [
+          "--config-file",
+          "pyproject.toml"
+        ],
+        "files.exclude": {
+          "**/__pycache__": true,
+          "**/.pytest_cache": true,
+          "**/node_modules": true,
+          "**/dist": true
+        }
+      }
+    }
+  },
+  "postCreateCommand": {
+    "python-deps": "pip install --upgrade pip && pip install -r operator/requirements.txt -r api-gateway/requirements.txt -r opencode-runtime/requirements.txt -r collector-agent/requirements.txt && pip install ruff mypy pydantic sqlalchemy types-PyYAML types-croniter pytest pre-commit",
+    "npm-deps": "cd web-ui && npm ci",
+    "pre-commit": "pre-commit install --install-hooks"
+  },
+  "postStartCommand": "git config --global --add safe.directory ${containerWorkspaceFolder}",
+  "remoteUser": "vscode",
+  "mounts": [
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.kube,target=/home/vscode/.kube,type=bind,consistency=cached"
+  ],
+  "forwardPorts": [3000, 5173, 8000, 8080, 5432, 6379, 4000],
+  "portsAttributes": {
+    "5173": {
+      "label": "Vite Dev Server (web-ui)"
+    },
+    "8000": {
+      "label": "API Gateway"
+    },
+    "8080": {
+      "label": "Operator / Health"
+    },
+    "4000": {
+      "label": "LiteLLM"
+    }
+  },
+  "runArgs": ["--network=host"]
+}

@@ -1,0 +1,320 @@
+# KubeSynth — Kind/Local Kubernetes Deployment Values
+# 
+# Usage:
+#   kind load docker-image kubesynth-api-gateway:latest
+#   kind load docker-image kubesynth-web-ui:latest
+#   kind load docker-image kubesynth-operator:latest
+#   kind load docker-image kubesynth-opencode-rt:latest
+#   helm upgrade --install kubesynth ./charts/kubesynth -n kubesynth --create-namespace -f deploy/values.kind.yaml
+
+global:
+  imagePullSecrets: []
+  clusterName: "kind-desktop"
+
+# ---------------------------------------------------------------------------
+# Images — using locally built images loaded into kind
+# ---------------------------------------------------------------------------
+operator:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: kubesynth-operator
+    tag: latest
+    pullPolicy: Never
+  workerImage:
+    repository: kubesynth-operator
+    tag: latest
+    pullPolicy: Never
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+  workerResources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+  stateDbEnabled: true
+
+apiGateway:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: kubesynth-api-gateway
+    tag: latest
+    pullPolicy: Never
+  ingress:
+    enabled: false
+  publicBaseUrl: ""
+  corsOrigins: ["*"]
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+  auth:
+    mode: shared_token
+    localAuthEnabled: true
+    registrationEnabled: true
+    bootstrapAdminNamespaces: ["default"]
+
+webUi:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: kubesynth-web-ui
+    tag: latest
+    pullPolicy: Never
+  service:
+    type: ClusterIP
+    port: 80
+  ingress:
+    enabled: false
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "64Mi"
+    limits:
+      cpu: "200m"
+      memory: "256Mi"
+
+opencodeRuntime:
+  image:
+    repository: kubesynth-opencode-rt
+    tag: latest
+    pullPolicy: Never
+  provider: litellm
+  limits:
+    maxPromptChars: 256000
+    maxSystemPromptChars: 64000
+    maxTeamContextChars: 32000
+    modelContextLimit: 256000
+    modelOutputLimit: 16384
+  autonomy:
+    sessionInitOnCreate: false
+    maxRetries: 3
+    maxTurns: 8
+    agentSteps: 128
+    compactionTokenThreshold: 0.70
+    planThresholdChars: 4096
+    structuredOutputRetryCount: 3
+
+# ---------------------------------------------------------------------------
+# Dependencies
+# ---------------------------------------------------------------------------
+postgresql:
+  enabled: true
+  image:
+    repository: postgres
+    tag: 16-alpine
+    pullPolicy: IfNotPresent
+  persistence:
+    size: 2Gi
+    storageClassName: ""
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "1Gi"
+
+redis:
+  enabled: true
+  image:
+    repository: redis
+    tag: 7-alpine
+    pullPolicy: IfNotPresent
+  persistence:
+    enabled: false
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "64Mi"
+    limits:
+      cpu: "200m"
+      memory: "256Mi"
+
+qdrant:
+  enabled: true
+  image:
+    repository: qdrant/qdrant
+    tag: v1.7.4
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "1Gi"
+
+nats:
+  enabled: true
+  image:
+    repository: nats
+    tag: 2.10-alpine
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "64Mi"
+    limits:
+      cpu: "200m"
+      memory: "256Mi"
+
+litellm:
+  enabled: true
+  image:
+    repository: litellm/litellm-database
+    tag: v1.82.3-stable
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+  config:
+    model_list:
+      # OpenAI models
+      - model_name: gpt-4
+        litellm_params:
+          model: openai/gpt-4
+          api_key: "os.environ/OPENAI_API_KEY"
+      - model_name: gpt-4o
+        litellm_params:
+          model: openai/gpt-4o
+          api_key: "os.environ/OPENAI_API_KEY"
+      - model_name: gpt-4o-mini
+        litellm_params:
+          model: openai/gpt-4o-mini
+          api_key: "os.environ/OPENAI_API_KEY"
+      - model_name: gpt-4.1
+        litellm_params:
+          model: openai/gpt-4.1
+          api_key: "os.environ/OPENAI_API_KEY"
+      - model_name: gpt-4.1-mini
+        litellm_params:
+          model: openai/gpt-4.1-mini
+          api_key: "os.environ/OPENAI_API_KEY"
+      - model_name: gpt-4.1-nano
+        litellm_params:
+          model: openai/gpt-4.1-nano
+          api_key: "os.environ/OPENAI_API_KEY"
+      - model_name: o3
+        litellm_params:
+          model: openai/o3
+          api_key: "os.environ/OPENAI_API_KEY"
+      - model_name: o3-mini
+        litellm_params:
+          model: openai/o3-mini
+          api_key: "os.environ/OPENAI_API_KEY"
+      - model_name: o4-mini
+        litellm_params:
+          model: openai/o4-mini
+          api_key: "os.environ/OPENAI_API_KEY"
+      # GitHub Copilot models (disabled — device auth blocks startup without valid token)
+      # Uncomment when a valid GITHUB_COPILOT_TOKEN is available:
+      # - model_name: github-copilot/gpt-4o
+      #   litellm_params:
+      #     model: github_copilot/gpt-4o
+      #     api_key: "os.environ/GITHUB_COPILOT_TOKEN"
+      # - model_name: github-copilot/gpt-4.1
+      #   litellm_params:
+      #     model: github_copilot/gpt-4.1
+      #     api_key: "os.environ/GITHUB_COPILOT_TOKEN"
+      # - model_name: github-copilot/claude-sonnet-4
+      #   litellm_params:
+      #     model: github_copilot/claude-sonnet-4
+      #     api_key: "os.environ/GITHUB_COPILOT_TOKEN"
+      # - model_name: github-copilot/claude-opus-4
+      #   litellm_params:
+      #     model: github_copilot/claude-opus-4
+      #     api_key: "os.environ/GITHUB_COPILOT_TOKEN"
+      # - model_name: github-copilot/o4-mini
+      #   litellm_params:
+      #     model: github_copilot/o4-mini
+      #     api_key: "os.environ/GITHUB_COPILOT_TOKEN"
+      # Anthropic models
+      - model_name: claude-sonnet-4
+        litellm_params:
+          model: anthropic/claude-sonnet-4-20250514
+          api_key: "os.environ/ANTHROPIC_API_KEY"
+      - model_name: claude-opus-4
+        litellm_params:
+          model: anthropic/claude-opus-4-20250514
+          api_key: "os.environ/ANTHROPIC_API_KEY"
+      - model_name: claude-3.5-sonnet
+        litellm_params:
+          model: anthropic/claude-3-5-sonnet-20241022
+          api_key: "os.environ/ANTHROPIC_API_KEY"
+      # OpenRouter models
+      - model_name: openrouter-gpt-4o-mini
+        litellm_params:
+          model: openrouter/openai/gpt-4o-mini
+          api_key: "os.environ/OPENROUTER_API_KEY"
+    general_settings:
+      master_key: "os.environ/LITELLM_MASTER_KEY"
+      database_url: "os.environ/DATABASE_URL"
+  resources:
+    requests:
+      cpu: "200m"
+      memory: "768Mi"
+    limits:
+      cpu: "2"
+      memory: "3Gi"
+
+# ---------------------------------------------------------------------------
+# Security & Secrets (DEV VALUES — CHANGE IN PRODUCTION)
+# ---------------------------------------------------------------------------
+platformSecrets:
+  mode: native
+  native:
+    openaiApiKey: ""
+    openrouterApiKey: ""
+    anthropicApiKey: ""
+    litellmMasterKey: "dev-litellm-master-key"
+    apiGatewaySharedToken: "dev-shared-token-change-in-production"
+    databasePassword: "kubesynth-dev-password"
+    jwtSecret: "dev-jwt-secret-change-in-production-min-32-chars-long"
+    authBootstrapAdminPassword: "admin123"
+    ldapBindPassword: ""
+    oidcProvidersJson: "[]"
+    samlProvidersJson: "[]"
+
+# ---------------------------------------------------------------------------
+# Production Hardening (Relaxed for local dev)
+# ---------------------------------------------------------------------------
+podDisruptionBudget:
+  enabled: false
+
+networkPolicy:
+  enabled: false
+
+trustBundle:
+  enabled: false
+
+autoscaling:
+  enabled: false
+
+# ---------------------------------------------------------------------------
+# Collector
+# ---------------------------------------------------------------------------
+collector:
+  enabled: false
+
+# ---------------------------------------------------------------------------
+# MCP Hub
+# ---------------------------------------------------------------------------
+mcpHub:
+  enabled: true
+  namespace: kubesynth-mcp-hub
+
+# ---------------------------------------------------------------------------
+# Telemetry
+# ---------------------------------------------------------------------------
+telemetry:
+  otlpEndpoint: ""

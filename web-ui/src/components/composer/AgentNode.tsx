@@ -189,6 +189,10 @@ function LatencyBadge({ ms }: { ms?: number | null }) {
   );
 }
 
+/* ── Static styles ── */
+
+const RUNNING_PULSE_STYLE: React.CSSProperties = { animation: "node-pulse-ring 2s ease-out infinite" };
+
 /* ── Main node component ── */
 
 export function AgentNode({ data, selected }: NodeProps<AgentStepNode>) {
@@ -215,7 +219,7 @@ export function AgentNode({ data, selected }: NodeProps<AgentStepNode>) {
       {isRunning && (
         <div
           className="absolute inset-0 rounded-xl border-2 border-amber-500/30 pointer-events-none"
-          style={{ animation: "node-pulse-ring 2s ease-out infinite" }}
+          style={RUNNING_PULSE_STYLE}
         />
       )}
 

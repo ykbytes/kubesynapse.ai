@@ -56,6 +56,12 @@ spec:
         - name: postgresql
           image: "{{ .Values.postgresql.image.repository }}:{{ .Values.postgresql.image.tag }}"
           imagePullPolicy: {{ .Values.postgresql.image.pullPolicy | default "IfNotPresent" }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
           ports:
             - containerPort: {{ .Values.postgresql.service.port | default 5432 }}
               name: postgres
@@ -80,6 +86,16 @@ spec:
               mountPath: /docker-entrypoint-initdb.d
           resources:
 {{ toYaml .Values.postgresql.resources | indent 12 }}
+          startupProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" -h 127.0.0.1 -p {{ .Values.postgresql.service.port | default 5432 }}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 18
           readinessProbe:
             exec:
               command:
@@ -88,6 +104,8 @@ spec:
                 - pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" -h 127.0.0.1 -p {{ .Values.postgresql.service.port | default 5432 }}
             initialDelaySeconds: 10
             periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
           livenessProbe:
             exec:
               command:
@@ -96,6 +114,8 @@ spec:
                 - pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" -h 127.0.0.1 -p {{ .Values.postgresql.service.port | default 5432 }}
             initialDelaySeconds: 20
             periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
       volumes:
         - name: tmp
           emptyDir:

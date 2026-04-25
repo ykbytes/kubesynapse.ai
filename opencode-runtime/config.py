@@ -182,6 +182,30 @@ MEMORY_MAX_THREAD_ENTRIES = max(_safe_int("OPENCODE_MEMORY_MAX_THREAD_ENTRIES", 
 MEMORY_MAX_WORKSPACE_ENTRIES = max(_safe_int("OPENCODE_MEMORY_MAX_WORKSPACE_ENTRIES", 50), 5)
 MEMORY_DIR = Path(os.getenv("OPENCODE_MEMORY_DIR", f"{XDG_DATA_HOME}/opencode-runtime/memory").strip())
 
+# Multi-tier memory configuration (inspired by Hermes Agent)
+MEMORY_DEFAULT_RETENTION = os.getenv("OPENCODE_MEMORY_DEFAULT_RETENTION", "session").strip().lower()
+MEMORY_CONTEXT_FENCING_ENABLED = os.getenv("OPENCODE_MEMORY_CONTEXT_FENCING", "true").strip().lower() in {
+    "1", "true", "yes", "on"
+}
+MEMORY_CONTEXT_MAX_TOKENS = max(_safe_int("OPENCODE_MEMORY_CONTEXT_MAX_TOKENS", 2048), 256)
+MEMORY_PRUNE_INTERVAL_HOURS = max(_safe_int("OPENCODE_MEMORY_PRUNE_INTERVAL_HOURS", 24), 1)
+MEMORY_ENTITY_EXTRACTION_ENABLED = os.getenv("OPENCODE_MEMORY_ENTITY_EXTRACTION", "true").strip().lower() in {
+    "1", "true", "yes", "on"
+}
+
+# Semantic memory (Qdrant vector DB) — optional
+MEMORY_SEMANTIC_ENABLED = os.getenv("OPENCODE_MEMORY_SEMANTIC_ENABLED", "false").strip().lower() in {
+    "1", "true", "yes", "on"
+}
+MEMORY_QDRANT_URL = os.getenv("OPENCODE_MEMORY_QDRANT_URL", "http://localhost:6333").strip()
+MEMORY_QDRANT_COLLECTION = os.getenv("OPENCODE_MEMORY_QDRANT_COLLECTION", "kubesynth_memory").strip()
+MEMORY_QDRANT_DIMENSION = max(_safe_int("OPENCODE_MEMORY_QDRANT_DIMENSION", 768), 64)
+MEMORY_QDRANT_TIMEOUT = max(_safe_float("OPENCODE_MEMORY_QDRANT_TIMEOUT", 5.0), 1.0)
+
+# Memory relevance scoring
+MEMORY_RELEVANCE_DECAY_HOURS = max(_safe_float("OPENCODE_MEMORY_RELEVANCE_DECAY_HOURS", 168.0), 1.0)  # 7 days
+MEMORY_MIN_RELEVANCE_SCORE = max(_safe_float("OPENCODE_MEMORY_MIN_RELEVANCE_SCORE", 0.3), 0.0)
+
 # ---------------------------------------------------------------------------
 # Workspace awareness
 # ---------------------------------------------------------------------------
@@ -257,7 +281,7 @@ A2A_ALLOWED_TARGETS_ENV = "A2A_ALLOWED_TARGETS_JSON"
 A2A_REQUIRE_HITL_ENV = "A2A_REQUIRE_HITL"
 A2A_MAX_TIMEOUT_SECONDS_ENV = "A2A_MAX_TIMEOUT_SECONDS"
 API_GATEWAY_INTERNAL_URL_ENV = "API_GATEWAY_INTERNAL_URL"
-API_GATEWAY_SHARED_TOKEN_ENV = "API_GATEWAY_SHARED_TOKEN"
+API_GATEWAY_SHARED_TOKEN_ENV = "API_GATEWAY_SHARED_TOKEN"  # noqa: S105 — env var name constant, not a secret value
 AGENT_SKILL_FILES_ENV = "AGENT_SKILL_FILES_JSON"
 OPENCODE_RUNTIME_CONFIG_FILES_ENV = "OPENCODE_RUNTIME_CONFIG_FILES_JSON"
 OPENCODE_MCP_CONNECTIONS_ENV = "OPENCODE_MCP_CONNECTIONS_JSON"

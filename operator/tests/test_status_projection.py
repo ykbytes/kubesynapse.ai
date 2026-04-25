@@ -6,7 +6,6 @@ import uuid
 from pathlib import Path
 from unittest.mock import MagicMock
 
-
 MODULE_PATH = Path(__file__).resolve().parents[1] / "controllers" / "status_projection.py"
 STUB_MODULE_NAMES = ["kopf", "services", "state_store"]
 

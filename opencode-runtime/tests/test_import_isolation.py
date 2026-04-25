@@ -5,7 +5,6 @@ import unittest
 import uuid
 from pathlib import Path
 
-
 MODULE_PATH = Path(__file__).resolve().parents[1] / "main.py"
 LOCAL_CONFIG_PATH = MODULE_PATH.parent / "config.py"
 

@@ -2,31 +2,27 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import os
+import time
 import uuid
 from typing import Any
 
 import httpx
-from fastapi import HTTPException
-
+import supervisor as _supervisor_mod
 from config import (
     DEFAULT_MODEL,
     DEFAULT_PROVIDER,
     HTTP_TIMEOUT_SECONDS,
-    OPENCODE_WORKDIR,
     SERVICE_NAME,
     SESSION_IDLE_MAX_POLL_SECONDS,
     SESSION_IDLE_POLL_SECONDS,
     SESSION_IDLE_TIMEOUT_SECONDS,
     server_base_url,
 )
+from fastapi import HTTPException
 from session import SESSION_REGISTRY
-import supervisor as _supervisor_mod
 from supervisor import _runtime_lock, is_shutting_down
-
-import time
 
 logger = logging.getLogger("opencode-runtime")
 

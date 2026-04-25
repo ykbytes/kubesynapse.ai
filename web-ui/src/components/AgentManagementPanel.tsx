@@ -960,10 +960,10 @@ export function AgentManagementPanel({
                 </CardHeader>
                 <CardContent className="space-y-4">
                   {catalogError ? (
-                    <div className="rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">{catalogError}</div>
+                    <div className="rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive" role="alert">{catalogError}</div>
                   ) : null}
                   {sidecarState.error ? (
-                    <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+                    <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300" role="alert">
                       The legacy raw sidecar JSON is invalid. Fix it below before saving legacy overrides.
                     </div>
                   ) : null}
@@ -971,22 +971,24 @@ export function AgentManagementPanel({
                     MCP connections are now the standard attachment path for this agent. Remote, hub, and sidecar transports all bind here, and sidecar connections deploy their containers automatically when the agent reconciles.
                   </div>
 
-                  <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                    <div className="rounded-2xl border border-primary/20 bg-primary/5 p-3">
-                      <p className="text-[10px] uppercase tracking-[0.16em] text-primary/70">Selected</p>
-                      <p className="mt-1 text-xl font-semibold text-foreground">{selectedConnections.length}</p>
-                    </div>
-                    <div className="rounded-2xl border border-sky-500/20 bg-sky-500/5 p-3">
-                      <p className="text-[10px] uppercase tracking-[0.16em] text-sky-400/70">Remote</p>
-                      <p className="mt-1 text-xl font-semibold text-foreground">{selectedConnectionStats.remote}</p>
-                    </div>
-                    <div className="rounded-2xl border border-violet-500/20 bg-violet-500/5 p-3">
-                      <p className="text-[10px] uppercase tracking-[0.16em] text-violet-400/70">Hub</p>
-                      <p className="mt-1 text-xl font-semibold text-foreground">{selectedConnectionStats.hub}</p>
-                    </div>
-                    <div className="rounded-2xl border border-amber-500/20 bg-amber-500/5 p-3">
-                      <p className="text-[10px] uppercase tracking-[0.16em] text-amber-400/70">Sidecar</p>
-                      <p className="mt-1 text-xl font-semibold text-foreground">{selectedConnectionStats.sidecar}</p>
+                  <div className="overflow-x-auto">
+                    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4 min-w-[480px]">
+                      <div className="rounded-2xl border border-primary/20 bg-primary/5 p-3">
+                        <p className="text-[10px] uppercase tracking-[0.16em] text-primary/70">Selected</p>
+                        <p className="mt-1 text-xl font-semibold text-foreground">{selectedConnections.length}</p>
+                      </div>
+                      <div className="rounded-2xl border border-sky-500/20 bg-sky-500/5 p-3">
+                        <p className="text-[10px] uppercase tracking-[0.16em] text-sky-400/70">Remote</p>
+                        <p className="mt-1 text-xl font-semibold text-foreground">{selectedConnectionStats.remote}</p>
+                      </div>
+                      <div className="rounded-2xl border border-violet-500/20 bg-violet-500/5 p-3">
+                        <p className="text-[10px] uppercase tracking-[0.16em] text-violet-400/70">Hub</p>
+                        <p className="mt-1 text-xl font-semibold text-foreground">{selectedConnectionStats.hub}</p>
+                      </div>
+                      <div className="rounded-2xl border border-amber-500/20 bg-amber-500/5 p-3">
+                        <p className="text-[10px] uppercase tracking-[0.16em] text-amber-400/70">Sidecar</p>
+                        <p className="mt-1 text-xl font-semibold text-foreground">{selectedConnectionStats.sidecar}</p>
+                      </div>
                     </div>
                   </div>
 
@@ -1199,10 +1201,10 @@ export function AgentManagementPanel({
                       </div>
                     </div>
                     <div className="flex items-center gap-1">
-                      <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => void handleAutoSelectSkills()} disabled={catalogLoading || !token.trim()} title="Auto-attach all skills">
+                      <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => void handleAutoSelectSkills()} disabled={catalogLoading || !token.trim()} title="Auto-attach all skills" aria-label="Auto-attach all skills">
                         <Wand2 className="h-3.5 w-3.5" />
                       </Button>
-                      <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => void handleRefreshCatalog()} disabled={catalogLoading || !token.trim()} title="Refresh catalog">
+                      <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => void handleRefreshCatalog()} disabled={catalogLoading || !token.trim()} title="Refresh catalog" aria-label="Refresh catalog">
                         <RefreshCw className={`h-3.5 w-3.5 ${catalogLoading ? "animate-spin" : ""}`} />
                       </Button>
                     </div>
@@ -1465,7 +1467,7 @@ export function AgentManagementPanel({
               <CardContent className="space-y-4">
                 {/* Existing schedules */}
                 {intelSchedules.filter((s) => s.agent_name === agent.name).length > 0 ? (
-                  <div className="space-y-2">
+                  <div className="space-y-2 overflow-x-auto">
                     {intelSchedules.filter((s) => s.agent_name === agent.name).map((sched) => (
                       <div key={sched.id} className="flex items-center justify-between rounded-xl border border-border/60 bg-background/70 px-3 py-2">
                         <div className="min-w-0 flex-1">
@@ -1479,7 +1481,7 @@ export function AgentManagementPanel({
                             {sched.next_run && <span className="ml-2">Next: {new Date(sched.next_run).toLocaleString()}</span>}
                           </p>
                         </div>
-                        <Button size="icon" variant="ghost" className="h-7 w-7 shrink-0" onClick={() => void handleDeleteSchedule(sched.id)}>
+                        <Button size="icon" variant="ghost" className="h-7 w-7 shrink-0" onClick={() => void handleDeleteSchedule(sched.id)} aria-label="Delete schedule">
                           <X className="h-3.5 w-3.5" />
                         </Button>
                       </div>
@@ -1553,7 +1555,7 @@ export function AgentManagementPanel({
               <CardContent className="space-y-4">
                 {/* Existing alerts */}
                 {intelAlerts.length > 0 ? (
-                  <div className="space-y-2">
+                  <div className="space-y-2 overflow-x-auto">
                     {intelAlerts.map((al) => (
                       <div key={al.id} className="flex items-center justify-between rounded-xl border border-border/60 bg-background/70 px-3 py-2">
                         <div className="min-w-0 flex-1">
@@ -1567,7 +1569,7 @@ export function AgentManagementPanel({
                             {al.trigger_count > 0 && <span className="ml-2">Fired {al.trigger_count}x</span>}
                           </p>
                         </div>
-                        <Button size="icon" variant="ghost" className="h-7 w-7 shrink-0" onClick={() => void handleDeleteAlert(al.id)}>
+                        <Button size="icon" variant="ghost" className="h-7 w-7 shrink-0" onClick={() => void handleDeleteAlert(al.id)} aria-label="Delete alert">
                           <X className="h-3.5 w-3.5" />
                         </Button>
                       </div>

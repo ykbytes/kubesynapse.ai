@@ -136,14 +136,12 @@ spec:
 {{- with $server.env }}
 {{ toYaml . | indent 12 }}
 {{- end }}
-{{- with $server.livenessProbe }}
+{{- $defaultLiveness := dict "httpGet" (dict "path" "/healthz" "port" ($server.port | default 8000)) "initialDelaySeconds" 10 "periodSeconds" 15 "timeoutSeconds" 5 "failureThreshold" 3 }}
+{{- $defaultReadiness := dict "httpGet" (dict "path" "/healthz" "port" ($server.port | default 8000)) "initialDelaySeconds" 5 "periodSeconds" 10 "timeoutSeconds" 5 "failureThreshold" 3 }}
           livenessProbe:
-{{ toYaml . | indent 12 }}
-{{- end }}
-{{- with $server.readinessProbe }}
+{{ ( $server.livenessProbe | default $defaultLiveness ) | toYaml | indent 12 }}
           readinessProbe:
-{{ toYaml . | indent 12 }}
-{{- end }}
+{{ ( $server.readinessProbe | default $defaultReadiness ) | toYaml | indent 12 }}
           volumeMounts:
             # /tmp is the only writable surface; root FS is read-only
             - name: tmp

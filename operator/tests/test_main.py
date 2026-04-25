@@ -73,13 +73,19 @@ sys.modules.setdefault("kubernetes.client", client_module)
 sys.modules.setdefault("kubernetes.config", config_module)
 sys.modules.setdefault("kubernetes.client.rest", rest_module)
 
-import main as operator_main  # noqa: E402
+# Ensure local references point to the actual installed mocks so that
+# isinstance() checks and exception class comparisons work across the
+# test file and the implementation modules.
+kopf_module = sys.modules["kopf"]
+rest_module = sys.modules["kubernetes.client.rest"]
+
 import builders.manifests as _builders_manifests  # noqa: E402
-import controllers.agent_controller as _agent_ctrl  # noqa: E402
 import config as _config  # noqa: E402
+import controllers.agent_controller as _agent_ctrl  # noqa: E402
+import controllers.tenant_controller as _tenant_ctrl  # noqa: E402
+import main as operator_main  # noqa: E402
 import reconcile as _reconcile  # noqa: E402
 import services.k8s as _services_k8s  # noqa: E402
-import controllers.tenant_controller as _tenant_ctrl  # noqa: E402
 
 
 def _api_exception(status: int) -> Exception:
@@ -116,7 +122,7 @@ class OperatorManifestTests(unittest.TestCase):
     def test_create_tenant_rejects_operator_namespace(self) -> None:
         logger = Mock()
 
-        with patch.object(_tenant_ctrl, "OPERATOR_NAMESPACE", "ai-platform"):
+        with patch.object(_tenant_ctrl, "OPERATOR_NAMESPACE", "ai-platform"):  # noqa: SIM117 — nested with for clarity
             with self.assertRaises(kopf_module.PermanentError):
                 _tenant_ctrl.create_tenant(
                     {"tenantName": "team-a", "namespace": "ai-platform"},
@@ -378,7 +384,7 @@ class OperatorManifestTests(unittest.TestCase):
             volumes,
         )
 
-    def test_statefulset_manifest_includes_skill_files_env(self) -> None:
+    def test_statefulset_manifest_includes_skill_files_env_detailed(self) -> None:
         manifest = _builders_manifests.create_agent_statefulset_manifest(
             "workspace-assistant",
             "default",
@@ -499,7 +505,7 @@ class OperatorManifestTests(unittest.TestCase):
             )
 
     def test_statefulset_manifest_rejects_invalid_auto_injected_sidecar_image(self) -> None:
-        with patch.dict(_builders_manifests.MCP_SIDECAR_CATALOG, {"browser": {"port": 8081}}, clear=True):
+        with patch.dict(_builders_manifests.MCP_SIDECAR_CATALOG, {"browser": {"port": 8081}}, clear=True):  # noqa: SIM117 — nested with for clarity
             with self.assertRaises(operator_main.kopf.PermanentError):
                 _builders_manifests.create_agent_statefulset_manifest(
                     "workspace-assistant",
@@ -1167,7 +1173,7 @@ class AllowedNamespacesTests(unittest.TestCase):
             "spec": {"allowedModels": ["gpt-4"]},
         }
 
-        with patch.object(_agent_ctrl.kubernetes.client, "CustomObjectsApi", return_value=custom_api, create=True):
+        with patch.object(_agent_ctrl.kubernetes.client, "CustomObjectsApi", return_value=custom_api, create=True):  # noqa: SIM117 — nested with for clarity
             with self.assertRaises(kopf_module.PermanentError):
                 _agent_ctrl.resolve_agent_policy("team-a", "shared-policies/shared-policy")
 
@@ -1243,10 +1249,9 @@ class AllowedNamespacesTests(unittest.TestCase):
                 "CoreV1Api",
                 return_value=core_api,
                 create=True,
-            ),
+            ),self.assertRaises(operator_main.kopf.PermanentError)
         ):
-            with self.assertRaises(operator_main.kopf.PermanentError):
-                _services_k8s.ensure_statefulset("default", desired_manifest)
+            _services_k8s.ensure_statefulset("default", desired_manifest)
 
         apps_api.patch_namespaced_stateful_set.assert_called_once()
         core_api.patch_namespaced_persistent_volume_claim.assert_called_once()
@@ -1299,10 +1304,9 @@ class AllowedNamespacesTests(unittest.TestCase):
                 "CoreV1Api",
                 return_value=core_api,
                 create=True,
-            ),
+            ),self.assertRaises(operator_main.kopf.TemporaryError)
         ):
-            with self.assertRaises(operator_main.kopf.TemporaryError):
-                _services_k8s.ensure_statefulset("default", desired_manifest)
+            _services_k8s.ensure_statefulset("default", desired_manifest)
 
         apps_api.patch_namespaced_stateful_set.assert_called_once()
         core_api.patch_namespaced_persistent_volume_claim.assert_not_called()

@@ -1,0 +1,16 @@
+{
+  "sidecarName": "documents",
+  "version": "1.0.0",
+  "allowedTools": ["read_pdf", "read_xlsx", "read_docx", "create_pdf"],
+  "networkEgress": {
+    "domains": [],
+    "ips": [],
+    "ports": []
+  },
+  "resourceLimits": {
+    "cpuRequest": "50m",
+    "cpuLimit": "500m",
+    "memoryRequest": "64Mi",
+    "memoryLimit": "256Mi"
+  }
+}

@@ -74,7 +74,7 @@ function statusTone(configured: boolean | null): string {
 }
 
 const PANEL_CARD_CLASS = "border-border/70 bg-background/75 shadow-sm backdrop-blur-sm";
-const METRIC_CARD_CLASS = "rounded-[1.15rem] border px-3 py-3 shadow-sm backdrop-blur-sm";
+const METRIC_CARD_CLASS = "rounded-[1.15rem] border px-2.5 py-1.5 shadow-sm backdrop-blur-sm";
 
 export function SettingsPanel({ token, canManageProviders }: SettingsPanelProps) {
   const [providers, setProviders] = useState<LLMProvider[]>([]);
@@ -182,11 +182,11 @@ export function SettingsPanel({ token, canManageProviders }: SettingsPanelProps)
     return keyVisibleByProvider[providerKey] ?? false;
   }
 
-  function toggleKeyVisible(providerKey: string) {
+  const handleToggleKeyVisible = useCallback((providerKey: string) => {
     setKeyVisibleByProvider((prev) => ({ ...prev, [providerKey]: !(prev[providerKey] ?? false) }));
-  }
+  }, []);
 
-  async function handleSaveKey(keyName: string) {
+  const handleSaveKey = useCallback(async (keyName: string) => {
     const draft = getKeyDraft(keyName).trim();
     if (!draft) return;
     setSavingKeyProvider(keyName);
@@ -202,9 +202,9 @@ export function SettingsPanel({ token, canManageProviders }: SettingsPanelProps)
     } finally {
       setSavingKeyProvider(null);
     }
-  }
+  }, [token, providers, refresh]);
 
-  async function handleDeleteModel(modelId: string, modelName: string) {
+  const handleDeleteModel = useCallback(async (modelId: string, modelName: string) => {
     try {
       await deleteLLMModel(token, modelId);
       toast.success(`Model "${modelName}" removed`);
@@ -212,7 +212,7 @@ export function SettingsPanel({ token, canManageProviders }: SettingsPanelProps)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to remove model");
     }
-  }
+  }, [token, refresh]);
 
   // ── Copilot device flow ──
 
@@ -263,12 +263,15 @@ export function SettingsPanel({ token, canManageProviders }: SettingsPanelProps)
     }
   }
 
-  function openAddDialog(providerKeyName: string) {
+  const handleOpenAddDialog = useCallback((providerKeyName: string) => {
     setAddDialogProvider(providerKeyName);
     setModelSearch("");
     setSelectedModelId("");
     setSuggestions([]);
-  }
+  }, []);
+
+  const handleSelectProvider = useCallback((keyName: string) => setSelectedProviderKey(keyName), []);
+  const handleSuggestionClick = useCallback((modelId: string) => { setSelectedModelId(modelId); setModelSearch(""); }, []);
 
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
@@ -324,11 +327,11 @@ export function SettingsPanel({ token, canManageProviders }: SettingsPanelProps)
 
   return (
     <ScrollArea className="flex-1">
-      <div className="mx-auto w-full max-w-[84rem] space-y-6 p-6">
-        <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="mx-auto w-full max-w-[84rem] space-y-2 p-2.5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
-            <h1 className="text-2xl font-semibold tracking-tight">LLM Providers</h1>
-            <p className="mt-1 text-sm text-muted-foreground">
+            <h1 className="text-base font-semibold tracking-tight">LLM Providers</h1>
+            <p className="text-sm text-muted-foreground">
               Configure API keys, browse models, and manage which models are available to agents.
             </p>
           </div>
@@ -339,18 +342,18 @@ export function SettingsPanel({ token, canManageProviders }: SettingsPanelProps)
         </div>
 
         <Card className="overflow-hidden border-border/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.04),rgba(255,255,255,0.01))] shadow-[0_24px_80px_-48px_rgba(0,0,0,0.65)]">
-          <CardHeader className="pb-3">
+          <CardHeader className="px-4 py-3 pb-2">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Server className="h-4 w-4 text-muted-foreground" />
-                <CardTitle className="text-base">LiteLLM Proxy</CardTitle>
+                <CardTitle className="text-sm font-semibold">LiteLLM Proxy</CardTitle>
               </div>
-              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => void refreshHealth()} disabled={healthLoading}>
+              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => void refreshHealth()} disabled={healthLoading} aria-label="Refresh health">
                 <RefreshCw className={`h-3.5 w-3.5 ${healthLoading ? "animate-spin" : ""}`} />
               </Button>
             </div>
           </CardHeader>
-          <CardContent>
+          <CardContent className="px-4 py-2.5">
             <div className="flex flex-wrap items-center gap-2">
               {healthLoading ? (
                 <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
@@ -366,46 +369,50 @@ export function SettingsPanel({ token, canManageProviders }: SettingsPanelProps)
           </CardContent>
         </Card>
 
-        <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-4">
+        <div className="grid gap-2 md:grid-cols-3 xl:grid-cols-4">
           <div className={`${METRIC_CARD_CLASS} border-primary/20 bg-primary/5`}>
-            <p className="text-[10px] uppercase tracking-[0.16em] text-primary/75">Configured keys</p>
-            <p className="mt-1 text-xl font-semibold text-foreground">{configuredCount}</p>
-            <p className="mt-1 text-xs text-muted-foreground">Providers ready to serve traffic.</p>
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-[10px] uppercase tracking-[0.16em] text-primary/75">Configured keys</p>
+              <p className="text-lg font-semibold text-foreground">{configuredCount}</p>
+            </div>
           </div>
           <div className={`${METRIC_CARD_CLASS} border-sky-500/20 bg-sky-500/5`}>
-            <p className="text-[10px] uppercase tracking-[0.16em] text-sky-300/80">Providers</p>
-            <p className="mt-1 text-xl font-semibold text-foreground">{providers.length}</p>
-            <p className="mt-1 text-xs text-muted-foreground">Catalogued gateways and vendor routes.</p>
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-[10px] uppercase tracking-[0.16em] text-sky-300/80">Providers</p>
+              <p className="text-lg font-semibold text-foreground">{providers.length}</p>
+            </div>
           </div>
           <div className={`${METRIC_CARD_CLASS} border-violet-500/20 bg-violet-500/5`}>
-            <p className="text-[10px] uppercase tracking-[0.16em] text-violet-300/80">Enabled models</p>
-            <p className="mt-1 text-xl font-semibold text-foreground">{totalModels}</p>
-            <p className="mt-1 text-xs text-muted-foreground">Active model IDs visible to agent authors.</p>
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-[10px] uppercase tracking-[0.16em] text-violet-300/80">Enabled models</p>
+              <p className="text-lg font-semibold text-foreground">{totalModels}</p>
+            </div>
           </div>
           <div className={`${METRIC_CARD_CLASS} border-emerald-500/20 bg-emerald-500/5`}>
-            <p className="text-[10px] uppercase tracking-[0.16em] text-emerald-300/80">Proxy health</p>
-            <p className="mt-1 text-xl font-semibold text-foreground capitalize">{health?.status ?? "unknown"}</p>
-            <p className="mt-1 text-xs text-muted-foreground">LiteLLM control plane status for provider routing.</p>
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-[10px] uppercase tracking-[0.16em] text-emerald-300/80">Proxy health</p>
+              <p className="text-lg font-semibold text-foreground capitalize">{health?.status ?? "unknown"}</p>
+            </div>
           </div>
         </div>
 
         {loading ? (
-          <div className="grid gap-4 lg:grid-cols-[340px_1fr]">
+          <div className="grid gap-2 lg:grid-cols-[260px_1fr]">
             <Card className={`h-[540px] ${PANEL_CARD_CLASS}`}>
-              <CardHeader className="pb-2">
+              <CardHeader className="px-4 py-3 pb-2">
                 <Skeleton className="h-8 w-full rounded" />
               </CardHeader>
-              <CardContent className="space-y-2">
+              <CardContent className="space-y-2 px-4 py-3">
                 {Array.from({ length: 6 }).map((_, i) => (
                   <Skeleton key={i} className="h-14 w-full rounded" />
                 ))}
               </CardContent>
             </Card>
             <Card className={`h-[540px] ${PANEL_CARD_CLASS}`}>
-              <CardHeader className="pb-2">
+              <CardHeader className="px-4 py-3 pb-2">
                 <Skeleton className="h-6 w-52 rounded" />
               </CardHeader>
-              <CardContent className="space-y-3">
+              <CardContent className="space-y-2 px-4 py-3">
                 <Skeleton className="h-9 w-full rounded" />
                 <Skeleton className="h-10 w-32 rounded" />
                 <Skeleton className="h-4 w-24 rounded" />
@@ -417,16 +424,16 @@ export function SettingsPanel({ token, canManageProviders }: SettingsPanelProps)
           </div>
         ) : providers.length === 0 ? (
           <Card className={PANEL_CARD_CLASS}>
-            <CardContent className="flex flex-col items-center gap-2 py-12">
+            <CardContent className="flex flex-col items-center gap-2 px-4 py-8">
               <Server className="h-8 w-8 text-muted-foreground/40" />
               <p className="text-sm text-muted-foreground">No providers found</p>
             </CardContent>
           </Card>
         ) : (
-          <div className="grid gap-4 lg:grid-cols-[340px_1fr]">
-            <Card className={`h-[540px] flex flex-col ${PANEL_CARD_CLASS}`}>
-              <CardHeader className="pb-3">
-                <CardTitle className="text-base">Providers</CardTitle>
+          <div className="grid gap-2 lg:grid-cols-[260px_1fr]">
+             <Card className={`h-[540px] flex flex-col ${PANEL_CARD_CLASS}`}>
+              <CardHeader className="px-4 py-3 pb-2">
+                <CardTitle className="text-sm font-semibold">Providers</CardTitle>
                 <div className="relative mt-1">
                   <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
                   <Input
@@ -437,11 +444,11 @@ export function SettingsPanel({ token, canManageProviders }: SettingsPanelProps)
                   />
                 </div>
               </CardHeader>
-              <CardContent className="min-h-0 flex-1 pt-0">
+              <CardContent className="min-h-0 flex-1 px-4 pt-0">
                 <ScrollArea className="h-full pr-2">
-                  <div className="space-y-2">
+                  <div className="space-y-1.5">
                     {filteredProviders.length === 0 ? (
-                      <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
+                      <div className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">
                         No providers match "{providerFilter}".
                       </div>
                     ) : (
@@ -451,8 +458,8 @@ export function SettingsPanel({ token, canManageProviders }: SettingsPanelProps)
                           <button
                             key={prov.key_name}
                             type="button"
-                            onClick={() => setSelectedProviderKey(prov.key_name)}
-                            className={`w-full rounded-[1rem] border px-3 py-3 text-left transition-all duration-200 ${
+                            onClick={() => handleSelectProvider(prov.key_name)}
+                            className={`w-full rounded-[1rem] border px-2.5 py-2 text-left transition-all duration-200 ${
                               isSelected
                                 ? "border-primary/35 bg-primary/10 shadow-sm shadow-primary/10"
                                 : "border-border/70 bg-background/70 hover:-translate-y-px hover:border-primary/20 hover:bg-primary/5"
@@ -470,7 +477,7 @@ export function SettingsPanel({ token, canManageProviders }: SettingsPanelProps)
                                 {prov.is_configured === null ? "Unknown" : prov.is_configured ? "Key set" : "No key"}
                               </Badge>
                             </div>
-                            <div className="mt-1 flex items-center gap-2">
+                            <div className="mt-0.5 flex items-center gap-2">
                               <Badge variant="secondary" className="text-[10px]">
                                 {prov.model_count} model{prov.model_count !== 1 ? "s" : ""}
                               </Badge>
@@ -489,23 +496,23 @@ export function SettingsPanel({ token, canManageProviders }: SettingsPanelProps)
 
             <Card className={`min-h-[540px] ${PANEL_CARD_CLASS}`}>
               {!selectedProvider ? (
-                <CardContent className="flex h-full min-h-[540px] flex-col items-center justify-center gap-2 text-center">
+                <CardContent className="flex h-full min-h-[540px] flex-col items-center justify-center gap-2 px-4 py-4 text-center">
                   <Info className="h-8 w-8 text-muted-foreground/40" />
                   <p className="text-sm text-muted-foreground">Select a provider to manage keys and models.</p>
                 </CardContent>
               ) : (
                 <>
-                  <CardHeader className="pb-3">
-                    <div className="flex flex-wrap items-start justify-between gap-2">
+                  <CardHeader className="px-4 py-3 pb-2">
+                    <div className="flex flex-wrap items-start justify-between gap-1.5">
                       <div>
-                        <CardTitle className="text-lg">{selectedProvider.label}</CardTitle>
+                        <CardTitle className="text-sm font-semibold">{selectedProvider.label}</CardTitle>
                         <p className="text-xs text-muted-foreground">{selectedProvider.key_name}</p>
-                        <div className="mt-2 flex flex-wrap gap-2">
+                        <div className="mt-1 flex flex-wrap gap-1.5">
                           <Badge variant="outline" className="text-[10px] uppercase tracking-[0.14em]">{selectedProvider.models.length} enabled</Badge>
                           <Badge variant="outline" className="text-[10px] uppercase tracking-[0.14em]">{selectedProvider.is_configured ? "Key installed" : "Awaiting secret"}</Badge>
                         </div>
                       </div>
-                      <div className="flex flex-wrap items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-1.5">
                         <Badge
                           variant={selectedProvider.is_configured ? "default" : "outline"}
                           className={`text-[10px] ${statusTone(selectedProvider.is_configured)}`}
@@ -518,12 +525,12 @@ export function SettingsPanel({ token, canManageProviders }: SettingsPanelProps)
                       </div>
                     </div>
                   </CardHeader>
-                  <CardContent className="space-y-5">
+                  <CardContent className="space-y-3 px-4 py-3">
                     {canManageProviders && selectedProvider.key_name === "GITHUB_COPILOT_TOKEN" ? (
-                      <div className="space-y-3">
+                      <div className="space-y-2">
                         <Label className="text-xs text-muted-foreground">GitHub Copilot Authentication</Label>
                         {copilotFlowActive && copilotUserCode ? (
-                          <div className="rounded-lg border border-primary/30 bg-primary/5 p-4 space-y-3">
+                          <div className="rounded-lg border border-primary/30 bg-primary/5 p-3 space-y-2">
                             <p className="text-sm text-muted-foreground">
                               Go to{" "}
                               <a
@@ -538,17 +545,18 @@ export function SettingsPanel({ token, canManageProviders }: SettingsPanelProps)
                               and enter this code:
                             </p>
                             <div className="flex items-center gap-2">
-                              <code className="rounded bg-background px-4 py-2 text-2xl font-bold tracking-widest">
+                              <code className="rounded bg-background px-3 py-1.5 text-xl font-bold tracking-widest">
                                 {copilotUserCode}
                               </code>
                               <Button
                                 variant="ghost"
                                 size="icon"
-                                className="h-9 w-9"
+                                className="h-8 w-8"
                                 onClick={() => {
                                   navigator.clipboard.writeText(copilotUserCode);
                                   toast.success("Code copied!");
                                 }}
+                                aria-label="Copy user code"
                               >
                                 <Copy className="h-4 w-4" />
                               </Button>
@@ -559,7 +567,7 @@ export function SettingsPanel({ token, canManageProviders }: SettingsPanelProps)
                             </div>
                           </div>
                         ) : copilotConnected ? (
-                          <div className="space-y-2">
+                          <div className="space-y-1.5">
                             <div className="flex items-center gap-2">
                               <CheckCircle2 className="h-4 w-4 text-emerald-500" />
                               <span className="text-sm font-medium text-emerald-500">Connected</span>
@@ -567,7 +575,7 @@ export function SettingsPanel({ token, canManageProviders }: SettingsPanelProps)
                             <Button
                               variant="outline"
                               size="sm"
-                              className="h-9 gap-1.5 text-xs"
+                              className="h-8 gap-1.5 text-xs"
                               onClick={() => void startCopilotDeviceFlow()}
                             >
                               <Github className="h-3.5 w-3.5" />
@@ -577,7 +585,7 @@ export function SettingsPanel({ token, canManageProviders }: SettingsPanelProps)
                         ) : (
                           <Button
                             size="sm"
-                            className="h-9 gap-1.5 text-xs"
+                            className="h-8 gap-1.5 text-xs"
                             onClick={() => void startCopilotDeviceFlow()}
                             disabled={copilotFlowActive}
                           >
@@ -591,7 +599,7 @@ export function SettingsPanel({ token, canManageProviders }: SettingsPanelProps)
                         )}
                       </div>
                     ) : canManageProviders ? (
-                      <div className="space-y-2">
+                      <div className="space-y-1.5">
                         <Label className="text-xs text-muted-foreground">API Key</Label>
                         <div className="relative">
                           <Input
@@ -599,21 +607,22 @@ export function SettingsPanel({ token, canManageProviders }: SettingsPanelProps)
                             value={getKeyDraft(selectedProvider.key_name)}
                             onChange={(e) => setKeyDraft(selectedProvider.key_name, e.target.value)}
                             placeholder={KEY_PLACEHOLDERS[selectedProvider.key_name] ?? "Paste API key..."}
-                            className="h-10 pr-9 font-mono text-xs"
+                            className="h-9 pr-9 font-mono text-xs"
                           />
                           <Button
                             variant="ghost"
                             size="icon"
                             className="absolute right-0 top-0 h-full w-9"
-                            onClick={() => toggleKeyVisible(selectedProvider.key_name)}
+                            onClick={() => handleToggleKeyVisible(selectedProvider.key_name)}
                             tabIndex={-1}
+                            aria-label={isKeyVisible(selectedProvider.key_name) ? "Hide API key" : "Show API key"}
                           >
                             {isKeyVisible(selectedProvider.key_name) ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
                           </Button>
                         </div>
                         <Button
                           size="sm"
-                          className="h-9 text-xs"
+                          className="h-8 text-xs"
                           onClick={() => void handleSaveKey(selectedProvider.key_name)}
                           disabled={savingKeyProvider === selectedProvider.key_name || !getKeyDraft(selectedProvider.key_name).trim()}
                         >
@@ -623,15 +632,15 @@ export function SettingsPanel({ token, canManageProviders }: SettingsPanelProps)
                       </div>
                     ) : null}
 
-                    <div className="space-y-2">
+                    <div className="space-y-1.5">
                       <div className="flex items-center justify-between gap-2">
                         <Label className="text-xs text-muted-foreground">Enabled Models</Label>
                         {canManageProviders && (
                           <Button
                             variant="outline"
                             size="sm"
-                            className="h-8 gap-1 text-xs"
-                            onClick={() => void openAddDialog(selectedProvider.key_name)}
+                            className="h-7 gap-1 text-xs"
+                            onClick={() => void handleOpenAddDialog(selectedProvider.key_name)}
                           >
                             <Plus className="h-3 w-3" />
                             Add model
@@ -640,13 +649,13 @@ export function SettingsPanel({ token, canManageProviders }: SettingsPanelProps)
                       </div>
 
                       {selectedProvider.models.length === 0 ? (
-                        <p className="py-3 text-sm text-muted-foreground">No models enabled for this provider yet.</p>
+                        <p className="py-2 text-sm text-muted-foreground">No models enabled for this provider yet.</p>
                       ) : (
                         <div className="space-y-1.5">
                           {selectedProvider.models.map((m) => (
                             <div
                               key={m.id || m.model_name}
-                              className="flex items-center gap-2 rounded-[1rem] border border-border/70 bg-background/70 px-3 py-2.5 text-sm shadow-sm"
+                              className="flex items-center gap-2 rounded-[1rem] border border-border/70 bg-background/70 px-2.5 py-2 text-sm shadow-sm"
                             >
                               <span className="flex-1 truncate font-medium">{m.model_name}</span>
                               <Badge variant="outline" className="text-[10px] uppercase tracking-[0.12em]">Enabled</Badge>
@@ -656,6 +665,7 @@ export function SettingsPanel({ token, canManageProviders }: SettingsPanelProps)
                                   size="icon"
                                   className="h-7 w-7 shrink-0 text-muted-foreground hover:text-destructive"
                                   onClick={() => void handleDeleteModel(m.id, m.model_name)}
+                                  aria-label="Remove model"
                                 >
                                   <Trash2 className="h-3.5 w-3.5" />
                                 </Button>
@@ -681,7 +691,7 @@ export function SettingsPanel({ token, canManageProviders }: SettingsPanelProps)
               Pick a model to enable, or type a custom model ID.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-3 py-2">
+          <div className="space-y-2 py-2">
             <div className="space-y-1.5">
               <Label className="text-xs">Model ID</Label>
               <div className="relative">
@@ -710,7 +720,7 @@ export function SettingsPanel({ token, canManageProviders }: SettingsPanelProps)
                       className={`flex w-full items-start gap-2 rounded-md px-2.5 py-2 text-left text-sm transition-colors hover:bg-muted/60 ${
                         selectedModelId === s.model_id ? "bg-primary/10 ring-1 ring-primary/30" : ""
                       }`}
-                      onClick={() => { setSelectedModelId(s.model_id); setModelSearch(""); }}
+                      onClick={() => handleSuggestionClick(s.model_id)}
                     >
                       <div className="min-w-0 flex-1">
                         <p className="text-xs font-medium">{s.display_name}</p>

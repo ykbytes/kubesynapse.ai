@@ -7,7 +7,6 @@ import uuid
 from pathlib import Path
 from unittest.mock import patch
 
-
 MODULE_PATH = Path(__file__).resolve().parents[1] / "state_store.py"
 
 
@@ -62,7 +61,7 @@ class StateStoreTests(unittest.TestCase):
                 "summary": {"phase": "waiting-approval"},
                 "stepResults": {"review": {"status": "pending"}},
                 "stepStates": {"review": "pending"},
-                "artifactRef": {"path": "/tmp/workflow.json", "journalPath": "/tmp/workflow.log"},
+                "artifactRef": {"path": "/tmp/workflow.json", "journalPath": "/tmp/workflow.log"},  # noqa: S108
                 "workerJob": {"name": "workflow-worker"},
                 "pendingApproval": {"name": "approval-one"},
             },
@@ -79,7 +78,7 @@ class StateStoreTests(unittest.TestCase):
                 "summary": {"phase": "completed", "completedAt": "2026-03-12T00:00:00Z"},
                 "stepResults": {"review": {"status": "completed"}},
                 "stepStates": {"review": "completed"},
-                "artifactRef": {"path": "/tmp/workflow.json", "journalPath": "/tmp/workflow.log"},
+                "artifactRef": {"path": "/tmp/workflow.json", "journalPath": "/tmp/workflow.log"},  # noqa: S108
                 "workerJob": {"name": "workflow-worker"},
             },
         )
@@ -89,8 +88,8 @@ class StateStoreTests(unittest.TestCase):
 
         self.assertEqual(len(records), 1)
         self.assertEqual(records[0].phase, "completed")
-        self.assertEqual(records[0].artifact_path, "/tmp/workflow.json")
-        self.assertEqual(records[0].journal_path, "/tmp/workflow.log")
+        self.assertEqual(records[0].artifact_path, "/tmp/workflow.json")  # noqa: S108
+        self.assertEqual(records[0].journal_path, "/tmp/workflow.log")  # noqa: S108
         self.assertEqual(records[0].worker_job_name, "workflow-worker")
         self.assertIsNotNone(records[0].completed_at)
 
@@ -206,7 +205,7 @@ class StateStoreTests(unittest.TestCase):
             spec={"cases": 4},
             status={
                 "summary": {"progress": 0.5},
-                "artifactRef": {"path": "/tmp/eval.json"},
+                "artifactRef": {"path": "/tmp/eval.json"},  # noqa: S108
                 "workerJob": {"name": "eval-worker"},
             },
         )
@@ -221,7 +220,7 @@ class StateStoreTests(unittest.TestCase):
             spec={"cases": 4},
             status={
                 "summary": {"passed": 4, "failed": 0, "completedAt": "2026-03-12T01:00:00Z"},
-                "artifactRef": {"path": "/tmp/eval.json"},
+                "artifactRef": {"path": "/tmp/eval.json"},  # noqa: S108
                 "workerJob": {"name": "eval-worker"},
             },
         )
@@ -232,7 +231,7 @@ class StateStoreTests(unittest.TestCase):
         self.assertEqual(len(records), 1)
         self.assertEqual(records[0].phase, "completed")
         self.assertTrue(records[0].passed)
-        self.assertEqual(records[0].artifact_path, "/tmp/eval.json")
+        self.assertEqual(records[0].artifact_path, "/tmp/eval.json")  # noqa: S108
         self.assertEqual(records[0].worker_job_name, "eval-worker")
         self.assertIsNotNone(records[0].completed_at)
 
@@ -255,6 +254,5 @@ class DatabaseDriverValidationTests(unittest.TestCase):
                 "STATE_DB_ENABLED": "false",
             },
             clear=False,
-        ):
-            with self.assertRaises(ValueError):
-                spec.loader.exec_module(module)
+        ), self.assertRaises(ValueError):
+            spec.loader.exec_module(module)

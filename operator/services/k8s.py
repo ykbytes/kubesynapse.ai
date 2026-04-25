@@ -9,13 +9,24 @@ from __future__ import annotations
 
 import copy
 import logging
+import random
+import time
+from collections.abc import Callable
+from functools import wraps
 from typing import Any
 
 import kopf
-
 import kubernetes.client  # type: ignore[import-untyped]
-from kubernetes.client.rest import ApiException  # type: ignore[import-untyped]
-
+from builders import (
+    OWNER_LABEL_AGENT_NAME,
+    OWNER_LABEL_MANAGED_BY,
+    OWNER_LABEL_MANAGED_BY_VALUE,
+    _extract_statefulset_storage_request,
+    _parse_storage_quantity,
+    create_worker_artifact_pvc_manifest,
+    create_worker_job_manifest,
+)
+from circuit_breaker import CircuitBreakerOpen, get_k8s_circuit_breaker
 from config import (
     CLUSTER_SECRET_STORE,
     DEFAULT_API_GATEWAY_SHARED_TOKEN,
@@ -28,38 +39,64 @@ from config import (
     SECRET_NAME,
     SECRET_PROVISIONING_MODE,
 )
-from builders import (
-    OWNER_LABEL_AGENT_NAME,
-    OWNER_LABEL_MANAGED_BY,
-    OWNER_LABEL_MANAGED_BY_VALUE,
-    _extract_statefulset_storage_request,
-    _parse_storage_quantity,
-    _statefulset_template_signature,
-    artifact_file_path,
-    build_artifact_ref,
-    build_journal_ref,
-    create_a2a_egress_network_policy_manifest,
-    create_a2a_ingress_network_policy_manifest,
-    create_agent_service_manifest,
-    create_agent_statefulset_manifest,
-    create_mcp_auth_secret_manifest,
-    create_mcp_network_policy_manifest,
-    create_worker_artifact_pvc_manifest,
-    create_worker_job_manifest,
-)
-from utils import (
-    build_eval_run_id,
-    build_workflow_run_id,
-    now_iso,
-    parse_a2a_peer_refs,
-    parse_agent_a2a_config,
-    parse_policy_a2a_config,
-    workflow_journal_path,
-)
+from kubernetes.client.rest import ApiException  # type: ignore[import-untyped]
 
 ApiTypeError = getattr(kubernetes.client, "ApiTypeError", TypeError)
 
 logger = logging.getLogger("operator.services")
+
+
+# ---------------------------------------------------------------------------
+# §7.2 — Exponential backoff with circuit breaker for K8s API calls
+# ---------------------------------------------------------------------------
+
+
+def _exponential_backoff(
+    max_retries: int = 3,
+    base_delay: float = 1.0,
+    max_delay: float = 60.0,
+    retryable_statuses: frozenset[int] = frozenset({409, 429, 500, 502, 503, 504}),
+) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    """Decorator that retries K8s API calls with exponential backoff + jitter."""
+
+    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+        @wraps(func)
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            cb = get_k8s_circuit_breaker()
+            for attempt in range(max_retries):
+                try:
+                    cb.call()
+                    result = func(*args, **kwargs)
+                    cb.record_success()
+                    return result
+                except ApiException as exc:
+                    cb.record_failure()
+                    status = int(getattr(exc, "status", 0) or 0)
+                    if attempt < max_retries - 1 and status in retryable_statuses:
+                        backoff = min(base_delay * (2**attempt) + random.uniform(0, 1), max_delay)  # noqa: S311
+                        logger.warning(
+                            "Retryable K8s API error in %s (attempt %d/%d, status=%d), "
+                            "retrying in %.1fs: %s",
+                            func.__name__,
+                            attempt + 1,
+                            max_retries,
+                            status,
+                            backoff,
+                            describe_api_exception(exc),
+                        )
+                        time.sleep(backoff)
+                        continue
+                    raise
+                except CircuitBreakerOpen:
+                    raise
+                except Exception:
+                    cb.record_failure()
+                    raise
+            return None  # pragma: no cover
+
+        return wrapper
+
+    return decorator
 
 
 # ---------------------------------------------------------------------------
@@ -134,8 +171,8 @@ def _sanitize_kube_resource(resource: Any) -> Any:
     if api_client_cls is not None:
         try:
             return api_client_cls().sanitize_for_serialization(resource)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("sanitize_for_serialization failed: %s", exc, exc_info=True)
 
     if hasattr(resource, "to_dict"):
         return resource.to_dict()
@@ -279,11 +316,11 @@ def _resize_statefulset_persistent_volume_claims(
             except ApiException as exc:
                 if exc.status in (403, 422):
                     raise kopf.PermanentError(
-                        (
+
                             f"PVC resize request for '{pvc_name}' in namespace '{namespace}' could not be applied: "
                             f"{describe_api_exception(exc)}"
-                        )
-                    )
+
+                    ) from exc
                 raise
 
 
@@ -292,6 +329,7 @@ def _resize_statefulset_persistent_volume_claims(
 # ---------------------------------------------------------------------------
 
 
+@_exponential_backoff()
 def ensure_persistent_storage(namespace: str, manifest: dict[str, Any]) -> None:
     """Create a PVC, silently ignoring AlreadyExists."""
     core_api = kubernetes.client.CoreV1Api()
@@ -302,6 +340,7 @@ def ensure_persistent_storage(namespace: str, manifest: dict[str, Any]) -> None:
             raise
 
 
+@_exponential_backoff()
 def ensure_service(namespace: str, manifest: dict[str, Any]) -> None:
     """Create or patch a Service."""
     core_api = kubernetes.client.CoreV1Api()
@@ -315,6 +354,7 @@ def ensure_service(namespace: str, manifest: dict[str, Any]) -> None:
         raise
 
 
+@_exponential_backoff()
 def ensure_statefulset(namespace: str, manifest: dict[str, Any]) -> None:
     """Create or reconcile a StatefulSet with immutable-field preservation."""
     apps_api = kubernetes.client.AppsV1Api()
@@ -366,7 +406,7 @@ def ensure_statefulset(namespace: str, manifest: dict[str, Any]) -> None:
                         "desired pod template after patching."
                     ),
                     delay=10,
-                )
+                ) from exc
             _resize_statefulset_persistent_volume_claims(
                 core_api,
                 namespace,
@@ -378,6 +418,7 @@ def ensure_statefulset(namespace: str, manifest: dict[str, Any]) -> None:
         raise
 
 
+@_exponential_backoff()
 def ensure_secret(namespace: str, manifest: dict[str, Any]) -> None:
     """Create or patch a Secret."""
     core_api = kubernetes.client.CoreV1Api()
@@ -393,7 +434,7 @@ def ensure_secret(namespace: str, manifest: dict[str, Any]) -> None:
 
 def ensure_runtime_namespace_secret(namespace: str, owner_name: str, logger: logging.Logger) -> None:
     """Provision the runtime secret for a namespace (via ExternalSecret or native Secret)."""
-    if SECRET_PROVISIONING_MODE == "external-secrets":
+    if SECRET_PROVISIONING_MODE == "external-secrets":  # noqa: S105 — provisioning mode, not a password
         external_secret = {
             "apiVersion": "external-secrets.io/v1beta1",
             "kind": "ExternalSecret",
@@ -490,6 +531,7 @@ def ensure_runtime_namespace_secret(namespace: str, owner_name: str, logger: log
     logger.info("Secret '%s' provisioned for namespace '%s'", SECRET_NAME, namespace)
 
 
+@_exponential_backoff()
 def ensure_network_policy(namespace: str, manifest: dict[str, Any]) -> None:
     """Create or replace a NetworkPolicy."""
     networking_api = kubernetes.client.NetworkingV1Api()
@@ -503,6 +545,7 @@ def ensure_network_policy(namespace: str, manifest: dict[str, Any]) -> None:
             raise
 
 
+@_exponential_backoff()
 def ensure_runtime_access(namespace: str) -> None:
     """Create or patch a ServiceAccount, RoleBinding, and ClusterRoleBinding for agent runtimes."""
     core_api = kubernetes.client.CoreV1Api()
@@ -626,9 +669,11 @@ def patch_custom_status(plural: str, namespace: str, name: str, status: dict[str
     import random as _random
     import time as _time
 
+    cb = get_k8s_circuit_breaker()
     api = kubernetes.client.CustomObjectsApi()
     for attempt in range(_STATUS_PATCH_MAX_RETRIES):
         try:
+            cb.call()
             api.patch_namespaced_custom_object_status(
                 group="kubesynth.ai",
                 version="v1alpha1",
@@ -637,10 +682,12 @@ def patch_custom_status(plural: str, namespace: str, name: str, status: dict[str
                 name=name,
                 body={"status": status},
             )
+            cb.record_success()
             return
         except ApiException as exc:
+            cb.record_failure()
             if exc.status == 409 and attempt < _STATUS_PATCH_MAX_RETRIES - 1:
-                backoff = (2**attempt) + _random.uniform(0, 0.5)
+                backoff = (2**attempt) + _random.uniform(0, 0.5)  # noqa: S311 — non-cryptographic jitter for retry backoff
                 logging.getLogger("operator.services.k8s").warning(
                     "Conflict patching %s/%s/%s status (409), retry %d/%d in %.1fs.",
                     plural,
@@ -667,6 +714,7 @@ def ensure_worker_artifact_storage(kind: str, resource_namespace: str, resource_
     return str(manifest["metadata"]["name"])
 
 
+@_exponential_backoff()
 def enqueue_worker_job(
     kind: str,
     resource_namespace: str,
@@ -696,6 +744,7 @@ def enqueue_worker_job(
     return str(manifest["metadata"]["name"])
 
 
+@_exponential_backoff()
 def read_job_state(name: str, namespace: str) -> str:
     """Read the current state of a Job: missing, pending, active, succeeded, failed."""
     if not name:
@@ -721,6 +770,7 @@ def read_job_state(name: str, namespace: str) -> str:
     return "pending"
 
 
+@_exponential_backoff()
 def cancel_worker_job(name: str, namespace: str) -> bool:
     """Delete a worker Job and its pods. Returns True if a Job was deleted."""
     if not name:
@@ -758,6 +808,7 @@ _PRUNABLE_RESOURCE_TYPES: list[dict[str, str]] = [
 ]
 
 
+@_exponential_backoff()
 def prune_orphaned_resources(
     namespace: str,
     agent_name: str,

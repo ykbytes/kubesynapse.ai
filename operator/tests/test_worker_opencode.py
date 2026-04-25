@@ -5,6 +5,7 @@ import json
 import sys
 import types
 import unittest
+from datetime import UTC
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -207,7 +208,8 @@ class AcquireWorkerLeaseTests(unittest.TestCase):
         batch_api = MagicMock()
         batch_api.read_namespaced_job.side_effect = missing_job
 
-        simple_obj = lambda **kwargs: types.SimpleNamespace(**kwargs)
+        def simple_obj(**kwargs):
+            return types.SimpleNamespace(**kwargs)
 
         with (
             patch.object(worker.kubernetes.client, "CoordinationV1Api", return_value=coord_api, create=True),
@@ -1246,9 +1248,10 @@ class WriteArtifactSerializationTests(unittest.TestCase):
     """write_artifact should handle non-serializable values via default=str."""
 
     def test_datetime_in_payload_does_not_crash(self) -> None:
-        from datetime import datetime, timezone
         import json
-        import tempfile, os
+        import os
+        import tempfile
+        from datetime import datetime
 
         with tempfile.TemporaryDirectory() as tmpdir:
             path = os.path.join(tmpdir, "run.json")
@@ -1257,7 +1260,7 @@ class WriteArtifactSerializationTests(unittest.TestCase):
             original = worker.ARTIFACT_PATH
             worker.ARTIFACT_PATH = path
             try:
-                worker.write_artifact({"ts": datetime.now(timezone.utc), "val": 42})
+                worker.write_artifact({"ts": datetime.now(UTC), "val": 42})
                 data = json.loads(Path(path).read_text(encoding="utf-8"))
                 self.assertEqual(data["val"], 42)
                 self.assertIsInstance(data["ts"], str)
@@ -1269,7 +1272,8 @@ class LoadArtifactCorruptTests(unittest.TestCase):
     """load_artifact should raise on corrupt data instead of silently returning {}."""
 
     def test_corrupt_json_raises(self) -> None:
-        import tempfile, os
+        import os
+        import tempfile
 
         with tempfile.TemporaryDirectory() as tmpdir:
             path = os.path.join(tmpdir, "run.json")
@@ -1550,8 +1554,6 @@ class MaxParallelStepsTests(unittest.TestCase):
         self.assertGreaterEqual(worker.MAX_PARALLEL_STEPS, 1)
 
     def test_max_parallel_steps_env_override(self) -> None:
-        import importlib
-        import worker
         with patch.dict("os.environ", {"MAX_PARALLEL_STEPS": "12"}):
             # Re-evaluate the expression the same way the module does.
             reloaded_value = max(int("12"), 1)

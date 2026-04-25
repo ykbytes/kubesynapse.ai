@@ -1,3 +1,4 @@
+{{- if .Values.operator.enabled }}
 {{- $opencodeRuntime := .Values.opencodeRuntime | default dict -}}
 {{- $opencodeLimits := get $opencodeRuntime "limits" | default dict -}}
 {{- $opencodeAutonomy := get $opencodeRuntime "autonomy" | default dict -}}
@@ -19,6 +20,8 @@ kind: Deployment
 metadata:
   name: {{ include "kubesynth.fullname" . }}-operator
   labels:
+    {{- include "kubesynth.labels" . | nindent 4 }}
+    app.kubernetes.io/component: operator
     app: operator
 spec:
 {{- if not (and .Values.autoscaling (.Values.autoscaling.enabled)) }}
@@ -35,6 +38,8 @@ spec:
         checksum/trust-bundle: {{ include (print $.Template.BasePath "/trust-bundle-configmap.yaml") . | sha256sum }}
 {{- end }}
       labels:
+        {{- include "kubesynth.labels" . | nindent 8 }}
+        app.kubernetes.io/component: operator
         app: operator
     spec:
 {{- with (include "kubesynth.imagePullSecrets" .) }}
@@ -73,6 +78,8 @@ spec:
           ports:
             - containerPort: 8080
               name: http
+            - containerPort: 8081
+              name: readiness
           env:
             - name: HOME
               value: /tmp
@@ -224,17 +231,28 @@ spec:
             httpGet:
               path: /healthz
               port: 8080
-            failureThreshold: 30
+            initialDelaySeconds: 5
             periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 30
           readinessProbe:
             httpGet:
-              path: /healthz
-              port: 8080
-            initialDelaySeconds: 10
-            periodSeconds: 15
+              path: /ready
+              port: readiness
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
           livenessProbe:
             httpGet:
               path: /healthz
               port: 8080
             initialDelaySeconds: 30
             periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "sleep 15"]
+{{- end }}

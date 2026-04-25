@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import hmac
-import json
 import logging
 import os
 import time
@@ -63,7 +62,7 @@ OIDC_ISSUER: str = os.getenv("OIDC_ISSUER", "").strip()
 OIDC_AUDIENCE: str = os.getenv("OIDC_AUDIENCE", "").strip()
 OIDC_JWKS_TIMEOUT_SECONDS: float = max(float(os.getenv("OIDC_JWKS_TIMEOUT_SECONDS", "10")), 1.0)
 
-AUTH_COOKIE_SECURE: bool = os.getenv("AUTH_COOKIE_SECURE", "").strip().lower() in {"1", "true", "yes", "on"}
+AUTH_COOKIE_SECURE: bool = os.getenv("AUTH_COOKIE_SECURE", "true").strip().lower() not in {"0", "false", "no", "off"}
 AUTH_COOKIE_DOMAIN: str | None = os.getenv("AUTH_COOKIE_DOMAIN", "").strip() or None
 AUTH_COOKIE_PATH: str = os.getenv("AUTH_COOKIE_PATH", "/").strip() or "/"
 AUTH_COOKIE_SAMESITE: str = os.getenv("AUTH_COOKIE_SAMESITE", "lax").strip().lower() or "lax"
@@ -74,7 +73,15 @@ CookieSameSite = Literal["lax", "strict", "none"]
 
 # JWKS cache (module-level mutable state — shared across requests)
 JWKS_CACHE: dict[str, Any] = {"keys": [], "expires_at": 0.0}
-_JWKS_LOCK: asyncio.Lock = asyncio.Lock()
+_JWKS_LOCK: asyncio.Lock | None = None
+
+
+def _get_jwks_lock() -> asyncio.Lock:
+    """Lazy initialization of JWKS lock to avoid event loop binding issues."""
+    global _JWKS_LOCK
+    if _JWKS_LOCK is None:
+        _JWKS_LOCK = asyncio.Lock()
+    return _JWKS_LOCK
 
 
 # ---------------------------------------------------------------------------
@@ -87,12 +94,15 @@ async def load_jwks() -> list[dict[str, Any]]:
     if JWKS_CACHE["expires_at"] > time.time():
         return JWKS_CACHE["keys"]
 
-    async with _JWKS_LOCK:
+    async with _get_jwks_lock():
         if JWKS_CACHE["expires_at"] > time.time():
             return JWKS_CACHE["keys"]
 
         if not OIDC_JWKS_URL:
-            raise HTTPException(status_code=503, detail="OIDC JWKS URL is not configured")
+            raise HTTPException(status_code=503, detail="Authentication service unavailable")
+        if not OIDC_JWKS_URL.startswith("https://"):
+            logger.error("OIDC_JWKS_URL must use HTTPS")
+            raise HTTPException(status_code=503, detail="Authentication service unavailable")
 
         async with httpx.AsyncClient(timeout=OIDC_JWKS_TIMEOUT_SECONDS) as client:
             response = await client.get(OIDC_JWKS_URL)
@@ -109,10 +119,17 @@ async def load_jwks() -> list[dict[str, Any]]:
 
 
 def request_client_ip(request: Request) -> str | None:
-    """Extract client IP from X-Forwarded-For or request.client."""
+    """Extract client IP from X-Forwarded-For or request.client.
+
+    Uses the rightmost IP in X-Forwarded-For (before any known proxies)
+    to avoid spoofing via client-injected leftmost IPs.
+    """
     forwarded_for = request.headers.get("x-forwarded-for", "").strip()
     if forwarded_for:
-        return forwarded_for.split(",", 1)[0].strip() or None
+        # Take the rightmost IP to prevent spoofing
+        ips = [ip.strip() for ip in forwarded_for.split(",") if ip.strip()]
+        if ips:
+            return ips[-1]
     if request.client is not None:
         return request.client.host
     return None
@@ -152,6 +169,9 @@ def clear_refresh_cookie(response: Response) -> None:
         key=REFRESH_COOKIE_NAME,
         path=AUTH_COOKIE_PATH,
         domain=AUTH_COOKIE_DOMAIN,
+        secure=AUTH_COOKIE_SECURE,
+        httponly=True,
+        samesite=cookie_samesite(),
     )
 
 
@@ -175,6 +195,9 @@ def clear_oidc_transaction_cookie(response: Response) -> None:
         key=OIDC_TRANSACTION_COOKIE_NAME,
         path=AUTH_COOKIE_PATH,
         domain=AUTH_COOKIE_DOMAIN,
+        secure=AUTH_COOKIE_SECURE,
+        httponly=True,
+        samesite=cookie_samesite(),
     )
 
 
@@ -310,11 +333,11 @@ def principal_from_oidc_claims(claims: dict[str, Any]) -> dict[str, Any]:
         role_candidates.insert(0, str(claims.get("role")))
     role = mapped_role if mapped_role in ROLE_PRIORITY else next(
         (item for item in role_candidates if item in ROLE_PRIORITY),
-        "admin",
+        "viewer",
     )
     allowed_namespaces = mapped_namespaces or normalize_namespaces(
-        claims.get("allowed_namespaces") or claims.get("namespaces") or ["*"]
-    ) or ["*"]
+        claims.get("allowed_namespaces") or claims.get("namespaces") or []
+    ) or []
     email = str(claims.get("email") or "").strip() or None
     preferred_username = str(
         claims.get("preferred_username")
@@ -443,9 +466,14 @@ def validate_claims(claims: dict[str, Any]) -> None:
 
 async def verify_oidc_token(token: str) -> dict[str, Any]:
     """Verify an OIDC JWT token and return the principal."""
-    header = jwt.get_unverified_header(token)
+    try:
+        header = jwt.get_unverified_header(token)
+    except jwt.JWTError as exc:
+        raise HTTPException(status_code=401, detail="Invalid token header") from exc
     key_id = header.get("kid")
     keys = await load_jwks()
+    if not key_id and len(keys) > 1:
+        raise HTTPException(status_code=401, detail="Token missing key ID in multi-key JWKS")
     key_data = next((item for item in keys if item.get("kid") == key_id), None)
     if key_data is None:
         raise HTTPException(status_code=401, detail="Unable to find a signing key for this token")
@@ -456,7 +484,10 @@ async def verify_oidc_token(token: str) -> dict[str, Any]:
     if not signing_key.verify(message.encode("utf-8"), decoded_signature):
         raise HTTPException(status_code=401, detail="Token signature is invalid")
 
-    claims = jwt.get_unverified_claims(token)
+    try:
+        claims = jwt.get_unverified_claims(token)
+    except jwt.JWTError as exc:
+        raise HTTPException(status_code=401, detail="Invalid token claims") from exc
     validate_claims(claims)
     return principal_from_oidc_claims(claims)
 
@@ -467,6 +498,13 @@ def verify_local_access_token(token: str) -> dict[str, Any]:
         claims = decode_access_token(token)
     except ValueError as exc:
         raise HTTPException(status_code=401, detail="Invalid local access token") from exc
+
+    # Validate time-based claims
+    now = int(time.time())
+    if claims.get("exp") is not None and now >= int(claims["exp"]):
+        raise HTTPException(status_code=401, detail="Token has expired")
+    if claims.get("nbf") is not None and now < int(claims["nbf"]):
+        raise HTTPException(status_code=401, detail="Token is not active yet")
 
     try:
         user_id = int(str(claims.get("sub") or ""))
@@ -487,7 +525,7 @@ def verify_local_access_token(token: str) -> dict[str, Any]:
 def verify_shared_token(token: str) -> dict[str, Any]:
     """Verify a shared-token and return the principal."""
     if not SHARED_TOKEN:
-        raise HTTPException(status_code=503, detail="Gateway shared token is not configured")
+        raise HTTPException(status_code=503, detail="Authentication service unavailable")
     if not hmac.compare_digest(token, SHARED_TOKEN):
         raise HTTPException(status_code=401, detail="Invalid bearer token")
     return build_shared_token_principal()
@@ -527,6 +565,7 @@ async def authenticate_bearer_token(token: str) -> dict[str, Any]:
         except HTTPException as exc:
             failures.append(str(exc.detail))
         except Exception as exc:
+            logger.debug("OIDC bearer verification failed in hybrid mode (%s): %s", type(exc).__name__, exc)
             logger.warning("OIDC bearer verification failed in hybrid mode: %s", exc)
             failures.append(str(exc))
 
@@ -536,13 +575,13 @@ async def authenticate_bearer_token(token: str) -> dict[str, Any]:
         except HTTPException as exc:
             failures.append(str(exc.detail))
 
-    detail = failures[0] if failures else "No configured auth strategy accepted the presented token"
-    raise HTTPException(status_code=401, detail=detail)
+    logger.warning("Authentication failed in hybrid mode: %s", failures)
+    raise HTTPException(status_code=401, detail="Authentication failed")
 
 
 async def verify_token(authorization: str | None = Header(default=None)) -> dict[str, Any]:
     """FastAPI dependency — verify the Bearer token from the Authorization header."""
-    if authorization is None or not authorization.startswith("Bearer "):
+    if authorization is None or not authorization.lower().startswith("bearer "):
         raise HTTPException(status_code=401, detail="Invalid authorization header")
 
     token = authorization[7:].strip()
@@ -568,6 +607,9 @@ async def verify_token_or_query(
 
     tok = raw_request.query_params.get("token", "").strip()
     if tok:
+        # Query-param tokens are used for SSE where headers cannot be set.
+        # Never log the raw token value — sanitize before logging.
+        logger.info("SSE auth via query param from client %s", request_client_ip(raw_request))
         return await authenticate_bearer_token(tok)
 
     raise HTTPException(status_code=401, detail="Missing token")

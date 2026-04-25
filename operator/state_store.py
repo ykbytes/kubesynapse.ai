@@ -6,12 +6,13 @@ import importlib.util
 import json
 import logging
 import os
-from pathlib import Path
 import sys
 import sysconfig
+from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime, timezone
-from typing import Any, Iterator
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
 from urllib.parse import quote_plus
 
 
@@ -39,7 +40,7 @@ def _ensure_stdlib_operator_module() -> None:
 
 _ensure_stdlib_operator_module()
 
-from sqlalchemy import Boolean, Column, DateTime, Integer, JSON, String, UniqueConstraint, create_engine
+from sqlalchemy import JSON, Boolean, Column, DateTime, Integer, String, UniqueConstraint, create_engine
 from sqlalchemy.orm import Session, declarative_base, sessionmaker
 
 logger = logging.getLogger("operator.state-store")
@@ -49,7 +50,7 @@ STATE_DB_ENABLED = os.getenv("STATE_DB_ENABLED", "true").strip().lower() in {"1"
 
 
 def utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _build_database_url() -> str:
@@ -80,7 +81,8 @@ def _build_database_url() -> str:
             )
         return f"{driver}://{quote_plus(username)}@{host}:{port}/{quote_plus(database_name)}"
 
-    sqlite_path = os.getenv("DATABASE_SQLITE_PATH", "/tmp/kubesynth-operator.db").strip()
+    import tempfile
+    sqlite_path = os.getenv("DATABASE_SQLITE_PATH", f"{tempfile.gettempdir()}/kubesynth-operator.db").strip()
     if sqlite_path.startswith("sqlite:///"):
         return sqlite_path
     if sqlite_path == ":memory:":
@@ -194,8 +196,8 @@ def _completed_timestamp(phase: str, status: dict[str, Any]) -> datetime | None:
             except ValueError:
                 continue
             if parsed.tzinfo is None:
-                return parsed.replace(tzinfo=timezone.utc)
-            return parsed.astimezone(timezone.utc)
+                return parsed.replace(tzinfo=UTC)
+            return parsed.astimezone(UTC)
     if phase in {"completed", "failed"}:
         return utc_now()
     return None

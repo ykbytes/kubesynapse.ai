@@ -7,7 +7,6 @@ import uuid
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-
 MODULE_PATH = Path(__file__).resolve().parents[1] / "controllers" / "workflow_controller.py"
 STUB_MODULE_NAMES = [
     "kopf",
@@ -43,7 +42,7 @@ def _install_stub_modules() -> dict[str, object | None]:
     kopf_module.PermanentError = type("PermanentError", (Exception,), {})
 
     builders_module = types.ModuleType("builders")
-    builders_module.artifact_file_path = lambda *_args, **_kwargs: "/tmp/workflow.json"
+    builders_module.artifact_file_path = lambda *_args, **_kwargs: "/tmp/workflow.json"  # noqa: S108
     builders_module.build_artifact_ref = lambda pvc_name, path, generation, **kwargs: {
         "pvcName": pvc_name,
         "path": path,
@@ -180,7 +179,7 @@ class WorkflowControllerRunIdTests(unittest.TestCase):
                 current_status={
                     "runId": "wf-run-default-kubesynth-factory-pipeline-23-old",
                     "observedGeneration": 23,
-                    "artifactRef": {"generation": 23, "path": "/tmp/old.json"},
+                    "artifactRef": {"generation": 23, "path": "/tmp/old.json"},  # noqa: S108
                     "currentStep": "deploy-bundle",
                     "pendingApproval": {"name": "approval-old"},
                     "stepStates": {"draft-blueprint": {"status": "completed"}},
@@ -214,7 +213,7 @@ class WorkflowControllerRunIdTests(unittest.TestCase):
                 current_status={
                     "runId": "wf-run-default-kubesynth-factory-pipeline-7-retry",
                     "observedGeneration": None,
-                    "artifactRef": {"generation": 7, "path": "/tmp/gen-7.json"},
+                    "artifactRef": {"generation": 7, "path": "/tmp/gen-7.json"},  # noqa: S108
                     "currentStep": "deploy-bundle",
                     "stepStates": {
                         "draft-blueprint": {"status": "completed"},

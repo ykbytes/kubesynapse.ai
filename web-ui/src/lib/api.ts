@@ -33,6 +33,7 @@ import type {
   EvalPayload,
   EvalTestCase,
   EvalUpdatePayload,
+  ExecutionTrace,
   FactoryMode,
   GatewayHealth,
   GitCredentialInfo,
@@ -44,6 +45,7 @@ import type {
   InvocationSummary,
   InvokePayload,
   InvokeResponse,
+  LLMCallRecord,
   LLMKeyInfo,
   LLMModelInfo,
   LLMProvider,
@@ -76,7 +78,10 @@ import type {
   SubagentInvocationMetadata,
   SubagentInvocationResult,
   SubagentSharedFile,
+  StepTrace,
   StreamEvent,
+  ToolCallRecord,
+  TraceEvent,
   UpdateUserPayload,
   UpdateAgentPayload,
   WorkflowInfo,
@@ -2617,6 +2622,241 @@ export async function downloadWorkflowRunTraceExport(
     `${workflowName}-${runId}-trace.json`,
   );
   triggerBrowserDownload(blob, filename);
+}
+
+/* ── Execution Observatory API ── */
+
+export interface ExecutionListItem {
+  id: string;
+  workflow_name: string;
+  namespace: string;
+  agent_name?: string | null;
+  run_id?: string | null;
+  status: string;
+  started_at?: string | null;
+  completed_at?: string | null;
+  duration_ms?: number | null;
+  step_count: number;
+  llm_call_count: number;
+  tool_call_count: number;
+  total_tokens: number;
+  total_cost_usd?: number | null;
+}
+
+export interface ExecutionListResponse {
+  items: ExecutionListItem[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export async function listExecutions(
+  token: string,
+  namespace: string,
+  filters: {
+    workflow?: string;
+    agent?: string;
+    status?: string;
+    from_date?: string;
+    to_date?: string;
+    search?: string;
+    sort_by?: string;
+    limit?: number;
+    offset?: number;
+  } = {},
+): Promise<ExecutionListResponse> {
+  const url = new URL(buildUrl("/api/traces/executions", namespace), API_BASE_URL || window.location.origin);
+  for (const [k, v] of Object.entries(filters)) {
+    if (v !== undefined && v !== null && v !== "") url.searchParams.set(k, String(v));
+  }
+  const target = API_BASE_URL ? url.toString() : `${url.pathname}${url.search}`;
+  const response = await fetchAuthenticated(target, token);
+  return parseJsonResponse(response, (payload) => {
+    const record = expectRecord(payload, "ExecutionListResponse");
+    const items = Array.isArray(record.items) ? record.items : [];
+    return {
+      items: items.map((item: unknown, index: number) => {
+        const r = expectRecord(item, `ExecutionListItem[${index}]`);
+        return {
+          id: readString(r, "id", `ExecutionListItem[${index}]`),
+          workflow_name: readString(r, "workflow_name", `ExecutionListItem[${index}]`),
+          namespace: readString(r, "namespace", `ExecutionListItem[${index}]`),
+          agent_name: readOptionalString(r, "agent_name", `ExecutionListItem[${index}]`),
+          run_id: readOptionalString(r, "run_id", `ExecutionListItem[${index}]`),
+          status: readString(r, "status", `ExecutionListItem[${index}]`, "unknown"),
+          started_at: readOptionalString(r, "started_at", `ExecutionListItem[${index}]`),
+          completed_at: readOptionalString(r, "completed_at", `ExecutionListItem[${index}]`),
+          duration_ms: readOptionalNumber(r, "duration_ms", `ExecutionListItem[${index}]`),
+          step_count: readOptionalNumber(r, "step_count", `ExecutionListItem[${index}]`) ?? 0,
+          llm_call_count: readOptionalNumber(r, "llm_call_count", `ExecutionListItem[${index}]`) ?? 0,
+          tool_call_count: readOptionalNumber(r, "tool_call_count", `ExecutionListItem[${index}]`) ?? 0,
+          total_tokens: readOptionalNumber(r, "total_tokens", `ExecutionListItem[${index}]`) ?? 0,
+          total_cost_usd: readOptionalNumber(r, "total_cost_usd", `ExecutionListItem[${index}]`),
+        } satisfies ExecutionListItem;
+      }),
+      total: readOptionalNumber(record, "total", "ExecutionListResponse") ?? 0,
+      limit: readOptionalNumber(record, "limit", "ExecutionListResponse") ?? 20,
+      offset: readOptionalNumber(record, "offset", "ExecutionListResponse") ?? 0,
+    };
+  });
+}
+
+export async function fetchExecutionDetail(token: string, executionId: string): Promise<ExecutionTrace> {
+  const response = await fetchAuthenticated(buildUrl(`/api/traces/executions/${executionId}`), token);
+  return parseJsonResponse(response, parseExecutionTracePayload);
+}
+
+export async function fetchExecutionSummary(token: string, executionId: string): Promise<ExecutionTrace> {
+  const response = await fetchAuthenticated(buildUrl(`/api/traces/executions/${executionId}/summary`), token);
+  return parseJsonResponse(response, parseExecutionTracePayload);
+}
+
+export async function fetchStepDetail(token: string, stepId: string): Promise<StepTrace> {
+  const response = await fetchAuthenticated(buildUrl(`/api/traces/steps/${stepId}`), token);
+  return parseJsonResponse(response, parseStepTracePayload);
+}
+
+export async function fetchExecutionEvents(token: string, executionId: string): Promise<TraceEvent[]> {
+  const response = await fetchAuthenticated(buildUrl(`/api/traces/executions/${executionId}/events`), token);
+  return parseJsonResponse(response, (payload) => {
+    if (!Array.isArray(payload)) return [];
+    return payload.map((item, index) => parseTraceEventPayload(item, `TraceEvent[${index}]`));
+  });
+}
+
+export async function deleteExecution(token: string, executionId: string): Promise<void> {
+  const response = await fetchAuthenticated(buildUrl(`/api/traces/executions/${executionId}`), token, {
+    method: "DELETE",
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new ApiError(response.status, "Failed to delete execution", text);
+  }
+}
+
+export async function exportExecutionJson(token: string, executionId: string): Promise<string> {
+  const response = await fetchAuthenticated(buildUrl(`/api/traces/executions/${executionId}/export/json`), token);
+  if (!response.ok) {
+    const text = await response.text();
+    throw new ApiError(response.status, "Failed to export execution JSON", text);
+  }
+  return response.text();
+}
+
+export async function exportExecutionHtml(token: string, executionId: string): Promise<string> {
+  const response = await fetchAuthenticated(buildUrl(`/api/traces/executions/${executionId}/export/html`), token);
+  if (!response.ok) {
+    const text = await response.text();
+    throw new ApiError(response.status, "Failed to export execution HTML", text);
+  }
+  return response.text();
+}
+
+function parseTraceEventPayload(payload: unknown, label = "TraceEvent"): TraceEvent {
+  const record = expectRecord(payload, label);
+  return {
+    id: readString(record, "id", label),
+    execution_id: readString(record, "execution_id", label),
+    event_type: readString(record, "event_type", label) as TraceEvent["event_type"],
+    timestamp: readString(record, "timestamp", label),
+    step_id: readOptionalString(record, "step_id", label),
+    payload: readRecord(record, "payload", label, {}),
+  };
+}
+
+function parseLLMCallRecordPayload(payload: unknown, label = "LLMCallRecord"): LLMCallRecord {
+  const record = expectRecord(payload, label);
+  return {
+    id: readString(record, "id", label),
+    step_id: readOptionalString(record, "step_id", label),
+    execution_id: readString(record, "execution_id", label),
+    model: readString(record, "model", label, ""),
+    prompt_tokens: readOptionalNumber(record, "prompt_tokens", label) ?? 0,
+    completion_tokens: readOptionalNumber(record, "completion_tokens", label) ?? 0,
+    total_tokens: readOptionalNumber(record, "total_tokens", label) ?? 0,
+    estimated_cost_usd: readOptionalNumber(record, "estimated_cost_usd", label),
+    latency_ms: readOptionalNumber(record, "latency_ms", label) ?? 0,
+    prompt_preview: readOptionalString(record, "prompt_preview", label),
+    response_preview: readOptionalString(record, "response_preview", label),
+    created_at: readOptionalString(record, "created_at", label) ?? "",
+  };
+}
+
+function parseToolCallRecordPayload(payload: unknown, label = "ToolCallRecord"): ToolCallRecord {
+  const record = expectRecord(payload, label);
+  return {
+    id: readString(record, "id", label),
+    step_id: readOptionalString(record, "step_id", label),
+    execution_id: readString(record, "execution_id", label),
+    tool_name: readString(record, "tool_name", label, ""),
+    args_preview: readOptionalString(record, "args_preview", label),
+    result_preview: readOptionalString(record, "result_preview", label),
+    latency_ms: readOptionalNumber(record, "latency_ms", label) ?? 0,
+    status: readString(record, "status", label, "unknown"),
+    created_at: readOptionalString(record, "created_at", label) ?? "",
+  };
+}
+
+function parseStepTracePayload(payload: unknown, label = "StepTrace"): StepTrace {
+  const record = expectRecord(payload, label);
+  const rawLlmCalls = record.llm_calls;
+  const rawToolCalls = record.tool_calls;
+  return {
+    id: readString(record, "id", label),
+    execution_id: readString(record, "execution_id", label),
+    name: readString(record, "name", label, ""),
+    status: readString(record, "status", label, "unknown"),
+    started_at: readOptionalString(record, "started_at", label),
+    completed_at: readOptionalString(record, "completed_at", label),
+    latency_ms: readOptionalNumber(record, "latency_ms", label),
+    error: readOptionalString(record, "error", label),
+    llm_calls: Array.isArray(rawLlmCalls)
+      ? rawLlmCalls.map((item, index) => parseLLMCallRecordPayload(item, `${label}.llm_calls[${index}]`))
+      : [],
+    tool_calls: Array.isArray(rawToolCalls)
+      ? rawToolCalls.map((item, index) => parseToolCallRecordPayload(item, `${label}.tool_calls[${index}]`))
+      : [],
+    input_preview: readOptionalString(record, "input_preview", label),
+    output_preview: readOptionalString(record, "output_preview", label),
+  };
+}
+
+function parseExecutionTracePayload(payload: unknown, label = "ExecutionTrace"): ExecutionTrace {
+  const record = expectRecord(payload, label);
+  const rawSteps = record.steps;
+  const rawLlmCalls = record.llm_calls;
+  const rawToolCalls = record.tool_calls;
+  const rawEvents = record.events;
+  return {
+    id: readString(record, "id", label),
+    workflow_name: readString(record, "workflow_name", label, ""),
+    namespace: readString(record, "namespace", label, ""),
+    agent_name: readOptionalString(record, "agent_name", label),
+    run_id: readOptionalString(record, "run_id", label),
+    status: readString(record, "status", label, "unknown"),
+    started_at: readOptionalString(record, "started_at", label),
+    completed_at: readOptionalString(record, "completed_at", label),
+    duration_ms: readOptionalNumber(record, "duration_ms", label),
+    input_preview: readOptionalString(record, "input_preview", label),
+    output_preview: readOptionalString(record, "output_preview", label),
+    step_count: readOptionalNumber(record, "step_count", label) ?? 0,
+    llm_call_count: readOptionalNumber(record, "llm_call_count", label) ?? 0,
+    tool_call_count: readOptionalNumber(record, "tool_call_count", label) ?? 0,
+    total_tokens: readOptionalNumber(record, "total_tokens", label) ?? 0,
+    total_cost_usd: readOptionalNumber(record, "total_cost_usd", label),
+    steps: Array.isArray(rawSteps)
+      ? rawSteps.map((item, index) => parseStepTracePayload(item, `${label}.steps[${index}]`))
+      : [],
+    llm_calls: Array.isArray(rawLlmCalls)
+      ? rawLlmCalls.map((item, index) => parseLLMCallRecordPayload(item, `${label}.llm_calls[${index}]`))
+      : [],
+    tool_calls: Array.isArray(rawToolCalls)
+      ? rawToolCalls.map((item, index) => parseToolCallRecordPayload(item, `${label}.tool_calls[${index}]`))
+      : [],
+    events: Array.isArray(rawEvents)
+      ? rawEvents.map((item, index) => parseTraceEventPayload(item, `${label}.events[${index}]`))
+      : [],
+  };
 }
 
 export async function fetchWorkflowNextAction(

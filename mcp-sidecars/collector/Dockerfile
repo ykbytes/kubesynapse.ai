@@ -10,6 +10,7 @@ RUN pip install --no-cache-dir -r collector-requirements.txt
 
 COPY base/mcp_base.py /app/mcp_base.py
 COPY collector/server.py /app/server.py
+COPY collector/capabilities.json /app/capabilities.json
 
 RUN useradd -u 1000 -m mcpuser || true
 USER 1000

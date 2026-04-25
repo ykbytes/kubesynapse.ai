@@ -13,9 +13,9 @@ from config import (
     A2A_ALLOWED_TARGETS,
     A2A_MAX_TIMEOUT_SECONDS,
     A2A_REQUIRE_HITL,
+    AGENT_SELECTION_MODE,
     API_GATEWAY_INTERNAL_URL,
     API_GATEWAY_SHARED_TOKEN,
-    AGENT_SELECTION_MODE,
     ARTIFACT_COLLECTION_MAX_FILES,
     ARTIFACT_PATH_PATTERN,
     COMPACTION_AGGRESSIVE_THRESHOLD,
@@ -35,6 +35,7 @@ from config import (
 from prompts import FORMAT_INSTRUCTIONS
 from sanitize_secrets import redact_secrets
 from skills import SKILL_RUNTIME_CONFIG
+
 from utils import truncate_text
 
 if TYPE_CHECKING:
@@ -130,7 +131,7 @@ def build_json_output_schema(output_schema: dict[str, Any] | None) -> dict[str, 
     }
 
 
-def build_prompt_format(request: "InvokeRequest") -> dict[str, Any] | None:
+def build_prompt_format(request: InvokeRequest) -> dict[str, Any] | None:
     """Build the prompt format descriptor for structured output requests."""
     if request.output_format == "json":
         return {
@@ -522,7 +523,7 @@ def build_compaction_hints(messages: list[dict[str, Any]], strategy: str) -> str
     hints = []
     if strategy in ("prune_outputs", "summarize", "aggressive"):
         if high_priority:
-            categories = set(p["category"] for p in high_priority)
+            categories = {p["category"] for p in high_priority}
             hints.append(f"PRESERVE: {', '.join(sorted(categories))} messages (high priority)")
         if low_priority:
             total_low_tokens = sum(p["tokens_est"] for p in low_priority)
@@ -678,7 +679,7 @@ def classify_task_type(prompt: str) -> str:
     substring matches (e.g. "find" no longer triggers on "findings").
     """
     # Score each category using word-boundary-aware patterns
-    scores: dict[str, float] = {cat: 0.0 for cat in _KEYWORD_PATTERNS}
+    scores: dict[str, float] = dict.fromkeys(_KEYWORD_PATTERNS, 0.0)
     for category, (patterns, weight) in _KEYWORD_PATTERNS.items():
         for pat in patterns:
             if pat.search(prompt):
@@ -866,7 +867,7 @@ def _summarize_tool_output(value: Any, *, max_chars: int = 240) -> str:
                 if preview:
                     summary = f"{summary}: {preview}"
                 return truncate_text(summary, max_chars)
-            keys = [str(key) for key in parsed.keys()][:5]
+            keys = [str(key) for key in parsed][:5]
             if keys:
                 return truncate_text(f"returned an object with keys: {', '.join(keys)}", max_chars)
 

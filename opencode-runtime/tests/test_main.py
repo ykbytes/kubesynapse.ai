@@ -6,8 +6,8 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch, MagicMock
-
+from typing import Any
+from unittest.mock import MagicMock, patch
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "main.py"
 SPEC = importlib.util.spec_from_file_location("opencode_runtime_main", MODULE_PATH)
@@ -158,7 +158,7 @@ class OpenCodeRuntimeTests(unittest.TestCase):
             "---\n"
             "Body\n"
         )
-        name, description, warnings = opencode_runtime_main.parse_skill_frontmatter(
+        name, _description, warnings = opencode_runtime_main.parse_skill_frontmatter(
             ".github/skills/reviewer/SKILL.md",
             content,
         )
@@ -540,7 +540,7 @@ class DetectCompletionStatusTests(unittest.TestCase):
 
     def test_incomplete_on_missing_info(self) -> None:
         # When info dict is absent, we default to empty which yields empty
-        # finish string â†’ treated as incomplete (we cannot confirm completion)
+        # finish string â†’ treated as incomplete (we cannot confirm completion)  # noqa: RUF003 — unicode quote in comment is intentional
         self.assertEqual(opencode_runtime_main.detect_completion_status({}), "incomplete")
 
     def test_unknown_on_non_dict_info(self) -> None:
@@ -1852,7 +1852,7 @@ class InvokeOpenCodeLoopTests(unittest.TestCase):
 
     def _run_invoke(self, request_kwargs: dict, payloads: list[dict]) -> opencode_runtime_main.InvokeResponse:
         request = opencode_runtime_main.InvokeRequest(**request_kwargs)
-        with self._patch_server_running(), self._patch_create_session(), self._patch_send_prompt(payloads) as mock_send:
+        with self._patch_server_running(), self._patch_create_session(), self._patch_send_prompt(payloads):
             patches = self._patch_session_helpers()
             with patches[0], patches[1], patches[2], patches[3], patches[4]:
                 return opencode_runtime_main.invoke_opencode(request)
@@ -1952,7 +1952,7 @@ class InvokeOpenCodeLoopTests(unittest.TestCase):
         ):
             patches = self._patch_session_helpers()
             with patches[0], patches[1], patches[2], patches[3], patches[4]:
-                resp = opencode_runtime_main.invoke_opencode(req)
+                opencode_runtime_main.invoke_opencode(req)
         # Verify the system prompt passed to send does NOT include AUTONOMY_SYSTEM_PROMPT
         call_kwargs = mock_send.call_args.kwargs
         system = call_kwargs.get("system_prompt", "")
@@ -1986,7 +1986,7 @@ class InvokeOpenCodeLoopTests(unittest.TestCase):
         todos = [{"id": "1", "title": "Write code", "status": "done"}]
         payload = self._make_payload("All done", "stop")
         req = opencode_runtime_main.InvokeRequest(prompt="Build it")
-        with self._patch_server_running(), self._patch_create_session(), self._patch_send_prompt([payload]):
+        with self._patch_server_running(), self._patch_create_session(), self._patch_send_prompt([payload]):  # noqa: SIM117 — nested with for clarity
             with (
                 patch.object(invoke_mod, "get_session_messages", return_value=[]),
                 patch.object(invoke_mod, "get_session_todos", return_value=todos),
@@ -2001,7 +2001,7 @@ class InvokeOpenCodeLoopTests(unittest.TestCase):
     def test_response_includes_continuity_metadata(self) -> None:
         payload = self._make_payload("All done", "stop")
         req = opencode_runtime_main.InvokeRequest(prompt="Build it")
-        with self._patch_server_running(), self._patch_create_session(), self._patch_send_prompt([payload]):
+        with self._patch_server_running(), self._patch_create_session(), self._patch_send_prompt([payload]):  # noqa: SIM117 — nested with for clarity
             with (
                 patch.object(invoke_mod, "get_session_messages", return_value=[]),
                 patch.object(invoke_mod, "get_session_todos", return_value=[]),
@@ -2018,7 +2018,7 @@ class InvokeOpenCodeLoopTests(unittest.TestCase):
         payload = self._make_payload("All done", "stop")
         req = opencode_runtime_main.InvokeRequest(prompt="Build feature", autonomous=True)
         mock_init = MagicMock(return_value=True)
-        with (
+        with (  # noqa: SIM117 — nested with for clarity
             self._patch_server_running(),
             self._patch_create_session(),
             self._patch_send_prompt([payload]),
@@ -2039,7 +2039,7 @@ class InvokeOpenCodeLoopTests(unittest.TestCase):
         payload = self._make_payload("All done", "stop")
         req = opencode_runtime_main.InvokeRequest(prompt="Build feature", autonomous=True)
         mock_init = MagicMock(return_value=True)
-        with (
+        with (  # noqa: SIM117 — nested with for clarity
             self._patch_server_running(),
             self._patch_create_session(),
             self._patch_send_prompt([payload]),
@@ -2062,12 +2062,12 @@ class InvokeOpenCodeLoopTests(unittest.TestCase):
         req = opencode_runtime_main.InvokeRequest(prompt="Test", max_turns=1)
         mock_abort = MagicMock(return_value=True)
         busy_status = {"type": "busy"}
-        with self._patch_server_running(), self._patch_create_session(), self._patch_send_prompt([payload]):
+        with self._patch_server_running(), self._patch_create_session(), self._patch_send_prompt([payload]):  # noqa: SIM117 — nested with for clarity
             with (
                 patch.object(invoke_mod, "get_session_messages", return_value=[]),
                 patch.object(invoke_mod, "get_session_todos", return_value=[]),
                 patch.object(invoke_mod, "wait_for_session_idle", return_value=busy_status),
-                patch.object(invoke_mod, "abort_session", mock_abort) as abort_mock,
+                patch.object(invoke_mod, "abort_session", mock_abort),
                 patch.object(invoke_mod, "summarize_session", return_value=True),
             ):
                 resp = opencode_runtime_main.invoke_opencode(req)
@@ -2080,7 +2080,7 @@ class InvokeOpenCodeLoopTests(unittest.TestCase):
             patch.object(analysis_mod, "MODEL_CONTEXT_LIMIT", 100000),
             patch.object(analysis_mod, "COMPACTION_TOKEN_THRESHOLD", 0.75),
         ):
-            # First response: incomplete with high tokens â†’ triggers proactive compaction
+            # First response: incomplete with high tokens â†’ triggers proactive compaction  # noqa: RUF003 — unicode quote in comment is intentional
             high_tokens_incomplete = self._make_payload(
                 "Working...", "tool-calls", tokens={"input": 60000, "output": 20000, "total": 80000}
             )
@@ -2088,7 +2088,7 @@ class InvokeOpenCodeLoopTests(unittest.TestCase):
             done = self._make_payload("Done", "stop")
             mock_summarize = MagicMock(return_value=True)
             req = opencode_runtime_main.InvokeRequest(prompt="Process", autonomous=True)
-            with (
+            with (  # noqa: SIM117 — nested with for clarity
                 self._patch_server_running(),
                 self._patch_create_session(),
                 self._patch_send_prompt([high_tokens_incomplete, done]),
@@ -2113,7 +2113,7 @@ class InvokeOpenCodeLoopTests(unittest.TestCase):
             payload = self._make_payload("Done", "stop", tokens={"input": 60000, "output": 20000, "total": 80000})
             mock_summarize = MagicMock(return_value=True)
             req = opencode_runtime_main.InvokeRequest(prompt="Process")
-            with self._patch_server_running(), self._patch_create_session(), self._patch_send_prompt([payload]):
+            with self._patch_server_running(), self._patch_create_session(), self._patch_send_prompt([payload]):  # noqa: SIM117 — nested with for clarity
                 with (
                     patch.object(invoke_mod, "get_session_messages", return_value=[]),
                     patch.object(invoke_mod, "get_session_todos", return_value=[]),
@@ -2138,7 +2138,7 @@ class InvokeOpenCodeLoopTests(unittest.TestCase):
             {"info": {"id": "msg_old", "role": "assistant", "finish": "stop"}, "parts": [{"type": "text", "text": "I updated AGENTS.md"}]},
         ]
         req = opencode_runtime_main.InvokeRequest(prompt="hello", max_turns=1)
-        with self._patch_server_running(), self._patch_create_session(), self._patch_send_prompt([payload]):
+        with self._patch_server_running(), self._patch_create_session(), self._patch_send_prompt([payload]):  # noqa: SIM117 — nested with for clarity
             with (
                 patch.object(invoke_mod, "get_session_message", return_value=exact_message),
                 patch.object(invoke_mod, "get_session_messages", return_value=stale_history),
@@ -2197,7 +2197,6 @@ class SessionRegistryPruningTests(unittest.TestCase):
     """Tests for SessionRegistry with max_age and max_entries pruning."""
 
     def _make_registry(self, data: dict | None = None, max_age: int = 3600, max_entries: int = 100):
-        import time as _time
 
         td = tempfile.mkdtemp()
         path = Path(td) / "session-map.json"
@@ -2207,7 +2206,6 @@ class SessionRegistryPruningTests(unittest.TestCase):
         return reg, path, td
 
     def test_get_or_set_creates_entry_with_timestamp(self) -> None:
-        import time as _time
 
         reg, path, _ = self._make_registry()
         sid = reg.get_or_set("thread1", "ses_abc")
@@ -2262,7 +2260,7 @@ class SessionRegistryPruningTests(unittest.TestCase):
         data = {}
         for i in range(10):
             data[f"t{i}"] = {"session_id": f"s{i}", "last_accessed": now - (10 - i)}
-        reg, path, _ = self._make_registry(data, max_entries=5)
+        reg, _path, _ = self._make_registry(data, max_entries=5)
         # Force pruning by resetting debounce
         reg._last_prune = 0
         reg.get_or_set("new_thread", "new_ses")
@@ -2273,17 +2271,17 @@ class SendPromptWithSessionRecoveryTests(unittest.TestCase):
     """Tests for _send_prompt_with_session_recovery, including 404 registry update."""
 
     def _make_kwargs(self, session_id: str = "ses_old") -> dict:
-        return dict(
-            session_id=session_id,
-            prompt="hello",
-            model="gpt-4",
-            system_prompt=None,
-            prompt_format=None,
-            working_directory="/workspace",
-            agent="build",
-            logical_thread_id="thread_1",
-            allow_session_recovery=True,
-        )
+        return {
+            "session_id": session_id,
+            "prompt": "hello",
+            "model": "gpt-4",
+            "system_prompt": None,
+            "prompt_format": None,
+            "working_directory": "/workspace",
+            "agent": "build",
+            "logical_thread_id": "thread_1",
+            "allow_session_recovery": True,
+        }
 
     def test_successful_send_returns_payload(self) -> None:
         expected = {"info": {"role": "assistant"}, "parts": []}
@@ -2322,7 +2320,7 @@ class SendPromptWithSessionRecoveryTests(unittest.TestCase):
     def test_non_404_error_propagates(self) -> None:
         from fastapi import HTTPException as _HTTPException
 
-        with patch.object(opencode_client_mod, "send_prompt", side_effect=_HTTPException(status_code=500)):
+        with patch.object(opencode_client_mod, "send_prompt", side_effect=_HTTPException(status_code=500)):  # noqa: SIM117 — nested with for clarity
             with self.assertRaises(_HTTPException) as ctx:
                 opencode_runtime_main._send_prompt_with_session_recovery(**self._make_kwargs())
         self.assertEqual(ctx.exception.status_code, 500)
@@ -2332,7 +2330,7 @@ class SendPromptWithSessionRecoveryTests(unittest.TestCase):
 
         kwargs = self._make_kwargs()
         kwargs["allow_session_recovery"] = False
-        with patch.object(opencode_client_mod, "send_prompt", side_effect=_HTTPException(status_code=404)):
+        with patch.object(opencode_client_mod, "send_prompt", side_effect=_HTTPException(status_code=404)):  # noqa: SIM117 — nested with for clarity
             with self.assertRaises(_HTTPException) as ctx:
                 opencode_runtime_main._send_prompt_with_session_recovery(**kwargs)
         self.assertEqual(ctx.exception.status_code, 404)
@@ -2391,7 +2389,7 @@ class SendPromptTests(unittest.TestCase):
         mock_client.__enter__ = MagicMock(return_value=mock_client)
         mock_client.__exit__ = MagicMock(return_value=False)
 
-        with patch.object(opencode_client_mod, "runtime_http_client", return_value=mock_client):
+        with patch.object(opencode_client_mod, "runtime_http_client", return_value=mock_client):  # noqa: SIM117 — nested with for clarity
             with self.assertRaises(_HTTPException) as ctx:
                 opencode_runtime_main.send_prompt(
                     session_id="ses_test",
@@ -2453,7 +2451,7 @@ class StructuredOutputFormatRetryTests(unittest.TestCase):
             patch.object(invoke_mod, "abort_session", return_value=True),
             patch.object(invoke_mod, "summarize_session", return_value=True),
         ):
-            resp = opencode_runtime_main.invoke_opencode(req)
+            opencode_runtime_main.invoke_opencode(req)
 
         # The second call (retry after StructuredOutputError) should include prompt_format
         self.assertGreaterEqual(len(call_log), 2)

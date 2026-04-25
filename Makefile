@@ -13,7 +13,9 @@
 	docker-push-mcp-code-exec docker-push-mcp-web-search docker-push-mcp-documents \
 	docker-push-mcp-browser docker-push-mcp-database docker-push-mcp-git \
 	docker-push-mcp-github-adapter docker-push-mcp-kubernetes docker-push-mcp-messaging \
-	docker-push-mcp-rag
+	docker-push-mcp-rag \
+	compose-up compose-down compose-build compose-logs compose-status \
+	k8s-install k8s-upgrade k8s-uninstall k8s-status
 
 CONTAINER_CLI ?= docker
 CONTAINER_BUILD_FLAGS ?= --format docker
@@ -150,6 +152,12 @@ docker-push-mcp-rag:
 
 test: test-services test-integration
 
+test-gateway:
+	cd api-gateway && python -m pytest tests/ -v --cov=. --cov-report=term-missing --cov-fail-under=30
+
+test-operator:
+	cd operator && python -m pytest tests/ -v --cov=. --cov-report=term-missing --cov-fail-under=30
+
 test-services:
 	@if [ -d operator/tests ]; then cd operator && python -m pytest tests/ -v; else echo "No operator tests found"; fi
 	@if [ -d opencode-runtime/tests ]; then cd opencode-runtime && python -m pytest tests/ -v; else echo "No opencode-runtime tests found"; fi
@@ -160,9 +168,12 @@ test-integration:
 	@if [ -d tests ]; then python -m pytest tests/ -v; else echo "No integration tests found"; fi
 
 lint:
-	cd operator && python -m flake8 . --max-line-length=120
-	cd opencode-runtime && python -m flake8 . --max-line-length=120
-	cd api-gateway && python -m flake8 . --max-line-length=120
+	ruff check operator/ api-gateway/ opencode-runtime/
+	cd api-gateway && bandit -r . -c ../.bandit.yaml || true
+
+format:
+	ruff format operator/ api-gateway/ opencode-runtime/
+	ruff check --fix operator/ api-gateway/ opencode-runtime/
 
 # ===========================
 # Helm
@@ -203,6 +214,61 @@ undeploy:
 	kubectl delete crd agenttenants.kubesynth.ai || true
 	kubectl delete crd agentworkflows.kubesynth.ai || true
 	kubectl delete crd agentevals.kubesynth.ai || true
+
+# ===========================
+# Docker Compose (local dev)
+# ===========================
+
+COMPOSE_FILE ?= docker-compose.yml
+
+compose-up:
+	docker compose -f $(COMPOSE_FILE) up -d
+	@echo ""
+	@echo "KubeSynth is running:"
+	@echo "  API Gateway:  http://localhost:8080"
+	@echo "  Web UI:       http://localhost:3000"
+	@echo "  LiteLLM:      http://localhost:4000"
+
+compose-down:
+	docker compose -f $(COMPOSE_FILE) down
+
+compose-down-volumes:
+	docker compose -f $(COMPOSE_FILE) down -v
+
+compose-build:
+	docker compose -f $(COMPOSE_FILE) build --no-cache
+
+compose-logs:
+	docker compose -f $(COMPOSE_FILE) logs -f
+
+compose-status:
+	docker compose -f $(COMPOSE_FILE) ps
+
+# ===========================
+# Kubernetes deployment
+# ===========================
+
+K8S_NAMESPACE ?= kubesynth
+K8S_RELEASE ?= kubesynth
+K8S_VALUES ?= ./deploy/values.production.yaml
+
+k8s-install:
+	./scripts/deploy-k8s.sh install
+
+k8s-upgrade:
+	./scripts/deploy-k8s.sh upgrade
+
+k8s-uninstall:
+	./scripts/deploy-k8s.sh uninstall
+
+k8s-status:
+	./scripts/deploy-k8s.sh status
+
+k8s-logs:
+	./scripts/deploy-k8s.sh logs $(SERVICE)
+
+k8s-port-forward:
+	./scripts/deploy-k8s.sh port-forward
 
 # ===========================
 # Clean

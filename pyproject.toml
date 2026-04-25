@@ -62,13 +62,34 @@ ignore = [
     "S104",  # binding to 0.0.0.0 is intentional in containers
     "S603",  # subprocess calls are intentional in sandbox tools
     "S607",  # partial executable path acceptable in container context
+    "B008",  # FastAPI Depends() in default args is standard pattern
+    "UP042", # (str, Enum) is intentional and widely compatible
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**/*.py" = ["S101", "S106"]  # allow assert and hardcoded passwords in tests
+"tests/**/*.py" = ["S101", "S105", "S106", "S108", "S110", "SIM117", "RUF003", "RUF012"]  # allow assert, passwords, temp files, nested with, unicode quotes, mutable defaults in tests
+"api-gateway/tests/**/*.py" = ["S101", "S105", "S106", "S108", "S110", "SIM117", "RUF003", "RUF012"]  # same for api-gateway tests
+"api-gateway/main.py" = ["E402", "S105"]  # local imports after sys.path manipulation; S105 false positives on OAuth method names
+"opencode-runtime/main.py" = ["E402"]  # late imports for optional deps and backward compat
+"operator/state_store.py" = ["E402"]  # late imports for optional deps
 
 [tool.ruff.lint.isort]
-known-first-party = ["operator", "agent_logic", "guardrails", "hitl", "env_utils", "opensandbox_tools", "utils", "state_store", "auth_store", "enterprise_auth", "jwt_utils"]
+known-first-party = [
+    "operator",
+    "agent_logic",
+    "guardrails",
+    "hitl",
+    "env_utils",
+    "opensandbox_tools",
+    "utils",
+    "state_store",
+    "auth_store",
+    "enterprise_auth",
+    "jwt_utils",
+    "api_gateway",
+    "opencode_runtime",
+    "constants",
+]
 
 [tool.pytest.ini_options]
 addopts = "--import-mode=importlib"

@@ -464,93 +464,83 @@ export function IntelligenceDashboard() {
 
   return (
     <TooltipProvider delayDuration={300}>
-      <div className="flex flex-col h-full overflow-hidden">
+        <div className="flex flex-col flex-1 min-h-0">
         {/* ── Header Bar ── */}
-        <div className="shrink-0 border-b border-border/60 bg-gradient-to-br from-background/95 via-background/90 to-muted/35 px-4 py-4 shadow-sm shadow-black/5">
-          <div className="space-y-4">
-            <div className="flex flex-wrap items-start justify-between gap-4">
-              <div className="space-y-2">
-                <div className="flex flex-wrap items-center gap-2">
-                  <Badge variant="outline" className="border-border/60 bg-background/80">Read-only collection</Badge>
-                  <Badge variant="outline" className="border-border/60 bg-background/80">{collectors.length} collector{collectors.length === 1 ? "" : "s"}</Badge>
-                  <Badge variant="outline" className="border-border/60 bg-background/80">Auto-refresh 15s</Badge>
-                </div>
-                <div>
-                  <h2 className="text-xl font-semibold tracking-tight text-foreground">Cluster intelligence</h2>
-                  <p className="text-sm leading-6 text-muted-foreground">
-                    Connect collectors, run read-only scripts, and inspect live operational evidence without leaving the workspace.
-                  </p>
-                </div>
-              </div>
-              <div className="flex items-center gap-2">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="h-9 bg-background/80 text-xs"
-                  onClick={refresh}
-                  disabled={refreshing}
-                >
-                  <RefreshCw className={cn("h-3.5 w-3.5 mr-1", refreshing && "animate-spin")} />
-                  Refresh
-                </Button>
+        <div className="shrink-0 border-b border-border/60 bg-gradient-to-br from-background/95 via-background/90 to-muted/35 px-3 py-2.5 shadow-sm shadow-black/5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="text-sm font-semibold text-foreground">Cluster intelligence</h2>
+              <div className="flex items-center gap-1.5">
+                <Badge variant="outline" className="border-border/60 bg-background/80 text-[10px] px-1.5 py-0">Read-only</Badge>
+                <Badge variant="outline" className="border-border/60 bg-background/80 text-[10px] px-1.5 py-0">{collectors.length} collector{collectors.length === 1 ? "" : "s"}</Badge>
+                <Badge variant="outline" className="border-border/60 bg-background/80 text-[10px] px-1.5 py-0">Auto-refresh 15s</Badge>
               </div>
             </div>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 bg-background/80 text-[11px] px-2"
+              onClick={refresh}
+              disabled={refreshing}
+            >
+              <RefreshCw className={cn("h-3 w-3 mr-1", refreshing && "animate-spin")} />
+              Refresh
+            </Button>
+          </div>
 
-            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-              <Card className="gap-0 border-border/60 bg-background/80 py-2 shadow-sm shadow-black/5 transition-transform duration-200 hover:-translate-y-0.5">
-                <CardHeader className="px-3 pb-1 pt-0">
-                <CardTitle className="text-[11px] font-medium text-muted-foreground flex items-center gap-1.5">
-                  <Server className="h-3.5 w-3.5" /> Collectors
+          <div className="mt-1.5 grid grid-cols-2 gap-2 md:grid-cols-4">
+            <Card className="gap-0 border-border/60 bg-background/80 py-1.5 shadow-sm shadow-black/5">
+              <CardHeader className="px-2.5 pb-0.5 pt-0">
+                <CardTitle className="text-[10px] font-medium text-muted-foreground flex items-center gap-1">
+                  <Server className="h-3 w-3" /> Collectors
                 </CardTitle>
               </CardHeader>
-              <CardContent className="px-3 pb-0">
-                <div className="text-xl font-bold">{collectors.length}</div>
+              <CardContent className="px-2.5 pb-0">
+                <div className="text-base font-bold">{collectors.length}</div>
                 <p className="text-[10px] text-muted-foreground">
-                  {collectors.length === 0
-                    ? "none connected"
-                    : `${onlineCollectors} online`}
+                  {collectors.length === 0 ? "none" : `${onlineCollectors} online`}
                 </p>
               </CardContent>
             </Card>
-              <Card className="gap-0 border-border/60 bg-background/80 py-2 shadow-sm shadow-black/5 transition-transform duration-200 hover:-translate-y-0.5">
-                <CardHeader className="px-3 pb-1 pt-0">
-                <CardTitle className="text-[11px] font-medium text-muted-foreground flex items-center gap-1.5">
-                  <Zap className="h-3.5 w-3.5" /> Tasks Run
+            <Card className="gap-0 border-border/60 bg-background/80 py-1.5 shadow-sm shadow-black/5">
+              <CardHeader className="px-2.5 pb-0.5 pt-0">
+                <CardTitle className="text-[10px] font-medium text-muted-foreground flex items-center gap-1">
+                  <Zap className="h-3 w-3" /> Tasks
                 </CardTitle>
               </CardHeader>
-              <CardContent className="px-3 pb-0">
-                <div className="text-xl font-bold">{totalTasks}</div>
-                <p className="text-[10px] text-muted-foreground">{completedTasks} fully succeeded</p>
+              <CardContent className="px-2.5 pb-0">
+                <div className="text-base font-bold">{totalTasks}</div>
+                <p className="text-[10px] text-muted-foreground">{completedTasks} succeeded</p>
               </CardContent>
             </Card>
-              <Card className="gap-0 border-border/60 bg-background/80 py-2 shadow-sm shadow-black/5 transition-transform duration-200 hover:-translate-y-0.5">
-                <CardHeader className="px-3 pb-1 pt-0">
-                <CardTitle className="text-[11px] font-medium text-muted-foreground flex items-center gap-1.5">
-                  <FileCode2 className="h-3.5 w-3.5" /> Built-in Scripts
+            <Card className="gap-0 border-border/60 bg-background/80 py-1.5 shadow-sm shadow-black/5">
+              <CardHeader className="px-2.5 pb-0.5 pt-0">
+                <CardTitle className="text-[10px] font-medium text-muted-foreground flex items-center gap-1">
+                  <FileCode2 className="h-3 w-3" /> Scripts
                 </CardTitle>
               </CardHeader>
-              <CardContent className="px-3 pb-0">
-                <div className="text-xl font-bold">{Object.keys(BUILTIN_SCRIPTS).length}</div>
+              <CardContent className="px-2.5 pb-0">
+                <div className="text-base font-bold">{Object.keys(BUILTIN_SCRIPTS).length}</div>
                 <p className="text-[10px] text-muted-foreground">ready to use</p>
               </CardContent>
             </Card>
-              <Card className="gap-0 border-border/60 bg-background/80 py-2 shadow-sm shadow-black/5 transition-transform duration-200 hover:-translate-y-0.5">
-                <CardHeader className="px-3 pb-1 pt-0">
-                <CardTitle className="text-[11px] font-medium text-muted-foreground flex items-center gap-1.5">
-                  <Activity className="h-3.5 w-3.5" /> Status
+            <Card className="gap-0 border-border/60 bg-background/80 py-1.5 shadow-sm shadow-black/5">
+              <CardHeader className="px-2.5 pb-0.5 pt-0">
+                <CardTitle className="text-[10px] font-medium text-muted-foreground flex items-center gap-1">
+                  <Activity className="h-3 w-3" /> Status
                 </CardTitle>
               </CardHeader>
-              <CardContent className="px-3 pb-0">
-                <div className="flex items-center gap-1.5">
+              <CardContent className="px-2.5 pb-0">
+                <div className="flex items-center gap-1">
                   <div className={cn(
-                    "h-2 w-2 rounded-full",
+                    "h-1.5 w-1.5 rounded-full",
                     onlineCollectors === collectors.length && collectors.length > 0
                       ? "bg-emerald-500"
                       : collectors.length === 0
                         ? "bg-muted-foreground/30"
                         : "bg-amber-500",
                   )} />
-                  <span className="text-xl font-bold">
+                  <span className="text-base font-bold">
                     {onlineCollectors === collectors.length && collectors.length > 0
                       ? "Healthy"
                       : collectors.length === 0
@@ -562,16 +552,15 @@ export function IntelligenceDashboard() {
                   {collectors.length === 0 ? "connect a cluster" : "all systems"}
                 </p>
               </CardContent>
-              </Card>
-            </div>
+            </Card>
           </div>
         </div>
 
         {/* ── Main Content ── */}
         <div className="flex-1 min-h-0 flex">
           {/* ── Left Panel: Resource Explorer ── */}
-          <div className="w-72 shrink-0 border-r border-border/60 bg-background/55 flex flex-col">
-            <div className="p-3 space-y-2 shrink-0">
+          <div className="w-64 shrink-0 border-r border-border/60 bg-background/55 flex flex-col">
+            <div className="p-2.5 space-y-1.5 shrink-0">
               <div className="flex items-center gap-1">
                 <Button
                   size="sm"
@@ -614,7 +603,7 @@ export function IntelligenceDashboard() {
             </div>
 
             <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as typeof activeTab)} className="flex-1 flex flex-col min-h-0">
-              <TabsList className="mx-3 mt-1 h-auto shrink-0 w-auto rounded-2xl border border-border/60 bg-background/80 p-1">
+              <TabsList className="mx-2.5 mt-0.5 h-auto shrink-0 w-auto rounded-2xl border border-border/60 bg-background/80 p-1">
                 <TabsTrigger value="collectors" className="text-[11px] cursor-pointer">
                   Collectors ({collectors.length})
                 </TabsTrigger>
@@ -626,24 +615,24 @@ export function IntelligenceDashboard() {
               <ScrollArea className="flex-1 min-h-0">
                 <TabsContent value="collectors" className="mt-0 p-2 space-y-1">
                   {filteredCollectors.length === 0 ? (
-                    <div className="rounded-2xl border border-dashed border-border/70 bg-background/70 px-3 py-8 text-center text-xs text-muted-foreground shadow-sm shadow-black/5">
+                    <div className="rounded-2xl border border-dashed border-border/70 bg-background/70 px-3 py-5 text-center text-xs text-muted-foreground shadow-sm shadow-black/5">
                       {collectors.length === 0 ? (
-                        <div className="space-y-3 px-2">
-                          <div className="mx-auto w-12 h-12 rounded-xl border border-border/60 bg-muted/20 flex items-center justify-center">
-                            <Server className="h-6 w-6 text-muted-foreground/40" />
+                        <div className="space-y-2 px-2">
+                          <div className="mx-auto w-10 h-10 rounded-lg border border-border/60 bg-muted/20 flex items-center justify-center">
+                            <Server className="h-5 w-5 text-muted-foreground/40" />
                           </div>
                           <p className="font-medium">No clusters connected</p>
                           <p className="text-[10px] leading-relaxed">
-                            Connect a Kubernetes cluster or VM to start running read-only intelligence scripts.
+                            Connect a cluster to run read-only scripts.
                           </p>
                           {canMutate && (
                             <Button
                               size="sm"
                               variant="outline"
-                              className="h-8 text-[11px] mt-1 bg-background/80"
+                              className="h-7 text-[11px] bg-background/80"
                               onClick={() => setShowRegisterDialog(true)}
                             >
-                              <Plus className="h-3 w-3 mr-1" /> Connect Cluster
+                              <Plus className="h-3 w-3 mr-1" /> Connect
                             </Button>
                           )}
                         </div>
@@ -722,15 +711,15 @@ export function IntelligenceDashboard() {
                     </div>
                   )}
                   {filteredTasks.length === 0 ? (
-                    <div className="rounded-2xl border border-dashed border-border/70 bg-background/70 px-3 py-8 text-center text-xs text-muted-foreground shadow-sm shadow-black/5">
+                    <div className="rounded-2xl border border-dashed border-border/70 bg-background/70 px-3 py-5 text-center text-xs text-muted-foreground shadow-sm shadow-black/5">
                       {tasks.length === 0 ? (
-                        <div className="space-y-3 px-2">
-                          <div className="mx-auto w-12 h-12 rounded-xl border border-border/60 bg-muted/20 flex items-center justify-center">
-                            <Terminal className="h-6 w-6 text-muted-foreground/40" />
+                        <div className="space-y-2 px-2">
+                          <div className="mx-auto w-10 h-10 rounded-lg border border-border/60 bg-muted/20 flex items-center justify-center">
+                            <Terminal className="h-5 w-5 text-muted-foreground/40" />
                           </div>
                           <p className="font-medium">No tasks yet</p>
                           <p className="text-[10px] leading-relaxed">
-                            Run a script on your connected clusters to see results here.
+                            Run a script to see results here.
                           </p>
                         </div>
                       ) : (
@@ -795,56 +784,55 @@ export function IntelligenceDashboard() {
             {!selectedCollector && !selectedTask ? (
               /* ── Empty State / Quick Actions ── */
               collectors.length === 0 ? (
-                <div className="flex items-center justify-center h-full p-8">
-                  <div className="max-w-lg w-full space-y-6">
-                    <div className="text-center space-y-2">
-                      <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl border border-border/60 bg-gradient-to-br from-primary/10 to-primary/5 shadow-sm shadow-black/5">
-                        <Sparkles className="h-8 w-8 text-primary/60" />
+                <div className="p-3">
+                  <div className="max-w-lg w-full space-y-2">
+                    <div className="flex items-center gap-2">
+                      <div className="flex h-8 w-8 items-center justify-center rounded-xl border border-border/60 bg-gradient-to-br from-primary/10 to-primary/5 shadow-sm shadow-black/5">
+                        <Sparkles className="h-4 w-4 text-primary/60" />
                       </div>
-                      <h2 className="text-lg font-semibold">Cluster Intelligence</h2>
-                      <p className="text-sm text-muted-foreground max-w-md mx-auto">
-                        Run read-only scripts on your Kubernetes clusters to collect health data,
-                        security posture, resource usage, and more — without modifying anything.
-                      </p>
+                      <h2 className="text-sm font-semibold">Cluster Intelligence</h2>
                     </div>
+                    <p className="text-xs text-muted-foreground">
+                      Run read-only scripts on your clusters to collect health, security, and resource data.
+                    </p>
 
-                    <div className="space-y-3">
-                      <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Getting Started</h3>
-                      <div className="space-y-2">
-                        <div className="flex items-start gap-3 rounded-2xl border border-border/60 bg-background/80 p-3 shadow-sm shadow-black/5">
-                          <div className="h-6 w-6 rounded-full bg-primary/10 flex items-center justify-center shrink-0 mt-0.5">
-                            <span className="text-xs font-bold text-primary">1</span>
+                    <div className="space-y-2">
+                      <h3 className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Getting Started</h3>
+                      <div className="space-y-1.5">
+                        <div className="flex items-start gap-2 rounded-xl border border-border/60 bg-background/80 p-2.5 shadow-sm shadow-black/5">
+                          <div className="h-5 w-5 rounded-full bg-primary/10 flex items-center justify-center shrink-0 mt-0.5">
+                            <span className="text-[10px] font-bold text-primary">1</span>
                           </div>
-                          <div className="flex-1">
+                          <div className="flex-1 min-w-0">
                             <p className="text-xs font-medium">Connect a Cluster</p>
-                            <p className="text-[11px] text-muted-foreground mt-0.5">
-                              Deploy the collector agent on your K8s cluster, then register its endpoint here.
+                            <p className="text-[10px] text-muted-foreground mt-0.5 leading-snug">
+                              Deploy the collector agent, then register its endpoint.
                             </p>
                           </div>
                           {canMutate && (
-                            <Button size="sm" className="h-7 text-[11px] shrink-0" onClick={() => setShowRegisterDialog(true)}>
+                            <Button size="sm" className="h-6 text-[11px] px-2 shrink-0" onClick={() => setShowRegisterDialog(true)}>
                               Connect <ArrowRight className="h-3 w-3 ml-1" />
                             </Button>
                           )}
                         </div>
-                        <div className="flex items-start gap-3 rounded-2xl border border-border/60 bg-background/70 p-3 shadow-sm shadow-black/5">
-                          <div className="h-6 w-6 rounded-full bg-muted flex items-center justify-center shrink-0 mt-0.5">
-                            <span className="text-xs font-bold text-muted-foreground">2</span>
+                        <div className="flex items-start gap-2 rounded-xl border border-border/60 bg-background/70 p-2.5 shadow-sm shadow-black/5">
+                          <div className="h-5 w-5 rounded-full bg-muted flex items-center justify-center shrink-0 mt-0.5">
+                            <span className="text-[10px] font-bold text-muted-foreground">2</span>
                           </div>
-                          <div>
+                          <div className="min-w-0">
                             <p className="text-xs font-medium text-muted-foreground">Run a Script</p>
-                            <p className="text-[11px] text-muted-foreground mt-0.5">
-                              Choose from {Object.keys(BUILTIN_SCRIPTS).length} built-in scripts or write custom read-only queries.
+                            <p className="text-[10px] text-muted-foreground mt-0.5 leading-snug">
+                              Choose from {Object.keys(BUILTIN_SCRIPTS).length} built-in scripts or write custom queries.
                             </p>
                           </div>
                         </div>
-                        <div className="flex items-start gap-3 rounded-2xl border border-border/60 bg-background/70 p-3 shadow-sm shadow-black/5">
-                          <div className="h-6 w-6 rounded-full bg-muted flex items-center justify-center shrink-0 mt-0.5">
-                            <span className="text-xs font-bold text-muted-foreground">3</span>
+                        <div className="flex items-start gap-2 rounded-xl border border-border/60 bg-background/70 p-2.5 shadow-sm shadow-black/5">
+                          <div className="h-5 w-5 rounded-full bg-muted flex items-center justify-center shrink-0 mt-0.5">
+                            <span className="text-[10px] font-bold text-muted-foreground">3</span>
                           </div>
-                          <div>
+                          <div className="min-w-0">
                             <p className="text-xs font-medium text-muted-foreground">Set Up Schedules & Alerts</p>
-                            <p className="text-[11px] text-muted-foreground mt-0.5">
+                            <p className="text-[10px] text-muted-foreground mt-0.5 leading-snug">
                               Automate collection with cron schedules and trigger AI agents on anomalies.
                             </p>
                           </div>
@@ -852,12 +840,11 @@ export function IntelligenceDashboard() {
                       </div>
                     </div>
 
-                    <div className="rounded-2xl border border-dashed border-border/70 bg-muted/15 p-3 shadow-sm shadow-black/5">
-                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                        <Lock className="h-3.5 w-3.5 shrink-0" />
-                        <p>
-                          <span className="font-medium">Read-only by design.</span>{" "}
-                          All scripts are sandboxed — write operations (delete, apply, rm) are automatically blocked.
+                    <div className="rounded-xl border border-dashed border-border/70 bg-muted/15 p-2.5 shadow-sm shadow-black/5">
+                      <div className="flex items-start gap-2 text-[11px] text-muted-foreground">
+                        <Lock className="h-3 w-3 shrink-0 mt-0.5" />
+                        <p className="leading-snug">
+                          <span className="font-medium">Read-only by design.</span> All scripts are sandboxed — write operations are automatically blocked.
                         </p>
                       </div>
                     </div>
@@ -865,17 +852,17 @@ export function IntelligenceDashboard() {
                 </div>
               ) : (
                 /* ── Quick Run panel when collectors exist ── */
-                <div className="p-4 space-y-4">
+                <div className="p-3 space-y-3">
                   <div className="flex items-center justify-between">
                     <div>
                       <h3 className="text-sm font-semibold">Quick Run</h3>
-                      <p className="text-xs text-muted-foreground mt-0.5">
-                        Run a script on all {collectors.length} connected collector{collectors.length !== 1 ? "s" : ""}
+                      <p className="text-[11px] text-muted-foreground mt-0.5">
+                        Run on all {collectors.length} collector{collectors.length !== 1 ? "s" : ""}
                       </p>
                     </div>
                     <div className="flex gap-1.5">
-                      <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => setShowCollectDialog(true)}>
-                        <Code2 className="h-3 w-3 mr-1" /> Custom Script
+                      <Button size="sm" variant="outline" className="h-7 text-[11px] px-2" onClick={() => setShowCollectDialog(true)}>
+                        <Code2 className="h-3 w-3 mr-1" /> Custom
                       </Button>
                     </div>
                   </div>
@@ -884,9 +871,9 @@ export function IntelligenceDashboard() {
                     const scripts = Object.entries(BUILTIN_SCRIPTS).filter(([, m]) => m.category === catKey);
                     if (scripts.length === 0) return null;
                     return (
-                      <div key={catKey} className="space-y-2">
+                      <div key={catKey} className="space-y-1.5">
                         <h4 className={cn("text-[11px] font-medium uppercase tracking-wider", cat.color)}>{cat.label}</h4>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-1.5">
                           {scripts.map(([key, meta]) => {
                             const Icon = meta.icon;
                             return (
@@ -894,16 +881,16 @@ export function IntelligenceDashboard() {
                                 key={key}
                                 onClick={() => handleQuickRun(key)}
                                 disabled={collectRunning}
-                                className="group flex items-center gap-3 rounded-2xl border border-border/60 bg-background/80 p-3 text-left text-xs shadow-sm shadow-black/5 transition-all hover:-translate-y-0.5 hover:border-primary/20 hover:bg-accent/35 hover:shadow-md"
+                                className="group flex items-center gap-2.5 rounded-xl border border-border/60 bg-background/80 p-2.5 text-left text-xs shadow-sm shadow-black/5 transition-all hover:-translate-y-0.5 hover:border-primary/20 hover:bg-accent/35 hover:shadow-md"
                               >
-                                <div className="h-8 w-8 rounded-lg bg-muted/50 flex items-center justify-center shrink-0 group-hover:bg-primary/10 transition-colors">
-                                  <Icon className="h-4 w-4 text-muted-foreground group-hover:text-primary transition-colors" />
+                                <div className="h-7 w-7 rounded-lg bg-muted/50 flex items-center justify-center shrink-0 group-hover:bg-primary/10 transition-colors">
+                                  <Icon className="h-3.5 w-3.5 text-muted-foreground group-hover:text-primary transition-colors" />
                                 </div>
                                 <div className="flex-1 min-w-0">
                                   <div className="font-medium">{meta.label}</div>
                                   <div className="text-[10px] text-muted-foreground truncate">{meta.description}</div>
                                 </div>
-                                <Play className="h-3.5 w-3.5 text-muted-foreground/0 group-hover:text-primary transition-colors shrink-0" />
+                                <Play className="h-3 w-3 text-muted-foreground/0 group-hover:text-primary transition-colors shrink-0" />
                               </button>
                             );
                           })}
@@ -947,7 +934,7 @@ export function IntelligenceDashboard() {
               </DialogDescription>
             </DialogHeader>
 
-            <div className="space-y-4 py-2">
+            <div className="space-y-3 py-2">
               {/* Name */}
               <div className="space-y-1.5">
                 <Label className="text-xs font-medium">Name</Label>
@@ -1108,7 +1095,7 @@ export function IntelligenceDashboard() {
               </DialogDescription>
             </DialogHeader>
 
-            <div className="flex-1 min-h-0 overflow-y-auto space-y-4 py-2 pr-1">
+            <div className="flex-1 min-h-0 overflow-y-auto space-y-3 py-2 pr-1">
               {/* Target */}
               <div className="space-y-1.5">
                 <Label className="text-xs font-medium">Target</Label>
@@ -1147,7 +1134,7 @@ export function IntelligenceDashboard() {
                   </TabsTrigger>
                 </TabsList>
 
-                <TabsContent value="builtin" className="mt-3 space-y-3">
+                <TabsContent value="builtin" className="mt-2 space-y-2">
                   <div className="relative">
                     <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
                     <Input
@@ -1196,7 +1183,7 @@ export function IntelligenceDashboard() {
                   </ScrollArea>
                 </TabsContent>
 
-                <TabsContent value="custom" className="mt-3 space-y-3">
+                <TabsContent value="custom" className="mt-2 space-y-2">
                   <div className="space-y-1.5">
                     <Label className="text-xs font-medium">Language</Label>
                     <Select value={collectScriptType} onValueChange={(v) => setCollectScriptType(v as typeof collectScriptType)}>
@@ -1315,9 +1302,9 @@ function CollectorDetail({
   onCollect: () => void;
 }) {
   return (
-    <div className="p-5 space-y-5">
+    <div className="p-2.5 space-y-2.5">
       {/* Header */}
-      <div className="flex items-start justify-between rounded-2xl border border-border/60 bg-background/80 p-4 shadow-sm shadow-black/5">
+      <div className="flex items-start justify-between rounded-xl border border-border/60 bg-background/80 p-3 shadow-sm shadow-black/5">
         <div>
           <h3 className="text-sm font-semibold flex items-center gap-2">
             <Server className="h-4 w-4" />
@@ -1352,7 +1339,7 @@ function CollectorDetail({
       <Separator />
 
       {/* Info Grid */}
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
         <InfoCard label="Endpoint" value={collector.url} mono />
         <InfoCard label="Cluster" value={collector.cluster || "unknown"} />
         <InfoCard label="Node" value={collector.node || "unknown"} />
@@ -1455,9 +1442,9 @@ function TaskDetail({
   const payloadTimeout = task.payload.timeout as number | undefined;
 
   return (
-    <div className="p-5 space-y-5">
+    <div className="p-2.5 space-y-2.5">
       {/* Header */}
-      <div className="flex items-start justify-between gap-3 rounded-2xl border border-border/60 bg-background/80 p-4 shadow-sm shadow-black/5">
+      <div className="flex items-start justify-between gap-3 rounded-xl border border-border/60 bg-background/80 p-3 shadow-sm shadow-black/5">
         <div>
           <h3 className="text-sm font-semibold flex items-center gap-2">
             <Terminal className="h-4 w-4" />
@@ -1487,7 +1474,7 @@ function TaskDetail({
       <Separator />
 
       {/* Task Info */}
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
         <InfoCard label="Submitted by" value={task.submitted_by} />
         <InfoCard label="Target" value={task.collector_id} />
         <InfoCard label="Timeout" value={payloadTimeout != null ? `${payloadTimeout}s` : "—"} />
@@ -1497,7 +1484,7 @@ function TaskDetail({
       {payloadScript && (
         <div className="space-y-1">
           <h4 className="text-xs font-medium text-muted-foreground">Script</h4>
-          <pre className="max-h-32 overflow-x-auto overflow-y-auto rounded-xl border border-border/60 bg-background/80 p-3 text-[11px] font-mono whitespace-pre-wrap shadow-sm shadow-black/5">
+          <pre className="max-h-32 overflow-x-auto overflow-y-auto rounded-xl border border-border/60 bg-background/80 p-2.5 text-[11px] font-mono whitespace-pre-wrap shadow-sm shadow-black/5">
             {payloadScript}
           </pre>
         </div>
@@ -1541,7 +1528,7 @@ function ResultCard({
     <div className="overflow-hidden rounded-xl border border-border/60 bg-background/80 shadow-sm shadow-black/5">
       <button
         onClick={onToggle}
-        className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-accent/50 transition-colors"
+        className="w-full flex items-center gap-2 px-2.5 py-1.5 text-xs hover:bg-accent/50 transition-colors"
       >
         <ChevronRight className={cn("h-3.5 w-3.5 transition-transform", expanded && "rotate-90")} />
         {result.status === "completed" ? (
@@ -1563,7 +1550,7 @@ function ResultCard({
         )}
       </button>
       {expanded && (
-        <div className="border-t px-3 py-2 space-y-2">
+        <div className="border-t px-2.5 py-1.5 space-y-1.5">
           {/* Meta row */}
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-muted-foreground">
             {result.node && <span>Node: {result.node}</span>}
@@ -1574,7 +1561,7 @@ function ResultCard({
 
           {/* Error */}
           {result.error && (
-            <div className="p-2 rounded-md bg-destructive/5 border border-destructive/20 text-[11px] text-destructive font-mono whitespace-pre-wrap">
+            <div className="p-1.5 rounded-md bg-destructive/5 border border-destructive/20 text-[11px] text-destructive font-mono whitespace-pre-wrap">
               {result.error}
             </div>
           )}
@@ -1583,7 +1570,7 @@ function ResultCard({
           {result.stdout && (
             <div className="space-y-0.5">
               <div className="text-[10px] font-medium text-muted-foreground">stdout</div>
-              <pre className="p-2 rounded-md bg-muted/50 border text-[11px] font-mono whitespace-pre-wrap overflow-x-auto max-h-96 overflow-y-auto">
+              <pre className="p-1.5 rounded-md bg-muted/50 border text-[11px] font-mono whitespace-pre-wrap overflow-x-auto max-h-96 overflow-y-auto">
                 {result.stdout}
               </pre>
             </div>
@@ -1593,7 +1580,7 @@ function ResultCard({
           {result.stderr && result.stderr.trim() && (
             <div className="space-y-0.5">
               <div className="text-[10px] font-medium text-muted-foreground">stderr</div>
-              <pre className="p-2 rounded-md bg-amber-500/5 border border-amber-500/20 text-[11px] font-mono whitespace-pre-wrap overflow-x-auto max-h-32 overflow-y-auto">
+              <pre className="p-1.5 rounded-md bg-amber-500/5 border border-amber-500/20 text-[11px] font-mono whitespace-pre-wrap overflow-x-auto max-h-32 overflow-y-auto">
                 {result.stderr}
               </pre>
             </div>
@@ -1610,7 +1597,7 @@ function ResultCard({
 
 function InfoCard({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
   return (
-    <div className="rounded-xl border border-border/60 bg-background/80 p-3 shadow-sm shadow-black/5">
+    <div className="rounded-xl border border-border/60 bg-background/80 p-2.5 shadow-sm shadow-black/5">
       <div className="mb-1 text-[10px] uppercase tracking-[0.16em] text-muted-foreground">{label}</div>
       <div className={cn("text-xs font-medium text-foreground", mono ? "font-mono break-all" : "break-words")}>{value}</div>
     </div>

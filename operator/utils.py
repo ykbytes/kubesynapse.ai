@@ -1,20 +1,18 @@
 """Shared utility functions used by the operator controller and worker."""
 
-from collections import deque
-from datetime import datetime, timezone
 import hashlib
 import json
 import logging
-import os
-from pathlib import PurePosixPath
 import re
 import time
-from typing import Any, Callable, Sequence
+from collections import deque
+from collections.abc import Callable, Sequence
+from datetime import UTC, datetime
+from pathlib import PurePosixPath
+from typing import Any
 
 import httpx
-
 from config import get_float_env, get_int_env
-
 
 logger = logging.getLogger("operator-utils")
 
@@ -45,7 +43,7 @@ MAX_WORKFLOW_STEPS = get_int_env("MAX_WORKFLOW_STEPS", 100, minimum=1)
 
 def now_iso() -> str:
     """Return the current UTC time as an ISO-8601 string."""
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def runtime_url(agent_name: str, namespace: str, port: int = 8080) -> str:
@@ -74,14 +72,14 @@ def build_thread_id(prefix: str, *parts: object, max_length: int = MAX_THREAD_ID
 def build_workflow_run_id(namespace: str, workflow_name: str, generation: int) -> str:
     epoch_ms = int(time.time() * 1000)
     digest = hashlib.sha256(
-        f"workflow:{namespace}:{workflow_name}:{generation}:{epoch_ms}".encode("utf-8")
+        f"workflow:{namespace}:{workflow_name}:{generation}:{epoch_ms}".encode()
     ).hexdigest()[:8]
     return build_thread_id("wf-run", namespace, workflow_name, generation, epoch_ms, digest, max_length=96)
 
 
 def build_eval_run_id(namespace: str, eval_name: str, generation: int) -> str:
     epoch_ms = int(time.time() * 1000)
-    digest = hashlib.sha256(f"eval:{namespace}:{eval_name}:{generation}:{epoch_ms}".encode("utf-8")).hexdigest()[:8]
+    digest = hashlib.sha256(f"eval:{namespace}:{eval_name}:{generation}:{epoch_ms}".encode()).hexdigest()[:8]
     return build_thread_id("eval-run", namespace, eval_name, generation, epoch_ms, digest, max_length=96)
 
 
@@ -118,6 +116,11 @@ def parse_runtime_config_files(raw_value: Any, *, source: str) -> dict[str, Any]
     total_chars = 0
     for raw_path, raw_content in raw_value.items():
         path = _normalize_runtime_config_path(raw_path, source=source)
+        if path.lower() in GOOSE_CONFIG_FORBIDDEN_FILES:
+            raise ValueError(
+                f"{source} path '{path}' is not allowed. "
+                "Use environment variables or a secret store for sensitive values."
+            )
         if isinstance(raw_content, str):
             serialized = raw_content
             value: Any = raw_content
@@ -165,7 +168,7 @@ def parse_json_output(text: str) -> Any | None:
         try:
             return json.loads(candidate)
         except ValueError:
-            pass
+            logger.debug("JSON parse failed for candidate: %s", candidate[:200], exc_info=True)
     # Strategy 2: extract from markdown code fences
     fences = _FENCED_JSON_RE.findall(candidate)
     for fenced_content in reversed(fences):
@@ -282,7 +285,7 @@ def validate_workflow_graph(steps: Sequence[dict[str, Any]]) -> dict[str, Any]:
 
     adjacency: dict[str, set[str]] = {name: set() for name in ordered_names}
     undirected: dict[str, set[str]] = {name: set() for name in ordered_names}
-    indegree: dict[str, int] = {name: 0 for name in ordered_names}
+    indegree: dict[str, int] = dict.fromkeys(ordered_names, 0)
 
     for step_name, step in step_map.items():
         dependencies = [str(dep).strip() for dep in step.get("dependsOn") or [] if str(dep).strip()]
@@ -692,14 +695,14 @@ def runtime_error_message(response: httpx.Response, *, max_body_chars: int = 400
     """Build a compact HTTP error message that includes a trimmed response body."""
     try:
         response.read()
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Could not read response body: %s", exc, exc_info=True)
 
     body = ""
     try:
         body = " ".join(response.text.strip().split())
-    except Exception:
-        body = ""
+    except Exception as exc:
+        logger.debug("Could not decode response text: %s", exc, exc_info=True)
 
     if body and len(body) > max_body_chars:
         body = f"{body[:max_body_chars].rstrip()}..."
@@ -806,7 +809,7 @@ def invoke_agent_runtime_stream(
     prefix = f"[opencode {step_name} iter={iteration}]" if step_name else f"[opencode {agent_name}]"
 
     try:
-        with httpx.Client(timeout=effective_timeout) as client:
+        with httpx.Client(timeout=effective_timeout) as client:  # noqa: SIM117 — nested with for clarity
             with client.stream("POST", stream_url, json=payload) as resp:
                 if resp.status_code >= 400:
                     logger.warning(
@@ -939,7 +942,8 @@ def cancel_agent_session(
         with httpx.Client(timeout=timeout_seconds) as client:
             response = client.post(url, params={"thread_id": thread_id})
         return response.status_code == 200
-    except Exception:
+    except Exception as exc:
+        logger.debug("Agent session cancel failed for %s/%s: %s", agent_name, namespace, exc, exc_info=True)
         return False
 
 

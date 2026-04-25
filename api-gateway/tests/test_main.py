@@ -7,7 +7,7 @@ import sys
 import types
 import unittest
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -16,7 +16,6 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-
 
 try:
     import jose  # noqa: F401
@@ -375,7 +374,7 @@ class IntelligenceNamespaceIsolationTests(unittest.IsolatedAsyncioTestCase):
             session.close()
 
     def test_build_auto_intelligence_context_filters_by_namespace(self) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         api_gateway_main._collection_tasks.update(
             {
                 "task-a": {
@@ -462,11 +461,11 @@ class IntelligenceNamespaceIsolationTests(unittest.IsolatedAsyncioTestCase):
                     namespace="team-a",
                     name="Legacy Collector",
                     url="https://collector-legacy.example.test",
-                    token_hash=hashlib.sha256("collector-dev-token".encode("utf-8")).hexdigest(),
+                    token_hash=hashlib.sha256(b"collector-dev-token").hexdigest(),
                     encrypted_token=None,
                     cluster="legacy",
                     tags=[],
-                    registered_at=datetime.now(timezone.utc),
+                    registered_at=datetime.now(UTC),
                     registered_by="operator-1",
                 )
             )
@@ -566,7 +565,7 @@ class IntelligenceNamespaceIsolationTests(unittest.IsolatedAsyncioTestCase):
             "payload": {"builtin": "node_health"},
             "results": {"team-a-shared-collector": {"status": "completed", "stdout": "healthy"}},
             "submitted_by": "operator-1",
-            "submitted_at": datetime.now(timezone.utc).isoformat(),
+            "submitted_at": datetime.now(UTC).isoformat(),
             "total": 1,
             "completed": 1,
         }
@@ -609,7 +608,7 @@ class IntelligenceNamespaceIsolationTests(unittest.IsolatedAsyncioTestCase):
                 "payload": {"builtin": "cluster_overview"},
                 "results": {"collector-a": {"status": "completed", "stdout": "ok"}},
                 "submitted_by": "operator-1",
-                "submitted_at": datetime.now(timezone.utc).isoformat(),
+                "submitted_at": datetime.now(UTC).isoformat(),
                 "total": 1,
                 "completed": 1,
             },
@@ -620,7 +619,7 @@ class IntelligenceNamespaceIsolationTests(unittest.IsolatedAsyncioTestCase):
                 "payload": {"builtin": "node_health"},
                 "results": {"collector-a": {"status": "completed", "stdout": "ok"}},
                 "submitted_by": "operator-1",
-                "submitted_at": datetime.now(timezone.utc).isoformat(),
+                "submitted_at": datetime.now(UTC).isoformat(),
                 "total": 1,
                 "completed": 1,
             },
@@ -631,7 +630,7 @@ class IntelligenceNamespaceIsolationTests(unittest.IsolatedAsyncioTestCase):
                 "payload": {"builtin": "pod_resources"},
                 "results": {"collector-b": {"status": "completed", "stdout": "ok"}},
                 "submitted_by": "operator-1",
-                "submitted_at": datetime.now(timezone.utc).isoformat(),
+                "submitted_at": datetime.now(UTC).isoformat(),
                 "total": 1,
                 "completed": 1,
             },
@@ -1059,9 +1058,8 @@ class WorkflowSchemaTests(unittest.TestCase):
             api_gateway_main,
             "read_custom_resource",
             side_effect=HTTPException(status_code=404, detail="Policy 'missing-policy' not found"),
-        ):
-            with self.assertRaises(HTTPException) as context:
-                api_gateway_main.build_agent_spec(request, namespace="team-a")
+        ), self.assertRaises(HTTPException) as context:
+            api_gateway_main.build_agent_spec(request, namespace="team-a")
 
         self.assertEqual(context.exception.status_code, 404)
         self.assertIn("missing-policy", str(context.exception.detail))
@@ -1841,10 +1839,9 @@ class GatewayInvokeProxyTests(unittest.IsolatedAsyncioTestCase):
                 api_gateway_main.httpx,
                 "AsyncClient",
                 return_value=FakeAsyncClient(),
-            ),
+            ),self.assertRaises(HTTPException) as context
         ):
-            with self.assertRaises(HTTPException) as context:
-                await api_gateway_main.invoke_agent("demo", request, raw_request, "default", user={})
+            await api_gateway_main.invoke_agent("demo", request, raw_request, "default", user={})
 
         self.assertEqual(context.exception.status_code, 502)
         self.assertIn("invalid JSON", str(context.exception.detail))
@@ -2950,7 +2947,7 @@ class McpOAuthSupportTests(unittest.TestCase):
             "secret_name": "mcp-conn-conn-gmail",
             "validation": {"status": "draft", "message": "Saved but not validated yet.", "detail": None},
         }
-        future_expiry = (datetime.now(timezone.utc) + timedelta(minutes=45)).isoformat()
+        future_expiry = (datetime.now(UTC) + timedelta(minutes=45)).isoformat()
 
         with patch.object(
             api_gateway_main,

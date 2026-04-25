@@ -6,19 +6,17 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import kopf
-
-from croniter import CroniterBadCronError, croniter  # type: ignore[import-untyped]
-
 from builders import artifact_file_path, build_artifact_ref
 from config import (
     EVAL_SCHEDULE_POLL_SECONDS,
     OPERATOR_NAMESPACE,
     SCHEDULED_EVAL_QUEUE_STALE_SECONDS,
 )
+from croniter import CroniterBadCronError, croniter  # type: ignore[import-untyped]
 from reconcile import execute_reconcile, inject_conditions, log_operator_event
 from services import (
     cancel_worker_job,
@@ -27,6 +25,7 @@ from services import (
     patch_custom_status,
     read_job_state,
 )
+
 from utils import build_eval_run_id, now_iso
 
 logger = logging.getLogger("operator.controllers.eval")
@@ -52,14 +51,14 @@ def parse_iso_datetime(value: str | None) -> datetime | None:
         return None
 
     if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
 
 
 def validate_eval_schedule(schedule: str) -> None:
     """Raise kopf.PermanentError if *schedule* is not a valid cron expression."""
     try:
-        croniter(schedule, datetime.now(timezone.utc))
+        croniter(schedule, datetime.now(UTC))
     except (CroniterBadCronError, ValueError) as exc:
         raise kopf.PermanentError(f"Invalid AgentEval schedule '{schedule}': {exc}") from exc
 
@@ -71,11 +70,8 @@ def scheduled_eval_due(schedule: str, last_run_value: str | None) -> bool:
         return False
 
     next_run = croniter(schedule, last_run).get_next(datetime)
-    if next_run.tzinfo is None:
-        next_run = next_run.replace(tzinfo=timezone.utc)
-    else:
-        next_run = next_run.astimezone(timezone.utc)
-    return datetime.now(timezone.utc) >= next_run
+    next_run = next_run.replace(tzinfo=UTC) if next_run.tzinfo is None else next_run.astimezone(UTC)
+    return datetime.now(UTC) >= next_run
 
 
 def enqueue_eval_job(
@@ -336,7 +332,7 @@ def run_scheduled_eval(
             str(worker_job.get("name") or ""),
             str(worker_job.get("namespace") or OPERATOR_NAMESPACE),
         )
-        queue_age_seconds = (datetime.now(timezone.utc) - queued_at).total_seconds()
+        queue_age_seconds = (datetime.now(UTC) - queued_at).total_seconds()
         if job_state in {"active", "pending"}:
             return
         if queue_age_seconds < SCHEDULED_EVAL_QUEUE_STALE_SECONDS:

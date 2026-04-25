@@ -9,19 +9,16 @@ import logging
 from typing import Any
 
 import kopf
-
 import kubernetes.client  # type: ignore[import-untyped]
-from kubernetes.client.rest import ApiException  # type: ignore[import-untyped]
-
 from builders import artifact_file_path, build_artifact_ref, build_journal_ref
-from config import OPERATOR_NAMESPACE
-from controllers.workflow_controller import enqueue_workflow_job
+from kubernetes.client.rest import ApiException  # type: ignore[import-untyped]
 from reconcile import execute_reconcile, inject_conditions, log_operator_event
 from services import (
-    cancel_worker_job,
     ensure_worker_artifact_storage,
     patch_custom_status,
 )
+
+from controllers.workflow_controller import enqueue_workflow_job
 from utils import now_iso, workflow_journal_path
 
 logger = logging.getLogger("operator.controllers.approval")

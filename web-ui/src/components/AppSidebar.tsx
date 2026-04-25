@@ -1,4 +1,4 @@
-import { Bot, GitBranch, FlaskConical, Inbox, MessageSquare, Package, Play, Plug, Plus, Radar, RefreshCw, PanelLeftClose, PanelLeft, Search, Blocks, Settings, ShieldCheck, ShieldAlert, Trash2 } from "lucide-react";
+import { Activity, Bot, GitBranch, FlaskConical, Inbox, MessageSquare, Package, Play, Plug, Plus, Radar, RefreshCw, PanelLeftClose, PanelLeft, Search, Blocks, Settings, ShieldCheck, ShieldAlert, Trash2 } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AgentVisualSignals } from "@/lib/agentSignals";
 import { cn } from "@/lib/utils";
@@ -51,6 +51,7 @@ const VIEW_META: Record<WorkspaceView, { label: string; icon: typeof Bot }> = {
   mcp: { label: "MCP Servers", icon: Plug },
   settings: { label: "Settings", icon: Settings },
   admin: { label: "Admin", icon: ShieldCheck },
+  observatory: { label: "Observatory", icon: Activity },
 };
 
 function statusDotClasses(status: string): string {
@@ -136,7 +137,7 @@ export function AppSidebar({
       <TooltipProvider delayDuration={100}>
         <aside className="flex w-14 flex-col items-center border-r border-sidebar-border/80 bg-sidebar/92 backdrop-blur-xl">
           {/* Match header height */}
-          <div className="flex h-14 w-full items-center justify-center border-b border-sidebar-border/80">
+          <div className="flex h-10 w-full items-center justify-center border-b border-sidebar-border/80">
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button variant="ghost" size="icon" className="h-9 w-9 rounded-xl text-muted-foreground hover:bg-sidebar-accent/75 hover:text-sidebar-accent-foreground" onClick={onToggleCollapse} aria-label="Expand sidebar">
@@ -195,7 +196,7 @@ export function AppSidebar({
     <TooltipProvider delayDuration={100}>
     <aside className="flex h-full w-full min-w-0 flex-col border-r border-sidebar-border/80 bg-sidebar/92 backdrop-blur-xl">
       {/* Header */}
-      <div className="flex h-14 items-center justify-between border-b border-sidebar-border/80 px-3.5">
+      <div className="flex h-10 items-center justify-between border-b border-sidebar-border/80 px-2.5">
         <div className="min-w-0">
           <p className="text-[10px] font-medium uppercase tracking-[0.22em] text-muted-foreground">Workspace</p>
           <p className="truncate text-sm font-semibold text-sidebar-foreground">{VIEW_META[activeView].label}</p>
@@ -206,7 +207,7 @@ export function AppSidebar({
       </div>
 
       {/* Vertical nav */}
-      <nav className="border-b border-sidebar-border/80 px-2.5 py-2.5" aria-label="Workspace views">
+      <nav className="border-b border-sidebar-border/80 px-1.5 py-1.5" aria-label="Workspace views">
         <div className="space-y-0.5">
           {visibleViews.map((view) => {
             const { icon: Icon, label } = VIEW_META[view];
@@ -217,7 +218,7 @@ export function AppSidebar({
                 key={view}
                 onClick={() => onViewChange(view)}
                 className={cn(
-                  "flex w-full items-center gap-2.5 rounded-xl border px-3 py-2 text-[13px] font-medium transition-all duration-150 ease-productive",
+                  "flex w-full items-center gap-2 rounded-lg border px-2.5 py-1 text-xs font-medium transition-all duration-150 ease-productive",
                   isActive
                     ? "border-sidebar-border bg-sidebar-primary/15 text-sidebar-foreground shadow-sm"
                     : "border-transparent text-muted-foreground hover:bg-sidebar-accent/70 hover:text-sidebar-accent-foreground",
@@ -244,7 +245,7 @@ export function AppSidebar({
       </nav>
 
       {/* Actions */}
-      <div className="flex gap-2 border-b border-sidebar-border/80 px-3.5 py-3">
+      <div className="flex gap-1.5 border-b border-sidebar-border/80 px-2.5 py-1.5">
         {canMutate && (
           <Button size="sm" className="h-8 flex-1 gap-1.5 rounded-xl text-xs" onClick={onCreateNew}>
             <Plus className="h-3.5 w-3.5" />
@@ -257,7 +258,7 @@ export function AppSidebar({
       </div>
 
       {/* Search */}
-      <div className="border-b border-sidebar-border/80 px-3.5 py-3">
+      <div className="border-b border-sidebar-border/80 px-2.5 py-1.5">
         <div className="relative">
           <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
           <Input

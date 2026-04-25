@@ -11,6 +11,7 @@ RUN pip install --no-cache-dir -r requirements-base.txt -r requirements.txt \
     && playwright install chromium --with-deps
 COPY base/mcp_base.py /app/mcp_base.py
 COPY browser/server.py /app/server.py
+COPY browser/capabilities.json /app/capabilities.json
 ENV MCP_LISTEN_PORT=8083
 RUN useradd -u 1000 -m mcpuser || true
 USER 1000

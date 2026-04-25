@@ -307,7 +307,8 @@ export function AuditLogPanel() {
             />
           </div>
         ) : (
-          <table className="w-full text-xs">
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
             <thead className="sticky top-0 bg-muted/50 backdrop-blur-sm z-10">
               <tr className="border-b text-muted-foreground text-left">
                 <th className="px-3 py-2 font-medium">Time</th>
@@ -344,6 +345,7 @@ export function AuditLogPanel() {
               ))}
             </tbody>
           </table>
+          </div>
         )}
       </ScrollArea>
 
@@ -352,10 +354,10 @@ export function AuditLogPanel() {
         <div className="px-4 py-2 border-t flex items-center justify-between text-xs shrink-0">
           <span className="text-muted-foreground">Page {page + 1} of {totalPages}</span>
           <div className="flex items-center gap-1">
-            <Button variant="ghost" size="sm" className="h-7 cursor-pointer" disabled={page === 0} onClick={() => setPage((p) => p - 1)}>
+            <Button variant="ghost" size="sm" className="h-7 cursor-pointer" disabled={page === 0} onClick={() => setPage((p) => p - 1)} aria-label="Previous page">
               <ChevronLeft className="h-3 w-3" />
             </Button>
-            <Button variant="ghost" size="sm" className="h-7 cursor-pointer" disabled={page >= totalPages - 1} onClick={() => setPage((p) => p + 1)}>
+            <Button variant="ghost" size="sm" className="h-7 cursor-pointer" disabled={page >= totalPages - 1} onClick={() => setPage((p) => p + 1)} aria-label="Next page">
               <ChevronRight className="h-3 w-3" />
             </Button>
           </div>

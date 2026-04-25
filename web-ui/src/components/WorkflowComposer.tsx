@@ -44,6 +44,10 @@ import { toast } from "sonner";
 import { AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 
+/* ── Static styles ── */
+
+const SVG_DEFS_STYLE: React.CSSProperties = { position: "absolute", width: 0, height: 0 };
+
 /* ── Inner canvas (needs ReactFlowProvider parent) ── */
 
 function ComposerCanvas({
@@ -421,6 +425,16 @@ function ComposerCanvas({
     setTimeout(() => reactFlowInstance.fitView({ padding: 0.2 }), 350);
   }, [reactFlowInstance]);
 
+  // Keep latest callbacks in refs so the keyboard listener never needs re-binding
+  const handleSaveRef = useRef(handleSave);
+  const handleAutoLayoutRef = useRef(handleAutoLayout);
+  const toggleMaximizeRef = useRef(toggleMaximize);
+  const isMaximizedRef = useRef(isMaximized);
+  useEffect(() => { handleSaveRef.current = handleSave; }, [handleSave]);
+  useEffect(() => { handleAutoLayoutRef.current = handleAutoLayout; }, [handleAutoLayout]);
+  useEffect(() => { toggleMaximizeRef.current = toggleMaximize; }, [toggleMaximize]);
+  useEffect(() => { isMaximizedRef.current = isMaximized; }, [isMaximized]);
+
   // Keyboard shortcuts
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -428,20 +442,20 @@ function ComposerCanvas({
       // Ctrl+S → Save
       if (ctrl && e.key === "s") {
         e.preventDefault();
-        handleSave();
+        void handleSaveRef.current();
       }
       // Ctrl+Shift+L → Auto-layout
       if (ctrl && e.shiftKey && e.key.toLowerCase() === "l") {
         e.preventDefault();
-        handleAutoLayout();
+        handleAutoLayoutRef.current();
       }
       // F11 → Toggle maximize
       if (e.key === "F11") {
         e.preventDefault();
-        toggleMaximize();
+        toggleMaximizeRef.current();
       }
       // Escape → Exit maximize
-      if (e.key === "Escape" && isMaximized) {
+      if (e.key === "Escape" && isMaximizedRef.current) {
         e.preventDefault();
         setIsMaximized(false);
         setTimeout(() => reactFlowInstance.fitView({ padding: 0.2 }), 350);
@@ -459,7 +473,7 @@ function ComposerCanvas({
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [handleSave, handleAutoLayout, toggleMaximize, isMaximized, reactFlowInstance]);
+  }, [reactFlowInstance]);
 
   return (
     <div className={cn(
@@ -549,7 +563,7 @@ function ComposerCanvas({
               maskColor="oklch(0.145 0.008 274 / 0.7)"
             />
             {/* Custom arrow marker */}
-            <svg style={{ position: "absolute", width: 0, height: 0 }}>
+            <svg style={SVG_DEFS_STYLE}>
               <defs>
                 <marker
                   id="dependency-arrow"

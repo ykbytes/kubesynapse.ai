@@ -8,7 +8,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY main.py worker.py utils.py state_store.py config.py errors.py reconcile.py tracing.py alembic.ini ./
+COPY main.py mock_entrypoint.py worker.py utils.py state_store.py config.py errors.py reconcile.py tracing.py trace_client.py circuit_breaker.py alembic.ini ./
 COPY controllers/ ./controllers/
 COPY builders/ ./builders/
 COPY services/ ./services/

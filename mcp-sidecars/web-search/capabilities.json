@@ -1,0 +1,16 @@
+{
+  "sidecarName": "web-search",
+  "version": "1.0.0",
+  "allowedTools": ["web_search", "fetch_url", "extract_text"],
+  "networkEgress": {
+    "domains": ["*"],
+    "ips": [],
+    "ports": [80, 443]
+  },
+  "resourceLimits": {
+    "cpuRequest": "50m",
+    "cpuLimit": "500m",
+    "memoryRequest": "64Mi",
+    "memoryLimit": "256Mi"
+  }
+}

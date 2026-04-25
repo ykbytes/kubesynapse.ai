@@ -5,6 +5,8 @@ kind: DaemonSet
 metadata:
   name: {{ include "kubesynth.fullname" . }}-collector
   labels:
+    {{- include "kubesynth.labels" . | nindent 4 }}
+    app.kubernetes.io/component: collector
     app: collector-agent
 spec:
   selector:
@@ -13,6 +15,8 @@ spec:
   template:
     metadata:
       labels:
+        {{- include "kubesynth.labels" . | nindent 8 }}
+        app.kubernetes.io/component: collector
         app: collector-agent
     spec:
 {{- with (include "kubesynth.imagePullSecrets" .) }}
@@ -26,10 +30,19 @@ spec:
         runAsGroup: 1000
         seccompProfile:
           type: RuntimeDefault
+      volumes:
+        - name: tmp
+          emptyDir: {}
       containers:
         - name: collector
           image: "{{ .Values.collector.image.repository }}:{{ .Values.collector.image.tag }}"
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: {{ .Values.collector.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
           ports:
             - containerPort: {{ .Values.collector.port }}
               name: http
@@ -46,18 +59,33 @@ spec:
                   fieldPath: spec.nodeName
           resources:
             {{- toYaml .Values.collector.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 18
           readinessProbe:
             httpGet:
               path: /healthz
               port: http
             initialDelaySeconds: 5
             periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
           livenessProbe:
             httpGet:
               path: /healthz
               port: http
             initialDelaySeconds: 10
             periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -112,6 +140,8 @@ kind: Service
 metadata:
   name: {{ include "kubesynth.fullname" . }}-collector
   labels:
+    {{- include "kubesynth.labels" . | nindent 4 }}
+    app.kubernetes.io/component: collector
     app: collector-agent
 spec:
   selector:

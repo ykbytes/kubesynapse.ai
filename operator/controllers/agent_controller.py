@@ -11,11 +11,9 @@ import logging
 from typing import Any
 
 import kopf
-
 import kubernetes.client  # type: ignore[import-untyped]
-from kubernetes.client.rest import ApiException  # type: ignore[import-untyped]
-
 from builders.translator import AgentOutputs, translate_agent
+from kubernetes.client.rest import ApiException  # type: ignore[import-untyped]
 from reconcile import execute_reconcile, log_operator_event, validate_cross_namespace_ref
 from services import (
     ensure_network_policy,
@@ -26,6 +24,7 @@ from services import (
     ensure_statefulset,
     prune_orphaned_resources,
 )
+
 from utils import validate_supported_policy_spec
 
 logger = logging.getLogger("operator.controllers.agent")

@@ -21,9 +21,7 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
 import time
-import unittest
 from pathlib import Path
 from unittest.mock import patch
 
@@ -67,7 +65,7 @@ def _wait_healthy(host: str, port: int, timeout: float = 30.0) -> bool:
                 resp = client.get(url)
                 if resp.status_code == 200 and resp.json().get("healthy") is True:
                     return True
-        except Exception:
+        except Exception:  # noqa: S110 — best-effort health probe in test helper
             pass
         time.sleep(0.5)
     return False

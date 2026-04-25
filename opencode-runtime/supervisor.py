@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-
 from config import (
     DEFAULT_PROVIDER,
     HOME_DIR,
@@ -111,8 +110,8 @@ def _start_opencode_process(env: dict[str, str]) -> subprocess.Popen[str]:
     The log files are rotated on each restart (previous content is overwritten).
     """
     _LOG_DIR.mkdir(parents=True, exist_ok=True)
-    stdout_fh = open(_STDOUT_LOG, "w", encoding="utf-8", buffering=1)
-    stderr_fh = open(_STDERR_LOG, "w", encoding="utf-8", buffering=1)
+    stdout_fh = open(_STDOUT_LOG, "w", encoding="utf-8", buffering=1)  # noqa: SIM115 — file handle managed elsewhere
+    stderr_fh = open(_STDERR_LOG, "w", encoding="utf-8", buffering=1)  # noqa: SIM115 — file handle managed elsewhere
     return subprocess.Popen(
         [
             OPENCODE_BIN,

@@ -8,13 +8,12 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
-from typing import Any, Callable
+from collections.abc import Callable
+from datetime import UTC, datetime
+from typing import Any
 
 import kopf
-
 from kubernetes.client.rest import ApiException  # type: ignore[import-untyped]
-
 from services import describe_api_exception
 from tracing import trace_reconcile
 
@@ -95,10 +94,7 @@ def validate_cross_namespace_ref(
 def _serialize_log_field(value: Any) -> str:
     """Serialize a log field value to a bounded JSON string."""
     try:
-        if isinstance(value, str):
-            serialized = json.dumps(value)
-        else:
-            serialized = json.dumps(value, sort_keys=True, default=str)
+        serialized = json.dumps(value) if isinstance(value, str) else json.dumps(value, sort_keys=True, default=str)
     except TypeError:
         serialized = json.dumps(str(value))
     if len(serialized) > MAX_LOG_FIELD_LENGTH:
@@ -355,7 +351,7 @@ def build_condition(
         "status": status,
         "reason": reason,
         "message": message,
-        "lastTransitionTime": last_transition_time or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "lastTransitionTime": last_transition_time or datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
 
 
@@ -369,7 +365,7 @@ def set_condition(conditions: list[dict[str, str]], condition: dict[str, str]) -
 def conditions_for_phase(phase: str) -> list[dict[str, str]]:
     """Derive standard conditions from a resource phase string."""
     phase_lower = phase.lower() if phase else ""
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     if phase_lower in {"completed", "succeeded"}:
         return [

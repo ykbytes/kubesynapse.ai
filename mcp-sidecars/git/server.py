@@ -11,7 +11,7 @@ import tempfile
 from urllib.parse import urlparse
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "base"))
-from mcp_base import create_mcp_server, run_server
+from mcp_base import create_mcp_server, run_server, check_egress_url
 
 log = logging.getLogger("mcp-git")
 
@@ -22,6 +22,25 @@ server = create_mcp_server(
 
 WORK_DIR = os.environ.get("MCP_WORK_DIR", tempfile.gettempdir())
 MAX_OUTPUT_CHARS = 12000
+
+# --- Path traversal protection ---
+_ALLOWED_BASE_DIRS = [
+    os.path.abspath(WORK_DIR),
+    os.path.abspath("/tmp"),
+]
+
+
+def _validate_repo_path(repo_path: str) -> str | None:
+    """Return an error message if repo_path is outside allowed directories, else None."""
+    try:
+        resolved = os.path.abspath(repo_path)
+    except (OSError, ValueError):
+        return "Invalid repository path"
+    for base_dir in _ALLOWED_BASE_DIRS:
+        if resolved == base_dir or resolved.startswith(base_dir + os.sep):
+            return None
+    return f"Repository path is outside allowed directories"
+
 
 # --- Credential bootstrap at startup ---
 
@@ -227,6 +246,9 @@ def git_clone(repo_url: str, branch: str = "", full_clone: bool = False, target_
 @server.tool()
 def git_status(repo_path: str) -> str:
     """Show git status (short format) for a repository."""
+    path_err = _validate_repo_path(repo_path)
+    if path_err:
+        return f"BLOCKED: {path_err}"
     try:
         result = _run(["git", "status", "--short", "--branch"], cwd=repo_path, timeout=15)
         return result.stdout.strip() or "(clean working tree)"
@@ -237,6 +259,9 @@ def git_status(repo_path: str) -> str:
 @server.tool()
 def git_diff(repo_path: str, ref: str = "HEAD") -> str:
     """Show git diff for a repository."""
+    path_err = _validate_repo_path(repo_path)
+    if path_err:
+        return f"BLOCKED: {path_err}"
     try:
         result = _run(["git", "diff", ref], cwd=repo_path, timeout=15)
         output = result.stdout or "(no changes)"
@@ -248,6 +273,9 @@ def git_diff(repo_path: str, ref: str = "HEAD") -> str:
 @server.tool()
 def git_log(repo_path: str, max_count: int = 10) -> str:
     """Show recent git log entries."""
+    path_err = _validate_repo_path(repo_path)
+    if path_err:
+        return f"BLOCKED: {path_err}"
     try:
         result = _run(
             ["git", "log", f"--max-count={min(max_count, 50)}", "--oneline", "--no-decorate"],
@@ -261,6 +289,9 @@ def git_log(repo_path: str, max_count: int = 10) -> str:
 @server.tool()
 def git_add(repo_path: str, paths: str = ".") -> str:
     """Stage files for commit. Use '.' for all, or space-separated paths."""
+    path_err = _validate_repo_path(repo_path)
+    if path_err:
+        return f"BLOCKED: {path_err}"
     try:
         cmd = ["git", "add"] + paths.split()
         result = _run(cmd, cwd=repo_path, timeout=15)
@@ -274,6 +305,9 @@ def git_add(repo_path: str, paths: str = ".") -> str:
 @server.tool()
 def git_commit(repo_path: str, message: str, add_all: bool = True) -> str:
     """Stage and commit changes in a repository."""
+    path_err = _validate_repo_path(repo_path)
+    if path_err:
+        return f"BLOCKED: {path_err}"
     try:
         if add_all:
             _run(["git", "add", "-A"], cwd=repo_path, timeout=10)
@@ -292,6 +326,9 @@ def git_push(repo_path: str, remote: str = "origin", branch: str = "") -> str:
     Uses --set-upstream on the first push so new repositories and branches
     get proper tracking configuration automatically.
     """
+    path_err = _validate_repo_path(repo_path)
+    if path_err:
+        return f"BLOCKED: {path_err}"
     try:
         cmd = ["git", "push", "--set-upstream", remote]
         if branch:
@@ -315,6 +352,9 @@ def git_branch(repo_path: str, name: str = "", create: bool = False, delete: boo
 
     No args: list branches. name+create: create new branch. name+delete: delete branch.
     """
+    path_err = _validate_repo_path(repo_path)
+    if path_err:
+        return f"BLOCKED: {path_err}"
     try:
         if not name:
             result = _run(["git", "branch", "-a"], cwd=repo_path, timeout=15)
@@ -335,6 +375,9 @@ def git_branch(repo_path: str, name: str = "", create: bool = False, delete: boo
 @server.tool()
 def git_checkout(repo_path: str, ref: str) -> str:
     """Checkout a branch, tag, or commit."""
+    path_err = _validate_repo_path(repo_path)
+    if path_err:
+        return f"BLOCKED: {path_err}"
     try:
         result = _run(["git", "checkout", ref], cwd=repo_path, timeout=15)
         if result.returncode != 0:
@@ -347,6 +390,9 @@ def git_checkout(repo_path: str, ref: str) -> str:
 @server.tool()
 def git_pull(repo_path: str, remote: str = "origin", branch: str = "") -> str:
     """Pull latest changes from remote."""
+    path_err = _validate_repo_path(repo_path)
+    if path_err:
+        return f"BLOCKED: {path_err}"
     try:
         cmd = ["git", "pull", remote]
         if branch:
@@ -364,6 +410,9 @@ def git_pull(repo_path: str, remote: str = "origin", branch: str = "") -> str:
 @server.tool()
 def git_stash(repo_path: str, action: str = "push", message: str = "") -> str:
     """Manage git stash. Actions: push, pop, list, drop."""
+    path_err = _validate_repo_path(repo_path)
+    if path_err:
+        return f"BLOCKED: {path_err}"
     try:
         cmd = ["git", "stash", action]
         if action == "push" and message:
@@ -398,6 +447,9 @@ def github_api(endpoint: str, method: str = "GET") -> str:
         if parsed.hostname != "api.github.com":
             return "BLOCKED: Only api.github.com endpoints are allowed"
         url = endpoint
+    egress_err = check_egress_url(url)
+    if egress_err:
+        return f"BLOCKED: {egress_err}"
     try:
         resp = requests.get(url, headers=headers, timeout=15)
         resp.raise_for_status()

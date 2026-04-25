@@ -1,37 +1,4 @@
-# PodDisruptionBudgets ensure at least one replica survives voluntary disruptions
-# (node drains, rolling upgrades) for the stateful critical components.
-{{- if or (gt (int (.Values.apiGateway.replicaCount | default 1)) 1) (and .Values.autoscaling (.Values.autoscaling.enabled)) }}
-apiVersion: policy/v1
-kind: PodDisruptionBudget
-metadata:
-  name: {{ include "kubesynth.fullname" . }}-api-gateway-pdb
-spec:
-  minAvailable: 1
-  selector:
-    matchLabels:
-      app: api-gateway
----
-{{- end }}
-{{- if or (gt (int (.Values.litellm.replicaCount | default 1)) 1) (and .Values.autoscaling (.Values.autoscaling.enabled)) }}
-apiVersion: policy/v1
-kind: PodDisruptionBudget
-metadata:
-  name: {{ include "kubesynth.fullname" . }}-litellm-pdb
-spec:
-  minAvailable: 1
-  selector:
-    matchLabels:
-      app: litellm
----
-{{- end }}
-{{- if gt (int (.Values.operator.replicaCount | default 2)) 1 }}
-apiVersion: policy/v1
-kind: PodDisruptionBudget
-metadata:
-  name: {{ include "kubesynth.fullname" . }}-operator-pdb
-spec:
-  minAvailable: 1
-  selector:
-    matchLabels:
-      app: operator
-{{- end }}
+{{/*
+PodDisruptionBudget resources have been consolidated into pod-disruption-budgets.yaml.
+This file is retained as a placeholder to avoid accidental re-creation of the old resources.
+*/}}

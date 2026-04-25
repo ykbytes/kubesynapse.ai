@@ -269,7 +269,7 @@ export function PolicyEditor({ selectedPolicyName }: PolicyEditorProps) {
 
   if (!selectedPolicy && !isCreateMode) {
     return (
-      <div className="flex flex-1 flex-col items-center justify-center gap-4 p-8">
+      <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6">
         <ShieldAlert className="h-12 w-12 text-muted-foreground/40" />
         <p className="text-sm text-muted-foreground">Select a policy from the sidebar or create a new one.</p>
         {canMutate && (
@@ -283,7 +283,7 @@ export function PolicyEditor({ selectedPolicyName }: PolicyEditorProps) {
 
   return (
     <ScrollArea className="flex-1">
-      <div className="p-4 space-y-4 max-w-2xl">
+      <div className="p-3 space-y-3 max-w-2xl">
         {/* Header */}
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
