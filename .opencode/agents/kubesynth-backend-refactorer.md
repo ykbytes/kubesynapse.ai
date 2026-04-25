@@ -61,24 +61,35 @@ Transform the KubeSynth backend from a functional monolith into a well-architect
 - **Query Optimization** — Eager loading, indexing, query plans
 - **Migrations** — Alembic for schema evolution
 
-## Refactoring Targets
+## Current State
 
-### 1. Gateway Monolith (`api-gateway/main.py` ~13k lines)
-**Problem:** Single file, hard to navigate, no separation of concerns
-**Solution:**
+- `api-gateway/main.py` is still a **13k-line monolith** — this is the #1 priority
+- Already extracted from main.py: `constants.py`, `utils.py`, `trace_store.py`, `traces_router.py`
+- Auth files are separate: `auth_middleware.py`, `auth_store.py`, `enterprise_auth.py`, `jwt_utils.py`
+- LiteLLM is now DB-backed (`litellm/litellm-database:v1.82.3-stable`) with Prisma/PostgreSQL — models managed via `/model/new` and `/model/delete` API
+- Operator tests: **206/206 passing**
+- Ruff: **0 errors everywhere**
+- Memory system: new 6-module package at `opencode-runtime/memory/`
+- `mypy --strict` has ~130 errors in `api-gateway/main.py` (fix AFTER router split)
+
+## Sprint 4 Priorities
+
+### Priority 1: API Gateway Router Split (CRITICAL)
+Break `api-gateway/main.py` (~13k lines) into modular routers:
 ```
 api-gateway/
-├── main.py              # App bootstrap only
+├── main.py              # App bootstrap, middleware, lifespan (~500 lines)
 ├── routers/
-│   ├── agents.py        # Agent CRUD
-│   ├── workflows.py     # Workflow CRUD + trigger
-│   ├── evals.py         # Eval CRUD
-│   ├── auth.py          # Auth endpoints
-│   ├── a2a.py           # A2A JSON-RPC
-│   ├── chat.py          # Chat session management
-│   ├── llm.py           # LLM proxy
-│   └── observability.py # Observability CRUD
-├── dependencies.py      # FastAPI Depends()
+│   ├── agents.py        # Agent CRUD (/api/agents/*)
+│   ├── workflows.py     # Workflow CRUD + trigger (/api/workflows/*)
+│   ├── evals.py         # Eval CRUD (/api/evals/*)
+│   ├── auth.py          # Auth endpoints (/api/auth/*)
+│   ├── a2a.py           # A2A JSON-RPC (/.well-known/*, /a2a/*)
+│   ├── chat.py          # Chat session management (/api/chat/*)
+│   ├── llm.py           # LLM proxy (/api/litellm/*)
+│   ├── admin.py         # Admin panel (/api/admin/*)
+│   └── observability.py # Traces, health (/api/health, /api/traces/*)
+├── dependencies.py      # Shared FastAPI Depends() (auth, db, nats)
 ├── services/
 │   ├── agent_service.py
 │   ├── workflow_service.py
@@ -88,9 +99,35 @@ api-gateway/
     └── responses.py     # Pydantic response models
 ```
 
-### 2. Worker Engine (`operator/worker.py` ~3,500 lines)
-**Problem:** Too long, mixed concerns (workflow + eval + step execution)
-**Solution:**
+**Rules for the split:**
+- Every extracted router uses `APIRouter(prefix=..., tags=[...])`
+- Shared state (`nats_client`, `litellm_url`, etc.) passed via `app.state` or dependency injection
+- No circular imports — dependencies flow one direction only
+- Each router file should be under 1500 lines
+- Preserve ALL existing endpoint paths exactly (no breaking changes)
+- Run `ruff check` after each file extraction
+- All existing functionality must be preserved (diff test: curl every endpoint before/after)
+
+### Priority 2: Fix api-gateway pytest
+- Resolve httpx/starlette version conflicts in `requirements.txt`
+- Get `api-gateway/tests/test_smoke.py` passing
+- Get `api-gateway/tests/test_main.py` passing
+- Target: `make test-gateway` green
+
+### Priority 3: mypy --strict compliance
+- After router split, run `mypy --strict` on each router file individually
+- Fix type annotations incrementally
+- Target: 0 mypy errors across all api-gateway files
+
+### Priority 4: Database & Migration Safety
+- Add `/api/health/db` endpoint that checks PostgreSQL connectivity
+- Tune SQLAlchemy connection pool (`pool_size`, `max_overflow`, `pool_pre_ping`)
+- Add `statement_timeout` to prevent runaway queries
+- Verify Alembic migrations run cleanly on startup
+
+### Secondary Targets (after Sprint 4)
+
+**Worker Engine** (`operator/worker.py` ~3,500 lines):
 ```
 operator/
 ├── worker/
@@ -105,9 +142,7 @@ operator/
 │   └── verification.py
 ```
 
-### 3. Runtime Loop (`opencode-runtime/invoke.py` ~1,300 lines)
-**Problem:** Complex multi-turn loop, hard to test
-**Solution:**
+**Runtime Loop** (`opencode-runtime/invoke.py` ~1,300 lines):
 ```
 opencode-runtime/
 ├── invoke/
@@ -145,12 +180,26 @@ opencode-runtime/
 - Helm/infrastructure changes (delegate to `@kubesynth-prod-engineer`)
 
 ## Key Files
-- `operator/worker.py` — The biggest refactor target
-- `operator/controllers/*.py` — Controller logic
-- `api-gateway/main.py` — Gateway monolith
-- `opencode-runtime/invoke.py` — Runtime loop
-- `operator/builders/translator.py` — Translator pattern
-- `operator/state_store.py` — SQLAlchemy models
+- `api-gateway/main.py` — THE monolith to split (13k lines, #1 priority)
+- `api-gateway/constants.py` — Already extracted constants
+- `api-gateway/utils.py` — Already extracted utilities
+- `api-gateway/trace_store.py` — Already extracted trace storage
+- `api-gateway/traces_router.py` — Already extracted traces router (reference for pattern)
+- `api-gateway/auth_middleware.py` — Auth middleware (stays separate)
+- `api-gateway/auth_store.py` — SQLAlchemy auth store
+- `api-gateway/requirements.txt` — Dependency versions (needs fixing for pytest)
+- `operator/worker.py` — Secondary refactor target (~3,500 lines)
+- `opencode-runtime/invoke.py` — Tertiary target (~1,300 lines)
+
+## Verification Commands
+```bash
+ruff check api-gateway/
+python -m py_compile api-gateway/main.py
+python -m py_compile api-gateway/routers/agents.py  # etc for each new file
+cd web-ui && npm run build  # ensure no TS breakage
+helm lint charts/kubesynth --strict
+pytest operator/tests/ -x  # ensure operator still passes
+```
 
 ## Workflow
 
@@ -166,5 +215,5 @@ opencode-runtime/
 - Every new module must have a clear single responsibility
 - Every function must be under 50 lines
 - Every class must be under 300 lines
-- Every change must pass `mypy --strict` and `ruff`
+- Every change must pass `ruff check` (mypy --strict after router split completes)
 - Every refactor must include updated or new tests
