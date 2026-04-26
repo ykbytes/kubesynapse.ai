@@ -753,6 +753,14 @@ def create_mcp_auth_secret_manifest(namespace: str) -> dict[str, Any]:
             delay=15,
         )
 
+    logger.info(
+        "MCP auth token copied from '%s/%s' → '%s/%s' (agent secret provisioning).",
+        MCP_HUB_NAMESPACE,
+        MCP_AUTH_SECRET_NAME,
+        namespace,
+        MCP_AUTH_SECRET_NAME,
+    )
+
     return {
         "apiVersion": "v1",
         "kind": "Secret",

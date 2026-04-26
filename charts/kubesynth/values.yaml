@@ -498,3 +498,29 @@ collector:
     limits:
       cpu: 200m
       memory: 256Mi
+
+# ---------------------------------------------------------------------------
+# RBAC configuration (P2-11: security audit — enterprise configurability)
+# ---------------------------------------------------------------------------
+rbac:
+  # Override default RBAC rules per component.  When a rule list is
+  # provided it replaces the built-in rules entirely.  Leave empty to
+  # keep the secure defaults.
+  operator:
+    rules: []
+    #   - apiGroups: ["kubesynth.ai"]
+    #     resources: [aiagents]
+    #     verbs: [get, list, watch]
+  apiGateway:
+    rules: []
+  runtime:
+    rules: []
+
+# ---------------------------------------------------------------------------
+# Agent runtime security (P1-5: opt-in cluster-wide access)
+# ---------------------------------------------------------------------------
+agentRuntime:
+  # Grant agents cluster-wide read-only access to nodes (for the
+  # Kubernetes MCP sidecar).  Disabled by default — enable only
+  # when agents genuinely need cross-namespace cluster visibility.
+  clusterReadAccess: false

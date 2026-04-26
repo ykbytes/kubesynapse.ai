@@ -7782,7 +7782,7 @@ async def a2a_jsonrpc(
 
         request_id, method, params = parse_jsonrpc_payload(payload)
         agent_name, resolved_namespace = resolve_a2a_agent_reference(assistant_id, namespace)
-        ensure_namespace_access(user, resolved_namespace)
+        ensure_namespace_access(user, resolved_namespace, "operator")  # P1-7: A2A send is a mutating operation
         gateway_request_id = raw_request.headers.get("x-request-id") or str(uuid.uuid4())
 
         if method == "message/send":
@@ -9247,7 +9247,7 @@ async def invoke_agent(
 
     agent_name, namespace = resolve_invoke_agent_reference(agent_name, namespace)
     _log_invoke_step("resolved_reference")
-    ensure_namespace_access(user, namespace)
+    ensure_namespace_access(user, namespace, "operator")  # P1-7: invoke is a mutating operation
     _log_invoke_step("namespace_access_checked")
     agent = await asyncio.to_thread(read_agent_cached, agent_name, namespace)
     _log_invoke_step("agent_loaded")
@@ -9379,7 +9379,7 @@ async def invoke_agent_stream(
     user=Depends(verify_token),
 ):
     agent_name, namespace = resolve_invoke_agent_reference(agent_name, namespace)
-    ensure_namespace_access(user, namespace)
+    ensure_namespace_access(user, namespace, "operator")  # P1-7: invoke is a mutating operation
     agent = await asyncio.to_thread(read_agent_cached, agent_name, namespace)
     validate_invoke_runtime_compatibility(runtime_kind_from_spec(agent.get("spec", {})), request)
     if request.factory_mode and not is_factory_agent_resource(agent_name, agent):
@@ -9841,6 +9841,34 @@ class ChatMessagesSave(BaseModel):
     messages: list[ChatMessagePayload]
 
 
+def _resolve_chat_session_owner(session_id: str) -> tuple[str, str, str]:
+    """Return (namespace, username, agent_name) for *session_id*.  Raises 404 when the session doesn't exist."""
+    from auth_store import db_session, ChatSession
+    with db_session() as dbs:
+        row = dbs.query(ChatSession).filter(ChatSession.session_id == session_id).first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return (
+        str(getattr(row, "namespace", "") or ""),
+        str(getattr(row, "username", "") or ""),
+        str(getattr(row, "agent_name", "") or ""),
+    )
+
+
+def _validate_session_ownership(session_id: str, user: dict[str, Any]) -> tuple[str, str]:
+    """Resolve session ownership and validate the caller has namespace access AND username match.
+
+    Returns (namespace, agent_name) when authorized.
+    Raises 403 on access denied, 404 on missing session.
+    """
+    namespace, session_username, agent_name = _resolve_chat_session_owner(session_id)
+    ensure_namespace_access(user, namespace)
+    caller_username = user.get("sub") or user.get("username")
+    if session_username and caller_username and session_username != caller_username:
+        raise HTTPException(status_code=403, detail="Access denied: session belongs to another user")
+    return namespace, agent_name
+
+
 @app.get("/api/chat-sessions")
 async def api_list_chat_sessions(
     agent_name: str,
@@ -9872,6 +9900,7 @@ async def api_get_chat_messages(
     user=Depends(verify_token),
 ):
     """Get all messages for a chat session."""
+    _validate_session_ownership(session_id, user)
     return get_chat_session_messages(session_id)
 
 
@@ -9882,6 +9911,7 @@ async def api_save_chat_messages(
     user=Depends(verify_token),
 ):
     """Save (replace) all messages for a chat session."""
+    _validate_session_ownership(session_id, user)
     save_chat_messages(session_id, [m.model_dump() for m in body.messages])
     return {"status": "ok"}
 
@@ -9893,6 +9923,7 @@ async def api_update_chat_session(
     user=Depends(verify_token),
 ):
     """Update a chat session title."""
+    _validate_session_ownership(session_id, user)
     result = update_chat_session_title(session_id, body.title)
     if result is None:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -9905,6 +9936,7 @@ async def api_delete_chat_session(
     user=Depends(verify_token),
 ):
     """Delete a chat session and all its messages."""
+    _validate_session_ownership(session_id, user)
     deleted = delete_chat_session(session_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -9934,19 +9966,36 @@ async def api_list_agent_memory(
     ]
 
 
+def _resolve_memory_record_owner(record_id: int) -> tuple[str, str]:
+    """Return (namespace, username) for *record_id*.  Raises 404 when the record doesn't exist."""
+    from auth_store import db_session, MemoryRecord
+    with db_session() as dbs:
+        row = dbs.query(MemoryRecord).filter(MemoryRecord.id == record_id).first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Memory record not found")
+    return (
+        str(getattr(row, "namespace", "") or ""),
+        str(getattr(row, "username", "") or ""),
+    )
+
+
 @app.patch("/api/memory/{record_id}", response_model=MemoryRecordInfo)
 async def api_update_memory_record(
     record_id: int,
     body: MemoryRecordUpdateRequest,
     user=Depends(verify_token),
 ):
-    username = user.get("sub") or user.get("username")
+    record_namespace, record_username = _resolve_memory_record_owner(record_id)
+    ensure_namespace_access(user, record_namespace)
+    caller_username = user.get("sub") or user.get("username")
+    if record_username and caller_username and record_username != caller_username:
+        raise HTTPException(status_code=403, detail="Access denied: memory record belongs to another user")
     updated = update_memory_record(
         record_id,
         promoted=body.promoted,
         topic=body.topic,
         content=body.content,
-        username=username,
+        username=caller_username,
     )
     if updated is None:
         raise HTTPException(status_code=404, detail="Memory record not found")
@@ -9958,8 +10007,12 @@ async def api_delete_memory_record(
     record_id: int,
     user=Depends(verify_token),
 ):
-    username = user.get("sub") or user.get("username")
-    deleted = delete_memory_record(record_id, username=username)
+    record_namespace, record_username = _resolve_memory_record_owner(record_id)
+    ensure_namespace_access(user, record_namespace)
+    caller_username = user.get("sub") or user.get("username")
+    if record_username and caller_username and record_username != caller_username:
+        raise HTTPException(status_code=403, detail="Access denied: memory record belongs to another user")
+    deleted = delete_memory_record(record_id, username=caller_username)
     if not deleted:
         raise HTTPException(status_code=404, detail="Memory record not found")
     return {"status": "deleted", "id": record_id}

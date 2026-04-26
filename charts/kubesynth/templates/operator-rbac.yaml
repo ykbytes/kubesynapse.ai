@@ -41,8 +41,11 @@ rules:
     resources: [leases]
     verbs: [create, delete, get, list, watch, patch, update]
   - apiGroups: [""]
-    resources: [pods, services, persistentvolumeclaims, serviceaccounts, namespaces, resourcequotas, limitranges, configmaps]
+    resources: [pods, services, persistentvolumeclaims, serviceaccounts, resourcequotas, limitranges, configmaps]
     verbs: [create, delete, get, list, watch, patch, update]
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [get, list, watch]
   - apiGroups: [""]
     resources: [nodes, endpoints, events]
     verbs: [create, get, list, watch, patch]
@@ -50,7 +53,7 @@ rules:
     resources: [pods/log]
     verbs: [get]
   - apiGroups: ["rbac.authorization.k8s.io"]
-    resources: [roles, rolebindings, clusterrolebindings]
+    resources: [roles, rolebindings]
     verbs: [create, delete, get, list, watch, patch, update]
   - apiGroups: ["apps"]
     resources: [deployments, daemonsets, replicasets]
@@ -121,15 +124,6 @@ rules:
     resources: [pods]
     verbs: [get, list, watch]
   - apiGroups: [""]
-    resources: [pods/log]
-    verbs: [get]
-  - apiGroups: [""]
-    resources: [secrets]
-    verbs: [get, update]
-  - apiGroups: [""]
-    resources: [configmaps]
-    verbs: [get, create, update]
-  - apiGroups: [""]
     resources: [namespaces]
     verbs: [list]
 ---
@@ -141,6 +135,39 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
   name: {{ include "kubesynth.fullname" . }}-api-gateway-role
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "kubesynth.fullname" . }}-api-gateway-sa
+    namespace: {{ .Release.Namespace | default "default" }}
+---
+# P0-2: Namespace-scoped Role for secret/configmap access in the operator
+# namespace only (provider registry, credential store).  Replaces the
+# former cluster-wide ClusterRole that allowed reading all secrets.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "kubesynth.fullname" . }}-api-gateway-secrets
+  namespace: {{ .Release.Namespace | default "default" }}
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [get, update]
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [get, create, update]
+  - apiGroups: [""]
+    resources: [pods/log]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "kubesynth.fullname" . }}-api-gateway-secrets-binding
+  namespace: {{ .Release.Namespace | default "default" }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "kubesynth.fullname" . }}-api-gateway-secrets
 subjects:
   - kind: ServiceAccount
     name: {{ include "kubesynth.fullname" . }}-api-gateway-sa
@@ -176,9 +203,9 @@ rules:
   - apiGroups: ["kubesynth.ai"]
     resources: [agentpolicies, aiagents, agentworkflows]
     verbs: [get, list, watch]
-  - apiGroups: ["kubesynth.ai"]
-    resources: [agentpolicies, aiagents, agentworkflows]
-    verbs: [create, patch, update]
+  # Runtime agents must NOT mutate platform CRDs (least-privilege). The
+  # agentapprovals resource is the only exception: runtimes need to create
+  # approval requests and read their status.
   - apiGroups: ["kubesynth.ai"]
     resources: [agentapprovals]
     verbs: [create, get, list, watch]
@@ -188,15 +215,30 @@ kind: ServiceAccount
 metadata:
   name: {{ .Values.runtimeServiceAccount.name | quote }}
 ---
+# ClusterRoleBinding removed per security audit P1-5.
+# Runtimes receive namespace-scoped RoleBindings from the operator.
+# Cluster-wide read access is granted only when explicitly enabled
+# via .Values.agentRuntime.clusterReadAccess (see agent-network-policy.yaml).
+{{- if .Values.agentRuntime.clusterReadAccess }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "kubesynth.fullname" . }}-runtime-readonly-role
+rules:
+  - apiGroups: [""]
+    resources: [nodes]
+    verbs: [get, list, watch]
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: {{ include "kubesynth.fullname" . }}-runtime-rolebinding
+  name: {{ include "kubesynth.fullname" . }}-runtime-readonly-rolebinding
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: {{ include "kubesynth.fullname" . }}-runtime-role
+  name: {{ include "kubesynth.fullname" . }}-runtime-readonly-role
 subjects:
   - kind: ServiceAccount
     name: {{ .Values.runtimeServiceAccount.name | quote }}
     namespace: {{ .Release.Namespace | default "default" }}
+{{- end }}

@@ -16,6 +16,7 @@ _logger = logging.getLogger("api-gateway.jwt")
 ACCESS_TOKEN_TTL_SECONDS = max(int(os.getenv("AUTH_ACCESS_TOKEN_TTL_SECONDS", "900")), 60)
 REFRESH_TOKEN_TTL_SECONDS = max(int(os.getenv("AUTH_REFRESH_TOKEN_TTL_SECONDS", str(7 * 24 * 3600))), 300)
 JWT_ISSUER = os.getenv("JWT_ISSUER", "kubesynth").strip() or "kubesynth"
+JWT_AUDIENCE = os.getenv("JWT_AUDIENCE", "").strip()  # P2-10: optionally enforce 'aud' claim
 
 
 class JwtKey:
@@ -155,6 +156,8 @@ def decode_access_token(token: str) -> dict[str, Any]:
         keys_to_try = list({k.kid: k for k in _JWT_KEYS.values()}.values())
 
     last_error: Exception | None = None
+    verify_options: dict[str, bool] = {"verify_aud": bool(JWT_AUDIENCE)}
+    audience = JWT_AUDIENCE if JWT_AUDIENCE else None
     for attempt_key in keys_to_try:
         try:
             claims = jwt.decode(
@@ -162,7 +165,8 @@ def decode_access_token(token: str) -> dict[str, Any]:
                 attempt_key.secret,
                 algorithms=["HS256"],
                 issuer=JWT_ISSUER,
-                options={"verify_aud": False},
+                audience=audience,
+                options=verify_options,
             )
         except JWTError as exc:
             last_error = exc
