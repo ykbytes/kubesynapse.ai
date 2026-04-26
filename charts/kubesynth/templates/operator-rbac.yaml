@@ -127,6 +127,9 @@ rules:
     resources: [secrets]
     verbs: [get, update]
   - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [get, create, update]
+  - apiGroups: [""]
     resources: [namespaces]
     verbs: [list]
 ---

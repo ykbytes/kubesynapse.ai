@@ -2893,7 +2893,7 @@ class GatewayProviderModelTests(unittest.IsolatedAsyncioTestCase):
             response = await api_gateway_main.llm_add_provider_model(
                 "GITHUB_COPILOT_TOKEN",
                 api_gateway_main.ProviderModelAdd(model_id="gpt-4o-mini", alias="mini"),
-                user={"role": "operator"},
+                user={"role": "admin"},
             )
 
         self.assertEqual(response, {"ok": True})

@@ -309,6 +309,8 @@ platformSecrets:
     openaiApiKey: ""
     openrouterApiKey: ""
     anthropicApiKey: ""
+    opencodeApiKey: ""
+    opencodeGoApiKey: ""
     litellmMasterKey: "replace-me"
     apiGatewaySharedToken: "replace-me-with-a-long-random-bearer-token"
     databasePassword: "replace-me-with-a-long-random-database-password"

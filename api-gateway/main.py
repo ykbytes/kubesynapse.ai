@@ -258,6 +258,14 @@ AGENT_RUNTIME_TIMEOUT_SECONDS = max(float(os.getenv("AGENT_RUNTIME_TIMEOUT_SECON
 LITELLM_INTERNAL_URL = os.getenv("LITELLM_INTERNAL_URL", "").strip() or "http://kubesynth-litellm:4000"
 LITELLM_MASTER_KEY = os.getenv("LITELLM_MASTER_KEY", "").strip()
 LLM_SECRET_NAME = os.getenv("LLM_SECRET_NAME", "kubesynth-llm-api-keys")
+PROVIDER_REGISTRY_CONFIGMAP_NAME = (
+    os.getenv("PROVIDER_REGISTRY_CONFIGMAP_NAME", f"{HELM_RELEASE_NAME}-provider-registry").strip()
+    or f"{HELM_RELEASE_NAME}-provider-registry"
+)
+PROVIDER_AUTH_SECRET_NAME = (
+    os.getenv("PROVIDER_AUTH_SECRET_NAME", LLM_SECRET_NAME).strip()
+    or LLM_SECRET_NAME
+)
 STREAM_KEEPALIVE_SECONDS = max(float(os.getenv("API_GATEWAY_STREAM_KEEPALIVE_SECONDS", "15")), 5.0)
 AGENT_READ_CACHE_TTL_SECONDS = max(float(os.getenv("API_GATEWAY_AGENT_READ_CACHE_TTL_SECONDS", "2.0")), 0.0)
 AGENT_READ_CACHE_MAX_ENTRIES = max(int(os.getenv("API_GATEWAY_AGENT_READ_CACHE_MAX_ENTRIES", "256")), 1)
@@ -9226,44 +9234,66 @@ async def invoke_agent(
     namespace: str = "default",
     user=Depends(verify_token),
 ):
+    invoke_started_at = time.perf_counter()
+
+    def _log_invoke_step(step: str) -> None:
+        logger.info(
+            "Invoke step agent=%s namespace=%s step=%s elapsed_ms=%.1f",
+            agent_name,
+            namespace,
+            step,
+            (time.perf_counter() - invoke_started_at) * 1000.0,
+        )
+
     agent_name, namespace = resolve_invoke_agent_reference(agent_name, namespace)
+    _log_invoke_step("resolved_reference")
     ensure_namespace_access(user, namespace)
+    _log_invoke_step("namespace_access_checked")
     agent = await asyncio.to_thread(read_agent_cached, agent_name, namespace)
+    _log_invoke_step("agent_loaded")
     validate_invoke_runtime_compatibility(runtime_kind_from_spec(agent.get("spec", {})), request)
+    _log_invoke_step("runtime_validated")
     if request.factory_mode and not is_factory_agent_resource(agent_name, agent):
         raise HTTPException(status_code=400, detail="factory_mode is only supported for the KubeSynth factory agent.")
     request_payload = request.model_dump(exclude={"factory_mode"})
     policy_memory = resolve_agent_memory_policy(agent, namespace)
+    _log_invoke_step("memory_policy_resolved")
     normalized_memory_policy = _normalize_memory_policy(policy_memory)
     promoted_memory = list_promoted_memory_records(
         namespace,
         agent_name,
         username=str(user.get("sub") or user.get("username") or "").strip() or None,
     )
+    _log_invoke_step("promoted_memory_loaded")
     ranked_memory = rank_promoted_memory_records(
         request.prompt, promoted_memory, memory_policy=normalized_memory_policy
     )
+    _log_invoke_step("promoted_memory_ranked")
     memory_note = build_memory_context_system_note(ranked_memory)
     if memory_note:
         existing_system = str(request_payload.get("system") or "").strip()
         request_payload["system"] = f"{memory_note}\n\n{existing_system}" if existing_system else memory_note
     append_system_note(request_payload, build_agent_collaboration_system_note(agent_name, namespace, agent))
+    _log_invoke_step("collaboration_note_appended")
     # Auto-inject intelligence context for intelligence-aware agents
     if _agent_wants_intelligence(agent):
         intel_ctx = _build_auto_intelligence_context(namespace)
         if intel_ctx:
             existing_system = str(request_payload.get("system") or "").strip()
             request_payload["system"] = f"{existing_system}\n\n{intel_ctx}" if existing_system else intel_ctx
+        _log_invoke_step("intelligence_context_processed")
     if request.factory_mode:
         append_system_note(request_payload, FACTORY_MODE_SYSTEM_NOTES.get(request.factory_mode))
     request_id = raw_request.headers.get("x-request-id") or str(uuid.uuid4())
     async with httpx.AsyncClient(timeout=AGENT_RUNTIME_TIMEOUT_SECONDS, trust_env=False) as client:
         try:
+            _log_invoke_step("runtime_request_start")
             response = await client.post(
                 f"{agent_runtime_url(agent_name, namespace)}/invoke",
                 json=request_payload,
                 headers={"x-request-id": request_id},
             )
+            _log_invoke_step("runtime_request_complete")
         except Exception as exc:
             logger.error("Agent invocation failed (%s): %s", agent_name, exc)
             raise HTTPException(status_code=502, detail="Agent invocation failed") from exc
@@ -9273,6 +9303,7 @@ async def invoke_agent(
         raise HTTPException(status_code=502, detail=f"Agent invocation failed: {error_payload['error']}")
 
     data = parse_json_object_response(response, context="Agent runtime /invoke")
+    _log_invoke_step("runtime_response_parsed")
     # Record token usage if present
     _usage = data.get("usage") or {}
     if _usage or data.get("model"):
@@ -10210,6 +10241,304 @@ _PROVIDER_POPULAR_MODELS: dict[str, list[dict[str, str]]] = {
     ],
 }
 
+_PROVIDER_REGISTRY_DATA_KEY = "providers.json"
+_PROVIDER_REGISTRY_VERSION = 1
+_PROVIDER_ID_RE = re.compile(r"^[a-z0-9](?:[-a-z0-9]{0,62})$")
+_OPENCODE_ZEN_MODELS_URL = "https://opencode.ai/zen/v1/models"
+_OPENCODE_ZEN_BASE_URL = "https://opencode.ai/zen/v1"
+_PROVIDER_AUTH_PLACEHOLDERS: dict[str, str] = {
+    "opencode": "sk-...",
+    "opencode-go": "sk-...",
+    "github-copilot": "Authenticated via GitHub",
+}
+_PROVIDER_REGISTRY_META: dict[str, dict[str, Any]] = {
+    "opencode": {
+        "label": "OpenCode Zen",
+        "description": "Recommended OpenCode-native provider with curated models from the OpenCode team.",
+        "auth_type": "apiKey",
+        "secret_key": "OPENCODE_API_KEY",
+        "base_url": _OPENCODE_ZEN_BASE_URL,
+        "docs_url": "https://opencode.ai/docs/providers/#opencode-zen",
+    },
+    "opencode-go": {
+        "label": "OpenCode Go",
+        "description": "Low-cost OpenCode provider tuned for reliable coding workloads.",
+        "auth_type": "apiKey",
+        "secret_key": "OPENCODE_GO_API_KEY",
+        "base_url": None,
+        "docs_url": "https://opencode.ai/docs/providers/#opencode-go",
+    },
+    "github-copilot": {
+        "label": "GitHub Copilot",
+        "description": "Connect a GitHub Copilot subscription through the device authorization flow.",
+        "auth_type": "oauth",
+        "secret_key": "GITHUB_COPILOT_TOKEN",
+        "base_url": "https://api.githubcopilot.com",
+        "docs_url": "https://opencode.ai/docs/providers/#github-copilot",
+    },
+}
+_OPENCODE_GO_FALLBACK_MODELS: list[dict[str, str]] = [
+    {
+        "model_id": "kimi-k2.6",
+        "display_name": "kimi-k2.6",
+        "description": "Current KubeSynth default for bundled OpenCode agents.",
+    }
+]
+
+
+def _provider_namespace() -> str:
+    return os.getenv("POD_NAMESPACE", "ai-platform")
+
+
+def _empty_provider_registry_state() -> dict[str, Any]:
+    return {"version": _PROVIDER_REGISTRY_VERSION, "custom_providers": {}}
+
+
+def _normalize_provider_id(raw_value: str) -> str:
+    provider_id = str(raw_value or "").strip().lower()
+    if not _PROVIDER_ID_RE.fullmatch(provider_id):
+        raise HTTPException(
+            status_code=400,
+            detail="provider_id must use lowercase letters, numbers, and hyphens only.",
+        )
+    return provider_id
+
+
+def _custom_provider_secret_key(provider_id: str) -> str:
+    normalized = re.sub(r"[^A-Z0-9]+", "_", provider_id.upper()).strip("_")
+    return f"CUSTOM_PROVIDER_{normalized}_API_KEY"
+
+
+def _decode_secret_value(raw_value: str) -> str | None:
+    if not raw_value:
+        return None
+    try:
+        return base64.b64decode(raw_value).decode("utf-8").strip() or None
+    except Exception:
+        return None
+
+
+def _read_or_create_provider_registry_configmap() -> tuple[Any, Any, dict[str, Any]]:
+    from kubernetes import client as k8s_client
+    from kubernetes.client.rest import ApiException
+
+    namespace = _provider_namespace()
+    api = k8s_client.CoreV1Api()
+    try:
+        configmap = api.read_namespaced_config_map(name=PROVIDER_REGISTRY_CONFIGMAP_NAME, namespace=namespace)
+    except ApiException as exc:
+        if exc.status != 404:
+            raise
+        body = {
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": {"name": PROVIDER_REGISTRY_CONFIGMAP_NAME, "namespace": namespace},
+            "data": {
+                _PROVIDER_REGISTRY_DATA_KEY: json.dumps(_empty_provider_registry_state(), ensure_ascii=False, sort_keys=True)
+            },
+        }
+        api.create_namespaced_config_map(namespace=namespace, body=body)
+        configmap = api.read_namespaced_config_map(name=PROVIDER_REGISTRY_CONFIGMAP_NAME, namespace=namespace)
+
+    data = getattr(configmap, "data", None) or {}
+    raw_payload = str(data.get(_PROVIDER_REGISTRY_DATA_KEY) or "").strip()
+    if not raw_payload:
+        return api, configmap, _empty_provider_registry_state()
+    try:
+        payload = json.loads(raw_payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=500, detail="Provider registry ConfigMap contains invalid JSON") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=500, detail="Provider registry ConfigMap must decode to an object")
+    custom_providers = payload.get("custom_providers")
+    if custom_providers is None:
+        payload["custom_providers"] = {}
+    elif not isinstance(custom_providers, dict):
+        raise HTTPException(status_code=500, detail="Provider registry custom_providers must decode to an object")
+    return api, configmap, payload
+
+
+def _save_provider_registry_state(api: Any, configmap: Any, state: dict[str, Any]) -> None:
+    data = getattr(configmap, "data", None) or {}
+    data[_PROVIDER_REGISTRY_DATA_KEY] = json.dumps(state, ensure_ascii=False, sort_keys=True)
+    configmap.data = data  # type: ignore[union-attr]
+    api.replace_namespaced_config_map(
+        name=PROVIDER_REGISTRY_CONFIGMAP_NAME,
+        namespace=_provider_namespace(),
+        body=configmap,
+    )
+
+
+def _read_or_create_provider_auth_secret() -> tuple[Any, Any, dict[str, str]]:
+    from kubernetes import client as k8s_client
+    from kubernetes.client.rest import ApiException
+
+    namespace = _provider_namespace()
+    api = k8s_client.CoreV1Api()
+    try:
+        secret = api.read_namespaced_secret(name=PROVIDER_AUTH_SECRET_NAME, namespace=namespace)
+    except ApiException as exc:
+        if exc.status != 404:
+            raise
+        body = {
+            "apiVersion": "v1",
+            "kind": "Secret",
+            "metadata": {"name": PROVIDER_AUTH_SECRET_NAME, "namespace": namespace},
+            "type": "Opaque",
+            "data": {},
+        }
+        api.create_namespaced_secret(namespace=namespace, body=body)
+        secret = api.read_namespaced_secret(name=PROVIDER_AUTH_SECRET_NAME, namespace=namespace)
+    data = getattr(secret, "data", None) or {}
+    return api, secret, cast(dict[str, str], data)
+
+
+def _update_provider_auth_secret(*, values: dict[str, str] | None = None, remove_keys: set[str] | None = None) -> None:
+    api, secret, existing_data = _read_or_create_provider_auth_secret()
+    next_data = dict(existing_data)
+    for key_name in remove_keys or set():
+        next_data.pop(key_name, None)
+    for key_name, value in (values or {}).items():
+        next_data[key_name] = base64.b64encode(value.encode("utf-8")).decode("ascii")
+    secret.data = next_data  # type: ignore[union-attr]
+    api.replace_namespaced_secret(name=PROVIDER_AUTH_SECRET_NAME, namespace=_provider_namespace(), body=secret)
+
+
+def _provider_registry_model_entries(raw_models: list[dict[str, str]]) -> list[dict[str, str | None]]:
+    return [
+        {
+            "id": str(item.get("model_id") or "").strip(),
+            "name": str(item.get("display_name") or item.get("model_id") or "").strip(),
+            "description": str(item.get("description") or "").strip() or None,
+        }
+        for item in raw_models
+        if str(item.get("model_id") or "").strip()
+    ]
+
+
+async def _fetch_opencode_zen_models() -> list[dict[str, str]]:
+    try:
+        async with httpx.AsyncClient(timeout=15.0, trust_env=False) as client:
+            response = await client.get(_OPENCODE_ZEN_MODELS_URL, headers={"Accept": "application/json"})
+            response.raise_for_status()
+            payload = response.json()
+        data = payload.get("data") if isinstance(payload, dict) else []
+        if not isinstance(data, list):
+            return []
+        result: list[dict[str, str]] = []
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            model_id = str(item.get("id") or "").strip()
+            if not model_id:
+                continue
+            result.append({"model_id": model_id, "display_name": model_id, "description": "Live model catalog"})
+        return result
+    except Exception as exc:
+        logger.warning("Failed to fetch OpenCode Zen models: %s", exc)
+        return [
+            {"model_id": "kimi-k2.6", "display_name": "kimi-k2.6", "description": "KubeSynth default"},
+            {"model_id": "gpt-5.4", "display_name": "gpt-5.4", "description": "Latest GPT family"},
+            {"model_id": "claude-sonnet-4", "display_name": "claude-sonnet-4", "description": "Claude Sonnet"},
+        ]
+
+
+async def _fetch_opencode_go_models() -> list[dict[str, str]]:
+    try:
+        async with httpx.AsyncClient(timeout=20.0, trust_env=False) as client:
+            response = await client.get(
+                "https://models.dev/api.json",
+                headers={"Accept": "application/json", "User-Agent": "kubesynth-api-gateway/1.0"},
+            )
+            response.raise_for_status()
+            data = response.json()
+        go_data = data.get("opencode-go") if isinstance(data, dict) else None
+        if not isinstance(go_data, dict):
+            return _OPENCODE_GO_FALLBACK_MODELS
+        models_raw = go_data.get("models") or {}
+        if not isinstance(models_raw, dict):
+            return _OPENCODE_GO_FALLBACK_MODELS
+        result: list[dict[str, str]] = []
+        for model_id in sorted(models_raw.keys()):
+            model_id = str(model_id).strip()
+            if not model_id:
+                continue
+            result.append({"model_id": model_id, "display_name": model_id, "description": "Live model catalog"})
+        return result if result else _OPENCODE_GO_FALLBACK_MODELS
+    except Exception as exc:
+        logger.warning("Failed to fetch opencode-go models from models.dev: %s", exc)
+        return _OPENCODE_GO_FALLBACK_MODELS
+
+
+async def _provider_registry_models_for_builtin(provider_id: str, auth_data: dict[str, str]) -> list[dict[str, str | None]]:
+    if provider_id == "opencode":
+        return _provider_registry_model_entries(await _fetch_opencode_zen_models())
+    if provider_id == "opencode-go":
+        return _provider_registry_model_entries(await _fetch_opencode_go_models())
+    if provider_id == "github-copilot":
+        copilot_token = _decode_secret_value(auth_data.get("GITHUB_COPILOT_TOKEN", ""))
+        if copilot_token:
+            live_models = await _fetch_copilot_models(copilot_token)
+            if live_models:
+                return _provider_registry_model_entries(live_models)
+        return _provider_registry_model_entries(_PROVIDER_POPULAR_MODELS.get("GITHUB_COPILOT_TOKEN", []))
+    return []
+
+
+async def _provider_registry_response() -> dict[str, Any]:
+    _, _, registry_state = _read_or_create_provider_registry_configmap()
+    _, _, auth_data = _read_or_create_provider_auth_secret()
+
+    providers: list[dict[str, Any]] = []
+    for provider_id, meta in _PROVIDER_REGISTRY_META.items():
+        secret_key = str(meta.get("secret_key") or "")
+        providers.append(
+            {
+                "id": provider_id,
+                "label": meta["label"],
+                "kind": "builtin",
+                "description": meta["description"],
+                "auth_type": meta["auth_type"],
+                "connected": bool(auth_data.get(secret_key)),
+                "docs_url": meta.get("docs_url"),
+                "base_url": meta.get("base_url"),
+                "key_placeholder": _PROVIDER_AUTH_PLACEHOLDERS.get(provider_id),
+                "editable": False,
+                "headers": {},
+                "models": await _provider_registry_models_for_builtin(provider_id, auth_data),
+            }
+        )
+
+    custom_providers = cast(dict[str, dict[str, Any]], registry_state.get("custom_providers") or {})
+    for provider_id, entry in sorted(custom_providers.items()):
+        secret_key = str(entry.get("secret_key_name") or _custom_provider_secret_key(provider_id))
+        model_ids = [
+            str(raw_model).strip()
+            for raw_model in cast(list[Any], entry.get("models") or [])
+            if str(raw_model).strip()
+        ]
+        providers.append(
+            {
+                "id": provider_id,
+                "label": str(entry.get("name") or provider_id),
+                "kind": "custom",
+                "description": str(entry.get("description") or "OpenAI-compatible custom provider.").strip(),
+                "auth_type": "apiKey",
+                "connected": bool(auth_data.get(secret_key)),
+                "docs_url": None,
+                "base_url": str(entry.get("base_url") or "").strip() or None,
+                "key_placeholder": "sk-...",
+                "editable": True,
+                "headers": cast(dict[str, str], entry.get("headers") or {}),
+                "models": [
+                    {"id": model_id, "name": model_id, "description": None}
+                    for model_id in model_ids
+                ],
+            }
+        )
+
+    return {"providers": providers}
+
 
 def _litellm_headers() -> dict[str, str]:
     key = LITELLM_MASTER_KEY
@@ -10233,6 +10562,156 @@ class LLMModelDeleteRequest(BaseModel):
 
 class LLMKeyUpdate(BaseModel):
     keys: dict[str, str] = Field(default_factory=dict, description="Map of KEY_NAME -> value")
+
+
+class ProviderCredentialUpdate(BaseModel):
+    api_key: str = Field(..., min_length=1, max_length=500)
+
+
+class ProviderCatalogModel(BaseModel):
+    model_id: str = Field(..., min_length=1, max_length=300)
+
+
+class CustomProviderRequest(BaseModel):
+    provider_id: str = Field(..., min_length=1, max_length=63)
+    name: str = Field(..., min_length=1, max_length=120)
+    base_url: str = Field(..., min_length=1, max_length=500)
+    description: str | None = Field(default=None, max_length=240)
+    api_key: str | None = Field(default=None, max_length=500)
+    headers: dict[str, str] = Field(default_factory=dict)
+    models: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_custom_provider_fields(self) -> "CustomProviderRequest":
+        normalized_headers: dict[str, str] = {}
+        for raw_name, raw_value in self.headers.items():
+            name = str(raw_name).strip()
+            value = str(raw_value).strip()
+            if not name:
+                raise ValueError("Custom provider headers must use non-empty names")
+            if not value:
+                raise ValueError(f"Custom provider header '{name}' must not be blank")
+            normalized_headers[name] = value
+        self.headers = normalized_headers
+        self.models = [str(model).strip() for model in self.models if str(model).strip()]
+        return self
+
+
+@app.get("/api/providers")
+async def provider_registry_list(user=Depends(verify_token)):
+    """List built-in and custom providers for the OpenCode-style settings UX."""
+    ensure_role(user, "viewer")
+    return await _provider_registry_response()
+
+
+@app.get("/api/providers/catalog")
+async def provider_registry_catalog(user=Depends(verify_token)):
+    """Return a flattened model catalog for runtime-compatible provider/model picks."""
+    ensure_role(user, "viewer")
+    payload = await _provider_registry_response()
+    catalog: list[dict[str, Any]] = []
+    for provider in cast(list[dict[str, Any]], payload.get("providers") or []):
+        provider_id = str(provider.get("id") or "").strip()
+        provider_label = str(provider.get("label") or provider_id).strip()
+        for model in cast(list[dict[str, Any]], provider.get("models") or []):
+            model_id = str(model.get("id") or "").strip()
+            if not provider_id or not model_id:
+                continue
+            catalog.append(
+                {
+                    "provider_id": provider_id,
+                    "provider_label": provider_label,
+                    "model_id": model_id,
+                    "model_ref": f"{provider_id}/{model_id}",
+                    "connected": bool(provider.get("connected")),
+                    "kind": str(provider.get("kind") or "builtin"),
+                    "description": model.get("description"),
+                }
+            )
+    return {"models": catalog}
+
+
+@app.put("/api/providers/{provider_id}/credentials")
+def provider_registry_update_credentials(provider_id: str, body: ProviderCredentialUpdate, user=Depends(verify_token)):
+    """Store provider auth in the dedicated provider-auth secret. Admin only."""
+    ensure_role(user, "admin")
+    normalized_provider_id = _normalize_provider_id(provider_id)
+    value = body.api_key.strip()
+    if not value:
+        raise HTTPException(status_code=400, detail="api_key must not be blank")
+
+    if normalized_provider_id in _PROVIDER_REGISTRY_META:
+        secret_key = str(_PROVIDER_REGISTRY_META[normalized_provider_id]["secret_key"])
+    else:
+        _, _, state = _read_or_create_provider_registry_configmap()
+        custom_providers = cast(dict[str, dict[str, Any]], state.get("custom_providers") or {})
+        if normalized_provider_id not in custom_providers:
+            raise HTTPException(status_code=404, detail=f"Unknown provider: {normalized_provider_id}")
+        secret_key = str(custom_providers[normalized_provider_id].get("secret_key_name") or _custom_provider_secret_key(normalized_provider_id))
+
+    _update_provider_auth_secret(values={secret_key: value})
+    logger.info("Updated provider credential for %s (by user %s)", normalized_provider_id, user.get("sub", "unknown"))
+    return {"status": "updated", "provider_id": normalized_provider_id}
+
+
+@app.get("/api/providers/{provider_id}/models")
+async def provider_registry_models(provider_id: str, user=Depends(verify_token)):
+    """Return model entries for a single provider."""
+    ensure_role(user, "viewer")
+    normalized_provider_id = _normalize_provider_id(provider_id)
+    payload = await _provider_registry_response()
+    providers = cast(list[dict[str, Any]], payload.get("providers") or [])
+    for provider in providers:
+        if str(provider.get("id") or "") == normalized_provider_id:
+            return {"provider_id": normalized_provider_id, "models": provider.get("models") or []}
+    raise HTTPException(status_code=404, detail=f"Unknown provider: {normalized_provider_id}")
+
+
+@app.post("/api/providers/custom", status_code=201)
+def provider_registry_upsert_custom_provider(body: CustomProviderRequest, user=Depends(verify_token)):
+    """Create or update a custom OpenAI-compatible provider. Admin only."""
+    ensure_role(user, "admin")
+    provider_id = _normalize_provider_id(body.provider_id)
+    if provider_id in _PROVIDER_REGISTRY_META:
+        raise HTTPException(status_code=400, detail="Built-in provider IDs cannot be overwritten")
+
+    base_url = body.base_url.strip()
+    if not re.match(r"^https?://", base_url, re.IGNORECASE):
+        raise HTTPException(status_code=400, detail="base_url must be an http or https URL")
+
+    api, configmap, state = _read_or_create_provider_registry_configmap()
+    custom_providers = cast(dict[str, dict[str, Any]], state.setdefault("custom_providers", {}))
+    secret_key_name = str(custom_providers.get(provider_id, {}).get("secret_key_name") or _custom_provider_secret_key(provider_id))
+    custom_providers[provider_id] = {
+        "name": body.name.strip(),
+        "description": (body.description or "").strip() or None,
+        "base_url": base_url,
+        "headers": {key: value for key, value in body.headers.items()},
+        "models": body.models,
+        "secret_key_name": secret_key_name,
+    }
+    _save_provider_registry_state(api, configmap, state)
+    if body.api_key and body.api_key.strip():
+        _update_provider_auth_secret(values={secret_key_name: body.api_key.strip()})
+    logger.info("Upserted custom provider %s (by user %s)", provider_id, user.get("sub", "unknown"))
+    return {"status": "created", "provider_id": provider_id}
+
+
+@app.delete("/api/providers/custom/{provider_id}")
+def provider_registry_delete_custom_provider(provider_id: str, user=Depends(verify_token)):
+    """Delete a custom provider and remove its stored auth material. Admin only."""
+    ensure_role(user, "admin")
+    normalized_provider_id = _normalize_provider_id(provider_id)
+    api, configmap, state = _read_or_create_provider_registry_configmap()
+    custom_providers = cast(dict[str, dict[str, Any]], state.get("custom_providers") or {})
+    if normalized_provider_id not in custom_providers:
+        raise HTTPException(status_code=404, detail=f"Unknown custom provider: {normalized_provider_id}")
+    entry = custom_providers.pop(normalized_provider_id)
+    _save_provider_registry_state(api, configmap, state)
+    secret_key_name = str(entry.get("secret_key_name") or _custom_provider_secret_key(normalized_provider_id))
+    _update_provider_auth_secret(remove_keys={secret_key_name})
+    logger.info("Deleted custom provider %s (by user %s)", normalized_provider_id, user.get("sub", "unknown"))
+    return {"status": "deleted", "provider_id": normalized_provider_id}
 
 
 @app.get("/api/llm/health")
@@ -10270,7 +10749,7 @@ async def llm_list_models(response: Response, user=Depends(verify_token)):
 @app.post("/api/llm/models", status_code=201)
 async def llm_add_model(body: LLMModelEntry, user=Depends(verify_token)):
     """Add a model deployment to LiteLLM."""
-    ensure_role(user, "operator")
+    ensure_role(user, "admin")
     payload = {"model_name": body.model_name, "litellm_params": body.litellm_params}
     try:
         async with httpx.AsyncClient(timeout=_LLM_PROXY_TIMEOUT, trust_env=False) as client:
@@ -10293,7 +10772,7 @@ async def llm_add_model(body: LLMModelEntry, user=Depends(verify_token)):
 @app.post("/api/llm/models/delete")
 async def llm_delete_model(body: LLMModelDeleteRequest, user=Depends(verify_token)):
     """Delete a model deployment from LiteLLM."""
-    ensure_role(user, "operator")
+    ensure_role(user, "admin")
     try:
         async with httpx.AsyncClient(timeout=_LLM_PROXY_TIMEOUT, trust_env=False) as client:
             resp = await client.post(
@@ -10315,7 +10794,7 @@ async def llm_delete_model(body: LLMModelDeleteRequest, user=Depends(verify_toke
 @app.get("/api/llm/keys")
 def llm_list_keys(user=Depends(verify_token)):
     """List which LLM API key env vars are set (names only, never values)."""
-    ensure_role(user, "operator")
+    ensure_role(user, "admin")
     try:
         from kubernetes import client as k8s_client
 
@@ -10341,7 +10820,7 @@ def llm_list_keys(user=Depends(verify_token)):
 @app.put("/api/llm/keys")
 def llm_update_keys(body: LLMKeyUpdate, user=Depends(verify_token)):
     """Update LLM API key values in the K8s Secret. Operator-or-admin."""
-    ensure_role(user, "operator")
+    ensure_role(user, "admin")
 
     # Validate key names
     for key_name in body.keys:
@@ -10601,7 +11080,7 @@ async def llm_provider_suggestions(provider: str, q: str = "", user=Depends(veri
 @app.post("/api/llm/providers/{provider}/models", status_code=201)
 async def llm_add_provider_model(provider: str, body: ProviderModelAdd, user=Depends(verify_token)):
     """Add a model to LiteLLM via the simplified provider-centric API."""
-    ensure_role(user, "operator")
+    ensure_role(user, "admin")
     if provider not in _PROVIDER_META:
         raise HTTPException(status_code=404, detail=f"Unknown provider: {provider}")
 
@@ -10763,7 +11242,7 @@ async def _exchange_copilot_session_token(github_oauth_token: str) -> tuple[str,
 @app.post("/api/copilot/auth/device")
 async def copilot_auth_device(user=Depends(verify_token)):
     """Initiate GitHub OAuth device flow for Copilot."""
-    ensure_role(user, "operator")
+    ensure_role(user, "admin")
     user_id = user.get("sub", "unknown")
 
     try:
@@ -10802,7 +11281,7 @@ async def copilot_auth_device(user=Depends(verify_token)):
 @app.post("/api/copilot/auth/poll")
 async def copilot_auth_poll(user=Depends(verify_token)):
     """Poll GitHub for device flow completion. On success stores token in K8s secret."""
-    ensure_role(user, "operator")
+    ensure_role(user, "admin")
     user_id = user.get("sub", "unknown")
     flow = _copilot_device_flows.get(user_id)
     if not flow:
@@ -10869,7 +11348,7 @@ async def copilot_auth_poll(user=Depends(verify_token)):
 @app.get("/api/copilot/auth/status")
 def copilot_auth_status(user=Depends(verify_token)):
     """Check if a Copilot token is stored in the K8s secret."""
-    ensure_role(user, "operator")
+    ensure_role(user, "admin")
     try:
         from kubernetes import client as k8s_client
 

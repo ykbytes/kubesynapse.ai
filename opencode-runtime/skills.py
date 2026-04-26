@@ -16,6 +16,7 @@ from config import (
     DEFAULT_AGENT,
     DEFAULT_AGENT_STEPS,
     DEFAULT_MODEL,
+    DEFAULT_MODEL_REF,
     DEFAULT_PROVIDER,
     HELM_RELEASE_NAME,
     HOME_DIR,
@@ -32,6 +33,7 @@ from config import (
     OPENCODE_SERVER_HOST,
     OPENCODE_SERVER_PORT,
     OPENCODE_WORKDIR,
+    SELECTED_PROVIDER_JSON,
     SESSION_MAP_PATH,
     SKILL_NAME_RE,
     WORKSPACE_SNAPSHOT_DIR,
@@ -365,11 +367,10 @@ def build_generated_config(
 ) -> tuple[dict[str, Any], list[str]]:
     """Generate the full OpenCode configuration object."""
     mcp_config, warnings = build_mcp_config(sidecars)
-    model_ref = f"{DEFAULT_PROVIDER}/{DEFAULT_MODEL}"
     config: dict[str, Any] = {
         "$schema": "https://opencode.ai/config.json",
-        "model": model_ref,
-        "small_model": model_ref,
+        "model": DEFAULT_MODEL_REF,
+        "small_model": DEFAULT_MODEL_REF,
         "default_agent": DEFAULT_AGENT,
         "permission": "allow",
         "compaction": {
@@ -380,25 +381,6 @@ def build_generated_config(
         "server": {
             "hostname": OPENCODE_SERVER_HOST,
             "port": OPENCODE_SERVER_PORT,
-        },
-        "provider": {
-            DEFAULT_PROVIDER: {
-                "npm": "@ai-sdk/openai-compatible",
-                "name": DEFAULT_PROVIDER,
-                "options": {
-                    "baseURL": build_litellm_base_url(),
-                    "apiKey": LITELLM_API_KEY,
-                },
-                "models": {
-                    DEFAULT_MODEL: {
-                        "name": DEFAULT_MODEL,
-                        "limit": {
-                            "context": MODEL_CONTEXT_LIMIT,
-                            "output": MODEL_OUTPUT_LIMIT,
-                        },
-                    }
-                },
-            }
         },
         "agent": {
             "build": {
@@ -412,6 +394,66 @@ def build_generated_config(
             },
         },
     }
+
+    provider: dict[str, Any] = {}
+    if DEFAULT_PROVIDER.lower() == "litellm":
+        provider[DEFAULT_PROVIDER] = {
+            "npm": "@ai-sdk/openai-compatible",
+            "name": DEFAULT_PROVIDER,
+            "options": {
+                "baseURL": build_litellm_base_url(),
+                "apiKey": LITELLM_API_KEY,
+            },
+            "models": {
+                DEFAULT_MODEL: {
+                    "name": DEFAULT_MODEL,
+                    "limit": {
+                        "context": MODEL_CONTEXT_LIMIT,
+                        "output": MODEL_OUTPUT_LIMIT,
+                    },
+                }
+            },
+        }
+    elif SELECTED_PROVIDER_JSON:
+        try:
+            payload = json.loads(SELECTED_PROVIDER_JSON)
+            if isinstance(payload, dict):
+                provider_id = str(payload.get("id") or DEFAULT_PROVIDER)
+                provider_name = str(payload.get("name") or provider_id)
+                provider_base_url = str(payload.get("base_url") or "").strip() or None
+                provider_headers = payload.get("headers")
+                provider_model_list: list[str] = [
+                    str(m).strip()
+                    for m in (payload.get("models") or [])
+                    if str(m).strip()
+                ]
+                provider_block: dict[str, Any] = {
+                    "npm": "@ai-sdk/openai-compatible",
+                    "name": provider_name,
+                }
+                if provider_base_url:
+                    provider_block.setdefault("options", {})["baseURL"] = provider_base_url
+                if isinstance(provider_headers, dict) and provider_headers:
+                    provider_block.setdefault("options", {})["headers"] = {
+                        str(k): str(v) for k, v in provider_headers.items()
+                    }
+                if provider_model_list:
+                    provider_block["models"] = {
+                        model_id: {
+                            "name": model_id,
+                            "limit": {
+                                "context": MODEL_CONTEXT_LIMIT,
+                                "output": MODEL_OUTPUT_LIMIT,
+                            },
+                        }
+                        for model_id in provider_model_list
+                    }
+                provider[provider_id] = provider_block
+        except (json.JSONDecodeError, TypeError, ValueError):
+            logger.warning("OPENCODE_SELECTED_PROVIDER_JSON is invalid; skipping custom provider config.")
+
+    if provider:
+        config["provider"] = provider
     if mcp_config:
         config["mcp"] = mcp_config
     if config_overrides:

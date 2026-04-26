@@ -193,6 +193,8 @@ def create_agent_resources(spec: dict[str, Any], name: str, namespace: str, hand
     ensure_service(namespace, outputs.service)
     if outputs.mcp_auth_secret is not None:
         ensure_secret(namespace, outputs.mcp_auth_secret)
+    if outputs.provider_bootstrap_secret is not None:
+        ensure_secret(namespace, outputs.provider_bootstrap_secret)
     ensure_statefulset(namespace, outputs.statefulset)
     ensure_network_policy(namespace, outputs.mcp_network_policy)
     ensure_network_policy(namespace, outputs.a2a_egress_network_policy)

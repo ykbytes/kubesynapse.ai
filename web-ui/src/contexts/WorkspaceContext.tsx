@@ -191,6 +191,25 @@ function stableArrayUpdate<T>(prev: T[], next: T[]): T[] {
   return next;
 }
 
+function stableAgentDetailCacheUpdate(
+  prev: Record<string, AgentDetail>,
+  details: AgentDetail[],
+): Record<string, AgentDetail> {
+  let changed = false;
+  const next = { ...prev };
+
+  for (const detail of details) {
+    const existing = prev[detail.name];
+    if (existing && JSON.stringify(existing) === JSON.stringify(detail)) {
+      continue;
+    }
+    next[detail.name] = detail;
+    changed = true;
+  }
+
+  return changed ? next : prev;
+}
+
 // ── Provider ──
 
 export function WorkspaceProvider({ children }: { children: ReactNode }) {
@@ -445,13 +464,17 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   // Fetch agent detail
   useEffect(() => {
     if (!token.trim() || !selectedAgentName || agentCreateMode) { setSelectedAgentDetail(null); return; }
-    if (cachedSelectedAgentDetail) setSelectedAgentDetail(cachedSelectedAgentDetail);
+    if (cachedSelectedAgentDetail) {
+      setSelectedAgentDetail(cachedSelectedAgentDetail);
+      setAgentManageError("");
+      return;
+    }
     let cancelled = false;
     void fetchAgent(token, namespace, selectedAgentName)
       .then((detail) => {
         if (!cancelled) {
           setSelectedAgentDetail(detail);
-          setAgentDetailCache((current) => ({ ...current, [detail.name]: detail }));
+          setAgentDetailCache((current) => stableAgentDetailCacheUpdate(current, [detail]));
           setAgentManageError("");
         }
       })
@@ -473,11 +496,10 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       .then((results) => {
         if (cancelled) return;
         setAgentDetailCache((current) => {
-          const next = { ...current };
-          for (const result of results) {
-            if (result.status === "fulfilled") next[result.value.name] = result.value;
-          }
-          return next;
+          return stableAgentDetailCacheUpdate(
+            current,
+            results.flatMap((result) => (result.status === "fulfilled" ? [result.value] : [])),
+          );
         });
       })
       .finally(() => {
@@ -637,7 +659,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       };
       const updated = await updateAgent(token, namespace, selectedAgentName, nextPayload);
       setSelectedAgentDetail(updated);
-      setAgentDetailCache((current) => ({ ...current, [updated.name]: updated }));
+      setAgentDetailCache((current) => stableAgentDetailCacheUpdate(current, [updated]));
       await refreshWorkspaceData({ silent: true });
       toast.success("Agent saved");
     } catch (err) {

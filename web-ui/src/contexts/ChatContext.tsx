@@ -191,6 +191,11 @@ function finalizeAssistantMessage(
   };
 }
 
+function normalizePersistedMessageStatus(status: UiMessage["status"] | string | null | undefined): NonNullable<UiMessage["status"]> {
+  if (status === "error" || status === "complete") return status;
+  return "complete";
+}
+
 function normalizeQuestionRequest(payload: Record<string, unknown>): QuestionRequest | null {
   const id = String(payload.id ?? "").trim();
   if (!id) return null;
@@ -1376,7 +1381,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       resetLiveChatState(selectedAgentName);
       setMessagesForAgent(selectedAgentName, () =>
         msgs.map((m) => ({
-          id: m.message_id, role: m.role as UiMessage["role"], content: m.content, status: m.status as UiMessage["status"],
+          id: m.message_id,
+          role: m.role as UiMessage["role"],
+          content: m.content,
+          status: normalizePersistedMessageStatus(m.status as UiMessage["status"]),
           toolName: m.tool_name ?? undefined, toolNode: m.tool_node ?? undefined,
         })),
       );
@@ -1384,7 +1392,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         id: m.message_id,
         role: m.role as UiMessage["role"],
         content: m.content,
-        status: m.status as UiMessage["status"],
+        status: normalizePersistedMessageStatus(m.status as UiMessage["status"]),
         toolName: m.tool_name ?? undefined,
         toolNode: m.tool_node ?? undefined,
       })));
@@ -1417,7 +1425,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     try {
       setSessionSaving(true);
       await saveChatSessionMessages(token, activeSessionId, messages.map((m) => ({
-        message_id: m.id, role: m.role, content: m.content, status: m.status ?? "complete", toolName: m.toolName, toolNode: m.toolNode,
+        message_id: m.id,
+        role: m.role,
+        content: m.content,
+        status: normalizePersistedMessageStatus(m.status),
+        toolName: m.toolName,
+        toolNode: m.toolNode,
       })));
       savedMessageSignatureRef.current = buildMessageSignature(messages);
       const savedAt = new Date().toISOString();
@@ -1455,7 +1468,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             setActiveSessionId(session.session_id);
             setChatSessions((prev) => upsertChatSession(prev, session));
             await saveChatSessionMessages(token, session.session_id, messages.map((m) => ({
-              message_id: m.id, role: m.role, content: m.content, status: m.status ?? "complete", toolName: m.toolName, toolNode: m.toolNode,
+              message_id: m.id,
+              role: m.role,
+              content: m.content,
+              status: normalizePersistedMessageStatus(m.status),
+              toolName: m.toolName,
+              toolNode: m.toolNode,
             })));
             savedMessageSignatureRef.current = buildMessageSignature(messages);
             const savedAt = new Date().toISOString();

@@ -129,6 +129,7 @@ from config import (  # noqa: F401 — re-exported
     COMPACTION_TOKEN_THRESHOLD,
     DEFAULT_AGENT,
     DEFAULT_MODEL,
+    DEFAULT_MODEL_REF,
     DEFAULT_PROVIDER,
     HOME_DIR,
     MAX_PROMPT_CHARS,
@@ -466,7 +467,7 @@ def info() -> dict[str, Any]:
         "service": SERVICE_NAME,
         "namespace": SERVICE_NAMESPACE,
         "provider": DEFAULT_PROVIDER,
-        "model": DEFAULT_MODEL,
+        "model": DEFAULT_MODEL_REF,
         "agent": DEFAULT_AGENT,
         "capabilities": runtime_capabilities(),
         "supervisor": {

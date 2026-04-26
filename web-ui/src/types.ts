@@ -273,6 +273,47 @@ export interface ModelSuggestion {
   description?: string;
 }
 
+export interface ConnectedProviderModel {
+  id: string;
+  name: string;
+  description?: string | null;
+}
+
+export interface ConnectedProvider {
+  id: string;
+  label: string;
+  kind: "builtin" | "custom";
+  description: string;
+  auth_type: "apiKey" | "oauth";
+  connected: boolean;
+  docs_url?: string | null;
+  base_url?: string | null;
+  key_placeholder?: string | null;
+  editable: boolean;
+  headers: Record<string, string>;
+  models: ConnectedProviderModel[];
+}
+
+export interface ProviderCatalogModel {
+  provider_id: string;
+  provider_label: string;
+  model_id: string;
+  model_ref: string;
+  connected: boolean;
+  kind: "builtin" | "custom";
+  description?: string | null;
+}
+
+export interface CustomProviderPayload {
+  provider_id: string;
+  name: string;
+  base_url: string;
+  description?: string;
+  api_key?: string;
+  headers: Record<string, string>;
+  models: string[];
+}
+
 /* ── GitHub Copilot auth types ── */
 
 export interface CopilotDeviceFlowResponse {

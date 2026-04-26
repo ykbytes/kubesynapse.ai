@@ -55,12 +55,11 @@ class OpenCodeRuntimeTests(unittest.TestCase):
         ):
             written = opencode_runtime_main.materialize_opencode_config_files(
                 {
-                    "model": "litellm/gpt-4",
+                    "model": "opencode/kimi-k2.6",
                     "provider": {
-                        "litellm": {
+                        "opencode": {
                             "options": {
-                                "baseURL": "http://litellm.internal/v1",
-                                "apiKey": "test-key",
+                                "baseURL": "https://opencode.ai/zen/v1",
                             }
                         }
                     },
@@ -72,18 +71,19 @@ class OpenCodeRuntimeTests(unittest.TestCase):
 
             self.assertEqual(written, ["opencode.json", "plugins/custom.ts"])
             self.assertEqual(config["default_agent"], "build")
-            self.assertEqual(config["model"], "litellm/gpt-4")
-            self.assertEqual(config["provider"]["litellm"]["options"]["baseURL"], "http://litellm.internal/v1")
+            self.assertEqual(config["model"], "opencode/kimi-k2.6")
+            self.assertEqual(config["provider"]["opencode"]["options"]["baseURL"], "https://opencode.ai/zen/v1")
             self.assertIn("Plugin", (root / "plugins" / "custom.ts").read_text(encoding="utf-8"))
 
     def test_build_generated_config_preserves_provider_when_overrides_are_partial(self) -> None:
-        config, warnings = opencode_runtime_main.build_generated_config(
-            [],
-            config_overrides={
-                "default_agent": "build",
-                "permission": "allow",
-            },
-        )
+        with patch.object(skills_mod, "DEFAULT_PROVIDER", "litellm"):
+            config, warnings = opencode_runtime_main.build_generated_config(
+                [],
+                config_overrides={
+                    "default_agent": "build",
+                    "permission": "allow",
+                },
+            )
 
         self.assertEqual(config["default_agent"], "build")
         self.assertEqual(config["permission"], "allow")
@@ -1794,7 +1794,7 @@ class OpenCodeOutboundA2ATests(unittest.TestCase):
         self.assertEqual(response.status, "approval_pending")
         self.assertEqual(response.approval_name, "peer-call-approval")
         self.assertTrue(response.thread_id)
-        self.assertEqual(response.model, opencode_runtime_main.DEFAULT_MODEL)
+        self.assertEqual(response.model, opencode_runtime_main.DEFAULT_MODEL_REF)
         self.assertFalse(response.response)
         self.assertIn("analysis-agent", mock_hitl.call_args.kwargs["action_description"])
         self.assertIn("team-b", mock_hitl.call_args.kwargs["action_description"])

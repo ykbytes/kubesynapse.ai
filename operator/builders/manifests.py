@@ -6,6 +6,7 @@ and their private helpers from operator/main.py into the builders package.
 
 from __future__ import annotations
 
+import base64
 import copy
 import hashlib
 import json
@@ -47,6 +48,7 @@ from config import (
     OPENCODE_RUNTIME_IMAGE_PULL_POLICY,
     OPERATOR_NAMESPACE,
     OTEL_ENDPOINT,
+    PROVIDER_REGISTRY_CONFIGMAP_NAME,
     RUNTIME_SERVICE_ACCOUNT,
     SECRET_NAME,
     SUPPORTED_RUNTIME_KINDS,
@@ -95,6 +97,24 @@ logger = logging.getLogger("operator.builders")
 def trust_bundle_enabled() -> bool:
     """Return True when runtime pods should mount a trust bundle."""
     return bool(TRUST_BUNDLE_CONFIGMAP_NAME and TRUST_BUNDLE_MOUNT_PATH)
+
+
+def _resolve_opencode_model_ref(raw_model: str) -> tuple[str, str]:
+    """Split a model reference into (provider_id, model_id).
+
+    Examples:
+        "opencode-go/kimi-k2.6" -> ("opencode-go", "kimi-k2.6")
+        "gpt-4"                -> (OPENCODE_DEFAULT_PROVIDER, "gpt-4")
+    """
+    cleaned = str(raw_model or "").strip() or "gpt-4"
+    if "/" in cleaned:
+        provider_id, model_id = cleaned.split("/", 1)
+        provider_id = provider_id.strip()
+        model_id = model_id.strip() or "gpt-4"
+        if not provider_id:
+            return (OPENCODE_DEFAULT_PROVIDER, model_id)
+        return (provider_id, model_id)
+    return (OPENCODE_DEFAULT_PROVIDER, cleaned)
 
 
 def trust_bundle_volume_mount() -> dict[str, Any]:
@@ -750,6 +770,119 @@ def create_mcp_auth_secret_manifest(namespace: str) -> dict[str, Any]:
     }
 
 
+# Built-in provider ID -> secret key mapping
+_BUILTIN_PROVIDER_SECRET_KEYS: dict[str, str] = {
+    "opencode": "OPENCODE_API_KEY",
+    "opencode-go": "OPENCODE_GO_API_KEY",
+    "github-copilot": "GITHUB_COPILOT_TOKEN",
+}
+
+
+def _build_provider_auth_content(auth_data: dict[str, str]) -> str:
+    vals: dict[str, dict[str, str]] = {}
+    for provider_id, secret_key in _BUILTIN_PROVIDER_SECRET_KEYS.items():
+        value = auth_data.get(secret_key)
+        if not value:
+            continue
+        try:
+            decoded = base64.b64decode(value).decode("utf-8").strip()
+        except Exception:
+            decoded = value.strip()
+        if decoded:
+            vals[provider_id] = {"type": "api", "key": decoded}
+    return json.dumps(vals, ensure_ascii=False)
+
+
+def _build_selected_provider_json(
+    selected_provider_id: str,
+    registry_state: dict[str, Any],
+) -> str | None:
+    custom_providers: dict[str, dict[str, Any]] = registry_state.get("custom_providers") or {}
+    entry = custom_providers.get(selected_provider_id)
+    if not isinstance(entry, dict):
+        return None
+    return json.dumps(
+        {
+            "id": selected_provider_id,
+            "name": str(entry.get("name") or selected_provider_id),
+            "base_url": str(entry.get("base_url") or "").strip() or None,
+            "headers": {str(k): str(v) for k, v in (entry.get("headers") or {}).items()},
+            "models": [str(m).strip() for m in (entry.get("models") or []) if str(m).strip()],
+        },
+        ensure_ascii=False,
+    )
+
+
+def create_opencode_provider_bootstrap_secret(
+    agent_name: str,
+    namespace: str,
+    spec: dict[str, Any],
+) -> dict[str, Any] | None:
+    model = str(spec.get("model") or "").strip() or "gpt-4"
+    selected_provider_id, _selected_model_id = _resolve_opencode_model_ref(model)
+
+    if selected_provider_id == "litellm":
+        return None
+
+    core_api = kubernetes.client.CoreV1Api()
+    try:
+        source_secret = core_api.read_namespaced_secret(name=SECRET_NAME, namespace=OPERATOR_NAMESPACE)
+    except ApiException as exc:
+        if exc.status == 404:
+            logger.warning("Provider auth secret '%s/%s' not found; skipping bootstrap secret.", OPERATOR_NAMESPACE, SECRET_NAME)
+            return None
+        raise
+    auth_data: dict[str, str] = getattr(source_secret, "data", None) or {}
+
+    auth_content = _build_provider_auth_content(auth_data)
+    if not auth_content or auth_content == "{}":
+        logger.warning("No connected provider auth keys found; skipping bootstrap secret.")
+        return None
+
+    string_data: dict[str, str] = {"OPENCODE_AUTH_CONTENT": auth_content}
+
+    try:
+        configmap = core_api.read_namespaced_config_map(
+            name=PROVIDER_REGISTRY_CONFIGMAP_NAME,
+            namespace=OPERATOR_NAMESPACE,
+        )
+    except ApiException as exc:
+        logger.debug("Provider registry configmap not found (%s); custom provider config unavailable.", exc)
+        configmap_data: dict[str, str] = {}
+    else:
+        configmap_data = getattr(configmap, "data", None) or {}
+
+    registry_state: dict[str, Any] = {}
+    raw_registry = str(configmap_data.get("providers.json") or "").strip()
+    if raw_registry:
+        try:
+            registry_state = json.loads(raw_registry)
+        except ValueError:
+            logger.warning("Provider registry configmap contains invalid JSON; custom provider config unavailable.")
+
+    selected_provider_json = _build_selected_provider_json(selected_provider_id, registry_state)
+    if selected_provider_json:
+        string_data["OPENCODE_SELECTED_PROVIDER_JSON"] = selected_provider_json
+
+    secret_name = f"{sandbox_name(agent_name)}-opencode-provider"
+    return {
+        "apiVersion": "v1",
+        "kind": "Secret",
+        "metadata": {
+            "name": secret_name,
+            "namespace": namespace,
+            "labels": {
+                "app": "ai-agent",
+                "kubesynth.ai/managed-by": "operator",
+                "kubesynth.ai/agent-name": agent_name,
+                "kubesynth.ai/secret-purpose": "opencode-provider",
+            },
+        },
+        "type": "Opaque",
+        "stringData": string_data,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Service manifests
 # ---------------------------------------------------------------------------
@@ -1044,13 +1177,19 @@ def create_agent_statefulset_manifest(
 
     agent_image = OPENCODE_RUNTIME_IMAGE
     agent_image_pull_policy = OPENCODE_RUNTIME_IMAGE_PULL_POLICY
+    # Resolve the selected provider/model from spec.model (supports slash-form refs)
+    selected_provider_id, selected_model_id = _resolve_opencode_model_ref(model)
     opencode_config_files = merged_opencode_runtime_config_files(spec)
     volume_mounts.append({"name": "workspace-volume", "mountPath": "/workspace"})
     volumes.append({"name": "workspace-volume", "emptyDir": {"sizeLimit": "5Gi"}})
+
+    # Build a deterministic per-agent secret name for provider bootstrap data
+    provider_bootstrap_secret_name = f"{sandbox_name(name)}-opencode-provider"
+
     env.extend(
         [
-            {"name": "OPENCODE_PROVIDER", "value": OPENCODE_DEFAULT_PROVIDER},
-            {"name": "OPENCODE_MODEL", "value": model},
+            {"name": "OPENCODE_PROVIDER", "value": selected_provider_id},
+            {"name": "OPENCODE_MODEL", "value": selected_model_id},
             {"name": "OPENCODE_SYSTEM_PROMPT", "value": system_prompt},
             {"name": "OPENCODE_DEFAULT_AGENT", "value": "build"},
             {"name": "LITELLM_HOST", "value": f"http://{LITELLM_SVC}.{OPERATOR_NAMESPACE}.svc.cluster.local:4000"},
@@ -1077,8 +1216,32 @@ def create_agent_statefulset_manifest(
                     }
                 },
             },
+            {
+                "name": "OPENCODE_AUTH_CONTENT",
+                "valueFrom": {
+                    "secretKeyRef": {
+                        "name": provider_bootstrap_secret_name,
+                        "key": "OPENCODE_AUTH_CONTENT",
+                        "optional": True,
+                    }
+                },
+            },
         ]
     )
+    # Inject selected-provider non-secret config for custom providers
+    if selected_provider_id not in ("opencode", "opencode-go", "github-copilot", "litellm"):
+        env.append(
+            {
+                "name": "OPENCODE_SELECTED_PROVIDER_JSON",
+                "valueFrom": {
+                    "secretKeyRef": {
+                        "name": provider_bootstrap_secret_name,
+                        "key": "OPENCODE_SELECTED_PROVIDER_JSON",
+                        "optional": True,
+                    }
+                },
+            }
+        )
     if opencode_config_files:
         env.append(
             {

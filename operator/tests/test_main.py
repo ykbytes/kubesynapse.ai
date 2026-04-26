@@ -971,6 +971,7 @@ class AgentControllerTests(unittest.TestCase):
         outputs.has_tenant = False
         outputs.runtime_kind = "opencode"
         outputs.mcp_auth_secret = None
+        outputs.provider_bootstrap_secret = None
         outputs.service = {"metadata": {"name": "workspace-assistant-sandbox"}}
         outputs.statefulset = {"metadata": {"name": "workspace-assistant-sandbox"}}
         outputs.mcp_network_policy = {"metadata": {"name": "workspace-assistant-sandbox-mcp-egress"}}
@@ -1394,7 +1395,7 @@ class AllowedNamespacesTests(unittest.TestCase):
         container_names = [item["name"] for item in pod_spec["containers"]]
 
         self.assertEqual(pod_spec["containers"][0]["image"], _config.OPENCODE_RUNTIME_IMAGE)
-        self.assertEqual(env["OPENCODE_PROVIDER"], _config.OPENCODE_DEFAULT_PROVIDER)
+        self.assertEqual(env["OPENCODE_PROVIDER"], "litellm")  # "gpt-4" has no slash -> falls back to default
         self.assertEqual(env["OPENCODE_MODEL"], "gpt-4")
         self.assertEqual(env["MCP_SERVERS"], "documents")
         self.assertEqual(env["HELM_RELEASE_NAME"], _config.HELM_RELEASE_NAME)

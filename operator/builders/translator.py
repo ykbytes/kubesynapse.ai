@@ -21,6 +21,7 @@ from builders.manifests import (
     create_agent_statefulset_manifest,
     create_mcp_auth_secret_manifest,
     create_mcp_network_policy_manifest,
+    create_opencode_provider_bootstrap_secret,
     resolve_runtime_kind,
 )
 from utils import (
@@ -51,6 +52,7 @@ class AgentOutputs:
     a2a_egress_network_policy: dict[str, Any]
     a2a_ingress_network_policy: dict[str, Any]
     mcp_auth_secret: dict[str, Any] | None = None
+    provider_bootstrap_secret: dict[str, Any] | None = None
 
     # Metadata carried through for logging / pruning
     agent_name: str = ""
@@ -83,6 +85,8 @@ class AgentOutputs:
         manifests = self.owned_manifests()
         if self.mcp_auth_secret is not None:
             manifests.append(self.mcp_auth_secret)
+        if self.provider_bootstrap_secret is not None:
+            manifests.append(self.provider_bootstrap_secret)
         return manifests
 
     def desired_resource_names(self) -> set[str]:
@@ -169,6 +173,8 @@ def translate_agent(
     if allowed_mcp or requested_mcp_servers or has_structured_mcp_connections:
         mcp_auth_secret = create_mcp_auth_secret_manifest(namespace)
 
+    provider_bootstrap_secret = create_opencode_provider_bootstrap_secret(name, namespace, spec)
+
     runtime_kind = resolve_runtime_kind(spec)
 
     return AgentOutputs(
@@ -178,6 +184,7 @@ def translate_agent(
         a2a_egress_network_policy=a2a_egress_policy,
         a2a_ingress_network_policy=a2a_ingress_policy,
         mcp_auth_secret=mcp_auth_secret,
+        provider_bootstrap_secret=provider_bootstrap_secret,
         agent_name=name,
         agent_namespace=namespace,
         policy_name=policy_name,

@@ -48,6 +48,7 @@ from config import (
     COMPACTION_MIN_TURN_SPACING,
     DEFAULT_AGENT,
     DEFAULT_MODEL,
+    DEFAULT_MODEL_REF,
     DEFAULT_SYSTEM_PROMPT,
     LIVE_UPDATE_TIMEOUT_SECONDS,
     MAX_COMPACTION_ATTEMPTS,
@@ -744,7 +745,7 @@ def invoke_opencode(request: InvokeRequest, stream_callback: StreamCallback = No
             return InvokeResponse(
                 thread_id=logical_thread_id,
                 response="",
-                model=request.model or DEFAULT_MODEL,
+                model=request.model or DEFAULT_MODEL_REF,
                 status="approval_pending",
                 approval_name=approval.get("approval_name"),
                 a2a=a2a_response_metadata(request),
@@ -755,13 +756,13 @@ def invoke_opencode(request: InvokeRequest, stream_callback: StreamCallback = No
         return invoke_outbound_a2a_request(
             request,
             logical_thread_id=logical_thread_id,
-            selected_model=request.model or DEFAULT_MODEL,
+            selected_model=request.model or DEFAULT_MODEL_REF,
         )
 
     ensure_server_running()
 
     working_directory = resolve_working_directory(request.working_directory)
-    selected_model = request.model or DEFAULT_MODEL
+    selected_model = request.model or DEFAULT_MODEL_REF
     created_new_session = False
     if request.no_session:
         session_id = create_remote_session(working_directory)

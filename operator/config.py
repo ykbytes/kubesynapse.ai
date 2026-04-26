@@ -220,6 +220,10 @@ A2A_MAX_TIMEOUT_SECONDS_ENV: str = "A2A_MAX_TIMEOUT_SECONDS"
 MCP_HUB_NAMESPACE: str = os.getenv("MCP_HUB_NAMESPACE", "mcp-hub").strip()
 MCP_AUTH_SECRET_NAME: str = os.getenv("MCP_AUTH_SECRET_NAME", "kubesynth-mcp-auth").strip()
 HELM_RELEASE_NAME: str = os.getenv("HELM_RELEASE_NAME", "kubesynth").strip() or "kubesynth"
+PROVIDER_REGISTRY_CONFIGMAP_NAME: str = os.getenv(
+    "PROVIDER_REGISTRY_CONFIGMAP_NAME",
+    f"{HELM_RELEASE_NAME}-provider-registry",
+).strip()
 
 # ---------------------------------------------------------------------------
 # Runtime extra env & config file env-var names

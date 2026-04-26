@@ -6,8 +6,8 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { Badge } from "@/components/ui/badge";
 import { useConnection } from "@/contexts/ConnectionContext";
-import { fetchLLMProviders } from "@/lib/api";
-import type { LLMProvider } from "@/types";
+import { fetchProviderCatalog } from "@/lib/api";
+import type { ProviderCatalogModel } from "@/types";
 
 interface ModelSelectorProps {
   value: string;
@@ -27,7 +27,7 @@ export function ModelSelector({
 }: ModelSelectorProps) {
   const { token } = useConnection();
   const [open, setOpen] = useState(false);
-  const [providers, setProviders] = useState<LLMProvider[]>([]);
+  const [models, setModels] = useState<ProviderCatalogModel[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const fetchedRef = useRef(false);
@@ -36,8 +36,8 @@ export function ModelSelector({
     setLoading(true);
     setError("");
     try {
-      const result = await fetchLLMProviders(token);
-      setProviders(result);
+      const result = await fetchProviderCatalog(token);
+      setModels(result);
     } catch {
       setError("Failed to load models");
     } finally {
@@ -60,17 +60,23 @@ export function ModelSelector({
     [loadModels],
   );
 
-  // Find which provider the selected model belongs to
   const selectedProvider = useMemo(
-    () => providers.find((p) => p.models.some((m) => m.model_name === value)),
-    [providers, value],
+    () => models.find((model) => model.model_ref === value || `${model.provider_id}/${model.model_id}` === value),
+    [models, value],
   );
 
-  // Only show providers that have models
-  const activeProviders = useMemo(
-    () => providers.filter((p) => p.models.length > 0),
-    [providers],
-  );
+  const groupedProviders = useMemo(() => {
+    const groups = new Map<string, { label: string; items: ProviderCatalogModel[] }>();
+    for (const model of models) {
+      const existing = groups.get(model.provider_id);
+      if (existing) {
+        existing.items.push(model);
+        continue;
+      }
+      groups.set(model.provider_id, { label: model.provider_label, items: [model] });
+    }
+    return Array.from(groups.entries()).map(([providerId, group]) => ({ providerId, ...group }));
+  }, [models]);
 
   return (
     <Popover open={open} onOpenChange={handleOpenChange}>
@@ -92,7 +98,7 @@ export function ModelSelector({
                 <span className="truncate">{value}</span>
                 {selectedProvider && (
                   <Badge variant="outline" className="text-[10px] shrink-0">
-                    {selectedProvider.label}
+                    {selectedProvider.provider_label}
                   </Badge>
                 )}
               </span>
@@ -125,35 +131,38 @@ export function ModelSelector({
                   Retry
                 </Button>
               </div>
-            ) : (
-              <>
-                <CommandEmpty>No models found.</CommandEmpty>
-                {activeProviders.map((prov) => (
-                  <CommandGroup key={prov.key_name} heading={prov.label}>
-                    {prov.models.map((m) => (
-                      <CommandItem
-                        key={m.id || m.model_name}
-                        value={m.model_name}
-                        onSelect={(v) => {
-                          onChange(v === value ? "" : v);
-                          setOpen(false);
-                        }}
-                      >
-                        <Check
-                          className={cn(
-                            "h-3.5 w-3.5 shrink-0",
-                            value === m.model_name ? "opacity-100" : "opacity-0",
-                          )}
-                        />
-                        <span className="truncate font-medium text-sm">
-                          {m.model_name}
-                        </span>
-                      </CommandItem>
-                    ))}
-                  </CommandGroup>
-                ))}
-              </>
-            )}
+              ) : (
+                <>
+                  <CommandEmpty>No models found.</CommandEmpty>
+                  {groupedProviders.map((provider) => (
+                    <CommandGroup key={provider.providerId} heading={provider.label}>
+                      {provider.items.map((model) => (
+                        <CommandItem
+                          key={model.model_ref}
+                          value={model.model_ref}
+                          onSelect={() => {
+                            onChange(model.model_ref === value ? "" : model.model_ref);
+                            setOpen(false);
+                          }}
+                        >
+                          <Check
+                            className={cn(
+                              "h-3.5 w-3.5 shrink-0",
+                              value === model.model_ref ? "opacity-100" : "opacity-0",
+                            )}
+                          />
+                          <div className="min-w-0 flex-1">
+                            <span className="truncate font-medium text-sm">{model.model_ref}</span>
+                            {model.description ? (
+                              <p className="truncate text-[11px] text-muted-foreground">{model.description}</p>
+                            ) : null}
+                          </div>
+                        </CommandItem>
+                      ))}
+                    </CommandGroup>
+                  ))}
+                </>
+              )}
           </CommandList>
         </Command>
       </PopoverContent>

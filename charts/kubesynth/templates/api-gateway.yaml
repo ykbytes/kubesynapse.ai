@@ -19,6 +19,7 @@ spec:
     metadata:
       annotations:
         checksum/secrets: {{ include (print $.Template.BasePath "/external-secrets.yaml") . | sha256sum }}
+        checksum/provider-registry: {{ include (print $.Template.BasePath "/provider-registry-configmap.yaml") . | sha256sum }}
         prometheus.io/scrape: "true"
         prometheus.io/port: "8080"
         prometheus.io/path: "/metrics"
@@ -154,6 +155,12 @@ spec:
                   optional: true
             - name: LLM_SECRET_NAME
               value: {{ include "kubesynth.fullname" . }}-llm-api-keys
+            - name: HELM_RELEASE_NAME
+              value: {{ include "kubesynth.fullname" . | quote }}
+            - name: PROVIDER_AUTH_SECRET_NAME
+              value: {{ include "kubesynth.fullname" . }}-llm-api-keys
+            - name: PROVIDER_REGISTRY_CONFIGMAP_NAME
+              value: {{ include "kubesynth.fullname" . }}-provider-registry
             - name: POD_NAMESPACE
               valueFrom:
                 fieldRef:

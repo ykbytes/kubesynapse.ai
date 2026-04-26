@@ -107,6 +107,11 @@ OPENCODE_SERVER_PORT = max(_safe_int("OPENCODE_SERVER_PORT", 4096), 1024)
 # ---------------------------------------------------------------------------
 DEFAULT_PROVIDER = os.getenv("OPENCODE_PROVIDER", "litellm").strip() or "litellm"
 DEFAULT_MODEL = (os.getenv("OPENCODE_MODEL") or os.getenv("AGENT_MODEL") or "gpt-4").strip() or "gpt-4"
+_AGENT_MODEL_RAW = (os.getenv("AGENT_MODEL") or "").strip()
+if "/" in _AGENT_MODEL_RAW:
+    DEFAULT_MODEL_REF = _AGENT_MODEL_RAW
+else:
+    DEFAULT_MODEL_REF = f"{DEFAULT_PROVIDER}/{DEFAULT_MODEL}"
 DEFAULT_SYSTEM_PROMPT = (os.getenv("OPENCODE_SYSTEM_PROMPT") or os.getenv("AGENT_SYSTEM_PROMPT") or "").strip()
 DEFAULT_AGENT = os.getenv("OPENCODE_DEFAULT_AGENT", "build").strip() or "build"
 
@@ -116,6 +121,11 @@ DEFAULT_AGENT = os.getenv("OPENCODE_DEFAULT_AGENT", "build").strip() or "build"
 LITELLM_HOST = os.getenv("LITELLM_HOST", "http://localhost:4000").strip() or "http://localhost:4000"
 LITELLM_BASE_PATH = os.getenv("LITELLM_BASE_PATH", "v1/chat/completions").strip() or "v1/chat/completions"
 LITELLM_API_KEY = os.getenv("LITELLM_API_KEY", "").strip()
+
+# ---------------------------------------------------------------------------
+# Selected provider
+# ---------------------------------------------------------------------------
+SELECTED_PROVIDER_JSON = os.getenv("OPENCODE_SELECTED_PROVIDER_JSON", "").strip()
 
 # ---------------------------------------------------------------------------
 # MCP

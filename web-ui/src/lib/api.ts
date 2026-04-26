@@ -22,10 +22,12 @@ import type {
   CatalogSkill,
   CatalogSkillDetail,
   ConfigField,
+  ConnectedProvider,
   CopilotAuthStatus,
   CopilotDeviceFlowResponse,
   CopilotPollResponse,
   CreateUserPayload,
+  CustomProviderPayload,
   CreateAgentPayload,
   DeleteResponse,
   EvalCaseResult,
@@ -70,6 +72,7 @@ import type {
   McpStats,
   McpSupportLevel,
   PolicyInfo,
+  ProviderCatalogModel,
   PolicyInputGuardrails,
   PolicyMemoryPolicy,
   PolicyOutputGuardrails,
@@ -333,6 +336,17 @@ async function fetchAuthenticated(
   }
 
   return response;
+}
+
+function requestInfoToUrl(input: RequestInfo | URL): string {
+  if (typeof input === "string") return input;
+  if (input instanceof URL) return input.toString();
+  return input.url;
+}
+
+function buildEventSourceFetch(token: string, requestId?: string) {
+  return (input: RequestInfo | URL, init?: RequestInit): Promise<Response> =>
+    fetchAuthenticated(requestInfoToUrl(input), token, init ?? {}, requestId);
 }
 
 function isRecord(value: unknown): value is JsonRecord {
@@ -2314,6 +2328,7 @@ export async function streamAgentLogs(options: LogStreamHandlers): Promise<void>
   const fullUrl = options.tail ? `${url}${url.includes("?") ? "&" : "?"}tail=${options.tail}` : url;
 
   await fetchEventSource(fullUrl, {
+    fetch: buildEventSourceFetch(options.token),
     headers: {
       ...buildHeaders(options.token),
       Accept: "text/event-stream",
@@ -2386,6 +2401,7 @@ export async function streamWorkflowLogs(options: WorkflowLogStreamHandlers): Pr
   const fullUrl = options.tail ? `${url}${url.includes("?") ? "&" : "?"}tail=${options.tail}` : url;
 
   await fetchEventSource(fullUrl, {
+    fetch: buildEventSourceFetch(options.token),
     headers: {
       ...buildHeaders(options.token),
       Accept: "text/event-stream",
@@ -3067,6 +3083,7 @@ export async function rejectQuestion(
 
 export async function streamAgentInvoke(options: StreamHandlers): Promise<void> {
   await fetchEventSource(buildUrl(`/api/agents/${options.agentName}/invoke/stream`, options.namespace), {
+    fetch: buildEventSourceFetch(options.token, options.requestId),
     method: "POST",
     headers: {
       ...buildHeaders(options.token, options.requestId),
@@ -3668,6 +3685,103 @@ export async function fetchLLMProviders(token: string): Promise<LLMProvider[]> {
       };
     });
   });
+}
+
+export async function fetchConnectedProviders(token: string): Promise<ConnectedProvider[]> {
+  const response = await fetchAuthenticated(buildUrl("/api/providers"), token);
+  return parseJsonResponse(response, (payload) => {
+    const record = expectRecord(payload, "ProvidersResponse");
+    const providers = record.providers;
+    if (!Array.isArray(providers)) return [];
+    return providers.map((item, index) => {
+      const provider = expectRecord(item, `providers[${index}]`);
+      const headersValue = provider.headers;
+      let headers: Record<string, string> = {};
+      if (isRecord(headersValue)) {
+        headers = Object.fromEntries(
+          Object.entries(headersValue).map(([key, value]) => [key, typeof value === "string" ? value : String(value)]),
+        );
+      }
+      return {
+        id: readString(provider, "id", `providers[${index}]`),
+        label: readString(provider, "label", `providers[${index}]`),
+        kind: readString(provider, "kind", `providers[${index}]`) as "builtin" | "custom",
+        description: readString(provider, "description", `providers[${index}]`, ""),
+        auth_type: readString(provider, "auth_type", `providers[${index}]`) as "apiKey" | "oauth",
+        connected: readBoolean(provider, "connected", `providers[${index}]`, false),
+        docs_url: readOptionalString(provider, "docs_url", `providers[${index}]`),
+        base_url: readOptionalString(provider, "base_url", `providers[${index}]`),
+        key_placeholder: readOptionalString(provider, "key_placeholder", `providers[${index}]`),
+        editable: readBoolean(provider, "editable", `providers[${index}]`, false),
+        headers,
+        models: Array.isArray(provider.models)
+          ? provider.models.map((model, modelIndex) => {
+              const entry = expectRecord(model, `providers[${index}].models[${modelIndex}]`);
+              return {
+                id: readString(entry, "id", `providers[${index}].models[${modelIndex}]`),
+                name: readString(entry, "name", `providers[${index}].models[${modelIndex}]`),
+                description: readOptionalString(entry, "description", `providers[${index}].models[${modelIndex}]`),
+              };
+            })
+          : [],
+      };
+    });
+  });
+}
+
+export async function fetchProviderCatalog(token: string): Promise<ProviderCatalogModel[]> {
+  const response = await fetchAuthenticated(buildUrl("/api/providers/catalog"), token);
+  return parseJsonResponse(response, (payload) => {
+    const record = expectRecord(payload, "ProviderCatalogResponse");
+    const models = record.models;
+    if (!Array.isArray(models)) return [];
+    return models.map((item, index) => {
+      const model = expectRecord(item, `models[${index}]`);
+      return {
+        provider_id: readString(model, "provider_id", `models[${index}]`),
+        provider_label: readString(model, "provider_label", `models[${index}]`),
+        model_id: readString(model, "model_id", `models[${index}]`),
+        model_ref: readString(model, "model_ref", `models[${index}]`),
+        connected: readBoolean(model, "connected", `models[${index}]`, false),
+        kind: readString(model, "kind", `models[${index}]`) as "builtin" | "custom",
+        description: readOptionalString(model, "description", `models[${index}]`),
+      };
+    });
+  });
+}
+
+export async function updateProviderCredential(token: string, providerId: string, apiKey: string): Promise<void> {
+  const response = await fetchAuthenticated(buildUrl(`/api/providers/${encodeURIComponent(providerId)}/credentials`), token, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ api_key: apiKey }),
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || `Failed to update provider credential (${response.status})`);
+  }
+}
+
+export async function createOrUpdateCustomProvider(token: string, payload: CustomProviderPayload): Promise<void> {
+  const response = await fetchAuthenticated(buildUrl("/api/providers/custom"), token, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || `Failed to save custom provider (${response.status})`);
+  }
+}
+
+export async function deleteCustomProvider(token: string, providerId: string): Promise<void> {
+  const response = await fetchAuthenticated(buildUrl(`/api/providers/custom/${encodeURIComponent(providerId)}`), token, {
+    method: "DELETE",
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || `Failed to delete custom provider (${response.status})`);
+  }
 }
 
 export async function fetchProviderSuggestions(token: string, provider: string, q?: string): Promise<ModelSuggestion[]> {
