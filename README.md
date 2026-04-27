@@ -50,25 +50,64 @@ graph LR
 
 ## Quick Start
 
-### Production Install (Helm + DockerHub)
+### Production Install (Helm OCI + Docker Hub)
 
-The fastest path uses pre-built images. Requires Kubernetes 1.25+, Helm 3.12+, and an LLM API key.
+The fastest path uses pre-built images from Docker Hub. Requires Kubernetes 1.25+, Helm 3.12+, and an LLM API key.
 
 ```bash
-# 1. Clone
-git clone https://github.com/kubesynth/kubesynth.git && cd kubesynth
+# 1. Install via Helm OCI (no git clone needed)
+helm install kubesynth oci://docker.io/kubesynth/charts/kubesynth \
+  --set platformSecrets.native.openaiApiKey="sk-..." \
+  --set litellm.masterKey="your-secure-key"
 
-# 2. Set secrets (edit file; never commit keys)
-# deploy/values.dockerhub.local.yaml
-#   platformSecrets.native.openaiApiKey: "sk-..."
-
-# 3. Deploy
-helm upgrade --install kubesynth ./charts/kubesynth \
-  -f ./deploy/values.dockerhub.local.yaml
-
-# 4. Verify
+# 2. Verify
 kubectl port-forward svc/kubesynth-api-gateway 8080:8080
 curl http://localhost:8080/api/health
+```
+
+### Install via Python SDK
+
+```bash
+pip install kubesynth-sdk
+```
+
+```python
+from kubesynth import KubeSynthClient
+
+client = KubeSynthClient(base_url="http://localhost:8080")
+health = await client.health_check()
+print(health)  # {"status": "ok"}
+```
+
+### Install via TypeScript SDK
+
+```bash
+npm install @kubesynth/sdk
+```
+
+```typescript
+import { KubeSynthClient } from "@kubesynth/sdk";
+
+const client = new KubeSynthClient({ baseUrl: "http://localhost:8080" });
+const agents = await client.listAgents();
+console.log(agents);
+```
+
+### Install CLI
+
+```bash
+pip install kubesynth-cli
+
+agentctl health
+agentctl agent list
+agentctl workflow create --file my-workflow.yaml
+```
+
+### Install via Homebrew (macOS/Linux)
+
+```bash
+brew tap kubesynth/tap
+brew install kubesynth-cli
 ```
 
 ### Local Development (Kind)

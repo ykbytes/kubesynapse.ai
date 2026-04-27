@@ -1,0 +1,712 @@
+# KubeSynth Troubleshooting Guide
+
+**Who is this for:** Anyone operating or developing on KubeSynth who needs to diagnose and fix common issues quickly.
+
+Each issue follows this pattern: **Symptoms -> Diagnosis -> Fix -> Prevention**
+
+---
+
+## Table of Contents
+
+- [Agent Pod Stuck in Pending](#agent-pod-stuck-in-pending)
+- [Agent Pod CrashLoopBackOff](#agent-pod-crashloopbackoff)
+- [Gateway 503 Errors](#gateway-503-errors)
+- [A2A Delegation Fails](#a2a-delegation-fails)
+- [LLM Calls Timeout](#llm-calls-timeout)
+- [Web UI Not Loading](#web-ui-not-loading)
+- [Database Connection Failures](#database-connection-failures)
+- [Workflow Eval Failures](#workflow-eval-failures)
+- [Auth and OIDC Issues](#auth-and-oidc-issues)
+- [MCP Tool Not Available](#mcp-tool-not-available)
+
+---
+
+## Agent Pod Stuck in Pending
+
+### Symptoms
+
+- `kubectl get pods` shows agent pod in `Pending` state
+- `kubectl describe pod` shows events like `Unschedulable` or `FailedBinding`
+
+### Diagnosis
+
+```bash
+kubectl describe pod <agent-pod> -n <namespace>
+kubectl get events -n <namespace> --field-selector reason=FailedScheduling
+```
+
+Common causes:
+
+| Cause | Event Message |
+|-------|---------------|
+| **PVC not bound** | `persistentvolumeclaim "state-volume" not found` |
+| **Insufficient resources** | `Insufficient cpu` or `Insufficient memory` |
+| **Node taints** | `Node(s) had taint {key=value:NoSchedule}` |
+| **Missing StorageClass** | `no volume plugin matched name: kubernetes.io/no-provisioner` |
+
+### Fix
+
+**PVC not bound:**
+
+```bash
+# Check PVC status
+kubectl get pvc -n <namespace>
+
+# If no default StorageClass, set one
+kubectl patch storageclass <your-class> -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
+
+# Or specify storageClassName in agent spec
+kubectl patch aiagent <name> -n <namespace> --type merge \
+  -p '{"spec":{"storageClassName":"standard"}}'
+```
+
+**Insufficient resources:**
+
+```bash
+# Check node capacity
+kubectl describe nodes | grep -A 5 "Allocated resources"
+
+# Reduce agent resource requests or add nodes
+kubectl patch aiagent <name> -n <namespace> --type merge \
+  -p '{"spec":{"resources":{"requests":{"cpu":"100m","memory":"256Mi"}}}}'
+```
+
+**Node taints:**
+
+```bash
+# Tolerate the taint in agent spec, or remove taint
+kubectl taint nodes <node> <key>:NoSchedule-
+```
+
+### Prevention
+
+- Set a default StorageClass before installing KubeSynth
+- Use ResourceQuotas per namespace to reserve headroom
+- Label nodes for agent workloads and use node affinity
+
+---
+
+## Agent Pod CrashLoopBackOff
+
+### Symptoms
+
+- Pod status shows `CrashLoopBackOff`
+- `kubectl logs` shows repeated restarts
+
+### Diagnosis
+
+```bash
+kubectl logs <agent-pod> -n <namespace> --previous
+kubectl describe pod <agent-pod> -n <namespace>
+```
+
+Common causes:
+
+| Cause | Log Indicator |
+|-------|---------------|
+| **Missing secrets** | `Secret "litellm-master-key" not found` |
+| **Invalid runtime config** | `RuntimeError: Unknown runtime kind "xyz"` |
+| **OOMKilled** | `Last State: Terminated, Reason: OOMKilled` |
+| **Image pull failure** | `Back-off pulling image "docker.io/..."` |
+
+### Fix
+
+**Missing secrets:**
+
+```bash
+# Verify secrets exist
+kubectl get secrets -n kubesynth
+
+# Re-create or update Helm values
+helm upgrade kubesynth oci://docker.io/kubesynth/charts/kubesynth \
+  -n kubesynth -f values.yaml
+```
+
+**Invalid runtime config:**
+
+```bash
+# The only supported runtime kind is "opencode"
+kubectl get aiagent <name> -n <namespace> -o jsonpath='{.spec.runtimeKind}'
+
+# Fix if needed
+kubectl patch aiagent <name> -n <namespace> --type merge \
+  -p '{"spec":{"runtimeKind":"opencode"}}'
+```
+
+**OOMKilled:**
+
+```bash
+# Increase memory limit
+kubectl patch aiagent <name> -n <namespace> --type merge \
+  -p '{"spec":{"resources":{"limits":{"memory":"4Gi"}}}}'
+```
+
+**Image pull failure:**
+
+```bash
+# Verify registry credentials
+kubectl get secret regcred -n kubesynth
+
+# Check image tag exists
+kubectl get aiagent <name> -n <namespace> -o yaml | grep image:
+```
+
+### Prevention
+
+- Validate agent specs with `agentctl validate` before applying
+- Set resource limits based on model context window size
+- Use explicit image tags, never `latest`
+
+---
+
+## Gateway 503 Errors
+
+### Symptoms
+
+- API returns `503 Service Unavailable`
+- `invoke` or `chat` endpoints fail intermittently
+
+### Diagnosis
+
+```bash
+# Check gateway readiness
+kubectl logs -n kubesynth deployment/kubesynth-api-gateway | grep "503"
+
+# Check runtime pod health
+kubectl get pods -n <namespace> -l app.kubernetes.io/name=<agent-name>
+
+# Check network policies
+kubectl get networkpolicies -n <namespace>
+```
+
+Common causes:
+
+| Cause | Indicator |
+|-------|-----------|
+| **Runtime not ready** | Agent pod in `ContainerCreating` or `NotReady` |
+| **NetworkPolicy blocking** | `ingress denied` in CNI logs |
+| **Gateway resource exhaustion** | Gateway pods at CPU/memory limits |
+| **Database unavailable** | `/api/ready` returns `degraded` |
+
+### Fix
+
+**Runtime not ready:**
+
+```bash
+# Wait for StatefulSet rollout
+kubectl rollout status statefulset <agent-name> -n <namespace>
+
+# If stuck, restart
+kubectl rollout restart statefulset <agent-name> -n <namespace>
+```
+
+**NetworkPolicy blocking:**
+
+```bash
+# Temporarily allow all ingress for debugging
+kubectl label networkpolicy -n <namespace> kubesynth-deny-ingress disabled=true
+
+# Or add explicit allow rule for gateway
+kubectl patch networkpolicy allow-gateway -n <namespace> --type merge \
+  -p '{"spec":{"ingress":[{"from":[{"podSelector":{"matchLabels":{"app":"kubesynth-api-gateway"}}}]}]}}'
+```
+
+**Gateway resource exhaustion:**
+
+```bash
+# Scale gateway horizontally
+kubectl scale deployment kubesynth-api-gateway -n kubesynth --replicas=5
+```
+
+### Prevention
+
+- Enable startup probes on agent runtimes
+- Use PodDisruptionBudgets for gateway and operator
+- Configure HPA on gateway before load increases
+
+---
+
+## A2A Delegation Fails
+
+### Symptoms
+
+- `@mention` in chat returns error or no response
+- A2A task status stays `pending` or `failed`
+
+### Diagnosis
+
+```bash
+# Check allowedTargets policy
+kubectl get agentpolicy -n <namespace> -o yaml | grep allowedTargets -A 10
+
+# Verify target agent exists and is running
+kubectl get aiagent <target-agent> -n <namespace>
+kubectl get pods -n <target-namespace> -l app.kubernetes.io/name=<target-agent>
+
+# Check gateway logs for A2A errors
+kubectl logs -n kubesynth deployment/kubesynth-api-gateway | grep "a2a"
+```
+
+Common causes:
+
+| Cause | Indicator |
+|-------|-----------|
+| **Policy denies target** | `A2A target "xyz" not in allowedTargets` |
+| **Target agent down** | Agent pod not found or not ready |
+| **Namespace mismatch** | Target exists in different namespace without cross-namespace policy |
+| **Auth scope issue** | Caller token lacks `operator` role for target namespace |
+
+### Fix
+
+**Policy denies target:**
+
+```bash
+# Update policy to allow the target
+kubectl patch agentpolicy <policy-name> -n <namespace> --type merge \
+  -p '{"spec":{"a2a":{"allowedTargets":[{"name":"security-specialist","namespace":"default"}]}}}'
+```
+
+**Target agent down:**
+
+```bash
+# Restart target agent
+kubectl rollout restart statefulset <target-agent> -n <target-namespace>
+```
+
+### Prevention
+
+- Document allowed A2A targets in agent onboarding runbooks
+- Use `AgentPolicy` defaults that deny all A2A unless explicitly allowed
+- Monitor `kubesynth_a2a_failures_total` Prometheus metric
+
+---
+
+## LLM Calls Timeout
+
+### Symptoms
+
+- Agent responds with timeout error after 30-300 seconds
+- LiteLLM logs show `ReadTimeout` or `Connection reset`
+
+### Diagnosis
+
+```bash
+# Check LiteLLM health
+kubectl exec -n kubesynth deploy/litellm -- curl -s localhost:4000/health/liveliness
+
+# Check model availability
+kubectl logs -n kubesynth deployment/litellm | grep "model"
+
+# Verify provider key validity
+curl -s http://localhost:8080/api/health/db
+```
+
+Common causes:
+
+| Cause | Indicator |
+|-------|-----------|
+| **LiteLLM misconfigured** | `Model not in model_list` |
+| **Provider rate limit** | `429 Too Many Requests` from OpenAI/Anthropic |
+| **Model deprecated** | `The model gpt-4-xxx does not exist` |
+| **Network egress blocked** | NetworkPolicy prevents LiteLLM from reaching provider API |
+
+### Fix
+
+**LiteLLM misconfigured:**
+
+```bash
+# Check model list
+kubectl get configmap litellm-config -n kubesynth -o yaml
+
+# Redeploy with correct model names
+helm upgrade kubesynth ... --set litellm.models='[{"model_name":"gpt-4o","litellm_params":{"model":"openai/gpt-4o"}}]'
+```
+
+**Provider rate limit:**
+
+```bash
+# Add fallback model in LiteLLM config
+# Or increase rate limit tier with provider
+```
+
+**Network egress blocked:**
+
+```bash
+# Add egress rule for provider APIs
+kubectl patch networkpolicy allow-litellm-egress -n kubesynth --type merge \
+  -p '{"spec":{"egress":[{"to":[{"ipBlock":{"cidr":"0.0.0.0/0"}}],"ports":[{"protocol":"TCP","port":443}]}]}}'
+```
+
+### Prevention
+
+- Configure LiteLLM with fallback models
+- Set reasonable timeout values in agent spec
+- Monitor provider rate limits and error rates
+
+---
+
+## Web UI Not Loading
+
+### Symptoms
+
+- Browser shows blank page or `502 Bad Gateway`
+- Console shows CORS errors or chunk load errors
+
+### Diagnosis
+
+```bash
+# Check web-ui pod status
+kubectl get pods -n kubesynth -l app.kubernetes.io/name=kubesynth-web-ui
+
+# Check ingress or port-forward
+kubectl get ingress -n kubesynth
+kubectl get svc kubesynth-web-ui -n kubesynth
+
+# Check gateway connectivity from UI pod
+kubectl exec -n kubesynth deploy/kubesynth-web-ui -- curl -s http://kubesynth-api-gateway:8080/api/health
+```
+
+Common causes:
+
+| Cause | Indicator |
+|-------|-----------|
+| **ImagePullBackOff** | `Back-off pulling image` |
+| **CORS misconfiguration** | `Access-Control-Allow-Origin` missing |
+| **Ingress misconfiguration** | `404` or `502` from ingress controller |
+| **API gateway down** | UI cannot reach `/api/health` |
+
+### Fix
+
+**ImagePullBackOff:**
+
+```bash
+# Check image tag and pull secrets
+kubectl get deployment kubesynth-web-ui -n kubesynth -o yaml | grep image:
+
+# If using local registry in Kind, re-load image
+kind load docker-image kubesynth/web-ui:tag --name kubesynth
+```
+
+**CORS misconfiguration:**
+
+```bash
+# Set correct CORS origin in gateway config
+helm upgrade kubesynth ... --set apiGateway.corsOrigins='["https://kubesynth.example.com"]'
+```
+
+**Ingress misconfiguration:**
+
+```bash
+# Verify ingress rules
+kubectl get ingress kubesynth -n kubesynth -o yaml
+
+# Check ingress controller logs
+kubectl logs -n ingress-nginx deployment/ingress-nginx-controller
+```
+
+### Prevention
+
+- Pin web-ui image tags in values files
+- Test CORS configuration in staging before production
+- Use health-check endpoints in ingress backend rules
+
+---
+
+## Database Connection Failures
+
+### Symptoms
+
+- Gateway `/api/ready` returns `degraded` with `database: error`
+- Login fails with `500 Internal Server Error`
+- Audit logs or chat history not persisting
+
+### Diagnosis
+
+```bash
+# Check PostgreSQL pod status
+kubectl get pods -n kubesynth -l app.kubernetes.io/name=postgresql
+
+# Check connection from gateway
+kubectl exec -n kubesynth deploy/kubesynth-api-gateway -- \
+  python -c "import psycopg2; conn = psycopg2.connect(host='postgresql', dbname='kubesynth', user='kubesynth', password='...'); print('OK')"
+
+# Check gateway logs
+kubectl logs -n kubesynth deployment/kubesynth-api-gateway | grep -i database
+```
+
+Common causes:
+
+| Cause | Indicator |
+|-------|-----------|
+| **PostgreSQL not ready** | Pod in `CrashLoopBackOff` or `Pending` |
+| **Wrong credentials** | `FATAL: password authentication failed` |
+| **Schema version mismatch** | `SchemaVersion mismatch: expected X, got Y` |
+| **Connection pool exhausted** | `FATAL: sorry, too many clients already` |
+
+### Fix
+
+**PostgreSQL not ready:**
+
+```bash
+# Check PVC and resources
+kubectl describe pod postgresql-0 -n kubesynth
+
+# If PVC issue, see [Agent Pod Stuck in Pending](#agent-pod-stuck-in-pending)
+```
+
+**Wrong credentials:**
+
+```bash
+# Update secret and restart gateway
+kubectl patch secret kubesynth-db-credentials -n kubesynth --type merge \
+  -p '{"stringData":{"password":"new-password"}}'
+kubectl rollout restart deployment/kubesynth-api-gateway -n kubesynth
+```
+
+**Schema version mismatch:**
+
+```bash
+# Run migration or reset (data loss if resetting)
+kubectl exec -n kubesynth deploy/kubesynth-api-gateway -- \
+  python -c "from auth_store import init_db; init_db()"
+```
+
+**Connection pool exhausted:**
+
+```bash
+# Increase pool size in gateway config
+helm upgrade kubesynth ... --set apiGateway.db.poolSize=20
+```
+
+### Prevention
+
+- Use external managed PostgreSQL in production
+- Monitor connection pool metrics
+- Set `pool_recycle` to prevent stale connections
+
+---
+
+## Workflow Eval Failures
+
+### Symptoms
+
+- Workflow or eval status shows `failed` or `timeout`
+- Worker Job status is `Error` or `DeadlineExceeded`
+
+### Diagnosis
+
+```bash
+# Check worker job logs
+kubectl logs -n <namespace> job/<workflow-name>-worker-<id>
+
+# Check artifacts
+kubectl get pvc -n <namespace> | grep artifact
+
+# Describe the job for events
+kubectl describe job <workflow-name>-worker-<id> -n <namespace>
+```
+
+Common causes:
+
+| Cause | Indicator |
+|-------|-----------|
+| **Step dependency failed** | `Previous step "xyz" failed` |
+| **Approval gate blocked** | `Waiting for approval: ...` |
+| **Resource quota exceeded** | `Forbidden: exceeded quota` |
+| **Artifact PVC full** | `no space left on device` |
+
+### Fix
+
+**Step dependency failed:**
+
+```bash
+# Inspect the failed step in logs
+kubectl logs -n <namespace> job/<workflow-name>-worker-<id> | grep ERROR
+
+# Retry failed steps only
+agentctl workflow retry-failed <workflow-name> -n <namespace>
+```
+
+**Approval gate blocked:**
+
+```bash
+# List pending approvals
+kubectl get agentapprovals -n <namespace>
+
+# Approve via API
+kubectl patch agentapproval <approval-name> -n <namespace> --type merge \
+  -p '{"status":{"decision":"approved","decidedBy":"admin","decidedAt":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","reason":"Approved via CLI"}}'
+```
+
+**Resource quota exceeded:**
+
+```bash
+# Increase namespace quota
+kubectl patch resourcequota <name> -n <namespace> --type merge \
+  -p '{"spec":{"hard":{"requests.cpu":"20","requests.memory":"40Gi"}}}'
+```
+
+**Artifact PVC full:**
+
+```bash
+# Clean old artifacts or expand PVC
+kubectl exec -n <namespace> job/<workflow-name>-worker-<id> -- du -sh /artifacts
+
+# Expand PVC (if storage class supports it)
+kubectl patch pvc <artifact-pvc> -n <namespace> --type merge \
+  -p '{"spec":{"resources":{"requests":{"storage":"10Gi"}}}}'
+```
+
+### Prevention
+
+- Set reasonable `activeDeadlineSeconds` on workflows
+- Use `requireApproval: true` only on genuinely risky steps
+- Monitor artifact PVC usage and set alerts
+
+---
+
+## Auth and OIDC Issues
+
+### Symptoms
+
+- Login redirect fails with `invalid_request`
+- JWT validation errors after login
+- `401 Unauthorized` on all API calls
+
+### Diagnosis
+
+```bash
+# Check auth mode
+kubectl get deployment kubesynth-api-gateway -n kubesynth -o yaml | grep AUTH_MODE
+
+# Check OIDC config
+curl -s http://localhost:8080/api/auth/config
+
+# Verify JWKS endpoint is reachable
+kubectl exec -n kubesynth deploy/kubesynth-api-gateway -- \
+  curl -s <oidc-issuer>/.well-known/openid-configuration | jq .jwks_uri
+```
+
+Common causes:
+
+| Cause | Indicator |
+|-------|-----------|
+| **Redirect URI mismatch** | `redirect_uri did not match any configured URIs` |
+| **JWKS endpoint unreachable** | `Unable to fetch JWKS` |
+| **Clock skew** | `Token not yet valid (nbf)` |
+| **Cookie blocked** | `Secure` cookie over HTTP in dev mode |
+
+### Fix
+
+**Redirect URI mismatch:**
+
+```bash
+# Update OIDC app registration with exact redirect URI
+# Example: https://kubesynth.example.com/api/auth/oidc/callback/default
+```
+
+**JWKS endpoint unreachable:**
+
+```bash
+# Check network egress from gateway
+kubectl exec -n kubesynth deploy/kubesynth-api-gateway -- \
+  curl -I <jwks-url>
+
+# If blocked, update NetworkPolicy or trust bundle
+```
+
+**Clock skew:**
+
+```bash
+# Sync node clocks
+kubectl exec -n kubesynth deploy/kubesynth-api-gateway -- date -u
+# If skew > 30s, configure NTP on nodes
+```
+
+**Cookie blocked:**
+
+```bash
+# For local development, disable secure cookies
+helm upgrade kubesynth ... --set apiGateway.auth.cookieSecure=false
+```
+
+### Prevention
+
+- Document exact redirect URIs in IdP configuration
+- Use HTTPS in production with `cookieSecure: true`
+- Enable JWT `kid` validation and key rotation
+
+---
+
+## MCP Tool Not Available
+
+### Symptoms
+
+- Agent says "I don't have access to that tool"
+- MCP sidecar pod not running or not reachable
+- `mcp/connections` endpoint shows `unhealthy`
+
+### Diagnosis
+
+```bash
+# List MCP sidecars for the agent
+kubectl get pods -n <namespace> -l app.kubernetes.io/name=<agent-name>
+
+# Check sidecar logs
+kubectl logs -n <namespace> <agent-pod> -c <mcp-sidecar>
+
+# Validate MCP connection via API
+curl -X POST http://localhost:8080/api/v1/mcp/connections/<id>/validate
+```
+
+Common causes:
+
+| Cause | Indicator |
+|-------|-----------|
+| **Sidecar not injected** | No extra containers in agent pod |
+| **Sidecar crash** | `CrashLoopBackOff` on sidecar container |
+| **Connection misconfigured** | `connection refused` or `invalid auth` |
+| **Policy blocks MCP server** | `MCP server "xyz" not in allowedMcpServers` |
+
+### Fix
+
+**Sidecar not injected:**
+
+```bash
+# Verify agent spec includes mcpConnections
+kubectl get aiagent <name> -n <namespace> -o jsonpath='{.spec.mcpConnections}'
+
+# Add connection
+kubectl patch aiagent <name> -n <namespace> --type merge \
+  -p '{"spec":{"mcpConnections":[{"connectionRef":"github-mcp"}]}}'
+```
+
+**Sidecar crash:**
+
+```bash
+# Check sidecar resource limits
+kubectl describe pod <agent-pod> -n <namespace>
+
+# Increase if OOMKilled
+kubectl patch aiagent <name> -n <namespace> --type merge \
+  -p '{"spec":{"mcpResources":{"limits":{"memory":"512Mi"}}}}'
+```
+
+**Policy blocks MCP server:**
+
+```bash
+# Add server to allowed list
+kubectl patch agentpolicy <policy-name> -n <namespace> --type merge \
+  -p '{"spec":{"allowedMcpServers":["github","kubernetes"]}}'
+```
+
+### Prevention
+
+- Validate MCP connections before attaching to agents
+- Use `AgentPolicy` to whitelist only required MCP servers
+- Monitor sidecar health with liveness probes
+
+---
+
+**Last Updated:** April 27, 2026  
+**Platform Version:** 1.0.0
