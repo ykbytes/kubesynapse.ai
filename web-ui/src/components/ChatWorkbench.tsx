@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   ArrowUp,
   ArrowUpRight,
+  AtSign,
   Brain,
   Bot,
   CheckCircle2,
@@ -45,7 +46,7 @@ import { StatusBadge } from "./StatusBadge";
 import { ActivityTimeline } from "./ActivityTimeline";
 import { MessageToolbar } from "./MessageToolbar";
 import { ChatSettingsDrawer } from "./ChatSettingsDrawer";
-import type { AgentDiscoveryPeer, FactoryMode, InvocationSummary, RuntimeKind, SpecialistSubagentDraft, UiActivity, UiMessage } from "../types";
+import type { AgentDiscoveryPeer, AgentInfo, FactoryMode, InvocationSummary, RuntimeKind, SpecialistSubagentDraft, UiActivity, UiMessage } from "../types";
 import type { UiTodo } from "../types";
 import { OperationLog } from "./OperationLog";
 import { FileExplorer } from "./FileExplorer";
@@ -79,6 +80,7 @@ interface ChatWorkbenchProps {
   a2aTimeoutSeconds: string;
   specialistSubagents: SpecialistSubagentDraft[];
   specialistTeamConfigured: boolean;
+  agents: AgentInfo[];
   discoveryPeers: AgentDiscoveryPeer[];
   discoveryLoading: boolean;
   discoveryError: string;
@@ -122,7 +124,25 @@ interface ChatWorkbenchProps {
 }
 
 const DRAWER_PANEL_CLASS = "absolute inset-y-3 right-3 z-10 flex flex-col overflow-hidden rounded-[1.4rem] border border-border/80 bg-background/96 shadow-2xl shadow-black/30 backdrop-blur-xl";
-const SURFACE_PANEL_CLASS = "rounded-[1.35rem] border border-border/70 bg-background/80 shadow-sm backdrop-blur-sm";
+const SURFACE_PANEL_CLASS = "rounded-sm border border-border/70 bg-background/80 shadow-sm backdrop-blur-sm";
+
+/* Highlight @mentions in text */
+function renderMentions(text: string, agents: AgentInfo[]): React.ReactNode {
+  const parts = text.split(/(@[a-z0-9](?:[a-z0-9\-]*[a-z0-9])?)/gi);
+  return parts.map((part, i) => {
+    const name = part.startsWith("@") ? part.slice(1) : null;
+    const agent = name ? agents.find((a) => a.name.toLowerCase() === name.toLowerCase()) : null;
+    if (agent) {
+      return (
+        <span key={i} className="inline-flex items-center gap-0.5 rounded-md bg-primary-foreground/20 px-1 py-0.5 text-xs font-semibold">
+          <AtSign className="h-3 w-3" />
+          {agent.name}
+        </span>
+      );
+    }
+    return <span key={i}>{part}</span>;
+  });
+}
 
 /* ------------------------------------------------------------------ */
 /*  Message bubble — ChatGPT-style layout                             */
@@ -137,6 +157,7 @@ const MessageBubble = memo(function MessageBubble({
   operationSummary,
   liveActivity = [],
   phase = "idle",
+  agents = [],
 }: {
   message: UiMessage;
   index: number;
@@ -146,6 +167,7 @@ const MessageBubble = memo(function MessageBubble({
   operationSummary?: InvocationSummary | null;
   liveActivity?: UiActivity[];
   phase?: "plan" | "build" | "idle";
+  agents?: AgentInfo[];
 }) {
   const [thinkingOpen, setThinkingOpen] = useState(false);
   const isStreaming = message.status === "streaming";
@@ -162,10 +184,10 @@ const MessageBubble = memo(function MessageBubble({
         className="group flex justify-end animate-slide-up"
         style={{ animationDelay: `${Math.min(index * 30, 300)}ms`, animationFillMode: "backwards" }}
       >
-        <div className="max-w-[75%]">
-          <div className="rounded-[1.35rem] rounded-br-lg border border-primary/35 bg-primary px-4 py-3 text-primary-foreground shadow-sm shadow-primary/20">
+          <div className="max-w-[75%]">
+          <div className="rounded-lg rounded-br-sm border border-primary/35 bg-primary px-4 py-3 text-primary-foreground shadow-sm shadow-primary/20">
             <div className="whitespace-pre-wrap break-words text-sm leading-relaxed">
-              {message.content || ""}
+              {message.content ? renderMentions(message.content, agents) : ""}
             </div>
           </div>
           {message.content && (
@@ -201,13 +223,8 @@ const MessageBubble = memo(function MessageBubble({
       role={isStreaming ? "status" : undefined}
       aria-live={isStreaming ? "polite" : undefined}
     >
-      {/* Avatar */}
-      <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-2xl border border-primary/20 bg-primary/10 shadow-sm shadow-primary/10">
-        <Bot className="h-3.5 w-3.5 text-primary" />
-      </div>
-
       {/* Content */}
-      <div className="min-w-0 flex-1 rounded-[1.35rem] border border-border/70 bg-background/75 px-4 py-3 shadow-sm backdrop-blur-sm">
+      <div className="min-w-0 flex-1 rounded-lg border border-border/70 bg-background/75 px-3 py-2 shadow-sm backdrop-blur-sm">
         {/* Thinking section */}
         {message.reasoning && (
           <div className="mb-2">
@@ -221,7 +238,7 @@ const MessageBubble = memo(function MessageBubble({
               <span>Reasoning</span>
             </button>
             {thinkingOpen && (
-              <div className="mt-1.5 max-h-64 overflow-y-auto rounded-[1rem] border border-border/60 bg-muted/30 px-3 py-2 text-xs italic leading-relaxed text-muted-foreground whitespace-pre-wrap break-words shadow-inner">
+              <div className="mt-1.5 max-h-64 overflow-y-auto rounded-sm border border-border/60 bg-muted/30 px-3 py-2 text-xs italic leading-relaxed text-muted-foreground whitespace-pre-wrap break-words shadow-inner">
                 {message.reasoning}
               </div>
             )}
@@ -358,80 +375,28 @@ function groupAgentCalls(calls: AgentCallSummary[]): GroupedAgentCall[] {
 }
 
 function AgentCallBanner({ calls, isStreaming }: { calls: AgentCallSummary[]; isStreaming: boolean }) {
-  const lastResponse = [...calls].reverse().find((c) => c.responsePreview);
-  const [expanded, setExpanded] = useState(!isStreaming && !!lastResponse);
   const groups = useMemo(() => groupAgentCalls(calls), [calls]);
   const uniqueNames = groups.map((g) => g.label);
   const headerLabel = calls.every((call) => call.kind === "explicit-a2a") ? "Delegated to" : "Contacted";
+  const overallStatus = groups.length > 0 ? groups[groups.length - 1].worstStatus : "completed";
+  const isError = agentCallIsError(overallStatus);
+  const isRunning = isStreaming || (!isError && agentCallIsRunning(overallStatus));
+  const statusColor = isError ? "text-red-400" : isRunning ? "text-amber-400" : "text-emerald-400";
 
   return (
-    <div className="mb-3 rounded-[1.2rem] border border-primary/20 bg-primary/[0.06] px-3.5 py-3 shadow-sm shadow-primary/10">
-      {/* Header — lists unique agent names */}
-      <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-primary">
-        <ArrowUpRight className="h-3.5 w-3.5" />
-        <span className="truncate">
-          {headerLabel}{" "}
-          {uniqueNames.length <= 3
-            ? uniqueNames.join(", ")
-            : `${uniqueNames.slice(0, 2).join(", ")} +${uniqueNames.length - 2}`}
-        </span>
-        {isStreaming ? (
-          <Badge variant="outline" className="ml-auto shrink-0 border-primary/20 bg-primary/10 px-1.5 py-0 text-[10px] text-primary">
-            live
-          </Badge>
-        ) : null}
-      </div>
-
-      {/* Timeline rows — grouped by unique agent */}
-      <div className="mt-2 border-l-2 border-primary/25 ml-[6px] space-y-0">
-        {groups.map((group, i) => {
-          const isError = agentCallIsError(group.worstStatus);
-          const isRunning = !isError && agentCallIsRunning(group.worstStatus);
-          const dotColor = isError
-            ? "bg-red-400"
-            : isRunning
-              ? "bg-amber-400 animate-pulse"
-              : "bg-emerald-400";
-          const statusColor = isError ? "text-red-400" : isRunning ? "text-amber-400" : "text-emerald-400";
-          const isLast = i === groups.length - 1;
-          return (
-            <div key={group.label} className="relative flex items-center gap-2.5 py-1 pl-4">
-              <span className={`absolute left-[-5px] top-1/2 -translate-y-1/2 h-2 w-2 rounded-full ${dotColor} ring-2 ring-background`} />
-              <ArrowUpRight className="h-3 w-3 shrink-0 text-primary/60" />
-              <span className="text-[13px] font-medium text-foreground">{group.label}</span>
-              {group.count > 1 ? (
-                <span className="rounded-full bg-primary/15 px-1.5 text-[10px] font-semibold tabular-nums text-primary">
-                  {group.count} calls
-                </span>
-              ) : null}
-              <span className={`text-[10px] font-medium ${statusColor}`}>
-                {formatAgentCallStatus(group.worstStatus)}
-              </span>
-              {isLast && isRunning ? (
-                <LoaderCircle className="h-3 w-3 animate-spin text-amber-400 ml-auto" />
-              ) : null}
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Expandable response preview — auto-expanded when done */}
-      {lastResponse?.responsePreview ? (
-        <div className="mt-1.5 ml-[6px] pl-4 border-l-2 border-transparent">
-          <button
-            type="button"
-            onClick={() => setExpanded((o) => !o)}
-            className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
-          >
-            {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-            <span>Latest peer response</span>
-          </button>
-          {expanded ? (
-            <p className="mt-1 whitespace-pre-wrap break-words text-xs leading-relaxed text-muted-foreground">
-              {lastResponse.responsePreview}
-            </p>
-          ) : null}
-        </div>
+    <div className="mb-1.5 flex items-center gap-2 rounded-md border border-primary/20 bg-primary/[0.06] px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-primary shadow-sm shadow-primary/10">
+      <ArrowUpRight className="h-3 w-3 shrink-0" />
+      <span className="truncate">
+        {headerLabel}{" "}
+        {uniqueNames.length <= 3
+          ? uniqueNames.join(", ")
+          : `${uniqueNames.slice(0, 2).join(", ")} +${uniqueNames.length - 2}`}
+      </span>
+      <span className={`ml-1 text-[10px] font-medium normal-case tracking-normal ${statusColor}`}>
+        {formatAgentCallStatus(overallStatus)}
+      </span>
+      {isRunning ? (
+        <LoaderCircle className="ml-auto h-3 w-3 animate-spin text-amber-400" />
       ) : null}
     </div>
   );
@@ -1539,6 +1504,7 @@ export function ChatWorkbench({
   a2aTimeoutSeconds,
   specialistSubagents,
   specialistTeamConfigured,
+  agents,
   discoveryPeers,
   discoveryLoading,
   discoveryError,
@@ -1604,6 +1570,19 @@ export function ChatWorkbench({
   const [editingMemoryContent, setEditingMemoryContent] = useState("");
   const [downloadingPath, setDownloadingPath] = useState<string | null>(null);
   const [fileExplorerView, setFileExplorerView] = useState<"all" | "changed">("all");
+  /* ── @-mention A2A dropdown ── */
+  const [mentionOpen, setMentionOpen] = useState(false);
+  const [mentionIndex, setMentionIndex] = useState(0);
+  const [mentionQuery, setMentionQuery] = useState("");
+  const mentionContainerRef = useRef<HTMLDivElement | null>(null);
+  const mentionableAgents = useMemo(() => agents.filter((a) => a.name !== agentName), [agents, agentName]);
+  const filteredMentionAgents = useMemo(() => {
+    const q = mentionQuery.toLowerCase();
+    if (!q) return mentionableAgents;
+    return mentionableAgents.filter((a) =>
+      a.name.toLowerCase().includes(q) || a.namespace.toLowerCase().includes(q) || (a.model ?? "").toLowerCase().includes(q),
+    );
+  }, [mentionableAgents, mentionQuery]);
   const a2aMode = Boolean(a2aTargetAgent && a2aTargetNamespace);
   const specialistMode = specialistTeamConfigured;
   const showFactoryMode = isFactoryAgentName(agentName);
@@ -1649,7 +1628,7 @@ export function ChatWorkbench({
     return null;
   }, [messages]);
   const starterPrompts = useMemo<StarterPrompt[]>(() => {
-    return [
+    const base: StarterPrompt[] = [
       {
         label: "Ship a scoped change",
         description: "Inspect the codebase, make a tight plan, and implement the highest-leverage fix safely.",
@@ -1671,7 +1650,15 @@ export function ChatWorkbench({
         prompt: "Summarize the current session state, important files, open risks, and the next three best moves to keep momentum.",
       },
     ];
-  }, [agentName]);
+    if (mentionableAgents.length > 0) {
+      base.push({
+        label: "Delegate to another agent",
+        description: `Route this request through @${mentionableAgents[0].name} for cross-agent collaboration.`,
+        prompt: `@${mentionableAgents[0].name} Please review the current codebase and suggest the most impactful improvement we can make this sprint.`,
+      });
+    }
+    return base;
+  }, [agentName, mentionableAgents]);
 
   // Resolve the Radix ScrollArea Viewport (the actual scrollable container)
   const scrollAreaRef = useRef<HTMLDivElement | null>(null);
@@ -1702,6 +1689,19 @@ export function ChatWorkbench({
     setDownloadingPath(null);
   }, [agentName]);
 
+  /* Close mention dropdown on click outside */
+  useEffect(() => {
+    if (!mentionOpen) return;
+    function onDocClick(e: MouseEvent) {
+      const container = mentionContainerRef.current;
+      if (container && !container.contains(e.target as Node)) {
+        setMentionOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, [mentionOpen]);
+
   const focusComposer = useCallback(() => {
     requestAnimationFrame(() => {
       const textarea = textareaRef.current;
@@ -1716,6 +1716,63 @@ export function ChatWorkbench({
     handleReusePrompt(text);
     focusComposer();
   }, [focusComposer, handleReusePrompt]);
+
+  /* Detect if user is typing an @mention */
+  function getMentionContext(text: string, cursorPos: number): { query: string; start: number } | null {
+    const beforeCursor = text.slice(0, cursorPos);
+    const match = beforeCursor.match(/@([^@\s]*)$/);
+    if (!match) return null;
+    return { query: match[1], start: beforeCursor.lastIndexOf("@") };
+  }
+
+  function handleMentionSelect(agent: AgentInfo) {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    const cursorPos = textarea.selectionStart ?? prompt.length;
+    const ctx = getMentionContext(prompt, cursorPos);
+    if (ctx) {
+      const before = prompt.slice(0, ctx.start);
+      const after = prompt.slice(cursorPos);
+      const newText = `${before}@${agent.name} ${after}`;
+      onPromptChange(newText);
+      onA2ATargetAgentChange(agent.name);
+      onA2ATargetNamespaceChange(agent.namespace);
+      requestAnimationFrame(() => {
+        const pos = ctx.start + agent.name.length + 2; // +2 for @ and space
+        textarea.setSelectionRange(pos, pos);
+        textarea.focus();
+      });
+    } else {
+      onA2ATargetAgentChange(agent.name);
+      onA2ATargetNamespaceChange(agent.namespace);
+    }
+    setMentionOpen(false);
+    setMentionQuery("");
+    setMentionIndex(0);
+  }
+
+  function clearA2A() {
+    onA2ATargetAgentChange("");
+    onA2ATargetNamespaceChange("");
+    onA2ATimeoutSecondsChange("");
+  }
+
+  function parseA2AFromPrompt(text: string): AgentInfo | null {
+    const match = text.match(/@([a-z0-9](?:[a-z0-9\-]*[a-z0-9])?)/i);
+    if (!match) return null;
+    const name = match[1];
+    const agent = agents.find((a) => a.name.toLowerCase() === name.toLowerCase());
+    return agent ?? null;
+  }
+
+  function handleSubmitWithMention() {
+    const detectedAgent = parseA2AFromPrompt(prompt);
+    if (detectedAgent && !a2aTargetAgent) {
+      onA2ATargetAgentChange(detectedAgent.name);
+      onA2ATargetNamespaceChange(detectedAgent.namespace);
+    }
+    onSubmit();
+  }
 
   const findPromptForRegenerate = useCallback((messageIndex: number): string | null => {
     for (let index = messageIndex - 1; index >= 0; index -= 1) {
@@ -1768,9 +1825,9 @@ export function ChatWorkbench({
   }
 
   return (
-    <div className="flex h-full min-w-0 flex-1 flex-col overflow-hidden rounded-l-[1.35rem] border border-border/60 bg-[linear-gradient(180deg,rgba(255,255,255,0.04),rgba(255,255,255,0.01)_14rem)] shadow-[0_26px_70px_-48px_rgba(0,0,0,0.8)]">
+    <div className="flex h-full min-w-0 flex-1 flex-col overflow-hidden rounded-none border border-border/60 bg-[linear-gradient(180deg,rgba(255,255,255,0.04),rgba(255,255,255,0.01)_14rem)] shadow-[0_26px_70px_-48px_rgba(0,0,0,0.8)]">
       {/* Header */}
-      <div className="flex items-center justify-between border-b border-border/70 bg-background/80 px-4 py-3 backdrop-blur-md">
+      <div className="flex items-center justify-between border-b border-border/70 bg-background/80 px-3 py-2 backdrop-blur-md">
         <div className="flex items-center gap-2">
           {agentName && (
             <span className={`h-2 w-2 shrink-0 rounded-full ${
@@ -1972,15 +2029,17 @@ export function ChatWorkbench({
             }
           }}
         >
-          <div className="mx-auto flex w-full max-w-6xl flex-col gap-5 px-5 py-5" aria-label="Conversation history" aria-live="polite" aria-atomic="false">
+          <div className="mx-auto flex w-full max-w-6xl flex-col gap-2 px-4 py-3" aria-label="Conversation history" aria-live="polite" aria-atomic="false">
             {messages.length === 0 && (
-              <div className="space-y-4">
+              <div className="space-y-3">
                 <EmptyState
                   icon={MessageSquare}
                   title="No messages yet"
-                  description={emptyMessage || "Send your first message to start a conversation. Try asking the agent to analyze code, fix a bug, or build a new feature."}
+                  description={emptyMessage || (mentionableAgents.length > 0
+                    ? "Send your first message or type @ to delegate to another agent. Try asking the agent to analyze code, fix a bug, or build a new feature."
+                    : "Send your first message to start a conversation. Try asking the agent to analyze code, fix a bug, or build a new feature.")}
                 />
-                <div className={`${SURFACE_PANEL_CLASS} p-3`}>
+                <div className={`${SURFACE_PANEL_CLASS} p-2.5`}>
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div>
                       <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">Starter prompts</div>
@@ -1994,7 +2053,7 @@ export function ChatWorkbench({
                         key={item.label}
                         type="button"
                         onClick={() => handlePromptReuse(item.prompt)}
-                        className="group rounded-[1.15rem] border border-border/70 bg-background/70 px-3 py-3 text-left shadow-sm transition-all duration-200 hover:-translate-y-px hover:border-primary/30 hover:bg-primary/5"
+                        className="group rounded-sm border border-border/70 bg-background/70 px-3 py-2 text-left shadow-sm transition-all duration-200 hover:-translate-y-px hover:border-primary/30 hover:bg-primary/5"
                         style={{ animationDelay: `${index * 45}ms`, animationFillMode: "backwards" }}
                       >
                         <div className="flex items-center gap-2 text-sm font-medium text-foreground">
@@ -2010,7 +2069,7 @@ export function ChatWorkbench({
             )}
 
             {teamRunSummary && (
-              <div className="rounded-[1.35rem] border border-primary/20 bg-primary/[0.06] p-3 shadow-sm shadow-primary/10 backdrop-blur-sm">
+              <div className="rounded-sm border border-primary/20 bg-primary/[0.06] p-2.5 shadow-sm shadow-primary/10 backdrop-blur-sm">
                 <div className="flex flex-wrap items-start justify-between gap-2">
                   <div>
                     <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.16em] text-primary">
@@ -2145,6 +2204,7 @@ export function ChatWorkbench({
                   operationSummary={message.role === "assistant"
                     ? buildInlineOperationSummary(message, message.id === lastAssistantMessageId ? summary : null)
                     : null}
+                  agents={agents}
                 />
               ),
             )}
@@ -2449,7 +2509,7 @@ export function ChatWorkbench({
       </div>
 
       {/* Composer */}
-      <div className="space-y-2 border-t border-border/60 bg-background/92 px-4 py-3 backdrop-blur-xl">
+      <div className="space-y-1.5 border-t border-border/60 bg-background/92 px-3 py-2 backdrop-blur-xl">
         {!chatFocused && (
           <>
         {/* Compact controls row: toggles + settings drawer */}
@@ -2522,8 +2582,50 @@ export function ChatWorkbench({
         )}
 
         {/* Prompt input */}
-        <div className="relative mx-auto w-full max-w-6xl">
-          <div className="relative rounded-[1.35rem] border border-border/70 bg-background/80 shadow-sm transition-colors focus-within:border-primary/30 focus-within:bg-primary/5">
+        <div className="relative mx-auto w-full max-w-6xl" ref={mentionContainerRef}>
+          {/* Parsed @mentions from prompt text */}
+          {(() => {
+            const mentionNames = Array.from(new Set((prompt.match(/@([a-z0-9](?:[a-z0-9\-]*[a-z0-9])?)/gi) || []).map((m) => m.slice(1))));
+            if (mentionNames.length === 0) return null;
+            return (
+              <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
+                {mentionNames.map((name) => {
+                  const agent = agents.find((a) => a.name.toLowerCase() === name.toLowerCase());
+                  return (
+                    <Badge
+                      key={name}
+                      variant="outline"
+                      className={`h-5 gap-0.5 rounded-full px-1.5 text-[10px] ${agent ? "border-primary/25 bg-primary/5 text-primary" : "border-amber-500/25 bg-amber-500/10 text-amber-300"}`}
+                    >
+                      <AtSign className="h-3 w-3" />
+                      {name}
+                      {!agent && <span className="text-[9px] opacity-70">(unknown)</span>}
+                    </Badge>
+                  );
+                })}
+              </div>
+            );
+          })()}
+          {/* A2A target chip */}
+          {a2aMode && (
+            <div className="mb-1.5 flex items-center gap-2">
+              <Badge variant="outline" className="h-6 gap-1 rounded-full border-primary/25 bg-primary/5 px-2 text-[10px] text-primary">
+                <AtSign className="h-3 w-3" />
+                {a2aTargetNamespace}/{a2aTargetAgent}
+                <button
+                  type="button"
+                  onClick={clearA2A}
+                  className="ml-0.5 inline-flex items-center justify-center rounded-full hover:bg-primary/10"
+                  aria-label="Clear A2A target"
+                  title="Clear A2A target"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </Badge>
+              <span className="text-[10px] text-muted-foreground/60">Request will route through this agent</span>
+            </div>
+          )}
+          <div className="relative rounded-lg border-2 border-border bg-background/80 shadow-sm transition-colors focus-within:border-primary/40 focus-within:bg-primary/5">
             <Textarea
               ref={textareaRef}
               autoFocus
@@ -2534,8 +2636,39 @@ export function ChatWorkbench({
                 const el = e.target;
                 el.style.height = "auto";
                 el.style.height = Math.min(el.scrollHeight, 200) + "px";
+                const cursorPos = el.selectionStart ?? e.target.value.length;
+                const ctx = getMentionContext(e.target.value, cursorPos);
+                if (ctx) {
+                  setMentionQuery(ctx.query);
+                  setMentionOpen(true);
+                  setMentionIndex(0);
+                } else {
+                  setMentionOpen(false);
+                }
               }}
               onKeyDown={(e) => {
+                if (mentionOpen && filteredMentionAgents.length > 0) {
+                  if (e.key === "ArrowDown") {
+                    e.preventDefault();
+                    setMentionIndex((i) => (i + 1) % filteredMentionAgents.length);
+                    return;
+                  }
+                  if (e.key === "ArrowUp") {
+                    e.preventDefault();
+                    setMentionIndex((i) => (i - 1 + filteredMentionAgents.length) % filteredMentionAgents.length);
+                    return;
+                  }
+                  if (e.key === "Enter" || e.key === "Tab") {
+                    e.preventDefault();
+                    handleMentionSelect(filteredMentionAgents[mentionIndex]);
+                    return;
+                  }
+                  if (e.key === "Escape") {
+                    e.preventDefault();
+                    setMentionOpen(false);
+                    return;
+                  }
+                }
                 if (e.key === "ArrowUp" && !e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey && !prompt.trim()) {
                   if (lastUserPrompt) {
                     e.preventDefault();
@@ -2545,10 +2678,10 @@ export function ChatWorkbench({
                 }
                 if (e.key === "Enter" && !e.shiftKey && canSubmit && tokenReady && !isSending) {
                   e.preventDefault();
-                  onSubmit();
+                  handleSubmitWithMention();
                   if (textareaRef.current) { textareaRef.current.style.height = "auto"; }
                 }
-                if (e.key === "Escape" && prompt.trim()) {
+                if (e.key === "Escape" && prompt.trim() && !mentionOpen) {
                   e.preventDefault();
                   onPromptChange("");
                   if (textareaRef.current) { textareaRef.current.style.height = "auto"; }
@@ -2558,6 +2691,28 @@ export function ChatWorkbench({
               className="resize-none border-0 bg-transparent pr-12 pl-4 py-3 min-h-[2.75rem] max-h-[200px] overflow-y-auto focus-visible:ring-0 focus-visible:ring-offset-0 placeholder:text-muted-foreground/50"
               aria-label="Prompt"
             />
+            {/* @-mention dropdown — appears ABOVE input so it never gets hidden */}
+            {mentionOpen && filteredMentionAgents.length > 0 && (
+              <div className="absolute left-0 right-0 bottom-full z-50 mb-1 overflow-hidden rounded-lg border border-border/80 bg-background/98 shadow-xl backdrop-blur-xl">
+                <div className="max-h-[240px] overflow-y-auto py-1">
+                  {filteredMentionAgents.map((agent, index) => (
+                    <button
+                      key={`${agent.namespace}/${agent.name}`}
+                      type="button"
+                      onClick={() => handleMentionSelect(agent)}
+                      className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors ${
+                        index === mentionIndex ? "bg-primary/10 text-foreground" : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
+                      }`}
+                    >
+                      <AtSign className="h-3.5 w-3.5 shrink-0 text-primary" />
+                      <span className="font-medium text-foreground">{agent.name}</span>
+                      <span className="text-xs text-muted-foreground">{agent.namespace}</span>
+                      {agent.model && <span className="text-[10px] text-muted-foreground/60">{agent.model}</span>}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
             {/* Bottom bar inside composer: runtime chip + send */}
             <div className="flex items-center justify-between px-2 pb-2">
               <div className="flex items-center gap-1.5">
@@ -2567,7 +2722,7 @@ export function ChatWorkbench({
                   </Badge>
                 )}
                 <span className="text-[10px] text-muted-foreground/50">
-                  Enter send · Shift+Enter newline{lastUserPrompt ? " · ArrowUp reuse last prompt" : ""}
+                  Enter send · Shift+Enter newline{lastUserPrompt ? " · ArrowUp reuse last prompt" : ""}{mentionableAgents.length > 0 ? " · @ mention agent" : ""}
                 </span>
               </div>
               <div>
@@ -2584,7 +2739,7 @@ export function ChatWorkbench({
                 ) : (
                   <Button
                     size="icon"
-                    onClick={onSubmit}
+                    onClick={handleSubmitWithMention}
                     disabled={!agentName || !canSubmit || !tokenReady}
                     aria-label="Send message (Enter)"
                     className="h-8 w-8 rounded-full transition-transform duration-150 active:scale-95 shadow-sm"
@@ -2598,7 +2753,7 @@ export function ChatWorkbench({
         </div>
 
         {error && (
-          <div role="alert" className="flex items-center gap-2 rounded-[1rem] border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive shadow-sm">
+          <div role="alert" className="flex items-center gap-2 rounded-sm border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive shadow-sm">
             <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
             <span className="flex-1">{error}</span>
             <Button

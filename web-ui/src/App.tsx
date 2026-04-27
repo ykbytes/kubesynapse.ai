@@ -7,6 +7,8 @@ import "@fontsource/ibm-plex-mono/500.css";
 import { AlertTriangle, Bot, MessageSquare, PanelRightOpen, RefreshCw } from "lucide-react";
 import React, { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import { Toaster } from "sonner";
+import { SkipToContent } from "./components/SkipToContent";
+import { AriaLiveRegion } from "./components/AriaLiveRegion";
 
 const LandingPage = lazy(() => import("./components/LandingPage").then((m) => ({ default: m.LandingPage })));
 
@@ -36,6 +38,8 @@ const WorkflowManager = lazy(() => import("./components/WorkflowManager").then((
 const IntelligenceDashboard = lazy(() => import("./components/IntelligenceDashboard").then((m) => ({ default: m.IntelligenceDashboard })));
 const McpManagementPanel = lazy(() => import("./components/McpManagementPanel").then((m) => ({ default: m.McpManagementPanel })));
 const ExecutionObservatory = lazy(() => import("./components/ExecutionObservatory").then((m) => ({ default: m.ExecutionObservatory })));
+const DocumentationPanel = lazy(() => import("./components/DocumentationPanel").then((m) => ({ default: m.DocumentationPanel })));
+const EventTriggersPanel = lazy(() => import("./components/EventTriggersPanel").then((m) => ({ default: m.EventTriggersPanel })));
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EmptyState } from "@/components/EmptyState";
@@ -375,10 +379,20 @@ function AppLayout() {
                           title: "Observatory",
                           description: "Inspect, replay, and compare workflow execution traces.",
                         }
-                      : {
-                          title: "Evaluations",
-                          description: "Create evaluation suites and track regression coverage.",
-                        };
+                      : ws.activeView === "docs"
+                        ? {
+                            title: "Documentation",
+                            description: "Learn how to deploy, operate, and extend KubeSynth.",
+                          }
+                        : ws.activeView === "webhooks"
+                          ? {
+                              title: "Webhooks & Triggers",
+                              description: "Configure webhook receivers and event-driven workflow triggers.",
+                            }
+                          : {
+                            title: "Evaluations",
+                            description: "Create evaluation suites and track regression coverage.",
+                          };
   const showCompactPageHeader = ws.activeView !== "composer" && !(ws.activeView === "chat" && ws.selectedAgentName);
   const mainContentClasses = ws.activeView === "composer"
     ? "flex flex-1 flex-col overflow-hidden pb-20 md:pb-0"
@@ -388,6 +402,8 @@ function AppLayout() {
 
   return (
     <div className="flex h-screen flex-col bg-background text-foreground">
+      <SkipToContent />
+      <AriaLiveRegion />
       {/* ── TopBar ── */}
       <Suspense fallback={<div className="h-12 border-b border-border bg-background" />}>
         <TopBar
@@ -431,7 +447,7 @@ function AppLayout() {
         <div
           className={`hidden shrink-0 overflow-hidden transition-[width] duration-200 ease-productive md:flex ${ws.sidebarCollapsed
             ? "md:w-14"
-            : "md:w-[clamp(11.5rem,15vw,14.5rem)] xl:w-[clamp(12rem,16vw,15.5rem)]"}`}
+            : "md:w-[clamp(11.5rem,15vw,14rem)] xl:w-[clamp(12rem,16vw,15rem)]"}`}
         >
           <SidebarShell>
             <AppSidebar
@@ -476,7 +492,7 @@ function AppLayout() {
         </div>
 
         {/* ── Main content ── */}
-        <main className={mainContentClasses}>
+        <main id="main-content" className={mainContentClasses} tabIndex={-1}>
           {showCompactPageHeader && (
             <div className="flex min-w-0 items-start justify-between gap-3">
               <div className="min-w-0">
@@ -605,7 +621,7 @@ function AppLayout() {
               </div>
             ) : (
               <div className="flex min-h-0 flex-1 min-w-0 flex-col overflow-hidden">
-                <div className="flex min-h-0 flex-1 min-w-0 flex-col gap-4 overflow-hidden lg:flex-row">
+                  <div className="flex min-h-0 flex-1 min-w-0 flex-col gap-0 overflow-hidden lg:flex-row">
                   <ContentShell>
                     <ChatSessionPanel
                       sessions={chat.chatSessions}
@@ -624,7 +640,7 @@ function AppLayout() {
                     />
                   </ContentShell>
 
-                  <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-[1.75rem] border border-border/70 bg-card/55 shadow-[0_18px_48px_-28px_rgba(15,23,42,0.45)] 2xl:flex-row">
+                  <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-none border border-border/70 bg-card/55 shadow-[0_18px_48px_-28px_rgba(15,23,42,0.45)] lg:flex-row">
                     <ContentShell>
                       <ChatWorkbench
                         agentName={ws.selectedAgentName}
@@ -644,6 +660,7 @@ function AppLayout() {
                         a2aTimeoutSeconds={chat.a2aTimeoutSeconds}
                         specialistSubagents={chat.specialistSubagents}
                         specialistTeamConfigured={chat.specialistTeamConfigured}
+                        agents={ws.agents}
                         discoveryPeers={ws.discoverablePeers}
                         discoveryLoading={ws.discoveryLoading}
                         discoveryError={ws.discoveryError}
@@ -807,6 +824,16 @@ function AppLayout() {
           ) : ws.activeView === "observatory" ? (
             <ContentShell>
               <ExecutionObservatory />
+            </ContentShell>
+          ) : ws.activeView === "docs" ? (
+            <ContentShell>
+              <DocumentationPanel />
+            </ContentShell>
+          ) : ws.activeView === "webhooks" ? (
+            <ContentShell>
+              <Suspense fallback={<div className="h-screen" />}>
+                <EventTriggersPanel />
+              </Suspense>
             </ContentShell>
           ) : (
             <ContentShell>

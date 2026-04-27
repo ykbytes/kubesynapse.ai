@@ -202,9 +202,10 @@ function buildOperations(summary: InvocationSummary): ClassifiedOp[] {
   for (const art of summary.artifacts ?? []) {
     if (!art || typeof art !== "object") continue;
     const op = classifyArtifact(art);
-    if (op.detail && artifactPaths.has(op.detail)) continue;
+    if (!op.detail) continue; // skip empty artifacts
+    if (artifactPaths.has(op.detail)) continue;
     ops.push(op);
-    if (op.detail) artifactPaths.add(op.detail);
+    artifactPaths.add(op.detail);
   }
 
   // Tool calls, dedup file-create/file-edit if already covered by artifacts

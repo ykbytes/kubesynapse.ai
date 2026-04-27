@@ -97,6 +97,10 @@ import type {
   WorkflowSummary,
   WorkflowUpdatePayload,
   AgentMcpConnection,
+  WebhookReceiverInfo,
+  WebhookInvocationInfo,
+  WorkflowTriggerInfo,
+  TriggerExecutionInfo,
 } from "../types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL?.trim() ?? "";
@@ -4662,4 +4666,216 @@ export async function fetchPromptContext(token: string, body: { collector_id?: s
     body: JSON.stringify(body),
   });
   return parseJsonResponse(response, (p) => p as PromptContextResponse);
+}
+
+// ── Webhook API ───────────────────────────────────────────────────────────
+
+function parseWebhookReceiverPayload(payload: unknown, label = "WebhookReceiverInfo"): WebhookReceiverInfo {
+  const record = expectRecord(payload, label);
+  return {
+    id: readNumber(record, "id", label),
+    namespace: readString(record, "namespace", label),
+    name: readString(record, "name", label),
+    secret_ref: readString(record, "secret_ref", label),
+    ip_allowlist: readStringArray(record, "ip_allowlist", label, []),
+    rate_limit: readOptionalNumber(record, "rate_limit", label) ?? 0,
+    max_payload_bytes: readOptionalNumber(record, "max_payload_bytes", label) ?? 0,
+    enabled: readBoolean(record, "enabled", label, true),
+    created_at: readOptionalString(record, "created_at", label) ?? "",
+    updated_at: readOptionalString(record, "updated_at", label) ?? "",
+  };
+}
+
+function parseWebhookInvocationPayload(payload: unknown, label = "WebhookInvocationInfo"): WebhookInvocationInfo {
+  const record = expectRecord(payload, label);
+  return {
+    id: readNumber(record, "id", label),
+    invocation_id: readString(record, "invocation_id", label),
+    webhook_name: readString(record, "webhook_name", label),
+    namespace: readString(record, "namespace", label),
+    source_ip: readString(record, "source_ip", label, ""),
+    received_at: readOptionalString(record, "received_at", label) ?? "",
+    signature_verified: readBoolean(record, "signature_verified", label, false),
+    status: readString(record, "status", label, ""),
+    matched_triggers: readOptionalNumber(record, "matched_triggers", label) ?? 0,
+  };
+}
+
+export async function listWebhooks(token: string, namespace: string): Promise<WebhookReceiverInfo[]> {
+  const response = await fetchAuthenticated(buildUrl("/api/v1/webhooks", namespace), token);
+  return parseJsonResponse(response, (payload) => {
+    if (!Array.isArray(payload)) return [];
+    return payload.map((item, index) => parseWebhookReceiverPayload(item, `WebhookReceiverInfo[${index}]`));
+  });
+}
+
+export async function fetchWebhook(token: string, namespace: string, name: string): Promise<WebhookReceiverInfo> {
+  const response = await fetchAuthenticated(buildUrl(`/api/v1/webhooks/${encodeURIComponent(name)}`, namespace), token);
+  return parseJsonResponse(response, (payload) => parseWebhookReceiverPayload(payload, "WebhookReceiverInfo"));
+}
+
+export interface CreateWebhookPayload {
+  name: string;
+  secret_ref: string;
+  ip_allowlist?: string[];
+  rate_limit?: number;
+  max_payload_bytes?: number;
+  enabled?: boolean;
+}
+
+export interface UpdateWebhookPayload {
+  secret_ref?: string;
+  ip_allowlist?: string[];
+  rate_limit?: number;
+  max_payload_bytes?: number;
+  enabled?: boolean;
+}
+
+export async function createWebhook(token: string, namespace: string, payload: CreateWebhookPayload): Promise<WebhookReceiverInfo> {
+  const response = await fetchAuthenticated(buildUrl("/api/v1/webhooks", namespace), token, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return parseJsonResponse(response, (p) => parseWebhookReceiverPayload(p, "WebhookReceiverInfo"));
+}
+
+export async function updateWebhook(token: string, namespace: string, name: string, payload: UpdateWebhookPayload): Promise<WebhookReceiverInfo> {
+  const response = await fetchAuthenticated(buildUrl(`/api/v1/webhooks/${encodeURIComponent(name)}`, namespace), token, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return parseJsonResponse(response, (p) => parseWebhookReceiverPayload(p, "WebhookReceiverInfo"));
+}
+
+export async function deleteWebhook(token: string, namespace: string, name: string): Promise<void> {
+  const response = await fetchAuthenticated(buildUrl(`/api/v1/webhooks/${encodeURIComponent(name)}`, namespace), token, {
+    method: "DELETE",
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new ApiError(response.status, "Failed to delete webhook", text);
+  }
+}
+
+export async function fetchWebhookHistory(token: string, namespace: string, name: string, limit = 50): Promise<WebhookInvocationInfo[]> {
+  const response = await fetchAuthenticated(
+    buildUrl(`/api/v1/webhooks/${encodeURIComponent(name)}/history`, namespace) + `&limit=${limit}`,
+    token,
+  );
+  return parseJsonResponse(response, (payload) => {
+    if (!Array.isArray(payload)) return [];
+    return payload.map((item, index) => parseWebhookInvocationPayload(item, `WebhookInvocationInfo[${index}]`));
+  });
+}
+
+// ── Workflow Trigger API ──────────────────────────────────────────────────
+
+function parseWorkflowTriggerPayload(payload: unknown, label = "WorkflowTriggerInfo"): WorkflowTriggerInfo {
+  const record = expectRecord(payload, label);
+  return {
+    id: readNumber(record, "id", label),
+    namespace: readString(record, "namespace", label),
+    name: readString(record, "name", label),
+    source_kind: readString(record, "source_kind", label),
+    source_ref: readString(record, "source_ref", label),
+    event_filter: readRecord(record, "event_filter", label, {}),
+    workflow_ref: readRecord(record, "workflow_ref", label, {}) as Record<string, string>,
+    payload_mapping: readRecord(record, "payload_mapping", label, {}) as Record<string, string>,
+    max_retries: readOptionalNumber(record, "max_retries", label) ?? 3,
+    backoff_seconds: readOptionalNumber(record, "backoff_seconds", label) ?? 5,
+    enabled: readBoolean(record, "enabled", label, true),
+    execution_count: readOptionalNumber(record, "execution_count", label) ?? 0,
+    last_triggered: readOptionalString(record, "last_triggered", label),
+  };
+}
+
+function parseTriggerExecutionPayload(payload: unknown, label = "TriggerExecutionInfo"): TriggerExecutionInfo {
+  const record = expectRecord(payload, label);
+  return {
+    id: readNumber(record, "id", label),
+    trigger_name: readString(record, "trigger_name", label),
+    namespace: readString(record, "namespace", label),
+    webhook_name: readString(record, "webhook_name", label, ""),
+    executed_at: readOptionalString(record, "executed_at", label) ?? "",
+    status: readString(record, "status", label, ""),
+    workflow_run_id: readOptionalString(record, "workflow_run_id", label),
+    error_message: readOptionalString(record, "error_message", label),
+  };
+}
+
+export async function listTriggers(token: string, namespace: string): Promise<WorkflowTriggerInfo[]> {
+  const response = await fetchAuthenticated(buildUrl("/api/v1/workflow-triggers", namespace), token);
+  return parseJsonResponse(response, (payload) => {
+    if (!Array.isArray(payload)) return [];
+    return payload.map((item, index) => parseWorkflowTriggerPayload(item, `WorkflowTriggerInfo[${index}]`));
+  });
+}
+
+export async function fetchTrigger(token: string, namespace: string, name: string): Promise<WorkflowTriggerInfo> {
+  const response = await fetchAuthenticated(buildUrl(`/api/v1/workflow-triggers/${encodeURIComponent(name)}`, namespace), token);
+  return parseJsonResponse(response, (payload) => parseWorkflowTriggerPayload(payload, "WorkflowTriggerInfo"));
+}
+
+export interface CreateTriggerPayload {
+  name: string;
+  source_kind: string;
+  source_ref: string;
+  event_filter?: Record<string, unknown>;
+  workflow_ref?: Record<string, string>;
+  payload_mapping?: Record<string, string>;
+  max_retries?: number;
+  backoff_seconds?: number;
+  enabled?: boolean;
+}
+
+export interface UpdateTriggerPayload {
+  source_kind?: string;
+  source_ref?: string;
+  event_filter?: Record<string, unknown>;
+  workflow_ref?: Record<string, string>;
+  payload_mapping?: Record<string, string>;
+  max_retries?: number;
+  backoff_seconds?: number;
+  enabled?: boolean;
+}
+
+export async function createTrigger(token: string, namespace: string, payload: CreateTriggerPayload): Promise<WorkflowTriggerInfo> {
+  const response = await fetchAuthenticated(buildUrl("/api/v1/workflow-triggers", namespace), token, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return parseJsonResponse(response, (p) => parseWorkflowTriggerPayload(p, "WorkflowTriggerInfo"));
+}
+
+export async function updateTrigger(token: string, namespace: string, name: string, payload: UpdateTriggerPayload): Promise<WorkflowTriggerInfo> {
+  const response = await fetchAuthenticated(buildUrl(`/api/v1/workflow-triggers/${encodeURIComponent(name)}`, namespace), token, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return parseJsonResponse(response, (p) => parseWorkflowTriggerPayload(p, "WorkflowTriggerInfo"));
+}
+
+export async function deleteTrigger(token: string, namespace: string, name: string): Promise<void> {
+  const response = await fetchAuthenticated(buildUrl(`/api/v1/workflow-triggers/${encodeURIComponent(name)}`, namespace), token, {
+    method: "DELETE",
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new ApiError(response.status, "Failed to delete trigger", text);
+  }
+}
+
+export async function fetchTriggerHistory(token: string, namespace: string, name: string, limit = 50): Promise<TriggerExecutionInfo[]> {
+  const response = await fetchAuthenticated(
+    buildUrl(`/api/v1/workflow-triggers/${encodeURIComponent(name)}/history`, namespace) + `&limit=${limit}`,
+    token,
+  );
+  return parseJsonResponse(response, (payload) => {
+    if (!Array.isArray(payload)) return [];
+    return payload.map((item, index) => parseTriggerExecutionPayload(item, `TriggerExecutionInfo[${index}]`));
+  });
 }

@@ -21,7 +21,14 @@ export interface TextFileDraft {
 }
 
 export interface AgentSkillsConfig {
-  files: Record<string, string>;
+  files?: Record<string, string>;
+  config_map_ref?: string;
+}
+
+export interface OpaConfig {
+  enabled?: boolean;
+  policies?: string[];
+  config_map_ref?: string;
 }
 
 /* ── Git Config types ── */
@@ -235,7 +242,7 @@ export interface AgentInfo {
   runtime_kind?: RuntimeKind;
 }
 
-export type WorkspaceView = "agents" | "chat" | "workflows" | "evals" | "catalog" | "composer" | "policies" | "intelligence" | "mcp" | "settings" | "admin" | "observatory";
+export type WorkspaceView = "agents" | "chat" | "workflows" | "evals" | "catalog" | "composer" | "policies" | "intelligence" | "mcp" | "settings" | "admin" | "observatory" | "docs" | "webhooks";
 
 /* ── LLM Provider types ── */
 
@@ -630,6 +637,7 @@ export interface AgentDetail extends AgentInfo {
   a2a_config: AgentA2AConfig;
   skills: AgentSkillsConfig;
   skill_summaries: AgentSkillSummary[];
+  opa?: OpaConfig | null;
   opencode_config_files: Record<string, unknown>;
   git_config?: GitConfig | null;
   github_config?: GitHubConfig | null;
@@ -649,6 +657,7 @@ export interface CreateAgentPayload {
   mcp_sidecars?: Array<Record<string, unknown>>;
   a2a_config?: AgentA2AConfig;
   skills?: AgentSkillsConfig;
+  opa?: OpaConfig | null;
   opencode_config_files?: Record<string, unknown>;
   git_config?: GitConfig | null;
   github_config?: GitHubConfig | null;
@@ -666,6 +675,7 @@ export interface UpdateAgentPayload {
   mcp_sidecars?: Array<Record<string, unknown>>;
   a2a_config?: AgentA2AConfig;
   skills?: AgentSkillsConfig;
+  opa?: OpaConfig | null;
   opencode_config_files?: Record<string, unknown>;
   git_config?: GitConfig | null;
   github_config?: GitHubConfig | null;
@@ -1270,4 +1280,58 @@ export interface ExecutionListResponse {
   total: number;
   limit: number;
   offset: number;
+}
+
+/* ── Webhook & Trigger types ── */
+
+export interface WebhookReceiverInfo {
+  id: number;
+  namespace: string;
+  name: string;
+  secret_ref: string;
+  ip_allowlist: string[];
+  rate_limit: number;
+  max_payload_bytes: number;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WebhookInvocationInfo {
+  id: number;
+  invocation_id: string;
+  webhook_name: string;
+  namespace: string;
+  source_ip: string;
+  received_at: string;
+  signature_verified: boolean;
+  status: string;
+  matched_triggers: number;
+}
+
+export interface WorkflowTriggerInfo {
+  id: number;
+  namespace: string;
+  name: string;
+  source_kind: string;
+  source_ref: string;
+  event_filter: Record<string, unknown>;
+  workflow_ref: Record<string, string>;
+  payload_mapping: Record<string, string>;
+  max_retries: number;
+  backoff_seconds: number;
+  enabled: boolean;
+  execution_count: number;
+  last_triggered: string | null;
+}
+
+export interface TriggerExecutionInfo {
+  id: number;
+  trigger_name: string;
+  namespace: string;
+  webhook_name: string;
+  executed_at: string;
+  status: string;
+  workflow_run_id: string | null;
+  error_message: string | null;
 }

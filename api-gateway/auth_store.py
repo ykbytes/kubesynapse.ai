@@ -25,6 +25,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     UniqueConstraint,
@@ -1006,6 +1007,152 @@ class AlertHistoryRow(Base):
         }
 
 
+# ─── Webhook & Trigger persistence models ──────────────────────────────────
+
+
+class WebhookReceiverRow(Base):
+    __tablename__ = "webhook_receivers"
+    __table_args__ = (UniqueConstraint("namespace", "name", name="uq_webhook_receivers_namespace_name"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    namespace = Column(String(128), nullable=False, index=True)
+    name = Column(String(128), nullable=False, index=True)
+    secret_ref = Column(String(253), nullable=False)
+    ip_allowlist = Column(JSON, nullable=False, default=list)
+    rate_limit = Column(Integer, nullable=False, default=60)
+    max_payload_bytes = Column(Integer, nullable=False, default=1048576)
+    enabled = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "namespace": self.namespace,
+            "name": self.name,
+            "secret_ref": self.secret_ref,
+            "ip_allowlist": self.ip_allowlist or [],
+            "rate_limit": self.rate_limit,
+            "max_payload_bytes": self.max_payload_bytes,
+            "enabled": self.enabled,
+            "created_at": ensure_utc(self.created_at).isoformat() if self.created_at else None,
+            "updated_at": ensure_utc(self.updated_at).isoformat() if self.updated_at else None,
+        }
+
+
+class WebhookInvocationRow(Base):
+    __tablename__ = "webhook_invocations"
+    __table_args__ = (
+        Index("ix_webhook_invocations_ns_name_created", "namespace", "webhook_name", "created_at"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    namespace = Column(String(128), nullable=False, index=True)
+    webhook_name = Column(String(128), nullable=False, index=True)
+    event_id = Column(String(128), nullable=False, unique=True, index=True)
+    source_ip = Column(String(128), nullable=True)
+    signature_valid = Column(Boolean, nullable=False, default=False)
+    payload_size = Column(Integer, nullable=False, default=0)
+    payload_snippet = Column(String(1024), nullable=True)
+    headers_json = Column(JSON, nullable=True)
+    matched_triggers = Column(JSON, nullable=False, default=list)
+    error_message = Column(String(1024), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "namespace": self.namespace,
+            "webhook_name": self.webhook_name,
+            "event_id": self.event_id,
+            "source_ip": self.source_ip,
+            "signature_valid": self.signature_valid,
+            "payload_size": self.payload_size,
+            "payload_snippet": self.payload_snippet,
+            "headers_json": self.headers_json,
+            "matched_triggers": self.matched_triggers or [],
+            "error_message": self.error_message,
+            "created_at": ensure_utc(self.created_at).isoformat() if self.created_at else None,
+        }
+
+
+class WorkflowTriggerRow(Base):
+    __tablename__ = "workflow_triggers"
+    __table_args__ = (UniqueConstraint("namespace", "name", name="uq_workflow_triggers_namespace_name"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    namespace = Column(String(128), nullable=False, index=True)
+    name = Column(String(128), nullable=False, index=True)
+    source_kind = Column(String(64), nullable=False, default="WebhookReceiver")
+    source_name = Column(String(128), nullable=False)
+    event_filter_json = Column(JSON, nullable=True)
+    target_workflow_name = Column(String(128), nullable=False)
+    target_workflow_namespace = Column(String(128), nullable=False, default="default")
+    payload_mapping_json = Column(JSON, nullable=False, default=dict)
+    retry_max_retries = Column(Integer, nullable=False, default=3)
+    retry_backoff_seconds = Column(Integer, nullable=False, default=60)
+    notifications_on_success = Column(JSON, nullable=False, default=list)
+    notifications_on_failure = Column(JSON, nullable=False, default=list)
+    enabled = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "namespace": self.namespace,
+            "name": self.name,
+            "source_kind": self.source_kind,
+            "source_name": self.source_name,
+            "event_filter": self.event_filter_json,
+            "target_workflow_name": self.target_workflow_name,
+            "target_workflow_namespace": self.target_workflow_namespace,
+            "payload_mapping": self.payload_mapping_json or {},
+            "retry_max_retries": self.retry_max_retries,
+            "retry_backoff_seconds": self.retry_backoff_seconds,
+            "notifications_on_success": self.notifications_on_success or [],
+            "notifications_on_failure": self.notifications_on_failure or [],
+            "enabled": self.enabled,
+            "created_at": ensure_utc(self.created_at).isoformat() if self.created_at else None,
+            "updated_at": ensure_utc(self.updated_at).isoformat() if self.updated_at else None,
+        }
+
+
+class TriggerExecutionRow(Base):
+    __tablename__ = "trigger_executions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    trigger_namespace = Column(String(128), nullable=False, index=True)
+    trigger_name = Column(String(128), nullable=False, index=True)
+    event_id = Column(String(128), nullable=False, index=True)
+    workflow_name = Column(String(128), nullable=False)
+    workflow_namespace = Column(String(128), nullable=False)
+    payload_json = Column(JSON, nullable=True)
+    status = Column(String(32), nullable=False, default="pending")
+    error_message = Column(String(1024), nullable=True)
+    attempt_count = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "trigger_namespace": self.trigger_namespace,
+            "trigger_name": self.trigger_name,
+            "event_id": self.event_id,
+            "workflow_name": self.workflow_name,
+            "workflow_namespace": self.workflow_namespace,
+            "payload_json": self.payload_json,
+            "status": self.status,
+            "error_message": self.error_message,
+            "attempt_count": self.attempt_count,
+            "created_at": ensure_utc(self.created_at).isoformat() if self.created_at else None,
+            "updated_at": ensure_utc(self.updated_at).isoformat() if self.updated_at else None,
+            "completed_at": ensure_utc(self.completed_at).isoformat() if self.completed_at else None,
+        }
+
+
 # Schema version tracking for migration integrity checks
 _SCHEMA_VERSION = 1  # Increment when schema changes require migration
 
@@ -1127,12 +1274,29 @@ def _ensure_password_reset_token_table() -> None:
             logger.info("Created password_reset_tokens table")
 
 
+def _ensure_webhook_trigger_tables() -> None:
+    with ENGINE.begin() as connection:
+        inspector = inspect(connection)
+        tables = inspector.get_table_names()
+        new_tables = [
+            WebhookReceiverRow.__table__,
+            WebhookInvocationRow.__table__,
+            WorkflowTriggerRow.__table__,
+            TriggerExecutionRow.__table__,
+        ]
+        for table in new_tables:
+            if table.name not in tables:
+                Base.metadata.create_all(bind=ENGINE, tables=[table])
+                logger.info("Created table %s", table.name)
+
+
 def init_database() -> None:
     Base.metadata.create_all(bind=ENGINE)
     _ensure_intelligence_collector_secret_columns()
     _ensure_intelligence_namespace_columns()
     _ensure_workflow_run_archive_columns()
     _ensure_password_reset_token_table()
+    _ensure_webhook_trigger_tables()
     _verify_schema_version()
 
 
@@ -2634,3 +2798,375 @@ def list_workflow_runs(
             }
             for r in rows
         ]
+
+
+# ─── Webhook & Trigger CRUD helpers ────────────────────────────────────────
+
+
+def list_webhook_receivers(namespace: str) -> list[dict[str, Any]]:
+    normalized = str(namespace or "default").strip() or "default"
+    with db_session() as session:
+        rows = (
+            session.query(WebhookReceiverRow)
+            .filter(WebhookReceiverRow.namespace == normalized)
+            .order_by(WebhookReceiverRow.name.asc())
+            .all()
+        )
+        return [row.to_dict() for row in rows]
+
+
+def get_webhook_receiver(namespace: str, name: str) -> dict[str, Any] | None:
+    normalized_ns = str(namespace or "default").strip() or "default"
+    normalized_name = str(name or "").strip()
+    if not normalized_name:
+        return None
+    with db_session() as session:
+        row = (
+            session.query(WebhookReceiverRow)
+            .filter(WebhookReceiverRow.namespace == normalized_ns, WebhookReceiverRow.name == normalized_name)
+            .one_or_none()
+        )
+        return row.to_dict() if row is not None else None
+
+
+def create_webhook_receiver(
+    namespace: str,
+    name: str,
+    secret_ref: str,
+    ip_allowlist: list[str] | None = None,
+    rate_limit: int = 60,
+    max_payload_bytes: int = 1048576,
+    enabled: bool = True,
+) -> dict[str, Any]:
+    normalized_ns = str(namespace or "default").strip() or "default"
+    normalized_name = str(name or "").strip()
+    if not normalized_name:
+        raise ValueError("Webhook name is required.")
+    if not secret_ref or not str(secret_ref).strip():
+        raise ValueError("secret_ref is required.")
+    row = WebhookReceiverRow(
+        namespace=normalized_ns,
+        name=normalized_name,
+        secret_ref=str(secret_ref).strip(),
+        ip_allowlist=list(ip_allowlist) if ip_allowlist else [],
+        rate_limit=max(1, int(rate_limit or 60)),
+        max_payload_bytes=max(1024, int(max_payload_bytes or 1048576)),
+        enabled=bool(enabled),
+    )
+    with db_session() as session:
+        session.add(row)
+        try:
+            session.flush()
+        except IntegrityError as exc:
+            raise ValueError(f"Webhook '{name}' already exists in namespace '{namespace}'") from exc
+        return row.to_dict()
+
+
+def update_webhook_receiver(
+    namespace: str,
+    name: str,
+    secret_ref: str | None = None,
+    ip_allowlist: list[str] | None = None,
+    rate_limit: int | None = None,
+    max_payload_bytes: int | None = None,
+    enabled: bool | None = None,
+) -> dict[str, Any]:
+    normalized_ns = str(namespace or "default").strip() or "default"
+    normalized_name = str(name or "").strip()
+    with db_session() as session:
+        row = (
+            session.query(WebhookReceiverRow)
+            .filter(WebhookReceiverRow.namespace == normalized_ns, WebhookReceiverRow.name == normalized_name)
+            .one_or_none()
+        )
+        if row is None:
+            raise ValueError(f"Webhook '{name}' not found in namespace '{namespace}'")
+        if secret_ref is not None:
+            row.secret_ref = str(secret_ref).strip()
+        if ip_allowlist is not None:
+            row.ip_allowlist = list(ip_allowlist)
+        if rate_limit is not None:
+            row.rate_limit = max(1, int(rate_limit))
+        if max_payload_bytes is not None:
+            row.max_payload_bytes = max(1024, int(max_payload_bytes))
+        if enabled is not None:
+            row.enabled = bool(enabled)
+        row.updated_at = utc_now()
+        return row.to_dict()
+
+
+def delete_webhook_receiver(namespace: str, name: str) -> bool:
+    normalized_ns = str(namespace or "default").strip() or "default"
+    normalized_name = str(name or "").strip()
+    with db_session() as session:
+        row = (
+            session.query(WebhookReceiverRow)
+            .filter(WebhookReceiverRow.namespace == normalized_ns, WebhookReceiverRow.name == normalized_name)
+            .one_or_none()
+        )
+        if row is None:
+            return False
+        session.delete(row)
+        return True
+
+
+def record_webhook_invocation(
+    namespace: str,
+    webhook_name: str,
+    event_id: str,
+    source_ip: str | None = None,
+    signature_valid: bool = False,
+    payload_size: int = 0,
+    payload_snippet: str | None = None,
+    headers_json: dict[str, Any] | None = None,
+    matched_triggers: list[str] | None = None,
+    error_message: str | None = None,
+) -> dict[str, Any]:
+    normalized_ns = str(namespace or "default").strip() or "default"
+    row = WebhookInvocationRow(
+        namespace=normalized_ns,
+        webhook_name=str(webhook_name or "").strip(),
+        event_id=str(event_id or "").strip(),
+        source_ip=source_ip,
+        signature_valid=signature_valid,
+        payload_size=int(payload_size or 0),
+        payload_snippet=str(payload_snippet)[:1024] if payload_snippet is not None else None,
+        headers_json=_json_clone(headers_json),
+        matched_triggers=list(matched_triggers) if matched_triggers else [],
+        error_message=error_message,
+    )
+    with db_session() as session:
+        session.add(row)
+        session.flush()
+        return row.to_dict()
+
+
+def count_recent_webhook_invocations(namespace: str, webhook_name: str, seconds: int = 60) -> int:
+    normalized_ns = str(namespace or "default").strip() or "default"
+    normalized_name = str(webhook_name or "").strip()
+    since = utc_now() - timedelta(seconds=max(1, int(seconds)))
+    with db_session() as session:
+        return (
+            session.query(WebhookInvocationRow)
+            .filter(
+                WebhookInvocationRow.namespace == normalized_ns,
+                WebhookInvocationRow.webhook_name == normalized_name,
+                WebhookInvocationRow.created_at >= since,
+            )
+            .count()
+        )
+
+
+def update_webhook_invocation_matched_triggers(invocation_id: int, matched_triggers: list[str]) -> None:
+    with db_session() as session:
+        row = session.query(WebhookInvocationRow).filter(WebhookInvocationRow.id == invocation_id).one_or_none()
+        if row is not None:
+            row.matched_triggers = list(matched_triggers)
+
+
+def list_webhook_invocations(
+    namespace: str,
+    webhook_name: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    normalized_ns = str(namespace or "default").strip() or "default"
+    with db_session() as session:
+        query = session.query(WebhookInvocationRow).filter(WebhookInvocationRow.namespace == normalized_ns)
+        if webhook_name:
+            query = query.filter(WebhookInvocationRow.webhook_name == str(webhook_name).strip())
+        rows = (
+            query.order_by(WebhookInvocationRow.created_at.desc())
+            .limit(max(1, int(limit)))
+            .offset(max(0, int(offset)))
+            .all()
+        )
+        return [row.to_dict() for row in rows]
+
+
+def list_workflow_triggers(namespace: str) -> list[dict[str, Any]]:
+    normalized = str(namespace or "default").strip() or "default"
+    with db_session() as session:
+        rows = (
+            session.query(WorkflowTriggerRow)
+            .filter(WorkflowTriggerRow.namespace == normalized)
+            .order_by(WorkflowTriggerRow.name.asc())
+            .all()
+        )
+        return [row.to_dict() for row in rows]
+
+
+def get_workflow_trigger(namespace: str, name: str) -> dict[str, Any] | None:
+    normalized_ns = str(namespace or "default").strip() or "default"
+    normalized_name = str(name or "").strip()
+    if not normalized_name:
+        return None
+    with db_session() as session:
+        row = (
+            session.query(WorkflowTriggerRow)
+            .filter(WorkflowTriggerRow.namespace == normalized_ns, WorkflowTriggerRow.name == normalized_name)
+            .one_or_none()
+        )
+        return row.to_dict() if row is not None else None
+
+
+def create_workflow_trigger(
+    namespace: str,
+    name: str,
+    source_kind: str = "WebhookReceiver",
+    source_name: str = "",
+    event_filter: dict[str, Any] | None = None,
+    target_workflow_name: str = "",
+    target_workflow_namespace: str = "default",
+    payload_mapping: dict[str, str] | None = None,
+    retry_max_retries: int = 3,
+    retry_backoff_seconds: int = 60,
+    notifications_on_success: list[str] | None = None,
+    notifications_on_failure: list[str] | None = None,
+    enabled: bool = True,
+) -> dict[str, Any]:
+    normalized_ns = str(namespace or "default").strip() or "default"
+    normalized_name = str(name or "").strip()
+    if not normalized_name:
+        raise ValueError("Trigger name is required.")
+    if not source_name or not str(source_name).strip():
+        raise ValueError("source_name is required.")
+    if not target_workflow_name or not str(target_workflow_name).strip():
+        raise ValueError("target_workflow_name is required.")
+    row = WorkflowTriggerRow(
+        namespace=normalized_ns,
+        name=normalized_name,
+        source_kind=str(source_kind or "WebhookReceiver").strip(),
+        source_name=str(source_name).strip(),
+        event_filter_json=_json_clone(event_filter),
+        target_workflow_name=str(target_workflow_name).strip(),
+        target_workflow_namespace=str(target_workflow_namespace or "default").strip(),
+        payload_mapping_json=_json_clone(payload_mapping) or {},
+        retry_max_retries=max(0, int(retry_max_retries or 0)),
+        retry_backoff_seconds=max(1, int(retry_backoff_seconds or 60)),
+        notifications_on_success=list(notifications_on_success) if notifications_on_success else [],
+        notifications_on_failure=list(notifications_on_failure) if notifications_on_failure else [],
+        enabled=bool(enabled),
+    )
+    with db_session() as session:
+        session.add(row)
+        try:
+            session.flush()
+        except IntegrityError as exc:
+            raise ValueError(f"Trigger '{name}' already exists in namespace '{namespace}'") from exc
+        return row.to_dict()
+
+
+def update_workflow_trigger(
+    namespace: str,
+    name: str,
+    source_kind: str | None = None,
+    source_name: str | None = None,
+    event_filter: dict[str, Any] | None = None,
+    target_workflow_name: str | None = None,
+    target_workflow_namespace: str | None = None,
+    payload_mapping: dict[str, str] | None = None,
+    retry_max_retries: int | None = None,
+    retry_backoff_seconds: int | None = None,
+    notifications_on_success: list[str] | None = None,
+    notifications_on_failure: list[str] | None = None,
+    enabled: bool | None = None,
+) -> dict[str, Any]:
+    normalized_ns = str(namespace or "default").strip() or "default"
+    normalized_name = str(name or "").strip()
+    with db_session() as session:
+        row = (
+            session.query(WorkflowTriggerRow)
+            .filter(WorkflowTriggerRow.namespace == normalized_ns, WorkflowTriggerRow.name == normalized_name)
+            .one_or_none()
+        )
+        if row is None:
+            raise ValueError(f"Trigger '{name}' not found in namespace '{namespace}'")
+        if source_kind is not None:
+            row.source_kind = str(source_kind).strip()
+        if source_name is not None:
+            row.source_name = str(source_name).strip()
+        if event_filter is not None:
+            row.event_filter_json = _json_clone(event_filter)
+        if target_workflow_name is not None:
+            row.target_workflow_name = str(target_workflow_name).strip()
+        if target_workflow_namespace is not None:
+            row.target_workflow_namespace = str(target_workflow_namespace).strip()
+        if payload_mapping is not None:
+            row.payload_mapping_json = _json_clone(payload_mapping) or {}
+        if retry_max_retries is not None:
+            row.retry_max_retries = max(0, int(retry_max_retries))
+        if retry_backoff_seconds is not None:
+            row.retry_backoff_seconds = max(1, int(retry_backoff_seconds))
+        if notifications_on_success is not None:
+            row.notifications_on_success = list(notifications_on_success)
+        if notifications_on_failure is not None:
+            row.notifications_on_failure = list(notifications_on_failure)
+        if enabled is not None:
+            row.enabled = bool(enabled)
+        row.updated_at = utc_now()
+        return row.to_dict()
+
+
+def delete_workflow_trigger(namespace: str, name: str) -> bool:
+    normalized_ns = str(namespace or "default").strip() or "default"
+    normalized_name = str(name or "").strip()
+    with db_session() as session:
+        row = (
+            session.query(WorkflowTriggerRow)
+            .filter(WorkflowTriggerRow.namespace == normalized_ns, WorkflowTriggerRow.name == normalized_name)
+            .one_or_none()
+        )
+        if row is None:
+            return False
+        session.delete(row)
+        return True
+
+
+def record_trigger_execution(
+    trigger_namespace: str,
+    trigger_name: str,
+    event_id: str,
+    workflow_name: str,
+    workflow_namespace: str,
+    payload_json: dict[str, Any] | None = None,
+    status: str = "pending",
+    error_message: str | None = None,
+    attempt_count: int = 0,
+) -> dict[str, Any]:
+    normalized_ns = str(trigger_namespace or "default").strip() or "default"
+    row = TriggerExecutionRow(
+        trigger_namespace=normalized_ns,
+        trigger_name=str(trigger_name or "").strip(),
+        event_id=str(event_id or "").strip(),
+        workflow_name=str(workflow_name or "").strip(),
+        workflow_namespace=str(workflow_namespace or "default").strip(),
+        payload_json=_json_clone(payload_json),
+        status=str(status or "pending").strip(),
+        error_message=error_message,
+        attempt_count=max(0, int(attempt_count or 0)),
+    )
+    with db_session() as session:
+        session.add(row)
+        session.flush()
+        return row.to_dict()
+
+
+def list_trigger_executions(
+    trigger_namespace: str,
+    trigger_name: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    normalized_ns = str(trigger_namespace or "default").strip() or "default"
+    with db_session() as session:
+        query = session.query(TriggerExecutionRow).filter(TriggerExecutionRow.trigger_namespace == normalized_ns)
+        if trigger_name:
+            query = query.filter(TriggerExecutionRow.trigger_name == str(trigger_name).strip())
+        rows = (
+            query.order_by(TriggerExecutionRow.created_at.desc())
+            .limit(max(1, int(limit)))
+            .offset(max(0, int(offset)))
+            .all()
+        )
+        return [row.to_dict() for row in rows]

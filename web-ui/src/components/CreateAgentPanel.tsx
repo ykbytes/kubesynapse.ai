@@ -2,6 +2,7 @@ import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Bot,
+  Check,
   GitBranch,
   Globe,
   LoaderCircle,
@@ -12,6 +13,7 @@ import {
   Search,
   Sparkles,
   Wand2,
+  X,
 } from "lucide-react";
 
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
@@ -37,31 +39,16 @@ import { fetchCatalogSkillDetail, fetchMcpConnections, fetchSkillsCatalog, refre
 import { A2A_ALLOWED_CALLERS_PLACEHOLDER } from "../lib/a2a";
 import { createOpenCodeConfigFileDraft } from "../lib/opencodeConfig";
 import {
-  formatMcpSidecarLabel,
   MCP_SERVERS_PLACEHOLDER,
   MCP_SIDECARS_PLACEHOLDER,
-  formatContainerImageDisplay,
   parseMcpServersText,
   parseMcpSidecarsText,
 } from "../lib/mcp";
 import { createSkillFileDraft } from "../lib/skills";
-import type { AgentInfo, CatalogSkill, CatalogSkillDetail, GitFormState, McpConnection, RuntimeKind, TextFileDraft, WorkflowInfo } from "../types";
+import type { AgentInfo, CatalogSkill, CatalogSkillDetail, GitFormState, McpConnection, McpTransport, RuntimeKind, TextFileDraft, WorkflowInfo } from "../types";
 import { A2ACallerPicker } from "./A2ACallerPicker";
 import { TextFileBundleEditor } from "./TextFileBundleEditor";
 import { SYSTEM_PROMPT_MAX_CHARS, systemPromptLengthError } from "../lib/agentPrompt";
-
-const MCP_SUPPORT_BADGE_STYLES = {
-  ready: "border-emerald-500/30 bg-emerald-500/10 text-emerald-300",
-  limited: "border-amber-500/30 bg-amber-500/10 text-amber-300",
-  planned: "border-slate-500/30 bg-slate-500/10 text-slate-300",
-} as const;
-
-const MCP_VALIDATION_BADGE_STYLES = {
-  draft: "border-slate-500/30 bg-slate-500/10 text-slate-300",
-  valid: "border-emerald-500/30 bg-emerald-500/10 text-emerald-300",
-  warning: "border-amber-500/30 bg-amber-500/10 text-amber-300",
-  invalid: "border-destructive/30 bg-destructive/10 text-destructive",
-} as const;
 
 type ConnectionFilterValue = "all" | "selected" | "remote" | "hub" | "sidecar";
 
@@ -141,25 +128,6 @@ function hasSkillAttached(detail: CatalogSkillDetail | undefined, draftPaths: Se
     return false;
   }
   return Object.keys(detail.assets).every((path) => draftPaths.has(normalizeDraftPath(path)));
-}
-
-function formatConnectionRuntimeSummary(connection: McpConnection): string {
-  if (connection.transport === "sidecar") {
-    const preview = connection.runtime_preview?.sidecar;
-    const rawPort = preview?.port ?? connection.config.sidecar_port;
-    const port = typeof rawPort === "number" ? rawPort : Number(rawPort ?? NaN);
-    const image = typeof preview?.image === "string" && preview.image.trim() ? preview.image : "";
-    const label = image ? formatContainerImageDisplay(image) : "Pod sidecar";
-    return Number.isFinite(port) ? `${label} on port ${port}` : label;
-  }
-  if (connection.transport === "remote") {
-    const previewUrl = typeof connection.runtime_preview?.url === "string" ? connection.runtime_preview.url.trim() : "";
-    if (previewUrl) {
-      return previewUrl.replace(/^https?:\/\//, "");
-    }
-    return connection.status_reason?.trim() || "Remote MCP endpoint";
-  }
-  return connection.status_reason?.trim() || "Shared namespace hub route";
 }
 
 export function CreateAgentPanel({
@@ -308,13 +276,16 @@ export function CreateAgentPanel({
     () => mcpConnections.filter((connection) => mcpConnectionIds.includes(connection.id)),
     [mcpConnections, mcpConnectionIds],
   );
-  const selectedConnectionStats = useMemo(
-    () => ({
-      remote: selectedConnections.filter((connection) => connection.transport === "remote").length,
-      hub: selectedConnections.filter((connection) => connection.transport === "hub").length,
-      sidecar: selectedConnections.filter((connection) => connection.transport === "sidecar").length,
-    }),
-    [selectedConnections],
+  const quickSidecars = useMemo(
+    () =>
+      mcpConnections.filter(
+        (c) =>
+          c.transport === "sidecar" &&
+          c.attachable &&
+          c.support_level === "ready" &&
+          c.validation.status === "valid",
+      ),
+    [mcpConnections],
   );
   const legacySharedServers = useMemo(() => parseMcpServersText(mcpServersText), [mcpServersText]);
   const legacyOverrideCount = legacySharedServers.length + sidecarState.items.length;
@@ -482,7 +453,7 @@ export function CreateAgentPanel({
           </TabsList>
 
           <TabsContent value="basics" className="animate-fade-in space-y-5">
-            <div className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
+            <div className="grid gap-4">
               <div className="grid gap-4 sm:grid-cols-2">
                 <Card className="shadow-none">
                   <CardHeader className="pb-3">
@@ -540,23 +511,6 @@ export function CreateAgentPanel({
                   </CardContent>
                 </Card>
               </div>
-
-              <Card className="shadow-none">
-                <CardHeader className="pb-3">
-                  <CardTitle className="text-sm">Launch checklist</CardTitle>
-                  <CardDescription>Keep creation fast: name the agent, choose a model, then add only the skills and tools it truly needs.</CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-3 text-sm text-muted-foreground">
-                  <div className="rounded-2xl border border-border/60 bg-background/60 p-3">
-                    <p className="font-medium text-foreground">Recommended path</p>
-                    <p className="mt-1 leading-6">Use curated skills for behavior, saved MCP connections for execution, and keep raw editors only as a fallback path for legacy configurations.</p>
-                  </div>
-                  <div className="rounded-2xl border border-border/60 bg-background/60 p-3">
-                    <p className="font-medium text-foreground">Creation stays reversible</p>
-                    <p className="mt-1 leading-6">You can still attach custom skill files, select saved namespace-scoped MCP connections, and fall back to raw overrides if you are migrating older agents.</p>
-                  </div>
-                </CardContent>
-              </Card>
             </div>
           </TabsContent>
 
@@ -615,279 +569,214 @@ export function CreateAgentPanel({
 
           <TabsContent value="tools" className="animate-fade-in space-y-4">
             <>
-              <div className="grid gap-4 xl:grid-cols-[1.05fr_0.95fr]">
-                <Card className="shadow-none">
-                  <CardHeader className="pb-3">
-                    <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div className="flex items-center gap-2">
-                        <div className="flex h-8 w-8 items-center justify-center rounded-xl border border-primary/20 bg-primary/10 text-primary">
-                          <Sparkles className="h-4 w-4" />
-                        </div>
-                        <div>
-                          <CardTitle className="text-sm">Saved MCP connections</CardTitle>
-                          <CardDescription>Bind namespace-scoped saved connections here. Registry browsing, endpoint autofill, and published tool lists now live in the MCP page.</CardDescription>
-                        </div>
-                      </div>
-                      <Button variant="outline" size="sm" onClick={handleOpenMcpManagement}>
-                        Open MCP page
-                      </Button>
-                    </div>
-                  </CardHeader>
-                  <CardContent className="space-y-3">
-                    {catalogError ? (
-                      <div className="rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-                        {catalogError}
-                      </div>
-                    ) : null}
-                    {sidecarState.error ? (
-                      <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
-                        The raw sidecar JSON is invalid. Fix it in Legacy raw overrides before mixing it with saved connections.
-                      </div>
-                    ) : null}
+              {/* Quick-Capabilities Section */}
+              {quickSidecars.length > 0 && (
+                <div className="space-y-2">
+                  <p className="text-xs font-medium text-muted-foreground">Quick sidecars</p>
+                  <div className="flex flex-wrap gap-2">
+                    {quickSidecars.map((connection) => {
+                      const selected = mcpConnectionIds.includes(connection.id);
+                      return (
+                        <button
+                          key={connection.id}
+                          type="button"
+                          onClick={() => handleToggleSavedConnection(connection.id)}
+                          className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs transition ${
+                            selected
+                              ? "border-primary bg-primary text-primary-foreground"
+                              : "border-border/60 bg-background/60 text-muted-foreground hover:border-primary/30 hover:text-foreground"
+                          }`}
+                          aria-pressed={selected}
+                        >
+                          <McpServerBadgeIcon
+                            serverId={connection.server_id}
+                            serverName={connection.server_name ?? connection.server_id}
+                            transport={connection.transport}
+                            size="xs"
+                          />
+                          <span>{connection.name}</span>
+                          {selected && <Check className="h-3 w-3" />}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
 
-                    <div className="rounded-xl border border-border/60 bg-background/60 p-3 text-[11px] leading-5 text-muted-foreground">
-                      MCP connections are the standard attachment path for new agents. Sidecar transports deploy per-agent containers automatically, while remote and hub transports keep endpoint and auth settings reusable at the namespace level.
-                    </div>
+              {/* Attached Tools Bar */}
+              <div className="space-y-2">
+                <p className="text-xs font-medium text-muted-foreground">Attached</p>
+                {selectedConnections.length > 0 ? (
+                  <div className="flex flex-wrap gap-2">
+                    {selectedConnections.map((connection) => (
+                      <button
+                        key={connection.id}
+                        type="button"
+                        onClick={() => handleToggleSavedConnection(connection.id)}
+                        className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] transition hover:opacity-80 ${
+                          connection.transport === "remote"
+                            ? "border-sky-500/30 bg-sky-500/10 text-sky-300"
+                            : connection.transport === "hub"
+                              ? "border-violet-500/30 bg-violet-500/10 text-violet-300"
+                              : "border-amber-500/30 bg-amber-500/10 text-amber-300"
+                        }`}
+                        aria-label={`Remove ${connection.name}`}
+                      >
+                        <span>{connection.name}</span>
+                        <X className="h-3 w-3" />
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground">No tools attached</p>
+                )}
+              </div>
 
-                    <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-                      <div className="relative flex-1">
-                        <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                        <Input
-                          value={connectionSearch}
-                          onChange={(event) => setConnectionSearch(event.target.value)}
-                          placeholder="Search connections, servers, or transports"
-                          className="pl-9"
-                        />
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <Select value={connectionFilter} onValueChange={(value) => setConnectionFilter(value as ConnectionFilterValue)}>
-                          <SelectTrigger className="w-[190px]">
-                            <SelectValue placeholder="Filter connections" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="all">All connections</SelectItem>
-                            <SelectItem value="selected">Selected only</SelectItem>
-                            <SelectItem value="remote">Remote only</SelectItem>
-                            <SelectItem value="hub">Hub only</SelectItem>
-                            <SelectItem value="sidecar">Sidecar only</SelectItem>
-                          </SelectContent>
-                        </Select>
-                        <Badge variant="secondary">{filteredConnections.length} shown</Badge>
-                      </div>
-                    </div>
+              {/* Simplified Connection List */}
+              <div className="space-y-3 rounded-2xl border border-border/70 bg-card/55 p-4">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                  <div className="relative flex-1">
+                    <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                      value={connectionSearch}
+                      onChange={(event) => setConnectionSearch(event.target.value)}
+                      placeholder="Search connections..."
+                      className="pl-9"
+                    />
+                  </div>
+                  <div className="inline-flex rounded-lg border border-border/60 bg-background/60 p-0.5">
+                    {(["all", "selected", "remote", "hub", "sidecar"] as ConnectionFilterValue[]).map((f) => (
+                      <button
+                        key={f}
+                        type="button"
+                        onClick={() => setConnectionFilter(f)}
+                        className={`px-2.5 py-1 text-xs rounded-md transition ${
+                          connectionFilter === f ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
+                        }`}
+                      >
+                        {f === "all" ? "All" : f === "selected" ? "Selected" : f.charAt(0).toUpperCase() + f.slice(1)}
+                      </button>
+                    ))}
+                  </div>
+                </div>
 
-                    {catalogLoading ? (
-                      <div className="flex items-center justify-center rounded-xl border border-dashed border-border/70 bg-background/40 px-4 py-6 text-sm text-muted-foreground">
-                        <LoaderCircle className="mr-2 h-4 w-4 animate-spin" /> Loading saved MCP connections...
-                      </div>
-                    ) : mcpConnections.length > 0 ? (
-                      filteredConnections.length > 0 ? (
-                        <ScrollArea className="max-h-[560px] pr-3">
-                          <div className="grid gap-3 md:grid-cols-2">
-                            {filteredConnections.map((connection) => {
-                              const selected = mcpConnectionIds.includes(connection.id);
-                              const blocked = !connection.attachable;
-                              return (
-                                <button
-                                  key={connection.id}
-                                  type="button"
-                                  onClick={() => handleToggleSavedConnection(connection.id)}
-                                  disabled={blocked}
-                                  className={`rounded-2xl border p-4 text-left transition ${
-                                    selected
-                                      ? "border-primary/30 bg-primary/10 shadow-inner shadow-primary/10"
-                                      : blocked
-                                        ? "cursor-not-allowed border-border/60 bg-background/40 opacity-70"
-                                        : "border-border/60 bg-background/60 hover:border-primary/20 hover:bg-accent/40"
-                                  }`}
-                                >
-                                  <div className="flex items-start gap-3">
+                {catalogError ? (
+                  <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                    {catalogError}
+                  </div>
+                ) : null}
+                {sidecarState.error ? (
+                  <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+                    The raw sidecar JSON is invalid. Fix it in Legacy raw overrides before mixing it with saved connections.
+                  </div>
+                ) : null}
+
+                {catalogLoading ? (
+                  <div className="flex items-center justify-center rounded-lg border border-dashed border-border/70 bg-background/40 px-4 py-6 text-sm text-muted-foreground">
+                    <LoaderCircle className="mr-2 h-4 w-4 animate-spin" /> Loading saved MCP connections...
+                  </div>
+                ) : mcpConnections.length > 0 ? (
+                  filteredConnections.length > 0 ? (
+                    <ScrollArea className="max-h-[320px] pr-2">
+                      <div className="space-y-1">
+                        {(["sidecar", "remote", "hub"] as McpTransport[]).map((transportGroup) => {
+                          const group = filteredConnections.filter((c) => c.transport === transportGroup);
+                          if (group.length === 0) return null;
+                          return (
+                            <div key={transportGroup}>
+                              <div className="sticky top-0 z-10 bg-card/95 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground backdrop-blur-sm">
+                                {transportGroup}
+                              </div>
+                              {group.map((connection) => {
+                                const selected = mcpConnectionIds.includes(connection.id);
+                                const blocked = !connection.attachable;
+                                return (
+                                  <button
+                                    key={connection.id}
+                                    type="button"
+                                    onClick={() => !blocked && handleToggleSavedConnection(connection.id)}
+                                    disabled={blocked}
+                                    className={`flex w-full items-center gap-3 rounded-md border px-3 py-2 text-left transition ${
+                                      selected
+                                        ? "border-primary/25 bg-primary/[0.06]"
+                                        : blocked
+                                          ? "cursor-not-allowed border-border/40 bg-background/30 opacity-60"
+                                          : "border-border/50 bg-background/60 hover:border-primary/15 hover:bg-accent/30"
+                                    }`}
+                                    aria-pressed={selected}
+                                  >
+                                    <div className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-sm border ${selected ? "border-primary bg-primary text-primary-foreground" : "border-muted-foreground/40"}`}>
+                                      {selected && <Check className="h-3 w-3" />}
+                                    </div>
                                     <McpServerBadgeIcon
                                       serverId={connection.server_id}
                                       serverName={connection.server_name ?? connection.server_id}
                                       transport={connection.transport}
-                                      size="md"
+                                      size="sm"
                                     />
-                                    <div className="min-w-0 flex-1 space-y-2">
-                                      <div className="flex flex-wrap items-center gap-2">
-                                        <p className="font-medium text-foreground">{connection.name}</p>
-                                        {selected ? (
-                                          <Badge variant="secondary" className="text-[10px]">
-                                            Selected
-                                          </Badge>
-                                        ) : null}
-                                        {blocked ? (
+                                    <div className="min-w-0 flex-1">
+                                      <div className="flex items-center gap-2">
+                                        <span className="text-sm font-medium text-foreground">{connection.name}</span>
+                                        {blocked && (
                                           <Badge variant="outline" className="border-amber-500/30 bg-amber-500/10 text-[10px] text-amber-300">
                                             Needs setup
                                           </Badge>
-                                        ) : null}
+                                        )}
                                       </div>
-                                      <p className="text-sm text-muted-foreground">{connection.server_name ?? connection.server_id}</p>
-                                      <p className="text-xs leading-5 text-muted-foreground">{formatConnectionRuntimeSummary(connection)}</p>
-                                      {connection.status_reason && !blocked ? (
-                                        <p className="text-[11px] leading-5 text-muted-foreground">{connection.status_reason}</p>
-                                      ) : null}
+                                      <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                                        <span>{connection.server_name ?? connection.server_id}</span>
+                                      </div>
                                     </div>
-                                  </div>
-                                  <div className="mt-4 flex flex-wrap items-center gap-2">
-                                    <Badge variant="outline" className={`text-[10px] ${MCP_SUPPORT_BADGE_STYLES[connection.support_level]}`}>
-                                      {connection.support_level}
-                                    </Badge>
-                                    <Badge variant="outline" className={`text-[10px] ${MCP_VALIDATION_BADGE_STYLES[connection.validation.status]}`}>
-                                      {connection.validation.status}
-                                    </Badge>
-                                    <Badge variant="outline" className="text-[10px] capitalize">
-                                      {connection.transport}
-                                    </Badge>
-                                    <Badge variant="secondary" className="text-[10px]">
-                                      {connection.binding_count} binding{connection.binding_count === 1 ? "" : "s"}
-                                    </Badge>
-                                  </div>
-                                </button>
-                              );
-                            })}
-                          </div>
-                        </ScrollArea>
-                      ) : (
-                        <div className="rounded-xl border border-dashed border-border/70 bg-background/40 px-4 py-6 text-sm text-muted-foreground">
-                          No saved MCP connections match the current search or transport filter.
-                        </div>
-                      )
-                    ) : (
-                      <div className="rounded-xl border border-dashed border-border/70 bg-background/40 px-4 py-6 text-sm text-muted-foreground">
-                        <p>No saved MCP connections exist in this namespace yet.</p>
-                        <p className="mt-1 text-xs leading-5">Create them in the MCP page first, then return here to bind them to the agent.</p>
-                        <Button variant="outline" size="sm" className="mt-3" onClick={handleOpenMcpManagement}>
-                          Create saved connection
-                        </Button>
-                      </div>
-                    )}
-                  </CardContent>
-                </Card>
-
-                <Card className="shadow-none">
-                  <CardHeader className="pb-3">
-                    <div className="flex items-center gap-2">
-                      <div className="flex h-8 w-8 items-center justify-center rounded-xl border border-emerald-500/20 bg-emerald-500/10 text-emerald-300">
-                        <Globe className="h-4 w-4" />
-                      </div>
-                      <div>
-                        <CardTitle className="text-sm">Connection summary</CardTitle>
-                        <CardDescription>Only the saved connections selected here are attached to the agent runtime.</CardDescription>
-                      </div>
-                    </div>
-                  </CardHeader>
-                  <CardContent className="space-y-4">
-                    <div className="grid grid-cols-3 gap-3">
-                      <div className="rounded-2xl border border-sky-500/20 bg-sky-500/5 p-3">
-                        <p className="text-[10px] uppercase tracking-[0.16em] text-sky-400/70">Remote</p>
-                        <p className="mt-1 text-xl font-semibold text-foreground">{selectedConnectionStats.remote}</p>
-                      </div>
-                      <div className="rounded-2xl border border-violet-500/20 bg-violet-500/5 p-3">
-                        <p className="text-[10px] uppercase tracking-[0.16em] text-violet-400/70">Hub</p>
-                        <p className="mt-1 text-xl font-semibold text-foreground">{selectedConnectionStats.hub}</p>
-                      </div>
-                      <div className="rounded-2xl border border-amber-500/20 bg-amber-500/5 p-3">
-                        <p className="text-[10px] uppercase tracking-[0.16em] text-amber-400/70">Sidecars</p>
-                        <p className="mt-1 text-xl font-semibold text-foreground">{selectedConnectionStats.sidecar}</p>
-                      </div>
-                    </div>
-
-                    <div className="space-y-2">
-                      <p className="text-xs font-medium text-foreground">Selected connections</p>
-                      {selectedConnections.length > 0 ? (
-                        <div className="flex flex-wrap gap-2">
-                          {selectedConnections.map((connection) => (
-                            <Badge
-                              key={connection.id}
-                              variant="outline"
-                              className={`rounded-full px-3 py-1 ${
-                                connection.transport === "remote"
-                                  ? "border-sky-500/30 bg-sky-500/10 text-sky-300"
-                                  : connection.transport === "hub"
-                                    ? "border-violet-500/30 bg-violet-500/10 text-violet-300"
-                                    : "border-amber-500/30 bg-amber-500/10 text-amber-300"
-                              }`}
-                            >
-                              <span className="inline-flex items-center gap-1.5">
-                                <McpServerBadgeIcon
-                                  serverId={connection.server_id}
-                                  serverName={connection.server_name ?? connection.server_id}
-                                  transport={connection.transport}
-                                  size="xs"
-                                />
-                                <span>{connection.name}</span>
-                              </span>
-                            </Badge>
-                          ))}
-                        </div>
-                      ) : (
-                        <p className="text-sm text-muted-foreground">No saved connections selected yet.</p>
-                      )}
-                    </div>
-
-                    <div className="rounded-xl border border-border/60 bg-background/60 p-3 text-xs leading-5 text-muted-foreground">
-                      Use the MCP page to browse registry entries, review published tools, and create or validate saved connections. This screen only decides which reusable MCP bindings travel with the agent.
-                    </div>
-
-                    <div className="space-y-2">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <p className="text-xs font-medium text-foreground">Legacy raw overrides</p>
-                        {hasLegacyOverrides ? (
-                          <Badge variant="outline" className="border-amber-500/30 bg-amber-500/10 text-[10px] text-amber-300">
-                            legacy path
-                          </Badge>
-                        ) : null}
-                      </div>
-                      {hasLegacyOverrides ? (
-                        <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-3 text-xs text-muted-foreground">
-                          {legacySharedServers.length > 0 ? (
-                            <div className="space-y-2">
-                              <p className="font-medium text-foreground">Legacy shared MCP endpoints</p>
-                              <div className="flex flex-wrap gap-2">
-                                {legacySharedServers.map((serverName) => (
-                                  <Badge key={serverName} variant="outline" className="rounded-full px-3 py-1 text-[10px] border-amber-500/30 bg-amber-500/10 text-amber-300">
-                                    {serverName}
-                                  </Badge>
-                                ))}
-                              </div>
+                                    <div className="flex items-center gap-2 shrink-0">
+                                      <Badge variant="outline" className={`text-[10px] ${
+                                        connection.transport === "remote"
+                                          ? "border-sky-500/30 bg-sky-500/10 text-sky-300"
+                                          : connection.transport === "hub"
+                                            ? "border-violet-500/30 bg-violet-500/10 text-violet-300"
+                                            : "border-amber-500/30 bg-amber-500/10 text-amber-300"
+                                      }`}>
+                                        {connection.transport}
+                                      </Badge>
+                                      <span
+                                        className={`h-2 w-2 rounded-full ${
+                                          connection.support_level === "ready"
+                                            ? "bg-emerald-500"
+                                            : connection.support_level === "limited"
+                                              ? "bg-amber-500"
+                                              : "bg-slate-400"
+                                        }`}
+                                        aria-label={`Status: ${connection.support_level}`}
+                                      />
+                                    </div>
+                                  </button>
+                                );
+                              })}
                             </div>
-                          ) : null}
-                          {sidecarState.items.length > 0 ? (
-                            <div className={`space-y-2 ${legacySharedServers.length > 0 ? "mt-3" : ""}`}>
-                              <p className="font-medium text-foreground">Legacy raw sidecars</p>
-                              <div className="flex flex-wrap gap-2">
-                                {sidecarState.items.map((sidecar, index) => {
-                                  const label = formatMcpSidecarLabel(sidecar, index);
-                                  return (
-                                    <Badge key={`${label}-${index}`} variant="outline" className="rounded-full px-3 py-1 text-[10px] border-amber-500/30 bg-amber-500/10 text-amber-300">
-                                      {label}
-                                    </Badge>
-                                  );
-                                })}
-                              </div>
-                            </div>
-                          ) : null}
-                          <p className="mt-3 text-[11px] leading-5 text-muted-foreground">
-                            Raw overrides bypass the saved-connection validation flow and should be kept only for migrations or one-off custom MCP endpoints.
-                          </p>
-                        </div>
-                      ) : (
-                        <p className="text-sm text-muted-foreground">No legacy raw overrides are active.</p>
-                      )}
+                          );
+                        })}
+                      </div>
+                    </ScrollArea>
+                  ) : (
+                    <div className="rounded-lg border border-dashed border-border/70 bg-background/40 px-4 py-6 text-sm text-muted-foreground">
+                      No saved MCP connections match the current search or transport filter.
                     </div>
+                  )
+                ) : (
+                  <div className="rounded-lg border border-dashed border-border/70 bg-background/40 px-4 py-6 text-sm text-muted-foreground">
+                    <p>No saved MCP connections exist in this namespace yet.</p>
+                    <p className="mt-1 text-xs leading-5">Create them in the MCP page first, then return here to bind them to the agent.</p>
+                    <Button variant="outline" size="sm" className="mt-3" onClick={handleOpenMcpManagement}>
+                      Create saved connection
+                    </Button>
+                  </div>
+                )}
 
-                    <Separator />
-                    <div className="rounded-xl border border-border/60 bg-background/60 p-3 text-xs text-muted-foreground">
-                      <p className="mb-1 font-medium text-foreground">Transport costs</p>
-                      <ul className="space-y-0.5 text-[11px]">
-                        <li><span className="text-sky-400">Remote</span> — external MCP endpoint captured per namespace connection</li>
-                        <li><span className="text-violet-400">Hub</span> — shared pod in mcp-hub namespace with saved namespace bindings</li>
-                        <li><span className="text-amber-400">Sidecar</span> — container per agent pod, with saved sidecar config preserved end to end</li>
-                      </ul>
-                    </div>
-                  </CardContent>
-                </Card>
+                {mcpConnections.length > 0 && (
+                  <Button variant="ghost" size="sm" className="text-xs text-muted-foreground" onClick={handleOpenMcpManagement}>
+                    <PlusCircle className="mr-1.5 h-3.5 w-3.5" />
+                    Add connection
+                  </Button>
+                )}
               </div>
 
               {legacyOverridesConflict ? (
@@ -902,7 +791,7 @@ export function CreateAgentPanel({
 
               <Accordion type="single" collapsible className="rounded-2xl border border-border/70 bg-background/50 px-4">
                 <AccordionItem value="advanced-routing" className="border-none">
-                  <AccordionTrigger className="py-4 text-sm font-medium">Legacy raw overrides</AccordionTrigger>
+                  <AccordionTrigger className="py-3 text-xs font-medium text-muted-foreground hover:text-foreground">Legacy raw overrides</AccordionTrigger>
                   <AccordionContent className="space-y-4">
                     <div className="rounded-xl border border-border/60 bg-background/60 px-3 py-3 text-[11px] leading-5 text-muted-foreground">
                       Use this only when you are migrating older agents or attaching an MCP endpoint that is not modeled yet as a saved connection. The saved-connection binding above is the preferred path.

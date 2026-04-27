@@ -316,6 +316,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     settings: 0,
     admin: 0,
     observatory: 0,
+    docs: 0,
+    webhooks: 0,
   }), [agents.length, workflows.length, evals.length, policies.length]);
 
   const sidebarItems = useMemo<SidebarResourceItem[]>(() =>
@@ -338,7 +340,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     [activeView, agents, workflows, evals, policies, agentDetailCache],
   );
 
-  const sidebarSelectedId = activeView === "agents" || activeView === "chat" ? selectedAgentName : (activeView === "workflows" || activeView === "composer") ? selectedWorkflowName : activeView === "policies" ? selectedPolicyName : selectedEvalName;
+  const sidebarSelectedId = activeView === "agents" || activeView === "chat" ? selectedAgentName : (activeView === "workflows" || activeView === "composer") ? selectedWorkflowName : activeView === "policies" ? selectedPolicyName : activeView === "evals" ? selectedEvalName : "";
 
   const emptySidebarMessage = useMemo(() => !token.trim()
     ? "Authenticate with a gateway token and load the namespace catalog."
@@ -358,7 +360,11 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
               ? "Manage users, roles, and namespace access."
               : activeView === "policies"
                 ? `No policies are defined in namespace '${namespace}'. Create one to enforce guardrails.`
-                : `No evaluations are defined in namespace '${namespace}'. Create one to validate agent quality.`,
+                : activeView === "docs"
+                  ? "Browse the documentation in the main panel."
+                  : activeView === "webhooks"
+                    ? "Manage webhook receivers and event-driven triggers in the main panel."
+                    : `No evaluations are defined in namespace '${namespace}'. Create one to validate agent quality.`,
     [token, activeView, namespace],
   );
 

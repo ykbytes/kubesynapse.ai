@@ -66,28 +66,39 @@ from auth_store import (
     IntelligenceTaskRow,
     apply_memory_feedback,
     change_user_password,
+    count_recent_webhook_invocations,
     count_users,
     create_chat_session,
     create_local_user,
     create_mcp_connection,
     create_session_for_user,
+    create_webhook_receiver,
+    create_workflow_trigger,
     db_session,
     delete_chat_session,
     delete_mcp_connection,
     delete_memory_record,
+    delete_webhook_receiver,
+    delete_workflow_trigger,
     ensure_bootstrap_admin,
     get_active_user_context,
     get_chat_session_messages,
     get_mcp_connection,
     get_mcp_connection_rows_by_ids,
     get_user_by_username,
+    get_webhook_receiver,
+    get_workflow_trigger,
     init_database,
     is_user_locked,
     list_chat_sessions,
     list_mcp_connections,
     list_memory_records,
     list_promoted_memory_records,
+    list_trigger_executions,
+    list_webhook_invocations,
+    list_webhook_receivers,
     list_workflow_runs,
+    list_workflow_triggers,
     login_rate_limit_key,
     login_rate_limited,
     note_login_attempt,
@@ -99,7 +110,9 @@ from auth_store import (
     record_eval_outcome_memory,
     record_failed_login,
     record_runtime_memory,
+    record_trigger_execution,
     record_usage,
+    record_webhook_invocation,
     record_workflow_outcome_memory,
     record_workflow_run,
     record_workflow_run_log_archive,
@@ -113,6 +126,9 @@ from auth_store import (
     update_mcp_connection,
     update_memory_record,
     update_user_fields,
+    update_webhook_invocation_matched_triggers,
+    update_webhook_receiver,
+    update_workflow_trigger,
     upsert_external_user,
     validate_email,
     verify_password,
@@ -1041,6 +1057,109 @@ class UpdateUserRequest(BaseModel):
     allowed_namespaces: list[str] | None = None
 
 
+class WebhookReceiverRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=63, pattern=K8S_NAME_PATTERN)
+    secret_ref: str = Field(min_length=1, max_length=253)
+    ip_allowlist: list[str] = Field(default_factory=list)
+    rate_limit: int = Field(default=60, ge=1, le=10000)
+    max_payload_bytes: int = Field(default=1048576, ge=1024, le=16777216)
+    enabled: bool = True
+
+
+class WebhookReceiverUpdateRequest(BaseModel):
+    secret_ref: str = Field(default="", min_length=1, max_length=253)
+    ip_allowlist: list[str] = Field(default_factory=list)
+    rate_limit: int = Field(default=60, ge=1, le=10000)
+    max_payload_bytes: int = Field(default=1048576, ge=1024, le=16777216)
+    enabled: bool = True
+
+
+class WebhookReceiverInfo(BaseModel):
+    name: str
+    namespace: str
+    secret_ref: str
+    ip_allowlist: list[str] = Field(default_factory=list)
+    rate_limit: int = 60
+    max_payload_bytes: int = 1048576
+    enabled: bool = True
+    created_at: str | None = None
+
+
+class WorkflowTriggerRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=63, pattern=K8S_NAME_PATTERN)
+    source_kind: str = Field(default="WebhookReceiver", pattern=r"^(WebhookReceiver|AgentEvent)$")
+    source_name: str = Field(min_length=1, max_length=63)
+    event_filter: dict[str, Any] | None = Field(default=None)
+    target_workflow_name: str = Field(min_length=1, max_length=63)
+    target_workflow_namespace: str = Field(default="default", min_length=1, max_length=63)
+    payload_mapping: dict[str, str] = Field(default_factory=dict)
+    retry_max_retries: int = Field(default=3, ge=0, le=10)
+    retry_backoff_seconds: int = Field(default=60, ge=1, le=3600)
+    notifications_on_success: list[str] = Field(default_factory=list)
+    notifications_on_failure: list[str] = Field(default_factory=list)
+    enabled: bool = True
+
+
+class WorkflowTriggerUpdateRequest(BaseModel):
+    source_kind: str = Field(default="WebhookReceiver", pattern=r"^(WebhookReceiver|AgentEvent)$")
+    source_name: str = Field(default="", min_length=1, max_length=63)
+    event_filter: dict[str, Any] | None = Field(default=None)
+    target_workflow_name: str = Field(default="", min_length=1, max_length=63)
+    target_workflow_namespace: str = Field(default="default", min_length=1, max_length=63)
+    payload_mapping: dict[str, str] = Field(default_factory=dict)
+    retry_max_retries: int = Field(default=3, ge=0, le=10)
+    retry_backoff_seconds: int = Field(default=60, ge=1, le=3600)
+    notifications_on_success: list[str] = Field(default_factory=list)
+    notifications_on_failure: list[str] = Field(default_factory=list)
+    enabled: bool = True
+
+
+class WorkflowTriggerInfo(BaseModel):
+    name: str
+    namespace: str
+    source_kind: str = "WebhookReceiver"
+    source_name: str
+    event_filter: dict[str, Any] | None = None
+    target_workflow_name: str
+    target_workflow_namespace: str = "default"
+    payload_mapping: dict[str, str] = Field(default_factory=dict)
+    retry_max_retries: int = 3
+    retry_backoff_seconds: int = 60
+    notifications_on_success: list[str] = Field(default_factory=list)
+    notifications_on_failure: list[str] = Field(default_factory=list)
+    enabled: bool = True
+    created_at: str | None = None
+
+
+class WebhookInvocationInfo(BaseModel):
+    id: int
+    namespace: str
+    webhook_name: str
+    event_id: str
+    source_ip: str | None = None
+    signature_valid: bool
+    payload_size: int
+    payload_snippet: str | None = None
+    matched_triggers: list[str] = Field(default_factory=list)
+    error_message: str | None = None
+    created_at: str | None = None
+
+
+class TriggerExecutionInfo(BaseModel):
+    id: int
+    trigger_namespace: str
+    trigger_name: str
+    event_id: str
+    workflow_name: str
+    workflow_namespace: str
+    payload_json: dict[str, Any] | None = None
+    status: str
+    error_message: str | None = None
+    attempt_count: int
+    created_at: str | None = None
+    completed_at: str | None = None
+
+
 RESOURCE_GROUP = "kubesynth.ai"
 RESOURCE_VERSION = "v1alpha1"
 RESOURCE_KIND_BY_PLURAL = {
@@ -1052,6 +1171,8 @@ RESOURCE_KIND_BY_PLURAL = {
     "observationpolicies": "ObservationPolicy",
     "observationreports": "ObservationReport",
     "connectorplugins": "ConnectorPlugin",
+    "webhookreceivers": "WebhookReceiver",
+    "workflowtriggers": "WorkflowTrigger",
 }
 
 

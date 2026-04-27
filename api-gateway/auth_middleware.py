@@ -9,6 +9,7 @@ in the route layer.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import hmac
 import logging
 import os
@@ -613,3 +614,26 @@ async def verify_token_or_query(
         return await authenticate_bearer_token(tok)
 
     raise HTTPException(status_code=401, detail="Missing token")
+
+
+def verify_webhook_signature(payload: bytes, signature: str, secret: str) -> bool:
+    """Verify HMAC-SHA256 signature of a webhook payload.
+
+    Args:
+        payload: Raw request body bytes.
+        signature: Hex-digest string from the ``X-KubeSynth-Signature`` header.
+        secret: Shared secret stored in a Kubernetes Secret.
+
+    Returns:
+        ``True`` if the signature is valid, else ``False``.
+
+    Security notes:
+        - Uses ``hmac.compare_digest`` to prevent timing attacks.
+        - Secrets should be rotated every 90 days.
+        - Use unique secrets per webhook receiver.
+        - Prefer Kubernetes Secrets (via secret_ref) over env vars or plaintext.
+    """
+    if not secret or not signature:
+        return False
+    expected = hmac.new(secret.encode("utf-8"), payload, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, signature)

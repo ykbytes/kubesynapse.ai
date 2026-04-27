@@ -1,4 +1,4 @@
-import { Activity, Bot, GitBranch, FlaskConical, Inbox, MessageSquare, Package, Play, Plug, Plus, Radar, RefreshCw, PanelLeftClose, PanelLeft, Search, Blocks, Settings, ShieldCheck, ShieldAlert, Trash2 } from "lucide-react";
+import { Activity, BookOpen, Bot, GitBranch, FlaskConical, Inbox, MessageSquare, Package, Play, Plug, Plus, Radar, RefreshCw, PanelLeftClose, PanelLeft, Search, Blocks, Settings, ShieldCheck, ShieldAlert, Trash2, Webhook } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AgentVisualSignals } from "@/lib/agentSignals";
 import { cn } from "@/lib/utils";
@@ -52,6 +52,8 @@ const VIEW_META: Record<WorkspaceView, { label: string; icon: typeof Bot }> = {
   settings: { label: "Settings", icon: Settings },
   admin: { label: "Admin", icon: ShieldCheck },
   observatory: { label: "Observatory", icon: Activity },
+  docs: { label: "Documentation", icon: BookOpen },
+  webhooks: { label: "Webhooks", icon: Webhook },
 };
 
 function statusDotClasses(status: string): string {
@@ -218,7 +220,7 @@ export function AppSidebar({
                 key={view}
                 onClick={() => onViewChange(view)}
                 className={cn(
-                  "flex w-full items-center gap-2 rounded-lg border px-2.5 py-1 text-xs font-medium transition-all duration-150 ease-productive",
+                  "flex w-full items-center gap-2 rounded-lg border px-2 py-1 text-xs font-medium transition-all duration-150 ease-productive",
                   isActive
                     ? "border-sidebar-border bg-sidebar-primary/15 text-sidebar-foreground shadow-sm"
                     : "border-transparent text-muted-foreground hover:bg-sidebar-accent/70 hover:text-sidebar-accent-foreground",
@@ -273,13 +275,13 @@ export function AppSidebar({
 
       {/* Resource list */}
       <ScrollArea className="flex-1">
-        <div className="space-y-1.5 p-2.5" role="listbox" aria-label={`${VIEW_META[activeView].label} list`}>
+        <div className="space-y-1 p-2" role="listbox" aria-label={`${VIEW_META[activeView].label} list`}>
           {loading && filteredItems.length === 0 && (
             <>
               {[0, 1, 2, 3].map((i) => (
-                <div key={i} className="flex items-start gap-2.5 rounded-xl border border-transparent px-3 py-2.5">
-                  <Skeleton className="mt-1.5 h-2 w-2 shrink-0 rounded-full" />
-                  <div className="min-w-0 flex-1 space-y-1.5">
+                <div key={i} className="flex items-start gap-2 rounded-xl border border-transparent px-2.5 py-2">
+                  <Skeleton className="mt-1 h-2 w-2 shrink-0 rounded-full" />
+                  <div className="min-w-0 flex-1 space-y-1">
                     <Skeleton className="h-3.5 w-3/4 rounded" />
                     <Skeleton className="h-3 w-1/2 rounded" />
                   </div>
@@ -353,7 +355,7 @@ const SidebarItem = memo(function SidebarItem({
       tabIndex={0}
       style={{ animationDelay: `${index * 30}ms` }}
       className={cn(
-        "group flex w-full cursor-pointer flex-col rounded-[calc(var(--radius-lg)+2px)] border px-3 py-2.5 text-left text-sm",
+        "group flex w-full cursor-pointer flex-col rounded-[calc(var(--radius-lg)+2px)] border px-2.5 py-2 text-left text-sm",
         "transition-all duration-150 ease-productive hover:border-sidebar-border/65 hover:bg-sidebar-accent/55 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
         "animate-slide-up opacity-0 [animation-fill-mode:forwards]",
         isSelected ? "border-sidebar-border bg-sidebar-accent/82 shadow-sm" : "border-transparent",
