@@ -80,7 +80,7 @@ jobs:
         with:
           version: v3.14.0
       - name: Helm Lint
-        run: helm lint ./charts/kubesynth
+        run: helm lint ./charts/kubesynapse
 
   build-and-push:
     runs-on: ubuntu-latest
@@ -105,36 +105,36 @@ jobs:
 
       - name: Build & Push Operator
         run: |
-          podman build --format docker -t ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynth-operator:${{ env.VERSION }} ./operator
-          podman push ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynth-operator:${{ env.VERSION }}
+          podman build --format docker -t ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynapse-operator:${{ env.VERSION }} ./operator
+          podman push ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynapse-operator:${{ env.VERSION }}
 
       - name: Build & Push OpenCode Runtime
         run: |
-          podman build --format docker -t ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynth-opencode-runtime:${{ env.VERSION }} ./opencode-runtime
-          podman push ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynth-opencode-runtime:${{ env.VERSION }}
+          podman build --format docker -t ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynapse-opencode-runtime:${{ env.VERSION }} ./opencode-runtime
+          podman push ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynapse-opencode-runtime:${{ env.VERSION }}
 
       - name: Build & Push API Gateway
         run: |
-          podman build --format docker -t ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynth-api-gateway:${{ env.VERSION }} ./api-gateway
-          podman push ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynth-api-gateway:${{ env.VERSION }}
+          podman build --format docker -t ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynapse-api-gateway:${{ env.VERSION }} ./api-gateway
+          podman push ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynapse-api-gateway:${{ env.VERSION }}
 
       - name: Build & Push Web UI
         run: |
-          podman build --format docker -t ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynth-web-ui:${{ env.VERSION }} ./web-ui
-          podman push ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynth-web-ui:${{ env.VERSION }}
+          podman build --format docker -t ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynapse-web-ui:${{ env.VERSION }} ./web-ui
+          podman push ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynapse-web-ui:${{ env.VERSION }}
 
       - name: Verify Chart Renders With Built Images
         run: |
-          helm template kubesynth ./charts/kubesynth \
-            --set operator.image.repository=${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynth-operator \
+          helm template kubesynapse ./charts/kubesynapse \
+            --set operator.image.repository=${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynapse-operator \
             --set operator.image.tag=${{ env.VERSION }} \
-            --set operator.workerImage.repository=${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynth-operator \
+            --set operator.workerImage.repository=${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynapse-operator \
             --set operator.workerImage.tag=${{ env.VERSION }} \
-            --set opencodeRuntime.image.repository=${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynth-opencode-runtime \
+            --set opencodeRuntime.image.repository=${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynapse-opencode-runtime \
             --set opencodeRuntime.image.tag=${{ env.VERSION }} \
-            --set apiGateway.image.repository=${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynth-api-gateway \
+            --set apiGateway.image.repository=${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynapse-api-gateway \
             --set apiGateway.image.tag=${{ env.VERSION }} \
-            --set webUi.image.repository=${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynth-web-ui \
+            --set webUi.image.repository=${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynapse-web-ui \
             --set webUi.image.tag=${{ env.VERSION }} > /tmp/chart-render.yaml
 
   helm-package:
@@ -149,7 +149,7 @@ jobs:
       - name: Package Helm Chart
         run: |
           mkdir -p dist
-          helm package ./charts/kubesynth -d ./dist
+          helm package ./charts/kubesynapse -d ./dist
       - uses: actions/upload-artifact@v4
         with:
           name: helm-chart

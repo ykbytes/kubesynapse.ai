@@ -1,4 +1,4 @@
-# KubeSynth Release Summary — Autonomous Hardening Sprint
+# KubeSynapse Release Summary — Autonomous Hardening Sprint
 
 **Date:** 2026-04-24
 **Branch:** `preprod`
@@ -8,7 +8,7 @@
 
 ## Executive Summary
 
-This release represents a comprehensive production-readiness sprint across all KubeSynth components. **12 security vulnerabilities were fixed**, the Helm chart was hardened for enterprise deployment, the landing page was completely redesigned with real capability demonstrations, and the API gateway backend saw its first modularization win.
+This release represents a comprehensive production-readiness sprint across all KubeSynapse components. **12 security vulnerabilities were fixed**, the Helm chart was hardened for enterprise deployment, the landing page was completely redesigned with real capability demonstrations, and the API gateway backend saw its first modularization win.
 
 ---
 
@@ -19,7 +19,7 @@ This release represents a comprehensive production-readiness sprint across all K
 
 | # | Fix | Severity |
 |---|-----|----------|
-| 1 | OIDC default `audience` set to `kubesynth-gateway` | Critical |
+| 1 | OIDC default `audience` set to `KubeSynapse-gateway` | Critical |
 | 2 | HTTPS enforced for OIDC endpoints | Critical |
 | 3 | Auth cookies: `Secure`, `HttpOnly`, `SameSite=Lax` | High |
 | 4 | Bearer token case-insensitive parsing | High |
@@ -52,7 +52,7 @@ This release represents a comprehensive production-readiness sprint across all K
 ---
 
 ### ☸️ Helm Chart Production Hardening
-**Files:** `charts/kubesynth/`
+**Files:** `charts/kubesynapse/`
 
 | Feature | Status |
 |---------|--------|
@@ -110,8 +110,8 @@ This release represents a comprehensive production-readiness sprint across all K
 | `ruff check api-gateway/constants.py` | ✅ Pass |
 | `ruff check api-gateway/utils.py` | ✅ Pass |
 | `ruff check api-gateway/main.py` | ✅ Pass |
-| `helm lint charts/kubesynth` | ✅ Pass |
-| `helm template kubesynth charts/kubesynth` | ✅ 34 files |
+| `helm lint charts/KubeSynapse` | ✅ Pass |
+| `helm template KubeSynapse charts/KubeSynapse` | ✅ 34 files |
 | `npm run build` (web-ui) | ✅ Pass |
 | `bandit -r api-gateway/` | ✅ No HIGH issues |
 
@@ -130,7 +130,7 @@ This release represents a comprehensive production-readiness sprint across all K
 ### For Existing Deployments
 ```bash
 # Upgrade with new hardening features
-helm upgrade kubesynth ./charts/kubesynth \
+helm upgrade KubeSynapse ./charts/kubesynapse \
   --set podDisruptionBudget.enabled=true \
   --set networkPolicy.enabled=true
 
@@ -168,13 +168,13 @@ cd web-ui && npm run build
 
 ## Contributors
 
-This release was produced autonomously by the **KubeSynth multi-agent team**:
-- **@kubesynth-architect** — Orchestration, planning, integration
-- **@kubesynth-security-guardian** — Security audit & fixes
-- **@kubesynth-ui-artist** — Landing page design & implementation
-- **@kubesynth-prod-engineer** — Helm hardening
-- **@kubesynth-backend-refactorer** — Backend analysis & partial refactor
-- **@kubesynth-docs-storyteller** — README, docs, templates
+This release was produced autonomously by the **KubeSynapse multi-agent team**:
+- **@KubeSynapse-architect** — Orchestration, planning, integration
+- **@KubeSynapse-security-guardian** — Security audit & fixes
+- **@KubeSynapse-ui-artist** — Landing page design & implementation
+- **@KubeSynapse-prod-engineer** — Helm hardening
+- **@KubeSynapse-backend-refactorer** — Backend analysis & partial refactor
+- **@KubeSynapse-docs-storyteller** — README, docs, templates
 
 ---
 

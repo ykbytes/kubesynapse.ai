@@ -1,4 +1,4 @@
-# KubeSynth Massive Bug Hunt & Fix — Complete Review
+# KubeSynapse Massive Bug Hunt & Fix — Complete Review
 
 **Date:** 2026-04-24
 **Sprint:** Autonomous Hardening Pass 1 + Pass 2
@@ -8,7 +8,7 @@
 
 ## Executive Summary
 
-Across two massive passes, **6 specialized agents** audited and fixed bugs across the entire KubeSynth repository:
+Across two massive passes, **6 specialized agents** audited and fixed bugs across the entire KubeSynapse repository:
 - **api-gateway:** Race conditions, hardcoded timeouts, JWT error handling, logging improvements
 - **operator:** 15 `raise without from` violations, thread-safety fixes, exception logging
 - **web-ui:** Accessibility (aria-labels), responsive tables, performance anti-patterns
@@ -186,7 +186,7 @@ Replaced all hardcoded occurrences in main.py.
 | `nats.yaml` | `{{- if .Values.nats.enabled }}` |
 
 ### 4.2 Standard Labels Added
-**Files Modified:** Added `{{- include "kubesynth.labels" . }}` + `app.kubernetes.io/component` to:
+**Files Modified:** Added `{{- include "KubeSynapse.labels" . }}` + `app.kubernetes.io/component` to:
 - `litellm-deployment.yaml` (Deployment, Pod, NetworkPolicy)
 - `litellm-service.yaml` (Service)
 - `operator-deployment.yaml` (Deployment, Pod)
@@ -215,15 +215,15 @@ Replaced all hardcoded occurrences in main.py.
 - Added explanatory comments about security trade-offs
 
 ### 4.6 Verification
-- `helm lint charts/kubesynth` — ✅ Pass
-- `helm template kubesynth charts/kubesynth` — ✅ 4,189 lines rendered, zero errors
+- `helm lint charts/KubeSynapse` — ✅ Pass
+- `helm template KubeSynapse charts/KubeSynapse` — ✅ 4,189 lines rendered, zero errors
 
 ---
 
 ## 5. MCP Sidecar Security Fixes (Security Guardian)
 
 ### 5.1 CRITICAL: Hardcoded Collector Token Removed
-**Files:** `api-gateway/main.py`, `mcp-sidecars/collector/server.py`, `charts/kubesynth/values.yaml`
+**Files:** `api-gateway/main.py`, `mcp-sidecars/collector/server.py`, `charts/kubesynapse/values.yaml`
 **Issue:** Default token `collector-dev-token` allowed universal collector authentication.
 **Fix:**
 - Removed `_DEFAULT_COLLECTOR_TOKEN` constant from `main.py`
@@ -303,8 +303,8 @@ Replaced all hardcoded occurrences in main.py.
 | Check | Component | Result |
 |-------|-----------|--------|
 | `npm run build` | web-ui | ✅ Zero TS errors |
-| `helm lint` | charts/kubesynth | ✅ Pass |
-| `helm template` | charts/kubesynth | ✅ 4,189 lines |
+| `helm lint` | charts/kubesynapse | ✅ Pass |
+| `helm template` | charts/kubesynapse | ✅ 4,189 lines |
 | `ruff check` | api-gateway/constants.py, utils.py, main.py, auth_middleware.py | ✅ Pass |
 | `python -m py_compile` | api-gateway/*.py | ✅ Pass |
 | `python -m py_compile` | operator/worker.py, services/k8s.py, builders/manifests.py, utils.py | ✅ Pass |
@@ -337,16 +337,16 @@ Replaced all hardcoded occurrences in main.py.
 - `web-ui/src/components/AuditLogPanel.tsx` — overflow-x-auto, aria-labels
 
 ### Helm
-- `charts/kubesynth/values.yaml` — collector.token default changed
-- `charts/kubesynth/templates/litellm-deployment.yaml` — enabled guard, labels
-- `charts/kubesynth/templates/litellm-service.yaml` — enabled guard, labels
-- `charts/kubesynth/templates/operator-deployment.yaml` — enabled guard, labels
-- `charts/kubesynth/templates/redis.yaml` — enabled guard, labels, terminationGracePeriod
-- `charts/kubesynth/templates/qdrant.yaml` — enabled guard, labels, terminationGracePeriod
-- `charts/kubesynth/templates/nats.yaml` — enabled guard, labels, terminationGracePeriod
-- `charts/kubesynth/templates/web-ui.yaml` — labels, terminationGracePeriod
-- `charts/kubesynth/templates/collector-daemonset.yaml` — labels, imagePullPolicy fix
-- `charts/kubesynth/templates/network-policy-default.yaml` — namespace restriction
+- `charts/kubesynapse/values.yaml` — collector.token default changed
+- `charts/kubesynapse/templates/litellm-deployment.yaml` — enabled guard, labels
+- `charts/kubesynapse/templates/litellm-service.yaml` — enabled guard, labels
+- `charts/kubesynapse/templates/operator-deployment.yaml` — enabled guard, labels
+- `charts/kubesynapse/templates/redis.yaml` — enabled guard, labels, terminationGracePeriod
+- `charts/kubesynapse/templates/qdrant.yaml` — enabled guard, labels, terminationGracePeriod
+- `charts/kubesynapse/templates/nats.yaml` — enabled guard, labels, terminationGracePeriod
+- `charts/kubesynapse/templates/web-ui.yaml` — labels, terminationGracePeriod
+- `charts/kubesynapse/templates/collector-daemonset.yaml` — labels, imagePullPolicy fix
+- `charts/kubesynapse/templates/network-policy-default.yaml` — namespace restriction
 
 ### MCP Sidecars
 - `mcp-sidecars/rag/server.py` — MD5→SHA256

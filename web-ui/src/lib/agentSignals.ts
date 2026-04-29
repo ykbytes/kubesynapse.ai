@@ -76,6 +76,12 @@ const RUNTIME_META: Record<RuntimeKind, Omit<AgentRuntimeSignal, "id" | "alpha">
     icon: Code,
     tone: "border-emerald-500/20 bg-emerald-500/5 text-emerald-200",
   },
+  pi: {
+    label: "Pi",
+    shortLabel: "Pi",
+    icon: Code,
+    tone: "border-violet-500/20 bg-violet-500/5 text-violet-200",
+  },
 };
 
 const CAPABILITY_META: Record<string, Omit<AgentCapabilitySignal, "id">> = {

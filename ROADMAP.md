@@ -1,6 +1,6 @@
-# KubeSynth Roadmap
+# KubeSynapse Roadmap
 
-This document outlines the planned evolution of KubeSynth. Timelines are best-effort estimates and may shift based on community feedback and contributor availability.
+This document outlines the planned evolution of KubeSynapse. Timelines are best-effort estimates and may shift based on community feedback and contributor availability.
 
 ---
 
@@ -12,14 +12,17 @@ This document outlines the planned evolution of KubeSynth. Timelines are best-ef
 - [x] API Gateway security hardening: OIDC PKCE, JWT rotation, brute-force protection
 - [x] MCP sidecar security: capability model, network egress filtering, resource quotas
 - [x] Helm chart production readiness: PDBs, NetworkPolicies, HPA, cert-manager
-- [ ] API Gateway router split (13k-line monolith → modular routers)
-- [ ] API versioning (`/api/v1/` prefix with deprecation headers)
-- [ ] `mypy --strict` zero-error compliance
-- [ ] Full test suite with smoke tests in CI
-- [ ] Community governance files (CONTRIBUTING, CODE_OF_CONDUCT, SECURITY, ROADMAP)
-- [ ] Helm chart OCI publishing to ghcr.io
+- [~] API Gateway router split (13k-line monolith → modular routers)
+- [~] API versioning (`/api/v1/` prefix with deprecation headers)
+- [~] `mypy --strict` zero-error compliance
+- [x] Full test suite with smoke tests in CI
+- [x] Community governance files (CONTRIBUTING, CODE_OF_CONDUCT, SECURITY, ROADMAP)
+- [x] Helm chart OCI publishing to ghcr.io
+- [x] Pi runtime support (dual-runtime alongside OpenCode)
 
-**Target**: May 2026
+**Target**: April 2026
+
+> **Note**: Pi runtime support shipped as dual-runtime alongside OpenCode. Live observability and artifact APIs completed.
 
 ---
 
@@ -36,11 +39,11 @@ This document outlines the planned evolution of KubeSynth. Timelines are best-ef
 
 ### v1.2 — Advanced Agent Orchestration
 
-- [ ] Multi-agent workflows with DAG-based composition
-- [ ] Agent-to-Agent (A2A) protocol: cross-cluster agent communication
-- [ ] Human-in-the-loop approval workflows
-- [ ] Agent evaluation framework: automated regression testing
-- [ ] Prompt versioning and rollback
+- [x] Multi-agent workflows with DAG-based composition
+- [x] Agent-to-Agent (A2A) protocol: cross-cluster agent communication
+- [x] Human-in-the-loop approval workflows
+- [x] Agent evaluation framework: automated regression testing
+- [x] Prompt versioning and rollback
 
 ---
 

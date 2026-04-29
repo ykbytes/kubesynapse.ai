@@ -15,7 +15,7 @@ _logger = logging.getLogger("api-gateway.jwt")
 
 ACCESS_TOKEN_TTL_SECONDS = max(int(os.getenv("AUTH_ACCESS_TOKEN_TTL_SECONDS", "900")), 60)
 REFRESH_TOKEN_TTL_SECONDS = max(int(os.getenv("AUTH_REFRESH_TOKEN_TTL_SECONDS", str(7 * 24 * 3600))), 300)
-JWT_ISSUER = os.getenv("JWT_ISSUER", "kubesynth").strip() or "kubesynth"
+JWT_ISSUER = os.getenv("JWT_ISSUER", "kubesynapse").strip() or "kubesynapse"
 JWT_AUDIENCE = os.getenv("JWT_AUDIENCE", "").strip()  # P2-10: optionally enforce 'aud' claim
 
 

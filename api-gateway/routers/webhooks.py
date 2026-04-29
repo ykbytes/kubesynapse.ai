@@ -125,14 +125,14 @@ async def invoke_webhook(
     name: str,
     raw_request: Request,
     namespace: str = "default",
-    x_kubesynth_signature: str | None = Header(default=None, alias="X-KubeSynth-Signature"),
-    x_kubesynth_timestamp: str | None = Header(default=None, alias="X-KubeSynth-Timestamp"),
+    x_KUBESYNAPSE_signature: str | None = Header(default=None, alias="X-kubesynapse-Signature"),
+    x_KUBESYNAPSE_timestamp: str | None = Header(default=None, alias="X-kubesynapse-Timestamp"),
 ):
     """Public endpoint for external webhook calls. No auth token required.
 
     Security controls applied:
     - HMAC-SHA256 signature verification (timing-safe via compare_digest)
-    - Replay attack prevention via X-KubeSynth-Timestamp
+    - Replay attack prevention via X-kubesynapse-Timestamp
     - In-memory + DB rate limiting (defense in depth)
     - Payload size limits (DoS protection)
     - IP allowlisting (defense in depth)
@@ -164,13 +164,13 @@ async def invoke_webhook(
     if secret_ref:
         secret = _resolve_webhook_secret(secret_ref)
         if secret:
-            if not x_kubesynth_signature:
-                raise HTTPException(status_code=401, detail="Missing X-KubeSynth-Signature header")
-            if not verify_webhook_signature(raw_body, x_kubesynth_signature, secret):
+            if not x_KUBESYNAPSE_signature:
+                raise HTTPException(status_code=401, detail="Missing X-kubesynapse-Signature header")
+            if not verify_webhook_signature(raw_body, x_KUBESYNAPSE_signature, secret):
                 raise HTTPException(status_code=401, detail="Invalid webhook signature")
             signature_verified = True
             # Prevent replay attacks once signature is valid
-            verify_webhook_timestamp(x_kubesynth_timestamp)
+            verify_webhook_timestamp(x_KUBESYNAPSE_timestamp)
         else:
             logger.warning("Webhook %s/%s references secret_ref '%s' but secret could not be resolved", namespace, name, secret_ref)
 
@@ -208,8 +208,8 @@ async def invoke_webhook(
         payload_size=len(raw_body),
         payload_snippet=json.dumps(sanitized_payload, ensure_ascii=False, default=str)[:1024] if sanitized_payload is not None else None,
         headers_json={
-            "x-kubesynth-signature-present": bool(x_kubesynth_signature),
-            "x-kubesynth-timestamp-present": bool(x_kubesynth_timestamp),
+            "x-kubesynapse-signature-present": bool(x_KUBESYNAPSE_signature),
+            "x-kubesynapse-timestamp-present": bool(x_KUBESYNAPSE_timestamp),
         },
     )
 

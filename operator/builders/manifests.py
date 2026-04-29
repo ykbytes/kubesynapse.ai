@@ -39,6 +39,9 @@ from config import (
     MCP_AUTH_SECRET_NAME,
     MCP_HUB_NAMESPACE,
     MCP_SIDECAR_CATALOG,
+    OPA_SIDECAR_IMAGE,
+    OPA_SIDECAR_PORT,
+    OPA_SIDECAR_RESOURCES,
     OPENCODE_DEFAULT_PROVIDER,
     OPENCODE_MCP_CONNECTIONS_ENV,
     OPENCODE_MCP_SIDECARS_ENV,
@@ -48,6 +51,11 @@ from config import (
     OPENCODE_RUNTIME_IMAGE_PULL_POLICY,
     OPERATOR_NAMESPACE,
     OTEL_ENDPOINT,
+    PI_DEFAULT_MODEL,
+    PI_DEFAULT_PROVIDER,
+    PI_DEFAULT_THINKING_LEVEL,
+    PI_RUNTIME_IMAGE,
+    PI_RUNTIME_IMAGE_PULL_POLICY,
     PROVIDER_REGISTRY_CONFIGMAP_NAME,
     RUNTIME_SERVICE_ACCOUNT,
     SECRET_NAME,
@@ -365,14 +373,19 @@ def resolve_runtime_kind(spec: dict[str, Any]) -> str:
     """Resolve and validate the runtime kind from an AIAgent spec."""
     runtime_spec = spec.get("runtime")
     if not isinstance(runtime_spec, dict):
-        raise kopf.PermanentError("AIAgent.spec.runtime.kind must be explicitly set to 'opencode'.")
+        raise kopf.PermanentError(
+            "AIAgent.spec.runtime.kind must be explicitly set to 'opencode' or 'pi'."
+        )
 
     runtime_kind = str(runtime_spec.get("kind") or "").strip().lower()
     if not runtime_kind:
-        raise kopf.PermanentError("AIAgent.spec.runtime.kind must be explicitly set to 'opencode'.")
+        raise kopf.PermanentError(
+            "AIAgent.spec.runtime.kind must be explicitly set to 'opencode' or 'pi'."
+        )
     if runtime_kind not in SUPPORTED_RUNTIME_KINDS:
         raise kopf.PermanentError(
-            f"Unsupported AIAgent.spec.runtime.kind '{runtime_kind}'. Only 'opencode' is supported."
+            f"Unsupported AIAgent.spec.runtime.kind '{runtime_kind}'. "
+            f"Supported: {', '.join(sorted(SUPPORTED_RUNTIME_KINDS))}"
         )
     return runtime_kind
 
@@ -403,9 +416,10 @@ def validate_runtime_configuration(runtime_kind: str, spec: dict[str, Any]) -> N
             raise kopf.PermanentError(
                 "AIAgent.spec.githubConfig.credentialSecretRef is required when githubConfig is provided."
             )
-    if runtime_kind != "opencode":
+    if runtime_kind not in SUPPORTED_RUNTIME_KINDS:
         raise kopf.PermanentError(
-            f"Unsupported AIAgent.spec.runtime.kind '{runtime_kind}'. Only 'opencode' is supported."
+            f"Unsupported AIAgent.spec.runtime.kind '{runtime_kind}'. "
+            f"Supported: {', '.join(sorted(SUPPORTED_RUNTIME_KINDS))}"
         )
 
     if goose_spec is not None:
@@ -705,9 +719,12 @@ def _build_sidecar_egress_init_container(allowed_cidrs: list[str]) -> dict[str, 
 # ---------------------------------------------------------------------------
 
 
-def create_worker_artifact_pvc_manifest(kind: str, resource_namespace: str, resource_name: str) -> dict[str, Any]:
+def create_worker_artifact_pvc_manifest(
+    kind: str, resource_namespace: str, resource_name: str,
+    owner_references: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """Build a PVC manifest for worker Job artifacts."""
-    return {
+    manifest: dict[str, Any] = {
         "apiVersion": "v1",
         "kind": "PersistentVolumeClaim",
         "metadata": {
@@ -715,13 +732,27 @@ def create_worker_artifact_pvc_manifest(kind: str, resource_namespace: str, reso
             "namespace": OPERATOR_NAMESPACE,
             "labels": {
                 "app": "operator-worker-artifacts",
-                "kubesynth.ai/resource-kind": kind,
-                "kubesynth.ai/resource-name": resource_name,
-                "kubesynth.ai/resource-namespace": resource_namespace,
+                "kubesynapse.ai/resource-kind": kind,
+                "kubesynapse.ai/resource-name": resource_name,
+                "kubesynapse.ai/resource-namespace": resource_namespace,
             },
         },
         "spec": build_pvc_spec(WORKER_ARTIFACT_SIZE, WORKER_ARTIFACT_STORAGE_CLASS or None),
     }
+    if owner_references:
+        if resource_namespace == OPERATOR_NAMESPACE:
+            manifest["metadata"]["ownerReferences"] = owner_references
+        else:
+            logger.warning(
+                "Skipping ownerReferences for worker artifact PVC '%s' because the owning %s '%s/%s' "
+                "lives outside operator namespace '%s'.",
+                manifest["metadata"]["name"],
+                kind,
+                resource_namespace,
+                resource_name,
+                OPERATOR_NAMESPACE,
+            )
+    return manifest
 
 
 # ---------------------------------------------------------------------------
@@ -769,8 +800,8 @@ def create_mcp_auth_secret_manifest(namespace: str) -> dict[str, Any]:
             "namespace": namespace,
             "labels": {
                 "app": "ai-agent",
-                "kubesynth.ai/managed-by": "operator",
-                "kubesynth.ai/secret-purpose": "mcp-auth",
+                "kubesynapse.ai/managed-by": "operator",
+                "kubesynapse.ai/secret-purpose": "mcp-auth",
             },
         },
         "type": str(getattr(source_secret, "type", None) or "Opaque"),
@@ -785,6 +816,47 @@ _BUILTIN_PROVIDER_SECRET_KEYS: dict[str, str] = {
     "github-copilot": "GITHUB_COPILOT_TOKEN",
 }
 
+_PI_PROVIDER_SECRET_KEYS: dict[str, tuple[str, ...]] = {
+    "anthropic": ("ANTHROPIC_API_KEY",),
+    "azure-openai-responses": ("AZURE_OPENAI_API_KEY",),
+    "openai": ("OPENAI_API_KEY",),
+    "deepseek": ("DEEPSEEK_API_KEY",),
+    "google": ("GEMINI_API_KEY", "GOOGLE_API_KEY"),
+    "mistral": ("MISTRAL_API_KEY",),
+    "groq": ("GROQ_API_KEY",),
+    "cerebras": ("CEREBRAS_API_KEY",),
+    "cloudflare-workers-ai": ("CLOUDFLARE_API_KEY",),
+    "xai": ("XAI_API_KEY",),
+    "openrouter": ("OPENROUTER_API_KEY",),
+    "vercel-ai-gateway": ("AI_GATEWAY_API_KEY",),
+    "zai": ("ZAI_API_KEY",),
+    "opencode": ("OPENCODE_API_KEY",),
+    "opencode-go": ("OPENCODE_API_KEY", "OPENCODE_GO_API_KEY"),
+    "huggingface": ("HF_TOKEN",),
+    "fireworks": ("FIREWORKS_API_KEY",),
+    "kimi-coding": ("KIMI_API_KEY",),
+    "minimax": ("MINIMAX_API_KEY",),
+    "minimax-cn": ("MINIMAX_CN_API_KEY",),
+}
+
+
+def _decode_secret_value(raw_value: str | None) -> str:
+    value = str(raw_value or "").strip()
+    if not value:
+        return ""
+    try:
+        return base64.b64decode(value).decode("utf-8").strip()
+    except Exception:
+        return value
+
+
+def _resolve_first_secret_value(auth_data: dict[str, str], secret_keys: tuple[str, ...]) -> str:
+    for secret_key in secret_keys:
+        decoded = _decode_secret_value(auth_data.get(secret_key))
+        if decoded:
+            return decoded
+    return ""
+
 
 def _build_provider_auth_content(auth_data: dict[str, str]) -> str:
     vals: dict[str, dict[str, str]] = {}
@@ -798,6 +870,15 @@ def _build_provider_auth_content(auth_data: dict[str, str]) -> str:
             decoded = value.strip()
         if decoded:
             vals[provider_id] = {"type": "api", "key": decoded}
+    return json.dumps(vals, ensure_ascii=False)
+
+
+def _build_pi_provider_auth_content(auth_data: dict[str, str]) -> str:
+    vals: dict[str, dict[str, str]] = {}
+    for provider_id, secret_keys in _PI_PROVIDER_SECRET_KEYS.items():
+        decoded = _resolve_first_secret_value(auth_data, secret_keys)
+        if decoded:
+            vals[provider_id] = {"type": "api_key", "key": decoded}
     return json.dumps(vals, ensure_ascii=False)
 
 
@@ -881,13 +962,51 @@ def create_opencode_provider_bootstrap_secret(
             "namespace": namespace,
             "labels": {
                 "app": "ai-agent",
-                "kubesynth.ai/managed-by": "operator",
-                "kubesynth.ai/agent-name": agent_name,
-                "kubesynth.ai/secret-purpose": "opencode-provider",
+                "kubesynapse.ai/managed-by": "operator",
+                "kubesynapse.ai/agent-name": agent_name,
+                "kubesynapse.ai/secret-purpose": "opencode-provider",
             },
         },
         "type": "Opaque",
         "stringData": string_data,
+    }
+
+
+def create_pi_provider_bootstrap_secret(
+    agent_name: str,
+    namespace: str,
+) -> dict[str, Any] | None:
+    core_api = kubernetes.client.CoreV1Api()
+    try:
+        source_secret = core_api.read_namespaced_secret(name=SECRET_NAME, namespace=OPERATOR_NAMESPACE)
+    except ApiException as exc:
+        if exc.status == 404:
+            logger.warning("Provider auth secret '%s/%s' not found; skipping pi bootstrap secret.", OPERATOR_NAMESPACE, SECRET_NAME)
+            return None
+        raise
+
+    auth_data: dict[str, str] = getattr(source_secret, "data", None) or {}
+    auth_content = _build_pi_provider_auth_content(auth_data)
+    if not auth_content or auth_content == "{}":
+        logger.warning("No connected pi provider auth keys found; skipping pi bootstrap secret.")
+        return None
+
+    secret_name = f"{sandbox_name(agent_name)}-pi-provider"
+    return {
+        "apiVersion": "v1",
+        "kind": "Secret",
+        "metadata": {
+            "name": secret_name,
+            "namespace": namespace,
+            "labels": {
+                "app": "ai-agent",
+                "kubesynapse.ai/managed-by": "operator",
+                "kubesynapse.ai/agent-name": agent_name,
+                "kubesynapse.ai/secret-purpose": "pi-provider",
+            },
+        },
+        "type": "Opaque",
+        "stringData": {"PI_AUTH_JSON": auth_content},
     }
 
 
@@ -920,6 +1039,348 @@ def create_agent_service_manifest(name: str, namespace: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+def _create_pi_statefulset_spec(
+    *,
+    name: str,
+    namespace: str,
+    spec: dict[str, Any],
+    system_prompt: str,
+    model: str,
+    mcp_connections: list[dict[str, Any]],
+    mcp_servers: list[str],
+    mcp_sidecars: list[dict[str, Any]],
+    enable_gvisor: bool,
+    agent_resources: dict[str, Any],
+    env: list[dict[str, Any]],
+    volume_mounts: list[dict[str, Any]],
+    volumes: list[dict[str, Any]],
+    init_volume_mounts: list[dict[str, Any]],
+    container_security_context: dict[str, Any],
+    pod_security_context: dict[str, Any],
+    git_sidecar_env: list[dict[str, Any]],
+    git_volumes: list[dict[str, Any]],
+    git_volume_mounts: list[dict[str, Any]],
+    init_containers: list[dict[str, Any]],
+    skills_config: dict[str, Any],
+) -> dict[str, Any]:
+    """Build a StatefulSet manifest for the pi runtime."""
+
+    runtime_spec = spec.get("runtime") or {}
+    pi_spec = (runtime_spec.get("pi") or {}) if isinstance(runtime_spec, dict) else {}
+
+    agent_image = PI_RUNTIME_IMAGE
+    agent_image_pull_policy = PI_RUNTIME_IMAGE_PULL_POLICY
+
+    # Resolve pi model configuration
+    pi_provider = str(pi_spec.get("provider") or PI_DEFAULT_PROVIDER or "").strip()
+    pi_model = str(pi_spec.get("model") or spec.get("model") or PI_DEFAULT_MODEL).strip()
+    pi_thinking_level = str(
+        pi_spec.get("thinkingLevel") or PI_DEFAULT_THINKING_LEVEL or "medium"
+    ).strip()
+    pi_tools = pi_spec.get("tools")
+    pi_no_tools = bool(pi_spec.get("noTools", False))
+    pi_no_session = bool(pi_spec.get("noSession", False))
+
+    # Workspace volume
+    volume_mounts = list(volume_mounts)
+    volume_mounts.append({"name": "workspace-volume", "mountPath": "/workspace"})
+    # State volume for pi session persistence
+    volume_mounts.append({"name": "state-volume", "mountPath": "/home/piuser/.pi/agent"})
+    volumes = list(volumes)
+    volumes.append({"name": "workspace-volume", "emptyDir": {"sizeLimit": "5Gi"}})
+
+    # Pi-specific environment variables
+    pi_env = list(env)
+    pi_env.extend(
+        [
+            {"name": "KUBESYNAPSE_AGENT_NAME", "value": name},
+            {"name": "KUBESYNAPSE_NAMESPACE", "value": namespace},
+            {"name": "PI_PROVIDER", "value": pi_provider},
+            {"name": "PI_MODEL", "value": pi_model},
+            {"name": "PI_THINKING_LEVEL", "value": pi_thinking_level},
+            {"name": "PI_NO_SESSION", "value": "true" if pi_no_session else "false"},
+            {"name": "PI_SYSTEM_PROMPT", "value": system_prompt},
+            {
+                "name": "LITELLM_API_KEY",
+                "valueFrom": {
+                    "secretKeyRef": {
+                        "name": SECRET_NAME,
+                        "key": "LITELLM_MASTER_KEY",
+                        "optional": True,
+                    }
+                },
+            },
+            {
+                "name": "MCP_BEARER_TOKEN",
+                "valueFrom": {
+                    "secretKeyRef": {
+                        "name": MCP_AUTH_SECRET_NAME,
+                        "key": "bearer-token",
+                        "optional": not bool(mcp_servers),
+                    }
+                },
+            },
+        ]
+    )
+
+    # Inject pi-compatible MCP connections
+    if mcp_connections:
+        pi_env.append(
+            {
+                "name": OPENCODE_MCP_CONNECTIONS_ENV,  # Same env var, pi extension reads it
+                "value": json.dumps(mcp_connections, ensure_ascii=False, sort_keys=True),
+            }
+        )
+
+    # Inject MCP sidecars
+    if mcp_sidecars:
+        pi_env.append(
+            {
+                "name": OPENCODE_MCP_SIDECARS_ENV,
+                "value": json.dumps(mcp_sidecars, ensure_ascii=False, sort_keys=True),
+            }
+        )
+
+    # Tools configuration
+    if pi_no_tools:
+        pi_env.append({"name": "PI_NO_TOOLS", "value": "true"})
+    elif pi_tools:
+        if isinstance(pi_tools, list):
+            pi_env.append({"name": "PI_TOOLS", "value": ",".join(str(t) for t in pi_tools)})
+        else:
+            pi_env.append({"name": "PI_TOOLS", "value": str(pi_tools)})
+
+    # Permission level from spec
+    permission_level = str(pi_spec.get("permissionLevel") or "permissive").strip()
+    pi_env.append({"name": "KS_PERMISSION_LEVEL", "value": permission_level})
+
+    # API key env vars for pi provider auto-detection
+    # Map kubesynapse LLM secret to pi-compatible env vars
+    for provider_key in [
+        "ANTHROPIC_API_KEY",
+        "AZURE_OPENAI_API_KEY",
+        "OPENAI_API_KEY",
+        "DEEPSEEK_API_KEY",
+        "GEMINI_API_KEY",
+        "GOOGLE_API_KEY",
+        "MISTRAL_API_KEY",
+        "GROQ_API_KEY",
+        "CEREBRAS_API_KEY",
+        "CLOUDFLARE_API_KEY",
+        "XAI_API_KEY",
+        "OPENROUTER_API_KEY",
+        "AI_GATEWAY_API_KEY",
+        "OPENCODE_API_KEY",
+        "OPENCODE_GO_API_KEY",
+        "HF_TOKEN",
+        "FIREWORKS_API_KEY",
+        "KIMI_API_KEY",
+        "MINIMAX_API_KEY",
+        "MINIMAX_CN_API_KEY",
+        "COHERE_API_KEY",
+    ]:
+        pi_env.append(
+            {
+                "name": provider_key,
+                "valueFrom": {
+                    "secretKeyRef": {
+                        "name": SECRET_NAME,
+                        "key": provider_key,
+                        "optional": True,
+                    }
+                },
+            }
+        )
+
+    # Provider-specific auth from provider registry (same pattern as OpenCode)
+    provider_bootstrap_secret_name = f"{sandbox_name(name)}-pi-provider"
+    pi_env.append(
+        {
+            "name": "PI_AUTH_JSON",
+            "valueFrom": {
+                "secretKeyRef": {
+                    "name": provider_bootstrap_secret_name,
+                    "key": "PI_AUTH_JSON",
+                    "optional": True,
+                }
+            },
+        }
+    )
+
+    if OTEL_ENDPOINT:
+        pi_env.append({"name": "OTEL_EXPORTER_OTLP_ENDPOINT", "value": OTEL_ENDPOINT})
+
+    # Init containers (same pattern as OpenCode)
+    init_containers = list(init_containers)
+    init_containers.append(
+        {
+            "name": "init-state-volume",
+            "image": agent_image,
+            "imagePullPolicy": agent_image_pull_policy,
+            "command": [
+                "/bin/sh",
+                "-c",
+                "set -e; "
+                "mkdir -p /home/piuser/.pi/agent/sessions /workspace; "
+                "chown -R 2000:2000 /home/piuser/.pi /workspace || true; "
+                "chmod -R ug+rwX /home/piuser/.pi /workspace || true",
+            ],
+            "securityContext": {
+                "runAsUser": 0,
+                "runAsGroup": 0,
+                "runAsNonRoot": False,
+                "allowPrivilegeEscalation": False,
+                "capabilities": {"drop": ["ALL"], "add": ["CHOWN", "FOWNER"]},
+                "seccompProfile": {"type": "RuntimeDefault"},
+            },
+            "volumeMounts": list(init_volume_mounts),
+        }
+    )
+
+    # Pi-bridge exposes HTTP endpoints for health checks and prompt forwarding.
+    pi_agent_container = {
+        "name": "agent-runtime",
+        "image": agent_image,
+        "imagePullPolicy": agent_image_pull_policy,
+        "securityContext": container_security_context,
+        "resources": agent_resources,
+        "ports": [{"containerPort": 8080, "name": "http", "protocol": "TCP"}],
+        "startupProbe": {
+            "httpGet": {"path": "/health", "port": 8080},
+            "initialDelaySeconds": 5,
+            "periodSeconds": 5,
+            "timeoutSeconds": 3,
+            "failureThreshold": 30,
+        },
+        "readinessProbe": {
+            "httpGet": {"path": "/ready", "port": 8080},
+            "initialDelaySeconds": 10,
+            "periodSeconds": 10,
+            "timeoutSeconds": 5,
+            "failureThreshold": 3,
+        },
+        "livenessProbe": {
+            "httpGet": {"path": "/health", "port": 8080},
+            "initialDelaySeconds": 15,
+            "periodSeconds": 20,
+            "timeoutSeconds": 5,
+            "failureThreshold": 3,
+        },
+        "lifecycle": {
+            "preStop": {
+                "exec": {
+                    "command": [
+                        "/bin/sh",
+                        "-c",
+                        "echo '{\"type\":\"abort\"}' | timeout 5 pi --mode rpc --no-session 2>/dev/null; sleep 10",
+                    ]
+                },
+            },
+        },
+        "volumeMounts": volume_mounts,
+        "env": pi_env,
+    }
+
+    containers = [pi_agent_container]
+
+    # Add MCP sidecar containers (same pattern as OpenCode)
+    if mcp_sidecars:
+        for index, sidecar_spec in enumerate(mcp_sidecars):
+            sidecar_name = sidecar_spec.get("name", f"tool-{index}")
+            sidecar_port = sidecar_spec.get("port", 8080)
+            sidecar_env_list = _build_sidecar_env_items(sidecar_spec)
+            sidecar_vol_mounts = [
+                {"name": "tmp-volume", "mountPath": "/tmp"}  # noqa: S108
+            ]
+            if sidecar_name == "git" and git_sidecar_env:
+                sidecar_env_list.extend(git_sidecar_env)
+                sidecar_vol_mounts.extend(git_volume_mounts)
+            if sidecar_name == "git":
+                sidecar_env_list.append({"name": "MCP_WORK_DIR", "value": "/workspace"})
+                sidecar_vol_mounts.append({"name": "workspace-volume", "mountPath": "/workspace"})
+            container_name = (
+                sidecar_name if str(sidecar_name).startswith("mcp-") else f"mcp-{sidecar_name}"
+            )
+            containers.append(
+                {
+                    "name": container_name,
+                    "image": sidecar_spec["image"],
+                    "imagePullPolicy": sidecar_spec.get("imagePullPolicy", "IfNotPresent"),
+                    "ports": [{"containerPort": sidecar_port, "protocol": "TCP"}],
+                    "resources": sidecar_spec.get("resources", {}),
+                    "env": sidecar_env_list,
+                    "volumeMounts": sidecar_vol_mounts,
+                }
+            )
+
+    # Add git volumes
+    all_volumes = list(volumes)
+    if git_volumes:
+        all_volumes.extend(git_volumes)
+
+    # Build StatefulSet
+    statefulset_name = sandbox_name(name)
+    pod_labels = {"app": "ai-agent", "agent-name": name, "runtime": "pi"}
+
+    manifest: dict[str, Any] = {
+        "apiVersion": "apps/v1",
+        "kind": "StatefulSet",
+        "metadata": {
+            "name": statefulset_name,
+            "namespace": namespace,
+            "labels": pod_labels,
+            "annotations": {
+                "kubesynapse.ai/agent-name": name,
+                "kubesynapse.ai/runtime": "pi",
+            },
+        },
+        "spec": {
+            "serviceName": statefulset_name,
+            "replicas": 1,
+            "selector": {"matchLabels": pod_labels},
+            "template": {
+                "metadata": {
+                    "labels": pod_labels,
+                    "annotations": {
+                        POD_TEMPLATE_REVISION_ANNOTATION: hashed_resource_name(
+                            "statefulset", namespace, statefulset_name, suffix=str(int(time.time()))
+                        ),
+                    },
+                },
+                "spec": {
+                    "serviceAccountName": RUNTIME_SERVICE_ACCOUNT,
+                    "securityContext": {
+                        "runAsNonRoot": True,
+                        "runAsUser": 2000,
+                        "runAsGroup": 2000,
+                        "fsGroup": 2000,
+                        "fsGroupChangePolicy": "OnRootMismatch",
+                        "seccompProfile": {"type": "RuntimeDefault"},
+                    },
+                    "initContainers": init_containers,
+                    "containers": containers,
+                    "volumes": all_volumes,
+                    "terminationGracePeriodSeconds": 60,
+                },
+            },
+            "volumeClaimTemplates": [
+                {
+                    "metadata": {"name": "state-volume"},
+                    "spec": build_pvc_spec(
+                        (spec.get("storage") or {}).get("size", DEFAULT_STORAGE_SIZE),
+                        (spec.get("storage") or {}).get("storageClassName"),
+                    ),
+                }
+            ],
+        },
+    }
+
+    if enable_gvisor:
+        manifest["spec"]["template"]["spec"]["runtimeClassName"] = "gvisor"
+
+    return manifest
+
+
 def create_agent_statefulset_manifest(
     name: str,
     namespace: str,
@@ -939,7 +1400,7 @@ def create_agent_statefulset_manifest(
     agent_resources = resolve_agent_container_resources(spec)
     if len(system_prompt) > 32000:
         raise kopf.PermanentError(f"spec.systemPrompt exceeds maximum length (32000 chars, got {len(system_prompt)})")
-    skills_config = parse_agent_skills_config(spec.get("skills"), source="AIAgent.spec.skills")
+    skills_config = parse_agent_skills_config(spec.get("skills"), source="AIAgent.spec.skills", namespace=namespace)
     mcp_sidecars = _auto_inject_mcp_sidecars(mcp_sidecars, skills_config)
     mcp_sidecars = _validate_mcp_sidecars(mcp_sidecars)
 
@@ -1165,6 +1626,8 @@ def create_agent_statefulset_manifest(
                 "value": json.dumps(skills_config.get("files", {}), ensure_ascii=False, sort_keys=True),
             }
         )
+        if skills_config.get("configMapRef"):
+            env.append({"name": "AGENT_SKILL_CONFIGMAP_PATH", "value": "/app/state/skills-configmap/"})
     # Inject git credentials into the main agent container (must happen
     # AFTER the main env list is created above).
     if git_config.get("repoUrl") and git_agent_env:
@@ -1179,9 +1642,48 @@ def create_agent_statefulset_manifest(
     if trust_bundle_enabled():
         volume_mounts.append(trust_bundle_volume_mount())
         volumes.append(trust_bundle_volume())
+    if skills_config.get("configMapRef"):
+        volume_mounts.append({"name": "skills-configmap", "mountPath": "/app/state/skills-configmap/", "readOnly": True})
+        volumes.append({"name": "skills-configmap", "configMap": {"name": skills_config["configMapRef"]}})
+
+    # Shared init volume mounts (used by both opencode and pi)
+    init_volume_mounts = [{"name": "state-volume", "mountPath": "/app/state"}]
+    if trust_bundle_enabled():
+        init_volume_mounts.append(trust_bundle_volume_mount())
+    # Shared init_containers placeholder (pi builds its own, opencode reassigns)
+    init_containers: list[dict[str, Any]] = []
+
+    if runtime_kind == "pi":
+        # Pi runtime mounts state at /home/piuser/.pi/agent/ for session persistence
+        return _create_pi_statefulset_spec(
+            name=name,
+            namespace=namespace,
+            spec=spec,
+            system_prompt=system_prompt,
+            model=model,
+            mcp_connections=mcp_connections,
+            mcp_servers=mcp_servers,
+            mcp_sidecars=mcp_sidecars,
+            enable_gvisor=enable_gvisor,
+            agent_resources=agent_resources,
+            env=env,
+            volume_mounts=volume_mounts,
+            volumes=volumes,
+            init_volume_mounts=[
+                {"name": "state-volume", "mountPath": "/home/piuser/.pi/agent"},
+                *([trust_bundle_volume_mount()] if trust_bundle_enabled() else []),
+            ],
+            container_security_context=container_security_context,
+            pod_security_context=pod_security_context,
+            git_sidecar_env=git_sidecar_env,
+            git_volumes=git_volumes,
+            git_volume_mounts=git_volume_mounts,
+            init_containers=init_containers,
+            skills_config=skills_config,
+        )
 
     if runtime_kind != "opencode":
-        raise kopf.PermanentError("AIAgent.spec.runtime.kind must be 'opencode'.")
+        raise kopf.PermanentError(f"AIAgent.spec.runtime.kind '{runtime_kind}' is not implemented.")
 
     agent_image = OPENCODE_RUNTIME_IMAGE
     agent_image_pull_policy = OPENCODE_RUNTIME_IMAGE_PULL_POLICY
@@ -1406,6 +1908,46 @@ def create_agent_statefulset_manifest(
                 }
             )
 
+    # OPA sidecar injection
+    opa_spec = spec.get("opa") or {}
+    if opa_spec.get("enabled"):
+        opa_policy_cm = str(opa_spec.get("configMapRef") or "").strip() or f"{name}-opa-policies"
+        volumes.append({"name": "opa-policies", "configMap": {"name": opa_policy_cm}})
+        containers.append(
+            {
+                "name": "opa",
+                "image": OPA_SIDECAR_IMAGE,
+                "ports": [{"containerPort": OPA_SIDECAR_PORT, "protocol": "TCP"}],
+                "args": [
+                    "run",
+                    "--server",
+                    "--addr",
+                    f"0.0.0.0:{OPA_SIDECAR_PORT}",
+                    "/opa/policies",
+                ],
+                "volumeMounts": [
+                    {"name": "opa-policies", "mountPath": "/opa/policies", "readOnly": True}
+                ],
+                "livenessProbe": {
+                    "httpGet": {"path": "/health", "port": OPA_SIDECAR_PORT},
+                    "initialDelaySeconds": 5,
+                    "periodSeconds": 10,
+                    "timeoutSeconds": 3,
+                    "failureThreshold": 3,
+                },
+                "readinessProbe": {
+                    "httpGet": {"path": "/health", "port": OPA_SIDECAR_PORT},
+                    "initialDelaySeconds": 2,
+                    "periodSeconds": 5,
+                    "timeoutSeconds": 3,
+                    "failureThreshold": 3,
+                },
+                "securityContext": container_security_context,
+                "resources": OPA_SIDECAR_RESOURCES,
+            }
+        )
+        logger.info("Injected OPA sidecar for agent '%s' (policies from ConfigMap '%s')", name, opa_policy_cm)
+
     # Enable service account token when the kubernetes MCP sidecar is present
     # so kubectl / in-cluster clients can reach the API server.
     has_k8s_sidecar = any(
@@ -1483,8 +2025,8 @@ def create_mcp_network_policy_manifest(name: str, namespace: str, allowed_mcp_ty
             {
                 "to": [
                     {
-                        "namespaceSelector": {"matchLabels": {"kubesynth.ai/mcp-hub": "true"}},
-                        "podSelector": {"matchLabels": {"mcp.kubesynth.ai/type": mcp_type}},
+                        "namespaceSelector": {"matchLabels": {"kubesynapse.ai/mcp-hub": "true"}},
+                        "podSelector": {"matchLabels": {"mcp.kubesynapse.ai/type": mcp_type}},
                     }
                 ],
                 "ports": [{"protocol": "TCP", "port": 8000}],
@@ -1500,7 +2042,7 @@ def create_mcp_network_policy_manifest(name: str, namespace: str, allowed_mcp_ty
             "labels": {
                 "app": "ai-agent",
                 "agent-name": name,
-                "kubesynth.ai/policy-type": "mcp-egress",
+                "kubesynapse.ai/policy-type": "mcp-egress",
                 **agent_owner_labels(name),
             },
         },
@@ -1544,7 +2086,7 @@ def create_a2a_egress_network_policy_manifest(
             "labels": {
                 "app": "ai-agent",
                 "agent-name": name,
-                "kubesynth.ai/policy-type": "a2a-egress",
+                "kubesynapse.ai/policy-type": "a2a-egress",
                 **agent_owner_labels(name),
             },
         },
@@ -1582,7 +2124,7 @@ def create_a2a_ingress_network_policy_manifest(
             "labels": {
                 "app": "ai-agent",
                 "agent-name": name,
-                "kubesynth.ai/policy-type": "a2a-ingress",
+                "kubesynapse.ai/policy-type": "a2a-ingress",
                 **agent_owner_labels(name),
             },
         },
@@ -1673,9 +2215,9 @@ def create_worker_job_manifest(
             "namespace": OPERATOR_NAMESPACE,
             "labels": {
                 "app": "operator-worker",
-                "kubesynth.ai/resource-kind": kind,
-                "kubesynth.ai/resource-name": resource_name,
-                "kubesynth.ai/resource-namespace": resource_namespace,
+                "kubesynapse.ai/resource-kind": kind,
+                "kubesynapse.ai/resource-name": resource_name,
+                "kubesynapse.ai/resource-namespace": resource_namespace,
             },
         },
         "spec": {
@@ -1686,7 +2228,7 @@ def create_worker_job_manifest(
                 "metadata": {
                     "labels": {
                         "app": "operator-worker",
-                        "kubesynth.ai/resource-kind": kind,
+                        "kubesynapse.ai/resource-kind": kind,
                     }
                 },
                 "spec": {

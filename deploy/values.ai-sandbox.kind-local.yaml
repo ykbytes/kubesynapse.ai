@@ -11,33 +11,33 @@ global:
 
 opencodeRuntime:
   image:
-    repository: localhost/kubesynthai/kubesynth-opencode-runtime
+    repository: localhost/KubeSynapseai/kubesynapse-opencode-runtime
     tag: mcp-structured-20260413-4
     pullPolicy: IfNotPresent
 
 operator:
   image:
-    repository: localhost/kubesynthai/kubesynth-operator
+    repository: localhost/KubeSynapseai/kubesynapse-operator
     tag: mcp-structured-20260413-3
     pullPolicy: IfNotPresent
   workerImage:
-    repository: localhost/kubesynthai/kubesynth-operator
+    repository: localhost/KubeSynapseai/kubesynapse-operator
     tag: mcp-structured-20260413-3
     pullPolicy: IfNotPresent
 
 apiGateway:
   image:
-    repository: localhost/kubesynthai/kubesynth-api-gateway
+    repository: localhost/KubeSynapseai/kubesynapse-api-gateway
     tag: google-oidc-20260413-223019
     pullPolicy: IfNotPresent
 
 webUi:
   image:
-    repository: localhost/kubesynthai/kubesynth-web-ui
+    repository: localhost/KubeSynapseai/kubesynapse-web-ui
     tag: google-oidc-20260413-223019
     pullPolicy: IfNotPresent
 
 collector:
   image:
-    repository: localhost/kubesynthai/collector-agent
+    repository: localhost/KubeSynapseai/collector-agent
     tag: dev

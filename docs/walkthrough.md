@@ -1,4 +1,4 @@
-# KubeSynth Implementation Walkthrough
+# KubeSynapse Implementation Walkthrough
 
 This document is a current implementation walkthrough of the platform that exists in this repository today. It replaces the earlier multi-runtime narrative with the actual OpenCode-first architecture, current operator model, and the new observability surfaces now shipped in the chart and UI.
 
@@ -15,7 +15,7 @@ As of April 2026, the shipped platform is centered on these paths:
 
 ## 1. Helm Chart Foundation
 
-The platform chart in `charts/kubesynth` is still the entry point for the full stack, but the scope has grown beyond the original sandbox core.
+The platform chart in `charts/KubeSynapse` is still the entry point for the full stack, but the scope has grown beyond the original sandbox core.
 
 What the chart installs now:
 
@@ -43,7 +43,7 @@ Current responsibilities:
 - project compact workflow and eval state back into CRD status while keeping detailed artifacts on PVC-backed JSON files
 - reconcile approval decisions so waiting workflows resume or fail deterministically
 - conditionally register optional controllers when their CRDs are installed
-- reconcile the observability CRDs when `observationtargets.kubesynth.ai` exists
+- reconcile the observability CRDs when `observationtargets.kubesynapse.ai` exists
 
 Notable implementation changes relative to the old docs:
 

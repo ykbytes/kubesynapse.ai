@@ -1,6 +1,6 @@
-# KubeSynth Frequently Asked Questions
+# KubeSynapse Frequently Asked Questions
 
-**Who is this for:** Anyone evaluating, deploying, or operating KubeSynth.
+**Who is this for:** Anyone evaluating, deploying, or operating KubeSynapse.
 
 ---
 
@@ -20,14 +20,14 @@
 
 ## General
 
-### What is KubeSynth?
+### What is KubeSynapse?
 
-KubeSynth is a production-grade, Kubernetes-native AI agent platform. It deploys,
+KubeSynapse is a production-grade, Kubernetes-native AI agent platform. It deploys,
 orchestrates, and governs AI agents using declarative custom resources (CRDs).
 You define agents, workflows, policies, and evaluations as YAML, and the platform
 handles runtime provisioning, security, monitoring, and scaling.
 
-### Who should use KubeSynth?
+### Who should use KubeSynapse?
 
 - **Platform teams** who want to offer AI agents as a managed service
 - **DevOps engineers** who need agents that interact with Kubernetes, Git, and cloud APIs
@@ -45,13 +45,13 @@ and metrics.
 
 ## Platform Comparison
 
-### How is KubeSynth different from LangChain or CrewAI?
+### How is KubeSynapse different from LangChain or CrewAI?
 
 LangChain and CrewAI are Python libraries. You write code to build agents.
-KubeSynth is a platform: you write YAML, and the platform runs the agents in
+KubeSynapse is a platform: you write YAML, and the platform runs the agents in
 isolated sandboxes with built-in governance, observability, and multi-tenancy.
 
-| Capability | KubeSynth | LangChain | CrewAI |
+| Capability | KubeSynapse | LangChain | CrewAI |
 |------------|-----------|-----------|--------|
 | Deployment model | Helm chart on Kubernetes | Python library | Python library |
 | Governance | CRD-based policies | Manual code | Manual code |
@@ -60,15 +60,15 @@ isolated sandboxes with built-in governance, observability, and multi-tenancy.
 | MCP tools | 11 bundled sidecars | Requires setup | Requires setup |
 | Human-in-the-loop | `AgentApproval` CRD | External | External |
 
-### How is KubeSynth different from Dify or LangFlow?
+### How is KubeSynapse different from Dify or LangFlow?
 
 Dify and LangFlow are visual workflow builders with self-hosted options.
-KubeSynth is operator-driven and GitOps-friendly. You manage agents as code,
+KubeSynapse is operator-driven and GitOps-friendly. You manage agents as code,
 not as GUI graphs, which makes CI/CD, review, and rollback natural.
 
-### How is KubeSynth different from Kubiya?
+### How is KubeSynapse different from Kubiya?
 
-Kubiya focuses on conversational DevOps with a SaaS model. KubeSynth is open-source, runs entirely in your cluster, and gives you full control over the runtime, policies, and data.
+Kubiya focuses on conversational DevOps with a SaaS model. KubeSynapse is open-source, runs entirely in your cluster, and gives you full control over the runtime, policies, and data.
 
 ---
 
@@ -102,15 +102,15 @@ Yes. Add custom model definitions via the LiteLLM configuration or the `/api/v1/
 
 Kubernetes 1.25 or later. The platform uses features like CronJob v1, NetworkPolicy, and CRD subresources that require 1.25+.
 
-### Does KubeSynth work on managed Kubernetes?
+### Does KubeSynapse work on managed Kubernetes?
 
 Yes. Tested on EKS, GKE, AKS, and Kind. See [COMPATIBILITY.md](../COMPATIBILITY.md) for the full matrix.
 
-### Does KubeSynth work on OpenShift?
+### Does KubeSynapse work on OpenShift?
 
 Partially. OpenShift's SecurityContextConstraints may conflict with the default security contexts. You may need to customize SCCs or disable restricted profiles.
 
-### Does KubeSynth work on GKE Autopilot or Fargate?
+### Does KubeSynapse work on GKE Autopilot or Fargate?
 
 GKE Autopilot and Fargate have restrictions on privileged containers and DaemonSets. The collector DaemonSet may not run. Run the core platform without the observability collector on these environments.
 
@@ -138,7 +138,7 @@ There is no hard limit. Each agent is a StatefulSet, so the limit is your
 cluster's capacity for pods, CPU, memory, and PVCs. A 10-node cluster with
 32 cores and 64Gi per node can comfortably run 50+ agents.
 
-### Does KubeSynth support GPU acceleration?
+### Does KubeSynapse support GPU acceleration?
 
 Yes. Set `runtimeClassName: nvidia` in the agent spec and ensure GPU nodes are available. The runtime will use the GPU for model inference if the underlying runtime supports it.
 
@@ -160,7 +160,7 @@ autoscaling:
 
 ### How is authentication handled?
 
-KubeSynth supports multiple auth modes: shared token, JWT, OIDC, SAML, LDAP, and hybrid. OIDC is recommended for production.
+KubeSynapse supports multiple auth modes: shared token, JWT, OIDC, SAML, LDAP, and hybrid. OIDC is recommended for production.
 
 ### How is authorization enforced?
 
@@ -174,7 +174,7 @@ Agent state PVCs use the cluster's StorageClass encryption. PostgreSQL and trace
 
 Yes. All inter-service communication inside the cluster should use TLS where configured. External ingress should terminate TLS. Set `apiGateway.tls.enabled: true` in production.
 
-### Does KubeSynth support compliance frameworks?
+### Does KubeSynapse support compliance frameworks?
 
 The platform provides audit logging, approval gates, policy enforcement, and
 namespace isolation, which map to SOC 2, ISO 27001, and NIST controls. You are
@@ -197,8 +197,8 @@ Yes. MCP tools are standard containers that expose a local HTTP or stdio interfa
 Use Kind or Minikube:
 
 ```bash
-kind create cluster --name kubesynth-dev
-helm install kubesynth oci://docker.io/kubesynth/charts/kubesynth \
+kind create cluster --name KubeSynapse-dev
+helm install KubeSynapse oci://docker.io/kubesynapse/charts/kubesynapse \
   --set platformSecrets.native.openaiApiKey="sk-..."
 ```
 
@@ -232,11 +232,11 @@ Back up these components:
 
 See [Backup and Recovery](backup-and-recovery.md) for the full guide.
 
-### How do I upgrade KubeSynth?
+### How do I upgrade KubeSynapse?
 
 ```bash
-helm upgrade kubesynth oci://docker.io/kubesynth/charts/kubesynth \
-  -n kubesynth -f values-production.yaml
+helm upgrade KubeSynapse oci://docker.io/kubesynapse/charts/kubesynapse \
+  -n kubesynapse -f values-production.yaml
 ```
 
 Review CRD changes and run smoke tests after upgrade. See [Operator Guide](operator-guide.md) for detailed procedures.
@@ -268,9 +268,9 @@ See [CONTRIBUTING.md](../CONTRIBUTING.md). Good first issues are tagged `good fi
 
 Apache License 2.0. See [LICENSE](../LICENSE).
 
-### Is KubeSynth going to be a CNCF project?
+### Is KubeSynapse going to be a CNCF project?
 
-There is a roadmap item to submit KubeSynth to the CNCF Sandbox. No timeline is committed yet. See [ROADMAP.md](../ROADMAP.md).
+There is a roadmap item to submit KubeSynapse to the CNCF Sandbox. No timeline is committed yet. See [ROADMAP.md](../ROADMAP.md).
 
 ### Where can I find video tutorials?
 

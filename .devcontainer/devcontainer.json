@@ -1,5 +1,5 @@
 {
-  "name": "KubeSynth Dev Container",
+  "name": "kubesynapse Dev Container",
   "image": "mcr.microsoft.com/devcontainers/python:3.11",
   "features": {
     "ghcr.io/devcontainers/features/node:1": {

@@ -1,8 +1,8 @@
 # Production Deployment Guide
 
-## KubeSynth AI Agent Sandbox - Enterprise Deployment
+## KubeSynapse AI Agent Sandbox - Enterprise Deployment
 
-This guide ensures the kubesynth platform is ready for production deployment on any Kubernetes cluster.
+This guide ensures the KubeSynapse platform is ready for production deployment on any Kubernetes cluster.
 
 ### Pre-Deployment Verification Checklist
 
@@ -90,12 +90,12 @@ kubectl create secret docker-registry dockerhub-regcred \
 #### 4. Deploy Helm Chart
 ```bash
 # Deploy with production values
-helm install kubesynth ./charts/kubesynth \
+helm install KubeSynapse ./charts/kubesynapse \
   -f deploy/values.dockerhub.local.yaml \
   -n ai-platform
 
 # Or update existing deployment
-helm upgrade kubesynth ./charts/kubesynth \
+helm upgrade KubeSynapse ./charts/kubesynapse \
   -f deploy/values.dockerhub.local.yaml \
   -n ai-platform
 ```
@@ -106,10 +106,10 @@ helm upgrade kubesynth ./charts/kubesynth \
 kubectl get pods -n ai-platform
 
 # Check operator reconciliation
-kubectl logs -n ai-platform deployment/kubesynth-operator
+kubectl logs -n ai-platform deployment/kubesynapse-operator
 
 # Verify gateway is healthy
-kubectl get svc -n ai-platform kubesynth-api-gateway
+kubectl get svc -n ai-platform kubesynapse-api-gateway
 
 # Test API
 curl -X GET http://<gateway-service>/api/health
@@ -153,7 +153,7 @@ curl -X GET http://<gateway-ip:port>/api/agents?namespace=default \
 
 **Increase replicas:**
 ```yaml
-# charts/kubesynth/values.yaml
+# charts/kubesynapse/values.yaml
 operator:
   replicaCount: 3  # High availability
 
@@ -209,7 +209,7 @@ kubectl exec -n ai-platform <api-gateway-pod> -- \
   sh -c 'cp /data/auth.db /backups/auth.db'
 
 # Check operator logs
-kubectl logs -n ai-platform deployment/kubesynth-operator -f
+kubectl logs -n ai-platform deployment/kubesynapse-operator -f
 
 # Monitor resource usage
 kubectl top nodes
@@ -219,11 +219,11 @@ kubectl top pods -n ai-platform
 **Updates and rollbacks:**
 ```bash
 # Update image version in values file
-helm upgrade kubesynth ./charts/kubesynth \
+helm upgrade KubeSynapse ./charts/kubesynapse \
   -f deploy/values.dockerhub.local.yaml
 
 # Rollback if needed
-helm rollback kubesynth -n ai-platform
+helm rollback KubeSynapse -n ai-platform
 ```
 
 ---

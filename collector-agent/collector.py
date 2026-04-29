@@ -1,5 +1,5 @@
 """
-KubeSynth Intelligence Collector Agent
+kubesynapse Intelligence Collector Agent
 
 Lightweight agent deployed as a DaemonSet on K8s clusters.
 Accepts read-only collection tasks, executes them safely,
@@ -282,7 +282,7 @@ def collect_system_info() -> dict:
 # ---------------------------------------------------------------------------
 # FastAPI app
 # ---------------------------------------------------------------------------
-app = FastAPI(title="KubeSynth Collector Agent", version="0.1.0")
+app = FastAPI(title="kubesynapse Collector Agent", version="0.1.0")
 security = HTTPBearer()
 
 

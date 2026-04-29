@@ -1,8 +1,8 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: kubesynth-web-ui-nginx
-  namespace: kubesynth
+  name: kubesynapse-web-ui-nginx
+  namespace: kubesynapse
 data:
   default.conf: |
     server {

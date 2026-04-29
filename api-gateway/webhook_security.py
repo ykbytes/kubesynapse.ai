@@ -41,11 +41,11 @@ def check_webhook_rate_limit(webhook_key: str, limit: int, window_seconds: int =
 def verify_webhook_timestamp(timestamp_header: Optional[str], max_age_seconds: int = 300) -> None:
     """Prevent replay attacks by checking timestamp freshness."""
     if not timestamp_header:
-        raise HTTPException(status_code=401, detail="Missing X-KubeSynth-Timestamp header")
+        raise HTTPException(status_code=401, detail="Missing X-kubesynapse-Timestamp header")
     try:
         request_time = int(timestamp_header)
     except ValueError:
-        raise HTTPException(status_code=401, detail="Invalid X-KubeSynth-Timestamp header")
+        raise HTTPException(status_code=401, detail="Invalid X-kubesynapse-Timestamp header")
     if abs(time.time() - request_time) > max_age_seconds:
         raise HTTPException(status_code=401, detail="Webhook timestamp is too old")
 

@@ -135,7 +135,7 @@ def mock_k8s_agents():
     """Return a list of mock agent resources for K8s API mocking."""
     return [
         {
-            "apiVersion": "kubesynth.ai/v1",
+            "apiVersion": "kubesynapse.ai/v1",
             "kind": "AIAgent",
             "metadata": {"name": "test-agent", "namespace": "default"},
             "spec": {

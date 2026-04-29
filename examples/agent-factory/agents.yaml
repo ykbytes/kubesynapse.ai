@@ -1,11 +1,11 @@
-apiVersion: kubesynth.ai/v1alpha1
+apiVersion: kubesynapse.ai/v1alpha1
 kind: AIAgent
 metadata:
-  name: kubesynth-factory-analyst
+  name: kubesynapse-factory-analyst
   namespace: default
 spec:
   model: copilot-gpt-5-mini
-  policyRef: kubesynth-factory-policy
+  policyRef: kubesynapse-factory-policy
   runtime:
     kind: opencode
     opencode:
@@ -20,9 +20,9 @@ spec:
     size: 1Gi
   enableGVisor: false
   systemPrompt: |
-    You are the KubeSynth Spec Analyst.
+    You are the kubesynapse Spec Analyst.
     Expand any incoming idea into a structured specification that a downstream
-    factory agent can turn into a valid KubeSynth bundle.
+    factory agent can turn into a valid kubesynapse bundle.
 
     HARD BOUNDARIES:
     - Do not generate manifests, YAML, or Kubernetes resources.
@@ -131,14 +131,14 @@ spec:
       "open_questions": ["<open question if any>"]
     }
 ---
-apiVersion: kubesynth.ai/v1alpha1
+apiVersion: kubesynapse.ai/v1alpha1
 kind: AIAgent
 metadata:
-  name: kubesynth-factory
+  name: kubesynapse-factory
   namespace: default
 spec:
   model: copilot-gpt-5-mini
-  policyRef: kubesynth-factory-policy
+  policyRef: kubesynapse-factory-policy
   runtime:
     kind: opencode
     opencode:
@@ -155,9 +155,9 @@ spec:
       memory: 2Gi
   enableGVisor: false
   systemPrompt: |
-    You are KubeSynth Factory.
+    You are kubesynapse Factory.
     Use the analyst's expanded specification as the source of truth and produce
-    a valid, high-value KubeSynth bundle for this platform.
+    a valid, high-value kubesynapse bundle for this platform.
 
     OPERATING MODES:
     - If the request does not specify factory_mode, default to governed-bundle.
@@ -173,7 +173,7 @@ spec:
       out-of-scope explanation.
     - Prefer the smallest capable architecture that still preserves planning,
       review, and execution boundaries.
-    - Only use supported KubeSynth resource kinds and valid CRD fields.
+    - Only use supported kubesynapse resource kinds and valid CRD fields.
     - Use real namespaces, plain string policyRef values, and valid agentRef values.
     - Do not set container images on AIAgent resources.
     - Verify blocks must use Python, not kubectl.
@@ -229,14 +229,14 @@ spec:
     - run_permitted
     - summary
 ---
-apiVersion: kubesynth.ai/v1alpha1
+apiVersion: kubesynapse.ai/v1alpha1
 kind: AIAgent
 metadata:
-  name: kubesynth-factory-reviewer
+  name: kubesynapse-factory-reviewer
   namespace: default
 spec:
   model: copilot-gpt-5-mini
-  policyRef: kubesynth-factory-policy
+  policyRef: kubesynapse-factory-policy
   runtime:
     kind: opencode
     opencode:
@@ -251,7 +251,7 @@ spec:
     size: 1Gi
   enableGVisor: false
   systemPrompt: |
-    You are the KubeSynth bundle reviewer.
+    You are the kubesynapse bundle reviewer.
     Review blueprints for both platform correctness and practical quality.
 
     READ-ONLY MODE:
@@ -295,14 +295,14 @@ spec:
       "revised_guidance_markdown": "<guidance for the next stage>"
     }
 ---
-apiVersion: kubesynth.ai/v1alpha1
+apiVersion: kubesynapse.ai/v1alpha1
 kind: AIAgent
 metadata:
-  name: kubesynth-factory-deployer
+  name: kubesynapse-factory-deployer
   namespace: default
 spec:
   model: copilot-gpt-5-mini
-  policyRef: kubesynth-factory-policy
+  policyRef: kubesynapse-factory-policy
   runtime:
     kind: opencode
     opencode:
@@ -318,7 +318,7 @@ spec:
     size: 1Gi
   enableGVisor: false
   systemPrompt: |
-    You are the KubeSynth deployment executor.
+    You are the kubesynapse deployment executor.
     Only perform approved deploy, edit, and verification work for reviewed bundles.
 
     TOOLING REALITY:

@@ -1,7 +1,7 @@
-apiVersion: kubesynth.ai/v1alpha1
+apiVersion: kubesynapse.ai/v1alpha1
 kind: AgentPolicy
 metadata:
-  name: kubesynth-factory-policy
+  name: kubesynapse-factory-policy
   namespace: default
 spec:
   inputGuardrails:

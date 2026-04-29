@@ -10,16 +10,16 @@ import httpx
 # Environment
 # ---------------------------------------------------------------------------
 MCP_HUB_NAMESPACE = os.getenv("MCP_HUB_NAMESPACE", "mcp-hub").strip() or "mcp-hub"
-HELM_RELEASE_NAME = os.getenv("HELM_RELEASE_NAME", "kubesynth").strip() or "kubesynth"
+HELM_RELEASE_NAME = os.getenv("HELM_RELEASE_NAME", "kubesynapse").strip() or "kubesynapse"
 
 # ---------------------------------------------------------------------------
 # Infrastructure endpoints
 # ---------------------------------------------------------------------------
-NATS_URL = os.getenv("NATS_URL", "nats://kubesynth-nats:4222")
-QDRANT_URL = os.getenv("QDRANT_URL", "http://kubesynth-qdrant:6333")
-LITELLM_INTERNAL_URL = os.getenv("LITELLM_INTERNAL_URL", "").strip() or "http://kubesynth-litellm:4000"
+NATS_URL = os.getenv("NATS_URL", "nats://kubesynapse-nats:4222")
+QDRANT_URL = os.getenv("QDRANT_URL", "http://kubesynapse-qdrant:6333")
+LITELLM_INTERNAL_URL = os.getenv("LITELLM_INTERNAL_URL", "").strip() or "http://kubesynapse-litellm:4000"
 LITELLM_MASTER_KEY = os.getenv("LITELLM_MASTER_KEY", "").strip()
-LLM_SECRET_NAME = os.getenv("LLM_SECRET_NAME", "kubesynth-llm-api-keys")
+LLM_SECRET_NAME = os.getenv("LLM_SECRET_NAME", "kubesynapse-llm-api-keys")
 
 # ---------------------------------------------------------------------------
 # Runtime / agent limits
@@ -45,7 +45,7 @@ HTTP_INVOKE_TIMEOUT = httpx.Timeout(120.0, connect=10.0)
 A2A_PROTOCOL_VERSION = "1.0"
 A2A_TASK_RETENTION_SECONDS = max(int(os.getenv("A2A_TASK_RETENTION_SECONDS", "3600")), 60)
 A2A_PUBLIC_BASE_URL = os.getenv("API_GATEWAY_PUBLIC_BASE_URL", "").strip()
-A2A_PROVIDER_ORGANIZATION = os.getenv("A2A_PROVIDER_ORGANIZATION", "kubesynthai").strip()
+A2A_PROVIDER_ORGANIZATION = os.getenv("A2A_PROVIDER_ORGANIZATION", "KubeSynapseai").strip()
 A2A_PROVIDER_URL = os.getenv("A2A_PROVIDER_URL", "").strip()
 A2A_TERMINAL_STATES: frozenset[str] = frozenset(
     {"TASK_STATE_COMPLETED", "TASK_STATE_FAILED", "TASK_STATE_CANCELED", "TASK_STATE_REJECTED"}
@@ -91,9 +91,9 @@ MAX_AGENT_SKILL_TOTAL_CHARS = max(int(os.getenv("AGENT_MAX_SKILL_TOTAL_CHARS", "
 # ---------------------------------------------------------------------------
 # Factory constants
 # ---------------------------------------------------------------------------
-FACTORY_AGENT_NAME = "kubesynth-factory"
-FACTORY_WORKFLOW_NAME = "kubesynth-factory-pipeline"
-FACTORY_CONTEXT_NAME = "kubesynth-factory-context"
+FACTORY_AGENT_NAME = "kubesynapse-factory"
+FACTORY_WORKFLOW_NAME = "kubesynapse-factory-pipeline"
+FACTORY_CONTEXT_NAME = "kubesynapse-factory-context"
 DEFAULT_FACTORY_MODE = "governed-bundle"
 FACTORY_MODES: frozenset[str] = frozenset({"lightweight-draft", "governed-bundle", "fully-autonomous"})
 FACTORY_MODE_SYSTEM_NOTES: dict[str, str] = {

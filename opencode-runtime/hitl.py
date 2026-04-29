@@ -30,7 +30,7 @@ except Exception:
     config = None
 
 
-APPROVAL_GROUP = "kubesynth.ai"
+APPROVAL_GROUP = "kubesynapse.ai"
 APPROVAL_VERSION = "v1alpha1"
 APPROVAL_PLURAL = "agentapprovals"
 HITL_MODE = os.getenv("HITL_MODE", "enforce").strip().lower()

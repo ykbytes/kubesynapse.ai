@@ -1,4 +1,4 @@
-apiVersion: kubesynth.ai/v1alpha1
+apiVersion: kubesynapse.ai/v1alpha1
 kind: AgentWorkflow
 metadata:
   name: creator

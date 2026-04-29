@@ -1,10 +1,10 @@
-# KubeSynth Architecture Overview
+# KubeSynapse Architecture Overview
 
 This document describes the architecture that the repository currently implements. It focuses on the active runtime path, the current control-plane model, and the observability capabilities that now exist in code.
 
 ## 1. System Summary
 
-KubeSynth is a Kubernetes-native AI agent platform built around these ideas:
+KubeSynapse is a Kubernetes-native AI agent platform built around these ideas:
 
 - represent agents, workflows, policies, approvals, evals, tenants, and observability resources as Kubernetes custom resources
 - reconcile desired state with a Python operator and background worker Jobs
@@ -12,7 +12,7 @@ KubeSynth is a Kubernetes-native AI agent platform built around these ideas:
 - route model calls through LiteLLM and optional retrieval through Qdrant
 - expose the platform through a FastAPI gateway, a React web UI, and the `agentctl` CLI
 
-The platform is now OpenCode-first. The active contract in the repository treats `runtime.kind: opencode` as the supported runtime path.
+The platform supports dual runtimes: OpenCode (`runtime.kind: opencode`) and Pi (`runtime.kind: pi`).
 
 ## 2. Top-Level Architecture
 
@@ -26,7 +26,8 @@ flowchart LR
     Worker[Workflow and Eval Workers]
 
     subgraph AgentPlane[Per-Agent Runtime Plane]
-        RuntimeSTS[OpenCode Runtime StatefulSet]
+        OpenCodeSTS[OpenCode Runtime StatefulSet]
+        PiSTS[Pi Runtime StatefulSet]
         Sidecar[Optional MCP Sidecars]
         SharedMCP[Shared MCP Hub]
         StatePVC[State PVC]
@@ -53,16 +54,22 @@ flowchart LR
     User -. apply CRDs .-> K8s
     Gateway --> K8s
     K8s --> Operator
-    Operator --> RuntimeSTS
+    Operator --> OpenCodeSTS
+    Operator --> PiSTS
     Operator --> Worker
     Operator --> ObservationCRDs
     Worker --> K8s
-    RuntimeSTS --> LiteLLM --> Redis
-    RuntimeSTS --> Qdrant
-    RuntimeSTS -. optional .-> Sidecar
-    RuntimeSTS -. optional .-> SharedMCP
-    RuntimeSTS --> StatePVC
-    RuntimeSTS --> ApprovalCR
+    OpenCodeSTS --> LiteLLM --> Redis
+    OpenCodeSTS --> Qdrant
+    OpenCodeSTS -. optional .-> Sidecar
+    OpenCodeSTS -. optional .-> SharedMCP
+    OpenCodeSTS --> StatePVC
+    OpenCodeSTS --> ApprovalCR
+    PiSTS --> LiteLLM
+    PiSTS -. optional .-> Sidecar
+    PiSTS -. optional .-> SharedMCP
+    PiSTS --> StatePVC
+    PiSTS --> ApprovalCR
     Gateway --> Postgres
     ObservationCRDs --> Reports
     Collector --> Reports
@@ -128,15 +135,17 @@ Current responsibilities include:
 
 ### Runtime sandboxes
 
-Each agent runs in an isolated sandbox, and the supported runtime path is OpenCode.
+Each agent runs in an isolated sandbox. The supported runtime paths are OpenCode and Pi.
 
-An agent sandbox typically contains:
+An OpenCode agent sandbox typically contains:
 
 - the OpenCode runtime process
 - runtime-generated config and context files
 - optional MCP sidecars
 - a persistent state volume
 - policy and approval enforcement hooks
+
+The Pi runtime runs as a separate StatefulSet using a Node.js HTTP bridge (`pi-runtime/pi_bridge.js`) that wraps Pi's RPC mode. It exposes artifact APIs (`/artifacts/list`, `/artifacts/download`, `/artifacts/zip`) backed by a pod-local filesystem and enforces a 120-second model timeout (`MODEL_TIMEOUT_MS`) with auto-abort and retry to prevent runaway sessions.
 
 ### Worker Jobs
 

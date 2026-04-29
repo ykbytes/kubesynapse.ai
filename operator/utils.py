@@ -655,25 +655,55 @@ def normalize_skill_file_path(raw_path: object) -> str:
     return candidate
 
 
-def parse_agent_skills_config(skills_config: Any, *, source: str = "AIAgent.spec.skills") -> dict[str, Any]:
+def parse_agent_skills_config(skills_config: Any, *, source: str = "AIAgent.spec.skills", namespace: str | None = None) -> dict[str, Any]:
     if skills_config is None:
         return {}
     if not isinstance(skills_config, dict):
         raise ValueError(f"{source} must be an object when provided.")
 
     raw_files = skills_config.get("files")
-    if raw_files is None:
-        if skills_config:
-            raise ValueError(f"{source}.files is required when skills are configured.")
-        return {}
-    if not isinstance(raw_files, dict):
+    config_map_ref = skills_config.get("configMapRef")
+    merged_files: dict[str, str] = {}
+
+    if isinstance(raw_files, dict):
+        merged_files = dict(raw_files)
+    elif raw_files is not None:
         raise ValueError(f"{source}.files must be a mapping of relative Markdown paths to file contents.")
-    if len(raw_files) > MAX_AGENT_SKILL_FILES:
+
+    if config_map_ref is not None:
+        if not isinstance(config_map_ref, str) or not config_map_ref.strip():
+            raise ValueError(f"{source}.configMapRef must be a non-empty string.")
+        config_map_ref = config_map_ref.strip()
+        if namespace:
+            try:
+                import kubernetes.client
+                from kubernetes.client.rest import ApiException
+                core_api = kubernetes.client.CoreV1Api()
+                cm = core_api.read_namespaced_config_map(name=config_map_ref, namespace=namespace)
+            except ApiException as exc:
+                if exc.status == 404:
+                    raise ValueError(
+                        f"{source}.configMapRef '{config_map_ref}' not found in namespace '{namespace}'."
+                    ) from exc
+                raise ValueError(
+                    f"{source}.configMapRef '{config_map_ref}' could not be read: {exc}"
+                ) from exc
+            cm_data = cm.data or {}
+            if not isinstance(cm_data, dict):
+                raise ValueError(f"{source}.configMapRef '{config_map_ref}' data is not a valid mapping.")
+            for key, value in cm_data.items():
+                if key not in merged_files:
+                    merged_files[key] = str(value)
+
+    if not merged_files and not config_map_ref:
+        return {}
+
+    if len(merged_files) > MAX_AGENT_SKILL_FILES:
         raise ValueError(f"{source}.files cannot contain more than {MAX_AGENT_SKILL_FILES} entries.")
 
     normalized_files: dict[str, str] = {}
     total_chars = 0
-    for raw_path, raw_content in sorted(raw_files.items(), key=lambda item: str(item[0])):
+    for raw_path, raw_content in sorted(merged_files.items(), key=lambda item: str(item[0])):
         normalized_path = normalize_skill_file_path(raw_path)
         if not isinstance(raw_content, str):
             raise ValueError(f"{source}.files.{normalized_path} must be a Markdown string.")
@@ -688,7 +718,12 @@ def parse_agent_skills_config(skills_config: Any, *, source: str = "AIAgent.spec
             raise ValueError(f"{source}.files exceeds the total limit of {MAX_AGENT_SKILL_TOTAL_CHARS} characters.")
         normalized_files[normalized_path] = raw_content.replace("\r\n", "\n")
 
-    return {"files": normalized_files} if normalized_files else {}
+    result: dict[str, Any] = {}
+    if normalized_files:
+        result["files"] = normalized_files
+    if config_map_ref:
+        result["configMapRef"] = config_map_ref
+    return result
 
 
 def runtime_error_message(response: httpx.Response, *, max_body_chars: int = 400) -> str:
@@ -820,7 +855,8 @@ def invoke_agent_runtime_stream(
                     )
                     return invoke_agent_runtime(agent_name, namespace, payload, timeout_seconds=timeout_seconds)
                 final_result: dict[str, Any] = {}
-                last_response = ""
+                response_chunks: list[str] = []
+                streamed_tool_calls: list[dict[str, Any]] = []
                 turn_count = 0
                 current_event_type = ""
                 for line in resp.iter_lines():
@@ -860,6 +896,7 @@ def invoke_agent_runtime_stream(
                         delta_text = data.get("delta", "")
                         # Log first 200 chars of delta to show what opencode is doing
                         if delta_text:
+                            response_chunks.append(str(delta_text))
                             preview = delta_text[:200].replace("\n", " ")
                             logger.info(
                                 "%s turn %d delta: %s%s",
@@ -871,6 +908,7 @@ def invoke_agent_runtime_stream(
                     elif etype == "response.tool_call":
                         tool_name = str(data.get("tool", "") or "tool")
                         tool_status = str(data.get("status", "unknown") or "unknown")
+                        streamed_tool_calls.append(dict(data))
                         input_preview = _tool_call_input_preview(data.get("input"))
                         suffix = f": {input_preview}" if input_preview else ""
                         logger.info(
@@ -899,6 +937,20 @@ def invoke_agent_runtime_stream(
                         )
                     elif etype == "response.completed":
                         final_result = data
+                        streamed_response = "".join(response_chunks)
+                        completed_response = str(final_result.get("response", "") or "").strip()
+                        # Prefer the accumulated streamed response when it is materially
+                        # longer than the payload in the completed event.  Some runtimes
+                        # truncate the final response field while the delta stream is
+                        # complete.
+                        if not completed_response or (
+                            streamed_response and len(streamed_response) > len(completed_response) + 100
+                        ):
+                            final_result["response"] = streamed_response
+                        if not final_result.get("tool_calls") and streamed_tool_calls:
+                            final_result["tool_calls"] = streamed_tool_calls
+                        if final_result.get("metadata") is None:
+                            final_result["metadata"] = {}
                         last_response = str(final_result.get("response", ""))
                         logger.info(
                             "%s completed — turns: %d, response: %d chars", prefix, turn_count, len(last_response)

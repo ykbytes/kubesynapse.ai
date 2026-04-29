@@ -29,7 +29,7 @@ logger = logging.getLogger("operator.controllers.approval")
 # ---------------------------------------------------------------------------
 
 
-@kopf.on.field("kubesynth.ai", "v1alpha1", "agentapprovals", field="status.decision")  # type: ignore[arg-type]
+@kopf.on.field("kubesynapse.ai", "v1alpha1", "agentapprovals", field="status.decision")  # type: ignore[arg-type]
 def on_approval_decision(old: str | None, new: str | None, name: str, namespace: str, logger: logging.Logger, **kwargs: Any) -> None:
     del kwargs
     previous_decision = str(old or "").strip().lower()
@@ -52,15 +52,15 @@ def on_approval_decision(old: str | None, new: str | None, name: str, namespace:
         custom_api = kubernetes.client.CustomObjectsApi()
         try:
             workflows = custom_api.list_namespaced_custom_object(
-                group="kubesynth.ai",
+                group="kubesynapse.ai",
                 version="v1alpha1",
                 namespace=namespace,
                 plural="agentworkflows",
-                label_selector=f"kubesynth.ai/pending-approval={name}",
+                label_selector=f"kubesynapse.ai/pending-approval={name}",
             ).get("items", [])
         except ApiException:
             workflows = custom_api.list_namespaced_custom_object(
-                group="kubesynth.ai",
+                group="kubesynapse.ai",
                 version="v1alpha1",
                 namespace=namespace,
                 plural="agentworkflows",

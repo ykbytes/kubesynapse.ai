@@ -1,4 +1,4 @@
-"""KubeSynth Memory System — Production-grade agent memory.
+"""kubesynapse Memory System — Production-grade agent memory.
 
 A multi-tier, pluggable memory architecture inspired by Hermes Agent.
 

@@ -23,6 +23,7 @@ import {
   AlertTriangle,
   ChevronDown,
   ChevronUp,
+  Radio,
 } from "lucide-react";
 import { ExpandableMarkdownEditor } from "@/components/ExpandableMarkdownEditor";
 import { cn } from "@/lib/utils";
@@ -52,6 +53,9 @@ interface ComposerToolbarProps {
   onAutoLayout: () => void;
   onToggleMaximize: () => void;
   onBack: () => void;
+  onToggleLivePanel?: () => void;
+  livePanelCollapsed?: boolean;
+  hasLiveActivity?: boolean;
 }
 
 export function ComposerToolbar({
@@ -77,6 +81,9 @@ export function ComposerToolbar({
   onAutoLayout,
   onToggleMaximize,
   onBack,
+  onToggleLivePanel,
+  livePanelCollapsed = true,
+  hasLiveActivity = false,
 }: ComposerToolbarProps) {
   const [inputExpanded, setInputExpanded] = useState(false);
   const [editorDialogOpen, setEditorDialogOpen] = useState(false);
@@ -208,6 +215,24 @@ export function ComposerToolbar({
           >
             <LayoutGrid className="h-3.5 w-3.5" />
           </Button>
+
+          {onToggleLivePanel && (
+            <Button
+              variant={livePanelCollapsed ? "ghost" : "secondary"}
+              size="icon"
+              className={cn(
+                "h-7 w-7 shrink-0 cursor-pointer relative",
+                !livePanelCollapsed && "bg-sky-500/10 text-sky-400 border-sky-500/20",
+              )}
+              onClick={onToggleLivePanel}
+              title={livePanelCollapsed ? "Show live activity (Ctrl+L)" : "Hide live activity (Ctrl+L)"}
+            >
+              <Radio className="h-3.5 w-3.5" />
+              {hasLiveActivity && livePanelCollapsed && (
+                <span className="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+              )}
+            </Button>
+          )}
 
           <Button
             variant="ghost"

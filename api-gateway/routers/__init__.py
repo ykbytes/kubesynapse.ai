@@ -1,4 +1,4 @@
-"""KubeSynth API Gateway — modular FastAPI routers.
+"""kubesynapse API Gateway — modular FastAPI routers.
 
 Each module exposes a ``router`` instance that is mounted in ``main.py``.
 """

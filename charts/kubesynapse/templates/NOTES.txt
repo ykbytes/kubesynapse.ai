@@ -1,0 +1,54 @@
+Thank you for installing kubesynapse!
+
+{{ if and (eq .Values.platformSecrets.mode "native")
+          (or (eq (default "" .Values.platformSecrets.native.litellmMasterKey) "replace-me")
+              (eq (default "" .Values.platformSecrets.native.apiGatewaySharedToken) "replace-me-with-a-long-random-bearer-token")
+              (eq (default "" .Values.platformSecrets.native.databasePassword) "replace-me-with-a-long-random-database-password")
+              (eq (default "" .Values.platformSecrets.native.jwtSecret) "replace-me-with-a-long-random-jwt-secret")) }}
+
+========================================================
+⚠️  SECURITY WARNING — DEFAULT SECRETS DETECTED
+========================================================
+
+One or more platform secrets are still using their default "replace-me"
+placeholder values from the chart.  This is insecure for production.
+
+Production deployments MUST override these in a custom values file:
+
+  platformSecrets:
+    native:
+      litellmMasterKey: "<random 32+ char key>"
+      apiGatewaySharedToken: "<random 32+ char key>"
+      databasePassword: "<random 32+ char key>"
+      jwtSecret: "<random 32+ char key>"
+      authBootstrapAdminPassword: ""  # Leave empty to disable; set for initial admin
+
+Or switch to external-secrets mode for production:
+
+  platformSecrets:
+    mode: external-secrets
+    externalSecrets:
+      ...
+
+{{ end }}
+
+{{ if eq (default "shared_token" .Values.apiGateway.auth.mode) "shared_token" }}
+========================================================
+⚠️  WARNING — SHARED_TOKEN AUTH MODE IS ENABLED
+========================================================
+
+The shared-token auth mode grants full admin access to any bearer of the
+shared token.  This is intended for development and CI environments only.
+
+For production, switch to an enterprise auth mode:
+
+  apiGateway:
+    auth:
+      mode: enterprise  # or: oidc, local
+========================================================
+
+{{ end }}
+
+Get started:
+  kubectl port-forward svc/{{ include "kubesynapse.fullname" . }}-api-gateway 8080:8080 -n {{ .Release.Namespace }}
+  kubectl port-forward svc/{{ include "kubesynapse.fullname" . }}-web-ui 3000:80 -n {{ .Release.Namespace }}

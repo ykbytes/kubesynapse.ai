@@ -1,6 +1,6 @@
 # Configuration Reference
 
-This document describes every environment variable, Helm value, and configuration option available in KubeSynth.
+This document describes every environment variable, Helm value, and configuration option available in KubeSynapse.
 
 ## Table of Contents
 
@@ -32,11 +32,11 @@ This document describes every environment variable, Helm value, and configuratio
 | `API_GATEWAY_COOKIE_SAMESITE` | `lax` | Cookie SameSite attribute |
 | `DATABASE_HOST` | `""` | PostgreSQL host |
 | `DATABASE_PORT` | `5432` | PostgreSQL port |
-| `DATABASE_NAME` | `kubesynth` | Database name |
+| `DATABASE_NAME` | `KubeSynapse` | Database name |
 | `DATABASE_USER` | `""` | Database user |
 | `DATABASE_PASSWORD` | `""` | Database password |
 | `DATABASE_SSL_MODE` | `prefer` | SSL mode for PostgreSQL |
-| `DATABASE_SQLITE_PATH` | `/tmp/kubesynth-gateway.db` | SQLite fallback path |
+| `DATABASE_SQLITE_PATH` | `/tmp/KubeSynapse-gateway.db` | SQLite fallback path |
 | `OPENCODE_MEMORY_ENABLED` | `true` | Enable cross-session memory persistence |
 | `OPENCODE_MEMORY_DIR` | `~/.local/share/opencode-runtime/memory` | Memory storage directory |
 | `OPENCODE_MEMORY_DEFAULT_RETENTION` | `session` | Default memory retention tier |
@@ -117,7 +117,7 @@ This document describes every environment variable, Helm value, and configuratio
 | `OPENCODE_MEMORY_ENTITY_EXTRACTION` | `true` | Enable entity extraction |
 | `OPENCODE_MEMORY_SEMANTIC_ENABLED` | `false` | Enable semantic memory |
 | `OPENCODE_MEMORY_QDRANT_URL` | `http://localhost:6333` | Qdrant URL |
-| `OPENCODE_MEMORY_QDRANT_COLLECTION` | `kubesynth_memory` | Qdrant collection name |
+| `OPENCODE_MEMORY_QDRANT_COLLECTION` | `KubeSynapse_memory` | Qdrant collection name |
 | `OPENCODE_MEMORY_QDRANT_DIMENSION` | `768` | Embedding dimension |
 | `OPENCODE_MEMORY_QDRANT_TIMEOUT` | `5.0` | Qdrant connection timeout |
 | `OPENCODE_MEMORY_RELEVANCE_DECAY_HOURS` | `168` | Memory relevance decay (hours) |
@@ -127,7 +127,7 @@ This document describes every environment variable, Helm value, and configuratio
 
 ## Helm Values
 
-See [`values.schema.json`](../charts/kubesynth/values.schema.json) for the complete JSON Schema.
+See [`values.schema.json`](../charts/kubesynapse/values.schema.json) for the complete JSON Schema.
 
 ### Key Sections
 
@@ -249,7 +249,7 @@ ingress:
   enabled: true
   className: "nginx"
   hosts:
-    - host: "staging.kubesynth.example.com"
+    - host: "staging.KubeSynapse.example.com"
       paths:
         - path: /
           pathType: Prefix
@@ -312,7 +312,7 @@ agentRuntime:
     notificationWebhookUrl: "https://hooks.production.example.com/hitl"
 
 runtimeServiceAccount:
-  name: "kubesynth-agent-runtime"
+  name: "KubeSynapse-agent-runtime"
 
 opencodeRuntime:
   limits:
@@ -357,23 +357,23 @@ apiGateway:
   enabled: true
   replicaCount: 3
   ingressClassName: "nginx"
-  ingressHost: "kubesynth.example.com"
+  ingressHost: "KubeSynapse.example.com"
   tls:
     enabled: true
-    secretName: "kubesynth-tls"
+    secretName: "KubeSynapse-tls"
   auth:
     mode: oidc
     jwt:
       secretName: "jwt-signing-key"
     oidcIssuer: "https://auth.example.com"
-    oidcAudience: "kubesynth"
+    oidcAudience: "KubeSynapse"
     cookieSecure: true
     cookieSameSite: strict
   db:
     host: "postgres.production.svc.cluster.local"
     port: 5432
-    name: "kubesynth"
-    user: "kubesynth"
+    name: "KubeSynapse"
+    user: "KubeSynapse"
     sslMode: "verify-full"
   resources:
     requests:
@@ -393,7 +393,7 @@ ingress:
   annotations:
     cert-manager.io/cluster-issuer: "letsencrypt-prod"
   hosts:
-    - host: "kubesynth.example.com"
+    - host: "KubeSynapse.example.com"
       paths:
         - path: /
           pathType: Prefix
@@ -404,9 +404,9 @@ ingress:
           service: api-gateway
           port: 8080
   tls:
-    - secretName: "kubesynth-tls"
+    - secretName: "KubeSynapse-tls"
       hosts:
-        - "kubesynth.example.com"
+        - "KubeSynapse.example.com"
 
 platformSecrets:
   mode: external-secrets
@@ -425,11 +425,11 @@ intelligence:
 Validate your values against the schema:
 
 ```bash
-helm lint ./charts/kubesynth --strict
+helm lint ./charts/kubesynapse --strict
 ```
 
 Or validate a custom values file:
 
 ```bash
-helm lint ./charts/kubesynth -f values-production.yaml --strict
+helm lint ./charts/kubesynapse -f values-production.yaml --strict
 ```

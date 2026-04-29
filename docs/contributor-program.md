@@ -1,34 +1,34 @@
-# KubeSynth Contributor Program
+# KubeSynapse Contributor Program
 
-We believe contributors are the heart of open source. The KubeSynth Contributor Program recognizes, rewards, and elevates community members who invest their time and expertise.
+We believe contributors are the heart of open source. The KubeSynapse Contributor Program recognizes, rewards, and elevates community members who invest their time and expertise.
 
 ## Recognition Tiers
 
 ### 🥉 Bronze Contributor (1+ merged PR)
 - Name listed in CONTRIBUTORS.md
-- "KubeSynth Contributor" badge for GitHub profile
+- "KubeSynapse Contributor" badge for GitHub profile
 - Shoutout in release notes
 
 ### 🥈 Silver Contributor (5+ merged PRs)
 - All Bronze benefits
-- KubeSynth t-shirt mailed to you
+- KubeSynapse t-shirt mailed to you
 - Early access to roadmap and RFCs
 - Eligible for "Committer" role (merge rights)
 
 ### 🥇 Gold Contributor (15+ merged PRs, or significant feature)
 - All Silver benefits
-- KubeSynth hoodie mailed to you
-- Spotlight interview on kubesynth.ai blog
+- KubeSynapse hoodie mailed to you
+- Spotlight interview on kubesynapse.ai blog
 - Conference ticket sponsorship (1/year, up to $2,000)
 - Eligible for Maintainer role
 
 ### 💎 Platinum Contributor (Sustained leadership, 30+ PRs, or community pillar)
 - All Gold benefits
-- KubeSynth jacket + custom swag box
+- KubeSynapse jacket + custom swag box
 - Named in README.md as core contributor
 - KubeCon/CNCF travel sponsorship (1/year, up to $3,000)
 - Eligible for TOC seat
-- KubeSynth credit on your profile and resume
+- KubeSynapse credit on your profile and resume
 
 ## How to Earn Recognition
 
@@ -46,7 +46,7 @@ Recognition is based on sustained, quality contributions. Every merged PR counts
 - Tutorial and blog post writing
 - Community support (answering issues, Discord/Slack help)
 - Bug triage and reproduction
-- Conference talks and workshops about KubeSynth
+- Conference talks and workshops about KubeSynapse
 - UX/design contributions
 
 ### Special Recognition Categories
@@ -67,13 +67,13 @@ Recognition is based on sustained, quality contributions. Every merged PR counts
 
 ## Contributor Spotlight
 
-Every month, we feature one contributor on the [KubeSynth blog](https://kubesynth.ai/blog):
+Every month, we feature one contributor on the [KubeSynapse blog](https://kubesynapse.ai/blog):
 
 **Format:**
-- Short interview (5 questions about your KubeSynth journey)
+- Short interview (5 questions about your KubeSynapse journey)
 - Photo and bio
 - Links to your contributions
-- What you're building with KubeSynth
+- What you're building with KubeSynapse
 
 To be featured, open an issue with title `[Contributor Spotlight] @yourhandle` and answer the interview questions.
 
@@ -100,8 +100,8 @@ Submit a request via GitHub issue with title `[Sponsorship] Conference Name - @y
 
 ## Questions?
 
-Open a discussion on [GitHub Discussions](https://github.com/ykbytes/kubemininions/discussions) or ask in `#kubesynth` on Slack.
+Open a discussion on [GitHub Discussions](https://github.com/ykbytes/kubemininions/discussions) or ask in `#KubeSynapse` on Slack.
 
 ---
 
-**KubeSynth** — Contributors make the platform.
+**KubeSynapse** — Contributors make the platform.

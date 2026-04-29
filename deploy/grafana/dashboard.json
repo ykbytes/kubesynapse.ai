@@ -52,7 +52,7 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(kubesynth_gateway_request_total[5m])) by (handler)",
+          "expr": "sum(rate(KUBESYNAPSE_gateway_request_total[5m])) by (handler)",
           "refId": "A"
         }
       ],
@@ -75,7 +75,7 @@
       "options": {"showHeader": true},
       "targets": [
         {
-          "expr": "sum(rate(kubesynth_gateway_request_latency_seconds_count{status=~\"5..\"}[5m])) / sum(rate(kubesynth_gateway_request_latency_seconds_count[5m])) * 100",
+          "expr": "sum(rate(KUBESYNAPSE_gateway_request_latency_seconds_count{status=~\"5..\"}[5m])) / sum(rate(KUBESYNAPSE_gateway_request_latency_seconds_count[5m])) * 100",
           "refId": "A"
         }
       ],
@@ -102,7 +102,7 @@
       "id": 3,
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum(rate(kubesynth_gateway_request_latency_seconds_bucket[5m])) by (le, handler))",
+          "expr": "histogram_quantile(0.95, sum(rate(KUBESYNAPSE_gateway_request_latency_seconds_bucket[5m])) by (le, handler))",
           "refId": "A"
         }
       ],
@@ -122,7 +122,7 @@
       "id": 4,
       "targets": [
         {
-          "expr": "sum(rate(kubesynth_operator_reconcile_total[5m])) by (resource_type)",
+          "expr": "sum(rate(KUBESYNAPSE_operator_reconcile_total[5m])) by (resource_type)",
           "refId": "A"
         }
       ],
@@ -142,7 +142,7 @@
       "id": 5,
       "targets": [
         {
-          "expr": "sum(kubesynth_operator_reconcile_errors_total)",
+          "expr": "sum(KUBESYNAPSE_operator_reconcile_errors_total)",
           "refId": "A"
         }
       ],
@@ -162,7 +162,7 @@
       "id": 6,
       "targets": [
         {
-          "expr": "sum(kubesynth_circuit_breaker_state{state=\"open\"})",
+          "expr": "sum(KUBESYNAPSE_circuit_breaker_state{state=\"open\"})",
           "refId": "A"
         }
       ],
@@ -182,7 +182,7 @@
       "id": 7,
       "targets": [
         {
-          "expr": "sum(container_memory_working_set_bytes{namespace=~\"$namespace\", pod=~\"kubesynth-.*\"}) by (pod)",
+          "expr": "sum(container_memory_working_set_bytes{namespace=~\"$namespace\", pod=~\"kubesynapse-.*\"}) by (pod)",
           "refId": "A"
         }
       ],
@@ -193,7 +193,7 @@
   "refresh": "30s",
   "schemaVersion": 30,
   "style": "dark",
-  "tags": ["kubesynth"],
+  "tags": ["kubesynapse"],
   "templating": {
     "list": [
       {
@@ -230,7 +230,7 @@
   "time": {"from": "now-1h", "to": "now"},
   "timepicker": {},
   "timezone": "utc",
-  "title": "KubeSynth Platform Overview",
-  "uid": "kubesynth-overview",
+  "title": "kubesynapse Platform Overview",
+  "uid": "kubesynapse-overview",
   "version": 1
 }

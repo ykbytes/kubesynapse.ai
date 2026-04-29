@@ -107,7 +107,7 @@ trace_client = TraceClient(
 _CURRENT_EXECUTION_ID: str | None = None
 _trace_context = threading.local()
 
-GROUP = "kubesynth.ai"
+GROUP = "kubesynapse.ai"
 VERSION = "v1alpha1"
 WORKER_KIND = os.getenv("WORKER_KIND", "").strip().lower()
 TARGET_NAMESPACE = os.getenv("TARGET_NAMESPACE", "").strip()
@@ -157,6 +157,10 @@ MAX_PARALLEL_STEPS: int = max(int(os.getenv("MAX_PARALLEL_STEPS", "4")), 1)
 # ---------------------------------------------------------------------------
 
 _shutting_down = threading.Event()
+
+# Serialize status patches for the same workflow resource to eliminate
+# 409 conflicts when parallel steps update status simultaneously.
+_WORKFLOW_STATUS_LOCK = threading.Lock()
 
 
 def is_shutting_down() -> bool:
@@ -222,16 +226,16 @@ def acquire_worker_lease(kind: str, namespace: str, name: str, generation: int) 
             name=lease_name,
             namespace=OPERATOR_NAMESPACE,
             labels={
-                "kubesynth.ai/kind": kind,
-                "kubesynth.ai/resource": name,
-                "kubesynth.ai/namespace": namespace,
+                "kubesynapse.ai/kind": kind,
+                "kubesynapse.ai/resource": name,
+                "kubesynapse.ai/namespace": namespace,
             },
         ),
         spec=kubernetes.client.V1LeaseSpec(
             holder_identity=_LEASE_HOLDER_IDENTITY,
             acquire_time=now,
             renew_time=now,
-            lease_duration_seconds=600,
+            lease_duration_seconds=120,
         ),
     )
     try:
@@ -244,7 +248,7 @@ def acquire_worker_lease(kind: str, namespace: str, name: str, generation: int) 
             try:
                 existing = coord_api.read_namespaced_lease(name=lease_name, namespace=OPERATOR_NAMESPACE)
                 renew = existing.spec.renew_time or existing.spec.acquire_time
-                duration = existing.spec.lease_duration_seconds or 600
+                duration = existing.spec.lease_duration_seconds or 120
                 if renew and (now - renew).total_seconds() > duration:
                     # Expired — take over
                     existing.spec.holder_identity = _LEASE_HOLDER_IDENTITY
@@ -301,6 +305,59 @@ def release_worker_lease(kind: str, name: str, generation: int) -> None:
     except kubernetes.client.ApiException as exc:
         if exc.status != 404:
             logger.warning("Failed to release lease %s: %s", lease_name, exc)
+
+
+# ---------------------------------------------------------------------------
+# §2.6b — Background lease renewal so long-running workers don't lose their lock
+# ---------------------------------------------------------------------------
+
+_lease_renewal_thread: threading.Thread | None = None
+_lease_renewal_stop = threading.Event()
+
+
+def _renew_lease_loop(kind: str, name: str, generation: int) -> None:
+    """Renew the Kubernetes Lease every 60 seconds while the worker runs."""
+    lease_name = f"{name}-gen-{generation}-{kind}"[:253]
+    coord_api = kubernetes.client.CoordinationV1Api()
+    while not _lease_renewal_stop.is_set():
+        _lease_renewal_stop.wait(timeout=60)
+        if _lease_renewal_stop.is_set():
+            break
+        try:
+            existing = coord_api.read_namespaced_lease(
+                name=lease_name, namespace=OPERATOR_NAMESPACE
+            )
+            existing.spec.renew_time = datetime.now(UTC)
+            coord_api.replace_namespaced_lease(
+                name=lease_name,
+                namespace=OPERATOR_NAMESPACE,
+                body=existing,
+            )
+            logger.debug("Renewed lease %s.", lease_name)
+        except Exception as exc:
+            logger.warning("Failed to renew lease %s: %s", lease_name, exc)
+
+
+def start_lease_renewal(kind: str, name: str, generation: int) -> None:
+    """Start a background thread that keeps the worker lease alive."""
+    global _lease_renewal_thread
+    _lease_renewal_stop.clear()
+    _lease_renewal_thread = threading.Thread(
+        target=_renew_lease_loop,
+        args=(kind, name, generation),
+        daemon=True,
+    )
+    _lease_renewal_thread.start()
+    logger.info("Started lease renewal thread for %s.", name)
+
+
+def stop_lease_renewal() -> None:
+    """Signal the lease renewal thread to stop and wait for it to exit."""
+    global _lease_renewal_thread
+    _lease_renewal_stop.set()
+    if _lease_renewal_thread is not None:
+        _lease_renewal_thread.join(timeout=5)
+        _lease_renewal_thread = None
 
 
 def check_run_id_conflict(kind: str, namespace: str, name: str, generation: int, run_id: str) -> None:
@@ -406,7 +463,7 @@ def _patch_pending_approval_label(pending_approval_name: str | None) -> None:
             namespace=TARGET_NAMESPACE,
             plural="agentworkflows",
             name=TARGET_NAME,
-            body={"metadata": {"labels": {"kubesynth.ai/pending-approval": label_value}}},
+            body={"metadata": {"labels": {"kubesynapse.ai/pending-approval": label_value}}},
         )
     except kubernetes.client.ApiException as exc:
         if exc.status == 404:
@@ -660,27 +717,28 @@ def patch_workflow_status(
     pending_approval: dict[str, Any] | None = None,
     extra_summary: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    summary = clear_workflow_summary_lifecycle_fields(
-        workflow_summary(step_states, total_steps, run_id)
-    )
-    summary["startedAt"] = started_at
-    if extra_summary:
-        summary.update(extra_summary)
+    with _WORKFLOW_STATUS_LOCK:
+        summary = clear_workflow_summary_lifecycle_fields(
+            workflow_summary(step_states, total_steps, run_id)
+        )
+        summary["startedAt"] = started_at
+        if extra_summary:
+            summary.update(extra_summary)
 
-    status_payload = {
-        "phase": phase,
-        "runId": run_id,
-        "currentStep": current_step,
-        "observedGeneration": generation,
-        "artifactRef": artifact_ref(generation),
-        "journalRef": journal_ref(generation),
-        "workerJob": worker_job,
-        "summary": summary,
-        "pendingApproval": pending_approval,
-        "stepStates": step_states,
-    }
-    patch_custom_status(plural, status_payload)
-    return status_payload
+        status_payload = {
+            "phase": phase,
+            "runId": run_id,
+            "currentStep": current_step,
+            "observedGeneration": generation,
+            "artifactRef": artifact_ref(generation),
+            "journalRef": journal_ref(generation),
+            "workerJob": worker_job,
+            "summary": summary,
+            "pendingApproval": pending_approval,
+            "stepStates": step_states,
+        }
+        patch_custom_status(plural, status_payload)
+        return status_payload
 
 
 def previous_output_for_dependencies(
@@ -3655,7 +3713,7 @@ def main() -> int:
 
     load_kubernetes_config()
     init_state_database()
-    init_tracing("kubesynth-worker")
+    init_tracing("kubesynapse-worker")
 
     # §2.6 — Acquire distributed lease before execution
     resource = get_resource(resource_plural())
@@ -3680,6 +3738,8 @@ def main() -> int:
         logger.error("Could not acquire lease for %s %s/%s gen %d. Exiting.", WORKER_KIND, TARGET_NAMESPACE, TARGET_NAME, generation)
         return 1
 
+    start_lease_renewal(WORKER_KIND, TARGET_NAME, generation)
+
     try:
         # §8.2 — Run worker with a global execution timeout
         with ThreadPoolExecutor(max_workers=1) as executor:
@@ -3687,7 +3747,19 @@ def main() -> int:
                 run_workflow_worker if WORKER_KIND == "workflow" else run_eval_worker
             )
             try:
-                future.result(timeout=WORKER_EXECUTION_TIMEOUT_SECONDS)
+                deadline = time.monotonic() + WORKER_EXECUTION_TIMEOUT_SECONDS
+                while not future.done():
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise concurrent.futures.TimeoutError
+                    try:
+                        future.result(timeout=min(remaining, 2.0))
+                    except concurrent.futures.TimeoutError:
+                        if is_shutting_down():
+                            raise RuntimeError(
+                                "Worker shutdown initiated — aborting workflow execution"
+                            )
+                        continue
             except concurrent.futures.TimeoutError:
                 logger.error(
                     "Worker timed out after %.0fs for %s '%s/%s'",
@@ -3736,6 +3808,7 @@ def main() -> int:
         record_dead_letter(WORKER_KIND, TARGET_NAMESPACE, TARGET_NAME, generation, run_id, error_text)
         return 1
     finally:
+        stop_lease_renewal()
         release_worker_lease(WORKER_KIND, TARGET_NAME, generation)
     return 0
 

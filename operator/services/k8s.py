@@ -442,9 +442,9 @@ def ensure_runtime_namespace_secret(namespace: str, owner_name: str, logger: log
                 "name": SECRET_NAME,
                 "namespace": namespace,
                 "labels": {
-                    "managed-by": "kubesynth",
-                    "kubesynth.ai/runtime-secret": "true",
-                    "kubesynth.ai/owner": owner_name,
+                    "managed-by": "kubesynapse",
+                    "kubesynapse.ai/runtime-secret": "true",
+                    "kubesynapse.ai/owner": owner_name,
                 },
             },
             "spec": {
@@ -454,11 +454,11 @@ def ensure_runtime_namespace_secret(namespace: str, owner_name: str, logger: log
                 "data": [
                     {
                         "secretKey": "LITELLM_MASTER_KEY",
-                        "remoteRef": {"key": "kubesynth/litellm-master-key"},
+                        "remoteRef": {"key": "kubesynapse/litellm-master-key"},
                     },
                     {
                         "secretKey": "API_GATEWAY_SHARED_TOKEN",
-                        "remoteRef": {"key": "kubesynth/api-gateway-shared-token"},
+                        "remoteRef": {"key": "kubesynapse/api-gateway-shared-token"},
                     },
                 ],
             },
@@ -519,9 +519,9 @@ def ensure_runtime_namespace_secret(namespace: str, owner_name: str, logger: log
             "name": SECRET_NAME,
             "namespace": namespace,
             "labels": {
-                "managed-by": "kubesynth",
-                "kubesynth.ai/runtime-secret": "true",
-                "kubesynth.ai/owner": owner_name,
+                "managed-by": "kubesynapse",
+                "kubesynapse.ai/runtime-secret": "true",
+                "kubesynapse.ai/owner": owner_name,
             },
         },
         "type": "Opaque",
@@ -639,7 +639,7 @@ def patch_custom_status(plural: str, namespace: str, name: str, status: dict[str
         try:
             cb.call()
             api.patch_namespaced_custom_object_status(
-                group="kubesynth.ai",
+                group="kubesynapse.ai",
                 version="v1alpha1",
                 namespace=namespace,
                 plural=plural,
@@ -671,9 +671,12 @@ def patch_custom_status(plural: str, namespace: str, name: str, status: dict[str
 # ---------------------------------------------------------------------------
 
 
-def ensure_worker_artifact_storage(kind: str, resource_namespace: str, resource_name: str) -> str:
+def ensure_worker_artifact_storage(
+    kind: str, resource_namespace: str, resource_name: str,
+    owner_references: list[dict[str, Any]] | None = None,
+) -> str:
     """Create the artifact PVC for a worker job and return its name."""
-    manifest = create_worker_artifact_pvc_manifest(kind, resource_namespace, resource_name)
+    manifest = create_worker_artifact_pvc_manifest(kind, resource_namespace, resource_name, owner_references)
     ensure_persistent_storage(OPERATOR_NAMESPACE, manifest)
     return str(manifest["metadata"]["name"])
 
@@ -703,9 +706,18 @@ def enqueue_worker_job(
         git_config=git_config,
         max_parallel_steps=max_parallel_steps,
     )
+    job_name = str(manifest["metadata"]["name"])
     batch_api = kubernetes.client.BatchV1Api()
+    try:
+        existing = batch_api.read_namespaced_job(name=job_name, namespace=OPERATOR_NAMESPACE)
+        if existing:
+            # Job already exists — idempotent return
+            return job_name
+    except kubernetes.client.ApiException as exc:
+        if exc.status != 404:
+            raise
     batch_api.create_namespaced_job(namespace=OPERATOR_NAMESPACE, body=manifest)
-    return str(manifest["metadata"]["name"])
+    return job_name
 
 
 @_exponential_backoff()
@@ -783,8 +795,8 @@ def prune_orphaned_resources(
     """Delete agent-scoped resources that are no longer in the desired set.
 
     Lists resources matching the owner labels
-    (``kubesynth.ai/managed-by=operator``,
-    ``kubesynth.ai/agent-name=<agent_name>``), then deletes any
+    (``kubesynapse.ai/managed-by=operator``,
+    ``kubesynapse.ai/agent-name=<agent_name>``), then deletes any
     whose ``metadata.name`` is NOT in *desired_names*.
 
     Parameters

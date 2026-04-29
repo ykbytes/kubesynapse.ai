@@ -1,16 +1,16 @@
-# RBAC Matrix — KubeSynth Service Accounts & Permissions
+# RBAC Matrix — KubeSynapse Service Accounts & Permissions
 
 ## Overview
 
-KubeSynth uses **least-privilege RBAC** with one ServiceAccount per component. This document enumerates every ServiceAccount, its associated Roles/ClusterRoles, and the justification for each permission.
+KubeSynapse uses **least-privilege RBAC** with one ServiceAccount per component. This document enumerates every ServiceAccount, its associated Roles/ClusterRoles, and the justification for each permission.
 
 ## Service Accounts
 
 | # | ServiceAccount | Component | Scope | Binding Type |
 |---|---------------|-----------|-------|-------------|
-| 1 | `kubesynth-operator-sa` | Operator (Kopf) | Cluster | ClusterRoleBinding |
-| 2 | `kubesynth-api-gateway-sa` | API Gateway (FastAPI) | Cluster + Namespace | ClusterRoleBinding + RoleBinding |
-| 3 | `kubesynth-agent-runtime` | Agent Runtime (OpenCode) | Cluster (conditional) | ClusterRoleBinding (conditional) |
+| 1 | `kubesynapse-operator-sa` | Operator (Kopf) | Cluster | ClusterRoleBinding |
+| 2 | `kubesynapse-api-gateway-sa` | API Gateway (FastAPI) | Cluster + Namespace | ClusterRoleBinding + RoleBinding |
+| 3 | `KubeSynapse-agent-runtime` | Agent Runtime (OpenCode) | Cluster (conditional) | ClusterRoleBinding (conditional) |
 | 4 | *(namespace default)* | Collector DaemonSet | Cluster (read-only) | ClusterRoleBinding |
 | 5 | *(namespace default)* | LiteLLM Proxy | None | N/A (no K8s API access needed) |
 
@@ -18,7 +18,7 @@ KubeSynth uses **least-privilege RBAC** with one ServiceAccount per component. T
 
 ## 1. Operator ServiceAccount
 
-**Name**: `kubesynth-operator-sa`
+**Name**: `kubesynapse-operator-sa`
 **Component**: Kopf-based Kubernetes Operator
 **Scope**: Cluster-wide (ClusterRole)
 
@@ -27,10 +27,10 @@ KubeSynth uses **least-privilege RBAC** with one ServiceAccount per component. T
 | API Group | Resource | Verbs | Justification |
 |-----------|----------|-------|---------------|
 | `kopf.dev` | `clusterkopfpeerings` | list, watch, patch, get | Kopf framework leader election and peering |
-| `kubesynth.ai` | `aiagents`, `agenttenants`, `agentpolicies`, `agentapprovals`, `agentworkflows`, `agentevals` | full CRUD | Core CRD reconciliation — the operator MUST create/update/delete these resources |
-| `kubesynth.ai` | `*/status` (6 resources) | get, patch, update | Write status subresource for reconciliation state reporting |
-| `kubesynth.ai` | `observationtargets`, `observationpolicies`, `observationreports`, `connectorplugins` | full CRUD | Observability CRD reconciliation |
-| `kubesynth.ai` | `observation*/status` (4 resources) | get, patch, update | Observability status updates |
+| `kubesynapse.ai` | `aiagents`, `agenttenants`, `agentpolicies`, `agentapprovals`, `agentworkflows`, `agentevals` | full CRUD | Core CRD reconciliation — the operator MUST create/update/delete these resources |
+| `kubesynapse.ai` | `*/status` (6 resources) | get, patch, update | Write status subresource for reconciliation state reporting |
+| `kubesynapse.ai` | `observationtargets`, `observationpolicies`, `observationreports`, `connectorplugins` | full CRUD | Observability CRD reconciliation |
+| `kubesynapse.ai` | `observation*/status` (4 resources) | get, patch, update | Observability status updates |
 | `apiextensions.k8s.io` | `customresourcedefinitions` | get, list, watch | **Read-only** — discover CRD versions and schemas at startup |
 | `apps` | `statefulsets` | full CRUD | Creates per-agent StatefulSets for agent runtimes |
 | `batch` | `jobs` | full CRUD | Creates evaluation jobs, migration jobs, cleanup jobs |
@@ -57,7 +57,7 @@ KubeSynth uses **least-privilege RBAC** with one ServiceAccount per component. T
 
 ## 2. API Gateway ServiceAccount
 
-**Name**: `kubesynth-api-gateway-sa`
+**Name**: `kubesynapse-api-gateway-sa`
 **Component**: FastAPI Gateway (REST API + WebSocket)
 **Scope**: Cluster (read-heavy CRD access) + Namespace (secrets/configmaps)
 
@@ -65,13 +65,13 @@ KubeSynth uses **least-privilege RBAC** with one ServiceAccount per component. T
 
 | API Group | Resource | Verbs | Justification |
 |-----------|----------|-------|---------------|
-| `kubesynth.ai` | `aiagents`, `agentworkflows`, `agentevals` | full CRUD | User-facing CRUD operations via REST API |
-| `kubesynth.ai` | `agentpolicies` | full CRUD | Policy management API |
-| `kubesynth.ai` | `agentapprovals` | get, list, watch | Read approval requests (approvals handled by operator) |
-| `kubesynth.ai` | `agentapprovals/status` | patch, update | Update approval status (approve/reject) |
-| `kubesynth.ai` | `agentworkflows/status` | patch, update | Update workflow execution status |
-| `kubesynth.ai` | `observationtargets`, `observationpolicies`, `observationreports`, `connectorplugins` | full CRUD | Observability API endpoints |
-| `kubesynth.ai` | `observation*/status` (4 resources) | patch, update | Observability status updates |
+| `kubesynapse.ai` | `aiagents`, `agentworkflows`, `agentevals` | full CRUD | User-facing CRUD operations via REST API |
+| `kubesynapse.ai` | `agentpolicies` | full CRUD | Policy management API |
+| `kubesynapse.ai` | `agentapprovals` | get, list, watch | Read approval requests (approvals handled by operator) |
+| `kubesynapse.ai` | `agentapprovals/status` | patch, update | Update approval status (approve/reject) |
+| `kubesynapse.ai` | `agentworkflows/status` | patch, update | Update workflow execution status |
+| `kubesynapse.ai` | `observationtargets`, `observationpolicies`, `observationreports`, `connectorplugins` | full CRUD | Observability API endpoints |
+| `kubesynapse.ai` | `observation*/status` (4 resources) | patch, update | Observability status updates |
 | `""` (core) | `pods` | get, list, watch | **Read-only** — API queries pod status for agent health |
 | `""` (core) | `namespaces` | list | **Read-only** — list available namespaces for tenant selection |
 
@@ -92,7 +92,7 @@ KubeSynth uses **least-privilege RBAC** with one ServiceAccount per component. T
 
 ## 3. Agent Runtime ServiceAccount
 
-**Name**: `kubesynth-agent-runtime` (configurable via `runtimeServiceAccount.name`)
+**Name**: `KubeSynapse-agent-runtime` (configurable via `runtimeServiceAccount.name`)
 **Component**: OpenCode Runtime (per-agent pods)
 **Scope**: Namespace (via operator-created RoleBinding) + Cluster (conditional, read-only)
 
@@ -113,8 +113,8 @@ KubeSynth uses **least-privilege RBAC** with one ServiceAccount per component. T
 | `batch` | `jobs`, `cronjobs` | get, list, watch | **Read-only** — job inspection |
 | `networking.k8s.io` | `ingresses`, `networkpolicies` | get, list, watch | **Read-only** — network inspection |
 | `autoscaling` | `horizontalpodautoscalers` | get, list, watch | **Read-only** — autoscaling inspection |
-| `kubesynth.ai` | `agentpolicies`, `aiagents`, `agentworkflows` | get, list, watch | **Read-only** — read platform state |
-| `kubesynth.ai` | `agentapprovals` | create, get, list, watch | Create approval requests for human-in-the-loop gates |
+| `kubesynapse.ai` | `agentpolicies`, `aiagents`, `agentworkflows` | get, list, watch | **Read-only** — read platform state |
+| `kubesynapse.ai` | `agentapprovals` | create, get, list, watch | Create approval requests for human-in-the-loop gates |
 
 ### Justification Summary
 - **Why mostly read-only?** Agents are untrusted workloads. They should never mutate production infrastructure.
@@ -176,23 +176,23 @@ No K8s API access needed. LiteLLM is a pure HTTP proxy that only talks to LLM pr
 ```bash
 # Verify API Gateway cannot list secrets cluster-wide
 kubectl auth can-i list secrets \
-  --as=system:serviceaccount:kubesynth:kubesynth-api-gateway-sa \
+  --as=system:serviceaccount:KubeSynapse:kubesynapse-api-gateway-sa \
   --all-namespaces
 # Expected: no
 
 # Verify API Gateway CAN read secrets in its namespace
 kubectl auth can-i get secrets \
-  --as=system:serviceaccount:kubesynth:kubesynth-api-gateway-sa \
-  -n kubesynth
+  --as=system:serviceaccount:KubeSynapse:kubesynapse-api-gateway-sa \
+  -n kubesynapse
 # Expected: yes
 
 # Verify Operator CANNOT exec into pods
 kubectl auth can-i create pods/exec \
-  --as=system:serviceaccount:kubesynth:kubesynth-operator-sa
+  --as=system:serviceaccount:KubeSynapse:kubesynapse-operator-sa
 # Expected: no
 
 # Verify Runtime CANNOT create agents
 kubectl auth can-i create aiagents \
-  --as=system:serviceaccount:kubesynth:kubesynth-agent-runtime
+  --as=system:serviceaccount:KubeSynapse:KubeSynapse-agent-runtime
 # Expected: no
 ```

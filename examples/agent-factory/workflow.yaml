@@ -1,7 +1,7 @@
-apiVersion: kubesynth.ai/v1alpha1
+apiVersion: kubesynapse.ai/v1alpha1
 kind: AgentWorkflow
 metadata:
-  name: kubesynth-factory-pipeline
+  name: kubesynapse-factory-pipeline
   namespace: default
 spec:
   description: >
@@ -9,12 +9,12 @@ spec:
     the bundle, reviewer checks it, factory finalizes it, and the deployer only
     acts behind explicit approval gates.
   input: ""
-  contextRef: kubesynth-factory-context
+  contextRef: kubesynapse-factory-context
   messageBus: in-memory
 
   steps:
     - name: analyze-request
-      agentRef: kubesynth-factory-analyst
+      agentRef: kubesynapse-factory-analyst
       prompt: |
         Expand the following request into the structured specification JSON
         contract and return JSON only.
@@ -34,11 +34,11 @@ spec:
           - quality_and_verification.acceptance_criteria.0
 
     - name: generate-blueprint
-      agentRef: kubesynth-factory
+      agentRef: kubesynapse-factory
       dependsOn:
         - analyze-request
       prompt: |
-        Build the initial KubeSynth factory blueprint and return machine JSON only.
+        Build the initial kubesynapse factory blueprint and return machine JSON only.
 
         Raw request payload:
         {{input}}
@@ -73,7 +73,7 @@ spec:
           - resource_names.0
 
     - name: review-blueprint
-      agentRef: kubesynth-factory-reviewer
+      agentRef: kubesynapse-factory-reviewer
       dependsOn:
         - generate-blueprint
       prompt: |
@@ -95,7 +95,7 @@ spec:
           - revised_guidance_markdown
 
     - name: finalize-bundle
-      agentRef: kubesynth-factory
+      agentRef: kubesynapse-factory
       dependsOn:
         - generate-blueprint
         - review-blueprint
@@ -147,7 +147,7 @@ spec:
 
     - name: deploy-approved-bundle
       type: conditional
-      agentRef: kubesynth-factory
+      agentRef: kubesynapse-factory
       dependsOn:
         - finalize-bundle
         - review-blueprint
@@ -159,7 +159,7 @@ spec:
         - deploy-bundle
 
     - name: deploy-bundle
-      agentRef: kubesynth-factory-deployer
+      agentRef: kubesynapse-factory-deployer
       dependsOn:
         - deploy-approved-bundle
         - finalize-bundle
@@ -200,7 +200,7 @@ spec:
 
     - name: run-approved-workflow
       type: conditional
-      agentRef: kubesynth-factory-deployer
+      agentRef: kubesynapse-factory-deployer
       dependsOn:
         - deploy-bundle
         - finalize-bundle
@@ -213,7 +213,7 @@ spec:
         - run-generated-workflow
 
     - name: run-generated-workflow
-      agentRef: kubesynth-factory-deployer
+      agentRef: kubesynapse-factory-deployer
       dependsOn:
         - run-approved-workflow
         - deploy-bundle

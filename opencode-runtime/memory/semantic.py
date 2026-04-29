@@ -26,7 +26,7 @@ class SemanticMemoryProvider(MemoryProvider):
     def __init__(
         self,
         qdrant_url: str = "http://localhost:6333",
-        collection_name: str = "kubesynth_memory",
+        collection_name: str = "KUBESYNAPSE_memory",
         embedding_dimension: int = 768,
         timeout: float = 5.0,
     ):

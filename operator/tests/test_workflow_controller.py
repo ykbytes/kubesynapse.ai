@@ -137,30 +137,30 @@ class WorkflowControllerRunIdTests(unittest.TestCase):
     def test_resolve_workflow_run_id_mints_new_id_for_new_generation(self) -> None:
         resolved = self.controller.resolve_workflow_run_id(
             "default",
-            "kubesynth-factory-pipeline",
+            "kubesynapse-factory-pipeline",
             24,
             workflow_status={
-                "runId": "wf-run-default-kubesynth-factory-pipeline-23-old",
+                "runId": "wf-run-default-kubesynapse-factory-pipeline-23-old",
                 "observedGeneration": 23,
                 "artifactRef": {"generation": 23},
             },
         )
 
-        self.assertEqual(resolved, "wf-run-default-kubesynth-factory-pipeline-24-new")
+        self.assertEqual(resolved, "wf-run-default-kubesynapse-factory-pipeline-24-new")
 
     def test_resolve_workflow_run_id_preserves_same_generation_retry_run(self) -> None:
         resolved = self.controller.resolve_workflow_run_id(
             "default",
-            "kubesynth-factory-pipeline",
+            "kubesynapse-factory-pipeline",
             7,
             workflow_status={
-                "runId": "wf-run-default-kubesynth-factory-pipeline-7-retry",
+                "runId": "wf-run-default-kubesynapse-factory-pipeline-7-retry",
                 "observedGeneration": None,
                 "artifactRef": {"generation": 7},
             },
         )
 
-        self.assertEqual(resolved, "wf-run-default-kubesynth-factory-pipeline-7-retry")
+        self.assertEqual(resolved, "wf-run-default-kubesynapse-factory-pipeline-7-retry")
 
     def test_enqueue_workflow_job_clears_stale_progress_for_new_generation(self) -> None:
         patch_status_mock = MagicMock()
@@ -173,11 +173,11 @@ class WorkflowControllerRunIdTests(unittest.TestCase):
             self.controller.enqueue_workflow_job(
                 spec={"steps": [{"name": "draft-blueprint"}, {"name": "deploy-bundle"}]},
                 meta={"generation": 24},
-                name="kubesynth-factory-pipeline",
+                name="kubesynapse-factory-pipeline",
                 namespace="default",
                 logger=logging.getLogger("test"),
                 current_status={
-                    "runId": "wf-run-default-kubesynth-factory-pipeline-23-old",
+                    "runId": "wf-run-default-kubesynapse-factory-pipeline-23-old",
                     "observedGeneration": 23,
                     "artifactRef": {"generation": 23, "path": "/tmp/old.json"},  # noqa: S108
                     "currentStep": "deploy-bundle",
@@ -191,7 +191,7 @@ class WorkflowControllerRunIdTests(unittest.TestCase):
         cancel_mock.assert_called_once_with("job-23", "ai-agent-sandbox")
         enqueue_mock.assert_called_once()
         patched_status = patch_status_mock.call_args.args[3]
-        self.assertEqual(patched_status["runId"], "wf-run-default-kubesynth-factory-pipeline-24-new")
+        self.assertEqual(patched_status["runId"], "wf-run-default-kubesynapse-factory-pipeline-24-new")
         self.assertEqual(patched_status["currentStep"], "")
         self.assertIsNone(patched_status["pendingApproval"])
         self.assertEqual(patched_status["stepStates"], {})
@@ -207,11 +207,11 @@ class WorkflowControllerRunIdTests(unittest.TestCase):
             self.controller.enqueue_workflow_job(
                 spec={"steps": [{"name": "draft-blueprint"}, {"name": "deploy-bundle"}]},
                 meta={"generation": 7},
-                name="kubesynth-factory-pipeline",
+                name="kubesynapse-factory-pipeline",
                 namespace="default",
                 logger=logging.getLogger("test"),
                 current_status={
-                    "runId": "wf-run-default-kubesynth-factory-pipeline-7-retry",
+                    "runId": "wf-run-default-kubesynapse-factory-pipeline-7-retry",
                     "observedGeneration": None,
                     "artifactRef": {"generation": 7, "path": "/tmp/gen-7.json"},  # noqa: S108
                     "currentStep": "deploy-bundle",
@@ -229,7 +229,7 @@ class WorkflowControllerRunIdTests(unittest.TestCase):
             )
 
         patched_status = patch_status_mock.call_args.args[3]
-        self.assertEqual(patched_status["runId"], "wf-run-default-kubesynth-factory-pipeline-7-retry")
+        self.assertEqual(patched_status["runId"], "wf-run-default-kubesynapse-factory-pipeline-7-retry")
         self.assertEqual(patched_status["currentStep"], "deploy-bundle")
         self.assertEqual(patched_status["stepStates"]["draft-blueprint"]["status"], "completed")
         self.assertEqual(patched_status["summary"]["completedSteps"], 1)
@@ -237,12 +237,34 @@ class WorkflowControllerRunIdTests(unittest.TestCase):
         self.assertIsNone(patched_status["summary"]["failedAt"])
         self.assertIsNone(patched_status["summary"]["completedAt"])
 
+    def test_enqueue_workflow_job_uses_workflow_constants_for_owner_ref_and_status_patch(self) -> None:
+        patch_status_mock = MagicMock()
+        enqueue_mock = MagicMock(return_value="job-42")
+        ensure_storage_mock = MagicMock(return_value="artifact-pvc")
+
+        with patch.object(self.controller, "patch_custom_status", patch_status_mock), \
+             patch.object(self.controller, "enqueue_worker_job", enqueue_mock), \
+             patch.object(self.controller, "ensure_worker_artifact_storage", ensure_storage_mock):
+            self.controller.enqueue_workflow_job(
+                spec={"steps": [{"name": "plan"}]},
+                meta={"generation": 42, "uid": "uid-42"},
+                name="jupiter8-web-synth",
+                namespace="default",
+                logger=logging.getLogger("test"),
+            )
+
+        owner_refs = ensure_storage_mock.call_args.args[3]
+        self.assertEqual(owner_refs[0]["apiVersion"], f"{self.controller.GROUP}/{self.controller.VERSION}")
+        self.assertEqual(owner_refs[0]["kind"], "AgentWorkflow")
+        self.assertEqual(owner_refs[0]["name"], "jupiter8-web-synth")
+        self.assertEqual(patch_status_mock.call_args.args[0], self.controller.WORKFLOW_PLURAL)
+
     def test_resolve_failed_workflow_auto_retry_plan_accepts_recoverable_failures(self) -> None:
         plan = self.controller.resolve_failed_workflow_auto_retry_plan(
             spec={"steps": [{"name": "draft-blueprint"}]},
             status={
                 "phase": "failed",
-                "runId": "wf-run-default-kubesynth-factory-pipeline-7-old",
+                "runId": "wf-run-default-kubesynapse-factory-pipeline-7-old",
                 "observedGeneration": 7,
                 "artifactRef": {"generation": 7},
                 "stepStates": {
@@ -262,18 +284,18 @@ class WorkflowControllerRunIdTests(unittest.TestCase):
                     self.controller.AUTO_RETRY_LIMIT_ANNOTATION: "2",
                 },
             },
-            name="kubesynth-factory-pipeline",
+            name="kubesynapse-factory-pipeline",
             namespace="default",
         )
 
         self.assertIsNotNone(plan)
         assert plan is not None
-        self.assertEqual(plan["runId"], "wf-run-default-kubesynth-factory-pipeline-7-new")
+        self.assertEqual(plan["runId"], "wf-run-default-kubesynapse-factory-pipeline-7-new")
         self.assertEqual(plan["failedSteps"], ["draft-blueprint"])
         self.assertEqual(plan["stepStates"]["draft-blueprint"]["status"], "pending")
         self.assertEqual(plan["stepStates"]["review"]["status"], "completed")
         self.assertEqual(plan["summary"]["autoRetryCount"], 1)
-        self.assertEqual(plan["summary"]["runId"], "wf-run-default-kubesynth-factory-pipeline-7-new")
+        self.assertEqual(plan["summary"]["runId"], "wf-run-default-kubesynapse-factory-pipeline-7-new")
 
     def test_resolve_failed_workflow_auto_retry_plan_skips_quality_gate_failures(self) -> None:
         plan = self.controller.resolve_failed_workflow_auto_retry_plan(
@@ -297,7 +319,7 @@ class WorkflowControllerRunIdTests(unittest.TestCase):
                     self.controller.AUTO_RETRY_FAILURE_CLASSES_ANNOTATION: "RuntimeError,TimeoutError",
                 },
             },
-            name="kubesynth-factory-pipeline",
+            name="kubesynapse-factory-pipeline",
             namespace="default",
         )
 
@@ -364,7 +386,7 @@ class WorkflowControllerRunIdTests(unittest.TestCase):
                 "summary": {"autoRetryCount": 0},
             },
             meta={"generation": 12, "annotations": {}},
-            name="kubesynth-factory-pipeline",
+            name="kubesynapse-factory-pipeline",
             namespace="default",
         )
 
@@ -395,7 +417,7 @@ class WorkflowControllerRunIdTests(unittest.TestCase):
                 "summary": {"autoRetryCount": 0},
             },
             meta={"generation": 13, "annotations": {}},
-            name="kubesynth-factory-pipeline",
+            name="kubesynapse-factory-pipeline",
             namespace="default",
         )
 
@@ -409,7 +431,7 @@ class WorkflowControllerRunIdTests(unittest.TestCase):
                 spec={"steps": [{"name": "draft-blueprint"}]},
                 status={
                     "phase": "failed",
-                    "runId": "wf-run-default-kubesynth-factory-pipeline-7-old",
+                    "runId": "wf-run-default-kubesynapse-factory-pipeline-7-old",
                     "observedGeneration": 7,
                     "artifactRef": {"generation": 7},
                     "workerJob": {"name": "job-7-old", "namespace": "ai-agent-sandbox"},
@@ -429,14 +451,14 @@ class WorkflowControllerRunIdTests(unittest.TestCase):
                         self.controller.AUTO_RETRY_LIMIT_ANNOTATION: "1",
                     },
                 },
-                name="kubesynth-factory-pipeline",
+                name="kubesynapse-factory-pipeline",
                 namespace="default",
                 logger=logging.getLogger("test"),
             )
 
         enqueue_mock.assert_called_once()
         enqueue_kwargs = enqueue_mock.call_args.kwargs
-        self.assertEqual(enqueue_kwargs["run_id"], "wf-run-default-kubesynth-factory-pipeline-7-new")
+        self.assertEqual(enqueue_kwargs["run_id"], "wf-run-default-kubesynapse-factory-pipeline-7-new")
         retry_status = enqueue_kwargs["current_status"]
         self.assertEqual(retry_status["phase"], "pending")
         self.assertEqual(retry_status["stepStates"]["draft-blueprint"]["status"], "pending")
@@ -457,7 +479,7 @@ class WorkflowControllerRunIdTests(unittest.TestCase):
                 },
                 status={
                     "phase": "failed",
-                    "runId": "wf-run-default-kubesynth-factory-pipeline-9-old",
+                    "runId": "wf-run-default-kubesynapse-factory-pipeline-9-old",
                     "observedGeneration": 9,
                     "artifactRef": {"generation": 9},
                     "workerJob": {"name": "job-9-old", "namespace": "ai-agent-sandbox"},
@@ -471,11 +493,11 @@ class WorkflowControllerRunIdTests(unittest.TestCase):
                     "summary": {"autoRetryCount": 0},
                 },
                 meta={"generation": 9, "annotations": {}},
-                name="kubesynth-factory-pipeline",
+                name="kubesynapse-factory-pipeline",
                 namespace="default",
                 logger=logging.getLogger("test"),
             )
 
         enqueue_mock.assert_called_once()
         enqueue_kwargs = enqueue_mock.call_args.kwargs
-        self.assertEqual(enqueue_kwargs["run_id"], "wf-run-default-kubesynth-factory-pipeline-9-new")
+        self.assertEqual(enqueue_kwargs["run_id"], "wf-run-default-kubesynapse-factory-pipeline-9-new")

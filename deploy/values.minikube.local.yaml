@@ -1,17 +1,17 @@
 operator:
   replicaCount: 1
   image:
-    repository: localhost/kubesynthai/kubesynth-operator
+    repository: localhost/KubeSynapseai/kubesynapse-operator
     tag: dev5
     pullPolicy: IfNotPresent
   workerImage:
-    repository: localhost/kubesynthai/kubesynth-operator
+    repository: localhost/KubeSynapseai/kubesynapse-operator
     tag: dev5
     pullPolicy: IfNotPresent
 
 opencodeRuntime:
   image:
-    repository: localhost/kubesynthai/kubesynth-opencode-runtime
+    repository: localhost/KubeSynapseai/kubesynapse-opencode-runtime
     tag: dev13
     pullPolicy: IfNotPresent
   limits:
@@ -29,7 +29,7 @@ opencodeRuntime:
 
 apiGateway:
   image:
-    repository: localhost/kubesynthai/kubesynth-api-gateway
+    repository: localhost/KubeSynapseai/kubesynapse-api-gateway
     tag: collector-1
     pullPolicy: IfNotPresent
   auth:
@@ -38,7 +38,7 @@ apiGateway:
 webUi:
   enabled: true
   image:
-    repository: localhost/kubesynthai/kubesynth-web-ui
+    repository: localhost/KubeSynapseai/kubesynapse-web-ui
     tag: redeploy-20260409-ui-1
     pullPolicy: IfNotPresent
 
@@ -56,47 +56,47 @@ mcpHub:
     bearerToken: "minikube-dev-mcp-token"
   servers:
     github:
-      image: localhost/kubesynthai/mcp-github-adapter
+      image: localhost/KubeSynapseai/mcp-github-adapter
       imagePullPolicy: IfNotPresent
 
 mcpToolSidecars:
   codeExec:
-    image: localhost/kubesynthai/mcp-code-exec
+    image: localhost/KubeSynapseai/mcp-code-exec
     tag: dev
     port: 8090
   webSearch:
-    image: localhost/kubesynthai/mcp-web-search
+    image: localhost/KubeSynapseai/mcp-web-search
     tag: dev
     port: 8091
   documents:
-    image: localhost/kubesynthai/mcp-documents
+    image: localhost/KubeSynapseai/mcp-documents
     tag: dev
     port: 8092
   browser:
-    image: localhost/kubesynthai/mcp-browser
+    image: localhost/KubeSynapseai/mcp-browser
     tag: dev
     port: 8093
   database:
-    image: localhost/kubesynthai/mcp-database
+    image: localhost/KubeSynapseai/mcp-database
     tag: dev
     port: 8094
   git:
-    image: localhost/kubesynthai/mcp-git
+    image: localhost/KubeSynapseai/mcp-git
     tag: dev
     port: 8095
   githubAdapter:
-    image: localhost/kubesynthai/mcp-github-adapter
+    image: localhost/KubeSynapseai/mcp-github-adapter
     tag: dev
     port: 8096
   kubernetes:
-    image: localhost/kubesynthai/mcp-kubernetes
+    image: localhost/KubeSynapseai/mcp-kubernetes
     tag: dev
     port: 8097
   messaging:
-    image: localhost/kubesynthai/mcp-messaging
+    image: localhost/KubeSynapseai/mcp-messaging
     tag: dev
     port: 8098
   rag:
-    image: localhost/kubesynthai/mcp-rag
+    image: localhost/KubeSynapseai/mcp-rag
     tag: dev
     port: 8099

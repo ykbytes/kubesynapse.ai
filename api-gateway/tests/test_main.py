@@ -1592,7 +1592,7 @@ class GatewayA2AProtocolAsyncTests(unittest.IsolatedAsyncioTestCase):
                         "parts": [{"text": "Summarize the research"}],
                     },
                     "metadata": {
-                        "kubesynthInvoke": {
+                        "KubeSynapseInvoke": {
                             "threadId": "peer-thread-1",
                             "system": "Return only the final answer.",
                             "model": "gpt-4.1",
@@ -2120,7 +2120,7 @@ class GatewayInvokeProxyTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("put only the agent name in the /a2a/<agent> path", forwarded["system"])
         self.assertIn("/a2a/peer-agent?namespace=default", forwarded["system"])
         self.assertIn("SendMessage", forwarded["system"])
-        self.assertIn("metadata.kubesynthInvoke.threadId", forwarded["system"])
+        self.assertIn("metadata.KubeSynapseInvoke.threadId", forwarded["system"])
 
     async def test_invoke_agent_with_namespace_path_alias_uses_canonical_handler(self) -> None:
         request = api_gateway_main.InvokeRequest(prompt="Who are you?")
@@ -2883,7 +2883,7 @@ class GatewayProviderModelTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch.dict(api_gateway_main.os.environ, {"POD_NAMESPACE": "default"}, clear=False),
-            patch.object(api_gateway_main, "LLM_SECRET_NAME", "kubesynth-llm-api-keys"),
+            patch.object(api_gateway_main, "LLM_SECRET_NAME", "kubesynapse-llm-api-keys"),
             patch.object(
                 api_gateway_main, "_exchange_copilot_session_token", AsyncMock(side_effect=RuntimeError("boom"))
             ),
@@ -2897,7 +2897,7 @@ class GatewayProviderModelTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(response, {"ok": True})
-        self.assertEqual(fake_core_v1_api.name, "kubesynth-llm-api-keys")
+        self.assertEqual(fake_core_v1_api.name, "kubesynapse-llm-api-keys")
         self.assertEqual(fake_core_v1_api.namespace, "default")
         self.assertEqual(fake_client.url, f"{api_gateway_main.LITELLM_INTERNAL_URL}/model/new")
         payload = fake_client.kwargs["json"]
@@ -3003,7 +3003,7 @@ class McpOAuthSupportTests(unittest.TestCase):
         ):
             response = api_gateway_main.start_saved_mcp_connection_oauth(
                 "conn-gmail",
-                raw_request=types.SimpleNamespace(base_url="https://kubesynth.example.test/"),
+                raw_request=types.SimpleNamespace(base_url="https://kubesynapse.example.test/"),
                 namespace="team-a",
                 user={"sub": "user-1", "role": "operator"},
             )
@@ -3012,7 +3012,7 @@ class McpOAuthSupportTests(unittest.TestCase):
         self.assertIn("client_id=client-123", response["authorization_url"])
         self.assertIn("state=", response["authorization_url"])
         self.assertIn(
-            "redirect_uri=https%3A%2F%2Fkubesynth.example.test%2Fapi%2Fmcp%2Fconnections%2Fconn-gmail%2Foauth%2Fcallback",
+            "redirect_uri=https%3A%2F%2FKubeSynapse.example.test%2Fapi%2Fmcp%2Fconnections%2Fconn-gmail%2Foauth%2Fcallback",
             response["authorization_url"],
         )
 

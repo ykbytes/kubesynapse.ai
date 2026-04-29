@@ -621,7 +621,7 @@ def verify_webhook_signature(payload: bytes, signature: str, secret: str) -> boo
 
     Args:
         payload: Raw request body bytes.
-        signature: Hex-digest string from the ``X-KubeSynth-Signature`` header.
+        signature: Hex-digest string from the ``X-kubesynapse-Signature`` header.
         secret: Shared secret stored in a Kubernetes Secret.
 
     Returns:

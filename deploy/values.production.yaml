@@ -41,7 +41,7 @@ agentRuntime:
     notificationWebhookUrl: "https://hooks.production.example.com/hitl"
 
 runtimeServiceAccount:
-  name: "kubesynth-agent-runtime"
+  name: "kubesynapse-agent-runtime"
 
 opencodeRuntime:
   limits:
@@ -86,23 +86,23 @@ apiGateway:
   enabled: true
   replicaCount: 3
   ingressClassName: "nginx"
-  ingressHost: "kubesynth.example.com"
+  ingressHost: "kubesynapse.example.com"
   tls:
     enabled: true
-    secretName: "kubesynth-tls"
+    secretName: "kubesynapse-tls"
   auth:
     mode: oidc
     jwt:
       secretName: "jwt-signing-key"
     oidcIssuer: "https://auth.example.com"
-    oidcAudience: "kubesynth"
+    oidcAudience: "kubesynapse"
     cookieSecure: true
     cookieSameSite: strict
   db:
     host: "postgres.production.svc.cluster.local"
     port: 5432
-    name: "kubesynth"
-    user: "kubesynth"
+    name: "kubesynapse"
+    user: "kubesynapse"
     sslMode: "verify-full"
   resources:
     requests:
@@ -122,7 +122,7 @@ ingress:
   annotations:
     cert-manager.io/cluster-issuer: "letsencrypt-prod"
   hosts:
-    - host: "kubesynth.example.com"
+    - host: "kubesynapse.example.com"
       paths:
         - path: /
           pathType: Prefix
@@ -133,9 +133,9 @@ ingress:
           service: api-gateway
           port: 8080
   tls:
-    - secretName: "kubesynth-tls"
+    - secretName: "kubesynapse-tls"
       hosts:
-        - "kubesynth.example.com"
+        - "kubesynapse.example.com"
 
 platformSecrets:
   mode: external-secrets

@@ -1,4 +1,4 @@
-# KubeSynth — Local Docker Compose Stack
+# kubesynapse — Local Docker Compose Stack
 # 
 # Usage:
 #   docker compose -f docker-compose.yml up --build
@@ -19,9 +19,9 @@
 #   - Operator needs a K8s cluster to function; for pure local dev it will crash-loop.
 #     Set OPERATOR_MOCK_K8S=true to run in mock mode (no real K8s needed).
 #   - api-gateway creates trace tables automatically on startup.
-#   - All services share the same Docker network `kubesynth`.
+#   - All services share the same Docker network `kubesynapse`.
 
-name: kubesynth
+name: kubesynapse
 
 services:
   # ------------------------------------------------------------------
@@ -29,27 +29,27 @@ services:
   # ------------------------------------------------------------------
   postgres:
     image: postgres:16-alpine
-    container_name: kubesynth-postgres
+    container_name: kubesynapse-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_USER: kubesynth
-      POSTGRES_PASSWORD: kubesynth-dev-password
-      POSTGRES_DB: kubesynth
+      POSTGRES_USER: kubesynapse
+      POSTGRES_PASSWORD: kubesynapse-dev-password
+      POSTGRES_DB: kubesynapse
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
       - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U kubesynth -d kubesynth"]
+      test: ["CMD-SHELL", "pg_isready -U kubesynapse -d kubesynapse"]
       interval: 5s
       timeout: 3s
       retries: 10
     networks:
-      - kubesynth
+      - kubesynapse
 
   redis:
     image: redis:7-alpine
-    container_name: kubesynth-redis
+    container_name: kubesynapse-redis
     restart: unless-stopped
     ports:
       - "6379:6379"
@@ -59,22 +59,22 @@ services:
       timeout: 3s
       retries: 5
     networks:
-      - kubesynth
+      - kubesynapse
 
   nats:
     image: nats:2-alpine
-    container_name: kubesynth-nats
+    container_name: kubesynapse-nats
     restart: unless-stopped
     ports:
       - "4222:4222"
       - "8222:8222"
     command: ["-js", "-m", "8222"]
     networks:
-      - kubesynth
+      - kubesynapse
 
   qdrant:
     image: qdrant/qdrant:v1.7.4
-    container_name: kubesynth-qdrant
+    container_name: kubesynapse-qdrant
     restart: unless-stopped
     ports:
       - "6333:6333"
@@ -82,7 +82,7 @@ services:
     volumes:
       - qdrant_data:/qdrant/storage
     networks:
-      - kubesynth
+      - kubesynapse
 
   # ------------------------------------------------------------------
   # Core platform services
@@ -91,7 +91,7 @@ services:
     build:
       context: ./api-gateway
       dockerfile: Dockerfile
-    container_name: kubesynth-api-gateway
+    container_name: kubesynapse-api-gateway
     restart: unless-stopped
     depends_on:
       postgres:
@@ -101,7 +101,7 @@ services:
     environment:
       API_GATEWAY_SHARED_TOKEN: "dev-shared-token-change-in-production"
       API_GATEWAY_AUTH_MODE: "shared_token"
-      DATABASE_URL: "postgresql+psycopg://kubesynth:kubesynth-dev-password@postgres:5432/kubesynth"
+      DATABASE_URL: "postgresql+psycopg://kubesynapse:kubesynapse-dev-password@postgres:5432/kubesynapse"
       DATABASE_DRIVER: "postgresql"
       REDIS_URL: "redis://redis:6379/0"
       NATS_URL: "nats://nats:4222"
@@ -115,7 +115,7 @@ services:
     volumes:
       - gateway_traces:/app/state/traces
     networks:
-      - kubesynth
+      - kubesynapse
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/api/health')"]
       interval: 30s
@@ -127,7 +127,7 @@ services:
     build:
       context: ./operator
       dockerfile: Dockerfile
-    container_name: kubesynth-operator
+    container_name: kubesynapse-operator
     restart: unless-stopped
     depends_on:
       postgres:
@@ -136,7 +136,7 @@ services:
         condition: service_healthy
     environment:
       OPERATOR_NAMESPACE: "default"
-      DATABASE_URL: "postgresql+psycopg://kubesynth:kubesynth-dev-password@postgres:5432/kubesynth"
+      DATABASE_URL: "postgresql+psycopg://kubesynapse:kubesynapse-dev-password@postgres:5432/kubesynapse"
       GATEWAY_URL: "http://api-gateway:8080"
       API_GATEWAY_SHARED_TOKEN: "dev-shared-token-change-in-production"
       WORKER_TRACE_ENABLED: "true"
@@ -148,13 +148,13 @@ services:
     # For local dev without K8s, run mock entrypoint that keeps readiness server alive.
     command: ["python", "/app/mock_entrypoint.py"]
     networks:
-      - kubesynth
+      - kubesynapse
 
   web-ui:
     build:
       context: ./web-ui
       dockerfile: Dockerfile
-    container_name: kubesynth-web-ui
+    container_name: kubesynapse-web-ui
     restart: unless-stopped
     depends_on:
       - api-gateway
@@ -163,13 +163,13 @@ services:
     ports:
       - "3000:8080"
     networks:
-      - kubesynth
+      - kubesynapse
 
   opencode-rt:
     build:
       context: ./opencode-runtime
       dockerfile: Dockerfile
-    container_name: kubesynth-opencode-rt
+    container_name: kubesynapse-opencode-rt
     restart: unless-stopped
     depends_on:
       - redis
@@ -184,7 +184,7 @@ services:
     ports:
       - "8081:8080"
     networks:
-      - kubesynth
+      - kubesynapse
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/ready', timeout=3)"]
       interval: 30s
@@ -197,7 +197,7 @@ services:
   # ------------------------------------------------------------------
   litellm:
     image: ghcr.io/berriai/litellm:main-latest
-    container_name: kubesynth-litellm
+    container_name: kubesynapse-litellm
     restart: unless-stopped
     ports:
       - "4000:4000"
@@ -208,15 +208,15 @@ services:
     volumes:
       - ./deploy/litellm-config.yaml:/app/config.yaml:ro
     networks:
-      - kubesynth
+      - kubesynapse
 
 # ------------------------------------------------------------------
 # Networks
 # ------------------------------------------------------------------
 networks:
-  kubesynth:
+  kubesynapse:
     driver: bridge
-    name: kubesynth
+    name: kubesynapse
 
 # ------------------------------------------------------------------
 # Volumes

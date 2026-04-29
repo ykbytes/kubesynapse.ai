@@ -1,0 +1,120 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: observationreports.kubesynapse.ai
+spec:
+  group: kubesynapse.ai
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Health
+          type: integer
+          jsonPath: .status.healthScore
+        - name: Findings
+          type: integer
+          jsonPath: .status.findingsCount
+        - name: Last Evaluated
+          type: date
+          jsonPath: .status.lastEvaluated
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          type: object
+          required: [spec]
+          properties:
+            spec:
+              type: object
+              properties:
+                targetRef:
+                  type: string
+                  description: "Reference to the ObservationTarget this report covers."
+                policyRef:
+                  type: string
+                  description: "Reference to the ObservationPolicy used for evaluation."
+                reportType:
+                  type: string
+                  enum:
+                    - anomaly
+                    - health-check
+                    - capacity
+                    - compliance
+                  default: anomaly
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  enum: [Pending, Evaluating, Complete, Error]
+                sourcePhase:
+                  type: string
+                  enum: [Pending, Active, Degraded, Failed]
+                  description: "Phase of the parent ObservationTarget when this report was generated"
+                healthScore:
+                  type: integer
+                  minimum: 0
+                  maximum: 100
+                findingsCount:
+                  type: integer
+                lastEvaluated:
+                  type: string
+                  format: date-time
+                findings:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                      severity:
+                        type: string
+                        enum: [info, warning, critical]
+                      metric:
+                        type: string
+                      algorithm:
+                        type: string
+                      timestamp:
+                        type: string
+                        format: date-time
+                      value:
+                        type: number
+                      expected:
+                        type: number
+                      deviation:
+                        type: number
+                      description:
+                        type: string
+                      recommendation:
+                        type: string
+                summary:
+                  type: string
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                        enum: ["True", "False", "Unknown"]
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      reason:
+                        type: string
+                      message:
+                        type: string
+  scope: Namespaced
+  names:
+    plural: observationreports
+    singular: observationreport
+    kind: ObservationReport
+    shortNames:
+      - obr
+      - oreport

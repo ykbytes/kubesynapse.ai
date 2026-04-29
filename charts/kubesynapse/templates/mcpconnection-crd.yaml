@@ -1,0 +1,199 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: mcpconnections.kubesynapse.ai
+spec:
+  group: kubesynapse.ai
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Server
+          type: string
+          jsonPath: .spec.serverId
+        - name: Transport
+          type: string
+          jsonPath: .spec.transport
+        - name: Auth
+          type: string
+          jsonPath: .spec.authType
+        - name: Status
+          type: string
+          jsonPath: .status.validationStatus
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          type: object
+          required: [spec]
+          description: |
+            McpConnection represents a saved, reusable MCP (Model Context Protocol)
+            connection configuration. The operator reconciles McpConnection CRs
+            into PostgreSQL records that the API gateway and agent runtime consume,
+            while providing native `kubectl` management.
+          properties:
+            spec:
+              type: object
+              required:
+                - serverId
+                - transport
+              properties:
+                serverId:
+                  type: string
+                  description: |
+                    Canonical server identifier matching the MCP registry entry
+                    (e.g., "github", "postgres", "mcp-hub/slack").
+                  minLength: 1
+                  maxLength: 128
+                transport:
+                  type: string
+                  enum:
+                    - remote
+                    - hub
+                    - sidecar
+                  description: |
+                    Transport mechanism:
+                    - remote: external MCP server (HTTP/SSE or stdio proxy)
+                    - hub: shared MCP server in the mcp-hub namespace
+                    - sidecar: local sidecar injected into the agent pod
+                endpoint:
+                  type: string
+                  description: |
+                    Remote endpoint URL used when transport=remote
+                    (e.g., "https://mcp.example.com/sse" or "ssh://...")
+                  format: uri
+                authType:
+                  type: string
+                  enum:
+                    - none
+                    - bearer
+                    - basic
+                    - oauth2
+                    - apiKey
+                    - mTLS
+                    - token
+                  default: none
+                  description: "Authentication method for this connection"
+                credentialSecretRef:
+                  type: object
+                  description: |
+                    Reference to a Kubernetes Secret holding credentials for this
+                    connection. Secret keys depend on authType.
+                  properties:
+                    name:
+                      type: string
+                      description: "Name of the Kubernetes Secret in the same namespace"
+                    keys:
+                      type: object
+                      description: "Mapping of credential key names to secret data keys"
+                      additionalProperties:
+                        type: string
+                  required:
+                    - name
+                config:
+                  type: object
+                  description: |
+                    Arbitrary configuration forwarded to the MCP sidecar or gateway
+                    (e.g., custom headers, timeout overrides, retry policy).
+                  x-kubernetes-preserve-unknown-fields: true
+                displayName:
+                  type: string
+                  description: "Human-readable label for the connection (defaults to serverId)"
+                  maxLength: 128
+            status:
+              type: object
+              description: "Observed state of the MCP connection, managed by the operator"
+              properties:
+                phase:
+                  type: string
+                  enum:
+                    - Pending
+                    - Provisioned
+                    - Validated
+                    - Failed
+                    - Deleting
+                  description: "Current lifecycle phase of the connection"
+                validationStatus:
+                  type: string
+                  enum:
+                    - draft
+                    - validated
+                    - unreachable
+                    - auth-failed
+                    - config-invalid
+                    - error
+                  default: draft
+                  description: "Result of the last connectivity / configuration validation"
+                validationMessage:
+                  type: string
+                  description: "Human-readable message from the last validation attempt"
+                  maxLength: 1024
+                lastValidatedAt:
+                  type: string
+                  format: date-time
+                  nullable: true
+                  description: "Timestamp of the last validation attempt"
+                bindingCount:
+                  type: integer
+                  minimum: 0
+                  description: "Number of agents currently referencing this connection"
+                oauthStatus:
+                  type: object
+                  description: "OAUTH2 token lifecycle status (when authType=oauth2)"
+                  properties:
+                    hasToken:
+                      type: boolean
+                      description: "Whether an OAuth access token is currently stored"
+                    expiresAt:
+                      type: string
+                      format: date-time
+                      nullable: true
+                      description: "When the stored access token expires"
+                    refreshAvailable:
+                      type: boolean
+                      description: "Whether a refresh token is available"
+                connectionId:
+                  type: string
+                  description: "Stable database connection ID assigned by the operator"
+                  minLength: 1
+                conditions:
+                  type: array
+                  description: |
+                    Standard Kubernetes status conditions (Type, Status, Reason,
+                    Message, LastTransitionTime) for this resource.
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                        enum:
+                          - "True"
+                          - "False"
+                          - Unknown
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                    required:
+                      - type
+                      - status
+                      - lastTransitionTime
+                  x-kubernetes-list-type: map
+                  x-kubernetes-list-map-keys:
+                    - type
+  scope: Namespaced
+  names:
+    plural: mcpconnections
+    singular: mcpconnection
+    kind: McpConnection
+    shortNames:
+      - mcpc

@@ -67,7 +67,7 @@ def scheduled_eval_due(schedule: str, last_run_value: str | None) -> bool:
     """Return True if the next scheduled run is due."""
     last_run = parse_iso_datetime(last_run_value)
     if last_run is None:
-        return False
+        return True
 
     next_run = croniter(schedule, last_run).get_next(datetime)
     next_run = next_run.replace(tzinfo=UTC) if next_run.tzinfo is None else next_run.astimezone(UTC)
@@ -87,7 +87,18 @@ def enqueue_eval_job(
     test_suite = spec.get("testSuite") or []
     generation = int((meta or {}).get("generation", 1))
     run_id = build_eval_run_id(namespace, name, generation)
-    artifact_pvc_name = ensure_worker_artifact_storage("eval", namespace, name)
+    owner_uid = str(meta.get("uid") or "") if meta else ""
+    owner_references: list[dict[str, Any]] | None = None
+    if owner_uid:
+        owner_references = [{
+            "apiVersion": f"{GROUP}/{VERSION}",
+            "kind": "AgentEval",
+            "name": name,
+            "uid": owner_uid,
+            "controller": True,
+            "blockOwnerDeletion": False,
+        }]
+    artifact_pvc_name = ensure_worker_artifact_storage("eval", namespace, name, owner_references)
     artifact_path = artifact_file_path("eval", namespace, name, generation)
     job_name = enqueue_worker_job(
         "eval",
@@ -141,8 +152,8 @@ def enqueue_eval_job(
 # ---------------------------------------------------------------------------
 
 
-@kopf.on.create("kubesynth.ai", "v1alpha1", "agentevals")  # type: ignore[arg-type]
-@kopf.on.update("kubesynth.ai", "v1alpha1", "agentevals")  # type: ignore[arg-type]
+@kopf.on.create("kubesynapse.ai", "v1alpha1", "agentevals")  # type: ignore[arg-type]
+@kopf.on.update("kubesynapse.ai", "v1alpha1", "agentevals")  # type: ignore[arg-type]
 def run_eval(
     spec: dict[str, Any],
     status: dict[str, Any],
@@ -198,7 +209,7 @@ def run_eval(
     )
 
 
-@kopf.on.resume("kubesynth.ai", "v1alpha1", "agentevals")  # type: ignore[arg-type]
+@kopf.on.resume("kubesynapse.ai", "v1alpha1", "agentevals")  # type: ignore[arg-type]
 def resume_eval(
     spec: dict[str, Any],
     status: dict[str, Any],
@@ -258,7 +269,7 @@ def resume_eval(
     )
 
 
-@kopf.on.delete("kubesynth.ai", "v1alpha1", "agentevals")  # type: ignore[arg-type]
+@kopf.on.delete("kubesynapse.ai", "v1alpha1", "agentevals")  # type: ignore[arg-type]
 def delete_eval(
     status: dict[str, Any],
     name: str,
@@ -288,7 +299,7 @@ def delete_eval(
 
 
 @kopf.timer(
-    "kubesynth.ai",
+    "kubesynapse.ai",
     "v1alpha1",
     "agentevals",
     interval=EVAL_SCHEDULE_POLL_SECONDS,

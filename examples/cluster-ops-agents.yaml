@@ -2,7 +2,7 @@
 ## Agent: Kubernetes Cluster Monitor
 ## Continuously monitors cluster health, detects anomalies, and reports findings.
 ##
-apiVersion: kubesynth.ai/v1alpha1
+apiVersion: kubesynapse.ai/v1alpha1
 kind: AIAgent
 metadata:
   name: k8s-monitor
@@ -51,7 +51,7 @@ spec:
 ## Agent: Kubernetes Deployer
 ## Safely deploys, scales, and manages workloads on the cluster.
 ##
-apiVersion: kubesynth.ai/v1alpha1
+apiVersion: kubesynapse.ai/v1alpha1
 kind: AIAgent
 metadata:
   name: k8s-deployer
@@ -85,7 +85,7 @@ spec:
     2. NEVER modify kube-system resources unless explicitly asked
     3. ALWAYS use resource limits and requests on new deployments
     4. ALWAYS prefer rolling updates over recreate strategy
-    5. ALWAYS add labels: app, version, managed-by=kubesynth
+    5. ALWAYS add labels: app, version, managed-by=kubesynapse
     6. NEVER deploy containers as root unless specifically required
     7. ALWAYS set readiness and liveness probes on new deployments
     8. ALWAYS review the manifest before applying — show it to the user first
@@ -108,7 +108,7 @@ spec:
 ## Agent: Kubernetes Debugger
 ## Diagnoses and fixes issues in the cluster.
 ##
-apiVersion: kubesynth.ai/v1alpha1
+apiVersion: kubesynapse.ai/v1alpha1
 kind: AIAgent
 metadata:
   name: k8s-debugger

@@ -1,7 +1,7 @@
 import http from 'k6/http';
 import { check, sleep } from 'k6';
 
-// KubeSynth API Gateway Load Test
+// kubesynapse API Gateway Load Test
 // Usage: k6 run tests/performance/api-gateway.js
 
 export const options = {

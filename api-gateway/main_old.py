@@ -33,7 +33,7 @@ if str(CURRENT_DIR) not in sys.path:
     sys.path.insert(0, str(CURRENT_DIR))
 
 MCP_HUB_NAMESPACE = os.getenv("MCP_HUB_NAMESPACE", "mcp-hub").strip() or "mcp-hub"
-HELM_RELEASE_NAME = os.getenv("HELM_RELEASE_NAME", "kubesynth").strip() or "kubesynth"
+HELM_RELEASE_NAME = os.getenv("HELM_RELEASE_NAME", "kubesynapse").strip() or "kubesynapse"
 
 from auth_middleware import (  # §4.1 — extracted auth middleware
     AUTH_MODE,
@@ -251,13 +251,13 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type", "Accept", "X-Request-Id"],
 )
 
-NATS_URL = os.getenv("NATS_URL", "nats://kubesynth-nats:4222")
-QDRANT_URL = os.getenv("QDRANT_URL", "http://kubesynth-qdrant:6333")
+NATS_URL = os.getenv("NATS_URL", "nats://kubesynapse-nats:4222")
+QDRANT_URL = os.getenv("QDRANT_URL", "http://kubesynapse-qdrant:6333")
 # Auth constants (AUTH_MODE, SHARED_TOKEN, etc.) moved to auth_middleware.py — §4.1
 AGENT_RUNTIME_TIMEOUT_SECONDS = max(float(os.getenv("AGENT_RUNTIME_TIMEOUT_SECONDS", "360")), 1.0)
-LITELLM_INTERNAL_URL = os.getenv("LITELLM_INTERNAL_URL", "").strip() or "http://kubesynth-litellm:4000"
+LITELLM_INTERNAL_URL = os.getenv("LITELLM_INTERNAL_URL", "").strip() or "http://kubesynapse-litellm:4000"
 LITELLM_MASTER_KEY = os.getenv("LITELLM_MASTER_KEY", "").strip()
-LLM_SECRET_NAME = os.getenv("LLM_SECRET_NAME", "kubesynth-llm-api-keys")
+LLM_SECRET_NAME = os.getenv("LLM_SECRET_NAME", "kubesynapse-llm-api-keys")
 PROVIDER_REGISTRY_CONFIGMAP_NAME = (
     os.getenv("PROVIDER_REGISTRY_CONFIGMAP_NAME", f"{HELM_RELEASE_NAME}-provider-registry").strip()
     or f"{HELM_RELEASE_NAME}-provider-registry"
@@ -272,7 +272,7 @@ AGENT_READ_CACHE_MAX_ENTRIES = max(int(os.getenv("API_GATEWAY_AGENT_READ_CACHE_M
 A2A_PROTOCOL_VERSION = "1.0"
 A2A_TASK_RETENTION_SECONDS = max(int(os.getenv("A2A_TASK_RETENTION_SECONDS", "3600")), 60)
 A2A_PUBLIC_BASE_URL = os.getenv("API_GATEWAY_PUBLIC_BASE_URL", "").strip()
-A2A_PROVIDER_ORGANIZATION = os.getenv("A2A_PROVIDER_ORGANIZATION", "kubesynthai").strip()
+A2A_PROVIDER_ORGANIZATION = os.getenv("A2A_PROVIDER_ORGANIZATION", "KubeSynapseai").strip()
 A2A_PROVIDER_URL = os.getenv("A2A_PROVIDER_URL", "").strip()
 A2A_TERMINAL_STATES = {
     "TASK_STATE_COMPLETED",
@@ -307,14 +307,14 @@ MAX_AGENT_SKILL_FILES = max(int(os.getenv("AGENT_MAX_SKILL_FILES", "24")), 1)
 MAX_AGENT_SKILL_FILE_PATH_CHARS = max(int(os.getenv("AGENT_MAX_SKILL_FILE_PATH_CHARS", "256")), 32)
 MAX_AGENT_SKILL_FILE_CONTENT_CHARS = max(int(os.getenv("AGENT_MAX_SKILL_FILE_CONTENT_CHARS", "16000")), 512)
 MAX_AGENT_SKILL_TOTAL_CHARS = max(int(os.getenv("AGENT_MAX_SKILL_TOTAL_CHARS", "64000")), 4096)
-FACTORY_AGENT_NAME = "kubesynth-factory"
-FACTORY_WORKFLOW_NAME = "kubesynth-factory-pipeline"
-FACTORY_CONTEXT_NAME = "kubesynth-factory-context"
+FACTORY_AGENT_NAME = "kubesynapse-factory"
+FACTORY_WORKFLOW_NAME = "kubesynapse-factory-pipeline"
+FACTORY_CONTEXT_NAME = "kubesynapse-factory-context"
 DEFAULT_FACTORY_MODE = "governed-bundle"
 FACTORY_MODES = frozenset({"lightweight-draft", "governed-bundle", "fully-autonomous"})
 FACTORY_MODE_SYSTEM_NOTES = {
     "lightweight-draft": (
-        "Factory mode: lightweight-draft. Produce the fastest useful first-pass blueprint that still respects the real KubeSynth CRDs. "
+        "Factory mode: lightweight-draft. Produce the fastest useful first-pass blueprint that still respects the real kubesynapse CRDs. "
         "Keep the design lean, surface assumptions explicitly, and stop at a draft artifact set without deployment execution."
     ),
     "governed-bundle": (
@@ -323,7 +323,7 @@ FACTORY_MODE_SYSTEM_NOTES = {
     ),
     "fully-autonomous": (
         "Factory mode: fully-autonomous. Produce the most capable end-to-end bundle you can, with strong decomposition, rich prompts, verification guidance, and operational realism. "
-        "Still respect explicit approval boundaries and current KubeSynth runtime constraints."
+        "Still respect explicit approval boundaries and current kubesynapse runtime constraints."
     ),
 }
 FACTORY_WORKFLOW_INPUT_RE = re.compile(
@@ -798,7 +798,7 @@ class CreateAgentRequest(BaseModel):
     system_prompt: str = Field(default="", max_length=AGENT_SYSTEM_PROMPT_MAX_CHARS)
     policy_ref: str | None = Field(default=None, max_length=253)
     storage_size: str | None = Field(default="1Gi", max_length=32)
-    runtime_kind: str = Field(pattern=r"^opencode$")
+    runtime_kind: str = Field(pattern=r"^(opencode|pi)$")
     enable_gvisor: bool = False
     mcp_connection_ids: list[str] = Field(default_factory=list)
     mcp_servers: list[str] = Field(default_factory=list)
@@ -817,7 +817,7 @@ class UpdateAgentRequest(BaseModel):
     system_prompt: str = Field(default="", max_length=AGENT_SYSTEM_PROMPT_MAX_CHARS)
     policy_ref: str | None = Field(default=None, max_length=253)
     storage_size: str | None = Field(default="1Gi", max_length=32)
-    runtime_kind: str | None = Field(default=None, pattern=r"^opencode$")
+    runtime_kind: str | None = Field(default=None, pattern=r"^(opencode|pi)$")
     enable_gvisor: bool = False
     mcp_connection_ids: list[str] | None = None
     mcp_servers: list[str] = Field(default_factory=list)
@@ -1017,7 +1017,7 @@ class UpdateUserRequest(BaseModel):
     allowed_namespaces: list[str] | None = None
 
 
-RESOURCE_GROUP = "kubesynth.ai"
+RESOURCE_GROUP = "kubesynapse.ai"
 RESOURCE_VERSION = "v1alpha1"
 RESOURCE_KIND_BY_PLURAL = {
     "aiagents": "AIAgent",
@@ -1039,8 +1039,8 @@ def normalized_runtime_kind(raw_value: str | None) -> str:
     runtime_kind = str(raw_value or "").strip().lower()
     if not runtime_kind:
         raise ValueError("runtime kind must be explicitly set")
-    if runtime_kind != "opencode":
-        raise ValueError(f"runtime kind must be 'opencode'; '{runtime_kind}' is no longer supported")
+    if runtime_kind not in ("opencode", "pi"):
+        raise ValueError(f"runtime kind must be 'opencode' or 'pi'; '{runtime_kind}' is no longer supported")
     return runtime_kind
 
 
@@ -1545,7 +1545,7 @@ def runtime_kind_from_spec(spec: dict[str, Any] | None) -> str:
 
 def validate_agent_runtime_compatibility(spec: dict[str, Any]) -> None:
     runtime_kind = runtime_kind_from_spec(spec)
-    if runtime_kind != "opencode":
+    if runtime_kind not in ("opencode", "pi"):
         raise HTTPException(status_code=400, detail=f"Unsupported AIAgent runtime kind '{runtime_kind}'")
     if spec.get("githubConfig"):
         raise HTTPException(
@@ -1558,7 +1558,7 @@ def validate_agent_runtime_compatibility(spec: dict[str, Any]) -> None:
 
 
 def validate_invoke_runtime_compatibility(runtime_kind: str, request: InvokeRequest) -> None:
-    if runtime_kind != "opencode":
+    if runtime_kind not in ("opencode", "pi"):
         raise HTTPException(status_code=400, detail=f"Unsupported AIAgent runtime kind '{runtime_kind}'")
 
     unsupported_fields: list[str] = []
@@ -2231,8 +2231,8 @@ def _upsert_mcp_connection_secret(namespace: str, connection_id: str, credential
             name=secret_name,
             namespace=namespace,
             labels={
-                "app.kubernetes.io/managed-by": "kubesynth",
-                "kubesynth.ai/mcp-connection-id": connection_id,
+                "app.kubernetes.io/managed-by": "kubesynapse",
+                "kubesynapse.ai/mcp-connection-id": connection_id,
             },
         ),
         type="Opaque",
@@ -2349,7 +2349,7 @@ def _mcp_oauth_entry_metadata(entry: dict[str, Any]) -> dict[str, Any]:
 def _saved_oauth_support(entry: dict[str, Any]) -> tuple[bool, str | None]:
     metadata = _mcp_oauth_entry_metadata(entry)
     if not metadata["authorization_url"] or not metadata["token_url"]:
-        return False, "This OAuth-backed MCP entry still needs provider authorization metadata before KubeSynth can drive the sign-in flow."
+        return False, "This OAuth-backed MCP entry still needs provider authorization metadata before kubesynapse can drive the sign-in flow."
 
     config_keys = {str(field.get("key") or "").strip() for field in _non_credential_fields_for_entry(entry)}
     credential_keys = {str(field.get("key") or "").strip() for field in _credential_fields_for_entry(entry)}
@@ -3160,7 +3160,7 @@ def build_agent_card(agent_name: str, namespace: str, request: Request) -> dict[
             }
         ],
         "provider": {
-            "organization": A2A_PROVIDER_ORGANIZATION or "kubesynthai",
+            "organization": A2A_PROVIDER_ORGANIZATION or "KubeSynapseai",
             "url": provider_url,
         },
         "version": version,
@@ -3412,11 +3412,11 @@ def parse_a2a_passthrough_metadata(raw_value: Any) -> dict[str, Any]:
     if not isinstance(raw_value, dict):
         raise A2AJSONRPCError(JSONRPC_INVALID_PARAMS, "metadata must be an object when provided")
 
-    passthrough = raw_value.get("kubesynthInvoke")
+    passthrough = raw_value.get("KubeSynapseInvoke")
     if passthrough is None:
         return {}
     if not isinstance(passthrough, dict):
-        raise A2AJSONRPCError(JSONRPC_INVALID_PARAMS, "metadata.kubesynthInvoke must be an object when provided")
+        raise A2AJSONRPCError(JSONRPC_INVALID_PARAMS, "metadata.KubeSynapseInvoke must be an object when provided")
 
     parsed: dict[str, Any] = {}
     thread_id = str(passthrough.get("threadId") or "").strip()
@@ -3452,7 +3452,7 @@ def parse_a2a_passthrough_metadata(raw_value: Any) -> dict[str, Any]:
         if not isinstance(sandbox_session, dict):
             raise A2AJSONRPCError(
                 JSONRPC_INVALID_PARAMS,
-                "metadata.kubesynthInvoke.sandboxSession must be an object when provided",
+                "metadata.KubeSynapseInvoke.sandboxSession must be an object when provided",
             )
         parsed["sandbox_session"] = copy.deepcopy(sandbox_session)
 
@@ -3461,7 +3461,7 @@ def parse_a2a_passthrough_metadata(raw_value: Any) -> dict[str, Any]:
         if not isinstance(team_context, dict):
             raise A2AJSONRPCError(
                 JSONRPC_INVALID_PARAMS,
-                "metadata.kubesynthInvoke.teamContext must be an object when provided",
+                "metadata.KubeSynapseInvoke.teamContext must be an object when provided",
             )
         parsed["team_context"] = copy.deepcopy(team_context)
 
@@ -3962,9 +3962,8 @@ def build_agent_spec(
             existing_opencode_config_files = existing_opencode.get("configFiles")
 
     try:
-        runtime_kind = normalized_opencode_runtime_kind(
+        runtime_kind = normalized_runtime_kind(
             getattr(body, "runtime_kind", None) or existing_runtime_kind,
-            field_name="runtime_kind",
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -4468,7 +4467,7 @@ def build_agent_collaboration_system_note(agent_name: str, namespace: str, agent
                 f"- To actually query a peer from standard chat, use the bash tool to POST JSON-RPC 2.0 to $API_GATEWAY_INTERNAL_URL/a2a/<agent>?namespace=<namespace> with Authorization: Bearer $API_GATEWAY_SHARED_TOKEN and A2A-Version: {A2A_PROTOCOL_VERSION}."
             )
             lines.append(
-                f"- Use method SendMessage. Put the task prompt in params.message.parts[]. For KubeSynth caller continuity, include params.metadata.kubesynthInvoke.threadId plus callerAgentName='{agent_name}' and callerAgentNamespace='{namespace}'."
+                f"- Use method SendMessage. Put the task prompt in params.message.parts[]. For kubesynapse caller continuity, include params.metadata.KubeSynapseInvoke.threadId plus callerAgentName='{agent_name}' and callerAgentNamespace='{namespace}'."
             )
             lines.append(
                 f"- URL rule: if a peer is shown as namespace/name, put only the agent name in the /a2a/<agent> path and keep the namespace in the ?namespace= query parameter. Example: peer {example_peer_namespace}/{example_peer_name} maps to $API_GATEWAY_INTERNAL_URL/a2a/{example_peer_name}?namespace={example_peer_namespace}."
@@ -4846,7 +4845,7 @@ def get_agents(namespace: str = "default") -> list[dict[str, Any]]:
 
         api = client.CustomObjectsApi()
         result = api.list_namespaced_custom_object(
-            group="kubesynth.ai",
+            group="kubesynapse.ai",
             version="v1alpha1",
             namespace=namespace,
             plural="aiagents",
@@ -4880,7 +4879,7 @@ def read_agent(agent_name: str, namespace: str) -> dict[str, Any]:
         return cast(
             dict[str, Any],
             client.CustomObjectsApi().get_namespaced_custom_object(
-                group="kubesynth.ai",
+                group="kubesynapse.ai",
                 version="v1alpha1",
                 namespace=namespace,
                 plural="aiagents",
@@ -5020,7 +5019,7 @@ def ensure_opa_configmap(agent_name: str, namespace: str, opa_config: dict[str, 
             metadata=k8s_client.V1ObjectMeta(
                 name=configmap_name,
                 namespace=namespace,
-                labels={"app.kubernetes.io/managed-by": "kubesynth", "agent-name": agent_name},
+                labels={"app.kubernetes.io/managed-by": "kubesynapse", "agent-name": agent_name},
             ),
             data=data,
         )
@@ -5045,7 +5044,7 @@ def read_approval(approval_name: str, namespace: str) -> dict[str, Any]:
         return cast(
             dict[str, Any],
             client.CustomObjectsApi().get_namespaced_custom_object(
-                group="kubesynth.ai",
+                group="kubesynapse.ai",
                 version="v1alpha1",
                 namespace=namespace,
                 plural="agentapprovals",
@@ -6574,7 +6573,7 @@ MCP_REGISTRY: list[dict[str, Any]] = [
         "repository_url": "https://github.com/tavily-ai/tavily-mcp",
         "protocol_label": "Streamable HTTP",
         "deployment_model": "Vendor-hosted remote",
-        "connection_notes": "Tavily supports either OAuth or API-key auth. KubeSynth uses Bearer-token API-key auth for headless saved connections.",
+        "connection_notes": "Tavily supports either OAuth or API-key auth. kubesynapse uses Bearer-token API-key auth for headless saved connections.",
         "auth_header_name": "Authorization",
         "auth_header_prefix": "Bearer ",
         "config_schema": [
@@ -7019,7 +7018,7 @@ def _build_mcp_registry_entry(entry: dict[str, Any]) -> dict[str, Any]:
                         "support_level": "planned",
                         "attachable": False,
                         "status_reason": oauth_reason
-                        or "This OAuth-backed MCP entry still needs provider metadata before KubeSynth can drive the sign-in flow.",
+                        or "This OAuth-backed MCP entry still needs provider metadata before kubesynapse can drive the sign-in flow.",
                     }
                 )
                 return result
@@ -7028,7 +7027,7 @@ def _build_mcp_registry_entry(entry: dict[str, Any]) -> dict[str, Any]:
                     "support_level": "ready" if registry_endpoint else "limited",
                     "attachable": True,
                     "status_reason": (
-                        "Attachable after you save the connection and complete browser-based OAuth once from the MCP page. KubeSynth stores the resulting token on the saved connection and reuses it for runtime headers."
+                        "Attachable after you save the connection and complete browser-based OAuth once from the MCP page. kubesynapse stores the resulting token on the saved connection and reuses it for runtime headers."
                         if registry_endpoint
                         else "Attachable after you save the connection, provide the endpoint URL for your own deployment, and complete browser-based OAuth once from the MCP page."
                     ),
@@ -7557,7 +7556,7 @@ def _mcp_oauth_callback_response(
 ) -> Response:
     payload = json.dumps(
         {
-            "type": "kubesynth-mcp-oauth-result",
+            "type": "kubesynapse-mcp-oauth-result",
             "connectionId": connection_id,
             "status": status_value,
             "message": message,
@@ -7838,10 +7837,10 @@ async def list_namespaces(user=Depends(verify_token)):
 @app.get("/api/health")
 def health() -> dict[str, Any]:
     if _SHUTDOWN.is_set():
-        return {"status": "shutting-down", "gateway": "kubesynth"}
+        return {"status": "shutting-down", "gateway": "kubesynapse"}
     return {
         "status": "healthy",
-        "gateway": "kubesynth",
+        "gateway": "kubesynapse",
         "auth_mode": AUTH_MODE,
         "browser_auth_enabled": browser_auth_enabled(),
         "local_auth_enabled": local_access_enabled(),
@@ -7855,7 +7854,7 @@ def health() -> dict[str, Any]:
 def ready(response: Response) -> dict[str, Any]:
     if _SHUTDOWN.is_set():
         response.status_code = 503
-        return {"status": "shutting-down", "gateway": "kubesynth"}
+        return {"status": "shutting-down", "gateway": "kubesynapse"}
     checks: dict[str, str] = {}
     try:
         from sqlalchemy import text as _sa_text
@@ -7870,7 +7869,7 @@ def ready(response: Response) -> dict[str, Any]:
     all_ok = all(v == "ok" for v in checks.values())
     if not all_ok:
         response.status_code = 503
-    return {"status": "ready" if all_ok else "degraded", "gateway": "kubesynth", "checks": checks}
+    return {"status": "ready" if all_ok else "degraded", "gateway": "kubesynapse", "checks": checks}
 
 
 @app.get("/.well-known/agent-card.json")
@@ -8138,7 +8137,7 @@ def decide_approval(
         from kubernetes import client
 
         client.CustomObjectsApi().patch_namespaced_custom_object_status(
-            group="kubesynth.ai",
+            group="kubesynapse.ai",
             version="v1alpha1",
             namespace=namespace,
             plural="agentapprovals",
@@ -8331,7 +8330,7 @@ def create_git_credentials(
         metadata=client.V1ObjectMeta(
             name=secret_name,
             namespace=namespace,
-            labels={"app.kubernetes.io/managed-by": "kubesynth", "agent": agent_name},
+            labels={"app.kubernetes.io/managed-by": "kubesynapse", "agent": agent_name},
         ),
         type="Opaque",
         string_data=string_data,
@@ -8410,7 +8409,7 @@ def create_github_credentials(
         metadata=client.V1ObjectMeta(
             name=secret_name,
             namespace=namespace,
-            labels={"app.kubernetes.io/managed-by": "kubesynth", "agent": agent_name},
+            labels={"app.kubernetes.io/managed-by": "kubesynapse", "agent": agent_name},
         ),
         type="Opaque",
         string_data={"token": body.token},
@@ -8651,7 +8650,7 @@ def trigger_workflow(
 
     existing_spec = current.get("spec", {}) or {}
     if body and body.factory_mode and not is_factory_workflow_resource(workflow_name, existing_spec):
-        raise HTTPException(status_code=400, detail="factory_mode is only supported for the KubeSynth factory workflow.")
+        raise HTTPException(status_code=400, detail="factory_mode is only supported for the kubesynapse factory workflow.")
 
     existing_input = str(existing_spec.get("input", "") or "")
     _, unwrapped_existing_request = unwrap_factory_workflow_input(existing_input)
@@ -9035,6 +9034,197 @@ def stream_workflow_status(
     )
 
 
+@app.get("/api/workflows/{workflow_name}/activities/stream")
+async def stream_workflow_activities(
+    workflow_name: str,
+    request: Request,
+    namespace: str = "default",
+    tail: int = 100,
+    user=Depends(verify_token),
+):
+    """SSE stream that pushes workflow activity events in real-time.
+
+    Converts workflow status transitions into structured activity events
+    (step starts, completions, failures) so the UI can show a live feed
+    of what the agents are doing.
+    """
+    ensure_namespace_access(user, namespace)
+    tail = max(1, min(tail, 5000))
+
+    async def activity_event_generator():
+        import time
+
+        terminal_phases = {"completed", "failed", "cancelled"}
+        prev_status: dict[str, Any] | None = None
+        emitted: list[dict[str, Any]] = []
+
+        yield sse_event(
+            "activities.started",
+            {"workflow_name": workflow_name, "phase": "", "run_id": "", "is_active": True},
+        )
+
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+
+                try:
+                    from kubernetes import client as k8s_client
+
+                    resource = cast(
+                        dict[str, Any],
+                        k8s_client.CustomObjectsApi().get_namespaced_custom_object(
+                            group=RESOURCE_GROUP,
+                            version=RESOURCE_VERSION,
+                            namespace=namespace,
+                            plural="agentworkflows",
+                            name=workflow_name,
+                        ),
+                    )
+                    status = resource.get("status") or {}
+                    phase = str(status.get("phase") or "").strip()
+                    run_id = str(status.get("runId") or "").strip()
+                    current_step = str(status.get("currentStep") or "").strip()
+                    step_states = status.get("stepStates") or {}
+                    summary = status.get("summary") or {}
+                    worker_job = status.get("workerJob") or {}
+
+                    is_active = phase in {"queued", "running", "waiting-approval"}
+
+                    # On first iteration, emit startup events for recent history
+                    if prev_status is None:
+                        yield sse_event(
+                            "activities.started",
+                            {"workflow_name": workflow_name, "phase": phase, "run_id": run_id, "is_active": is_active},
+                        )
+                        # Emit current step state snapshot as initial activities
+                        for step_name, st in list(step_states.items())[-tail:]:
+                            st_status = str(st.get("status") or "").strip()
+                            if st_status and st_status != "pending":
+                                event_type = (
+                                    "error" if st_status in {"failed", "denied"}
+                                    else "success" if st_status == "completed"
+                                    else "operation"
+                                )
+                                act = {
+                                    "id": hashlib.sha256(f"{run_id}-{step_name}-{st_status}".encode()).hexdigest()[:16],
+                                    "timestamp": summary.get("updatedAt") or datetime.now(UTC).isoformat(),
+                                    "type": event_type,
+                                    "event": f"workflow.step.{st_status}",
+                                    "agentRef": str(st.get("agentRef") or ""),
+                                    "step": step_name,
+                                    "runId": run_id,
+                                    "message": f"Step '{step_name}' is {st_status}",
+                                    "details": st,
+                                    "source": "status",
+                                }
+                                emitted.append(act["id"])
+                                yield sse_event("activity", act)
+
+                    # Detect step state changes
+                    if prev_status is not None:
+                        prev_step_states = prev_status.get("stepStates") or {}
+                        for step_name, st in step_states.items():
+                            prev_st = prev_step_states.get(step_name) or {}
+                            st_status = str(st.get("status") or "").strip()
+                            prev_status_name = str(prev_st.get("status") or "").strip()
+                            if st_status and st_status != prev_status_name:
+                                event_type = (
+                                    "error" if st_status in {"failed", "denied"}
+                                    else "success" if st_status == "completed"
+                                    else "reasoning" if st_status == "running"
+                                    else "system"
+                                )
+                                act = {
+                                    "id": hashlib.sha256(f"{run_id}-{step_name}-{st_status}-{time.time()}".encode()).hexdigest()[:16],
+                                    "timestamp": summary.get("updatedAt") or datetime.now(UTC).isoformat(),
+                                    "type": event_type,
+                                    "event": f"workflow.step.{st_status}",
+                                    "agentRef": str(st.get("agentRef") or ""),
+                                    "step": step_name,
+                                    "runId": run_id,
+                                    "message": (
+                                        f"Step '{step_name}' {st_status}"
+                                        + (f" ({st.get('latencyMs', 0)}ms)" if st.get("latencyMs") else "")
+                                    ),
+                                    "details": st,
+                                    "source": "status",
+                                }
+                                if act["id"] not in emitted:
+                                    emitted.append(act["id"])
+                                    yield sse_event("activity", act)
+
+                        # Detect phase changes
+                        prev_phase = str(prev_status.get("phase") or "").strip()
+                        if phase and phase != prev_phase:
+                            act = {
+                                "id": hashlib.sha256(f"{run_id}-phase-{phase}-{time.time()}".encode()).hexdigest()[:16],
+                                "timestamp": summary.get("updatedAt") or datetime.now(UTC).isoformat(),
+                                "type": "system",
+                                "event": f"workflow.phase.{phase}",
+                                "agentRef": "",
+                                "step": current_step,
+                                "runId": run_id,
+                                "message": f"Workflow is {phase}" + (f" (step: {current_step})" if current_step else ""),
+                                "details": {"phase": phase, "currentStep": current_step, "workerJob": worker_job},
+                                "source": "status",
+                            }
+                            if act["id"] not in emitted:
+                                emitted.append(act["id"])
+                                yield sse_event("activity", act)
+
+                    # Detect current step changes while running
+                    if prev_status is not None and current_step:
+                        prev_current_step = str(prev_status.get("currentStep") or "").strip()
+                        if current_step != prev_current_step and phase == "running":
+                            act = {
+                                "id": hashlib.sha256(f"{run_id}-currentstep-{current_step}-{time.time()}".encode()).hexdigest()[:16],
+                                "timestamp": summary.get("updatedAt") or datetime.now(UTC).isoformat(),
+                                "type": "operation",
+                                "event": "workflow.step.started",
+                                "agentRef": str((step_states.get(current_step) or {}).get("agentRef") or ""),
+                                "step": current_step,
+                                "runId": run_id,
+                                "message": f"Starting step '{current_step}'",
+                                "details": step_states.get(current_step) or {},
+                                "source": "status",
+                            }
+                            if act["id"] not in emitted:
+                                emitted.append(act["id"])
+                                yield sse_event("activity", act)
+
+                    prev_status = {
+                        "phase": phase,
+                        "runId": run_id,
+                        "currentStep": current_step,
+                        "stepStates": step_states,
+                        "summary": summary,
+                        "workerJob": worker_job,
+                    }
+
+                    if phase in terminal_phases:
+                        yield sse_event("activities.done", {"phase": phase})
+                        return
+
+                except Exception as exc:
+                    yield sse_event("activities.error", {"error": str(exc)})
+                    return
+
+                await asyncio.sleep(2)
+        except asyncio.CancelledError:
+            return
+
+    return StreamingResponse(
+        activity_event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @app.get("/api/workflows/{workflow_name}/runs")
 def get_workflow_runs(
     workflow_name: str,
@@ -9388,7 +9578,7 @@ async def invoke_agent(
     validate_invoke_runtime_compatibility(runtime_kind_from_spec(agent.get("spec", {})), request)
     _log_invoke_step("runtime_validated")
     if request.factory_mode and not is_factory_agent_resource(agent_name, agent):
-        raise HTTPException(status_code=400, detail="factory_mode is only supported for the KubeSynth factory agent.")
+        raise HTTPException(status_code=400, detail="factory_mode is only supported for the kubesynapse factory agent.")
     request_payload = request.model_dump(exclude={"factory_mode"})
     policy_memory = resolve_agent_memory_policy(agent, namespace)
     _log_invoke_step("memory_policy_resolved")
@@ -9517,7 +9707,7 @@ async def invoke_agent_stream(
     agent = await asyncio.to_thread(read_agent_cached, agent_name, namespace)
     validate_invoke_runtime_compatibility(runtime_kind_from_spec(agent.get("spec", {})), request)
     if request.factory_mode and not is_factory_agent_resource(agent_name, agent):
-        raise HTTPException(status_code=400, detail="factory_mode is only supported for the KubeSynth factory agent.")
+        raise HTTPException(status_code=400, detail="factory_mode is only supported for the kubesynapse factory agent.")
     request_payload = request.model_dump(exclude={"factory_mode"})
     append_system_note(request_payload, build_agent_collaboration_system_note(agent_name, namespace, agent))
     # Auto-inject intelligence context for intelligence-aware agents
@@ -10468,7 +10658,7 @@ _OPENCODE_GO_FALLBACK_MODELS: list[dict[str, str]] = [
     {
         "model_id": "kimi-k2.6",
         "display_name": "kimi-k2.6",
-        "description": "Current KubeSynth default for bundled OpenCode agents.",
+        "description": "Current kubesynapse default for bundled OpenCode agents.",
     }
 ]
 
@@ -10624,7 +10814,7 @@ async def _fetch_opencode_zen_models() -> list[dict[str, str]]:
     except Exception as exc:
         logger.warning("Failed to fetch OpenCode Zen models: %s", exc)
         return [
-            {"model_id": "kimi-k2.6", "display_name": "kimi-k2.6", "description": "KubeSynth default"},
+            {"model_id": "kimi-k2.6", "display_name": "kimi-k2.6", "description": "kubesynapse default"},
             {"model_id": "gpt-5.4", "display_name": "gpt-5.4", "description": "Latest GPT family"},
             {"model_id": "claude-sonnet-4", "display_name": "claude-sonnet-4", "description": "Claude Sonnet"},
         ]
@@ -10635,7 +10825,7 @@ async def _fetch_opencode_go_models() -> list[dict[str, str]]:
         async with httpx.AsyncClient(timeout=20.0, trust_env=False) as client:
             response = await client.get(
                 "https://models.dev/api.json",
-                headers={"Accept": "application/json", "User-Agent": "kubesynth-api-gateway/1.0"},
+                headers={"Accept": "application/json", "User-Agent": "kubesynapse-api-gateway/1.0"},
             )
             response.raise_for_status()
             data = response.json()
@@ -12198,7 +12388,7 @@ def observability_overview(
         v1 = k8s_client.CoreV1Api()
         pods = v1.list_namespaced_pod(
             namespace=namespace,
-            label_selector="kubesynth.ai/managed-by=kubesynth-operator",
+            label_selector="kubesynapse.ai/managed-by=kubesynapse-operator",
         )
         agent_pod_summary["total"] = len(pods.items)
         for pod in pods.items:
@@ -12499,7 +12689,7 @@ _INTELLIGENCE_BUILTINS = {
     "crd_inventory",
 }
 
-_DEFAULT_COLLECTOR_TOKEN = os.environ.get("KUBESYNTH_COLLECTOR_TOKEN", "")
+_DEFAULT_COLLECTOR_TOKEN = os.environ.get("KUBESYNAPSE_COLLECTOR_TOKEN", "")
 _DEFAULT_COLLECTOR_TOKEN_HASH = (
     hashlib.sha256(_DEFAULT_COLLECTOR_TOKEN.encode("utf-8")).hexdigest() if _DEFAULT_COLLECTOR_TOKEN else ""
 )
@@ -13860,3 +14050,4 @@ async def _intelligence_scheduler_loop():
         except Exception:
             logger.exception("Error in intelligence scheduler loop")
     logger.info("Intelligence scheduler stopped.")
+

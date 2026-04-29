@@ -1,6 +1,6 @@
-# KubeSynth Troubleshooting Guide
+# KubeSynapse Troubleshooting Guide
 
-**Who is this for:** Anyone operating or developing on KubeSynth who needs to diagnose and fix common issues quickly.
+**Who is this for:** Anyone operating or developing on KubeSynapse who needs to diagnose and fix common issues quickly.
 
 Each issue follows this pattern: **Symptoms -> Diagnosis -> Fix -> Prevention**
 
@@ -80,7 +80,7 @@ kubectl taint nodes <node> <key>:NoSchedule-
 
 ### Prevention
 
-- Set a default StorageClass before installing KubeSynth
+- Set a default StorageClass before installing KubeSynapse
 - Use ResourceQuotas per namespace to reserve headroom
 - Label nodes for agent workloads and use node affinity
 
@@ -115,11 +115,11 @@ Common causes:
 
 ```bash
 # Verify secrets exist
-kubectl get secrets -n kubesynth
+kubectl get secrets -n kubesynapse
 
 # Re-create or update Helm values
-helm upgrade kubesynth oci://docker.io/kubesynth/charts/kubesynth \
-  -n kubesynth -f values.yaml
+helm upgrade KubeSynapse oci://docker.io/kubesynapse/charts/kubesynapse \
+  -n kubesynapse -f values.yaml
 ```
 
 **Invalid runtime config:**
@@ -145,7 +145,7 @@ kubectl patch aiagent <name> -n <namespace> --type merge \
 
 ```bash
 # Verify registry credentials
-kubectl get secret regcred -n kubesynth
+kubectl get secret regcred -n kubesynapse
 
 # Check image tag exists
 kubectl get aiagent <name> -n <namespace> -o yaml | grep image:
@@ -170,7 +170,7 @@ kubectl get aiagent <name> -n <namespace> -o yaml | grep image:
 
 ```bash
 # Check gateway readiness
-kubectl logs -n kubesynth deployment/kubesynth-api-gateway | grep "503"
+kubectl logs -n kubesynapse deployment/kubesynapse-api-gateway | grep "503"
 
 # Check runtime pod health
 kubectl get pods -n <namespace> -l app.kubernetes.io/name=<agent-name>
@@ -204,18 +204,18 @@ kubectl rollout restart statefulset <agent-name> -n <namespace>
 
 ```bash
 # Temporarily allow all ingress for debugging
-kubectl label networkpolicy -n <namespace> kubesynth-deny-ingress disabled=true
+kubectl label networkpolicy -n <namespace> KubeSynapse-deny-ingress disabled=true
 
 # Or add explicit allow rule for gateway
 kubectl patch networkpolicy allow-gateway -n <namespace> --type merge \
-  -p '{"spec":{"ingress":[{"from":[{"podSelector":{"matchLabels":{"app":"kubesynth-api-gateway"}}}]}]}}'
+  -p '{"spec":{"ingress":[{"from":[{"podSelector":{"matchLabels":{"app":"kubesynapse-api-gateway"}}}]}]}}'
 ```
 
 **Gateway resource exhaustion:**
 
 ```bash
 # Scale gateway horizontally
-kubectl scale deployment kubesynth-api-gateway -n kubesynth --replicas=5
+kubectl scale deployment kubesynapse-api-gateway -n kubesynapse --replicas=5
 ```
 
 ### Prevention
@@ -244,7 +244,7 @@ kubectl get aiagent <target-agent> -n <namespace>
 kubectl get pods -n <target-namespace> -l app.kubernetes.io/name=<target-agent>
 
 # Check gateway logs for A2A errors
-kubectl logs -n kubesynth deployment/kubesynth-api-gateway | grep "a2a"
+kubectl logs -n kubesynapse deployment/kubesynapse-api-gateway | grep "a2a"
 ```
 
 Common causes:
@@ -277,7 +277,7 @@ kubectl rollout restart statefulset <target-agent> -n <target-namespace>
 
 - Document allowed A2A targets in agent onboarding runbooks
 - Use `AgentPolicy` defaults that deny all A2A unless explicitly allowed
-- Monitor `kubesynth_a2a_failures_total` Prometheus metric
+- Monitor `KubeSynapse_a2a_failures_total` Prometheus metric
 
 ---
 
@@ -292,10 +292,10 @@ kubectl rollout restart statefulset <target-agent> -n <target-namespace>
 
 ```bash
 # Check LiteLLM health
-kubectl exec -n kubesynth deploy/litellm -- curl -s localhost:4000/health/liveliness
+kubectl exec -n kubesynapse deploy/litellm -- curl -s localhost:4000/health/liveliness
 
 # Check model availability
-kubectl logs -n kubesynth deployment/litellm | grep "model"
+kubectl logs -n kubesynapse deployment/litellm | grep "model"
 
 # Verify provider key validity
 curl -s http://localhost:8080/api/health/db
@@ -316,10 +316,10 @@ Common causes:
 
 ```bash
 # Check model list
-kubectl get configmap litellm-config -n kubesynth -o yaml
+kubectl get configmap litellm-config -n kubesynapse -o yaml
 
 # Redeploy with correct model names
-helm upgrade kubesynth ... --set litellm.models='[{"model_name":"gpt-4o","litellm_params":{"model":"openai/gpt-4o"}}]'
+helm upgrade KubeSynapse ... --set litellm.models='[{"model_name":"gpt-4o","litellm_params":{"model":"openai/gpt-4o"}}]'
 ```
 
 **Provider rate limit:**
@@ -333,7 +333,7 @@ helm upgrade kubesynth ... --set litellm.models='[{"model_name":"gpt-4o","litell
 
 ```bash
 # Add egress rule for provider APIs
-kubectl patch networkpolicy allow-litellm-egress -n kubesynth --type merge \
+kubectl patch networkpolicy allow-litellm-egress -n kubesynapse --type merge \
   -p '{"spec":{"egress":[{"to":[{"ipBlock":{"cidr":"0.0.0.0/0"}}],"ports":[{"protocol":"TCP","port":443}]}]}}'
 ```
 
@@ -356,14 +356,14 @@ kubectl patch networkpolicy allow-litellm-egress -n kubesynth --type merge \
 
 ```bash
 # Check web-ui pod status
-kubectl get pods -n kubesynth -l app.kubernetes.io/name=kubesynth-web-ui
+kubectl get pods -n kubesynapse -l app.kubernetes.io/name=kubesynapse-web-ui
 
 # Check ingress or port-forward
-kubectl get ingress -n kubesynth
-kubectl get svc kubesynth-web-ui -n kubesynth
+kubectl get ingress -n kubesynapse
+kubectl get svc kubesynapse-web-ui -n kubesynapse
 
 # Check gateway connectivity from UI pod
-kubectl exec -n kubesynth deploy/kubesynth-web-ui -- curl -s http://kubesynth-api-gateway:8080/api/health
+kubectl exec -n kubesynapse deploy/kubesynapse-web-ui -- curl -s http://kubesynapse-api-gateway:8080/api/health
 ```
 
 Common causes:
@@ -381,24 +381,24 @@ Common causes:
 
 ```bash
 # Check image tag and pull secrets
-kubectl get deployment kubesynth-web-ui -n kubesynth -o yaml | grep image:
+kubectl get deployment kubesynapse-web-ui -n kubesynapse -o yaml | grep image:
 
 # If using local registry in Kind, re-load image
-kind load docker-image kubesynth/web-ui:tag --name kubesynth
+kind load docker-image KubeSynapse/web-ui:tag --name KubeSynapse
 ```
 
 **CORS misconfiguration:**
 
 ```bash
 # Set correct CORS origin in gateway config
-helm upgrade kubesynth ... --set apiGateway.corsOrigins='["https://kubesynth.example.com"]'
+helm upgrade KubeSynapse ... --set apiGateway.corsOrigins='["https://KubeSynapse.example.com"]'
 ```
 
 **Ingress misconfiguration:**
 
 ```bash
 # Verify ingress rules
-kubectl get ingress kubesynth -n kubesynth -o yaml
+kubectl get ingress kubesynapse -n kubesynapse -o yaml
 
 # Check ingress controller logs
 kubectl logs -n ingress-nginx deployment/ingress-nginx-controller
@@ -424,14 +424,14 @@ kubectl logs -n ingress-nginx deployment/ingress-nginx-controller
 
 ```bash
 # Check PostgreSQL pod status
-kubectl get pods -n kubesynth -l app.kubernetes.io/name=postgresql
+kubectl get pods -n kubesynapse -l app.kubernetes.io/name=postgresql
 
 # Check connection from gateway
-kubectl exec -n kubesynth deploy/kubesynth-api-gateway -- \
-  python -c "import psycopg2; conn = psycopg2.connect(host='postgresql', dbname='kubesynth', user='kubesynth', password='...'); print('OK')"
+kubectl exec -n kubesynapse deploy/kubesynapse-api-gateway -- \
+  python -c "import psycopg2; conn = psycopg2.connect(host='postgresql', dbname='kubesynapse', user='kubesynapse', password='...'); print('OK')"
 
 # Check gateway logs
-kubectl logs -n kubesynth deployment/kubesynth-api-gateway | grep -i database
+kubectl logs -n kubesynapse deployment/kubesynapse-api-gateway | grep -i database
 ```
 
 Common causes:
@@ -449,7 +449,7 @@ Common causes:
 
 ```bash
 # Check PVC and resources
-kubectl describe pod postgresql-0 -n kubesynth
+kubectl describe pod postgresql-0 -n kubesynapse
 
 # If PVC issue, see [Agent Pod Stuck in Pending](#agent-pod-stuck-in-pending)
 ```
@@ -458,16 +458,16 @@ kubectl describe pod postgresql-0 -n kubesynth
 
 ```bash
 # Update secret and restart gateway
-kubectl patch secret kubesynth-db-credentials -n kubesynth --type merge \
+kubectl patch secret KubeSynapse-db-credentials -n kubesynapse --type merge \
   -p '{"stringData":{"password":"new-password"}}'
-kubectl rollout restart deployment/kubesynth-api-gateway -n kubesynth
+kubectl rollout restart deployment/kubesynapse-api-gateway -n kubesynapse
 ```
 
 **Schema version mismatch:**
 
 ```bash
 # Run migration or reset (data loss if resetting)
-kubectl exec -n kubesynth deploy/kubesynth-api-gateway -- \
+kubectl exec -n kubesynapse deploy/kubesynapse-api-gateway -- \
   python -c "from auth_store import init_db; init_db()"
 ```
 
@@ -475,7 +475,7 @@ kubectl exec -n kubesynth deploy/kubesynth-api-gateway -- \
 
 ```bash
 # Increase pool size in gateway config
-helm upgrade kubesynth ... --set apiGateway.db.poolSize=20
+helm upgrade KubeSynapse ... --set apiGateway.db.poolSize=20
 ```
 
 ### Prevention
@@ -577,13 +577,13 @@ kubectl patch pvc <artifact-pvc> -n <namespace> --type merge \
 
 ```bash
 # Check auth mode
-kubectl get deployment kubesynth-api-gateway -n kubesynth -o yaml | grep AUTH_MODE
+kubectl get deployment kubesynapse-api-gateway -n kubesynapse -o yaml | grep AUTH_MODE
 
 # Check OIDC config
 curl -s http://localhost:8080/api/auth/config
 
 # Verify JWKS endpoint is reachable
-kubectl exec -n kubesynth deploy/kubesynth-api-gateway -- \
+kubectl exec -n kubesynapse deploy/kubesynapse-api-gateway -- \
   curl -s <oidc-issuer>/.well-known/openid-configuration | jq .jwks_uri
 ```
 
@@ -602,14 +602,14 @@ Common causes:
 
 ```bash
 # Update OIDC app registration with exact redirect URI
-# Example: https://kubesynth.example.com/api/auth/oidc/callback/default
+# Example: https://KubeSynapse.example.com/api/auth/oidc/callback/default
 ```
 
 **JWKS endpoint unreachable:**
 
 ```bash
 # Check network egress from gateway
-kubectl exec -n kubesynth deploy/kubesynth-api-gateway -- \
+kubectl exec -n kubesynapse deploy/kubesynapse-api-gateway -- \
   curl -I <jwks-url>
 
 # If blocked, update NetworkPolicy or trust bundle
@@ -619,7 +619,7 @@ kubectl exec -n kubesynth deploy/kubesynth-api-gateway -- \
 
 ```bash
 # Sync node clocks
-kubectl exec -n kubesynth deploy/kubesynth-api-gateway -- date -u
+kubectl exec -n kubesynapse deploy/kubesynapse-api-gateway -- date -u
 # If skew > 30s, configure NTP on nodes
 ```
 
@@ -627,7 +627,7 @@ kubectl exec -n kubesynth deploy/kubesynth-api-gateway -- date -u
 
 ```bash
 # For local development, disable secure cookies
-helm upgrade kubesynth ... --set apiGateway.auth.cookieSecure=false
+helm upgrade KubeSynapse ... --set apiGateway.auth.cookieSecure=false
 ```
 
 ### Prevention

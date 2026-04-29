@@ -35,7 +35,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { ModelSelector } from "@/components/ModelSelector";
 import { McpServerBadgeIcon } from "@/components/McpServerBadgeIcon";
-import { fetchCatalogSkillDetail, fetchMcpConnections, fetchSkillsCatalog, refreshSkillsCatalog } from "../lib/api";
+import { fetchCatalogSkillDetail, fetchMcpConnections, fetchSkillsCatalog, refreshSkillsCatalog, apiErrorMessage } from "../lib/api";
 import { A2A_ALLOWED_CALLERS_PLACEHOLDER } from "../lib/a2a";
 import { createOpenCodeConfigFileDraft } from "../lib/opencodeConfig";
 import {
@@ -45,10 +45,11 @@ import {
   parseMcpSidecarsText,
 } from "../lib/mcp";
 import { createSkillFileDraft } from "../lib/skills";
-import type { AgentInfo, CatalogSkill, CatalogSkillDetail, GitFormState, McpConnection, McpTransport, RuntimeKind, TextFileDraft, WorkflowInfo } from "../types";
+import type { AgentInfo, CatalogSkill, CatalogSkillDetail, GitFormState, McpConnection, RuntimeKind, TextFileDraft, WorkflowInfo } from "../types";
 import { A2ACallerPicker } from "./A2ACallerPicker";
 import { TextFileBundleEditor } from "./TextFileBundleEditor";
 import { SYSTEM_PROMPT_MAX_CHARS, systemPromptLengthError } from "../lib/agentPrompt";
+import { getRuntimeSignal } from "../lib/agentSignals";
 
 type ConnectionFilterValue = "all" | "selected" | "remote" | "hub" | "sidecar";
 
@@ -87,6 +88,7 @@ interface CreateAgentPanelProps {
   onA2AAllowedCallersTextChange: (value: string) => void;
   onSkillFileDraftsChange: (value: TextFileDraft[]) => void;
   onOpenCodeConfigFileDraftsChange: (value: TextFileDraft[]) => void;
+  onRuntimeKindChange: (value: RuntimeKind) => void;
   gitForm: GitFormState;
   onGitFormChange: (value: GitFormState) => void;
   onCreate: () => void;
@@ -157,6 +159,7 @@ export function CreateAgentPanel({
   onA2AAllowedCallersTextChange,
   onSkillFileDraftsChange,
   onOpenCodeConfigFileDraftsChange,
+  onRuntimeKindChange,
   gitForm,
   onGitFormChange,
   onCreate,
@@ -207,7 +210,7 @@ export function CreateAgentPanel({
       })
       .catch((nextError) => {
         if (!cancelled) {
-          setCatalogError(nextError instanceof Error ? nextError.message : String(nextError));
+          setCatalogError(apiErrorMessage(nextError));
         }
       })
       .finally(() => {
@@ -429,7 +432,7 @@ export function CreateAgentPanel({
               <Badge variant="secondary">guided setup</Badge>
             </div>
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-              <span>OpenCode runtime</span>
+              <span>{getRuntimeSignal(runtimeKind).label} runtime</span>
               <span>{skillFileDrafts.length} skill file{skillFileDrafts.length === 1 ? "" : "s"}</span>
               <span>{selectedConnections.length} saved MCP connection{selectedConnections.length === 1 ? "" : "s"}</span>
               {hasLegacyOverrides ? (
@@ -447,7 +450,7 @@ export function CreateAgentPanel({
           <TabsList className="h-auto flex-wrap justify-start gap-1 rounded-2xl border border-border/60 bg-background/70 p-1.5">
             <TabsTrigger value="basics">Basics</TabsTrigger>
             <TabsTrigger value="behavior">Behavior</TabsTrigger>
-            <TabsTrigger value="tools">MCP Connections</TabsTrigger>
+            <TabsTrigger value="tools">Capabilities</TabsTrigger>
             <TabsTrigger value="files">Skills & Files</TabsTrigger>
             <TabsTrigger value="repository">Repository</TabsTrigger>
           </TabsList>
@@ -494,20 +497,46 @@ export function CreateAgentPanel({
                 <Card className="shadow-none">
                   <CardHeader className="pb-3">
                     <CardTitle className="text-sm">Runtime profile</CardTitle>
-                    <CardDescription>The workspace now provisions OpenCode agents only.</CardDescription>
+                    <CardDescription>Choose the agent runtime that fits your use case.</CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-3">
-                    <div className="rounded-2xl border border-primary/40 bg-primary/10 px-4 py-3 text-left text-foreground shadow-inner shadow-primary/10">
-                      <div className="flex items-center justify-between gap-3">
-                        <div>
-                          <p className="font-medium text-sm">OpenCode runtime</p>
-                          <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                            Best for autonomous multi-turn coding tasks with structured output, session persistence, context-overflow recovery, shared MCP routing, and managed sidecars.
-                          </p>
-                        </div>
-                        <Badge>Selected</Badge>
-                      </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Runtime kind</Label>
+                      <Select value={runtimeKind} onValueChange={(v) => onRuntimeKindChange(v as RuntimeKind)}>
+                        <SelectTrigger className="h-8 text-xs">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {(["opencode", "pi"] as RuntimeKind[]).map((kind) => {
+                            const signal = getRuntimeSignal(kind);
+                            return (
+                              <SelectItem key={kind} value={kind} className="text-xs">
+                                <span className="inline-flex items-center gap-1.5">
+                                  <signal.icon className="h-3.5 w-3.5" />
+                                  {signal.label}
+                                  {signal.alpha && <Badge variant="outline" className="h-3 px-1 text-[9px]">Alpha</Badge>}
+                                </span>
+                              </SelectItem>
+                            );
+                          })}
+                        </SelectContent>
+                      </Select>
                     </div>
+                    {runtimeKind === "opencode" ? (
+                      <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/5 px-4 py-3 text-left text-foreground">
+                        <p className="font-medium text-sm">OpenCode runtime</p>
+                        <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                          Best for autonomous multi-turn coding tasks with structured output, session persistence, context-overflow recovery, shared MCP routing, and managed sidecars.
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="rounded-2xl border border-violet-500/30 bg-violet-500/5 px-4 py-3 text-left text-foreground">
+                        <p className="font-medium text-sm">Pi runtime</p>
+                        <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                          Lightweight alternative runtime using the pi coding agent. Supports streaming, tool use, and MCP connections via the pi extension system.
+                        </p>
+                      </div>
+                    )}
                   </CardContent>
                 </Card>
               </div>
@@ -678,79 +707,68 @@ export function CreateAgentPanel({
                 ) : mcpConnections.length > 0 ? (
                   filteredConnections.length > 0 ? (
                     <ScrollArea className="max-h-[320px] pr-2">
-                      <div className="space-y-1">
-                        {(["sidecar", "remote", "hub"] as McpTransport[]).map((transportGroup) => {
-                          const group = filteredConnections.filter((c) => c.transport === transportGroup);
-                          if (group.length === 0) return null;
+                      <div className="space-y-2">
+                        {filteredConnections.map((connection) => {
+                          const selected = mcpConnectionIds.includes(connection.id);
+                          const blocked = !connection.attachable;
                           return (
-                            <div key={transportGroup}>
-                              <div className="sticky top-0 z-10 bg-card/95 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground backdrop-blur-sm">
-                                {transportGroup}
+                            <div
+                              key={connection.id}
+                              className={`flex items-center gap-3 rounded-xl border px-3 py-2.5 transition ${
+                                selected
+                                  ? "border-primary/25 bg-primary/[0.06]"
+                                  : blocked
+                                    ? "border-border/40 bg-background/30 opacity-60"
+                                    : "border-border/50 bg-background/60"
+                              }`}
+                            >
+                              <McpServerBadgeIcon
+                                serverId={connection.server_id}
+                                serverName={connection.server_name ?? connection.server_id}
+                                transport={connection.transport}
+                                size="sm"
+                              />
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-sm font-medium text-foreground">{connection.name}</span>
+                                  {blocked && (
+                                    <Badge variant="outline" className="border-amber-500/30 bg-amber-500/10 text-[10px] text-amber-300">
+                                      Needs setup
+                                    </Badge>
+                                  )}
+                                </div>
+                                <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                                  <span>{connection.server_name ?? connection.server_id}</span>
+                                  <span className="text-muted-foreground/40">·</span>
+                                  <span className={`capitalize ${
+                                    connection.transport === "remote"
+                                      ? "text-sky-300"
+                                      : connection.transport === "hub"
+                                        ? "text-violet-300"
+                                        : "text-amber-300"
+                                  }`}>{connection.transport}</span>
+                                  <span className="text-muted-foreground/40">·</span>
+                                  <span className={connection.support_level === "ready" ? "text-emerald-500" : connection.support_level === "limited" ? "text-amber-500" : "text-slate-400"}>
+                                    {connection.support_level}
+                                  </span>
+                                </div>
                               </div>
-                              {group.map((connection) => {
-                                const selected = mcpConnectionIds.includes(connection.id);
-                                const blocked = !connection.attachable;
-                                return (
-                                  <button
-                                    key={connection.id}
-                                    type="button"
-                                    onClick={() => !blocked && handleToggleSavedConnection(connection.id)}
-                                    disabled={blocked}
-                                    className={`flex w-full items-center gap-3 rounded-md border px-3 py-2 text-left transition ${
-                                      selected
-                                        ? "border-primary/25 bg-primary/[0.06]"
-                                        : blocked
-                                          ? "cursor-not-allowed border-border/40 bg-background/30 opacity-60"
-                                          : "border-border/50 bg-background/60 hover:border-primary/15 hover:bg-accent/30"
-                                    }`}
-                                    aria-pressed={selected}
-                                  >
-                                    <div className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-sm border ${selected ? "border-primary bg-primary text-primary-foreground" : "border-muted-foreground/40"}`}>
-                                      {selected && <Check className="h-3 w-3" />}
-                                    </div>
-                                    <McpServerBadgeIcon
-                                      serverId={connection.server_id}
-                                      serverName={connection.server_name ?? connection.server_id}
-                                      transport={connection.transport}
-                                      size="sm"
-                                    />
-                                    <div className="min-w-0 flex-1">
-                                      <div className="flex items-center gap-2">
-                                        <span className="text-sm font-medium text-foreground">{connection.name}</span>
-                                        {blocked && (
-                                          <Badge variant="outline" className="border-amber-500/30 bg-amber-500/10 text-[10px] text-amber-300">
-                                            Needs setup
-                                          </Badge>
-                                        )}
-                                      </div>
-                                      <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-                                        <span>{connection.server_name ?? connection.server_id}</span>
-                                      </div>
-                                    </div>
-                                    <div className="flex items-center gap-2 shrink-0">
-                                      <Badge variant="outline" className={`text-[10px] ${
-                                        connection.transport === "remote"
-                                          ? "border-sky-500/30 bg-sky-500/10 text-sky-300"
-                                          : connection.transport === "hub"
-                                            ? "border-violet-500/30 bg-violet-500/10 text-violet-300"
-                                            : "border-amber-500/30 bg-amber-500/10 text-amber-300"
-                                      }`}>
-                                        {connection.transport}
-                                      </Badge>
-                                      <span
-                                        className={`h-2 w-2 rounded-full ${
-                                          connection.support_level === "ready"
-                                            ? "bg-emerald-500"
-                                            : connection.support_level === "limited"
-                                              ? "bg-amber-500"
-                                              : "bg-slate-400"
-                                        }`}
-                                        aria-label={`Status: ${connection.support_level}`}
-                                      />
-                                    </div>
-                                  </button>
-                                );
-                              })}
+                              <Button
+                                size="sm"
+                                variant={selected ? "secondary" : "outline"}
+                                disabled={blocked}
+                                onClick={() => handleToggleSavedConnection(connection.id)}
+                                className="shrink-0 text-xs h-8"
+                              >
+                                {selected ? (
+                                  <>
+                                    <Check className="mr-1 h-3.5 w-3.5" />
+                                    Attached
+                                  </>
+                                ) : (
+                                  "Attach"
+                                )}
+                              </Button>
                             </div>
                           );
                         })}

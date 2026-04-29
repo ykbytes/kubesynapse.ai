@@ -19,7 +19,7 @@
 
 CONTAINER_CLI ?= docker
 CONTAINER_BUILD_FLAGS ?= --format docker
-REGISTRY ?= docker.io/yakdhane
+REGISTRY ?= docker.io/kubesynapse
 VERSION ?= latest
 SKILLS_CATALOG_FILE ?= ./catalog/skills-catalog.json
 HELM_SKILLS_CATALOG_ARG := $(if $(wildcard $(SKILLS_CATALOG_FILE)),--set-file skillsCatalog.catalogJson=$(SKILLS_CATALOG_FILE),)
@@ -57,16 +57,16 @@ ui-preview:
 docker-build: docker-build-operator docker-build-opencode-runtime docker-build-gateway docker-build-ui docker-build-mcp-sidecars
 
 docker-build-operator:
-	$(CONTAINER_CLI) build $(CONTAINER_BUILD_FLAGS) -t $(REGISTRY)/kubesynth-operator:$(VERSION) ./operator
+	$(CONTAINER_CLI) build $(CONTAINER_BUILD_FLAGS) -t $(REGISTRY)/kubesynapse-operator:$(VERSION) ./operator
 
 docker-build-opencode-runtime:
-	$(CONTAINER_CLI) build $(CONTAINER_BUILD_FLAGS) -t $(REGISTRY)/kubesynth-opencode-runtime:$(VERSION) ./opencode-runtime
+	$(CONTAINER_CLI) build $(CONTAINER_BUILD_FLAGS) -t $(REGISTRY)/kubesynapse-opencode-runtime:$(VERSION) ./opencode-runtime
 
 docker-build-gateway:
-	$(CONTAINER_CLI) build $(CONTAINER_BUILD_FLAGS) -t $(REGISTRY)/kubesynth-api-gateway:$(VERSION) ./api-gateway
+	$(CONTAINER_CLI) build $(CONTAINER_BUILD_FLAGS) -t $(REGISTRY)/kubesynapse-api-gateway:$(VERSION) ./api-gateway
 
 docker-build-ui:
-	$(CONTAINER_CLI) build $(CONTAINER_BUILD_FLAGS) -t $(REGISTRY)/kubesynth-web-ui:$(VERSION) ./web-ui
+	$(CONTAINER_CLI) build $(CONTAINER_BUILD_FLAGS) -t $(REGISTRY)/kubesynapse-web-ui:$(VERSION) ./web-ui
 
 docker-build-mcp-sidecars: docker-build-mcp-code-exec docker-build-mcp-web-search docker-build-mcp-documents docker-build-mcp-browser docker-build-mcp-database docker-build-mcp-git docker-build-mcp-github-adapter docker-build-mcp-kubernetes docker-build-mcp-messaging docker-build-mcp-rag
 
@@ -103,16 +103,16 @@ docker-build-mcp-rag:
 docker-push: docker-push-operator docker-push-opencode-runtime docker-push-gateway docker-push-ui docker-push-mcp-sidecars
 
 docker-push-operator:
-	$(CONTAINER_CLI) push $(REGISTRY)/kubesynth-operator:$(VERSION)
+	$(CONTAINER_CLI) push $(REGISTRY)/kubesynapse-operator:$(VERSION)
 
 docker-push-opencode-runtime:
-	$(CONTAINER_CLI) push $(REGISTRY)/kubesynth-opencode-runtime:$(VERSION)
+	$(CONTAINER_CLI) push $(REGISTRY)/kubesynapse-opencode-runtime:$(VERSION)
 
 docker-push-gateway:
-	$(CONTAINER_CLI) push $(REGISTRY)/kubesynth-api-gateway:$(VERSION)
+	$(CONTAINER_CLI) push $(REGISTRY)/kubesynapse-api-gateway:$(VERSION)
 
 docker-push-ui:
-	$(CONTAINER_CLI) push $(REGISTRY)/kubesynth-web-ui:$(VERSION)
+	$(CONTAINER_CLI) push $(REGISTRY)/kubesynapse-web-ui:$(VERSION)
 
 docker-push-mcp-sidecars: docker-push-mcp-code-exec docker-push-mcp-web-search docker-push-mcp-documents docker-push-mcp-browser docker-push-mcp-database docker-push-mcp-git docker-push-mcp-github-adapter docker-push-mcp-kubernetes docker-push-mcp-messaging docker-push-mcp-rag
 
@@ -180,26 +180,26 @@ format:
 # ===========================
 
 helm-lint:
-	helm lint ./charts/kubesynth
+	helm lint ./charts/kubesynapse
 
 helm-package:
-	helm package ./charts/kubesynth -d ./dist
+	helm package ./charts/kubesynapse -d ./dist
 
 helm-template:
-	helm template ai-sandbox ./charts/kubesynth $(HELM_SKILLS_CATALOG_ARG)
+	helm template ai-sandbox ./charts/kubesynapse $(HELM_SKILLS_CATALOG_ARG)
 
 # ===========================
 # Deploy (local cluster)
 # ===========================
 
 deploy:
-	helm upgrade --install kubesynth ./charts/kubesynth $(HELM_SKILLS_CATALOG_ARG)
+	helm upgrade --install kubesynapse ./charts/kubesynapse $(HELM_SKILLS_CATALOG_ARG)
 
 deploy-ai-sandbox-kind-dry-run:
-	helm upgrade $(AI_SANDBOX_RELEASE) ./charts/kubesynth -n $(AI_SANDBOX_NAMESPACE) --reuse-values --server-side=true --force-conflicts -f $(AI_SANDBOX_KIND_VALUES_FILE) $(AI_SANDBOX_KIND_EXTRA_VALUES_ARGS) $(HELM_SKILLS_CATALOG_ARG) --dry-run
+	helm upgrade $(AI_SANDBOX_RELEASE) ./charts/kubesynapse -n $(AI_SANDBOX_NAMESPACE) --reuse-values --server-side=true --force-conflicts -f $(AI_SANDBOX_KIND_VALUES_FILE) $(AI_SANDBOX_KIND_EXTRA_VALUES_ARGS) $(HELM_SKILLS_CATALOG_ARG) --dry-run
 
 deploy-ai-sandbox-kind:
-	helm upgrade $(AI_SANDBOX_RELEASE) ./charts/kubesynth -n $(AI_SANDBOX_NAMESPACE) --reuse-values --server-side=true --force-conflicts -f $(AI_SANDBOX_KIND_VALUES_FILE) $(AI_SANDBOX_KIND_EXTRA_VALUES_ARGS) $(HELM_SKILLS_CATALOG_ARG)
+	helm upgrade $(AI_SANDBOX_RELEASE) ./charts/kubesynapse -n $(AI_SANDBOX_NAMESPACE) --reuse-values --server-side=true --force-conflicts -f $(AI_SANDBOX_KIND_VALUES_FILE) $(AI_SANDBOX_KIND_EXTRA_VALUES_ARGS) $(HELM_SKILLS_CATALOG_ARG)
 
 deploy-sample:
 	kubectl apply -f examples/sample-agent.yaml
@@ -207,13 +207,13 @@ deploy-sample:
 	kubectl apply -f examples/sample-policy.yaml
 
 undeploy:
-	helm uninstall kubesynth || true
-	kubectl delete crd aiagents.kubesynth.ai || true
-	kubectl delete crd agentpolicies.kubesynth.ai || true
-	kubectl delete crd agentapprovals.kubesynth.ai || true
-	kubectl delete crd agenttenants.kubesynth.ai || true
-	kubectl delete crd agentworkflows.kubesynth.ai || true
-	kubectl delete crd agentevals.kubesynth.ai || true
+	helm uninstall kubesynapse || true
+	kubectl delete crd aiagents.kubesynapse.ai || true
+	kubectl delete crd agentpolicies.kubesynapse.ai || true
+	kubectl delete crd agentapprovals.kubesynapse.ai || true
+	kubectl delete crd agenttenants.kubesynapse.ai || true
+	kubectl delete crd agentworkflows.kubesynapse.ai || true
+	kubectl delete crd agentevals.kubesynapse.ai || true
 
 # ===========================
 # Docker Compose (local dev)
@@ -224,7 +224,7 @@ COMPOSE_FILE ?= docker-compose.yml
 compose-up:
 	docker compose -f $(COMPOSE_FILE) up -d
 	@echo ""
-	@echo "KubeSynth is running:"
+	@echo "kubesynapse is running:"
 	@echo "  API Gateway:  http://localhost:8080"
 	@echo "  Web UI:       http://localhost:3000"
 	@echo "  LiteLLM:      http://localhost:4000"
@@ -248,8 +248,8 @@ compose-status:
 # Kubernetes deployment
 # ===========================
 
-K8S_NAMESPACE ?= kubesynth
-K8S_RELEASE ?= kubesynth
+K8S_NAMESPACE ?= kubesynapse
+K8S_RELEASE ?= kubesynapse
 K8S_VALUES ?= ./deploy/values.production.yaml
 
 k8s-install:
@@ -276,10 +276,10 @@ k8s-port-forward:
 
 clean:
 	rm -rf bin/ dist/
-	$(CONTAINER_CLI) rmi $(REGISTRY)/kubesynth-operator:$(VERSION) || true
-	$(CONTAINER_CLI) rmi $(REGISTRY)/kubesynth-opencode-runtime:$(VERSION) || true
-	$(CONTAINER_CLI) rmi $(REGISTRY)/kubesynth-api-gateway:$(VERSION) || true
-	$(CONTAINER_CLI) rmi $(REGISTRY)/kubesynth-web-ui:$(VERSION) || true
+	$(CONTAINER_CLI) rmi $(REGISTRY)/kubesynapse-operator:$(VERSION) || true
+	$(CONTAINER_CLI) rmi $(REGISTRY)/kubesynapse-opencode-runtime:$(VERSION) || true
+	$(CONTAINER_CLI) rmi $(REGISTRY)/kubesynapse-api-gateway:$(VERSION) || true
+	$(CONTAINER_CLI) rmi $(REGISTRY)/kubesynapse-web-ui:$(VERSION) || true
 	$(CONTAINER_CLI) rmi $(REGISTRY)/mcp-code-exec:$(VERSION) || true
 	$(CONTAINER_CLI) rmi $(REGISTRY)/mcp-web-search:$(VERSION) || true
 	$(CONTAINER_CLI) rmi $(REGISTRY)/mcp-documents:$(VERSION) || true

@@ -126,6 +126,25 @@ interface ChatWorkbenchProps {
 const DRAWER_PANEL_CLASS = "absolute inset-y-3 right-3 z-10 flex flex-col overflow-hidden rounded-[1.4rem] border border-border/80 bg-background/96 shadow-2xl shadow-black/30 backdrop-blur-xl";
 const SURFACE_PANEL_CLASS = "rounded-sm border border-border/70 bg-background/80 shadow-sm backdrop-blur-sm";
 
+/* Auto-scroll reasoning box that stays at bottom */
+function AutoScrollReasoning({ reasoning }: { reasoning: string }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (el) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [reasoning]);
+  return (
+    <div
+      ref={ref}
+      className="mt-1 max-h-48 overflow-y-auto rounded-sm border border-border/60 bg-muted/30 px-2.5 py-1.5 text-[11px] italic leading-relaxed text-muted-foreground whitespace-pre-wrap break-words shadow-inner"
+    >
+      {reasoning}
+    </div>
+  );
+}
+
 /* Highlight @mentions in text */
 function renderMentions(text: string, agents: AgentInfo[]): React.ReactNode {
   const parts = text.split(/(@[a-z0-9](?:[a-z0-9\-]*[a-z0-9])?)/gi);
@@ -218,29 +237,27 @@ const MessageBubble = memo(function MessageBubble({
   // ── Assistant message: left-aligned, full-width, with avatar ──
   return (
     <div
-      className="group flex gap-3 animate-slide-up"
+      className="group flex gap-2 animate-slide-up"
       style={{ animationDelay: `${Math.min(index * 30, 300)}ms`, animationFillMode: "backwards" }}
       role={isStreaming ? "status" : undefined}
       aria-live={isStreaming ? "polite" : undefined}
     >
       {/* Content */}
-      <div className="min-w-0 flex-1 rounded-lg border border-border/70 bg-background/75 px-3 py-2 shadow-sm backdrop-blur-sm">
+      <div className="min-w-0 flex-1 rounded-lg border border-border/70 bg-background/75 px-2.5 py-1.5 shadow-sm backdrop-blur-sm">
         {/* Thinking section */}
         {message.reasoning && (
-          <div className="mb-2">
+          <div className="mb-1.5">
             <button
               onClick={() => setThinkingOpen((o) => !o)}
-              className="flex items-center gap-1.5 text-[11px] text-muted-foreground hover:text-foreground transition-colors duration-150"
+              className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors duration-150"
               aria-expanded={thinkingOpen}
             >
-              <Brain className="h-3 w-3" aria-hidden="true" />
-              {thinkingOpen ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+              <Brain className="h-2.5 w-2.5" aria-hidden="true" />
+              {thinkingOpen ? <ChevronDown className="h-2.5 w-2.5" /> : <ChevronRight className="h-2.5 w-2.5" />}
               <span>Reasoning</span>
             </button>
             {thinkingOpen && (
-              <div className="mt-1.5 max-h-64 overflow-y-auto rounded-sm border border-border/60 bg-muted/30 px-3 py-2 text-xs italic leading-relaxed text-muted-foreground whitespace-pre-wrap break-words shadow-inner">
-                {message.reasoning}
-              </div>
+              <AutoScrollReasoning reasoning={message.reasoning} />
             )}
           </div>
         )}
@@ -763,35 +780,35 @@ function LiveActivityFeed({ activity, isStreaming }: { activity: UiActivity[]; i
   if (entries.length === 0) return null;
 
   return (
-    <div className="mt-3 rounded-2xl border border-border/60 bg-muted/15 px-3 py-2.5">
-      <div className="mb-2 flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
-        {isStreaming ? <LoaderCircle className="h-3.5 w-3.5 animate-spin text-primary" /> : <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />}
-        <span>{isStreaming ? "Live activity" : "Run activity"}</span>
-        <Badge variant="outline" className="ml-auto px-1 py-0 text-[10px]">
+    <div className="mt-2 rounded-lg border border-border/50 bg-muted/10 px-2 py-1.5">
+      <div className="mb-1 flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+        {isStreaming ? <LoaderCircle className="h-3 w-3 animate-spin text-primary" /> : <CheckCircle2 className="h-3 w-3 text-emerald-400" />}
+        <span>{isStreaming ? "Live" : "Activity"}</span>
+        <Badge variant="outline" className="ml-auto px-1 py-0 text-[9px]">
           {entries.length}
         </Badge>
       </div>
-      <div className="space-y-1.5">
+      <div className="space-y-1">
         {entries.map((entry) => {
           const styles = LIVE_ACTIVITY_STYLES[entry.tone];
           const Icon = entry.icon;
           const iconClassName = entry.tone === "running" && (entry.icon === LoaderCircle || entry.icon === Cog)
-            ? "h-3.5 w-3.5 animate-spin"
-            : "h-3.5 w-3.5";
+            ? "h-3 w-3 animate-spin"
+            : "h-3 w-3";
           return (
-            <div key={entry.id} className="flex items-start gap-2 rounded-xl border border-border/60 bg-background/70 px-2.5 py-2">
-              <div className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full ${styles.icon}`}>
+            <div key={entry.id} className="flex items-start gap-1.5 rounded-md border border-border/40 bg-background/60 px-2 py-1">
+              <div className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full ${styles.icon}`}>
                 <Icon className={iconClassName} />
               </div>
               <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="min-w-0 flex-1 break-words text-[12px] font-medium text-foreground">{entry.label}</span>
-                  <span className={`rounded-full border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.14em] ${styles.badge}`}>
-                    {entry.tone === "running" ? "live" : entry.tone === "success" ? "done" : entry.tone === "error" ? "error" : "info"}
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="min-w-0 flex-1 break-words text-[11px] font-medium text-foreground">{entry.label}</span>
+                  <span className={`rounded-full border px-1 py-0 text-[8px] font-semibold uppercase tracking-[0.12em] ${styles.badge}`}>
+                    {entry.tone === "running" ? "live" : entry.tone === "success" ? "done" : entry.tone === "error" ? "err" : "info"}
                   </span>
                 </div>
                 {entry.detail && (
-                  <div className="mt-0.5 break-words text-[11px] leading-relaxed text-muted-foreground">{entry.detail}</div>
+                  <div className="mt-0 break-words text-[10px] leading-snug text-muted-foreground">{entry.detail}</div>
                 )}
               </div>
             </div>
@@ -1670,16 +1687,19 @@ export function ChatWorkbench({
   }, []);
 
   useEffect(() => {
-    if (!isAtBottomRef.current || messages.length === 0) return;
+    // Always scroll to bottom when streaming or when new messages arrive
+    const isStreamingActive = messages.length > 0 && messages[messages.length - 1]?.status === "streaming";
+    if (!isAtBottomRef.current && !isStreamingActive) return;
     // Use requestAnimationFrame to ensure DOM has updated before scrolling
     requestAnimationFrame(() => {
       const viewport = scrollContainerRef.current;
       if (viewport) {
         viewport.scrollTop = viewport.scrollHeight;
       }
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [messages.length, messages[messages.length - 1]?.status, messages[messages.length - 1]?.content?.length]);
+  }, [messages.length, messages[messages.length - 1]?.status, messages[messages.length - 1]?.content?.length, messages[messages.length - 1]?.reasoning?.length]);
 
   useEffect(() => {
     setDetailsOpen(false);
@@ -1827,7 +1847,7 @@ export function ChatWorkbench({
   return (
     <div className="flex h-full min-w-0 flex-1 flex-col overflow-hidden rounded-none border border-border/60 bg-[linear-gradient(180deg,rgba(255,255,255,0.04),rgba(255,255,255,0.01)_14rem)] shadow-[0_26px_70px_-48px_rgba(0,0,0,0.8)]">
       {/* Header */}
-      <div className="flex items-center justify-between border-b border-border/70 bg-background/80 px-3 py-2 backdrop-blur-md">
+      <div className="flex items-center justify-between border-b border-border/70 bg-background/80 px-2.5 py-1.5 backdrop-blur-md">
         <div className="flex items-center gap-2">
           {agentName && (
             <span className={`h-2 w-2 shrink-0 rounded-full ${
@@ -1841,22 +1861,22 @@ export function ChatWorkbench({
             {agentName ?? "Choose an agent"}
           </h2>
           {agentName && selectedAgent?.status && (
-            <span className="rounded-full border border-border/60 bg-muted/30 px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+            <span className="rounded-full border border-border/60 bg-muted/30 px-1.5 py-0 text-[9px] font-medium text-muted-foreground">
               {selectedAgent.status}
             </span>
           )}
           {agentName && selectedAgent?.model && (
-            <span className="hidden text-[11px] text-muted-foreground/70 xl:block">{selectedAgent.model}</span>
+            <span className="hidden text-[10px] text-muted-foreground/70 xl:block">{selectedAgent.model}</span>
           )}
           {agentName && canMutate && (
-            <Button variant="ghost" size="sm" className="h-7 gap-1 rounded-full px-2 text-xs" onClick={handleCreateNew}>
-              <Plus className="h-3.5 w-3.5" />
+            <Button variant="ghost" size="sm" className="h-6 gap-0.5 rounded-full px-1.5 text-[10px]" onClick={handleCreateNew}>
+              <Plus className="h-3 w-3" />
               New
             </Button>
           )}
           {agentName && (
-            <Button variant="ghost" size="sm" className="h-7 gap-1 rounded-full px-2 text-xs" onClick={() => navigateToResource("agents", agentName)}>
-              <Cog className="h-3.5 w-3.5" />
+            <Button variant="ghost" size="sm" className="h-6 gap-0.5 rounded-full px-1.5 text-[10px]" onClick={() => navigateToResource("agents", agentName)}>
+              <Cog className="h-3 w-3" />
               Manage
             </Button>
           )}
@@ -1866,8 +1886,8 @@ export function ChatWorkbench({
                 {visibleChatMcpCapabilities.map((capability) => (
                   <Tooltip key={capability.id}>
                     <TooltipTrigger asChild>
-                      <Badge variant="outline" className={`h-6 rounded-full px-2 text-[10px] ${capability.tone}`}>
-                        <capability.icon className="mr-1 h-3 w-3" />
+                      <Badge variant="outline" className={`h-5 rounded-full px-1.5 text-[9px] ${capability.tone}`}>
+                        <capability.icon className="mr-0.5 h-2.5 w-2.5" />
                         {capability.shortLabel}
                       </Badge>
                     </TooltipTrigger>
@@ -1919,12 +1939,12 @@ export function ChatWorkbench({
               type="button"
               variant="ghost"
               size="sm"
-              className="h-8 gap-1 rounded-full px-2 text-xs"
+              className="h-6 gap-0.5 rounded-full px-1.5 text-[10px]"
               onClick={() => { planDock.toggle(); if (!planOpen) { setDetailsOpen(false); setFilesOpen(false); setMemoryOpen(false); } }}
             >
-              {planOpen ? <PanelRightClose className="h-3.5 w-3.5" /> : <PanelRightOpen className="h-3.5 w-3.5" />}
+              {planOpen ? <PanelRightClose className="h-3 w-3" /> : <PanelRightOpen className="h-3 w-3" />}
               Plan
-              <Badge variant="outline" className="ml-1 px-1 py-0 text-[10px]">
+              <Badge variant="outline" className="ml-0.5 px-1 py-0 text-[9px]">
                 {planCount}
               </Badge>
             </Button>
@@ -1934,7 +1954,7 @@ export function ChatWorkbench({
               type="button"
               variant="ghost"
               size="sm"
-              className="h-8 gap-1 rounded-full px-2 text-xs"
+              className="h-6 gap-0.5 rounded-full px-1.5 text-[10px]"
               onClick={() => {
                 const nextOpen = !(filesOpen && fileExplorerView === "all");
                 setFileExplorerView("all");
@@ -1946,7 +1966,7 @@ export function ChatWorkbench({
                 }
               }}
             >
-              <FolderOpen className="h-3.5 w-3.5" />
+              <FolderOpen className="h-3 w-3" />
               Files
             </Button>
           )}
@@ -1955,7 +1975,7 @@ export function ChatWorkbench({
               type="button"
               variant="ghost"
               size="sm"
-              className="h-8 gap-1 rounded-full px-2 text-xs"
+              className="h-6 gap-0.5 rounded-full px-1.5 text-[10px]"
               onClick={() => {
                 const nextOpen = !(filesOpen && fileExplorerView === "changed");
                 setFileExplorerView("changed");
@@ -1967,7 +1987,7 @@ export function ChatWorkbench({
                 }
               }}
             >
-              <FileDiff className="h-3.5 w-3.5" />
+              <FileDiff className="h-3 w-3" />
               Changes
             </Button>
           )}
@@ -1976,12 +1996,12 @@ export function ChatWorkbench({
               type="button"
               variant="ghost"
               size="sm"
-              className="h-8 gap-1 rounded-full px-2 text-xs"
+              className="h-6 gap-0.5 rounded-full px-1.5 text-[10px]"
               onClick={() => { setMemoryOpen((open) => !open); if (!memoryOpen) { setDetailsOpen(false); if (planOpen) planDock.toggle(); setFilesOpen(false); } }}
             >
-              <MemoryStick className="h-3.5 w-3.5" />
+              <MemoryStick className="h-3 w-3" />
               Memory
-              <Badge variant="outline" className="ml-1 px-1 py-0 text-[10px]">
+              <Badge variant="outline" className="ml-0.5 px-1 py-0 text-[9px]">
                 {memoryCount}
               </Badge>
             </Button>
@@ -1991,29 +2011,29 @@ export function ChatWorkbench({
               type="button"
               variant="ghost"
               size="sm"
-              className="h-8 gap-1 rounded-full px-2 text-xs"
+              className="h-6 gap-0.5 rounded-full px-1.5 text-[10px]"
               onClick={() => { setDetailsOpen((open) => !open); if (!detailsOpen) { if (planOpen) planDock.toggle(); setFilesOpen(false); setMemoryOpen(false); } }}
             >
-              {detailsOpen ? <PanelRightClose className="h-3.5 w-3.5" /> : <PanelRightOpen className="h-3.5 w-3.5" />}
+              {detailsOpen ? <PanelRightClose className="h-3 w-3" /> : <PanelRightOpen className="h-3 w-3" />}
               Details
-              <Badge variant="outline" className="ml-1 px-1 py-0 text-[10px]">
+              <Badge variant="outline" className="ml-0.5 px-1 py-0 text-[9px]">
                 {detailCount}
               </Badge>
             </Button>
           )}
-          <Badge variant={streamMode ? "default" : "secondary"}>
-            {streamMode ? "streaming" : "single-shot"}
+          <Badge variant={streamMode ? "default" : "secondary"} className="text-[9px] px-1.5 py-0 h-5">
+            {streamMode ? "stream" : "single"}
           </Badge>
           <Button
             type="button"
             variant="ghost"
             size="icon"
-            className="h-8 w-8 rounded-full"
+            className="h-6 w-6 rounded-full"
             onClick={() => setChatFocused(!chatFocused)}
             title={chatFocused ? "Exit focused mode" : "Focused mode"}
             aria-label={chatFocused ? "Exit focused mode" : "Enter focused mode"}
           >
-            {chatFocused ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
+            {chatFocused ? <Minimize2 className="h-3 w-3" /> : <Maximize2 className="h-3 w-3" />}
           </Button>
         </div>
       </div>
@@ -2029,7 +2049,7 @@ export function ChatWorkbench({
             }
           }}
         >
-          <div className="mx-auto flex w-full max-w-6xl flex-col gap-2 px-4 py-3" aria-label="Conversation history" aria-live="polite" aria-atomic="false">
+          <div className="mx-auto flex w-full max-w-6xl flex-col gap-1.5 px-3 py-2" aria-label="Conversation history" aria-live="polite" aria-atomic="false">
             {messages.length === 0 && (
               <div className="space-y-3">
                 <EmptyState
@@ -2509,7 +2529,7 @@ export function ChatWorkbench({
       </div>
 
       {/* Composer */}
-      <div className="space-y-1.5 border-t border-border/60 bg-background/92 px-3 py-2 backdrop-blur-xl">
+      <div className="space-y-1 border-t border-border/60 bg-background/92 px-3 py-1.5 backdrop-blur-xl">
         {!chatFocused && (
           <>
         {/* Compact controls row: toggles + settings drawer */}
@@ -2688,7 +2708,7 @@ export function ChatWorkbench({
                 }
               }}
               rows={1}
-              className="resize-none border-0 bg-transparent pr-12 pl-4 py-3 min-h-[2.75rem] max-h-[200px] overflow-y-auto focus-visible:ring-0 focus-visible:ring-offset-0 placeholder:text-muted-foreground/50"
+              className="resize-none border-0 bg-transparent pr-12 pl-3 py-2 min-h-[2.25rem] max-h-[160px] overflow-y-auto focus-visible:ring-0 focus-visible:ring-offset-0 placeholder:text-muted-foreground/50 text-sm"
               aria-label="Prompt"
             />
             {/* @-mention dropdown — appears ABOVE input so it never gets hidden */}

@@ -25,6 +25,12 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
+import {
   UserCheck,
   Repeat,
   MousePointerClick,
@@ -52,6 +58,7 @@ import {
   Timer,
   Zap,
   Package,
+  Trash2,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
@@ -73,6 +80,7 @@ interface PropertiesPanelProps {
   onToggleCollapse: () => void;
   onNodeDataChange: (nodeId: string, patch: Partial<AgentStepNodeData>) => void;
   onSelectNode?: (nodeId: string) => void;
+  onDeleteNode?: (nodeId: string) => void;
 }
 
 function humanizeStepStatus(status: string): string {
@@ -448,164 +456,185 @@ function ConfigTab({
         </Select>
       </div>
 
-      {/* Loop Configuration */}
-      {data.stepType === "loop" && (
-        <div className="space-y-2 border rounded-md p-2 bg-blue-500/10">
-          <Label className="text-[10px] text-blue-500 font-semibold">Loop Config</Label>
-          <div className="space-y-1">
-            <Label className="text-[10px]">Max Iterations</Label>
-            <Input
-              type="number"
-              min={1}
-              max={10000}
-              value={data.loopConfig?.maxIterations ?? ""}
-              onChange={(e) => {
-                const raw = e.target.value;
-                if (!raw) {
-                  onNodeDataChange(node.id, {
-                    loopConfig: { ...data.loopConfig, maxIterations: undefined },
-                  });
-                  return;
-                }
-                const val = parseInt(raw, 10);
-                if (isNaN(val) || val < 1) return;
-                onNodeDataChange(node.id, {
-                  loopConfig: { ...data.loopConfig, maxIterations: Math.min(val, 10000) },
-                });
-              }}
-              placeholder="e.g. 10"
-              className="h-7 text-xs"
-            />
-          </div>
-          <div className="space-y-1">
-            <Label className="text-[10px]">Plan Source</Label>
-            <Select
-              value={data.loopConfig?.planSource ?? "prompt"}
-              onValueChange={(v) =>
-                onNodeDataChange(node.id, {
-                  loopConfig: { ...data.loopConfig, planSource: v as "inline" | "prompt" },
-                })
-              }
+      {/* Advanced Configuration Accordion */}
+      <Accordion type="multiple" className="space-y-2">
+        {/* Loop Configuration */}
+        {data.stepType === "loop" && (
+          <AccordionItem value="loop" className="border rounded-md px-2 bg-blue-500/[0.06]">
+            <AccordionTrigger className="text-[10px] text-blue-500 font-semibold py-2 hover:no-underline">
+              <span className="flex items-center gap-1"><Repeat className="h-3 w-3" /> Loop Config</span>
+            </AccordionTrigger>
+            <AccordionContent className="space-y-2 pb-2">
+              <div className="space-y-1">
+                <Label className="text-[10px]">Max Iterations</Label>
+                <Input
+                  type="number"
+                  min={1}
+                  max={10000}
+                  value={data.loopConfig?.maxIterations ?? ""}
+                  onChange={(e) => {
+                    const raw = e.target.value;
+                    if (!raw) {
+                      onNodeDataChange(node.id, {
+                        loopConfig: { ...data.loopConfig, maxIterations: undefined },
+                      });
+                      return;
+                    }
+                    const val = parseInt(raw, 10);
+                    if (isNaN(val) || val < 1) return;
+                    onNodeDataChange(node.id, {
+                      loopConfig: { ...data.loopConfig, maxIterations: Math.min(val, 10000) },
+                    });
+                  }}
+                  placeholder="e.g. 10"
+                  className="h-7 text-xs"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-[10px]">Plan Source</Label>
+                <Select
+                  value={data.loopConfig?.planSource ?? "prompt"}
+                  onValueChange={(v) =>
+                    onNodeDataChange(node.id, {
+                      loopConfig: { ...data.loopConfig, planSource: v as "inline" | "prompt" },
+                    })
+                  }
+                >
+                  <SelectTrigger className="h-7 text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="prompt">Prompt</SelectItem>
+                    <SelectItem value="inline">Inline</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              {data.loopConfig?.planSource === "inline" && (
+                <div className="space-y-1">
+                  <Label className="text-[10px]">Plan</Label>
+                  <Textarea
+                    value={data.loopConfig?.plan ?? ""}
+                    onChange={(e) =>
+                      onNodeDataChange(node.id, {
+                        loopConfig: { ...data.loopConfig, plan: e.target.value },
+                      })
+                    }
+                    className="text-xs min-h-[40px]"
+                    rows={2}
+                    placeholder="Inline plan..."
+                  />
+                </div>
+              )}
+            </AccordionContent>
+          </AccordionItem>
+        )}
+
+        {/* Conditional Configuration */}
+        {data.stepType === "conditional" && (
+          <AccordionItem value="conditional" className="border rounded-md px-2 bg-purple-500/[0.06]">
+            <AccordionTrigger className="text-[10px] text-purple-500 font-semibold py-2 hover:no-underline">
+              <span className="flex items-center gap-1"><GitBranch className="h-3 w-3" /> Conditional Config</span>
+            </AccordionTrigger>
+            <AccordionContent className="space-y-2 pb-2">
+              <div className="space-y-1">
+                <Label className="text-[10px]">Condition Expression</Label>
+                <Input
+                  value={data.conditionExpr ?? ""}
+                  onChange={(e) => onNodeDataChange(node.id, { conditionExpr: e.target.value })}
+                  className="h-7 text-xs font-mono"
+                  placeholder='e.g. contains("success")'
+                />
+                <p className="text-[9px] text-muted-foreground/60 leading-tight">
+                  Operators: contains, equals, not_equals, starts_with, ends_with, length_gt, length_lt, is_empty, not_empty, matches. Combine with and/or/not.
+                </p>
+              </div>
+              <div className="space-y-1">
+                <Label className="text-[10px]">Then Steps (comma-separated)</Label>
+                <Input
+                  value={(data.thenSteps ?? []).join(", ")}
+                  onChange={(e) => {
+                    const steps = e.target.value.split(",").map((s) => s.trim()).filter(Boolean);
+                    onNodeDataChange(node.id, { thenSteps: steps.length ? steps : null });
+                  }}
+                  className="h-7 text-xs"
+                  placeholder="step-a, step-b"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-[10px]">Else Steps (comma-separated)</Label>
+                <Input
+                  value={(data.elseSteps ?? []).join(", ")}
+                  onChange={(e) => {
+                    const steps = e.target.value.split(",").map((s) => s.trim()).filter(Boolean);
+                    onNodeDataChange(node.id, { elseSteps: steps.length ? steps : null });
+                  }}
+                  className="h-7 text-xs"
+                  placeholder="step-c, step-d"
+                />
+              </div>
+            </AccordionContent>
+          </AccordionItem>
+        )}
+
+        {/* Review Configuration */}
+        {data.stepType === "review" && (
+          <AccordionItem value="review" className="border rounded-md px-2 bg-rose-500/[0.06]">
+            <AccordionTrigger className="text-[10px] text-rose-400 font-semibold py-2 hover:no-underline">
+              <span className="flex items-center gap-1"><ShieldCheck className="h-3 w-3" /> Review Config</span>
+            </AccordionTrigger>
+            <AccordionContent className="space-y-2 pb-2">
+              <div className="space-y-1">
+                <Label className="text-[10px]">Review Criteria</Label>
+                <Textarea
+                  value={data.reviewCriteria ?? ""}
+                  onChange={(e) =>
+                    onNodeDataChange(node.id, { reviewCriteria: e.target.value || null })
+                  }
+                  className="text-xs min-h-[56px]"
+                  rows={3}
+                  placeholder="Describe what the reviewing agent should evaluate, e.g. 'Ensure the output is valid YAML and all required keys are present.'"
+                />
+                <p className="text-[9px] text-muted-foreground/60 leading-tight">
+                  The review agent evaluates the previous step output against these criteria and returns an approved / rejected verdict.
+                </p>
+              </div>
+            </AccordionContent>
+          </AccordionItem>
+        )}
+
+        {/* Verify Output */}
+        <AccordionItem value="verify" className="border rounded-md px-2">
+          <AccordionTrigger className="text-[10px] font-semibold py-2 hover:no-underline">
+            <span className="flex items-center gap-1"><ShieldCheck className="h-3 w-3" /> {data.verify != null ? "Verify Output" : "No Verification"}</span>
+          </AccordionTrigger>
+          <AccordionContent className="space-y-2 pb-2">
+            <Button
+              variant={data.verify ? "secondary" : "outline"}
+              size="sm"
+              className="h-7 text-xs gap-1.5 w-full justify-start cursor-pointer"
+              onClick={() => onNodeDataChange(node.id, { verify: data.verify ? null : "" })}
             >
-              <SelectTrigger className="h-7 text-xs">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="prompt">Prompt</SelectItem>
-                <SelectItem value="inline">Inline</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          {data.loopConfig?.planSource === "inline" && (
-            <div className="space-y-1">
-              <Label className="text-[10px]">Plan</Label>
-              <Textarea
-                value={data.loopConfig?.plan ?? ""}
-                onChange={(e) =>
-                  onNodeDataChange(node.id, {
-                    loopConfig: { ...data.loopConfig, plan: e.target.value },
-                  })
-                }
-                className="text-xs min-h-[40px]"
-                rows={2}
-                placeholder="Inline plan..."
-              />
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Conditional Configuration */}
-      {data.stepType === "conditional" && (
-        <div className="space-y-2 border rounded-md p-2 bg-purple-500/10">
-          <Label className="text-[10px] text-purple-500 font-semibold">Conditional Config</Label>
-          <div className="space-y-1">
-            <Label className="text-[10px]">Condition Expression</Label>
-            <Input
-              value={data.conditionExpr ?? ""}
-              onChange={(e) => onNodeDataChange(node.id, { conditionExpr: e.target.value })}
-              className="h-7 text-xs font-mono"
-              placeholder='e.g. contains("success")'
-            />
-            <p className="text-[9px] text-muted-foreground/60 leading-tight">
-              Operators: contains, equals, not_equals, starts_with, ends_with, length_gt, length_lt, is_empty, not_empty, matches. Combine with and/or/not.
-            </p>
-          </div>
-          <div className="space-y-1">
-            <Label className="text-[10px]">Then Steps (comma-separated)</Label>
-            <Input
-              value={(data.thenSteps ?? []).join(", ")}
-              onChange={(e) => {
-                const steps = e.target.value.split(",").map((s) => s.trim()).filter(Boolean);
-                onNodeDataChange(node.id, { thenSteps: steps.length ? steps : null });
-              }}
-              className="h-7 text-xs"
-              placeholder="step-a, step-b"
-            />
-          </div>
-          <div className="space-y-1">
-            <Label className="text-[10px]">Else Steps (comma-separated)</Label>
-            <Input
-              value={(data.elseSteps ?? []).join(", ")}
-              onChange={(e) => {
-                const steps = e.target.value.split(",").map((s) => s.trim()).filter(Boolean);
-                onNodeDataChange(node.id, { elseSteps: steps.length ? steps : null });
-              }}
-              className="h-7 text-xs"
-              placeholder="step-c, step-d"
-            />
-          </div>
-        </div>
-      )}
-
-      {/* Review Configuration */}
-      {data.stepType === "review" && (
-        <div className="space-y-2 border rounded-md p-2 bg-rose-500/10">
-          <Label className="text-[10px] text-rose-400 font-semibold">Review Config</Label>
-          <div className="space-y-1">
-            <Label className="text-[10px]">Review Criteria</Label>
-            <Textarea
-              value={data.reviewCriteria ?? ""}
-              onChange={(e) =>
-                onNodeDataChange(node.id, { reviewCriteria: e.target.value || null })
-              }
-              className="text-xs min-h-[56px]"
-              rows={3}
-              placeholder="Describe what the reviewing agent should evaluate, e.g. 'Ensure the output is valid YAML and all required keys are present.'"
-            />
-            <p className="text-[9px] text-muted-foreground/60 leading-tight">
-              The review agent evaluates the previous step output against these criteria and returns an approved / rejected verdict.
-            </p>
-          </div>
-        </div>
-      )}
-
-      {/* Verify Output */}
-      <Button
-        variant={data.verify ? "secondary" : "outline"}
-        size="sm"
-        className="h-7 text-xs gap-1.5 w-full justify-start cursor-pointer"
-        onClick={() => onNodeDataChange(node.id, { verify: data.verify ? null : "" })}
-      >
-        <ShieldCheck className="h-3 w-3" />
-        {data.verify != null ? "Verify Output" : "No Verification"}
-      </Button>
-      {data.verify != null && (
-        <div className="space-y-1">
-          <Textarea
-            value={data.verify}
-            onChange={(e) =>
-              onNodeDataChange(node.id, { verify: e.target.value })
-            }
-            className="text-xs min-h-[48px]"
-            rows={2}
-            placeholder="Describe what to verify about this step's output, e.g. 'Confirm the generated YAML contains a valid Deployment manifest.'"
-          />
-          <p className="text-[9px] text-muted-foreground/60 leading-tight">
-            An additional verification pass runs after this step. Leave the prompt specific so the verifier can make a clear pass/fail decision.
-          </p>
-        </div>
-      )}
+              {data.verify != null ? "Disable Verification" : "Enable Verification"}
+            </Button>
+            {data.verify != null && (
+              <div className="space-y-1">
+                <Textarea
+                  value={data.verify}
+                  onChange={(e) =>
+                    onNodeDataChange(node.id, { verify: e.target.value })
+                  }
+                  className="text-xs min-h-[48px]"
+                  rows={2}
+                  placeholder="Describe what to verify about this step's output, e.g. 'Confirm the generated YAML contains a valid Deployment manifest.'"
+                />
+                <p className="text-[9px] text-muted-foreground/60 leading-tight">
+                  An additional verification pass runs after this step. Leave the prompt specific so the verifier can make a clear pass/fail decision.
+                </p>
+              </div>
+            )}
+          </AccordionContent>
+        </AccordionItem>
+      </Accordion>
     </div>
   );
 }
@@ -1466,6 +1495,7 @@ export function PropertiesPanel({
   onToggleCollapse,
   onNodeDataChange,
   onSelectNode,
+  onDeleteNode,
 }: PropertiesPanelProps) {
   // Collapsed strip
   if (collapsed) {
@@ -1544,6 +1574,17 @@ export function PropertiesPanel({
             {statusBadge.icon}
             {statusBadge.label}
           </span>
+        )}
+        {onDeleteNode && selectedNode.type === "agentStep" && (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-5 w-5 shrink-0 cursor-pointer text-muted-foreground hover:text-destructive"
+            onClick={() => onDeleteNode(selectedNode.id)}
+            title="Delete step"
+          >
+            <Trash2 className="h-3 w-3" />
+          </Button>
         )}
         <Button
           variant="ghost"

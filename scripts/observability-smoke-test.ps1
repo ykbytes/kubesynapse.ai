@@ -102,7 +102,7 @@ try {
     $connector = Invoke-JsonApi -Method "POST" -Url "${BaseUrl}/api/observability/connectors?namespace=${Namespace}" -Body @{
         name = $connectorName
         description = "Smoke-test connector proving that connector create, update, and delete flows work through the live gateway."
-        image = "docker.io/kubesynth/connector-kubernetes:smoke"
+        image = "docker.io/kubesynapse/connector-kubernetes:smoke"
         protocol = "grpc"
         port = 9090
         capabilities = @("kubernetes-api")

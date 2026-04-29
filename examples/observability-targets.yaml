@@ -1,7 +1,7 @@
 ##
 ## ConnectorPlugin — built-in Kubernetes API connector
 ##
-apiVersion: kubesynth.ai/v1alpha1
+apiVersion: kubesynapse.ai/v1alpha1
 kind: ConnectorPlugin
 metadata:
   name: kubernetes-connector
@@ -9,7 +9,7 @@ metadata:
 spec:
   # Human-readable purpose shown in the UI so operators understand why this connector exists.
   description: Connects to the Kubernetes API and translates cluster objects, conditions, and events into observability signals that policies and reports can evaluate.
-  image: kubesynth/connector-kubernetes:v1.0
+  image: kubesynapse/connector-kubernetes:v1.0
   protocol: grpc
   port: 9090
   capabilities:
@@ -26,14 +26,14 @@ spec:
 ##
 ## ObservationPolicy — cluster monitoring policy with anomaly detection
 ##
-apiVersion: kubesynth.ai/v1alpha1
+apiVersion: kubesynapse.ai/v1alpha1
 kind: ObservationPolicy
 metadata:
   name: cluster-monitoring-policy
   namespace: default
 spec:
   # Human-readable purpose shown in the UI so operators understand what the policy is protecting.
-  description: Defines how KubeSynth should retain Kubernetes telemetry, detect unusual cluster behavior, and publish alerts when health or capacity drifts from normal.
+  description: Defines how kubesynapse should retain Kubernetes telemetry, detect unusual cluster behavior, and publish alerts when health or capacity drifts from normal.
   retention:
     days: 30
     downsampling:
@@ -87,7 +87,7 @@ spec:
 ##
 ## ObservationTarget — Kubernetes API server & control plane
 ##
-apiVersion: kubesynth.ai/v1alpha1
+apiVersion: kubesynapse.ai/v1alpha1
 kind: ObservationTarget
 metadata:
   name: k8s-control-plane
@@ -114,7 +114,7 @@ spec:
 ##
 ## ObservationTarget — all workloads across namespaces
 ##
-apiVersion: kubesynth.ai/v1alpha1
+apiVersion: kubesynapse.ai/v1alpha1
 kind: ObservationTarget
 metadata:
   name: k8s-workloads
@@ -137,7 +137,7 @@ spec:
 ##
 ## ObservationTarget — node health & resources
 ##
-apiVersion: kubesynth.ai/v1alpha1
+apiVersion: kubesynapse.ai/v1alpha1
 kind: ObservationTarget
 metadata:
   name: k8s-node-health
@@ -160,7 +160,7 @@ spec:
 ##
 ## ObservationTarget — AI agent sandbox namespace
 ##
-apiVersion: kubesynth.ai/v1alpha1
+apiVersion: kubesynapse.ai/v1alpha1
 kind: ObservationTarget
 metadata:
   name: k8s-agent-sandbox

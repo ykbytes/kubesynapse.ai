@@ -1,0 +1,128 @@
+# ---------------------------------------------------------------------------
+# MCP Hub Namespace – Network Policies
+#
+# These policies govern what can talk TO mcp-hub pods and what mcp-hub pods
+# can talk TO. The namespace itself must be labelled:
+#   kubesynapse.ai/mcp-hub: "true"
+# (applied at namespace creation time, e.g. by the operator or cluster admin)
+#
+# Execution model:
+#   Tier 1 (this file): Shared enterprise MCP servers – GitHub, Prometheus,
+#     Terraform, Kubernetes ops, Atlassian – deployed once in the mcp-hub
+#     namespace, reachable from any agent namespace.
+#   Tier 2 (agent-network-policy.yaml rule 7): Per-tenant MCP servers
+#     deployed alongside the agent StatefulSet in the tenant namespace.
+#   Tier 3 (StatefulSet spec): Sidecar MCP servers for vault/credentials,
+#     reachable only on localhost within the pod.
+# ---------------------------------------------------------------------------
+
+# Rule 1: Default-deny all – the mcp-hub namespace is locked down by default.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mcp-hub-default-deny-all
+  namespace: {{ .Values.mcpHub.namespace | default "mcp-hub" }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+---
+# Rule 2: Allow ingress to MCP server pods ONLY from agent pods in
+#   namespaces labelled kubesynapse.ai/tenant=true.
+#   namespaceSelector AND podSelector are ANDed → only ai-agent pods in
+#   tenant namespaces can reach MCP servers on port 8000.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mcp-hub-allow-agent-ingress
+  namespace: {{ .Values.mcpHub.namespace | default "mcp-hub" }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: mcp-server
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubesynapse.ai/tenant: "true"
+          podSelector:
+            matchLabels:
+              app: ai-agent
+      ports:
+        - protocol: TCP
+          port: 8000
+---
+# Rule 3: DNS egress for MCP server pods (required for all K8s workloads).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mcp-hub-allow-dns-egress
+  namespace: {{ .Values.mcpHub.namespace | default "mcp-hub" }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: mcp-server
+  policyTypes:
+    - Egress
+  egress:
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+# Rule 4: HTTPS egress – MCP servers that call external APIs (GitHub, Terraform
+#   Registry, Prometheus remote endpoints, etc.) need port 443.
+#   This is intentionally broad; tighten with ipBlock CIDR lists per MCP type
+#   if your environment allows it.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mcp-hub-allow-https-egress
+  namespace: {{ .Values.mcpHub.namespace | default "mcp-hub" }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: mcp-server
+  policyTypes:
+    - Egress
+  egress:
+    - ports:
+        - protocol: TCP
+          port: 443
+---
+# Rule 5: Allow MCP servers that need to reach in-cluster services
+#   (e.g. mcp-prometheus reaching cluster Prometheus, mcp-qdrant reaching Qdrant).
+#   Only pods in the sandbox release namespace are reachable.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mcp-hub-allow-sandbox-egress
+  namespace: {{ .Values.mcpHub.namespace | default "mcp-hub" }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: mcp-server
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Release.Namespace }}
+      ports:
+        # Prometheus
+        - protocol: TCP
+          port: 9090
+        # Grafana
+        - protocol: TCP
+          port: 3000
+        # Qdrant
+        - protocol: TCP
+          port: 6333
+        # LiteLLM (if an MCP server proxies model invocations)
+        - protocol: TCP
+          port: 4000

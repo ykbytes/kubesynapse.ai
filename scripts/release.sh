@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# KubeSynth Release Script
+# kubesynapse Release Script
 # Usage: ./scripts/release.sh <version>
 # Example: ./scripts/release.sh v1.0.0
 
@@ -21,7 +21,7 @@ fi
 REGISTRY="${REGISTRY:-docker.io/yakdhane}"
 CHART_REGISTRY="${CHART_REGISTRY:-oci://ghcr.io/yakdhane/charts}"
 
-echo "=== KubeSynth Release $VERSION ==="
+echo "=== kubesynapse Release $VERSION ==="
 
 # ---------------------------------------------------------------------------
 # 1. Update version references
@@ -67,10 +67,10 @@ make docker-push VERSION="$VERSION"
 echo "[6/8] Signing images with cosign..."
 if command -v cosign &> /dev/null; then
     for image in \
-        "kubesynth-operator" \
-        "kubesynth-api-gateway" \
-        "kubesynth-web-ui" \
-        "kubesynth-opencode-runtime"; do
+        "kubesynapse-operator" \
+        "kubesynapse-api-gateway" \
+        "kubesynapse-web-ui" \
+        "kubesynapse-opencode-runtime"; do
         cosign sign --yes "$REGISTRY/$image:$VERSION"
     done
 else
@@ -83,10 +83,10 @@ fi
 echo "[7/8] Generating SBOMs..."
 if command -v syft &> /dev/null; then
     for image in \
-        "kubesynth-operator" \
-        "kubesynth-api-gateway" \
-        "kubesynth-web-ui" \
-        "kubesynth-opencode-runtime"; do
+        "kubesynapse-operator" \
+        "kubesynapse-api-gateway" \
+        "kubesynapse-web-ui" \
+        "kubesynapse-opencode-runtime"; do
         syft "$REGISTRY/$image:$VERSION" -o spdx-json > "dist/sbom-$image-$VERSION.json"
     done
 else
@@ -97,10 +97,10 @@ fi
 # 8. Package and publish Helm chart
 # ---------------------------------------------------------------------------
 echo "[8/8] Packaging Helm chart..."
-helm package ./charts/kubesynth --version "${VERSION#v}" --app-version "$VERSION" -d ./dist/
+helm package ./charts/kubesynapse --version "${VERSION#v}" --app-version "$VERSION" -d ./dist/
 
 if command -v helm &> /dev/null; then
-    helm push "./dist/kubesynth-${VERSION#v}.tgz" "$CHART_REGISTRY"
+    helm push "./dist/kubesynapse-${VERSION#v}.tgz" "$CHART_REGISTRY"
 else
     echo "WARNING: helm not available for OCI push."
 fi
@@ -111,7 +111,7 @@ fi
 echo "Creating GitHub release..."
 if command -v gh &> /dev/null; then
     gh release create "$VERSION" \
-        --title "KubeSynth $VERSION" \
+        --title "kubesynapse $VERSION" \
         --notes-file CHANGELOG.md \
         ./dist/*
 else

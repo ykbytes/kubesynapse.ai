@@ -39,7 +39,7 @@ mypy_output.txt
 # ===========================
 tools-repos/
 mcp-catalog/
-codecodenewversionkubesynth_kagent_reference/
+codecodenewversionKUBESYNAPSE_kagent_reference/
 
 # ===========================
 # Runtime / config

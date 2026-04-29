@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# KubeSynth Kubernetes deployment script
+# kubesynapse Kubernetes deployment script
 #
 # Usage:
 #   ./scripts/deploy-k8s.sh [install|upgrade|uninstall|status|logs]
 #
 # Environment variables:
-#   NAMESPACE       - Kubernetes namespace (default: kubesynth)
-#   RELEASE_NAME    - Helm release name (default: kubesynth)
+#   NAMESPACE       - Kubernetes namespace (default: kubesynapse)
+#   RELEASE_NAME    - Helm release name (default: kubesynapse)
 #   VALUES_FILE     - Helm values file (default: deploy/values.production.yaml)
 #   REGISTRY        - Container registry (default: docker.io/yakdhane)
 #   VERSION         - Image tag (default: latest)
@@ -15,8 +15,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
-NAMESPACE="${NAMESPACE:-kubesynth}"
-RELEASE_NAME="${RELEASE_NAME:-kubesynth}"
+NAMESPACE="${NAMESPACE:-kubesynapse}"
+RELEASE_NAME="${RELEASE_NAME:-kubesynapse}"
 VALUES_FILE="${VALUES_FILE:-$PROJECT_ROOT/deploy/values.production.yaml}"
 REGISTRY="${REGISTRY:-docker.io/yakdhane}"
 VERSION="${VERSION:-latest}"
@@ -33,8 +33,8 @@ ensure_namespace() {
 case "${1:-install}" in
   install)
     ensure_namespace
-    echo "📦 Installing KubeSynth via Helm..."
-    helm upgrade --install "$RELEASE_NAME" ./charts/kubesynth \
+    echo "📦 Installing kubesynapse via Helm..."
+    helm upgrade --install "$RELEASE_NAME" ./charts/kubesynapse \
       --namespace "$NAMESPACE" \
       --values "$VALUES_FILE" \
       --set image.tag="$VERSION" \
@@ -51,8 +51,8 @@ case "${1:-install}" in
 
   upgrade)
     ensure_namespace
-    echo "⬆️ Upgrading KubeSynth..."
-    helm upgrade "$RELEASE_NAME" ./charts/kubesynth \
+    echo "⬆️ Upgrading kubesynapse..."
+    helm upgrade "$RELEASE_NAME" ./charts/kubesynapse \
       --namespace "$NAMESPACE" \
       --values "$VALUES_FILE" \
       --set image.tag="$VERSION" \
@@ -64,7 +64,7 @@ case "${1:-install}" in
     ;;
 
   uninstall)
-    echo "🗑️ Uninstalling KubeSynth..."
+    echo "🗑️ Uninstalling kubesynapse..."
     helm uninstall "$RELEASE_NAME" --namespace "$NAMESPACE" || true
     echo ""
     echo "To delete namespace and all data:"
@@ -72,7 +72,7 @@ case "${1:-install}" in
     ;;
 
   status)
-    echo "📊 KubeSynth status in namespace: $NAMESPACE"
+    echo "📊 kubesynapse status in namespace: $NAMESPACE"
     echo ""
     echo "Pods:"
     kubectl get pods -n "$NAMESPACE"

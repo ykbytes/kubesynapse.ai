@@ -1,6 +1,6 @@
 ---
 name: Bug report
-about: Create a report to help us improve KubeSynth
+about: Create a report to help us improve KubeSynapse
 title: "[BUG] "
 labels: bug
 triage: true
@@ -28,7 +28,7 @@ What actually happened. Include logs, stack traces, or screenshots.
 
 ## Environment
 
-- KubeSynth version:
+- KubeSynapse version:
 - Kubernetes version:
 - Cloud provider (if any):
 - Browser (if UI issue):

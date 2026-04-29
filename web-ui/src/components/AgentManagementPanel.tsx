@@ -54,9 +54,9 @@ import {
   stringifyMcpSidecars,
 } from "../lib/mcp";
 import { buildSkillFiles, createSkillFileDraft, skillFileDraftsFromFiles } from "../lib/skills";
-import { deriveAgentVisualSignals } from "@/lib/agentSignals";
+import { deriveAgentVisualSignals, getRuntimeSignal } from "@/lib/agentSignals";
 import {
-  fetchCatalogSkillDetail, fetchMcpConnections, fetchSkillsCatalog, refreshSkillsCatalog,
+  fetchCatalogSkillDetail, fetchMcpConnections, fetchMcpRegistry, fetchSkillsCatalog, refreshSkillsCatalog, createMcpConnection, apiErrorMessage,
   fetchIntelligenceCollectors, fetchIntelligenceSchedules, createIntelligenceSchedule, deleteIntelligenceSchedule,
   fetchIntelligenceAlerts, createIntelligenceAlert, deleteIntelligenceAlert, fetchAlertHistory, fetchPromptContext,
 } from "../lib/api";
@@ -71,6 +71,7 @@ import type {
   CatalogSkillDetail,
   GitConfig,
   McpConnection,
+  McpRegistryServer,
   PolicyInfo,
   RuntimeKind,
   TextFileDraft,
@@ -105,8 +106,8 @@ const MCP_VALIDATION_BADGE_STYLES = {
   invalid: "border-destructive/30 bg-destructive/10 text-destructive",
 } as const;
 
-const PANEL_CARD_CLASS = "border-border/65 bg-background/75 shadow-sm backdrop-blur-sm";
-const METRIC_PANEL_CLASS = "rounded-[1.15rem] border px-3 py-3 shadow-sm backdrop-blur-sm";
+const PANEL_CARD_CLASS = "border-border/80 bg-background/80 shadow-sm";
+const METRIC_PANEL_CLASS = "rounded-lg border px-3 py-1.5 shadow-sm";
 
 type ConnectionFilterValue = "all" | "selected" | "remote" | "hub" | "sidecar";
 
@@ -288,8 +289,10 @@ export function AgentManagementPanel({
   // Catalog state
   const [catalogSkills, setCatalogSkills] = useState<CatalogSkill[]>([]);
   const [mcpConnections, setMcpConnections] = useState<McpConnection[]>([]);
+  const [mcpRegistry, setMcpRegistry] = useState<McpRegistryServer[]>([]);
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [catalogError, setCatalogError] = useState("");
+  const [quickAddBusyId, setQuickAddBusyId] = useState("");
   const [skillSearch, setSkillSearch] = useState("");
   const [skillCategory, setSkillCategory] = useState("");
   const [skillDetailsById, setSkillDetailsById] = useState<Record<string, CatalogSkillDetail>>({});
@@ -321,21 +324,23 @@ export function AgentManagementPanel({
     if (!token.trim()) {
       setCatalogSkills([]);
       setMcpConnections([]);
+      setMcpRegistry([]);
       setCatalogError("");
       return;
     }
     let cancelled = false;
     setCatalogLoading(true);
     setCatalogError("");
-    Promise.all([fetchSkillsCatalog(token), fetchMcpConnections(token, namespace)])
-      .then(([skills, savedConnections]) => {
+    Promise.all([fetchSkillsCatalog(token), fetchMcpConnections(token, namespace), fetchMcpRegistry(token)])
+      .then(([skills, savedConnections, registry]) => {
         if (!cancelled) {
           setCatalogSkills(skills);
           setMcpConnections(savedConnections);
+          setMcpRegistry(registry);
         }
       })
       .catch((nextError) => {
-        if (!cancelled) setCatalogError(nextError instanceof Error ? nextError.message : String(nextError));
+        if (!cancelled) setCatalogError(apiErrorMessage(nextError));
       })
       .finally(() => {
         if (!cancelled) setCatalogLoading(false);
@@ -502,7 +507,7 @@ export function AgentManagementPanel({
 
   // Collector sidecar toggle helper
   const COLLECTOR_SIDECAR_NAME = "collector";
-  const COLLECTOR_SIDECAR_IMAGE = "localhost/kubesynthai/mcp-collector:dev";
+  const COLLECTOR_SIDECAR_IMAGE = "localhost/KubeSynapseai/mcp-collector:dev";
   const COLLECTOR_SIDECAR_PORT = 8100;
   const hasCollectorSidecar = selectedToolIds.has(COLLECTOR_SIDECAR_NAME);
 
@@ -534,6 +539,39 @@ export function AgentManagementPanel({
         : [...current, connectionId]
     ));
     setCatalogError("");
+  }
+
+  async function handleQuickAddRegistryServer(server: McpRegistryServer) {
+    if (!token.trim() || !canMutate) return;
+    setQuickAddBusyId(server.id);
+    setCatalogError("");
+    try {
+      const config: Record<string, unknown> = {};
+      if (server.transport === "remote" && server.endpoint) {
+        config.endpoint_url = server.endpoint;
+      }
+      if (server.transport === "sidecar" && server.sidecar_port) {
+        config.sidecar_port = server.sidecar_port;
+      }
+      if (server.transport === "sidecar" && server.sidecar_image) {
+        config.sidecar_image = server.sidecar_image;
+      }
+      const created = await createMcpConnection(token, namespace, {
+        name: server.name,
+        server_id: server.id,
+        config,
+        credentials: {},
+        validate_on_save: false,
+      });
+      setMcpConnections((current) => [...current, created]);
+      setMcpConnectionIds((current) => [...current, created.id]);
+      setCatalogError("");
+    } catch (err) {
+      const msg = apiErrorMessage(err);
+      setCatalogError(msg);
+    } finally {
+      setQuickAddBusyId("");
+    }
   }
 
   function handleOpenMcpManagement() {
@@ -647,7 +685,7 @@ export function AgentManagementPanel({
           system_prompt: systemPrompt,
           policy_ref: policyRef.trim() || undefined,
           storage_size: storageSize.trim() || undefined,
-          runtime_kind: "opencode",
+          runtime_kind: runtimeKind,
           enable_gvisor: enableGvisor,
           mcp_connection_ids: usingSavedConnections ? normalizedConnectionIds : [],
           mcp_servers: mcpServers,
@@ -703,6 +741,19 @@ export function AgentManagementPanel({
         return left.name.localeCompare(right.name);
       });
   }, [connectionFilter, connectionSearch, mcpConnections, normalizedConnectionIds]);
+
+  const savedServerIds = useMemo(() => new Set(mcpConnections.map((c) => c.server_id)), [mcpConnections]);
+
+  const matchingRegistry = useMemo(() => {
+    const query = connectionSearch.trim().toLowerCase();
+    if (!query) return [];
+    return mcpRegistry.filter((server) => {
+      if (savedServerIds.has(server.id)) return false;
+      if (connectionFilter !== "all" && connectionFilter !== "selected" && server.transport !== connectionFilter) return false;
+      return [server.name, server.id, server.description, server.category]
+        .some((value) => value?.toLowerCase().includes(query));
+    });
+  }, [connectionSearch, connectionFilter, mcpRegistry, savedServerIds]);
 
   return (
     <Card className="overflow-hidden border-border/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.04),rgba(255,255,255,0.01))] shadow-[0_24px_80px_-48px_rgba(0,0,0,0.65)]">
@@ -770,31 +821,39 @@ export function AgentManagementPanel({
         </div>
       </CardHeader>
       <CardContent>
-        <Tabs defaultValue="basics" className="space-y-5">
-          <div className="grid gap-3 xl:grid-cols-4">
-            <div className={`${METRIC_PANEL_CLASS} border-primary/20 bg-primary/5`}>
-              <p className="text-[10px] uppercase tracking-[0.16em] text-primary/75">Runtime</p>
-              <p className="mt-1 text-base font-semibold text-foreground">{currentSignals.runtime.label}</p>
-              <p className="mt-1 text-xs text-muted-foreground">{currentSignals.access.label}</p>
+        <Tabs defaultValue="basics" className="space-y-4">
+          <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+            <div className={`${METRIC_PANEL_CLASS} border-primary/30 bg-primary/10`}>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-primary">Runtime</span>
+                <span className="text-sm font-bold text-foreground">{currentSignals.runtime.label}</span>
+              </div>
+              <p className="text-[11px] font-medium text-foreground/80">{currentSignals.access.label}</p>
             </div>
-            <div className={`${METRIC_PANEL_CLASS} border-sky-500/20 bg-sky-500/5`}>
-              <p className="text-[10px] uppercase tracking-[0.16em] text-sky-300/80">Connections</p>
-              <p className="mt-1 text-base font-semibold text-foreground">{selectedConnections.length}</p>
-              <p className="mt-1 text-xs text-muted-foreground">
+            <div className={`${METRIC_PANEL_CLASS} border-sky-500/30 bg-sky-500/10`}>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-sky-500">Connections</span>
+                <span className="text-sm font-bold text-foreground">{selectedConnections.length}</span>
+              </div>
+              <p className="text-[11px] font-medium text-foreground/80">
                 {usingSavedConnections
                   ? `${selectedConnectionStats.remote} remote · ${selectedConnectionStats.sidecar} sidecar`
                   : `${effectiveMcpSidecars.length} legacy sidecar${effectiveMcpSidecars.length === 1 ? "" : "s"}`}
               </p>
             </div>
-            <div className={`${METRIC_PANEL_CLASS} border-violet-500/20 bg-violet-500/5`}>
-              <p className="text-[10px] uppercase tracking-[0.16em] text-violet-300/80">Guidance</p>
-              <p className="mt-1 text-base font-semibold text-foreground">{selectedCatalogSkills.length + skillFileDrafts.length}</p>
-              <p className="mt-1 text-xs text-muted-foreground">{selectedCatalogSkills.length} catalog · {skillFileDrafts.length} file{skillFileDrafts.length === 1 ? "" : "s"}</p>
+            <div className={`${METRIC_PANEL_CLASS} border-violet-500/30 bg-violet-500/10`}>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-violet-500">Guidance</span>
+                <span className="text-sm font-bold text-foreground">{selectedCatalogSkills.length + skillFileDrafts.length}</span>
+              </div>
+              <p className="text-[11px] font-medium text-foreground/80">{selectedCatalogSkills.length} catalog · {skillFileDrafts.length} file{skillFileDrafts.length === 1 ? "" : "s"}</p>
             </div>
-            <div className={`${METRIC_PANEL_CLASS} border-emerald-500/20 bg-emerald-500/5`}>
-              <p className="text-[10px] uppercase tracking-[0.16em] text-emerald-300/80">Hardening</p>
-              <p className="mt-1 text-base font-semibold text-foreground">{policyRef.trim() ? "Policy on" : "Review needed"}</p>
-              <p className="mt-1 text-xs text-muted-foreground">{enableGvisor ? "Isolated with gVisor" : "Standard runtime sandbox"}</p>
+            <div className={`${METRIC_PANEL_CLASS} border-emerald-500/30 bg-emerald-500/10`}>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-500">Hardening</span>
+                <span className="text-sm font-bold text-foreground">{policyRef.trim() ? "On" : "Off"}</span>
+              </div>
+              <p className="text-[11px] font-medium text-foreground/80">{enableGvisor ? "gVisor sandbox" : "Standard sandbox"}</p>
             </div>
           </div>
 
@@ -842,20 +901,46 @@ export function AgentManagementPanel({
                 <Card className={PANEL_CARD_CLASS}>
                   <CardHeader className="pb-3">
                     <CardTitle className="text-sm">Runtime profile</CardTitle>
-                    <CardDescription>This deployment now reconciles OpenCode agents only.</CardDescription>
+                    <CardDescription>Choose the agent runtime that fits this deployment.</CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-3">
-                    <div className="rounded-2xl border border-primary/40 bg-primary/10 px-4 py-3 text-left text-foreground shadow-inner shadow-primary/10">
-                      <div className="flex items-center justify-between gap-3">
-                        <div>
-                          <p className="font-medium text-sm">OpenCode runtime</p>
-                          <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                            Best for autonomous multi-turn coding with structured output, session management, context-overflow recovery, shared MCP routing, and managed sidecars.
-                          </p>
-                        </div>
-                        <Badge>Selected</Badge>
-                      </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Runtime kind</Label>
+                      <Select value={runtimeKind} onValueChange={(v) => setRuntimeKind(v as RuntimeKind)}>
+                        <SelectTrigger className="h-8 text-xs">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {(["opencode", "pi"] as RuntimeKind[]).map((kind) => {
+                            const signal = getRuntimeSignal(kind);
+                            return (
+                              <SelectItem key={kind} value={kind} className="text-xs">
+                                <span className="inline-flex items-center gap-1.5">
+                                  <signal.icon className="h-3.5 w-3.5" />
+                                  {signal.label}
+                                  {signal.alpha && <Badge variant="outline" className="h-3 px-1 text-[9px]">Alpha</Badge>}
+                                </span>
+                              </SelectItem>
+                            );
+                          })}
+                        </SelectContent>
+                      </Select>
                     </div>
+                    {runtimeKind === "opencode" ? (
+                      <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/5 px-4 py-3 text-left text-foreground">
+                        <p className="font-medium text-sm">OpenCode runtime</p>
+                        <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                          Best for autonomous multi-turn coding with structured output, session management, context-overflow recovery, shared MCP routing, and managed sidecars.
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="rounded-2xl border border-violet-500/30 bg-violet-500/5 px-4 py-3 text-left text-foreground">
+                        <p className="font-medium text-sm">Pi runtime</p>
+                        <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                          Lightweight alternative runtime using the pi coding agent. Supports streaming, tool use, and MCP connections via the pi extension system.
+                        </p>
+                      </div>
+                    )}
                   </CardContent>
                 </Card>
               </div>
@@ -1050,7 +1135,7 @@ export function AgentManagementPanel({
                         </SelectContent>
                       </Select>
                       <Badge variant="outline" className="border-border/60 bg-background/70 text-[10px] text-muted-foreground">
-                        {filteredConnections.length} shown
+                        {filteredConnections.length + matchingRegistry.length} shown
                       </Badge>
                     </div>
                   </div>
@@ -1059,8 +1144,7 @@ export function AgentManagementPanel({
                     <div className="flex items-center justify-center rounded-xl border border-dashed border-border/70 bg-background/40 px-4 py-6 text-sm text-muted-foreground">
                       <LoaderCircle className="mr-2 h-4 w-4 animate-spin" /> Loading saved MCP connections...
                     </div>
-                  ) : mcpConnections.length > 0 ? (
-                    filteredConnections.length > 0 ? (
+                  ) : filteredConnections.length > 0 || matchingRegistry.length > 0 ? (
                     <ScrollArea className="max-h-[560px] pr-3">
                       <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-3">
                         {filteredConnections.map((connection) => {
@@ -1125,13 +1209,66 @@ export function AgentManagementPanel({
                             </button>
                           );
                         })}
+                        {matchingRegistry.map((server) => (
+                          <div
+                            key={server.id}
+                            className="rounded-2xl border border-dashed border-border/70 bg-background/40 p-4 text-left transition hover:border-primary/20 hover:bg-accent/30"
+                          >
+                            <div className="flex items-start gap-3">
+                              <McpServerBadgeIcon
+                                serverId={server.id}
+                                serverName={server.name}
+                                transport={server.transport}
+                                iconName={server.icon}
+                                size="md"
+                              />
+                              <div className="min-w-0 flex-1 space-y-2">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <p className="font-medium text-foreground">{server.name}</p>
+                                  <Badge variant="outline" className="border-sky-500/30 bg-sky-500/10 text-[10px] text-sky-300">
+                                    Registry
+                                  </Badge>
+                                </div>
+                                <p className="text-sm text-muted-foreground">{server.description}</p>
+                                {server.connection_notes ? (
+                                  <p className="text-[11px] leading-5 text-muted-foreground">{server.connection_notes}</p>
+                                ) : null}
+                              </div>
+                            </div>
+                            <div className="mt-4 flex items-center justify-between">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <Badge variant="outline" className={`text-[10px] ${MCP_SUPPORT_BADGE_STYLES[server.support_level]}`}>
+                                  {server.support_level}
+                                </Badge>
+                                <Badge variant="outline" className="text-[10px] capitalize">
+                                  {server.transport}
+                                </Badge>
+                                <Badge variant="outline" className="text-[10px]">
+                                  {server.tools_count} tool{server.tools_count === 1 ? "" : "s"}
+                                </Badge>
+                              </div>
+                              <Button
+                                size="sm"
+                                variant="secondary"
+                                disabled={!token.trim() || quickAddBusyId === server.id}
+                                onClick={() => handleQuickAddRegistryServer(server)}
+                              >
+                                {quickAddBusyId === server.id ? (
+                                  <LoaderCircle className="mr-1 h-3.5 w-3.5 animate-spin" />
+                                ) : (
+                                  <Plus className="mr-1 h-3.5 w-3.5" />
+                                )}
+                                Add
+                              </Button>
+                            </div>
+                          </div>
+                        ))}
                       </div>
                     </ScrollArea>
-                    ) : (
-                      <div className="rounded-2xl border border-dashed border-border/70 bg-background/40 px-4 py-8 text-center text-sm text-muted-foreground">
-                        No saved MCP connections match the current search or transport filter.
-                      </div>
-                    )
+                  ) : mcpConnections.length > 0 ? (
+                    <div className="rounded-2xl border border-dashed border-border/70 bg-background/40 px-4 py-8 text-center text-sm text-muted-foreground">
+                      No saved MCP connections match the current search or transport filter.
+                    </div>
                   ) : (
                     <div className="rounded-2xl border border-dashed border-border/70 bg-background/40 px-4 py-8 text-center text-sm text-muted-foreground">
                       <p>No saved MCP connections are available in this namespace yet.</p>

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import {
+  BookOpen,
   Bot,
   FlaskConical,
   GitBranch,
@@ -55,6 +56,7 @@ const NAV_ITEMS: { view: WorkspaceView; label: string; icon: LucideIcon; keyword
   { view: "policies", label: "Go to Policies", icon: ShieldAlert, keywords: "policy guard" },
   { view: "settings", label: "Go to Settings", icon: Settings, keywords: "settings config provider" },
   { view: "admin", label: "Go to Admin", icon: ShieldCheck, keywords: "admin users" },
+  { view: "docs", label: "Open Documentation", icon: BookOpen, keywords: "docs documentation help guide" },
 ];
 
 export function CommandPalette({

@@ -1,4 +1,4 @@
-apiVersion: kubesynth.ai/v1alpha1
+apiVersion: kubesynapse.ai/v1alpha1
 kind: AIAgent
 metadata:
   name: ai300-researcher
@@ -183,7 +183,7 @@ spec:
       "reference_urls": ["<all collected URLs>"]
     }
 ---
-apiVersion: kubesynth.ai/v1alpha1
+apiVersion: kubesynapse.ai/v1alpha1
 kind: AIAgent
 metadata:
   name: ai300-exam-writer
@@ -442,7 +442,7 @@ spec:
       `function checkAnswer`, `function revealAll`, `function resetExam`, and
       balanced `details` sections.
 ---
-apiVersion: kubesynth.ai/v1alpha1
+apiVersion: kubesynapse.ai/v1alpha1
 kind: AIAgent
 metadata:
   name: ai300-qa-reviewer

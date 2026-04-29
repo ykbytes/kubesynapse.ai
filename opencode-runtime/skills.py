@@ -12,6 +12,7 @@ from typing import Any
 
 import yaml
 from config import (
+    AGENT_SKILL_CONFIGMAP_PATH_ENV,
     AGENT_SKILL_FILES_ENV,
     DEFAULT_AGENT,
     DEFAULT_AGENT_STEPS,
@@ -55,6 +56,30 @@ SKILL_RUNTIME_CONFIG: dict[str, Any] = {
     "mcpSidecars": [],
 }
 
+# kubesynapse platform instruction injected into all OpenCode agents
+KUBESYNAPSE_INSTRUCTION_CONTENT = (
+    "# kubesynapse Platform Context\n\n"
+    "You are operating inside the kubesynapse Kubernetes AI platform.\n\n"
+    "## Environment\n"
+    "- Your pod name, namespace, and identity are in environment variables (KUBESYNAPSE_AGENT_NAME, KUBESYNAPSE_NAMESPACE, etc.).\n"
+    "- You have access to A2A (agent-to-agent) communication — use @ mentions to invoke peer agents.\n"
+    "- You have access to MCP (Model Context Protocol) servers configured by the platform admin.\n"
+    "- The shared repository URL is in GIT_REPO_URL (if configured).\n\n"
+    "## Session Continuity\n"
+    "- Use the memory tool to save important findings and decisions.\n"
+    "- Check memory first when you don't recall previous conversation context.\n"
+    "- After completing major milestones, save a summary to memory with type='checkpoint'.\n\n"
+    "## Behavior Rules\n"
+    "1. Always search the codebase before making changes.\n"
+    "2. Verify your work after each change — read files back, run tests.\n"
+    "3. Report FULL error messages, not summaries.\n"
+    "4. Use MCP servers for external integrations instead of bash hacks when available.\n"
+    "5. Only invoke A2A agents that are configured in your outbound targets.\n"
+    "6. You are scoped to your namespace — cross-namespace operations require explicit references.\n"
+    "7. Clean up temporary files and be efficient with resources.\n"
+    "8. When something fails, report the full error and your diagnosis.\n"
+)
+
 
 def ensure_runtime_directories() -> None:
     """Create required runtime directories if they do not exist."""
@@ -69,6 +94,23 @@ def ensure_runtime_directories() -> None:
         Path(WORKSPACE_SNAPSHOT_DIR),
     ]:
         path.mkdir(parents=True, exist_ok=True)
+
+
+def materialize_KUBESYNAPSE_instructions() -> str | None:
+    """Write the kubesynapse platform instruction file to the OpenCode config dir.
+
+    Returns the relative path to the instruction file for use in opencode.json,
+    or None if the file could not be written.
+    """
+    try:
+        config_dir = Path(OPENCODE_CONFIG_DIR)
+        config_dir.mkdir(parents=True, exist_ok=True)
+        target = config_dir / "kubesynapse-platform-context.md"
+        target.write_text(KUBESYNAPSE_INSTRUCTION_CONTENT, encoding="utf-8")
+        return str(target.relative_to(config_dir).as_posix())
+    except OSError as exc:
+        logger.warning("Failed to write kubesynapse instruction file: %s", exc)
+        return None
 
 
 def parse_skill_frontmatter(path: str, content: str) -> tuple[str, str, list[str]]:
@@ -169,17 +211,41 @@ def materialize_opencode_config_files(base_config: dict[str, Any] | None = None)
     return sorted(written_files)
 
 
+def _collect_skill_files_from_env() -> dict[str, str]:
+    """Collect skill files from operator-injected env var and ConfigMap mount."""
+    files: dict[str, str] = {}
+
+    payload = _parse_json_env(AGENT_SKILL_FILES_ENV)
+    if payload is not None:
+        if not isinstance(payload, dict):
+            raise RuntimeError(f"{AGENT_SKILL_FILES_ENV} must be a JSON object")
+        files.update({str(k): str(v) for k, v in payload.items()})
+
+    configmap_path = os.environ.get(AGENT_SKILL_CONFIGMAP_PATH_ENV, "").strip()
+    if configmap_path:
+        cm_dir = Path(configmap_path)
+        if cm_dir.is_dir():
+            for entry in sorted(cm_dir.iterdir()):
+                if entry.is_file() and entry.name.endswith(".md"):
+                    try:
+                        content = entry.read_text(encoding="utf-8")
+                    except Exception:
+                        continue
+                    files[entry.name] = content
+
+    return files
+
+
 def materialize_skill_files() -> tuple[list[str], list[dict[str, str]], list[str]]:
     """Write operator-injected skill files to the OpenCode skills directory.
 
+    Reads from both inline skill files (env var) and mounted ConfigMap directory.
     Returns (written_files, skill_meta, warnings) where skill_meta is a list of
     dicts with keys ``name``, ``description``, ``file``, and ``content``.
     """
-    payload = _parse_json_env(AGENT_SKILL_FILES_ENV)
-    if payload is None:
+    skill_files = _collect_skill_files_from_env()
+    if not skill_files:
         return [], [], []
-    if not isinstance(payload, dict):
-        raise RuntimeError(f"{AGENT_SKILL_FILES_ENV} must be a JSON object")
 
     written_files: list[str] = []
     skill_meta: list[dict[str, str]] = []
@@ -187,7 +253,7 @@ def materialize_skill_files() -> tuple[list[str], list[dict[str, str]], list[str
     seen_names: set[str] = set()
     skills_root = Path(OPENCODE_CONFIG_DIR) / "skills"
 
-    for raw_path, raw_content in payload.items():
+    for raw_path, raw_content in skill_files.items():
         content = str(raw_content)
         skill_name, skill_description, skill_warnings = parse_skill_frontmatter(str(raw_path), content)
         warnings.extend(skill_warnings)
@@ -367,6 +433,7 @@ def build_generated_config(
 ) -> tuple[dict[str, Any], list[str]]:
     """Generate the full OpenCode configuration object."""
     mcp_config, warnings = build_mcp_config(sidecars)
+    KUBESYNAPSE_instruction_path = materialize_KUBESYNAPSE_instructions()
     config: dict[str, Any] = {
         "$schema": "https://opencode.ai/config.json",
         "model": DEFAULT_MODEL_REF,
@@ -394,6 +461,8 @@ def build_generated_config(
             },
         },
     }
+    if KUBESYNAPSE_instruction_path:
+        config["instructions"] = [KUBESYNAPSE_instruction_path]
 
     provider: dict[str, Any] = {}
     if DEFAULT_PROVIDER.lower() == "litellm":
@@ -473,7 +542,7 @@ def configure_git_credentials() -> None:
         timeout=5,
     )
     subprocess.run(
-        ["git", "config", "--global", "user.email", "agent@kubesynth.local"],
+        ["git", "config", "--global", "user.email", "agent@kubesynapse.local"],
         capture_output=True,
         timeout=5,
     )

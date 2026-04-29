@@ -1,5 +1,5 @@
 {
-  "name": "kubesynth-web-ui",
+  "name": "kubesynapse-web-ui",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -35,7 +35,9 @@
     "framer-motion": "^12.38.0",
     "highlight.js": "^11.11.1",
     "lucide-react": "^0.511.0",
+    "mermaid": "^11.14.0",
     "monaco-editor": "^0.55.1",
+    "prism-react-renderer": "^2.4.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-markdown": "^10.1.0",

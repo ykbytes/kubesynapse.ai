@@ -1,14 +1,14 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: kubesynth-factory-context
+  name: kubesynapse-factory-context
   namespace: default
 data:
   context: |
-    # KubeSynth Factory Context
+    # kubesynapse Factory Context
 
     ## Mission
-    Design production-grade KubeSynth bundles that create AIAgent,
+    Design production-grade kubesynapse bundles that create AIAgent,
     AgentWorkflow, AgentPolicy, and ConfigMap resources with explicit approval
     boundaries, rich operating instructions, and reliable verification steps.
 
@@ -28,7 +28,7 @@ data:
        specification with requirements, capabilities, specialist roles, tasks,
        and verification criteria. The spec is the source of truth.
     2. The factory agent receives the expanded specification and generates the
-       optimal KubeSynth bundle from it.
+       optimal kubesynapse bundle from it.
 
     This design means the factory can handle ANY idea — apps, books, learning
     systems, automations, research pipelines, creative projects, compliance
@@ -197,7 +197,7 @@ data:
     - `kubectl` is NOT available inside OpenCode sandboxes. All verify blocks
       and deploy scripts MUST use Python with the `kubernetes` client library.
     - Generated bundles MUST NOT include CRD definition files. CRDs are
-      installed and managed by the KubeSynth operator. Bundles only produce
+      installed and managed by the kubesynapse operator. Bundles only produce
       instances: AIAgent, AgentWorkflow, AgentPolicy, ConfigMap.
     - Generated manifests MUST use real namespace values (e.g. `default`),
       NOT Jinja/Helm template syntax such as a namespace placeholder token.
@@ -207,7 +207,7 @@ data:
       container image.
     - Generated bundles MUST NOT include phantom infrastructure (custom
       Deployments, Services, Ingresses) that doesn't exist on the platform.
-      KubeSynth bundles consist of AIAgent + AgentWorkflow + AgentPolicy +
+      kubesynapse bundles consist of AIAgent + AgentWorkflow + AgentPolicy +
       ConfigMap resources only.
     - Every `agentRef` in a workflow step MUST reference an AIAgent defined
       in the same bundle. Do NOT reference agents like `workflow-runner` that
@@ -218,7 +218,7 @@ data:
     what is listed here. Any field not in this reference will cause a
     validation error when applied to the cluster.
 
-    ### AIAgent (apiVersion: kubesynth.ai/v1alpha1)
+    ### AIAgent (apiVersion: kubesynapse.ai/v1alpha1)
     ```yaml
     spec:
       model: <string>             # Model route, e.g. "gpt-4.1-mini"
@@ -257,7 +257,7 @@ data:
     `configRef`, `image`, `containerImage`, `replicas`, `env`, `volumes`,
     `serviceAccount`, `annotations` on spec level.
 
-    ### AgentPolicy (apiVersion: kubesynth.ai/v1alpha1)
+    ### AgentPolicy (apiVersion: kubesynapse.ai/v1alpha1)
     ```yaml
     spec:
       allowedModels:              # Array of allowed model strings
@@ -286,7 +286,7 @@ data:
     `maxSummaryLengthWords`, `forbidExposure`, `allowedTools`,
     `allowedActions`.
 
-    ### AgentWorkflow (apiVersion: kubesynth.ai/v1alpha1)
+    ### AgentWorkflow (apiVersion: kubesynapse.ai/v1alpha1)
     ```yaml
     spec:
       description: <string>
@@ -322,7 +322,7 @@ data:
     ### Example: Correct minimal bundle
     ```yaml
     # --- AIAgent ---
-    apiVersion: kubesynth.ai/v1alpha1
+    apiVersion: kubesynapse.ai/v1alpha1
     kind: AIAgent
     metadata:
       name: my-agent
@@ -344,7 +344,7 @@ data:
         You are a specialist agent. Your mission is ...
     ---
     # --- AgentPolicy ---
-    apiVersion: kubesynth.ai/v1alpha1
+    apiVersion: kubesynapse.ai/v1alpha1
     kind: AgentPolicy
     metadata:
       name: my-policy
@@ -360,7 +360,7 @@ data:
         maxOutputTokens: 50000
     ---
     # --- AgentWorkflow ---
-    apiVersion: kubesynth.ai/v1alpha1
+    apiVersion: kubesynapse.ai/v1alpha1
     kind: AgentWorkflow
     metadata:
       name: my-workflow

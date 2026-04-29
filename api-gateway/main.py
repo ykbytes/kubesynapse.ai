@@ -1,4 +1,4 @@
-"""KubeSynth API Gateway — thin application factory.
+"""kubesynapse API Gateway — thin application factory.
 
 All route handlers have been extracted to routers/*.py.
 All shared models and helpers live in _core.py.

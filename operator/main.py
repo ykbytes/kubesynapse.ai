@@ -169,15 +169,15 @@ def _render_prometheus_metrics() -> str:
         errors = _reconcile_errors
         latency_sum = _reconcile_latency_sum
     return (
-        "# HELP kubesynth_operator_reconcile_total Total reconciliation operations\n"
-        "# TYPE kubesynth_operator_reconcile_total counter\n"
-        f"kubesynth_operator_reconcile_total {total}\n"
-        "# HELP kubesynth_operator_reconcile_errors Total reconciliation errors\n"
-        "# TYPE kubesynth_operator_reconcile_errors counter\n"
-        f"kubesynth_operator_reconcile_errors {errors}\n"
-        "# HELP kubesynth_operator_reconcile_latency_sum Sum of reconciliation latency (ms)\n"
-        "# TYPE kubesynth_operator_reconcile_latency_sum counter\n"
-        f"kubesynth_operator_reconcile_latency_sum {latency_sum:.3f}\n"
+        "# HELP KUBESYNAPSE_operator_reconcile_total Total reconciliation operations\n"
+        "# TYPE KUBESYNAPSE_operator_reconcile_total counter\n"
+        f"KUBESYNAPSE_operator_reconcile_total {total}\n"
+        "# HELP KUBESYNAPSE_operator_reconcile_errors Total reconciliation errors\n"
+        "# TYPE KUBESYNAPSE_operator_reconcile_errors counter\n"
+        f"KUBESYNAPSE_operator_reconcile_errors {errors}\n"
+        "# HELP KUBESYNAPSE_operator_reconcile_latency_sum Sum of reconciliation latency (ms)\n"
+        "# TYPE KUBESYNAPSE_operator_reconcile_latency_sum counter\n"
+        f"KUBESYNAPSE_operator_reconcile_latency_sum {latency_sum:.3f}\n"
     )
 
 
@@ -200,14 +200,22 @@ threading.Thread(target=_start_readiness_server, daemon=True, name="readiness-se
 @kopf.on.startup()
 def configure(settings: kopf.OperatorSettings, **_) -> None:
     """Ensure K8s client is authenticated when the operator starts."""
-    settings.persistence.finalizer = "kubesynth.ai/finalizer"
+    settings.persistence.finalizer = "kubesynapse.ai/finalizer"
     settings.peering.name = OPERATOR_PEERING_NAME
     # §7.1 — Leader election: 30s lease duration
     settings.peering.lifetime = 30
     settings.peering.standby_delay = 15
     _load_kubernetes_config()
     init_state_database()
-    init_tracing("kubesynth-operator")
+    init_tracing("kubesynapse-operator")
+
+    # §S6-1 — Migrate existing DB MCP connections to CRD resources
+    try:
+        from controllers.mcp_connection_controller import _migrate_db_connections_to_crds
+
+        _migrate_db_connections_to_crds(logger)
+    except Exception as exc:
+        logger.info("McpConnection migration skipped or failed: %s", exc)
     log_operator_event(
         logger,
         logging.INFO,

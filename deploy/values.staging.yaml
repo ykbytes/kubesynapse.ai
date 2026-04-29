@@ -41,7 +41,7 @@ ingress:
   enabled: true
   className: "nginx"
   hosts:
-    - host: "staging.kubesynth.example.com"
+    - host: "staging.kubesynapse.example.com"
       paths:
         - path: /
           pathType: Prefix

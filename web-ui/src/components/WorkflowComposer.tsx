@@ -40,8 +40,9 @@ import { NodePalette } from "./composer/NodePalette";
 import { PropertiesPanel } from "./composer/PropertiesPanel";
 import { ComposerToolbar } from "./composer/ComposerToolbar";
 import { RunHistoryPanel } from "./composer/RunHistoryPanel";
+import { LiveActivityStream, useWorkflowActivities } from "./LiveActivityStream";
 import { toast } from "sonner";
-import { AlertCircle } from "lucide-react";
+import { AlertCircle, MousePointerClick } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 /* ── Static styles ── */
@@ -105,6 +106,17 @@ function ComposerCanvas({
   const [paletteCollapsed, setPaletteCollapsed] = useState(false);
   const [propertiesCollapsed, setPropertiesCollapsed] = useState(false);
   const [runHistoryCollapsed, setRunHistoryCollapsed] = useState(true);
+  const [livePanelCollapsed, setLivePanelCollapsed] = useState(true);
+
+  // Live activity stream
+  const {
+    activities,
+    isConnected,
+    isActive,
+    phase: livePhase,
+    error: liveError,
+    reconnect: liveReconnect,
+  } = useWorkflowActivities(token, namespace, workflow?.name ?? null);
 
   // Sync step states from workflow polling to node data
   useEffect(() => {
@@ -247,6 +259,54 @@ function ComposerCanvas({
     [nodes, reactFlowInstance],
   );
 
+  // Add agent step from palette click
+  const handleAddAgentFromPalette = useCallback(
+    (agentName: string) => {
+      const agent = agents.find((a) => a.name === agentName);
+      const canvasRect = wrapperRef.current?.getBoundingClientRect();
+      const centerX = canvasRect ? canvasRect.width / 2 : 400;
+      const centerY = canvasRect ? canvasRect.height / 2 : 300;
+      const position = reactFlowInstance.screenToFlowPosition({
+        x: centerX,
+        y: centerY,
+      });
+
+      setNodes((nds) => {
+        const existingIds = new Set(nds.map((n) => n.id));
+        const stepId = makeStepId(agentName, existingIds);
+        // Offset slightly if multiple nodes at same position
+        const offsetCount = nds.filter((n) => Math.abs(n.position.x - position.x) < 20 && Math.abs(n.position.y - position.y) < 20).length;
+        const finalPosition = {
+          x: position.x + offsetCount * 40,
+          y: position.y + offsetCount * 40,
+        };
+
+        const newNode: ComposerNode = {
+          id: stepId,
+          type: "agentStep",
+          position: finalPosition,
+          data: {
+            stepName: stepId,
+            agentRef: agentName,
+            prompt: "",
+            requireApproval: false,
+            stepType: "agent",
+            loopConfig: null,
+            conditionExpr: null,
+            thenSteps: null,
+            elseSteps: null,
+            stepState: null,
+            runtimeKind: agent?.runtime_kind ?? null,
+          },
+        };
+        return [...nds, newNode];
+      });
+      setIsDirty(true);
+      toast.success(`Added step "${agentName}"`);
+    },
+    [reactFlowInstance, setNodes, agents],
+  );
+
   // Handle drop of agent from palette
   const onDragOver = useCallback((e: DragEvent) => {
     e.preventDefault();
@@ -256,7 +316,7 @@ function ComposerCanvas({
   const onDrop = useCallback(
     (e: DragEvent) => {
       e.preventDefault();
-      const agentName = e.dataTransfer.getData("application/kubesynth-agent");
+      const agentName = e.dataTransfer.getData("application/kubesynapse-agent");
       if (!agentName || !wrapperRef.current) return;
 
       const position = reactFlowInstance.screenToFlowPosition({
@@ -470,6 +530,11 @@ function ComposerCanvas({
         e.preventDefault();
         setPropertiesCollapsed((prev) => !prev);
       }
+      // Ctrl+L → Toggle live activity panel
+      if (ctrl && !e.shiftKey && e.key.toLowerCase() === "l") {
+        e.preventDefault();
+        setLivePanelCollapsed((prev) => !prev);
+      }
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
@@ -514,14 +579,39 @@ function ComposerCanvas({
         onAutoLayout={handleAutoLayout}
         onToggleMaximize={toggleMaximize}
         onBack={handleBack}
+        onToggleLivePanel={() => setLivePanelCollapsed((p) => !p)}
+        livePanelCollapsed={livePanelCollapsed}
+        hasLiveActivity={activities.length > 0 || isActive}
       />
 
       <div className="flex flex-1 min-h-0 overflow-hidden">
-        <NodePalette agents={agents} collapsed={paletteCollapsed} onToggleCollapse={() => setPaletteCollapsed((p) => !p)} />
+        <NodePalette agents={agents} collapsed={paletteCollapsed} onToggleCollapse={() => setPaletteCollapsed((p) => !p)} onAddAgent={handleAddAgentFromPalette} />
 
         <div ref={wrapperRef} className="flex-1 relative">
           {/* Canvas vignette overlay */}
           <div className="composer-canvas-vignette" />
+
+          {/* Empty state helper */}
+          {nodes.length <= 1 && (
+            <div className="absolute inset-0 z-10 flex items-center justify-center pointer-events-none">
+              <div className="text-center space-y-3 max-w-sm px-6">
+                <div className="inline-flex h-12 w-12 items-center justify-center rounded-2xl border border-primary/20 bg-primary/10 text-primary">
+                  <MousePointerClick className="h-6 w-6" />
+                </div>
+                <div>
+                  <p className="text-sm font-medium text-foreground">Build your workflow</p>
+                  <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
+                    Drag agents from the left palette onto the canvas, or click the + button next to any agent to add a step.
+                  </p>
+                </div>
+                <div className="flex items-center justify-center gap-3 text-[10px] text-muted-foreground">
+                  <span className="inline-flex items-center gap-1"><span className="inline-block h-1.5 w-1.5 rounded-full bg-primary" />Click agent +</span>
+                  <span className="inline-flex items-center gap-1"><span className="inline-block h-1.5 w-1.5 rounded-full bg-primary" />Drag to canvas</span>
+                  <span className="inline-flex items-center gap-1"><span className="inline-block h-1.5 w-1.5 rounded-full bg-primary" />Connect steps</span>
+                </div>
+              </div>
+            </div>
+          )}
           <ReactFlow
             nodes={nodes}
             edges={edgesWithData}
@@ -590,7 +680,28 @@ function ComposerCanvas({
           onToggleCollapse={() => setPropertiesCollapsed((p) => !p)}
           onNodeDataChange={handleNodeDataChange}
           onSelectNode={handleSelectNodeFromPanel}
+          onDeleteNode={(nodeId) => {
+            setNodes((nds) => nds.filter((n) => n.id !== nodeId));
+            setEdges((eds) => eds.filter((e) => e.source !== nodeId && e.target !== nodeId));
+            setSelectedNodeId(null);
+            setIsDirty(true);
+          }}
         />
+
+        {/* Live Activity Panel */}
+        {!livePanelCollapsed && workflow?.name && (
+          <div className="w-80 border-l bg-background shrink-0 flex flex-col">
+            <LiveActivityStream
+              workflowName={workflow.name}
+              activities={activities}
+              isConnected={isConnected}
+              isActive={isActive}
+              phase={livePhase}
+              error={liveError}
+              onReconnect={liveReconnect}
+            />
+          </div>
+        )}
       </div>
 
       {!isNew && (

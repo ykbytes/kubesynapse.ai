@@ -538,7 +538,7 @@ function LogsPanel({
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="space-y-2">
-      <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{title}</h4>
+      <h4 className="text-xs font-bold uppercase tracking-wider text-foreground/80">{title}</h4>
       <Separator />
       <div className="space-y-1.5">{children}</div>
     </div>
@@ -548,7 +548,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 function KV({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-baseline justify-between gap-4 text-xs">
-      <span className="text-muted-foreground shrink-0">{label}</span>
+      <span className="text-foreground/70 shrink-0">{label}</span>
       <span className="truncate font-medium text-foreground text-right">{value}</span>
     </div>
   );

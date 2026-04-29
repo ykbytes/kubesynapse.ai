@@ -1,0 +1,6 @@
+{
+  "name": "kubesynapse-artifacts",
+  "private": true,
+  "type": "module",
+  "pi": { "extensions": ["./index.ts"] }
+}

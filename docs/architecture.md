@@ -1,6 +1,6 @@
-# KubeSynth Architecture
+# KubeSynapse Architecture
 
-This document is the canonical reference for how KubeSynth is built, how data flows through the system, and how components interact.
+This document is the canonical reference for how KubeSynapse is built, how data flows through the system, and how components interact.
 
 **Who is this for:** Platform engineers, SREs, security auditors, and contributors who need to understand the system end-to-end.
 
@@ -38,7 +38,7 @@ flowchart TB
         CLI[agentctl CLI]
     end
 
-    subgraph KubeSynth["KubeSynth Platform"]
+    subgraph KubeSynapse["KubeSynapse Platform"]
         GW[API Gateway]
         UI[Web UI]
         OP[Operator]
@@ -46,7 +46,7 @@ flowchart TB
     end
 
     Dev -->|HTTPS| UI
-    Dev -->|kubectl| KubeSynth
+    Dev -->|kubectl| KubeSynapse
     CLI -->|REST| GW
     App -->|A2A JSON-RPC| GW
     GW -->|LLM calls| LLM
@@ -69,7 +69,7 @@ flowchart TB
 flowchart LR
     subgraph Control["Control Plane"]
         K8S[Kubernetes API Server]
-        CRD[CRDs<br/>kubesynth.ai/v1alpha1]
+        CRD[CRDs<br/>KubeSynapse.ai/v1alpha1]
         OP[Operator<br/>Kopf-based]
         GW[API Gateway<br/>FastAPI]
     end

@@ -6,7 +6,141 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
-## [Unreleased] - robustness-hardening branch
+## [Unreleased] - Sprint 9 (Pi Runtime & Live Observability)
+
+### Added
+- **Pi Runtime Integration**:
+  - New `runtime.kind: "pi"` support alongside `opencode`
+  - Pi bridge (`pi-runtime/pi_bridge.js`) implements HTTP bridge for Pi RPC mode
+  - Artifact API endpoints (`/artifacts/list`, `/artifacts/download`, `/artifacts/zip`) added to pi-runtime
+  - Model timeout mechanism (`MODEL_TIMEOUT_MS=120s`) with auto-abort and retry
+- **Deployment Hardening**:
+  - LiteLLM database bootstrap is now automatic via Helm init container running `prisma db push`
+  - Operator dependency egress policy added for PostgreSQL, Redis, NATS, LiteLLM, and Qdrant
+  - Operator Kubernetes API egress policy fixed to avoid blocking private-cluster API access
+  - LiteLLM isolation policy now includes egress to PostgreSQL, Redis, and DNS
+- **Workflow Engine Improvements**:
+  - Fixed workflow controller enqueue bug (`GROUP`, `VERSION`, `WORKFLOW_PLURAL`)
+  - Fixed worker artifact PVC creation (skip cross-namespace `ownerReferences`)
+  - Fixed streamed response reconstruction (backfill missing completed.response / tool_calls from stream events)
+  - Fixed stream truncation bug (prefer accumulated `response.delta` text)
+  - Added autoRetry for recoverable failures
+  - Radically slimmed context ConfigMaps to prevent model hangs
+- **Live Observability UI**:
+  - ExecutionObservatory with trace inspection, StepInspector, LLMCallViewer, TracePlayer, ExecutionTimeline, ExecutionDiffView
+  - Live Activity Stream with step-level status transitions
+  - Workflow file browser with ZIP download restoration
+  - Agent live reasoning log design (terminal-style SSE events, filter chips, copy/download, stall detection)
+- **Resource & Reliability**:
+  - Boosted agent sandbox resources (builder limits: 4 CPU / 8Gi)
+  - Increased step timeouts (`scaffold-project` 3600s, `build-synth-core` 5400s, etc.)
+  - Wipe Pi session PVC between restarts to clear stale sessions
+
+### Verification
+- `npm run build` — 0 TypeScript errors
+- `helm lint --strict` — passes
+- `ruff check` — 0 errors
+- Operator tests pass
+
+---
+
+## [1.0.0] - 2026-04-27 — Sprint 8 (Final)
+
+### Added
+- **Vulnerability Scanning Pipeline** (`.github/workflows/security-scan.yaml`):
+  - Trivy container image scanning for all 4 images (api-gateway, operator, opencode-runtime, web-ui) with SARIF upload to GitHub Security
+  - Trivy filesystem scanning with SARIF upload
+  - kube-linter for Helm/K8s best practices (privileged containers, privilege escalation, read-only root FS, run-as-non-root, capabilities, sensitive host mounts, anti-affinity, RBAC)
+  - checkov for IaC security scanning (Helm charts + rendered K8s manifests)
+  - npm audit for both web-ui and TypeScript SDK
+  - pip-audit extended to cover cli/ dependencies
+  - Bandit SAST with SARIF format and GitHub Security integration
+  - CRITICAL vulnerabilities block on all scans
+  - Secret detection via TruffleHog with verified credential scanning
+- **RBAC Audit & Matrix** (`docs/rbac-matrix.md`):
+  - Comprehensive documentation of all 5 ServiceAccounts (operator, api-gateway, agent-runtime, collector, litellm)
+  - Detailed permission matrix with justification for every API group/resource/verb
+  - Least-privilege audit checklist (13 checks, all PASS)
+  - Verification commands for cluster operators
+  - Identified: no `pods/exec`, no cluster-wide secret list on gateway, agent runtime cannot mutate platform CRDs
+- **Secrets Management Guide** (`docs/secrets-management.md`):
+  - 3 full integration paths: External Secrets Operator (AWS/GCP/Azure), Vault CSI Provider (HashiCorp Vault), Sealed Secrets (Bitnami)
+  - Each path: prerequisites, step-by-step installation, configuration snippets, verification commands
+  - Comparison table across all 3 approaches
+  - KubeSynapse-specific secret reference (8 secret keys with component mapping)
+  - Security best practices section
+- **Artifact Distribution**:
+  - Docker Hub publishing in release workflow: `KubeSynapse/operator`, `KubeSynapse/api-gateway`, `KubeSynapse/opencode-runtime`, `KubeSynapse/web-ui` (with `:latest` tags)
+  - Helm OCI pushed to both GHCR and Docker Hub (`oci://docker.io/kubesynapse/charts/KubeSynapse`)
+  - Python SDK renamed to `kubesynapse-sdk` for `pip install kubesynapse-sdk`
+  - TypeScript SDK renamed to `@kubesynapse/sdk` for `npm install @kubesynapse/sdk`
+  - CLI renamed to `kubesynapse-cli` for `pip install kubesynapse-cli`
+  - README updated with install instructions for pip, npm, Homebrew, and Helm OCI
+- **Compatibility Matrix** (`COMPATIBILITY.md`):
+  - Test matrix covering K8s 1.25–1.34 (Kind), with planned EKS/GKE/AKS columns
+  - Component compatibility table (8 core components, 11 MCP sidecars)
+  - Kubernetes feature requirements reference
+  - Automated compatibility test script (`scripts/test-compatibility.sh`) — creates Kind clusters across versions, deploys KubeSynapse, runs smoke tests, cleans up
+  - Known limitations documented (OpenShift, GKE Autopilot, arm64, Fargate, Windows)
+- **Accessibility (WCAG 2.1 AA)**:
+  - `SkipToContent` component — skip-to-main-content link, first focusable element on every page
+  - `AriaLiveRegion` component — dual-region (polite `role="status"` + assertive `role="alert"`) with `announceToScreenReader()` utility
+  - `FocusTrap` component — keyboard trap for modals/dialogs/drawers with Escape handling
+  - `ConfirmDialog` enhanced: `aria-labelledby`, `aria-describedby`, `aria-label` on buttons, decorative icon `aria-hidden`
+  - `<main id="main-content" tabIndex={-1}>` for skip link target
+  - Color contrast verified: `text-foreground` on `bg-background` = 12.3:1 (WCAG AA requires 4.5:1)
+  - Accessibility audit report (`docs/accessibility-report.md`) — full WCAG 2.1 AA compliance matrix with 50 success criteria
+- **Security Documentation** (`SECURITY.md`):
+  - Accepted vulnerabilities section: pip-audit accepted risks (2 entries), Trivy container accepted risks (2 entries), kube-linter accepted risks (2 entries), Bandit accepted risks (2 entries)
+  - Quarterly review cadence defined
+  - Escalation process for new CRITICAL CVEs
+
+### Changed
+- `clients/python/setup.py` — package renamed from `kubesynapse-client` to `kubesynapse-sdk`
+- `clients/typescript/package.json` — package renamed from `@KubeSynapse/client` to `@kubesynapse/sdk`
+- `cli/pyproject.toml` — package renamed from `agentctl` to `kubesynapse-cli`
+- `web-ui/src/App.tsx` — integrates SkipToContent and AriaLiveRegion at app root; main element gets `id="main-content"`
+- `.github/workflows/release.yaml` — extended for dual-registry (GHCR + Docker Hub) with cosign signing on both, `:latest` tags on Docker Hub, Helm OCI push to both registries
+- `README.md` — added pip/npm/Homebrew install instructions, Helm OCI one-liner install
+
+### Verification
+- `npm run build` — ✅ 0 TypeScript errors (4608 modules)
+- `helm lint --strict` — ✅ passes
+- `ruff check` — ✅ 0 errors on all new code
+- All 6 a11y components built successfully
+- Release workflow validated for dual-registry push
+
+---
+
+## [Unreleased] - Sprint 7
+
+### Added
+- **CI/CD Release Automation**: `.github/workflows/release-please.yaml` — Google release-please action with conventional commit detection, auto-versioning, and auto-CHANGELOG generation (`release-please-config.json`, `.release-please-manifest.json`)
+- **Supply Chain Integrity**: `.github/workflows/supply-chain.yaml` — per-push SBOM generation (Syft SPDX + CycloneDX), Trivy vulnerability scanning with SARIF upload to GitHub Security, Cosign keyless image signing with OIDC, and build provenance attestation
+- **Grafana Dashboards** (3 new):
+  - `deploy/grafana/dashboards/agent-overview.json` — Agent health, pod status, memory/CPU, CRD reconciliation rates
+  - `deploy/grafana/dashboards/workflow-execution.json` — Workflow runs, step duration P50/P95, worker queue depth, failure rates
+  - `deploy/grafana/dashboards/llm-usage.json` — Token rate by model, cost rate ($/hr), latency P50/P95/P99 per model, provider error rates, LiteLLM health
+- **Prometheus Alert Rules** (4 new): Agent pod down (critical), workflow failure rate > 5%, API error rate > 1%, LiteLLM unhealthy, step timeout rate > 10%
+- **Performance Benchmarks**: `benchmarks/` directory with 3 reproducible benchmark scripts (`bench-reconcile.py`, `bench-api.py`, `bench-concurrency.py`) and comprehensive README with baseline targets, CI integration, and JSON export format
+- **Landing Page v2.0**: Animated cluster visualization in hero (floating agent pods + K8s control plane + SVG connection lines), live GitHub stars counter (fetched from GitHub API), 4-column comparison matrix (KubeSynapse vs LangChain vs CrewAI vs Kubiya) with 12 capability rows, system-preference dark mode detection (already existed but enhanced)
+- **Blog Posts** (3): `docs/blog/what-is-KubeSynapse.md` — "Why Kubernetes is the Right Platform for AI Agents", `docs/blog/KubeSynapse-vs-alternatives.md` — full comparison with detailed feature matrix, `docs/blog/building-first-agent.md` — "Build a DevOps Agent in 5 Minutes" tutorial with copy-pasteable YAML
+- **Video Content Plan**: `docs/videos.md` — 5-video series outline (product overview 3min, governance 8min, workflows 8min, observability 6min, community 4min) with scripts, visual assets, recording tools, and publishing strategy
+- **Python SDK**: `clients/python/` — async `KubeSynapseClient` (httpx + Pydantic v2) with 15 API methods covering health, agents, workflows, policies, and traces; `SyncKubeSynapseClient` wrapper; `setup.py` with PyPI-ready config; full type annotations and docstrings
+- **TypeScript SDK**: `clients/typescript/` — `KubeSynapseClient` class with full type coverage, 15 API methods, AbortController timeouts, error handling; exports all request/response types; React/Next.js usage example
+- **Community Infrastructure**: `docs/community.md` — Community page with Slack/Discord links, meeting schedule, contributor path (4 levels), Good First Issue criteria; `docs/contributor-program.md` — 4 recognition tiers (Bronze/Silver/Gold/Platinum), swag, conference sponsorship, nomination process; Good First Issue template (`.github/ISSUE_TEMPLATE/good_first_issue.md`)
+- **Good First Issue** label criteria added to `CONTRIBUTING.md`
+
+### Changed
+- `web-ui/src/components/LandingPage.tsx` — Added `AnimatedCluster` component (floating pod visualization), `GitHubStars` component (live star count from GitHub API), replaced generic "Other Platforms" comparison with 4-column matrix (KubeSynapse vs LangChain vs CrewAI vs Kubiya)
+- `deploy/prometheus/rules.yaml` — Expanded from 8 to 13 alert rules with Sprint 7 additions
+- `CONTRIBUTING.md` — Added Good First Issue criteria section
+
+### Verification
+- `npm run build` — ✅ 0 TypeScript errors (4606 modules)
+- `helm lint --strict` — ✅ passes (0 failures)
+- `ruff check` — ✅ 0 errors on all new code (benchmarks/, clients/)
+- `ruff check --fix` — ✅ auto-fixes applied, all clean
 
 ### Added
 - Production-grade SaaS landing page with animated particle background, typewriter hero, scroll parallax, and tabbed macOS terminal showcasing complete AIAgent/AgentWorkflow YAML examples (`web-ui/src/components/LandingPage.tsx`)
@@ -26,7 +160,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Security
 - Fixed 12 vulnerabilities in `api-gateway/auth_middleware.py` (CVSS up to 9.8):
-  - OIDC default `audience` changed from empty string to `kubesynth-gateway`
+  - OIDC default `audience` changed from empty string to `KubeSynapse-gateway`
   - Enforced HTTPS for OIDC endpoints via URL scheme validation
   - Added `Secure`, `HttpOnly`, `SameSite=Lax` flags to auth cookies
   - Made Bearer token parsing case-insensitive
@@ -59,7 +193,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - `helm lint --strict` passes with JSON Schema validation
   - Added `per-file-ignores` in `pyproject.toml` for intentional patterns
 - **Configuration Hardening**:
-  - `charts/kubesynth/values.schema.json` — comprehensive JSON Schema for Helm values
+  - `charts/kubesynapse/values.schema.json` — comprehensive JSON Schema for Helm values
   - `docs/configuration-reference.md` — documents every env var and Helm value
   - `deploy/values.dev.yaml`, `values.staging.yaml`, `values.production.yaml`
 - **Database & Migration Safety**:
@@ -103,47 +237,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - RUF003 en-dash characters replaced with hyphens in comments
 
 ### Removed
-- 75+ lines of duplicated constant and utility definitions from `api-gateway/main.py`
-- Unused `Code2` import from LandingPage.tsx
-- Legacy flake8 references from Makefile
-- OpenCode runtime adapter (`opencode-runtime/`)
-- Codex runtime adapter (`codex-runtime/`)
-- Alembic database migrations for operator (`operator/alembic.ini`, `operator/migrations/`)
-- Operator modularized into `controllers/`, `builders/`, `services/`
-- `operator/config.py`, `errors.py`, `reconcile.py`, `tracing.py` modules
-- 10 MCP sidecar images under `mcp-sidecars/`
-- Agent Helm sub-charts (`charts/agents/`)
-- Agent templates and skills catalog (`catalog/`)
-- `scripts/` directory for build, packaging, and lint scripts
-- `tests/` directory for cross-cutting integration tests
-- `docs/` directory consolidating all documentation
-- Apache 2.0 LICENSE
-- CONTRIBUTING.md and SECURITY.md
-- CHANGELOG.md (this file)
-
-### Changed
-- Repository reorganized: docs moved to `docs/`, tests to `tests/`, scripts to `scripts/`
-- README.md rewritten to reflect current state
-- .gitignore updated for all project languages
-- .gitignore now excludes transient local gateway state under `api-gateway/.local/` and ad-hoc `.pytest-*.txt` result captures
-- Makefile updated with all 17 container image targets
-- Goose runtime base image updated from removed `v1.0.18` tag to `latest`
-- Documentation updated to remove 33 false completion checkmarks in road-to-prod-audit.md
-- execution-plan.md updated to reflect operator modularization as DONE
-- architecture-overview.md updated with all 4 runtimes and complete directory map
-- INSTALL.md corrected to show 7 platform + 10 sidecar images (17 total)
-- Kubernetes version requirement updated to 1.25+ across all docs
-- INSTALL.md and `web-ui/README.md` now document the current local browser-QA flow: Vite dev on `5173`, gateway on `8080`, preview on `4173`, and local-auth + SQLite bootstrap for self-contained UI testing
-- The desktop web-ui shell now uses an elastic sidebar width instead of a fixed wide MCP/resource column on narrow desktop panes
-
-### Removed
 - 15+ junk/temporary files from repository root
 - Fake integration claims from landing page
-
-### Fixed
-- Broken relative link in `docs/walkthrough.md` (INSTALL.md path)
-- CLI framework incorrectly documented as "Click" (actually Typer + Rich)
-- Stale file path references in `docs/deployment-readme.md`
 
 ---
 
@@ -194,7 +289,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Goose runtime adapter
 - FastAPI API gateway with hybrid auth (shared token + OIDC)
 - React + TypeScript web console
-- Helm chart (`charts/kubesynth/`)
+- Helm chart (`charts/kubesynapse/`)
 - CLI tool (`agentctl`) built on Typer + Rich
 - MCP sidecar architecture with 3-tier execution model
 - Pre-built images published to `docker.io/yakdhane`

@@ -163,7 +163,7 @@ class ApprovalControllerTests(unittest.TestCase):
 
         enqueue_mock.assert_called_once()
         execute_mock.assert_called_once()
-        self.assertTrue(any(call.get("label_selector") == "kubesynth.ai/pending-approval=approval-one" for call in fake_api.calls))
+        self.assertTrue(any(call.get("label_selector") == "kubesynapse.ai/pending-approval=approval-one" for call in fake_api.calls))
 
     def test_terminal_decision_does_not_reprocess(self) -> None:
         fake_api = _FakeCustomObjectsApi([])

@@ -1,4 +1,4 @@
-# KubeSynth Multi-Agent Team — Quick Reference
+# KubeSynapse Multi-Agent Team — Quick Reference
 
 **Version:** 1.0  
 **Date:** 2026-04-23  
@@ -10,19 +10,19 @@
 
 ### Switch to the Primary Agent
 ```
-Press Tab in OpenCode until you see: [kubesynth-architect]
+Press Tab in OpenCode until you see: [KubeSynapse-architect]
 ```
 
 ### Invoke a Subagent Directly
 ```
-@kubesynth-ui-artist improve the chat workbench responsive layout
+@KubeSynapse-ui-artist improve the chat workbench responsive layout
 ```
 
 ### Let the Architect Delegate
 ```
-kubesynth-architect> The workflow controller has a race condition
+KubeSynapse-architect> The workflow controller has a race condition
 ```
-The architect will analyze and delegate to `@kubesynth-bug-hunter`.
+The architect will analyze and delegate to `@KubeSynapse-bug-hunter`.
 
 ---
 
@@ -30,14 +30,14 @@ The architect will analyze and delegate to `@kubesynth-bug-hunter`.
 
 | Agent | Color | Mode | Best For |
 |-------|-------|------|----------|
-| **`kubesynth-architect`** | Purple `#7C3AED` | **Primary** | Orchestration, planning, cross-cutting decisions |
-| **`kubesynth-ui-artist`** | Pink `#EC4899` | Subagent | React components, Tailwind CSS, accessibility, animations |
-| **`kubesynth-landing-magician`** | Cyan `#06B6D4` | Subagent | Landing pages, brand design, marketing site, scroll animations |
-| **`kubesynth-security-guardian`** | Red `#EF4444` | Subagent | Security audits, vulnerability scanning, auth review, compliance |
-| **`kubesynth-prod-engineer`** | Blue `#3B82F6` | Subagent | Helm hardening, probes, PDBs, logging, tracing, resource tuning |
-| **`kubesynth-docs-storyteller`** | Green `#10B981` | Subagent | README, guides, blog posts, demos, GitHub templates, benchmarks |
-| **`kubesynth-bug-hunter`** | Orange `#F97316` | Subagent | Bug investigation, regression tests, code quality, coverage |
-| **`kubesynth-backend-refactorer`** | Indigo `#6366F1` | Subagent | Operator logic, gateway APIs, runtime pipeline, SQLAlchemy |
+| **`KubeSynapse-architect`** | Purple `#7C3AED` | **Primary** | Orchestration, planning, cross-cutting decisions |
+| **`KubeSynapse-ui-artist`** | Pink `#EC4899` | Subagent | React components, Tailwind CSS, accessibility, animations |
+| **`KubeSynapse-landing-magician`** | Cyan `#06B6D4` | Subagent | Landing pages, brand design, marketing site, scroll animations |
+| **`KubeSynapse-security-guardian`** | Red `#EF4444` | Subagent | Security audits, vulnerability scanning, auth review, compliance |
+| **`KubeSynapse-prod-engineer`** | Blue `#3B82F6` | Subagent | Helm hardening, probes, PDBs, logging, tracing, resource tuning |
+| **`KubeSynapse-docs-storyteller`** | Green `#10B981` | Subagent | README, guides, blog posts, demos, GitHub templates, benchmarks |
+| **`KubeSynapse-bug-hunter`** | Orange `#F97316` | Subagent | Bug investigation, regression tests, code quality, coverage |
+| **`KubeSynapse-backend-refactorer`** | Indigo `#6366F1` | Subagent | Operator logic, gateway APIs, runtime pipeline, SQLAlchemy |
 
 ---
 
@@ -47,14 +47,14 @@ The architect will analyze and delegate to `@kubesynth-bug-hunter`.
 
 | Task | Agent | Example |
 |------|-------|---------|
-| Fix a UI bug or add a new component | `@kubesynth-ui-artist` | "Add loading skeletons to the agent list" |
-| Redesign the landing page | `@kubesynth-landing-magician` | "Create a hero section with terminal animation" |
-| Audit auth flow for vulnerabilities | `@kubesynth-security-guardian` | "Review JWT handling in the gateway" |
-| Add liveness probes to Helm chart | `@kubesynth-prod-engineer` | "Add probes and PDBs to all services" |
-| Rewrite README for OSS launch | `@kubesynth-docs-storyteller` | "Make README scannable with architecture diagram" |
-| Fix a race condition in worker | `@kubesynth-bug-hunter` | "Investigate workflow watchdog retry bug" |
-| Refactor 13k-line gateway into modules | `@kubesynth-backend-refactorer` | "Split main.py into routers/" |
-| Plan a multi-domain feature | `@kubesynth-architect` | "Plan the v0.2 release with UI + backend changes" |
+| Fix a UI bug or add a new component | `@KubeSynapse-ui-artist` | "Add loading skeletons to the agent list" |
+| Redesign the landing page | `@KubeSynapse-landing-magician` | "Create a hero section with terminal animation" |
+| Audit auth flow for vulnerabilities | `@KubeSynapse-security-guardian` | "Review JWT handling in the gateway" |
+| Add liveness probes to Helm chart | `@KubeSynapse-prod-engineer` | "Add probes and PDBs to all services" |
+| Rewrite README for OSS launch | `@KubeSynapse-docs-storyteller` | "Make README scannable with architecture diagram" |
+| Fix a race condition in worker | `@KubeSynapse-bug-hunter` | "Investigate workflow watchdog retry bug" |
+| Refactor 13k-line gateway into modules | `@KubeSynapse-backend-refactorer` | "Split main.py into routers/" |
+| Plan a multi-domain feature | `@KubeSynapse-architect` | "Plan the v0.2 release with UI + backend changes" |
 
 ---
 
@@ -65,10 +65,10 @@ The architect will analyze and delegate to `@kubesynth-bug-hunter`.
 User: "Our landing page needs a complete redesign"
 
 Architect: "I'll coordinate this. Let me delegate to the specialists."
-  → @kubesynth-landing-magician: "Design new landing page sections"
-  → @kubesynth-ui-artist: "Build the React components"
-  → @kubesynth-docs-storyteller: "Write the copy and CTA messages"
-  → @kubesynth-prod-engineer: "Ensure static assets are cached"
+  → @KubeSynapse-landing-magician: "Design new landing page sections"
+  → @KubeSynapse-ui-artist: "Build the React components"
+  → @KubeSynapse-docs-storyteller: "Write the copy and CTA messages"
+  → @KubeSynapse-prod-engineer: "Ensure static assets are cached"
 
 Architect: "Review and integrate all outputs. Done."
 ```
@@ -78,9 +78,9 @@ Architect: "Review and integrate all outputs. Done."
 User: "We're going production next week, need a security review"
 
 Architect: "Critical path. Delegating immediately."
-  → @kubesynth-security-guardian: "Full security audit of gateway and operator"
-  → @kubesynth-prod-engineer: "Harden Helm chart based on audit findings"
-  → @kubesynth-bug-hunter: "Add regression tests for security fixes"
+  → @KubeSynapse-security-guardian: "Full security audit of gateway and operator"
+  → @KubeSynapse-prod-engineer: "Harden Helm chart based on audit findings"
+  → @KubeSynapse-bug-hunter: "Add regression tests for security fixes"
 
 Architect: "Prioritize critical findings, plan remediation."
 ```
@@ -90,8 +90,8 @@ Architect: "Prioritize critical findings, plan remediation."
 User: "Workflow gets stuck in 'queued' state"
 
 Architect: "Routing to bug hunter."
-  → @kubesynth-bug-hunter: "Investigate workflow controller watchdog"
-  → @kubesynth-backend-refactorer: "Refactor worker state machine if needed"
+  → @KubeSynapse-bug-hunter: "Investigate workflow controller watchdog"
+  → @KubeSynapse-backend-refactorer: "Refactor worker state machine if needed"
 
 Architect: "Review fix and add regression test."
 ```
@@ -101,10 +101,10 @@ Architect: "Review fix and add regression test."
 User: "We need 1000 GitHub stars in 30 days"
 
 Architect: "Multi-pronged approach."
-  → @kubesynth-docs-storyteller: "Rewrite README, create blog posts, benchmarks"
-  → @kubesynth-landing-magician: "Build stunning landing page"
-  → @kubesynth-prod-engineer: "Add dev container for easy contribution"
-  → @kubesynth-ui-artist: "Polish the demo experience in Web UI"
+  → @KubeSynapse-docs-storyteller: "Rewrite README, create blog posts, benchmarks"
+  → @KubeSynapse-landing-magician: "Build stunning landing page"
+  → @KubeSynapse-prod-engineer: "Add dev container for easy contribution"
+  → @KubeSynapse-ui-artist: "Polish the demo experience in Web UI"
 
 Architect: "Coordinate launch timeline."
 ```
@@ -146,7 +146,7 @@ kubemininions/.opencode/agents/
 ```powershell
 # Windows
 taskkill /F /IM opencode.exe /IM OpenCode.exe
-cd C:\Users\ahmed\OneDrive\Desktop\repos\kubesynth\kubemininions
+cd C:\Users\ahmed\OneDrive\Desktop\repos\KubeSynapse\kubemininions
 opencode
 ```
 
@@ -158,7 +158,7 @@ opencode
 1. Create `~/.config/opencode/agents/my-agent.md`
 2. Use YAML frontmatter for config
 3. Add `mode: subagent`
-4. Add to `kubesynth-architect` task permissions
+4. Add to `KubeSynapse-architect` task permissions
 
 ### Change Models per Agent
 Edit the `model:` field in any agent's frontmatter:
@@ -181,7 +181,7 @@ model: openai/gpt-5
 3. Restart OpenCode: kill process and restart
 
 ### Task delegation fails
-1. Check `kubesynth-architect` has `permission.task` for that subagent
+1. Check `KubeSynapse-architect` has `permission.task` for that subagent
 2. Ensure subagent file exists and is readable
 3. Check `opencode agent list` shows the subagent
 
@@ -203,4 +203,4 @@ model: openai/gpt-5
 
 ---
 
-*Generated by the KubeSynth Architect agent team. For questions or improvements, delegate to `@kubesynth-docs-storyteller`.*
+*Generated by the KubeSynapse Architect agent team. For questions or improvements, delegate to `@KubeSynapse-docs-storyteller`.*

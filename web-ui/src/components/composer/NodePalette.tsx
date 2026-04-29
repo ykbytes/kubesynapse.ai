@@ -1,6 +1,6 @@
 import { useMemo, useState, type DragEvent } from "react";
 import type { AgentInfo } from "@/types";
-import { Bot, GripVertical, Search, ChevronDown, ChevronRight, PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { Bot, GripVertical, Search, ChevronDown, ChevronRight, PanelLeftClose, PanelLeftOpen, Plus } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -11,6 +11,7 @@ interface NodePaletteProps {
   agents: AgentInfo[];
   collapsed: boolean;
   onToggleCollapse: () => void;
+  onAddAgent?: (agentName: string) => void;
 }
 
 function statusDot(status?: string) {
@@ -23,7 +24,7 @@ function statusDot(status?: string) {
   return <span className={cn("h-1.5 w-1.5 rounded-full shrink-0", color)} />;
 }
 
-export function NodePalette({ agents, collapsed, onToggleCollapse }: NodePaletteProps) {
+export function NodePalette({ agents, collapsed, onToggleCollapse, onAddAgent }: NodePaletteProps) {
   const [search, setSearch] = useState("");
   const [groupCollapsed, setGroupCollapsed] = useState<Record<string, boolean>>({});
 
@@ -49,7 +50,7 @@ export function NodePalette({ agents, collapsed, onToggleCollapse }: NodePalette
   }, [filtered]);
 
   function onDragStart(e: DragEvent<HTMLDivElement>, agentName: string) {
-    e.dataTransfer.setData("application/kubesynth-agent", agentName);
+    e.dataTransfer.setData("application/kubesynapse-agent", agentName);
     e.dataTransfer.effectAllowed = "move";
   }
 
@@ -144,8 +145,8 @@ export function NodePalette({ agents, collapsed, onToggleCollapse }: NodePalette
                         draggable
                         onDragStart={(e) => onDragStart(e, a.name)}
                         className="flex items-center gap-1.5 rounded-lg border border-transparent bg-card/60 px-2 py-1.5 text-xs cursor-grab active:cursor-grabbing hover:bg-accent hover:border-border transition-colors group"
-                        title={`Drag "${a.name}" onto the canvas to add a step`}
-                        aria-label={`${a.name} — drag to add step`}
+                        title={`Drag or click + to add "${a.name}" as a step`}
+                        aria-label={`${a.name} — drag or click to add step`}
                       >
                         <GripVertical className="h-3 w-3 text-muted-foreground/30 group-hover:text-muted-foreground/60 shrink-0" />
                         <div className="min-w-0 flex-1">
@@ -159,6 +160,20 @@ export function NodePalette({ agents, collapsed, onToggleCollapse }: NodePalette
                             </div>
                           )}
                         </div>
+                        {onAddAgent && (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-5 w-5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onAddAgent(a.name);
+                            }}
+                            title={`Add "${a.name}" step`}
+                          >
+                            <Plus className="h-3 w-3" />
+                          </Button>
+                        )}
                       </div>
                     ))}
                   </div>

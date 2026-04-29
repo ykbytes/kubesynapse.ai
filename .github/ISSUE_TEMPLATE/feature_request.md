@@ -1,6 +1,6 @@
 ---
 name: Feature request
-about: Suggest an idea for KubeSynth
+about: Suggest an idea for KubeSynapse
 title: "[FEATURE] "
 labels: enhancement
 triage: true

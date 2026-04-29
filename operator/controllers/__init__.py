@@ -28,11 +28,11 @@ _import_controller("status_projection")
 
 def _optional_controller(module_name: str, plural: str) -> None:
     """Import an optional controller only when its CRD exists."""
-    if crd_exists("kubesynth.ai", "v1alpha1", plural):
+    if crd_exists("kubesynapse.ai", "v1alpha1", plural):
         _import_controller(module_name)
         return
     logger.warning(
-        "Skipping optional controller '%s' because CRD '%s.kubesynth.ai' is not installed.",
+        "Skipping optional controller '%s' because CRD '%s.kubesynapse.ai' is not installed.",
         module_name,
         plural,
     )

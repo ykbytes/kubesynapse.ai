@@ -1,6 +1,6 @@
-# KubeSynth Operator Guide
+# KubeSynapse Operator Guide
 
-**Who is this for:** Platform engineers, SREs, and cluster operators responsible for running KubeSynth in production.
+**Who is this for:** Platform engineers, SREs, and cluster operators responsible for running KubeSynapse in production.
 
 This guide covers monitoring, alerting, scaling, upgrades, backups, troubleshooting, and capacity planning.
 
@@ -39,7 +39,7 @@ This guide covers monitoring, alerting, scaling, upgrades, backups, troubleshoot
 **Operator reconciliation rate:**
 
 ```promql
-rate(kubesynth_operator_reconciliations_total[5m])
+rate(KubeSynapse_operator_reconciliations_total[5m])
 ```
 
 **Agent pod restarts:**
@@ -52,7 +52,7 @@ increase(kube_pod_container_status_restarts_total{namespace=~".*"}[1h])
 
 ```promql
 histogram_quantile(0.99,
-  rate(http_request_duration_seconds_bucket{job="kubesynth-api-gateway"}[5m])
+  rate(http_request_duration_seconds_bucket{job="kubesynapse-api-gateway"}[5m])
 )
 ```
 
@@ -65,7 +65,7 @@ rate(litellm_request_errors_total[5m])
 **Active approvals (pending human decision):**
 
 ```promql
-kubesynth_approvals_pending_total{namespace=~".*"}
+KubeSynapse_approvals_pending_total{namespace=~".*"}
 ```
 
 ### Grafana Dashboards
@@ -90,11 +90,11 @@ Deploy `deploy/prometheus/rules.yaml` to your Prometheus instance. Key rules:
 
 | Alert | Severity | Meaning | Runbook |
 |-------|----------|---------|---------|
-| `KubeSynthAgentPodDown` | Critical | Agent runtime pod not ready for > 5 min | Check pod events, OOM, image pull |
-| `KubeSynthWorkflowFailureRateHigh` | Warning | > 5% workflow steps failing | Inspect worker logs, artifacts |
-| `KubeSynthApiErrorRateHigh` | Critical | Gateway error rate > 1% | Check gateway logs, DB connectivity |
-| `KubeSynthLiteLLMUnhealthy` | Critical | LiteLLM health endpoint failing | Verify provider keys, LiteLLM logs |
-| `KubeSynthStepTimeoutRateHigh` | Warning | > 10% steps timing out | Increase worker deadline, check LLM latency |
+| `KubeSynapseAgentPodDown` | Critical | Agent runtime pod not ready for > 5 min | Check pod events, OOM, image pull |
+| `KubeSynapseWorkflowFailureRateHigh` | Warning | > 5% workflow steps failing | Inspect worker logs, artifacts |
+| `KubeSynapseApiErrorRateHigh` | Critical | Gateway error rate > 1% | Check gateway logs, DB connectivity |
+| `KubeSynapseLiteLLMUnhealthy` | Critical | LiteLLM health endpoint failing | Verify provider keys, LiteLLM logs |
+| `KubeSynapseStepTimeoutRateHigh` | Warning | > 10% steps timing out | Increase worker deadline, check LLM latency |
 
 ### Alertmanager Routing Suggestions
 
@@ -110,7 +110,7 @@ route:
         severity: critical
       receiver: 'pagerduty-platform'
     - match:
-        alertname: KubeSynthLiteLLMUnhealthy
+        alertname: KubeSynapseLiteLLMUnhealthy
       receiver: 'ml-ops-oncall'
 ```
 
@@ -166,27 +166,27 @@ agentRuntime:
 1. **Review the changelog:**
 
    ```bash
-   curl -sL https://github.com/kubesynth/kubesynth/releases/latest
+   curl -sL https://github.com/kubesynapse/kubesynapse/releases/latest
    ```
 
 2. **Backup critical state:**
 
    ```bash
-   kubectl exec -n kubesynth deploy/kubesynth-api-gateway -- \
+   kubectl exec -n kubesynapse deploy/kubesynapse-api-gateway -- \
      sh -c 'cp /data/auth.db /backups/auth.db.$(date +%s)'
    ```
 
 3. **Upgrade the chart:**
 
    ```bash
-   helm upgrade kubesynth oci://docker.io/kubesynth/charts/kubesynth \
-     -n kubesynth -f values-production.yaml
+   helm upgrade KubeSynapse oci://docker.io/kubesynapse/charts/kubesynapse \
+     -n kubesynapse -f values-production.yaml
    ```
 
 4. **Verify CRD changes:**
 
    ```bash
-   kubectl get crds | grep kubesynth
+   kubectl get crds | grep KubeSynapse
    ```
 
 5. **Smoke test:**
@@ -228,11 +228,11 @@ agentRuntime:
 
 ```bash
 #!/bin/bash
-NAMESPACE=kubesynth
+NAMESPACE=KubeSynapse
 DATE=$(date +%Y%m%d-%H%M%S)
 
 # Auth DB
-kubectl exec -n $NAMESPACE deploy/kubesynth-api-gateway -- \
+kubectl exec -n $NAMESPACE deploy/kubesynapse-api-gateway -- \
   sh -c 'sqlite3 /data/auth.db .dump' > auth-db-$DATE.sql
 
 # CRDs
@@ -241,8 +241,8 @@ for crd in aiagents agentworkflows agentevals agentpolicies agentapprovals agent
 done
 
 # Agent state PVCs (using Velero)
-velero backup create kubesynth-agents-$DATE \
-  --selector app.kubernetes.io/part-of=kubesynth
+velero backup create KubeSynapse-agents-$DATE \
+  --selector app.kubernetes.io/part-of=KubeSynapse
 ```
 
 ### Restore Procedure
@@ -260,7 +260,7 @@ velero backup create kubesynth-agents-$DATE \
 
 | Symptom | Likely Cause | Fix |
 |---------|--------------|-----|
-| Operator pod CrashLoopBackOff | Missing RBAC permissions | Check ClusterRoleBindings, verify `kubesynth-operator-sa` |
+| Operator pod CrashLoopBackOff | Missing RBAC permissions | Check ClusterRoleBindings, verify `kubesynapse-operator-sa` |
 | Reconciliation stuck | K8s API rate limiting | Increase QPS/burst in operator config, check API server health |
 | Agent StatefulSet not created | Invalid agent spec | Check `kubectl describe aiagent`, review validation errors |
 | Workflow jobs not spawning | Worker resource quota exceeded | Increase namespace quotas or reduce worker CPU/memory requests |
@@ -271,16 +271,16 @@ velero backup create kubesynth-agents-$DATE \
 
 ```bash
 # Operator logs
-kubectl logs -n kubesynth deployment/kubesynth-operator -f
+kubectl logs -n kubesynapse deployment/kubesynapse-operator -f
 
 # Recent events
-kubectl get events -n kubesynth --sort-by='.lastTimestamp' | tail -20
+kubectl get events -n kubesynapse --sort-by='.lastTimestamp' | tail -20
 
 # Reconciliation latency
-kubectl logs -n kubesynth deployment/kubesynth-operator | grep "reconcile"
+kubectl logs -n kubesynapse deployment/kubesynapse-operator | grep "reconcile"
 
 # Leader election status
-kubectl get leases -n kubesynth
+kubectl get leases -n kubesynapse
 
 # Describe a stuck agent
 kubectl describe aiagent my-agent -n default
@@ -295,7 +295,7 @@ kubectl describe statefulset my-agent -n default
 
 | Secret | Rotation Method | Impact |
 |--------|-----------------|--------|
-| **JWT signing key** | `kubectl rollout restart deploy/kubesynth-api-gateway` | Users must re-login |
+| **JWT signing key** | `kubectl rollout restart deploy/kubesynapse-api-gateway` | Users must re-login |
 | **LLM API keys** | Update ExternalSecret or Helm values | No downtime if using External Secrets Operator |
 | **Database password** | Update Helm values, restart gateway | Brief DB reconnect |
 | **MCP auth tokens** | Rotate `mcp-auth` secret, restart affected agents | Agents restart one by one |
@@ -306,8 +306,8 @@ kubectl describe statefulset my-agent -n default
 apiVersion: external-secrets.io/v1beta1
 kind: ExternalSecret
 metadata:
-  name: kubesynth-litellm-key
-  namespace: kubesynth
+  name: KubeSynapse-litellm-key
+  namespace: KubeSynapse
 spec:
   refreshInterval: 1h
   secretStoreRef:
@@ -318,7 +318,7 @@ spec:
   data:
     - secretKey: api-key
       remoteRef:
-        key: secret/data/kubesynth/litellm
+        key: secret/data/KubeSynapse/litellm
         property: api-key
 ```
 

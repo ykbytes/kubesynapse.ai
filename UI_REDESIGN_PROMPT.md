@@ -1,4 +1,4 @@
-# KubeSynthAI Web UI — Redesign Prompt
+# KubeSynapseAI Web UI — Redesign Prompt
 
 ## Current UI Overview
 
@@ -71,7 +71,7 @@ Use this prompt with AI image generators (Midjourney, DALL-E 3, v0 by Vercel, et
 ### Master Prompt: Complete UI Redesign
 
 ```
-Redesign the web UI for "KubeSynthAI" — a Kubernetes-native AI agent orchestration platform. The current UI is a feature-rich but visually dense dashboard built with React, Tailwind CSS, and shadcn/ui components. Create a modern, clean, and highly usable redesign that addresses the following:
+Redesign the web UI for "KubeSynapseAI" — a Kubernetes-native AI agent orchestration platform. The current UI is a feature-rich but visually dense dashboard built with React, Tailwind CSS, and shadcn/ui components. Create a modern, clean, and highly usable redesign that addresses the following:
 
 **Design System:**
 - Keep the dark theme as default (OKLCH-based: bg oklch(0.145 0.008 274), primary teal oklch(0.65 0.13 175))
@@ -204,32 +204,32 @@ Inspired by Linear, Vercel Dashboard, and Raycast — clean, dense but not clutt
 
 #### Prompt: Agents List + Detail View
 ```
-Design a dashboard view for "KubeSynthAI" showing a list of AI agents as cards in a 3-column grid. Each card shows: agent name (bold), a colored runtime badge (LangGraph=purple, Goose=green, OpenCode=blue), a green status dot, the model name in muted text, last activity time, and a small sparkline chart showing invocation count. Top of page has a "New Agent" primary button and a filter bar with search input, runtime dropdown, and status filter. Right side has a 320px context panel showing recent activity feed and agent stats. Dark theme with OKLCH colors: background oklch(0.145 0.008 274), cards oklch(0.185 0.011 274), primary teal oklch(0.65 0.13 175). Clean, Linear-inspired design.
+Design a dashboard view for "KubeSynapseAI" showing a list of AI agents as cards in a 3-column grid. Each card shows: agent name (bold), a colored runtime badge (LangGraph=purple, Goose=green, OpenCode=blue), a green status dot, the model name in muted text, last activity time, and a small sparkline chart showing invocation count. Top of page has a "New Agent" primary button and a filter bar with search input, runtime dropdown, and status filter. Right side has a 320px context panel showing recent activity feed and agent stats. Dark theme with OKLCH colors: background oklch(0.145 0.008 274), cards oklch(0.185 0.011 274), primary teal oklch(0.65 0.13 175). Clean, Linear-inspired design.
 ```
 
 #### Prompt: Chat Workbench
 ```
-Design a chat interface for "KubeSynthAI" — an AI agent workbench. Left sidebar (280px) shows a searchable list of chat sessions with last message preview. Main area shows a message thread with grouped "turns" — each turn has a collapsible header showing turn number, duration, and status. Inside a turn: user message (right-aligned bubble), agent thinking section (collapsed by default), tool call badges (compact inline pills showing tool name and status), and the agent's final response. Bottom compose bar has text input, model selector dropdown, and send button. Below compose bar: quick action chips (Subagents, A2A Delegate, Artifacts). Dark theme, clean spacing, Inter font for body text. Professional developer tool aesthetic.
+Design a chat interface for "KubeSynapseAI" — an AI agent workbench. Left sidebar (280px) shows a searchable list of chat sessions with last message preview. Main area shows a message thread with grouped "turns" — each turn has a collapsible header showing turn number, duration, and status. Inside a turn: user message (right-aligned bubble), agent thinking section (collapsed by default), tool call badges (compact inline pills showing tool name and status), and the agent's final response. Bottom compose bar has text input, model selector dropdown, and send button. Below compose bar: quick action chips (Subagents, A2A Delegate, Artifacts). Dark theme, clean spacing, Inter font for body text. Professional developer tool aesthetic.
 ```
 
 #### Prompt: Workflow Composer
 ```
-Design a full-screen workflow DAG editor for "KubeSynthAI". A large canvas with a subtle dot grid background shows interconnected nodes representing agent steps. Nodes are rectangular with rounded corners, a colored left border strip (blue/purple/green), an icon, the agent name, and a small status badge in the top-right corner. Edges are animated dashed lines showing data flow. A floating toolbar (top-left) has undo, redo, auto-layout, zoom controls, and a "Run" button. A node palette (top-right, floating) has draggable step types. A minimap in the bottom-right shows the full graph overview. One node is selected, and a properties panel slides in from the right showing configuration fields. Dark theme, sleek, inspired by React Flow and Figma.
+Design a full-screen workflow DAG editor for "KubeSynapseAI". A large canvas with a subtle dot grid background shows interconnected nodes representing agent steps. Nodes are rectangular with rounded corners, a colored left border strip (blue/purple/green), an icon, the agent name, and a small status badge in the top-right corner. Edges are animated dashed lines showing data flow. A floating toolbar (top-left) has undo, redo, auto-layout, zoom controls, and a "Run" button. A node palette (top-right, floating) has draggable step types. A minimap in the bottom-right shows the full graph overview. One node is selected, and a properties panel slides in from the right showing configuration fields. Dark theme, sleek, inspired by React Flow and Figma.
 ```
 
 #### Prompt: Observability Dashboard
 ```
-Design an observability dashboard for "KubeSynthAI" — an AI agent platform. Top row: 4 KPI cards showing Total Invocations Today (12,847, ↑12%), Avg Response Time (2.3s, ↓5%), Workflow Success Rate (97.8%), Token Cost This Month ($1,247). Below: a large line chart showing invocations over time (7 days), an area chart for error rate, a stacked bar chart for token cost breakdown by agent, and a donut chart for workflow success/failure ratio. Bottom section: an alerts table with severity icons, messages, sources, and timestamps. Tabs at top: Overview | Agents | Workflows | Costs | Alerts | Audit Log. Dark theme with teal accent, clean data visualization, modern SaaS dashboard aesthetic.
+Design an observability dashboard for "KubeSynapseAI" — an AI agent platform. Top row: 4 KPI cards showing Total Invocations Today (12,847, ↑12%), Avg Response Time (2.3s, ↓5%), Workflow Success Rate (97.8%), Token Cost This Month ($1,247). Below: a large line chart showing invocations over time (7 days), an area chart for error rate, a stacked bar chart for token cost breakdown by agent, and a donut chart for workflow success/failure ratio. Bottom section: an alerts table with severity icons, messages, sources, and timestamps. Tabs at top: Overview | Agents | Workflows | Costs | Alerts | Audit Log. Dark theme with teal accent, clean data visualization, modern SaaS dashboard aesthetic.
 ```
 
 #### Prompt: Policies Editor
 ```
-Design a policy editor for "KubeSynthAI". Split layout: left 60% is a Monaco code editor showing a YAML policy document with syntax highlighting. Right 40% is an info panel showing: policy name, description, validation status (green checkmark), affected agents list (4 agents with status badges), and a policy effect summary chart. Bottom of editor: a problems panel showing validation errors (currently none). Left edge: a template library sidebar with pre-built policy templates (Input Guardrails, Output Filtering, Tool Restrictions, Model Allowlist). Dark theme, professional developer tool aesthetic, clean typography.
+Design a policy editor for "KubeSynapseAI". Split layout: left 60% is a Monaco code editor showing a YAML policy document with syntax highlighting. Right 40% is an info panel showing: policy name, description, validation status (green checkmark), affected agents list (4 agents with status badges), and a policy effect summary chart. Bottom of editor: a problems panel showing validation errors (currently none). Left edge: a template library sidebar with pre-built policy templates (Input Guardrails, Output Filtering, Tool Restrictions, Model Allowlist). Dark theme, professional developer tool aesthetic, clean typography.
 ```
 
 #### Prompt: Mobile Responsive View
 ```
-Design a mobile view of "KubeSynthAI" on an iPhone-sized screen. Bottom tab bar with 5 icons: Agents, Workflows, Chat, Observability, More. Main screen shows agent cards in a single-column list — each card has agent name, runtime badge, status dot, and last activity time. Top bar has hamburger menu (left), brand logo (center), notification bell and search icon (right). Pull-to-refresh gesture implied. Dark theme, large touch targets (44px minimum), clean mobile layout. Professional app aesthetic.
+Design a mobile view of "KubeSynapseAI" on an iPhone-sized screen. Bottom tab bar with 5 icons: Agents, Workflows, Chat, Observability, More. Main screen shows agent cards in a single-column list — each card has agent name, runtime badge, status dot, and last activity time. Top bar has hamburger menu (left), brand logo (center), notification bell and search icon (right). Pull-to-refresh gesture implied. Dark theme, large touch targets (44px minimum), clean mobile layout. Professional app aesthetic.
 ```
 
 ---
@@ -265,4 +265,4 @@ If implementing incrementally, tackle in this order:
 
 ---
 
-*Generated for KubeSynthAI Web UI — React + Tailwind CSS + shadcn/ui dashboard.*
+*Generated for KubeSynapseAI Web UI — React + Tailwind CSS + shadcn/ui dashboard.*

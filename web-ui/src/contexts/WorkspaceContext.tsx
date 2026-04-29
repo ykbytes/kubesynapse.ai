@@ -599,13 +599,13 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
 
       const payload: CreateAgentPayload = {
         name: agentName, model: createAgentModel.trim(), system_prompt: createAgentSystemPrompt.trim(),
-        runtime_kind: "opencode",
+        runtime_kind: createAgentRuntimeKind,
         mcp_connection_ids: createAgentMcpConnectionIds,
         mcp_servers: createAgentMcpConnectionIds.length === 0 ? mcpServers : undefined,
         mcp_sidecars: createAgentMcpConnectionIds.length === 0 ? mcpSidecars : undefined,
         a2a_config: allowedCallers.length > 0 ? { allowed_callers: allowedCallers } : undefined,
         skills: Object.keys(skillFiles).length > 0 ? { files: skillFiles } : undefined,
-        opencode_config_files: opencodeConfigFiles,
+        opencode_config_files: createAgentRuntimeKind === "opencode" ? opencodeConfigFiles : undefined,
         git_config: createAgentGitForm.enabled ? {
           repo_url: createAgentGitForm.repoUrl, default_branch: createAgentGitForm.defaultBranch || "main",
           branch: createAgentGitForm.branch || undefined,
@@ -655,12 +655,13 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         return;
       }
       const allowedCallers = parseA2APeerRefsText(a2aAllowedCallersText);
+      const nextRuntimeKind = payload.runtime_kind ?? selectedAgentDetail?.runtime_kind ?? "opencode";
       const nextPayload: UpdateAgentPayload = {
         ...payload,
-        runtime_kind: "opencode",
+        runtime_kind: nextRuntimeKind,
         a2a_config: { allowed_callers: allowedCallers },
         skills: { files: skillFiles },
-        opencode_config_files: opencodeConfigFiles,
+        opencode_config_files: nextRuntimeKind === "opencode" ? opencodeConfigFiles : undefined,
         github_config: null,
       };
       const updated = await updateAgent(token, namespace, selectedAgentName, nextPayload);

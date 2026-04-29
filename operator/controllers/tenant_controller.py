@@ -27,7 +27,7 @@ logger = logging.getLogger("operator.controllers.tenant")
 # Kopf handlers
 # ---------------------------------------------------------------------------
 
-@kopf.on.create("kubesynth.ai", "v1alpha1", "agenttenants")  # type: ignore[arg-type]
+@kopf.on.create("kubesynapse.ai", "v1alpha1", "agenttenants")  # type: ignore[arg-type]
 def create_tenant(spec: dict[str, Any], name: str, logger: logging.Logger, **kwargs: Any) -> None:
     del kwargs
     _reconcile_tenant(spec, name, logger)
@@ -75,9 +75,9 @@ def _reconcile_tenant(spec: dict[str, Any], name: str, logger: logging.Logger) -
             metadata=kubernetes.client.V1ObjectMeta(
                 name=target_ns,
                 labels={
-                    "managed-by": "kubesynth",
+                    "managed-by": "kubesynapse",
                     "tenant": tenant_name,
-                    "kubesynth.ai/tenant": "true",
+                    "kubesynapse.ai/tenant": "true",
                 },
             )
         )
@@ -156,7 +156,7 @@ def _reconcile_tenant(spec: dict[str, Any], name: str, logger: logging.Logger) -
             metadata=kubernetes.client.V1ObjectMeta(name=f"{tenant_name}-agent-admin", namespace=target_ns),
             rules=[
                 kubernetes.client.V1PolicyRule(
-                    api_groups=["kubesynth.ai"],
+                    api_groups=["kubesynapse.ai"],
                     resources=["aiagents", "agentpolicies", "agentapprovals", "agentworkflows", "agentevals"],
                     verbs=["*"],
                 ),
@@ -244,7 +244,7 @@ def _reconcile_tenant(spec: dict[str, Any], name: str, logger: logging.Logger) -
         )
 
 
-@kopf.on.delete("kubesynth.ai", "v1alpha1", "agenttenants")  # type: ignore[arg-type]
+@kopf.on.delete("kubesynapse.ai", "v1alpha1", "agenttenants")  # type: ignore[arg-type]
 def delete_tenant(spec: dict[str, Any], name: str, logger: logging.Logger, **kwargs: Any) -> None:
     del kwargs
     tenant_name = spec.get("tenantName", name)
@@ -309,7 +309,7 @@ def delete_tenant(spec: dict[str, Any], name: str, logger: logging.Logger, **kwa
     )
 
 
-@kopf.on.update("kubesynth.ai", "v1alpha1", "agenttenants")  # type: ignore[arg-type]
+@kopf.on.update("kubesynapse.ai", "v1alpha1", "agenttenants")  # type: ignore[arg-type]
 def update_tenant(spec: dict[str, Any], name: str, logger: logging.Logger, **kwargs: Any) -> None:
     del kwargs
     execute_reconcile(
@@ -325,7 +325,7 @@ def update_tenant(spec: dict[str, Any], name: str, logger: logging.Logger, **kwa
     )
 
 
-@kopf.on.resume("kubesynth.ai", "v1alpha1", "agenttenants")  # type: ignore[arg-type]
+@kopf.on.resume("kubesynapse.ai", "v1alpha1", "agenttenants")  # type: ignore[arg-type]
 def resume_tenant(spec: dict[str, Any], name: str, logger: logging.Logger, **kwargs: Any) -> None:
     del kwargs
     execute_reconcile(

@@ -1,6 +1,6 @@
 # Road to Production: Architecture Audit & Competitive Readiness Blueprint
 
-> **Scope**: Full-depth audit of the `kubesynth` agent orchestration platform — operator, runtimes, API gateway, Helm chart, and supporting infrastructure — with actionable rewrites and standards alignment for production-grade credibility.
+> **Scope**: Full-depth audit of the `KubeSynapse` agent orchestration platform — operator, runtimes, API gateway, Helm chart, and supporting infrastructure — with actionable rewrites and standards alignment for production-grade credibility.
 
 ---
 
@@ -402,7 +402,7 @@ The gateway validates JWTs but delegates authentication flows to the auth servic
 
 ### 5.1 — Monolithic Chart (P1)
 
-**Problem**: A single `kubesynth` chart deploys the entire platform: PostgreSQL, Redis, Qdrant, NATS, LiteLLM, Operator, API Gateway, Web UI, CRDs, RBAC, NetworkPolicies. This is ~26 templates in one chart.
+**Problem**: A single `KubeSynapse` chart deploys the entire platform: PostgreSQL, Redis, Qdrant, NATS, LiteLLM, Operator, API Gateway, Web UI, CRDs, RBAC, NetworkPolicies. This is ~26 templates in one chart.
 
 **Impact**:
 - Cannot upgrade infrastructure components (PostgreSQL) separately from the application (operator)
@@ -1072,7 +1072,7 @@ stages:
     
   integration-test:
     - kind create cluster
-    - helm install kubesynth
+    - helm install KubeSynapse
     - pytest tests/integration/ --timeout=300
     
   security:

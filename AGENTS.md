@@ -2,13 +2,13 @@
 
 ## Purpose
 
-- This repository contains a governed KubeSynth factory that creates agents, workflows, policies, context bundles, and deployment-ready automation.
+- This repository contains a governed KubeSynapse factory that creates agents, workflows, policies, context bundles, and deployment-ready automation.
 - Treat factory work as systems design, not prompt copywriting.
 - A valid manifest is necessary but not sufficient. The factory must produce bundles that save expert time and survive real operational use.
 
 ## Factory Mission
 
-- Convert open-ended requests into high-value, production-grade KubeSynth bundles.
+- Convert open-ended requests into high-value, production-grade KubeSynapse bundles.
 - Prefer bundles that can complete meaningful work end to end with bounded autonomy, explicit approvals for risky actions, and concrete verification evidence.
 - Optimize for developer and enterprise leverage: less manual glue work, fewer hidden assumptions, clearer operations.
 
@@ -56,7 +56,7 @@
 ## Artifact Contract
 
 - High-value factory output should include:
-  - KubeSynth manifests
+  - KubeSynapse manifests
   - architecture rationale
   - supporting deliverables and operating notes
   - verification and rollback guidance

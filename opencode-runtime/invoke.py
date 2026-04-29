@@ -85,6 +85,7 @@ from opencode_client import (
 )
 from prompts import (
     AUTONOMY_SYSTEM_PROMPT,
+    KUBESYNAPSE_AGENT_SYSTEM_PROMPT,
     build_format_system_prompt,
     build_handoff_resumption_prompt,
     build_recovery_prompt,
@@ -220,10 +221,10 @@ def build_outbound_a2a_team_context(
 
 
 def build_gateway_a2a_jsonrpc_payload(payload: dict[str, Any], request_id: str) -> dict[str, Any]:
-    kubesynth_invoke: dict[str, Any] = {}
+    KUBESYNAPSE_invoke: dict[str, Any] = {}
     thread_id = str(payload.get("thread_id") or "").strip()
     if thread_id:
-        kubesynth_invoke["threadId"] = thread_id
+        KUBESYNAPSE_invoke["threadId"] = thread_id
 
     for source_key, target_key in (
         ("system", "system"),
@@ -235,11 +236,11 @@ def build_gateway_a2a_jsonrpc_payload(payload: dict[str, Any], request_id: str) 
     ):
         value = str(payload.get(source_key) or "").strip()
         if value:
-            kubesynth_invoke[target_key] = value
+            KUBESYNAPSE_invoke[target_key] = value
 
     team_context = payload.get("team_context")
     if isinstance(team_context, dict) and team_context:
-        kubesynth_invoke["teamContext"] = team_context
+        KUBESYNAPSE_invoke["teamContext"] = team_context
 
     params: dict[str, Any] = {
         "message": {
@@ -248,8 +249,8 @@ def build_gateway_a2a_jsonrpc_payload(payload: dict[str, Any], request_id: str) 
             "parts": [{"text": str(payload.get("prompt") or ""), "mediaType": "text/plain"}],
         }
     }
-    if kubesynth_invoke:
-        params["metadata"] = {"kubesynthInvoke": kubesynth_invoke}
+    if KUBESYNAPSE_invoke:
+        params["metadata"] = {"KubeSynapseInvoke": KUBESYNAPSE_invoke}
 
     return {
         "jsonrpc": "2.0",
@@ -822,6 +823,7 @@ def invoke_opencode(request: InvokeRequest, stream_callback: StreamCallback = No
 
     system_prompt = combine_system_prompt(
         AUTONOMY_SYSTEM_PROMPT if request.autonomous else None,
+        KUBESYNAPSE_AGENT_SYSTEM_PROMPT,
         DEFAULT_SYSTEM_PROMPT,
         request.system,
         pre_auth_prompt,

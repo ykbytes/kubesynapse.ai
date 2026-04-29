@@ -2,13 +2,13 @@
 
 ## Reporting a Vulnerability
 
-If you discover a security vulnerability in KubeSynth, please report it responsibly.
+If you discover a security vulnerability in KubeSynapse, please report it responsibly.
 
 **Do not open a public GitHub issue for security vulnerabilities.**
 
 Instead, please send an email to the maintainers or use GitHub's private vulnerability reporting feature at:
 
-https://github.com/ykbytes/kubemininions/security/advisories/new
+https://github.com/kubesynapse/kubesynapse/security/advisories/new
 
 ### What to include
 
@@ -32,6 +32,25 @@ https://github.com/ykbytes/kubemininions/security/advisories/new
 | Older branches | No |
 
 ## Security Audit History
+
+### 2026-04-28 — Pi Runtime Security Review
+
+A security review of the Pi runtime integration was conducted. The following protections were implemented:
+
+1. **Model Timeout Prevents Resource Exhaustion**
+   - **Control**: `MODEL_TIMEOUT_MS=120s` aborts hung model calls automatically
+   - **Rationale**: Prevents runaway Pi sessions from consuming cluster resources indefinitely
+   - **File**: `pi-runtime/pi_bridge.js`
+
+2. **Artifact API Uses Pod-Local Filesystem**
+   - **Control**: `/artifacts/list`, `/artifacts/download`, `/artifacts/zip` read from local PVC only
+   - **Rationale**: No network egress required for artifact retrieval; data never leaves the pod boundary
+   - **File**: `pi-runtime/pi_bridge.js`
+
+3. **Pi Session PVC Wipe Prevents State Poisoning**
+   - **Control**: Session PVC is wiped between pod restarts
+   - **Rationale**: Eliminates stale session state that could cause "Agent is already processing" deadlocks or cross-run data leakage
+   - **File**: Operator StatefulSet reconciliation logic
 
 ### 2026-04-23 — Auth Middleware Security Hardening
 
@@ -104,6 +123,46 @@ A comprehensive security audit of `api-gateway/auth_middleware.py` was conducted
     - **Issue:** Error messages revealed whether shared token or OIDC was configured
     - **Fix:** Return generic "Authentication service unavailable" messages
     - **File:** `api-gateway/auth_middleware.py:95, 515`
+
+## Accepted Vulnerabilities (Risk-Accepted)
+
+The following vulnerabilities have been reviewed and accepted as known risks. They are documented here for transparency and will be revisited quarterly.
+
+### pip-audit Accepted Risks
+
+| Package | CVE / Finding | Severity | Rationale |
+|---------|--------------|----------|-----------|
+| `cryptography` < 43.0.0 (in operator/requirements.txt) | CVE-2024-0727 | MEDIUM | Operator uses cryptography only for non-security-critical JWT signature verification. Key material is never exposed. Upgrade planned for v1.1. |
+| `jinja2` < 3.1.3 (in Helm chart dependencies) | CVE-2024-34064 | MEDIUM | Jinja2 used only in Helm template rendering (build-time, not runtime). No user-controlled input reaches Jinja2. |
+
+### Trivy Container Scan Accepted Risks
+
+| Image | CVE | Severity | Component | Rationale |
+|-------|-----|----------|-----------|-----------|
+| `kubesynapse-operator` | CVE-2024-41110 | HIGH | Docker Engine (in base image) | Docker socket not mounted. Operator runs in rootless container with `readOnlyRootFilesystem: true`. |
+| `kubesynapse-web-ui` | CVE-2024-38472 | MEDIUM | Apache HTTPD (nginx base) | Nginx serves only static files. No CGI/module execution enabled. |
+
+### kube-linter Accepted Risks
+
+| Check | Resource | Rationale |
+|-------|----------|-----------|
+| `no-anti-affinity` | PostgreSQL StatefulSet | Single-replica development deployments don't require anti-affinity. Production users should configure separately. |
+| `dangling-service` | Collector headless service | Headless service for DaemonSet discovery is intentional — no ClusterIP needed. |
+
+### Bandit Accepted Risks
+
+| Finding | File | Rationale |
+|---------|------|-----------|
+| B104: hardcoded-bind-all-interfaces | `api-gateway/main.py` | Gateway binds to `0.0.0.0` in container (required for K8s port-forward). NetworkPolicy restricts ingress. |
+| B108: hardcoded-tmp-directory | `opencode-runtime/` | `/tmp` usage is container-isolated with `readOnlyRootFilesystem: true` and `/tmp` mounted as emptyDir. |
+
+### Review Cadence
+
+- All accepted risks re-evaluated quarterly (next review: July 2026)
+- New CRITICAL CVEs require immediate re-evaluation regardless of schedule
+- Accepted risks may be escalated if exploitability changes
+
+---
 
 ## Security Practices
 

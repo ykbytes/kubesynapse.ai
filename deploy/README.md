@@ -1,8 +1,8 @@
-# KubeSynth Deployment Guide
+# KubeSynapse Deployment Guide
 
 ## Quick Start (Docker Compose)
 
-The fastest way to run KubeSynth locally:
+The fastest way to run KubeSynapse locally:
 
 ```bash
 # Start the full stack
@@ -37,7 +37,7 @@ make compose-down
 ### Default Credentials
 
 - **Shared Token**: `dev-shared-token-change-in-production`
-- **Postgres**: `kubesynth` / `kubesynth-dev-password`
+- **Postgres**: `kubesynapse` / `kubesynapse-dev-password`
 
 ⚠️ **Change these before exposing to the internet.**
 
@@ -73,7 +73,7 @@ REGISTRY=ghcr.io/myorg VERSION=v1.2.3 make docker-build
 
 ```bash
 # Create namespace and install
-kubectl create namespace kubesynth
+kubectl create namespace kubesynapse
 make k8s-install
 
 # Or with custom values
@@ -97,6 +97,29 @@ make k8s-uninstall
 ```bash
 make k8s-port-forward
 ```
+
+---
+
+## Kind Development Loop
+
+For local development with [Kind](https://kind.sigs.k8s.io/):
+
+```bash
+# Build and load images into the Kind cluster
+make docker-build
+kind load docker-image docker.io/kubesynapse/kubesynapse-operator:v1.0.0 --name desktop
+kind load docker-image docker.io/kubesynapse/kubesynapse-api-gateway:v1.0.0 --name desktop
+kind load docker-image docker.io/kubesynapse/kubesynapse-web-ui:v1.0.0 --name desktop
+kind load docker-image docker.io/kubesynapse/kubesynapse-pi-rt:v1.0.0 --name desktop
+
+# Deploy with local image values
+helm install kubesynapse ./charts/kubesynapse -n kubesynapse \
+  -f deploy/values.dev.yaml \
+  -f deploy/values.local-images.example.yaml
+```
+
+See `deploy/values.local-images.example.yaml` for the full local-image registry and
+tag overrides.
 
 ---
 
@@ -125,8 +148,8 @@ See `deploy/values.*.yaml` for environment-specific examples:
 
 ```yaml
 image:
-  registry: docker.io/yakdhane
-  tag: latest
+  registry: docker.io/kubesynapse
+  tag: v1.0.0
 
 apiGateway:
   sharedToken: "change-me"
@@ -143,8 +166,26 @@ database:
 
 ingress:
   enabled: true
-  host: kubesynth.example.com
+  host: kubesynapse.example.com
 ```
+
+### Pi Runtime Deployment
+
+The Pi runtime is **opt-in**. Enable it in your values file:
+
+```yaml
+agentRuntime:
+  pi:
+    enabled: true
+```
+
+### LiteLLM Database Bootstrap
+
+LiteLLM schema initialization is automatic in the Helm chart.
+
+- The deployment runs `prisma db push` in an init container before LiteLLM starts.
+- You should not need to manually exec into the pod to initialize the database.
+- If LiteLLM still fails on first boot, check PostgreSQL readiness and NetworkPolicies first.
 
 ---
 
@@ -171,8 +212,8 @@ ingress:
 
 ```bash
 # Check logs
-docker logs kubesynth-api-gateway
-kubectl logs -n kubesynth deployment/kubesynth-api-gateway
+docker logs kubesynapse-api-gateway
+kubectl logs -n kubesynapse deployment/kubesynapse-api-gateway
 
 # Check health
 curl http://localhost:8080/api/health
@@ -183,20 +224,20 @@ curl http://localhost:8080/api/ready
 
 ```bash
 # Test Postgres connectivity
-docker exec -it kubesynth-postgres psql -U kubesynth -d kubesynth -c "SELECT 1"
+docker exec -it kubesynapse-postgres psql -U kubesynapse -d kubesynapse -c "SELECT 1"
 
 # Check migration status
-kubectl exec -n kubesynth deployment/kubesynth-api-gateway -- alembic current
+kubectl exec -n kubesynapse deployment/kubesynapse-api-gateway -- alembic current
 ```
 
 ### Trace storage issues
 
 ```bash
 # Check trace directory
-docker exec kubesynth-api-gateway ls -la /app/state/traces
+docker exec kubesynapse-api-gateway ls -la /app/state/traces
 
 # Verify trace tables exist
-docker exec -it kubesynth-postgres psql -U kubesynth -c "\dt workflow_*"
+docker exec -it kubesynapse-postgres psql -U kubesynapse -c "\dt workflow_*"
 ```
 
 ---
@@ -210,7 +251,7 @@ Prometheus rules and Grafana dashboards are in `deploy/prometheus/` and `deploy/
 kubectl apply -f deploy/prometheus/rules.yaml
 
 # Import Grafana dashboard
-kubectl create configmap grafana-dashboard-kubesynth \
+kubectl create configmap grafana-dashboard-kubesynapse \
   --from-file=deploy/grafana/dashboard.json \
   -n monitoring
 ```

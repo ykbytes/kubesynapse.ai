@@ -5,7 +5,7 @@
  */
 
 export interface BrandConfig {
-  /** Top-line brand name, e.g. "KubeSynth" */
+  /** Top-line brand name, e.g. "kubesynapse" */
   name: string;
   /** Subtitle / product line, e.g. "Agent Sandbox" */
   tagline: string;
@@ -22,9 +22,9 @@ export interface BrandConfig {
 }
 
 export const BRAND: BrandConfig = {
-  name: import.meta.env.VITE_BRAND_NAME?.trim() || "KubeSynth",
+  name: import.meta.env.VITE_BRAND_NAME?.trim() || "kubesynapse",
   tagline: import.meta.env.VITE_BRAND_TAGLINE?.trim() || "Agent Sandbox",
-  pageTitle: import.meta.env.VITE_BRAND_PAGE_TITLE?.trim() || "KubeSynth – Agent Sandbox",
+  pageTitle: import.meta.env.VITE_BRAND_PAGE_TITLE?.trim() || "kubesynapse – Agent Sandbox",
   logoUrl: import.meta.env.VITE_BRAND_LOGO_URL?.trim() || "",
   accentColor: import.meta.env.VITE_BRAND_ACCENT_COLOR?.trim() || "",
   faviconUrl: import.meta.env.VITE_BRAND_FAVICON_URL?.trim() || "",

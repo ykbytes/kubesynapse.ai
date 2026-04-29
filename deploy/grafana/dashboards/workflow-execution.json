@@ -1,0 +1,408 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": "-- Grafana --",
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "kubesynapse Workflow Execution — runs, step durations, failure rates, and success/failure trends",
+  "editable": true,
+  "gnetId": null,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 0},
+      "id": 100,
+      "panels": [],
+      "title": "Workflow Summary",
+      "type": "row"
+    },
+    {
+      "datasource": "${prometheus_datasource}",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null}
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 4, "w": 4, "x": 0, "y": 1},
+      "id": 1,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(KUBESYNAPSE_workflow_runs_total{status=\"started\"}[1h])) * 3600",
+          "legendFormat": "Runs/hr"
+        }
+      ],
+      "title": "Workflow Runs (last hr)",
+      "type": "stat"
+    },
+    {
+      "datasource": "${prometheus_datasource}",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 5},
+              {"color": "red", "value": 10}
+            ]
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 4, "w": 4, "x": 4, "y": 1},
+      "id": 2,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "expr": "(sum(rate(KUBESYNAPSE_workflow_runs_total{status=\"failed\"}[5m])) / sum(rate(KUBESYNAPSE_workflow_runs_total[5m]))) * 100",
+          "legendFormat": "Failure Rate"
+        }
+      ],
+      "title": "Failure Rate %",
+      "type": "stat"
+    },
+    {
+      "datasource": "${prometheus_datasource}",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 30},
+              {"color": "red", "value": 60}
+            ]
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 4, "w": 4, "x": 8, "y": 1},
+      "id": 3,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {"calcs": ["mean"], "fields": "", "values": false},
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(KUBESYNAPSE_workflow_duration_seconds_bucket[5m])) by (le))",
+          "legendFormat": "P50"
+        }
+      ],
+      "title": "Avg Duration (P50)",
+      "type": "stat"
+    },
+    {
+      "datasource": "${prometheus_datasource}",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 60},
+              {"color": "red", "value": 300}
+            ]
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 4, "w": 4, "x": 12, "y": 1},
+      "id": 4,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(KUBESYNAPSE_workflow_duration_seconds_bucket[5m])) by (le))",
+          "legendFormat": "P99"
+        }
+      ],
+      "title": "P99 Duration",
+      "type": "stat"
+    },
+    {
+      "datasource": "${prometheus_datasource}",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "fillOpacity": 20,
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 2,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "mappings": [],
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 10, "w": 12, "x": 0, "y": 5},
+      "id": 10,
+      "options": {
+        "legend": {"calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom"},
+        "tooltip": {"mode": "multi", "sort": "desc"}
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(KUBESYNAPSE_workflow_runs_total[5m])) by (workflow_name, status)",
+          "legendFormat": "{{workflow_name}}-{{status}}"
+        }
+      ],
+      "title": "Workflow Runs (per workflow, 5m rate)",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 15},
+      "id": 200,
+      "panels": [],
+      "title": "Step Execution",
+      "type": "row"
+    },
+    {
+      "datasource": "${prometheus_datasource}",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "fillOpacity": 15,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "mappings": [],
+          "unit": "s"
+        },
+        "overrides": [
+          {"matcher": {"id": "byName", "options": "P95"}, "properties": [{"id": "custom.lineStyle", "value": {"dash": [5, 5], "fill": "dash"}}]}
+        ]
+      },
+      "gridPos": {"h": 10, "w": 12, "x": 0, "y": 16},
+      "id": 20,
+      "options": {
+        "legend": {"calcs": ["mean", "max", "lastNotNull"], "displayMode": "table", "placement": "bottom"},
+        "tooltip": {"mode": "multi", "sort": "desc"}
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(KUBESYNAPSE_step_duration_seconds_bucket[5m])) by (le, step_type))",
+          "legendFormat": "P50 {{step_type}}"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(KUBESYNAPSE_step_duration_seconds_bucket[5m])) by (le, step_type))",
+          "legendFormat": "P95 {{step_type}}"
+        }
+      ],
+      "title": "Step Duration (P50/P95 by type)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "${prometheus_datasource}",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "fillOpacity": 15,
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 2,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "mappings": [],
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 10, "w": 12, "x": 12, "y": 16},
+      "id": 21,
+      "options": {
+        "legend": {"calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom"},
+        "tooltip": {"mode": "multi", "sort": "desc"}
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(KUBESYNAPSE_step_executions_total[5m])) by (step_type, status)",
+          "legendFormat": "{{step_type}}-{{status}}"
+        }
+      ],
+      "title": "Step Executions (per type, 5m rate)",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 26},
+      "id": 300,
+      "panels": [],
+      "title": "Worker Health",
+      "type": "row"
+    },
+    {
+      "datasource": "${prometheus_datasource}",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "fillOpacity": 15,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "mappings": [],
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 27},
+      "id": 30,
+      "options": {
+        "legend": {"calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom"},
+        "tooltip": {"mode": "multi", "sort": "desc"}
+      },
+      "targets": [
+        {
+          "expr": "sum(KUBESYNAPSE_worker_jobs_active) by (queue)",
+          "legendFormat": "{{queue}} active"
+        },
+        {
+          "expr": "sum(KUBESYNAPSE_worker_jobs_waiting) by (queue)",
+          "legendFormat": "{{queue}} waiting"
+        }
+      ],
+      "title": "Worker Job Queue Depth",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "${prometheus_datasource}",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "fillOpacity": 10,
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 2,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "mappings": [],
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 27},
+      "id": 31,
+      "options": {
+        "legend": {"calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom"},
+        "tooltip": {"mode": "multi", "sort": "desc"}
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(KUBESYNAPSE_worker_jobs_completed_total[5m])) by (queue)",
+          "legendFormat": "{{queue}} completed"
+        },
+        {
+          "expr": "sum(rate(KUBESYNAPSE_worker_jobs_failed_total[5m])) by (queue)",
+          "legendFormat": "{{queue}} failed"
+        }
+      ],
+      "title": "Worker Job Throughput (completed/failed)",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["kubesynapse", "workflows", "workers"],
+  "templating": {
+    "list": [
+      {
+        "current": {"selected": false, "text": "kubesynapse", "value": "kubesynapse"},
+        "datasource": "${prometheus_datasource}",
+        "definition": "label_values(kube_namespace_created, namespace)",
+        "hide": 0,
+        "includeAll": false,
+        "label": "Namespace",
+        "multi": false,
+        "name": "namespace",
+        "options": [],
+        "query": "label_values(kube_namespace_created, namespace)",
+        "refresh": 1,
+        "regex": "/kubesynapse/",
+        "sort": 0,
+        "type": "query"
+      }
+    ]
+  },
+  "time": {"from": "now-1h", "to": "now"},
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "kubesynapse — Workflow Execution",
+  "uid": "kubesynapse-workflow-execution",
+  "version": 1,
+  "weekStart": ""
+}

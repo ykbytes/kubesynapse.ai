@@ -1,4 +1,4 @@
-# KubeSynth Video Content Plan
+# KubeSynapse Video Content Plan
 
 ## Video 1: Product Overview (3 minutes)
 
@@ -8,7 +8,7 @@ Platform engineers, DevOps leads, CTOs exploring AI agent infrastructure.
 ### Script Outline
 
 **0:00–0:15 — Hook**
-> "You've built amazing AI agents in LangChain. Now you need to run them in production. On Kubernetes. With governance, observability, and multi-tenancy. Meet KubeSynth."
+> "You've built amazing AI agents in LangChain. Now you need to run them in production. On Kubernetes. With governance, observability, and multi-tenancy. Meet KubeSynapse."
 
 **0:15–0:45 — The Problem**
 - Show: Agent running as a Python script. Process dies. Agent forgets everything.
@@ -17,7 +17,7 @@ Platform engineers, DevOps leads, CTOs exploring AI agent infrastructure.
 - Voiceover: "Most AI agent frameworks solve the development problem, not the production problem."
 
 **0:45–1:30 — The Solution**
-- Terminal: `helm install kubesynth ./charts/kubesynth -n kubesynth --create-namespace`
+- Terminal: `helm install KubeSynapse ./charts/kubesynapse -n kubesynapse --create-namespace`
 - Visual: Animated architecture diagram showing all components spinning up (API gateway, operator, LiteLLM, PostgreSQL, Redis, NATS, Qdrant)
 - Web UI: Landing page → Dashboard → Agent list → Workflow list
 - Voiceover: "One Helm command deploys the full stack. API gateway, Kubernetes operator, LiteLLM proxy, databases — all pre-configured for production."
@@ -40,7 +40,7 @@ Platform engineers, DevOps leads, CTOs exploring AI agent infrastructure.
 - Show: GitHub repo URL, star button animation
 - Show: Community Discord/Slack link
 - Show: Quick Start guide link
-- Voiceover: "KubeSynth is open source, Apache 2.0 licensed. One Helm command to production. Star us on GitHub and join the community."
+- Voiceover: "KubeSynapse is open source, Apache 2.0 licensed. One Helm command to production. Star us on GitHub and join the community."
 
 ### Visual Assets Needed
 - Animated architecture diagram (Mermaid or custom SVG)
@@ -106,7 +106,7 @@ Platform engineers, DevOps leads, CTOs exploring AI agent infrastructure.
 - Add subtle background music (royalty-free from Epidemic Sound or Uppbeat)
 
 ### Visual Style
-- Dark theme throughout (matches KubeSynth brand)
+- Dark theme throughout (matches KubeSynapse brand)
 - Consistent color palette: blue (#2563EB), cyan (#06B6D4), slate (#0F172A)
 - Use IBM Plex Mono for code, IBM Plex Sans for UI text
 - Smooth transitions between terminal and UI views
@@ -118,6 +118,6 @@ Platform engineers, DevOps leads, CTOs exploring AI agent infrastructure.
 
 ### Publishing
 - Upload to YouTube as unlisted first, review, then publish
-- Create a playlist: "KubeSynth — Kubernetes-Native AI Agents"
+- Create a playlist: "KubeSynapse — Kubernetes-Native AI Agents"
 - Include links to GitHub, docs, community in video description
 - Share on Hacker News, Reddit (r/kubernetes, r/LLMDevs), LinkedIn

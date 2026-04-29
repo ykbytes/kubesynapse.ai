@@ -15,15 +15,15 @@ $manifestFiles = @(
 )
 
 $activeAgents = @(
-    "kubesynth-factory-analyst",
-    "kubesynth-factory",
-    "kubesynth-factory-reviewer",
-    "kubesynth-factory-deployer"
+    "kubesynapse-factory-analyst",
+    "kubesynapse-factory",
+    "kubesynapse-factory-reviewer",
+    "kubesynapse-factory-deployer"
 )
 
 $obsoleteAgents = @(
-    "kubesynth-factory-materializer",
-    "kubesynth-factory-quality-reviewer"
+    "kubesynapse-factory-materializer",
+    "kubesynapse-factory-quality-reviewer"
 )
 
 function Assert-LastExitCode {
@@ -61,7 +61,7 @@ function Wait-ForStatefulSetDeletion {
     }
 }
 
-Write-Host "=== Deploying lean KubeSynth factory example ===" -ForegroundColor Cyan
+Write-Host "=== Deploying lean kubesynapse factory example ===" -ForegroundColor Cyan
 
 Write-Host "`n[1/5] Removing obsolete factory agents..." -ForegroundColor Yellow
 foreach ($agent in $obsoleteAgents) {
@@ -90,8 +90,8 @@ foreach ($agent in $activeAgents) {
 Write-Host "`n[5/5] Verifying live resources..." -ForegroundColor Yellow
 kubectl get aiagent -n $ns | Out-Host
 Assert-LastExitCode "kubectl get aiagent"
-kubectl get agentworkflow kubesynth-factory-pipeline -n $ns | Out-Host
-Assert-LastExitCode "kubectl get agentworkflow kubesynth-factory-pipeline"
+kubectl get agentworkflow kubesynapse-factory-pipeline -n $ns | Out-Host
+Assert-LastExitCode "kubectl get agentworkflow kubesynapse-factory-pipeline"
 
 foreach ($agent in $activeAgents) {
     kubectl get aiagent $agent -n $ns | Out-Host
@@ -107,6 +107,6 @@ foreach ($agent in $obsoleteAgents) {
 }
 
 Write-Host "`nFactory example deployed." -ForegroundColor Green
-Write-Host "Workflow: kubesynth-factory-pipeline" -ForegroundColor Cyan
+Write-Host "Workflow: kubesynapse-factory-pipeline" -ForegroundColor Cyan
 Write-Host "Trigger examples: ./invoke-examples.sh" -ForegroundColor Cyan
 Write-Host "Approvals: monitor with 'kubectl get agentapprovals -n $ns' or the web UI" -ForegroundColor Cyan

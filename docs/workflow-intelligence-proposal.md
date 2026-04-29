@@ -1,17 +1,17 @@
-# KubeSynth Overhaul: Self-Verifying, Context-Aware Workflow Platform
+# KubeSynapse Overhaul: Self-Verifying, Context-Aware Workflow Platform
 
 ## Executive Summary
 
-Five targeted changes transform kubesynth from a capable execution substrate into a smarter, self-verifying, context-aware workflow platform. No new services. No rewrites. All changes fit into existing subsystems.
+Five targeted changes transform KubeSynapse from a capable execution substrate into a smarter, self-verifying, context-aware workflow platform. No new services. No rewrites. All changes fit into existing subsystems.
 
-**Core insight:** Agent output quality is determined *before* and *after* execution, not during it. KubeSynth already runs agents well. What it lacks is:
+**Core insight:** Agent output quality is determined *before* and *after* execution, not during it. KubeSynapse already runs agents well. What it lacks is:
 1. **Proving results** — verification gates after each step
 2. **Catching mistakes** — peer-review as a native step type
 3. **Front-loading clarity** — project context injection via ConfigMap
 4. **Running faster** — formalized wave-based parallel execution
 5. **Guiding users** — next-action suggestions + verification/review visibility in the UI
 
-Ideas are drawn from three reference tools (Superpowers two-stage review, BMAD project-context-first design, get-shit-done spec-driven verification) and adapted to fit kubesynth' Kubernetes-native CRD + operator + worker architecture.
+Ideas are drawn from three reference tools (Superpowers two-stage review, BMAD project-context-first design, get-shit-done spec-driven verification) and adapted to fit KubeSynapse' Kubernetes-native CRD + operator + worker architecture.
 
 ---
 
@@ -19,7 +19,7 @@ Ideas are drawn from three reference tools (Superpowers two-stage review, BMAD p
 
 ### Change 1: `verify` field on workflow steps
 
-**Files:** `charts/kubesynth/templates/agentworkflow-crd.yaml`, `operator/worker.py`, `operator/utils.py`
+**Files:** `charts/kubesynapse/templates/agentworkflow-crd.yaml`, `operator/worker.py`, `operator/utils.py`
 
 **CRD:** Add `verify` (type: string) to the step schema. Optional. When present, after a step completes successfully, the worker sends a second invocation to the same agentRef with a structured verification prompt:
 
@@ -39,7 +39,7 @@ Respond with exactly PASS or FAIL on the first line, followed by your reasoning.
 
 ### Change 2: `type: review` workflow step
 
-**Files:** `charts/kubesynth/templates/agentworkflow-crd.yaml`, `operator/worker.py`
+**Files:** `charts/kubesynapse/templates/agentworkflow-crd.yaml`, `operator/worker.py`
 
 **CRD:** Extend `type` enum from `[agent, loop]` to `[agent, loop, review]`. Add `reviewCriteria` (type: string) to step properties.
 
@@ -55,7 +55,7 @@ Respond with exactly PASS or FAIL on the first line, followed by your reasoning.
 
 ### Change 3: `contextRef` for project context injection
 
-**Files:** `charts/kubesynth/templates/agentworkflow-crd.yaml`, `operator/worker.py`, `operator/utils.py`
+**Files:** `charts/kubesynapse/templates/agentworkflow-crd.yaml`, `operator/worker.py`, `operator/utils.py`
 
 **CRD:** Add `contextRef` (type: string) to `spec.properties` (workflow-level, not step-level). Points to a ConfigMap name in the same namespace.
 
@@ -120,7 +120,7 @@ Logic:
 ## Enhanced Workflow Example
 
 ```yaml
-apiVersion: kubesynth.ai/v1alpha1
+apiVersion: kubesynapse.ai/v1alpha1
 kind: AgentWorkflow
 metadata:
   name: feature-pipeline
@@ -162,7 +162,7 @@ Note: `code-review` and `spec-review` are independent (both depend only on `impl
 
 | File | Changes |
 |------|---------|
-| `charts/kubesynth/templates/agentworkflow-crd.yaml` | Add `verify`, `reviewCriteria` to step properties; add `review` to type enum; add `contextRef` to spec |
+| `charts/kubesynapse/templates/agentworkflow-crd.yaml` | Add `verify`, `reviewCriteria` to step properties; add `review` to type enum; add `contextRef` to spec |
 | `operator/utils.py` | Add `project_context` param to `render_prompt()`; add `compute_execution_waves()` |
 | `operator/worker.py` | Verification logic in `execute_workflow_step()`; new `execute_review_step()`; context loading in `run_workflow_worker()`; wave-based execution loop |
 | `api-gateway/main.py` | `GET /api/workflows/{name}/next-action` endpoint |

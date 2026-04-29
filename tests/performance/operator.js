@@ -1,7 +1,7 @@
 import http from 'k6/http';
 import { check, sleep } from 'k6';
 
-// KubeSynth Operator Reconciliation Benchmark
+// kubesynapse Operator Reconciliation Benchmark
 // Measures operator API endpoints under load
 
 export const options = {
@@ -29,7 +29,7 @@ export default function () {
   const metricsRes = http.get(`${BASE_URL}/metrics`);
   check(metricsRes, {
     'metrics returns 200': (r) => r.status === 200,
-    'metrics contains reconcile total': (r) => r.body.includes('kubesynth_operator_reconcile_total'),
+    'metrics contains reconcile total': (r) => r.body.includes('KUBESYNAPSE_operator_reconcile_total'),
   });
 
   sleep(0.5);

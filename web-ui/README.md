@@ -1,6 +1,6 @@
-# KubeSynth Console
+# KubeSynapse Console
 
-Vite + React + TypeScript frontend for the KubeSynth API gateway.
+Vite + React + TypeScript frontend for the KubeSynapse API gateway.
 
 ## Local development
 
@@ -25,9 +25,44 @@ Run `npm run build` to create a production bundle in `dist/`.
 
 ## Container image
 
-Build the production image with `podman build -t ghcr.io/your-org/kubesynth-web-ui:latest .`.
+Build the production image with `podman build -t ghcr.io/your-org/kubesynapse-web-ui:latest .`.
 
 The image serves the Vite bundle through Nginx with SPA fallback enabled. In the Helm chart the UI is published on `/`, while the API gateway remains on `/api` for the same host.
+
+Current deployed image: `docker.io/kubesynapse/kubesynapse-web-ui:v1.2.0`.
+
+## Live Activity Stream
+
+Real-time step-level status transitions with a pulse indicator and a
+**Ctrl+L** keyboard toggle. The stream surfaces agent starts, completions,
+approvals, and errors as they happen without polling.
+
+## ExecutionObservatory
+
+Post-execution trace analysis suite:
+
+- **TracePlayer** — Replay a workflow run step-by-step.
+- **StepInspector** — Deep-dive into inputs, outputs, and timing for any step.
+- **LLMCallViewer** — Inspect raw prompt/response pairs sent to the model.
+- **ExecutionTimeline** — Gantt-style view of parallel and sequential steps.
+- **ExecutionDiffView** — Compare two runs side-by-side to spot regressions.
+
+## WorkflowComposer
+
+Visual DAG builder that supports conditional and loop step editing, live
+execution state overlays, inline approval gates, and a recent run history
+sidebar. Changes are validated against the workflow CRD schema before saving.
+
+## FileExplorer + Artifact Browser
+
+Tree view of generated files across all agent workspaces. Includes a built-in
+file preview for Markdown, JSON, images, and code, plus a one-click ZIP
+download of the entire workspace.
+
+## Agent Live Reasoning Log (planned)
+
+Terminal-style SSE stream that surfaces raw Pi agent events in real time.
+Useful for debugging model reasoning loops and tool-use decisions.
 
 ## Current scope
 
@@ -47,6 +82,11 @@ The image serves the Vite bundle through Nginx with SPA fallback enabled. In the
 - Evaluation creation, editing, inspection, deletion, and per-case result visualization
 - Policy management, admin user management, audit trail review, usage dashboards, and health dashboard access
 - Command palette, mobile navigation shell, onboarding tour, notifications, and redesigned provider-centric settings management
+- Live Activity Stream with real-time step-level status transitions, pulse indicator, and Ctrl+L toggle
+- ExecutionObservatory for post-execution trace analysis (TracePlayer, StepInspector, LLMCallViewer, Timeline, DiffView)
+- WorkflowComposer DAG builder with conditional/loop editing, live execution state, inline approvals, and run history
+- FileExplorer and Artifact Browser with tree view, file preview, and ZIP download of the entire workspace
+- Agent Live Reasoning Log (planned) — terminal-style SSE stream of Pi agent events
 
 ## Operator workflow
 

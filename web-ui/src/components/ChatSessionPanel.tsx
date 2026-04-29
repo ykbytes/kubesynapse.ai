@@ -60,7 +60,7 @@ const SessionItem = memo(function SessionItem({
 
   return (
     <div
-      className={`group cursor-pointer rounded-xl border px-2.5 py-2 text-sm transition-colors ${
+      className={`group cursor-pointer rounded-sm border px-2 py-1.5 text-sm transition-colors ${
         isActive
           ? "border-primary/30 bg-primary/8 text-foreground shadow-sm"
           : "border-transparent text-muted-foreground hover:border-border hover:bg-muted/40 hover:text-foreground"
@@ -71,7 +71,7 @@ const SessionItem = memo(function SessionItem({
       tabIndex={0}
     >
       <div className="flex items-start gap-2">
-        <div className={`mt-1 rounded-lg p-1 ${isActive ? "bg-primary/12 text-primary" : "bg-muted/60 text-muted-foreground"}`}>
+        <div className={`mt-1 rounded-sm p-1 ${isActive ? "bg-primary/12 text-primary" : "bg-muted/60 text-muted-foreground"}`}>
           <MessageSquare className="h-3.5 w-3.5 shrink-0" />
         </div>
         <div className="min-w-0 flex-1">
@@ -91,12 +91,12 @@ const SessionItem = memo(function SessionItem({
           ) : (
             <>
               <div className="truncate text-xs font-medium text-foreground">{session.title}</div>
-              <div className="mt-1 flex items-center gap-1 text-[10px] text-muted-foreground/75">
+              <div className="mt-0.5 flex items-center gap-1 text-[10px] text-muted-foreground/75">
                 <Clock className="h-2.5 w-2.5" />
                 {formatRelativeTime(session.updated_at)}
               </div>
               {!!session.summary && (
-                <div className="mt-2 space-y-1.5 text-[10px] text-muted-foreground/80">
+                <div className="mt-1.5 space-y-1 text-[10px] text-muted-foreground/80">
                   <div className="flex flex-wrap items-center gap-2">
                     <span>{session.summary.message_count} msg</span>
                     {session.summary.tool_names.length > 0 && (
@@ -167,10 +167,10 @@ export const ChatSessionPanel = memo(function ChatSessionPanel({
   }, [search, sessions]);
 
   return (
-    <div className="flex h-[20rem] w-full shrink-0 flex-col overflow-hidden rounded-[1.75rem] border border-border/70 bg-card/55 shadow-[0_18px_48px_-28px_rgba(15,23,42,0.45)] lg:h-full lg:w-[18rem] xl:w-[20rem]">
-      <div className="border-b border-border px-3 py-3">
+    <div className="flex h-[20rem] w-full shrink-0 flex-col overflow-hidden rounded-none border border-border/70 bg-card/55 shadow-[0_18px_48px_-28px_rgba(15,23,42,0.45)] lg:h-full lg:w-[15rem] xl:w-[17rem]">
+      <div className="border-b border-border px-2.5 py-2">
         <div className="flex items-center justify-between gap-2">
-          <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Sessions</span>
+          <span className="text-xs font-semibold uppercase tracking-wider text-foreground/75">Sessions</span>
           <div className="flex gap-1">
             <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onSaveCurrent} title="Save current session">
               <Clock className="h-3.5 w-3.5" />
@@ -180,7 +180,7 @@ export const ChatSessionPanel = memo(function ChatSessionPanel({
             </Button>
           </div>
         </div>
-        <div className="mt-3 space-y-2">
+          <div className="mt-1.5 space-y-1">
           <div className="relative">
             <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
             <Input
@@ -200,7 +200,7 @@ export const ChatSessionPanel = memo(function ChatSessionPanel({
         </div>
       </div>
       <ScrollArea className="flex-1">
-        <div className="space-y-2 p-2">
+        <div className="space-y-1 p-1.5">
           {loading && sessions.length === 0 && (
             <div className="flex items-center justify-center py-6 text-xs text-muted-foreground">Loading...</div>
           )}

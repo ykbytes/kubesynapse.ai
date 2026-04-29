@@ -1,0 +1,110 @@
+{{- if .Values.qdrant.enabled }}
+# Qdrant Vector Database for RAG pipelines
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "kubesynapse.fullname" . }}-qdrant
+  labels:
+    {{- include "kubesynapse.labels" . | nindent 4 }}
+    app.kubernetes.io/component: qdrant
+    app: qdrant
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: qdrant
+  template:
+    metadata:
+      labels:
+        {{- include "kubesynapse.labels" . | nindent 8 }}
+        app.kubernetes.io/component: qdrant
+        app: qdrant
+    spec:
+{{- with (include "kubesynapse.imagePullSecrets" .) }}
+{{ . | nindent 6 }}
+{{- end }}
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: qdrant
+          image: "{{ .Values.qdrant.image.repository }}:{{ .Values.qdrant.image.tag }}"
+          imagePullPolicy: {{ .Values.qdrant.image.pullPolicy | default "IfNotPresent" }}
+          workingDir: /qdrant
+          env:
+            - name: QDRANT__STORAGE__STORAGE_PATH
+              value: /qdrant/storage
+            - name: QDRANT__STORAGE__SNAPSHOTS_PATH
+              value: /qdrant/storage/snapshots
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false  # Qdrant requires write access to its storage
+            capabilities:
+              drop:
+                - ALL
+          ports:
+            - containerPort: 6333
+              name: http
+            - containerPort: 6334
+              name: grpc
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: 6333
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 18
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 6333
+            initialDelaySeconds: 20
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 6333
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          volumeMounts:
+            - name: qdrant-storage
+              mountPath: /qdrant/storage
+          resources:
+{{ toYaml .Values.qdrant.resources | indent 12 }}
+      volumes:
+        - name: qdrant-storage
+          emptyDir: {}  # In production, use a PersistentVolumeClaim
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "kubesynapse.fullname" . }}-qdrant
+  labels:
+    {{- include "kubesynapse.labels" . | nindent 4 }}
+    app.kubernetes.io/component: qdrant
+    app: qdrant
+spec:
+  selector:
+    app: qdrant
+  ports:
+    - protocol: TCP
+      port: 6333
+      targetPort: 6333
+      name: http
+    - protocol: TCP
+      port: 6334
+      targetPort: 6334
+      name: grpc
+{{- end }}

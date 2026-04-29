@@ -47,15 +47,15 @@ interface AgentTemplate {
 }
 
 const TEMPLATE_SIDECAR_SPECS: Record<string, { name: string; image: string; port: number }> = {
-  "code-exec": { name: "code-exec", image: "localhost/kubesynthai/mcp-code-exec", port: 8090 },
-  "web-search": { name: "web-search", image: "localhost/kubesynthai/mcp-web-search", port: 8091 },
-  documents: { name: "documents", image: "localhost/kubesynthai/mcp-documents", port: 8092 },
-  browser: { name: "browser", image: "localhost/kubesynthai/mcp-browser", port: 8093 },
-  database: { name: "database", image: "localhost/kubesynthai/mcp-database", port: 8094 },
-  git: { name: "git", image: "localhost/kubesynthai/mcp-git", port: 8095 },
-  kubernetes: { name: "kubernetes", image: "localhost/kubesynthai/mcp-kubernetes", port: 8097 },
-  messaging: { name: "messaging", image: "localhost/kubesynthai/mcp-messaging", port: 8098 },
-  rag: { name: "rag", image: "localhost/kubesynthai/mcp-rag", port: 8099 },
+  "code-exec": { name: "code-exec", image: "localhost/KubeSynapseai/mcp-code-exec", port: 8090 },
+  "web-search": { name: "web-search", image: "localhost/KubeSynapseai/mcp-web-search", port: 8091 },
+  documents: { name: "documents", image: "localhost/KubeSynapseai/mcp-documents", port: 8092 },
+  browser: { name: "browser", image: "localhost/KubeSynapseai/mcp-browser", port: 8093 },
+  database: { name: "database", image: "localhost/KubeSynapseai/mcp-database", port: 8094 },
+  git: { name: "git", image: "localhost/KubeSynapseai/mcp-git", port: 8095 },
+  kubernetes: { name: "kubernetes", image: "localhost/KubeSynapseai/mcp-kubernetes", port: 8097 },
+  messaging: { name: "messaging", image: "localhost/KubeSynapseai/mcp-messaging", port: 8098 },
+  rag: { name: "rag", image: "localhost/KubeSynapseai/mcp-rag", port: 8099 },
 };
 
 function resolveTemplateSidecars(sidecarIds: string[]): Array<Record<string, unknown>> {

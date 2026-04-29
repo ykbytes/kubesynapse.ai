@@ -1,7 +1,7 @@
-# KubeSynth / OpenCode — Enterprise Overview & Value Proposition
+# KubeSynapse / OpenCode — Enterprise Overview & Value Proposition
 
 ## Executive Summary
-KubeSynth + OpenCode is an enterprise-grade agent orchestration and developer automation platform that enables secure, auditable, and scalable AI-driven workflows inside Kubernetes. It couples a runtime for executing codified agent tasks (OpenCode runtime), a sandboxed agent execution environment (Agent Sandbox), and a management/operator layer for governance, scaling, and integrations. The platform accelerates engineering productivity, transforms workflows (code generation, validation, infra automation), and reduces risk through strict RBAC, provenance, and operator-managed lifecycle.
+KubeSynapse + OpenCode is an enterprise-grade agent orchestration and developer automation platform that enables secure, auditable, and scalable AI-driven workflows inside Kubernetes. It couples a runtime for executing codified agent tasks (OpenCode runtime), a sandboxed agent execution environment (Agent Sandbox), and a management/operator layer for governance, scaling, and integrations. The platform accelerates engineering productivity, transforms workflows (code generation, validation, infra automation), and reduces risk through strict RBAC, provenance, and operator-managed lifecycle.
 
 ## Problem Statement
 - Enterprises need to safely automate complex engineering tasks using LLMs while keeping IP and secrets on-prem or in trusted clouds.

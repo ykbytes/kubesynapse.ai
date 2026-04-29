@@ -1,6 +1,6 @@
 # Deployment README
 
-This directory contains the current deployment-facing documents and helper assets for KubeSynth. The goal of this file is to point at the real entry points that exist in the repository today rather than older generic production prose.
+This directory contains the current deployment-facing documents and helper assets for KubeSynapse. The goal of this file is to point at the real entry points that exist in the repository today rather than older generic production prose.
 
 ## What is here
 
@@ -40,7 +40,7 @@ Use this to validate the observability path after deploying the new connector, t
 From the repository root:
 
 ```bash
-helm upgrade --install kubesynth ./charts/kubesynth \
+helm upgrade --install KubeSynapse ./charts/kubesynapse \
   -f ./deploy/values.dockerhub.local.yaml
 ```
 

@@ -1,6 +1,6 @@
-# Secrets Management — KubeSynth
+# Secrets Management — KubeSynapse
 
-This guide covers three production-grade approaches for managing secrets in KubeSynth deployments. Choose the approach that best fits your infrastructure and security requirements.
+This guide covers three production-grade approaches for managing secrets in KubeSynapse deployments. Choose the approach that best fits your infrastructure and security requirements.
 
 ---
 
@@ -14,7 +14,7 @@ This guide covers three production-grade approaches for managing secrets in Kube
 | **K8s Secret created?** | Yes (mirrors into K8s) | No (mounted as volume) | Yes (decrypted at deploy time) |
 | **Complexity** | Medium | High | Low |
 | **Best for** | Teams already on AWS/GCP/Azure with existing Secret Manager | Enterprises with HashiCorp Vault already deployed | Small teams, GitOps workflows, edge/air-gapped clusters |
-| **KubeSynth integration** | Reference ExternalSecret in Helm values | Reference Vault path in Helm values | Commit SealedSecret YAML to repo; decrypt with Helm |
+| **KubeSynapse integration** | Reference ExternalSecret in Helm values | Reference Vault path in Helm values | Commit SealedSecret YAML to repo; decrypt with Helm |
 
 ---
 
@@ -99,38 +99,38 @@ spec:
           key: client-secret
 ```
 
-### Step 3: Create ExternalSecret for KubeSynth
+### Step 3: Create ExternalSecret for KubeSynapse
 
-Define an `ExternalSecret` that maps cloud secrets to K8s Secrets KubeSynth can consume.
+Define an `ExternalSecret` that maps cloud secrets to K8s Secrets KubeSynapse can consume.
 
 ```yaml
 apiVersion: external-secrets.io/v1beta1
 kind: ExternalSecret
 metadata:
-  name: kubesynth-secrets
-  namespace: kubesynth
+  name: KubeSynapse-secrets
+  namespace: KubeSynapse
 spec:
   refreshInterval: "1h"  # Sync from cloud every hour
   secretStoreRef:
     kind: ClusterSecretStore
     name: aws-secrets-manager  # or gcp-secrets-manager, azure-key-vault
   target:
-    name: kubesynth-platform-secrets
+    name: KubeSynapse-platform-secrets
     creationPolicy: Owner
   data:
     # Map cloud secret names → K8s secret keys
     - secretKey: OPENAI_API_KEY
       remoteRef:
-        key: "/kubesynth/production/openai-api-key"
+        key: "/KubeSynapse/production/openai-api-key"
     - secretKey: ANTHROPIC_API_KEY
       remoteRef:
-        key: "/kubesynth/production/anthropic-api-key"
+        key: "/KubeSynapse/production/anthropic-api-key"
     - secretKey: LITELLM_MASTER_KEY
       remoteRef:
-        key: "/kubesynth/production/litellm-master-key"
+        key: "/KubeSynapse/production/litellm-master-key"
     - secretKey: DATABASE_URL
       remoteRef:
-        key: "/kubesynth/production/database-url"
+        key: "/KubeSynapse/production/database-url"
 ```
 
 ### Step 4: Reference in Helm Values
@@ -138,20 +138,20 @@ spec:
 ```yaml
 # deploy/values.production.yaml
 platformSecrets:
-  existingSecret: "kubesynth-platform-secrets"  # Created by ESO
+  existingSecret: "KubeSynapse-platform-secrets"  # Created by ESO
 ```
 
 ### Verify
 
 ```bash
 # Check ExternalSecret status
-kubectl get externalsecret kubesynth-secrets -n kubesynth
+kubectl get externalsecret kubesynapse-secrets -n kubesynapse
 
 # Check the generated K8s Secret
-kubectl get secret kubesynth-platform-secrets -n kubesynth -o jsonpath='{.data}' | jq 'keys'
+kubectl get secret kubesynapse-platform-secrets -n kubesynapse -o jsonpath='{.data}' | jq 'keys'
 
-# Verify KubeSynth pods are using the secret
-kubectl describe pod -l app.kubernetes.io/name=kubesynth-api-gateway -n kubesynth | grep OPENAI_API_KEY
+# Verify KubeSynapse pods are using the secret
+kubectl describe pod -l app.kubernetes.io/name=kubesynapse-api-gateway -n kubesynapse | grep OPENAI_API_KEY
 ```
 
 ---
@@ -189,25 +189,25 @@ vault write auth/kubernetes/config \
   kubernetes_host="https://kubernetes.default.svc" \
   token_reviewer_jwt="$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)"
 
-# Create a policy for KubeSynth
-vault policy write kubesynth - <<EOF
-path "secret/data/kubesynth/*" {
+# Create a policy for KubeSynapse
+vault policy write KubeSynapse - <<EOF
+path "secret/data/KubeSynapse/*" {
   capabilities = ["read"]
 }
 EOF
 
 # Create a role
-vault write auth/kubernetes/role/kubesynth \
-  bound_service_account_names=kubesynth-api-gateway-sa \
-  bound_service_account_namespaces=kubesynth \
-  policies=kubesynth \
+vault write auth/kubernetes/role/KubeSynapse \
+  bound_service_account_names=kubesynapse-api-gateway-sa \
+  bound_service_account_namespaces=KubeSynapse \
+  policies=KubeSynapse \
   ttl=1h
 ```
 
 ### Step 3: Store Secrets in Vault
 
 ```bash
-vault kv put secret/kubesynth/production \
+vault kv put secret/KubeSynapse/production \
   OPENAI_API_KEY="sk-..." \
   ANTHROPIC_API_KEY="sk-ant-..." \
   LITELLM_MASTER_KEY="secure-master-key" \
@@ -220,25 +220,25 @@ vault kv put secret/kubesynth/production \
 apiVersion: secrets-store.csi.x-k8s.io/v1
 kind: SecretProviderClass
 metadata:
-  name: kubesynth-vault
-  namespace: kubesynth
+  name: KubeSynapse-vault
+  namespace: KubeSynapse
 spec:
   provider: vault
   parameters:
     vaultAddress: "https://vault.vault.svc:8200"
-    roleName: "kubesynth"
+    roleName: "KubeSynapse"
     objects: |
-      - secretPath: "secret/data/kubesynth/production"
+      - secretPath: "secret/data/KubeSynapse/production"
         objectName: "openai-api-key"
         secretKey: "OPENAI_API_KEY"
-      - secretPath: "secret/data/kubesynth/production"
+      - secretPath: "secret/data/KubeSynapse/production"
         objectName: "anthropic-api-key"
         secretKey: "ANTHROPIC_API_KEY"
-      - secretPath: "secret/data/kubesynth/production"
+      - secretPath: "secret/data/KubeSynapse/production"
         objectName: "litellm-master-key"
         secretKey: "LITELLM_MASTER_KEY"
   secretObjects:
-    - secretName: kubesynth-platform-secrets
+    - secretName: KubeSynapse-platform-secrets
       type: Opaque
       data:
         - objectName: openai-api-key
@@ -251,28 +251,28 @@ spec:
 
 ### Step 5: Reference in Pod Spec
 
-The Vault CSI driver automatically mounts the secrets. KubeSynth's Helm chart will detect `platformSecrets.existingSecret` and inject the environment variables from the K8s Secret.
+The Vault CSI driver automatically mounts the secrets. KubeSynapse's Helm chart will detect `platformSecrets.existingSecret` and inject the environment variables from the K8s Secret.
 
 ```yaml
 # deploy/values.production.yaml
 platformSecrets:
-  existingSecret: "kubesynth-platform-secrets"  # Created by Vault CSI
+  existingSecret: "KubeSynapse-platform-secrets"  # Created by Vault CSI
 ```
 
 ### Verify
 
 ```bash
 # Check SecretProviderClass status
-kubectl get secretproviderclass kubesynth-vault -n kubesynth
+kubectl get secretproviderclass kubesynapse-vault -n kubesynapse
 
 # Check the generated K8s Secret
-kubectl get secret kubesynth-platform-secrets -n kubesynth
+kubectl get secret kubesynapse-platform-secrets -n kubesynapse
 
 # Verify Vault CSI driver is running
 kubectl get pods -l app=vault-csi-provider -n vault
 
 # Test secret access from a pod
-kubectl exec -it deploy/kubesynth-api-gateway -n kubesynth -- env | grep OPENAI_API_KEY
+kubectl exec -it deploy/kubesynapse-api-gateway -n kubesynapse -- env | grep OPENAI_API_KEY
 ```
 
 ---
@@ -299,8 +299,8 @@ helm install sealed-secrets sealed-secrets/sealed-secrets \
 
 ```bash
 # Create a regular K8s Secret (do NOT commit this file)
-kubectl create secret generic kubesynth-platform-secrets \
-  --namespace kubesynth \
+kubectl create secret generic KubeSynapse-platform-secrets \
+  --namespace kubesynapse \
   --from-literal=OPENAI_API_KEY="sk-..." \
   --from-literal=ANTHROPIC_API_KEY="sk-ant-..." \
   --from-literal=LITELLM_MASTER_KEY="secure-master-key" \
@@ -326,8 +326,8 @@ The resulting `sealed-secret.yaml` looks like:
 apiVersion: bitnami.com/v1alpha1
 kind: SealedSecret
 metadata:
-  name: kubesynth-platform-secrets
-  namespace: kubesynth
+  name: KubeSynapse-platform-secrets
+  namespace: KubeSynapse
 spec:
   encryptedData:
     OPENAI_API_KEY: AgB4x...encrypted...base64...==
@@ -335,8 +335,8 @@ spec:
     LITELLM_MASTER_KEY: AgC6z...encrypted...base64...==
   template:
     metadata:
-      name: kubesynth-platform-secrets
-      namespace: kubesynth
+      name: KubeSynapse-platform-secrets
+      namespace: KubeSynapse
 ```
 
 ### Step 4: Commit and Deploy
@@ -344,7 +344,7 @@ spec:
 ```bash
 # Safe to commit — only the cluster can decrypt
 git add sealed-secret.yaml
-git commit -m "Add KubeSynth platform secrets (sealed)"
+git commit -m "Add KubeSynapse platform secrets (sealed)"
 
 # Deploy — Sealed Secrets controller automatically decrypts
 kubectl apply -f sealed-secret.yaml
@@ -355,28 +355,28 @@ kubectl apply -f sealed-secret.yaml
 ```yaml
 # deploy/values.production.yaml
 platformSecrets:
-  existingSecret: "kubesynth-platform-secrets"  # Decrypted from SealedSecret
+  existingSecret: "KubeSynapse-platform-secrets"  # Decrypted from SealedSecret
 ```
 
 ### Verify
 
 ```bash
 # Check SealedSecret status
-kubectl get sealedsecret kubesynth-platform-secrets -n kubesynth
+kubectl get sealedsecret kubesynapse-platform-secrets -n kubesynapse
 
 # Check the decrypted K8s Secret (requires cluster access)
-kubectl get secret kubesynth-platform-secrets -n kubesynth
+kubectl get secret kubesynapse-platform-secrets -n kubesynapse
 
-# Verify KubeSynth pods see the secret
-kubectl exec -it deploy/kubesynth-api-gateway -n kubesynth -- env | grep OPENAI_API_KEY
+# Verify KubeSynapse pods see the secret
+kubectl exec -it deploy/kubesynapse-api-gateway -n kubesynapse -- env | grep OPENAI_API_KEY
 ```
 
 ### Rotating Secrets with Sealed Secrets
 
 ```bash
 # 1. Re-create the secret with new values
-kubectl create secret generic kubesynth-platform-secrets \
-  --namespace kubesynth \
+kubectl create secret generic KubeSynapse-platform-secrets \
+  --namespace kubesynapse \
   --from-literal=OPENAI_API_KEY="sk-new-..." \
   --dry-run=client -o yaml > secret.yaml
 
@@ -390,14 +390,14 @@ kubeseal --controller-name=sealed-secrets-controller \
 kubectl apply -f sealed-secret.yaml
 
 # 4. Restart pods to pick up new values
-kubectl rollout restart deployment -n kubesynth
+kubectl rollout restart deployment -n kubesynapse
 ```
 
 ---
 
-## KubeSynth-Specific Secret Reference
+## KubeSynapse-Specific Secret Reference
 
-All secrets consumed by KubeSynth components:
+All secrets consumed by KubeSynapse components:
 
 | Secret Key | Component | Required | Description |
 |-----------|-----------|----------|-------------|
@@ -417,6 +417,6 @@ All secrets consumed by KubeSynth components:
 1. **Never commit plaintext secrets to git.** Use Sealed Secrets or reference an external manager.
 2. **Use separate secrets per environment.** Production secrets should never be accessible from dev clusters.
 3. **Rotate secrets regularly.** ESO and Vault CSI support automatic rotation.
-4. **Restrict secret access.** KubeSynth's RBAC limits which SAs can read secrets (see [RBAC Matrix](rbac-matrix.md)).
+4. **Restrict secret access.** KubeSynapse's RBAC limits which SAs can read secrets (see [RBAC Matrix](rbac-matrix.md)).
 5. **Audit secret access.** Enable Kubernetes audit logging for Secret reads.
-6. **Use namespace isolation.** Place KubeSynth in its own namespace and use NetworkPolicies.
+6. **Use namespace isolation.** Place KubeSynapse in its own namespace and use NetworkPolicies.

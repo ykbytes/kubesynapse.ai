@@ -234,7 +234,7 @@ export function WebhookManager() {
     ? `${gatewayUrl}/api/v1/webhooks/${encodeURIComponent(selectedWebhook.namespace)}/${encodeURIComponent(selectedWebhook.name)}/invoke`
     : "";
   const curlExample = selectedWebhook
-    ? `curl -X POST "${webhookUrl}" \\\n  -H "Content-Type: application/json" \\\n  -H "X-KubeSynth-Signature: <signature>" \\\n  -d '{"key":"value"}'`
+    ? `curl -X POST "${webhookUrl}" \\\n  -H "Content-Type: application/json" \\\n  -H "X-kubesynapse-Signature: <signature>" \\\n  -d '{"key":"value"}'`
     : "";
 
   const canSubmit = Boolean(formName.trim()) && Boolean(formSecretRef.trim());

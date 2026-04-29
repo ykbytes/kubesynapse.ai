@@ -1,4 +1,4 @@
-apiVersion: kubesynth.ai/v1alpha1
+apiVersion: kubesynapse.ai/v1alpha1
 kind: AgentPolicy
 metadata:
   name: ai300-researcher-policy
@@ -13,7 +13,7 @@ spec:
     maxTimeoutSeconds: 30
     requireHitl: false
 ---
-apiVersion: kubesynth.ai/v1alpha1
+apiVersion: kubesynapse.ai/v1alpha1
 kind: AgentPolicy
 metadata:
   name: ai300-exam-writer-policy
@@ -28,7 +28,7 @@ spec:
     maxTimeoutSeconds: 30
     requireHitl: false
 ---
-apiVersion: kubesynth.ai/v1alpha1
+apiVersion: kubesynapse.ai/v1alpha1
 kind: AgentPolicy
 metadata:
   name: ai300-qa-reviewer-policy

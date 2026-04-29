@@ -1,6 +1,6 @@
 import re
 
-path = r'C:\Users\ahmed\OneDrive\Desktop\repos\kubesynth\kubemininions\api-gateway\main.py'
+path = r'C:\Users\ahmed\OneDrive\Desktop\repos\kubesynapse\kubemininions\api-gateway\main.py'
 with open(path, encoding='utf-8') as f:
     content = f.read()
 

@@ -35,10 +35,14 @@ from utils import build_workflow_run_id, now_iso, validate_workflow_graph, workf
 
 logger = logging.getLogger("operator.controllers.workflow")
 
+GROUP = "kubesynapse.ai"
+VERSION = "v1alpha1"
+WORKFLOW_PLURAL = "agentworkflows"
+
 AUTO_RETRY_SPEC_FIELD = "autoRetry"
-AUTO_RETRY_FAILED_ANNOTATION = "kubesynth.ai/auto-retry-failed"
-AUTO_RETRY_LIMIT_ANNOTATION = "kubesynth.ai/auto-retry-limit"
-AUTO_RETRY_FAILURE_CLASSES_ANNOTATION = "kubesynth.ai/auto-retry-failure-classes"
+AUTO_RETRY_FAILED_ANNOTATION = "kubesynapse.ai/auto-retry-failed"
+AUTO_RETRY_LIMIT_ANNOTATION = "kubesynapse.ai/auto-retry-limit"
+AUTO_RETRY_FAILURE_CLASSES_ANNOTATION = "kubesynapse.ai/auto-retry-failure-classes"
 DEFAULT_AUTO_RETRY_LIMIT = 1
 DEFAULT_AUTO_RETRY_FAILURE_CLASSES = frozenset(
     {
@@ -455,7 +459,18 @@ def enqueue_workflow_job(
         workflow_status=workflow_status,
         run_id=run_id,
     )
-    artifact_pvc_name = ensure_worker_artifact_storage("workflow", namespace, name)
+    owner_uid = str(meta.get("uid") or "") if meta else ""
+    owner_references: list[dict[str, Any]] | None = None
+    if owner_uid:
+        owner_references = [{
+            "apiVersion": f"{GROUP}/{VERSION}",
+            "kind": "AgentWorkflow",
+            "name": name,
+            "uid": owner_uid,
+            "controller": True,
+            "blockOwnerDeletion": False,
+        }]
+    artifact_pvc_name = ensure_worker_artifact_storage("workflow", namespace, name, owner_references)
     artifact_path = artifact_file_path("workflow", namespace, name, generation)
     journal_path = workflow_journal_path(artifact_path)
     git_config = spec.get("gitConfig") or {}
@@ -502,7 +517,7 @@ def enqueue_workflow_job(
     step_states = workflow_status.get("stepStates", {}) or {} if preserve_generation_state else {}
 
     patch_custom_status(
-        "agentworkflows",
+        WORKFLOW_PLURAL,
         namespace,
         name,
         inject_conditions(
@@ -555,8 +570,8 @@ def enqueue_workflow_job(
 # ---------------------------------------------------------------------------
 
 
-@kopf.on.create("kubesynth.ai", "v1alpha1", "agentworkflows")  # type: ignore[arg-type]
-@kopf.on.update("kubesynth.ai", "v1alpha1", "agentworkflows")  # type: ignore[arg-type]
+@kopf.on.create(GROUP, VERSION, WORKFLOW_PLURAL)  # type: ignore[arg-type]
+@kopf.on.update(GROUP, VERSION, WORKFLOW_PLURAL)  # type: ignore[arg-type]
 def run_workflow(
     spec: dict[str, Any],
     status: dict[str, Any],
@@ -601,7 +616,7 @@ def run_workflow(
     execute_reconcile(
         lambda: (
             patch_custom_status(
-                "agentworkflows",
+                WORKFLOW_PLURAL,
                 namespace,
                 name,
                 inject_conditions(
@@ -634,12 +649,7 @@ def run_workflow(
     )
 
 
-@kopf.timer(
-    "kubesynth.ai",
-    "v1alpha1",
-    "agentworkflows",
-    interval=WORKFLOW_POLL_SECONDS,
-)  # type: ignore[arg-type]
+@kopf.timer(GROUP, VERSION, WORKFLOW_PLURAL, interval=WORKFLOW_POLL_SECONDS)  # type: ignore[arg-type]
 def run_workflow_watchdog(
     spec: dict[str, Any],
     status: dict[str, Any],
@@ -751,7 +761,7 @@ def run_workflow_watchdog(
     )
 
 
-@kopf.on.field("kubesynth.ai", "v1alpha1", "agentworkflows", field="status.phase")  # type: ignore[arg-type]
+@kopf.on.field(GROUP, VERSION, WORKFLOW_PLURAL, field="status.phase")  # type: ignore[arg-type]
 def on_workflow_phase_cancelled(
     old: str | None,
     new: str | None,
@@ -779,7 +789,7 @@ def on_workflow_phase_cancelled(
     )
 
 
-@kopf.on.resume("kubesynth.ai", "v1alpha1", "agentworkflows")  # type: ignore[arg-type]
+@kopf.on.resume(GROUP, VERSION, WORKFLOW_PLURAL)  # type: ignore[arg-type]
 def resume_workflow(
     spec: dict[str, Any],
     status: dict[str, Any],
@@ -850,7 +860,7 @@ def resume_workflow(
     )
 
 
-@kopf.on.delete("kubesynth.ai", "v1alpha1", "agentworkflows")  # type: ignore[arg-type]
+@kopf.on.delete(GROUP, VERSION, WORKFLOW_PLURAL)  # type: ignore[arg-type]
 def delete_workflow(
     status: dict[str, Any],
     name: str,

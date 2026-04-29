@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Pre-Deployment Validation Suite for KubeSynth AI Agent Sandbox
+Pre-Deployment Validation Suite for kubesynapse AI Agent Sandbox
 
 This script performs comprehensive validation before deploying to production,
 checking all critical components, security settings, and functionality.
@@ -133,7 +133,7 @@ class ProductionReadinessValidator:
         """Validate Helm chart configuration"""
         self.log("Validating Helm chart...", "INFO")
         
-        chart_file = self.workspace_root / "charts/kubesynth/Chart.yaml"
+        chart_file = self.workspace_root / "charts/kubesynapse/Chart.yaml"
         if not chart_file.exists():
             self.add_result("helm", "chart_exists", False,
                           "Chart.yaml not found", "critical")
@@ -422,7 +422,7 @@ class ProductionReadinessValidator:
     def run_all_validations(self) -> None:
         """Run all validation checks"""
         self.log("\n" + "="*70, "INFO")
-        self.log("KUBESYNTH PRODUCTION READINESS VALIDATION", "INFO")
+        self.log("kubesynapse PRODUCTION READINESS VALIDATION", "INFO")
         self.log(f"Start time: {datetime.now().isoformat()}", "INFO")
         self.log("="*70 + "\n", "INFO")
 
@@ -496,7 +496,7 @@ class ProductionReadinessValidator:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Production Readiness Validator for KubeSynth"
+        description="Production Readiness Validator for kubesynapse"
     )
     parser.add_argument("--verbose", "-v", action="store_true",
                        help="Verbose output")

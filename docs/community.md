@@ -1,14 +1,14 @@
-# KubeSynth Community
+# KubeSynapse Community
 
-Welcome to the KubeSynth community! We're building the production-grade platform for Kubernetes-native AI agents — and we'd love your help.
+Welcome to the KubeSynapse community! We're building the production-grade platform for Kubernetes-native AI agents — and we'd love your help.
 
 ## Get Involved
 
 ### Chat & Discussion
 
 - **GitHub Discussions:** [github.com/ykbytes/kubemininions/discussions](https://github.com/ykbytes/kubemininions/discussions) — feature ideas, Q&A, show-and-tell
-- **Slack Community:** `#kubesynth` on the [Kubernetes Slack](https://slack.k8s.io/) — real-time chat with maintainers and users
-- **Discord:** [Join our server](https://discord.gg/kubesynth) (coming soon) — community calls, office hours, pair programming
+- **Slack Community:** `#KubeSynapse` on the [Kubernetes Slack](https://slack.k8s.io/) — real-time chat with maintainers and users
+- **Discord:** [Join our server](https://discord.gg/KubeSynapse) (coming soon) — community calls, office hours, pair programming
 
 ### Community Calls
 
@@ -68,7 +68,7 @@ Look for the label on [GitHub Issues](https://github.com/ykbytes/kubemininions/i
 See [Contributor Program](./contributor-program.md) for details on:
 - Swag (stickers, t-shirts, hoodies)
 - Spotlight in release notes
-- KubeSynth Contributor badge
+- KubeSynapse Contributor badge
 - Conference ticket sponsorship
 - TOC nomination eligibility
 
@@ -82,17 +82,17 @@ All community spaces are governed by our [Code of Conduct](../CODE_OF_CONDUCT.md
 |---------|---------|------|
 | GitHub Issues | Bug reports, feature requests | [Issues](https://github.com/ykbytes/kubemininions/issues) |
 | GitHub Discussions | Q&A, ideas, community | [Discussions](https://github.com/ykbytes/kubemininions/discussions) |
-| Slack | Real-time chat | `#kubesynth` on [K8s Slack](https://slack.k8s.io/) |
-| Discord | Community calls, office hours | [Join](https://discord.gg/kubesynth) |
+| Slack | Real-time chat | `#KubeSynapse` on [K8s Slack](https://slack.k8s.io/) |
+| Discord | Community calls, office hours | [Join](https://discord.gg/KubeSynapse) |
 | Security | Vulnerability disclosure | [SECURITY.md](../SECURITY.md) |
-| Email | Private inquiries | team@kubesynth.ai |
+| Email | Private inquiries | team@kubesynapse.ai |
 
 ## Upcoming Events
 
-- **KubeCon NA 2026:** KubeSynth maintainer track talk (proposed)
+- **KubeCon NA 2026:** KubeSynapse maintainer track talk (proposed)
 - **CNCF Sandbox Application:** Q3 2026 target
 - **Hacktoberfest 2026:** Planned participation
 
 ---
 
-**KubeSynth** — Built in the open, for the community.
+**KubeSynapse** — Built in the open, for the community.

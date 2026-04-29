@@ -1,0 +1,6 @@
+{
+  "name": "kubesynapse-web-search",
+  "private": true,
+  "type": "module",
+  "pi": { "extensions": ["./index.ts"] }
+}

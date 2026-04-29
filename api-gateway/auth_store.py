@@ -93,15 +93,15 @@ def _build_database_url() -> str:
     if host:
         driver = os.getenv("DATABASE_DRIVER", "postgresql+psycopg").strip() or "postgresql+psycopg"
         port = int(os.getenv("DATABASE_PORT", "5432").strip() or "5432")
-        username = os.getenv("DATABASE_USER", "kubesynth").strip() or "kubesynth"
+        username = os.getenv("DATABASE_USER", "kubesynapse").strip() or "kubesynapse"
         password = os.getenv("DATABASE_PASSWORD", "").strip()
-        database_name = os.getenv("DATABASE_NAME", "kubesynth").strip() or "kubesynth"
+        database_name = os.getenv("DATABASE_NAME", "kubesynapse").strip() or "kubesynapse"
         if password:
             return f"{driver}://{quote_plus(username)}:{quote_plus(password)}@{host}:{port}/{quote_plus(database_name)}"
         return f"{driver}://{quote_plus(username)}@{host}:{port}/{quote_plus(database_name)}"
 
     import tempfile
-    sqlite_path = os.getenv("DATABASE_SQLITE_PATH", f"{tempfile.gettempdir()}/kubesynth-gateway.db").strip()
+    sqlite_path = os.getenv("DATABASE_SQLITE_PATH", f"{tempfile.gettempdir()}/kubesynapse-gateway.db").strip()
     if sqlite_path.startswith("sqlite:///"):
         return sqlite_path
     if sqlite_path == ":memory:":

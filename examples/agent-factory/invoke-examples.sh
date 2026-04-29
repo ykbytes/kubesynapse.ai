@@ -7,7 +7,7 @@ NS="${NS:-default}"
 
 echo "== Example 1: Ask the factory for an app-delivery bundle, but do not deploy =="
 curl -sS \
-  -X POST "${API_BASE}/api/agents/kubesynth-factory/invoke?namespace=${NS}" \
+  -X POST "${API_BASE}/api/agents/kubesynapse-factory/invoke?namespace=${NS}" \
   -H "Authorization: Bearer ${TOKEN}" \
   -H "Content-Type: application/json" \
   -d @- <<'JSON'
@@ -20,20 +20,20 @@ JSON
 echo
 echo "== Example 2: Ask for a report or book workflow without running it =="
 curl -sS \
-  -X POST "${API_BASE}/api/agents/kubesynth-factory/invoke?namespace=${NS}" \
+  -X POST "${API_BASE}/api/agents/kubesynapse-factory/invoke?namespace=${NS}" \
   -H "Authorization: Bearer ${TOKEN}" \
   -H "Content-Type: application/json" \
   -d @- <<'JSON'
 {
   "factory_mode": "governed-bundle",
-  "prompt": "Create a practitioner handbook on operating KubeSynth in enterprise clusters. Produce the chapter plan, research workflow, editorial QA design, exact manifests, and generated workflow that could draft and review the handbook after approval, but do not run anything yet."
+  "prompt": "Create a practitioner handbook on operating kubesynapse in enterprise clusters. Produce the chapter plan, research workflow, editorial QA design, exact manifests, and generated workflow that could draft and review the handbook after approval, but do not run anything yet."
 }
 JSON
 
 echo
 echo "== Example 3: Ask for a presentation workflow without deploying it =="
 curl -sS \
-  -X POST "${API_BASE}/api/agents/kubesynth-factory/invoke?namespace=${NS}" \
+  -X POST "${API_BASE}/api/agents/kubesynapse-factory/invoke?namespace=${NS}" \
   -H "Authorization: Bearer ${TOKEN}" \
   -H "Content-Type: application/json" \
   -d @- <<'JSON'
@@ -46,7 +46,7 @@ JSON
 echo
 echo "== Example 4: Trigger the fully autonomous deploy-and-run path =="
 curl -sS \
-  -X POST "${API_BASE}/api/workflows/kubesynth-factory-pipeline/trigger?namespace=${NS}" \
+  -X POST "${API_BASE}/api/workflows/kubesynapse-factory-pipeline/trigger?namespace=${NS}" \
   -H "Authorization: Bearer ${TOKEN}" \
   -H "Content-Type: application/json" \
   -d @- <<'JSON'

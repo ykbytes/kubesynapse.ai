@@ -43,7 +43,7 @@ try {
             "annotate",
             "agentworkflow",
             "ableton-live-web",
-            "kubesynth.ai/trigger=$(Get-Date -Format o)",
+            "kubesynapse.ai/trigger=$(Get-Date -Format o)",
             "--overwrite"
         )
     }

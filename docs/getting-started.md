@@ -1,4 +1,4 @@
-# Getting Started with KubeSynth
+# Getting Started with KubeSynapse
 
 **Time to complete:** 5 minutes  
 **Who is this for:** Platform engineers, DevOps teams, and AI developers who want to deploy their first agent on Kubernetes.
@@ -8,7 +8,7 @@
 ## Table of Contents
 
 - [Prerequisites](#prerequisites)
-- [Step 1: Install KubeSynth via Helm OCI](#step-1-install-kubesynth-via-helm-oci)
+- [Step 1: Install KubeSynapse via Helm OCI](#step-1-install-KubeSynapse-via-helm-oci)
 - [Step 2: Port-Forward and Verify Health](#step-2-port-forward-and-verify-health)
 - [Step 3: Create Your First Agent](#step-3-create-your-first-agent)
 - [Step 4: Chat with the Agent](#step-4-chat-with-the-agent)
@@ -29,18 +29,18 @@
 You also need a running Kubernetes cluster. For local testing, use [Kind](https://kind.sigs.k8s.io/):
 
 ```bash
-kind create cluster --name kubesynth
+kind create cluster --name KubeSynapse
 ```
 
 ---
 
-## Step 1: Install KubeSynth via Helm OCI
+## Step 1: Install KubeSynapse via Helm OCI
 
 One command installs the entire platform:
 
 ```bash
-helm install kubesynth oci://docker.io/kubesynth/charts/kubesynth \
-  --namespace kubesynth --create-namespace \
+helm install KubeSynapse oci://docker.io/kubesynapse/charts/kubesynapse \
+  --namespace kubesynapse --create-namespace \
   --set platformSecrets.native.openaiApiKey="sk-..." \
   --set litellm.masterKey="your-secure-litellm-key"
 ```
@@ -48,14 +48,14 @@ helm install kubesynth oci://docker.io/kubesynth/charts/kubesynth \
 **What this does:**
 - Deploys the API Gateway, Operator, Web UI, LiteLLM, Redis, Qdrant, PostgreSQL, and NATS
 - Installs 11 CRDs into your cluster
-- Creates the `kubesynth` namespace
+- Creates the `kubesynapse` namespace
 
 **Expected output:**
 
 ```text
-NAME: kubesynth
+NAME: KubeSynapse
 LAST DEPLOYED: Mon Apr 27 10:00:00 2026
-NAMESPACE: kubesynth
+NAMESPACE: KubeSynapse
 STATUS: deployed
 REVISION: 1
 ```
@@ -63,7 +63,7 @@ REVISION: 1
 Wait for all pods to become ready:
 
 ```bash
-kubectl wait --for=condition=ready pod --all -n kubesynth --timeout=300s
+kubectl wait --for=condition=ready pod --all -n kubesynapse --timeout=300s
 ```
 
 ---
@@ -74,10 +74,10 @@ Forward the API Gateway and Web UI to your local machine:
 
 ```bash
 # Terminal 1 — API Gateway
-kubectl port-forward -n kubesynth svc/kubesynth-api-gateway 8080:8080
+kubectl port-forward -n kubesynapse svc/kubesynapse-api-gateway 8080:8080
 
 # Terminal 2 — Web UI
-kubectl port-forward -n kubesynth svc/kubesynth-web-ui 3000:80
+kubectl port-forward -n kubesynapse svc/kubesynapse-web-ui 3000:80
 ```
 
 Verify the gateway is healthy:
@@ -91,7 +91,7 @@ curl http://localhost:8080/api/health
 ```json
 {
   "status": "healthy",
-  "gateway": "kubesynth",
+  "gateway": "KubeSynapse",
   "auth_mode": "shared_token",
   "browser_auth_enabled": true,
   "local_auth_enabled": true,
@@ -109,7 +109,7 @@ Open the Web UI at [http://localhost:3000](http://localhost:3000).
 
 ```bash
 # Install the CLI
-pip install kubesynth-cli
+pip install kubesynapse-cli
 
 # Create an agent
 agentctl agent create \
@@ -124,7 +124,7 @@ agentctl agent create \
 Save this as `first-agent.yaml`:
 
 ```yaml
-apiVersion: kubesynth.ai/v1alpha1
+apiVersion: kubesynapse.ai/v1alpha1
 kind: AIAgent
 metadata:
   name: onboarding-bot
@@ -148,6 +148,38 @@ kubectl apply -f first-agent.yaml
 kubectl get aiagent -n default
 kubectl get pods -n default -l app.kubernetes.io/name=onboarding-bot
 ```
+
+---
+
+## Step 3b: Create a Pi Runtime Agent (Alternative)
+
+KubeSynapse also supports the **Pi runtime** as an alternative to OpenCode. Pi uses a Node.js RPC bridge with live reasoning log streaming via SSE.
+
+Save this as `pi-agent.yaml`:
+
+```yaml
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AIAgent
+metadata:
+  name: pi-onboarding-bot
+  namespace: default
+spec:
+  runtimeKind: pi
+  runtime:
+    pi:
+      provider: opencode
+  systemPrompt: "You are a friendly DevOps onboarding assistant."
+  model: gpt-4o
+  storageSize: 1Gi
+```
+
+Apply it:
+
+```bash
+kubectl apply -f pi-agent.yaml
+```
+
+**Note:** The Pi runtime streams live reasoning logs via SSE, visible in the Web UI **Chat Workbench** as terminal-style events.
 
 ---
 
@@ -190,12 +222,12 @@ curl -X POST http://localhost:8080/api/v1/agents/onboarding-bot/invoke \
 
 ## Step 5: Delegate to Another Agent via A2A
 
-KubeSynth supports native A2A (Agent-to-Agent) delegation. Create a second agent that the first can call.
+KubeSynapse supports native A2A (Agent-to-Agent) delegation. Create a second agent that the first can call.
 
 ### 1. Create a specialist agent
 
 ```yaml
-apiVersion: kubesynth.ai/v1alpha1
+apiVersion: kubesynapse.ai/v1alpha1
 kind: AIAgent
 metadata:
   name: security-specialist
@@ -216,7 +248,7 @@ kubectl apply -f security-specialist.yaml
 Create an `AgentPolicy` that allows A2A targeting:
 
 ```yaml
-apiVersion: kubesynth.ai/v1alpha1
+apiVersion: kubesynapse.ai/v1alpha1
 kind: AgentPolicy
 metadata:
   name: a2a-delegation-policy

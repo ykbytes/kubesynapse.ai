@@ -2,7 +2,7 @@ openapi: 3.1.0
 info:
   title: OpenCode Runtime API
   description: |
-    The OpenCode Runtime API is the HTTP contract between the kubesynth
+    The OpenCode Runtime API is the HTTP contract between the kubesynapse
     operator/worker and the per-agent OpenCode runtime sidecar.  All invocations
     from the operator go exclusively through `operator/worker.py`; no controller
     calls the runtime directly.
@@ -12,7 +12,7 @@ info:
     **Contract Version**: `v1alpha1`
   version: 1.0.0
   contact:
-    name: kubesynth
+    name: kubesynapse
   license:
     name: Apache 2.0
     url: https://www.apache.org/licenses/LICENSE-2.0

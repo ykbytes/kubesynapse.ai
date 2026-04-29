@@ -10,7 +10,7 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 cd "$PROJECT_ROOT"
 
 echo "========================================"
-echo "KubeSynth Docker Build Verification"
+echo "kubesynapse Docker Build Verification"
 echo "========================================"
 echo ""
 
@@ -22,7 +22,7 @@ build_image() {
   local dockerfile=${3:-Dockerfile}
   
   echo "🔨 Building $name from $path/$dockerfile ..."
-  if docker build -f "$path/$dockerfile" -t "kubesynth/$name:test" "$path" > "/tmp/build-$name.log" 2>&1; then
+  if docker build -f "$path/$dockerfile" -t "kubesynapse/$name:test" "$path" > "/tmp/build-$name.log" 2>&1; then
     echo "  ✅ $name built successfully"
     return 0
   else

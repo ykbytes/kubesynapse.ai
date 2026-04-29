@@ -302,7 +302,7 @@ def _get_session_memory() -> SessionMemory:
     except Exception:
         import tempfile
 
-        fallback = Path(tempfile.gettempdir()) / "kubesynth-memory"
+        fallback = Path(tempfile.gettempdir()) / "kubesynapse-memory"
         fallback.mkdir(parents=True, exist_ok=True)
         return SessionMemory(fallback)
 

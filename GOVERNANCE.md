@@ -1,8 +1,8 @@
-# KubeSynth Governance
+# KubeSynapse Governance
 
 ## Overview
 
-KubeSynth is an open-source project committed to building a production-grade Kubernetes AI platform. This document defines how decisions are made, how contributors can participate, and how the project is maintained.
+KubeSynapse is an open-source project committed to building a production-grade Kubernetes AI platform. This document defines how decisions are made, how contributors can participate, and how the project is maintained.
 
 ## Decision Making
 
@@ -52,10 +52,10 @@ See [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md). All participants must adhere to it
 
 ## License
 
-KubeSynth is licensed under the Apache License 2.0.
+KubeSynapse is licensed under the Apache License 2.0.
 
 ## Contact
 
 - Issues: [GitHub Issues](https://github.com/ykbytes/kubemininions/issues)
 - Discussions: [GitHub Discussions](https://github.com/ykbytes/kubemininions/discussions)
-- Security: security@kubesynth.ai
+- Security: security@kubesynapse.ai

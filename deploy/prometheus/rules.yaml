@@ -1,53 +1,53 @@
 groups:
-  - name: kubesynth
+  - name: kubesynapse
     rules:
-      - alert: KubeSynthOperatorReconcileErrorsHigh
-        expr: sum(rate(kubesynth_operator_reconcile_errors_total[5m])) by (resource_type) > 0.1
+      - alert: KubeSynapseOperatorReconcileErrorsHigh
+        expr: sum(rate(KUBESYNAPSE_operator_reconcile_errors_total[5m])) by (resource_type) > 0.1
         for: 5m
         labels:
           severity: warning
         annotations:
           summary: "High reconciliation error rate for {{ $labels.resource_type }}"
-          description: "The KubeSynth operator is experiencing >0.1 errors/sec reconciling {{ $labels.resource_type }} resources."
+          description: "The kubesynapse operator is experiencing >0.1 errors/sec reconciling {{ $labels.resource_type }} resources."
 
-      - alert: KubeSynthOperatorCircuitBreakerOpen
-        expr: sum(kubesynth_circuit_breaker_state{state="open"}) > 0
+      - alert: KubeSynapseOperatorCircuitBreakerOpen
+        expr: sum(KUBESYNAPSE_circuit_breaker_state{state="open"}) > 0
         for: 1m
         labels:
           severity: critical
         annotations:
           summary: "Circuit breaker is open"
-          description: "A KubeSynth circuit breaker is open, indicating repeated failures calling the Kubernetes API."
+          description: "A kubesynapse circuit breaker is open, indicating repeated failures calling the Kubernetes API."
 
-      - alert: KubeSynthGatewayErrorRateHigh
-        expr: sum(rate(kubesynth_gateway_request_latency_seconds_count{status=~"5.."}[5m])) / sum(rate(kubesynth_gateway_request_latency_seconds_count[5m])) > 0.05
+      - alert: KubeSynapseGatewayErrorRateHigh
+        expr: sum(rate(KUBESYNAPSE_gateway_request_latency_seconds_count{status=~"5.."}[5m])) / sum(rate(KUBESYNAPSE_gateway_request_latency_seconds_count[5m])) > 0.05
         for: 5m
         labels:
           severity: warning
         annotations:
           summary: "High API gateway error rate"
-          description: "The KubeSynth API gateway 5xx error rate is >5% over the last 5 minutes."
+          description: "The kubesynapse API gateway 5xx error rate is >5% over the last 5 minutes."
 
-      - alert: KubeSynthGatewayLatencyHigh
-        expr: histogram_quantile(0.95, sum(rate(kubesynth_gateway_request_latency_seconds_bucket[5m])) by (le)) > 5
+      - alert: KubeSynapseGatewayLatencyHigh
+        expr: histogram_quantile(0.95, sum(rate(KUBESYNAPSE_gateway_request_latency_seconds_bucket[5m])) by (le)) > 5
         for: 5m
         labels:
           severity: warning
         annotations:
           summary: "High API gateway latency"
-          description: "The KubeSynth API gateway P95 latency is >5 seconds."
+          description: "The kubesynapse API gateway P95 latency is >5 seconds."
 
-      - alert: KubeSynthWorkerTimeout
-        expr: sum(rate(kubesynth_worker_timeout_total[5m])) > 0
+      - alert: KubeSynapseWorkerTimeout
+        expr: sum(rate(KUBESYNAPSE_worker_timeout_total[5m])) > 0
         for: 1m
         labels:
           severity: warning
         annotations:
           summary: "Worker job timed out"
-          description: "A KubeSynth worker job has exceeded its execution timeout."
+          description: "A kubesynapse worker job has exceeded its execution timeout."
 
-      - alert: KubeSynthMcpSidecarDown
-        expr: up{job=~"kubesynth-mcp-.*"} == 0
+      - alert: KubeSynapseMcpSidecarDown
+        expr: up{job=~"kubesynapse-mcp-.*"} == 0
         for: 2m
         labels:
           severity: warning
@@ -55,8 +55,8 @@ groups:
           summary: "MCP sidecar is down"
           description: "The MCP sidecar {{ $labels.job }} has been down for more than 2 minutes."
 
-      - alert: KubeSynthMemoryHigh
-        expr: container_memory_working_set_bytes{pod=~"kubesynth-.*"} / container_spec_memory_limit_bytes{pod=~"kubesynth-.*"} > 0.85
+      - alert: KubeSynapseMemoryHigh
+        expr: container_memory_working_set_bytes{pod=~"kubesynapse-.*"} / container_spec_memory_limit_bytes{pod=~"kubesynapse-.*"} > 0.85
         for: 5m
         labels:
           severity: warning
@@ -64,11 +64,76 @@ groups:
           summary: "High memory usage"
           description: "Pod {{ $labels.pod }} is using >85% of its memory limit."
 
-      - alert: KubeSynthCpuThrottling
-        expr: rate(container_cpu_cfs_throttled_seconds_total{pod=~"kubesynth-.*"}[5m]) > 0.1
+      - alert: KubeSynapseCpuThrottling
+        expr: rate(container_cpu_cfs_throttled_seconds_total{pod=~"kubesynapse-.*"}[5m]) > 0.1
         for: 5m
         labels:
           severity: info
         annotations:
           summary: "CPU throttling detected"
           description: "Pod {{ $labels.pod }} is being CPU throttled. Consider increasing CPU limits."
+
+      # ── Sprint 7: Agent pod down ──────────────────────────────────
+      - alert: KubeSynapseAgentPodDown
+        expr: kube_pod_info{namespace="kubesynapse", pod=~"kubesynapse-agent-.*", phase!="Running", phase!="Succeeded"} > 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Agent pod is not running"
+          description: "Agent pod {{ $labels.pod }} is in phase {{ $labels.phase }}. This agent will not process workflows until recovered."
+
+      # ── Sprint 7: Workflow failure rate > 5% ──────────────────────
+      - alert: KubeSynapseWorkflowFailureRateHigh
+        expr: |
+          (
+            sum(rate(KUBESYNAPSE_workflow_runs_total{status="failed"}[5m]))
+            /
+            sum(rate(KUBESYNAPSE_workflow_runs_total[5m]))
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Workflow failure rate exceeds 5%"
+          description: "The workflow failure rate is {{ $value | humanizePercentage }} over the last 5 minutes. Investigate recent workflow runs and agent logs."
+
+      # ── Sprint 7: API error rate > 1% ─────────────────────────────
+      - alert: KubeSynapseAPIErrorRateHigh
+        expr: |
+          (
+            sum(rate(KUBESYNAPSE_gateway_request_latency_seconds_count{status=~"5.."}[5m]))
+            /
+            sum(rate(KUBESYNAPSE_gateway_request_latency_seconds_count[5m]))
+          ) > 0.01
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "API error rate exceeds 1%"
+          description: "The API gateway 5xx error rate is {{ $value | humanizePercentage }} over the last 5 minutes. Check gateway logs and backend service health."
+
+      # ── Sprint 7: LiteLLM unhealthy ───────────────────────────────
+      - alert: KubeSynapseLiteLLMUnhealthy
+        expr: KUBESYNAPSE_litellm_health_status != 1
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "LiteLLM proxy is unhealthy"
+          description: "The LiteLLM health check is failing. LLM requests will fail until the proxy is recovered. Check LiteLLM pod logs and upstream provider connectivity."
+
+      # ── Sprint 7: Workflow step timeout rate ──────────────────────
+      - alert: KubeSynapseStepTimeoutRate
+        expr: |
+          (
+            sum(rate(KUBESYNAPSE_step_executions_total{status="timeout"}[10m]))
+            /
+            sum(rate(KUBESYNAPSE_step_executions_total[10m]))
+          ) > 0.1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Step timeout rate exceeds 10%"
+          description: "{{ $value | humanizePercentage }} of workflow steps are timing out over the last 10 minutes. Check worker resources and step timeout configurations."

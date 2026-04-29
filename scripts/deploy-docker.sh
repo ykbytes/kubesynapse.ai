@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# KubeSynth Docker deployment script
+# kubesynapse Docker deployment script
 # 
 # Usage:
 #   ./scripts/deploy-docker.sh [up|down|build|logs|status]
@@ -21,7 +21,7 @@ cd "$PROJECT_ROOT"
 
 case "${1:-up}" in
   up)
-    echo "🚀 Starting KubeSynth stack..."
+    echo "🚀 Starting kubesynapse stack..."
     docker compose -f "$COMPOSE_FILE" up -d
     echo ""
     echo "Services:"
@@ -36,12 +36,12 @@ case "${1:-up}" in
     ;;
 
   down)
-    echo "🛑 Stopping KubeSynth stack..."
+    echo "🛑 Stopping kubesynapse stack..."
     docker compose -f "$COMPOSE_FILE" down
     ;;
 
   down-volumes)
-    echo "🛑 Stopping KubeSynth stack and removing volumes..."
+    echo "🛑 Stopping kubesynapse stack and removing volumes..."
     docker compose -f "$COMPOSE_FILE" down -v
     ;;
 
@@ -75,7 +75,7 @@ case "${1:-up}" in
 
   push)
     echo "📤 Pushing images to $REGISTRY..."
-    for image in kubesynth-api-gateway kubesynth-operator kubesynth-web-ui kubesynth-opencode-runtime; do
+    for image in kubesynapse-api-gateway kubesynapse-operator kubesynapse-web-ui kubesynapse-opencode-runtime; do
       docker tag "$image:$VERSION" "$REGISTRY/$image:$VERSION"
       docker push "$REGISTRY/$image:$VERSION"
     done

@@ -1,6 +1,6 @@
-# Contributing to KubeSynth
+# Contributing to KubeSynapse
 
-Thank you for your interest in contributing to KubeSynth! This guide covers everything you need to get started.
+Thank you for your interest in contributing to KubeSynapse! This guide covers everything you need to get started.
 
 ## Table of Contents
 
@@ -31,9 +31,9 @@ All contributors must follow our [Code of Conduct](CODE_OF_CONDUCT.md). Be respe
 
 ```bash
 # Fork the repository on GitHub, then:
-git clone https://github.com/<your-username>/kubesynth.git
-cd kubesynth
-git remote add upstream https://github.com/ykbytes/kubemininions.git
+git clone https://github.com/<your-username>/KubeSynapse.git
+cd KubeSynapse
+git remote add upstream https://github.com/kubesynapse/kubesynapse.git
 ```
 
 ### Branch Strategy
@@ -68,12 +68,19 @@ npm install
 npm run dev    # Start dev server at http://localhost:5173
 ```
 
+### Pi Runtime
+
+```bash
+cd pi-runtime
+npm install    # Install Pi runtime dev dependencies
+```
+
 ### Local Kind Cluster (for integration testing)
 
 ```bash
 kind create cluster --config kind-cluster-config.yaml
 kubectl apply -f https://github.com/cert-manager/cert-manager/releases/latest/download/cert-manager.yaml
-helm install kubesynth ./charts/kubesynth -n kubesynth --create-namespace
+helm install KubeSynapse ./charts/kubesynapse -n kubesynapse --create-namespace
 ```
 
 ## Code Standards
@@ -111,8 +118,8 @@ npm run build    # Must pass with zero errors before PR
 ### Helm Charts
 
 ```bash
-helm lint charts/kubesynth --strict
-helm template kubesynth charts/kubesynth --debug
+helm lint charts/kubesynapse --strict
+helm template KubeSynapse charts/kubesynapse --debug
 ```
 
 ### YAML / CRD Naming Convention
@@ -224,9 +231,10 @@ To claim a Good First Issue, comment `/assign` on the issue. A maintainer will a
 | `operator/` | Kubernetes operator (Kopf-based) — reconciles CRDs into running pods |
 | `api-gateway/` | FastAPI gateway — REST API, A2A endpoints, authentication |
 | `opencode-runtime/` | OpenCode runtime — FastAPI wrapper around opencode serve |
+| `pi-runtime/` | Pi agent runtime bridge (Node.js HTTP bridge for Pi RPC mode) |
 | `web-ui/` | React 18 + Vite + Tailwind CSS v4 console |
 | `mcp-sidecars/` | 10 MCP tool sidecar container images |
-| `charts/kubesynth/` | Helm chart for full-stack deployment |
+| `charts/kubesynapse/` | Helm chart for full-stack deployment |
 | `docs/` | Architecture, deployment, and operations guides |
 | `scripts/` | Automation scripts (demo, release, etc.) |
 | `catalog/` | Community agent and workflow catalog |
@@ -234,7 +242,7 @@ To claim a Good First Issue, comment `/assign` on the issue. A maintainer will a
 
 ## Community
 
-- **GitHub Discussions**: [github.com/ykbytes/kubemininions/discussions](https://github.com/ykbytes/kubemininions/discussions)
+- **GitHub Discussions**: [github.com/kubesynapse/kubesynapse/discussions](https://github.com/kubesynapse/kubesynapse/discussions)
 - **Roadmap**: [ROADMAP.md](ROADMAP.md)
 - **Maintainers**: [MAINTAINERS.md](MAINTAINERS.md)
 

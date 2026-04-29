@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "agentctl"
+name = "kubesynapse-cli"
 version = "0.2.0"
-description = "Rich Python CLI for KubeSynth"
+description = "Rich Python CLI for kubesynapse"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

@@ -60,7 +60,7 @@ The important part is this annotation on the target:
 ```yaml
 metadata:
   annotations:
-    observability.kubesynth.ai/demo-mode: firing
+    observability.kubesynapse.ai/demo-mode: firing
 ```
 
 That annotation tells the current controller to synthesize a visible firing report so you can inspect something concrete in the UI.
@@ -157,13 +157,13 @@ That makes the page readable even before every resource has been manually curate
 If you want the same target to stop firing, change:
 
 ```yaml
-observability.kubesynth.ai/demo-mode: firing
+observability.kubesynapse.ai/demo-mode: firing
 ```
 
 to:
 
 ```yaml
-observability.kubesynth.ai/demo-mode: healthy
+observability.kubesynapse.ai/demo-mode: healthy
 ```
 
 Then re-apply the target and wait for the next controller reconciliation.

@@ -8,11 +8,11 @@ trustBundle:
 operator:
   replicaCount: 1
   image:
-    repository: docker.io/yakdhane/kubesynth-operator
+    repository: docker.io/yakdhane/kubesynapse-operator
     tag: deploy-20260401-225700-hotfix
     pullPolicy: Always
   workerImage:
-    repository: docker.io/yakdhane/kubesynth-operator
+    repository: docker.io/yakdhane/kubesynapse-operator
     tag: deploy-20260401-225700-hotfix
     pullPolicy: Always
 
@@ -36,7 +36,7 @@ opencodeRuntime:
 
 apiGateway:
   image:
-    repository: docker.io/yakdhane/kubesynth-api-gateway
+    repository: docker.io/yakdhane/kubesynapse-api-gateway
     tag: deploy-20260401-212102
     pullPolicy: Always
   auth:
@@ -47,7 +47,7 @@ apiGateway:
 webUi:
   enabled: true
   image:
-    repository: docker.io/yakdhane/kubesynth-web-ui
+    repository: docker.io/yakdhane/kubesynapse-web-ui
     tag: deploy-20260401-225700-hotfix
     pullPolicy: Always
 

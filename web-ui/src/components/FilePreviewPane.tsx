@@ -24,7 +24,7 @@ interface FilePreviewPaneProps {
   onDownload: () => void;
 }
 
-const EDITOR_THEME = "kubesynth-control";
+const EDITOR_THEME = "kubesynapse-control";
 
 const EDITOR_OPTIONS = {
   automaticLayout: true,

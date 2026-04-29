@@ -1,4 +1,4 @@
-apiVersion: kubesynth.ai/v1alpha1
+apiVersion: kubesynapse.ai/v1alpha1
 kind: AgentPolicy
 metadata:
   name: strict-enterprise-policy

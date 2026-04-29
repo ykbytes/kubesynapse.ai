@@ -32,24 +32,41 @@ export function ConfirmDialog({
 }: ConfirmDialogProps) {
   const isDestructive = variant === "destructive";
   const Icon = isDestructive ? AlertTriangle : Info;
+  const dialogTitleId = "confirm-dialog-title";
+  const dialogDescId = "confirm-dialog-description";
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[400px]">
+      <DialogContent
+        className="sm:max-w-[400px]"
+        aria-labelledby={dialogTitleId}
+        aria-describedby={dialogDescId}
+      >
         <DialogHeader>
           <div className="flex items-center gap-2.5">
-            <div className={`rounded-xl p-2.5 ring-1 shadow-md animate-bounce-in ${isDestructive ? "bg-destructive/15 ring-destructive/30 shadow-destructive/15" : "bg-primary/15 ring-primary/30 shadow-primary/15"}`}>
+            <div
+              className={`rounded-xl p-2.5 ring-1 shadow-md animate-bounce-in ${isDestructive ? "bg-destructive/15 ring-destructive/30 shadow-destructive/15" : "bg-primary/15 ring-primary/30 shadow-primary/15"}`}
+              aria-hidden="true"
+            >
               <Icon className={`h-4 w-4 ${isDestructive ? "text-destructive" : "text-primary"}`} />
             </div>
-            <DialogTitle>{title}</DialogTitle>
+            <DialogTitle id={dialogTitleId}>{title}</DialogTitle>
           </div>
-          <DialogDescription className="pt-1">{description}</DialogDescription>
+          <DialogDescription id={dialogDescId} className="pt-1">
+            {description}
+          </DialogDescription>
         </DialogHeader>
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
+          <Button
+            variant="outline"
+            onClick={() => onOpenChange(false)}
+            aria-label={cancelLabel}
+          >
             {cancelLabel}
           </Button>
           <Button
             variant={variant === "destructive" ? "destructive" : "default"}
+            aria-label={confirmLabel}
             onClick={() => {
               onConfirm();
               onOpenChange(false);

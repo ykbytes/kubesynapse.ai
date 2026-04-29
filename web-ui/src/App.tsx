@@ -382,7 +382,7 @@ function AppLayout() {
                       : ws.activeView === "docs"
                         ? {
                             title: "Documentation",
-                            description: "Learn how to deploy, operate, and extend KubeSynth.",
+                            description: "Learn how to deploy, operate, and extend kubesynapse.",
                           }
                         : ws.activeView === "webhooks"
                           ? {
@@ -559,6 +559,7 @@ function AppLayout() {
                     onA2AAllowedCallersTextChange={ws.setCreateAgentA2AAllowedCallersText}
                     onSkillFileDraftsChange={ws.setCreateAgentSkillFileDrafts}
                     onOpenCodeConfigFileDraftsChange={ws.setCreateAgentOpenCodeConfigFileDrafts}
+                    onRuntimeKindChange={ws.setCreateAgentRuntimeKind}
                     gitForm={ws.createAgentGitForm}
                     onGitFormChange={ws.setCreateAgentGitForm}
                     onCreate={() => void handleCreateAgentFull()}

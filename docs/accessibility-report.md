@@ -1,15 +1,15 @@
-# Accessibility Conformance Report — KubeSynth Web UI
+# Accessibility Conformance Report — KubeSynapse Web UI
 
 **Standard**: WCAG 2.1 Level AA
 **Date**: 2026-04-27
 **Version**: v1.0.0
-**Auditor**: KubeSynth Engineering
+**Auditor**: KubeSynapse Engineering
 
 ---
 
 ## Executive Summary
 
-KubeSynth Web UI has been audited and enhanced to meet WCAG 2.1 AA compliance. All critical paths (agent creation, workflow management, chat interaction, and settings) are keyboard-accessible, screen-reader-friendly, and meet minimum color contrast requirements.
+KubeSynapse Web UI has been audited and enhanced to meet WCAG 2.1 AA compliance. All critical paths (agent creation, workflow management, chat interaction, and settings) are keyboard-accessible, screen-reader-friendly, and meet minimum color contrast requirements.
 
 ---
 
@@ -42,7 +42,7 @@ KubeSynth Web UI has been audited and enhanced to meet WCAG 2.1 AA compliance. A
 | 2.2.2 Pause, Stop, Hide | Control for moving/blinking content | ✅ PASS | Loading spinners are CSS-based, not flashing. No auto-playing video. |
 | 2.3.1 Three Flashes or Below | No more than 3 flashes/sec | ✅ PASS | All animations use CSS transitions/`framer-motion` at ≤60fps. No strobe effects. |
 | 2.4.1 Bypass Blocks | Skip-to-content link | ✅ PASS | `<SkipToContent>` component rendered as first focusable element on every page. Links to `<main id="main-content">`. |
-| 2.4.2 Page Titled | Descriptive `<title>` | ✅ PASS | Document title updates with active view (e.g., "Agents — KubeSynth"). |
+| 2.4.2 Page Titled | Descriptive `<title>` | ✅ PASS | Document title updates with active view (e.g., "Agents — KubeSynapse"). |
 | 2.4.3 Focus Order | Logical tab order | ✅ PASS | Tab order: Skip link → TopBar → Sidebar → Main Content → Inspector. |
 | 2.4.4 Link Purpose (In Context) | Clear link text | ✅ PASS | All links have descriptive text (no "click here"). Icon buttons have `aria-label`. |
 | 2.4.5 Multiple Ways | Multiple ways to find content | ✅ PASS | Sidebar navigation + Command Palette (`Cmd+K`) search + direct URL routing. |

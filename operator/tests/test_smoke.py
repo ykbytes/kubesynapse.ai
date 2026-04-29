@@ -1,4 +1,4 @@
-"""Smoke tests for the KubeSynth operator.
+"""Smoke tests for the kubesynapse operator.
 
 These tests verify core operator logic without requiring a real Kubernetes cluster.
 """

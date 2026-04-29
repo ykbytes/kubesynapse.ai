@@ -1,4 +1,4 @@
-# KubeSynth Deep-Dive Analysis
+# KubeSynapse Deep-Dive Analysis
 
 **Date:** 2026-04-23
 **Branch:** `preprod`
@@ -6,9 +6,9 @@
 
 ---
 
-## 1. What Is KubeSynth?
+## 1. What Is KubeSynapse?
 
-KubeSynth is a **Kubernetes-native AI agent platform**. It treats AI agents as first-class Kubernetes resources, providing a complete control plane to build, deploy, govern, and observe AI agents inside a cluster.
+KubeSynapse is a **Kubernetes-native AI agent platform**. It treats AI agents as first-class Kubernetes resources, providing a complete control plane to build, deploy, govern, and observe AI agents inside a cluster.
 
 **Core Philosophy:**
 - **OpenCode-first runtime** — The only supported agent runtime is `opencode` (an AI CLI/server).
@@ -239,7 +239,7 @@ Before forwarding to runtime, enriches prompt with:
 
 ---
 
-### 3.6 Helm Chart (`charts/kubesynth/`)
+### 3.6 Helm Chart (`charts/kubesynapse/`)
 
 **Full platform chart** deploying:
 - Operator (2 replicas)
@@ -268,7 +268,7 @@ Each is a separate Docker image, running as sidecars in agent pods or shared ser
 
 ---
 
-## 4. CRD Model (Group: `kubesynth.ai/v1alpha1`)
+## 4. CRD Model (Group: `KubeSynapse.ai/v1alpha1`)
 
 | CRD | Purpose | Reconciled To |
 |-----|---------|---------------|
@@ -433,7 +433,7 @@ Each is a separate Docker image, running as sidecars in agent pods or shared ser
     - Add `.devcontainer/` for VS Code + GitHub Codespaces.
 
 23. **YouTube / Loom Demo**
-    - A 5-minute "KubeSynth in 5 minutes" video drives adoption more than docs.
+    - A 5-minute "KubeSynapse in 5 minutes" video drives adoption more than docs.
 
 24. **Discord / Slack Community**
     - Link in README. Use GitHub Discussions for Q&A.
@@ -447,16 +447,16 @@ Each is a separate Docker image, running as sidecars in agent pods or shared ser
     - Make installation one command instead of `pip install -e`.
 
 27. **Terraform Provider**
-    - DevOps engineers love Terraform. A provider for `kubesynth_ai_agent`, `kubesynth_ai_workflow` would be huge.
+    - DevOps engineers love Terraform. A provider for `KubeSynapse_ai_agent`, `KubeSynapse_ai_workflow` would be huge.
 
 28. **GitOps Integration**
-    - Document ArgoCD/Flux patterns for managing KubeSynth CRDs.
+    - Document ArgoCD/Flux patterns for managing KubeSynapse CRDs.
 
 29. **Cost Attribution**
     - `UsageRecord` tracks tokens. Add per-tenant, per-workflow cost dashboards.
 
 30. **kubectl Plugin**
-    - `kubectl kubesynth get agents` — wraps `agentctl` as a kubectl plugin.
+    - `kubectl KubeSynapse get agents` — wraps `agentctl` as a kubectl plugin.
 
 ---
 

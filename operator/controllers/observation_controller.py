@@ -17,11 +17,27 @@ from kubernetes.client.rest import ApiException  # type: ignore[import-untyped]
 
 logger = logging.getLogger("operator.controllers.observation")
 
-GROUP = "kubesynth.ai"
+GROUP = "kubesynapse.ai"
 VERSION = "v1alpha1"
 REPORT_PLURAL = "observationreports"
 POLICY_PLURAL = "observationpolicies"
 CONNECTOR_PLURAL = "connectorplugins"
+
+
+def _patch_status_with_retry(plural: str, namespace: str, name: str, status: dict[str, Any]) -> None:
+    """Patch CRD status with optimistic-concurrency retry on 409.
+
+    Silently ignores 404 (resource may have been deleted during reconciliation).
+    """
+    from services.k8s import patch_custom_status
+
+    try:
+        patch_custom_status(plural, namespace, name, status)
+    except ApiException as exc:
+        if exc.status == 404:
+            logger.debug("Status patch 404 for %s/%s/%s — resource deleted.", plural, namespace, name)
+            return
+        raise
 
 
 def _now_iso() -> str:
@@ -42,7 +58,7 @@ def _get_demo_mode(meta: dict[str, Any], spec: dict[str, Any]) -> str:
     annotations = meta.get("annotations") or {}
     labels = spec.get("labels") or {}
     raw_mode = (
-        annotations.get("observability.kubesynth.ai/demo-mode")
+        annotations.get("observability.kubesynapse.ai/demo-mode")
         or labels.get("demoMode")
         or labels.get("demo-mode")
         or "healthy"
@@ -98,7 +114,7 @@ def _build_findings(
             ),
             "recommendation": (
                 "Open the report in the Observability workspace, inspect the finding details, and then "
-                "switch the target annotation 'observability.kubesynth.ai/demo-mode' back to 'healthy' "
+                "switch the target annotation 'observability.kubesynapse.ai/demo-mode' back to 'healthy' "
                 "when you no longer want the demo alert to fire."
             ),
         }
@@ -214,6 +230,7 @@ def _ensure_report_for_target(
         "policyRef": policy_ref or None,
         "reportType": "anomaly" if demo_mode != "healthy" else "health-check",
     }
+    target_uid = str(meta.get("uid") or "")
     report_body = {
         "apiVersion": f"{GROUP}/{VERSION}",
         "kind": "ObservationReport",
@@ -221,9 +238,19 @@ def _ensure_report_for_target(
             "name": report_name,
             "namespace": namespace,
             "labels": {
-                "kubesynth.ai/managed-by": "observation-controller",
-                "kubesynth.ai/observation-target": name,
+                "kubesynapse.ai/managed-by": "observation-controller",
+                "kubesynapse.ai/observation-target": name,
             },
+            "ownerReferences": [
+                {
+                    "apiVersion": f"{GROUP}/{VERSION}",
+                    "kind": "ObservationTarget",
+                    "name": name,
+                    "uid": target_uid,
+                    "controller": True,
+                    "blockOwnerDeletion": False,
+                }
+            ] if target_uid else [],
         },
         "spec": report_spec,
     }
@@ -257,13 +284,11 @@ def _ensure_report_for_target(
         policy_spec=policy_spec,
         demo_mode=demo_mode,
     )
-    custom_api.patch_namespaced_custom_object_status(
-        group=GROUP,
-        version=VERSION,
-        namespace=namespace,
-        plural=REPORT_PLURAL,
-        name=report_name,
-        body={"status": report_status},
+    _patch_status_with_retry(
+        REPORT_PLURAL,
+        namespace,
+        report_name,
+        report_status,
     )
 
 
@@ -295,23 +320,15 @@ def _reconcile_policy_status(namespace: str, policy_ref: str | None) -> None:
         if candidate and (last_evaluated is None or str(candidate) > str(last_evaluated)):
             last_evaluated = candidate
 
-    try:
-        custom_api.patch_namespaced_custom_object_status(
-            group=GROUP,
-            version=VERSION,
-            namespace=resolved_policy_namespace,
-            plural=POLICY_PLURAL,
-            name=policy_name,
-            body={
-                "status": {
-                    "activeAlerts": active_alerts,
-                    "lastEvaluated": last_evaluated or _now_iso(),
-                }
-            },
-        )
-    except ApiException as exc:
-        if exc.status != 404:
-            raise
+    _patch_status_with_retry(
+        POLICY_PLURAL,
+        resolved_policy_namespace,
+        policy_name,
+        {
+            "activeAlerts": active_alerts,
+            "lastEvaluated": last_evaluated or _now_iso(),
+        },
+    )
 
 
 def _reconcile_connector_status(namespace: str, connector_ref: str | None) -> None:
@@ -335,18 +352,14 @@ def _reconcile_connector_status(namespace: str, connector_ref: str | None) -> No
 
     image = str((connector.get("spec") or {}).get("image") or "")
     version = image.rsplit(":", 1)[1] if ":" in image else "unknown"
-    custom_api.patch_namespaced_custom_object_status(
-        group=GROUP,
-        version=VERSION,
-        namespace=namespace,
-        plural=CONNECTOR_PLURAL,
-        name=connector_name,
-        body={
-            "status": {
-                "ready": "True",
-                "version": version,
-                "lastHealthCheck": _now_iso(),
-            }
+    _patch_status_with_retry(
+        CONNECTOR_PLURAL,
+        namespace,
+        connector_name,
+        {
+            "ready": "True",
+            "version": version,
+            "lastHealthCheck": _now_iso(),
         },
     )
 
@@ -355,7 +368,7 @@ def _reconcile_connector_status(namespace: str, connector_ref: str | None) -> No
 # ObservationTarget handlers
 # ---------------------------------------------------------------------------
 
-@kopf.on.create("kubesynth.ai", "v1alpha1", "observationtargets")  # type: ignore[arg-type]
+@kopf.on.create("kubesynapse.ai", "v1alpha1", "observationtargets")  # type: ignore[arg-type]
 def create_observation_target(
     spec: dict[str, Any], name: str, namespace: str, patch: kopf.Patch,
     logger: logging.Logger, **kwargs: Any,
@@ -369,7 +382,7 @@ def create_observation_target(
     return {"message": f"ObservationTarget {name} accepted, awaiting connector readiness."}
 
 
-@kopf.on.update("kubesynth.ai", "v1alpha1", "observationtargets")  # type: ignore[arg-type]
+@kopf.on.update("kubesynapse.ai", "v1alpha1", "observationtargets")  # type: ignore[arg-type]
 def update_observation_target(
     spec: dict[str, Any], name: str, namespace: str, patch: kopf.Patch,
     logger: logging.Logger, **kwargs: Any,
@@ -379,7 +392,7 @@ def update_observation_target(
     return {"message": f"ObservationTarget {name} spec updated."}
 
 
-@kopf.on.delete("kubesynth.ai", "v1alpha1", "observationtargets")  # type: ignore[arg-type]
+@kopf.on.delete("kubesynapse.ai", "v1alpha1", "observationtargets")  # type: ignore[arg-type]
 def delete_observation_target(
     name: str, namespace: str, logger: logging.Logger, **kwargs: Any,
 ) -> None:
@@ -391,7 +404,7 @@ def delete_observation_target(
 # ObservationPolicy handlers
 # ---------------------------------------------------------------------------
 
-@kopf.on.create("kubesynth.ai", "v1alpha1", "observationpolicies")  # type: ignore[arg-type]
+@kopf.on.create("kubesynapse.ai", "v1alpha1", "observationpolicies")  # type: ignore[arg-type]
 def create_observation_policy(
     spec: dict[str, Any], name: str, namespace: str, patch: kopf.Patch,
     logger: logging.Logger, **kwargs: Any,
@@ -404,7 +417,7 @@ def create_observation_policy(
     return {"message": f"ObservationPolicy {name} accepted."}
 
 
-@kopf.on.update("kubesynth.ai", "v1alpha1", "observationpolicies")  # type: ignore[arg-type]
+@kopf.on.update("kubesynapse.ai", "v1alpha1", "observationpolicies")  # type: ignore[arg-type]
 def update_observation_policy(
     spec: dict[str, Any], name: str, namespace: str,
     logger: logging.Logger, **kwargs: Any,
@@ -414,7 +427,7 @@ def update_observation_policy(
     return {"message": f"ObservationPolicy {name} spec updated."}
 
 
-@kopf.on.delete("kubesynth.ai", "v1alpha1", "observationpolicies")  # type: ignore[arg-type]
+@kopf.on.delete("kubesynapse.ai", "v1alpha1", "observationpolicies")  # type: ignore[arg-type]
 def delete_observation_policy(
     name: str, namespace: str, logger: logging.Logger, **kwargs: Any,
 ) -> None:
@@ -426,7 +439,7 @@ def delete_observation_policy(
 # ObservationReport handlers
 # ---------------------------------------------------------------------------
 
-@kopf.on.create("kubesynth.ai", "v1alpha1", "observationreports")  # type: ignore[arg-type]
+@kopf.on.create("kubesynapse.ai", "v1alpha1", "observationreports")  # type: ignore[arg-type]
 def create_observation_report(
     spec: dict[str, Any], name: str, namespace: str, patch: kopf.Patch,
     logger: logging.Logger, **kwargs: Any,
@@ -441,7 +454,7 @@ def create_observation_report(
     return {"message": f"ObservationReport {name} accepted, awaiting evaluation."}
 
 
-@kopf.on.update("kubesynth.ai", "v1alpha1", "observationreports")  # type: ignore[arg-type]
+@kopf.on.update("kubesynapse.ai", "v1alpha1", "observationreports")  # type: ignore[arg-type]
 def update_observation_report(
     spec: dict[str, Any], name: str, namespace: str,
     logger: logging.Logger, **kwargs: Any,
@@ -451,7 +464,7 @@ def update_observation_report(
     return {"message": f"ObservationReport {name} spec updated."}
 
 
-@kopf.on.delete("kubesynth.ai", "v1alpha1", "observationreports")  # type: ignore[arg-type]
+@kopf.on.delete("kubesynapse.ai", "v1alpha1", "observationreports")  # type: ignore[arg-type]
 def delete_observation_report(
     name: str, namespace: str, logger: logging.Logger, **kwargs: Any,
 ) -> None:
@@ -463,7 +476,7 @@ def delete_observation_report(
 # ConnectorPlugin handlers
 # ---------------------------------------------------------------------------
 
-@kopf.on.create("kubesynth.ai", "v1alpha1", "connectorplugins")  # type: ignore[arg-type]
+@kopf.on.create("kubesynapse.ai", "v1alpha1", "connectorplugins")  # type: ignore[arg-type]
 def create_connector_plugin(
     spec: dict[str, Any], name: str, namespace: str, patch: kopf.Patch,
     logger: logging.Logger, **kwargs: Any,
@@ -475,7 +488,7 @@ def create_connector_plugin(
     return {"message": f"ConnectorPlugin {name} accepted, awaiting health check."}
 
 
-@kopf.on.update("kubesynth.ai", "v1alpha1", "connectorplugins")  # type: ignore[arg-type]
+@kopf.on.update("kubesynapse.ai", "v1alpha1", "connectorplugins")  # type: ignore[arg-type]
 def update_connector_plugin(
     spec: dict[str, Any], name: str, namespace: str,
     logger: logging.Logger, **kwargs: Any,
@@ -485,7 +498,7 @@ def update_connector_plugin(
     return {"message": f"ConnectorPlugin {name} spec updated."}
 
 
-@kopf.on.delete("kubesynth.ai", "v1alpha1", "connectorplugins")  # type: ignore[arg-type]
+@kopf.on.delete("kubesynapse.ai", "v1alpha1", "connectorplugins")  # type: ignore[arg-type]
 def delete_connector_plugin(
     name: str, namespace: str, logger: logging.Logger, **kwargs: Any,
 ) -> None:
@@ -497,7 +510,7 @@ def delete_connector_plugin(
 # Periodic timer — target scrape status reconciler
 # ---------------------------------------------------------------------------
 
-@kopf.timer("kubesynth.ai", "v1alpha1", "observationtargets", interval=60)  # type: ignore[arg-type]
+@kopf.timer("kubesynapse.ai", "v1alpha1", "observationtargets", interval=60)  # type: ignore[arg-type]
 def reconcile_target_status(
     spec: dict[str, Any], status: dict[str, Any], meta: dict[str, Any], name: str, namespace: str,
     patch: kopf.Patch, logger: logging.Logger, **kwargs: Any,
@@ -508,38 +521,41 @@ def reconcile_target_status(
     and update scrape statistics. For now it transitions Pending → Active.
     """
     del kwargs
-    demo_mode = _get_demo_mode(meta, spec)
-    current_metrics = int(status.get("metricsCollected") or 0)
-    phase = "Active"
-    connector_health = "Healthy"
-    if demo_mode == "warning" or demo_mode == "critical":
-        phase = "Degraded"
-    elif demo_mode == "failed":
-        phase = "Failed"
+    try:
+        demo_mode = _get_demo_mode(meta, spec)
+        current_metrics = int(status.get("metricsCollected") or 0)
+        phase = "Active"
+        connector_health = "Healthy"
+        if demo_mode == "warning" or demo_mode == "critical":
+            phase = "Degraded"
+        elif demo_mode == "failed":
+            phase = "Failed"
 
-    patch.status["phase"] = phase
-    patch.status["connectorHealth"] = connector_health
-    patch.status["lastScrapeTime"] = _now_iso()
-    patch.status["metricsCollected"] = current_metrics + 12 + (_metric_seed(name) % 5)
+        patch.status["phase"] = phase
+        patch.status["connectorHealth"] = connector_health
+        patch.status["lastScrapeTime"] = _now_iso()
+        patch.status["metricsCollected"] = current_metrics + 12 + (_metric_seed(name) % 5)
 
-    _reconcile_connector_status(namespace, spec.get("connectorRef"))
-    _ensure_report_for_target(
-        name=name,
-        namespace=namespace,
-        spec=spec,
-        status={
-            **status,
-            "phase": phase,
-            "connectorHealth": connector_health,
-        },
-        meta=meta,
-        logger=logger,
-    )
-    _reconcile_policy_status(namespace, spec.get("policyRef"))
-    logger.info(
-        "ObservationTarget %s/%s reconciled (mode=%s, phase=%s)",
-        namespace,
-        name,
-        demo_mode,
-        phase,
-    )
+        _reconcile_connector_status(namespace, spec.get("connectorRef"))
+        _ensure_report_for_target(
+            name=name,
+            namespace=namespace,
+            spec=spec,
+            status={
+                **status,
+                "phase": phase,
+                "connectorHealth": connector_health,
+            },
+            meta=meta,
+            logger=logger,
+        )
+        _reconcile_policy_status(namespace, spec.get("policyRef"))
+        logger.info(
+            "ObservationTarget %s/%s reconciled (mode=%s, phase=%s)",
+            namespace,
+            name,
+            demo_mode,
+            phase,
+        )
+    except kubernetes.client.ApiException as exc:
+        logger.warning("ObservationTarget %s/%s reconciliation failed: %s", namespace, name, exc)

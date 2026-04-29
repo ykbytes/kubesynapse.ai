@@ -29,13 +29,13 @@ logger = logging.getLogger("operator.builders")
 # Constants shared across builders and services
 # ---------------------------------------------------------------------------
 
-POD_TEMPLATE_REVISION_ANNOTATION: str = "kubesynth.ai/pod-template-revision"
+POD_TEMPLATE_REVISION_ANNOTATION: str = "kubesynapse.ai/pod-template-revision"
 
 # Orphan pruning labels (§kagent-pattern-6)
 # Added to every agent-scoped manifest so prune_orphaned_resources() can
 # list-by-label and compare against the desired resource set.
-OWNER_LABEL_MANAGED_BY: str = "kubesynth.ai/managed-by"
-OWNER_LABEL_AGENT_NAME: str = "kubesynth.ai/agent-name"
+OWNER_LABEL_MANAGED_BY: str = "kubesynapse.ai/managed-by"
+OWNER_LABEL_AGENT_NAME: str = "kubesynapse.ai/agent-name"
 OWNER_LABEL_MANAGED_BY_VALUE: str = "operator"
 
 
@@ -81,7 +81,7 @@ def resolved_api_gateway_internal_url() -> str:
     """Return the API gateway URL, falling back to in-cluster DNS."""
     if API_GATEWAY_INTERNAL_URL:
         return API_GATEWAY_INTERNAL_URL.rstrip("/")
-    return f"http://kubesynth-api-gateway.{OPERATOR_NAMESPACE}.svc.cluster.local:8080"
+    return f"http://kubesynapse-api-gateway.{OPERATOR_NAMESPACE}.svc.cluster.local:8080"
 
 
 def slugify_name(value: str, max_length: int = 63) -> str:

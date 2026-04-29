@@ -1,7 +1,7 @@
 import type { FactoryMode } from "@/types";
 
-export const FACTORY_AGENT_NAME = "kubesynth-factory";
-export const FACTORY_WORKFLOW_NAME = "kubesynth-factory-pipeline";
+export const FACTORY_AGENT_NAME = "kubesynapse-factory";
+export const FACTORY_WORKFLOW_NAME = "kubesynapse-factory-pipeline";
 export const DEFAULT_FACTORY_MODE: FactoryMode = "governed-bundle";
 
 export const FACTORY_MODE_OPTIONS: Array<{

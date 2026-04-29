@@ -1,4 +1,4 @@
-"""Memory type definitions and constants for the KubeSynth memory system."""
+"""Memory type definitions and constants for the kubesynapse memory system."""
 
 from __future__ import annotations
 

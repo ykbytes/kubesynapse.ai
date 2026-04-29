@@ -24,7 +24,7 @@ from sqlalchemy import text
 
 logger = logging.getLogger("operator.controllers.webhook")
 
-GROUP = "kubesynth.ai"
+GROUP = "kubesynapse.ai"
 VERSION = "v1alpha1"
 WEBHOOK_PLURAL = "webhookreceivers"
 TRIGGER_PLURAL = "workflowtriggers"

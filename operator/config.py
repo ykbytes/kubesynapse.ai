@@ -111,21 +111,27 @@ def with_trust_bundle_env(raw_env: Any) -> Any:
 # Service endpoints & images
 # ---------------------------------------------------------------------------
 
-LITELLM_SVC: str = os.getenv("LITELLM_SVC_NAME", "kubesynth-litellm")
-SECRET_NAME: str = os.getenv("LLM_SECRET_NAME", "kubesynth-llm-api-keys")
+LITELLM_SVC: str = os.getenv("LITELLM_SVC_NAME", "kubesynapse-litellm")
+SECRET_NAME: str = os.getenv("LLM_SECRET_NAME", "kubesynapse-llm-api-keys")
 
-OPENCODE_RUNTIME_IMAGE: str = os.getenv("OPENCODE_RUNTIME_IMAGE", "yakdhane/kubesynth-opencode-runtime:latest")
+OPENCODE_RUNTIME_IMAGE: str = os.getenv("OPENCODE_RUNTIME_IMAGE", "yakdhane/kubesynapse-opencode-runtime:latest")
 OPENCODE_RUNTIME_IMAGE_PULL_POLICY: str = get_string_env("OPENCODE_RUNTIME_IMAGE_PULL_POLICY", "IfNotPresent")
 OPENCODE_DEFAULT_PROVIDER: str = get_string_env("OPENCODE_DEFAULT_PROVIDER", "litellm")
 
-RUNTIME_SERVICE_ACCOUNT: str = os.getenv("RUNTIME_SERVICE_ACCOUNT", "kubesynth-agent-runtime")
-RUNTIME_CLUSTER_ROLE: str = os.getenv("RUNTIME_CLUSTER_ROLE", "kubesynth-agent-runtime-role")
+PI_RUNTIME_IMAGE: str = os.getenv("PI_RUNTIME_IMAGE", "kubesynapse-pi-rt:v0.1.0")
+PI_RUNTIME_IMAGE_PULL_POLICY: str = get_string_env("PI_RUNTIME_IMAGE_PULL_POLICY", "IfNotPresent")
+PI_DEFAULT_PROVIDER: str = get_string_env("PI_DEFAULT_PROVIDER", "")
+PI_DEFAULT_MODEL: str = get_string_env("PI_DEFAULT_MODEL", "anthropic/claude-sonnet-4-20250514")
+PI_DEFAULT_THINKING_LEVEL: str = get_string_env("PI_DEFAULT_THINKING_LEVEL", "medium")
+
+RUNTIME_SERVICE_ACCOUNT: str = os.getenv("RUNTIME_SERVICE_ACCOUNT", "kubesynapse-agent-runtime")
+RUNTIME_CLUSTER_ROLE: str = os.getenv("RUNTIME_CLUSTER_ROLE", "kubesynapse-agent-runtime-role")
 
 # ---------------------------------------------------------------------------
 # Infrastructure services
 # ---------------------------------------------------------------------------
 
-QDRANT_SVC: str = os.getenv("QDRANT_SVC_NAME", "kubesynth-qdrant")
+QDRANT_SVC: str = os.getenv("QDRANT_SVC_NAME", "kubesynapse-qdrant")
 OTEL_ENDPOINT: str = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "").strip()
 
 # ---------------------------------------------------------------------------
@@ -133,7 +139,7 @@ OTEL_ENDPOINT: str = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "").strip()
 # ---------------------------------------------------------------------------
 
 DEFAULT_STORAGE_SIZE: str = os.getenv("AGENT_STORAGE_SIZE", "1Gi")
-CLUSTER_SECRET_STORE: str = os.getenv("CLUSTER_SECRET_STORE", "kubesynth-vault-backend")
+CLUSTER_SECRET_STORE: str = os.getenv("CLUSTER_SECRET_STORE", "kubesynapse-vault-backend")
 SECRET_PROVISIONING_MODE: str = os.getenv("SECRET_PROVISIONING_MODE", "native").strip().lower() or "native"
 DEFAULT_LITELLM_MASTER_KEY: str = os.getenv("DEFAULT_LITELLM_MASTER_KEY", "").strip()
 DEFAULT_API_GATEWAY_SHARED_TOKEN: str = os.getenv("DEFAULT_API_GATEWAY_SHARED_TOKEN", "").strip()
@@ -148,14 +154,14 @@ TRUST_BUNDLE_MOUNT_PATH: str = os.getenv("TRUST_BUNDLE_MOUNT_PATH", "").strip()
 API_PORT: int = 8080
 PROTECTED_NAMESPACES: frozenset[str] = frozenset({"default", "kube-system", "kube-public", "kube-node-lease"})
 ARTIFACT_MOUNT_PATH: str = "/artifacts"
-SUPPORTED_RUNTIME_KINDS: frozenset[str] = frozenset({"opencode"})
+SUPPORTED_RUNTIME_KINDS: frozenset[str] = frozenset({"opencode", "pi"})
 
 # ---------------------------------------------------------------------------
 # Operator & worker settings
 # ---------------------------------------------------------------------------
 
 OPERATOR_NAMESPACE: str = os.getenv("OPERATOR_NAMESPACE", "default").strip() or "default"
-OPERATOR_PEERING_NAME: str = get_string_env("OPERATOR_PEERING_NAME", "kubesynth-operator")
+OPERATOR_PEERING_NAME: str = get_string_env("OPERATOR_PEERING_NAME", "kubesynapse-operator")
 
 WORKER_IMAGE: str = os.getenv("WORKER_IMAGE", "ghcr.io/your-org/ai-operator:latest")
 WORKER_SERVICE_ACCOUNT_NAME: str = os.getenv("WORKER_SERVICE_ACCOUNT_NAME", "default").strip() or "default"
@@ -218,8 +224,8 @@ A2A_MAX_TIMEOUT_SECONDS_ENV: str = "A2A_MAX_TIMEOUT_SECONDS"
 # ---------------------------------------------------------------------------
 
 MCP_HUB_NAMESPACE: str = os.getenv("MCP_HUB_NAMESPACE", "mcp-hub").strip()
-MCP_AUTH_SECRET_NAME: str = os.getenv("MCP_AUTH_SECRET_NAME", "kubesynth-mcp-auth").strip()
-HELM_RELEASE_NAME: str = os.getenv("HELM_RELEASE_NAME", "kubesynth").strip() or "kubesynth"
+MCP_AUTH_SECRET_NAME: str = os.getenv("MCP_AUTH_SECRET_NAME", "kubesynapse-mcp-auth").strip()
+HELM_RELEASE_NAME: str = os.getenv("HELM_RELEASE_NAME", "kubesynapse").strip() or "kubesynapse"
 PROVIDER_REGISTRY_CONFIGMAP_NAME: str = os.getenv(
     "PROVIDER_REGISTRY_CONFIGMAP_NAME",
     f"{HELM_RELEASE_NAME}-provider-registry",
@@ -234,6 +240,16 @@ OPENCODE_RUNTIME_CONFIG_FILES_ENV: str = "OPENCODE_RUNTIME_CONFIG_FILES_JSON"
 OPENCODE_MCP_CONNECTIONS_ENV: str = "OPENCODE_MCP_CONNECTIONS_JSON"
 OPENCODE_MCP_SIDECARS_ENV: str = "OPENCODE_MCP_SIDECARS_JSON"
 AGENT_SKILL_FILES_ENV: str = "AGENT_SKILL_FILES_JSON"
+
+# ---------------------------------------------------------------------------
+# OPA sidecar configuration
+# ---------------------------------------------------------------------------
+OPA_SIDECAR_IMAGE: str = os.getenv("OPA_SIDECAR_IMAGE", "openpolicyagent/opa:latest-static").strip() or "openpolicyagent/opa:latest-static"
+OPA_SIDECAR_PORT: int = get_int_env("OPA_SIDECAR_PORT", 8181, minimum=1)
+OPA_SIDECAR_RESOURCES: Any = get_json_env("OPA_SIDECAR_RESOURCES_JSON", {
+    "requests": {"cpu": "50m", "memory": "64Mi"},
+    "limits": {"cpu": "200m", "memory": "256Mi"},
+})
 
 # ---------------------------------------------------------------------------
 # MCP sidecar catalog (mutable — populated once at import time)

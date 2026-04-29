@@ -1,4 +1,4 @@
-# KubeSynth — Installation, Usage & Operations Guide
+# KubeSynapse — Installation, Usage & Operations Guide
 
 ## Table of Contents
 
@@ -47,7 +47,7 @@
 
 ## Overview
 
-This guide is the detailed install and operations reference for KubeSynth.
+This guide is the detailed install and operations reference for KubeSynapse.
 
 For the most current deployment entry points, prefer these docs first:
 
@@ -55,7 +55,7 @@ For the most current deployment entry points, prefer these docs first:
 - `docs/architecture-overview.md` for the current platform architecture
 - `docs/walkthrough.md` for the current implementation model
 
-**KubeSynth** is a Kubernetes-native platform for deploying, governing, and orchestrating AI agents at enterprise scale. It lets you define agents, policies, multi-agent workflows, evaluation suites, and observability resources as Kubernetes custom resources while a Python operator reconciles them into running infrastructure.
+**KubeSynapse** is a Kubernetes-native platform for deploying, governing, and orchestrating AI agents at enterprise scale. It lets you define agents, policies, multi-agent workflows, evaluation suites, and observability resources as Kubernetes custom resources while a Python operator reconciles them into running infrastructure.
 
 The current supported runtime is OpenCode. Older references in the repository to LangGraph, Goose, or Codex describe earlier architecture phases rather than the primary runtime path used by the current code.
 
@@ -201,7 +201,7 @@ platformSecrets:
 ### 3. Deploy
 
 ```bash
-helm upgrade --install kubesynth ./charts/kubesynth \
+helm upgrade --install KubeSynapse ./charts/kubesynapse \
   -f ./deploy/values.dockerhub.local.yaml
 ```
 
@@ -215,23 +215,23 @@ Expected pods once everything is ready:
 
 | Pod prefix | Description |
 |---|---|
-| `kubesynth-operator-*` | Operator (2 replicas for HA) |
-| `kubesynth-api-gateway-*` | API Gateway |
-| `kubesynth-litellm-*` | LiteLLM model proxy |
-| `kubesynth-redis-*` | Redis cache |
-| `kubesynth-qdrant-*` | Qdrant vector database |
-| `kubesynth-nats-*` | NATS message bus |
-| `kubesynth-web-ui-*` | Web dashboard |
+| `kubesynapse-operator-*` | Operator (2 replicas for HA) |
+| `kubesynapse-api-gateway-*` | API Gateway |
+| `KubeSynapse-litellm-*` | LiteLLM model proxy |
+| `KubeSynapse-redis-*` | Redis cache |
+| `KubeSynapse-qdrant-*` | Qdrant vector database |
+| `KubeSynapse-nats-*` | NATS message bus |
+| `kubesynapse-web-ui-*` | Web dashboard |
 
 ### 5. Port-forward and test
 
 ```bash
 # API Gateway
-kubectl port-forward svc/kubesynth-api-gateway 8080:8080
+kubectl port-forward svc/kubesynapse-api-gateway 8080:8080
 curl http://localhost:8080/api/health
 
 # Web UI (open in browser)
-kubectl port-forward svc/kubesynth-web-ui 3000:80
+kubectl port-forward svc/kubesynapse-web-ui 3000:80
 # Visit http://localhost:3000
 ```
 
@@ -261,7 +261,7 @@ All images live under `docker.io/yakdhane`:
 | `yakdhane/ai-operator` | Kopf-based operator + worker |
 | `yakdhane/ai-opencode-runtime` | OpenCode HTTP adapter |
 | `yakdhane/ai-api-gateway` | FastAPI gateway |
-| `yakdhane/kubesynth-web-ui` | React web console |
+| `yakdhane/kubesynapse-web-ui` | React web console |
 | `yakdhane/mcp-code-exec` | Code execution MCP sidecar |
 | `yakdhane/mcp-web-search` | Web search MCP sidecar |
 | `yakdhane/mcp-documents` | Document processing MCP sidecar |
@@ -314,25 +314,25 @@ kind create cluster --name ai-sandbox
 
 ```bash
 # From the repository root (builds the platform images and bundled sidecars)
-make docker-build REGISTRY=localhost/kubesynthai VERSION=dev CONTAINER_CLI=docker
+make docker-build REGISTRY=localhost/KubeSynapseai VERSION=dev CONTAINER_CLI=docker
 # Produces platform images such as:
-#   localhost/kubesynthai/kubesynth-operator:dev
-#   localhost/kubesynthai/kubesynth-opencode-runtime:dev
-#   localhost/kubesynthai/kubesynth-api-gateway:dev
-#   localhost/kubesynthai/kubesynth-web-ui:dev
-#   localhost/kubesynthai/mcp-code-exec:dev
-#   localhost/kubesynthai/mcp-web-search:dev
-#   localhost/kubesynthai/mcp-documents:dev
+#   localhost/KubeSynapseai/kubesynapse-operator:dev
+#   localhost/KubeSynapseai/KubeSynapse-opencode-runtime:dev
+#   localhost/KubeSynapseai/kubesynapse-api-gateway:dev
+#   localhost/KubeSynapseai/kubesynapse-web-ui:dev
+#   localhost/KubeSynapseai/mcp-code-exec:dev
+#   localhost/KubeSynapseai/mcp-web-search:dev
+#   localhost/KubeSynapseai/mcp-documents:dev
 #   ... (all 10 mcp-* sidecars)
 ```
 
 Or build individual components with Docker:
 
 ```bash
-docker build -t localhost/kubesynthai/kubesynth-operator:dev ./operator
-docker build -t localhost/kubesynthai/kubesynth-opencode-runtime:dev ./opencode-runtime
-docker build -t localhost/kubesynthai/kubesynth-api-gateway:dev ./api-gateway
-docker build -t localhost/kubesynthai/kubesynth-web-ui:dev ./web-ui
+docker build -t localhost/KubeSynapseai/kubesynapse-operator:dev ./operator
+docker build -t localhost/KubeSynapseai/KubeSynapse-opencode-runtime:dev ./opencode-runtime
+docker build -t localhost/KubeSynapseai/kubesynapse-api-gateway:dev ./api-gateway
+docker build -t localhost/KubeSynapseai/kubesynapse-web-ui:dev ./web-ui
 ```
 
 The bundled MCP sidecars build from sub-directories under `./mcp-sidecars/`, one Dockerfile each.
@@ -342,19 +342,19 @@ The Makefile builds all of them in one pass and is the recommended approach.
 
 ```bash
 mkdir -p dist
-docker save -o dist/kubesynth-operator.tar localhost/kubesynthai/kubesynth-operator:dev
-docker save -o dist/kubesynth-opencode-runtime.tar localhost/kubesynthai/kubesynth-opencode-runtime:dev
-docker save -o dist/kubesynth-api-gateway.tar localhost/kubesynthai/kubesynth-api-gateway:dev
-docker save -o dist/kubesynth-web-ui.tar localhost/kubesynthai/kubesynth-web-ui:dev
-kind load image-archive dist/kubesynth-operator.tar --name ai-sandbox
-kind load image-archive dist/kubesynth-opencode-runtime.tar --name ai-sandbox
-kind load image-archive dist/kubesynth-api-gateway.tar --name ai-sandbox
-kind load image-archive dist/kubesynth-web-ui.tar --name ai-sandbox
+docker save -o dist/kubesynapse-operator.tar localhost/KubeSynapseai/kubesynapse-operator:dev
+docker save -o dist/KubeSynapse-opencode-runtime.tar localhost/KubeSynapseai/KubeSynapse-opencode-runtime:dev
+docker save -o dist/kubesynapse-api-gateway.tar localhost/KubeSynapseai/kubesynapse-api-gateway:dev
+docker save -o dist/kubesynapse-web-ui.tar localhost/KubeSynapseai/kubesynapse-web-ui:dev
+kind load image-archive dist/kubesynapse-operator.tar --name ai-sandbox
+kind load image-archive dist/KubeSynapse-opencode-runtime.tar --name ai-sandbox
+kind load image-archive dist/kubesynapse-api-gateway.tar --name ai-sandbox
+kind load image-archive dist/kubesynapse-web-ui.tar --name ai-sandbox
 ```
 
 ### 4. Set your LLM API key
 
-Edit `charts/kubesynth/values.yaml`:
+Edit `charts/kubesynapse/values.yaml`:
 
 ```yaml
 platformSecrets:
@@ -370,11 +370,11 @@ platformSecrets:
   ### 5. Install the Helm chart with the local-image override
 
 ```bash
-  helm install ai-sandbox ./charts/kubesynth -f ./deploy/values.local-images.example.yaml
+  helm install ai-sandbox ./charts/kubesynapse -f ./deploy/values.local-images.example.yaml
 ```
 
   `deploy/values.local-images.example.yaml` remaps the core platform images to the
-  `localhost/kubesynthai:*:dev` tags shown above. Extend it with
+  `localhost/KubeSynapseai:*:dev` tags shown above. Extend it with
   `mcpToolSidecars` entries only if your agents use locally built sidecar images
   instead of the default published ones.
 
@@ -382,8 +382,8 @@ platformSecrets:
 
   ```bash
   eval $(minikube docker-env)   # build directly into Minikube's Docker daemon
-  make docker-build REGISTRY=localhost/kubesynthai VERSION=dev CONTAINER_CLI=docker
-  helm install ai-sandbox ./charts/kubesynth -f ./deploy/values.minikube.local.yaml
+  make docker-build REGISTRY=localhost/KubeSynapseai VERSION=dev CONTAINER_CLI=docker
+  helm install ai-sandbox ./charts/kubesynapse -f ./deploy/values.minikube.local.yaml
   ```
 
   ### 6. Verify pods are running
@@ -396,25 +396,25 @@ Expected pods:
 
 | Pod prefix | Description |
 |---|---|
-| `kubesynth-operator-*` | Operator (HA pair) |
-| `kubesynth-api-gateway-*` | API Gateway |
-| `kubesynth-litellm-*` | LiteLLM model proxy |
-| `kubesynth-redis-*` | Redis cache |
-| `kubesynth-qdrant-*` | Qdrant vector database |
-| `kubesynth-nats-*` | NATS message bus |
-| `kubesynth-web-ui-*` | Web dashboard |
+| `kubesynapse-operator-*` | Operator (HA pair) |
+| `kubesynapse-api-gateway-*` | API Gateway |
+| `KubeSynapse-litellm-*` | LiteLLM model proxy |
+| `KubeSynapse-redis-*` | Redis cache |
+| `KubeSynapse-qdrant-*` | Qdrant vector database |
+| `KubeSynapse-nats-*` | NATS message bus |
+| `kubesynapse-web-ui-*` | Web dashboard |
 
 ### 7. Port-forward and test
 
 ```bash
 # API Gateway
-kubectl port-forward svc/kubesynth-api-gateway 8080:8080
+kubectl port-forward svc/kubesynapse-api-gateway 8080:8080
 
 # Health check
 curl http://localhost:8080/api/health
 
 # Web UI
-kubectl port-forward svc/kubesynth-web-ui 3000:80
+kubectl port-forward svc/kubesynapse-web-ui 3000:80
 # Visit http://localhost:3000
 ```
 
@@ -453,7 +453,7 @@ export VERSION=1.0.0
 docker build -t $REGISTRY/ai-operator:$VERSION           ./operator
 docker build -t $REGISTRY/ai-opencode-runtime:$VERSION   ./opencode-runtime
 docker build -t $REGISTRY/ai-api-gateway:$VERSION        ./api-gateway
-docker build -t $REGISTRY/kubesynth-web-ui:$VERSION ./web-ui
+docker build -t $REGISTRY/kubesynapse-web-ui:$VERSION ./web-ui
 
 # MCP sidecars (one Dockerfile per sidecar under ./mcp-sidecars/)
 docker build -t $REGISTRY/mcp-code-exec:$VERSION   -f mcp-sidecars/code-exec/Dockerfile   mcp-sidecars
@@ -488,7 +488,7 @@ docker login ghcr.io
 docker push $REGISTRY/ai-operator:$VERSION
 docker push $REGISTRY/ai-opencode-runtime:$VERSION
 docker push $REGISTRY/ai-api-gateway:$VERSION
-docker push $REGISTRY/kubesynth-web-ui:$VERSION
+docker push $REGISTRY/kubesynapse-web-ui:$VERSION
 # Push all mcp-* images the same way, or use the -Push flag on the packaging script above
 ```
 
@@ -544,13 +544,13 @@ apiGateway:
   auth:
     mode: oidc                              # Use OIDC in production
     oidcIssuer: "https://login.mycompany.com"
-    oidcAudience: "kubesynth"
+    oidcAudience: "KubeSynapse"
     oidcJwksUrl: "https://login.mycompany.com/.well-known/jwks.json"
 
 webUi:
   enabled: true
   image:
-    repository: ghcr.io/your-org/kubesynth-web-ui
+    repository: ghcr.io/your-org/kubesynapse-web-ui
     tag: "1.0.0"
 
 litellm:
@@ -601,7 +601,7 @@ For Google browser sign-in, keep the gateway in `hybrid` or `oidc` mode, set `ap
 Use the checked-in example overlay as a starting point:
 
 ```bash
-helm upgrade --install kubesynth ./charts/kubesynth \
+helm upgrade --install KubeSynapse ./charts/kubesynapse \
   -f ./deploy/values.cluster.example.yaml \
   -f ./deploy/values.google-oidc.example.yaml
 ```
@@ -628,7 +628,7 @@ Register this redirect URI in Google Cloud:
 https://agents.example.com/api/auth/oidc/callback/google
 ```
 
-If you use External Secrets instead, store the same JSON array at the secret key backing `kubesynth/oidc-providers-json` and keep `apiGateway.publicBaseUrl` aligned with the public gateway URL.
+If you use External Secrets instead, store the same JSON array at the secret key backing `KubeSynapse/oidc-providers-json` and keep `apiGateway.publicBaseUrl` aligned with the public gateway URL.
 
 The chart intentionally deploys no shared MCP servers by default. The GitHub
 entry above is a real upstream image reference, but the current runtime still
@@ -649,10 +649,10 @@ chart changes unless you want to pin or relocate them.
 
 ```bash
 # Lint first
-helm lint ./charts/kubesynth -f values-prod.yaml
+helm lint ./charts/kubesynapse -f values-prod.yaml
 
 # Install
-helm upgrade --install ai-sandbox ./charts/kubesynth \
+helm upgrade --install ai-sandbox ./charts/kubesynapse \
   --namespace ai-platform \
   --create-namespace \
   -f values-prod.yaml \
@@ -668,21 +668,21 @@ If `catalog/skills-catalog.json` exists, include it during Helm installs and upg
 kubectl get pods -n ai-platform
 
 # CRDs registered
-kubectl get crds | grep kubesynth.ai
+kubectl get crds | grep kubesynapse.ai
 
 # Expected CRDs:
-#   aiagents.kubesynth.ai
-#   agentpolicies.kubesynth.ai
-#   agentapprovals.kubesynth.ai
-#   agenttenants.kubesynth.ai
-#   agentworkflows.kubesynth.ai
-#   agentevals.kubesynth.ai
+#   aiagents.kubesynapse.ai
+#   agentpolicies.kubesynapse.ai
+#   agentapprovals.kubesynapse.ai
+#   agenttenants.kubesynapse.ai
+#   agentworkflows.kubesynapse.ai
+#   agentevals.kubesynapse.ai
 
 # Operator logs healthy
 kubectl logs -n ai-platform -l app=operator --tail=50
 
 # API Gateway reachable
-kubectl port-forward -n ai-platform svc/kubesynth-api-gateway 8080:8080
+kubectl port-forward -n ai-platform svc/kubesynapse-api-gateway 8080:8080
 curl http://localhost:8080/api/health
 ```
 
@@ -727,10 +727,10 @@ Expected secret keys in your backend:
 
 | Remote key | Purpose |
 |------------|---------|
-| `kubesynth/openai-api-key` | OpenAI API key |
-| `kubesynth/anthropic-api-key` | Anthropic API key |
-| `kubesynth/litellm-master-key` | LiteLLM master key |
-| `kubesynth/api-gateway-shared-token` | API Gateway bearer token |
+| `KubeSynapse/openai-api-key` | OpenAI API key |
+| `KubeSynapse/anthropic-api-key` | Anthropic API key |
+| `KubeSynapse/litellm-master-key` | LiteLLM master key |
+| `KubeSynapse/api-gateway-shared-token` | API Gateway bearer token |
 
 ---
 
@@ -742,7 +742,7 @@ Tenants provide namespace isolation, resource quotas, and model allow-lists.
 
 ```yaml
 # my-tenant.yaml
-apiVersion: kubesynth.ai/v1alpha1
+apiVersion: kubesynapse.ai/v1alpha1
 kind: AgentTenant
 metadata:
   name: my-team
@@ -776,7 +776,7 @@ Policies define guardrails and access control.
 
 ```yaml
 # my-policy.yaml
-apiVersion: kubesynth.ai/v1alpha1
+apiVersion: kubesynapse.ai/v1alpha1
 kind: AgentPolicy
 metadata:
   name: standard-policy
@@ -808,7 +808,7 @@ kubectl apply -f my-policy.yaml
 
 ```yaml
 # my-agent.yaml
-apiVersion: kubesynth.ai/v1alpha1
+apiVersion: kubesynapse.ai/v1alpha1
 kind: AIAgent
 metadata:
   name: my-assistant
@@ -923,7 +923,7 @@ Define a DAG of agent steps with dependencies:
 
 ```yaml
 # my-workflow.yaml
-apiVersion: kubesynth.ai/v1alpha1
+apiVersion: kubesynapse.ai/v1alpha1
 kind: AgentWorkflow
 metadata:
   name: research-pipeline
@@ -997,7 +997,7 @@ Define automated test suites that run on a schedule:
 
 ```yaml
 # my-eval.yaml
-apiVersion: kubesynth.ai/v1alpha1
+apiVersion: kubesynapse.ai/v1alpha1
 kind: AgentEval
 metadata:
   name: assistant-eval
@@ -1164,7 +1164,7 @@ Access it:
 
 ```bash
 # Port-forward (local dev)
-kubectl port-forward svc/kubesynth-web-ui 3000:80
+kubectl port-forward svc/kubesynapse-web-ui 3000:80
 # Open http://localhost:3000
 
 # Or via Ingress at the root path (production)
@@ -1200,7 +1200,7 @@ $env:API_GATEWAY_AUTH_MODE = "local"
 $env:LOCAL_AUTH_ENABLED = "true"
 $env:API_GATEWAY_SHARED_TOKEN = "dev-shared-token"
 $env:API_GATEWAY_CORS_ORIGINS = "http://localhost:5173,http://127.0.0.1:5173"
-$env:DATABASE_SQLITE_PATH = "C:/path/to/kubemininions/api-gateway/.local/kubesynth-gateway.db"
+$env:DATABASE_SQLITE_PATH = "C:/path/to/kubemininions/api-gateway/.local/KubeSynapse-gateway.db"
 python -m uvicorn main:app --host 127.0.0.1 --port 8080
 ```
 
@@ -1476,15 +1476,15 @@ Each agent runs as a singleton StatefulSet (1 replica) with its own PVC for dura
 
 ```bash
 # Remove the Helm release
-helm uninstall kubesynth -n ai-platform
+helm uninstall KubeSynapse -n ai-platform
 
 # Remove CRDs (Helm does not delete CRDs on uninstall)
-kubectl delete crd aiagents.kubesynth.ai
-kubectl delete crd agentpolicies.kubesynth.ai
-kubectl delete crd agentapprovals.kubesynth.ai
-kubectl delete crd agenttenants.kubesynth.ai
-kubectl delete crd agentworkflows.kubesynth.ai
-kubectl delete crd agentevals.kubesynth.ai
+kubectl delete crd aiagents.kubesynapse.ai
+kubectl delete crd agentpolicies.kubesynapse.ai
+kubectl delete crd agentapprovals.kubesynapse.ai
+kubectl delete crd agenttenants.kubesynapse.ai
+kubectl delete crd agentworkflows.kubesynapse.ai
+kubectl delete crd agentevals.kubesynapse.ai
 
 # Remove tenant namespaces (created by the operator)
 kubectl delete namespace agent-tenant-my-team
@@ -1505,10 +1505,10 @@ make undeploy
 kubectl logs -l app=operator -n ai-platform --tail=100
 
 # Verify CRDs are installed
-kubectl get crds | grep kubesynth.ai
+kubectl get crds | grep kubesynapse.ai
 
 # Verify RBAC
-kubectl auth can-i create statefulsets --as=system:serviceaccount:ai-platform:kubesynth-operator-sa
+kubectl auth can-i create statefulsets --as=system:serviceaccount:ai-platform:kubesynapse-operator-sa
 ```
 
 ### Agent pod not starting
@@ -1559,20 +1559,20 @@ kubectl get agentapprovals -n <tenant-ns>
 kubectl logs -l app=litellm -n ai-platform --tail=50
 
 # Verify the LLM API key secret
-kubectl get secret kubesynth-llm-api-keys -n ai-platform -o yaml
+kubectl get secret KubeSynapse-llm-api-keys -n ai-platform -o yaml
 ```
 
 ### Helm install fails
 
 ```bash
 # Lint first
-helm lint ./charts/kubesynth -f values-prod.yaml
+helm lint ./charts/kubesynapse -f values-prod.yaml
 
 # Dry-run to see rendered templates
-helm template kubesynth ./charts/kubesynth -f values-prod.yaml | less
+helm template KubeSynapse ./charts/kubesynapse -f values-prod.yaml | less
 
 # Debug install
-helm install kubesynth ./charts/kubesynth -f values-prod.yaml --debug --dry-run
+helm install KubeSynapse ./charts/kubesynapse -f values-prod.yaml --debug --dry-run
 ```
 
 ---
@@ -1580,7 +1580,7 @@ helm install kubesynth ./charts/kubesynth -f values-prod.yaml --debug --dry-run
 ## Project Structure
 
 ```
-kubesynthai/
+KubeSynapseai/
 ├── INSTALL.md                      ← This file
 ├── docs/architecture-overview.md   ← Detailed design document
 ├── Makefile                        ← Build, test, lint, deploy targets
@@ -1628,7 +1628,7 @@ kubesynthai/
 │   ├── pyproject.toml
 │   └── README.md
 │
-├── charts/kubesynth/        ← Helm chart
+├── charts/kubesynapse/        ← Helm chart
 │   ├── Chart.yaml
 │   ├── values.yaml                 ← All configuration knobs
 │   └── templates/
@@ -1677,7 +1677,7 @@ make test                 # Run pytest on all components
 make helm-lint            # Lint the Helm chart
 make helm-package         # Package chart to dist/
 make helm-template        # Render templates to stdout
-make deploy               # helm upgrade --install kubesynth
+make deploy               # helm upgrade --install KubeSynapse
 make deploy-sample        # Apply sample agent, tenant, and policy
 make undeploy             # Uninstall chart + delete CRDs
 make build-cli            # Install agentctl into the current Python environment

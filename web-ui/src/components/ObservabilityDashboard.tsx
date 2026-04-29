@@ -159,7 +159,7 @@ const EDITOR_GUIDES: Record<EditableResourceTab, EditorGuide> = {
     title: "Targets tell the platform what to watch",
     summary: "A target points at the real thing you care about, such as the Kubernetes API, a Prometheus endpoint, or another system. The connector collects the data, and the policy decides how the platform should interpret it.",
     steps: [
-      "Pick the target type so KubeSynth knows what kind of system you are observing.",
+      "Pick the target type so kubesynapse knows what kind of system you are observing.",
       "Attach a connector that can actually talk to that system and collect data from it.",
       "Optionally attach a policy so the collected signals get retained, analyzed, and turned into reports or alerts.",
     ],
@@ -174,8 +174,8 @@ const EDITOR_GUIDES: Record<EditableResourceTab, EditorGuide> = {
     ],
   },
   connectors: {
-    title: "Connectors explain how KubeSynth reaches a source system",
-    summary: "A connector is the collector plugin. It knows the protocol, image, port, and capabilities required to talk to an external source and normalize that source into observability data KubeSynth can work with.",
+    title: "Connectors explain how kubesynapse reaches a source system",
+    summary: "A connector is the collector plugin. It knows the protocol, image, port, and capabilities required to talk to an external source and normalize that source into observability data kubesynapse can work with.",
     steps: [
       "Choose the image that implements the protocol you need, such as the Kubernetes API or Prometheus scraping.",
       "Declare capabilities so operators can see what kinds of targets this connector supports.",
@@ -186,7 +186,7 @@ const EDITOR_GUIDES: Record<EditableResourceTab, EditorGuide> = {
 
 const EMPTY_TARGET_FORM: TargetFormState = {
   name: "",
-  description: "Describe the system this target watches, why it matters, and what kind of health or behavior you expect KubeSynth to evaluate.",
+  description: "Describe the system this target watches, why it matters, and what kind of health or behavior you expect kubesynapse to evaluate.",
   targetType: "kubernetes-api",
   connectorRef: "",
   endpoint: "",

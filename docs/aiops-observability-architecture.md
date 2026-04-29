@@ -1,4 +1,4 @@
-# KubeSynth Observability Research Notes
+# KubeSynapse Observability Research Notes
 
 > **Status**: Historical research and design context
 > **Current implementation**: See `docs/architecture-overview.md`, `docs/observability-explained.md`, `examples/observability-targets.yaml`, and `scripts/observability-smoke-test.ps1`
@@ -56,13 +56,13 @@ The KubeMinions platform already provides:
 | Component | Technology | File Reference |
 |-----------|-----------|----------------|
 | Operator Framework | Kopf (Python) | `operator/main.py`, `operator/controllers/` |
-| CRD Model | 6 CRDs (kubesynth.ai/v1alpha1) | `charts/kubesynth/templates/*-crd.yaml` |
+| CRD Model | 6 CRDs (KubeSynapse.ai/v1alpha1) | `charts/kubesynapse/templates/*-crd.yaml` |
 | Tracing | OpenTelemetry (graceful degradation) | `operator/tracing.py` |
 | Metrics | Prometheus (FastAPI Instrumentator) | `agent-runtime/agent_logic.py` |
-| Secrets | External Secrets Operator + Vault/Azure KV/AWS SM | `charts/kubesynth/templates/external-secrets.yaml` |
-| Messaging | NATS JetStream (deployed, unused) | `charts/kubesynth/templates/nats.yaml` |
+| Secrets | External Secrets Operator + Vault/Azure KV/AWS SM | `charts/kubesynapse/templates/external-secrets.yaml` |
+| Messaging | NATS JetStream (deployed, unused) | `charts/kubesynapse/templates/nats.yaml` |
 | Visualization | Grafana (assumed, not CRD-driven) | N/A |
-| Model Gateway | LiteLLM | `charts/kubesynth/templates/litellm.yaml` |
+| Model Gateway | LiteLLM | `charts/kubesynapse/templates/litellm.yaml` |
 
 **Constraint**: Do NOT re-recommend any of the above. The Observability Module must add *new* capabilities on top of this foundation.
 
@@ -138,7 +138,7 @@ Red Hat (Dec 2025, #5): *"Modern Kubernetes monitoring: Metrics, tools, and AIOp
 | **Secret Injection** | External Secrets Operator | Already deployed; provisions secrets from Vault into Kubernetes | Existing |
 | **MCP Auth** | SPIFFE + OAuth | LinkedIn: "Authenticating MCP OAuth Clients With SPIFFE and SPIRE" | #10 |
 
-**Trust domain**: `spiffe://kubesynth.ai/observer/<connector-name>` — each connector plugin receives its own SVID, scoped to read-only operations.
+**Trust domain**: `spiffe://kubesynapse.ai/observer/<connector-name>` — each connector plugin receives its own SVID, scoped to read-only operations.
 
 ### RQ-8: Multi-Cluster Observability
 
@@ -162,7 +162,7 @@ Flipkart (SerpAPI #11): Scales Prometheus to 80M metrics using federation. SUSE 
 
 ```mermaid
 graph TB
-    subgraph "Control Plane (kubesynth namespace)"
+    subgraph "Control Plane (KubeSynapse namespace)"
         OO[Observer Operator<br/>Kopf Controller]
         VM[VictoriaMetrics<br/>Long-term TSDB]
         PS[Perses<br/>Dashboard CRDs]
@@ -245,7 +245,7 @@ graph TB
 
 ### 2.3 New Custom Resource Definitions
 
-All new CRDs use group `kubesynth.ai`, version `v1alpha1`, matching the existing 6 CRDs in `charts/kubesynth/templates/`.
+All new CRDs use group `kubesynapse.ai`, version `v1alpha1`, matching the existing 6 CRDs in `charts/kubesynapse/templates/`.
 
 #### 2.3.1 ObservationTarget
 
@@ -255,9 +255,9 @@ Declares **what** to observe. One CR per logical target (a cluster, a namespace 
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
-  name: observationtargets.kubesynth.ai
+  name: observationtargets.kubesynapse.ai
 spec:
-  group: kubesynth.ai
+  group: kubesynapse.ai
   versions:
     - name: v1alpha1
       served: true
@@ -411,7 +411,7 @@ spec:
 **Example CR**:
 
 ```yaml
-apiVersion: kubesynth.ai/v1alpha1
+apiVersion: kubesynapse.ai/v1alpha1
 kind: ObservationTarget
 metadata:
   name: agent-metrics
@@ -424,7 +424,7 @@ spec:
   policyRef: default-observation-policy
   selector:
     matchLabels:
-      kubesynth.ai/managed-by: kubesynth-operator
+      kubesynapse.ai/managed-by: kubesynapse-operator
   labels:
     cluster: localklusta
     environment: development
@@ -438,9 +438,9 @@ Declares **how** to observe: retention, alerting thresholds, anomaly detection c
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
-  name: observationpolicies.kubesynth.ai
+  name: observationpolicies.kubesynapse.ai
 spec:
-  group: kubesynth.ai
+  group: kubesynapse.ai
   versions:
     - name: v1alpha1
       served: true
@@ -596,7 +596,7 @@ spec:
 **Example CR**:
 
 ```yaml
-apiVersion: kubesynth.ai/v1alpha1
+apiVersion: kubesynapse.ai/v1alpha1
 kind: ObservationPolicy
 metadata:
   name: default-observation-policy
@@ -650,9 +650,9 @@ Generated automatically by the Anomaly Detector. Contains findings, health score
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
-  name: observationreports.kubesynth.ai
+  name: observationreports.kubesynapse.ai
 spec:
-  group: kubesynth.ai
+  group: kubesynapse.ai
   versions:
     - name: v1alpha1
       served: true
@@ -777,13 +777,13 @@ spec:
 **Example generated CR**:
 
 ```yaml
-apiVersion: kubesynth.ai/v1alpha1
+apiVersion: kubesynapse.ai/v1alpha1
 kind: ObservationReport
 metadata:
   name: agent-metrics-report-20260405-1200
   namespace: ai-agent-sandbox
   ownerReferences:
-    - apiVersion: kubesynth.ai/v1alpha1
+    - apiVersion: kubesynapse.ai/v1alpha1
       kind: ObservationTarget
       name: agent-metrics
       uid: <target-uid>
@@ -828,9 +828,9 @@ Registers a connector plugin and its capabilities. The Observer Operator uses th
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
-  name: connectorplugins.kubesynth.ai
+  name: connectorplugins.kubesynapse.ai
 spec:
-  group: kubesynth.ai
+  group: kubesynapse.ai
   versions:
     - name: v1alpha1
       served: true
@@ -863,7 +863,7 @@ spec:
               properties:
                 image:
                   type: string
-                  description: "Container image for the connector (e.g., kubesynth/connector-prometheus:v1.0)."
+                  description: "Container image for the connector (e.g., KubeSynapse/connector-prometheus:v1.0)."
                 protocol:
                   type: string
                   enum:
@@ -972,13 +972,13 @@ spec:
 **Example CRs for built-in connectors**:
 
 ```yaml
-apiVersion: kubesynth.ai/v1alpha1
+apiVersion: kubesynapse.ai/v1alpha1
 kind: ConnectorPlugin
 metadata:
   name: prometheus-connector
   namespace: ai-agent-sandbox
 spec:
-  image: "kubesynth/connector-prometheus:v0.1.0"
+  image: "KubeSynapse/connector-prometheus:v0.1.0"
   protocol: grpc
   port: 9090
   capabilities:
@@ -992,13 +992,13 @@ spec:
       cpu: "200m"
       memory: "256Mi"
 ---
-apiVersion: kubesynth.ai/v1alpha1
+apiVersion: kubesynapse.ai/v1alpha1
 kind: ConnectorPlugin
 metadata:
   name: snmp-connector
   namespace: ai-agent-sandbox
 spec:
-  image: "kubesynth/connector-snmp:v0.1.0"
+  image: "KubeSynapse/connector-snmp:v0.1.0"
   protocol: grpc
   port: 9091
   capabilities:
@@ -1012,13 +1012,13 @@ spec:
       cpu: "200m"
       memory: "128Mi"
 ---
-apiVersion: kubesynth.ai/v1alpha1
+apiVersion: kubesynapse.ai/v1alpha1
 kind: ConnectorPlugin
 metadata:
   name: gnmi-connector
   namespace: ai-agent-sandbox
 spec:
-  image: "kubesynth/connector-gnmi:v0.1.0"
+  image: "KubeSynapse/connector-gnmi:v0.1.0"
   protocol: grpc
   port: 9092
   capabilities:
@@ -1032,13 +1032,13 @@ spec:
       cpu: "500m"
       memory: "512Mi"
 ---
-apiVersion: kubesynth.ai/v1alpha1
+apiVersion: kubesynapse.ai/v1alpha1
 kind: ConnectorPlugin
 metadata:
   name: k8s-api-connector
   namespace: ai-agent-sandbox
 spec:
-  image: "kubesynth/connector-k8s-api:v0.1.0"
+  image: "KubeSynapse/connector-k8s-api:v0.1.0"
   protocol: grpc
   port: 9093
   capabilities:
@@ -1051,20 +1051,20 @@ spec:
       cpu: "200m"
       memory: "256Mi"
 ---
-apiVersion: kubesynth.ai/v1alpha1
+apiVersion: kubesynapse.ai/v1alpha1
 kind: ConnectorPlugin
 metadata:
   name: nats-connector
   namespace: ai-agent-sandbox
 spec:
-  image: "kubesynth/connector-nats:v0.1.0"
+  image: "KubeSynapse/connector-nats:v0.1.0"
   protocol: grpc
   port: 9094
   capabilities:
     - nats
   env:
     - name: NATS_URL
-      value: "nats://kubesynth-nats:4222"
+      value: "nats://KubeSynapse-nats:4222"
   resources:
     requests:
       cpu: "50m"
@@ -1125,7 +1125,7 @@ def resolve_connector_plugin(namespace: str, connector_ref: str) -> dict[str, An
     custom_api = kubernetes.client.CustomObjectsApi()
     try:
         plugin = custom_api.get_namespaced_custom_object(
-            group="kubesynth.ai",
+            group="kubesynapse.ai",
             version="v1alpha1",
             namespace=namespace,
             plural="connectorplugins",
@@ -1156,9 +1156,9 @@ def translate_observation(
     resources = connector_spec.get("resources", {})
 
     labels = {
-        "kubesynth.ai/managed-by": "kubesynth-observer",
-        "kubesynth.ai/observation-target": name,
-        "kubesynth.ai/target-type": spec["targetType"],
+        "kubesynapse.ai/managed-by": "KubeSynapse-observer",
+        "kubesynapse.ai/observation-target": name,
+        "kubesynapse.ai/target-type": spec["targetType"],
     }
 
     # --- Deployment with connector sidecar ---
@@ -1276,9 +1276,9 @@ def translate_observation(
 # Kopf Handlers
 # ---------------------------------------------------------------------------
 
-@kopf.on.create("kubesynth.ai", "v1alpha1", "observationtargets")
-@kopf.on.update("kubesynth.ai", "v1alpha1", "observationtargets")
-@kopf.on.resume("kubesynth.ai", "v1alpha1", "observationtargets")
+@kopf.on.create("kubesynapse.ai", "v1alpha1", "observationtargets")
+@kopf.on.update("kubesynapse.ai", "v1alpha1", "observationtargets")
+@kopf.on.resume("kubesynapse.ai", "v1alpha1", "observationtargets")
 async def reconcile_observation_target(spec, name, namespace, status, patch, **kwargs):
     """Reconcile an ObservationTarget — provision or update the connector pod."""
     logger.info("Reconciling ObservationTarget %s/%s", namespace, name)
@@ -1306,7 +1306,7 @@ async def reconcile_observation_target(spec, name, namespace, status, patch, **k
     patch.status["connectorHealth"] = "Unknown"
 
 
-@kopf.on.delete("kubesynth.ai", "v1alpha1", "observationtargets")
+@kopf.on.delete("kubesynapse.ai", "v1alpha1", "observationtargets")
 async def delete_observation_target(spec, name, namespace, **kwargs):
     """Clean up connector pods when an ObservationTarget is deleted."""
     logger.info("Deleting ObservationTarget %s/%s resources", namespace, name)
@@ -1315,7 +1315,7 @@ async def delete_observation_target(spec, name, namespace, **kwargs):
 
 ### 2.5 NATS JetStream Integration — First Consumer
 
-NATS JetStream is deployed (`charts/kubesynth/templates/nats.yaml`) but currently unused. The Observability Module becomes its first consumer.
+NATS JetStream is deployed (`charts/kubesynapse/templates/nats.yaml`) but currently unused. The Observability Module becomes its first consumer.
 
 **Subject hierarchy**:
 
@@ -1379,9 +1379,9 @@ Stream: AIOPS_OBSERVATIONS
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: kubesynth:observer
+  name: KubeSynapse:observer
   labels:
-    kubesynth.ai/managed-by: kubesynth-observer
+    kubesynapse.ai/managed-by: KubeSynapse-observer
 rules:
   # Read-only access to Kubernetes resources for observation
   - apiGroups: [""]
@@ -1410,8 +1410,8 @@ rules:
       - cronjobs
     verbs: ["get", "list", "watch"]
 
-  # Read-only access to KubeSynth CRDs
-  - apiGroups: ["kubesynth.ai"]
+  # Read-only access to KubeSynapse CRDs
+  - apiGroups: ["kubesynapse.ai"]
     resources:
       - aiagents
       - agentpolicies
@@ -1422,7 +1422,7 @@ rules:
     verbs: ["get", "list", "watch"]
 
   # Full access to observer's own CRDs
-  - apiGroups: ["kubesynth.ai"]
+  - apiGroups: ["kubesynapse.ai"]
     resources:
       - observationtargets
       - observationtargets/status
@@ -1440,7 +1440,7 @@ rules:
       - deployments
     verbs: ["create", "update", "patch", "delete"]
     # Scoped via label selector in the controller code:
-    # labelSelector: kubesynth.ai/managed-by=kubesynth-observer
+    # labelSelector: kubesynapse.ai/managed-by=KubeSynapse-observer
 
   # NetworkPolicy management for observer pods
   - apiGroups: ["networking.k8s.io"]
@@ -1477,11 +1477,11 @@ metadata:
   name: observer-connector-isolation
   namespace: ai-agent-sandbox
   labels:
-    kubesynth.ai/managed-by: kubesynth-observer
+    kubesynapse.ai/managed-by: KubeSynapse-observer
 spec:
   podSelector:
     matchLabels:
-      kubesynth.ai/managed-by: kubesynth-observer
+      kubesynapse.ai/managed-by: KubeSynapse-observer
   policyTypes:
     - Ingress
     - Egress
@@ -1527,7 +1527,7 @@ spec:
     - to:
         - podSelector:
             matchLabels:
-              kubesynth.ai/managed-by: kubesynth-operator
+              kubesynapse.ai/managed-by: kubesynapse-operator
       ports:
         - protocol: TCP
           port: 5000  # Agent runtime /metrics port
@@ -1539,9 +1539,9 @@ spec:
 
 ```hcl
 # Vault policy for Observer Module connectors
-# Path: vault/policies/kubesynth-observer.hcl
+# Path: vault/policies/KubeSynapse-observer.hcl
 
-path "secret/data/kubesynth/observer/*" {
+path "secret/data/KubeSynapse/observer/*" {
   capabilities = ["read", "list"]
 }
 
@@ -1551,21 +1551,21 @@ path "database/creds/observer-readonly" {
 }
 
 # SNMP community strings
-path "secret/data/kubesynth/snmp/*" {
+path "secret/data/KubeSynapse/snmp/*" {
   capabilities = ["read"]
 }
 
 # gNMI TLS certificates
-path "secret/data/kubesynth/gnmi/*" {
+path "secret/data/KubeSynapse/gnmi/*" {
   capabilities = ["read"]
 }
 
 # Deny all write operations to non-observer paths
-path "secret/data/kubesynth/agents/*" {
+path "secret/data/KubeSynapse/agents/*" {
   capabilities = ["deny"]
 }
 
-path "secret/data/kubesynth/litellm/*" {
+path "secret/data/KubeSynapse/litellm/*" {
   capabilities = ["deny"]
 }
 ```
@@ -1600,21 +1600,21 @@ Rejects ObservationTarget specs that attempt to declare write operations.
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingWebhookConfiguration
 metadata:
-  name: kubesynth-observer-validation
+  name: KubeSynapse-observer-validation
   labels:
-    kubesynth.ai/managed-by: kubesynth-observer
+    kubesynapse.ai/managed-by: KubeSynapse-observer
 webhooks:
-  - name: validate.observationtarget.kubesynth.ai
+  - name: validate.observationtarget.kubesynapse.ai
     admissionReviewVersions: ["v1"]
     sideEffects: None
     clientConfig:
       service:
-        name: kubesynth-observer-webhook
+        name: KubeSynapse-observer-webhook
         namespace: ai-agent-sandbox
         path: /validate-observationtarget
         port: 443
     rules:
-      - apiGroups: ["kubesynth.ai"]
+      - apiGroups: ["kubesynapse.ai"]
         apiVersions: ["v1alpha1"]
         operations: ["CREATE", "UPDATE"]
         resources: ["observationtargets"]
@@ -1647,8 +1647,8 @@ def validate_observation_target(request):
     # 3. Reject custom connectors without explicit security review label
     if spec.get("targetType") == "custom":
         labels = request.object.get("metadata", {}).get("labels", {})
-        if labels.get("kubesynth.ai/security-reviewed") != "true":
-            return deny("Custom connectors require 'kubesynth.ai/security-reviewed: true' label")
+        if labels.get("kubesynapse.ai/security-reviewed") != "true":
+            return deny("Custom connectors require 'kubesynapse.ai/security-reviewed: true' label")
 
     return allow()
 ```
@@ -1656,17 +1656,17 @@ def validate_observation_target(request):
 ### 3.6 SPIFFE Trust Domain
 
 ```
-Trust domain: spiffe://kubesynth.ai
+Trust domain: spiffe://kubesynapse.ai
 
 SVID hierarchy:
-  spiffe://kubesynth.ai/observer                          # Observer Operator
-  spiffe://kubesynth.ai/observer/connector/prometheus      # Prometheus Connector
-  spiffe://kubesynth.ai/observer/connector/snmp            # SNMP Connector
-  spiffe://kubesynth.ai/observer/connector/gnmi            # gNMI Connector
-  spiffe://kubesynth.ai/observer/connector/k8s-api         # K8s API Connector
-  spiffe://kubesynth.ai/observer/connector/nats            # NATS Connector
-  spiffe://kubesynth.ai/observer/anomaly-detector          # Anomaly Detector
-  spiffe://kubesynth.ai/observer/victoria-writer           # VM Writer
+  spiffe://kubesynapse.ai/observer                          # Observer Operator
+  spiffe://kubesynapse.ai/observer/connector/prometheus      # Prometheus Connector
+  spiffe://kubesynapse.ai/observer/connector/snmp            # SNMP Connector
+  spiffe://kubesynapse.ai/observer/connector/gnmi            # gNMI Connector
+  spiffe://kubesynapse.ai/observer/connector/k8s-api         # K8s API Connector
+  spiffe://kubesynapse.ai/observer/connector/nats            # NATS Connector
+  spiffe://kubesynapse.ai/observer/anomaly-detector          # Anomaly Detector
+  spiffe://kubesynapse.ai/observer/victoria-writer           # VM Writer
 ```
 
 **SPIRE registration entry**:
@@ -1674,10 +1674,10 @@ SVID hierarchy:
 ```bash
 # Register the Prometheus connector workload
 spire-server entry create \
-  -spiffeID spiffe://kubesynth.ai/observer/connector/prometheus \
-  -parentID spiffe://kubesynth.ai/observer \
-  -selector k8s:pod-label:kubesynth.ai/managed-by:kubesynth-observer \
-  -selector k8s:pod-label:kubesynth.ai/target-type:prometheus \
+  -spiffeID spiffe://kubesynapse.ai/observer/connector/prometheus \
+  -parentID spiffe://kubesynapse.ai/observer \
+  -selector k8s:pod-label:kubesynapse.ai/managed-by:KubeSynapse-observer \
+  -selector k8s:pod-label:kubesynapse.ai/target-type:prometheus \
   -ttl 3600 \
   -downstream
 ```
@@ -1694,14 +1694,14 @@ Perses stores dashboard definitions as Kubernetes CRDs, fitting naturally into t
 apiVersion: perses.dev/v1alpha1
 kind: PersesDashboard
 metadata:
-  name: kubesynth-agent-health
+  name: KubeSynapse-agent-health
   namespace: ai-agent-sandbox
   labels:
-    kubesynth.ai/managed-by: kubesynth-observer
-    perses.dev/project: kubesynth
+    kubesynapse.ai/managed-by: KubeSynapse-observer
+    perses.dev/project: KubeSynapse
 spec:
   display:
-    name: "KubeSynth Agent Health Overview"
+    name: "KubeSynapse Agent Health Overview"
     description: "Real-time agent health metrics, anomaly detection, and HITL approval status"
   duration: "1h"
   refreshInterval: "30s"
@@ -2020,8 +2020,8 @@ spec:
 
 The existing web UI (`web-ui/`, port 3000) can embed Perses dashboards via:
 
-1. **iframe embed**: `<iframe src="http://perses:8080/project/kubesynth/dashboard/kubesynth-agent-health" />`
-2. **Perses API**: Fetch panel data via `GET /api/v1/projects/kubesynth/dashboards/kubesynth-agent-health` and render with a custom React component
+1. **iframe embed**: `<iframe src="http://perses:8080/project/KubeSynapse/dashboard/KubeSynapse-agent-health" />`
+2. **Perses API**: Fetch panel data via `GET /api/v1/projects/KubeSynapse/dashboards/KubeSynapse-agent-health` and render with a custom React component
 3. **Metrics API proxy**: Add `/api/metrics/query` endpoint to the API gateway that proxies PromQL queries to VictoriaMetrics
 
 **Recommended approach**: Option 2 (Perses API) for embedding dashboard panels as React components in the existing `ChatWorkbench.tsx`, allowing agent health context alongside chat threads.
@@ -2170,9 +2170,9 @@ type Connector interface {
 // proto/observer_connector.proto
 syntax = "proto3";
 
-package kubesynth.observer.v1alpha1;
+package KubeSynapse.observer.v1alpha1;
 
-option go_package = "github.com/kubesynth/observer/api/v1alpha1";
+option go_package = "github.com/KubeSynapse/observer/api/v1alpha1";
 
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/duration.proto";
@@ -2381,7 +2381,7 @@ def _build_connector_env(target_spec: dict, connector_spec: dict) -> list[dict]:
         {"name": "SCRAPE_INTERVAL", "value": target_spec.get("scrapeInterval", "30s")},
         {"name": "CONNECTOR_PORT", "value": str(connector_spec.get("port", 9090))},
         {"name": "VICTORIAMETRICS_URL", "value": "http://victoriametrics:8428"},
-        {"name": "NATS_URL", "value": "nats://kubesynth-nats:4222"},
+        {"name": "NATS_URL", "value": "nats://KubeSynapse-nats:4222"},
     ]
 
     # Add target labels as JSON env var

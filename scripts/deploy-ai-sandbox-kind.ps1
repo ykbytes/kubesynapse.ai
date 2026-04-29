@@ -16,7 +16,7 @@ try {
     $helmArgs = @(
         "upgrade",
         $ReleaseName,
-        "./charts/kubesynth",
+        "./charts/kubesynapse",
         "-n",
         $Namespace,
         "--reuse-values",

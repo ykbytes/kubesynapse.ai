@@ -41,7 +41,7 @@ _tracer: Any = None
 _initialized = False
 
 
-def init_tracing(service_name: str = "kubesynth-operator") -> None:
+def init_tracing(service_name: str = "kubesynapse-operator") -> None:
     """Initialize the global TracerProvider if OTEL is available and configured."""
     global _tracer, _initialized
     if _initialized:

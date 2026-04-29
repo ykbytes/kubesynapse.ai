@@ -11,7 +11,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY main.py _core.py auth_store.py enterprise_auth.py jwt_utils.py auth_middleware.py trace_store.py traces_router.py constants.py utils.py dependencies.py ./
+COPY main.py _core.py auth_store.py enterprise_auth.py jwt_utils.py auth_middleware.py trace_store.py traces_router.py constants.py utils.py dependencies.py webhook_security.py main_old.py ./
 COPY routers/ ./routers/
 RUN chown -R gatewayuser:gateway /app
 
@@ -19,4 +19,4 @@ USER gatewayuser
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/api/health')"]
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["uvicorn", "main_old:app", "--host", "0.0.0.0", "--port", "8080"]

@@ -1,0 +1,6 @@
+{
+  "name": "kubesynapse-a2a",
+  "private": true,
+  "type": "module",
+  "pi": { "extensions": ["./index.ts"] }
+}

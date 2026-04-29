@@ -37,7 +37,7 @@ const components: Components = {
             <CopyButton value={codeString} className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity" />
           </div>
           <div className="overflow-x-auto p-4">
-            <code className={`${className ?? ""} text-[13px] leading-relaxed font-mono`} {...props}>
+            <code className={`${className ?? ""} text-[13px] leading-relaxed font-mono text-foreground/90`} {...props}>
               {children}
             </code>
           </div>
@@ -72,13 +72,13 @@ const components: Components = {
     );
   },
   thead({ children, ...props }) {
-    return <thead className="bg-muted/50 text-left text-xs font-medium text-muted-foreground" {...props}>{children}</thead>;
+    return <thead className="bg-muted/80 text-left text-xs font-semibold text-foreground/80" {...props}>{children}</thead>;
   },
   th({ children, ...props }) {
     return <th className="px-3 py-2 font-semibold" {...props}>{children}</th>;
   },
   td({ children, ...props }) {
-    return <td className="border-t border-border/30 px-3 py-2" {...props}>{children}</td>;
+    return <td className="border-t border-border/30 px-3 py-2 text-foreground/75" {...props}>{children}</td>;
   },
   blockquote({ children, ...props }) {
     return (

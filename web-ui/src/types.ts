@@ -1,9 +1,9 @@
-export type RuntimeKind = "opencode";
+export type RuntimeKind = "opencode" | "pi";
 
 export type FactoryMode = "lightweight-draft" | "governed-bundle" | "fully-autonomous";
 
 /** Runtimes still under active development — shown with a red "Alpha" badge in the UI. */
-export const ALPHA_RUNTIMES: ReadonlySet<RuntimeKind> = new Set<RuntimeKind>();
+export const ALPHA_RUNTIMES: ReadonlySet<RuntimeKind> = new Set<RuntimeKind>(["pi"]);
 
 export interface A2APeerRef {
   name: string;
@@ -1334,4 +1334,29 @@ export interface TriggerExecutionInfo {
   status: string;
   workflow_run_id: string | null;
   error_message: string | null;
+}
+
+/* ── Live Agent Activity Stream types ── */
+
+export type AgentActivityType = "reasoning" | "operation" | "a2a" | "file" | "warning" | "error" | "success" | "system";
+
+export interface AgentActivity {
+  id: string;
+  timestamp: string;
+  type: AgentActivityType;
+  event: string;
+  agentRef: string;
+  step: string;
+  runId: string;
+  message: string;
+  details: Record<string, unknown>;
+  source: string;
+}
+
+export interface ActivityStreamState {
+  activities: AgentActivity[];
+  isConnected: boolean;
+  isActive: boolean;
+  phase: string;
+  error: string | null;
 }

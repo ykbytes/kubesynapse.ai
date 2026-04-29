@@ -121,6 +121,128 @@ function Navbar({ onLogin, darkMode, onToggleDark }: { onLogin: () => void; dark
   );
 }
 
+// ─── Animated Cluster Visualization ───
+
+function AnimatedCluster() {
+  return (
+    <div className="relative mx-auto mb-8 h-48 max-w-xl overflow-hidden md:h-56">
+      {/* K8s control plane node */}
+      <motion.div
+        className="absolute left-1/2 top-2 flex -translate-x-1/2 items-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 shadow-sm"
+        animate={{ y: [0, -4, 0] }}
+        transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
+      >
+        <Server className="h-3 w-3 text-blue-600" />
+        <span className="text-[10px] font-semibold text-blue-700">kube-apiserver</span>
+      </motion.div>
+
+      {/* Floating agent pods */}
+      {[
+        { x: "15%", y: "40%", label: "agent-0", color: "emerald", delay: 0 },
+        { x: "35%", y: "30%", label: "agent-1", color: "blue", delay: 1 },
+        { x: "65%", y: "25%", label: "agent-2", color: "purple", delay: 0.5 },
+        { x: "80%", y: "45%", label: "agent-3", color: "cyan", delay: 1.5 },
+        { x: "25%", y: "65%", label: "worker-0", color: "orange", delay: 2 },
+        { x: "55%", y: "70%", label: "worker-1", color: "pink", delay: 0.8 },
+        { x: "75%", y: "65%", label: "litellm", color: "indigo", delay: 1.2 },
+      ].map((pod) => {
+        const colorMap: Record<string, string> = {
+          emerald: "border-emerald-300 bg-emerald-50 text-emerald-700",
+          blue: "border-blue-300 bg-blue-50 text-blue-700",
+          purple: "border-purple-300 bg-purple-50 text-purple-700",
+          cyan: "border-cyan-300 bg-cyan-50 text-cyan-700",
+          orange: "border-orange-300 bg-orange-50 text-orange-700",
+          pink: "border-pink-300 bg-pink-50 text-pink-700",
+          indigo: "border-indigo-300 bg-indigo-50 text-indigo-700",
+        };
+        return (
+          <motion.div
+            key={pod.label}
+            className={`absolute rounded-full border px-2.5 py-1 text-[9px] font-semibold shadow-sm ${colorMap[pod.color]}`}
+            style={{ left: pod.x, top: pod.y }}
+            animate={{
+              y: [0, -8, 0, 6, 0],
+              x: [0, 3, -3, 2, 0],
+              scale: [1, 1.03, 0.97, 1.02, 1],
+            }}
+            transition={{
+              duration: 4 + pod.delay,
+              repeat: Infinity,
+              ease: "easeInOut",
+              delay: pod.delay,
+            }}
+          >
+            <span className="mr-1 inline-block h-1.5 w-1.5 rounded-full bg-current opacity-60" />
+            {pod.label}
+          </motion.div>
+        );
+      })}
+
+      {/* Connection lines (subtle) */}
+      <svg className="absolute inset-0 h-full w-full" viewBox="0 0 500 220" fill="none">
+        {[
+          { x1: 250, y1: 20, x2: 120, y2: 100 },
+          { x1: 250, y1: 20, x2: 200, y2: 70 },
+          { x1: 250, y1: 20, x2: 350, y2: 60 },
+          { x1: 250, y1: 20, x2: 420, y2: 110 },
+          { x1: 120, y1: 100, x2: 150, y2: 150 },
+          { x1: 350, y1: 60, x2: 300, y2: 155 },
+        ].map((line, i) => (
+          <motion.line
+            key={i}
+            x1={line.x1}
+            y1={line.y1}
+            x2={line.x2}
+            y2={line.y2}
+            stroke="#cbd5e1"
+            strokeWidth={0.5}
+            strokeDasharray="4 3"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: [0.15, 0.35, 0.15] }}
+            transition={{ duration: 3, repeat: Infinity, delay: i * 0.4 }}
+          />
+        ))}
+      </svg>
+    </div>
+  );
+}
+
+// ─── GitHub Stars Counter ───
+
+function GitHubStars() {
+  const [stars, setStars] = useState<number | null>(null);
+
+  useEffect(() => {
+    fetch("https://api.github.com/repos/ykbytes/kubemininions")
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.stargazers_count != null) setStars(data.stargazers_count);
+      })
+      .catch(() => {});
+  }, []);
+
+  if (stars == null) return null;
+
+  const formatter = Intl.NumberFormat("en", { notation: "compact" });
+
+  return (
+    <motion.a
+      href="https://github.com/ykbytes/kubemininions"
+      target="_blank"
+      rel="noopener noreferrer"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ delay: 1 }}
+      className="mt-4 inline-flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-700 shadow-sm transition-all hover:bg-amber-100"
+    >
+      <svg className="h-3.5 w-3.5" viewBox="0 0 16 16" fill="currentColor">
+        <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z" />
+      </svg>
+      {formatter.format(stars)} GitHub stars
+    </motion.a>
+  );
+}
+
 // ─── Hero Section ───
 
 function HeroSection({ onLogin }: { onLogin: () => void }) {
@@ -170,11 +292,13 @@ function HeroSection({ onLogin }: { onLogin: () => void }) {
           Declarative CRDs, policy-driven governance, A2A-ready workflows — installed with Helm.
         </motion.p>
 
+        <AnimatedCluster />
+
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.6, delay: 0.3 }}
-          className="mt-10 flex flex-col items-center gap-4 sm:flex-row sm:justify-center"
+          className="mt-6 flex flex-col items-center gap-4 sm:flex-row sm:justify-center"
         >
           <button
             onClick={onLogin}
@@ -191,6 +315,8 @@ function HeroSection({ onLogin }: { onLogin: () => void }) {
             Deploy with Helm
           </a>
         </motion.div>
+
+        <GitHubStars />
       </div>
     </section>
   );
@@ -321,19 +447,19 @@ function InstallSection() {
 
   const tabLines: Record<TabKey, TerminalLine[]> = {
     install: [
-      { text: "helm repo add kubesynth https://charts.kubesynth.ai", color: "command", prefix: "$", type: "input" },
+      { text: "helm repo add kubesynapse https://charts.kubesynapse.ai", color: "command", prefix: "$", type: "input" },
       { text: "helm repo update", color: "command", prefix: "$", type: "input" },
-      { text: "helm install kubesynth kubesynth/kubesynth \\", color: "command", prefix: "$", type: "input" },
-      { text: "  --namespace kubesynth --create-namespace \\", color: "command", prefix: "", type: "input" },
+      { text: "helm install kubesynapse kubesynapse/kubesynapse \\", color: "command", prefix: "$", type: "input" },
+      { text: "  --namespace kubesynapse --create-namespace \\", color: "command", prefix: "", type: "input" },
       { text: "  --set gateway.replicas=2", color: "command", prefix: "", type: "input" },
       { text: "", type: "blank" },
-      { text: "NAME: kubesynth", color: "output", type: "output" },
-      { text: "NAMESPACE: kubesynth", color: "output", type: "output" },
+      { text: "NAME: kubesynapse", color: "output", type: "output" },
+      { text: "NAMESPACE: kubesynapse", color: "output", type: "output" },
       { text: "STATUS: deployed", color: "string", type: "output" },
       { text: "REVISION: 1", color: "output", type: "output" },
     ],
     agent: [
-      { text: "apiVersion: kubesynth.ai/v1alpha1", color: "yamlKey", type: "input" },
+      { text: "apiVersion: kubesynapse.ai/v1alpha1", color: "yamlKey", type: "input" },
       { text: "kind: AIAgent", color: "yamlKey", type: "input" },
       { text: "metadata:", color: "yamlKey", type: "input" },
       { text: "  name: incident-triage", color: "yamlVal", type: "input" },
@@ -364,7 +490,7 @@ function InstallSection() {
       { text: "    maxTokensPerRun: 50000", color: "yamlVal", type: "input" },
     ],
     workflow: [
-      { text: "apiVersion: kubesynth.ai/v1alpha1", color: "yamlKey", type: "input" },
+      { text: "apiVersion: kubesynapse.ai/v1alpha1", color: "yamlKey", type: "input" },
       { text: "kind: AgentWorkflow", color: "yamlKey", type: "input" },
       { text: "metadata:", color: "yamlKey", type: "input" },
       { text: "  name: incident-response", color: "yamlVal", type: "input" },
@@ -401,10 +527,10 @@ function InstallSection() {
     ],
     operate: [
       { text: "kubectl apply -f agent.yaml", color: "command", prefix: "$", type: "input" },
-      { text: "aiagent.kubesynth.ai/incident-triage created", color: "string", type: "output" },
+      { text: "aiagent.kubesynapse.ai/incident-triage created", color: "string", type: "output" },
       { text: "", type: "blank" },
       { text: "kubectl apply -f workflow.yaml", color: "command", prefix: "$", type: "input" },
-      { text: "agentworkflow.kubesynth.ai/incident-response created", color: "string", type: "output" },
+      { text: "agentworkflow.kubesynapse.ai/incident-response created", color: "string", type: "output" },
       { text: "", type: "blank" },
       { text: "kubectl get aiagents -n production", color: "command", prefix: "$", type: "input" },
       { text: "NAME            STATUS    AGE", color: "output", type: "output" },
@@ -1122,7 +1248,7 @@ function TestimonialsSection() {
   const quotes = [
     {
       quote:
-        "KubeSynth finally let us treat AI agents like any other Kubernetes workload. CRDs, Helm, kubectl — it fits into our existing GitOps pipeline without friction.",
+        "kubesynapse finally let us treat AI agents like any other Kubernetes workload. CRDs, Helm, kubectl — it fits into our existing GitOps pipeline without friction.",
       role: "Platform Engineer",
       org: "Fortune 500 Infrastructure Team",
     },
@@ -1186,24 +1312,37 @@ function TestimonialsSection() {
   );
 }
 
-// ─── Comparison Strip ───
+// ─── Comparison Matrix ───
 
 function ComparisonStrip() {
   const ref = useRef(null);
   const inView = useInView(ref, { once: true, margin: "-40px" });
 
+  const columns = ["kubesynapse", "LangChain", "CrewAI", "Kubiya"];
   const rows = [
-    { label: "Kubernetes Native", kubesynth: true, others: false },
-    { label: "Self-Hosted via Helm", kubesynth: true, others: "partial" },
-    { label: "A2A Protocol (JSON-RPC/SSE)", kubesynth: true, others: false },
-    { label: "MCP Tool Ecosystem", kubesynth: true, others: "partial" },
-    { label: "Policy & Governance CRDs", kubesynth: true, others: false },
-    { label: "Human-in-the-Loop Approval", kubesynth: true, others: "partial" },
+    { label: "Kubernetes Native", kubesynapse: "✅", langchain: "❌", crewai: "❌", kubiya: "⚠️" },
+    { label: "Self-Hosted (Helm)", kubesynapse: "✅", langchain: "❌", crewai: "❌", kubiya: "❌ SaaS" },
+    { label: "CRD Governance", kubesynapse: "✅", langchain: "❌", crewai: "❌", kubiya: "❌" },
+    { label: "A2A Protocol", kubesynapse: "✅ JSON-RPC/SSE", langchain: "❌", crewai: "❌", kubiya: "⚠️ REST" },
+    { label: "MCP Tool Ecosystem", kubesynapse: "✅ 11 sidecars", langchain: "✅ Tools", crewai: "✅ Tools", kubiya: "⚠️ Built-in" },
+    { label: "HITL Approval Gates", kubesynapse: "✅ CRD", langchain: "⚠️ Manual", crewai: "⚠️ Manual", kubiya: "✅" },
+    { label: "Token Budget Enforcement", kubesynapse: "✅ CRD", langchain: "❌ LangSmith $", crewai: "❌", kubiya: "✅" },
+    { label: "Multi-Tenancy", kubesynapse: "✅ Namespaces", langchain: "❌", crewai: "❌", kubiya: "⚠️ Org-based" },
+    { label: "Stateful Agents (PVC)", kubesynapse: "✅ StatefulSet", langchain: "❌", crewai: "❌", kubiya: "❌" },
+    { label: "Workflow DAG Engine", kubesynapse: "✅ CRD", langchain: "✅ LCEL", crewai: "✅ Process", kubiya: "✅" },
+    { label: "Built-in Auth", kubesynapse: "✅ OIDC + Token", langchain: "❌", crewai: "❌", kubiya: "✅ SaaS" },
+    { label: "Open Source (Apache 2)", kubesynapse: "✅", langchain: "✅ MIT", crewai: "✅ MIT", kubiya: "❌ Proprietary" },
   ];
 
+  const cellStyle = (text: string) => {
+    if (text.startsWith("✅")) return "text-emerald-400";
+    if (text.startsWith("❌")) return "text-slate-500";
+    return "text-amber-400";
+  };
+
   return (
-    <section className="bg-slate-900 px-6 py-24 md:py-32" ref={ref}>
-      <div className="mx-auto max-w-5xl">
+    <section className="bg-slate-900 px-4 py-24 md:py-32" ref={ref}>
+      <div className="mx-auto max-w-6xl">
         <motion.div
           initial="hidden"
           animate={inView ? "visible" : "hidden"}
@@ -1211,55 +1350,58 @@ function ComparisonStrip() {
           className="mb-12 text-center"
         >
           <motion.p variants={itemVariants} className="text-xs font-semibold uppercase tracking-widest text-blue-400">
-            Why KubeSynth
+            Comparison Matrix
           </motion.p>
           <motion.h2 variants={itemVariants} className="mt-3 text-3xl font-bold tracking-tight text-white sm:text-4xl">
-            Built for K8s. Not Bolted On.
+            kubesynapse vs The Alternatives
           </motion.h2>
+          <motion.p variants={itemVariants} className="mx-auto mt-4 max-w-xl text-sm text-slate-400">
+            kubesynapse is the only platform purpose-built for production Kubernetes — not a Python library with a K8s deployment guide.
+          </motion.p>
         </motion.div>
 
         <motion.div
           variants={fadeIn}
           initial="hidden"
           animate={inView ? "visible" : "hidden"}
-          className="overflow-hidden rounded-2xl border border-slate-700 bg-slate-800/50"
+          className="overflow-x-auto rounded-2xl border border-slate-700 bg-slate-800/50"
         >
-          <div className="grid grid-cols-3 gap-4 border-b border-slate-700 px-6 py-4 text-xs font-semibold uppercase tracking-wider text-slate-400">
-            <div>Capability</div>
-            <div className="text-center text-blue-400">KubeSynth</div>
-            <div className="text-center">Other Platforms</div>
-          </div>
-          {rows.map((row, i) => (
-            <div
-              key={row.label}
-              className={`grid grid-cols-3 items-center gap-4 px-6 py-4 text-sm ${
-                i < rows.length - 1 ? "border-b border-slate-700/50" : ""
-              }`}
-            >
-              <div className="text-slate-300">{row.label}</div>
-              <div className="flex justify-center">
-                {row.kubesynth === true ? (
-                  <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2.5 py-1 text-xs font-semibold text-emerald-400 ring-1 ring-emerald-500/20">
-                    <CheckCircle2 className="h-3 w-3" /> Yes
-                  </span>
-                ) : (
-                  <span className="text-slate-400">{row.kubesynth}</span>
-                )}
-              </div>
-              <div className="flex justify-center">
-                {row.others === true ? (
-                  <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-                ) : row.others === false ? (
-                  <span className="text-slate-500">—</span>
-                ) : (
-                  <span className="rounded-full bg-amber-500/10 px-2.5 py-1 text-xs font-semibold text-amber-400 ring-1 ring-amber-500/20">
-                    Partial
-                  </span>
-                )}
-              </div>
-            </div>
-          ))}
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-slate-700">
+                <th className="px-4 py-4 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">Capability</th>
+                {columns.map((col) => (
+                  <th key={col} className={`px-4 py-4 text-center text-xs font-bold uppercase tracking-wider ${col === "kubesynapse" ? "text-blue-400" : "text-slate-500"}`}>
+                    {col}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row, i) => (
+                <tr key={row.label} className={i < rows.length - 1 ? "border-b border-slate-700/50" : ""}>
+                  <td className="px-4 py-3.5 text-slate-300 font-medium">{row.label}</td>
+                  <td className={`px-4 py-3.5 text-center font-medium ${cellStyle(row.kubesynapse)}`}>
+                    {row.kubesynapse}
+                  </td>
+                  <td className={`px-4 py-3.5 text-center ${cellStyle(row.langchain)}`}>
+                    {row.langchain}
+                  </td>
+                  <td className={`px-4 py-3.5 text-center ${cellStyle(row.crewai)}`}>
+                    {row.crewai}
+                  </td>
+                  <td className={`px-4 py-3.5 text-center ${cellStyle(row.kubiya)}`}>
+                    {row.kubiya}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </motion.div>
+
+        <p className="mt-6 text-center text-xs text-slate-500">
+          ✅ = Native support &nbsp;|&nbsp; ⚠️ = Partial / requires setup &nbsp;|&nbsp; ❌ = Not available
+        </p>
       </div>
     </section>
   );
@@ -1297,7 +1439,7 @@ function BottomCTA({ onLogin }: { onLogin: () => void }) {
               <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
             </button>
             <a
-              href="https://github.com/kubesynth/kubesynth"
+              href="https://github.com/kubesynapse/kubesynapse"
               target="_blank"
               rel="noopener noreferrer"
               className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-8 py-3.5 text-sm font-semibold text-slate-700 shadow-sm transition-all hover:bg-slate-50 hover:border-slate-300"
@@ -1344,7 +1486,7 @@ function Footer() {
             <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400">Resources</h4>
             <ul className="mt-4 space-y-2.5 text-sm text-slate-600">
               <li><a href="#" className="transition-colors hover:text-slate-900">Documentation</a></li>
-              <li><a href="https://github.com/kubesynth/kubesynth" target="_blank" rel="noopener noreferrer" className="transition-colors hover:text-slate-900">GitHub</a></li>
+              <li><a href="https://github.com/kubesynapse/kubesynapse" target="_blank" rel="noopener noreferrer" className="transition-colors hover:text-slate-900">GitHub</a></li>
               <li><a href="#" className="transition-colors hover:text-slate-900">Changelog</a></li>
               <li><a href="#" className="transition-colors hover:text-slate-900">Helm Charts</a></li>
             </ul>

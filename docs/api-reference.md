@@ -1,6 +1,6 @@
-# KubeSynth API Reference
+# KubeSynapse API Reference
 
-**Who is this for:** Developers integrating with KubeSynth via REST API, A2A JSON-RPC, or SDKs.
+**Who is this for:** Developers integrating with KubeSynapse via REST API, A2A JSON-RPC, or SDKs.
 
 **Base URL:** `http://<gateway-host>/api/v1`  
 **Current Version:** `v1`  
@@ -32,7 +32,7 @@
 
 ## Authentication
 
-KubeSynth supports multiple authentication modes configured at install time.
+KubeSynapse supports multiple authentication modes configured at install time.
 
 | Mode | Header / Mechanism | Endpoint Requirement |
 |------|--------------------|----------------------|
@@ -53,7 +53,7 @@ Returns current authentication configuration.
 {
   "mode": "oidc",
   "oidc_issuer": "https://auth.example.com",
-  "oidc_audience": "kubesynth",
+  "oidc_audience": "KubeSynapse",
   "local_auth_enabled": true
 }
 ```
@@ -136,7 +136,7 @@ Gateway health check.
 ```json
 {
   "status": "healthy",
-  "gateway": "kubesynth",
+  "gateway": "KubeSynapse",
   "auth_mode": "oidc"
 }
 ```
@@ -150,7 +150,7 @@ Readiness probe including database connectivity.
 ```json
 {
   "status": "ready",
-  "gateway": "kubesynth",
+  "gateway": "KubeSynapse",
   "checks": {
     "database": "ok"
   }
@@ -698,7 +698,7 @@ Tenants are managed as Kubernetes `AgentTenant` CRDs. The platform does not expo
 #### Example: Create a tenant
 
 ```yaml
-apiVersion: kubesynth.ai/v1alpha1
+apiVersion: kubesynapse.ai/v1alpha1
 kind: AgentTenant
 metadata:
   name: team-alpha
@@ -730,7 +730,7 @@ kubectl get agenttenants
 
 ## A2A Protocol
 
-KubeSynth implements the A2A (Agent-to-Agent) protocol over JSON-RPC 2.0.
+KubeSynapse implements the A2A (Agent-to-Agent) protocol over JSON-RPC 2.0.
 
 ### Agent Card
 

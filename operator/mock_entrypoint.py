@@ -34,9 +34,9 @@ class _MockHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
             self.end_headers()
             self.wfile.write(
-                b"# HELP kubesynth_operator_reconcile_total Total reconciliation operations\n"
-                b"# TYPE kubesynth_operator_reconcile_total counter\n"
-                b"kubesynth_operator_reconcile_total 0\n"
+                b"# HELP KUBESYNAPSE_operator_reconcile_total Total reconciliation operations\n"
+                b"# TYPE KUBESYNAPSE_operator_reconcile_total counter\n"
+                b"KUBESYNAPSE_operator_reconcile_total 0\n"
             )
         else:
             self.send_response(404)
@@ -56,7 +56,7 @@ def _start_server() -> None:
 
 
 threading.Thread(target=_start_server, daemon=True, name="readiness-server").start()
-logger.info("KubeSynth operator running in MOCK mode — no Kubernetes cluster required.")
+logger.info("kubesynapse operator running in MOCK mode — no Kubernetes cluster required.")
 
 while True:
     time.sleep(3600)

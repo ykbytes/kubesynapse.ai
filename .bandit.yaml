@@ -1,4 +1,4 @@
-# Bandit security scanner configuration for KubeSynth
+# Bandit security scanner configuration for kubesynapse
 # https://bandit.readthedocs.io/en/latest/config.html
 
 skips:

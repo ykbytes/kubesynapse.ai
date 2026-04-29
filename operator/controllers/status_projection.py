@@ -160,7 +160,7 @@ def _project_eval_status_snapshot(
     )
 
 
-@kopf.on.field("kubesynth.ai", "v1alpha1", "agentworkflows", field="status.phase")  # type: ignore[arg-type]
+@kopf.on.field("kubesynapse.ai", "v1alpha1", "agentworkflows", field="status.phase")  # type: ignore[arg-type]
 def project_workflow_status(
     old: str | None,
     new: str | None,
@@ -193,7 +193,7 @@ def project_workflow_status(
     )
 
 
-@kopf.on.field("kubesynth.ai", "v1alpha1", "agentworkflows", field="status.runId")  # type: ignore[arg-type]
+@kopf.on.field("kubesynapse.ai", "v1alpha1", "agentworkflows", field="status.runId")  # type: ignore[arg-type]
 def project_workflow_run_id(
     old: str | None,
     new: str | None,
@@ -225,9 +225,9 @@ def project_workflow_run_id(
     )
 
 
-if crd_exists("kubesynth.ai", "v1alpha1", "agentevals"):
+if crd_exists("kubesynapse.ai", "v1alpha1", "agentevals"):
 
-    @kopf.on.field("kubesynth.ai", "v1alpha1", "agentevals", field="status.phase")  # type: ignore[arg-type]
+    @kopf.on.field("kubesynapse.ai", "v1alpha1", "agentevals", field="status.phase")  # type: ignore[arg-type]
     def project_eval_status(
         old: str | None,
         new: str | None,
@@ -259,7 +259,7 @@ if crd_exists("kubesynth.ai", "v1alpha1", "agentevals"):
         )
 
 
-    @kopf.on.field("kubesynth.ai", "v1alpha1", "agentevals", field="status.runId")  # type: ignore[arg-type]
+    @kopf.on.field("kubesynapse.ai", "v1alpha1", "agentevals", field="status.runId")  # type: ignore[arg-type]
     def project_eval_run_id(
         old: str | None,
         new: str | None,

@@ -1,6 +1,6 @@
 # agentctl
 
-**Modern CLI for KubeSynth** — a Kubernetes-native OpenCode-first AI agent orchestration platform.
+**Modern CLI for KubeSynapse** — a Kubernetes-native OpenCode-first AI agent orchestration platform.
 
 `agentctl` provides full control over agents, workflows, evaluations, policies, approvals, credentials, authentication, and the skills catalog from the terminal.
 
@@ -159,6 +159,14 @@ agentctl agents discover workspace-assistant --include-unreachable
 
 Shows the agent's configured Agent-to-Agent (A2A) communication targets and their reachability status.
 
+### Stream Live Agent Events
+
+```bash
+agentctl agents live-events my-agent
+```
+
+Opens an SSE stream of real-time agent reasoning events (Pi runtime only).
+
 ---
 
 ## Invoking Agents
@@ -287,6 +295,14 @@ agentctl workflows status my-workflow
 ```
 
 Shows a focused view of the current execution state including phase, current step, run ID, pending approvals, and per-step status.
+
+### Fetch Workflow Logs
+
+```bash
+agentctl workflows logs my-workflow
+```
+
+Streams the runtime logs for the most recent workflow execution.
 
 ---
 
@@ -535,6 +551,30 @@ Shows shared MCP hub servers configured in the gateway, including transport type
 
 ---
 
+## Artifacts
+
+Download files produced by agent runs.
+
+### List Artifacts
+
+```bash
+agentctl artifacts list my-agent
+```
+
+### Download a File
+
+```bash
+agentctl artifacts download my-agent output/results.json
+```
+
+### Download Workspace ZIP
+
+```bash
+agentctl artifacts zip my-agent
+```
+
+---
+
 ## Apply (Generic Resource Management)
 
 ```bash
@@ -559,7 +599,7 @@ If the resource already exists (HTTP 409), it falls back to an update (PATCH).
 ### 1. Kubernetes Custom Resource Manifests
 
 ```yaml
-apiVersion: kubesynth.ai/v1alpha1
+apiVersion: kubesynapse.ai/v1alpha1
 kind: AIAgent
 metadata:
   name: research-assistant
@@ -649,6 +689,7 @@ agentctl agents show NAME               # Show agent details
 agentctl agents update NAME [-f FILE]   # Update agent
 agentctl agents delete NAME             # Delete agent
 agentctl agents discover NAME           # Show A2A peer discovery
+agentctl agents live-events NAME        # Stream live agent events
 
 agentctl workflows list                 # List workflows
 agentctl workflows create -f FILE       # Create workflow
@@ -658,6 +699,7 @@ agentctl workflows delete NAME          # Delete workflow
 agentctl workflows trigger NAME [INPUT] # Trigger workflow execution
 agentctl workflows cancel NAME          # Cancel running workflow
 agentctl workflows status NAME          # Show focused run status
+agentctl workflows logs NAME            # Fetch workflow logs
 
 agentctl evals list                     # List eval suites
 agentctl evals create -f FILE           # Create eval
@@ -695,6 +737,10 @@ agentctl skills get ID                  # Show skill details
 
 agentctl tools list                     # List MCP tool sidecars
 agentctl tools hub                      # List shared MCP hub servers
+
+agentctl artifacts list AGENT           # List agent artifacts
+agentctl artifacts download AGENT FILE  # Download a single artifact
+agentctl artifacts zip AGENT            # Download workspace ZIP
 ```
 
 ---

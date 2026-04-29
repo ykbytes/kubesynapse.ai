@@ -1,6 +1,6 @@
-# KubeSynth Factory Example
+# KubeSynapse Factory Example
 
-This example packages a lean factory for turning an incoming idea into a reviewed KubeSynth bundle. The previous six-agent version duplicated materialization and quality review. This version keeps the same core behavior with four agents and a single draft -> review -> finalize path.
+This example packages a lean factory for turning an incoming idea into a reviewed KubeSynapse bundle. The previous six-agent version duplicated materialization and quality review. This version keeps the same core behavior with four agents and a single draft -> review -> finalize path.
 
 ## Resources
 
@@ -14,13 +14,13 @@ This example packages a lean factory for turning an incoming idea into a reviewe
 
 ## Agents
 
-1. `kubesynth-factory-analyst`
+1. `KubeSynapse-factory-analyst`
    Expands raw requests into a structured specification with requirements, roles, tasks, acceptance criteria, and verification guidance.
-2. `kubesynth-factory`
+2. `KubeSynapse-factory`
    Drafts the initial bundle, then finalizes it after review. Final materialization now stays with the factory instead of a separate materializer agent.
-3. `kubesynth-factory-reviewer`
+3. `KubeSynapse-factory-reviewer`
    Performs schema, reference, approval-boundary, and quality review in one pass.
-4. `kubesynth-factory-deployer`
+4. `KubeSynapse-factory-deployer`
    Applies approved manifests and, if separately approved, triggers the generated workflow.
 
 ## Workflow Shape
@@ -56,13 +56,13 @@ pwsh ./deploy.ps1
 
 The deploy script:
 
-- removes the obsolete `kubesynth-factory-materializer` and `kubesynth-factory-quality-reviewer` agents,
+- removes the obsolete `KubeSynapse-factory-materializer` and `KubeSynapse-factory-quality-reviewer` agents,
 - validates the context, policy, agents, and workflow manifests,
 - applies the lean four-agent bundle,
 - waits for the four active sandboxes to roll out.
 
 ## Invoke
 
-Use `invoke-examples.sh` for direct agent invocation and workflow-trigger examples. The workflow name remains `kubesynth-factory-pipeline`, so existing trigger examples continue to work.
+Use `invoke-examples.sh` for direct agent invocation and workflow-trigger examples. The workflow name remains `KubeSynapse-factory-pipeline`, so existing trigger examples continue to work.
 
 When `deploy-bundle` or `run-generated-workflow` pauses for approval, approve the generated `AgentApproval` from the web UI or with the API shown in `invoke-examples.sh`.

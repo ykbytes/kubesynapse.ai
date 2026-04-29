@@ -1,6 +1,6 @@
-# Build a DevOps Agent in 5 Minutes with KubeSynth
+# Build a DevOps Agent in 5 Minutes with KubeSynapse
 
-**Published:** April 2026 | **Author:** KubeSynth Team
+**Published:** April 2026 | **Author:** KubeSynapse Team
 
 ---
 
@@ -13,33 +13,33 @@ In this tutorial, you'll deploy a fully autonomous DevOps agent on your Kubernet
 - `kubectl` configured for your cluster
 - 5 minutes
 
-## Step 1: Install KubeSynth (60 seconds)
+## Step 1: Install KubeSynapse (60 seconds)
 
 ```bash
-helm repo add kubesynth https://ykbytes.github.io/kubemininions/charts
+helm repo add KubeSynapse https://ykbytes.github.io/kubemininions/charts
 helm repo update
 
-helm install kubesynth kubesynth/kubesynth \
-  --namespace kubesynth \
+helm install KubeSynapse KubeSynapse/KubeSynapse \
+  --namespace kubesynapse \
   --create-namespace \
-  --set operator.image.repository=ghcr.io/ykbytes/kubesynth-operator \
-  --set apiGateway.image.repository=ghcr.io/ykbytes/kubesynth-api-gateway \
+  --set operator.image.repository=ghcr.io/ykbytes/kubesynapse-operator \
+  --set apiGateway.image.repository=ghcr.io/ykbytes/kubesynapse-api-gateway \
   --set litellm.enabled=true \
   --set litellm.apiKey.openai=$OPENAI_API_KEY
 
 # Wait for all pods
-kubectl wait --for=condition=Ready pods --all -n kubesynth --timeout=120s
+kubectl wait --for=condition=Ready pods --all -n kubesynapse --timeout=120s
 ```
 
 Verify the installation:
 
 ```bash
-kubectl get pods -n kubesynth
+kubectl get pods -n kubesynapse
 # NAME                              READY   STATUS    RESTARTS   AGE
-# kubesynth-api-gateway-xxx         1/1     Running   0          30s
-# kubesynth-operator-xxx            1/1     Running   0          30s
-# kubesynth-postgresql-0            1/1     Running   0          30s
-# kubesynth-litellm-xxx             1/1     Running   0          30s
+# kubesynapse-api-gateway-xxx         1/1     Running   0          30s
+# kubesynapse-operator-xxx            1/1     Running   0          30s
+# kubesynapse-postgresql-0            1/1     Running   0          30s
+# KubeSynapse-litellm-xxx             1/1     Running   0          30s
 ```
 
 ## Step 2: Define the Agent Policy (30 seconds)
@@ -48,11 +48,11 @@ Create a policy that allows kubectl operations but requires approval for deletes
 
 ```yaml
 # deploy/devops-agent-policy.yaml
-apiVersion: agents.kubesynth.ai/v1
+apiVersion: agents.kubesynapse.ai/v1
 kind: AgentPolicy
 metadata:
   name: devops-agent-policy
-  namespace: kubesynth
+  namespace: KubeSynapse
 spec:
   maxTokensPerRequest: 4096
   maxDailyCost: 2.00
@@ -81,11 +81,11 @@ kubectl apply -f deploy/devops-agent-policy.yaml
 
 ```yaml
 # deploy/devops-agent.yaml
-apiVersion: agents.kubesynth.ai/v1
+apiVersion: agents.kubesynapse.ai/v1
 kind: AIAgent
 metadata:
   name: devops-bot
-  namespace: kubesynth
+  namespace: KubeSynapse
 spec:
   policyRef: devops-agent-policy
   replicas: 1
@@ -109,11 +109,11 @@ Apply it:
 kubectl apply -f deploy/devops-agent.yaml
 
 # Watch the agent come alive
-kubectl get statefulset -n kubesynth
+kubectl get statefulset -n kubesynapse
 # NAME          READY   AGE
 # devops-bot    1/1     10s
 
-kubectl get pods -n kubesynth -l app=kubesynth-agent,agent=devops-bot
+kubectl get pods -n kubesynapse -l app=kubesynapse-agent,agent=devops-bot
 # NAME            READY   STATUS    RESTARTS   AGE
 # devops-bot-0    1/1     Running   0          12s
 ```
@@ -124,11 +124,11 @@ Define a workflow that asks the agent to investigate a namespace:
 
 ```yaml
 # deploy/diagnose-workflow.yaml
-apiVersion: agents.kubesynth.ai/v1
+apiVersion: agents.kubesynapse.ai/v1
 kind: AgentWorkflow
 metadata:
   name: diagnose-default-ns
-  namespace: kubesynth
+  namespace: KubeSynapse
 spec:
   agent: devops-bot
   steps:
@@ -162,7 +162,7 @@ Apply and watch:
 kubectl apply -f deploy/diagnose-workflow.yaml
 
 # Watch the workflow execute
-kubectl get agentworkflow -n kubesynth diagnose-default-ns -w
+kubectl get agentworkflow -n kubesynapse diagnose-default-ns -w
 # NAME                   STATUS     STEPS   AGE
 # diagnose-default-ns    Running    1/3     5s
 # diagnose-default-ns    Running    2/3     15s
@@ -173,7 +173,7 @@ kubectl get agentworkflow -n kubesynth diagnose-default-ns -w
 Get the results:
 
 ```bash
-kubectl describe agentworkflow -n kubesynth diagnose-default-ns
+kubectl describe agentworkflow -n kubesynapse diagnose-default-ns
 # ...
 # Status:
 #   Steps:
@@ -189,19 +189,19 @@ kubectl describe agentworkflow -n kubesynth diagnose-default-ns
 If the agent identifies an issue that requires `kubectl-delete`, it will create an `AgentApproval` CRD:
 
 ```bash
-kubectl get agentapprovals -n kubesynth
+kubectl get agentapprovals -n kubesynapse
 # NAME                       STATUS    AGE
 # delete-stuck-pod-abc123    Pending   10s
 
 # Review and approve
-kubectl describe agentapproval -n kubesynth delete-stuck-pod-abc123
+kubectl describe agentapproval -n kubesynapse delete-stuck-pod-abc123
 # ...
 # Spec:
 #   Reason: "Pod stuck in CrashLoopBackOff for 30+ minutes. Restarting may resolve."
 #   Action: kubectl-delete pod stuck-pod -n default
 
 # Approve it
-kubectl patch agentapproval -n kubesynth delete-stuck-pod-abc123 \
+kubectl patch agentapproval -n kubesynapse delete-stuck-pod-abc123 \
   --type merge \
   -p '{"spec":{"decision":"approved","comment":"Approved. Deleting stuck pod."}}'
 
@@ -212,7 +212,7 @@ kubectl patch agentapproval -n kubesynth delete-stuck-pod-abc123 \
 
 In 5 minutes, you:
 
-1. **Deployed the full KubeSynth stack** — API gateway, operator, LiteLLM, PostgreSQL, Redis, NATS, Qdrant
+1. **Deployed the full KubeSynapse stack** — API gateway, operator, LiteLLM, PostgreSQL, Redis, NATS, Qdrant
 2. **Defined governance policy** — token limits, cost limits, tool whitelist, approval gates
 3. **Provisioned a stateful agent** — StatefulSet with PVC, stable DNS, graceful lifecycle
 4. **Ran a multi-step workflow** — DAG execution with dependencies, retries, and exponential backoff
@@ -230,17 +230,17 @@ All without writing a single line of agent code. Just Kubernetes manifests.
 ## Bonus: One-Liner via CLI
 
 ```bash
-kubesynth agent create devops-bot \
+KubeSynapse agent create devops-bot \
   --policy devops-agent-policy \
   --model gpt-4o-mini \
   --tools kubectl-get,kubectl-describe,kubectl-logs \
   --storage 1Gi
 
-kubesynth workflow run diagnose-default-ns \
+KubeSynapse workflow run diagnose-default-ns \
   --agent devops-bot \
   --steps check-pods,check-events,diagnose
 ```
 
 ---
 
-**KubeSynth** — Because your agents deserve Kubernetes.
+**KubeSynapse** — Because your agents deserve Kubernetes.

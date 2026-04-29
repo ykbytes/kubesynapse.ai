@@ -1,10 +1,10 @@
 <mxfile host="Electron" agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) draw.io/29.6.6 Chrome/144.0.7559.236 Electron/40.8.4 Safari/537.36" version="29.6.6">
-  <diagram name="KubeSynth Architecture" id="kubesynth-arch">
+  <diagram name="kubesynapse Architecture" id="kubesynapse-arch">
     <mxGraphModel dx="1303" dy="834" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1250" pageHeight="850" math="0" shadow="0" adaptiveColors="auto">
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
-        <mxCell id="title" parent="1" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;strokeColor=none;fillColor=none;" value="&lt;font style=&#39;font-size:22px&#39;&gt;&lt;b&gt;KubeSynth&lt;/b&gt; Platform Architecture&lt;/font&gt;&lt;br&gt;&lt;font style=&#39;font-size:11px;color:#777&#39;&gt;Kubernetes-Native AI Agent Platform&lt;/font&gt;" vertex="1">
+        <mxCell id="title" parent="1" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;strokeColor=none;fillColor=none;" value="&lt;font style=&#39;font-size:22px&#39;&gt;&lt;b&gt;kubesynapse&lt;/b&gt; Platform Architecture&lt;/font&gt;&lt;br&gt;&lt;font style=&#39;font-size:11px;color:#777&#39;&gt;Kubernetes-Native AI Agent Platform&lt;/font&gt;" vertex="1">
           <mxGeometry height="40" width="560" x="300" y="10" as="geometry" />
         </mxCell>
         <mxCell id="ext_access" parent="1" style="swimlane;startSize=20;rounded=1;fillColor=#F3E5F5;strokeColor=#CE93D8;swimlaneLine=0;fontColor=#7B1FA2;fontSize=10;fontStyle=1;html=1;shadow=0;arcSize=8;" value="EXTERNAL ACCESS" vertex="1">

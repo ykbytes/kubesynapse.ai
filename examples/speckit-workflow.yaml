@@ -11,7 +11,7 @@
 # before implementation (to let a human sanity-check the task list).
 # ---------------------------------------------------------------------------
 
-apiVersion: kubesynth.ai/v1alpha1
+apiVersion: kubesynapse.ai/v1alpha1
 kind: AgentWorkflow
 metadata:
   name: speckit-pipeline

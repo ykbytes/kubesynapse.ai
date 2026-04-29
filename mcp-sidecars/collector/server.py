@@ -1,5 +1,5 @@
 """
-KubeSynth Collector MCP Sidecar
+kubesynapse Collector MCP Sidecar
 
 MCP tool interface that lets AI agents gather intelligence from
 collector agents deployed on Kubernetes clusters and VMs.
@@ -68,7 +68,7 @@ def _check_egress(url: str) -> str | None:
 server = create_mcp_server(
     name="collector-tools",
     description=(
-        "Intelligence gathering tools for KubeSynth. "
+        "Intelligence gathering tools for kubesynapse. "
         "Use these tools to collect information from Kubernetes clusters "
         "and VMs by running read-only scripts on deployed collector agents."
     ),

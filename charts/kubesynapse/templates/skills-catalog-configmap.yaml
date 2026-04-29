@@ -1,0 +1,12 @@
+{{- if .Values.skillsCatalog.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "kubesynapse.fullname" . }}-skills-catalog
+  labels:
+    app.kubernetes.io/component: skills-catalog
+    {{- include "kubesynapse.labels" . | nindent 4 }}
+data:
+  skills-catalog.json: |
+    {{- .Values.skillsCatalog.catalogJson | nindent 4 }}
+{{- end }}

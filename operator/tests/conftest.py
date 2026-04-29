@@ -101,9 +101,15 @@ client_module.V1Volume = MagicMock
 client_module.V1VolumeMount = MagicMock
 client_module.V1PersistentVolumeClaim = MagicMock
 client_module.V1PersistentVolumeClaimSpec = MagicMock
+client_module.V1RoleRef = MagicMock
+client_module.V1Subject = MagicMock
 client_module.V1ResourceQuota = MagicMock
-client_module.V1LimitRange = MagicMock
+client_module.V1ResourceQuotaSpec = MagicMock
+client_module.V1LimitRangeSpec = MagicMock
 client_module.V1LimitRangeItem = MagicMock
+client_module.V1DeploymentSpec = MagicMock
+client_module.V1StatefulSet = MagicMock
+client_module.V1StatefulSetSpec = MagicMock
 
 kubernetes_module.client = client_module
 kubernetes_module.config = config_module

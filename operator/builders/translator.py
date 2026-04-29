@@ -22,6 +22,7 @@ from builders.manifests import (
     create_mcp_auth_secret_manifest,
     create_mcp_network_policy_manifest,
     create_opencode_provider_bootstrap_secret,
+    create_pi_provider_bootstrap_secret,
     resolve_runtime_kind,
 )
 from utils import (
@@ -173,9 +174,12 @@ def translate_agent(
     if allowed_mcp or requested_mcp_servers or has_structured_mcp_connections:
         mcp_auth_secret = create_mcp_auth_secret_manifest(namespace)
 
-    provider_bootstrap_secret = create_opencode_provider_bootstrap_secret(name, namespace, spec)
-
     runtime_kind = resolve_runtime_kind(spec)
+    provider_bootstrap_secret = (
+        create_pi_provider_bootstrap_secret(name, namespace)
+        if runtime_kind == "pi"
+        else create_opencode_provider_bootstrap_secret(name, namespace, spec)
+    )
 
     return AgentOutputs(
         service=service_manifest,

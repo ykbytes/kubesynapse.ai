@@ -327,14 +327,14 @@ async function fetchAuthenticated(
 
       // Notify React state
       if (_onTokenRefreshed) _onTokenRefreshed(session.access_token);
-      localStorage.setItem("kubesynth/token", session.access_token);
+      localStorage.setItem("kubesynapse/token", session.access_token);
 
       // Retry the original request with the new token
       return fetch(url, buildAuthenticatedInit(session.access_token, requestId, init));
     } catch {
       _refreshPromise = null;
       // Refresh truly failed — clear stale token so the UI re-shows login
-      localStorage.removeItem("kubesynth/token");
+      localStorage.removeItem("kubesynapse/token");
       return response;
     }
   }
@@ -544,8 +544,8 @@ function readRecord(record: JsonRecord, key: string, label: string, fallback: Js
 function readRuntimeKind(record: JsonRecord, key: string, label: string, fallback?: RuntimeKind): RuntimeKind {
   const value = record[key];
   const runtimeKind = value === undefined && fallback !== undefined ? fallback : value;
-  if (runtimeKind !== "opencode") {
-    throw new Error(`${label}.${key} must be 'opencode'.`);
+  if (runtimeKind !== "opencode" && runtimeKind !== "pi") {
+    throw new Error(`${label}.${key} must be 'opencode' or 'pi'.`);
   }
   return runtimeKind;
 }
@@ -1708,9 +1708,10 @@ async function parseJsonResponse<T>(response: Response, parser: (payload: unknow
         detail = text;
       }
     }
+    const message = detail ? `Request failed with status ${response.status}: ${detail}` : `Request failed with status ${response.status}`;
     throw new ApiError(
       response.status,
-      `Request failed with status ${response.status}`,
+      message,
       detail || undefined,
     );
   }
@@ -2913,6 +2914,16 @@ export function createWorkflowStatusStream(
 ): EventSource {
   const url = buildUrl(`/api/workflows/${workflowName}/status/stream`, namespace);
   return new EventSource(`${url}&token=${encodeURIComponent(token)}`);
+}
+
+export function createWorkflowActivitiesStream(
+  token: string,
+  namespace: string,
+  workflowName: string,
+  tail = 100,
+): EventSource {
+  const url = buildUrl(`/api/workflows/${workflowName}/activities/stream`, namespace);
+  return new EventSource(`${url}&tail=${tail}&token=${encodeURIComponent(token)}`);
 }
 
 export function createNotificationStream(

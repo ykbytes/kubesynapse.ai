@@ -1,5 +1,5 @@
 [project]
-name = "kubesynth"
+name = "kubesynapse"
 version = "0.1.0"
 requires-python = ">=3.11"
 
@@ -70,6 +70,9 @@ ignore = [
 "tests/**/*.py" = ["S101", "S105", "S106", "S108", "S110", "SIM117", "RUF003", "RUF012"]  # allow assert, passwords, temp files, nested with, unicode quotes, mutable defaults in tests
 "api-gateway/tests/**/*.py" = ["S101", "S105", "S106", "S108", "S110", "SIM117", "RUF003", "RUF012"]  # same for api-gateway tests
 "api-gateway/main.py" = ["E402", "S105"]  # local imports after sys.path manipulation; S105 false positives on OAuth method names
+"api-gateway/main_old.py" = ["E402", "S105"]  # legacy monolith — same exemptions
+"api-gateway/_core.py" = ["E402", "F401", "F821", "S105", "S110"]  # E402: late imports; F401: imports used by router star-imports; F821: names resolved at import time; S105/S110: pre-existing
+"api-gateway/routers/**/*.py" = ["F403", "F405", "E402", "S105"]  # F403/F405: star imports from _core; E402: legacy late imports; S105: false positives on URL strings
 "opencode-runtime/main.py" = ["E402"]  # late imports for optional deps and backward compat
 "operator/state_store.py" = ["E402"]  # late imports for optional deps
 

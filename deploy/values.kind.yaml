@@ -1,11 +1,11 @@
-# KubeSynth — Kind/Local Kubernetes Deployment Values
+# kubesynapse — Kind/Local Kubernetes Deployment Values
 # 
 # Usage:
-#   kind load docker-image kubesynth-api-gateway:latest
-#   kind load docker-image kubesynth-web-ui:latest
-#   kind load docker-image kubesynth-operator:latest
-#   kind load docker-image kubesynth-opencode-rt:latest
-#   helm upgrade --install kubesynth ./charts/kubesynth -n kubesynth --create-namespace -f deploy/values.kind.yaml
+#   kind load docker-image kubesynapse-api-gateway:latest
+#   kind load docker-image kubesynapse-web-ui:latest
+#   kind load docker-image kubesynapse-operator:latest
+#   kind load docker-image kubesynapse-opencode-rt:latest
+#   helm upgrade --install kubesynapse ./charts/kubesynapse -n kubesynapse --create-namespace -f deploy/values.kind.yaml
 
 global:
   imagePullSecrets: []
@@ -18,11 +18,11 @@ operator:
   enabled: true
   replicaCount: 1
   image:
-    repository: kubesynth-operator
+    repository: kubesynapse-operator
     tag: latest
     pullPolicy: Never
   workerImage:
-    repository: kubesynth-operator
+    repository: kubesynapse-operator
     tag: latest
     pullPolicy: Never
   resources:
@@ -45,7 +45,7 @@ apiGateway:
   enabled: true
   replicaCount: 1
   image:
-    repository: kubesynth-api-gateway
+    repository: kubesynapse-api-gateway
     tag: latest
     pullPolicy: Never
   ingress:
@@ -69,7 +69,7 @@ webUi:
   enabled: true
   replicaCount: 1
   image:
-    repository: kubesynth-web-ui
+    repository: kubesynapse-web-ui
     tag: latest
     pullPolicy: Never
   service:
@@ -87,8 +87,8 @@ webUi:
 
 opencodeRuntime:
   image:
-    repository: kubesynth-opencode-rt
-    tag: latest
+    repository: kubesynapse-opencode-rt
+    tag: v1.0.4
     pullPolicy: Never
   provider: litellm
   limits:
@@ -278,7 +278,7 @@ platformSecrets:
     anthropicApiKey: ""
     litellmMasterKey: "dev-litellm-master-key"
     apiGatewaySharedToken: "dev-shared-token-change-in-production"
-    databasePassword: "kubesynth-dev-password"
+    databasePassword: "kubesynapse-dev-password"
     jwtSecret: "dev-jwt-secret-change-in-production-min-32-chars-long"
     authBootstrapAdminPassword: "admin123"
     ldapBindPassword: ""
@@ -311,10 +311,12 @@ collector:
 # ---------------------------------------------------------------------------
 mcpHub:
   enabled: true
-  namespace: kubesynth-mcp-hub
+  namespace: kubesynapse-mcp-hub
 
 # ---------------------------------------------------------------------------
 # Telemetry
 # ---------------------------------------------------------------------------
 telemetry:
   otlpEndpoint: ""
+  serviceMonitor:
+    enabled: false
