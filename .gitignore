@@ -13,6 +13,7 @@ __pycache__/
 # Node / Web UI
 # ===========================
 web-ui/dist/
+web-ui/dist-public/
 web-ui/node_modules/
 web-ui/*.tsbuildinfo
 web-ui/vite.config.js

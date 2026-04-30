@@ -9,8 +9,6 @@ import {
   MonitorDot, Layers, Radio, FolderTree, ChevronRight,
 } from "lucide-react";
 import { BRAND } from "@/lib/brand";
-import { DocumentationPanel } from "./DocumentationPanel";
-import { BlogPage } from "./BlogPage";
 
 // ─── Types ───
 
@@ -66,18 +64,8 @@ const colorMap: Record<string, string> = {
 // ─── Navbar ───
 
 function Navbar({
-  onOpenDocs,
-  onOpenBlog,
-  docsMode,
-  blogMode,
-  onBackToLanding,
   onSectionClick,
 }: {
-  onOpenDocs: () => void;
-  onOpenBlog: () => void;
-  docsMode: boolean;
-  blogMode: boolean;
-  onBackToLanding: () => void;
   onSectionClick: (sectionId: string) => void;
 }) {
   const [scrolled, setScrolled] = useState(false);
@@ -117,30 +105,14 @@ function Navbar({
           <button type="button" onClick={() => onSectionClick("install")} className="transition-colors hover:text-[oklch(0.708_0.101_188)]">Install</button>
           <button
             type="button"
-            onClick={onOpenDocs}
-            className={`transition-colors ${docsMode ? "text-[oklch(0.708_0.101_188)]" : "hover:text-[oklch(0.708_0.101_188)]"}`}
+            onClick={() => onSectionClick("docs")}
+            className="transition-colors hover:text-[oklch(0.708_0.101_188)]"
           >
             Docs
-          </button>
-          <button
-            type="button"
-            onClick={onOpenBlog}
-            className={`transition-colors ${blogMode ? "text-[oklch(0.708_0.101_188)]" : "hover:text-[oklch(0.708_0.101_188)]"}`}
-          >
-            Blog
           </button>
         </div>
 
         <div className="flex items-center gap-3">
-          {(docsMode || blogMode) && (
-            <button
-              type="button"
-              onClick={onBackToLanding}
-              className="rounded-lg px-3 py-2 text-sm font-medium text-[oklch(0.82_0.01_264)] transition-colors hover:text-[oklch(0.958_0.004_264)]"
-            >
-              Back
-            </button>
-          )}
           <a
             href="https://github.com/ykbytes/kubesynapse.ai"
             target="_blank"
@@ -157,7 +129,7 @@ function Navbar({
 
 // ─── Hero Section ───
 
-function HeroSection({ onOpenDocs }: { onOpenDocs: () => void }) {
+function HeroSection({ onSectionClick }: { onSectionClick: (sectionId: string) => void }) {
   return (
     <section className="relative overflow-hidden px-6 pb-20 pt-20 md:pb-28 md:pt-32">
       {/* Background grid */}
@@ -224,7 +196,7 @@ function HeroSection({ onOpenDocs }: { onOpenDocs: () => void }) {
           </a>
           <button
             type="button"
-            onClick={onOpenDocs}
+            onClick={() => onSectionClick("docs")}
             className="flex items-center gap-2 rounded-xl border border-[oklch(0.4_0.015_264)] bg-[oklch(0.206_0.009_264/0.8)] px-7 py-3.5 text-sm font-semibold text-[oklch(0.85_0.01_264)] shadow-sm backdrop-blur-sm transition-all hover:border-[oklch(0.708_0.101_188/0.4)] hover:text-[oklch(0.958_0.004_264)]"
           >
             <BookOpen className="h-4 w-4 text-[oklch(0.708_0.101_188)]" />
@@ -1746,22 +1718,9 @@ function Footer() {
 // ─── Main LandingPage ───
 
 export function LandingPage({ onLogin: _onLogin }: LandingPageProps) {
-  const [view, setView] = useState<"landing" | "docs" | "blog">("landing");
-
-  // Navigate to a landing-page section from any view
   const handleSectionClick = useCallback((sectionId: string) => {
-    if (view !== "landing") {
-      setView("landing");
-      // Wait for landing page to render, then scroll
-      requestAnimationFrame(() => {
-        setTimeout(() => {
-          document.getElementById(sectionId)?.scrollIntoView({ behavior: "smooth" });
-        }, 80);
-      });
-    } else {
-      document.getElementById(sectionId)?.scrollIntoView({ behavior: "smooth" });
-    }
-  }, [view]);
+    document.getElementById(sectionId)?.scrollIntoView({ behavior: "smooth" });
+  }, []);
 
   return (
     <div className="min-h-screen bg-[oklch(0.164_0.007_264)] text-[oklch(0.958_0.004_264)] font-sans">
@@ -1771,40 +1730,21 @@ export function LandingPage({ onLogin: _onLogin }: LandingPageProps) {
       >
         Skip to main content
       </a>
-      <Navbar
-        onOpenDocs={() => setView("docs")}
-        onOpenBlog={() => setView("blog")}
-        docsMode={view === "docs"}
-        blogMode={view === "blog"}
-        onBackToLanding={() => setView("landing")}
-        onSectionClick={handleSectionClick}
-      />
-      {view === "docs" ? (
-        <main id="main-content" className="h-[calc(100vh-4rem)]">
-          <DocumentationPanel />
-        </main>
-      ) : view === "blog" ? (
-        <main id="main-content" className="h-[calc(100vh-4rem)] overflow-y-auto">
-          <BlogPage onBack={() => setView("landing")} />
-        </main>
-      ) : (
-        <>
-          <main id="main-content">
-            <HeroSection onOpenDocs={() => setView("docs")} />
-            <EcosystemCloud />
-            <ProblemSection />
-            <UIPreviewSection />
-            <FeaturesSection />
-            <HowItWorks />
-            <InstallSection />
-            <ArchitectureSection />
-            <DocsSection />
-            <WhySection />
-            <BottomCTA />
-          </main>
-          <Footer />
-        </>
-      )}
+      <Navbar onSectionClick={handleSectionClick} />
+      <main id="main-content">
+        <HeroSection onSectionClick={handleSectionClick} />
+        <EcosystemCloud />
+        <ProblemSection />
+        <UIPreviewSection />
+        <FeaturesSection />
+        <HowItWorks />
+        <InstallSection />
+        <ArchitectureSection />
+        <DocsSection />
+        <WhySection />
+        <BottomCTA />
+      </main>
+      <Footer />
     </div>
   );
 }
