@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { motion, useInView, AnimatePresence } from "framer-motion";
 import {
   ArrowRight, Bot, BrainCircuit, CheckCircle2, Database, GitBranch,
@@ -9,6 +9,10 @@ import {
   MonitorDot, Layers, Radio, FolderTree, ChevronRight,
 } from "lucide-react";
 import { BRAND } from "@/lib/brand";
+
+const DocumentationPanel = lazy(() =>
+  import("./DocumentationPanel").then((m) => ({ default: m.DocumentationPanel })),
+);
 
 // ─── Types ───
 
@@ -64,8 +68,14 @@ const colorMap: Record<string, string> = {
 // ─── Navbar ───
 
 function Navbar({
+  onOpenDocs,
+  docsMode,
+  onBackToLanding,
   onSectionClick,
 }: {
+  onOpenDocs: () => void;
+  docsMode: boolean;
+  onBackToLanding: () => void;
   onSectionClick: (sectionId: string) => void;
 }) {
   const [scrolled, setScrolled] = useState(false);
@@ -105,14 +115,23 @@ function Navbar({
           <button type="button" onClick={() => onSectionClick("install")} className="transition-colors hover:text-[oklch(0.708_0.101_188)]">Install</button>
           <button
             type="button"
-            onClick={() => onSectionClick("docs")}
-            className="transition-colors hover:text-[oklch(0.708_0.101_188)]"
+            onClick={onOpenDocs}
+            className={`transition-colors ${docsMode ? "text-[oklch(0.708_0.101_188)]" : "hover:text-[oklch(0.708_0.101_188)]"}`}
           >
             Docs
           </button>
         </div>
 
         <div className="flex items-center gap-3">
+          {docsMode && (
+            <button
+              type="button"
+              onClick={onBackToLanding}
+              className="rounded-lg px-3 py-2 text-sm font-medium text-[oklch(0.82_0.01_264)] transition-colors hover:text-[oklch(0.958_0.004_264)]"
+            >
+              Back
+            </button>
+          )}
           <a
             href="https://github.com/ykbytes/kubesynapse.ai"
             target="_blank"
@@ -129,7 +148,7 @@ function Navbar({
 
 // ─── Hero Section ───
 
-function HeroSection({ onSectionClick }: { onSectionClick: (sectionId: string) => void }) {
+function HeroSection({ onOpenDocs }: { onOpenDocs: () => void }) {
   return (
     <section className="relative overflow-hidden px-6 pb-20 pt-20 md:pb-28 md:pt-32">
       {/* Background grid */}
@@ -196,7 +215,7 @@ function HeroSection({ onSectionClick }: { onSectionClick: (sectionId: string) =
           </a>
           <button
             type="button"
-            onClick={() => onSectionClick("docs")}
+            onClick={onOpenDocs}
             className="flex items-center gap-2 rounded-xl border border-[oklch(0.4_0.015_264)] bg-[oklch(0.206_0.009_264/0.8)] px-7 py-3.5 text-sm font-semibold text-[oklch(0.85_0.01_264)] shadow-sm backdrop-blur-sm transition-all hover:border-[oklch(0.708_0.101_188/0.4)] hover:text-[oklch(0.958_0.004_264)]"
           >
             <BookOpen className="h-4 w-4 text-[oklch(0.708_0.101_188)]" />
@@ -1718,9 +1737,21 @@ function Footer() {
 // ─── Main LandingPage ───
 
 export function LandingPage({ onLogin: _onLogin }: LandingPageProps) {
+  const [view, setView] = useState<"landing" | "docs">("landing");
+
   const handleSectionClick = useCallback((sectionId: string) => {
+    if (view !== "landing") {
+      setView("landing");
+      requestAnimationFrame(() => {
+        setTimeout(() => {
+          document.getElementById(sectionId)?.scrollIntoView({ behavior: "smooth" });
+        }, 80);
+      });
+      return;
+    }
+
     document.getElementById(sectionId)?.scrollIntoView({ behavior: "smooth" });
-  }, []);
+  }, [view]);
 
   return (
     <div className="min-h-screen bg-[oklch(0.164_0.007_264)] text-[oklch(0.958_0.004_264)] font-sans">
@@ -1730,21 +1761,45 @@ export function LandingPage({ onLogin: _onLogin }: LandingPageProps) {
       >
         Skip to main content
       </a>
-      <Navbar onSectionClick={handleSectionClick} />
-      <main id="main-content">
-        <HeroSection onSectionClick={handleSectionClick} />
-        <EcosystemCloud />
-        <ProblemSection />
-        <UIPreviewSection />
-        <FeaturesSection />
-        <HowItWorks />
-        <InstallSection />
-        <ArchitectureSection />
-        <DocsSection />
-        <WhySection />
-        <BottomCTA />
-      </main>
-      <Footer />
+      <Navbar
+        onOpenDocs={() => setView("docs")}
+        docsMode={view === "docs"}
+        onBackToLanding={() => setView("landing")}
+        onSectionClick={handleSectionClick}
+      />
+      {view === "docs" ? (
+        <main id="main-content" className="h-[calc(100vh-4rem)]">
+          <Suspense
+            fallback={
+              <div className="flex h-full items-center justify-center">
+                <div className="flex flex-col items-center gap-3 animate-fade-in">
+                  <div className="h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                  <p className="text-sm text-muted-foreground">Loading documentation...</p>
+                </div>
+              </div>
+            }
+          >
+            <DocumentationPanel />
+          </Suspense>
+        </main>
+      ) : (
+        <>
+          <main id="main-content">
+            <HeroSection onOpenDocs={() => setView("docs")} />
+            <EcosystemCloud />
+            <ProblemSection />
+            <UIPreviewSection />
+            <FeaturesSection />
+            <HowItWorks />
+            <InstallSection />
+            <ArchitectureSection />
+            <DocsSection />
+            <WhySection />
+            <BottomCTA />
+          </main>
+          <Footer />
+        </>
+      )}
     </div>
   );
 }
