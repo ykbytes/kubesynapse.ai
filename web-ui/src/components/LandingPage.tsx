@@ -66,7 +66,6 @@ const colorMap: Record<string, string> = {
 // ─── Navbar ───
 
 function Navbar({
-  onLogin,
   onOpenDocs,
   onOpenBlog,
   docsMode,
@@ -74,7 +73,6 @@ function Navbar({
   onBackToLanding,
   onSectionClick,
 }: {
-  onLogin: () => void;
   onOpenDocs: () => void;
   onOpenBlog: () => void;
   docsMode: boolean;
@@ -151,12 +149,6 @@ function Navbar({
           >
             GitHub
           </a>
-          <button
-            onClick={onLogin}
-            className="rounded-lg border border-[oklch(0.4_0.015_264)] bg-[oklch(0.206_0.009_264)] px-4 py-2 text-sm font-medium text-[oklch(0.85_0.01_264)] transition-all hover:border-[oklch(0.708_0.101_188/0.5)] hover:text-[oklch(0.958_0.004_264)]"
-          >
-            Open Console
-          </button>
         </div>
       </div>
     </nav>
@@ -1753,7 +1745,7 @@ function Footer() {
 
 // ─── Main LandingPage ───
 
-export function LandingPage({ onLogin }: LandingPageProps) {
+export function LandingPage({ onLogin: _onLogin }: LandingPageProps) {
   const [view, setView] = useState<"landing" | "docs" | "blog">("landing");
 
   // Navigate to a landing-page section from any view
@@ -1780,7 +1772,6 @@ export function LandingPage({ onLogin }: LandingPageProps) {
         Skip to main content
       </a>
       <Navbar
-        onLogin={onLogin}
         onOpenDocs={() => setView("docs")}
         onOpenBlog={() => setView("blog")}
         docsMode={view === "docs"}
