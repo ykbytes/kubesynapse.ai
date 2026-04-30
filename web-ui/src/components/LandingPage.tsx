@@ -1,12 +1,16 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { motion, useInView, AnimatePresence } from "framer-motion";
 import {
   ArrowRight, Bot, BrainCircuit, CheckCircle2, Database, GitBranch,
-  Globe, LayoutPanelTop, Lock, MessageSquare, Network, Play, RefreshCw,
-  Server, Shield, Timer, Workflow, Zap, Terminal, Copy,
-  Boxes, Code, Puzzle, Moon, Sun,
+  LayoutPanelTop, Lock, Network, Play, RefreshCw,
+  Server, Shield, Workflow, Zap, Terminal, Copy,
+  Boxes, Code, Puzzle, Activity, FileCode2, Eye,
+  BookOpen, Cpu, Gauge, AlertTriangle, Wrench,
+  MonitorDot, Layers, Radio, FolderTree, ChevronRight,
 } from "lucide-react";
 import { BRAND } from "@/lib/brand";
+import { DocumentationPanel } from "./DocumentationPanel";
+import { BlogPage } from "./BlogPage";
 
 // ─── Types ───
 
@@ -29,7 +33,7 @@ const itemVariants = {
   visible: {
     opacity: 1,
     y: 0,
-    transition: { duration: 0.55, ease: "easeOut" as const },
+    transition: { duration: 0.55, ease: [0.2, 0, 0.38, 0.9] as [number, number, number, number] },
   },
 };
 
@@ -38,7 +42,7 @@ const fadeIn = {
   visible: { opacity: 1, transition: { duration: 0.5 } },
 };
 
-// ─── Terminal Component ───
+// ─── Terminal Types ───
 
 interface TerminalLine {
   text: string;
@@ -47,11 +51,37 @@ interface TerminalLine {
   type?: "input" | "output" | "blank";
 }
 
-
+const colorMap: Record<string, string> = {
+  comment: "text-[oklch(0.62_0.01_264)]",
+  command: "text-[oklch(0.75_0.12_188)]",
+  string: "text-[oklch(0.76_0.16_154)]",
+  flag: "text-[oklch(0.82_0.16_84)]",
+  output: "text-[oklch(0.82_0.01_264)]",
+  yamlKey: "text-[oklch(0.75_0.12_308)]",
+  yamlVal: "text-[oklch(0.85_0.01_264)]",
+  prompt: "text-[oklch(0.76_0.16_154)]",
+  list: "text-[oklch(0.85_0.01_264)]",
+};
 
 // ─── Navbar ───
 
-function Navbar({ onLogin, darkMode, onToggleDark }: { onLogin: () => void; darkMode: boolean; onToggleDark: () => void }) {
+function Navbar({
+  onLogin,
+  onOpenDocs,
+  onOpenBlog,
+  docsMode,
+  blogMode,
+  onBackToLanding,
+  onSectionClick,
+}: {
+  onLogin: () => void;
+  onOpenDocs: () => void;
+  onOpenBlog: () => void;
+  docsMode: boolean;
+  blogMode: boolean;
+  onBackToLanding: () => void;
+  onSectionClick: (sectionId: string) => void;
+}) {
   const [scrolled, setScrolled] = useState(false);
 
   useEffect(() => {
@@ -64,56 +94,68 @@ function Navbar({ onLogin, darkMode, onToggleDark }: { onLogin: () => void; dark
     <nav
       className={`sticky top-0 z-50 border-b transition-all duration-300 ${
         scrolled
-          ? darkMode
-            ? "border-slate-700/80 bg-slate-900/90 shadow-sm backdrop-blur-md"
-            : "border-slate-200/80 bg-white/90 shadow-sm backdrop-blur-md"
-          : darkMode
-            ? "border-transparent bg-slate-900/60 backdrop-blur-sm"
-            : "border-transparent bg-white/60 backdrop-blur-sm"
+          ? "border-[oklch(0.3_0.01_264)] bg-[oklch(0.14_0.008_264/0.92)] shadow-lg shadow-black/20 backdrop-blur-xl"
+          : "border-transparent bg-[oklch(0.14_0.008_264/0.6)] backdrop-blur-sm"
       }`}
     >
       <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-3.5">
         <div className="flex items-center gap-2.5">
-          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-600 text-white shadow-sm">
+          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[oklch(0.708_0.101_188)] text-[oklch(0.158_0.007_264)] shadow-lg shadow-[oklch(0.708_0.101_188/0.3)]">
             <LayoutPanelTop className="h-5 w-5" />
           </div>
           <div className="flex items-baseline gap-2">
-            <span className="text-lg font-bold tracking-tight text-slate-900">
+            <span className="text-lg font-bold tracking-tight text-[oklch(0.958_0.004_264)]">
               {BRAND.name}
             </span>
-            <span className="hidden text-xs font-medium text-slate-500 sm:inline">
+            <span className="hidden text-xs font-medium text-[oklch(0.72_0.01_264)] sm:inline">
               {BRAND.tagline}
             </span>
           </div>
         </div>
 
-        <div className="hidden items-center gap-8 text-sm font-medium text-slate-600 md:flex">
-          <a href="#features" className="transition-colors hover:text-slate-900">Features</a>
-          <a href="#architecture" className="transition-colors hover:text-slate-900">Architecture</a>
-          <a href="#workflows" className="transition-colors hover:text-slate-900">Workflows</a>
-          <a href="#install" className="transition-colors hover:text-slate-900">Install</a>
+        <div className="hidden items-center gap-8 text-sm font-medium text-[oklch(0.82_0.01_264)] md:flex">
+          <button type="button" onClick={() => onSectionClick("features")} className="transition-colors hover:text-[oklch(0.708_0.101_188)]">Features</button>
+          <button type="button" onClick={() => onSectionClick("architecture")} className="transition-colors hover:text-[oklch(0.708_0.101_188)]">Architecture</button>
+          <button type="button" onClick={() => onSectionClick("install")} className="transition-colors hover:text-[oklch(0.708_0.101_188)]">Install</button>
+          <button
+            type="button"
+            onClick={onOpenDocs}
+            className={`transition-colors ${docsMode ? "text-[oklch(0.708_0.101_188)]" : "hover:text-[oklch(0.708_0.101_188)]"}`}
+          >
+            Docs
+          </button>
+          <button
+            type="button"
+            onClick={onOpenBlog}
+            className={`transition-colors ${blogMode ? "text-[oklch(0.708_0.101_188)]" : "hover:text-[oklch(0.708_0.101_188)]"}`}
+          >
+            Blog
+          </button>
         </div>
 
         <div className="flex items-center gap-3">
-          <button
-            onClick={onToggleDark}
-            className={`rounded-lg p-2 text-sm font-medium transition-colors ${darkMode ? "text-slate-300 hover:text-white" : "text-slate-600 hover:text-slate-900"}`}
-            aria-label={darkMode ? "Switch to light mode" : "Switch to dark mode"}
-            title={darkMode ? "Switch to light mode" : "Switch to dark mode"}
+          {(docsMode || blogMode) && (
+            <button
+              type="button"
+              onClick={onBackToLanding}
+              className="rounded-lg px-3 py-2 text-sm font-medium text-[oklch(0.82_0.01_264)] transition-colors hover:text-[oklch(0.958_0.004_264)]"
+            >
+              Back
+            </button>
+          )}
+          <a
+            href="https://github.com/ykbytes/kubesynapse.ai"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="rounded-lg px-3 py-2 text-sm font-medium text-[oklch(0.82_0.01_264)] transition-colors hover:text-[oklch(0.958_0.004_264)]"
           >
-            {darkMode ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
-          </button>
+            GitHub
+          </a>
           <button
             onClick={onLogin}
-            className={`rounded-lg px-4 py-2 text-sm font-medium transition-colors ${darkMode ? "text-slate-300 hover:text-white" : "text-slate-600 hover:text-slate-900"}`}
+            className="rounded-lg border border-[oklch(0.4_0.015_264)] bg-[oklch(0.206_0.009_264)] px-4 py-2 text-sm font-medium text-[oklch(0.85_0.01_264)] transition-all hover:border-[oklch(0.708_0.101_188/0.5)] hover:text-[oklch(0.958_0.004_264)]"
           >
-            Sign In
-          </button>
-          <button
-            onClick={onLogin}
-            className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition-all hover:bg-blue-700 hover:shadow-md active:scale-[0.98]"
-          >
-            Get Started
+            Open Console
           </button>
         </div>
       </div>
@@ -121,178 +163,58 @@ function Navbar({ onLogin, darkMode, onToggleDark }: { onLogin: () => void; dark
   );
 }
 
-// ─── Animated Cluster Visualization ───
-
-function AnimatedCluster() {
-  return (
-    <div className="relative mx-auto mb-8 h-48 max-w-xl overflow-hidden md:h-56">
-      {/* K8s control plane node */}
-      <motion.div
-        className="absolute left-1/2 top-2 flex -translate-x-1/2 items-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 shadow-sm"
-        animate={{ y: [0, -4, 0] }}
-        transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
-      >
-        <Server className="h-3 w-3 text-blue-600" />
-        <span className="text-[10px] font-semibold text-blue-700">kube-apiserver</span>
-      </motion.div>
-
-      {/* Floating agent pods */}
-      {[
-        { x: "15%", y: "40%", label: "agent-0", color: "emerald", delay: 0 },
-        { x: "35%", y: "30%", label: "agent-1", color: "blue", delay: 1 },
-        { x: "65%", y: "25%", label: "agent-2", color: "purple", delay: 0.5 },
-        { x: "80%", y: "45%", label: "agent-3", color: "cyan", delay: 1.5 },
-        { x: "25%", y: "65%", label: "worker-0", color: "orange", delay: 2 },
-        { x: "55%", y: "70%", label: "worker-1", color: "pink", delay: 0.8 },
-        { x: "75%", y: "65%", label: "litellm", color: "indigo", delay: 1.2 },
-      ].map((pod) => {
-        const colorMap: Record<string, string> = {
-          emerald: "border-emerald-300 bg-emerald-50 text-emerald-700",
-          blue: "border-blue-300 bg-blue-50 text-blue-700",
-          purple: "border-purple-300 bg-purple-50 text-purple-700",
-          cyan: "border-cyan-300 bg-cyan-50 text-cyan-700",
-          orange: "border-orange-300 bg-orange-50 text-orange-700",
-          pink: "border-pink-300 bg-pink-50 text-pink-700",
-          indigo: "border-indigo-300 bg-indigo-50 text-indigo-700",
-        };
-        return (
-          <motion.div
-            key={pod.label}
-            className={`absolute rounded-full border px-2.5 py-1 text-[9px] font-semibold shadow-sm ${colorMap[pod.color]}`}
-            style={{ left: pod.x, top: pod.y }}
-            animate={{
-              y: [0, -8, 0, 6, 0],
-              x: [0, 3, -3, 2, 0],
-              scale: [1, 1.03, 0.97, 1.02, 1],
-            }}
-            transition={{
-              duration: 4 + pod.delay,
-              repeat: Infinity,
-              ease: "easeInOut",
-              delay: pod.delay,
-            }}
-          >
-            <span className="mr-1 inline-block h-1.5 w-1.5 rounded-full bg-current opacity-60" />
-            {pod.label}
-          </motion.div>
-        );
-      })}
-
-      {/* Connection lines (subtle) */}
-      <svg className="absolute inset-0 h-full w-full" viewBox="0 0 500 220" fill="none">
-        {[
-          { x1: 250, y1: 20, x2: 120, y2: 100 },
-          { x1: 250, y1: 20, x2: 200, y2: 70 },
-          { x1: 250, y1: 20, x2: 350, y2: 60 },
-          { x1: 250, y1: 20, x2: 420, y2: 110 },
-          { x1: 120, y1: 100, x2: 150, y2: 150 },
-          { x1: 350, y1: 60, x2: 300, y2: 155 },
-        ].map((line, i) => (
-          <motion.line
-            key={i}
-            x1={line.x1}
-            y1={line.y1}
-            x2={line.x2}
-            y2={line.y2}
-            stroke="#cbd5e1"
-            strokeWidth={0.5}
-            strokeDasharray="4 3"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: [0.15, 0.35, 0.15] }}
-            transition={{ duration: 3, repeat: Infinity, delay: i * 0.4 }}
-          />
-        ))}
-      </svg>
-    </div>
-  );
-}
-
-// ─── GitHub Stars Counter ───
-
-function GitHubStars() {
-  const [stars, setStars] = useState<number | null>(null);
-
-  useEffect(() => {
-    fetch("https://api.github.com/repos/ykbytes/kubemininions")
-      .then((r) => r.json())
-      .then((data) => {
-        if (data.stargazers_count != null) setStars(data.stargazers_count);
-      })
-      .catch(() => {});
-  }, []);
-
-  if (stars == null) return null;
-
-  const formatter = Intl.NumberFormat("en", { notation: "compact" });
-
-  return (
-    <motion.a
-      href="https://github.com/ykbytes/kubemininions"
-      target="_blank"
-      rel="noopener noreferrer"
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      transition={{ delay: 1 }}
-      className="mt-4 inline-flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-700 shadow-sm transition-all hover:bg-amber-100"
-    >
-      <svg className="h-3.5 w-3.5" viewBox="0 0 16 16" fill="currentColor">
-        <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z" />
-      </svg>
-      {formatter.format(stars)} GitHub stars
-    </motion.a>
-  );
-}
-
 // ─── Hero Section ───
 
-function HeroSection({ onLogin }: { onLogin: () => void }) {
+function HeroSection({ onOpenDocs }: { onOpenDocs: () => void }) {
   return (
-    <section className="relative overflow-hidden bg-white px-6 pb-20 pt-20 md:pb-28 md:pt-32">
-      {/* Subtle grid background */}
-      <div className="pointer-events-none absolute inset-0 opacity-[0.03]"
+    <section className="relative overflow-hidden px-6 pb-20 pt-20 md:pb-28 md:pt-32">
+      {/* Background grid */}
+      <div
+        className="pointer-events-none absolute inset-0 opacity-[0.04]"
         style={{
           backgroundImage:
-            "linear-gradient(to right, #0f172a 1px, transparent 1px), linear-gradient(to bottom, #0f172a 1px, transparent 1px)",
-          backgroundSize: "40px 40px",
+            "linear-gradient(to right, oklch(0.958 0.004 264) 1px, transparent 1px), linear-gradient(to bottom, oklch(0.958 0.004 264) 1px, transparent 1px)",
+          backgroundSize: "32px 32px",
         }}
       />
+      {/* Radial glow */}
+      <div className="pointer-events-none absolute inset-0">
+        <div className="absolute left-1/2 top-0 h-[600px] w-[800px] -translate-x-1/2 -translate-y-1/3 rounded-full bg-[oklch(0.708_0.101_188/0.08)] blur-[100px]" />
+      </div>
 
       <div className="relative mx-auto max-w-5xl text-center">
         <motion.div
           initial={{ opacity: 0, y: 16 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5 }}
-          className="mb-6 inline-flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-4 py-1.5 text-xs font-semibold text-slate-600 shadow-sm"
+          className="mb-6 inline-flex items-center gap-2 rounded-full border border-[oklch(0.708_0.101_188/0.3)] bg-[oklch(0.206_0.009_264/0.8)] px-4 py-1.5 text-xs font-semibold text-[oklch(0.708_0.101_188)] shadow-lg shadow-[oklch(0.708_0.101_188/0.1)] backdrop-blur-sm"
         >
-          <span className="flex h-2 w-2 rounded-full bg-emerald-500 ring-2 ring-emerald-500/20" />
-          Kubernetes-Native AI Agent Orchestration
+          <span className="flex h-2 w-2 rounded-full bg-[oklch(0.76_0.16_154)] ring-2 ring-[oklch(0.76_0.16_154/0.3)]" />
+          Kubernetes-Native AI Operations Platform
         </motion.div>
 
         <motion.h1
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.6, delay: 0.1 }}
-          className="text-4xl font-extrabold tracking-tight text-slate-900 sm:text-5xl md:text-6xl lg:text-7xl"
+          className="text-4xl font-extrabold tracking-tight text-[oklch(0.958_0.004_264)] sm:text-5xl md:text-6xl lg:text-7xl"
         >
-          Deploy AI Agents on{" "}
-          <span className="bg-gradient-to-r from-blue-600 to-cyan-500 bg-clip-text text-transparent">
-            Kubernetes
+          Your Kubernetes Cluster&rsquo;s{" "}
+          <span className="bg-gradient-to-r from-[oklch(0.708_0.101_188)] to-[oklch(0.742_0.132_233)] bg-clip-text text-transparent">
+            AI Companion
           </span>
-          <br />
-          <span className="text-slate-700">That Actually Ship</span>
         </motion.h1>
 
         <motion.p
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.6, delay: 0.2 }}
-          className="mx-auto mt-6 max-w-2xl text-base text-slate-600 sm:text-lg md:text-xl leading-relaxed"
+          className="mx-auto mt-6 max-w-2xl text-base text-[oklch(0.82_0.01_264)] sm:text-lg md:text-xl leading-relaxed"
         >
-          The production-grade platform for running autonomous AI agents as StatefulSets.
-          Declarative CRDs, policy-driven governance, A2A-ready workflows — installed with Helm.
+          The self-hosted command center for DevOps and IT operations.
+          Deploy AI agents that automate incident response, infrastructure management,
+          and deployment pipelines — all governed by Kubernetes-native CRDs.
         </motion.p>
-
-        <AnimatedCluster />
 
         <motion.div
           initial={{ opacity: 0, y: 20 }}
@@ -300,29 +222,49 @@ function HeroSection({ onLogin }: { onLogin: () => void }) {
           transition={{ duration: 0.6, delay: 0.3 }}
           className="mt-6 flex flex-col items-center gap-4 sm:flex-row sm:justify-center"
         >
-          <button
-            onClick={onLogin}
-            className="group flex items-center gap-2 rounded-xl bg-blue-600 px-7 py-3.5 text-sm font-semibold text-white shadow-lg shadow-blue-600/20 transition-all hover:bg-blue-700 hover:shadow-xl active:scale-[0.98]"
-          >
-            Initialize Workspace
-            <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
-          </button>
           <a
             href="#install"
-            className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-7 py-3.5 text-sm font-semibold text-slate-700 shadow-sm transition-all hover:bg-slate-50 hover:border-slate-300"
+            className="group flex items-center gap-2 rounded-xl bg-[oklch(0.708_0.101_188)] px-7 py-3.5 text-sm font-semibold text-[oklch(0.158_0.007_264)] shadow-lg shadow-[oklch(0.708_0.101_188/0.3)] transition-all hover:shadow-xl hover:shadow-[oklch(0.708_0.101_188/0.4)] active:scale-[0.98]"
           >
-            <Terminal className="h-4 w-4 text-blue-600" />
+            <Terminal className="h-4 w-4" />
             Deploy with Helm
+            <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
           </a>
+          <button
+            type="button"
+            onClick={onOpenDocs}
+            className="flex items-center gap-2 rounded-xl border border-[oklch(0.4_0.015_264)] bg-[oklch(0.206_0.009_264/0.8)] px-7 py-3.5 text-sm font-semibold text-[oklch(0.85_0.01_264)] shadow-sm backdrop-blur-sm transition-all hover:border-[oklch(0.708_0.101_188/0.4)] hover:text-[oklch(0.958_0.004_264)]"
+          >
+            <BookOpen className="h-4 w-4 text-[oklch(0.708_0.101_188)]" />
+            View Documentation
+          </button>
         </motion.div>
 
-        <GitHubStars />
+        {/* Stats */}
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 0.8, duration: 0.6 }}
+          className="mt-12 flex flex-wrap items-center justify-center gap-8 text-center"
+        >
+          {[
+            { label: "CRD Types", value: "6" },
+            { label: "MCP Sidecars", value: "11" },
+            { label: "Runtimes", value: "2" },
+            { label: "Self-Hosted", value: "100%" },
+          ].map((stat) => (
+            <div key={stat.label} className="flex flex-col">
+              <span className="text-2xl font-bold text-[oklch(0.708_0.101_188)]">{stat.value}</span>
+              <span className="text-xs text-[oklch(0.72_0.01_264)]">{stat.label}</span>
+            </div>
+          ))}
+        </motion.div>
       </div>
     </section>
   );
 }
 
-// ─── Ecosystem Cloud ───
+// ─── Ecosystem Bar ───
 
 function EcosystemCloud() {
   const tools = [
@@ -337,19 +279,24 @@ function EcosystemCloud() {
   ];
 
   return (
-    <section className="border-y border-slate-100 bg-slate-50/50 px-6 py-12">
+    <section className="border-y border-[oklch(0.3_0.01_264)] bg-[oklch(0.149_0.008_264/0.8)] px-6 py-12">
       <div className="mx-auto max-w-6xl">
-        <p className="mb-8 text-center text-xs font-semibold uppercase tracking-widest text-slate-400">
+        <p className="mb-8 text-center text-xs font-semibold uppercase tracking-widest text-[oklch(0.62_0.01_264)]">
           Built for the Kubernetes Ecosystem
         </p>
         <div className="flex flex-wrap items-center justify-center gap-x-10 gap-y-6">
           {tools.map((tool) => {
             const Icon = tool.icon;
             return (
-              <div key={tool.name} className="flex items-center gap-2 text-slate-400">
+              <motion.div
+                key={tool.name}
+                className="flex items-center gap-2 text-[oklch(0.68_0.01_264)]"
+                whileHover={{ scale: 1.05, color: "oklch(0.708 0.101 188)" }}
+                transition={{ duration: 0.2 }}
+              >
                 <Icon className="h-5 w-5" />
                 <span className="text-sm font-medium">{tool.name}</span>
-              </div>
+              </motion.div>
             );
           })}
         </div>
@@ -363,22 +310,22 @@ function EcosystemCloud() {
 function ProblemSection() {
   const problems = [
     {
-      icon: Server,
-      title: "Stateful Agents Are Hard",
+      icon: AlertTriangle,
+      title: "Incidents Without Intelligence",
       description:
-        "AI agents need memory, sessions, and checkpoints. Running them as ephemeral pods loses state on every restart.",
+        "Alert fatigue is real. Your on-call team manually correlates logs, checks pod status, and guesses at root causes at 3 AM.",
     },
     {
       icon: Lock,
-      title: "No Built-In Governance",
+      title: "Ungoverned Automation",
       description:
-        "Tool usage, token budgets, and output guardrails are afterthoughts. You need policy-as-code at the cluster level.",
+        "AI tools without guardrails are dangerous in production. Token budgets, approval gates, and audit trails are afterthoughts.",
     },
     {
-      icon: GitBranch,
-      title: "Orchestration Is Manual",
+      icon: Layers,
+      title: "Fragmented Tooling",
       description:
-        "Multi-agent workflows require complex DAG logic, approval gates, and failure recovery — none of which come out-of-the-box.",
+        "Deployment scripts, monitoring, security scanning, and capacity planning all live in separate silos with no unified intelligence layer.",
     },
   ];
 
@@ -386,7 +333,7 @@ function ProblemSection() {
   const inView = useInView(ref, { once: true, margin: "-80px" });
 
   return (
-    <section className="bg-white px-6 py-24 md:py-32" ref={ref}>
+    <section className="px-6 py-24 md:py-32" ref={ref}>
       <div className="mx-auto max-w-7xl">
         <motion.div
           initial="hidden"
@@ -394,11 +341,11 @@ function ProblemSection() {
           variants={containerVariants}
           className="mb-16 text-center"
         >
-          <motion.p variants={itemVariants} className="text-xs font-semibold uppercase tracking-widest text-blue-600">
+          <motion.p variants={itemVariants} className="text-xs font-semibold uppercase tracking-widest text-[oklch(0.708_0.101_188)]">
             The Challenge
           </motion.p>
-          <motion.h2 variants={itemVariants} className="mt-3 text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl md:text-5xl">
-            Managing AI Agents on K8s Is <span className="text-slate-500">Hard</span>
+          <motion.h2 variants={itemVariants} className="mt-3 text-3xl font-bold tracking-tight text-[oklch(0.958_0.004_264)] sm:text-4xl md:text-5xl">
+            Kubernetes Operations Deserve <span className="text-[oklch(0.72_0.01_264)]">Better</span>
           </motion.h2>
         </motion.div>
 
@@ -412,13 +359,13 @@ function ProblemSection() {
                 initial="hidden"
                 animate={inView ? "visible" : "hidden"}
                 transition={{ delay: i * 0.1 }}
-                className="group rounded-2xl border border-slate-200 bg-white p-8 shadow-sm transition-all hover:border-blue-200 hover:shadow-md"
+                className="group rounded-2xl border border-[oklch(0.3_0.01_264)] bg-[oklch(0.206_0.009_264/0.6)] p-8 backdrop-blur-sm transition-all hover:border-[oklch(0.708_0.101_188/0.4)] hover:shadow-lg hover:shadow-[oklch(0.708_0.101_188/0.05)]"
               >
-                <div className="mb-5 flex h-12 w-12 items-center justify-center rounded-xl bg-blue-50 text-blue-600 ring-1 ring-blue-100 transition-colors group-hover:bg-blue-100">
+                <div className="mb-5 flex h-12 w-12 items-center justify-center rounded-xl bg-[oklch(0.708_0.101_188/0.1)] text-[oklch(0.708_0.101_188)] ring-1 ring-[oklch(0.708_0.101_188/0.2)] transition-colors group-hover:bg-[oklch(0.708_0.101_188/0.15)]">
                   <Icon className="h-6 w-6" />
                 </div>
-                <h3 className="text-lg font-semibold text-slate-900">{p.title}</h3>
-                <p className="mt-3 text-sm leading-relaxed text-slate-600">{p.description}</p>
+                <h3 className="text-lg font-semibold text-[oklch(0.958_0.004_264)]">{p.title}</h3>
+                <p className="mt-3 text-sm leading-relaxed text-[oklch(0.82_0.01_264)]">{p.description}</p>
               </motion.div>
             );
           })}
@@ -428,264 +375,618 @@ function ProblemSection() {
   );
 }
 
-// ─── Install / Terminal Showcase ───
+// ─── UI Preview Section ───
 
-type TabKey = "install" | "agent" | "workflow" | "operate";
-
-function InstallSection() {
+function UIPreviewSection() {
   const ref = useRef(null);
   const inView = useInView(ref, { once: true, margin: "-60px" });
-  const [activeTab, setActiveTab] = useState<TabKey>("install");
-  const [hasTyped, setHasTyped] = useState<Record<TabKey, boolean>>({ install: false, agent: false, workflow: false, operate: false });
+  const [activeTab, setActiveTab] = useState<"composer" | "agents" | "activity" | "observatory">("composer");
 
-  const tabs: { key: TabKey; label: string; icon: typeof Terminal }[] = [
-    { key: "install", label: "Install", icon: Terminal },
-    { key: "agent", label: "AIAgent", icon: Bot },
-    { key: "workflow", label: "Workflow", icon: Workflow },
-    { key: "operate", label: "Operate", icon: Play },
+  const tabs = [
+    { key: "composer" as const, label: "Workflow Composer", icon: Workflow },
+    { key: "agents" as const, label: "Agent Management", icon: Bot },
+    { key: "activity" as const, label: "Live Activity", icon: Activity },
+    { key: "observatory" as const, label: "Observatory", icon: Eye },
   ];
 
-  const tabLines: Record<TabKey, TerminalLine[]> = {
-    install: [
-      { text: "helm repo add kubesynapse https://charts.kubesynapse.ai", color: "command", prefix: "$", type: "input" },
-      { text: "helm repo update", color: "command", prefix: "$", type: "input" },
-      { text: "helm install kubesynapse kubesynapse/kubesynapse \\", color: "command", prefix: "$", type: "input" },
-      { text: "  --namespace kubesynapse --create-namespace \\", color: "command", prefix: "", type: "input" },
-      { text: "  --set gateway.replicas=2", color: "command", prefix: "", type: "input" },
-      { text: "", type: "blank" },
-      { text: "NAME: kubesynapse", color: "output", type: "output" },
-      { text: "NAMESPACE: kubesynapse", color: "output", type: "output" },
-      { text: "STATUS: deployed", color: "string", type: "output" },
-      { text: "REVISION: 1", color: "output", type: "output" },
-    ],
-    agent: [
-      { text: "apiVersion: kubesynapse.ai/v1alpha1", color: "yamlKey", type: "input" },
-      { text: "kind: AIAgent", color: "yamlKey", type: "input" },
-      { text: "metadata:", color: "yamlKey", type: "input" },
-      { text: "  name: incident-triage", color: "yamlVal", type: "input" },
-      { text: "  namespace: production", color: "yamlVal", type: "input" },
-      { text: "spec:", color: "yamlKey", type: "input" },
-      { text: "  runtime:", color: "yamlKey", type: "input" },
-      { text: "    name: opencode", color: "yamlVal", type: "input" },
-      { text: "    model: claude-sonnet-4", color: "yamlVal", type: "input" },
-      { text: "    temperature: 0.1", color: "yamlVal", type: "input" },
-      { text: "  systemPrompt: |", color: "yamlKey", type: "input" },
-      { text: "    You are an expert SRE agent. When an alert", color: "string", type: "input" },
-      { text: "    fires, correlate logs, check pod status, and", color: "string", type: "input" },
-      { text: "    suggest remediation steps. Always ask before", color: "string", type: "input" },
-      { text: "    executing destructive commands.", color: "string", type: "input" },
-      { text: "  memory:", color: "yamlKey", type: "input" },
-      { text: "    strategy: persistent", color: "yamlVal", type: "input" },
-      { text: "    ttl: 24h", color: "yamlVal", type: "input" },
-      { text: "  mcpSidecars:", color: "yamlKey", type: "input" },
-      { text: "    - name: kubernetes", color: "yamlVal", type: "input" },
-      { text: "      config:", color: "yamlVal", type: "input" },
-      { text: "        namespace: production", color: "yamlVal", type: "input" },
-      { text: "    - name: web-search", color: "yamlVal", type: "input" },
-      { text: "    - name: messaging", color: "yamlVal", type: "input" },
-      { text: "  governance:", color: "yamlKey", type: "input" },
-      { text: "    approvalRequired:", color: "yamlVal", type: "input" },
-      { text: "      - kubectl delete", color: "list", type: "input" },
-      { text: "      - kubectl exec", color: "list", type: "input" },
-      { text: "    maxTokensPerRun: 50000", color: "yamlVal", type: "input" },
-    ],
-    workflow: [
-      { text: "apiVersion: kubesynapse.ai/v1alpha1", color: "yamlKey", type: "input" },
-      { text: "kind: AgentWorkflow", color: "yamlKey", type: "input" },
-      { text: "metadata:", color: "yamlKey", type: "input" },
-      { text: "  name: incident-response", color: "yamlVal", type: "input" },
-      { text: "  namespace: production", color: "yamlVal", type: "input" },
-      { text: "spec:", color: "yamlKey", type: "input" },
-      { text: "  trigger:", color: "yamlKey", type: "input" },
-      { text: "    type: webhook", color: "yamlVal", type: "input" },
-      { text: "    source: prometheus", color: "yamlVal", type: "input" },
-      { text: "  dag:", color: "yamlKey", type: "input" },
-      { text: "    - id: triage", color: "yamlVal", type: "input" },
-      { text: "      agentRef:", color: "yamlVal", type: "input" },
-      { text: "        name: incident-triage", color: "yamlVal", type: "input" },
-      { text: "      inputs:", color: "yamlVal", type: "input" },
-      { text: "        alert: ${{ trigger.payload }}", color: "string", type: "input" },
-      { text: "      next: [correlate, notify]", color: "yamlVal", type: "input" },
-      { text: "", type: "blank" },
-      { text: "    - id: correlate", color: "yamlVal", type: "input" },
-      { text: "      agentRef:", color: "yamlVal", type: "input" },
-      { text: "        name: log-analyzer", color: "yamlVal", type: "input" },
-      { text: "      next: [remediate]", color: "yamlVal", type: "input" },
-      { text: "", type: "blank" },
-      { text: "    - id: remediate", color: "yamlVal", type: "input" },
-      { text: "      agentRef:", color: "yamlVal", type: "input" },
-      { text: "        name: incident-triage", color: "yamlVal", type: "input" },
-      { text: "      approvalGate:", color: "yamlVal", type: "input" },
-      { text: "        timeout: 10m", color: "yamlVal", type: "input" },
-      { text: "      next: [notify]", color: "yamlVal", type: "input" },
-      { text: "", type: "blank" },
-      { text: "    - id: notify", color: "yamlVal", type: "input" },
-      { text: "      agentRef:", color: "yamlVal", type: "input" },
-      { text: "        name: slack-bot", color: "yamlVal", type: "input" },
-      { text: "      inputs:", color: "yamlVal", type: "input" },
-      { text: "        channel: #incidents", color: "string", type: "input" },
-    ],
-    operate: [
-      { text: "kubectl apply -f agent.yaml", color: "command", prefix: "$", type: "input" },
-      { text: "aiagent.kubesynapse.ai/incident-triage created", color: "string", type: "output" },
-      { text: "", type: "blank" },
-      { text: "kubectl apply -f workflow.yaml", color: "command", prefix: "$", type: "input" },
-      { text: "agentworkflow.kubesynapse.ai/incident-response created", color: "string", type: "output" },
-      { text: "", type: "blank" },
-      { text: "kubectl get aiagents -n production", color: "command", prefix: "$", type: "input" },
-      { text: "NAME            STATUS    AGE", color: "output", type: "output" },
-      { text: "incident-triage Running   3m", color: "string", type: "output" },
-      { text: "", type: "blank" },
-      { text: "agentctl workflow run incident-response --watch", color: "command", prefix: "$", type: "input" },
-      { text: "▶ Trigger: Alert received from Prometheus", color: "output", type: "output" },
-      { text: "▶ TriageAgent: Correlating logs...", color: "output", type: "output" },
-      { text: "▶ ApprovalGate: Waiting for human review", color: "flag", type: "output" },
-    ],
-  };
-
-  const handleTabChange = (tab: TabKey) => {
-    setActiveTab(tab);
-    if (!hasTyped[tab]) {
-      setHasTyped((prev) => ({ ...prev, [tab]: true }));
-    }
-  };
-
-  // Auto-start typing for first tab when in view
-  useEffect(() => {
-    if (inView && !hasTyped.install) {
-      const timer = setTimeout(() => {
-        setHasTyped((prev) => ({ ...prev, install: true }));
-      }, 800);
-      return () => clearTimeout(timer);
-    }
-  }, [inView, hasTyped.install]);
-
   return (
-    <section id="install" className="bg-slate-50 px-4 py-24 sm:px-6 md:py-32" ref={ref}>
-      <div className="mx-auto max-w-5xl">
+    <section className="px-6 py-24 md:py-32" ref={ref}>
+      <div className="mx-auto max-w-7xl">
         <motion.div
           initial="hidden"
           animate={inView ? "visible" : "hidden"}
           variants={containerVariants}
           className="mb-12 text-center"
         >
-          <motion.p variants={itemVariants} className="text-xs font-semibold uppercase tracking-widest text-blue-600">
-            Quick Start
+          <motion.p variants={itemVariants} className="text-xs font-semibold uppercase tracking-widest text-[oklch(0.708_0.101_188)]">
+            The Real Interface
           </motion.p>
-          <motion.h2 variants={itemVariants} className="mt-3 text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl md:text-5xl">
-            Deploy in <span className="text-blue-600">5 Minutes</span>
+          <motion.h2 variants={itemVariants} className="mt-3 text-3xl font-bold tracking-tight text-[oklch(0.958_0.004_264)] sm:text-4xl md:text-5xl">
+            Operations Console Built for <span className="text-[oklch(0.708_0.101_188)]">Engineers</span>
           </motion.h2>
-          <motion.p variants={itemVariants} className="mx-auto mt-4 max-w-2xl text-base text-slate-600">
-            One Helm install gives you the entire control plane. Then declare agents with YAML and control them with kubectl.
+          <motion.p variants={itemVariants} className="mx-auto mt-4 max-w-2xl text-base text-[oklch(0.82_0.01_264)]">
+            A faithful miniaturized replica of the real console: sticky glass top bar, workspace sidebar,
+            and the same operational surfaces used for agents, workflows, live activity, and execution traces.
           </motion.p>
         </motion.div>
 
-        {/* Tabbed Terminal */}
         <motion.div
           variants={itemVariants}
           initial="hidden"
           animate={inView ? "visible" : "hidden"}
-          className="overflow-hidden rounded-xl bg-slate-900 shadow-2xl shadow-slate-900/30 ring-1 ring-slate-700/50"
+          className="mb-6 flex flex-wrap justify-center gap-2"
         >
-          {/* Tabs */}
-          <div className="flex border-b border-slate-700/50 bg-slate-800/80">
-            {tabs.map((tab) => {
-              const Icon = tab.icon;
-              const isActive = activeTab === tab.key;
-              return (
-                <button
-                  key={tab.key}
-                  onClick={() => handleTabChange(tab.key)}
-                  className={`flex items-center gap-2 px-5 py-3 text-sm font-medium transition-all ${
-                    isActive
-                      ? "bg-slate-900 text-sky-400 border-t-2 border-t-sky-500"
-                      : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/50"
-                  }`}
-                >
-                  <Icon className="h-4 w-4" />
-                  {tab.label}
-                </button>
-              );
-            })}
-            <div className="flex-1" />
-            <button
-              onClick={() => {
-                const text = tabLines[activeTab].map((l) => `${l.prefix || ""}${l.text}`).join("\n");
-                navigator.clipboard.writeText(text).catch(() => {});
-              }}
-              className="px-4 py-3 text-slate-500 hover:text-slate-300 transition-colors"
-              title="Copy"
-            >
-              <Copy className="h-4 w-4" />
-            </button>
+          {tabs.map((tab) => {
+            const Icon = tab.icon;
+            const isActive = activeTab === tab.key;
+            return (
+              <button
+                key={tab.key}
+                onClick={() => setActiveTab(tab.key)}
+                className={`flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium transition-all ${
+                  isActive
+                    ? "bg-[oklch(0.708_0.101_188/0.15)] text-[oklch(0.708_0.101_188)] ring-1 ring-[oklch(0.708_0.101_188/0.3)]"
+                    : "text-[oklch(0.72_0.01_264)] hover:text-[oklch(0.85_0.01_264)] hover:bg-[oklch(0.252_0.010_264)]"
+                }`}
+              >
+                <Icon className="h-4 w-4" />
+                {tab.label}
+              </button>
+            );
+          })}
+        </motion.div>
+
+        <motion.div
+          variants={fadeIn}
+          initial="hidden"
+          animate={inView ? "visible" : "hidden"}
+          className="overflow-hidden rounded-2xl border border-[oklch(0.3_0.01_264)] bg-[oklch(0.164_0.007_264)] shadow-2xl shadow-black/30"
+        >
+          <div className="flex items-center gap-2 border-b border-[oklch(0.3_0.01_264)] bg-[oklch(0.149_0.008_264)] px-4 py-3">
+            <div className="flex gap-1.5">
+              <div className="h-3 w-3 rounded-full bg-[oklch(0.636_0.173_24/0.7)]" />
+              <div className="h-3 w-3 rounded-full bg-[oklch(0.82_0.16_84/0.7)]" />
+              <div className="h-3 w-3 rounded-full bg-[oklch(0.76_0.16_154/0.7)]" />
+            </div>
+            <span className="ml-4 text-xs text-[oklch(0.62_0.01_264)]">kubesynapse — console preview</span>
           </div>
 
-          {/* Terminal Content */}
           <AnimatePresence mode="wait">
             <motion.div
               key={activeTab}
-              className="p-5 font-mono text-[13px] leading-6"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.2 }}
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              transition={{ duration: 0.3 }}
+              className="min-h-[460px] p-1"
             >
-              {tabLines[activeTab].map((line, i) => (
-                <motion.div
-                  key={i}
-                  initial={{ opacity: 0, x: -8 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: i * 0.06, duration: 0.3 }}
-                  className="min-h-[1.5rem]"
-                >
-                  {line.text === "" ? (
-                    <span>&nbsp;</span>
-                  ) : (
-                    <span className={`whitespace-pre ${colorMap[line.color || "output"] || "text-slate-300"}`}>
-                      {line.prefix && (
-                        <span className="select-none text-emerald-500/80">{line.prefix} </span>
-                      )}
-                      {line.text}
-                    </span>
-                  )}
-                </motion.div>
-              ))}
+              <ConsoleShowcase activeTab={activeTab} />
             </motion.div>
           </AnimatePresence>
-        </motion.div>
-
-        {/* Feature pills below terminal */}
-        <motion.div
-          variants={itemVariants}
-          initial="hidden"
-          animate={inView ? "visible" : "hidden"}
-          className="mt-8 flex flex-wrap justify-center gap-3"
-        >
-          {["Helm Chart", "CRDs", "kubectl", "agentctl CLI", "A2A JSON-RPC"].map((item) => (
-            <span
-              key={item}
-              className="rounded-full border border-slate-200 bg-white px-4 py-1.5 text-xs font-medium text-slate-600 shadow-sm"
-            >
-              {item}
-            </span>
-          ))}
         </motion.div>
       </div>
     </section>
   );
 }
 
-const colorMap: Record<string, string> = {
-  comment: "text-slate-500",
-  command: "text-sky-400",
-  string: "text-emerald-400",
-  flag: "text-amber-400",
-  output: "text-slate-400",
-  yamlKey: "text-fuchsia-400",
-  yamlVal: "text-slate-300",
-  prompt: "text-emerald-500",
-  list: "text-slate-300",
-};
+function ConsoleShowcase({ activeTab }: { activeTab: "composer" | "agents" | "activity" | "observatory" }) {
+  return (
+    <div className="flex h-[460px] overflow-hidden bg-[oklch(0.164_0.007_264)]">
+      <div className="flex w-[15.5rem] shrink-0 flex-col border-r border-[oklch(0.296_0.011_264)] bg-[oklch(0.149_0.008_264/0.92)] backdrop-blur-xl">
+        <div className="flex h-10 items-center justify-between border-b border-[oklch(0.296_0.011_264)] px-2.5">
+          <div className="min-w-0">
+            <p className="text-[10px] font-medium uppercase tracking-[0.22em] text-[oklch(0.72_0.012_264)]">Workspace</p>
+            <p className="truncate text-sm font-semibold text-[oklch(0.952_0.004_264)]">
+              {activeTab === "composer" ? "Composer" : activeTab === "agents" ? "Agents" : activeTab === "activity" ? "Workflows" : "Observatory"}
+            </p>
+          </div>
+          <div className="h-8 w-8 rounded-xl border border-[oklch(0.32_0.011_264/0.7)] bg-[oklch(0.206_0.009_264/0.72)]" />
+        </div>
+
+        <div className="border-b border-[oklch(0.296_0.011_264)] px-1.5 py-1.5">
+          <div className="space-y-0.5">
+            {[
+              { key: "agents", label: "Agents", icon: Bot, count: 12 },
+              { key: "chat", label: "Chat", icon: Activity, count: 4 },
+              { key: "workflows", label: "Workflows", icon: GitBranch, count: 8 },
+              { key: "composer", label: "Composer", icon: Workflow, count: 3 },
+              { key: "observatory", label: "Observatory", icon: Eye, count: 24 },
+              { key: "docs", label: "Documentation", icon: BookOpen, count: 0 },
+            ].map((view) => {
+              const active =
+                (activeTab === "composer" && view.key === "composer") ||
+                (activeTab === "agents" && view.key === "agents") ||
+                (activeTab === "activity" && view.key === "workflows") ||
+                (activeTab === "observatory" && view.key === "observatory");
+              const Icon = view.icon;
+              return (
+                <div
+                  key={view.key}
+                  className={`flex items-center gap-2 rounded-lg border px-2 py-1 text-xs font-medium ${
+                    active
+                      ? "border-[oklch(0.708_0.101_188/0.25)] bg-[oklch(0.708_0.101_188/0.14)] text-[oklch(0.952_0.004_264)] shadow-sm"
+                      : "border-transparent text-[oklch(0.78_0.012_264)]"
+                  }`}
+                >
+                  <Icon className={`h-4 w-4 shrink-0 ${active ? "text-[oklch(0.708_0.101_188)]" : "text-[oklch(0.78_0.012_264)]"}`} />
+                  <span className="flex-1 text-left">{view.label}</span>
+                  {view.count > 0 ? (
+                    <span className={`flex h-5 min-w-[1.25rem] items-center justify-center rounded-full border px-1.5 text-[10px] font-semibold tabular-nums ${
+                      active
+                        ? "border-[oklch(0.708_0.101_188/0.25)] bg-[oklch(0.708_0.101_188/0.14)] text-[oklch(0.708_0.101_188)]"
+                        : "border-[oklch(0.34_0.015_264)] bg-[oklch(0.252_0.01_264/0.7)] text-[oklch(0.78_0.012_264)]"
+                    }`}>
+                      {view.count}
+                    </span>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="flex gap-1.5 border-b border-[oklch(0.296_0.011_264)] px-2.5 py-1.5">
+          <div className="flex h-8 flex-1 items-center justify-center gap-1.5 rounded-xl bg-[oklch(0.708_0.101_188)] text-[oklch(0.158_0.007_264)]">
+            <span className="text-xs font-semibold">New</span>
+          </div>
+          <div className="h-8 w-8 rounded-xl border border-[oklch(0.38_0.015_264)] bg-[oklch(0.206_0.009_264/0.72)]" />
+        </div>
+
+        <div className="p-2.5">
+          <div className="mb-2 rounded-xl border border-[oklch(0.38_0.015_264)] bg-[oklch(0.206_0.009_264/0.72)] px-3 py-2 text-[11px] text-[oklch(0.78_0.012_264)]">
+            Search resources...
+          </div>
+          <div className="space-y-1.5">
+            {[
+              { title: "incident-triage", subtitle: "opencode • production", status: "running" },
+              { title: "log-analyzer", subtitle: "pi • production", status: "running" },
+              { title: "security-scan", subtitle: "opencode • security", status: activeTab === "agents" ? "pending" : "completed" },
+            ].map((item, index) => (
+              <div
+                key={item.title}
+                className={`rounded-xl border px-3 py-2 text-xs ${
+                  index === 0
+                    ? "border-[oklch(0.708_0.101_188/0.22)] bg-[oklch(0.708_0.101_188/0.08)]"
+                    : "border-[oklch(0.35_0.015_264)] bg-[oklch(0.206_0.009_264/0.46)]"
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <span className={`h-2 w-2 rounded-full ${
+                    item.status === "running"
+                      ? "bg-[oklch(0.76_0.16_154)]"
+                      : item.status === "pending"
+                        ? "bg-[oklch(0.82_0.16_84)]"
+                        : "bg-[oklch(0.708_0.101_188)]"
+                  }`} />
+                  <span className="truncate font-medium text-[oklch(0.958_0.004_264)]">{item.title}</span>
+                </div>
+                <p className="mt-1 truncate text-[10px] text-[oklch(0.72_0.012_264)]">{item.subtitle}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="flex min-w-0 flex-1 flex-col">
+        <div className="sticky top-0 z-10 flex min-h-14 items-center justify-between gap-x-3 border-b border-[oklch(0.296_0.011_264)] bg-[oklch(0.149_0.008_264/0.88)] px-4 py-2 shadow-sm backdrop-blur-xl">
+          <div className="flex min-w-0 flex-1 items-center gap-3">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[calc(0.875rem+2px)] border border-[oklch(0.38_0.015_264)] bg-[oklch(0.206_0.009_264/0.72)] text-[oklch(0.708_0.101_188)] shadow-sm">
+              <LayoutPanelTop className="h-4 w-4" />
+            </div>
+            <div className="min-w-0">
+              <p className="text-[10px] font-medium uppercase tracking-[0.24em] text-[oklch(0.72_0.012_264)]">Operations Console</p>
+              <div className="flex min-w-0 items-center gap-2">
+                <span className="truncate text-sm font-semibold text-[oklch(0.958_0.004_264)]">{BRAND.name}</span>
+                <span className="hidden truncate text-xs text-[oklch(0.72_0.012_264)] lg:inline">{BRAND.tagline}</span>
+              </div>
+            </div>
+          </div>
+          <div className="ml-auto flex items-center gap-2">
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-[oklch(0.76_0.16_154/0.2)] bg-[oklch(0.76_0.16_154/0.08)] px-2.5 py-1 text-[11px] font-medium text-[oklch(0.76_0.16_154)]">
+              <span className="h-2 w-2 rounded-full bg-[oklch(0.76_0.16_154)]" />
+              Healthy
+            </span>
+            <span className="inline-flex h-9 items-center rounded-xl border border-[oklch(0.38_0.015_264)] bg-[oklch(0.206_0.009_264/0.72)] px-3 font-mono text-[11px] text-[oklch(0.958_0.004_264)]">
+              production
+            </span>
+            <div className="h-9 w-9 rounded-xl border border-[oklch(0.38_0.015_264)] bg-[oklch(0.206_0.009_264/0.72)]" />
+            <div className="h-9 w-9 rounded-xl border border-[oklch(0.38_0.015_264)] bg-[oklch(0.206_0.009_264/0.72)]" />
+          </div>
+        </div>
+
+        <div className="flex min-h-0 flex-1">
+          <div className="flex min-w-0 flex-1 flex-col p-3">
+            {activeTab === "composer" && <FaithfulComposerPanel />}
+            {activeTab === "agents" && <FaithfulAgentsPanel />}
+            {activeTab === "activity" && <FaithfulActivityPanel />}
+            {activeTab === "observatory" && <FaithfulObservatoryPanel />}
+          </div>
+          <div className="hidden w-[18rem] shrink-0 border-l border-[oklch(0.296_0.011_264)] bg-[oklch(0.149_0.008_264/0.72)] p-3 xl:block">
+            <p className="text-[10px] font-medium uppercase tracking-[0.22em] text-[oklch(0.72_0.012_264)]">Inspector</p>
+            <div className="mt-3 rounded-2xl border border-[oklch(0.35_0.015_264)] bg-[oklch(0.206_0.009_264/0.56)] p-4">
+              <p className="text-xs font-semibold text-[oklch(0.958_0.004_264)]">
+                {activeTab === "composer" ? "Selected Step" : activeTab === "agents" ? "Agent Detail" : activeTab === "activity" ? "Workflow Signal" : "Trace Summary"}
+              </p>
+              <div className="mt-3 space-y-2">
+                {[
+                  { label: activeTab === "composer" ? "Step" : activeTab === "agents" ? "Runtime" : activeTab === "activity" ? "Phase" : "Status", value: activeTab === "composer" ? "incident-triage" : activeTab === "agents" ? "opencode" : activeTab === "activity" ? "running" : "completed" },
+                  { label: activeTab === "composer" ? "Depends On" : activeTab === "agents" ? "Model" : activeTab === "activity" ? "Connected" : "Duration", value: activeTab === "composer" ? "webhook-trigger" : activeTab === "agents" ? "claude-sonnet-4" : activeTab === "activity" ? "yes" : "2.4 s" },
+                  { label: activeTab === "composer" ? "Approval" : activeTab === "agents" ? "Storage" : activeTab === "activity" ? "Events" : "Steps", value: activeTab === "composer" ? "required" : activeTab === "agents" ? "2Gi PVC" : activeTab === "activity" ? "18" : "4" },
+                ].map((item) => (
+                  <MetricChip key={item.label} label={item.label} value={item.value} />
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FaithfulComposerPanel() {
+  return (
+    <div className="relative min-h-0 flex-1 overflow-hidden rounded-2xl border border-[oklch(0.35_0.015_264)] bg-[oklch(0.164_0.007_264)]" style={{ backgroundImage: "radial-gradient(oklch(0.32 0.011 264 / 0.45) 1px, transparent 1px)", backgroundSize: "20px 20px" }}>
+      {/* Floating toolbar */}
+      <div className="absolute left-3 top-3 z-10 flex items-center gap-1.5 rounded-lg border border-[oklch(0.35_0.015_264)] bg-[oklch(0.206_0.009_264/0.9)] px-2 py-1.5 backdrop-blur-sm shadow-sm">
+        <div className="flex h-6 w-6 items-center justify-center rounded border border-[oklch(0.38_0.015_264)] bg-[oklch(0.164_0.007_264)] text-[oklch(0.78_0.012_264)]">
+          <Workflow className="h-3 w-3" />
+        </div>
+        <div className="h-4 w-px bg-[oklch(0.3_0.01_264)]" />
+        <div className="flex h-6 w-6 items-center justify-center rounded border border-[oklch(0.38_0.015_264)] bg-[oklch(0.164_0.007_264)] text-[oklch(0.78_0.012_264)]">
+          <RefreshCw className="h-3 w-3" />
+        </div>
+        <div className="flex h-6 w-6 items-center justify-center rounded border border-[oklch(0.38_0.015_264)] bg-[oklch(0.164_0.007_264)] text-[oklch(0.78_0.012_264)]">
+          <Play className="h-3 w-3" />
+        </div>
+        <div className="h-4 w-px bg-[oklch(0.3_0.01_264)]" />
+        <span className="text-[9px] font-medium text-[oklch(0.62_0.012_264)]">incident-response</span>
+      </div>
+
+      {/* Animated DAG edges */}
+      <svg className="absolute inset-0 h-full w-full pointer-events-none" fill="none">
+        {/* Trigger → incident-triage */}
+        <motion.path d="M 165 200 C 230 200, 240 155, 310 155" stroke="oklch(0.708 0.101 188 / 0.5)" strokeWidth={2} strokeDasharray="6 4" animate={{ strokeDashoffset: [0, -20] }} transition={{ duration: 1.5, repeat: Infinity, ease: "linear" }} />
+        <circle cx="310" cy="155" r="3" fill="oklch(0.708 0.101 188 / 0.6)" />
+        {/* Trigger → log-analyzer */}
+        <motion.path d="M 165 200 C 230 200, 240 275, 310 275" stroke="oklch(0.708 0.101 188 / 0.5)" strokeWidth={2} strokeDasharray="6 4" animate={{ strokeDashoffset: [0, -20] }} transition={{ duration: 1.5, repeat: Infinity, ease: "linear", delay: 0.15 }} />
+        <circle cx="310" cy="275" r="3" fill="oklch(0.708 0.101 188 / 0.6)" />
+        {/* incident-triage → remediate */}
+        <motion.path d="M 450 155 C 510 155, 520 215, 580 215" stroke="oklch(0.684 0.138 308 / 0.5)" strokeWidth={2} strokeDasharray="6 4" animate={{ strokeDashoffset: [0, -20] }} transition={{ duration: 1.5, repeat: Infinity, ease: "linear", delay: 0.3 }} />
+        <circle cx="580" cy="215" r="3" fill="oklch(0.684 0.138 308 / 0.6)" />
+        {/* log-analyzer → remediate */}
+        <motion.path d="M 450 275 C 510 275, 520 215, 580 215" stroke="oklch(0.684 0.138 308 / 0.5)" strokeWidth={2} strokeDasharray="6 4" animate={{ strokeDashoffset: [0, -20] }} transition={{ duration: 1.5, repeat: Infinity, ease: "linear", delay: 0.45 }} />
+      </svg>
+
+      {/* Workflow Nodes — styled like real AgentNode cards */}
+      <ComposerNode
+        className="left-[40px] top-[170px]"
+        icon={Radio}
+        title="webhook-trigger"
+        badge="trigger"
+        badgeColor="bg-[oklch(0.82_0.16_84/0.15)] text-[oklch(0.82_0.16_84)] border-[oklch(0.82_0.16_84/0.25)]"
+        borderColor="border-[oklch(0.82_0.16_84/0.4)]"
+        iconColor="text-[oklch(0.82_0.16_84)]"
+        subtitle="source: prometheus"
+      />
+      <ComposerNode
+        className="left-[310px] top-[120px]"
+        icon={Bot}
+        title="incident-triage"
+        badge="opencode"
+        badgeColor="bg-[oklch(0.708_0.101_188/0.15)] text-[oklch(0.708_0.101_188)] border-[oklch(0.708_0.101_188/0.25)]"
+        borderColor="border-[oklch(0.708_0.101_188/0.4)]"
+        iconColor="text-[oklch(0.708_0.101_188)]"
+        subtitle="claude-sonnet-4"
+        status="running"
+      />
+      <ComposerNode
+        className="left-[310px] top-[240px]"
+        icon={Bot}
+        title="log-analyzer"
+        badge="pi"
+        badgeColor="bg-[oklch(0.76_0.16_154/0.15)] text-[oklch(0.76_0.16_154)] border-[oklch(0.76_0.16_154/0.25)]"
+        borderColor="border-[oklch(0.76_0.16_154/0.4)]"
+        iconColor="text-[oklch(0.76_0.16_154)]"
+        subtitle="gpt-4o"
+        status="running"
+      />
+      <ComposerNode
+        className="left-[580px] top-[180px]"
+        icon={Shield}
+        title="remediate"
+        badge="approval"
+        badgeColor="bg-[oklch(0.684_0.138_308/0.15)] text-[oklch(0.684_0.138_308)] border-[oklch(0.684_0.138_308/0.25)]"
+        borderColor="border-[oklch(0.684_0.138_308/0.4)]"
+        iconColor="text-[oklch(0.684_0.138_308)]"
+        subtitle="requireApproval: true"
+        status="waiting"
+      />
+
+      {/* Minimap in bottom-right */}
+      <div className="absolute bottom-3 right-3 h-[60px] w-[100px] rounded-lg border border-[oklch(0.35_0.015_264)] bg-[oklch(0.149_0.008_264/0.85)] backdrop-blur-sm">
+        <div className="p-1.5">
+          <div className="h-1 w-3 rounded-sm bg-[oklch(0.82_0.16_84/0.4)]" style={{ marginLeft: "8px", marginTop: "16px" }} />
+          <div className="flex gap-1" style={{ marginTop: "2px" }}>
+            <div className="h-1 w-3 rounded-sm bg-[oklch(0.708_0.101_188/0.4)]" style={{ marginLeft: "24px" }} />
+          </div>
+          <div className="h-1 w-3 rounded-sm bg-[oklch(0.708_0.101_188/0.4)]" style={{ marginLeft: "24px", marginTop: "2px" }} />
+          <div className="h-1 w-3 rounded-sm bg-[oklch(0.684_0.138_308/0.4)]" style={{ marginLeft: "44px", marginTop: "-4px" }} />
+        </div>
+      </div>
+
+      {/* Zoom controls bottom-left */}
+      <div className="absolute bottom-3 left-3 flex flex-col gap-0.5 rounded-lg border border-[oklch(0.35_0.015_264)] bg-[oklch(0.206_0.009_264/0.9)] backdrop-blur-sm">
+        <div className="flex h-6 w-6 items-center justify-center text-[10px] font-bold text-[oklch(0.78_0.012_264)]">+</div>
+        <div className="h-px bg-[oklch(0.3_0.01_264)]" />
+        <div className="flex h-6 w-6 items-center justify-center text-[10px] font-bold text-[oklch(0.78_0.012_264)]">&minus;</div>
+      </div>
+    </div>
+  );
+}
+
+function FaithfulAgentsPanel() {
+  const agents = [
+    { name: "incident-triage", status: "Running", runtime: "opencode", model: "claude-sonnet-4", age: "3h" },
+    { name: "log-analyzer", status: "Running", runtime: "pi", model: "gpt-4o", age: "2h" },
+    { name: "security-scanner", status: "Pending", runtime: "opencode", model: "gpt-4o", age: "8m" },
+  ];
+
+  return (
+    <div className="grid min-h-0 flex-1 grid-cols-[1.15fr_0.85fr] gap-3">
+      <div className="rounded-2xl border border-[oklch(0.35_0.015_264)] bg-[oklch(0.206_0.009_264/0.56)] p-3">
+        <div className="mb-3 flex items-center justify-between">
+          <div>
+            <p className="text-[10px] font-medium uppercase tracking-[0.22em] text-[oklch(0.72_0.012_264)]">Agent Management</p>
+            <p className="text-sm font-semibold text-[oklch(0.958_0.004_264)]">Namespace: production</p>
+          </div>
+          <div className="rounded-xl border border-[oklch(0.35_0.015_264)] bg-[oklch(0.164_0.007_264/0.78)] px-3 py-2 text-xs text-[oklch(0.78_0.012_264)]">12 agents</div>
+        </div>
+        <div className="space-y-2">
+          {agents.map((agent, i) => (
+            <div key={agent.name} className={`rounded-2xl border p-4 ${i === 0 ? "border-[oklch(0.708_0.101_188/0.3)] bg-[oklch(0.708_0.101_188/0.08)]" : "border-[oklch(0.34_0.015_264)] bg-[oklch(0.164_0.007_264/0.78)]"}`}>
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className={`h-2 w-2 rounded-full ${agent.status === "Running" ? "bg-[oklch(0.76_0.16_154)]" : "bg-[oklch(0.82_0.16_84)]"}`} />
+                    <h3 className="text-sm font-semibold text-[oklch(0.958_0.004_264)]">{agent.name}</h3>
+                  </div>
+                  <p className="mt-1 text-xs text-[oklch(0.72_0.012_264)]">model: {agent.model}</p>
+                </div>
+                <div className="flex gap-2">
+                  <span className="rounded-full border border-[oklch(0.708_0.101_188/0.25)] bg-[oklch(0.708_0.101_188/0.12)] px-2 py-0.5 text-[10px] font-semibold text-[oklch(0.708_0.101_188)]">{agent.runtime}</span>
+                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${agent.status === "Running" ? "bg-[oklch(0.76_0.16_154/0.12)] text-[oklch(0.76_0.16_154)]" : "bg-[oklch(0.82_0.16_84/0.12)] text-[oklch(0.82_0.16_84)]"}`}>{agent.status}</span>
+                </div>
+              </div>
+              <div className="mt-3 grid grid-cols-3 gap-2">
+                <MetricChip label="Age" value={agent.age} />
+                <MetricChip label="Storage" value="2Gi" />
+                <MetricChip label="Access" value="governed" />
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="rounded-2xl border border-[oklch(0.35_0.015_264)] bg-[oklch(0.206_0.009_264/0.56)] p-4">
+        <p className="text-[10px] font-medium uppercase tracking-[0.22em] text-[oklch(0.72_0.012_264)]">Selected Agent</p>
+        <h3 className="mt-2 text-base font-semibold text-[oklch(0.958_0.004_264)]">incident-triage</h3>
+        <div className="mt-4 grid grid-cols-2 gap-2">
+          {[
+            { label: "Runtime", value: "opencode" },
+            { label: "Model", value: "claude-sonnet-4" },
+            { label: "Storage", value: "2Gi PVC" },
+            { label: "MCP", value: "kubernetes, web-search" },
+            { label: "Budget", value: "50k / run" },
+            { label: "Policy", value: "governed" },
+          ].map((item) => (
+            <MetricChip key={item.label} label={item.label} value={item.value} />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FaithfulActivityPanel() {
+  const activities = [
+    { agent: "incident-triage", text: "Correlating pod restart events with memory pressure...", time: "10:44:18", icon: BrainCircuit, color: "text-sky-400", bg: "bg-sky-500/5", border: "border-sky-500/20" },
+    { agent: "incident-triage", text: "kubectl get pods -n production --field-selector=status.phase!=Running", time: "10:44:20", icon: Wrench, color: "text-amber-400", bg: "bg-amber-500/5", border: "border-amber-500/20" },
+    { agent: "log-analyzer", text: "Generated report: /workspace/incident-2024-001.md", time: "10:44:23", icon: FileCode2, color: "text-emerald-400", bg: "bg-emerald-500/5", border: "border-emerald-500/20" },
+    { agent: "log-analyzer", text: "Root cause identified: OOM kill on web-frontend-7f8d9", time: "10:44:25", icon: CheckCircle2, color: "text-emerald-400", bg: "bg-emerald-500/5", border: "border-emerald-500/20" },
+    { agent: "security-scanner", text: "CVE detected in deploy/redis base image", time: "10:44:29", icon: AlertTriangle, color: "text-amber-400", bg: "bg-amber-500/5", border: "border-amber-500/20" },
+  ];
+
+  return (
+    <div className="grid min-h-0 flex-1 grid-cols-[1.1fr_0.9fr] gap-3">
+      <div className="rounded-2xl border border-[oklch(0.35_0.015_264)] bg-[oklch(0.206_0.009_264/0.56)] p-4">
+        <div className="mb-3 flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-[oklch(0.958_0.004_264)]">LiveActivityStream</h3>
+          <div className="flex items-center gap-1.5">
+            <span className="h-2 w-2 rounded-full bg-[oklch(0.76_0.16_154)] animate-pulse" />
+            <span className="text-[10px] text-[oklch(0.72_0.012_264)]">Connected</span>
+          </div>
+        </div>
+        <div className="space-y-1.5">
+          {activities.map((activity, i) => {
+            const Icon = activity.icon;
+            return (
+              <motion.div
+                key={i}
+                initial={{ opacity: 0, x: -12 }}
+                animate={{ opacity: 1, x: 0 }}
+                transition={{ delay: i * 0.08 }}
+                className={`flex items-start gap-3 rounded-lg border px-3 py-2.5 ${activity.bg} ${activity.border}`}
+              >
+                <Icon className={`mt-0.5 h-3.5 w-3.5 flex-shrink-0 ${activity.color}`} />
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] font-semibold text-[oklch(0.708_0.101_188)]">{activity.agent}</span>
+                    <span className="text-[9px] text-[oklch(0.72_0.012_264)]">{activity.time}</span>
+                  </div>
+                  <p className="mt-0.5 truncate text-xs text-[oklch(0.88_0.012_264)]">{activity.text}</p>
+                </div>
+              </motion.div>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="rounded-2xl border border-[oklch(0.35_0.015_264)] bg-[oklch(0.206_0.009_264/0.56)] p-4">
+        <div className="mb-3 flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-[oklch(0.958_0.004_264)]">Workflow Status</h3>
+          <span className="rounded-full bg-[oklch(0.82_0.16_84/0.12)] px-2 py-0.5 text-[10px] font-semibold text-[oklch(0.82_0.16_84)]">running</span>
+        </div>
+        <div className="space-y-2">
+          {[
+            { step: "triage", status: "completed", color: "bg-emerald-500" },
+            { step: "analyze-logs", status: "completed", color: "bg-emerald-500" },
+            { step: "approval", status: "running", color: "bg-amber-500" },
+            { step: "remediate", status: "waiting", color: "bg-[oklch(0.82_0.012_264/0.45)]" },
+          ].map((item) => (
+            <div key={item.step} className="flex items-center gap-3 rounded-xl border border-[oklch(0.33_0.015_264)] bg-[oklch(0.164_0.007_264/0.78)] px-3 py-2">
+              <span className={`h-2.5 w-2.5 rounded-full ${item.color}`} />
+              <span className="flex-1 text-xs font-medium text-[oklch(0.958_0.004_264)]">{item.step}</span>
+              <span className="text-[10px] text-[oklch(0.72_0.012_264)]">{item.status}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FaithfulObservatoryPanel() {
+  const executions = [
+    { workflow: "incident-response", status: "completed", duration: "2.4 s", agent: "incident-triage" },
+    { workflow: "security-scan", status: "running", duration: "1.1 s", agent: "security-scanner" },
+    { workflow: "capacity-check", status: "failed", duration: "3.0 s", agent: "capacity-planner" },
+  ];
+
+  return (
+    <div className="grid min-h-0 flex-1 grid-cols-[0.95fr_1.05fr] gap-3">
+      <div className="rounded-2xl border border-[oklch(0.35_0.015_264)] bg-[oklch(0.206_0.009_264/0.56)] p-4">
+        <div className="mb-3 flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-[oklch(0.958_0.004_264)]">Execution List</h3>
+          <div className="rounded-xl border border-[oklch(0.33_0.015_264)] bg-[oklch(0.164_0.007_264/0.78)] px-3 py-2 text-[11px] text-[oklch(0.78_0.012_264)]">Filters</div>
+        </div>
+        <div className="space-y-2">
+          {executions.map((exec, i) => {
+            const tone = exec.status === "completed" ? "bg-emerald-500" : exec.status === "failed" ? "bg-red-500" : "bg-amber-500";
+            return (
+              <div key={exec.workflow} className={`rounded-xl border px-3 py-3 ${i === 0 ? "border-[oklch(0.708_0.101_188/0.25)] bg-[oklch(0.708_0.101_188/0.08)]" : "border-[oklch(0.33_0.015_264)] bg-[oklch(0.164_0.007_264/0.78)]"}`}>
+                <div className="flex items-center gap-3">
+                  <span className={`h-2.5 w-2.5 rounded-full ${tone}`} />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-xs font-semibold text-[oklch(0.958_0.004_264)]">{exec.workflow}</p>
+                    <p className="truncate text-[10px] text-[oklch(0.72_0.012_264)]">{exec.agent}</p>
+                  </div>
+                  <span className="text-[10px] text-[oklch(0.72_0.012_264)]">{exec.duration}</span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="rounded-2xl border border-[oklch(0.35_0.015_264)] bg-[oklch(0.206_0.009_264/0.56)] p-4">
+        <div className="mb-3 flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-[oklch(0.958_0.004_264)]">ExecutionTimeline / StepInspector</h3>
+          <div className="flex gap-2">
+            {[
+              "overview",
+              "timeline",
+              "llm",
+            ].map((tab, i) => (
+              <span key={tab} className={`rounded px-2 py-0.5 text-[10px] font-medium ${i === 0 ? "bg-[oklch(0.708_0.101_188/0.15)] text-[oklch(0.708_0.101_188)]" : "text-[oklch(0.72_0.012_264)]"}`}>{tab}</span>
+            ))}
+          </div>
+        </div>
+        <div className="space-y-3">
+          {[
+            { label: "trigger", duration: "120 ms", color: "bg-emerald-500", width: "22%" },
+            { label: "triage", duration: "860 ms", color: "bg-emerald-500", width: "58%" },
+            { label: "analyze-logs", duration: "1.1 s", color: "bg-emerald-500", width: "72%" },
+            { label: "approval", duration: "420 ms", color: "bg-amber-500", width: "34%" },
+          ].map((item) => (
+            <div key={item.label} className="rounded-xl border border-[oklch(0.33_0.015_264)] bg-[oklch(0.164_0.007_264/0.78)] px-3 py-3">
+              <div className="mb-2 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className={`h-2.5 w-2.5 rounded-full ${item.color}`} />
+                  <span className="text-xs font-medium text-[oklch(0.958_0.004_264)]">{item.label}</span>
+                </div>
+                <span className="text-[10px] text-[oklch(0.72_0.012_264)]">{item.duration}</span>
+              </div>
+              <div className="h-2 rounded-full bg-[oklch(0.252_0.01_264)]">
+                <div className="h-2 rounded-full bg-[oklch(0.708_0.101_188)]" style={{ width: item.width }} />
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ComposerNode({
+  className,
+  icon: Icon,
+  title,
+  badge,
+  badgeColor,
+  borderColor,
+  iconColor,
+  subtitle,
+  status,
+}: {
+  className: string;
+  icon: typeof Bot;
+  title: string;
+  badge: string;
+  badgeColor: string;
+  borderColor: string;
+  iconColor: string;
+  subtitle: string;
+  status?: "running" | "waiting" | "completed";
+}) {
+  return (
+    <motion.div
+      className={`absolute rounded-xl border bg-[oklch(0.206_0.009_264/0.95)] shadow-lg backdrop-blur-md ${borderColor} ${className}`}
+      style={{ width: "auto", minWidth: "120px" }}
+      animate={{ boxShadow: ["0 0 0 0 oklch(0.708 0.101 188 / 0)", "0 0 10px 1px oklch(0.708 0.101 188 / 0.1)", "0 0 0 0 oklch(0.708 0.101 188 / 0)"] }}
+      transition={{ duration: 4, repeat: Infinity }}
+    >
+      {/* Handle dots (connection points) */}
+      <div className="absolute -left-1.5 top-1/2 h-3 w-3 -translate-y-1/2 rounded-full border-2 border-[oklch(0.35_0.015_264)] bg-[oklch(0.206_0.009_264)]" />
+      <div className="absolute -right-1.5 top-1/2 h-3 w-3 -translate-y-1/2 rounded-full border-2 border-[oklch(0.35_0.015_264)] bg-[oklch(0.206_0.009_264)]" />
+
+      <div className="px-3 py-2.5">
+        <div className="flex items-center gap-2">
+          <div className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-[oklch(0.164_0.007_264)] ${iconColor}`}>
+            <Icon className="h-3 w-3" />
+          </div>
+          <span className="text-[11px] font-semibold text-[oklch(0.958_0.004_264)]">{title}</span>
+          {status && (
+            <span className={`ml-auto h-2 w-2 rounded-full ${status === "running" ? "bg-[oklch(0.76_0.16_154)] animate-pulse" : status === "waiting" ? "bg-[oklch(0.82_0.16_84)]" : "bg-[oklch(0.76_0.16_154)]"}`} />
+          )}
+        </div>
+        <div className="mt-1.5 flex items-center gap-1.5">
+          <span className={`inline-flex rounded-full border px-1.5 py-0.5 text-[8px] font-semibold ${badgeColor}`}>{badge}</span>
+          <span className="text-[9px] text-[oklch(0.62_0.012_264)]">{subtitle}</span>
+        </div>
+      </div>
+    </motion.div>
+  );
+}
+
+function MetricChip({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-xl border border-[oklch(0.33_0.015_264)] bg-[oklch(0.164_0.007_264/0.78)] px-3 py-2">
+      <p className="text-[10px] text-[oklch(0.72_0.012_264)]">{label}</p>
+      <p className="mt-0.5 text-xs font-medium text-[oklch(0.958_0.004_264)]">{value}</p>
+    </div>
+  );
+}
 
 // ─── Features Grid ───
 
@@ -693,45 +994,45 @@ function FeaturesSection() {
   const features = [
     {
       icon: Server,
-      title: "Kubernetes-Native Orchestration",
+      title: "Kubernetes-Native CRDs",
       description:
-        "Agents, policies, workflows, and tenants are first-class CRDs reconciled by a production Kopf operator.",
+        "AIAgent, AgentWorkflow, AgentPolicy, AgentTenant — first-class custom resources reconciled by a production Kopf operator.",
       tags: ["CRDs", "Operator", "Helm"],
     },
     {
-      icon: MessageSquare,
-      title: "A2A Protocol Support",
+      icon: MonitorDot,
+      title: "Incident Response Automation",
       description:
-        "Native JSON-RPC and Server-Sent Events for agent-to-agent delegation, streaming, and real-time collaboration.",
-      tags: ["JSON-RPC", "SSE", "A2A"],
-    },
-    {
-      icon: Terminal,
-      title: "OpenCode Runtime",
-      description:
-        "Purpose-built FastAPI wrapper around opencode serve with session persistence and checkpoint recovery.",
-      tags: ["StatefulSet", "PVC", "Checkpoints"],
+        "Agents correlate alerts, check pod health, analyze logs, and propose remediation — with human approval gates for destructive actions.",
+      tags: ["SRE", "On-Call", "HITL"],
     },
     {
       icon: Puzzle,
       title: "MCP Tool Ecosystem",
       description:
-        "Attach Model Context Protocol servers as sidecars. Kubernetes ops, web search, browser automation, RAG, and more.",
+        "11 bundled sidecars: Kubernetes ops, web search, browser automation, file system, messaging, and more. Hot-attach any MCP server.",
       tags: ["11 Sidecars", "Hot Attach", "Tools"],
     },
     {
       icon: Shield,
       title: "Policy-Driven Governance",
       description:
-        "AgentPolicy CRDs enforce input/output guardrails, token caps, PII masking, and allowed model lists.",
-      tags: ["Guardrails", "RBAC", "Approval"],
+        "Enforce token budgets, allowed models, PII masking, tool whitelists, and output guardrails via AgentPolicy CRDs.",
+      tags: ["Guardrails", "RBAC", "Budget"],
     },
     {
       icon: Workflow,
-      title: "Visual Workflow Engine",
+      title: "Visual DAG Workflows",
       description:
-        "Build multi-agent pipelines with a drag-and-drop DAG editor. Approval gates, parallel execution, and retries.",
-      tags: ["DAG", "Retries", "Approval Gates"],
+        "Build multi-agent pipelines with the drag-and-drop composer. Approval gates, parallel execution, retries, and artifact passing.",
+      tags: ["DAG", "Retries", "Approval"],
+    },
+    {
+      icon: Gauge,
+      title: "Full Observability",
+      description:
+        "Execution Observatory with distributed traces, LLM call inspection, step timing, token usage, and real-time activity streaming.",
+      tags: ["Traces", "Metrics", "Live Stream"],
     },
   ];
 
@@ -739,7 +1040,7 @@ function FeaturesSection() {
   const inView = useInView(ref, { once: true, margin: "-80px" });
 
   return (
-    <section id="features" className="bg-white px-6 py-24 md:py-32" ref={ref}>
+    <section id="features" className="px-6 py-24 md:py-32" ref={ref}>
       <div className="mx-auto max-w-7xl">
         <motion.div
           initial="hidden"
@@ -747,14 +1048,14 @@ function FeaturesSection() {
           variants={containerVariants}
           className="mb-16 text-center"
         >
-          <motion.p variants={itemVariants} className="text-xs font-semibold uppercase tracking-widest text-blue-600">
-            Platform Features
+          <motion.p variants={itemVariants} className="text-xs font-semibold uppercase tracking-widest text-[oklch(0.708_0.101_188)]">
+            Platform Capabilities
           </motion.p>
-          <motion.h2 variants={itemVariants} className="mt-3 text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl md:text-5xl">
-            Everything You Need to <span className="text-blue-600">Ship Agents</span>
+          <motion.h2 variants={itemVariants} className="mt-3 text-3xl font-bold tracking-tight text-[oklch(0.958_0.004_264)] sm:text-4xl md:text-5xl">
+            Everything Your Cluster <span className="text-[oklch(0.708_0.101_188)]">Needs</span>
           </motion.h2>
-          <motion.p variants={itemVariants} className="mx-auto mt-4 max-w-2xl text-base text-slate-600">
-            From development to production. A complete control plane for Kubernetes-native AI agent operations.
+          <motion.p variants={itemVariants} className="mx-auto mt-4 max-w-2xl text-base text-[oklch(0.82_0.01_264)]">
+            From incident triage to capacity planning. A complete AI operations layer for Kubernetes-native infrastructure.
           </motion.p>
         </motion.div>
 
@@ -768,18 +1069,18 @@ function FeaturesSection() {
                 initial="hidden"
                 animate={inView ? "visible" : "hidden"}
                 transition={{ delay: i * 0.08 }}
-                className="group rounded-2xl border border-slate-200 bg-white p-7 shadow-sm transition-all hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-md"
+                className="group rounded-2xl border border-[oklch(0.3_0.01_264)] bg-[oklch(0.206_0.009_264/0.5)] p-7 backdrop-blur-sm transition-all hover:-translate-y-0.5 hover:border-[oklch(0.708_0.101_188/0.3)] hover:shadow-lg hover:shadow-[oklch(0.708_0.101_188/0.05)]"
               >
-                <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-xl bg-blue-50 text-blue-600 ring-1 ring-blue-100 transition-colors group-hover:bg-blue-100">
+                <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-xl bg-[oklch(0.708_0.101_188/0.1)] text-[oklch(0.708_0.101_188)] ring-1 ring-[oklch(0.708_0.101_188/0.2)] transition-colors group-hover:bg-[oklch(0.708_0.101_188/0.15)]">
                   <Icon className="h-5 w-5" />
                 </div>
-                <h3 className="text-base font-semibold text-slate-900">{feature.title}</h3>
-                <p className="mt-2 text-sm leading-relaxed text-slate-600">{feature.description}</p>
+                <h3 className="text-base font-semibold text-[oklch(0.958_0.004_264)]">{feature.title}</h3>
+                <p className="mt-2 text-sm leading-relaxed text-[oklch(0.82_0.01_264)]">{feature.description}</p>
                 <div className="mt-4 flex flex-wrap gap-2">
                   {feature.tags.map((tag) => (
                     <span
                       key={tag}
-                      className="rounded-full bg-slate-100 px-2.5 py-0.5 text-[11px] font-medium text-slate-600"
+                      className="rounded-full bg-[oklch(0.252_0.010_264)] px-2.5 py-0.5 text-[11px] font-medium text-[oklch(0.82_0.01_264)]"
                     >
                       {tag}
                     </span>
@@ -802,25 +1103,19 @@ function HowItWorks() {
       num: "01",
       icon: GitBranch,
       title: "Declare",
-      description: "Write an AIAgent CRD with your system prompt, model, memory policy, and MCP sidecars. Apply it with kubectl.",
-      gradient: "from-blue-500 to-indigo-600",
-      bgGradient: "from-blue-50 to-indigo-50",
+      description: "Write an AIAgent CRD with your system prompt, model, memory policy, and MCP sidecars. Apply it with kubectl or Helm.",
     },
     {
       num: "02",
       icon: RefreshCw,
       title: "Reconcile",
-      description: "The Kopf operator watches your CRD and provisions a StatefulSet, Service, PVC, and ConfigMap automatically.",
-      gradient: "from-indigo-500 to-purple-600",
-      bgGradient: "from-indigo-50 to-purple-50",
+      description: "The Kopf operator watches your CRD and provisions a StatefulSet, Service, PVC, and ConfigMap with full lifecycle management.",
     },
     {
       num: "03",
       icon: Bot,
-      title: "Execute",
-      description: "Invoke via agentctl, the web UI, or A2A JSON-RPC. The runtime persists memory, enforces policies, and routes model calls through LiteLLM.",
-      gradient: "from-purple-500 to-pink-600",
-      bgGradient: "from-purple-50 to-pink-50",
+      title: "Operate",
+      description: "Invoke via the web console, agentctl CLI, or A2A JSON-RPC. Agents persist memory, enforce policies, and route calls through LiteLLM.",
     },
   ];
 
@@ -828,7 +1123,7 @@ function HowItWorks() {
   const inView = useInView(ref, { once: true, margin: "-80px" });
 
   return (
-    <section className="bg-white px-6 py-24 md:py-32" ref={ref}>
+    <section className="px-6 py-24 md:py-32" ref={ref}>
       <div className="mx-auto max-w-7xl">
         <motion.div
           initial="hidden"
@@ -836,11 +1131,14 @@ function HowItWorks() {
           variants={containerVariants}
           className="mb-16 text-center"
         >
-          <motion.p variants={itemVariants} className="text-xs font-semibold uppercase tracking-widest text-blue-600">
+          <motion.p variants={itemVariants} className="text-xs font-semibold uppercase tracking-widest text-[oklch(0.708_0.101_188)]">
             How It Works
           </motion.p>
-          <motion.h2 variants={itemVariants} className="mt-3 text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl md:text-5xl">
-            From YAML to <span className="bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">Running Agent</span>
+          <motion.h2 variants={itemVariants} className="mt-3 text-3xl font-bold tracking-tight text-[oklch(0.958_0.004_264)] sm:text-4xl md:text-5xl">
+            From YAML to{" "}
+            <span className="bg-gradient-to-r from-[oklch(0.708_0.101_188)] to-[oklch(0.742_0.132_233)] bg-clip-text text-transparent">
+              Running Agent
+            </span>
           </motion.h2>
         </motion.div>
 
@@ -865,9 +1163,9 @@ function HowItWorks() {
                       animate={inView ? { opacity: 1, x: 0 } : {}}
                       transition={{ delay: i * 0.15 + 0.3, duration: 0.5 }}
                     >
-                      <div className="h-px w-6 bg-gradient-to-r from-slate-300 to-slate-200" />
+                      <div className="h-px w-6 bg-gradient-to-r from-[oklch(0.4_0.015_264)] to-[oklch(0.3_0.01_264)]" />
                       <motion.div
-                        className="h-2 w-2 rounded-full bg-blue-400"
+                        className="h-2 w-2 rounded-full bg-[oklch(0.708_0.101_188)]"
                         animate={{ scale: [1, 1.3, 1], opacity: [0.5, 1, 0.5] }}
                         transition={{ duration: 2, repeat: Infinity, delay: i * 0.5 }}
                       />
@@ -875,30 +1173,26 @@ function HowItWorks() {
                   </div>
                 )}
 
-                <div className="relative overflow-hidden rounded-2xl border border-slate-200 bg-white p-8 transition-all duration-300 hover:shadow-xl hover:shadow-blue-900/5 hover:-translate-y-1">
-                  {/* Background gradient blob */}
-                  <div className={`absolute -right-10 -top-10 h-32 w-32 rounded-full bg-gradient-to-br ${step.bgGradient} opacity-60 blur-2xl transition-opacity group-hover:opacity-100`} />
-
+                <div className="relative overflow-hidden rounded-2xl border border-[oklch(0.3_0.01_264)] bg-[oklch(0.206_0.009_264/0.5)] p-8 backdrop-blur-sm transition-all duration-300 hover:border-[oklch(0.708_0.101_188/0.3)] hover:shadow-lg hover:shadow-[oklch(0.708_0.101_188/0.05)] hover:-translate-y-1">
                   {/* Step number badge */}
                   <div className="relative mb-6 flex items-center justify-between">
-                    <div className={`flex h-14 w-14 items-center justify-center rounded-xl bg-gradient-to-br ${step.gradient} text-white shadow-lg shadow-blue-500/20`}>
+                    <div className="flex h-14 w-14 items-center justify-center rounded-xl bg-[oklch(0.708_0.101_188/0.15)] text-[oklch(0.708_0.101_188)] shadow-lg shadow-[oklch(0.708_0.101_188/0.1)]">
                       <Icon className="h-7 w-7" />
                     </div>
-                    <span className={`text-5xl font-black bg-gradient-to-br ${step.gradient} bg-clip-text text-transparent opacity-20`}>
+                    <span className="text-5xl font-black text-[oklch(0.708_0.101_188/0.1)]">
                       {step.num}
                     </span>
                   </div>
 
-                  {/* Content */}
                   <div className="relative">
-                    <h3 className="text-xl font-bold text-slate-900">{step.title}</h3>
-                    <p className="mt-3 text-sm leading-relaxed text-slate-600">
+                    <h3 className="text-xl font-bold text-[oklch(0.958_0.004_264)]">{step.title}</h3>
+                    <p className="mt-3 text-sm leading-relaxed text-[oklch(0.82_0.01_264)]">
                       {step.description}
                     </p>
                   </div>
 
                   {/* Bottom accent line */}
-                  <div className={`absolute bottom-0 left-0 h-1 w-0 bg-gradient-to-r ${step.gradient} transition-all duration-500 group-hover:w-full rounded-b-2xl`} />
+                  <div className="absolute bottom-0 left-0 h-1 w-0 rounded-b-2xl bg-gradient-to-r from-[oklch(0.708_0.101_188)] to-[oklch(0.742_0.132_233)] transition-all duration-500 group-hover:w-full" />
                 </div>
               </motion.div>
             );
@@ -909,290 +1203,233 @@ function HowItWorks() {
   );
 }
 
-// ─── Stunning Workflow Animation ───
+// ─── Install Terminal Section ───
 
-function WorkflowAnimation() {
-  const [stage, setStage] = useState(0);
-  const totalStages = 6;
+type TabKey = "install" | "agent" | "workflow" | "operate";
 
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setStage((s) => (s + 1) % totalStages);
-    }, 2800);
-    return () => clearInterval(interval);
-  }, []);
+function InstallSection() {
+  const ref = useRef(null);
+  const inView = useInView(ref, { once: true, margin: "-60px" });
+  const [activeTab, setActiveTab] = useState<TabKey>("install");
 
-  const nodes = [
-    { id: "ingress", label: "Ingress", sub: "A2A / Webhook", x: 60, y: 140, icon: Globe },
-    { id: "gateway", label: "API Gateway", sub: "FastAPI + Auth", x: 220, y: 140, icon: Server },
-    { id: "operator", label: "Operator", sub: "Kopf Engine", x: 400, y: 140, icon: RefreshCw },
-    { id: "runtime", label: "Runtime", sub: "OpenCode STS", x: 580, y: 70, icon: Bot },
-    { id: "mcp", label: "MCP Sidecars", sub: "Tool Pods", x: 580, y: 210, icon: Puzzle },
-    { id: "llm", label: "LiteLLM", sub: "Model Router", x: 760, y: 140, icon: BrainCircuit },
+  const tabs: { key: TabKey; label: string; icon: typeof Terminal }[] = [
+    { key: "install", label: "Install", icon: Terminal },
+    { key: "agent", label: "AIAgent", icon: Bot },
+    { key: "workflow", label: "Workflow", icon: Workflow },
+    { key: "operate", label: "Operate", icon: Play },
   ];
 
-  const edges = [
-    { from: "ingress", to: "gateway", id: 0 },
-    { from: "gateway", to: "operator", id: 1 },
-    { from: "operator", to: "runtime", id: 2 },
-    { from: "operator", to: "mcp", id: 3 },
-    { from: "runtime", to: "llm", id: 4 },
-    { from: "mcp", to: "llm", id: 5 },
-  ];
-
-  const stageMap: Record<number, { active: string[]; packet?: { edgeId: number } }> = {
-    0: { active: ["ingress"], packet: { edgeId: 0 } },
-    1: { active: ["gateway"], packet: { edgeId: 1 } },
-    2: { active: ["operator"], packet: { edgeId: 2 } },
-    3: { active: ["runtime"], packet: { edgeId: 4 } },
-    4: { active: ["llm"], packet: { edgeId: 4 } },
-    5: { active: ["runtime", "mcp"], packet: { edgeId: 5 } },
-  };
-
-  const activeIds = stageMap[stage]?.active || [];
-  const packetEdge = stageMap[stage]?.packet;
-
-  const getNode = (id: string) => nodes.find((n) => n.id === id)!;
-
-  const getPathPoints = (edgeId: number) => {
-    const edge = edges[edgeId];
-    const from = getNode(edge.from);
-    const to = getNode(edge.to);
-    // Node dimensions in SVG coords
-    const nw = 120;
-    const nh = 56;
-    const startX = from.x + nw;
-    const startY = from.y + nh / 2;
-    const endX = to.x;
-    const endY = to.y + nh / 2;
-    const midX = (startX + endX) / 2;
-    return [
-      { x: startX, y: startY },
-      { x: midX, y: startY },
-      { x: midX, y: endY },
-      { x: endX, y: endY },
-    ];
+  const tabLines: Record<TabKey, TerminalLine[]> = {
+    install: [
+      { text: "# Install KubeSynapse via Helm OCI", color: "comment", type: "input" },
+      { text: "helm install kubesynapse \\", color: "command", prefix: "$", type: "input" },
+      { text: "  oci://docker.io/kubesynapse/charts/kubesynapse \\", color: "command", type: "input" },
+      { text: "  --namespace kubesynapse --create-namespace \\", color: "command", type: "input" },
+      { text: "  --set platformSecrets.native.openaiApiKey=\"sk-...\"", color: "command", type: "input" },
+      { text: "", type: "blank" },
+      { text: "NAME: kubesynapse", color: "output", type: "output" },
+      { text: "NAMESPACE: kubesynapse", color: "output", type: "output" },
+      { text: "STATUS: deployed", color: "string", type: "output" },
+      { text: "REVISION: 1", color: "output", type: "output" },
+      { text: "", type: "blank" },
+      { text: "kubectl port-forward svc/kubesynapse-api-gateway 8080:8080", color: "command", prefix: "$", type: "input" },
+      { text: "Forwarding from 127.0.0.1:8080 -> 8080", color: "string", type: "output" },
+    ],
+    agent: [
+      { text: "apiVersion: kubesynapse.ai/v1alpha1", color: "yamlKey", type: "input" },
+      { text: "kind: AIAgent", color: "yamlKey", type: "input" },
+      { text: "metadata:", color: "yamlKey", type: "input" },
+      { text: "  name: incident-triage", color: "yamlVal", type: "input" },
+      { text: "  namespace: production", color: "yamlVal", type: "input" },
+      { text: "spec:", color: "yamlKey", type: "input" },
+      { text: "  runtimeKind: opencode", color: "yamlVal", type: "input" },
+      { text: "  model: claude-sonnet-4", color: "yamlVal", type: "input" },
+      { text: "  storageSize: 2Gi", color: "yamlVal", type: "input" },
+      { text: "  systemPrompt: |", color: "yamlKey", type: "input" },
+      { text: "    You are an SRE agent. When an alert fires,", color: "string", type: "input" },
+      { text: "    correlate logs, check pod status, and suggest", color: "string", type: "input" },
+      { text: "    remediation. Ask before destructive commands.", color: "string", type: "input" },
+      { text: "  mcpSidecars:", color: "yamlKey", type: "input" },
+      { text: "    - name: kubernetes", color: "yamlVal", type: "input" },
+      { text: "      config:", color: "yamlVal", type: "input" },
+      { text: "        namespace: production", color: "yamlVal", type: "input" },
+      { text: "    - name: web-search", color: "yamlVal", type: "input" },
+      { text: "    - name: messaging", color: "yamlVal", type: "input" },
+    ],
+    workflow: [
+      { text: "apiVersion: kubesynapse.ai/v1alpha1", color: "yamlKey", type: "input" },
+      { text: "kind: AgentWorkflow", color: "yamlKey", type: "input" },
+      { text: "metadata:", color: "yamlKey", type: "input" },
+      { text: "  name: incident-response", color: "yamlVal", type: "input" },
+      { text: "spec:", color: "yamlKey", type: "input" },
+      { text: "  description: Automated incident response pipeline", color: "yamlVal", type: "input" },
+      { text: "  steps:", color: "yamlKey", type: "input" },
+      { text: "    - name: triage", color: "yamlVal", type: "input" },
+      { text: "      agentRef: incident-triage", color: "yamlVal", type: "input" },
+      { text: "      prompt: |", color: "yamlKey", type: "input" },
+      { text: "        Analyze this alert and correlate with recent", color: "string", type: "input" },
+      { text: "        pod events. Identify root cause.", color: "string", type: "input" },
+      { text: "    - name: analyze-logs", color: "yamlVal", type: "input" },
+      { text: "      agentRef: log-analyzer", color: "yamlVal", type: "input" },
+      { text: "      dependsOn: [triage]", color: "yamlVal", type: "input" },
+      { text: "      prompt: |", color: "yamlKey", type: "input" },
+      { text: "        Deep-dive into logs for the affected pods.", color: "string", type: "input" },
+      { text: "    - name: remediate", color: "yamlVal", type: "input" },
+      { text: "      agentRef: incident-triage", color: "yamlVal", type: "input" },
+      { text: "      dependsOn: [analyze-logs]", color: "yamlVal", type: "input" },
+      { text: "      requireApproval: true", color: "flag", type: "input" },
+      { text: "      prompt: |", color: "yamlKey", type: "input" },
+      { text: "        Apply the recommended fix from the analysis.", color: "string", type: "input" },
+    ],
+    operate: [
+      { text: "kubectl apply -f agent.yaml", color: "command", prefix: "$", type: "input" },
+      { text: "aiagent.kubesynapse.ai/incident-triage created", color: "string", type: "output" },
+      { text: "", type: "blank" },
+      { text: "kubectl apply -f workflow.yaml", color: "command", prefix: "$", type: "input" },
+      { text: "agentworkflow.kubesynapse.ai/incident-response created", color: "string", type: "output" },
+      { text: "", type: "blank" },
+      { text: "kubectl get aiagents -n production", color: "command", prefix: "$", type: "input" },
+      { text: "NAME              RUNTIME    STATUS    AGE", color: "output", type: "output" },
+      { text: "incident-triage   opencode   Running   2m", color: "string", type: "output" },
+      { text: "log-analyzer      pi         Running   2m", color: "string", type: "output" },
+      { text: "", type: "blank" },
+      { text: "agentctl workflow trigger incident-response", color: "command", prefix: "$", type: "input" },
+      { text: "Workflow triggered: incident-response (run-4f2a)", color: "string", type: "output" },
+      { text: "Step [triage]: running...", color: "output", type: "output" },
+      { text: "Step [analyze-logs]: waiting on [triage]", color: "output", type: "output" },
+      { text: "Step [remediate]: pending approval", color: "flag", type: "output" },
+    ],
   };
 
   return (
-    <section id="workflows" className="bg-white px-6 py-24 md:py-32">
-      <div className="mx-auto max-w-7xl">
+    <section id="install" className="px-4 py-24 sm:px-6 md:py-32" ref={ref}>
+      <div className="mx-auto max-w-5xl">
         <motion.div
           initial="hidden"
-          whileInView="visible"
-          viewport={{ once: true, margin: "-80px" }}
+          animate={inView ? "visible" : "hidden"}
           variants={containerVariants}
-          className="mb-16 text-center"
+          className="mb-12 text-center"
         >
-          <motion.p variants={itemVariants} className="text-xs font-semibold uppercase tracking-widest text-blue-600">
-            Live Pipeline
+          <motion.p variants={itemVariants} className="text-xs font-semibold uppercase tracking-widest text-[oklch(0.708_0.101_188)]">
+            Quick Start
           </motion.p>
-          <motion.h2 variants={itemVariants} className="mt-3 text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl md:text-5xl">
-            Kubernetes Pipeline <span className="text-blue-600">in Motion</span>
+          <motion.h2 variants={itemVariants} className="mt-3 text-3xl font-bold tracking-tight text-[oklch(0.958_0.004_264)] sm:text-4xl md:text-5xl">
+            Deploy in <span className="text-[oklch(0.708_0.101_188)]">5 Minutes</span>
           </motion.h2>
-          <motion.p variants={itemVariants} className="mx-auto mt-4 max-w-2xl text-base text-slate-600">
-            Watch requests flow from ingress to runtime. Every node is a real Kubernetes resource
-            reconciled by the operator.
+          <motion.p variants={itemVariants} className="mx-auto mt-4 max-w-2xl text-base text-[oklch(0.82_0.01_264)]">
+            One Helm install gives you the full control plane. Then declare agents with YAML and manage them with kubectl.
           </motion.p>
         </motion.div>
 
+        {/* Tabbed Terminal */}
         <motion.div
-          variants={fadeIn}
+          variants={itemVariants}
           initial="hidden"
-          whileInView="visible"
-          viewport={{ once: true }}
-          className="relative overflow-hidden rounded-2xl border border-slate-200 bg-slate-50 p-6 shadow-sm md:p-10"
+          animate={inView ? "visible" : "hidden"}
+          className="overflow-hidden rounded-xl border border-[oklch(0.3_0.01_264)] bg-[oklch(0.12_0.006_264)] shadow-2xl shadow-black/40 ring-1 ring-[oklch(0.25_0.01_264)]"
         >
-          <svg
-            viewBox="0 0 900 300"
-            className="mx-auto h-auto w-full max-w-[900px]"
-            fill="none"
-            xmlns="http://www.w3.org/2000/svg"
-          >
-            <defs>
-              <linearGradient id="connGradient" x1="0%" y1="0%" x2="100%" y2="0%">
-                <stop offset="0%" stopColor="#3b82f6">
-                  <animate attributeName="stop-color" values="#3b82f6;#06b6d4;#3b82f6" dur="3s" repeatCount="indefinite" />
-                </stop>
-                <stop offset="100%" stopColor="#06b6d4">
-                  <animate attributeName="stop-color" values="#06b6d4;#3b82f6;#06b6d4" dur="3s" repeatCount="indefinite" />
-                </stop>
-              </linearGradient>
-              <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
-                <feGaussianBlur stdDeviation="3" result="blur" />
-                <feMerge>
-                  <feMergeNode in="blur" />
-                  <feMergeNode in="SourceGraphic" />
-                </feMerge>
-              </filter>
-            </defs>
-
-            {/* Connection Lines */}
-            {edges.map((edge) => {
-              const from = getNode(edge.from);
-              const to = getNode(edge.to);
-              const nw = 120;
-              const nh = 56;
-              const x1 = from.x + nw;
-              const y1 = from.y + nh / 2;
-              const x2 = to.x;
-              const y2 = to.y + nh / 2;
-              const mx = (x1 + x2) / 2;
-              const isPacketActive = packetEdge?.edgeId === edge.id;
-
+          {/* Tabs */}
+          <div className="flex border-b border-[oklch(0.25_0.01_264)] bg-[oklch(0.149_0.008_264)]">
+            {tabs.map((tab) => {
+              const Icon = tab.icon;
+              const isActive = activeTab === tab.key;
               return (
-                <g key={edge.id}>
-                  <path
-                    d={`M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`}
-                    stroke="#cbd5e1"
-                    strokeWidth={2}
-                    fill="none"
-                  />
-                  <motion.path
-                    d={`M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`}
-                    stroke="url(#connGradient)"
-                    strokeWidth={2.5}
-                    fill="none"
-                    strokeDasharray="8 5"
-                    initial={{ strokeDashoffset: 0 }}
-                    animate={{ strokeDashoffset: isPacketActive ? -26 : 0 }}
-                    transition={isPacketActive ? { duration: 0.8, repeat: Infinity, ease: "linear" } : {}}
-                    opacity={isPacketActive ? 1 : 0.6}
-                  />
-                </g>
+                <button
+                  key={tab.key}
+                  onClick={() => setActiveTab(tab.key)}
+                  className={`flex items-center gap-2 px-5 py-3 text-sm font-medium transition-all ${
+                    isActive
+                      ? "bg-[oklch(0.12_0.006_264)] text-[oklch(0.708_0.101_188)] border-t-2 border-t-[oklch(0.708_0.101_188)]"
+                      : "text-[oklch(0.62_0.01_264)] hover:text-[oklch(0.82_0.01_264)] hover:bg-[oklch(0.18_0.008_264)]"
+                  }`}
+                >
+                  <Icon className="h-4 w-4" />
+                  {tab.label}
+                </button>
               );
             })}
-
-            {/* Data Packet */}
-            {packetEdge && (
-              <PacketCircle path={getPathPoints(packetEdge.edgeId)} />
-            )}
-
-            {/* Nodes */}
-            {nodes.map((node) => {
-              const Icon = node.icon;
-              const isActive = activeIds.includes(node.id);
-              return (
-                <g key={node.id}>
-                  {/* Pulse ring */}
-                  {isActive && (
-                    <motion.rect
-                      x={node.x - 4}
-                      y={node.y - 4}
-                      width={128}
-                      height={64}
-                      rx={14}
-                      fill="none"
-                      stroke="#3b82f6"
-                      strokeWidth={2}
-                      initial={{ opacity: 0.6, scale: 1 }}
-                      animate={{ opacity: 0, scale: 1.15 }}
-                      transition={{ duration: 1.5, repeat: Infinity }}
-                      style={{ transformOrigin: `${node.x + 60}px ${node.y + 28}px` }}
-                    />
-                  )}
-                  {/* Node body */}
-                  <foreignObject x={node.x} y={node.y} width={120} height={56}>
-                    <motion.div
-                      className={`flex h-full w-full flex-col items-center justify-center rounded-xl border bg-white shadow-sm ${
-                        isActive ? "border-blue-400 shadow-blue-200" : "border-slate-200"
-                      }`}
-                      animate={
-                        isActive
-                          ? {
-                              boxShadow: [
-                                "0 0 0 0 rgba(59,130,246,0)",
-                                "0 0 20px 2px rgba(59,130,246,0.25)",
-                                "0 0 0 0 rgba(59,130,246,0)",
-                              ],
-                            }
-                          : {}
-                      }
-                      transition={{ duration: 2, repeat: Infinity }}
-                    >
-                      <div className="flex items-center gap-2">
-                        <Icon className={`h-4 w-4 ${isActive ? "text-blue-600" : "text-slate-500"}`} />
-                        <div className="flex flex-col">
-                          <span className="text-[11px] font-bold text-slate-900 leading-tight">{node.label}</span>
-                          <span className="text-[9px] text-slate-500 leading-tight">{node.sub}</span>
-                        </div>
-                      </div>
-                    </motion.div>
-                  </foreignObject>
-                  {/* Status dot */}
-                  <circle
-                    cx={node.x + 112}
-                    cy={node.y + 10}
-                    r={3}
-                    fill={isActive ? "#10b981" : "#cbd5e1"}
-                  >
-                    {isActive && (
-                      <animate attributeName="opacity" values="1;0.4;1" dur="2s" repeatCount="indefinite" />
-                    )}
-                  </circle>
-                </g>
-              );
-            })}
-          </svg>
-
-          {/* Status bar */}
-          <div className="mt-8 flex flex-wrap items-center justify-between gap-4 rounded-xl border border-slate-200 bg-white px-5 py-3.5 shadow-sm">
-            <div className="flex flex-wrap items-center gap-6 text-xs text-slate-600">
-              <span className="flex items-center gap-1.5">
-                <Timer className="h-3.5 w-3.5 text-blue-600" />
-                Reconcile: 1.2s
-              </span>
-              <span className="flex items-center gap-1.5">
-                <Bot className="h-3.5 w-3.5 text-blue-600" />
-                3 agents active
-              </span>
-              <span className="flex items-center gap-1.5">
-                <Shield className="h-3.5 w-3.5 text-amber-500" />
-                1 approval gate
-              </span>
-            </div>
-            <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-3 py-1 text-[11px] font-semibold text-emerald-700 ring-1 ring-emerald-200">
-              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
-              Pipeline Healthy
-            </span>
+            <div className="flex-1" />
+            <button
+              onClick={() => {
+                const text = tabLines[activeTab].map((l) => `${l.prefix ? l.prefix + " " : ""}${l.text}`).join("\n");
+                navigator.clipboard.writeText(text).catch(() => {});
+              }}
+              className="px-4 py-3 text-[oklch(0.4_0.01_264)] hover:text-[oklch(0.82_0.01_264)] transition-colors"
+              title="Copy to clipboard"
+            >
+              <Copy className="h-4 w-4" />
+            </button>
           </div>
+
+          {/* Terminal Content */}
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={activeTab}
+              className="p-5 font-mono text-[13px] leading-6"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.2 }}
+            >
+              {tabLines[activeTab].map((line, i) => (
+                <motion.div
+                  key={i}
+                  initial={{ opacity: 0, x: -8 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ delay: i * 0.04, duration: 0.25 }}
+                  className="min-h-[1.5rem]"
+                >
+                  {line.text === "" ? (
+                    <span>&nbsp;</span>
+                  ) : (
+                    <span className={`whitespace-pre ${colorMap[line.color || "output"] || "text-[oklch(0.82_0.01_264)]"}`}>
+                      {line.prefix && (
+                        <span className="select-none text-[oklch(0.76_0.16_154/0.8)]">{line.prefix} </span>
+                      )}
+                      {line.text}
+                    </span>
+                  )}
+                </motion.div>
+              ))}
+            </motion.div>
+          </AnimatePresence>
+        </motion.div>
+
+        {/* Feature pills */}
+        <motion.div
+          variants={itemVariants}
+          initial="hidden"
+          animate={inView ? "visible" : "hidden"}
+          className="mt-8 flex flex-wrap justify-center gap-3"
+        >
+          {["Helm OCI", "CRDs", "kubectl", "agentctl CLI", "A2A JSON-RPC", "SSE Streaming"].map((item) => (
+            <span
+              key={item}
+              className="rounded-full border border-[oklch(0.3_0.01_264)] bg-[oklch(0.206_0.009_264/0.6)] px-4 py-1.5 text-xs font-medium text-[oklch(0.82_0.01_264)]"
+            >
+              {item}
+            </span>
+          ))}
         </motion.div>
       </div>
     </section>
   );
 }
 
-function PacketCircle({ path }: { path: { x: number; y: number }[] }) {
-  return (
-    <motion.circle
-      r={5}
-      fill="#06b6d4"
-      filter="url(#glow)"
-      initial={{ cx: path[0].x, cy: path[0].y, opacity: 0 }}
-      animate={{
-        cx: path.map((p) => p.x),
-        cy: path.map((p) => p.y),
-        opacity: [0, 1, 1, 0],
-      }}
-      transition={{ duration: 1.4, ease: "easeInOut" }}
-    />
-  );
-}
-
-// ─── Architecture Preview ───
+// ─── Architecture Section ───
 
 function ArchitectureSection() {
   const ref = useRef(null);
   const inView = useInView(ref, { once: true, margin: "-80px" });
 
   const components = [
-    { label: "Control Plane", items: ["Kubernetes API", "Operator (Kopf)", "API Gateway", "CRDs v1alpha1"] },
-    { label: "Execution Plane", items: ["OpenCode Runtime", "MCP Sidecars", "Worker Jobs", "StatefulSets"] },
-    { label: "Shared Services", items: ["LiteLLM Proxy", "Qdrant", "Redis", "PostgreSQL", "NATS"] },
+    { label: "Control Plane", items: ["Kubernetes API Server", "Operator (Kopf)", "API Gateway (FastAPI)", "CRDs v1alpha1 (6 types)"] },
+    { label: "Execution Plane", items: ["OpenCode Runtime (STS)", "Pi Runtime (STS)", "MCP Sidecars (11)", "Worker Jobs"] },
+    { label: "Shared Services", items: ["LiteLLM (Model Router)", "PostgreSQL", "Redis", "NATS", "Qdrant"] },
   ];
 
   return (
-    <section id="architecture" className="bg-slate-50 px-6 py-24 md:py-32" ref={ref}>
+    <section id="architecture" className="border-y border-[oklch(0.3_0.01_264)] bg-[oklch(0.149_0.008_264/0.5)] px-6 py-24 md:py-32" ref={ref}>
       <div className="mx-auto max-w-7xl">
         <motion.div
           initial="hidden"
@@ -1200,15 +1437,15 @@ function ArchitectureSection() {
           variants={containerVariants}
           className="mb-16 text-center"
         >
-          <motion.p variants={itemVariants} className="text-xs font-semibold uppercase tracking-widest text-blue-600">
+          <motion.p variants={itemVariants} className="text-xs font-semibold uppercase tracking-widest text-[oklch(0.708_0.101_188)]">
             Architecture
           </motion.p>
-          <motion.h2 variants={itemVariants} className="mt-3 text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl md:text-5xl">
-            Built for <span className="text-blue-600">Production</span>
+          <motion.h2 variants={itemVariants} className="mt-3 text-3xl font-bold tracking-tight text-[oklch(0.958_0.004_264)] sm:text-4xl md:text-5xl">
+            Built for <span className="text-[oklch(0.708_0.101_188)]">Production</span>
           </motion.h2>
-          <motion.p variants={itemVariants} className="mx-auto mt-4 max-w-2xl text-base text-slate-600">
+          <motion.p variants={itemVariants} className="mx-auto mt-4 max-w-2xl text-base text-[oklch(0.82_0.01_264)]">
             Separation of control plane and execution plane. Every agent is an isolated StatefulSet
-            with its own persistent volume and policy envelope.
+            with its own persistent volume, network policy, and governance envelope.
           </motion.p>
         </motion.div>
 
@@ -1220,16 +1457,16 @@ function ArchitectureSection() {
               initial="hidden"
               animate={inView ? "visible" : "hidden"}
               transition={{ delay: i * 0.1 }}
-              className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm"
+              className="rounded-2xl border border-[oklch(0.3_0.01_264)] bg-[oklch(0.206_0.009_264/0.5)] p-6 backdrop-blur-sm"
             >
-              <h3 className="mb-4 text-sm font-bold uppercase tracking-wider text-slate-500">{col.label}</h3>
+              <h3 className="mb-4 text-sm font-bold uppercase tracking-wider text-[oklch(0.62_0.01_264)]">{col.label}</h3>
               <div className="space-y-3">
                 {col.items.map((item) => (
                   <div
                     key={item}
-                    className="flex items-center gap-3 rounded-lg border border-slate-100 bg-slate-50 px-4 py-3 text-sm font-medium text-slate-700"
+                    className="flex items-center gap-3 rounded-lg border border-[oklch(0.3_0.01_264/0.5)] bg-[oklch(0.164_0.007_264/0.8)] px-4 py-3 text-sm font-medium text-[oklch(0.85_0.01_264)]"
                   >
-                    <CheckCircle2 className="h-4 w-4 flex-shrink-0 text-blue-600" />
+                    <CheckCircle2 className="h-4 w-4 flex-shrink-0 text-[oklch(0.708_0.101_188)]" />
                     {item}
                   </div>
                 ))}
@@ -1242,35 +1479,25 @@ function ArchitectureSection() {
   );
 }
 
-// ─── Testimonials ───
+// ─── Documentation Section ───
 
-function TestimonialsSection() {
-  const quotes = [
-    {
-      quote:
-        "kubesynapse finally let us treat AI agents like any other Kubernetes workload. CRDs, Helm, kubectl — it fits into our existing GitOps pipeline without friction.",
-      role: "Platform Engineer",
-      org: "Fortune 500 Infrastructure Team",
-    },
-    {
-      quote:
-        "The policy engine is a game changer. We can enforce token budgets and tool guardrails at the cluster level. No more worrying about runaway agent spend.",
-      role: "SRE Lead",
-      org: "Cloud-Native SaaS Startup",
-    },
-    {
-      quote:
-        "Running agents as StatefulSets with persistent memory means our incident-response bot actually remembers previous outages. The checkpoint recovery is rock solid.",
-      role: "Kubernetes Contributor",
-      org: "Open Source Community",
-    },
-  ];
-
+function DocsSection() {
   const ref = useRef(null);
   const inView = useInView(ref, { once: true, margin: "-80px" });
 
+  const docs = [
+    { icon: BookOpen, title: "Getting Started", description: "5-minute tutorial from install to your first agent", href: "#install" },
+    { icon: Layers, title: "Architecture Guide", description: "Control plane, execution plane, and data flow diagrams", href: "#architecture" },
+    { icon: Code, title: "API Reference", description: "OpenAPI schema, REST endpoints, SSE streaming, A2A protocol", href: "#" },
+    { icon: Boxes, title: "Helm Chart Docs", description: "Values reference, production examples, upgrade guides", href: "#" },
+    { icon: Terminal, title: "CLI Reference", description: "agentctl commands for agent, workflow, and eval management", href: "#" },
+    { icon: FolderTree, title: "CRD Schema", description: "AIAgent, AgentWorkflow, AgentPolicy, AgentTenant specifications", href: "#" },
+    { icon: Shield, title: "Security Guide", description: "Network policies, RBAC, secret management, auth flows", href: "#" },
+    { icon: GitBranch, title: "Contributing", description: "Development setup, PR process, coding standards", href: "https://github.com/ykbytes/kubesynapse.ai/blob/main/CONTRIBUTING.md" },
+  ];
+
   return (
-    <section className="bg-white px-6 py-24 md:py-32" ref={ref}>
+    <section id="docs" className="px-6 py-24 md:py-32" ref={ref}>
       <div className="mx-auto max-w-7xl">
         <motion.div
           initial="hidden"
@@ -1278,130 +1505,120 @@ function TestimonialsSection() {
           variants={containerVariants}
           className="mb-16 text-center"
         >
-          <motion.p variants={itemVariants} className="text-xs font-semibold uppercase tracking-widest text-blue-600">
-            Community
+          <motion.p variants={itemVariants} className="text-xs font-semibold uppercase tracking-widest text-[oklch(0.708_0.101_188)]">
+            Documentation
           </motion.p>
-          <motion.h2 variants={itemVariants} className="mt-3 text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl md:text-5xl">
-            Trusted by <span className="text-blue-600">Operators</span>
+          <motion.h2 variants={itemVariants} className="mt-3 text-3xl font-bold tracking-tight text-[oklch(0.958_0.004_264)] sm:text-4xl md:text-5xl">
+            Everything You Need to <span className="text-[oklch(0.708_0.101_188)]">Get Started</span>
           </motion.h2>
+          <motion.p variants={itemVariants} className="mx-auto mt-4 max-w-2xl text-base text-[oklch(0.82_0.01_264)]">
+            Comprehensive documentation for operators, developers, and contributors.
+          </motion.p>
         </motion.div>
 
-        <div className="grid gap-6 md:grid-cols-3">
-          {quotes.map((q, i) => (
-            <motion.div
-              key={i}
-              variants={itemVariants}
-              initial="hidden"
-              animate={inView ? "visible" : "hidden"}
-              transition={{ delay: i * 0.1 }}
-              className="relative rounded-2xl border border-slate-200 bg-white p-7 shadow-sm"
-            >
-              <div className="mb-4 text-blue-600">
-                <MessageSquare className="h-6 w-6" />
-              </div>
-              <p className="text-sm leading-relaxed text-slate-700">&ldquo;{q.quote}&rdquo;</p>
-              <div className="mt-6 border-t border-slate-100 pt-4">
-                <p className="text-sm font-semibold text-slate-900">{q.role}</p>
-                <p className="text-xs text-slate-500">{q.org}</p>
-              </div>
-            </motion.div>
-          ))}
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {docs.map((doc, i) => {
+            const Icon = doc.icon;
+            return (
+              <motion.a
+                key={doc.title}
+                href={doc.href}
+                variants={itemVariants}
+                initial="hidden"
+                animate={inView ? "visible" : "hidden"}
+                transition={{ delay: i * 0.06 }}
+                className="group rounded-xl border border-[oklch(0.3_0.01_264)] bg-[oklch(0.206_0.009_264/0.4)] p-5 backdrop-blur-sm transition-all hover:border-[oklch(0.708_0.101_188/0.3)] hover:shadow-md hover:shadow-[oklch(0.708_0.101_188/0.05)] hover:-translate-y-0.5"
+              >
+                <Icon className="mb-3 h-5 w-5 text-[oklch(0.708_0.101_188)]" />
+                <h3 className="text-sm font-semibold text-[oklch(0.958_0.004_264)] group-hover:text-[oklch(0.708_0.101_188)] transition-colors">
+                  {doc.title}
+                </h3>
+                <p className="mt-1.5 text-xs leading-relaxed text-[oklch(0.72_0.01_264)]">{doc.description}</p>
+                <ChevronRight className="mt-3 h-4 w-4 text-[oklch(0.4_0.01_264)] transition-all group-hover:text-[oklch(0.708_0.101_188)] group-hover:translate-x-1" />
+              </motion.a>
+            );
+          })}
         </div>
       </div>
     </section>
   );
 }
 
-// ─── Comparison Matrix ───
+// ─── Why KubeSynapse (replaces comparison matrix) ───
 
-function ComparisonStrip() {
+function WhySection() {
   const ref = useRef(null);
-  const inView = useInView(ref, { once: true, margin: "-40px" });
+  const inView = useInView(ref, { once: true, margin: "-80px" });
 
-  const columns = ["kubesynapse", "LangChain", "CrewAI", "Kubiya"];
-  const rows = [
-    { label: "Kubernetes Native", kubesynapse: "✅", langchain: "❌", crewai: "❌", kubiya: "⚠️" },
-    { label: "Self-Hosted (Helm)", kubesynapse: "✅", langchain: "❌", crewai: "❌", kubiya: "❌ SaaS" },
-    { label: "CRD Governance", kubesynapse: "✅", langchain: "❌", crewai: "❌", kubiya: "❌" },
-    { label: "A2A Protocol", kubesynapse: "✅ JSON-RPC/SSE", langchain: "❌", crewai: "❌", kubiya: "⚠️ REST" },
-    { label: "MCP Tool Ecosystem", kubesynapse: "✅ 11 sidecars", langchain: "✅ Tools", crewai: "✅ Tools", kubiya: "⚠️ Built-in" },
-    { label: "HITL Approval Gates", kubesynapse: "✅ CRD", langchain: "⚠️ Manual", crewai: "⚠️ Manual", kubiya: "✅" },
-    { label: "Token Budget Enforcement", kubesynapse: "✅ CRD", langchain: "❌ LangSmith $", crewai: "❌", kubiya: "✅" },
-    { label: "Multi-Tenancy", kubesynapse: "✅ Namespaces", langchain: "❌", crewai: "❌", kubiya: "⚠️ Org-based" },
-    { label: "Stateful Agents (PVC)", kubesynapse: "✅ StatefulSet", langchain: "❌", crewai: "❌", kubiya: "❌" },
-    { label: "Workflow DAG Engine", kubesynapse: "✅ CRD", langchain: "✅ LCEL", crewai: "✅ Process", kubiya: "✅" },
-    { label: "Built-in Auth", kubesynapse: "✅ OIDC + Token", langchain: "❌", crewai: "❌", kubiya: "✅ SaaS" },
-    { label: "Open Source (Apache 2)", kubesynapse: "✅", langchain: "✅ MIT", crewai: "✅ MIT", kubiya: "❌ Proprietary" },
+  const reasons = [
+    {
+      icon: Server,
+      title: "Kubernetes-Native by Design",
+      description: "Agents are CRDs, not Python objects. Managed by a Kopf operator with full lifecycle — create, reconcile, scale, and delete with kubectl.",
+    },
+    {
+      icon: Lock,
+      title: "Self-Hosted, Zero Telemetry",
+      description: "Your cluster, your data. Deploy via Helm OCI in your own namespace with no external dependencies or phone-home behavior.",
+    },
+    {
+      icon: Shield,
+      title: "Governed from Day One",
+      description: "Token budgets, approval gates, tool whitelists, PII masking, and audit trails enforced by AgentPolicy CRDs — not bolted on later.",
+    },
+    {
+      icon: Layers,
+      title: "Stateful Agents with PVCs",
+      description: "Every agent gets its own StatefulSet, PersistentVolumeClaim, and network policy. Memory, workspace files, and context survive restarts.",
+    },
   ];
 
-  const cellStyle = (text: string) => {
-    if (text.startsWith("✅")) return "text-emerald-400";
-    if (text.startsWith("❌")) return "text-slate-500";
-    return "text-amber-400";
-  };
-
   return (
-    <section className="bg-slate-900 px-4 py-24 md:py-32" ref={ref}>
-      <div className="mx-auto max-w-6xl">
+    <section className="border-y border-[oklch(0.3_0.01_264)] bg-[oklch(0.149_0.008_264/0.5)] px-6 py-24 md:py-32" ref={ref}>
+      <div className="mx-auto max-w-7xl">
         <motion.div
           initial="hidden"
           animate={inView ? "visible" : "hidden"}
           variants={containerVariants}
-          className="mb-12 text-center"
+          className="mb-16 text-center"
         >
-          <motion.p variants={itemVariants} className="text-xs font-semibold uppercase tracking-widest text-blue-400">
-            Comparison Matrix
+          <motion.p variants={itemVariants} className="text-xs font-semibold uppercase tracking-widest text-[oklch(0.708_0.101_188)]">
+            Why KubeSynapse
           </motion.p>
-          <motion.h2 variants={itemVariants} className="mt-3 text-3xl font-bold tracking-tight text-white sm:text-4xl">
-            kubesynapse vs The Alternatives
+          <motion.h2 variants={itemVariants} className="mt-3 text-3xl font-bold tracking-tight text-[oklch(0.958_0.004_264)] sm:text-4xl md:text-5xl">
+            Purpose-Built for{" "}
+            <span className="bg-gradient-to-r from-[oklch(0.708_0.101_188)] to-[oklch(0.742_0.132_233)] bg-clip-text text-transparent">
+              Production
+            </span>
           </motion.h2>
-          <motion.p variants={itemVariants} className="mx-auto mt-4 max-w-xl text-sm text-slate-400">
-            kubesynapse is the only platform purpose-built for production Kubernetes — not a Python library with a K8s deployment guide.
+          <motion.p variants={itemVariants} className="mx-auto mt-4 max-w-xl text-base text-[oklch(0.82_0.01_264)]">
+            Not a Python library with a deployment guide. A complete AI operations platform designed from day one for Kubernetes operators.
           </motion.p>
         </motion.div>
 
-        <motion.div
-          variants={fadeIn}
-          initial="hidden"
-          animate={inView ? "visible" : "hidden"}
-          className="overflow-x-auto rounded-2xl border border-slate-700 bg-slate-800/50"
-        >
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-slate-700">
-                <th className="px-4 py-4 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">Capability</th>
-                {columns.map((col) => (
-                  <th key={col} className={`px-4 py-4 text-center text-xs font-bold uppercase tracking-wider ${col === "kubesynapse" ? "text-blue-400" : "text-slate-500"}`}>
-                    {col}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row, i) => (
-                <tr key={row.label} className={i < rows.length - 1 ? "border-b border-slate-700/50" : ""}>
-                  <td className="px-4 py-3.5 text-slate-300 font-medium">{row.label}</td>
-                  <td className={`px-4 py-3.5 text-center font-medium ${cellStyle(row.kubesynapse)}`}>
-                    {row.kubesynapse}
-                  </td>
-                  <td className={`px-4 py-3.5 text-center ${cellStyle(row.langchain)}`}>
-                    {row.langchain}
-                  </td>
-                  <td className={`px-4 py-3.5 text-center ${cellStyle(row.crewai)}`}>
-                    {row.crewai}
-                  </td>
-                  <td className={`px-4 py-3.5 text-center ${cellStyle(row.kubiya)}`}>
-                    {row.kubiya}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </motion.div>
-
-        <p className="mt-6 text-center text-xs text-slate-500">
-          ✅ = Native support &nbsp;|&nbsp; ⚠️ = Partial / requires setup &nbsp;|&nbsp; ❌ = Not available
-        </p>
+        <div className="grid gap-6 md:grid-cols-2">
+          {reasons.map((reason, i) => {
+            const Icon = reason.icon;
+            return (
+              <motion.div
+                key={reason.title}
+                variants={itemVariants}
+                initial="hidden"
+                animate={inView ? "visible" : "hidden"}
+                transition={{ delay: i * 0.1 }}
+                className="group flex gap-5 rounded-2xl border border-[oklch(0.3_0.01_264)] bg-[oklch(0.206_0.009_264/0.5)] p-7 backdrop-blur-sm transition-all hover:border-[oklch(0.708_0.101_188/0.3)] hover:shadow-lg hover:shadow-[oklch(0.708_0.101_188/0.05)]"
+              >
+                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-[oklch(0.708_0.101_188/0.1)] text-[oklch(0.708_0.101_188)] ring-1 ring-[oklch(0.708_0.101_188/0.2)] transition-colors group-hover:bg-[oklch(0.708_0.101_188/0.15)]">
+                  <Icon className="h-6 w-6" />
+                </div>
+                <div>
+                  <h3 className="text-base font-semibold text-[oklch(0.958_0.004_264)]">{reason.title}</h3>
+                  <p className="mt-2 text-sm leading-relaxed text-[oklch(0.82_0.01_264)]">{reason.description}</p>
+                </div>
+              </motion.div>
+            );
+          })}
+        </div>
       </div>
     </section>
   );
@@ -1409,42 +1626,60 @@ function ComparisonStrip() {
 
 // ─── Bottom CTA ───
 
-function BottomCTA({ onLogin }: { onLogin: () => void }) {
+function BottomCTA() {
   return (
-    <section className="bg-white px-6 py-24 md:py-32">
+    <section className="px-6 py-24 md:py-32">
       <div className="mx-auto max-w-4xl text-center">
         <motion.div
           initial={{ opacity: 0, scale: 0.95 }}
           whileInView={{ opacity: 1, scale: 1 }}
           viewport={{ once: true }}
           transition={{ duration: 0.6 }}
-          className="rounded-3xl border border-slate-200 bg-slate-50 p-10 md:p-16 shadow-sm"
+          className="rounded-3xl border border-[oklch(0.3_0.01_264)] bg-[oklch(0.206_0.009_264/0.5)] p-10 shadow-2xl shadow-[oklch(0.708_0.101_188/0.05)] backdrop-blur-sm md:p-16"
         >
-          <div className="mx-auto mb-6 flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-600 text-white shadow-lg shadow-blue-600/20">
-            <Workflow className="h-7 w-7" />
+          <div className="mx-auto mb-6 flex h-14 w-14 items-center justify-center rounded-2xl bg-[oklch(0.708_0.101_188)] text-[oklch(0.158_0.007_264)] shadow-lg shadow-[oklch(0.708_0.101_188/0.3)]">
+            <Cpu className="h-7 w-7" />
           </div>
-          <h2 className="text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl md:text-5xl">
-            Ready to <span className="text-blue-600">Orchestrate</span>?
+          <h2 className="text-3xl font-bold tracking-tight text-[oklch(0.958_0.004_264)] sm:text-4xl md:text-5xl">
+            Ready to <span className="text-[oklch(0.708_0.101_188)]">Automate</span>?
           </h2>
-          <p className="mx-auto mt-4 max-w-xl text-base text-slate-600">
-            Initialize your workspace and deploy your first agent in minutes.
-            Start with incident triage, compliance auditing, or bring your own workflow.
+          <p className="mx-auto mt-4 max-w-xl text-base text-[oklch(0.82_0.01_264)]">
+            Deploy KubeSynapse on your cluster and let AI agents handle incident response,
+            infrastructure automation, and operational intelligence.
           </p>
-          <div className="mt-10 flex flex-col items-center gap-4 sm:flex-row sm:justify-center">
-            <button
-              onClick={onLogin}
-              className="group flex items-center gap-2 rounded-xl bg-slate-900 px-8 py-3.5 text-sm font-semibold text-white shadow-lg transition-all hover:bg-slate-800 hover:shadow-xl active:scale-[0.98]"
-            >
-              Get Started Free
-              <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
-            </button>
+
+          {/* Inline install command */}
+          <div className="mx-auto mt-8 max-w-lg overflow-hidden rounded-lg border border-[oklch(0.3_0.01_264)] bg-[oklch(0.12_0.006_264)]">
+            <div className="flex items-center justify-between px-4 py-2.5">
+              <code className="text-xs text-[oklch(0.75_0.12_188)]">
+                <span className="text-[oklch(0.76_0.16_154/0.8)]">$ </span>
+                helm install kubesynapse oci://docker.io/kubesynapse/charts/kubesynapse
+              </code>
+              <button
+                onClick={() => navigator.clipboard.writeText("helm install kubesynapse oci://docker.io/kubesynapse/charts/kubesynapse --namespace kubesynapse --create-namespace").catch(() => {})}
+                className="ml-2 text-[oklch(0.4_0.01_264)] hover:text-[oklch(0.82_0.01_264)] transition-colors"
+                title="Copy"
+              >
+                <Copy className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </div>
+
+          <div className="mt-8 flex flex-col items-center gap-4 sm:flex-row sm:justify-center">
             <a
-              href="https://github.com/kubesynapse/kubesynapse"
+              href="#install"
+              className="group flex items-center gap-2 rounded-xl bg-[oklch(0.708_0.101_188)] px-8 py-3.5 text-sm font-semibold text-[oklch(0.158_0.007_264)] shadow-lg shadow-[oklch(0.708_0.101_188/0.3)] transition-all hover:shadow-xl active:scale-[0.98]"
+            >
+              Deploy Now
+              <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
+            </a>
+            <a
+              href="https://github.com/ykbytes/kubesynapse.ai"
               target="_blank"
               rel="noopener noreferrer"
-              className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-8 py-3.5 text-sm font-semibold text-slate-700 shadow-sm transition-all hover:bg-slate-50 hover:border-slate-300"
+              className="flex items-center gap-2 rounded-xl border border-[oklch(0.4_0.015_264)] bg-[oklch(0.206_0.009_264/0.8)] px-8 py-3.5 text-sm font-semibold text-[oklch(0.85_0.01_264)] shadow-sm transition-all hover:border-[oklch(0.708_0.101_188/0.4)] hover:text-[oklch(0.958_0.004_264)]"
             >
-              <GitBranch className="h-4 w-4 text-blue-600" />
+              <GitBranch className="h-4 w-4 text-[oklch(0.708_0.101_188)]" />
               View on GitHub
             </a>
           </div>
@@ -1458,58 +1693,57 @@ function BottomCTA({ onLogin }: { onLogin: () => void }) {
 
 function Footer() {
   return (
-    <footer className="border-t border-slate-200 bg-white px-6 py-14">
+    <footer className="border-t border-[oklch(0.3_0.01_264)] px-6 py-14">
       <div className="mx-auto max-w-7xl">
         <div className="grid gap-10 sm:grid-cols-2 lg:grid-cols-4">
           <div className="sm:col-span-2 lg:col-span-1">
             <div className="flex items-center gap-2">
-              <LayoutPanelTop className="h-5 w-5 text-blue-600" />
-              <span className="text-sm font-bold text-slate-900">{BRAND.name}</span>
+              <LayoutPanelTop className="h-5 w-5 text-[oklch(0.708_0.101_188)]" />
+              <span className="text-sm font-bold text-[oklch(0.958_0.004_264)]">{BRAND.name}</span>
             </div>
-            <p className="mt-3 max-w-[260px] text-xs leading-relaxed text-slate-500">
-              Kubernetes-native AI agent orchestration with durable memory, governance,
-              and enterprise workflow automation. Open source under Apache 2.0.
+            <p className="mt-3 max-w-[260px] text-xs leading-relaxed text-[oklch(0.68_0.01_264)]">
+              The AI-powered command center for Kubernetes operations.
+              Self-hosted, open source under Apache 2.0.
             </p>
           </div>
 
           <div>
-            <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400">Product</h4>
-            <ul className="mt-4 space-y-2.5 text-sm text-slate-600">
-              <li><a href="#features" className="transition-colors hover:text-slate-900">Features</a></li>
-              <li><a href="#architecture" className="transition-colors hover:text-slate-900">Architecture</a></li>
-              <li><a href="#workflows" className="transition-colors hover:text-slate-900">Workflows</a></li>
-              <li><a href="#install" className="transition-colors hover:text-slate-900">Quick Start</a></li>
+            <h4 className="text-xs font-bold uppercase tracking-wider text-[oklch(0.62_0.01_264)]">Platform</h4>
+            <ul className="mt-4 space-y-2.5 text-sm text-[oklch(0.78_0.01_264)]">
+              <li><a href="#features" className="transition-colors hover:text-[oklch(0.708_0.101_188)]">Features</a></li>
+              <li><a href="#architecture" className="transition-colors hover:text-[oklch(0.708_0.101_188)]">Architecture</a></li>
+              <li><a href="#install" className="transition-colors hover:text-[oklch(0.708_0.101_188)]">Quick Start</a></li>
+              <li><a href="#docs" className="transition-colors hover:text-[oklch(0.708_0.101_188)]">Documentation</a></li>
             </ul>
           </div>
 
           <div>
-            <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400">Resources</h4>
-            <ul className="mt-4 space-y-2.5 text-sm text-slate-600">
-              <li><a href="#" className="transition-colors hover:text-slate-900">Documentation</a></li>
-              <li><a href="https://github.com/kubesynapse/kubesynapse" target="_blank" rel="noopener noreferrer" className="transition-colors hover:text-slate-900">GitHub</a></li>
-              <li><a href="#" className="transition-colors hover:text-slate-900">Changelog</a></li>
-              <li><a href="#" className="transition-colors hover:text-slate-900">Helm Charts</a></li>
+            <h4 className="text-xs font-bold uppercase tracking-wider text-[oklch(0.62_0.01_264)]">Resources</h4>
+            <ul className="mt-4 space-y-2.5 text-sm text-[oklch(0.78_0.01_264)]">
+              <li><a href="https://github.com/ykbytes/kubesynapse.ai" target="_blank" rel="noopener noreferrer" className="transition-colors hover:text-[oklch(0.708_0.101_188)]">GitHub</a></li>
+              <li><a href="https://github.com/ykbytes/kubesynapse.ai/blob/main/CHANGELOG.md" target="_blank" rel="noopener noreferrer" className="transition-colors hover:text-[oklch(0.708_0.101_188)]">Changelog</a></li>
+              <li><a href="https://github.com/ykbytes/kubesynapse.ai/tree/main/charts/kubesynapse" target="_blank" rel="noopener noreferrer" className="transition-colors hover:text-[oklch(0.708_0.101_188)]">Helm Charts</a></li>
+              <li><a href="https://github.com/ykbytes/kubesynapse.ai/blob/main/LICENSE" target="_blank" rel="noopener noreferrer" className="transition-colors hover:text-[oklch(0.708_0.101_188)]">License</a></li>
             </ul>
           </div>
 
           <div>
-            <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400">Community</h4>
-            <ul className="mt-4 space-y-2.5 text-sm text-slate-600">
-              <li><a href="#" className="transition-colors hover:text-slate-900">Contributing</a></li>
-              <li><a href="#" className="transition-colors hover:text-slate-900">Security</a></li>
-              <li><a href="#" className="transition-colors hover:text-slate-900">License</a></li>
-              <li><a href="#" className="transition-colors hover:text-slate-900">Status</a></li>
+            <h4 className="text-xs font-bold uppercase tracking-wider text-[oklch(0.62_0.01_264)]">Community</h4>
+            <ul className="mt-4 space-y-2.5 text-sm text-[oklch(0.78_0.01_264)]">
+              <li><a href="https://github.com/ykbytes/kubesynapse.ai/blob/main/CONTRIBUTING.md" target="_blank" rel="noopener noreferrer" className="transition-colors hover:text-[oklch(0.708_0.101_188)]">Contributing</a></li>
+              <li><a href="https://github.com/ykbytes/kubesynapse.ai/security" target="_blank" rel="noopener noreferrer" className="transition-colors hover:text-[oklch(0.708_0.101_188)]">Security</a></li>
+              <li><a href="https://github.com/ykbytes/kubesynapse.ai/issues" target="_blank" rel="noopener noreferrer" className="transition-colors hover:text-[oklch(0.708_0.101_188)]">Issue Tracker</a></li>
+              <li><a href="mailto:team@kubesynapse.ai" className="transition-colors hover:text-[oklch(0.708_0.101_188)]">Contact</a></li>
             </ul>
           </div>
         </div>
 
-        <div className="mt-12 flex flex-col items-center justify-between gap-4 border-t border-slate-100 pt-8 sm:flex-row">
-          <p className="text-xs text-slate-500">
+        <div className="mt-12 flex flex-col items-center justify-between gap-4 border-t border-[oklch(0.25_0.01_264)] pt-8 sm:flex-row">
+          <p className="text-xs text-[oklch(0.58_0.01_264)]">
             &copy; {new Date().getFullYear()} {BRAND.name}. Open source under Apache 2.0.
           </p>
-          <div className="flex items-center gap-6 text-xs text-slate-500">
-            <a href="#" className="transition-colors hover:text-slate-900">Privacy</a>
-            <a href="#" className="transition-colors hover:text-slate-900">Terms</a>
+          <div className="flex items-center gap-4 text-xs text-[oklch(0.58_0.01_264)]">
+            <span>Self-hosted &middot; No telemetry &middot; Your cluster, your data</span>
           </div>
         </div>
       </div>
@@ -1520,43 +1754,66 @@ function Footer() {
 // ─── Main LandingPage ───
 
 export function LandingPage({ onLogin }: LandingPageProps) {
-  const [darkMode, setDarkMode] = useState(() => {
-    if (typeof window !== "undefined") {
-      return window.matchMedia("(prefers-color-scheme: dark)").matches;
-    }
-    return false;
-  });
+  const [view, setView] = useState<"landing" | "docs" | "blog">("landing");
 
-  useEffect(() => {
-    const mq = window.matchMedia("(prefers-color-scheme: dark)");
-    const handler = (e: MediaQueryListEvent) => setDarkMode(e.matches);
-    mq.addEventListener("change", handler);
-    return () => mq.removeEventListener("change", handler);
-  }, []);
+  // Navigate to a landing-page section from any view
+  const handleSectionClick = useCallback((sectionId: string) => {
+    if (view !== "landing") {
+      setView("landing");
+      // Wait for landing page to render, then scroll
+      requestAnimationFrame(() => {
+        setTimeout(() => {
+          document.getElementById(sectionId)?.scrollIntoView({ behavior: "smooth" });
+        }, 80);
+      });
+    } else {
+      document.getElementById(sectionId)?.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [view]);
 
   return (
-    <div className={`min-h-screen transition-colors duration-300 ${darkMode ? "bg-slate-900 text-slate-100" : "bg-white text-slate-900"}`}>
+    <div className="min-h-screen bg-[oklch(0.164_0.007_264)] text-[oklch(0.958_0.004_264)] font-sans">
       <a
         href="#main-content"
-        className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-[100] focus:rounded-lg focus:bg-blue-600 focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:text-white"
+        className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-[100] focus:rounded-lg focus:bg-[oklch(0.708_0.101_188)] focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:text-[oklch(0.158_0.007_264)]"
       >
         Skip to main content
       </a>
-      <Navbar onLogin={onLogin} darkMode={darkMode} onToggleDark={() => setDarkMode((v) => !v)} />
-      <main id="main-content">
-        <HeroSection onLogin={onLogin} />
-        <EcosystemCloud />
-        <ProblemSection />
-        <InstallSection />
-        <FeaturesSection />
-        <HowItWorks />
-        <WorkflowAnimation />
-        <ArchitectureSection />
-        <TestimonialsSection />
-        <ComparisonStrip />
-        <BottomCTA onLogin={onLogin} />
-      </main>
-      <Footer />
+      <Navbar
+        onLogin={onLogin}
+        onOpenDocs={() => setView("docs")}
+        onOpenBlog={() => setView("blog")}
+        docsMode={view === "docs"}
+        blogMode={view === "blog"}
+        onBackToLanding={() => setView("landing")}
+        onSectionClick={handleSectionClick}
+      />
+      {view === "docs" ? (
+        <main id="main-content" className="h-[calc(100vh-4rem)]">
+          <DocumentationPanel />
+        </main>
+      ) : view === "blog" ? (
+        <main id="main-content" className="h-[calc(100vh-4rem)] overflow-y-auto">
+          <BlogPage onBack={() => setView("landing")} />
+        </main>
+      ) : (
+        <>
+          <main id="main-content">
+            <HeroSection onOpenDocs={() => setView("docs")} />
+            <EcosystemCloud />
+            <ProblemSection />
+            <UIPreviewSection />
+            <FeaturesSection />
+            <HowItWorks />
+            <InstallSection />
+            <ArchitectureSection />
+            <DocsSection />
+            <WhySection />
+            <BottomCTA />
+          </main>
+          <Footer />
+        </>
+      )}
     </div>
   );
 }

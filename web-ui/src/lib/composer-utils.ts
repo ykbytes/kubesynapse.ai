@@ -119,14 +119,28 @@ export function workflowToCanvas(
     const ex = s.execution as Record<string, unknown> | null | undefined;
     return ex?._composerX != null;
   });
-  if (!hasPositions) autoLayout(nodes, edges);
+  if (!hasPositions) {
+    autoLayout(nodes, edges);
+  }
+
+  // Detect direction from node positions (stored or auto-laid-out)
+  const detected = detectDirectionFromPositions(nodes);
+  setCurrentDirection(detected);
 
   return { nodes, edges };
 }
 
+/* ── Layout direction type ── */
+
+export type LayoutDirection = "vertical" | "horizontal";
+
 /* ── Simple topological auto-layout ── */
 
-export function autoLayout(nodes: ComposerNode[], edges: Edge[]): void {
+export function autoLayout(
+  nodes: ComposerNode[],
+  edges: Edge[],
+  direction: LayoutDirection = "vertical",
+): void {
   if (nodes.length === 0) return;
 
   const parentMap = new Map<string, string[]>();
@@ -170,13 +184,27 @@ export function autoLayout(nodes: ComposerNode[], edges: Edge[]): void {
   }
 
   const maxDepth = Math.max(...depthGroups.keys(), 0);
-  for (let d = 0; d <= maxDepth; d++) {
-    const group = depthGroups.get(d) ?? [];
-    const totalWidth = group.length * NODE_W + (group.length - 1) * GAP_X;
-    const startX = -totalWidth / 2 + NODE_W / 2;
-    group.forEach((node, i) => {
-      node.position = { x: startX + i * (NODE_W + GAP_X), y: d * (NODE_H + GAP_Y) };
-    });
+
+  if (direction === "horizontal") {
+    // Horizontal: depth progresses left→right (x), siblings stack vertically (y)
+    for (let d = 0; d <= maxDepth; d++) {
+      const group = depthGroups.get(d) ?? [];
+      const totalHeight = group.length * NODE_H + (group.length - 1) * GAP_X;
+      const startY = -totalHeight / 2 + NODE_H / 2;
+      group.forEach((node, i) => {
+        node.position = { x: d * (NODE_W + GAP_Y), y: startY + i * (NODE_H + GAP_X) };
+      });
+    }
+  } else {
+    // Vertical (default): depth progresses top→bottom (y), siblings spread horizontally (x)
+    for (let d = 0; d <= maxDepth; d++) {
+      const group = depthGroups.get(d) ?? [];
+      const totalWidth = group.length * NODE_W + (group.length - 1) * GAP_X;
+      const startX = -totalWidth / 2 + NODE_W / 2;
+      group.forEach((node, i) => {
+        node.position = { x: startX + i * (NODE_W + GAP_X), y: d * (NODE_H + GAP_Y) };
+      });
+    }
   }
 }
 
@@ -280,4 +308,41 @@ const RUNTIME_COLORS: Record<string, string> = {
 export function runtimeAccentClass(kind?: string | null): string {
   if (!kind) return "border-l-muted-foreground/40";
   return RUNTIME_COLORS[kind] ?? "border-l-primary/60";
+}
+
+/* ── Shared layout direction for nodes to read ── */
+
+let _currentDirection: LayoutDirection = "vertical";
+
+export function setCurrentDirection(d: LayoutDirection): void {
+  _currentDirection = d;
+}
+
+export function getCurrentDirection(): LayoutDirection {
+  return _currentDirection;
+}
+
+/* ── Detect layout direction from node positions ── */
+
+export function detectDirectionFromPositions(nodes: ComposerNode[]): LayoutDirection {
+  if (nodes.length < 2) return _currentDirection;
+
+  // Compute bounding box of all nodes
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const n of nodes) {
+    if (n.position.x < minX) minX = n.position.x;
+    if (n.position.x > maxX) maxX = n.position.x;
+    if (n.position.y < minY) minY = n.position.y;
+    if (n.position.y > maxY) maxY = n.position.y;
+  }
+
+  const spanX = maxX - minX;
+  const spanY = maxY - minY;
+
+  // If horizontal span is significantly larger, it's a horizontal layout
+  if (spanX > spanY * 1.5) return "horizontal";
+  if (spanY > spanX * 1.5) return "vertical";
+
+  // Default to vertical when ambiguous
+  return "vertical";
 }

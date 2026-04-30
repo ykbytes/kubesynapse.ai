@@ -24,12 +24,15 @@ import { decideApproval } from "@/lib/api";
 import {
   type ComposerNode,
   type AgentStepNodeData,
+  type LayoutDirection,
   TRIGGER_NODE_ID,
   workflowToCanvas,
   canvasToPayload,
   autoLayout,
   makeStepId,
   hasCycle,
+  setCurrentDirection,
+  getCurrentDirection,
 } from "@/lib/composer-utils";
 import { anyStepUsesInput } from "@/lib/template-utils";
 
@@ -107,6 +110,7 @@ function ComposerCanvas({
   const [propertiesCollapsed, setPropertiesCollapsed] = useState(false);
   const [runHistoryCollapsed, setRunHistoryCollapsed] = useState(true);
   const [livePanelCollapsed, setLivePanelCollapsed] = useState(true);
+  const [layoutDirection, setLayoutDirection] = useState<LayoutDirection>(() => getCurrentDirection());
 
   // Live activity stream
   const {
@@ -417,15 +421,25 @@ function ComposerCanvas({
   );
 
   // Auto-layout
-  const handleAutoLayout = useCallback(() => {
+  const handleAutoLayout = useCallback((dir?: LayoutDirection) => {
+    const d = dir ?? layoutDirection;
     setNodes((nds) => {
       const copy = nds.map((n) => ({ ...n })) as ComposerNode[];
-      autoLayout(copy, edges);
+      autoLayout(copy, edges, d);
       return copy;
     });
     setTimeout(() => reactFlowInstance.fitView({ padding: 0.2 }), 50);
-    toast.success("Layout applied");
-  }, [edges, setNodes, reactFlowInstance]);
+  }, [edges, setNodes, reactFlowInstance, layoutDirection]);
+
+  // Toggle layout direction and re-layout
+  const handleToggleDirection = useCallback(() => {
+    setLayoutDirection((prev) => {
+      const next = prev === "vertical" ? "horizontal" : "vertical";
+      setCurrentDirection(next);
+      handleAutoLayout(next);
+      return next;
+    });
+  }, [handleAutoLayout]);
 
   // Save — context handlers already show toast.success/toast.error
   const handleSave = useCallback(async () => {
@@ -577,6 +591,8 @@ function ComposerCanvas({
         onApprove={() => handleApproval("approved")}
         onDeny={() => handleApproval("denied")}
         onAutoLayout={handleAutoLayout}
+        onToggleDirection={handleToggleDirection}
+        layoutDirection={layoutDirection}
         onToggleMaximize={toggleMaximize}
         onBack={handleBack}
         onToggleLivePanel={() => setLivePanelCollapsed((p) => !p)}
@@ -587,10 +603,7 @@ function ComposerCanvas({
       <div className="flex flex-1 min-h-0 overflow-hidden">
         <NodePalette agents={agents} collapsed={paletteCollapsed} onToggleCollapse={() => setPaletteCollapsed((p) => !p)} onAddAgent={handleAddAgentFromPalette} />
 
-        <div ref={wrapperRef} className="flex-1 relative">
-          {/* Canvas vignette overlay */}
-          <div className="composer-canvas-vignette" />
-
+        <div ref={wrapperRef} className="flex-1 relative composer-canvas-wrapper">
           {/* Empty state helper */}
           {nodes.length <= 1 && (
             <div className="absolute inset-0 z-10 flex items-center justify-center pointer-events-none">
@@ -631,12 +644,12 @@ function ComposerCanvas({
             fitViewOptions={{ padding: 0.25 }}
             deleteKeyCode={["Backspace", "Delete"]}
             connectionLineStyle={{ stroke: "oklch(0.65 0.13 175)", strokeWidth: 2, strokeDasharray: "6 3" }}
-            className="bg-background"
+            className="composer-canvas"
           >
-            <Background variant={BackgroundVariant.Dots} gap={24} size={1} color="oklch(0.30 0.012 274 / 0.4)" />
-            <Controls className="!bg-card/60 !border-border/50 !shadow-md !rounded-lg" />
+            <Background variant={BackgroundVariant.Dots} gap={24} size={1} color="var(--color-border)" />
+            <Controls className="!bg-card !border-border !shadow-md !rounded-lg" />
             <MiniMap
-              className="!bg-card/50 !border-border/50 !rounded-xl !shadow-xl"
+              className="!bg-card/70 !border-border !rounded-xl !shadow-lg"
               style={{ width: 160, height: 100 }}
               nodeColor={(n) => {
                 if (n.type === "trigger") return "oklch(0.65 0.13 175)";
@@ -652,19 +665,25 @@ function ComposerCanvas({
               }}
               maskColor="oklch(0.145 0.008 274 / 0.7)"
             />
-            {/* Custom arrow marker */}
+            {/* Custom arrow markers */}
             <svg style={SVG_DEFS_STYLE}>
               <defs>
                 <marker
                   id="dependency-arrow"
-                  viewBox="0 0 12 12"
-                  refX="11"
-                  refY="6"
-                  markerWidth="8"
-                  markerHeight="8"
+                  viewBox="0 0 14 14"
+                  refX="12"
+                  refY="7"
+                  markerWidth="10"
+                  markerHeight="10"
                   orient="auto-start-reverse"
                 >
-                  <path d="M 0 1 L 10 6 L 0 11 Q 2 6 0 1" fill="oklch(0.30 0.012 274)" />
+                  <path
+                    d="M 1 2 L 11 7 L 1 12 Q 3.5 7 1 2"
+                    fill="oklch(0.50 0.04 264)"
+                    stroke="oklch(0.50 0.04 264)"
+                    strokeWidth="0.5"
+                    strokeLinejoin="round"
+                  />
                 </marker>
               </defs>
             </svg>

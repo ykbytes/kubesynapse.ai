@@ -8,7 +8,7 @@ This guide ensures the KubeSynapse platform is ready for production deployment o
 
 #### ✅ Image Versions
 - [x] All images have explicit versioned tags (no `latest` or `main-latest` tags)
-- [x] Image registry: `docker.io/yakdhane/*` 
+- [x] Image registry: `docker.io/kubesynapse/*` 
 - [x] Current web-ui tag: `deploy-20260319-172000`
 - [x] All Python services use multi-stage builds where applicable
 - [x] No build tools or package managers in final runtime images
@@ -28,7 +28,7 @@ This guide ensures the KubeSynapse platform is ready for production deployment o
 
 #### ✅ Core Features Verified
 - [x] Gateway authentication: hybrid mode operational
-- [x] Admin credentials: `admin` / `minikube-dev-admin-password` (customize before deployment)
+- [x] Admin credentials are configured through chart-managed secrets and should be customized before deployment
 - [x] Agent management: pdfcreator and researcher agents running
 - [x] Operator reconciliation loop functional
 - [x] Workflow execution capabilities verified
@@ -58,10 +58,10 @@ This guide ensures the KubeSynapse platform is ready for production deployment o
 
 #### 2. Prepare Configuration
 
-**Update image registry (if not using docker.io/yakdhane):**
+**Update image registry (if not using docker.io/kubesynapse):**
 ```bash
 # Edit deploy/values.dockerhub.local.yaml
-# Change all repository values from docker.io/yakdhane/* to your registry
+# Change all repository values from docker.io/kubesynapse/* to your registry
 # Ensure all images are tagged with explicit versions
 ```
 

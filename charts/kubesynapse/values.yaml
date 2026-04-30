@@ -18,11 +18,6 @@ networkPolicy:
   # Defaults to 0.0.0.0/0 for backward compatibility.
   clusterApiCidr: "0.0.0.0/0"
 
-trustBundle:
-  enabled: false
-  configMapName: ""
-  mountPath: /etc/ssl/certs/custom-ca-bundle.pem
-
 litellm:
   enabled: true
   image:
@@ -115,7 +110,7 @@ opencodeRuntime:
 piRuntime:
   image:
     repository: docker.io/kubesynapse/kubesynapse-pi-rt
-    tag: v1.0.0
+    tag: v1.0.4-fifo-fix
     pullPolicy: IfNotPresent
   # Default provider auto-detected from API keys (ANTHROPIC_API_KEY, OPENAI_API_KEY, etc.)
   provider: ""
@@ -132,16 +127,22 @@ piRuntime:
   # Extra environment variables injected into pi agent pods
   env: {}
 
+mistralVibeRuntime:
+  image:
+    repository: docker.io/kubesynapse/kubesynapse-vibe-rt
+    tag: v0.1.2-mistral-vibe-defaultfix
+    pullPolicy: IfNotPresent
+
 operator:
   enabled: true
   replicaCount: 2
   image:
     repository: docker.io/kubesynapse/kubesynapse-operator
-    tag: v1.0.0
+    tag: v1.0.5-mistral-vibe-defaultfix
     pullPolicy: IfNotPresent
   workerImage:
     repository: docker.io/kubesynapse/kubesynapse-operator
-    tag: v1.0.0
+    tag: v1.0.5-mistral-vibe-defaultfix
     pullPolicy: IfNotPresent
   resources:
     requests:
@@ -185,7 +186,7 @@ apiGateway:
   replicaCount: 1
   image:
     repository: docker.io/kubesynapse/kubesynapse-api-gateway
-    tag: v1.0.0
+    tag: v1.0.5-mistral-vibe
     pullPolicy: IfNotPresent
   ingressClassName: ""
   ingressHost: ""  # leave empty for a hostless ingress, or set e.g. "agents.mycompany.com"
@@ -207,7 +208,7 @@ apiGateway:
   auth:
     mode: hybrid
     localAuthEnabled: true
-    registrationEnabled: false
+    registrationEnabled: true
     jwtIssuer: kubesynapse
     accessTokenTtlSeconds: 900
     refreshTokenTtlSeconds: 604800
@@ -263,7 +264,7 @@ webUi:
   replicaCount: 1
   image:
     repository: docker.io/kubesynapse/kubesynapse-web-ui
-    tag: v1.0.0
+    tag: v1.0.24-runtime-branding
     pullPolicy: IfNotPresent
   service:
     type: ClusterIP
@@ -332,6 +333,7 @@ platformSecrets:
     openaiApiKey: ""
     openrouterApiKey: ""
     anthropicApiKey: ""
+    mistralApiKey: ""
     opencodeApiKey: ""
     opencodeGoApiKey: ""
     litellmMasterKey: "replace-me"
@@ -410,7 +412,7 @@ mcpHub:
     # GitHub MCP server over streamable HTTP.
     github:
       enabled: true
-      image: "docker.io/yakdhane/mcp-github-adapter:deploy-20260401-212102"
+      image: "docker.io/kubesynapse/mcp-github-adapter:deploy-20260401-212102"
       imagePullPolicy: IfNotPresent
       port: 8000
       servicePort: 8000
@@ -518,47 +520,47 @@ skillsCatalog:
 # ---------------------------------------------------------------------------
 mcpToolSidecars:
   codeExec:
-    image: docker.io/yakdhane/mcp-code-exec
+    image: docker.io/kubesynapse/mcp-code-exec
     tag: deploy-20260401-212102
     port: 8090
   webSearch:
-    image: docker.io/yakdhane/mcp-web-search
+    image: docker.io/kubesynapse/mcp-web-search
     tag: deploy-20260401-212102
     port: 8091
   documents:
-    image: docker.io/yakdhane/mcp-documents
+    image: docker.io/kubesynapse/mcp-documents
     tag: deploy-20260401-212102
     port: 8092
   browser:
-    image: docker.io/yakdhane/mcp-browser
+    image: docker.io/kubesynapse/mcp-browser
     tag: deploy-20260401-212102
     port: 8093
   database:
-    image: docker.io/yakdhane/mcp-database
+    image: docker.io/kubesynapse/mcp-database
     tag: deploy-20260401-212102
     port: 8094
   git:
-    image: docker.io/yakdhane/mcp-git
+    image: docker.io/kubesynapse/mcp-git
     tag: deploy-20260401-212102
     port: 8095
   githubAdapter:
-    image: docker.io/yakdhane/mcp-github-adapter
+    image: docker.io/kubesynapse/mcp-github-adapter
     tag: deploy-20260401-212102
     port: 8096
   kubernetes:
-    image: docker.io/yakdhane/mcp-kubernetes
+    image: docker.io/kubesynapse/mcp-kubernetes
     tag: deploy-20260401-212102
     port: 8097
   messaging:
-    image: docker.io/yakdhane/mcp-messaging
+    image: docker.io/kubesynapse/mcp-messaging
     tag: deploy-20260401-212102
     port: 8098
   rag:
-    image: docker.io/yakdhane/mcp-rag
+    image: docker.io/kubesynapse/mcp-rag
     tag: deploy-20260401-212102
     port: 8099
   collector:
-    image: docker.io/yakdhane/mcp-collector
+    image: docker.io/kubesynapse/mcp-collector
     tag: dev
     port: 8100
 

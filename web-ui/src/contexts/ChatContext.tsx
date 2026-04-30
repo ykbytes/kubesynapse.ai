@@ -47,12 +47,14 @@ type InvokeExecutionOptions = {
   userPrompt?: string;
   appendUserMessage?: boolean;
   systemNotice?: string;
+  userAttachments?: UiMessage["attachments"];
 };
 
 type PromptSubmissionOptions = {
   appendUserMessage?: boolean;
   clearComposer?: boolean;
   systemNotice?: string;
+  userAttachments?: UiMessage["attachments"];
 };
 
 type OpenCodeChatSettings = {
@@ -296,7 +298,7 @@ export interface ChatContextValue {
   setSelectedFactoryMode: (value: FactoryMode) => void;
 
   // Actions
-  handleSubmit: () => Promise<void>;
+  handleSubmit: (attachments?: UiMessage["attachments"]) => Promise<void>;
   handleLoadLogs: () => Promise<void>;
   handleStreamLogs: () => void;
   handleStopLogStream: () => void;
@@ -654,16 +656,17 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
   // ── runInvocation ──
 
-  async function runInvocation({ agentName, payload, userPrompt, appendUserMessage = true, systemNotice }: InvokeExecutionOptions) {
+  async function runInvocation({ agentName, payload, userPrompt, appendUserMessage = true, systemNotice, userAttachments }: InvokeExecutionOptions) {
     const requestId = createId();
     const assistantMessageId = createId();
 
     setChatError(""); setWorkspaceError(""); setLogsForAgent(agentName, ""); setActivityForAgent(agentName, () => []); setSummaryForAgent(agentName, () => null);
+    const now = new Date().toISOString();
     setMessagesForAgent(agentName, (cur) => {
       const next = [...cur];
-      if (systemNotice) next.push({ id: createId(), role: "system", content: systemNotice, status: "complete" });
-      if (appendUserMessage && userPrompt?.trim()) next.push({ id: createId(), role: "user", content: userPrompt.trim(), status: "complete" });
-      next.push({ id: assistantMessageId, role: "assistant", content: "", status: "streaming" });
+      if (systemNotice) next.push({ id: createId(), role: "system", content: systemNotice, status: "complete", timestamp: now });
+      if (appendUserMessage && userPrompt?.trim()) next.push({ id: createId(), role: "user", content: userPrompt.trim(), status: "complete", attachments: userAttachments, timestamp: now });
+      next.push({ id: assistantMessageId, role: "assistant", content: "", status: "streaming", timestamp: now });
       return next;
     });
     setIsSendingByAgent((prev) => ({ ...prev, [agentName]: true }));
@@ -711,6 +714,17 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           if (event === "response.started") {
             if (typeof ep.thread_id === "string" && ep.thread_id.trim()) {
               threadIdsRef.current[agentName] = ep.thread_id.trim();
+            }
+            return;
+          }
+
+          if (event === "response.config") {
+            const config = ep.config && typeof ep.config === "object" ? ep.config as Record<string, unknown> : ep;
+            const model = typeof config.model === "string" ? config.model.trim() : "";
+            if (model) {
+              setMessagesForAgent(agentName, (cur) => cur.map((m) =>
+                m.id === assistantMessageId ? { ...m, modelName: model } : m
+              ));
             }
             return;
           }
@@ -781,13 +795,15 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             setTodosForAgent(agentName, nextSummary.todos ?? []);
             threadIdsRef.current[agentName] = nextSummary.threadId;
             pendingRequestRef.current[agentName] = nextSummary.status === "approval_pending" ? { ...payload, thread_id: nextSummary.threadId } : null;
+            // Use response text from the completed event payload as fallback if message.content is still empty
+            const completedResponse = typeof ep.response === "string" ? ep.response : "";
+            const completedModel = typeof ep.model === "string" ? ep.model.trim() : "";
+            const fallbackContent = nextSummary.status === "approval_pending"
+              ? "Approval pending. Re-submit after approval."
+              : completedResponse || "Invocation completed.";
             setMessagesForAgent(agentName, (cur) => cur.map((m) => (
               m.id === assistantMessageId
-                ? finalizeAssistantMessage(
-                    m,
-                    nextSummary,
-                    nextSummary.status === "approval_pending" ? "Approval pending. Re-submit after approval." : "Invocation completed.",
-                  )
+                ? { ...finalizeAssistantMessage(m, nextSummary, fallbackContent), ...(completedModel && !m.modelName ? { modelName: completedModel } : {}) }
                 : m
             )));
             return;
@@ -882,7 +898,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
   // ── prompt submission helpers ──
 
-  const buildInvokePayload = useCallback((agentName: string, promptText: string): InvokePayload | null => {
+  const buildInvokePayload = useCallback((agentName: string, promptText: string, images?: Array<{ data: string; media_type: string; name?: string }>): InvokePayload | null => {
     const nextPrompt = promptText.trim();
     let opencodeMaxTurns: number | undefined;
     let opencodeWorkingDirectory: string | undefined;
@@ -911,6 +927,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
     return {
       prompt: nextPrompt, thread_id: threadIdsRef.current[agentName], require_approval: requireApproval,
+      images: images && images.length > 0 ? images : undefined,
       approval_action: requireApproval ? `Approve UI request for ${agentName}` : undefined,
       a2a_target_agent: hasExplicitA2A ? normA2AAgent : undefined, a2a_target_namespace: hasExplicitA2A ? normA2ANs : undefined,
       a2a_timeout_seconds: explicitA2ATimeoutSeconds,
@@ -928,7 +945,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     if (!selectedAgentName) return;
 
     const nextPrompt = promptText.trim();
-    const payload = buildInvokePayload(selectedAgentName, nextPrompt);
+    // Convert image attachments to invoke payload format
+    const imagePayloads = options.userAttachments
+      ?.filter((a) => a.isImage && a.dataUrl)
+      .map((a) => ({ data: a.dataUrl, media_type: a.type || "image/png", name: a.name }));
+    const payload = buildInvokePayload(selectedAgentName, nextPrompt, imagePayloads);
     if (!payload) return;
 
     if (options.clearComposer !== false) {
@@ -941,15 +962,16 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       userPrompt: nextPrompt,
       appendUserMessage: options.appendUserMessage ?? true,
       systemNotice: options.systemNotice,
+      userAttachments: options.userAttachments,
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, selectedAgentName, buildInvokePayload]);
 
   // ── handleSubmit ──
 
-  const handleSubmit = useCallback(async () => {
+  const handleSubmit = useCallback(async (attachments?: UiMessage["attachments"]) => {
     if (!selectedAgentName || !canSubmitChat) return;
-    await submitPromptText(prompt, { clearComposer: true });
+    await submitPromptText(prompt, { clearComposer: true, userAttachments: attachments });
   }, [selectedAgentName, canSubmitChat, prompt, submitPromptText]);
 
   const handleReusePrompt = useCallback((text: string) => {

@@ -281,7 +281,7 @@ The `awesome-pi-agent` repository (685 stars) catalogs the pi extension ecosyste
 ## 9. Files to Create for Integration
 
 ```
-kubemininions/
+kubesynapse.ai/
 ├── pi-runtime/                          # NEW: Pi agent runtime Docker image
 │   ├── Dockerfile                       # Node 22 + pi-coding-agent + KubeSynapse extensions
 │   ├── package.json                     # Dependencies: pi-coding-agent, pi-ai, pi-agent-core

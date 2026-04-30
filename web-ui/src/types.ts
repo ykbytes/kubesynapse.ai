@@ -1,9 +1,9 @@
-export type RuntimeKind = "opencode" | "pi";
+export type RuntimeKind = "opencode" | "pi" | "mistral-vibe";
 
 export type FactoryMode = "lightweight-draft" | "governed-bundle" | "fully-autonomous";
 
 /** Runtimes still under active development — shown with a red "Alpha" badge in the UI. */
-export const ALPHA_RUNTIMES: ReadonlySet<RuntimeKind> = new Set<RuntimeKind>(["pi"]);
+export const ALPHA_RUNTIMES: ReadonlySet<RuntimeKind> = new Set<RuntimeKind>(["pi", "mistral-vibe"]);
 
 export interface A2APeerRef {
   name: string;
@@ -769,6 +769,7 @@ export interface UpdateUserPayload {
 
 export interface InvokePayload {
   prompt: string;
+  images?: Array<{ data: string; media_type: string; name?: string }>;
   thread_id?: string;
   model?: string;
   system?: string;
@@ -1086,6 +1087,12 @@ export interface UiMessage {
   content: string;
   reasoning?: string;
   status?: "streaming" | "complete" | "error";
+  /** Model that produced this message (assistant only) */
+  modelName?: string;
+  /** ISO timestamp when the message was created */
+  timestamp?: string;
+  /** Attached files or pasted images */
+  attachments?: Array<{ name: string; type: string; dataUrl: string; isImage: boolean }>;
   /** Tool-call fields (populated when role === "tool") */
   toolName?: string;
   toolNode?: string;

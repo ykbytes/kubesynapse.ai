@@ -123,6 +123,12 @@ from auth_store import (
 from auth_store import (
     list_users as list_local_users,
 )
+from auth_store import (
+    delete_execution_trace,
+    get_execution_trace,
+    list_execution_traces,
+    record_execution_trace,
+)
 from enterprise_auth import (
     authenticate_ldap_user,
     build_oidc_authorization_request,
@@ -272,7 +278,7 @@ AGENT_READ_CACHE_MAX_ENTRIES = max(int(os.getenv("API_GATEWAY_AGENT_READ_CACHE_M
 A2A_PROTOCOL_VERSION = "1.0"
 A2A_TASK_RETENTION_SECONDS = max(int(os.getenv("A2A_TASK_RETENTION_SECONDS", "3600")), 60)
 A2A_PUBLIC_BASE_URL = os.getenv("API_GATEWAY_PUBLIC_BASE_URL", "").strip()
-A2A_PROVIDER_ORGANIZATION = os.getenv("A2A_PROVIDER_ORGANIZATION", "KubeSynapseai").strip()
+A2A_PROVIDER_ORGANIZATION = os.getenv("A2A_PROVIDER_ORGANIZATION", "KubeSynapse").strip()
 A2A_PROVIDER_URL = os.getenv("A2A_PROVIDER_URL", "").strip()
 A2A_TERMINAL_STATES = {
     "TASK_STATE_COMPLETED",
@@ -460,8 +466,11 @@ class SubagentRequest(BaseModel):
 
 class InvokeRequest(BaseModel):
     prompt: str = ""
+    images: list[dict[str, Any]] | None = Field(default=None, description="Optional images: [{data: 'data:image/png;base64,...', media_type: 'image/png', name: 'file.png'}]")
     thread_id: str | None = None
     model: str | None = None
+    provider: str | None = None
+    thinkingLevel: str | None = None
     system: str | None = None
     factory_mode: str | None = Field(default=None, max_length=32)
     require_approval: bool = False
@@ -798,7 +807,7 @@ class CreateAgentRequest(BaseModel):
     system_prompt: str = Field(default="", max_length=AGENT_SYSTEM_PROMPT_MAX_CHARS)
     policy_ref: str | None = Field(default=None, max_length=253)
     storage_size: str | None = Field(default="1Gi", max_length=32)
-    runtime_kind: str = Field(pattern=r"^(opencode|pi)$")
+    runtime_kind: str = Field(pattern=r"^(opencode|pi|mistral-vibe)$")
     enable_gvisor: bool = False
     mcp_connection_ids: list[str] = Field(default_factory=list)
     mcp_servers: list[str] = Field(default_factory=list)
@@ -817,7 +826,7 @@ class UpdateAgentRequest(BaseModel):
     system_prompt: str = Field(default="", max_length=AGENT_SYSTEM_PROMPT_MAX_CHARS)
     policy_ref: str | None = Field(default=None, max_length=253)
     storage_size: str | None = Field(default="1Gi", max_length=32)
-    runtime_kind: str | None = Field(default=None, pattern=r"^(opencode|pi)$")
+    runtime_kind: str | None = Field(default=None, pattern=r"^(opencode|pi|mistral-vibe)$")
     enable_gvisor: bool = False
     mcp_connection_ids: list[str] | None = None
     mcp_servers: list[str] = Field(default_factory=list)
@@ -1039,8 +1048,10 @@ def normalized_runtime_kind(raw_value: str | None) -> str:
     runtime_kind = str(raw_value or "").strip().lower()
     if not runtime_kind:
         raise ValueError("runtime kind must be explicitly set")
-    if runtime_kind not in ("opencode", "pi"):
-        raise ValueError(f"runtime kind must be 'opencode' or 'pi'; '{runtime_kind}' is no longer supported")
+    if runtime_kind not in ("opencode", "pi", "mistral-vibe"):
+        raise ValueError(
+            f"runtime kind must be 'opencode', 'pi', or 'mistral-vibe'; '{runtime_kind}' is no longer supported"
+        )
     return runtime_kind
 
 
@@ -1545,7 +1556,7 @@ def runtime_kind_from_spec(spec: dict[str, Any] | None) -> str:
 
 def validate_agent_runtime_compatibility(spec: dict[str, Any]) -> None:
     runtime_kind = runtime_kind_from_spec(spec)
-    if runtime_kind not in ("opencode", "pi"):
+    if runtime_kind not in ("opencode", "pi", "mistral-vibe"):
         raise HTTPException(status_code=400, detail=f"Unsupported AIAgent runtime kind '{runtime_kind}'")
     if spec.get("githubConfig"):
         raise HTTPException(
@@ -1558,7 +1569,7 @@ def validate_agent_runtime_compatibility(spec: dict[str, Any]) -> None:
 
 
 def validate_invoke_runtime_compatibility(runtime_kind: str, request: InvokeRequest) -> None:
-    if runtime_kind not in ("opencode", "pi"):
+    if runtime_kind not in ("opencode", "pi", "mistral-vibe"):
         raise HTTPException(status_code=400, detail=f"Unsupported AIAgent runtime kind '{runtime_kind}'")
 
     unsupported_fields: list[str] = []
@@ -1580,6 +1591,36 @@ def validate_invoke_runtime_compatibility(runtime_kind: str, request: InvokeRequ
                 f"invocation. Unsupported fields for opencode agents: {joined_fields}."
             ),
         )
+
+
+def inject_model_config_from_agent(request_payload: dict[str, Any], agent: dict[str, Any]) -> None:
+    """Inject model/provider/thinkingLevel from the agent CRD spec into the
+    invoke request payload, so the pi bridge can dynamically switch models
+    without requiring a pod restart.
+
+    Only injects when the caller hasn't already set the field.
+    """
+    spec = agent.get("spec") or {}
+    runtime = spec.get("runtime") or {}
+    pi_spec = runtime.get("pi") or {}
+
+    # Model: spec.runtime.pi.model > spec.model
+    if not request_payload.get("model"):
+        model = pi_spec.get("model") or spec.get("model") or ""
+        if model:
+            request_payload["model"] = str(model).strip()
+
+    # Provider: spec.runtime.pi.provider
+    if not request_payload.get("provider"):
+        provider = pi_spec.get("provider") or ""
+        if provider:
+            request_payload["provider"] = str(provider).strip()
+
+    # Thinking level: spec.runtime.pi.thinkingLevel
+    if not request_payload.get("thinkingLevel"):
+        thinking = pi_spec.get("thinkingLevel") or ""
+        if thinking:
+            request_payload["thinkingLevel"] = str(thinking).strip()
 
 
 def parse_json_object_response(response: httpx.Response, *, context: str) -> dict[str, Any]:
@@ -3160,7 +3201,7 @@ def build_agent_card(agent_name: str, namespace: str, request: Request) -> dict[
             }
         ],
         "provider": {
-            "organization": A2A_PROVIDER_ORGANIZATION or "KubeSynapseai",
+            "organization": A2A_PROVIDER_ORGANIZATION or "KubeSynapse",
             "url": provider_url,
         },
         "version": version,
@@ -8525,6 +8566,24 @@ def _sync_workflow_run_history(info: WorkflowInfo) -> None:
             started_at=started_at,
             completed_at=completed_at,
         )
+        # Sync execution trace for Observatory
+        try:
+            _duration = None
+            if started_at and completed_at:
+                _duration = int((completed_at - started_at).total_seconds() * 1000)
+            record_execution_trace(
+                trace_id=info.run_id,
+                workflow_name=info.name,
+                namespace=info.namespace,
+                run_id=info.run_id,
+                status=info.phase,
+                started_at=started_at,
+                completed_at=completed_at,
+                duration_ms=_duration,
+                step_count=summary.get("totalSteps", 0) or 0,
+            )
+        except Exception:
+            pass
         if info.phase in {"completed", "failed"}:
             primary_agent = info.steps[0].agent_ref if info.steps else None
             if primary_agent:
@@ -8739,6 +8798,22 @@ def trigger_workflow(
         )
     except Exception as exc:
         logger.warning("Failed to record workflow run history: %s", exc)
+
+    # Record execution trace for Observatory
+    try:
+        _wf_trace_id = result.run_id or str(uuid.uuid4())
+        record_execution_trace(
+            trace_id=_wf_trace_id,
+            workflow_name=workflow_name,
+            namespace=namespace,
+            run_id=result.run_id,
+            status=result.phase or "running",
+            started_at=datetime.now(UTC),
+            input_preview=new_input[:2000] if new_input else None,
+            step_count=result.summary.get("totalSteps", 0) if isinstance(result.summary, dict) else 0,
+        )
+    except Exception:
+        logger.debug("Failed to record execution trace for workflow trigger", exc_info=True)
 
     return result
 
@@ -9040,7 +9115,7 @@ async def stream_workflow_activities(
     request: Request,
     namespace: str = "default",
     tail: int = 100,
-    user=Depends(verify_token),
+    user=Depends(verify_token_or_query),
 ):
     """SSE stream that pushes workflow activity events in real-time.
 
@@ -9274,6 +9349,151 @@ def export_workflow_run_trace(
     response = JSONResponse(payload)
     response.headers["Content-Disposition"] = f'attachment; filename="{workflow_name}-{run_id}-trace.json"'
     return response
+
+
+# ---------------------------------------------------------------------------
+# Observatory — Execution Traces
+# ---------------------------------------------------------------------------
+
+@app.get("/api/traces/executions")
+def list_traces(
+    namespace: str = "default",
+    workflow: str | None = None,
+    agent: str | None = None,
+    status: str | None = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
+    search: str | None = None,
+    sort_by: str = "newest",
+    limit: int = 20,
+    offset: int = 0,
+    user=Depends(verify_token),
+):
+    """List execution traces for the Observatory."""
+    ensure_namespace_access(user, namespace)
+    return list_execution_traces(
+        namespace,
+        workflow=workflow,
+        agent=agent,
+        status=status,
+        from_date=from_date,
+        to_date=to_date,
+        search=search,
+        sort_by=sort_by,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@app.get("/api/traces/executions/{execution_id}")
+def get_trace_detail(
+    execution_id: str,
+    user=Depends(verify_token),
+):
+    """Get detailed execution trace."""
+    trace = get_execution_trace(execution_id)
+    if trace is None:
+        raise HTTPException(status_code=404, detail="Execution trace not found")
+    ensure_namespace_access(user, trace.get("namespace", "default"))
+    return trace
+
+
+@app.get("/api/traces/executions/{execution_id}/summary")
+def get_trace_summary(
+    execution_id: str,
+    user=Depends(verify_token),
+):
+    """Get execution trace summary."""
+    trace = get_execution_trace(execution_id)
+    if trace is None:
+        raise HTTPException(status_code=404, detail="Execution trace not found")
+    ensure_namespace_access(user, trace.get("namespace", "default"))
+    return trace
+
+
+@app.get("/api/traces/executions/{execution_id}/events")
+def get_trace_events(
+    execution_id: str,
+    user=Depends(verify_token),
+):
+    """Get events for an execution trace."""
+    trace = get_execution_trace(execution_id)
+    if trace is None:
+        raise HTTPException(status_code=404, detail="Execution trace not found")
+    ensure_namespace_access(user, trace.get("namespace", "default"))
+    return trace.get("events", [])
+
+
+@app.delete("/api/traces/executions/{execution_id}")
+def delete_trace(
+    execution_id: str,
+    user=Depends(verify_token),
+):
+    """Delete an execution trace."""
+    trace = get_execution_trace(execution_id)
+    if trace is None:
+        raise HTTPException(status_code=404, detail="Execution trace not found")
+    ensure_namespace_access(user, trace.get("namespace", "default"), "operator")
+    delete_execution_trace(execution_id)
+    return {"status": "deleted"}
+
+
+@app.get("/api/traces/executions/{execution_id}/export/json")
+def export_trace_json(
+    execution_id: str,
+    user=Depends(verify_token),
+):
+    """Export execution trace as JSON download."""
+    trace = get_execution_trace(execution_id)
+    if trace is None:
+        raise HTTPException(status_code=404, detail="Execution trace not found")
+    ensure_namespace_access(user, trace.get("namespace", "default"))
+    resp = JSONResponse(trace)
+    resp.headers["Content-Disposition"] = f'attachment; filename="trace-{execution_id}.json"'
+    return resp
+
+
+@app.get("/api/traces/executions/{execution_id}/export/html")
+def export_trace_html(
+    execution_id: str,
+    user=Depends(verify_token),
+):
+    """Export execution trace as HTML report."""
+    trace = get_execution_trace(execution_id)
+    if trace is None:
+        raise HTTPException(status_code=404, detail="Execution trace not found")
+    ensure_namespace_access(user, trace.get("namespace", "default"))
+    html = f"""<!DOCTYPE html>
+<html><head><title>Trace: {trace.get('workflow_name', 'unknown')}</title>
+<style>body{{font-family:monospace;background:#1a1a2e;color:#e0e0e0;padding:2rem}}
+table{{border-collapse:collapse;width:100%}}td,th{{border:1px solid #333;padding:8px;text-align:left}}
+th{{background:#16213e}}.ok{{color:#4ade80}}.fail{{color:#f87171}}</style></head>
+<body><h1>Execution Trace</h1>
+<table><tr><th>Field</th><th>Value</th></tr>
+<tr><td>ID</td><td>{trace.get('id','')}</td></tr>
+<tr><td>Workflow</td><td>{trace.get('workflow_name','')}</td></tr>
+<tr><td>Agent</td><td>{trace.get('agent_name','N/A')}</td></tr>
+<tr><td>Status</td><td>{trace.get('status','')}</td></tr>
+<tr><td>Started</td><td>{trace.get('started_at','')}</td></tr>
+<tr><td>Completed</td><td>{trace.get('completed_at','')}</td></tr>
+<tr><td>Duration</td><td>{trace.get('duration_ms',0)}ms</td></tr>
+<tr><td>Steps</td><td>{trace.get('step_count',0)}</td></tr>
+<tr><td>LLM Calls</td><td>{trace.get('llm_call_count',0)}</td></tr>
+<tr><td>Total Tokens</td><td>{trace.get('total_tokens',0)}</td></tr>
+</table></body></html>"""
+    from starlette.responses import HTMLResponse
+    return HTMLResponse(html, headers={
+        "Content-Disposition": f'attachment; filename="trace-{execution_id}.html"',
+    })
+
+
+@app.get("/api/traces/steps/{step_id}")
+def get_step_detail(
+    step_id: str,
+    user=Depends(verify_token),
+):
+    """Get a single step detail."""
+    raise HTTPException(status_code=404, detail="Step not found — use execution detail endpoint")
 
 
 @app.get("/api/workflows/{workflow_name}/logs")
@@ -9580,6 +9800,7 @@ async def invoke_agent(
     if request.factory_mode and not is_factory_agent_resource(agent_name, agent):
         raise HTTPException(status_code=400, detail="factory_mode is only supported for the kubesynapse factory agent.")
     request_payload = request.model_dump(exclude={"factory_mode"})
+    inject_model_config_from_agent(request_payload, agent)  # dynamic model switching
     policy_memory = resolve_agent_memory_policy(agent, namespace)
     _log_invoke_step("memory_policy_resolved")
     normalized_memory_policy = _normalize_memory_policy(policy_memory)
@@ -9620,10 +9841,34 @@ async def invoke_agent(
             _log_invoke_step("runtime_request_complete")
         except Exception as exc:
             logger.error("Agent invocation failed (%s): %s", agent_name, exc)
+            try:
+                record_execution_trace(
+                    trace_id=request_id, workflow_name=f"invoke:{agent_name}",
+                    namespace=namespace, agent_name=agent_name, run_id=request_id,
+                    status="failed",
+                    started_at=datetime.now(UTC) - timedelta(milliseconds=int((time.perf_counter() - invoke_started_at) * 1000)),
+                    completed_at=datetime.now(UTC),
+                    duration_ms=int((time.perf_counter() - invoke_started_at) * 1000),
+                    input_preview=(request.prompt or "")[:2000],
+                )
+            except Exception:
+                pass
             raise HTTPException(status_code=502, detail="Agent invocation failed") from exc
 
     if response.status_code >= 400:
         error_payload = error_payload_from_body(response.content, "Agent invocation failed")
+        try:
+            record_execution_trace(
+                trace_id=request_id, workflow_name=f"invoke:{agent_name}",
+                namespace=namespace, agent_name=agent_name, run_id=request_id,
+                status="failed",
+                started_at=datetime.now(UTC) - timedelta(milliseconds=int((time.perf_counter() - invoke_started_at) * 1000)),
+                completed_at=datetime.now(UTC),
+                duration_ms=int((time.perf_counter() - invoke_started_at) * 1000),
+                input_preview=(request.prompt or "")[:2000],
+            )
+        except Exception:
+            pass
         raise HTTPException(status_code=502, detail=f"Agent invocation failed: {error_payload['error']}")
 
     data = parse_json_object_response(response, context="Agent runtime /invoke")
@@ -9656,6 +9901,28 @@ async def invoke_agent(
         )
     except Exception:
         logger.warning("Failed to record runtime memory for %s", agent_name, exc_info=True)
+    # Record execution trace for Observatory
+    try:
+        _invoke_duration_ms = int((time.perf_counter() - invoke_started_at) * 1000)
+        _invoke_wall_start = datetime.now(UTC) - timedelta(milliseconds=_invoke_duration_ms)
+        record_execution_trace(
+            trace_id=request_id,
+            workflow_name=f"invoke:{agent_name}",
+            namespace=namespace,
+            agent_name=agent_name,
+            run_id=request_id,
+            status="completed",
+            started_at=_invoke_wall_start,
+            completed_at=datetime.now(UTC),
+            duration_ms=_invoke_duration_ms,
+            input_preview=(request.prompt or "")[:2000],
+            output_preview=(data.get("response") or "")[:2000],
+            step_count=1,
+            llm_call_count=1,
+            total_tokens=int((_usage or {}).get("total_tokens", 0)),
+        )
+    except Exception:
+        logger.debug("Failed to record execution trace for invoke", exc_info=True)
     return InvokeResponse(
         agent_name=agent_name,
         response=data.get("response", ""),
@@ -9709,6 +9976,7 @@ async def invoke_agent_stream(
     if request.factory_mode and not is_factory_agent_resource(agent_name, agent):
         raise HTTPException(status_code=400, detail="factory_mode is only supported for the kubesynapse factory agent.")
     request_payload = request.model_dump(exclude={"factory_mode"})
+    inject_model_config_from_agent(request_payload, agent)  # dynamic model switching
     append_system_note(request_payload, build_agent_collaboration_system_note(agent_name, namespace, agent))
     # Auto-inject intelligence context for intelligence-aware agents
     if _agent_wants_intelligence(agent):

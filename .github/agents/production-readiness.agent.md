@@ -560,7 +560,7 @@ Brand config exists, but logo, favicon, and richer white-label support are not f
 For each change set:
 1. Modify source files.
 2. Run narrow relevant checks first, then broader checks if needed.
-3. Build affected images: `podman build -t docker.io/yakdhane/<image>:<tag>`
+3. Build affected images: `podman build -t docker.io/kubesynapse/<image>:<tag>`
 4. Push images.
 5. Update `deploy/values.dockerhub.local.yaml`.
 6. Deploy with Helm.

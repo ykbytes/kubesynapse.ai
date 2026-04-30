@@ -75,7 +75,7 @@ This document outlines the planned evolution of KubeSynapse. Timelines are best-
 
 The roadmap is community-driven. To propose a feature or reprioritization:
 
-1. Open a [GitHub Discussion](https://github.com/ykbytes/kubemininions/discussions) under "Ideas"
+1. Open a [GitHub issue](https://github.com/ykbytes/kubesynapse.ai/issues) describing the proposal and use case
 2. Describe the use case and expected impact
 3. Discuss with maintainers and the community
 4. If consensus is reached, a roadmap item is created

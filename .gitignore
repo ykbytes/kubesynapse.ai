@@ -40,12 +40,20 @@ mypy_output.txt
 tools-repos/
 mcp-catalog/
 codecodenewversionKUBESYNAPSE_kagent_reference/
+temp-pi-mono/
+.opencode/
+add_noqa.py
+api-gateway/fix_logger.py
+api-gateway/fix_main.py
+scripts/split_routes.py
+scripts/split_routes_v2.py
 
 # ===========================
 # Runtime / config
 # ===========================
 .sandbox-live.toml
 api-gateway/.local/
+tmp-worker-netpol.yaml
 
 # ===========================
 # OS

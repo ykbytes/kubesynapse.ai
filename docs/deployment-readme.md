@@ -22,12 +22,12 @@ Use these to choose the deployment mode you actually want:
 
 - `deploy/values.dockerhub.local.yaml` for published image deployment
 - `deploy/values.cluster.example.yaml` for a more general cluster example
-- `deploy/values.ai-sandbox.kind-local.yaml` for refreshing the live local Kind release
+- `deploy/values.ai-sandbox.kind-local.yaml` for refreshing the current local Kind release
 - `deploy/values.google-oidc.example.yaml` as a safe managed sign-in overlay template
 
 ### `scripts/deploy-ai-sandbox-kind.ps1`
 
-Use this when you already have the `ai-sandbox` release in `ai-agent-sandbox` and only want to refresh images and chart-managed values without replaying a stale broad values file.
+Use this when you already have the local Kind release installed and only want to refresh images and chart-managed values without replaying a stale broad values file.
 
 ### `scripts/observability-smoke-test.ps1`
 
@@ -51,7 +51,7 @@ This is the fastest path when you want to use the checked-in published image ref
 Build the core platform images and bundled MCP sidecars:
 
 ```bash
-make docker-build REGISTRY=ghcr.io/your-org VERSION=latest CONTAINER_CLI=docker
+make docker-build REGISTRY=localhost/kubesynapse VERSION=dev CONTAINER_CLI=docker
 ```
 
 Then deploy with a values file that points at your registry.

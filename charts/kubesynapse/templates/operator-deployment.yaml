@@ -35,9 +35,6 @@ spec:
     metadata:
       annotations:
         checksum/secrets: {{ include (print $.Template.BasePath "/external-secrets.yaml") . | sha256sum }}
-{{- if .Values.trustBundle.enabled }}
-        checksum/trust-bundle: {{ include (print $.Template.BasePath "/trust-bundle-configmap.yaml") . | sha256sum }}
-{{- end }}
       labels:
         {{- include "kubesynapse.labels" . | nindent 8 }}
         app.kubernetes.io/component: operator
@@ -88,11 +85,6 @@ spec:
       volumes:
         - name: tmp
           emptyDir: {}
-{{- if .Values.trustBundle.enabled }}
-        - name: trust-bundle
-          configMap:
-            name: {{ default (printf "%s-trust-bundle" (include "kubesynapse.fullname" .)) .Values.trustBundle.configMapName }}
-{{- end }}
       containers:
         - name: operator
           image: "{{ .Values.operator.image.repository }}:{{ .Values.operator.image.tag }}"
@@ -150,16 +142,18 @@ spec:
               value: "{{ .Values.opencodeRuntime.image.repository }}:{{ .Values.opencodeRuntime.image.tag }}"
             - name: OPENCODE_RUNTIME_IMAGE_PULL_POLICY
               value: {{ .Values.opencodeRuntime.image.pullPolicy | default "IfNotPresent" | quote }}
+            - name: PI_RUNTIME_IMAGE
+              value: "{{ .Values.piRuntime.image.repository }}:{{ .Values.piRuntime.image.tag }}"
+            - name: PI_RUNTIME_IMAGE_PULL_POLICY
+              value: {{ .Values.piRuntime.image.pullPolicy | default "IfNotPresent" | quote }}
+            - name: MISTRAL_VIBE_RUNTIME_IMAGE
+              value: "{{ .Values.mistralVibeRuntime.image.repository }}:{{ .Values.mistralVibeRuntime.image.tag }}"
+            - name: MISTRAL_VIBE_RUNTIME_IMAGE_PULL_POLICY
+              value: {{ .Values.mistralVibeRuntime.image.pullPolicy | default "IfNotPresent" | quote }}
             - name: OPENCODE_DEFAULT_PROVIDER
               value: {{ .Values.opencodeRuntime.provider | default "litellm" | quote }}
             - name: OPENCODE_RUNTIME_EXTRA_ENV_JSON
               value: {{ $opencodeEnv | toJson | quote }}
-{{- if .Values.trustBundle.enabled }}
-            - name: TRUST_BUNDLE_CONFIGMAP_NAME
-              value: {{ default (printf "%s-trust-bundle" (include "kubesynapse.fullname" .)) .Values.trustBundle.configMapName | quote }}
-            - name: TRUST_BUNDLE_MOUNT_PATH
-              value: {{ .Values.trustBundle.mountPath | quote }}
-{{- end }}
             - name: WORKER_IMAGE
               value: "{{ .Values.operator.workerImage.repository }}:{{ .Values.operator.workerImage.tag }}"
             - name: WORKER_IMAGE_PULL_POLICY
@@ -249,12 +243,6 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
-{{- if .Values.trustBundle.enabled }}
-            - name: trust-bundle
-              mountPath: {{ .Values.trustBundle.mountPath | quote }}
-              subPath: ca-bundle.pem
-              readOnly: true
-{{- end }}
           resources:
 {{ toYaml .Values.operator.resources | indent 12 }}
           startupProbe:

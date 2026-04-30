@@ -1,10 +1,10 @@
 #!/bin/bash
 set -euo pipefail
 
-echo "[kubesynapse-pi-runtime] Starting pi in RPC mode..."
+echo "[kubesynapse-pi-runtime] Starting pi runtime (bridge-managed mode)..."
 echo "[kubesynapse-pi-runtime] Agent: ${KUBESYNAPSE_AGENT_NAME:-unknown}"
-echo "[kubesynapse-pi-runtime] Provider: ${PI_PROVIDER:-auto}"
-echo "[kubesynapse-pi-runtime] Model: ${PI_MODEL:-auto}"
+echo "[kubesynapse-pi-runtime] Default provider: ${PI_PROVIDER:-auto}"
+echo "[kubesynapse-pi-runtime] Default model: ${PI_MODEL:-auto}"
 echo "[kubesynapse-pi-runtime] Working directory: ${OPENCODE_WORKDIR:-/workspace}"
 
 WORKDIR="${OPENCODE_WORKDIR:-/workspace}"
@@ -111,87 +111,13 @@ You are an AI agent running inside the kubesynapse Kubernetes AI platform.
 AGENTSEOF
 echo "[kubesynapse-pi-runtime] Written AGENTS.md"
 
-# Build the pi command
-PI_CMD="pi --mode rpc"
-
-# Session handling
-if [ "${PI_NO_SESSION:-false}" = "true" ]; then
-    PI_CMD="$PI_CMD --no-session"
-else
-    PI_CMD="$PI_CMD --session-dir $SESSION_DIR"
-fi
-
-# Provider & model
-if [ -n "${PI_PROVIDER:-}" ]; then
-    PI_CMD="$PI_CMD --provider ${PI_PROVIDER}"
-fi
-
-if [ -n "${PI_MODEL:-}" ]; then
-    PI_CMD="$PI_CMD --model ${PI_MODEL}"
-fi
-
-# Thinking level
-if [ -n "${PI_THINKING_LEVEL:-}" ]; then
-    PI_CMD="$PI_CMD --thinking ${PI_THINKING_LEVEL}"
-fi
-
-# Tools configuration
-if [ "${PI_NO_TOOLS:-false}" = "true" ]; then
-    PI_CMD="$PI_CMD --no-tools"
-elif [ -n "${PI_TOOLS:-}" ]; then
-    PI_CMD="$PI_CMD --tools ${PI_TOOLS}"
-fi
-
-# Extensions
-if [ -n "${PI_EXTENSIONS:-}" ]; then
-    for ext in ${PI_EXTENSIONS}; do
-        PI_CMD="$PI_CMD -e ${ext}"
-    done
-fi
-
-# System prompt
-if [ -n "${PI_SYSTEM_PROMPT:-}" ]; then
-    PI_CMD="$PI_CMD --system-prompt \"${PI_SYSTEM_PROMPT}\""
-fi
-
-echo "[kubesynapse-pi-runtime] Command: $PI_CMD"
-
 # Write ready marker for Kubernetes readiness probe
 echo "ready" > "$READY_FILE" 2>/dev/null || true
 
-# Create FIFOs for pi stdin/stdout BEFORE starting the bridge
-# so the bridge can open them for reading.
-PI_STDIN_FIFO="/tmp/pi-stdin"
-PI_STDOUT_FIFO="/tmp/pi-stdout"
-rm -f "$PI_STDIN_FIFO" "$PI_STDOUT_FIFO"
-mkfifo "$PI_STDIN_FIFO"
-mkfifo "$PI_STDOUT_FIFO"
-
-# Background writer keeps the stdin FIFO open so pi's read never gets EOF
-sleep infinity > "$PI_STDIN_FIFO" &
-FIFO_WRITER_PID=$!
-
-# Start pi-bridge HTTP server in background (Node.js, no extra deps)
-# The bridge will read pi's stdout from /tmp/pi-stdout
-echo "[kubesynapse-pi-runtime] Starting HTTP bridge on port 8080..."
-node /pi_bridge.js &
-BRIDGE_PID=$!
-echo "[kubesynapse-pi-runtime] Bridge PID: $BRIDGE_PID"
-
-# Give the bridge a moment to open the stdout FIFO for reading
-sleep 0.5
-
-# Trap SIGTERM for graceful shutdown
-cleanup() {
-    echo "[kubesynapse-pi-runtime] Received shutdown signal"
-    rm -f "$READY_FILE"
-    kill $BRIDGE_PID 2>/dev/null || true
-    kill $FIFO_WRITER_PID 2>/dev/null || true
-    wait
-}
-
-trap cleanup SIGTERM SIGINT
-
-# Execute pi reading from stdin FIFO, writing stdout to stdout FIFO
-# This avoids competition with Docker's container stdout reader
-exec $PI_CMD < "$PI_STDIN_FIFO" > "$PI_STDOUT_FIFO"
+# ── Bridge is now PID 1 ─────────────────────────────────────────────
+# The bridge manages the pi subprocess lifecycle (spawn, restart on model
+# change, graceful shutdown). Pi is no longer exec'd directly.
+# Default model/provider/thinkingLevel are passed via env vars; the bridge
+# reads them and can override per-invoke when the gateway sends new values.
+echo "[kubesynapse-pi-runtime] Launching bridge as PID 1 (pi subprocess manager)..."
+exec node /pi_bridge.js

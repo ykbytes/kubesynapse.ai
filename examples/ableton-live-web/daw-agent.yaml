@@ -697,7 +697,7 @@ spec:
         ```
   mcpSidecars:
     - name: code-exec
-      image: docker.io/yakdhane/mcp-code-exec:deploy-20260319-090333
+      image: docker.io/kubesynapse/mcp-code-exec:deploy-20260319-090333
       port: 8090
   storage:
     size: 2Gi

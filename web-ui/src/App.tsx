@@ -700,7 +700,7 @@ function AppLayout() {
                         onFactoryModeChange={chat.setSelectedFactoryMode}
                         onSaveSession={() => void chat.handleSaveCurrentSession()}
                         canSubmit={chat.canSubmitChat}
-                        onSubmit={() => void chat.handleSubmit()}
+                        onSubmit={(atts) => void chat.handleSubmit(atts)}
                         onCancel={chat.cancelStream}
                       />
                     </ContentShell>

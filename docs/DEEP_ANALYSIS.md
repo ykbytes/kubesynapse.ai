@@ -2,7 +2,7 @@
 
 **Date:** 2026-04-23
 **Branch:** `preprod`
-**Repository:** `ykbytes/kubemininions`
+**Repository:** `ykbytes/kubesynapse.ai`
 
 ---
 
@@ -435,8 +435,8 @@ Each is a separate Docker image, running as sidecars in agent pods or shared ser
 23. **YouTube / Loom Demo**
     - A 5-minute "KubeSynapse in 5 minutes" video drives adoption more than docs.
 
-24. **Discord / Slack Community**
-    - Link in README. Use GitHub Discussions for Q&A.
+24. **Project Communication Surface**
+    - Link the README to GitHub Issues, pull requests, and the maintainer contact email.
 
 25. **Benchmarks & Comparisons**
     - Compare startup time, resource usage vs. similar tools (e.g., LangFlow, Dify on K8s).

@@ -31,9 +31,9 @@ All contributors must follow our [Code of Conduct](CODE_OF_CONDUCT.md). Be respe
 
 ```bash
 # Fork the repository on GitHub, then:
-git clone https://github.com/<your-username>/KubeSynapse.git
-cd KubeSynapse
-git remote add upstream https://github.com/kubesynapse/kubesynapse.git
+git clone https://github.com/<your-username>/kubesynapse.ai.git
+cd kubesynapse.ai
+git remote add upstream https://github.com/ykbytes/kubesynapse.ai.git
 ```
 
 ### Branch Strategy
@@ -242,7 +242,7 @@ To claim a Good First Issue, comment `/assign` on the issue. A maintainer will a
 
 ## Community
 
-- **GitHub Discussions**: [github.com/kubesynapse/kubesynapse/discussions](https://github.com/kubesynapse/kubesynapse/discussions)
+- **GitHub Issues**: [github.com/ykbytes/kubesynapse.ai/issues](https://github.com/ykbytes/kubesynapse.ai/issues)
 - **Roadmap**: [ROADMAP.md](ROADMAP.md)
 - **Maintainers**: [MAINTAINERS.md](MAINTAINERS.md)
 

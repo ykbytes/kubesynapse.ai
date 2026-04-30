@@ -97,6 +97,7 @@ spec:
                       enum:
                         - opencode
                         - pi
+                        - mistral-vibe
                       description: "Runtime implementation to provision for this agent"
                     opencode:
                       type: object
@@ -149,6 +150,16 @@ spec:
                             - moderate
                             - strict
                           description: "Security permission level. strict=read-only, moderate=block-dangerous, permissive=allow-all. Default: permissive"
+                    mistralVibe:
+                      type: object
+                      description: "Mistral Vibe-specific configuration used when runtime.kind=mistral-vibe"
+                      properties:
+                        model:
+                          type: string
+                          description: "Mistral Vibe model alias. Overrides spec.model when set."
+                        noSession:
+                          type: boolean
+                          description: "Ephemeral mode for the Vibe runtime bridge"
                   required:
                     - kind
                 gitConfig:

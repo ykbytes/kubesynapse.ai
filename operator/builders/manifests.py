@@ -37,6 +37,8 @@ from config import (
     IMAGE_PULL_SECRETS,
     LITELLM_SVC,
     MCP_AUTH_SECRET_NAME,
+    MISTRAL_VIBE_RUNTIME_IMAGE,
+    MISTRAL_VIBE_RUNTIME_IMAGE_PULL_POLICY,
     MCP_HUB_NAMESPACE,
     MCP_SIDECAR_CATALOG,
     OPA_SIDECAR_IMAGE,
@@ -60,8 +62,6 @@ from config import (
     RUNTIME_SERVICE_ACCOUNT,
     SECRET_NAME,
     SUPPORTED_RUNTIME_KINDS,
-    TRUST_BUNDLE_CONFIGMAP_NAME,
-    TRUST_BUNDLE_MOUNT_PATH,
     WORKER_ACTIVE_DEADLINE_SECONDS,
     WORKER_ARTIFACT_SIZE,
     WORKER_ARTIFACT_STORAGE_CLASS,
@@ -102,11 +102,6 @@ from utils import (
 logger = logging.getLogger("operator.builders")
 
 
-def trust_bundle_enabled() -> bool:
-    """Return True when runtime pods should mount a trust bundle."""
-    return bool(TRUST_BUNDLE_CONFIGMAP_NAME and TRUST_BUNDLE_MOUNT_PATH)
-
-
 def _resolve_opencode_model_ref(raw_model: str) -> tuple[str, str]:
     """Split a model reference into (provider_id, model_id).
 
@@ -123,24 +118,6 @@ def _resolve_opencode_model_ref(raw_model: str) -> tuple[str, str]:
             return (OPENCODE_DEFAULT_PROVIDER, model_id)
         return (provider_id, model_id)
     return (OPENCODE_DEFAULT_PROVIDER, cleaned)
-
-
-def trust_bundle_volume_mount() -> dict[str, Any]:
-    """Build the trust bundle file mount used by runtime containers."""
-    return {
-        "name": "trust-bundle",
-        "mountPath": TRUST_BUNDLE_MOUNT_PATH,
-        "subPath": "ca-bundle.pem",
-        "readOnly": True,
-    }
-
-
-def trust_bundle_volume() -> dict[str, Any]:
-    """Build the trust bundle config map volume for runtime pods."""
-    return {
-        "name": "trust-bundle",
-        "configMap": {"name": TRUST_BUNDLE_CONFIGMAP_NAME},
-    }
 
 
 def resolve_agent_container_resources(spec: dict[str, Any]) -> dict[str, dict[str, str]]:
@@ -457,6 +434,49 @@ def _build_pod_template_revision(
     revision_source = {
         "spec": spec,
         "runtimeKind": runtime_kind,
+        "policyName": policy_name,
+        "policySpec": policy_spec or {},
+        "mcpSidecars": mcp_sidecars,
+    }
+    serialized = json.dumps(revision_source, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()[:12]
+
+
+def _build_pi_pod_template_revision(
+    spec: dict[str, Any],
+    policy_name: str | None,
+    policy_spec: dict[str, Any] | None,
+    mcp_sidecars: list[dict[str, Any]],
+) -> str:
+    """Compute a deterministic revision hash for pi runtime pods.
+
+    Excludes model, provider, and thinkingLevel from the hash so that
+    changes to these fields do not trigger a pod restart.  The bridge
+    handles dynamic model switching at invoke time.
+    """
+    # Deep-copy spec so we can strip model-related fields without mutating.
+    # Convert to plain dicts recursively since kopf Spec/Body objects don't
+    # support .pop().  json round-trip guarantees all nested objects are plain.
+    import json
+    stripped = json.loads(json.dumps(dict(spec)))
+
+    # Remove top-level model (used as fallback by the operator)
+    stripped.pop("model", None)
+
+    # Remove pi-specific model/provider/thinkingLevel
+    runtime = stripped.get("runtime") or {}
+    pi_spec = runtime.get("pi") or {}
+    pi_spec.pop("model", None)
+    pi_spec.pop("provider", None)
+    pi_spec.pop("thinkingLevel", None)
+    if runtime.get("pi") is not None:
+        runtime["pi"] = pi_spec
+    if stripped.get("runtime") is not None:
+        stripped["runtime"] = runtime
+
+    revision_source = {
+        "spec": stripped,
+        "runtimeKind": "pi",
         "policyName": policy_name,
         "policySpec": policy_spec or {},
         "mcpSidecars": mcp_sidecars,
@@ -1342,8 +1362,11 @@ def _create_pi_statefulset_spec(
                 "metadata": {
                     "labels": pod_labels,
                     "annotations": {
-                        POD_TEMPLATE_REVISION_ANNOTATION: hashed_resource_name(
-                            "statefulset", namespace, statefulset_name, suffix=str(int(time.time()))
+                        POD_TEMPLATE_REVISION_ANNOTATION: _build_pi_pod_template_revision(
+                            spec=spec,
+                            policy_name=None,
+                            policy_spec=None,
+                            mcp_sidecars=mcp_sidecars,
                         ),
                     },
                 },
@@ -1378,6 +1401,179 @@ def _create_pi_statefulset_spec(
     if enable_gvisor:
         manifest["spec"]["template"]["spec"]["runtimeClassName"] = "gvisor"
 
+    return manifest
+
+
+def _create_mistral_vibe_statefulset_spec(
+    *,
+    name: str,
+    namespace: str,
+    spec: dict[str, Any],
+    system_prompt: str,
+    model: str,
+    enable_gvisor: bool,
+    agent_resources: dict[str, Any],
+    env: list[dict[str, Any]],
+    volume_mounts: list[dict[str, Any]],
+    volumes: list[dict[str, Any]],
+    init_volume_mounts: list[dict[str, Any]],
+    init_containers: list[dict[str, Any]],
+) -> dict[str, Any]:
+    runtime_spec = spec.get("runtime") or {}
+    vibe_spec = (runtime_spec.get("mistralVibe") or {}) if isinstance(runtime_spec, dict) else {}
+
+    agent_image = MISTRAL_VIBE_RUNTIME_IMAGE
+    agent_image_pull_policy = MISTRAL_VIBE_RUNTIME_IMAGE_PULL_POLICY
+    vibe_model = str(vibe_spec.get("model") or spec.get("model") or "devstral-small").strip() or "devstral-small"
+    vibe_no_session = bool(vibe_spec.get("noSession", False))
+
+    volume_mounts = list(volume_mounts)
+    volume_mounts.append({"name": "workspace-volume", "mountPath": "/workspace"})
+    volumes = list(volumes)
+    volumes.append({"name": "workspace-volume", "emptyDir": {"sizeLimit": "5Gi"}})
+
+    vibe_env = list(env)
+    vibe_env.extend(
+        [
+            {"name": "KUBESYNAPSE_AGENT_NAME", "value": name},
+            {"name": "KUBESYNAPSE_NAMESPACE", "value": namespace},
+            {"name": "VIBE_ACTIVE_MODEL", "value": vibe_model},
+            {"name": "VIBE_SYSTEM_PROMPT", "value": system_prompt},
+            {"name": "VIBE_NO_SESSION", "value": "true" if vibe_no_session else "false"},
+            {
+                "name": "MISTRAL_API_KEY",
+                "valueFrom": {
+                    "secretKeyRef": {
+                        "name": SECRET_NAME,
+                        "key": "MISTRAL_API_KEY",
+                        "optional": True,
+                    }
+                },
+            },
+        ]
+    )
+    if OTEL_ENDPOINT:
+        vibe_env.append({"name": "OTEL_EXPORTER_OTLP_ENDPOINT", "value": OTEL_ENDPOINT})
+
+    init_containers = list(init_containers)
+    init_containers.append(
+        {
+            "name": "init-state-volume",
+            "image": agent_image,
+            "imagePullPolicy": agent_image_pull_policy,
+            "command": [
+                "/bin/sh",
+                "-c",
+                "set -e; mkdir -p /app/state/home/.vibe /workspace; chown -R 1000:1000 /app/state /workspace || true; chmod -R ug+rwX /app/state /workspace || true",
+            ],
+            "securityContext": {
+                "runAsUser": 0,
+                "runAsGroup": 0,
+                "runAsNonRoot": False,
+                "allowPrivilegeEscalation": False,
+                "capabilities": {"drop": ["ALL"], "add": ["CHOWN", "FOWNER"]},
+                "seccompProfile": {"type": "RuntimeDefault"},
+            },
+            "volumeMounts": list(init_volume_mounts),
+        }
+    )
+
+    statefulset_name = sandbox_name(name)
+    pod_labels = {"app": "ai-agent", "agent-name": name, "runtime": "mistral-vibe"}
+    manifest: dict[str, Any] = {
+        "apiVersion": "apps/v1",
+        "kind": "StatefulSet",
+        "metadata": {
+            "name": statefulset_name,
+            "namespace": namespace,
+            "labels": pod_labels,
+            "annotations": {
+                "kubesynapse.ai/agent-name": name,
+                "kubesynapse.ai/runtime": "mistral-vibe",
+            },
+        },
+        "spec": {
+            "serviceName": statefulset_name,
+            "replicas": 1,
+            "selector": {"matchLabels": pod_labels},
+            "template": {
+                "metadata": {
+                    "labels": pod_labels,
+                    "annotations": {
+                        POD_TEMPLATE_REVISION_ANNOTATION: _build_pod_template_revision(
+                            spec=spec,
+                            runtime_kind="mistral-vibe",
+                            policy_name=None,
+                            policy_spec=None,
+                            mcp_sidecars=[],
+                        ),
+                    },
+                },
+                "spec": {
+                    "serviceAccountName": RUNTIME_SERVICE_ACCOUNT,
+                    "securityContext": {
+                        "runAsNonRoot": True,
+                        "runAsUser": 1000,
+                        "runAsGroup": 1000,
+                        "fsGroup": 1000,
+                        "fsGroupChangePolicy": "OnRootMismatch",
+                        "seccompProfile": {"type": "RuntimeDefault"},
+                    },
+                    "initContainers": init_containers,
+                    "containers": [
+                        {
+                            "name": "agent-runtime",
+                            "image": agent_image,
+                            "imagePullPolicy": agent_image_pull_policy,
+                            "securityContext": {
+                                "allowPrivilegeEscalation": False,
+                                "readOnlyRootFilesystem": True,
+                                "capabilities": {"drop": ["ALL"]},
+                            },
+                            "resources": agent_resources,
+                            "ports": [{"containerPort": 8080, "name": "http", "protocol": "TCP"}],
+                            "startupProbe": {
+                                "httpGet": {"path": "/health", "port": 8080},
+                                "initialDelaySeconds": 5,
+                                "periodSeconds": 5,
+                                "timeoutSeconds": 3,
+                                "failureThreshold": 30,
+                            },
+                            "readinessProbe": {
+                                "httpGet": {"path": "/ready", "port": 8080},
+                                "initialDelaySeconds": 10,
+                                "periodSeconds": 10,
+                                "timeoutSeconds": 5,
+                                "failureThreshold": 3,
+                            },
+                            "livenessProbe": {
+                                "httpGet": {"path": "/health", "port": 8080},
+                                "initialDelaySeconds": 15,
+                                "periodSeconds": 20,
+                                "timeoutSeconds": 5,
+                                "failureThreshold": 3,
+                            },
+                            "volumeMounts": volume_mounts,
+                            "env": vibe_env,
+                        }
+                    ],
+                    "volumes": volumes,
+                    "terminationGracePeriodSeconds": 60,
+                },
+            },
+            "volumeClaimTemplates": [
+                {
+                    "metadata": {"name": "state-volume"},
+                    "spec": build_pvc_spec(
+                        (spec.get("storage") or {}).get("size", DEFAULT_STORAGE_SIZE),
+                        (spec.get("storage") or {}).get("storageClassName"),
+                    ),
+                }
+            ],
+        },
+    }
+    if enable_gvisor:
+        manifest["spec"]["template"]["spec"]["runtimeClassName"] = "gvisor"
     return manifest
 
 
@@ -1433,7 +1629,7 @@ def create_agent_statefulset_manifest(
             mcp_sidecars.append(
                 {
                     "name": "git",
-                    "image": git_catalog_entry.get("image", "docker.io/yakdhane/mcp-git:latest"),
+                    "image": git_catalog_entry.get("image", "docker.io/kubesynapse/mcp-git:latest"),
                     "port": git_catalog_entry.get("port", 8095),
                 }
             )
@@ -1639,17 +1835,12 @@ def create_agent_statefulset_manifest(
         {"name": "state-volume", "mountPath": "/app/state"},
     ]
     volumes: list[dict[str, Any]] = [{"name": "tmp-volume", "emptyDir": {"sizeLimit": "1Gi"}}]
-    if trust_bundle_enabled():
-        volume_mounts.append(trust_bundle_volume_mount())
-        volumes.append(trust_bundle_volume())
     if skills_config.get("configMapRef"):
         volume_mounts.append({"name": "skills-configmap", "mountPath": "/app/state/skills-configmap/", "readOnly": True})
         volumes.append({"name": "skills-configmap", "configMap": {"name": skills_config["configMapRef"]}})
 
     # Shared init volume mounts (used by both opencode and pi)
     init_volume_mounts = [{"name": "state-volume", "mountPath": "/app/state"}]
-    if trust_bundle_enabled():
-        init_volume_mounts.append(trust_bundle_volume_mount())
     # Shared init_containers placeholder (pi builds its own, opencode reassigns)
     init_containers: list[dict[str, Any]] = []
 
@@ -1671,7 +1862,6 @@ def create_agent_statefulset_manifest(
             volumes=volumes,
             init_volume_mounts=[
                 {"name": "state-volume", "mountPath": "/home/piuser/.pi/agent"},
-                *([trust_bundle_volume_mount()] if trust_bundle_enabled() else []),
             ],
             container_security_context=container_security_context,
             pod_security_context=pod_security_context,
@@ -1680,6 +1870,22 @@ def create_agent_statefulset_manifest(
             git_volume_mounts=git_volume_mounts,
             init_containers=init_containers,
             skills_config=skills_config,
+        )
+
+    if runtime_kind == "mistral-vibe":
+        return _create_mistral_vibe_statefulset_spec(
+            name=name,
+            namespace=namespace,
+            spec=spec,
+            system_prompt=system_prompt,
+            model=model,
+            enable_gvisor=enable_gvisor,
+            agent_resources=agent_resources,
+            env=env,
+            volume_mounts=volume_mounts,
+            volumes=volumes,
+            init_volume_mounts=[{"name": "state-volume", "mountPath": "/app/state"}],
+            init_containers=init_containers,
         )
 
     if runtime_kind != "opencode":
@@ -1794,8 +2000,6 @@ def create_agent_statefulset_manifest(
     env.extend(runtime_extra_env)
 
     init_volume_mounts = [{"name": "state-volume", "mountPath": "/app/state"}]
-    if trust_bundle_enabled():
-        init_volume_mounts.append(trust_bundle_volume_mount())
 
     init_containers = [
         {

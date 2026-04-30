@@ -502,15 +502,15 @@ export function CreateAgentPanel({
                   <CardContent className="space-y-3">
                     <div className="space-y-1.5">
                       <Label className="text-xs">Runtime kind</Label>
-                      <Select value={runtimeKind} onValueChange={(v) => onRuntimeKindChange(v as RuntimeKind)}>
-                        <SelectTrigger className="h-8 text-xs">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {(["opencode", "pi"] as RuntimeKind[]).map((kind) => {
-                            const signal = getRuntimeSignal(kind);
-                            return (
-                              <SelectItem key={kind} value={kind} className="text-xs">
+                       <Select value={runtimeKind} onValueChange={(v) => onRuntimeKindChange(v as RuntimeKind)}>
+                         <SelectTrigger className="h-8 text-xs">
+                           <SelectValue />
+                         </SelectTrigger>
+                         <SelectContent>
+                           {(["opencode", "pi", "mistral-vibe"] as RuntimeKind[]).map((kind) => {
+                             const signal = getRuntimeSignal(kind);
+                             return (
+                               <SelectItem key={kind} value={kind} className="text-xs">
                                 <span className="inline-flex items-center gap-1.5">
                                   <signal.icon className="h-3.5 w-3.5" />
                                   {signal.label}
@@ -529,11 +529,18 @@ export function CreateAgentPanel({
                           Best for autonomous multi-turn coding tasks with structured output, session persistence, context-overflow recovery, shared MCP routing, and managed sidecars.
                         </p>
                       </div>
-                    ) : (
+                    ) : runtimeKind === "pi" ? (
                       <div className="rounded-2xl border border-violet-500/30 bg-violet-500/5 px-4 py-3 text-left text-foreground">
                         <p className="font-medium text-sm">Pi runtime</p>
                         <p className="mt-1 text-xs leading-5 text-muted-foreground">
                           Lightweight alternative runtime using the pi coding agent. Supports streaming, tool use, and MCP connections via the pi extension system.
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="rounded-2xl border border-fuchsia-500/30 bg-fuchsia-500/5 px-4 py-3 text-left text-foreground">
+                        <p className="font-medium text-sm">Mistral Vibe runtime</p>
+                        <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                          Dedicated Mistral Vibe runtime for lightweight prompt-driven execution with streaming support and Mistral-native model aliases.
                         </p>
                       </div>
                     )}

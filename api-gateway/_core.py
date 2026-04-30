@@ -312,7 +312,7 @@ AGENT_READ_CACHE_MAX_ENTRIES = max(int(os.getenv("API_GATEWAY_AGENT_READ_CACHE_M
 A2A_PROTOCOL_VERSION = "1.0"
 A2A_TASK_RETENTION_SECONDS = max(int(os.getenv("A2A_TASK_RETENTION_SECONDS", "3600")), 60)
 A2A_PUBLIC_BASE_URL = os.getenv("API_GATEWAY_PUBLIC_BASE_URL", "").strip()
-A2A_PROVIDER_ORGANIZATION = os.getenv("A2A_PROVIDER_ORGANIZATION", "KubeSynapseai").strip()
+A2A_PROVIDER_ORGANIZATION = os.getenv("A2A_PROVIDER_ORGANIZATION", "KubeSynapse").strip()
 A2A_PROVIDER_URL = os.getenv("A2A_PROVIDER_URL", "").strip()
 A2A_TERMINAL_STATES = {
     "TASK_STATE_COMPLETED",
@@ -3305,7 +3305,7 @@ def build_agent_card(agent_name: str, namespace: str, request: Request) -> dict[
             }
         ],
         "provider": {
-            "organization": A2A_PROVIDER_ORGANIZATION or "KubeSynapseai",
+            "organization": A2A_PROVIDER_ORGANIZATION or "KubeSynapse",
             "url": provider_url,
         },
         "version": version,

@@ -24,11 +24,14 @@ import {
   ChevronDown,
   ChevronUp,
   Radio,
+  ArrowDownUp,
+  ArrowLeftRight,
 } from "lucide-react";
 import { ExpandableMarkdownEditor } from "@/components/ExpandableMarkdownEditor";
 import { cn } from "@/lib/utils";
 
 import type { WorkflowSummary, WorkflowPendingApproval } from "@/types";
+import type { LayoutDirection } from "@/lib/composer-utils";
 
 interface ComposerToolbarProps {
   workflowName: string;
@@ -51,6 +54,8 @@ interface ComposerToolbarProps {
   onRun: () => void;
   isMaximized: boolean;
   onAutoLayout: () => void;
+  onToggleDirection: () => void;
+  layoutDirection: LayoutDirection;
   onToggleMaximize: () => void;
   onBack: () => void;
   onToggleLivePanel?: () => void;
@@ -79,6 +84,8 @@ export function ComposerToolbar({
   onSave,
   onRun,
   onAutoLayout,
+  onToggleDirection,
+  layoutDirection,
   onToggleMaximize,
   onBack,
   onToggleLivePanel,
@@ -214,6 +221,18 @@ export function ComposerToolbar({
             title="Auto-arrange all nodes (Ctrl+Shift+L)"
           >
             <LayoutGrid className="h-3.5 w-3.5" />
+          </Button>
+
+          <Button
+            variant={layoutDirection === "horizontal" ? "secondary" : "outline"}
+            size="icon"
+            className="h-7 w-7 shrink-0 cursor-pointer"
+            onClick={onToggleDirection}
+            title={layoutDirection === "vertical" ? "Switch to horizontal layout" : "Switch to vertical layout"}
+          >
+            {layoutDirection === "vertical"
+              ? <ArrowDownUp className="h-3.5 w-3.5" />
+              : <ArrowLeftRight className="h-3.5 w-3.5" />}
           </Button>
 
           {onToggleLivePanel && (

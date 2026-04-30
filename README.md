@@ -1,9 +1,9 @@
 # KubeSynapse
 
 <p align="center">
-  <a href="https://github.com/kubesynapse/kubesynapse/stargazers"><img src="https://img.shields.io/github/stars/kubesynapse/kubesynapse" alt="GitHub Stars"></a>
-  <a href="https://github.com/kubesynapse/kubesynapse/blob/main/LICENSE"><img src="https://img.shields.io/github/license/kubesynapse/kubesynapse" alt="License"></a>
-  <a href="https://github.com/kubesynapse/kubesynapse/releases"><img src="https://img.shields.io/github/v/release/kubesynapse/kubesynapse" alt="Release"></a>
+  <a href="https://github.com/ykbytes/kubesynapse.ai/stargazers"><img src="https://img.shields.io/github/stars/ykbytes/kubesynapse.ai" alt="GitHub Stars"></a>
+  <a href="https://github.com/ykbytes/kubesynapse.ai/blob/main/LICENSE"><img src="https://img.shields.io/github/license/ykbytes/kubesynapse.ai" alt="License"></a>
+  <a href="https://github.com/ykbytes/kubesynapse.ai/releases"><img src="https://img.shields.io/github/v/release/ykbytes/kubesynapse.ai" alt="Release"></a>
   <a href="https://kubernetes.io/"><img src="https://img.shields.io/badge/Kubernetes-1.25%2B-326CE5" alt="Kubernetes 1.25+"></a>
 </p>
 
@@ -17,24 +17,24 @@ Deploy, orchestrate, and govern AI agents using declarative custom resources. Ku
 KubeSynapse separates the **control plane** (CRDs, operator, gateway) from the **execution plane** (per-agent runtimes and sidecars).
 
 ```mermaid
-graph LR
-    subgraph "Clients"
-        UI[Web UI<br/>React 18 + Vite + Tailwind v4]
-        CLI[agentctl CLI<br/>Typer-based]
-        EXT[External API Clients]
+flowchart LR
+    subgraph Clients
+        UI["Web UI\nReact 18 + Vite + Tailwind v4"]
+        CLI["agentctl CLI\nTyper-based"]
+        EXT["External API Clients"]
     end
 
-    subgraph "Control Plane"
-        GW[API Gateway<br/>FastAPI monolith<br/>A2A JSON-RPC + SSE]
-        K8S[Kubernetes API Server]
-        OP[Operator<br/>Kopf-based engine<br/>~3,500-line worker]
-        CRD[CRDs: KubeSynapse.ai/v1alpha1<br/>AIAgent, AgentWorkflow, AgentEval,<br/>AgentPolicy, AgentApproval, AgentTenant]
+    subgraph ControlPlane[Control Plane]
+        GW["API Gateway\nFastAPI monolith\nA2A JSON-RPC + SSE"]
+        K8S["Kubernetes API Server"]
+        OP["Operator\nKopf-based engine\n~3,500-line worker"]
+        CRD["CRDs: KubeSynapse.ai/v1alpha1\nAIAgent, AgentWorkflow, AgentEval\nAgentPolicy, AgentApproval, AgentTenant"]
     end
 
-    subgraph "Execution Plane"
-        RT[OpenCode Runtime STS<br/>FastAPI wrapper<br/>around opencode serve]
-        PI[Pi Runtime STS<br/>Node.js RPC bridge<br/>HTTP bridge mode]
-        MCP[MCP Sidecars<br/>Bundled tool containers]
+    subgraph ExecutionPlane[Execution Plane]
+        RT["OpenCode Runtime STS\nFastAPI wrapper\naround opencode serve"]
+        PI["Pi Runtime STS\nNode.js RPC bridge\nHTTP bridge mode"]
+        MCP["MCP Sidecars\nBundled tool containers"]
     end
 
     UI -->|HTTP| GW
@@ -133,10 +133,10 @@ Build locally and load into a Kind cluster. No registry required.
 
 ```bash
 # 1. Create cluster
-kind create cluster --name KubeSynapse-dev
+kind create cluster --name kubesynapse-dev
 
 # 2. Build platform images + MCP sidecars
-make docker-build REGISTRY=localhost/KubeSynapseai VERSION=dev CONTAINER_CLI=docker
+make docker-build REGISTRY=localhost/kubesynapse VERSION=dev CONTAINER_CLI=docker
 
 # 3. Install
 helm upgrade --install KubeSynapse ./charts/kubesynapse \
@@ -205,8 +205,8 @@ We welcome contributions. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full 
 
 ```bash
 # Fork, clone, and build
-git clone https://github.com/your-username/KubeSynapse.git
-cd KubeSynapse
+git clone https://github.com/your-username/kubesynapse.ai.git
+cd kubesynapse.ai
 
 # Run the test suite
 make test

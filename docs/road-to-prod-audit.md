@@ -439,7 +439,7 @@ charts/
 
 ### 5.3 — Hardcoded Image References (P2)
 
-**Problem**: Default image references use `ghcr.io/your-org/...` placeholders. The operator itself has `RUNTIME_IMAGE = os.getenv("AGENT_RUNTIME_IMAGE", "ghcr.io/your-org/ai-agent-runtime:latest")`. Using `:latest` tags is an anti-pattern.
+**Problem**: Default image references used placeholder registries and `:latest` tags. Using unowned registries or floating tags is an anti-pattern.
 
 **Fix**: 
 - Pin all images to SHA digests in production values

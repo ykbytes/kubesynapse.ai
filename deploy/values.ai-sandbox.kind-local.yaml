@@ -11,33 +11,33 @@ global:
 
 opencodeRuntime:
   image:
-    repository: localhost/KubeSynapseai/kubesynapse-opencode-runtime
+    repository: localhost/kubesynapse/kubesynapse-opencode-runtime
     tag: mcp-structured-20260413-4
     pullPolicy: IfNotPresent
 
 operator:
   image:
-    repository: localhost/KubeSynapseai/kubesynapse-operator
+    repository: localhost/kubesynapse/kubesynapse-operator
     tag: mcp-structured-20260413-3
     pullPolicy: IfNotPresent
   workerImage:
-    repository: localhost/KubeSynapseai/kubesynapse-operator
+    repository: localhost/kubesynapse/kubesynapse-operator
     tag: mcp-structured-20260413-3
     pullPolicy: IfNotPresent
 
 apiGateway:
   image:
-    repository: localhost/KubeSynapseai/kubesynapse-api-gateway
+    repository: localhost/kubesynapse/kubesynapse-api-gateway
     tag: google-oidc-20260413-223019
     pullPolicy: IfNotPresent
 
 webUi:
   image:
-    repository: localhost/KubeSynapseai/kubesynapse-web-ui
+    repository: localhost/kubesynapse/kubesynapse-web-ui
     tag: google-oidc-20260413-223019
     pullPolicy: IfNotPresent
 
 collector:
   image:
-    repository: localhost/KubeSynapseai/collector-agent
+    repository: localhost/kubesynapse/collector-agent
     tag: dev

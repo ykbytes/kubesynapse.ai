@@ -166,7 +166,7 @@ agentRuntime:
 1. **Review the changelog:**
 
    ```bash
-   curl -sL https://github.com/kubesynapse/kubesynapse/releases/latest
+   curl -sL https://github.com/ykbytes/kubesynapse.ai/releases/latest
    ```
 
 2. **Backup critical state:**

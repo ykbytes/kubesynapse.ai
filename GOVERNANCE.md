@@ -56,6 +56,6 @@ KubeSynapse is licensed under the Apache License 2.0.
 
 ## Contact
 
-- Issues: [GitHub Issues](https://github.com/ykbytes/kubemininions/issues)
-- Discussions: [GitHub Discussions](https://github.com/ykbytes/kubemininions/discussions)
+- Issues: [GitHub Issues](https://github.com/ykbytes/kubesynapse.ai/issues)
+- Pull Requests: [GitHub Pull Requests](https://github.com/ykbytes/kubesynapse.ai/pulls)
 - Security: security@kubesynapse.ai

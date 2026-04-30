@@ -30,7 +30,7 @@ spec:
             bash: deny
   mcpSidecars:
     - name: web-search
-      image: docker.io/yakdhane/mcp-web-search:deploy-20260401-212102
+      image: docker.io/kubesynapse/mcp-web-search:deploy-20260401-212102
       port: 8091
   storage:
     size: 2Gi
@@ -213,7 +213,7 @@ spec:
           permission: allow
   mcpSidecars:
     - name: web-search
-      image: docker.io/yakdhane/mcp-web-search:deploy-20260401-212102
+      image: docker.io/kubesynapse/mcp-web-search:deploy-20260401-212102
       port: 8091
   storage:
     size: 2Gi
@@ -474,7 +474,7 @@ spec:
             bash: deny
   mcpSidecars:
     - name: web-search
-      image: docker.io/yakdhane/mcp-web-search:deploy-20260401-212102
+      image: docker.io/kubesynapse/mcp-web-search:deploy-20260401-212102
       port: 8091
   storage:
     size: 2Gi

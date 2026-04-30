@@ -16,16 +16,14 @@ In this tutorial, you'll deploy a fully autonomous DevOps agent on your Kubernet
 ## Step 1: Install KubeSynapse (60 seconds)
 
 ```bash
-helm repo add KubeSynapse https://ykbytes.github.io/kubemininions/charts
-helm repo update
+git clone https://github.com/ykbytes/kubesynapse.ai.git
+cd kubesynapse.ai
 
-helm install KubeSynapse KubeSynapse/KubeSynapse \
+helm install kubesynapse ./charts/kubesynapse \
   --namespace kubesynapse \
   --create-namespace \
-  --set operator.image.repository=ghcr.io/ykbytes/kubesynapse-operator \
-  --set apiGateway.image.repository=ghcr.io/ykbytes/kubesynapse-api-gateway \
-  --set litellm.enabled=true \
-  --set litellm.apiKey.openai=$OPENAI_API_KEY
+  --set platformSecrets.native.openaiApiKey=$OPENAI_API_KEY \
+  --set platformSecrets.native.apiGatewaySharedToken=replace-me-with-a-long-random-bearer-token
 
 # Wait for all pods
 kubectl wait --for=condition=Ready pods --all -n kubesynapse --timeout=120s
@@ -39,7 +37,7 @@ kubectl get pods -n kubesynapse
 # kubesynapse-api-gateway-xxx         1/1     Running   0          30s
 # kubesynapse-operator-xxx            1/1     Running   0          30s
 # kubesynapse-postgresql-0            1/1     Running   0          30s
-# KubeSynapse-litellm-xxx             1/1     Running   0          30s
+# kubesynapse-litellm-xxx             1/1     Running   0          30s
 ```
 
 ## Step 2: Define the Agent Policy (30 seconds)

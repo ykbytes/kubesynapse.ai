@@ -1,6 +1,7 @@
 import { Handle, Position, type NodeProps } from "@xyflow/react";
 import type { AgentStepNode, AgentStepNodeData } from "@/lib/composer-utils";
-import { runtimeAccentClass } from "@/lib/composer-utils";
+import { runtimeAccentClass, getCurrentDirection } from "@/lib/composer-utils";
+import { getRuntimeSignal } from "@/lib/agentSignals";
 import { cn } from "@/lib/utils";
 import {
   UserCheck,
@@ -9,8 +10,6 @@ import {
   XCircle,
   LoaderCircle,
   Clock,
-  Bot,
-  Code,
   ShieldAlert,
   ShieldCheck,
   AlertTriangle,
@@ -20,13 +19,9 @@ import {
 /* ── Runtime icon mapping ── */
 
 function RuntimeIcon({ kind, className }: { kind?: string | null; className?: string }) {
-  const cls = className ?? "h-3.5 w-3.5";
-  switch (kind) {
-    case "opencode":
-      return <Code className={cn(cls, "text-sky-400")} />;
-    default:
-      return <Bot className={cn(cls, "text-muted-foreground")} />;
-  }
+  const signal = getRuntimeSignal(kind as Parameters<typeof getRuntimeSignal>[0]);
+  const Icon = signal.icon;
+  return <Icon className={cn("h-3.5 w-3.5", className)} />;
 }
 
 /* ── Status helpers ── */
@@ -198,21 +193,33 @@ const RUNNING_PULSE_STYLE: React.CSSProperties = { animation: "node-pulse-ring 2
 export function AgentNode({ data, selected }: NodeProps<AgentStepNode>) {
   const status = data.stepState?.status;
   const isRunning = status === "running";
+  const dir = getCurrentDirection();
+  const isHorizontal = dir === "horizontal";
+
+  const targetPos = isHorizontal ? Position.Left : Position.Top;
+  const sourcePos = isHorizontal ? Position.Right : Position.Bottom;
+
+  const targetHandleClass = isHorizontal
+    ? "!h-5 !w-2 !rounded-sm !bg-primary/80 !border-0 !left-[-4px] group-hover/node:!bg-primary group-hover/node:!shadow-[0_0_6px_oklch(0.65_0.13_175_/_0.4)] transition-all"
+    : "!w-5 !h-2 !rounded-sm !bg-primary/80 !border-0 !top-[-4px] group-hover/node:!bg-primary group-hover/node:!shadow-[0_0_6px_oklch(0.65_0.13_175_/_0.4)] transition-all";
+
+  const sourceHandleClass = isHorizontal
+    ? "!h-5 !w-2 !rounded-sm !bg-primary/80 !border-0 !right-[-4px] group-hover/node:!bg-primary group-hover/node:!shadow-[0_0_6px_oklch(0.65_0.13_175_/_0.4)] transition-all"
+    : "!w-5 !h-2 !rounded-sm !bg-primary/80 !border-0 !bottom-[-4px] group-hover/node:!bg-primary group-hover/node:!shadow-[0_0_6px_oklch(0.65_0.13_175_/_0.4)] transition-all";
 
   return (
     <div
       aria-label={`${data.stepName} step${data.agentRef ? `, agent ${data.agentRef}` : ""}${data.requireApproval ? ", requires approval" : ""}`}
       className={cn(
-        "group/node relative w-[280px] rounded-xl border bg-card shadow-md transition-all duration-200",
+        "group/node relative w-[280px] rounded-xl border bg-card/80 backdrop-blur-sm shadow-lg transition-all duration-150",
         "border-l-[3px]",
         runtimeAccentClass(data.runtimeKind),
         stepStatusBorder(status),
         selected && cn(
           "ring-2 ring-offset-1 ring-offset-background shadow-xl scale-[1.02]",
           stepStatusRing(status) || "ring-primary/60",
-          "animate-glow-pulse",
         ),
-        !selected && "hover:shadow-lg hover:shadow-primary/5 hover:ring-1 hover:ring-primary/20",
+        !selected && "hover:shadow-xl hover:shadow-primary/5 hover:ring-1 hover:ring-primary/20",
       )}
     >
       {/* Running pulse overlay */}
@@ -224,17 +231,19 @@ export function AgentNode({ data, selected }: NodeProps<AgentStepNode>) {
       )}
 
       {/* ── Input handle ── */}
-      <div className="absolute -top-5 left-1/2 -translate-x-1/2 flex flex-col items-center pointer-events-none">
-        <span className="text-[8px] font-semibold uppercase tracking-widest text-muted-foreground/60 mb-0.5 select-none">in</span>
-      </div>
+      {!isHorizontal && (
+        <div className="absolute -top-5 left-1/2 -translate-x-1/2 flex flex-col items-center pointer-events-none">
+          <span className="text-[8px] font-semibold uppercase tracking-widest text-muted-foreground/60 mb-0.5 select-none">in</span>
+        </div>
+      )}
       <Handle
         type="target"
-        position={Position.Top}
-        className="!w-5 !h-2 !rounded-sm !bg-primary/80 !border-0 !top-[-4px] group-hover/node:!bg-primary group-hover/node:!shadow-[0_0_6px_oklch(0.65_0.13_175_/_0.4)] transition-all"
+        position={targetPos}
+        className={targetHandleClass}
       />
 
       {/* ── Header ── */}
-      <div className="flex items-center gap-2 px-3 py-2 border-b border-border/40">
+      <div className="flex items-center gap-2 px-3 py-2 border-b border-border/30">
         <RuntimeIcon kind={data.runtimeKind} />
         <span className="text-xs font-semibold truncate flex-1">{data.stepName}</span>
         <StatusBadge status={status} />
@@ -244,7 +253,7 @@ export function AgentNode({ data, selected }: NodeProps<AgentStepNode>) {
       <div className="px-3 py-2 space-y-1.5">
         {/* Agent ref chip */}
         <div className="flex items-center gap-1.5 flex-wrap">
-          <span className="inline-flex items-center rounded-md border bg-secondary/50 px-1.5 py-0.5 text-[10px] font-mono text-muted-foreground truncate max-w-[180px]">
+          <span className="inline-flex items-center rounded-md border border-border/40 bg-secondary/40 px-1.5 py-0.5 text-[10px] font-mono text-muted-foreground truncate max-w-[180px]">
             {data.agentRef || "unassigned"}
           </span>
           <LatencyBadge ms={data.stepState?.latencyMs} />
@@ -266,7 +275,7 @@ export function AgentNode({ data, selected }: NodeProps<AgentStepNode>) {
           )}
           {data.stepType === "loop" && (
             <span className="inline-flex items-center gap-0.5 rounded-full bg-blue-500/10 border border-blue-500/20 px-1.5 py-0.5 text-[9px] text-blue-400 font-medium">
-              <Repeat className="h-2.5 w-2.5" /> Loop{data.loopConfig?.maxIterations ? ` ×${data.loopConfig.maxIterations}` : ""}
+              <Repeat className="h-2.5 w-2.5" /> Loop{data.loopConfig?.maxIterations ? ` x${data.loopConfig.maxIterations}` : ""}
             </span>
           )}
           {data.stepType === "conditional" && (
@@ -327,12 +336,14 @@ export function AgentNode({ data, selected }: NodeProps<AgentStepNode>) {
       {/* ── Output handle ── */}
       <Handle
         type="source"
-        position={Position.Bottom}
-        className="!w-5 !h-2 !rounded-sm !bg-primary/80 !border-0 !bottom-[-4px] group-hover/node:!bg-primary group-hover/node:!shadow-[0_0_6px_oklch(0.65_0.13_175_/_0.4)] transition-all"
+        position={sourcePos}
+        className={sourceHandleClass}
       />
-      <div className="absolute -bottom-5 left-1/2 -translate-x-1/2 flex flex-col items-center pointer-events-none">
-        <span className="text-[8px] font-semibold uppercase tracking-widest text-muted-foreground/60 mt-0.5 select-none">out</span>
-      </div>
+      {!isHorizontal && (
+        <div className="absolute -bottom-5 left-1/2 -translate-x-1/2 flex flex-col items-center pointer-events-none">
+          <span className="text-[8px] font-semibold uppercase tracking-widest text-muted-foreground/60 mt-0.5 select-none">out</span>
+        </div>
+      )}
     </div>
   );
 }

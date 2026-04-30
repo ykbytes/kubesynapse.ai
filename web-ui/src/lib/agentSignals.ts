@@ -1,3 +1,4 @@
+import type { ComponentType } from "react";
 import {
   Activity,
   Bot,
@@ -22,6 +23,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
+import { RUNTIME_BRAND_ICONS } from "@/components/RuntimeBrandIcon";
 import { ALPHA_RUNTIMES, type AgentMcpConnection, type GitConfig, type GitHubConfig, type RuntimeKind } from "@/types";
 
 export interface AgentSignalSource {
@@ -39,7 +41,7 @@ export interface AgentRuntimeSignal {
   id: RuntimeKind | "unknown";
   label: string;
   shortLabel: string;
-  icon: LucideIcon;
+  icon: ComponentType<{ className?: string }>;
   tone: string;
   alpha: boolean;
 }
@@ -73,14 +75,20 @@ const RUNTIME_META: Record<RuntimeKind, Omit<AgentRuntimeSignal, "id" | "alpha">
   opencode: {
     label: "OpenCode",
     shortLabel: "OpenCode",
-    icon: Code,
+    icon: RUNTIME_BRAND_ICONS.opencode,
     tone: "border-emerald-500/20 bg-emerald-500/5 text-emerald-200",
   },
   pi: {
     label: "Pi",
     shortLabel: "Pi",
-    icon: Code,
+    icon: RUNTIME_BRAND_ICONS.pi,
     tone: "border-violet-500/20 bg-violet-500/5 text-violet-200",
+  },
+  "mistral-vibe": {
+    label: "Mistral Vibe",
+    shortLabel: "Vibe",
+    icon: RUNTIME_BRAND_ICONS["mistral-vibe"],
+    tone: "border-fuchsia-500/20 bg-fuchsia-500/5 text-fuchsia-200",
   },
 };
 

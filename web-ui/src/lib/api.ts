@@ -544,8 +544,8 @@ function readRecord(record: JsonRecord, key: string, label: string, fallback: Js
 function readRuntimeKind(record: JsonRecord, key: string, label: string, fallback?: RuntimeKind): RuntimeKind {
   const value = record[key];
   const runtimeKind = value === undefined && fallback !== undefined ? fallback : value;
-  if (runtimeKind !== "opencode" && runtimeKind !== "pi") {
-    throw new Error(`${label}.${key} must be 'opencode' or 'pi'.`);
+  if (runtimeKind !== "opencode" && runtimeKind !== "pi" && runtimeKind !== "mistral-vibe") {
+    throw new Error(`${label}.${key} must be 'opencode', 'pi', or 'mistral-vibe'.`);
   }
   return runtimeKind;
 }
@@ -1378,9 +1378,14 @@ function parseInvokeResponsePayload(payload: unknown): InvokeResponse {
 }
 
 function parseStreamPayload(data: string): JsonRecord {
+  const trimmed = data.trim();
+  if (!trimmed || trimmed === "[DONE]") {
+    return {};
+  }
+
   let parsed: unknown;
   try {
-    parsed = JSON.parse(data);
+    parsed = JSON.parse(trimmed);
   } catch {
     throw new Error("Streaming event payload was not valid JSON.");
   }

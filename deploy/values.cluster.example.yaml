@@ -6,17 +6,17 @@ global:
 
 operator:
   image:
-    repository: docker.io/yakdhane/kubesynapse-operator
+    repository: docker.io/kubesynapse/kubesynapse-operator
     tag: deploy-20260401-225700-hotfix
     pullPolicy: IfNotPresent
   workerImage:
-    repository: docker.io/yakdhane/kubesynapse-operator
+    repository: docker.io/kubesynapse/kubesynapse-operator
     tag: deploy-20260401-225700-hotfix
     pullPolicy: IfNotPresent
 
 opencodeRuntime:
   image:
-    repository: docker.io/yakdhane/kubesynapse-opencode-runtime
+    repository: docker.io/kubesynapse/kubesynapse-opencode-rt
     tag: deploy-20260401-212102-opencode
     pullPolicy: IfNotPresent
   limits:
@@ -34,7 +34,7 @@ opencodeRuntime:
 
 apiGateway:
   image:
-    repository: docker.io/yakdhane/kubesynapse-api-gateway
+    repository: docker.io/kubesynapse/kubesynapse-api-gateway
     tag: deploy-20260401-212102
     pullPolicy: IfNotPresent
   ingressClassName: ""
@@ -51,7 +51,7 @@ apiGateway:
 webUi:
   enabled: true
   image:
-    repository: docker.io/yakdhane/kubesynapse-web-ui
+    repository: docker.io/kubesynapse/kubesynapse-web-ui
     tag: deploy-20260401-225700-hotfix
     pullPolicy: IfNotPresent
 
@@ -85,36 +85,36 @@ mcpHub:
   servers:
     github:
       enabled: true
-      image: docker.io/yakdhane/mcp-github-adapter:deploy-20260401-212102
+      image: docker.io/kubesynapse/mcp-github-adapter:deploy-20260401-212102
 
 mcpToolSidecars:
   codeExec:
-    image: docker.io/yakdhane/mcp-code-exec
+    image: docker.io/kubesynapse/mcp-code-exec
     tag: deploy-20260401-212102
   webSearch:
-    image: docker.io/yakdhane/mcp-web-search
+    image: docker.io/kubesynapse/mcp-web-search
     tag: deploy-20260401-212102
   documents:
-    image: docker.io/yakdhane/mcp-documents
+    image: docker.io/kubesynapse/mcp-documents
     tag: deploy-20260401-212102
   browser:
-    image: docker.io/yakdhane/mcp-browser
+    image: docker.io/kubesynapse/mcp-browser
     tag: deploy-20260401-212102
   database:
-    image: docker.io/yakdhane/mcp-database
+    image: docker.io/kubesynapse/mcp-database
     tag: deploy-20260401-212102
   git:
-    image: docker.io/yakdhane/mcp-git
+    image: docker.io/kubesynapse/mcp-git
     tag: deploy-20260401-212102
   githubAdapter:
-    image: docker.io/yakdhane/mcp-github-adapter
+    image: docker.io/kubesynapse/mcp-github-adapter
     tag: deploy-20260401-212102
   kubernetes:
-    image: docker.io/yakdhane/mcp-kubernetes
+    image: docker.io/kubesynapse/mcp-kubernetes
     tag: deploy-20260401-212102
   messaging:
-    image: docker.io/yakdhane/mcp-messaging
+    image: docker.io/kubesynapse/mcp-messaging
     tag: latest
   rag:
-    image: docker.io/yakdhane/mcp-rag
+    image: docker.io/kubesynapse/mcp-rag
     tag: latest

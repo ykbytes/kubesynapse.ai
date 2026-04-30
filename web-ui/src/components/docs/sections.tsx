@@ -42,7 +42,7 @@ function GettingStartedSection() {
       />
       <div id="gs-prerequisites">
         <SectionHeading icon={Layers}>Prerequisites</SectionHeading>
-        <p className="mt-2 text-base leading-7 text-muted-foreground">
+        <p className="mt-2 text-base leading-7 text-[oklch(0.80_0.01_264)]">
           Before installing kubesynapse, ensure your environment meets the following requirements:
         </p>
         <DocsTable
@@ -63,12 +63,12 @@ function GettingStartedSection() {
 
       <div id="gs-install">
         <SectionHeading icon={Rocket}>Step 1: Install kubesynapse</SectionHeading>
-        <p className="mt-2 text-base leading-7 text-muted-foreground">
+        <p className="mt-2 text-base leading-7 text-[oklch(0.80_0.01_264)]">
           The fastest path uses pre-built images from Docker Hub. Clone the repository and deploy with Helm.
         </p>
         <CodeBlock
           code={`# 1. Clone the repository
-git clone https://github.com/kubesynapse/kubesynapse.git && cd kubesynapse
+git clone https://github.com/ykbytes/kubesynapse.ai.git && cd kubesynapse.ai
 
 # 2. Deploy with the default local-values example
 helm upgrade --install kubesynapse ./charts/kubesynapse \\
@@ -89,7 +89,7 @@ curl http://localhost:8080/api/health`}
 
       <div id="gs-secrets">
         <SectionHeading icon={Settings}>Step 2: Configure Secrets</SectionHeading>
-        <p className="mt-2 text-base leading-7 text-muted-foreground">
+        <p className="mt-2 text-base leading-7 text-[oklch(0.80_0.01_264)]">
           Store LLM API keys and other sensitive values as Kubernetes Secrets. The operator and gateway read these
           secrets to authenticate with upstream providers.
         </p>
@@ -153,7 +153,7 @@ platformSecrets:
 
       <div id="gs-first-agent">
         <SectionHeading icon={Bot}>Step 4: Create Your First Agent</SectionHeading>
-        <p className="mt-2 text-base leading-7 text-muted-foreground">
+        <p className="mt-2 text-base leading-7 text-[oklch(0.80_0.01_264)]">
           Apply an <code>AIAgent</code> manifest. The operator provisions a StatefulSet, PVC, and OpenCode runtime
           container for each resource.
         </p>
@@ -235,7 +235,7 @@ function ArchitectureSection() {
       />
       <div id="arch-overview">
         <SectionHeading icon={Layers}>System Overview</SectionHeading>
-        <p className="mt-2 text-base leading-7 text-muted-foreground">
+        <p className="mt-2 text-base leading-7 text-[oklch(0.80_0.01_264)]">
           kubesynapse separates the <strong>control plane</strong> (CRDs, operator, gateway) from the{" "}
           <strong>execution plane</strong> (per-agent runtimes and sidecars). All desired state is stored in the
           Kubernetes API and reconciled by a Kopf-based operator.
@@ -272,7 +272,7 @@ function ArchitectureSection() {
       </div>
       <div id="arch-control">
         <SectionHeading icon={FileCode}>Control Plane — CRDs</SectionHeading>
-        <p className="mt-2 text-base leading-7 text-muted-foreground">
+        <p className="mt-2 text-base leading-7 text-[oklch(0.80_0.01_264)]">
           The platform installs and reconciles the following custom resources:
         </p>
         <DocsTable
@@ -305,7 +305,7 @@ function ArchitectureSection() {
       </div>
       <div id="arch-execution">
         <SectionHeading icon={Server}>Execution Plane</SectionHeading>
-        <p className="mt-2 text-base leading-7 text-muted-foreground">
+        <p className="mt-2 text-base leading-7 text-[oklch(0.80_0.01_264)]">
           Each agent runs as an isolated singleton StatefulSet backed by the <strong>OpenCode runtime</strong> — a
           FastAPI wrapper around <code>opencode serve</code> with session persistence and checkpoint recovery.
           Optional <strong>MCP sidecars</strong> run alongside the runtime to provide tools such as code execution,
@@ -326,7 +326,7 @@ function ArchitectureSection() {
       </div>
       <div id="arch-gateway">
         <SectionHeading icon={Globe}>API Gateway Responsibilities</SectionHeading>
-        <ul className="mt-2 list-disc space-y-1.5 pl-5 text-base leading-7 text-muted-foreground">
+        <ul className="mt-2 list-disc space-y-1.5 pl-5 text-base leading-7 text-[oklch(0.80_0.01_264)]">
           <li>Authentication and authorization (Bearer tokens, OIDC, SAML, local auth)</li>
           <li>RESTful CRUD for agents, workflows, evals, policies, and tenants</li>
           <li>A2A JSON-RPC and Server-Sent Events (SSE) for real-time streaming</li>
@@ -353,7 +353,7 @@ function AgentsSection() {
       />
       <div id="agent-crd">
         <SectionHeading icon={FileCode}>AIAgent CRD Reference</SectionHeading>
-        <p className="mt-2 text-base leading-7 text-muted-foreground">
+        <p className="mt-2 text-base leading-7 text-[oklch(0.80_0.01_264)]">
           The <code>AIAgent</code> custom resource is the core unit of kubesynapse. The operator watches these resources
           and provisions matching StatefulSets, PVCs, and ConfigMaps.
         </p>
@@ -376,7 +376,7 @@ function AgentsSection() {
       </div>
       <div id="agent-example">
         <SectionHeading icon={FileCode}>Complete YAML Example</SectionHeading>
-        <p className="mt-2 text-base leading-7 text-muted-foreground">
+        <p className="mt-2 text-base leading-7 text-[oklch(0.80_0.01_264)]">
           This manifest demonstrates every major field of the AIAgent CRD with inline documentation.
         </p>
         <CodeBlock
@@ -441,10 +441,10 @@ spec:
       </div>
       <div id="agent-storage">
         <SectionHeading icon={Server}>Storage Configuration</SectionHeading>
-        <p className="mt-2 text-base leading-7 text-muted-foreground">
+        <p className="mt-2 text-base leading-7 text-[oklch(0.80_0.01_264)]">
           The <code>storage.size</code> field controls the PVC attached to the agent's StatefulSet. This volume stores:
         </p>
-        <ul className="mt-2 list-disc space-y-1.5 pl-5 text-base leading-7 text-muted-foreground">
+        <ul className="mt-2 list-disc space-y-1.5 pl-5 text-base leading-7 text-[oklch(0.80_0.01_264)]">
           <li>Conversation session checkpoints</li>
           <li>Sandbox artifacts and tool outputs</li>
           <li>Git clones and working directories</li>
@@ -457,7 +457,7 @@ spec:
       </div>
       <div id="agent-skills">
         <SectionHeading icon={FileCode}>Skills (File-Backed)</SectionHeading>
-        <p className="mt-2 text-base leading-7 text-muted-foreground">
+        <p className="mt-2 text-base leading-7 text-[oklch(0.80_0.01_264)]">
           Skills are file-backed context packages attached to an agent. You can embed Markdown guides, JSON schemas,
           or example conversations directly in the manifest.
         </p>
@@ -502,7 +502,7 @@ function ChatSessionsSection() {
       ]} />
       <div id="chat-basics">
         <SectionHeading icon={MessageSquare}>Chat Session Basics</SectionHeading>
-        <p className="mt-2 text-base leading-7 text-muted-foreground">
+        <p className="mt-2 text-base leading-7 text-[oklch(0.80_0.01_264)]">
           Chat sessions use Server-Sent Events (SSE) for real-time streaming. The runtime maintains conversation
           state in the agent's PVC, enabling session continuation across restarts.
         </p>
@@ -522,7 +522,7 @@ function MemorySection() {
   return (
     <div className="space-y-8">
       <SectionHeading icon={GitBranch}>Agent Memory Architecture</SectionHeading>
-      <p className="mt-2 text-base leading-7 text-muted-foreground">
+      <p className="mt-2 text-base leading-7 text-[oklch(0.80_0.01_264)]">
         kubesynapse uses Qdrant as the vector database for agent memory. Each agent's conversation history,
         retrieved documents, and learned context are stored as embeddings for semantic retrieval.
       </p>
@@ -546,7 +546,7 @@ function WorkflowsSection() {
       ]} />
       <div id="wf-overview">
         <SectionHeading icon={ListOrdered}>Workflow Overview</SectionHeading>
-        <p className="mt-2 text-base leading-7 text-muted-foreground">
+        <p className="mt-2 text-base leading-7 text-[oklch(0.80_0.01_264)]">
           AgentWorkflow defines a multi-step DAG where each step uses one or more AIAgents.
           Steps can run sequentially or in parallel, with optional human-approval gates.
         </p>
@@ -573,7 +573,7 @@ function McpSection() {
   return (
     <div className="space-y-8">
       <SectionHeading icon={Plug}>MCP (Model Context Protocol)</SectionHeading>
-      <p className="mt-2 text-base leading-7 text-muted-foreground">
+      <p className="mt-2 text-base leading-7 text-[oklch(0.80_0.01_264)]">
         MCP connections provide tools to your agents. Use <code>McpConnection</code> CRDs for native Kubernetes
         management or the API gateway's <code>/api/v1/mcp/connections</code> endpoints.
       </p>
@@ -594,7 +594,7 @@ function A2aSection() {
   return (
     <div className="space-y-8">
       <SectionHeading icon={Bot}>Agent-to-Agent (A2A)</SectionHeading>
-      <p className="mt-2 text-base leading-7 text-muted-foreground">
+      <p className="mt-2 text-base leading-7 text-[oklch(0.80_0.01_264)]">
         A2A enables agents to call each other for specialized tasks. Configure <code>allowedCallers</code> on
         the target agent and define <code>allowedA2ATargets</code> in policies or skills.
       </p>
@@ -610,7 +610,7 @@ function PoliciesSection() {
   return (
     <div className="space-y-8">
       <SectionHeading icon={ShieldCheck}>Agent Policies</SectionHeading>
-      <p className="mt-2 text-base leading-7 text-muted-foreground">
+      <p className="mt-2 text-base leading-7 text-[oklch(0.80_0.01_264)]">
         AgentPolicy defines guardrails: allowed models, token caps, cross-namespace access rules, and
         tool restrictions. Attach policies to agents via <code>policyRef</code>.
       </p>
@@ -629,7 +629,7 @@ function EvaluationsSection() {
   return (
     <div className="space-y-8">
       <SectionHeading icon={FlaskConical}>Evaluations</SectionHeading>
-      <p className="mt-2 text-base leading-7 text-muted-foreground">
+      <p className="mt-2 text-base leading-7 text-[oklch(0.80_0.01_264)]">
         AgentEval runs evaluation suites against agents. Define test cases, pass/fail criteria,
         and schedule recurring evaluations via cron expressions.
       </p>
@@ -652,7 +652,7 @@ function ObservabilitySection() {
   return (
     <div className="space-y-8">
       <SectionHeading icon={Eye}>Observability</SectionHeading>
-      <p className="mt-2 text-base leading-7 text-muted-foreground">
+      <p className="mt-2 text-base leading-7 text-[oklch(0.80_0.01_264)]">
         kubesynapse exposes OpenTelemetry traces, Prometheus metrics, and structured JSON logs across all components.
       </p>
       <DocsTable headers={["Component", "Metrics", "Traces", "Logs"]} rows={[
@@ -669,7 +669,7 @@ function CliSection() {
   return (
     <div className="space-y-8">
       <SectionHeading icon={Terminal}>CLI Reference (agentctl)</SectionHeading>
-      <p className="mt-2 text-base leading-7 text-muted-foreground">
+      <p className="mt-2 text-base leading-7 text-[oklch(0.80_0.01_264)]">
         <code>agentctl</code> is the official CLI for managing kubesynapse agents from the terminal.
       </p>
       <CodeBlock code={`# List all agents
@@ -694,7 +694,7 @@ function ApiReferenceSection() {
   return (
     <div className="space-y-8">
       <SectionHeading icon={Wrench}>API Reference</SectionHeading>
-      <p className="mt-2 text-base leading-7 text-muted-foreground">
+      <p className="mt-2 text-base leading-7 text-[oklch(0.80_0.01_264)]">
         All REST endpoints are available under <code>/api/v1/</code>. OpenAPI docs at <code>/api/v1/docs</code>.
       </p>
       <DocsTable headers={["Method", "Path", "Description"]} rows={[
@@ -715,7 +715,7 @@ function LlmProvidersSection() {
   return (
     <div className="space-y-8">
       <SectionHeading icon={Zap}>LLM Providers</SectionHeading>
-      <p className="mt-2 text-base leading-7 text-muted-foreground">
+      <p className="mt-2 text-base leading-7 text-[oklch(0.80_0.01_264)]">
         LiteLLM proxies all model requests, supporting 100+ providers. Configure provider API keys via
         Kubernetes Secrets referenced in the Helm values.
       </p>
@@ -734,7 +734,7 @@ function ExportImportSection() {
   return (
     <div className="space-y-8">
       <SectionHeading icon={Globe}>Export & Import</SectionHeading>
-      <p className="mt-2 text-base leading-7 text-muted-foreground">
+      <p className="mt-2 text-base leading-7 text-[oklch(0.80_0.01_264)]">
         Export agent configurations, policies, and workflows as portable YAML bundles for migration between clusters.
       </p>
       <CodeBlock code={`# Export an agent with all dependencies
@@ -771,24 +771,24 @@ function FaqSection() {
       <SectionHeading icon={MessageSquare}>FAQ</SectionHeading>
       <div className="space-y-6">
         <div>
-          <h4 className="font-semibold text-foreground">How does kubesynapse differ from LangChain or CrewAI?</h4>
-          <p className="mt-1 text-muted-foreground">kubesynapse is Kubernetes-native — agents are CRDs, not Python objects. It provides multi-tenancy, RBAC, audit logging, and GitOps workflows out of the box.</p>
+          <h4 className="font-bold text-[oklch(0.95_0.005_264)]">What makes kubesynapse different from other AI agent frameworks?</h4>
+          <p className="mt-1 text-[oklch(0.80_0.01_264)]">kubesynapse is Kubernetes-native from day one — agents are CRDs managed by a Kopf operator, not Python objects running outside the cluster. It provides multi-tenancy, RBAC, audit logging, policy enforcement, and GitOps-ready workflows out of the box.</p>
         </div>
         <div>
-          <h4 className="font-semibold text-foreground">Can I use my own LLM models?</h4>
-          <p className="mt-1 text-muted-foreground">Yes. Configure any LiteLLM-compatible provider (Ollama, vLLM, etc.) in the Helm values.</p>
+          <h4 className="font-bold text-[oklch(0.95_0.005_264)]">Can I use my own LLM models?</h4>
+          <p className="mt-1 text-[oklch(0.80_0.01_264)]">Yes. Configure any LiteLLM-compatible provider (Ollama, vLLM, etc.) in the Helm values.</p>
         </div>
         <div>
-          <h4 className="font-semibold text-foreground">What is the minimum cluster size?</h4>
-          <p className="mt-1 text-muted-foreground">For development: 4 vCPU, 8 GiB RAM (Kind/Minikube). Production: 8+ vCPU, 16+ GiB RAM with 3 nodes for HA.</p>
+          <h4 className="font-bold text-[oklch(0.95_0.005_264)]">What is the minimum cluster size?</h4>
+          <p className="mt-1 text-[oklch(0.80_0.01_264)]">For development: 4 vCPU, 8 GiB RAM (Kind/Minikube). Production: 8+ vCPU, 16+ GiB RAM with 3 nodes for HA.</p>
         </div>
         <div>
-          <h4 className="font-semibold text-foreground">How do I upgrade between versions?</h4>
-          <p className="mt-1 text-muted-foreground">Use <code>helm upgrade</code>. The operator handles CRD schema migrations automatically. Always back up the database before upgrading major versions.</p>
+          <h4 className="font-bold text-[oklch(0.95_0.005_264)]">How do I upgrade between versions?</h4>
+          <p className="mt-1 text-[oklch(0.80_0.01_264)]">Use <code>helm upgrade</code>. The operator handles CRD schema migrations automatically. Always back up the database before upgrading major versions.</p>
         </div>
         <div>
-          <h4 className="font-semibold text-foreground">Is there a hosted/SaaS version?</h4>
-          <p className="mt-1 text-muted-foreground">kubesynapse is designed for self-hosting. Enterprise support and managed offerings are available. Contact the maintainers for details.</p>
+          <h4 className="font-bold text-[oklch(0.95_0.005_264)]">Is there a hosted/SaaS version?</h4>
+          <p className="mt-1 text-[oklch(0.80_0.01_264)]">kubesynapse is designed for self-hosting. Enterprise support and managed offerings are available. Contact the maintainers for details.</p>
         </div>
       </div>
     </div>

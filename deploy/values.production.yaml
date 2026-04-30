@@ -11,10 +11,6 @@ networkPolicy:
   ingressNamespaces: ["ingress-nginx", "monitoring"]
   clusterApiCidr: "10.0.0.0/8"
 
-trustBundle:
-  enabled: true
-  configMapName: "corp-ca-bundle"
-
 litellm:
   enabled: true
   replicaCount: 3

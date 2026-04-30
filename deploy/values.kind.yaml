@@ -294,9 +294,6 @@ podDisruptionBudget:
 networkPolicy:
   enabled: false
 
-trustBundle:
-  enabled: false
-
 autoscaling:
   enabled: false
 

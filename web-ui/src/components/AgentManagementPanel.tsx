@@ -507,7 +507,7 @@ export function AgentManagementPanel({
 
   // Collector sidecar toggle helper
   const COLLECTOR_SIDECAR_NAME = "collector";
-  const COLLECTOR_SIDECAR_IMAGE = "localhost/KubeSynapseai/mcp-collector:dev";
+  const COLLECTOR_SIDECAR_IMAGE = "localhost/kubesynapse/mcp-collector:dev";
   const COLLECTOR_SIDECAR_PORT = 8100;
   const hasCollectorSidecar = selectedToolIds.has(COLLECTOR_SIDECAR_NAME);
 
@@ -911,7 +911,7 @@ export function AgentManagementPanel({
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          {(["opencode", "pi"] as RuntimeKind[]).map((kind) => {
+                          {(["opencode", "pi", "mistral-vibe"] as RuntimeKind[]).map((kind) => {
                             const signal = getRuntimeSignal(kind);
                             return (
                               <SelectItem key={kind} value={kind} className="text-xs">
@@ -933,11 +933,18 @@ export function AgentManagementPanel({
                           Best for autonomous multi-turn coding with structured output, session management, context-overflow recovery, shared MCP routing, and managed sidecars.
                         </p>
                       </div>
-                    ) : (
+                    ) : runtimeKind === "pi" ? (
                       <div className="rounded-2xl border border-violet-500/30 bg-violet-500/5 px-4 py-3 text-left text-foreground">
                         <p className="font-medium text-sm">Pi runtime</p>
                         <p className="mt-1 text-xs leading-5 text-muted-foreground">
                           Lightweight alternative runtime using the pi coding agent. Supports streaming, tool use, and MCP connections via the pi extension system.
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="rounded-2xl border border-fuchsia-500/30 bg-fuchsia-500/5 px-4 py-3 text-left text-foreground">
+                        <p className="font-medium text-sm">Mistral Vibe runtime</p>
+                        <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                          Dedicated Mistral Vibe runtime for lightweight prompt-driven execution with streaming support and Mistral-native model aliases.
                         </p>
                       </div>
                     )}

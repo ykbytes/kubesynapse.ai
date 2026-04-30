@@ -861,6 +861,36 @@ class WorkflowRunHistory(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
 
 
+# ─── Observatory execution trace persistence ─────────────────────────────
+
+
+class ExecutionTraceRow(Base):
+    """Unified execution traces for the Observatory panel."""
+    __tablename__ = "execution_traces"
+
+    id = Column(String(128), primary_key=True)
+    workflow_name = Column(String(256), nullable=False, index=True)
+    namespace = Column(String(256), nullable=False, default="default", index=True)
+    agent_name = Column(String(256), nullable=True, index=True)
+    run_id = Column(String(128), nullable=True, index=True)
+    status = Column(String(64), nullable=False, default="running", index=True)
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    duration_ms = Column(Integer, nullable=True)
+    input_preview = Column(String(2000), nullable=True)
+    output_preview = Column(String(2000), nullable=True)
+    step_count = Column(Integer, nullable=False, default=0)
+    llm_call_count = Column(Integer, nullable=False, default=0)
+    tool_call_count = Column(Integer, nullable=False, default=0)
+    total_tokens = Column(Integer, nullable=False, default=0)
+    total_cost_usd = Column(Float, nullable=True)
+    steps_json = Column(JSON, nullable=True)
+    llm_calls_json = Column(JSON, nullable=True)
+    tool_calls_json = Column(JSON, nullable=True)
+    events_json = Column(JSON, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+
 # ─── Intelligence persistence models ─────────────────────────────────────
 
 
@@ -1632,7 +1662,7 @@ def ensure_bootstrap_admin() -> None:
 
     # Bypass password policy for bootstrap — the admin password is set by the
     # deployer via env/secret and may not satisfy interactive-user complexity
-    # rules (e.g. dev passwords like "minikube-dev-admin-password").
+    # rules (e.g. short-lived development bootstrap passwords).
     validated_email = validate_email(email)
     try:
         with db_session() as session:
@@ -2798,6 +2828,187 @@ def list_workflow_runs(
             }
             for r in rows
         ]
+
+
+# ─── Observatory execution trace helpers ───────────────────────────────────
+
+
+def _execution_trace_to_dict(row: ExecutionTraceRow) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "workflow_name": row.workflow_name,
+        "namespace": row.namespace,
+        "agent_name": row.agent_name,
+        "run_id": row.run_id,
+        "status": row.status,
+        "started_at": ensure_utc(row.started_at).isoformat() if row.started_at else None,
+        "completed_at": ensure_utc(row.completed_at).isoformat() if row.completed_at else None,
+        "duration_ms": row.duration_ms,
+        "input_preview": row.input_preview,
+        "output_preview": row.output_preview,
+        "step_count": row.step_count or 0,
+        "llm_call_count": row.llm_call_count or 0,
+        "tool_call_count": row.tool_call_count or 0,
+        "total_tokens": row.total_tokens or 0,
+        "total_cost_usd": row.total_cost_usd,
+        "steps": row.steps_json or [],
+        "llm_calls": row.llm_calls_json or [],
+        "tool_calls": row.tool_calls_json or [],
+        "events": row.events_json or [],
+        "created_at": ensure_utc(row.created_at).isoformat() if row.created_at else None,
+    }
+
+
+def record_execution_trace(
+    *,
+    trace_id: str,
+    workflow_name: str,
+    namespace: str = "default",
+    agent_name: str | None = None,
+    run_id: str | None = None,
+    status: str = "running",
+    started_at: datetime | None = None,
+    completed_at: datetime | None = None,
+    duration_ms: int | None = None,
+    input_preview: str | None = None,
+    output_preview: str | None = None,
+    step_count: int = 0,
+    llm_call_count: int = 0,
+    tool_call_count: int = 0,
+    total_tokens: int = 0,
+    total_cost_usd: float | None = None,
+    steps_json: list | None = None,
+    llm_calls_json: list | None = None,
+    tool_calls_json: list | None = None,
+    events_json: list | None = None,
+) -> dict[str, Any]:
+    with db_session() as session:
+        existing = session.query(ExecutionTraceRow).filter(ExecutionTraceRow.id == trace_id).one_or_none()
+        if existing:
+            existing.status = status
+            if completed_at:
+                existing.completed_at = completed_at
+            if duration_ms is not None:
+                existing.duration_ms = duration_ms
+            if output_preview is not None:
+                existing.output_preview = output_preview
+            if step_count:
+                existing.step_count = step_count
+            if llm_call_count:
+                existing.llm_call_count = llm_call_count
+            if tool_call_count:
+                existing.tool_call_count = tool_call_count
+            if total_tokens:
+                existing.total_tokens = total_tokens
+            if total_cost_usd is not None:
+                existing.total_cost_usd = total_cost_usd
+            if steps_json is not None:
+                existing.steps_json = steps_json
+            if llm_calls_json is not None:
+                existing.llm_calls_json = llm_calls_json
+            if tool_calls_json is not None:
+                existing.tool_calls_json = tool_calls_json
+            if events_json is not None:
+                existing.events_json = events_json
+            record = existing
+        else:
+            record = ExecutionTraceRow(
+                id=trace_id,
+                workflow_name=workflow_name,
+                namespace=namespace,
+                agent_name=agent_name,
+                run_id=run_id,
+                status=status,
+                started_at=started_at or utc_now(),
+                completed_at=completed_at,
+                duration_ms=duration_ms,
+                input_preview=input_preview[:2000] if input_preview else None,
+                output_preview=output_preview[:2000] if output_preview else None,
+                step_count=step_count,
+                llm_call_count=llm_call_count,
+                tool_call_count=tool_call_count,
+                total_tokens=total_tokens,
+                total_cost_usd=total_cost_usd,
+                steps_json=steps_json,
+                llm_calls_json=llm_calls_json,
+                tool_calls_json=tool_calls_json,
+                events_json=events_json,
+            )
+            session.add(record)
+        session.flush()
+        return _execution_trace_to_dict(record)
+
+
+def list_execution_traces(
+    namespace: str = "default",
+    *,
+    workflow: str | None = None,
+    agent: str | None = None,
+    status: str | None = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
+    search: str | None = None,
+    sort_by: str = "newest",
+    limit: int = 20,
+    offset: int = 0,
+) -> dict[str, Any]:
+    with db_session() as session:
+        query = session.query(ExecutionTraceRow).filter(ExecutionTraceRow.namespace == namespace)
+        if workflow:
+            query = query.filter(ExecutionTraceRow.workflow_name.ilike(f"%{workflow}%"))
+        if agent:
+            query = query.filter(ExecutionTraceRow.agent_name.ilike(f"%{agent}%"))
+        if status:
+            query = query.filter(ExecutionTraceRow.status == status)
+        if from_date:
+            try:
+                from_dt = datetime.fromisoformat(from_date.replace("Z", "+00:00"))
+                query = query.filter(ExecutionTraceRow.started_at >= from_dt)
+            except (ValueError, TypeError):
+                pass
+        if to_date:
+            try:
+                to_dt = datetime.fromisoformat(to_date.replace("Z", "+00:00"))
+                query = query.filter(ExecutionTraceRow.started_at <= to_dt)
+            except (ValueError, TypeError):
+                pass
+        if search:
+            query = query.filter(
+                (ExecutionTraceRow.workflow_name.ilike(f"%{search}%"))
+                | (ExecutionTraceRow.agent_name.ilike(f"%{search}%"))
+                | (ExecutionTraceRow.run_id.ilike(f"%{search}%"))
+            )
+        total = query.count()
+        if sort_by == "oldest":
+            query = query.order_by(ExecutionTraceRow.started_at.asc())
+        else:
+            query = query.order_by(ExecutionTraceRow.started_at.desc().nullslast())
+        limit = max(1, min(limit, 100))
+        offset = max(0, offset)
+        rows = query.offset(offset).limit(limit).all()
+        return {
+            "items": [_execution_trace_to_dict(r) for r in rows],
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+        }
+
+
+def get_execution_trace(trace_id: str) -> dict[str, Any] | None:
+    with db_session() as session:
+        row = session.query(ExecutionTraceRow).filter(ExecutionTraceRow.id == trace_id).one_or_none()
+        if row is None:
+            return None
+        return _execution_trace_to_dict(row)
+
+
+def delete_execution_trace(trace_id: str) -> bool:
+    with db_session() as session:
+        row = session.query(ExecutionTraceRow).filter(ExecutionTraceRow.id == trace_id).one_or_none()
+        if row is None:
+            return False
+        session.delete(row)
+        return True
 
 
 # ─── Webhook & Trigger CRUD helpers ────────────────────────────────────────

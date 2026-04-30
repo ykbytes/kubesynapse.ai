@@ -197,7 +197,7 @@ Yes. MCP tools are standard containers that expose a local HTTP or stdio interfa
 Use Kind or Minikube:
 
 ```bash
-kind create cluster --name KubeSynapse-dev
+kind create cluster --name kubesynapse-dev
 helm install KubeSynapse oci://docker.io/kubesynapse/charts/kubesynapse \
   --set platformSecrets.native.openaiApiKey="sk-..."
 ```
@@ -256,9 +256,9 @@ Cost has two components:
 
 ### How do I get help?
 
-- **GitHub Discussions**: Questions and feature requests
-- **GitHub Issues**: Bug reports with the issue template
-- **Slack/Discord**: Real-time community chat (links in [Community](community.md))
+- **GitHub Issues**: Bug reports and feature requests
+- **Pull Requests**: Proposed fixes, docs updates, and feature work
+- **Email**: Private inquiries via `team@kubesynapse.ai`
 
 ### How do I contribute?
 

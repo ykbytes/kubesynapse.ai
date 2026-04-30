@@ -1,10 +1,10 @@
 import { useCallback, useMemo, useState } from "react";
-import { Download, FolderOpen } from "lucide-react";
+import { Download, FolderOpen, TerminalSquare } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { FileExplorer } from "../FileExplorer";
 import { WorkflowLogPanel } from "../WorkflowLogPanel";
-import { RunHistoryPanel } from "../composer/RunHistoryPanel";
+import { RunHistoryPanel, phaseIcon, phaseColor, phaseAccent, durationSeconds, formatDuration, formatTimestampFull } from "../composer/RunHistoryPanel";
 import { useConnection } from "@/contexts/ConnectionContext";
 import {
   listAgentArtifacts,
@@ -14,6 +14,11 @@ import {
   type WorkflowRunRecord,
 } from "@/lib/api";
 import type { WorkflowInfo } from "../../types";
+import { cn } from "@/lib/utils";
+
+/* ------------------------------------------------------------------ */
+/*  Agent file browser (reused from original)                          */
+/* ------------------------------------------------------------------ */
 
 function AgentFileBrowserTabs({
   agents,
@@ -41,7 +46,7 @@ function AgentFileBrowserTabs({
       if (!token || !resolvedActiveAgent) return;
       await downloadAgentArtifact(token, namespace ?? "default", resolvedActiveAgent, path, filename);
     },
-    [token, namespace, resolvedActiveAgent]
+    [token, namespace, resolvedActiveAgent],
   );
 
   const handlePreview = useCallback(
@@ -51,7 +56,7 @@ function AgentFileBrowserTabs({
       }
       return previewAgentArtifact(token, namespace ?? "default", resolvedActiveAgent, path);
     },
-    [token, namespace, resolvedActiveAgent]
+    [token, namespace, resolvedActiveAgent],
   );
 
   const handleDownloadZip = useCallback(async () => {
@@ -65,16 +70,19 @@ function AgentFileBrowserTabs({
   }, [token, namespace, resolvedActiveAgent]);
 
   return (
-    <div className="space-y-3">
+    <div className="flex h-full flex-col gap-3">
+      {/* Header */}
       <div className="flex items-center gap-2">
+        <FolderOpen className="h-4 w-4 text-primary" />
+        <span className="text-xs font-semibold text-foreground">Workspace Files</span>
         {dedupedAgents.length > 1 && (
-          <div className="flex gap-1 flex-1 flex-wrap">
+          <div className="flex gap-1 flex-wrap">
             {dedupedAgents.map((agent) => (
               <Button
                 key={agent}
                 size="sm"
                 variant={agent === resolvedActiveAgent ? "secondary" : "ghost"}
-                className="h-7 rounded-lg text-xs"
+                className="h-6 rounded-lg text-[10px] px-2"
                 onClick={() => setActiveAgent(agent)}
               >
                 {agent}
@@ -84,27 +92,34 @@ function AgentFileBrowserTabs({
         )}
         <Button
           size="sm"
-          variant="outline"
-          className="h-7 rounded-lg text-xs ml-auto"
+          variant="ghost"
+          className="h-7 rounded-lg text-[10px] ml-auto"
           disabled={zipping || !resolvedActiveAgent}
           onClick={handleDownloadZip}
         >
-          <Download className="h-3.5 w-3.5 mr-1.5" />
-          {zipping ? "Downloading…" : "Download All (ZIP)"}
+          <Download className="h-3 w-3 mr-1" />
+          {zipping ? "Downloading\u2026" : "ZIP"}
         </Button>
       </div>
+      {/* File explorer fills remaining space */}
       {resolvedActiveAgent && (
-        <FileExplorer
-          agentName={resolvedActiveAgent}
-          onLoad={loadFiles}
-          onDownload={handleDownload}
-          onPreview={handlePreview}
-          liveUpdatesEnabled={liveUpdatesEnabled}
-        />
+        <div className="flex-1 min-h-0">
+          <FileExplorer
+            agentName={resolvedActiveAgent}
+            onLoad={loadFiles}
+            onDownload={handleDownload}
+            onPreview={handlePreview}
+            liveUpdatesEnabled={liveUpdatesEnabled}
+          />
+        </div>
       )}
     </div>
   );
 }
+
+/* ------------------------------------------------------------------ */
+/*  Main view                                                          */
+/* ------------------------------------------------------------------ */
 
 interface WorkflowHistoryViewProps {
   workflow: WorkflowInfo;
@@ -114,6 +129,8 @@ interface WorkflowHistoryViewProps {
   isActive: boolean;
 }
 
+type ActiveTab = "trace" | "files";
+
 export function WorkflowHistoryView({
   workflow,
   selectedHistoryRun,
@@ -121,41 +138,107 @@ export function WorkflowHistoryView({
   activeRunAgents,
   isActive,
 }: WorkflowHistoryViewProps) {
+  const [activeTab, setActiveTab] = useState<ActiveTab>("trace");
+
   const visibleAgents = useMemo(
     () => Array.from(new Set(activeRunAgents.filter(Boolean))),
-    [activeRunAgents]
+    [activeRunAgents],
   );
 
+  const run = selectedHistoryRun;
+  const dur = durationSeconds(run);
+
   return (
-    <div className="grid gap-6 2xl:grid-cols-[minmax(0,1.14fr)_minmax(24rem,0.86fr)] animate-fade-in">
+    <div className="grid grid-cols-[minmax(240px,280px)_1fr] gap-4 h-[calc(100vh-11rem)] animate-fade-in">
+      {/* -------- Left: Run list sidebar -------- */}
       <RunHistoryPanel
         workflowName={workflow.name}
         collapsible={false}
         onSelectRun={setSelectedHistoryRun}
       />
 
-      <div className="space-y-6">
-        <WorkflowLogPanel workflow={workflow} selectedRun={selectedHistoryRun} />
-
-        {visibleAgents.length > 0 && (
-          <Card className="border-border/65 bg-background/75 shadow-sm backdrop-blur-sm">
-            <CardHeader className="pb-2">
-              <CardTitle className="flex items-center gap-2 text-sm">
-                <FolderOpen className="h-4 w-4" />
-                Agent workspace files
-              </CardTitle>
-              <CardDescription className="text-xs">
-                Browse files created during this workflow run.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="p-4">
-              <AgentFileBrowserTabs
-                agents={visibleAgents}
-                liveUpdatesEnabled={isActive}
-              />
-            </CardContent>
-          </Card>
+      {/* -------- Right: Run header + tabbed content -------- */}
+      <div className="flex flex-col gap-3 min-h-0">
+        {/* Run details header */}
+        {run ? (
+          <div className={cn(
+            "rounded-xl border border-border/60 bg-background/70 px-4 py-3 border-l-[3px]",
+            phaseAccent(run.phase),
+          )}>
+            <div className="flex flex-wrap items-center gap-2">
+              {phaseIcon(run.phase)}
+              <Badge variant="outline" className={cn("h-5 border px-2 text-[10px] capitalize", phaseColor(run.phase))}>
+                {run.phase}
+              </Badge>
+              {run.run_id && (
+                <span className="font-mono text-[11px] text-muted-foreground truncate max-w-[20rem]">{run.run_id}</span>
+              )}
+              <span className="text-xs text-muted-foreground">
+                {run.completed_steps ?? 0}/{run.total_steps ?? "?"} steps
+              </span>
+              {dur != null && (
+                <span className="text-xs font-medium text-foreground">{formatDuration(dur)}</span>
+              )}
+              {run.archived_log_available && (
+                <Badge variant="outline" className="border-emerald-500/20 bg-emerald-500/10 text-[10px] text-emerald-600 dark:text-emerald-300">
+                  archived
+                </Badge>
+              )}
+            </div>
+            <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
+              <span>Created {formatTimestampFull(run.created_at)}</span>
+              <span>Started {formatTimestampFull(run.started_at)}</span>
+              {run.completed_at && <span>Completed {formatTimestampFull(run.completed_at)}</span>}
+              {run.triggered_by && <span>Triggered by {run.triggered_by}</span>}
+            </div>
+          </div>
+        ) : (
+          <div className="rounded-xl border border-dashed border-border/50 bg-background/50 px-4 py-4 text-center text-xs text-muted-foreground">
+            Run the workflow to see execution history here.
+          </div>
         )}
+
+        {/* Tab bar */}
+        <div className="flex items-center gap-1 border-b border-border/40 pb-0">
+          <button
+            type="button"
+            onClick={() => setActiveTab("trace")}
+            className={cn(
+              "flex items-center gap-1.5 border-b-2 px-3 py-2 text-xs font-medium transition-colors",
+              activeTab === "trace"
+                ? "border-primary text-foreground"
+                : "border-transparent text-muted-foreground hover:text-foreground",
+            )}
+          >
+            <TerminalSquare className="h-3.5 w-3.5" />
+            Trace Logs
+          </button>
+          {visibleAgents.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setActiveTab("files")}
+              className={cn(
+                "flex items-center gap-1.5 border-b-2 px-3 py-2 text-xs font-medium transition-colors",
+                activeTab === "files"
+                  ? "border-primary text-foreground"
+                  : "border-transparent text-muted-foreground hover:text-foreground",
+              )}
+            >
+              <FolderOpen className="h-3.5 w-3.5" />
+              Workspace Files
+            </button>
+          )}
+        </div>
+
+        {/* Tab content — fills remaining height */}
+        <div className="flex-1 min-h-0">
+          {activeTab === "trace" && (
+            <WorkflowLogPanel workflow={workflow} selectedRun={selectedHistoryRun} />
+          )}
+          {activeTab === "files" && visibleAgents.length > 0 && (
+            <AgentFileBrowserTabs agents={visibleAgents} liveUpdatesEnabled={isActive} />
+          )}
+        </div>
       </div>
     </div>
   );

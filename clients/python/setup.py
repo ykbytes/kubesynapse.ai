@@ -12,7 +12,7 @@ setup(
     long_description_content_type="text/markdown",
     author="kubesynapse Team",
     author_email="team@kubesynapse.ai",
-    url="https://github.com/ykbytes/kubemininions",
+    url="https://github.com/ykbytes/kubesynapse.ai",
     packages=find_packages(exclude=["tests*"]),
     python_requires=">=3.10",
     install_requires=[

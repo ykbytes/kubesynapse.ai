@@ -138,15 +138,15 @@ Architect: "Coordinate launch timeline."
 
 ### Per-Project (version controlled, shared with team)
 ```bash
-# Already installed at:
-kubemininions/.opencode/agents/
+# Project-local agent prompts can live under:
+.opencode/agents/
 ```
 
 ### Restart OpenCode to Pick Up New Agents
 ```powershell
 # Windows
 taskkill /F /IM opencode.exe /IM OpenCode.exe
-cd C:\Users\ahmed\OneDrive\Desktop\repos\KubeSynapse\kubemininions
+cd <repo-root>
 opencode
 ```
 

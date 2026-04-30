@@ -14,60 +14,6 @@ data:
 apiVersion: kubesynapse.ai/v1alpha1
 kind: AIAgent
 metadata:
-  name: j8-web-architect
-  namespace: default
-spec:
-  model: opencode/minimax-m2.5-free
-  runtime:
-    kind: pi
-    pi:
-      provider: opencode
-      model: opencode/minimax-m2.5-free
-      thinkingLevel: high
-      tools:
-        - read
-        - bash
-        - write
-        - grep
-        - find
-        - ls
-      permissionLevel: moderate
-      noSession: true
-  storage:
-    size: 2Gi
-  resources:
-    requests:
-      memory: 1Gi
-      cpu: 500m
-    limits:
-      memory: 4Gi
-      cpu: "2"
-  enableGVisor: false
-  skills:
-    files:
-      .github/skills/j8-spec-output/SKILL.md: |
-        ---
-        name: j8-spec-output
-        description: Emit a concise JSON implementation blueprint for the builder agent.
-        ---
-
-        # Required output
-
-        Return JSON only.
-
-        Required top-level keys:
-        - app_name
-        - architecture
-        - file_plan
-        - delivery_phases
-        - verification
-        - starter_presets
-
-        Keep the plan concrete, brief, and directly executable.
----
-apiVersion: kubesynapse.ai/v1alpha1
-kind: AIAgent
-metadata:
   name: j8-web-builder
   namespace: default
 spec:
@@ -84,8 +30,7 @@ spec:
         - edit
         - write
         - grep
-        - find
-        - ls
+        - glob
         - webfetch
       permissionLevel: permissive
   storage:

@@ -1321,7 +1321,7 @@ class GatewayToolCatalogTests(unittest.TestCase):
             api_gateway_main.os.environ,
             {
                 "MCP_SIDECAR_CATALOG_JSON": json.dumps(
-                    {"codeExec": {"image": "docker.io/yakdhane/mcp-code-exec:v2", "port": 8090}}
+                    {"codeExec": {"image": "docker.io/kubesynapse/mcp-code-exec:v2", "port": 8090}}
                 )
             },
             clear=False,
@@ -1329,7 +1329,7 @@ class GatewayToolCatalogTests(unittest.TestCase):
             api_gateway_main._MCP_SIDECAR_CATALOG_CACHE = None
             self.assertEqual(
                 api_gateway_main._resolve_sidecar_image("code-exec"),
-                "docker.io/yakdhane/mcp-code-exec:v2",
+                "docker.io/kubesynapse/mcp-code-exec:v2",
             )
 
     def test_tool_categories_prefer_catalog_port_over_default_port(self) -> None:
@@ -1337,7 +1337,7 @@ class GatewayToolCatalogTests(unittest.TestCase):
             api_gateway_main.os.environ,
             {
                 "MCP_SIDECAR_CATALOG_JSON": json.dumps(
-                    {"codeExec": {"image": "docker.io/yakdhane/mcp-code-exec:v2", "port": 9012}}
+                    {"codeExec": {"image": "docker.io/kubesynapse/mcp-code-exec:v2", "port": 9012}}
                 )
             },
             clear=False,
@@ -1347,14 +1347,14 @@ class GatewayToolCatalogTests(unittest.TestCase):
 
         code_exec = next(tool for tool in categories if tool["id"] == "code-exec")
         self.assertEqual(code_exec["default_port"], 9012)
-        self.assertEqual(code_exec["sidecar_image"], "docker.io/yakdhane/mcp-code-exec:v2")
+        self.assertEqual(code_exec["sidecar_image"], "docker.io/kubesynapse/mcp-code-exec:v2")
 
     def test_tool_categories_fallback_to_default_port_when_catalog_port_missing_or_invalid(self) -> None:
         test_cases = [
-            {"name": "missing", "catalog": {"codeExec": {"image": "docker.io/yakdhane/mcp-code-exec:v2"}}},
+            {"name": "missing", "catalog": {"codeExec": {"image": "docker.io/kubesynapse/mcp-code-exec:v2"}}},
             {
                 "name": "invalid",
-                "catalog": {"codeExec": {"image": "docker.io/yakdhane/mcp-code-exec:v2", "port": "invalid"}},
+                "catalog": {"codeExec": {"image": "docker.io/kubesynapse/mcp-code-exec:v2", "port": "invalid"}},
             },
         ]
 
@@ -1372,7 +1372,7 @@ class GatewayToolCatalogTests(unittest.TestCase):
 
             code_exec = next(tool for tool in categories if tool["id"] == "code-exec")
             self.assertEqual(code_exec["default_port"], 8090)
-            self.assertEqual(code_exec["sidecar_image"], "docker.io/yakdhane/mcp-code-exec:v2")
+            self.assertEqual(code_exec["sidecar_image"], "docker.io/kubesynapse/mcp-code-exec:v2")
 
 
 class GatewayAgentDiscoveryTests(unittest.TestCase):

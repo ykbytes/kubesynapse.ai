@@ -25,7 +25,7 @@ Maintainers are appointed based on:
 3. **Domain Expertise**: Deep understanding of Kubernetes, AI agents, or the project's architecture
 4. **Alignment**: Demonstrated commitment to the project's values and goals
 
-To nominate yourself or someone else, open a [GitHub Discussion](https://github.com/ykbytes/kubemininions/discussions) with the `maintainer-nomination` label.
+To nominate yourself or someone else, open an [issue](https://github.com/ykbytes/kubesynapse.ai/issues) with the `maintainer-nomination` label.
 
 ## Maintainer Emeritus
 
@@ -40,4 +40,4 @@ See [GOVERNANCE.md](GOVERNANCE.md) for the full decision-making process.
 ## Contact
 
 - **Email**: maintainers@kubesynapse.ai
-- **GitHub Discussions**: [https://github.com/ykbytes/kubemininions/discussions](https://github.com/ykbytes/kubemininions/discussions)
+- **GitHub Issues**: [https://github.com/ykbytes/kubesynapse.ai/issues](https://github.com/ykbytes/kubesynapse.ai/issues)

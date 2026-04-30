@@ -94,19 +94,6 @@ def serialize_env_value(value: Any) -> str:
     return str(value)
 
 
-def with_trust_bundle_env(raw_env: Any) -> Any:
-    """Merge trust bundle env vars into a runtime env mapping when configured."""
-    if not isinstance(raw_env, dict):
-        return raw_env
-
-    merged = dict(raw_env)
-    if TRUST_BUNDLE_CONFIGMAP_NAME and TRUST_BUNDLE_MOUNT_PATH:
-        merged.setdefault("SSL_CERT_FILE", TRUST_BUNDLE_MOUNT_PATH)
-        merged.setdefault("REQUESTS_CA_BUNDLE", TRUST_BUNDLE_MOUNT_PATH)
-        merged.setdefault("NODE_EXTRA_CA_CERTS", TRUST_BUNDLE_MOUNT_PATH)
-    return merged
-
-
 # ---------------------------------------------------------------------------
 # Service endpoints & images
 # ---------------------------------------------------------------------------
@@ -114,7 +101,7 @@ def with_trust_bundle_env(raw_env: Any) -> Any:
 LITELLM_SVC: str = os.getenv("LITELLM_SVC_NAME", "kubesynapse-litellm")
 SECRET_NAME: str = os.getenv("LLM_SECRET_NAME", "kubesynapse-llm-api-keys")
 
-OPENCODE_RUNTIME_IMAGE: str = os.getenv("OPENCODE_RUNTIME_IMAGE", "yakdhane/kubesynapse-opencode-runtime:latest")
+OPENCODE_RUNTIME_IMAGE: str = os.getenv("OPENCODE_RUNTIME_IMAGE", "docker.io/kubesynapse/kubesynapse-opencode-rt:v1.0.0")
 OPENCODE_RUNTIME_IMAGE_PULL_POLICY: str = get_string_env("OPENCODE_RUNTIME_IMAGE_PULL_POLICY", "IfNotPresent")
 OPENCODE_DEFAULT_PROVIDER: str = get_string_env("OPENCODE_DEFAULT_PROVIDER", "litellm")
 
@@ -123,6 +110,9 @@ PI_RUNTIME_IMAGE_PULL_POLICY: str = get_string_env("PI_RUNTIME_IMAGE_PULL_POLICY
 PI_DEFAULT_PROVIDER: str = get_string_env("PI_DEFAULT_PROVIDER", "")
 PI_DEFAULT_MODEL: str = get_string_env("PI_DEFAULT_MODEL", "anthropic/claude-sonnet-4-20250514")
 PI_DEFAULT_THINKING_LEVEL: str = get_string_env("PI_DEFAULT_THINKING_LEVEL", "medium")
+
+MISTRAL_VIBE_RUNTIME_IMAGE: str = os.getenv("MISTRAL_VIBE_RUNTIME_IMAGE", "kubesynapse-vibe-rt:v0.1.0")
+MISTRAL_VIBE_RUNTIME_IMAGE_PULL_POLICY: str = get_string_env("MISTRAL_VIBE_RUNTIME_IMAGE_PULL_POLICY", "IfNotPresent")
 
 RUNTIME_SERVICE_ACCOUNT: str = os.getenv("RUNTIME_SERVICE_ACCOUNT", "kubesynapse-agent-runtime")
 RUNTIME_CLUSTER_ROLE: str = os.getenv("RUNTIME_CLUSTER_ROLE", "kubesynapse-agent-runtime-role")
@@ -144,9 +134,6 @@ SECRET_PROVISIONING_MODE: str = os.getenv("SECRET_PROVISIONING_MODE", "native").
 DEFAULT_LITELLM_MASTER_KEY: str = os.getenv("DEFAULT_LITELLM_MASTER_KEY", "").strip()
 DEFAULT_API_GATEWAY_SHARED_TOKEN: str = os.getenv("DEFAULT_API_GATEWAY_SHARED_TOKEN", "").strip()
 API_GATEWAY_INTERNAL_URL: str = os.getenv("API_GATEWAY_INTERNAL_URL", "").strip()
-TRUST_BUNDLE_CONFIGMAP_NAME: str = os.getenv("TRUST_BUNDLE_CONFIGMAP_NAME", "").strip()
-TRUST_BUNDLE_MOUNT_PATH: str = os.getenv("TRUST_BUNDLE_MOUNT_PATH", "").strip()
-
 # ---------------------------------------------------------------------------
 # Static constants (not loaded from environment)
 # ---------------------------------------------------------------------------
@@ -154,7 +141,7 @@ TRUST_BUNDLE_MOUNT_PATH: str = os.getenv("TRUST_BUNDLE_MOUNT_PATH", "").strip()
 API_PORT: int = 8080
 PROTECTED_NAMESPACES: frozenset[str] = frozenset({"default", "kube-system", "kube-public", "kube-node-lease"})
 ARTIFACT_MOUNT_PATH: str = "/artifacts"
-SUPPORTED_RUNTIME_KINDS: frozenset[str] = frozenset({"opencode", "pi"})
+SUPPORTED_RUNTIME_KINDS: frozenset[str] = frozenset({"opencode", "pi", "mistral-vibe"})
 
 # ---------------------------------------------------------------------------
 # Operator & worker settings
@@ -163,7 +150,7 @@ SUPPORTED_RUNTIME_KINDS: frozenset[str] = frozenset({"opencode", "pi"})
 OPERATOR_NAMESPACE: str = os.getenv("OPERATOR_NAMESPACE", "default").strip() or "default"
 OPERATOR_PEERING_NAME: str = get_string_env("OPERATOR_PEERING_NAME", "kubesynapse-operator")
 
-WORKER_IMAGE: str = os.getenv("WORKER_IMAGE", "ghcr.io/your-org/ai-operator:latest")
+WORKER_IMAGE: str = os.getenv("WORKER_IMAGE", "docker.io/kubesynapse/kubesynapse-operator:v1.0.0")
 WORKER_SERVICE_ACCOUNT_NAME: str = os.getenv("WORKER_SERVICE_ACCOUNT_NAME", "default").strip() or "default"
 WORKER_ARTIFACT_SIZE: str = os.getenv("WORKER_ARTIFACT_SIZE", "2Gi")
 WORKER_ARTIFACT_STORAGE_CLASS: str = os.getenv("WORKER_ARTIFACT_STORAGE_CLASS", "").strip()
@@ -235,7 +222,7 @@ PROVIDER_REGISTRY_CONFIGMAP_NAME: str = os.getenv(
 # Runtime extra env & config file env-var names
 # ---------------------------------------------------------------------------
 
-OPENCODE_RUNTIME_EXTRA_ENV: Any = with_trust_bundle_env(get_json_env("OPENCODE_RUNTIME_EXTRA_ENV_JSON", {}))
+OPENCODE_RUNTIME_EXTRA_ENV: Any = get_json_env("OPENCODE_RUNTIME_EXTRA_ENV_JSON", {})
 OPENCODE_RUNTIME_CONFIG_FILES_ENV: str = "OPENCODE_RUNTIME_CONFIG_FILES_JSON"
 OPENCODE_MCP_CONNECTIONS_ENV: str = "OPENCODE_MCP_CONNECTIONS_JSON"
 OPENCODE_MCP_SIDECARS_ENV: str = "OPENCODE_MCP_SIDECARS_JSON"

@@ -29,7 +29,7 @@ function edgeColor(status?: string | null): string {
     case "cancelled":
       return "oklch(0.68 0.14 52)"; // muted orange
     default:
-      return "oklch(0.30 0.012 274)"; // border color
+      return "oklch(0.50 0.04 264)"; // visible neutral gray
   }
 }
 
@@ -70,10 +70,12 @@ export function DependencyEdge(props: EdgeProps) {
         path={edgePath}
         style={{
           stroke: color,
-          strokeWidth: isHighlighted ? 2.5 : 1.5,
-          strokeDasharray: isFlowing ? undefined : sourceStatus === "waiting_approval" ? "4 3" : "6 4",
-          opacity: isHighlighted ? 1 : 0.6,
-          transition: "stroke 0.3s ease, stroke-width 0.3s ease, opacity 0.3s ease",
+          strokeWidth: isHighlighted ? 2.5 : 2,
+          strokeDasharray: isFlowing ? undefined : sourceStatus === "waiting_approval" ? "4 3" : "8 4",
+          opacity: isHighlighted ? 1 : 0.7,
+          strokeLinecap: "round",
+          strokeLinejoin: "round",
+          transition: "stroke 0.15s ease, stroke-width 0.15s ease, opacity 0.15s ease",
         }}
         markerEnd="url(#dependency-arrow)"
       />

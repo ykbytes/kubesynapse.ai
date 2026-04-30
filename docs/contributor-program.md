@@ -100,7 +100,7 @@ Submit a request via GitHub issue with title `[Sponsorship] Conference Name - @y
 
 ## Questions?
 
-Open a discussion on [GitHub Discussions](https://github.com/ykbytes/kubemininions/discussions) or ask in `#KubeSynapse` on Slack.
+Open an [issue](https://github.com/ykbytes/kubesynapse.ai/issues) or email `team@kubesynapse.ai`.
 
 ---
 

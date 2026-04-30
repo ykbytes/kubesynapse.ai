@@ -199,6 +199,31 @@ spec:
           port: 4000
 ---
 # ---------------------------------------------------------------------------
+# Allow Egress from LiteLLM to External LLM APIs (HTTPS)
+# Required for LiteLLM to proxy requests to upstream model providers
+# (OpenRouter, OpenAI, Anthropic, etc.) over the internet.
+# ---------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kubesynapse.fullname" . }}-allow-litellm-external-egress
+  labels:
+    {{- include "kubesynapse.labels" . | nindent 4 }}
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector:
+    matchLabels:
+      app: litellm
+  policyTypes:
+    - Egress
+  egress:
+    - ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 80
+---
+# ---------------------------------------------------------------------------
 # Allow Egress from Operator to Kubernetes API
 # ---------------------------------------------------------------------------
 apiVersion: networking.k8s.io/v1
@@ -278,6 +303,94 @@ spec:
           port: 6333
 ---
 # ---------------------------------------------------------------------------
+# Allow Egress from Operator Workers to Platform Dependencies
+# Worker Jobs created by the operator use app=operator-worker and need access
+# to the state database and LiteLLM router to execute workflow steps.
+# ---------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kubesynapse.fullname" . }}-allow-worker-deps-egress
+  labels:
+    {{- include "kubesynapse.labels" . | nindent 4 }}
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector:
+    matchLabels:
+      app: operator-worker
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: postgresql
+      ports:
+        - protocol: TCP
+          port: 5432
+    - to:
+        - podSelector:
+            matchLabels:
+              app: litellm
+      ports:
+        - protocol: TCP
+          port: 4000
+---
+# ---------------------------------------------------------------------------
+# Allow Egress from Operator Workers to Agent Sandbox Pods
+# Workflow worker jobs invoke runtime sandboxes in any namespace via HTTP :8080.
+# ---------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kubesynapse.fullname" . }}-allow-worker-agent-egress
+  labels:
+    {{- include "kubesynapse.labels" . | nindent 4 }}
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector:
+    matchLabels:
+      app: operator-worker
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              app: ai-agent
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+# ---------------------------------------------------------------------------
+# Allow Egress from Operator Workers to Kubernetes API
+# Worker jobs patch workflow state and fetch runtime resources from the API.
+# ---------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kubesynapse.fullname" . }}-allow-worker-k8s-egress
+  labels:
+    {{- include "kubesynapse.labels" . | nindent 4 }}
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector:
+    matchLabels:
+      app: operator-worker
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - ipBlock:
+            cidr: {{ $k8sApiCidr }}
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 6443
+---
+# ---------------------------------------------------------------------------
 # Allow Egress from API Gateway to Dependencies
 # ---------------------------------------------------------------------------
 apiVersion: networking.k8s.io/v1
@@ -329,6 +442,61 @@ spec:
       ports:
         - protocol: TCP
           port: 6333
+---
+# ---------------------------------------------------------------------------
+# Allow Egress from API Gateway to Agent Sandbox Pods
+# The gateway invokes agent runtime sandboxes in any namespace via HTTP :8080.
+# ---------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kubesynapse.fullname" . }}-allow-gateway-agent-egress
+  labels:
+    {{- include "kubesynapse.labels" . | nindent 4 }}
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector:
+    matchLabels:
+      app: api-gateway
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              app: ai-agent
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+# ---------------------------------------------------------------------------
+# Allow Egress from API Gateway to Kubernetes API
+# The gateway lists CRDs (aiagents, agentworkflows, agentpolicies, agentevals)
+# directly from the K8s API to serve /api/agents, /api/workflows, etc.
+# ---------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kubesynapse.fullname" . }}-allow-gateway-k8s-egress
+  labels:
+    {{- include "kubesynapse.labels" . | nindent 4 }}
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector:
+    matchLabels:
+      app: api-gateway
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - ipBlock:
+            cidr: {{ $k8sApiCidr }}
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 6443
 ---
 # ---------------------------------------------------------------------------
 # Allow Egress from Web UI to API Gateway

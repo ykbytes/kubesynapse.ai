@@ -112,7 +112,7 @@ This deploys the full stack: API gateway, Kubernetes operator, LiteLLM proxy, Op
 1. Read the [Quick Start guide](../getting-started.md) to deploy your first agent in 5 minutes
 2. Explore the [Architecture Overview](../architecture-overview.md) to understand the full system
 3. Check the [Operator Guide](../operator-guide.md) for day-2 operations
-4. Join the community on [GitHub Discussions](https://github.com/ykbytes/kubemininions/discussions)
+4. Track changes and open questions in the [GitHub repository](https://github.com/ykbytes/kubesynapse.ai)
 
 ---
 

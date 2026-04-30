@@ -29,7 +29,7 @@ agent:
   mcpServers: []
   mcpSidecars:
     - name: kubernetes
-      image: docker.io/yakdhane/mcp-kubernetes:deploy-20260401-212102
+      image: docker.io/kubesynapse/mcp-kubernetes:deploy-20260401-212102
       port: 8097
   githubConfig: {}
   gitConfig: {}

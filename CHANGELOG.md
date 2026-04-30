@@ -292,4 +292,4 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Helm chart (`charts/kubesynapse/`)
 - CLI tool (`agentctl`) built on Typer + Rich
 - MCP sidecar architecture with 3-tier execution model
-- Pre-built images published to `docker.io/yakdhane`
+- Pre-built images published to `docker.io/kubesynapse`

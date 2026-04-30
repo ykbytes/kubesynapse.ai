@@ -75,8 +75,6 @@ This document describes every environment variable, Helm value, and configuratio
 | `MCP_AUTH_SECRET_NAME` | `mcp-auth` | Secret name for MCP auth |
 | `SECRET_PROVISIONING_MODE` | `native` | Secret provisioning: `native` or `external-secrets` |
 | `CLUSTER_SECRET_STORE` | `""` | External Secrets cluster store name |
-| `TRUST_BUNDLE_CONFIGMAP_NAME` | `""` | ConfigMap name for custom CA bundle |
-| `TRUST_BUNDLE_MOUNT_PATH` | `/etc/ssl/certs/custom-ca-bundle.pem` | Mount path for trust bundle |
 | `A2A_ALLOWED_CALLERS_ENV` | `A2A_ALLOWED_CALLERS_JSON` | Env var for A2A allowed callers |
 | `A2A_ALLOWED_TARGETS_ENV` | `A2A_ALLOWED_TARGETS_JSON` | Env var for A2A allowed targets |
 | `A2A_REQUIRE_HITL_ENV` | `A2A_REQUIRE_HITL` | Env var for A2A HITL requirement |
@@ -134,7 +132,6 @@ See [`values.schema.json`](../charts/kubesynapse/values.schema.json) for the com
 - `global` — Cluster name and image pull secrets
 - `podDisruptionBudget` — HA settings
 - `networkPolicy` — Network security
-- `trustBundle` — Custom CA certificates
 - `litellm` — LLM proxy configuration
 - `agentRuntime` — Agent resource limits and HITL
 - `opencodeRuntime` — OpenCode sidecar settings
@@ -281,10 +278,6 @@ networkPolicy:
   enabled: true
   ingressNamespaces: ["ingress-nginx", "monitoring"]
   clusterApiCidr: "10.0.0.0/8"
-
-trustBundle:
-  enabled: true
-  configMapName: "corp-ca-bundle"
 
 litellm:
   enabled: true

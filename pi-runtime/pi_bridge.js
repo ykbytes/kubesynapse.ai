@@ -1,9 +1,12 @@
 #!/usr/bin/env node
 /**
- * HTTP-to-pi-RPC Bridge (Node.js)
+ * HTTP-to-pi-RPC Bridge (Node.js)  —  Subprocess Manager Edition
  *
- * Minimal HTTP server that bridges HTTP requests to pi's RPC stdin/stdout.
- * No external dependencies — uses only Node.js built-in modules.
+ * The bridge is now PID 1. It spawns and manages the `pi` process as a child,
+ * communicating via FIFOs. When an invoke request specifies a different
+ * model/provider/thinkingLevel than what the current pi subprocess is using,
+ * the bridge gracefully kills the old pi and spawns a new one with updated
+ * arguments — no pod redeploy required.
  *
  * Endpoints:
  *   GET  /health         — Returns 200 if pi process is alive
@@ -19,14 +22,17 @@ const http = require("http");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { spawn } = require("child_process");
+const { spawn, execSync } = require("child_process");
 
 const HOST = process.env.PI_BRIDGE_HOST || "0.0.0.0";
 const PORT = parseInt(process.env.PI_BRIDGE_PORT || "8080", 10);
-const PI_FIFO = process.env.PI_FIFO_PATH || "/tmp/pi-stdin";
-const PI_STDOUT_FIFO = process.env.PI_STDOUT_PATH || "/tmp/pi-stdout";
+const PI_STDIN_FIFO = "/tmp/pi-stdin";
+const PI_STDOUT_FIFO = "/tmp/pi-stdout";
 const WORKDIR = path.resolve(process.env.OPENCODE_WORKDIR || "/workspace");
 const HOME_DIR = path.resolve(process.env.HOME || "/home/piuser");
+const SESSION_DIR = process.env.PI_CODING_AGENT_DIR
+  ? path.join(process.env.PI_CODING_AGENT_DIR, "sessions")
+  : "/home/piuser/.pi/agent/sessions";
 const ARTIFACT_COLLECTION_MAX_FILES = Math.max(parseInt(process.env.PI_ARTIFACT_MAX_FILES || "200", 10) || 200, 1);
 const ARTIFACT_DOWNLOAD_MAX_SIZE = Math.max(parseInt(process.env.PI_ARTIFACT_DOWNLOAD_MAX_SIZE || String(50 * 1024 * 1024), 10) || (50 * 1024 * 1024), 1);
 const SKIP_DIRS = new Set([".git", "node_modules", "__pycache__", ".next", ".venv", "venv", "dist", ".cache"]);
@@ -52,7 +58,22 @@ let commandCounter = 0;
 const pendingResponses = new Map();
 const eventStreams = new Set();
 const ACTIVE_INVOCATIONS = new Map(); // invocationId -> { res, chunks, tools, done, timer }
-const MODEL_TIMEOUT_MS = Math.max(parseInt(process.env.PI_MODEL_TIMEOUT_MS || "120000", 10) || 120000, 10000); // default 120s, min 10s
+const MODEL_TIMEOUT_MS = Math.max(parseInt(process.env.PI_MODEL_TIMEOUT_MS || "120000", 10) || 120000, 10000);
+
+// ── Pi Subprocess State ─────────────────────────────────────────────
+
+let piProcess = null;         // child_process.ChildProcess | null
+let stdinKeepAliveFd = null;  // fd keeping stdin FIFO open (O_RDWR, never blocks)
+let stdoutReader = null;      // fs.ReadStream | null
+let piReady = false;
+let piStarting = false;
+
+// Current running configuration
+let currentConfig = {
+  model: process.env.PI_MODEL || "",
+  provider: process.env.PI_PROVIDER || "",
+  thinkingLevel: process.env.PI_THINKING_LEVEL || "medium",
+};
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
@@ -261,6 +282,261 @@ function streamArtifactsZip(res, root = "") {
   });
 }
 
+// ── Pi Subprocess Management ────────────────────────────────────────
+
+function buildPiArgs(config) {
+  const args = ["--mode", "rpc"];
+
+  // Session handling
+  if (process.env.PI_NO_SESSION === "true") {
+    args.push("--no-session");
+  } else {
+    args.push("--session-dir", SESSION_DIR);
+  }
+
+  // Provider & model
+  if (config.provider) {
+    args.push("--provider", config.provider);
+  }
+  if (config.model) {
+    args.push("--model", config.model);
+  }
+
+  // Thinking level
+  if (config.thinkingLevel) {
+    args.push("--thinking", config.thinkingLevel);
+  }
+
+  // Tools configuration
+  if (process.env.PI_NO_TOOLS === "true") {
+    args.push("--no-tools");
+  } else if (process.env.PI_TOOLS) {
+    args.push("--tools", process.env.PI_TOOLS);
+  }
+
+  // Extensions
+  if (process.env.PI_EXTENSIONS) {
+    for (const ext of process.env.PI_EXTENSIONS.split(/\s+/).filter(Boolean)) {
+      args.push("-e", ext);
+    }
+  }
+
+  // System prompt
+  if (process.env.PI_SYSTEM_PROMPT) {
+    args.push("--system-prompt", process.env.PI_SYSTEM_PROMPT);
+  }
+
+  return args;
+}
+
+function configChanged(requested) {
+  const model = (requested.model || "").trim();
+  const provider = (requested.provider || "").trim();
+  const thinkingLevel = (requested.thinkingLevel || requested.thinking_level || "").trim();
+
+  // Only consider changed if the request explicitly provides a non-empty value
+  // that differs from the current config
+  if (model && model !== currentConfig.model) return true;
+  if (provider && provider !== currentConfig.provider) return true;
+  if (thinkingLevel && thinkingLevel !== currentConfig.thinkingLevel) return true;
+  return false;
+}
+
+function stopPi() {
+  return new Promise((resolve) => {
+    piReady = false;
+
+    // Clean up stdout reader
+    if (stdoutReader) {
+      try { stdoutReader.destroy(); } catch {}
+      stdoutReader = null;
+    }
+
+    // Close stdin keep-alive fd
+    if (stdinKeepAliveFd !== null) {
+      try { fs.closeSync(stdinKeepAliveFd); } catch {}
+      stdinKeepAliveFd = null;
+    }
+
+    // Kill pi process
+    if (piProcess) {
+      const proc = piProcess;
+      piProcess = null;
+
+      proc.once("exit", () => {
+        // Clean up FIFOs
+        try { fs.unlinkSync(PI_STDIN_FIFO); } catch {}
+        try { fs.unlinkSync(PI_STDOUT_FIFO); } catch {}
+        resolve();
+      });
+
+      try { proc.kill("SIGTERM"); } catch {}
+
+      // Force kill after 5 seconds
+      setTimeout(() => {
+        try { proc.kill("SIGKILL"); } catch {}
+      }, 5000);
+
+      // Safety: resolve anyway after 8 seconds
+      setTimeout(resolve, 8000);
+    } else {
+      // No process, just clean up FIFOs
+      try { fs.unlinkSync(PI_STDIN_FIFO); } catch {}
+      try { fs.unlinkSync(PI_STDOUT_FIFO); } catch {}
+      resolve();
+    }
+
+    // Reject all pending responses
+    for (const [id, handler] of pendingResponses) {
+      clearTimeout(handler.timeout);
+      handler.reject(new Error("Pi process restarting"));
+    }
+    pendingResponses.clear();
+  });
+}
+
+function startPi(config) {
+  return new Promise((resolve, reject) => {
+    if (piStarting) {
+      reject(new Error("Pi subprocess is already starting"));
+      return;
+    }
+    piStarting = true;
+    piReady = false;
+
+    // Update current config
+    currentConfig = {
+      model: (config.model || "").trim(),
+      provider: (config.provider || "").trim(),
+      thinkingLevel: (config.thinkingLevel || "medium").trim(),
+    };
+
+    const args = buildPiArgs(currentConfig);
+    console.log(`[pi-bridge] Starting pi subprocess: pi ${args.join(" ")}`);
+
+    // Create FIFOs
+    try { fs.unlinkSync(PI_STDIN_FIFO); } catch {}
+    try { fs.unlinkSync(PI_STDOUT_FIFO); } catch {}
+    try {
+      execSync(`mkfifo ${PI_STDIN_FIFO}`);
+      execSync(`mkfifo ${PI_STDOUT_FIFO}`);
+    } catch (err) {
+      piStarting = false;
+      reject(new Error(`Failed to create FIFOs: ${err.message}`));
+      return;
+    }
+
+    // Keep stdin FIFO open with O_RDWR (never blocks on FIFO, unlike O_WRONLY)
+    stdinKeepAliveFd = fs.openSync(PI_STDIN_FIFO, fs.constants.O_RDWR);
+
+    // Open stdout FIFO for reading with O_RDWR (never blocks)
+    // We'll use this fd for the read stream and also as the write target for pi
+    const stdoutRwFd = fs.openSync(PI_STDOUT_FIFO, fs.constants.O_RDWR);
+
+    // Start stdout reader using the already-opened fd
+    startStdoutReaderFromFd(stdoutRwFd);
+
+    // Small delay for reader to attach before starting pi
+    setTimeout(() => {
+      // Spawn pi — stdin reads from our FIFO, stdout writes to our FIFO
+      // Open non-blocking fds for pi's stdio
+      const stdinFd = fs.openSync(PI_STDIN_FIFO, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
+      const stdoutFd = fs.openSync(PI_STDOUT_FIFO, fs.constants.O_WRONLY | fs.constants.O_NONBLOCK);
+
+      piProcess = spawn("pi", args, {
+        stdio: [stdinFd, stdoutFd, "pipe"],
+        cwd: WORKDIR,
+        env: process.env,
+      });
+
+      // Close our copies of the file descriptors (pi now owns them)
+      fs.closeSync(stdinFd);
+      fs.closeSync(stdoutFd);
+
+      piProcess.stderr.on("data", (chunk) => {
+        const text = chunk.toString().trim();
+        if (text) console.log(`[pi-stderr] ${text}`);
+      });
+
+      piProcess.on("error", (err) => {
+        console.error(`[pi-bridge] Pi subprocess error: ${err.message}`);
+        piProcess = null;
+        piReady = false;
+        piStarting = false;
+      });
+
+      piProcess.on("exit", (code, signal) => {
+        console.log(`[pi-bridge] Pi subprocess exited: code=${code}, signal=${signal}`);
+        piProcess = null;
+        piReady = false;
+      });
+
+      // Consider pi started after a brief delay (it needs to initialize)
+      setTimeout(() => {
+        piReady = piProcess !== null;
+        piStarting = false;
+        if (piReady) {
+          console.log(`[pi-bridge] Pi subprocess ready (PID: ${piProcess.pid}, model: ${currentConfig.model || "default"}, provider: ${currentConfig.provider || "auto"})`);
+          resolve();
+        } else {
+          reject(new Error("Pi process exited before becoming ready"));
+        }
+      }, 1500);
+    }, 500);
+  });
+}
+
+async function ensurePiWithConfig(requestedConfig) {
+  // If config changed, restart pi
+  if (piProcess && configChanged(requestedConfig)) {
+    const newModel = requestedConfig.model || currentConfig.model;
+    const newProvider = requestedConfig.provider || currentConfig.provider;
+    const newThinking = requestedConfig.thinkingLevel || requestedConfig.thinking_level || currentConfig.thinkingLevel;
+    console.log(`[pi-bridge] Model config change detected: ${currentConfig.provider}/${currentConfig.model} -> ${newProvider}/${newModel}`);
+
+    // Fail any active invocations
+    for (const [invId, inv] of ACTIVE_INVOCATIONS) {
+      clearTimeout(inv.timer);
+      inv.error = "Pi restarting for model change";
+      inv.done = true;
+      if (inv.stream && !inv.stream.destroyed) {
+        inv.stream.write(`event: response.error\ndata: ${JSON.stringify({ error: inv.error })}\n\n`);
+        inv.stream.end();
+      }
+      ACTIVE_INVOCATIONS.delete(invId);
+    }
+
+    await stopPi();
+    await startPi({
+      model: newModel,
+      provider: newProvider,
+      thinkingLevel: newThinking,
+    });
+    return;
+  }
+
+  // If pi is not running, start it with requested config (or defaults)
+  if (!piProcess && !piStarting) {
+    await startPi({
+      model: requestedConfig.model || currentConfig.model,
+      provider: requestedConfig.provider || currentConfig.provider,
+      thinkingLevel: requestedConfig.thinkingLevel || requestedConfig.thinking_level || currentConfig.thinkingLevel,
+    });
+    return;
+  }
+
+  // If pi is starting, wait for it
+  if (piStarting) {
+    const start = Date.now();
+    while (piStarting && Date.now() - start < 10000) {
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    if (!piProcess) {
+      throw new Error("Pi process failed to start");
+    }
+  }
+}
+
 // ── Pi Communication ────────────────────────────────────────────────
 
 function sendToPi(command) {
@@ -268,10 +544,18 @@ function sendToPi(command) {
   const payload = JSON.stringify({ ...command, id }) + "\n";
 
   return new Promise((resolve, reject) => {
+    if (!piProcess) {
+      reject(new Error("Pi process is not running"));
+      return;
+    }
     try {
-      const fd = fs.openSync(PI_FIFO, "w");
-      fs.writeSync(fd, payload);
-      fs.closeSync(fd);
+      // Write via the keep-alive fd (O_RDWR, never blocks) instead of
+      // opening the FIFO each time which could block the event loop.
+      if (stdinKeepAliveFd === null) {
+        reject(new Error("stdin FIFO not open"));
+        return;
+      }
+      fs.writeSync(stdinKeepAliveFd, payload);
 
       const timeout = setTimeout(() => {
         pendingResponses.delete(id);
@@ -325,7 +609,6 @@ function handlePiOutput(line) {
     }
 
     // Route to active synchronous invocations
-    // Pi sends message_update with assistantMessageEvent.delta for text chunks
     if (data.type === "message_update" && data.assistantMessageEvent) {
       const evt = data.assistantMessageEvent;
       if (evt.type === "text_delta" && evt.delta) {
@@ -336,7 +619,6 @@ function handlePiOutput(line) {
           }
         }
       }
-      // Also accumulate from message.content if present (assistant only)
       const text = extractTextFromPiMessage(data.message);
       if (text && data.message && data.message.role === "assistant") {
         for (const inv of ACTIVE_INVOCATIONS.values()) {
@@ -386,13 +668,14 @@ function handlePiOutput(line) {
       }
     }
 
-    // Mark invocation complete on agent_end (full response received)
+    // Mark invocation complete on agent_end
     if (data.type === "agent_end") {
       for (const inv of ACTIVE_INVOCATIONS.values()) {
         clearTimeout(inv.timer);
         inv.done = true;
         if (inv.stream) {
-          inv.stream.write(`event: response.completed\ndata: ${JSON.stringify({ status: "completed" })}\n\n`);
+          const responseText = inv.chunks.join("");
+          inv.stream.write(`event: response.completed\ndata: ${JSON.stringify({ status: "completed", response: responseText })}\n\n`);
         }
       }
     }
@@ -449,61 +732,66 @@ function handleExtensionUIRequest(data) {
   }
 
   try {
-    const fd = fs.openSync(PI_FIFO, "w");
-    fs.writeSync(fd, JSON.stringify(response) + "\n");
-    fs.closeSync(fd);
+    if (stdinKeepAliveFd !== null) {
+      fs.writeSync(stdinKeepAliveFd, JSON.stringify(response) + "\n");
+    } else {
+      console.error("[pi-bridge] Cannot send extension UI response: stdin FIFO not open");
+    }
   } catch (e) {
     console.error("[pi-bridge] Failed to send extension UI response:", e.message);
   }
 }
 
 function isPiAlive() {
-  try {
-    const cmdline = fs.readFileSync("/proc/1/cmdline", "utf8");
-    return cmdline.includes("pi");
-  } catch {
-    return false;
-  }
+  return piProcess !== null && !piProcess.killed && piProcess.exitCode === null;
 }
 
 // ── Read pi's stdout ────────────────────────────────────────────────
 
 function startStdoutReader() {
+  startStdoutReaderFromFd(null);
+}
+
+function startStdoutReaderFromFd(fd) {
+  if (stdoutReader) {
+    try { stdoutReader.destroy(); } catch {}
+  }
+
   let buffer = "";
-  const stdoutPath = PI_STDOUT_FIFO || "/tmp/pi-stdout";
-
   try {
-    const stdout = fs.createReadStream(stdoutPath, {
-      encoding: "utf8",
-      highWaterMark: 4096,
-    });
+    const opts = { encoding: "utf8", highWaterMark: 4096 };
+    if (fd !== null) {
+      opts.fd = fd;
+      opts.autoClose = false;
+    }
+    stdoutReader = fd !== null
+      ? fs.createReadStream(null, opts)
+      : fs.createReadStream(PI_STDOUT_FIFO, opts);
 
-    stdout.on("data", (chunk) => {
+    stdoutReader.on("data", (chunk) => {
       buffer += chunk;
       const lines = buffer.split("\n");
       buffer = lines.pop();
       for (const line of lines) {
         if (line.trim()) {
-          // Log raw pi output for Kubernetes observability
           console.log("[pi-stdout]", line.trim());
           handlePiOutput(line);
         }
       }
     });
 
-    stdout.on("end", () => {
-      // Pi exited or stdout closed; attempt to re-open after a delay
-      console.log("[pi-bridge] stdout stream ended, will retry in 2s...");
-      setTimeout(startStdoutReader, 2000);
+    stdoutReader.on("end", () => {
+      console.log("[pi-bridge] stdout stream ended");
+      stdoutReader = null;
     });
 
-    stdout.on("error", (err) => {
+    stdoutReader.on("error", (err) => {
       console.error("[pi-bridge] stdout read error:", err.message);
-      setTimeout(startStdoutReader, 2000);
+      stdoutReader = null;
     });
   } catch (err) {
     console.error("[pi-bridge] Cannot read pi stdout:", err.message);
-    setTimeout(startStdoutReader, 2000);
+    stdoutReader = null;
   }
 }
 
@@ -533,6 +821,36 @@ function readBody(req) {
   });
 }
 
+// ── Image/file attachment handler ───────────────────────────────────
+
+function handleImageAttachments(message, images) {
+  let finalMessage = message;
+  if (Array.isArray(images) && images.length > 0) {
+    const imagePaths = [];
+    for (let i = 0; i < images.length; i++) {
+      const img = images[i];
+      const dataUrl = img.data || "";
+      const name = img.name || `image-${i + 1}.png`;
+      const safeName = name.replace(/[^a-zA-Z0-9._-]/g, "_");
+      const match = dataUrl.match(/^data:[^;]+;base64,(.+)$/);
+      if (match) {
+        const filePath = `/workspace/${safeName}`;
+        try {
+          fs.writeFileSync(filePath, Buffer.from(match[1], "base64"));
+          imagePaths.push(filePath);
+        } catch (err) {
+          console.error(`[pi-bridge] Failed to write image ${safeName}:`, err.message);
+        }
+      }
+    }
+    if (imagePaths.length > 0) {
+      const fileList = imagePaths.map((p) => `- ${p}`).join("\n");
+      finalMessage = `${message}\n\n[The user attached ${imagePaths.length} file(s) which have been saved to the workspace:\n${fileList}\n]`;
+    }
+  }
+  return finalMessage;
+}
+
 // ── HTTP Handlers ───────────────────────────────────────────────────
 
 async function handleRequest(req, res) {
@@ -551,17 +869,22 @@ async function handleRequest(req, res) {
     return;
   }
 
-  // Health check
+  // Health check — includes current config
   if (requestPath === "/health") {
     const alive = isPiAlive();
     return jsonResponse(res, alive ? 200 : 503, {
       status: alive ? "healthy" : "unhealthy",
       pi: alive ? "running" : "not running",
+      pid: piProcess?.pid || null,
+      config: currentConfig,
     });
   }
 
   // Readiness check
   if (requestPath === "/ready") {
+    if (!isPiAlive()) {
+      return jsonResponse(res, 503, { status: "not ready", error: "pi not running" });
+    }
     try {
       await sendToPi({ type: "get_state" });
       return jsonResponse(res, 200, { status: "ready" });
@@ -570,11 +893,14 @@ async function handleRequest(req, res) {
     }
   }
 
-  // Get state
+  // Get state — includes current config
   if (requestPath === "/state" || requestPath === "/api/state") {
     try {
       const response = await sendToPi({ type: "get_state" });
-      return jsonResponse(res, 200, response.data || response);
+      return jsonResponse(res, 200, {
+        ...(response.data || response),
+        currentConfig,
+      });
     } catch (err) {
       return jsonResponse(res, 500, { error: err.message });
     }
@@ -636,12 +962,21 @@ async function handleRequest(req, res) {
         return jsonResponse(res, 400, { error: "prompt is required" });
       }
 
+      // Dynamic model switching: check if request specifies different config
+      await ensurePiWithConfig({
+        model: parsed.model || "",
+        provider: parsed.provider || "",
+        thinkingLevel: parsed.thinkingLevel || parsed.thinking_level || "",
+      });
+
+      // Handle image attachments
+      const finalMessage = handleImageAttachments(message, parsed.images);
+
       const invId = `invoke-${++commandCounter}`;
       const invocation = { chunks: [], tools: [], done: false, error: null, stream: null };
       ACTIVE_INVOCATIONS.set(invId, invocation);
 
-      // Send prompt
-      await sendToPi({ type: "prompt", message });
+      await sendToPi({ type: "prompt", message: finalMessage });
 
       // Poll until done or timeout
       const start = Date.now();
@@ -651,7 +986,6 @@ async function handleRequest(req, res) {
       }
 
       if (!invocation.done) {
-        // Timeout — abort Pi
         await sendToPi({ type: "abort" }).catch(() => {});
         invocation.error = `Model call timed out after ${MODEL_TIMEOUT_MS}ms`;
       }
@@ -662,12 +996,12 @@ async function handleRequest(req, res) {
         return jsonResponse(res, 502, {
           thread_id: parsed.thread_id || invId,
           response: "",
-          model: parsed.model || "",
+          model: currentConfig.model,
           status: "failed",
           warnings: [invocation.error],
           artifacts: [],
           tool_calls: invocation.tools,
-          metadata: {},
+          metadata: { runtime: "pi", config: currentConfig },
         });
       }
 
@@ -675,12 +1009,12 @@ async function handleRequest(req, res) {
       return jsonResponse(res, 200, {
         thread_id: parsed.thread_id || invId,
         response: responseText,
-        model: parsed.model || "",
+        model: currentConfig.model,
         status: "completed",
         warnings: [],
         artifacts: [],
         tool_calls: invocation.tools,
-        metadata: { runtime: "pi" },
+        metadata: { runtime: "pi", config: currentConfig },
       });
     } catch (err) {
       return jsonResponse(res, 400, { error: err.message });
@@ -696,11 +1030,21 @@ async function handleRequest(req, res) {
         return jsonResponse(res, 400, { error: "prompt is required" });
       }
 
+      // Dynamic model switching: check if request specifies different config
+      await ensurePiWithConfig({
+        model: parsed.model || "",
+        provider: parsed.provider || "",
+        thinkingLevel: parsed.thinkingLevel || parsed.thinking_level || "",
+      });
+
+      // Handle image attachments
+      const finalMessage = handleImageAttachments(message, parsed.images);
+
       const invId = `stream-${++commandCounter}`;
       const invocation = { chunks: [], tools: [], done: false, error: null, stream: res };
       ACTIVE_INVOCATIONS.set(invId, invocation);
 
-      // Set model timeout — abort if Pi doesn't respond within MODEL_TIMEOUT_MS
+      // Set model timeout
       const modelTimer = setTimeout(() => {
         if (!invocation.done && !invocation.error) {
           const timeoutErr = `Model call timed out after ${MODEL_TIMEOUT_MS}ms`;
@@ -711,7 +1055,6 @@ async function handleRequest(req, res) {
             invocation.stream.write(`event: response.error\ndata: ${JSON.stringify({ error: timeoutErr })}\n\n`);
             invocation.stream.end();
           }
-          // Abort Pi to free it for next request
           sendToPi({ type: "abort" }).catch(() => {});
         }
       }, MODEL_TIMEOUT_MS);
@@ -723,13 +1066,15 @@ async function handleRequest(req, res) {
         Connection: "keep-alive",
       });
 
+      // Send config info as first SSE event so frontend knows the active model
+      res.write(`event: response.config\ndata: ${JSON.stringify({ config: currentConfig })}\n\n`);
+
       req.on("close", () => {
         clearTimeout(invocation.timer);
         ACTIVE_INVOCATIONS.delete(invId);
       });
 
-      // Send prompt
-      await sendToPi({ type: "prompt", message });
+      await sendToPi({ type: "prompt", message: finalMessage });
 
       // Keep connection alive and close when done
       const keepalive = setInterval(() => {
@@ -792,22 +1137,35 @@ async function handleRequest(req, res) {
 
 // ── Main ─────────────────────────────────────────────────────────────
 
-console.log("[pi-bridge] Starting on", HOST + ":" + PORT);
-console.log("[pi-bridge] Pi FIFO:", PI_FIFO);
+console.log("[pi-bridge] Starting subprocess manager on", HOST + ":" + PORT);
+console.log("[pi-bridge] Default config:", JSON.stringify(currentConfig));
 
-startStdoutReader();
-
+// Start the HTTP server first, then spawn pi
 const server = http.createServer(handleRequest);
-server.listen(PORT, HOST, () => {
-  console.log("[pi-bridge] Listening on", HOST + ":" + PORT);
-  console.log("[pi-bridge] Pi alive:", isPiAlive());
+server.listen(PORT, HOST, async () => {
+  console.log("[pi-bridge] HTTP server listening on", HOST + ":" + PORT);
+
+  // Spawn pi with default config from env vars
+  try {
+    await startPi(currentConfig);
+    console.log("[pi-bridge] Pi subprocess started successfully");
+  } catch (err) {
+    console.error("[pi-bridge] Failed to start pi subprocess:", err.message);
+    console.error("[pi-bridge] Bridge will retry when first invoke request arrives");
+  }
 });
 
-process.on("SIGTERM", () => {
-  console.log("[pi-bridge] Shutting down...");
-  server.close(() => process.exit(0));
-});
+// Graceful shutdown
+async function shutdown(signal) {
+  console.log(`[pi-bridge] Received ${signal}, shutting down...`);
+  await stopPi();
+  server.close(() => {
+    console.log("[pi-bridge] HTTP server closed");
+    process.exit(0);
+  });
+  // Force exit after 10 seconds
+  setTimeout(() => process.exit(1), 10000);
+}
 
-process.on("SIGINT", () => {
-  server.close(() => process.exit(0));
-});
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));

@@ -21,6 +21,7 @@ import {
   MessageSquare,
   MemoryStick,
   Minimize2,
+  Paperclip,
   Pencil,
   Pin,
   PanelRightClose,
@@ -44,7 +45,6 @@ import { CopyButton } from "./CopyButton";
 import { EmptyState } from "./EmptyState";
 import { StatusBadge } from "./StatusBadge";
 import { ActivityTimeline } from "./ActivityTimeline";
-import { MessageToolbar } from "./MessageToolbar";
 import { ChatSettingsDrawer } from "./ChatSettingsDrawer";
 import type { AgentDiscoveryPeer, AgentInfo, FactoryMode, InvocationSummary, RuntimeKind, SpecialistSubagentDraft, UiActivity, UiMessage } from "../types";
 import type { UiTodo } from "../types";
@@ -55,12 +55,13 @@ import { fetchSessionDiff } from "@/lib/api";
 import { extractAgentCallsFromSummary, parseAgentInvokeCommand, sanitizeText, type AgentCallSummary } from "@/lib/agentCalls";
 import { factoryModeShortLabel, isFactoryAgentName } from "@/lib/factoryModes";
 import { usePlanDock } from "@/hooks/usePlanDock";
+import { cn } from "@/lib/utils";
 import { useChat } from "@/contexts/ChatContext";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { useConnection } from "@/contexts/ConnectionContext";
 import { QuestionDock } from "./QuestionDock";
 import { MarkdownRenderer } from "./MarkdownRenderer";
-import { extractMcpCapabilityIds, getCapabilitySignal } from "@/lib/agentSignals";
+import { deriveAgentVisualSignals, extractMcpCapabilityIds, getCapabilitySignal } from "@/lib/agentSignals";
 
 interface ChatWorkbenchProps {
   agentName: string;
@@ -119,7 +120,7 @@ interface ChatWorkbenchProps {
   onFactoryModeChange: (value: FactoryMode) => void;
   onSaveSession: () => void;
   canSubmit: boolean;
-  onSubmit: () => void;
+  onSubmit: (attachments?: UiMessage["attachments"]) => void;
   onCancel: () => void;
 }
 
@@ -170,9 +171,9 @@ function renderMentions(text: string, agents: AgentInfo[]): React.ReactNode {
 const MessageBubble = memo(function MessageBubble({
   message,
   index,
-  onEditPrompt,
-  onRegeneratePrompt,
-  promptForRegenerate,
+  onEditPrompt: _onEditPrompt,
+  onRegeneratePrompt: _onRegeneratePrompt,
+  promptForRegenerate: _promptForRegenerate,
   operationSummary,
   liveActivity = [],
   phase = "idle",
@@ -198,6 +199,8 @@ const MessageBubble = memo(function MessageBubble({
 
   // ── User message: right-aligned solid bubble ──
   if (isUser) {
+    const attachments = message.attachments;
+    const hasAttachments = attachments && attachments.length > 0;
     return (
       <div
         className="group flex justify-end animate-slide-up"
@@ -205,13 +208,36 @@ const MessageBubble = memo(function MessageBubble({
       >
           <div className="max-w-[75%]">
           <div className="rounded-lg rounded-br-sm border border-primary/35 bg-primary px-4 py-3 text-primary-foreground shadow-sm shadow-primary/20">
+            {/* Attachment previews */}
+            {hasAttachments && (
+              <div className="mb-2 flex flex-wrap gap-2">
+                {attachments.map((att, i) =>
+                  att.isImage ? (
+                    <img
+                      key={i}
+                      src={att.dataUrl}
+                      alt={att.name}
+                      className="max-h-40 max-w-[200px] rounded-md border border-primary-foreground/20 object-cover"
+                    />
+                  ) : (
+                    <span
+                      key={i}
+                      className="inline-flex items-center gap-1 rounded-md border border-primary-foreground/20 bg-primary-foreground/10 px-2 py-0.5 text-xs text-primary-foreground"
+                    >
+                      <Paperclip className="h-3 w-3" />
+                      {att.name}
+                    </span>
+                  ),
+                )}
+              </div>
+            )}
             <div className="whitespace-pre-wrap break-words text-sm leading-relaxed">
               {message.content ? renderMentions(message.content, agents) : ""}
             </div>
           </div>
-          {message.content && (
-            <div className="mt-1 flex justify-end">
-              <MessageToolbar content={message.content} isUser onEdit={onEditPrompt ? () => onEditPrompt(message.content) : undefined} />
+          {message.timestamp && (
+            <div className="mt-1 text-right text-[10px] text-muted-foreground/40 opacity-0 transition-opacity duration-150 group-hover:opacity-100">
+              {formatMessageTimestamp(message.timestamp)}
             </div>
           )}
         </div>
@@ -243,7 +269,7 @@ const MessageBubble = memo(function MessageBubble({
       aria-live={isStreaming ? "polite" : undefined}
     >
       {/* Content */}
-      <div className="min-w-0 flex-1 rounded-lg border border-border/70 bg-background/75 px-2.5 py-1.5 shadow-sm backdrop-blur-sm">
+      <div className="min-w-0 flex-1 rounded-lg border border-border/70 bg-background/75 px-4 py-3 shadow-sm backdrop-blur-sm">
         {/* Thinking section */}
         {message.reasoning && (
           <div className="mb-1.5">
@@ -289,14 +315,12 @@ const MessageBubble = memo(function MessageBubble({
           </div>
         ) : null}
 
-        {/* Message toolbar — appears on hover */}
-        {message.content && (
-          <div className="mt-1">
-            <MessageToolbar
-              content={message.content}
-              isStreaming={isStreaming}
-              onRegenerate={promptForRegenerate ? () => { void onRegeneratePrompt?.(promptForRegenerate); } : undefined}
-            />
+        {/* Model + timestamp metadata (visible on hover) */}
+        {(message.modelName || message.timestamp) && (
+          <div className="mt-1.5 flex items-center gap-1.5 text-[10px] text-muted-foreground/40 opacity-0 transition-opacity duration-150 group-hover:opacity-100">
+            {message.modelName && <span className="font-medium">{message.modelName}</span>}
+            {message.modelName && message.timestamp && <span>·</span>}
+            {message.timestamp && <span>{formatMessageTimestamp(message.timestamp)}</span>}
           </div>
         )}
       </div>
@@ -897,6 +921,15 @@ function formatRelativeTime(iso: string | null): string {
   if (hours < 24) return `${hours}h ago`;
   const days = Math.floor(hours / 24);
   return `${days}d ago`;
+}
+
+function formatMessageTimestamp(iso: string): string {
+  try {
+    const date = new Date(iso);
+    return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  } catch {
+    return "";
+  }
 }
 
 function formatMemoryTypeLabel(value: string): string {
@@ -1569,6 +1602,11 @@ export function ChatWorkbench({
   } = useChat();
   const { chatFocused, setChatFocused, selectedAgentDetail, selectedAgent, navigateToResource, handleCreateNew } = useWorkspace();
   const { token, namespace, canMutate } = useConnection();
+  const chatSignals = useMemo(
+    () => deriveAgentVisualSignals(selectedAgentDetail ?? { runtime_kind: runtimeKind }),
+    [runtimeKind, selectedAgentDetail],
+  );
+  const ChatRuntimeIcon = chatSignals.runtime.icon;
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const isAtBottomRef = useRef(true);
   const scrollContainerRef = useRef<HTMLElement | null>(null);
@@ -1592,6 +1630,8 @@ export function ChatWorkbench({
   const [mentionIndex, setMentionIndex] = useState(0);
   const [mentionQuery, setMentionQuery] = useState("");
   const mentionContainerRef = useRef<HTMLDivElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [attachments, setAttachments] = useState<Array<{ id: string; name: string; type: string; size: number; dataUrl: string; isImage: boolean }>>([]);
   const mentionableAgents = useMemo(() => agents.filter((a) => a.name !== agentName), [agents, agentName]);
   const filteredMentionAgents = useMemo(() => {
     const q = mentionQuery.toLowerCase();
@@ -1791,7 +1831,76 @@ export function ChatWorkbench({
       onA2ATargetAgentChange(detectedAgent.name);
       onA2ATargetNamespaceChange(detectedAgent.namespace);
     }
-    onSubmit();
+    // Prepend text file contents to prompt
+    if (attachments.length > 0) {
+      const textAttachments = attachments.filter((a) => !a.isImage);
+      if (textAttachments.length > 0) {
+        const prefix = textAttachments
+          .map((a) => {
+            try {
+              const content = atob(a.dataUrl.split(",")[1] ?? "");
+              return `--- File: ${a.name} ---\n${content}\n--- End File ---`;
+            } catch { return ""; }
+          })
+          .filter(Boolean)
+          .join("\n\n");
+        if (prefix) {
+          onPromptChange(prefix + "\n\n" + prompt);
+        }
+      }
+    }
+    // Capture attachments for the user message before clearing
+    const messageAttachments = attachments.length > 0
+      ? attachments.map(({ name, type, dataUrl, isImage }) => ({ name, type, dataUrl, isImage }))
+      : undefined;
+    setAttachments([]);
+    onSubmit(messageAttachments);
+  }
+
+  /* ── File attachment helpers ── */
+  function processFiles(files: FileList | File[]) {
+    const fileArray = Array.from(files);
+    fileArray.forEach((file) => {
+      if (file.size > 10 * 1024 * 1024) return; // 10MB limit
+      const reader = new FileReader();
+      reader.onload = () => {
+        const dataUrl = reader.result as string;
+        const isImage = file.type.startsWith("image/");
+        setAttachments((prev) => [
+          ...prev,
+          { id: crypto.randomUUID(), name: file.name, type: file.type, size: file.size, dataUrl, isImage },
+        ]);
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
+    if (e.target.files && e.target.files.length > 0) {
+      processFiles(e.target.files);
+      e.target.value = ""; // reset so same file can be re-selected
+    }
+  }
+
+  function handlePaste(e: React.ClipboardEvent) {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    const files: File[] = [];
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.kind === "file") {
+        const file = item.getAsFile();
+        if (file) files.push(file);
+      }
+    }
+    if (files.length > 0) {
+      e.preventDefault();
+      processFiles(files);
+    }
+  }
+
+  function removeAttachment(id: string) {
+    setAttachments((prev) => prev.filter((a) => a.id !== id));
   }
 
   const findPromptForRegenerate = useCallback((messageIndex: number): string | null => {
@@ -2049,7 +2158,7 @@ export function ChatWorkbench({
             }
           }}
         >
-          <div className="mx-auto flex w-full max-w-6xl flex-col gap-1.5 px-3 py-2" aria-label="Conversation history" aria-live="polite" aria-atomic="false">
+          <div className="mx-auto flex w-full max-w-6xl flex-col gap-3 px-4 py-3" aria-label="Conversation history" aria-live="polite" aria-atomic="false">
             {messages.length === 0 && (
               <div className="space-y-3">
                 <EmptyState
@@ -2646,6 +2755,38 @@ export function ChatWorkbench({
             </div>
           )}
           <div className="relative rounded-lg border-2 border-border bg-background/80 shadow-sm transition-colors focus-within:border-primary/40 focus-within:bg-primary/5">
+            {/* Attachment previews */}
+            {attachments.length > 0 && (
+              <div className="flex flex-wrap gap-2 px-3 pt-2">
+                {attachments.map((att) => (
+                  <div key={att.id} className="group/att relative flex items-center gap-1.5 rounded-md border border-border/60 bg-muted/40 px-2 py-1">
+                    {att.isImage ? (
+                      <img src={att.dataUrl} alt={att.name} className="h-8 w-8 rounded object-cover" />
+                    ) : (
+                      <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
+                    )}
+                    <span className="max-w-[120px] truncate text-[11px] text-muted-foreground">{att.name}</span>
+                    <button
+                      type="button"
+                      onClick={() => removeAttachment(att.id)}
+                      className="ml-0.5 rounded-full p-0.5 text-muted-foreground/60 hover:bg-destructive/10 hover:text-destructive transition-colors"
+                      aria-label={`Remove ${att.name}`}
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            {/* Hidden file input */}
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept="image/*,.txt,.md,.json,.yaml,.yml,.csv,.log,.py,.js,.ts,.tsx,.jsx,.sh,.bash,.sql,.xml,.html,.css,.toml,.ini,.cfg,.env,.dockerfile,Dockerfile"
+              className="hidden"
+              onChange={handleFileSelect}
+            />
             <Textarea
               ref={textareaRef}
               autoFocus
@@ -2666,6 +2807,7 @@ export function ChatWorkbench({
                   setMentionOpen(false);
                 }
               }}
+              onPaste={handlePaste}
               onKeyDown={(e) => {
                 if (mentionOpen && filteredMentionAgents.length > 0) {
                   if (e.key === "ArrowDown") {
@@ -2733,12 +2875,23 @@ export function ChatWorkbench({
                 </div>
               </div>
             )}
-            {/* Bottom bar inside composer: runtime chip + send */}
+            {/* Bottom bar inside composer: runtime chip + attach + send */}
             <div className="flex items-center justify-between px-2 pb-2">
               <div className="flex items-center gap-1.5">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                  onClick={() => fileInputRef.current?.click()}
+                  aria-label="Attach file"
+                  title="Attach file or image"
+                >
+                  <Paperclip className="h-4 w-4" />
+                </Button>
                 {agentName && (
-                  <Badge variant="outline" className="px-1.5 py-0 text-[10px] text-muted-foreground border-border/50">
-                    {runtimeKind}
+                  <Badge variant="outline" className={cn("inline-flex items-center gap-1 px-1.5 py-0 text-[10px] border", chatSignals.runtime.tone)}>
+                    <ChatRuntimeIcon className="h-3 w-3" />
+                    {chatSignals.runtime.shortLabel}
                   </Badge>
                 )}
                 <span className="text-[10px] text-muted-foreground/50">

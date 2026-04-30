@@ -50,7 +50,7 @@ The workflow keeps explicit approval control while removing the old duplicated l
 From the repo root:
 
 ```powershell
-Set-Location kubemininions/examples/agent-factory
+Set-Location ./examples/agent-factory
 pwsh ./deploy.ps1
 ```
 

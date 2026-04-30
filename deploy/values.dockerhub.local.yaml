@@ -2,23 +2,20 @@ global:
   imagePullSecrets:
     - dockerhub-regcred
 
-trustBundle:
-  enabled: false
-
 operator:
   replicaCount: 1
   image:
-    repository: docker.io/yakdhane/kubesynapse-operator
+    repository: docker.io/kubesynapse/kubesynapse-operator
     tag: deploy-20260401-225700-hotfix
     pullPolicy: Always
   workerImage:
-    repository: docker.io/yakdhane/kubesynapse-operator
+    repository: docker.io/kubesynapse/kubesynapse-operator
     tag: deploy-20260401-225700-hotfix
     pullPolicy: Always
 
 opencodeRuntime:
   image:
-    repository: docker.io/yakdhane/ai-opencode-runtime
+    repository: docker.io/kubesynapse/kubesynapse-opencode-rt
     tag: deploy-20260401-212102-opencode
     pullPolicy: Always
   limits:
@@ -36,7 +33,7 @@ opencodeRuntime:
 
 apiGateway:
   image:
-    repository: docker.io/yakdhane/kubesynapse-api-gateway
+    repository: docker.io/kubesynapse/kubesynapse-api-gateway
     tag: deploy-20260401-212102
     pullPolicy: Always
   auth:
@@ -47,7 +44,7 @@ apiGateway:
 webUi:
   enabled: true
   image:
-    repository: docker.io/yakdhane/kubesynapse-web-ui
+    repository: docker.io/kubesynapse/kubesynapse-web-ui
     tag: deploy-20260401-225700-hotfix
     pullPolicy: Always
 
@@ -55,20 +52,20 @@ platformSecrets:
   mode: native
   native:
     openaiApiKey: ""
-    openrouterApiKey: "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"
+    openrouterApiKey: ""
     anthropicApiKey: ""
-    litellmMasterKey: "minikube-dev-master-key"
-    apiGatewaySharedToken: "minikube-dev-shared-token"
-    databasePassword: "minikube-dev-database-password"
-    jwtSecret: "minikube-dev-jwt-secret"
-    authBootstrapAdminPassword: "minikube-dev-admin-password"
+    litellmMasterKey: "replace-me-with-a-long-random-master-key"
+    apiGatewaySharedToken: "replace-me-with-a-long-random-bearer-token"
+    databasePassword: "replace-me-with-a-long-random-database-password"
+    jwtSecret: "replace-me-with-a-long-random-jwt-secret"
+    authBootstrapAdminPassword: "replace-me-with-a-long-random-admin-password"
 
 mcpHub:
   auth:
-    bearerToken: "minikube-dev-mcp-token"
+    bearerToken: "replace-me-with-a-long-random-mcp-token"
   servers:
     github:
-      image: docker.io/yakdhane/mcp-github-adapter:deploy-20260401-212102
+      image: docker.io/kubesynapse/mcp-github-adapter:deploy-20260401-212102
       imagePullPolicy: Always
 
 skillsCatalog:
@@ -76,32 +73,32 @@ skillsCatalog:
 
 mcpToolSidecars:
   codeExec:
-    image: docker.io/yakdhane/mcp-code-exec:deploy-20260401-212102
+    image: docker.io/kubesynapse/mcp-code-exec:deploy-20260401-212102
     port: 8090
   webSearch:
-    image: docker.io/yakdhane/mcp-web-search:deploy-20260401-212102
+    image: docker.io/kubesynapse/mcp-web-search:deploy-20260401-212102
     port: 8091
   documents:
-    image: docker.io/yakdhane/mcp-documents:deploy-20260401-212102
+    image: docker.io/kubesynapse/mcp-documents:deploy-20260401-212102
     port: 8092
   browser:
-    image: docker.io/yakdhane/mcp-browser:deploy-20260401-212102
+    image: docker.io/kubesynapse/mcp-browser:deploy-20260401-212102
     port: 8093
   database:
-    image: docker.io/yakdhane/mcp-database:deploy-20260401-212102
+    image: docker.io/kubesynapse/mcp-database:deploy-20260401-212102
     port: 8094
   git:
-    image: docker.io/yakdhane/mcp-git:deploy-20260401-212102
+    image: docker.io/kubesynapse/mcp-git:deploy-20260401-212102
     port: 8095
   githubAdapter:
-    image: docker.io/yakdhane/mcp-github-adapter:deploy-20260401-212102
+    image: docker.io/kubesynapse/mcp-github-adapter:deploy-20260401-212102
     port: 8096
   kubernetes:
-    image: docker.io/yakdhane/mcp-kubernetes:deploy-20260401-212102
+    image: docker.io/kubesynapse/mcp-kubernetes:deploy-20260401-212102
     port: 8097
   messaging:
-    image: docker.io/yakdhane/mcp-messaging:deploy-20260401-212102
+    image: docker.io/kubesynapse/mcp-messaging:deploy-20260401-212102
     port: 8098
   rag:
-    image: docker.io/yakdhane/mcp-rag:deploy-20260401-212102
+    image: docker.io/kubesynapse/mcp-rag:deploy-20260401-212102
     port: 8099

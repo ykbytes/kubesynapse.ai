@@ -11,7 +11,6 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Separator } from "@/components/ui/separator";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
 import { SECTIONS } from "./docs/sections";
@@ -29,7 +28,7 @@ function MiniToc({
 
   return (
     <div className="space-y-3">
-      <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">On this page</p>
+      <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground/70">On this page</p>
       <nav className="space-y-1" aria-label="On this page">
         {section.subsections.map((sub) => (
           <button
@@ -102,9 +101,9 @@ export function DocumentationPanel() {
   );
 
   return (
-    <div className="flex h-full flex-col overflow-hidden">
+    <div className="flex h-full flex-col overflow-hidden bg-background text-foreground">
       {/* Sticky search header */}
-      <div className="shrink-0 border-b border-border/60 bg-background/95 px-4 py-3 backdrop-blur-sm">
+      <div className="shrink-0 border-b border-border bg-background px-4 py-3">
         <div className="flex items-center gap-3">
           {/* Mobile hamburger */}
           <Sheet open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
@@ -113,11 +112,11 @@ export function DocumentationPanel() {
                 <Menu className="h-4 w-4" />
               </Button>
             </SheetTrigger>
-            <SheetContent side="left" className="w-[min(18rem,calc(100vw-1rem))] border-r border-border/70 bg-background/98 p-0 backdrop-blur-sm">
+            <SheetContent side="left" className="w-[min(18rem,calc(100vw-1rem))] border-r border-border bg-background p-0">
               <div className="flex h-full flex-col">
-                <div className="flex items-center gap-2 border-b border-border/60 px-4 py-3">
+                <div className="flex items-center gap-2 border-b border-border px-4 py-3">
                   <BookOpen className="h-5 w-5 text-primary" aria-hidden="true" />
-                  <span className="text-sm font-semibold text-foreground">Documentation</span>
+                  <span className="text-sm font-bold text-foreground">Documentation</span>
                 </div>
                 <ScrollArea className="flex-1">
                   <nav className="space-y-0.5 p-2" aria-label="Documentation sections">
@@ -130,8 +129,8 @@ export function DocumentationPanel() {
                           className={cn(
                             "flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm transition-colors",
                             isActive
-                              ? "bg-primary/10 font-medium text-primary"
-                              : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
+                              ? "bg-primary/15 font-semibold text-primary"
+                              : "text-muted-foreground hover:bg-muted hover:text-foreground",
                           )}
                           aria-current={isActive ? "true" : undefined}
                         >
@@ -142,7 +141,7 @@ export function DocumentationPanel() {
                       );
                     })}
                     {filteredSections.length === 0 && (
-                      <p className="px-3 py-4 text-sm text-muted-foreground">No sections match your search.</p>
+                      <p className="px-3 py-4 text-sm text-muted-foreground/70">No sections match your search.</p>
                     )}
                   </nav>
                 </ScrollArea>
@@ -152,17 +151,17 @@ export function DocumentationPanel() {
 
           <div className="flex min-w-0 flex-1 items-center gap-2">
             <BookOpen className="hidden h-5 w-5 shrink-0 text-primary sm:block" aria-hidden="true" />
-            <h1 className="hidden text-base font-semibold text-foreground sm:block">kubesynapse Documentation</h1>
+            <h1 className="hidden text-base font-bold text-foreground sm:block">KubeSynapse Documentation</h1>
           </div>
 
           <div className="relative min-w-0 flex-1 md:max-w-md">
-            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground/60" aria-hidden="true" />
             <Input
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               onKeyDown={handleSearchKeyDown}
               placeholder="Search documentation..."
-              className="h-9 border-border/60 bg-card/60 pl-9 text-sm"
+              className="h-9 border-border bg-card pl-9 text-sm text-foreground placeholder:text-muted-foreground/50"
               aria-label="Search documentation"
             />
             {searchQuery && (
@@ -182,9 +181,9 @@ export function DocumentationPanel() {
 
       <div className="flex min-h-0 flex-1">
         {/* Desktop TOC sidebar */}
-        <aside className="hidden w-[170px] shrink-0 border-r border-border/60 bg-card/30 md:flex">
+        <aside className="hidden w-[200px] shrink-0 border-r border-border bg-background md:flex">
           <ScrollArea className="h-full w-full">
-            <nav className="space-y-0 p-1" aria-label="Documentation sections">
+            <nav className="space-y-0.5 p-2" aria-label="Documentation sections">
               {filteredSections.map((s) => {
                 const isActive = activeSection === s.id;
                 return (
@@ -192,20 +191,20 @@ export function DocumentationPanel() {
                     key={s.id}
                     onClick={() => scrollToSection(s.id)}
                     className={cn(
-                      "flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm transition-colors",
+                      "flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-[13px] transition-colors",
                       isActive
-                        ? "bg-primary/10 font-medium text-primary"
-                        : "text-foreground/70 hover:bg-accent/50 hover:text-foreground",
+                        ? "bg-primary/15 font-semibold text-primary"
+                        : "text-muted-foreground hover:bg-muted hover:text-foreground",
                     )}
                     aria-current={isActive ? "true" : undefined}
                   >
-                    <s.icon className="h-4 w-4 shrink-0" aria-hidden="true" />
+                    <s.icon className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
                     <span className="line-clamp-1">{s.title}</span>
                   </button>
                 );
               })}
               {filteredSections.length === 0 && (
-                <p className="px-3 py-4 text-sm text-muted-foreground">No sections match your search.</p>
+                <p className="px-3 py-4 text-sm text-muted-foreground/70">No sections match your search.</p>
               )}
             </nav>
           </ScrollArea>
@@ -213,26 +212,26 @@ export function DocumentationPanel() {
 
         {/* Content area */}
         <ScrollArea ref={contentRef} className="flex-1">
-          <div className="px-4 py-4 sm:px-5 md:px-6">
+          <div className="mx-auto max-w-5xl px-8 py-8">
             {filteredSections.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-20 text-center">
-                <Search className="h-10 w-10 text-muted-foreground/40" aria-hidden="true" />
-                <h2 className="mt-4 text-lg font-semibold text-foreground">No results found</h2>
+                <Search className="h-10 w-10 text-muted-foreground/50" aria-hidden="true" />
+                <h2 className="mt-4 text-lg font-bold text-foreground">No results found</h2>
                 <p className="mt-1 text-sm text-muted-foreground">Try a different keyword or clear your search.</p>
                 <Button variant="outline" size="sm" className="mt-4" onClick={() => setSearchQuery("")}>
                   Clear search
                 </Button>
               </div>
             ) : (
-              <div className="space-y-10">
+              <div className="space-y-14">
                 {filteredSections.map((section) => (
-                  <section key={section.id} id={section.id} className="scroll-mt-24 animate-fade-in">
-                    <div className="flex items-center gap-2">
+                  <section key={section.id} id={section.id} className="scroll-mt-24">
+                    <div className="flex items-center gap-2.5">
                       <section.icon className="h-5 w-5 text-primary" aria-hidden="true" />
-                      <h2 className="text-xl font-semibold tracking-tight text-foreground">{section.title}</h2>
+                      <h2 className="text-xl font-bold tracking-tight text-foreground">{section.title}</h2>
                     </div>
-                    <Separator className="my-3" />
-                    <div className="text-base leading-6 text-foreground/80">{section.content}</div>
+                    <div className="my-5 h-px bg-border" />
+                    <div className="text-[15px] leading-7 text-foreground/85">{section.content}</div>
                   </section>
                 ))}
               </div>
@@ -241,16 +240,16 @@ export function DocumentationPanel() {
         </ScrollArea>
 
         {/* Right sidebar — mini TOC + quick links */}
-        <aside className="hidden w-[140px] shrink-0 border-l border-border/60 bg-card/30 xl:block">
+        <aside className="hidden w-[180px] shrink-0 border-l border-border bg-background xl:block">
           <ScrollArea className="h-full w-full">
-            <div className="space-y-4 p-2">
+            <div className="space-y-6 p-3">
               <MiniToc activeSection={activeSection} onClick={scrollToSection} />
 
               <div className="space-y-3">
-                <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Quick Links</p>
-                <nav className="space-y-1" aria-label="Quick links">
+                <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground/70">Quick Links</p>
+                <nav className="space-y-1.5" aria-label="Quick links">
                   <a
-                    href="https://github.com/kubesynapse/kubesynapse"
+                    href="https://github.com/ykbytes/kubesynapse.ai"
                     target="_blank"
                     rel="noopener noreferrer"
                     className="flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
@@ -259,7 +258,7 @@ export function DocumentationPanel() {
                     GitHub
                   </a>
                   <a
-                    href="https://github.com/kubesynapse/kubesynapse/issues"
+                    href="https://github.com/ykbytes/kubesynapse.ai/issues"
                     target="_blank"
                     rel="noopener noreferrer"
                     className="flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"

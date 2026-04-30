@@ -8,7 +8,7 @@ If you discover a security vulnerability in KubeSynapse, please report it respon
 
 Instead, please send an email to the maintainers or use GitHub's private vulnerability reporting feature at:
 
-https://github.com/kubesynapse/kubesynapse/security/advisories/new
+https://github.com/ykbytes/kubesynapse.ai/security/advisories/new
 
 ### What to include
 

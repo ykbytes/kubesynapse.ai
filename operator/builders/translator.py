@@ -178,7 +178,7 @@ def translate_agent(
     provider_bootstrap_secret = (
         create_pi_provider_bootstrap_secret(name, namespace)
         if runtime_kind == "pi"
-        else create_opencode_provider_bootstrap_secret(name, namespace, spec)
+        else None if runtime_kind == "mistral-vibe" else create_opencode_provider_bootstrap_secret(name, namespace, spec)
     )
 
     return AgentOutputs(

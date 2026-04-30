@@ -4,11 +4,11 @@ Welcome to the KubeSynapse community! We're building the production-grade platfo
 
 ## Get Involved
 
-### Chat & Discussion
+### Collaboration Channels
 
-- **GitHub Discussions:** [github.com/ykbytes/kubemininions/discussions](https://github.com/ykbytes/kubemininions/discussions) — feature ideas, Q&A, show-and-tell
-- **Slack Community:** `#KubeSynapse` on the [Kubernetes Slack](https://slack.k8s.io/) — real-time chat with maintainers and users
-- **Discord:** [Join our server](https://discord.gg/KubeSynapse) (coming soon) — community calls, office hours, pair programming
+- **GitHub Issues:** [github.com/ykbytes/kubesynapse.ai/issues](https://github.com/ykbytes/kubesynapse.ai/issues) — bug reports, feature requests, and implementation follow-up
+- **Pull Requests:** [github.com/ykbytes/kubesynapse.ai/pulls](https://github.com/ykbytes/kubesynapse.ai/pulls) — propose code, docs, and chart improvements
+- **Email:** `team@kubesynapse.ai` — private inquiries and maintainer contact
 
 ### Community Calls
 
@@ -16,7 +16,7 @@ Welcome to the KubeSynapse community! We're building the production-grade platfo
 - **Office Hours:** Every other Thursday, 9:00 AM PT — drop in for Q&A with maintainers
 - **Sprint Demos:** At the end of each sprint cycle, we livestream what shipped
 
-Meeting links are shared on GitHub Discussions and Slack before each call.
+Meeting details will be published in the repository once a recurring schedule is established.
 
 ## Contributor Path
 
@@ -25,8 +25,8 @@ Anyone who submits issues, comments on discussions, or opens PRs.
 
 **Get started:**
 1. Read [CONTRIBUTING.md](../CONTRIBUTING.md)
-2. Find a [Good First Issue](https://github.com/ykbytes/kubemininions/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
-3. Join the Slack channel and introduce yourself
+2. Find a [Good First Issue](https://github.com/ykbytes/kubesynapse.ai/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
+3. Open an issue or pull request and introduce the change you want to make
 
 ### Level 2: Committer
 Contributors with merge rights. Appointed after:
@@ -61,7 +61,7 @@ We tag issues as `good first issue` when they are:
 - Not time-sensitive
 - Come with mentoring from a maintainer
 
-Look for the label on [GitHub Issues](https://github.com/ykbytes/kubemininions/issues). If you see one you'd like to work on, comment `/assign` and a maintainer will assign it to you.
+Look for the label on [GitHub Issues](https://github.com/ykbytes/kubesynapse.ai/issues). If you see one you'd like to work on, leave a comment with your plan so maintainers can coordinate.
 
 ## Contributor Recognition
 
@@ -80,12 +80,10 @@ All community spaces are governed by our [Code of Conduct](../CODE_OF_CONDUCT.md
 
 | Channel | Purpose | Link |
 |---------|---------|------|
-| GitHub Issues | Bug reports, feature requests | [Issues](https://github.com/ykbytes/kubemininions/issues) |
-| GitHub Discussions | Q&A, ideas, community | [Discussions](https://github.com/ykbytes/kubemininions/discussions) |
-| Slack | Real-time chat | `#KubeSynapse` on [K8s Slack](https://slack.k8s.io/) |
-| Discord | Community calls, office hours | [Join](https://discord.gg/KubeSynapse) |
-| Security | Vulnerability disclosure | [SECURITY.md](../SECURITY.md) |
+| GitHub Issues | Bug reports and feature requests | [Issues](https://github.com/ykbytes/kubesynapse.ai/issues) |
+| Pull Requests | Proposed changes and reviews | [Pulls](https://github.com/ykbytes/kubesynapse.ai/pulls) |
 | Email | Private inquiries | team@kubesynapse.ai |
+| Security | Vulnerability disclosure | [SECURITY.md](../SECURITY.md) |
 
 ## Upcoming Events
 

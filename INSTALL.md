@@ -162,7 +162,7 @@ Key capabilities:
 
 ## Quick Start — DockerHub Images
 
-The fastest way to get running. Pre-built platform and sidecar images are published to `docker.io/yakdhane`. No build step required.
+The fastest way to get running. Pre-built platform and sidecar images are published to `docker.io/kubesynapse`. No build step required.
 
 ### Prerequisites
 
@@ -254,24 +254,24 @@ curl -X POST http://localhost:8080/api/agents/research-assistant/invoke \
 #### Image tag and registry reference
 
 The `deploy/values.dockerhub.local.yaml` file pins all components to a specific tested tag (`deploy-YYYYMMDD-HHMMSS`).
-All images live under `docker.io/yakdhane`:
+All images live under `docker.io/kubesynapse`:
 
 | Image | Description |
 |---|---|
-| `yakdhane/ai-operator` | Kopf-based operator + worker |
-| `yakdhane/ai-opencode-runtime` | OpenCode HTTP adapter |
-| `yakdhane/ai-api-gateway` | FastAPI gateway |
-| `yakdhane/kubesynapse-web-ui` | React web console |
-| `yakdhane/mcp-code-exec` | Code execution MCP sidecar |
-| `yakdhane/mcp-web-search` | Web search MCP sidecar |
-| `yakdhane/mcp-documents` | Document processing MCP sidecar |
-| `yakdhane/mcp-browser` | Browser automation MCP sidecar |
-| `yakdhane/mcp-database` | Database query MCP sidecar |
-| `yakdhane/mcp-git` | Git operations MCP sidecar |
-| `yakdhane/mcp-kubernetes` | Kubernetes ops MCP sidecar |
-| `yakdhane/mcp-messaging` | Messaging/NATS MCP sidecar |
-| `yakdhane/mcp-rag` | RAG/Qdrant MCP sidecar |
-| `yakdhane/mcp-github-adapter` | GitHub MCP hub adapter |
+| `kubesynapse/kubesynapse-operator` | Kopf-based operator + worker |
+| `kubesynapse/kubesynapse-opencode-rt` | OpenCode HTTP adapter |
+| `kubesynapse/kubesynapse-api-gateway` | FastAPI gateway |
+| `kubesynapse/kubesynapse-web-ui` | React web console |
+| `kubesynapse/mcp-code-exec` | Code execution MCP sidecar |
+| `kubesynapse/mcp-web-search` | Web search MCP sidecar |
+| `kubesynapse/mcp-documents` | Document processing MCP sidecar |
+| `kubesynapse/mcp-browser` | Browser automation MCP sidecar |
+| `kubesynapse/mcp-database` | Database query MCP sidecar |
+| `kubesynapse/mcp-git` | Git operations MCP sidecar |
+| `kubesynapse/mcp-kubernetes` | Kubernetes ops MCP sidecar |
+| `kubesynapse/mcp-messaging` | Messaging/NATS MCP sidecar |
+| `kubesynapse/mcp-rag` | RAG/Qdrant MCP sidecar |
+| `kubesynapse/mcp-github-adapter` | GitHub MCP hub adapter |
 
 ---
 
@@ -307,32 +307,32 @@ To skip the build step entirely, see [Quick Start — DockerHub Images](#quick-s
 ### 1. Create a Kind cluster
 
 ```bash
-kind create cluster --name ai-sandbox
+kind create cluster --name kubesynapse-dev
 ```
 
 ### 2. Build the platform images
 
 ```bash
 # From the repository root (builds the platform images and bundled sidecars)
-make docker-build REGISTRY=localhost/KubeSynapseai VERSION=dev CONTAINER_CLI=docker
+make docker-build REGISTRY=localhost/kubesynapse VERSION=dev CONTAINER_CLI=docker
 # Produces platform images such as:
-#   localhost/KubeSynapseai/kubesynapse-operator:dev
-#   localhost/KubeSynapseai/KubeSynapse-opencode-runtime:dev
-#   localhost/KubeSynapseai/kubesynapse-api-gateway:dev
-#   localhost/KubeSynapseai/kubesynapse-web-ui:dev
-#   localhost/KubeSynapseai/mcp-code-exec:dev
-#   localhost/KubeSynapseai/mcp-web-search:dev
-#   localhost/KubeSynapseai/mcp-documents:dev
+#   localhost/kubesynapse/kubesynapse-operator:dev
+#   localhost/kubesynapse/kubesynapse-opencode-runtime:dev
+#   localhost/kubesynapse/kubesynapse-api-gateway:dev
+#   localhost/kubesynapse/kubesynapse-web-ui:dev
+#   localhost/kubesynapse/mcp-code-exec:dev
+#   localhost/kubesynapse/mcp-web-search:dev
+#   localhost/kubesynapse/mcp-documents:dev
 #   ... (all 10 mcp-* sidecars)
 ```
 
 Or build individual components with Docker:
 
 ```bash
-docker build -t localhost/KubeSynapseai/kubesynapse-operator:dev ./operator
-docker build -t localhost/KubeSynapseai/KubeSynapse-opencode-runtime:dev ./opencode-runtime
-docker build -t localhost/KubeSynapseai/kubesynapse-api-gateway:dev ./api-gateway
-docker build -t localhost/KubeSynapseai/kubesynapse-web-ui:dev ./web-ui
+docker build -t localhost/kubesynapse/kubesynapse-operator:dev ./operator
+docker build -t localhost/kubesynapse/kubesynapse-opencode-runtime:dev ./opencode-runtime
+docker build -t localhost/kubesynapse/kubesynapse-api-gateway:dev ./api-gateway
+docker build -t localhost/kubesynapse/kubesynapse-web-ui:dev ./web-ui
 ```
 
 The bundled MCP sidecars build from sub-directories under `./mcp-sidecars/`, one Dockerfile each.
@@ -342,14 +342,14 @@ The Makefile builds all of them in one pass and is the recommended approach.
 
 ```bash
 mkdir -p dist
-docker save -o dist/kubesynapse-operator.tar localhost/KubeSynapseai/kubesynapse-operator:dev
-docker save -o dist/KubeSynapse-opencode-runtime.tar localhost/KubeSynapseai/KubeSynapse-opencode-runtime:dev
-docker save -o dist/kubesynapse-api-gateway.tar localhost/KubeSynapseai/kubesynapse-api-gateway:dev
-docker save -o dist/kubesynapse-web-ui.tar localhost/KubeSynapseai/kubesynapse-web-ui:dev
-kind load image-archive dist/kubesynapse-operator.tar --name ai-sandbox
-kind load image-archive dist/KubeSynapse-opencode-runtime.tar --name ai-sandbox
-kind load image-archive dist/kubesynapse-api-gateway.tar --name ai-sandbox
-kind load image-archive dist/kubesynapse-web-ui.tar --name ai-sandbox
+docker save -o dist/kubesynapse-operator.tar localhost/kubesynapse/kubesynapse-operator:dev
+docker save -o dist/kubesynapse-opencode-runtime.tar localhost/kubesynapse/kubesynapse-opencode-runtime:dev
+docker save -o dist/kubesynapse-api-gateway.tar localhost/kubesynapse/kubesynapse-api-gateway:dev
+docker save -o dist/kubesynapse-web-ui.tar localhost/kubesynapse/kubesynapse-web-ui:dev
+kind load image-archive dist/kubesynapse-operator.tar --name kubesynapse-dev
+kind load image-archive dist/kubesynapse-opencode-runtime.tar --name kubesynapse-dev
+kind load image-archive dist/kubesynapse-api-gateway.tar --name kubesynapse-dev
+kind load image-archive dist/kubesynapse-web-ui.tar --name kubesynapse-dev
 ```
 
 ### 4. Set your LLM API key
@@ -370,11 +370,11 @@ platformSecrets:
   ### 5. Install the Helm chart with the local-image override
 
 ```bash
-  helm install ai-sandbox ./charts/kubesynapse -f ./deploy/values.local-images.example.yaml
+  helm install kubesynapse ./charts/kubesynapse -f ./deploy/values.local-images.example.yaml
 ```
 
   `deploy/values.local-images.example.yaml` remaps the core platform images to the
-  `localhost/KubeSynapseai:*:dev` tags shown above. Extend it with
+  `localhost/kubesynapse/*:dev` tags shown above. Extend it with
   `mcpToolSidecars` entries only if your agents use locally built sidecar images
   instead of the default published ones.
 
@@ -382,8 +382,8 @@ platformSecrets:
 
   ```bash
   eval $(minikube docker-env)   # build directly into Minikube's Docker daemon
-  make docker-build REGISTRY=localhost/KubeSynapseai VERSION=dev CONTAINER_CLI=docker
-  helm install ai-sandbox ./charts/kubesynapse -f ./deploy/values.minikube.local.yaml
+  make docker-build REGISTRY=localhost/kubesynapse VERSION=dev CONTAINER_CLI=docker
+  helm install kubesynapse ./charts/kubesynapse -f ./deploy/values.minikube.local.yaml
   ```
 
   ### 6. Verify pods are running
@@ -652,7 +652,7 @@ chart changes unless you want to pin or relocate them.
 helm lint ./charts/kubesynapse -f values-prod.yaml
 
 # Install
-helm upgrade --install ai-sandbox ./charts/kubesynapse \
+helm upgrade --install kubesynapse ./charts/kubesynapse \
   --namespace ai-platform \
   --create-namespace \
   -f values-prod.yaml \
@@ -1200,7 +1200,7 @@ $env:API_GATEWAY_AUTH_MODE = "local"
 $env:LOCAL_AUTH_ENABLED = "true"
 $env:API_GATEWAY_SHARED_TOKEN = "dev-shared-token"
 $env:API_GATEWAY_CORS_ORIGINS = "http://localhost:5173,http://127.0.0.1:5173"
-$env:DATABASE_SQLITE_PATH = "C:/path/to/kubemininions/api-gateway/.local/KubeSynapse-gateway.db"
+$env:DATABASE_SQLITE_PATH = "C:/path/to/kubesynapse.ai/api-gateway/.local/kubesynapse-gateway.db"
 python -m uvicorn main:app --host 127.0.0.1 --port 8080
 ```
 
@@ -1580,7 +1580,7 @@ helm install KubeSynapse ./charts/kubesynapse -f values-prod.yaml --debug --dry-
 ## Project Structure
 
 ```
-KubeSynapseai/
+kubesynapse.ai/
 ├── INSTALL.md                      ← This file
 ├── docs/architecture-overview.md   ← Detailed design document
 ├── Makefile                        ← Build, test, lint, deploy targets
