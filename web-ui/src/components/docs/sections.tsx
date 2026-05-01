@@ -757,9 +757,17 @@ function TroubleshootingSection() {
         ["Workflow never completes", "Step stuck in Running", "Verify approval was submitted"],
       ]} />
       <Callout variant="troubleshoot" title="Debug Commands">
-        <code className="text-xs">kubectl describe aiagent &lt;name&gt; -n &lt;ns&gt;</code><br />
-        <code className="text-xs">kubectl logs -l app=operator -n kubesynapse</code><br />
-        <code className="text-xs">kubectl exec -n kubesynapse kubesynapse-postgresql-0 -- psql -U kubesynapse -c "SELECT * FROM mcp_connections;"</code>
+        <div className="space-y-2">
+          <code className="block rounded-md bg-background/70 px-2.5 py-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-words">
+            kubectl describe aiagent &lt;name&gt; -n &lt;ns&gt;
+          </code>
+          <code className="block rounded-md bg-background/70 px-2.5 py-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-words">
+            kubectl logs -l app=operator -n kubesynapse
+          </code>
+          <code className="block rounded-md bg-background/70 px-2.5 py-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-words">
+            kubectl exec -n kubesynapse kubesynapse-postgresql-0 -- psql -U kubesynapse -c "SELECT * FROM mcp_connections;"
+          </code>
+        </div>
       </Callout>
     </div>
   );

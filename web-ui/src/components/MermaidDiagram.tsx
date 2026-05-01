@@ -66,7 +66,7 @@ export const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ chart, className
 
   return (
     <div
-      className={`my-4 overflow-hidden rounded-xl border border-border/60 bg-card/40 p-4 shadow-sm ${className ?? ""}`}
+      className={`my-4 overflow-hidden rounded-xl border border-border/60 bg-card/40 p-3 shadow-sm sm:p-4 ${className ?? ""}`}
     >
       {loading && (
         <div className="flex items-center justify-center py-8">
@@ -80,12 +80,14 @@ export const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ chart, className
         </div>
       )}
       {!loading && !error && (
-        <div
-          ref={containerRef}
-          className="mermaid flex justify-center"
-          dangerouslySetInnerHTML={{ __html: svg }}
-          aria-label="Mermaid diagram"
-        />
+        <div className="overflow-x-auto">
+          <div
+            ref={containerRef}
+            className="mermaid flex min-w-max justify-start [&>svg]:h-auto [&>svg]:max-w-none lg:justify-center"
+            dangerouslySetInnerHTML={{ __html: svg }}
+            aria-label="Mermaid diagram"
+          />
+        </div>
       )}
     </div>
   );

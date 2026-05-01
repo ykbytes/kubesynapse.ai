@@ -131,6 +131,7 @@ def worker_passthrough_env() -> list[dict[str, str]]:
         "API_GATEWAY_SHARED_TOKEN",
         "DEFAULT_API_GATEWAY_SHARED_TOKEN",
         "GATEWAY_URL",
+        "API_GATEWAY_INTERNAL_URL",
         "WORKER_TRACE_ENABLED",
         "WORKER_TRACE_BATCH_SIZE",
         "WORKER_TRACE_FLUSH_INTERVAL_SEC",

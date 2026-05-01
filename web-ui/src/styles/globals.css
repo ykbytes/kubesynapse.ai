@@ -941,6 +941,38 @@ body::after {
   word-wrap: break-word;
   overflow-wrap: break-word;
 }
+.docs-content {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.docs-content p,
+.docs-content li,
+.docs-content h2,
+.docs-content h3,
+.docs-content h4,
+.docs-content td,
+.docs-content th {
+  overflow-wrap: anywhere;
+}
+.docs-content p code,
+.docs-content li code,
+.docs-content td code,
+.docs-content th code,
+.docs-content div code {
+  display: inline-block;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  vertical-align: middle;
+}
+.docs-content pre code {
+  display: block;
+  max-width: none;
+  white-space: pre;
+  overflow-wrap: normal;
+  word-break: normal;
+}
 .markdown-body > *:first-child { margin-top: 0; }
 .markdown-body > *:last-child { margin-bottom: 0; }
 

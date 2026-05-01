@@ -1179,15 +1179,27 @@ export type TraceEventType =
   | "EXECUTION_STARTED"
   | "EXECUTION_COMPLETED"
   | "EXECUTION_FAILED"
+  | "EXECUTION_CANCELLED"
   | "STEP_STARTED"
   | "STEP_COMPLETED"
   | "STEP_FAILED"
+  | "STEP_SKIPPED"
+  | "LLM_CALL_STARTED"
   | "LLM_CALL_COMPLETED"
+  | "LLM_CALL_FAILED"
+  | "LLM_STREAM_CHUNK"
+  | "TOOL_CALL_STARTED"
   | "TOOL_CALL_COMPLETED"
+  | "TOOL_CALL_FAILED"
   | "DECISION"
+  | "BRANCH_TAKEN"
+  | "STATE_SNAPSHOT"
+  | "VARIABLE_SET"
   | "ERROR"
   | "WARNING"
   | "PROGRESS"
+  | "TODO_CREATED"
+  | "TODO_COMPLETED"
   | "ARTIFACT_CREATED"
   | "CUSTOM";
 
@@ -1205,6 +1217,7 @@ export interface LLMCallRecord {
   step_id?: string | null;
   execution_id: string;
   model: string;
+  provider?: string | null;
   prompt_tokens: number;
   completion_tokens: number;
   total_tokens: number;
@@ -1222,6 +1235,7 @@ export interface ToolCallRecord {
   tool_name: string;
   args_preview?: string | null;
   result_preview?: string | null;
+  error_message?: string | null;
   latency_ms: number;
   status: string;
   created_at: string;
@@ -1231,11 +1245,16 @@ export interface StepTrace {
   id: string;
   execution_id: string;
   name: string;
+  step_index?: number | null;
+  step_type?: string | null;
+  parent_step_id?: string | null;
   status: string;
   started_at?: string | null;
   completed_at?: string | null;
   latency_ms?: number | null;
   error?: string | null;
+  tokens_used?: number | null;
+  cost_usd?: number | null;
   llm_calls: LLMCallRecord[];
   tool_calls: ToolCallRecord[];
   input_preview?: string | null;
@@ -1248,16 +1267,24 @@ export interface ExecutionTrace {
   namespace: string;
   agent_name?: string | null;
   run_id?: string | null;
+  triggered_by?: string | null;
   status: string;
   started_at?: string | null;
   completed_at?: string | null;
+  created_at?: string | null;
   duration_ms?: number | null;
+  error_message?: string | null;
+  trace_file_path?: string | null;
   input_preview?: string | null;
   output_preview?: string | null;
   step_count: number;
+  completed_steps?: number | null;
+  failed_steps?: number | null;
   llm_call_count: number;
   tool_call_count: number;
   total_tokens: number;
+  prompt_tokens?: number | null;
+  completion_tokens?: number | null;
   total_cost_usd?: number | null;
   steps: StepTrace[];
   llm_calls: LLMCallRecord[];
@@ -1280,6 +1307,7 @@ export interface ExecutionListItem {
   tool_call_count: number;
   total_tokens: number;
   total_cost_usd?: number | null;
+  triggered_by?: string | null;
 }
 
 export interface ExecutionListResponse {

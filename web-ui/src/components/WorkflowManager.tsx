@@ -469,7 +469,7 @@ export function WorkflowManager({
               <div className="px-2 py-1">
                 <div className="text-xs font-medium text-muted-foreground">Workflow workspace</div>
                 <div className="text-sm font-semibold text-foreground">
-                  Operate, trace, or edit without leaving this page.
+                  Operate, review runs, or edit without leaving this page.
                 </div>
               </div>
               <TabsList className="h-auto w-full flex-wrap justify-start gap-2 rounded-xl bg-transparent p-0 lg:w-auto">
@@ -485,7 +485,7 @@ export function WorkflowManager({
                   className="gap-2 rounded-xl border border-border/60 bg-background/70 px-3 py-2 text-xs data-[state=active]:border-primary/30 data-[state=active]:bg-primary/10 data-[state=active]:text-foreground data-[state=active]:shadow-none"
                 >
                   <FolderOpen className="h-3.5 w-3.5" />
-                  History and trace
+                  Runs & Files
                 </TabsTrigger>
                 <TabsTrigger
                   value="definition"

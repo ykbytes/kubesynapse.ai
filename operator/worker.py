@@ -2806,6 +2806,8 @@ def run_workflow_worker() -> None:
     )
     # §2.5 — DB mirroring is now handled by the status projection controller.
 
+    global _CURRENT_EXECUTION_ID  # noqa: PLW0603 — module-level used by nested funcs
+
     execution_id = ""
     try:
         try:
@@ -2822,6 +2824,10 @@ def run_workflow_worker() -> None:
             execution_id = ""
         if execution_id:
             _CURRENT_EXECUTION_ID = execution_id
+        logger.info(
+            "Trace state: execution_id=%s, artifact_matches=%s, completed=%d/%d, run_id=%s",
+            execution_id or "(none)", artifact_matches_generation, len(completed), len(steps), run_id,
+        )
 
         # Compute execution waves for logging and progress visibility
         waves = compute_execution_waves(steps, completed, skipped)
@@ -2922,6 +2928,7 @@ def run_workflow_worker() -> None:
                     except Exception:
                         logger.warning("Trace end_step failed", exc_info=True)
 
+        fatal_failures: list[dict[str, Any]] = []
         while len(completed) + len(skipped) < len(steps):
             if is_shutting_down():
                 raise RuntimeError("Worker shutdown initiated — aborting workflow execution")
@@ -3034,6 +3041,7 @@ def run_workflow_worker() -> None:
             if len(frontier) == 1:
                 step = frontier[0]
                 step_type = str(step.get("type", "agent")).strip()
+                _on_iteration_cb = None
                 if step_type == "loop":
                     def _on_iteration(progress: dict[str, Any], _step_name: str = str(step.get("name", ""))) -> None:
                         step_states[_step_name] = step_states.get(_step_name, {})
@@ -3044,31 +3052,13 @@ def run_workflow_worker() -> None:
                             started_at=started_at, step_states=step_states, worker_job=worker_job,
                             pending_approval=None, extra_summary={"loopProgress": progress},
                         )
-                    outcome = execute_loop_step(
-                        step, str(spec.get("input", "")), step_results, run_id, worker_job,
-                        on_iteration_complete=_on_iteration,
-                        project_context=project_context,
-                    )
-                elif step_type == "conditional":
-                    outcome = execute_conditional_step(
-                        step, str(spec.get("input", "")), step_results, run_id, worker_job,
-                    )
-                elif step_type == "review":
-                    outcome = execute_review_step(
-                        step, str(spec.get("input", "")), step_results, run_id, worker_job,
-                        project_context=project_context,
-                    )
-                else:
-                    outcome = execute_workflow_step(
-                        step,
-                        str(spec.get("input", "")),
-                        step_results,
-                        run_id,
-                        pending_approval or None,
-                        worker_job,
-                        project_context=project_context,
-                        on_todo_update=_make_todo_callback(str(step.get("name", ""))),
-                    )
+                    _on_iteration_cb = _on_iteration
+                outcome = _execute_frontier_step(
+                    step,
+                    pending_approval or None,
+                    on_iteration_complete=_on_iteration_cb,
+                    on_todo_update=_make_todo_callback(str(step.get("name", ""))),
+                )
                 outcome_by_name[outcome["stepName"]] = outcome
             else:
                 frontier_timeout = max(

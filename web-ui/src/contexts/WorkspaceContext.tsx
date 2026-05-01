@@ -155,6 +155,11 @@ export interface WorkspaceContextValue {
   selectedEval: EvalInfo | null;
   selectedFactoryWorkflowMode: FactoryMode;
   setSelectedFactoryWorkflowMode: (value: FactoryMode) => void;
+  observatoryFocus: {
+    workflowName: string;
+    runId?: string | null;
+    requestedAt: number;
+  } | null;
 
   // Actions
   refreshWorkspaceData: (options?: { silent?: boolean; token?: string; namespace?: string }) => Promise<void>;
@@ -173,6 +178,8 @@ export interface WorkspaceContextValue {
   handleSelectResource: (name: string) => void;
   handleCreateNew: () => void;
   navigateToResource: (view: WorkspaceView, name?: string) => void;
+  openObservatoryForWorkflowRun: (workflowName: string, runId?: string | null) => void;
+  clearObservatoryFocus: () => void;
 }
 
 const WorkspaceContext = createContext<WorkspaceContextValue | null>(null);
@@ -259,6 +266,11 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [agentViewTab, setAgentViewTab] = useState<"config" | "chat">("chat");
   const [configPanelCollapsed, setConfigPanelCollapsed] = useState(false);
   const [chatFocused, setChatFocused] = useState(false);
+  const [observatoryFocus, setObservatoryFocus] = useState<{
+    workflowName: string;
+    runId?: string | null;
+    requestedAt: number;
+  } | null>(null);
 
   // Create-agent form
   const [createAgentName, setCreateAgentName] = useState(DEFAULT_AGENT_NAME);
@@ -858,6 +870,16 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const openObservatoryForWorkflowRun = useCallback((workflowName: string, runId?: string | null) => {
+    setActiveView("observatory");
+    setInspectorOpen(false);
+    setObservatoryFocus({ workflowName, runId: runId ?? null, requestedAt: Date.now() });
+  }, []);
+
+  const clearObservatoryFocus = useCallback(() => {
+    setObservatoryFocus(null);
+  }, []);
+
   const ctxValue = useMemo<WorkspaceContextValue>(() => ({
     agents, policies, workflows, evals, selectedAgentDetail, selectedRuntimeKind,
     activeView, selectedAgentName, selectedWorkflowName, selectedEvalName,
@@ -873,10 +895,10 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     setCreateAgentName, setCreateAgentModel, setCreateAgentSystemPrompt, setCreateAgentRuntimeKind, setCreateAgentMcpConnectionIds,
     setCreateAgentMcpServersText, setCreateAgentMcpSidecarsText, setCreateAgentA2AAllowedCallersText,
     setCreateAgentSkillFileDrafts, setCreateAgentOpenCodeConfigFileDrafts, setCreateAgentGitForm, setCreateAgentGitHubForm,
-    sidebarCounts, sidebarItems, sidebarSelectedId, emptySidebarMessage, selectedAgent, selectedWorkflow, selectedEval, selectedFactoryWorkflowMode, setSelectedFactoryWorkflowMode,
+    sidebarCounts, sidebarItems, sidebarSelectedId, emptySidebarMessage, selectedAgent, selectedWorkflow, selectedEval, selectedFactoryWorkflowMode, setSelectedFactoryWorkflowMode, observatoryFocus,
     refreshWorkspaceData, handleCreateAgent, handleSaveAgent, handleDeleteAgent,
     handleCreateWorkflow, handleUpdateWorkflow, handleDeleteWorkflow, handleTriggerWorkflow, handleCancelWorkflow, handleRetryFailedSteps,
-    handleCreateEval, handleUpdateEval, handleDeleteEval, handleSelectResource, handleCreateNew, navigateToResource,
+    handleCreateEval, handleUpdateEval, handleDeleteEval, handleSelectResource, handleCreateNew, navigateToResource, openObservatoryForWorkflowRun, clearObservatoryFocus,
   }), [
     agents, policies, workflows, evals, selectedAgentDetail, selectedRuntimeKind,
     activeView, selectedAgentName, selectedWorkflowName, selectedEvalName,
@@ -888,10 +910,10 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     createAgentName, createAgentModel, createAgentSystemPrompt, createAgentRuntimeKind, createAgentMcpConnectionIds,
     createAgentMcpServersText, createAgentMcpSidecarsText, createAgentA2AAllowedCallersText,
     createAgentSkillFileDrafts, createAgentOpenCodeConfigFileDrafts, createAgentGitForm, createAgentGitHubForm, createError,
-    sidebarCounts, sidebarItems, sidebarSelectedId, emptySidebarMessage, selectedAgent, selectedWorkflow, selectedEval, selectedFactoryWorkflowMode,
+    sidebarCounts, sidebarItems, sidebarSelectedId, emptySidebarMessage, selectedAgent, selectedWorkflow, selectedEval, selectedFactoryWorkflowMode, observatoryFocus,
     refreshWorkspaceData, handleCreateAgent, handleSaveAgent, handleDeleteAgent,
     handleCreateWorkflow, handleUpdateWorkflow, handleDeleteWorkflow, handleTriggerWorkflow, handleCancelWorkflow, handleRetryFailedSteps,
-    handleCreateEval, handleUpdateEval, handleDeleteEval, handleSelectResource, handleCreateNew, navigateToResource, setSelectedFactoryWorkflowMode,
+    handleCreateEval, handleUpdateEval, handleDeleteEval, handleSelectResource, handleCreateNew, navigateToResource, setSelectedFactoryWorkflowMode, openObservatoryForWorkflowRun, clearObservatoryFocus,
   ]);
 
   return (

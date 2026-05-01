@@ -128,6 +128,8 @@ from auth_store import (
     get_execution_trace,
     list_execution_traces,
     record_execution_trace,
+    ExecutionTraceRow,
+    utc_now,
 )
 from enterprise_auth import (
     authenticate_ldap_user,
@@ -9494,6 +9496,182 @@ def get_step_detail(
 ):
     """Get a single step detail."""
     raise HTTPException(status_code=404, detail="Step not found — use execution detail endpoint")
+
+
+class _BatchIngestRequest(BaseModel):
+    """Batch trace event ingestion from workers."""
+    events: list[dict[str, Any]] = Field(default_factory=list)
+
+
+@app.post("/api/traces/batch", status_code=202)
+def ingest_trace_batch(
+    body: _BatchIngestRequest,
+    user=Depends(verify_token),
+):
+    """Ingest a batch of trace events from operator workers.
+
+    Processes events and upserts into execution_traces table.
+    """
+    # Group events by execution_id so we can batch-update each execution
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for ev in body.events:
+        eid = ev.get("execution_id")
+        if eid:
+            grouped.setdefault(eid, []).append(ev)
+
+    for execution_id, events in grouped.items():
+        try:
+            _process_trace_events(execution_id, events)
+        except Exception:
+            logger.warning("Failed to process trace events for %s", execution_id, exc_info=True)
+
+    return {"detail": "Batch accepted", "executions_processed": len(grouped)}
+
+
+def _process_trace_events(execution_id: str, events: list[dict[str, Any]]) -> None:
+    """Process a list of trace events for a single execution."""
+    with db_session() as session:
+        row = session.query(ExecutionTraceRow).filter(ExecutionTraceRow.id == execution_id).one_or_none()
+
+        for ev in events:
+            event_type = ev.get("event_type", "custom")
+            payload = ev.get("payload") or {}
+            step_id = ev.get("step_id")
+
+            if event_type == "execution_started":
+                if row is None:
+                    row = ExecutionTraceRow(
+                        id=execution_id,
+                        workflow_name=payload.get("workflow_name", ""),
+                        namespace=payload.get("namespace", "default"),
+                        agent_name=payload.get("agent_name"),
+                        run_id=payload.get("run_id"),
+                        status="running",
+                        started_at=utc_now(),
+                        steps_json=[],
+                        llm_calls_json=[],
+                        tool_calls_json=[],
+                        events_json=[],
+                    )
+                    session.add(row)
+                    session.flush()
+                else:
+                    row.status = "running"
+                    row.started_at = row.started_at or utc_now()
+
+            elif event_type in ("execution_completed", "execution_failed", "execution_cancelled"):
+                if row is None:
+                    continue
+                status_map = {
+                    "execution_completed": "completed",
+                    "execution_failed": "failed",
+                    "execution_cancelled": "cancelled",
+                }
+                row.status = status_map.get(event_type, "failed")
+                row.completed_at = utc_now()
+                if payload.get("outputs"):
+                    row.output_preview = str(payload["outputs"])[:2000]
+                if payload.get("error"):
+                    row.output_preview = f"ERROR: {payload['error']}"[:2000]
+                metrics = payload.get("metrics") or {}
+                if metrics.get("total_steps"):
+                    row.step_count = metrics["total_steps"]
+                if metrics.get("completed_steps") is not None:
+                    row.step_count = max(row.step_count or 0, metrics["completed_steps"])
+                if row.started_at and row.completed_at:
+                    row.duration_ms = int((row.completed_at - row.started_at).total_seconds() * 1000)
+
+            elif event_type == "step_started" and step_id:
+                if row is None:
+                    continue
+                steps = list(row.steps_json or [])
+                steps.append({
+                    "id": step_id,
+                    "name": payload.get("step_name", ""),
+                    "type": payload.get("step_type", "agent"),
+                    "index": payload.get("step_index", len(steps)),
+                    "status": "running",
+                    "started_at": utc_now().isoformat(),
+                })
+                row.steps_json = steps
+                row.step_count = len(steps)
+
+            elif event_type in ("step_completed", "step_failed", "step_skipped") and step_id:
+                if row is None:
+                    continue
+                import copy as _copy
+                steps = _copy.deepcopy(row.steps_json or [])
+                status_map = {
+                    "step_completed": "completed",
+                    "step_failed": "failed",
+                    "step_skipped": "skipped",
+                }
+                for s in steps:
+                    if s.get("id") == step_id:
+                        s["status"] = status_map.get(event_type, "failed")
+                        s["completed_at"] = utc_now().isoformat()
+                        if payload.get("outputs"):
+                            s["output_preview"] = str(payload["outputs"])[:500]
+                        if payload.get("error"):
+                            s["error"] = str(payload["error"])[:500]
+                        break
+                row.steps_json = steps
+
+            elif event_type == "llm_call_completed" and step_id:
+                if row is None:
+                    continue
+                llm_calls = list(row.llm_calls_json or [])
+                prompt_tokens = payload.get("prompt_tokens", 0)
+                completion_tokens = payload.get("completion_tokens", 0)
+                total_tokens = prompt_tokens + completion_tokens
+                llm_calls.append({
+                    "id": f"llm-{uuid.uuid4().hex[:12]}",
+                    "step_id": step_id,
+                    "model": payload.get("model", ""),
+                    "provider": payload.get("provider"),
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "total_tokens": total_tokens,
+                    "cost_usd": payload.get("cost_usd"),
+                    "latency_ms": payload.get("latency_ms"),
+                    "prompt_preview": str(payload.get("prompt_preview", ""))[:1024],
+                    "response_preview": str(payload.get("response_preview", ""))[:2048],
+                })
+                row.llm_calls_json = llm_calls
+                row.llm_call_count = len(llm_calls)
+                row.total_tokens = (row.total_tokens or 0) + total_tokens
+                if payload.get("cost_usd"):
+                    row.total_cost_usd = (row.total_cost_usd or 0.0) + payload["cost_usd"]
+
+            elif event_type in ("tool_call_completed", "tool_call_failed") and step_id:
+                if row is None:
+                    continue
+                tool_calls = list(row.tool_calls_json or [])
+                tool_calls.append({
+                    "id": f"tool-{uuid.uuid4().hex[:12]}",
+                    "step_id": step_id,
+                    "tool_name": payload.get("tool_name", ""),
+                    "tool_args": payload.get("tool_args"),
+                    "tool_result": payload.get("tool_result"),
+                    "error": payload.get("error"),
+                    "duration_ms": payload.get("duration_ms"),
+                })
+                row.tool_calls_json = tool_calls
+                row.tool_call_count = len(tool_calls)
+
+            # Append all events to events_json for timeline
+            if row is not None:
+                all_events = list(row.events_json or [])
+                all_events.append({
+                    "event_type": event_type,
+                    "execution_id": execution_id,
+                    "step_id": step_id,
+                    "timestamp": ev.get("timestamp", utc_now().isoformat()),
+                    "payload": payload,
+                })
+                row.events_json = all_events
+
+        session.flush()
 
 
 @app.get("/api/workflows/{workflow_name}/logs")

@@ -5,6 +5,7 @@ from typing import Any, cast
 
 # Re-import all shared symbols from the gateway core
 from _core import *
+from _core import _SHUTDOWN
 from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response
 
 router = APIRouter(tags=["admin"])

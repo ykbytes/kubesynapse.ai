@@ -48,9 +48,9 @@ export function CodeBlock({ code, lang = "bash", showLineNumbers = true }: CodeB
   const lines = code.split("\n");
 
   return (
-    <div className="group relative my-5 overflow-hidden rounded-lg border border-border bg-[oklch(0.11_0.005_264)]">
-      <div className="flex items-center justify-between border-b border-border/60 px-4 py-2">
-        <div className="flex items-center gap-2.5">
+    <div className="group relative my-5 max-w-full overflow-hidden rounded-lg border border-border bg-[oklch(0.11_0.005_264)]">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/60 px-3 py-2 sm:px-4">
+        <div className="flex flex-wrap items-center gap-2.5">
           <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">{lang}</span>
           <span className="text-[11px] text-border">|</span>
           <span className="text-[11px] text-muted-foreground/60">{lines.length} lines</span>
@@ -67,18 +67,18 @@ export function CodeBlock({ code, lang = "bash", showLineNumbers = true }: CodeB
       </div>
       <Highlight theme={KubeSynapseTheme} code={code.trimEnd()} language={language}>
         {({ className, style, tokens, getLineProps, getTokenProps }) => (
-          <pre className={cn(className, "overflow-x-auto p-4 text-[13px] leading-7")} style={{ ...style, margin: 0 }}>
+          <pre className={cn(className, "max-w-full overflow-x-auto p-3 text-[12px] leading-6 sm:p-4 sm:text-[13px] sm:leading-7")} style={{ ...style, margin: 0 }}>
             <code className="font-mono">
               {tokens.map((line, i) => {
                 const lineProps = getLineProps({ line });
                 return (
                   <div key={i} {...lineProps} className="table-row">
                     {showLineNumbers && (
-                      <span className="table-cell select-none pr-4 text-right text-muted-foreground/40" style={{ minWidth: "2.5rem" }}>
+                      <span className="hidden select-none pr-4 text-right text-muted-foreground/40 sm:table-cell" style={{ minWidth: "2.5rem" }}>
                         {i + 1}
                       </span>
                     )}
-                    <span className="table-cell">
+                    <span className="table-cell min-w-0">
                       {line.map((token, key) => (
                         <span key={key} {...getTokenProps({ token })} />
                       ))}
@@ -107,12 +107,12 @@ export function Callout({ children, variant = "info", title }: CalloutProps) {
   const Icon = v.icon;
 
   return (
-    <div className={cn("my-5 rounded-r-lg border-l-[3px] px-5 py-4", v.bg, v.border)}>
+    <div className={cn("my-5 rounded-r-lg border-l-[3px] px-4 py-3.5 sm:px-5 sm:py-4", v.bg, v.border)}>
       <div className="flex items-start gap-3">
         <Icon className={cn("mt-0.5 h-5 w-5 shrink-0", v.iconColor)} aria-hidden="true" />
-        <div className="space-y-1.5">
+        <div className="min-w-0 space-y-1.5">
           {title && <p className={cn("text-sm font-bold", v.titleColor)}>{title}</p>}
-          <div className="text-sm leading-7 text-foreground/85">{children}</div>
+          <div className="text-sm leading-6 text-foreground/85 sm:leading-7">{children}</div>
         </div>
       </div>
     </div>
@@ -122,32 +122,57 @@ export function Callout({ children, variant = "info", title }: CalloutProps) {
 /* ── DocsTable ── */
 export function DocsTable({ headers, rows }: DocsTableProps) {
   return (
-    <div className="my-5 overflow-hidden rounded-lg border border-border">
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b-2 border-border bg-card">
-              {headers.map((h, i) => (
-                <th key={i} className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-muted-foreground">{h}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((row, ri) => (
-              <tr key={ri} className={cn(
-                "border-b border-border/60 transition-colors hover:bg-muted/50",
-                ri % 2 === 1 && "bg-card/50"
-              )}>
-                {row.map((cell, ci) => (
-                  <td key={ci} className={cn(
-                    "px-4 py-3",
-                    ci === 0 ? "font-medium text-foreground" : "text-foreground/80"
-                  )}>{cell}</td>
+    <div className="my-5 max-w-full">
+      <div className="space-y-3 sm:hidden">
+        {rows.map((row, ri) => (
+          <div key={ri} className="overflow-hidden rounded-lg border border-border bg-card/60">
+            {row.map((cell, ci) => (
+              <div
+                key={ci}
+                className={cn(
+                  "grid grid-cols-[6.5rem_minmax(0,1fr)] gap-3 px-3 py-2.5",
+                  ci > 0 && "border-t border-border/60",
+                )}
+              >
+                <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                  {headers[ci]}
+                </span>
+                <span className={cn("min-w-0 break-words text-xs", ci === 0 ? "font-medium text-foreground" : "text-foreground/80")}>
+                  {cell}
+                </span>
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+
+      <div className="hidden overflow-hidden rounded-lg border border-border sm:block">
+        <div className="max-w-full overflow-x-auto">
+          <table className="w-full min-w-[34rem] text-sm">
+            <thead>
+              <tr className="border-b-2 border-border bg-card">
+                {headers.map((h, i) => (
+                  <th key={i} className="whitespace-nowrap px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-muted-foreground">{h}</th>
                 ))}
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {rows.map((row, ri) => (
+                <tr key={ri} className={cn(
+                  "border-b border-border/60 transition-colors hover:bg-muted/50",
+                  ri % 2 === 1 && "bg-card/50"
+                )}>
+                  {row.map((cell, ci) => (
+                    <td key={ci} className={cn(
+                      "align-top break-words px-4 py-3",
+                      ci === 0 ? "font-medium text-foreground" : "text-foreground/80"
+                    )}>{cell}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );
@@ -156,13 +181,13 @@ export function DocsTable({ headers, rows }: DocsTableProps) {
 /* ── QuickRefCard ── */
 export function QuickRefCard({ title, items }: QuickRefCardProps) {
   return (
-    <div className="rounded-lg border border-border bg-card p-5">
-      <h3 className="mb-4 text-sm font-bold text-foreground">{title}</h3>
+    <div className="rounded-lg border border-border bg-card p-4 sm:p-5">
+      <h3 className="mb-3 text-sm font-bold text-foreground sm:mb-4">{title}</h3>
       <div className="space-y-3">
         {items.map((item, i) => (
-          <div key={i} className="flex items-center justify-between">
+          <div key={i} className="flex flex-col items-start gap-1 sm:flex-row sm:items-center sm:justify-between">
             <span className="text-sm text-muted-foreground">{item.label}</span>
-            <code className="rounded-md bg-muted px-2.5 py-1 font-mono text-xs font-semibold text-foreground">{item.value}</code>
+            <code className="block w-full max-w-full break-all whitespace-normal rounded-md bg-muted px-2.5 py-1 font-mono text-xs font-semibold text-foreground sm:w-auto sm:overflow-x-auto sm:whitespace-nowrap sm:break-normal">{item.value}</code>
           </div>
         ))}
       </div>
@@ -173,10 +198,10 @@ export function QuickRefCard({ title, items }: QuickRefCardProps) {
 /* ── StepGuide ── */
 export function StepGuide({ steps }: StepGuideProps) {
   return (
-    <div className="space-y-6">
+    <div className="space-y-5 sm:space-y-6">
       {steps.map((step, i) => (
-        <div key={i} className="flex gap-4">
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/15 text-sm font-bold text-primary">
+        <div key={i} className="flex gap-3 sm:gap-4">
+          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/15 text-xs font-bold text-primary sm:h-8 sm:w-8 sm:text-sm">
             {i + 1}
           </div>
           <div className="min-w-0">
@@ -192,10 +217,10 @@ export function StepGuide({ steps }: StepGuideProps) {
 /* ── SectionHeading ── */
 export function SectionHeading({ icon: Icon, children, level = 3 }: SectionHeadingProps) {
   const Tag = `h${level}` as const;
-  const sizeClass = level === 2 ? "text-xl" : level === 3 ? "text-lg" : "text-base";
+  const sizeClass = level === 2 ? "text-lg sm:text-xl" : level === 3 ? "text-base sm:text-lg" : "text-sm sm:text-base";
   return (
-    <div className={cn("flex items-center gap-2.5", level === 2 && "mb-4")}>
-      {Icon && <Icon className="h-5 w-5 text-primary" aria-hidden="true" />}
+    <div className={cn("flex flex-wrap items-center gap-2", level === 2 && "mb-4")}>
+      {Icon && <Icon className="h-4 w-4 text-primary sm:h-5 sm:w-5" aria-hidden="true" />}
       <Tag className={cn("font-bold text-foreground", sizeClass)}>{children}</Tag>
     </div>
   );

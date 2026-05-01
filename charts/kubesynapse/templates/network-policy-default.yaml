@@ -391,6 +391,60 @@ spec:
           port: 6443
 ---
 # ---------------------------------------------------------------------------
+# Allow Egress from Operator Workers to API Gateway
+# Workers POST execution trace events to the gateway's /api/traces/batch
+# endpoint for Observatory data ingestion.
+# ---------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kubesynapse.fullname" . }}-allow-worker-gateway-egress
+  labels:
+    {{- include "kubesynapse.labels" . | nindent 4 }}
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector:
+    matchLabels:
+      app: operator-worker
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: api-gateway
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+# ---------------------------------------------------------------------------
+# Allow Egress from Operator to API Gateway
+# The operator calls gateway APIs for trace reporting and internal
+# coordination (e.g. workflow trigger, status sync).
+# ---------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kubesynapse.fullname" . }}-allow-operator-gateway-egress
+  labels:
+    {{- include "kubesynapse.labels" . | nindent 4 }}
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector:
+    matchLabels:
+      app: operator
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: api-gateway
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+# ---------------------------------------------------------------------------
 # Allow Egress from API Gateway to Dependencies
 # ---------------------------------------------------------------------------
 apiVersion: networking.k8s.io/v1

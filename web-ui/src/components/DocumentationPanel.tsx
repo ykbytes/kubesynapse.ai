@@ -103,8 +103,8 @@ export function DocumentationPanel() {
   return (
     <div className="flex h-full flex-col overflow-hidden bg-background text-foreground">
       {/* Sticky search header */}
-      <div className="shrink-0 border-b border-border bg-background px-4 py-3">
-        <div className="flex items-center gap-3">
+      <div className="shrink-0 border-b border-border bg-background px-3 py-2.5 sm:px-4 sm:py-3">
+        <div className="flex items-center gap-2 sm:gap-3">
           {/* Mobile hamburger */}
           <Sheet open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
             <SheetTrigger asChild>
@@ -154,7 +154,7 @@ export function DocumentationPanel() {
             <h1 className="hidden text-base font-bold text-foreground sm:block">KubeSynapse Documentation</h1>
           </div>
 
-          <div className="relative min-w-0 flex-1 md:max-w-md">
+          <div className="relative min-w-0 flex-1 max-w-none md:max-w-md">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground/60" aria-hidden="true" />
             <Input
               value={searchQuery}
@@ -179,7 +179,7 @@ export function DocumentationPanel() {
         </div>
       </div>
 
-      <div className="flex min-h-0 flex-1">
+      <div className="flex min-h-0 min-w-0 flex-1">
         {/* Desktop TOC sidebar */}
         <aside className="hidden w-[200px] shrink-0 border-r border-border bg-background md:flex">
           <ScrollArea className="h-full w-full">
@@ -211,8 +211,8 @@ export function DocumentationPanel() {
         </aside>
 
         {/* Content area */}
-        <ScrollArea ref={contentRef} className="flex-1">
-          <div className="mx-auto max-w-5xl px-8 py-8">
+        <div ref={contentRef} className="min-w-0 flex-1 overflow-x-hidden overflow-y-auto">
+          <div className="mx-auto w-full max-w-5xl px-4 py-6 sm:px-6 md:px-8 md:py-8">
             {filteredSections.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-20 text-center">
                 <Search className="h-10 w-10 text-muted-foreground/50" aria-hidden="true" />
@@ -223,21 +223,21 @@ export function DocumentationPanel() {
                 </Button>
               </div>
             ) : (
-              <div className="space-y-14">
+              <div className="space-y-10 sm:space-y-12 md:space-y-14">
                 {filteredSections.map((section) => (
-                  <section key={section.id} id={section.id} className="scroll-mt-24">
-                    <div className="flex items-center gap-2.5">
+                  <section key={section.id} id={section.id} className="min-w-0 scroll-mt-24">
+                    <div className="flex flex-wrap items-center gap-2.5">
                       <section.icon className="h-5 w-5 text-primary" aria-hidden="true" />
-                      <h2 className="text-xl font-bold tracking-tight text-foreground">{section.title}</h2>
+                      <h2 className="text-lg font-bold tracking-tight text-foreground sm:text-xl">{section.title}</h2>
                     </div>
                     <div className="my-5 h-px bg-border" />
-                    <div className="text-[15px] leading-7 text-foreground/85">{section.content}</div>
+                    <div className="docs-content min-w-0 max-w-full break-words text-sm leading-7 text-foreground/85 [overflow-wrap:anywhere] [&>*]:min-w-0 sm:text-[15px]">{section.content}</div>
                   </section>
                 ))}
               </div>
             )}
           </div>
-        </ScrollArea>
+        </div>
 
         {/* Right sidebar — mini TOC + quick links */}
         <aside className="hidden w-[180px] shrink-0 border-l border-border bg-background xl:block">

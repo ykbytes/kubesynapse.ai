@@ -2667,6 +2667,7 @@ export interface ExecutionListItem {
   tool_call_count: number;
   total_tokens: number;
   total_cost_usd?: number | null;
+  triggered_by?: string | null;
 }
 
 export interface ExecutionListResponse {
@@ -2693,7 +2694,28 @@ export async function listExecutions(
 ): Promise<ExecutionListResponse> {
   const url = new URL(buildUrl("/api/traces/executions", namespace), API_BASE_URL || window.location.origin);
   for (const [k, v] of Object.entries(filters)) {
-    if (v !== undefined && v !== null && v !== "") url.searchParams.set(k, String(v));
+    if (v === undefined || v === null || v === "") continue;
+    const normalizedKey = {
+      workflow: "workflow_name",
+      agent: "agent_name",
+      sort_by: "sort_by",
+      from_date: "from_date",
+      to_date: "to_date",
+      search: "search",
+      status: "status",
+      limit: "limit",
+      offset: "offset",
+    }[k] ?? k;
+    const normalizedValue =
+      normalizedKey === "sort_by"
+        ? ({
+            started_at_desc: "newest",
+            started_at_asc: "oldest",
+            duration_desc: "newest",
+            duration_asc: "oldest",
+          }[String(v)] ?? String(v))
+        : String(v);
+    url.searchParams.set(normalizedKey, normalizedValue);
   }
   const target = API_BASE_URL ? url.toString() : `${url.pathname}${url.search}`;
   const response = await fetchAuthenticated(target, token);
@@ -2713,11 +2735,23 @@ export async function listExecutions(
           started_at: readOptionalString(r, "started_at", `ExecutionListItem[${index}]`),
           completed_at: readOptionalString(r, "completed_at", `ExecutionListItem[${index}]`),
           duration_ms: readOptionalNumber(r, "duration_ms", `ExecutionListItem[${index}]`),
-          step_count: readOptionalNumber(r, "step_count", `ExecutionListItem[${index}]`) ?? 0,
-          llm_call_count: readOptionalNumber(r, "llm_call_count", `ExecutionListItem[${index}]`) ?? 0,
-          tool_call_count: readOptionalNumber(r, "tool_call_count", `ExecutionListItem[${index}]`) ?? 0,
+          step_count:
+            readOptionalNumber(r, "step_count", `ExecutionListItem[${index}]`) ??
+            readOptionalNumber(r, "total_steps", `ExecutionListItem[${index}]`) ??
+            0,
+          llm_call_count:
+            readOptionalNumber(r, "llm_call_count", `ExecutionListItem[${index}]`) ??
+            readOptionalNumber(r, "total_llm_calls", `ExecutionListItem[${index}]`) ??
+            0,
+          tool_call_count:
+            readOptionalNumber(r, "tool_call_count", `ExecutionListItem[${index}]`) ??
+            readOptionalNumber(r, "total_tool_calls", `ExecutionListItem[${index}]`) ??
+            0,
           total_tokens: readOptionalNumber(r, "total_tokens", `ExecutionListItem[${index}]`) ?? 0,
-          total_cost_usd: readOptionalNumber(r, "total_cost_usd", `ExecutionListItem[${index}]`),
+          total_cost_usd:
+            readOptionalNumber(r, "total_cost_usd", `ExecutionListItem[${index}]`) ??
+            readOptionalNumber(r, "estimated_cost_usd", `ExecutionListItem[${index}]`),
+          triggered_by: readOptionalString(r, "triggered_by", `ExecutionListItem[${index}]`),
         } satisfies ExecutionListItem;
       }),
       total: readOptionalNumber(record, "total", "ExecutionListResponse") ?? 0,
@@ -2761,7 +2795,9 @@ export async function deleteExecution(token: string, executionId: string): Promi
 }
 
 export async function exportExecutionJson(token: string, executionId: string): Promise<string> {
-  const response = await fetchAuthenticated(buildUrl(`/api/traces/executions/${executionId}/export/json`), token);
+  const response = await fetchAuthenticated(buildUrl(`/api/traces/executions/${executionId}/export/json`), token, {
+    method: "POST",
+  });
   if (!response.ok) {
     const text = await response.text();
     throw new ApiError(response.status, "Failed to export execution JSON", text);
@@ -2780,13 +2816,29 @@ export async function exportExecutionHtml(token: string, executionId: string): P
 
 function parseTraceEventPayload(payload: unknown, label = "TraceEvent"): TraceEvent {
   const record = expectRecord(payload, label);
+  const rawTimestamp = record.timestamp;
+  const rawEventType = readString(record, "event_type", label, "custom");
+  const payloadRecord = readRecord(record, "payload", label, {});
+  const timestamp =
+    typeof rawTimestamp === "number" && Number.isFinite(rawTimestamp)
+      ? new Date((rawTimestamp > 1_000_000_000_000 ? rawTimestamp : rawTimestamp * 1000)).toISOString()
+      : readString(record, "timestamp", label);
+  const stepId =
+    readOptionalString(record, "step_id", label) ??
+    readOptionalString(payloadRecord, "step_id", `${label}.payload`) ??
+    readOptionalString(payloadRecord, "step_name", `${label}.payload`);
   return {
-    id: readString(record, "id", label),
+    id: readString(
+      record,
+      "id",
+      label,
+      `${readString(record, "execution_id", label, "execution")}:${rawEventType}:${String(rawTimestamp ?? "")}`,
+    ),
     execution_id: readString(record, "execution_id", label),
-    event_type: readString(record, "event_type", label) as TraceEvent["event_type"],
-    timestamp: readString(record, "timestamp", label),
-    step_id: readOptionalString(record, "step_id", label),
-    payload: readRecord(record, "payload", label, {}),
+    event_type: rawEventType.toUpperCase() as TraceEvent["event_type"],
+    timestamp,
+    step_id: stepId,
+    payload: payloadRecord,
   };
 }
 
@@ -2797,10 +2849,13 @@ function parseLLMCallRecordPayload(payload: unknown, label = "LLMCallRecord"): L
     step_id: readOptionalString(record, "step_id", label),
     execution_id: readString(record, "execution_id", label),
     model: readString(record, "model", label, ""),
+    provider: readOptionalString(record, "provider", label),
     prompt_tokens: readOptionalNumber(record, "prompt_tokens", label) ?? 0,
     completion_tokens: readOptionalNumber(record, "completion_tokens", label) ?? 0,
     total_tokens: readOptionalNumber(record, "total_tokens", label) ?? 0,
-    estimated_cost_usd: readOptionalNumber(record, "estimated_cost_usd", label),
+    estimated_cost_usd:
+      readOptionalNumber(record, "estimated_cost_usd", label) ??
+      readOptionalNumber(record, "cost_usd", label),
     latency_ms: readOptionalNumber(record, "latency_ms", label) ?? 0,
     prompt_preview: readOptionalString(record, "prompt_preview", label),
     response_preview: readOptionalString(record, "response_preview", label),
@@ -2810,16 +2865,30 @@ function parseLLMCallRecordPayload(payload: unknown, label = "LLMCallRecord"): L
 
 function parseToolCallRecordPayload(payload: unknown, label = "ToolCallRecord"): ToolCallRecord {
   const record = expectRecord(payload, label);
+  const toolResult = readOptionalJsonValue(record, "tool_result");
+  const toolArgs = readOptionalJsonValue(record, "tool_args");
+  const errorMessage = readOptionalString(record, "error_message", label);
   return {
     id: readString(record, "id", label),
     step_id: readOptionalString(record, "step_id", label),
     execution_id: readString(record, "execution_id", label),
     tool_name: readString(record, "tool_name", label, ""),
-    args_preview: readOptionalString(record, "args_preview", label),
-    result_preview: readOptionalString(record, "result_preview", label),
-    latency_ms: readOptionalNumber(record, "latency_ms", label) ?? 0,
-    status: readString(record, "status", label, "unknown"),
-    created_at: readOptionalString(record, "created_at", label) ?? "",
+    args_preview:
+      readOptionalString(record, "args_preview", label) ??
+      (toolArgs === null ? null : JSON.stringify(toolArgs, null, 2)),
+    result_preview:
+      readOptionalString(record, "result_preview", label) ??
+      (toolResult === null ? errorMessage : JSON.stringify(toolResult, null, 2)),
+    latency_ms:
+      readOptionalNumber(record, "latency_ms", label) ??
+      readOptionalNumber(record, "duration_ms", label) ??
+      0,
+    status: readString(record, "status", label, errorMessage ? "failed" : "completed"),
+    error_message: errorMessage,
+    created_at:
+      readOptionalString(record, "created_at", label) ??
+      readOptionalString(record, "started_at", label) ??
+      "",
   };
 }
 
@@ -2827,23 +2896,36 @@ function parseStepTracePayload(payload: unknown, label = "StepTrace"): StepTrace
   const record = expectRecord(payload, label);
   const rawLlmCalls = record.llm_calls;
   const rawToolCalls = record.tool_calls;
+  const inputSummary = readOptionalJsonValue(record, "input_summary");
+  const outputSummary = readOptionalJsonValue(record, "output_summary");
   return {
     id: readString(record, "id", label),
     execution_id: readString(record, "execution_id", label),
-    name: readString(record, "name", label, ""),
+    name: readString(record, "name", label, readString(record, "step_name", label, "")),
+    step_index: readOptionalNumber(record, "step_index", label),
+    step_type: readOptionalString(record, "step_type", label),
+    parent_step_id: readOptionalString(record, "parent_step_id", label),
     status: readString(record, "status", label, "unknown"),
     started_at: readOptionalString(record, "started_at", label),
     completed_at: readOptionalString(record, "completed_at", label),
-    latency_ms: readOptionalNumber(record, "latency_ms", label),
-    error: readOptionalString(record, "error", label),
+    latency_ms:
+      readOptionalNumber(record, "latency_ms", label) ??
+      readOptionalNumber(record, "duration_ms", label),
+    error: readOptionalString(record, "error", label) ?? readOptionalString(record, "error_message", label),
+    tokens_used: readOptionalNumber(record, "tokens_used", label),
+    cost_usd: readOptionalNumber(record, "cost_usd", label),
     llm_calls: Array.isArray(rawLlmCalls)
       ? rawLlmCalls.map((item, index) => parseLLMCallRecordPayload(item, `${label}.llm_calls[${index}]`))
       : [],
     tool_calls: Array.isArray(rawToolCalls)
       ? rawToolCalls.map((item, index) => parseToolCallRecordPayload(item, `${label}.tool_calls[${index}]`))
       : [],
-    input_preview: readOptionalString(record, "input_preview", label),
-    output_preview: readOptionalString(record, "output_preview", label),
+    input_preview:
+      readOptionalString(record, "input_preview", label) ??
+      (inputSummary === null ? null : JSON.stringify(inputSummary, null, 2)),
+    output_preview:
+      readOptionalString(record, "output_preview", label) ??
+      (outputSummary === null ? null : JSON.stringify(outputSummary, null, 2)),
   };
 }
 
@@ -2853,23 +2935,48 @@ function parseExecutionTracePayload(payload: unknown, label = "ExecutionTrace"):
   const rawLlmCalls = record.llm_calls;
   const rawToolCalls = record.tool_calls;
   const rawEvents = record.events;
+  const inputSummary = readOptionalJsonValue(record, "input_summary");
+  const outputSummary = readOptionalJsonValue(record, "output_summary");
   return {
     id: readString(record, "id", label),
     workflow_name: readString(record, "workflow_name", label, ""),
     namespace: readString(record, "namespace", label, ""),
     agent_name: readOptionalString(record, "agent_name", label),
     run_id: readOptionalString(record, "run_id", label),
+    triggered_by: readOptionalString(record, "triggered_by", label),
     status: readString(record, "status", label, "unknown"),
     started_at: readOptionalString(record, "started_at", label),
     completed_at: readOptionalString(record, "completed_at", label),
+    created_at: readOptionalString(record, "created_at", label),
     duration_ms: readOptionalNumber(record, "duration_ms", label),
-    input_preview: readOptionalString(record, "input_preview", label),
-    output_preview: readOptionalString(record, "output_preview", label),
-    step_count: readOptionalNumber(record, "step_count", label) ?? 0,
-    llm_call_count: readOptionalNumber(record, "llm_call_count", label) ?? 0,
-    tool_call_count: readOptionalNumber(record, "tool_call_count", label) ?? 0,
+    error_message: readOptionalString(record, "error_message", label),
+    trace_file_path: readOptionalString(record, "trace_file_path", label),
+    input_preview:
+      readOptionalString(record, "input_preview", label) ??
+      (inputSummary === null ? null : JSON.stringify(inputSummary, null, 2)),
+    output_preview:
+      readOptionalString(record, "output_preview", label) ??
+      (outputSummary === null ? null : JSON.stringify(outputSummary, null, 2)),
+    step_count:
+      readOptionalNumber(record, "step_count", label) ??
+      readOptionalNumber(record, "total_steps", label) ??
+      0,
+    completed_steps: readOptionalNumber(record, "completed_steps", label),
+    failed_steps: readOptionalNumber(record, "failed_steps", label),
+    llm_call_count:
+      readOptionalNumber(record, "llm_call_count", label) ??
+      readOptionalNumber(record, "total_llm_calls", label) ??
+      0,
+    tool_call_count:
+      readOptionalNumber(record, "tool_call_count", label) ??
+      readOptionalNumber(record, "total_tool_calls", label) ??
+      0,
     total_tokens: readOptionalNumber(record, "total_tokens", label) ?? 0,
-    total_cost_usd: readOptionalNumber(record, "total_cost_usd", label),
+    prompt_tokens: readOptionalNumber(record, "prompt_tokens", label),
+    completion_tokens: readOptionalNumber(record, "completion_tokens", label),
+    total_cost_usd:
+      readOptionalNumber(record, "total_cost_usd", label) ??
+      readOptionalNumber(record, "estimated_cost_usd", label),
     steps: Array.isArray(rawSteps)
       ? rawSteps.map((item, index) => parseStepTracePayload(item, `${label}.steps[${index}]`))
       : [],

@@ -319,8 +319,12 @@ def safe_record_workflow_state(
                 .all()
             )
             for stale_record in stale_records:
-                stale_status = _json_clone(stale_record.status_json) or {}
-                stale_summary = _json_clone(stale_record.summary_json) or {}
+                stale_status = _json_clone(stale_record.status_json)
+                if not isinstance(stale_status, dict):
+                    stale_status = {}
+                stale_summary = _json_clone(stale_record.summary_json)
+                if not isinstance(stale_summary, dict):
+                    stale_summary = {}
                 stale_record.phase = "cancelled"
                 stale_status["phase"] = "cancelled"
                 stale_summary.setdefault("error", f"Superseded by run {run_id}")
@@ -393,8 +397,12 @@ def safe_record_eval_state(
                 .all()
             )
             for stale_record in stale_records:
-                stale_status = _json_clone(stale_record.status_json) or {}
-                stale_summary = _json_clone(stale_record.summary_json) or {}
+                stale_status = _json_clone(stale_record.status_json)
+                if not isinstance(stale_status, dict):
+                    stale_status = {}
+                stale_summary = _json_clone(stale_record.summary_json)
+                if not isinstance(stale_summary, dict):
+                    stale_summary = {}
                 stale_record.phase = "cancelled"
                 stale_status["phase"] = "cancelled"
                 stale_summary.setdefault("error", f"Superseded by run {run_id}")

@@ -383,14 +383,17 @@ def workflow_should_requeue(status: dict[str, Any], job_state: str) -> str | Non
 
 
 def workflow_status_matches_generation(workflow_status: dict[str, Any], generation: int) -> bool:
-    """Return True when status and artifact state belong to the requested generation."""
-    observed_generation = int((workflow_status or {}).get("observedGeneration", 0) or 0)
-    if observed_generation == generation:
-        return True
+    """Return True when status belongs to the requested generation.
 
-    artifact_ref = (workflow_status or {}).get("artifactRef", {}) or {}
-    artifact_generation = int(artifact_ref.get("generation", 0) or 0)
-    return artifact_generation == generation
+    Only trusts ``observedGeneration`` — the authoritative field set by the
+    worker when it begins execution.  The ``artifactRef.generation`` fallback
+    was removed because it caused the controller to treat a re-triggered
+    workflow (whose trigger reset ``observedGeneration`` to None but left
+    ``artifactRef`` intact) as already-reconciled, restoring stale
+    ``stepStates`` and preventing actual step re-execution.
+    """
+    observed_generation = int((workflow_status or {}).get("observedGeneration", 0) or 0)
+    return observed_generation == generation
 
 
 def resolve_workflow_run_id(

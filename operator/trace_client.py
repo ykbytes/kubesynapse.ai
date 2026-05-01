@@ -262,7 +262,7 @@ class TraceClient:
             headers["Authorization"] = f"Bearer {self._token}"
         try:
             with httpx.Client(timeout=10.0) as client:
-                response = client.post(url, json=batch, headers=headers)
+                response = client.post(url, json={"events": batch}, headers=headers)
             if response.status_code >= 400:
                 logger.warning(
                     "Trace batch rejected by gateway (%s): %s",

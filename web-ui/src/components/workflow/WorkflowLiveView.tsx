@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import {
   AlertTriangle,
+  ArrowUpRight,
   CheckCircle2,
   ChevronRight,
   Clock,
@@ -29,6 +30,7 @@ import {
   type WorkflowSignalStep,
 } from "./workflow-helpers";
 import { FACTORY_MODE_OPTIONS } from "@/lib/factoryModes";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
 import type {
   FactoryMode,
   WorkflowInfo,
@@ -209,6 +211,7 @@ export function WorkflowLiveView({
   onTrigger,
   onRetryFailed,
 }: WorkflowLiveViewProps) {
+  const { openObservatoryForWorkflowRun } = useWorkspace();
   const stepFilterOptions = [
     { value: "all" as const, label: "All", count: steps.length },
     { value: "active" as const, label: "Active", count: workflowSignals.activeSteps },
@@ -447,6 +450,17 @@ export function WorkflowLiveView({
               )}
             </div>
             <div className="flex items-center gap-2">
+              {workflow.run_id && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8 rounded-lg text-xs"
+                  onClick={() => openObservatoryForWorkflowRun(workflow.name, workflow.run_id ?? null)}
+                >
+                  <ArrowUpRight className="mr-1.5 h-3.5 w-3.5" />
+                  Open in Observatory
+                </Button>
+              )}
               {isActive && (
                 <Button
                   size="sm"

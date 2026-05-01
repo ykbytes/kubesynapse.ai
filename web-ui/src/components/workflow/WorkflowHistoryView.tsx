@@ -1,11 +1,11 @@
 import { useCallback, useMemo, useState } from "react";
-import { Download, FolderOpen, TerminalSquare } from "lucide-react";
+import { ArrowUpRight, Download, FolderOpen, TerminalSquare } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { FileExplorer } from "../FileExplorer";
-import { WorkflowLogPanel } from "../WorkflowLogPanel";
 import { RunHistoryPanel, phaseIcon, phaseColor, phaseAccent, durationSeconds, formatDuration, formatTimestampFull } from "../composer/RunHistoryPanel";
 import { useConnection } from "@/contexts/ConnectionContext";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
 import {
   listAgentArtifacts,
   downloadAgentArtifact,
@@ -129,8 +129,6 @@ interface WorkflowHistoryViewProps {
   isActive: boolean;
 }
 
-type ActiveTab = "trace" | "files";
-
 export function WorkflowHistoryView({
   workflow,
   selectedHistoryRun,
@@ -138,7 +136,7 @@ export function WorkflowHistoryView({
   activeRunAgents,
   isActive,
 }: WorkflowHistoryViewProps) {
-  const [activeTab, setActiveTab] = useState<ActiveTab>("trace");
+  const { openObservatoryForWorkflowRun } = useWorkspace();
 
   const visibleAgents = useMemo(
     () => Array.from(new Set(activeRunAgents.filter(Boolean))),
@@ -147,6 +145,9 @@ export function WorkflowHistoryView({
 
   const run = selectedHistoryRun;
   const dur = durationSeconds(run);
+  const handleOpenObservatory = useCallback(() => {
+    openObservatoryForWorkflowRun(workflow.name, run?.run_id ?? null);
+  }, [openObservatoryForWorkflowRun, run?.run_id, workflow.name]);
 
   return (
     <div className="grid grid-cols-[minmax(240px,280px)_1fr] gap-4 h-[calc(100vh-11rem)] animate-fade-in">
@@ -165,31 +166,45 @@ export function WorkflowHistoryView({
             "rounded-xl border border-border/60 bg-background/70 px-4 py-3 border-l-[3px]",
             phaseAccent(run.phase),
           )}>
-            <div className="flex flex-wrap items-center gap-2">
-              {phaseIcon(run.phase)}
-              <Badge variant="outline" className={cn("h-5 border px-2 text-[10px] capitalize", phaseColor(run.phase))}>
-                {run.phase}
-              </Badge>
-              {run.run_id && (
-                <span className="font-mono text-[11px] text-muted-foreground truncate max-w-[20rem]">{run.run_id}</span>
-              )}
-              <span className="text-xs text-muted-foreground">
-                {run.completed_steps ?? 0}/{run.total_steps ?? "?"} steps
-              </span>
-              {dur != null && (
-                <span className="text-xs font-medium text-foreground">{formatDuration(dur)}</span>
-              )}
-              {run.archived_log_available && (
-                <Badge variant="outline" className="border-emerald-500/20 bg-emerald-500/10 text-[10px] text-emerald-600 dark:text-emerald-300">
-                  archived
-                </Badge>
-              )}
-            </div>
-            <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
-              <span>Created {formatTimestampFull(run.created_at)}</span>
-              <span>Started {formatTimestampFull(run.started_at)}</span>
-              {run.completed_at && <span>Completed {formatTimestampFull(run.completed_at)}</span>}
-              {run.triggered_by && <span>Triggered by {run.triggered_by}</span>}
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  {phaseIcon(run.phase)}
+                  <Badge variant="outline" className={cn("h-5 border px-2 text-[10px] capitalize", phaseColor(run.phase))}>
+                    {run.phase}
+                  </Badge>
+                  {run.run_id && (
+                    <span className="max-w-[20rem] truncate font-mono text-[11px] text-muted-foreground">{run.run_id}</span>
+                  )}
+                  <span className="text-xs text-muted-foreground">
+                    {run.completed_steps ?? 0}/{run.total_steps ?? "?"} steps
+                  </span>
+                  {dur != null && (
+                    <span className="text-xs font-medium text-foreground">{formatDuration(dur)}</span>
+                  )}
+                  {run.archived_log_available && (
+                    <Badge variant="outline" className="border-emerald-500/20 bg-emerald-500/10 text-[10px] text-emerald-600 dark:text-emerald-300">
+                      archived
+                    </Badge>
+                  )}
+                </div>
+                <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
+                  <span>Created {formatTimestampFull(run.created_at)}</span>
+                  <span>Started {formatTimestampFull(run.started_at)}</span>
+                  {run.completed_at && <span>Completed {formatTimestampFull(run.completed_at)}</span>}
+                  {run.triggered_by && <span>Triggered by {run.triggered_by}</span>}
+                </div>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-8 shrink-0 rounded-lg text-xs"
+                onClick={handleOpenObservatory}
+              >
+                <ArrowUpRight className="mr-1.5 h-3.5 w-3.5" />
+                Open in Observatory
+              </Button>
             </div>
           </div>
         ) : (
@@ -198,45 +213,38 @@ export function WorkflowHistoryView({
           </div>
         )}
 
-        {/* Tab bar */}
-        <div className="flex items-center gap-1 border-b border-border/40 pb-0">
-          <button
-            type="button"
-            onClick={() => setActiveTab("trace")}
-            className={cn(
-              "flex items-center gap-1.5 border-b-2 px-3 py-2 text-xs font-medium transition-colors",
-              activeTab === "trace"
-                ? "border-primary text-foreground"
-                : "border-transparent text-muted-foreground hover:text-foreground",
-            )}
-          >
-            <TerminalSquare className="h-3.5 w-3.5" />
-            Trace Logs
-          </button>
-          {visibleAgents.length > 0 && (
-            <button
+        <div className="rounded-xl border border-border/60 bg-card/40 p-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+                <TerminalSquare className="h-3.5 w-3.5 text-primary" />
+                Deep trace analysis lives in Observatory
+              </div>
+              <p className="mt-1 text-sm text-foreground">
+                Use the workflow page for recent runs and workspace files. Open Observatory for trace logs,
+                replay, step timing, LLM/tool call inspection, and run-to-run comparison.
+              </p>
+            </div>
+            <Button
               type="button"
-              onClick={() => setActiveTab("files")}
-              className={cn(
-                "flex items-center gap-1.5 border-b-2 px-3 py-2 text-xs font-medium transition-colors",
-                activeTab === "files"
-                  ? "border-primary text-foreground"
-                  : "border-transparent text-muted-foreground hover:text-foreground",
-              )}
+              variant="outline"
+              size="sm"
+              className="h-8 shrink-0 rounded-lg text-xs"
+              onClick={handleOpenObservatory}
             >
-              <FolderOpen className="h-3.5 w-3.5" />
-              Workspace Files
-            </button>
-          )}
+              <ArrowUpRight className="mr-1.5 h-3.5 w-3.5" />
+              Open Observatory
+            </Button>
+          </div>
         </div>
 
-        {/* Tab content — fills remaining height */}
         <div className="flex-1 min-h-0">
-          {activeTab === "trace" && (
-            <WorkflowLogPanel workflow={workflow} selectedRun={selectedHistoryRun} />
-          )}
-          {activeTab === "files" && visibleAgents.length > 0 && (
+          {visibleAgents.length > 0 ? (
             <AgentFileBrowserTabs agents={visibleAgents} liveUpdatesEnabled={isActive} />
+          ) : (
+            <div className="flex h-full items-center justify-center rounded-xl border border-dashed border-border/50 bg-background/50 px-4 py-4 text-center text-xs text-muted-foreground">
+              No workflow workspace files are available yet.
+            </div>
           )}
         </div>
       </div>

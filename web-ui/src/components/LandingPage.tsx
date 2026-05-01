@@ -94,7 +94,7 @@ function Navbar({
           : "border-transparent bg-[oklch(0.14_0.008_264/0.6)] backdrop-blur-sm"
       }`}
     >
-      <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-3.5">
+      <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-3.5 sm:px-6">
         <div className="flex items-center gap-2.5">
           <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[oklch(0.708_0.101_188)] text-[oklch(0.158_0.007_264)] shadow-lg shadow-[oklch(0.708_0.101_188/0.3)]">
             <LayoutPanelTop className="h-5 w-5" />
@@ -150,7 +150,7 @@ function Navbar({
 
 function HeroSection({ onOpenDocs }: { onOpenDocs: () => void }) {
   return (
-    <section className="relative overflow-hidden px-6 pb-20 pt-20 md:pb-28 md:pt-32">
+    <section className="relative overflow-hidden px-4 pb-20 pt-16 sm:px-6 md:pb-28 md:pt-32">
       {/* Background grid */}
       <div
         className="pointer-events-none absolute inset-0 opacity-[0.04]"
@@ -162,7 +162,7 @@ function HeroSection({ onOpenDocs }: { onOpenDocs: () => void }) {
       />
       {/* Radial glow */}
       <div className="pointer-events-none absolute inset-0">
-        <div className="absolute left-1/2 top-0 h-[600px] w-[800px] -translate-x-1/2 -translate-y-1/3 rounded-full bg-[oklch(0.708_0.101_188/0.08)] blur-[100px]" />
+        <div className="absolute left-1/2 top-0 h-[420px] w-[min(800px,100vw)] -translate-x-1/2 -translate-y-1/3 rounded-full bg-[oklch(0.708_0.101_188/0.08)] blur-[100px] sm:h-[600px]" />
       </div>
 
       <div className="relative mx-auto max-w-5xl text-center">
@@ -170,7 +170,7 @@ function HeroSection({ onOpenDocs }: { onOpenDocs: () => void }) {
           initial={{ opacity: 0, y: 16 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5 }}
-          className="mb-6 inline-flex items-center gap-2 rounded-full border border-[oklch(0.708_0.101_188/0.3)] bg-[oklch(0.206_0.009_264/0.8)] px-4 py-1.5 text-xs font-semibold text-[oklch(0.708_0.101_188)] shadow-lg shadow-[oklch(0.708_0.101_188/0.1)] backdrop-blur-sm"
+          className="mb-6 inline-flex max-w-full flex-wrap items-center justify-center gap-2 rounded-full border border-[oklch(0.708_0.101_188/0.3)] bg-[oklch(0.206_0.009_264/0.8)] px-4 py-1.5 text-center text-[11px] font-semibold text-[oklch(0.708_0.101_188)] shadow-lg shadow-[oklch(0.708_0.101_188/0.1)] backdrop-blur-sm sm:text-xs"
         >
           <span className="flex h-2 w-2 rounded-full bg-[oklch(0.76_0.16_154)] ring-2 ring-[oklch(0.76_0.16_154/0.3)]" />
           Kubernetes-Native AI Operations Platform
@@ -180,7 +180,7 @@ function HeroSection({ onOpenDocs }: { onOpenDocs: () => void }) {
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.6, delay: 0.1 }}
-          className="text-4xl font-extrabold tracking-tight text-[oklch(0.958_0.004_264)] sm:text-5xl md:text-6xl lg:text-7xl"
+          className="text-3xl font-extrabold tracking-tight text-[oklch(0.958_0.004_264)] sm:text-5xl md:text-6xl lg:text-7xl"
         >
           Your Kubernetes Cluster&rsquo;s{" "}
           <span className="bg-gradient-to-r from-[oklch(0.708_0.101_188)] to-[oklch(0.742_0.132_233)] bg-clip-text text-transparent">
@@ -192,7 +192,7 @@ function HeroSection({ onOpenDocs }: { onOpenDocs: () => void }) {
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.6, delay: 0.2 }}
-          className="mx-auto mt-6 max-w-2xl text-base text-[oklch(0.82_0.01_264)] sm:text-lg md:text-xl leading-relaxed"
+          className="mx-auto mt-6 max-w-2xl text-base leading-relaxed text-[oklch(0.82_0.01_264)] sm:text-lg md:text-xl"
         >
           The self-hosted command center for DevOps and IT operations.
           Deploy AI agents that automate incident response, infrastructure management,
@@ -203,11 +203,11 @@ function HeroSection({ onOpenDocs }: { onOpenDocs: () => void }) {
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.6, delay: 0.3 }}
-          className="mt-6 flex flex-col items-center gap-4 sm:flex-row sm:justify-center"
+          className="mt-6 flex flex-col items-stretch gap-4 sm:flex-row sm:items-center sm:justify-center"
         >
           <a
             href="#install"
-            className="group flex items-center gap-2 rounded-xl bg-[oklch(0.708_0.101_188)] px-7 py-3.5 text-sm font-semibold text-[oklch(0.158_0.007_264)] shadow-lg shadow-[oklch(0.708_0.101_188/0.3)] transition-all hover:shadow-xl hover:shadow-[oklch(0.708_0.101_188/0.4)] active:scale-[0.98]"
+            className="group flex w-full items-center justify-center gap-2 rounded-xl bg-[oklch(0.708_0.101_188)] px-7 py-3.5 text-sm font-semibold text-[oklch(0.158_0.007_264)] shadow-lg shadow-[oklch(0.708_0.101_188/0.3)] transition-all hover:shadow-xl hover:shadow-[oklch(0.708_0.101_188/0.4)] active:scale-[0.98] sm:w-auto"
           >
             <Terminal className="h-4 w-4" />
             Deploy with Helm
@@ -216,7 +216,7 @@ function HeroSection({ onOpenDocs }: { onOpenDocs: () => void }) {
           <button
             type="button"
             onClick={onOpenDocs}
-            className="flex items-center gap-2 rounded-xl border border-[oklch(0.4_0.015_264)] bg-[oklch(0.206_0.009_264/0.8)] px-7 py-3.5 text-sm font-semibold text-[oklch(0.85_0.01_264)] shadow-sm backdrop-blur-sm transition-all hover:border-[oklch(0.708_0.101_188/0.4)] hover:text-[oklch(0.958_0.004_264)]"
+            className="flex w-full items-center justify-center gap-2 rounded-xl border border-[oklch(0.4_0.015_264)] bg-[oklch(0.206_0.009_264/0.8)] px-7 py-3.5 text-sm font-semibold text-[oklch(0.85_0.01_264)] shadow-sm backdrop-blur-sm transition-all hover:border-[oklch(0.708_0.101_188/0.4)] hover:text-[oklch(0.958_0.004_264)] sm:w-auto"
           >
             <BookOpen className="h-4 w-4 text-[oklch(0.708_0.101_188)]" />
             View Documentation
@@ -228,7 +228,7 @@ function HeroSection({ onOpenDocs }: { onOpenDocs: () => void }) {
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           transition={{ delay: 0.8, duration: 0.6 }}
-          className="mt-12 flex flex-wrap items-center justify-center gap-8 text-center"
+          className="mt-12 flex flex-wrap items-center justify-center gap-6 text-center sm:gap-8"
         >
           {[
             { label: "CRD Types", value: "6" },
@@ -262,7 +262,7 @@ function EcosystemCloud() {
   ];
 
   return (
-    <section className="border-y border-[oklch(0.3_0.01_264)] bg-[oklch(0.149_0.008_264/0.8)] px-6 py-12">
+    <section className="border-y border-[oklch(0.3_0.01_264)] bg-[oklch(0.149_0.008_264/0.8)] px-4 py-12 sm:px-6">
       <div className="mx-auto max-w-6xl">
         <p className="mb-8 text-center text-xs font-semibold uppercase tracking-widest text-[oklch(0.62_0.01_264)]">
           Built for the Kubernetes Ecosystem
@@ -316,7 +316,7 @@ function ProblemSection() {
   const inView = useInView(ref, { once: true, margin: "-80px" });
 
   return (
-    <section className="px-6 py-24 md:py-32" ref={ref}>
+    <section className="px-4 py-24 sm:px-6 md:py-32" ref={ref}>
       <div className="mx-auto max-w-7xl">
         <motion.div
           initial="hidden"
@@ -327,7 +327,7 @@ function ProblemSection() {
           <motion.p variants={itemVariants} className="text-xs font-semibold uppercase tracking-widest text-[oklch(0.708_0.101_188)]">
             The Challenge
           </motion.p>
-          <motion.h2 variants={itemVariants} className="mt-3 text-3xl font-bold tracking-tight text-[oklch(0.958_0.004_264)] sm:text-4xl md:text-5xl">
+          <motion.h2 variants={itemVariants} className="mt-3 text-2xl font-bold tracking-tight text-[oklch(0.958_0.004_264)] sm:text-4xl md:text-5xl">
             Kubernetes Operations Deserve <span className="text-[oklch(0.72_0.01_264)]">Better</span>
           </motion.h2>
         </motion.div>
@@ -342,7 +342,7 @@ function ProblemSection() {
                 initial="hidden"
                 animate={inView ? "visible" : "hidden"}
                 transition={{ delay: i * 0.1 }}
-                className="group rounded-2xl border border-[oklch(0.3_0.01_264)] bg-[oklch(0.206_0.009_264/0.6)] p-8 backdrop-blur-sm transition-all hover:border-[oklch(0.708_0.101_188/0.4)] hover:shadow-lg hover:shadow-[oklch(0.708_0.101_188/0.05)]"
+                className="group rounded-2xl border border-[oklch(0.3_0.01_264)] bg-[oklch(0.206_0.009_264/0.6)] p-6 backdrop-blur-sm transition-all hover:border-[oklch(0.708_0.101_188/0.4)] hover:shadow-lg hover:shadow-[oklch(0.708_0.101_188/0.05)] sm:p-8"
               >
                 <div className="mb-5 flex h-12 w-12 items-center justify-center rounded-xl bg-[oklch(0.708_0.101_188/0.1)] text-[oklch(0.708_0.101_188)] ring-1 ring-[oklch(0.708_0.101_188/0.2)] transition-colors group-hover:bg-[oklch(0.708_0.101_188/0.15)]">
                   <Icon className="h-6 w-6" />
@@ -373,7 +373,7 @@ function UIPreviewSection() {
   ];
 
   return (
-    <section className="px-6 py-24 md:py-32" ref={ref}>
+    <section className="px-4 py-24 sm:px-6 md:py-32" ref={ref}>
       <div className="mx-auto max-w-7xl">
         <motion.div
           initial="hidden"
@@ -384,7 +384,7 @@ function UIPreviewSection() {
           <motion.p variants={itemVariants} className="text-xs font-semibold uppercase tracking-widest text-[oklch(0.708_0.101_188)]">
             The Real Interface
           </motion.p>
-          <motion.h2 variants={itemVariants} className="mt-3 text-3xl font-bold tracking-tight text-[oklch(0.958_0.004_264)] sm:text-4xl md:text-5xl">
+          <motion.h2 variants={itemVariants} className="mt-3 text-2xl font-bold tracking-tight text-[oklch(0.958_0.004_264)] sm:text-4xl md:text-5xl">
             Operations Console Built for <span className="text-[oklch(0.708_0.101_188)]">Engineers</span>
           </motion.h2>
           <motion.p variants={itemVariants} className="mx-auto mt-4 max-w-2xl text-base text-[oklch(0.82_0.01_264)]">
@@ -397,7 +397,7 @@ function UIPreviewSection() {
           variants={itemVariants}
           initial="hidden"
           animate={inView ? "visible" : "hidden"}
-          className="mb-6 flex flex-wrap justify-center gap-2"
+          className="-mx-4 mb-6 flex gap-2 overflow-x-auto px-4 pb-1 sm:mx-0 sm:flex-wrap sm:justify-center sm:overflow-visible sm:px-0 sm:pb-0"
         >
           {tabs.map((tab) => {
             const Icon = tab.icon;
@@ -406,47 +406,55 @@ function UIPreviewSection() {
               <button
                 key={tab.key}
                 onClick={() => setActiveTab(tab.key)}
-                className={`flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium transition-all ${
+                className={`shrink-0 rounded-lg px-4 py-2.5 text-sm font-medium transition-all ${
                   isActive
                     ? "bg-[oklch(0.708_0.101_188/0.15)] text-[oklch(0.708_0.101_188)] ring-1 ring-[oklch(0.708_0.101_188/0.3)]"
                     : "text-[oklch(0.72_0.01_264)] hover:text-[oklch(0.85_0.01_264)] hover:bg-[oklch(0.252_0.010_264)]"
                 }`}
               >
-                <Icon className="h-4 w-4" />
-                {tab.label}
+                <span className="flex items-center gap-2">
+                  <Icon className="h-4 w-4" />
+                  {tab.label}
+                </span>
               </button>
             );
           })}
         </motion.div>
 
-        <motion.div
-          variants={fadeIn}
-          initial="hidden"
-          animate={inView ? "visible" : "hidden"}
-          className="overflow-hidden rounded-2xl border border-[oklch(0.3_0.01_264)] bg-[oklch(0.164_0.007_264)] shadow-2xl shadow-black/30"
-        >
-          <div className="flex items-center gap-2 border-b border-[oklch(0.3_0.01_264)] bg-[oklch(0.149_0.008_264)] px-4 py-3">
-            <div className="flex gap-1.5">
-              <div className="h-3 w-3 rounded-full bg-[oklch(0.636_0.173_24/0.7)]" />
-              <div className="h-3 w-3 rounded-full bg-[oklch(0.82_0.16_84/0.7)]" />
-              <div className="h-3 w-3 rounded-full bg-[oklch(0.76_0.16_154/0.7)]" />
-            </div>
-            <span className="ml-4 text-xs text-[oklch(0.62_0.01_264)]">kubesynapse — console preview</span>
-          </div>
+        <p className="mb-3 text-center text-xs text-[oklch(0.62_0.01_264)] sm:hidden">
+          Swipe sideways to explore the full console preview.
+        </p>
 
-          <AnimatePresence mode="wait">
-            <motion.div
-              key={activeTab}
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -8 }}
-              transition={{ duration: 0.3 }}
-              className="min-h-[460px] p-1"
-            >
-              <ConsoleShowcase activeTab={activeTab} />
-            </motion.div>
-          </AnimatePresence>
-        </motion.div>
+        <div className="-mx-4 overflow-x-auto px-4 pb-2 sm:mx-0 sm:overflow-visible sm:px-0 sm:pb-0">
+          <motion.div
+            variants={fadeIn}
+            initial="hidden"
+            animate={inView ? "visible" : "hidden"}
+            className="min-w-[920px] overflow-hidden rounded-2xl border border-[oklch(0.3_0.01_264)] bg-[oklch(0.164_0.007_264)] shadow-2xl shadow-black/30 sm:min-w-0"
+          >
+            <div className="flex items-center gap-2 border-b border-[oklch(0.3_0.01_264)] bg-[oklch(0.149_0.008_264)] px-4 py-3">
+              <div className="flex gap-1.5">
+                <div className="h-3 w-3 rounded-full bg-[oklch(0.636_0.173_24/0.7)]" />
+                <div className="h-3 w-3 rounded-full bg-[oklch(0.82_0.16_84/0.7)]" />
+                <div className="h-3 w-3 rounded-full bg-[oklch(0.76_0.16_154/0.7)]" />
+              </div>
+              <span className="ml-4 text-xs text-[oklch(0.62_0.01_264)]">kubesynapse — console preview</span>
+            </div>
+
+            <AnimatePresence mode="wait">
+              <motion.div
+                key={activeTab}
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -8 }}
+                transition={{ duration: 0.3 }}
+                className="min-h-[380px] p-1 sm:min-h-[460px]"
+              >
+                <ConsoleShowcase activeTab={activeTab} />
+              </motion.div>
+            </AnimatePresence>
+          </motion.div>
+        </div>
       </div>
     </section>
   );
@@ -454,8 +462,8 @@ function UIPreviewSection() {
 
 function ConsoleShowcase({ activeTab }: { activeTab: "composer" | "agents" | "activity" | "observatory" }) {
   return (
-    <div className="flex h-[460px] overflow-hidden bg-[oklch(0.164_0.007_264)]">
-      <div className="flex w-[15.5rem] shrink-0 flex-col border-r border-[oklch(0.296_0.011_264)] bg-[oklch(0.149_0.008_264/0.92)] backdrop-blur-xl">
+    <div className="flex h-[380px] min-w-[920px] overflow-hidden bg-[oklch(0.164_0.007_264)] sm:h-[460px] sm:min-w-0">
+      <div className="flex w-[13rem] shrink-0 flex-col border-r border-[oklch(0.296_0.011_264)] bg-[oklch(0.149_0.008_264/0.92)] backdrop-blur-xl lg:w-[15.5rem]">
         <div className="flex h-10 items-center justify-between border-b border-[oklch(0.296_0.011_264)] px-2.5">
           <div className="min-w-0">
             <p className="text-[10px] font-medium uppercase tracking-[0.22em] text-[oklch(0.72_0.012_264)]">Workspace</p>
@@ -565,20 +573,20 @@ function ConsoleShowcase({ activeTab }: { activeTab: "composer" | "agents" | "ac
             </div>
           </div>
           <div className="ml-auto flex items-center gap-2">
-            <span className="inline-flex items-center gap-1.5 rounded-full border border-[oklch(0.76_0.16_154/0.2)] bg-[oklch(0.76_0.16_154/0.08)] px-2.5 py-1 text-[11px] font-medium text-[oklch(0.76_0.16_154)]">
+            <span className="hidden items-center gap-1.5 rounded-full border border-[oklch(0.76_0.16_154/0.2)] bg-[oklch(0.76_0.16_154/0.08)] px-2.5 py-1 text-[11px] font-medium text-[oklch(0.76_0.16_154)] sm:inline-flex">
               <span className="h-2 w-2 rounded-full bg-[oklch(0.76_0.16_154)]" />
               Healthy
             </span>
-            <span className="inline-flex h-9 items-center rounded-xl border border-[oklch(0.38_0.015_264)] bg-[oklch(0.206_0.009_264/0.72)] px-3 font-mono text-[11px] text-[oklch(0.958_0.004_264)]">
+            <span className="hidden h-9 items-center rounded-xl border border-[oklch(0.38_0.015_264)] bg-[oklch(0.206_0.009_264/0.72)] px-3 font-mono text-[11px] text-[oklch(0.958_0.004_264)] md:inline-flex">
               production
             </span>
-            <div className="h-9 w-9 rounded-xl border border-[oklch(0.38_0.015_264)] bg-[oklch(0.206_0.009_264/0.72)]" />
-            <div className="h-9 w-9 rounded-xl border border-[oklch(0.38_0.015_264)] bg-[oklch(0.206_0.009_264/0.72)]" />
+            <div className="hidden h-9 w-9 rounded-xl border border-[oklch(0.38_0.015_264)] bg-[oklch(0.206_0.009_264/0.72)] md:block" />
+            <div className="hidden h-9 w-9 rounded-xl border border-[oklch(0.38_0.015_264)] bg-[oklch(0.206_0.009_264/0.72)] xl:block" />
           </div>
         </div>
 
         <div className="flex min-h-0 flex-1">
-          <div className="flex min-w-0 flex-1 flex-col p-3">
+          <div className="flex min-w-0 flex-1 flex-col p-2 sm:p-3">
             {activeTab === "composer" && <FaithfulComposerPanel />}
             {activeTab === "agents" && <FaithfulAgentsPanel />}
             {activeTab === "activity" && <FaithfulActivityPanel />}
@@ -1023,7 +1031,7 @@ function FeaturesSection() {
   const inView = useInView(ref, { once: true, margin: "-80px" });
 
   return (
-    <section id="features" className="px-6 py-24 md:py-32" ref={ref}>
+    <section id="features" className="px-4 py-24 sm:px-6 md:py-32" ref={ref}>
       <div className="mx-auto max-w-7xl">
         <motion.div
           initial="hidden"
@@ -1034,7 +1042,7 @@ function FeaturesSection() {
           <motion.p variants={itemVariants} className="text-xs font-semibold uppercase tracking-widest text-[oklch(0.708_0.101_188)]">
             Platform Capabilities
           </motion.p>
-          <motion.h2 variants={itemVariants} className="mt-3 text-3xl font-bold tracking-tight text-[oklch(0.958_0.004_264)] sm:text-4xl md:text-5xl">
+          <motion.h2 variants={itemVariants} className="mt-3 text-2xl font-bold tracking-tight text-[oklch(0.958_0.004_264)] sm:text-4xl md:text-5xl">
             Everything Your Cluster <span className="text-[oklch(0.708_0.101_188)]">Needs</span>
           </motion.h2>
           <motion.p variants={itemVariants} className="mx-auto mt-4 max-w-2xl text-base text-[oklch(0.82_0.01_264)]">
@@ -1052,7 +1060,7 @@ function FeaturesSection() {
                 initial="hidden"
                 animate={inView ? "visible" : "hidden"}
                 transition={{ delay: i * 0.08 }}
-                className="group rounded-2xl border border-[oklch(0.3_0.01_264)] bg-[oklch(0.206_0.009_264/0.5)] p-7 backdrop-blur-sm transition-all hover:-translate-y-0.5 hover:border-[oklch(0.708_0.101_188/0.3)] hover:shadow-lg hover:shadow-[oklch(0.708_0.101_188/0.05)]"
+                className="group rounded-2xl border border-[oklch(0.3_0.01_264)] bg-[oklch(0.206_0.009_264/0.5)] p-6 backdrop-blur-sm transition-all hover:-translate-y-0.5 hover:border-[oklch(0.708_0.101_188/0.3)] hover:shadow-lg hover:shadow-[oklch(0.708_0.101_188/0.05)] sm:p-7"
               >
                 <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-xl bg-[oklch(0.708_0.101_188/0.1)] text-[oklch(0.708_0.101_188)] ring-1 ring-[oklch(0.708_0.101_188/0.2)] transition-colors group-hover:bg-[oklch(0.708_0.101_188/0.15)]">
                   <Icon className="h-5 w-5" />
@@ -1106,7 +1114,7 @@ function HowItWorks() {
   const inView = useInView(ref, { once: true, margin: "-80px" });
 
   return (
-    <section className="px-6 py-24 md:py-32" ref={ref}>
+    <section className="px-4 py-24 sm:px-6 md:py-32" ref={ref}>
       <div className="mx-auto max-w-7xl">
         <motion.div
           initial="hidden"
@@ -1117,7 +1125,7 @@ function HowItWorks() {
           <motion.p variants={itemVariants} className="text-xs font-semibold uppercase tracking-widest text-[oklch(0.708_0.101_188)]">
             How It Works
           </motion.p>
-          <motion.h2 variants={itemVariants} className="mt-3 text-3xl font-bold tracking-tight text-[oklch(0.958_0.004_264)] sm:text-4xl md:text-5xl">
+          <motion.h2 variants={itemVariants} className="mt-3 text-2xl font-bold tracking-tight text-[oklch(0.958_0.004_264)] sm:text-4xl md:text-5xl">
             From YAML to{" "}
             <span className="bg-gradient-to-r from-[oklch(0.708_0.101_188)] to-[oklch(0.742_0.132_233)] bg-clip-text text-transparent">
               Running Agent
@@ -1156,19 +1164,19 @@ function HowItWorks() {
                   </div>
                 )}
 
-                <div className="relative overflow-hidden rounded-2xl border border-[oklch(0.3_0.01_264)] bg-[oklch(0.206_0.009_264/0.5)] p-8 backdrop-blur-sm transition-all duration-300 hover:border-[oklch(0.708_0.101_188/0.3)] hover:shadow-lg hover:shadow-[oklch(0.708_0.101_188/0.05)] hover:-translate-y-1">
+                <div className="relative overflow-hidden rounded-2xl border border-[oklch(0.3_0.01_264)] bg-[oklch(0.206_0.009_264/0.5)] p-6 backdrop-blur-sm transition-all duration-300 hover:border-[oklch(0.708_0.101_188/0.3)] hover:shadow-lg hover:shadow-[oklch(0.708_0.101_188/0.05)] hover:-translate-y-1 sm:p-8">
                   {/* Step number badge */}
                   <div className="relative mb-6 flex items-center justify-between">
-                    <div className="flex h-14 w-14 items-center justify-center rounded-xl bg-[oklch(0.708_0.101_188/0.15)] text-[oklch(0.708_0.101_188)] shadow-lg shadow-[oklch(0.708_0.101_188/0.1)]">
-                      <Icon className="h-7 w-7" />
+                    <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-[oklch(0.708_0.101_188/0.15)] text-[oklch(0.708_0.101_188)] shadow-lg shadow-[oklch(0.708_0.101_188/0.1)] sm:h-14 sm:w-14">
+                      <Icon className="h-6 w-6 sm:h-7 sm:w-7" />
                     </div>
-                    <span className="text-5xl font-black text-[oklch(0.708_0.101_188/0.1)]">
+                    <span className="text-4xl font-black text-[oklch(0.708_0.101_188/0.1)] sm:text-5xl">
                       {step.num}
                     </span>
                   </div>
 
                   <div className="relative">
-                    <h3 className="text-xl font-bold text-[oklch(0.958_0.004_264)]">{step.title}</h3>
+                    <h3 className="text-lg font-bold text-[oklch(0.958_0.004_264)] sm:text-xl">{step.title}</h3>
                     <p className="mt-3 text-sm leading-relaxed text-[oklch(0.82_0.01_264)]">
                       {step.description}
                     </p>
@@ -1296,7 +1304,7 @@ function InstallSection() {
           <motion.p variants={itemVariants} className="text-xs font-semibold uppercase tracking-widest text-[oklch(0.708_0.101_188)]">
             Quick Start
           </motion.p>
-          <motion.h2 variants={itemVariants} className="mt-3 text-3xl font-bold tracking-tight text-[oklch(0.958_0.004_264)] sm:text-4xl md:text-5xl">
+          <motion.h2 variants={itemVariants} className="mt-3 text-2xl font-bold tracking-tight text-[oklch(0.958_0.004_264)] sm:text-4xl md:text-5xl">
             Deploy in <span className="text-[oklch(0.708_0.101_188)]">5 Minutes</span>
           </motion.h2>
           <motion.p variants={itemVariants} className="mx-auto mt-4 max-w-2xl text-base text-[oklch(0.82_0.01_264)]">
@@ -1312,7 +1320,7 @@ function InstallSection() {
           className="overflow-hidden rounded-xl border border-[oklch(0.3_0.01_264)] bg-[oklch(0.12_0.006_264)] shadow-2xl shadow-black/40 ring-1 ring-[oklch(0.25_0.01_264)]"
         >
           {/* Tabs */}
-          <div className="flex border-b border-[oklch(0.25_0.01_264)] bg-[oklch(0.149_0.008_264)]">
+          <div className="flex flex-wrap items-center border-b border-[oklch(0.25_0.01_264)] bg-[oklch(0.149_0.008_264)]">
             {tabs.map((tab) => {
               const Icon = tab.icon;
               const isActive = activeTab === tab.key;
@@ -1320,7 +1328,7 @@ function InstallSection() {
                 <button
                   key={tab.key}
                   onClick={() => setActiveTab(tab.key)}
-                  className={`flex items-center gap-2 px-5 py-3 text-sm font-medium transition-all ${
+                    className={`flex shrink-0 items-center gap-2 px-4 py-3 text-sm font-medium transition-all sm:px-5 ${
                     isActive
                       ? "bg-[oklch(0.12_0.006_264)] text-[oklch(0.708_0.101_188)] border-t-2 border-t-[oklch(0.708_0.101_188)]"
                       : "text-[oklch(0.62_0.01_264)] hover:text-[oklch(0.82_0.01_264)] hover:bg-[oklch(0.18_0.008_264)]"
@@ -1331,13 +1339,12 @@ function InstallSection() {
                 </button>
               );
             })}
-            <div className="flex-1" />
             <button
               onClick={() => {
                 const text = tabLines[activeTab].map((l) => `${l.prefix ? l.prefix + " " : ""}${l.text}`).join("\n");
                 navigator.clipboard.writeText(text).catch(() => {});
               }}
-              className="px-4 py-3 text-[oklch(0.4_0.01_264)] hover:text-[oklch(0.82_0.01_264)] transition-colors"
+              className="ml-auto px-4 py-3 text-[oklch(0.4_0.01_264)] transition-colors hover:text-[oklch(0.82_0.01_264)]"
               title="Copy to clipboard"
             >
               <Copy className="h-4 w-4" />
@@ -1348,7 +1355,7 @@ function InstallSection() {
           <AnimatePresence mode="wait">
             <motion.div
               key={activeTab}
-              className="p-5 font-mono text-[13px] leading-6"
+              className="overflow-x-auto p-4 font-mono text-[12px] leading-6 sm:p-5 sm:text-[13px]"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
@@ -1365,7 +1372,7 @@ function InstallSection() {
                   {line.text === "" ? (
                     <span>&nbsp;</span>
                   ) : (
-                    <span className={`whitespace-pre ${colorMap[line.color || "output"] || "text-[oklch(0.82_0.01_264)]"}`}>
+                    <span className={`whitespace-pre-wrap break-words sm:whitespace-pre ${colorMap[line.color || "output"] || "text-[oklch(0.82_0.01_264)]"}`}>
                       {line.prefix && (
                         <span className="select-none text-[oklch(0.76_0.16_154/0.8)]">{line.prefix} </span>
                       )}
@@ -1412,7 +1419,7 @@ function ArchitectureSection() {
   ];
 
   return (
-    <section id="architecture" className="border-y border-[oklch(0.3_0.01_264)] bg-[oklch(0.149_0.008_264/0.5)] px-6 py-24 md:py-32" ref={ref}>
+    <section id="architecture" className="border-y border-[oklch(0.3_0.01_264)] bg-[oklch(0.149_0.008_264/0.5)] px-4 py-24 sm:px-6 md:py-32" ref={ref}>
       <div className="mx-auto max-w-7xl">
         <motion.div
           initial="hidden"
@@ -1423,7 +1430,7 @@ function ArchitectureSection() {
           <motion.p variants={itemVariants} className="text-xs font-semibold uppercase tracking-widest text-[oklch(0.708_0.101_188)]">
             Architecture
           </motion.p>
-          <motion.h2 variants={itemVariants} className="mt-3 text-3xl font-bold tracking-tight text-[oklch(0.958_0.004_264)] sm:text-4xl md:text-5xl">
+          <motion.h2 variants={itemVariants} className="mt-3 text-2xl font-bold tracking-tight text-[oklch(0.958_0.004_264)] sm:text-4xl md:text-5xl">
             Built for <span className="text-[oklch(0.708_0.101_188)]">Production</span>
           </motion.h2>
           <motion.p variants={itemVariants} className="mx-auto mt-4 max-w-2xl text-base text-[oklch(0.82_0.01_264)]">
@@ -1480,7 +1487,7 @@ function DocsSection() {
   ];
 
   return (
-    <section id="docs" className="px-6 py-24 md:py-32" ref={ref}>
+    <section id="docs" className="px-4 py-24 sm:px-6 md:py-32" ref={ref}>
       <div className="mx-auto max-w-7xl">
         <motion.div
           initial="hidden"
@@ -1491,7 +1498,7 @@ function DocsSection() {
           <motion.p variants={itemVariants} className="text-xs font-semibold uppercase tracking-widest text-[oklch(0.708_0.101_188)]">
             Documentation
           </motion.p>
-          <motion.h2 variants={itemVariants} className="mt-3 text-3xl font-bold tracking-tight text-[oklch(0.958_0.004_264)] sm:text-4xl md:text-5xl">
+          <motion.h2 variants={itemVariants} className="mt-3 text-2xl font-bold tracking-tight text-[oklch(0.958_0.004_264)] sm:text-4xl md:text-5xl">
             Everything You Need to <span className="text-[oklch(0.708_0.101_188)]">Get Started</span>
           </motion.h2>
           <motion.p variants={itemVariants} className="mx-auto mt-4 max-w-2xl text-base text-[oklch(0.82_0.01_264)]">
@@ -1557,7 +1564,7 @@ function WhySection() {
   ];
 
   return (
-    <section className="border-y border-[oklch(0.3_0.01_264)] bg-[oklch(0.149_0.008_264/0.5)] px-6 py-24 md:py-32" ref={ref}>
+    <section className="border-y border-[oklch(0.3_0.01_264)] bg-[oklch(0.149_0.008_264/0.5)] px-4 py-24 sm:px-6 md:py-32" ref={ref}>
       <div className="mx-auto max-w-7xl">
         <motion.div
           initial="hidden"
@@ -1568,7 +1575,7 @@ function WhySection() {
           <motion.p variants={itemVariants} className="text-xs font-semibold uppercase tracking-widest text-[oklch(0.708_0.101_188)]">
             Why KubeSynapse
           </motion.p>
-          <motion.h2 variants={itemVariants} className="mt-3 text-3xl font-bold tracking-tight text-[oklch(0.958_0.004_264)] sm:text-4xl md:text-5xl">
+          <motion.h2 variants={itemVariants} className="mt-3 text-2xl font-bold tracking-tight text-[oklch(0.958_0.004_264)] sm:text-4xl md:text-5xl">
             Purpose-Built for{" "}
             <span className="bg-gradient-to-r from-[oklch(0.708_0.101_188)] to-[oklch(0.742_0.132_233)] bg-clip-text text-transparent">
               Production
@@ -1589,7 +1596,7 @@ function WhySection() {
                 initial="hidden"
                 animate={inView ? "visible" : "hidden"}
                 transition={{ delay: i * 0.1 }}
-                className="group flex gap-5 rounded-2xl border border-[oklch(0.3_0.01_264)] bg-[oklch(0.206_0.009_264/0.5)] p-7 backdrop-blur-sm transition-all hover:border-[oklch(0.708_0.101_188/0.3)] hover:shadow-lg hover:shadow-[oklch(0.708_0.101_188/0.05)]"
+                className="group flex flex-col gap-4 rounded-2xl border border-[oklch(0.3_0.01_264)] bg-[oklch(0.206_0.009_264/0.5)] p-6 backdrop-blur-sm transition-all hover:border-[oklch(0.708_0.101_188/0.3)] hover:shadow-lg hover:shadow-[oklch(0.708_0.101_188/0.05)] sm:flex-row sm:gap-5 sm:p-7"
               >
                 <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-[oklch(0.708_0.101_188/0.1)] text-[oklch(0.708_0.101_188)] ring-1 ring-[oklch(0.708_0.101_188/0.2)] transition-colors group-hover:bg-[oklch(0.708_0.101_188/0.15)]">
                   <Icon className="h-6 w-6" />
@@ -1611,19 +1618,19 @@ function WhySection() {
 
 function BottomCTA() {
   return (
-    <section className="px-6 py-24 md:py-32">
+    <section className="px-4 py-24 sm:px-6 md:py-32">
       <div className="mx-auto max-w-4xl text-center">
         <motion.div
           initial={{ opacity: 0, scale: 0.95 }}
           whileInView={{ opacity: 1, scale: 1 }}
           viewport={{ once: true }}
           transition={{ duration: 0.6 }}
-          className="rounded-3xl border border-[oklch(0.3_0.01_264)] bg-[oklch(0.206_0.009_264/0.5)] p-10 shadow-2xl shadow-[oklch(0.708_0.101_188/0.05)] backdrop-blur-sm md:p-16"
+          className="rounded-3xl border border-[oklch(0.3_0.01_264)] bg-[oklch(0.206_0.009_264/0.5)] p-6 shadow-2xl shadow-[oklch(0.708_0.101_188/0.05)] backdrop-blur-sm sm:p-8 md:p-16"
         >
           <div className="mx-auto mb-6 flex h-14 w-14 items-center justify-center rounded-2xl bg-[oklch(0.708_0.101_188)] text-[oklch(0.158_0.007_264)] shadow-lg shadow-[oklch(0.708_0.101_188/0.3)]">
             <Cpu className="h-7 w-7" />
           </div>
-          <h2 className="text-3xl font-bold tracking-tight text-[oklch(0.958_0.004_264)] sm:text-4xl md:text-5xl">
+          <h2 className="text-2xl font-bold tracking-tight text-[oklch(0.958_0.004_264)] sm:text-4xl md:text-5xl">
             Ready to <span className="text-[oklch(0.708_0.101_188)]">Automate</span>?
           </h2>
           <p className="mx-auto mt-4 max-w-xl text-base text-[oklch(0.82_0.01_264)]">
@@ -1633,14 +1640,16 @@ function BottomCTA() {
 
           {/* Inline install command */}
           <div className="mx-auto mt-8 max-w-lg overflow-hidden rounded-lg border border-[oklch(0.3_0.01_264)] bg-[oklch(0.12_0.006_264)]">
-            <div className="flex items-center justify-between px-4 py-2.5">
-              <code className="text-xs text-[oklch(0.75_0.12_188)]">
-                <span className="text-[oklch(0.76_0.16_154/0.8)]">$ </span>
-                helm install kubesynapse oci://docker.io/kubesynapse/charts/kubesynapse
-              </code>
+            <div className="flex flex-col gap-2 px-4 py-2.5 sm:flex-row sm:items-center sm:justify-between">
+              <div className="min-w-0 overflow-x-auto">
+                <code className="block whitespace-nowrap text-[11px] text-[oklch(0.75_0.12_188)] sm:text-xs">
+                  <span className="text-[oklch(0.76_0.16_154/0.8)]">$ </span>
+                  helm install kubesynapse oci://docker.io/kubesynapse/charts/kubesynapse
+                </code>
+              </div>
               <button
                 onClick={() => navigator.clipboard.writeText("helm install kubesynapse oci://docker.io/kubesynapse/charts/kubesynapse --namespace kubesynapse --create-namespace").catch(() => {})}
-                className="ml-2 text-[oklch(0.4_0.01_264)] hover:text-[oklch(0.82_0.01_264)] transition-colors"
+                className="self-end text-[oklch(0.4_0.01_264)] transition-colors hover:text-[oklch(0.82_0.01_264)] sm:ml-2 sm:self-auto"
                 title="Copy"
               >
                 <Copy className="h-3.5 w-3.5" />
@@ -1651,7 +1660,7 @@ function BottomCTA() {
           <div className="mt-8 flex flex-col items-center gap-4 sm:flex-row sm:justify-center">
             <a
               href="#install"
-              className="group flex items-center gap-2 rounded-xl bg-[oklch(0.708_0.101_188)] px-8 py-3.5 text-sm font-semibold text-[oklch(0.158_0.007_264)] shadow-lg shadow-[oklch(0.708_0.101_188/0.3)] transition-all hover:shadow-xl active:scale-[0.98]"
+              className="group flex w-full items-center justify-center gap-2 rounded-xl bg-[oklch(0.708_0.101_188)] px-8 py-3.5 text-sm font-semibold text-[oklch(0.158_0.007_264)] shadow-lg shadow-[oklch(0.708_0.101_188/0.3)] transition-all hover:shadow-xl active:scale-[0.98] sm:w-auto"
             >
               Deploy Now
               <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
@@ -1660,7 +1669,7 @@ function BottomCTA() {
               href="https://github.com/ykbytes/kubesynapse.ai"
               target="_blank"
               rel="noopener noreferrer"
-              className="flex items-center gap-2 rounded-xl border border-[oklch(0.4_0.015_264)] bg-[oklch(0.206_0.009_264/0.8)] px-8 py-3.5 text-sm font-semibold text-[oklch(0.85_0.01_264)] shadow-sm transition-all hover:border-[oklch(0.708_0.101_188/0.4)] hover:text-[oklch(0.958_0.004_264)]"
+              className="flex w-full items-center justify-center gap-2 rounded-xl border border-[oklch(0.4_0.015_264)] bg-[oklch(0.206_0.009_264/0.8)] px-8 py-3.5 text-sm font-semibold text-[oklch(0.85_0.01_264)] shadow-sm transition-all hover:border-[oklch(0.708_0.101_188/0.4)] hover:text-[oklch(0.958_0.004_264)] sm:w-auto"
             >
               <GitBranch className="h-4 w-4 text-[oklch(0.708_0.101_188)]" />
               View on GitHub
@@ -1676,7 +1685,7 @@ function BottomCTA() {
 
 function Footer() {
   return (
-    <footer className="border-t border-[oklch(0.3_0.01_264)] px-6 py-14">
+    <footer className="border-t border-[oklch(0.3_0.01_264)] px-4 py-14 sm:px-6">
       <div className="mx-auto max-w-7xl">
         <div className="grid gap-10 sm:grid-cols-2 lg:grid-cols-4">
           <div className="sm:col-span-2 lg:col-span-1">
@@ -1684,7 +1693,7 @@ function Footer() {
               <LayoutPanelTop className="h-5 w-5 text-[oklch(0.708_0.101_188)]" />
               <span className="text-sm font-bold text-[oklch(0.958_0.004_264)]">{BRAND.name}</span>
             </div>
-            <p className="mt-3 max-w-[260px] text-xs leading-relaxed text-[oklch(0.68_0.01_264)]">
+            <p className="mt-3 max-w-sm text-xs leading-relaxed text-[oklch(0.68_0.01_264)]">
               The AI-powered command center for Kubernetes operations.
               Self-hosted, open source under Apache 2.0.
             </p>
@@ -1768,7 +1777,7 @@ export function LandingPage({ onLogin: _onLogin }: LandingPageProps) {
         onSectionClick={handleSectionClick}
       />
       {view === "docs" ? (
-        <main id="main-content" className="h-[calc(100vh-4rem)]">
+        <main id="main-content" className="h-[calc(100dvh-4rem)]">
           <Suspense
             fallback={
               <div className="flex h-full items-center justify-center">

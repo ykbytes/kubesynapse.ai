@@ -51,7 +51,7 @@ const VIEW_META: Record<WorkspaceView, { label: string; icon: typeof Bot }> = {
   mcp: { label: "MCP Servers", icon: Plug },
   settings: { label: "Settings", icon: Settings },
   admin: { label: "Admin", icon: ShieldCheck },
-  observatory: { label: "Observatory", icon: Activity },
+  observatory: { label: "Execution Observatory", icon: Activity },
   docs: { label: "Documentation", icon: BookOpen },
   webhooks: { label: "Webhooks", icon: Webhook },
 };

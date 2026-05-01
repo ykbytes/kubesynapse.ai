@@ -231,6 +231,13 @@ def trigger_workflow(
                     "phase": "pending",
                     "observedGeneration": None,
                     "pendingApproval": None,
+                    "stepStates": None,
+                    "summary": None,
+                    "currentStep": "",
+                    "workerJob": None,
+                    "runId": None,
+                    "artifactRef": None,
+                    "journalRef": None,
                 }
             },
         )
