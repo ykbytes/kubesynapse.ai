@@ -1,0 +1,87 @@
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AgentWorkflow
+metadata:
+  name: observatory-demo
+  namespace: default
+spec:
+  description: >-
+    4-step Observatory demo: researches a topic from two angles sequentially,
+    synthesises findings, then reviews the final output.
+    Produces rich trace data (steps, LLM calls, execution waves).
+  input: "Explain how Kubernetes pod scheduling works and why bin-packing matters for cost optimization."
+  messageBus: in-memory
+  steps:
+    # ── Wave 1 ──────────────────────────────────────────────────────────
+    - name: research-architecture
+      type: agent
+      agentRef: minimax
+      dependsOn: []
+      prompt: >-
+        You are a Kubernetes architecture researcher.
+
+        Analyze the Kubernetes scheduler architecture: how the scheduling
+        framework works, what extension points exist (Filter, Score, Reserve,
+        Permit, Bind), and how the default plugins implement bin-packing vs
+        spreading.
+
+        Produce a structured analysis as JSON:
+        {"step":"research-architecture","sections":[{"title":"...","body":"..."}],"keyInsights":["..."],"done":true}
+      verify: "PASS if sections array has at least 2 entries and keyInsights is non-empty."
+      requireApproval: false
+
+    # ── Wave 2 ──────────────────────────────────────────────────────────
+    - name: research-cost
+      type: agent
+      agentRef: minimax
+      dependsOn: [research-architecture]
+      prompt: >-
+        You are a FinOps analyst specializing in Kubernetes cost optimization.
+
+        Research how bin-packing pod scheduling reduces cloud spend: node
+        utilization metrics, the role of requests vs limits, cluster
+        autoscaler interaction, and real-world savings benchmarks.
+
+        Produce a structured analysis as JSON:
+        {"step":"research-cost","findings":[{"metric":"...","impact":"..."}],"recommendations":["..."],"done":true}
+      verify: "PASS if findings array is non-empty and recommendations has at least 1 item."
+      requireApproval: false
+
+    # ── Wave 3 (merge) ──────────────────────────────────────────────────
+    - name: synthesize
+      type: agent
+      agentRef: minimax
+      dependsOn: [research-architecture, research-cost]
+      prompt: >-
+        You are a technical writer.
+
+        You have two research inputs:
+        1. Architecture analysis from the research-architecture step
+        2. Cost analysis from the research-cost step
+
+        Synthesize both into a single cohesive explanation (500-800 words)
+        covering how Kubernetes scheduling works AND why bin-packing matters
+        for cost. Use concrete examples and numbers where available.
+
+        Return JSON:
+        {"step":"synthesize","article":"<your article text>","wordCount":<int>,"sourcesUsed":["research-architecture","research-cost"],"done":true}
+      verify: "PASS if article field is non-empty and wordCount >= 200."
+      requireApproval: false
+
+    # ── Wave 4 (review) ─────────────────────────────────────────────────
+    - name: quality-review
+      type: review
+      agentRef: minimax
+      dependsOn: [synthesize]
+      prompt: >-
+        You are a senior technical reviewer.
+
+        Review the synthesized article for:
+        - Technical accuracy (Kubernetes scheduling concepts)
+        - Completeness (both architecture and cost angles covered)
+        - Clarity and readability
+        - Actionable recommendations
+
+        Return JSON:
+        {"step":"quality-review","score":8,"verdict":"approve","strengths":["..."],"improvements":["..."],"done":true}
+      verify: "PASS if score >= 5 and verdict is approve or revise."
+      requireApproval: false

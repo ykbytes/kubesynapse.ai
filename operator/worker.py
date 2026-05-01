@@ -554,13 +554,14 @@ def resume_workflow_state_from_artifact(
 ) -> tuple[bool, dict[str, Any], dict[str, Any], dict[str, Any], str]:
     artifact_generation_matches = artifact.get("generation") == generation
     status_step_states = dict(status.get("stepStates") or {})
-    preserved_status_progress = any(
-        isinstance(state, dict)
-        and str(state.get("status") or "").strip() not in {"", "pending"}
-        for state in status_step_states.values()
-    )
+    # §2.6 — Strict run_id match: the controller always passes
+    # WORKFLOW_RUN_ID to worker Jobs, so the artifact must match it.
+    # The old `preserved_status_progress` fallback is removed because it
+    # caused ghost runs: a race between the previous worker's final status
+    # patch and the trigger's status reset let stale stepStates survive,
+    # making the new worker believe the artifact was still valid.
     artifact_matches_generation = artifact_generation_matches and (
-        artifact.get("runId") == run_id or preserved_status_progress
+        artifact.get("runId") == run_id
     )
 
     if not artifact_matches_generation:
@@ -2808,25 +2809,31 @@ def run_workflow_worker() -> None:
 
     global _CURRENT_EXECUTION_ID  # noqa: PLW0603 — module-level used by nested funcs
 
+    # §2.6 — Detect "ghost" executions: if the artifact was loaded and ALL
+    # steps are already completed, this worker has nothing to do.  Skip trace
+    # reporting so the Observatory only shows real runs.
+    _is_ghost_run = artifact_matches_generation and len(completed) >= len(steps) and len(steps) > 0
+
     execution_id = ""
     try:
-        try:
-            execution_id = trace_client.start_execution(
-                namespace=TARGET_NAMESPACE,
-                workflow_name=TARGET_NAME,
-                agent_name=TARGET_NAME,
-                run_id=run_id,
-                inputs={"input": spec.get("input")},
-                triggered_by="workflow-worker",
-            )
-        except Exception:
-            logger.warning("Trace start_execution failed", exc_info=True)
-            execution_id = ""
-        if execution_id:
-            _CURRENT_EXECUTION_ID = execution_id
+        if not _is_ghost_run:
+            try:
+                execution_id = trace_client.start_execution(
+                    namespace=TARGET_NAMESPACE,
+                    workflow_name=TARGET_NAME,
+                    agent_name=TARGET_NAME,
+                    run_id=run_id,
+                    inputs={"input": spec.get("input")},
+                    triggered_by="workflow-worker",
+                )
+            except Exception:
+                logger.warning("Trace start_execution failed", exc_info=True)
+                execution_id = ""
+            if execution_id:
+                _CURRENT_EXECUTION_ID = execution_id
         logger.info(
-            "Trace state: execution_id=%s, artifact_matches=%s, completed=%d/%d, run_id=%s",
-            execution_id or "(none)", artifact_matches_generation, len(completed), len(steps), run_id,
+            "Trace state: execution_id=%s, artifact_matches=%s, completed=%d/%d, run_id=%s, ghost=%s",
+            execution_id or "(none)", artifact_matches_generation, len(completed), len(steps), run_id, _is_ghost_run,
         )
 
         # Compute execution waves for logging and progress visibility
@@ -2839,6 +2846,23 @@ def run_workflow_worker() -> None:
             {"runId": run_id, "waveCount": len(waves), "waves": wave_names},
         )
         logger.info("Computed %d execution waves for workflow '%s'", len(waves), TARGET_NAME)
+
+        # §2.6 — Ghost-run early exit: artifact loaded everything as already
+        # completed.  Nothing to execute.  Do NOT write a new artifact, do NOT
+        # patch CRD status (the previous worker already did both), and do NOT
+        # emit trace events.  Just release the lease and exit cleanly.
+        if _is_ghost_run:
+            logger.info(
+                "Ghost run detected for workflow '%s' (run_id=%s) — "
+                "all %d steps already completed from stale artifact.  Exiting early.",
+                TARGET_NAME, run_id, len(steps),
+            )
+            append_journal_event(
+                "workflow.ghost_run.skipped",
+                {"runId": run_id, "completedSteps": len(completed), "totalSteps": len(steps)},
+            )
+            return  # ← exits the try block; finally/lease-release still runs
+
         current_wave_index = 0
 
         def _execute_frontier_step(

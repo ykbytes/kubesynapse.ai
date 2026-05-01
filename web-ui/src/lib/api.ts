@@ -2900,10 +2900,14 @@ function parseStepTracePayload(payload: unknown, label = "StepTrace"): StepTrace
   const outputSummary = readOptionalJsonValue(record, "output_summary");
   return {
     id: readString(record, "id", label),
-    execution_id: readString(record, "execution_id", label),
+    execution_id: readOptionalString(record, "execution_id", label) ?? "",
     name: readString(record, "name", label, readString(record, "step_name", label, "")),
-    step_index: readOptionalNumber(record, "step_index", label),
-    step_type: readOptionalString(record, "step_type", label),
+    step_index:
+      readOptionalNumber(record, "step_index", label) ??
+      readOptionalNumber(record, "index", label),
+    step_type:
+      readOptionalString(record, "step_type", label) ??
+      readOptionalString(record, "type", label),
     parent_step_id: readOptionalString(record, "parent_step_id", label),
     status: readString(record, "status", label, "unknown"),
     started_at: readOptionalString(record, "started_at", label),
