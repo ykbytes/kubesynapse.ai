@@ -18,6 +18,10 @@ Each issue follows this pattern: **Symptoms -> Diagnosis -> Fix -> Prevention**
 - [Workflow Eval Failures](#workflow-eval-failures)
 - [Auth and OIDC Issues](#auth-and-oidc-issues)
 - [MCP Tool Not Available](#mcp-tool-not-available)
+- [Execution Observatory Shows No Data](#execution-observatory-shows-no-data)
+- [Workflow Logs Return "No Worker Pod Found"](#workflow-logs-return-no-worker-pod-found)
+- [Auth Page Shows Bootstrap When Users Exist](#auth-page-shows-bootstrap-when-users-exist)
+- [Web UI Changes Not Visible After Deploy](#web-ui-changes-not-visible-after-deploy)
 
 ---
 
@@ -708,5 +712,159 @@ kubectl patch agentpolicy <policy-name> -n <namespace> --type merge \
 
 ---
 
-**Last Updated:** April 27, 2026  
+**Last Updated:** May 3, 2026  
 **Platform Version:** 1.0.0
+
+---
+
+## Execution Observatory Shows No Data
+
+### Symptoms
+
+- Execution Observatory shows "No steps recorded" or "0 LLM, 0 tools" for a completed workflow
+- Stats show 0/5 steps, "—" duration
+- Event timeline is empty
+
+### Diagnosis
+
+```bash
+# Check if trace data reached the database
+kubectl exec -n kubesynapse deployment/kubesynapse-api-gateway -- python -c "
+import psycopg
+conn = psycopg.connect('host=kubesynapse-postgresql user=kubesynapse password=<pw> dbname=kubesynapse')
+cur = conn.cursor()
+cur.execute(\"SELECT COUNT(*) FROM execution_traces\")
+print('traces:', cur.fetchone()[0])
+"
+
+# Check if API gateway received batch requests
+kubectl logs -n kubesynapse deployment/kubesynapse-api-gateway --tail=30 | grep "/api/traces/batch"
+```
+
+Common causes:
+
+| Cause | Diagnosis | Fix |
+|---|---|---|
+| **Missing shared token** | `DEFAULT_API_GATEWAY_SHARED_TOKEN` env var empty on operator | Set via `kubectl set env` |
+| **Network policy blocks worker** | Worker pod cannot reach API gateway on port 8080 | Verify `kubesynapse-allow-worker-gateway-egress` network policy |
+| **Operator restarted** | Token lost after helm upgrade | Re-apply token after each upgrade |
+| **Old run** | Execution ran before trace pipeline was fixed | Re-run the workflow |
+
+### Fix — Apply Shared Token
+
+```bash
+kubectl set env deployment/kubesynapse-operator -n kubesynapse \
+  DEFAULT_API_GATEWAY_SHARED_TOKEN='<your-shared-token>'
+
+# Trigger a new workflow run to verify
+kubectl patch workflow <name> -n <namespace> --type merge \
+  -p '{"status":{"observedGeneration":0}}'
+```
+
+### Prevention
+
+- The helm chart template (`charts/kubesynapse/templates/operator-deployment.yaml`) now uses a direct `value:` for `DEFAULT_API_GATEWAY_SHARED_TOKEN` instead of `valueFrom: secretKeyRef` with `optional: true`
+- Verify after each helm upgrade: `kubectl get deployment kubesynapse-operator -n kubesynapse -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="DEFAULT_API_GATEWAY_SHARED_TOKEN")].value}'`
+
+---
+
+## Workflow Logs Return "No Worker Pod Found"
+
+### Symptoms
+
+- Observatory logs tab shows "No worker pod found for workflow job" or "unavailable"
+- Log source shows "archived" instead of "live-worker"
+- Worker logs exist in the pod but the API gateway can't find them
+
+### Diagnosis
+
+```bash
+# Check the worker pod exists and has logs
+kubectl get pods -n kubesynapse -l job-name=<job-name>
+kubectl logs -n kubesynapse <pod-name>
+
+# Verify API gateway can list pods in the operator namespace
+kubectl exec -n kubesynapse deployment/kubesynapse-api-gateway -- python -c "
+from kubernetes import client, config
+config.load_incluster_config()
+pods = client.CoreV1Api().list_namespaced_pod(namespace='kubesynapse', label_selector='job-name=<job-name>')
+print(len(pods.items), 'pods found')
+"
+```
+
+### Fix
+
+The API gateway was looking up worker pods in the workflow's namespace (e.g., `default`) instead of the operator's namespace (`kubesynapse`). This is fixed in API gateway v15+.
+
+If still seeing the issue, verify the gateway can load in-cluster Kubernetes config:
+
+```bash
+kubectl exec -n kubesynapse deployment/kubesynapse-api-gateway -- python -c "
+from kubernetes import config; config.load_incluster_config(); print('OK')
+"
+```
+
+---
+
+## Auth Page Shows Bootstrap When Users Exist
+
+### Symptoms
+
+- Auth page shows "Welcome — create the first admin account" banner
+- Tab shows "Create Account" instead of "Sign In"
+- Cannot switch to login mode
+- Previously created accounts cannot sign in
+
+### Diagnosis
+
+```bash
+# Check if users exist in the database
+kubectl exec -n kubesynapse deployment/kubesynapse-api-gateway -- python -c "
+import psycopg
+conn = psycopg.connect('host=kubesynapse-postgresql user=kubesynapse password=<pw> dbname=kubesynapse')
+cur = conn.cursor()
+cur.execute('SELECT COUNT(*) FROM users')
+print('users:', cur.fetchone()[0])
+"
+```
+
+If the count is 0, the PostgreSQL data was lost. This happens when the kind cluster node restarts (local-path-provisioner data on `tmpfs` is ephemeral).
+
+### Fix
+
+1. **Create a new admin account** using the bootstrap form
+2. **For production**: Use a persistent storage class for PostgreSQL (not `standard` / local-path)
+3. **For kind development**: Accept that data is ephemeral between Docker Desktop restarts
+
+```bash
+# Check PostgreSQL mount type
+kubectl exec -n kubesynapse pod/kubesynapse-postgresql-0 -- cat /proc/mounts | grep postgresql/data
+# If it shows "tmpfs", storage is NOT persistent
+```
+
+---
+
+## Web UI Changes Not Visible After Deploy
+
+### Symptoms
+
+- Deployed new web UI image but old UI still shows
+- JS/CSS bundle files unchanged despite new image
+- Hard refresh (Ctrl+Shift+R) needed every time
+
+### Diagnosis
+
+The nginx config in the web UI container sets immutable cache headers for `/assets`:
+
+```nginx
+add_header Cache-Control "public, immutable";
+```
+
+Browsers cache these assets for 1 year. After each deploy, the old cached bundles are served.
+
+### Fix
+
+1. **Hard refresh**: `Ctrl+Shift+R` (Chrome/Edge) or `Cmd+Shift+R` (Mac)
+2. **DevTools**: Network tab → "Disable cache" checkbox
+3. **Incognito window**: Always loads fresh assets
+4. **Cache-busting is automatic**: Each build produces new bundle filenames (e.g., `index-X9sjL0aj.js` → `index-D4b0WUm_.js`), so after hard refresh, the new files load correctly

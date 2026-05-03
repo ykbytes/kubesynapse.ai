@@ -6,6 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [Unreleased] - Sprint 10 (Observatory Pipeline Hardening & UI Fixes)
+
+### Fixed
+- **Trace Pipeline**:
+  - Fixed `DEFAULT_API_GATEWAY_SHARED_TOKEN` not propagating to worker jobs (workers couldn't auth to `/api/traces/batch`)
+  - Changed helm chart from `valueFrom: secretKeyRef` (optional) to direct `value:` for reliable token injection
+  - Fixed worker log endpoint looking up pods in workflow namespace instead of operator namespace (`kubesynapse`)
+  - Fixed `execution_id` missing from step, LLM call, and tool call records stored in `execution_traces` DB
+  - Fixed `latency_ms` not computed for steps — now calculated from `started_at` → `completed_at`
+  - Fixed per-step LLM/tool counts showing 0 — `_execution_trace_to_dict` now joins by `step_id`
+  - Fixed `step_index` hardcoded to 0 — worker no longer sends explicit index, backend auto-increments from `len(steps)`
+  - Fixed LLM calls not recorded for pi-runtime when metadata is not a dict
+- **Observatory UI**:
+  - Fixed tabs (Steps, Logs, Insights, Compare) not scrollable — added `flex-1 overflow-y-auto`
+  - Fixed observatory sidebar list not rendering in AppSidebar
+  - Made tool/LLM call parsers defensive against missing `execution_id` (old data compatibility)
+- **Auth Page**:
+  - Tab now shows "Create Account" during bootstrap instead of misleading "Sign In"
+  - Hidden broken "Sign in instead" toggle when no users exist (bootstrap mode)
+  - Restored "Open Console" button on local LandingPage (showLogin prop)
+
 ## [Unreleased] - Sprint 9 (Pi Runtime & Live Observability)
 
 ### Added
