@@ -103,7 +103,7 @@ class TraceClient:
         execution_id: str,
         step_name: str,
         step_type: str | None = None,
-        step_index: int = 0,
+        step_index: int | None = None,
         parent_step_id: str | None = None,
         inputs: dict[str, Any] | None = None,
     ) -> str:
