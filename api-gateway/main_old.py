@@ -4765,7 +4765,8 @@ def _resolve_workflow_run_trace_payload(
 
     if not logs and trace.get("worker_job_name"):
         try:
-            logs, pod_name = _read_workflow_job_logs(str(trace["worker_job_name"]), namespace, tail)
+            job_namespace = os.getenv("POD_NAMESPACE", "kubesynapse")
+            logs, pod_name = _read_workflow_job_logs(str(trace["worker_job_name"]), job_namespace, tail)
             source = "live-worker"
             if logs and persist_live_fallback:
                 with contextlib.suppress(Exception):
@@ -9587,6 +9588,7 @@ def _process_trace_events(execution_id: str, events: list[dict[str, Any]]) -> No
                 steps = list(row.steps_json or [])
                 steps.append({
                     "id": step_id,
+                    "execution_id": execution_id,
                     "name": payload.get("step_name", ""),
                     "type": payload.get("step_type", "agent"),
                     "index": payload.get("step_index", len(steps)),
@@ -9614,6 +9616,16 @@ def _process_trace_events(execution_id: str, events: list[dict[str, Any]]) -> No
                             s["output_preview"] = str(payload["outputs"])[:500]
                         if payload.get("error"):
                             s["error"] = str(payload["error"])[:500]
+                        started_at = s.get("started_at")
+                        completed_at = s.get("completed_at")
+                        if started_at and completed_at:
+                            from datetime import datetime as _dt
+                            try:
+                                st = _dt.fromisoformat(str(started_at))
+                                ct = _dt.fromisoformat(str(completed_at))
+                                s["latency_ms"] = int((ct - st).total_seconds() * 1000)
+                            except ValueError:
+                                pass
                         break
                 row.steps_json = steps
 
@@ -9626,6 +9638,7 @@ def _process_trace_events(execution_id: str, events: list[dict[str, Any]]) -> No
                 total_tokens = prompt_tokens + completion_tokens
                 llm_calls.append({
                     "id": f"llm-{uuid.uuid4().hex[:12]}",
+                    "execution_id": execution_id,
                     "step_id": step_id,
                     "model": payload.get("model", ""),
                     "provider": payload.get("provider"),
@@ -9649,6 +9662,7 @@ def _process_trace_events(execution_id: str, events: list[dict[str, Any]]) -> No
                 tool_calls = list(row.tool_calls_json or [])
                 tool_calls.append({
                     "id": f"tool-{uuid.uuid4().hex[:12]}",
+                    "execution_id": execution_id,
                     "step_id": step_id,
                     "tool_name": payload.get("tool_name", ""),
                     "tool_args": payload.get("tool_args"),

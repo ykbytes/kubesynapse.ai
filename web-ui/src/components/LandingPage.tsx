@@ -18,6 +18,7 @@ const DocumentationPanel = lazy(() =>
 
 interface LandingPageProps {
   onLogin: () => void;
+  showLogin?: boolean;
 }
 
 // ─── Animation Variants ───
@@ -72,11 +73,15 @@ function Navbar({
   docsMode,
   onBackToLanding,
   onSectionClick,
+  onLogin,
+  showLogin,
 }: {
   onOpenDocs: () => void;
   docsMode: boolean;
   onBackToLanding: () => void;
   onSectionClick: (sectionId: string) => void;
+  onLogin?: () => void;
+  showLogin?: boolean;
 }) {
   const [scrolled, setScrolled] = useState(false);
 
@@ -130,6 +135,15 @@ function Navbar({
               className="rounded-lg px-3 py-2 text-sm font-medium text-[oklch(0.82_0.01_264)] transition-colors hover:text-[oklch(0.958_0.004_264)]"
             >
               Back
+            </button>
+          )}
+          {showLogin && onLogin && (
+            <button
+              type="button"
+              onClick={onLogin}
+              className="rounded-lg bg-[oklch(0.708_0.101_188)] px-4 py-2 text-sm font-semibold text-[oklch(0.158_0.007_264)] shadow-lg shadow-[oklch(0.708_0.101_188/0.25)] transition-all hover:bg-[oklch(0.75_0.12_188)] hover:shadow-[oklch(0.708_0.101_188/0.4)]"
+            >
+              Open Console
             </button>
           )}
           <a
@@ -1745,7 +1759,7 @@ function Footer() {
 
 // ─── Main LandingPage ───
 
-export function LandingPage({ onLogin: _onLogin }: LandingPageProps) {
+export function LandingPage({ onLogin, showLogin }: LandingPageProps) {
   const [view, setView] = useState<"landing" | "docs">("landing");
 
   const handleSectionClick = useCallback((sectionId: string) => {
@@ -1775,6 +1789,8 @@ export function LandingPage({ onLogin: _onLogin }: LandingPageProps) {
         docsMode={view === "docs"}
         onBackToLanding={() => setView("landing")}
         onSectionClick={handleSectionClick}
+        onLogin={onLogin}
+        showLogin={showLogin}
       />
       {view === "docs" ? (
         <main id="main-content" className="h-[calc(100dvh-4rem)]">

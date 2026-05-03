@@ -2834,6 +2834,29 @@ def list_workflow_runs(
 
 
 def _execution_trace_to_dict(row: ExecutionTraceRow) -> dict[str, Any]:
+    steps = list(row.steps_json or [])
+    llm_calls = row.llm_calls_json or []
+    tool_calls = row.tool_calls_json or []
+    llm_by_step: dict[str, list] = {}
+    tool_by_step: dict[str, list] = {}
+    for llm in llm_calls:
+        sid = str(llm.get("step_id", ""))
+        llm_by_step.setdefault(sid, []).append(llm)
+    for tc in tool_calls:
+        sid = str(tc.get("step_id", ""))
+        tool_by_step.setdefault(sid, []).append(tc)
+    for s in steps:
+        sid = str(s.get("id", ""))
+        s["llm_calls"] = llm_by_step.get(sid, [])
+        s["tool_calls"] = tool_by_step.get(sid, [])
+        if "step_index" not in s and "index" in s:
+            s["step_index"] = s.get("index")
+        if s.get("llm_calls"):
+            s["prompt_tokens"] = sum(int(c.get("prompt_tokens", 0) or 0) for c in s["llm_calls"])
+            s["completion_tokens"] = sum(int(c.get("completion_tokens", 0) or 0) for c in s["llm_calls"])
+            s["tokens_used"] = s["prompt_tokens"] + s["completion_tokens"]
+        if s.get("tool_calls") and s.get("tool_call_count") is None:
+            s["tool_call_count"] = len(s["tool_calls"])
     return {
         "id": row.id,
         "workflow_name": row.workflow_name,
@@ -2851,9 +2874,9 @@ def _execution_trace_to_dict(row: ExecutionTraceRow) -> dict[str, Any]:
         "tool_call_count": row.tool_call_count or 0,
         "total_tokens": row.total_tokens or 0,
         "total_cost_usd": row.total_cost_usd,
-        "steps": row.steps_json or [],
-        "llm_calls": row.llm_calls_json or [],
-        "tool_calls": row.tool_calls_json or [],
+        "steps": steps,
+        "llm_calls": llm_calls,
+        "tool_calls": tool_calls,
         "events": row.events_json or [],
         "created_at": ensure_utc(row.created_at).isoformat() if row.created_at else None,
     }
@@ -2997,6 +3020,18 @@ def list_execution_traces(
 def get_execution_trace(trace_id: str) -> dict[str, Any] | None:
     with db_session() as session:
         row = session.query(ExecutionTraceRow).filter(ExecutionTraceRow.id == trace_id).one_or_none()
+        if row is None and str(trace_id).startswith("wf-run-"):
+            # Workflow run IDs may not have their own trace row; look up the
+            # actual exec- trace record that shares the same run_id.
+            row = (
+                session.query(ExecutionTraceRow)
+                .filter(
+                    ExecutionTraceRow.run_id == trace_id,
+                    ExecutionTraceRow.id.like("exec-%"),
+                )
+                .order_by(ExecutionTraceRow.started_at.desc().nullslast())
+                .first()
+            )
         if row is None:
             return None
         return _execution_trace_to_dict(row)

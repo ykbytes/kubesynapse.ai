@@ -135,7 +135,7 @@ export function AuthPage({ onBack }: AuthPageProps) {
                 className={`flex-1 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${activeTab === "password" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
                 onClick={() => setActiveTab("password")}
               >
-                Sign In
+                {isBootstrapping ? "Create Account" : "Sign In"}
               </button>
               <button
                 type="button"
@@ -160,7 +160,7 @@ export function AuthPage({ onBack }: AuthPageProps) {
                     <h2 className="text-lg font-semibold text-foreground">
                       {conn.registerMode ? "Create Account" : "Sign In"}
                     </h2>
-                    {passwordProviders.includes("local") && conn.authConfig?.registration_enabled && (
+                    {passwordProviders.includes("local") && conn.authConfig?.registration_enabled && !isBootstrapping && (
                       <Button
                         variant="ghost"
                         size="sm"

@@ -108,17 +108,19 @@ class TraceClient:
         inputs: dict[str, Any] | None = None,
     ) -> str:
         step_id = f"step-{uuid.uuid4().hex[:12]}"
+        payload: dict[str, Any] = {
+            "step_name": step_name,
+            "step_type": step_type,
+            "parent_step_id": parent_step_id,
+            "inputs": inputs,
+        }
+        if step_index is not None:
+            payload["step_index"] = step_index
         self._append_event(
             event_type="step_started",
             execution_id=execution_id,
             step_id=step_id,
-            payload={
-                "step_name": step_name,
-                "step_type": step_type,
-                "step_index": step_index,
-                "parent_step_id": parent_step_id,
-                "inputs": inputs,
-            },
+            payload=payload,
         )
         return step_id
 

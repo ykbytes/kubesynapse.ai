@@ -2847,7 +2847,7 @@ function parseLLMCallRecordPayload(payload: unknown, label = "LLMCallRecord"): L
   return {
     id: readString(record, "id", label),
     step_id: readOptionalString(record, "step_id", label),
-    execution_id: readString(record, "execution_id", label),
+    execution_id: readOptionalString(record, "execution_id", label) ?? "",
     model: readString(record, "model", label, ""),
     provider: readOptionalString(record, "provider", label),
     prompt_tokens: readOptionalNumber(record, "prompt_tokens", label) ?? 0,
@@ -2871,7 +2871,7 @@ function parseToolCallRecordPayload(payload: unknown, label = "ToolCallRecord"):
   return {
     id: readString(record, "id", label),
     step_id: readOptionalString(record, "step_id", label),
-    execution_id: readString(record, "execution_id", label),
+    execution_id: readOptionalString(record, "execution_id", label) ?? "",
     tool_name: readString(record, "tool_name", label, ""),
     args_preview:
       readOptionalString(record, "args_preview", label) ??

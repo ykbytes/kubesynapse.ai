@@ -1130,13 +1130,17 @@ def _emit_traces_from_result(result: dict[str, Any]) -> None:
                     duration_ms=tc.get("duration_ms") or tc.get("duration") or None,
                 )
         metadata = result.get("metadata") or {}
-        if isinstance(metadata, dict) and result.get("model"):
+        if not isinstance(metadata, dict):
+            metadata = {}
+        model = str(result.get("model") or metadata.get("model") or "")
+        response_text = str(result.get("response") or "")
+        if response_text:
             trace_client.record_llm_call(
                 execution_id=execution_id,
                 step_id=step_id,
-                model=str(result.get("model")),
+                model=model or "unknown",
                 prompt=str(result.get("prompt", "")),
-                response=str(result.get("response", "")),
+                response=response_text,
                 prompt_tokens=int(metadata.get("prompt_tokens") or metadata.get("promptTokens") or 0),
                 completion_tokens=int(metadata.get("completion_tokens") or metadata.get("completionTokens") or 0),
                 cost_usd=float(metadata.get("cost_usd") or metadata.get("costUsd") or 0.0) or None,
@@ -2880,7 +2884,6 @@ def run_workflow_worker() -> None:
                         execution_id=_CURRENT_EXECUTION_ID,
                         step_name=step_name,
                         step_type=step_type,
-                        step_index=0,
                         inputs={"step": step_name, "type": step_type},
                     )
                 except Exception:

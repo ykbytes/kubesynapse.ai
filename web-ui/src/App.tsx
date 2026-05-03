@@ -54,8 +54,8 @@ import { ChatProvider, useChat } from "./contexts/ChatContext";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import { NotificationProvider } from "./contexts/NotificationContext";
 
-import type { EvalInfo, UiMessage, WorkflowInfo, WorkspaceView } from "./types";
-import { cloneAgent, downloadAgentArtifact, downloadAgentArtifactZip, exportBundleUrl, importBundle, listAgentArtifacts, previewAgentArtifact } from "./lib/api";
+import type { EvalInfo, ExecutionListItem, UiMessage, WorkflowInfo, WorkspaceView } from "./types";
+import { cloneAgent, deleteExecution, downloadAgentArtifact, downloadAgentArtifactZip, exportBundleUrl, importBundle, listAgentArtifacts, listExecutions, previewAgentArtifact } from "./lib/api";
 import { toast } from "sonner";
 
 // ── Pure utility functions ──
@@ -96,6 +96,26 @@ function evalStatusFromResource(resource: EvalInfo | null): Record<string, unkno
 
 function supportsInspector(view: WorkspaceView): boolean {
   return view === "agents" || view === "chat" || view === "workflows" || view === "composer" || view === "evals";
+}
+
+function formatDuration(ms?: number | null): string {
+  if (ms == null || !Number.isFinite(ms)) return "—";
+  if (ms < 1000) return `${Math.round(ms)} ms`;
+  const seconds = ms / 1000;
+  if (seconds < 60) return `${seconds.toFixed(1)} s`;
+  const minutes = Math.floor(seconds / 60);
+  const rem = Math.round(seconds % 60);
+  return `${minutes}m ${rem}s`;
+}
+
+function executionToSidebarItem(e: ExecutionListItem): import("./components/AppSidebar").SidebarResourceItem {
+  return {
+    id: e.id,
+    title: e.workflow_name,
+    subtitle: e.agent_name || e.run_id || "",
+    status: e.status,
+    note: `${e.step_count} steps · ${formatDuration(e.duration_ms)}`,
+  };
 }
 
 // ── NotificationShell — NotificationProvider needs Connection values ──
@@ -198,12 +218,38 @@ function AppLayout() {
   const [showAuth, setShowAuth] = useState(false);
   const inspectorSupported = supportsInspector(ws.activeView);
 
+  // ── Observatory sidebar state ──
+  const [observatoryItems, setObservatoryItems] = useState<ExecutionListItem[]>([]);
+  const [observatorySelectedId, setObservatorySelectedId] = useState<string | null>(null);
+  const [observatoryLoading, setObservatoryLoading] = useState(false);
+
   // ⚠️  All hooks must be declared BEFORE any conditional returns (Rules of Hooks)
   useEffect(() => {
     if (!inspectorSupported && ws.inspectorOpen) {
       ws.setInspectorOpen(false);
     }
   }, [inspectorSupported, ws.inspectorOpen, ws.setInspectorOpen]);
+
+  // Fetch executions for Observatory sidebar
+  useEffect(() => {
+    if (ws.activeView !== "observatory") return;
+    let cancelled = false;
+    setObservatoryLoading(true);
+    listExecutions(conn.token, conn.namespace, { limit: 200 })
+      .then((result) => {
+        if (cancelled) return;
+        setObservatoryItems(result.items);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        toast.error("Failed to load executions");
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setObservatoryLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [ws.activeView, conn.token, conn.namespace]);
 
   const handleSidebarDeleteRequest = useCallback((id: string) => {
     setSidebarDeleteTarget({ id, view: ws.activeView });
@@ -273,7 +319,7 @@ function AppLayout() {
     }
     return (
       <Suspense fallback={<LoadingPanel />}>
-        <LandingPage onLogin={() => setShowAuth(true)} />
+        <LandingPage onLogin={() => setShowAuth(true)} showLogin={true} />
       </Suspense>
     );
   }
@@ -454,15 +500,29 @@ function AppLayout() {
               collapsed={ws.sidebarCollapsed}
               onToggleCollapse={() => ws.setSidebarCollapsed((prev) => !prev)}
               activeView={ws.activeView}
-              counts={ws.sidebarCounts}
-              items={ws.sidebarItems}
-              selectedId={ws.sidebarSelectedId}
-              loading={ws.catalogLoading}
-              emptyMessage={ws.emptySidebarMessage}
+              counts={ws.activeView === "observatory" ? { ...ws.sidebarCounts, observatory: observatoryItems.length } : ws.sidebarCounts}
+              items={ws.activeView === "observatory" ? observatoryItems.map(executionToSidebarItem) : ws.sidebarItems}
+              selectedId={ws.activeView === "observatory" ? (observatorySelectedId ?? "") : ws.sidebarSelectedId}
+              loading={ws.activeView === "observatory" ? observatoryLoading : ws.catalogLoading}
+              emptyMessage={ws.activeView === "observatory" ? "No executions recorded yet." : ws.emptySidebarMessage}
               isAdmin={conn.isAdmin}
               onViewChange={handleWorkspaceViewChange}
-              onRefresh={() => void ws.refreshWorkspaceData({ silent: false })}
-              onSelect={ws.handleSelectResource}
+              onRefresh={
+                ws.activeView === "observatory"
+                  ? () => {
+                      setObservatoryLoading(true);
+                      listExecutions(conn.token, conn.namespace, { limit: 200 })
+                        .then((result) => setObservatoryItems(result.items))
+                        .catch(() => toast.error("Failed to load executions"))
+                        .finally(() => setObservatoryLoading(false));
+                    }
+                  : () => void ws.refreshWorkspaceData({ silent: false })
+              }
+              onSelect={
+                ws.activeView === "observatory"
+                  ? (id) => setObservatorySelectedId(id)
+                  : ws.handleSelectResource
+              }
               onCreateNew={ws.handleCreateNew}
               onQuickRun={
                 ws.activeView === "agents"
@@ -485,7 +545,17 @@ function AppLayout() {
               onDeleteItem={
                 ws.activeView === "agents" || ws.activeView === "chat" || ws.activeView === "workflows" || ws.activeView === "composer" || ws.activeView === "evals"
                   ? handleSidebarDeleteRequest
-                  : undefined
+                  : ws.activeView === "observatory"
+                    ? (id) => {
+                        deleteExecution(conn.token, id)
+                          .then(() => {
+                            toast.success("Execution deleted");
+                            setObservatoryItems((prev) => prev.filter((e) => e.id !== id));
+                            if (observatorySelectedId === id) setObservatorySelectedId(null);
+                          })
+                          .catch(() => toast.error("Failed to delete execution"));
+                      }
+                    : undefined
               }
             />
           </SidebarShell>
@@ -824,7 +894,7 @@ function AppLayout() {
               </Tabs>
           ) : ws.activeView === "observatory" ? (
             <ContentShell>
-              <ExecutionObservatory />
+              <ExecutionObservatory selectedExecutionId={observatorySelectedId} sidebarMode={true} />
             </ContentShell>
           ) : ws.activeView === "docs" ? (
             <ContentShell>

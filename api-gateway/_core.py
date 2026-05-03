@@ -4868,7 +4868,8 @@ def _resolve_workflow_run_trace_payload(
 
     if not logs and trace.get("worker_job_name"):
         try:
-            logs, pod_name = _read_workflow_job_logs(str(trace["worker_job_name"]), namespace, tail)
+            job_namespace = os.getenv("POD_NAMESPACE", "kubesynapse")
+            logs, pod_name = _read_workflow_job_logs(str(trace["worker_job_name"]), job_namespace, tail)
             source = "live-worker"
             if logs and persist_live_fallback:
                 with contextlib.suppress(Exception):

@@ -6,6 +6,6 @@ import "./styles/globals.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <LandingPage onLogin={() => {}} />
+    <LandingPage onLogin={() => {}} showLogin={false} />
   </React.StrictMode>,
 );

@@ -312,15 +312,21 @@ function buildRunTraceNotice(runTrace: WorkflowRunTraceResponse | null): string 
   return null;
 }
 
-export function ExecutionObservatory() {
+interface ExecutionObservatoryProps {
+  selectedExecutionId?: string | null;
+  sidebarMode?: boolean;
+}
+
+export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, sidebarMode }: ExecutionObservatoryProps) {
   const { token, namespace } = useConnection();
   const { observatoryFocus, clearObservatoryFocus, navigateToResource } = useWorkspace();
   const executionListRequestIdRef = useRef(0);
+  const isSidebarMode = sidebarMode === true;
 
   const [executions, setExecutions] = useState<ExecutionListItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
-  const [selectedExecutionId, setSelectedExecutionId] = useState<string | null>(null);
+  const [selectedExecutionId, setSelectedExecutionId] = useState<string | null>(externalSelectedId ?? null);
   const [detail, setDetail] = useState<ExecutionTrace | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [activeTab, setActiveTab] = useState("steps");
@@ -394,6 +400,13 @@ export function ExecutionObservatory() {
       setFocusRequestAt(null);
     }
   }, [clearObservatoryFocus, executions, focusRequestAt, loading, observatoryFocus]);
+
+  // Sync with externally-controlled selection (sidebar mode)
+  useEffect(() => {
+    if (externalSelectedId !== undefined) {
+      setSelectedExecutionId(externalSelectedId);
+    }
+  }, [externalSelectedId]);
 
   useEffect(() => {
     if (!observatoryFocus || !focusRequestAt) return;
@@ -695,7 +708,8 @@ export function ExecutionObservatory() {
         </div>
       </div>
 
-      <div className="grid min-h-0 flex-1 gap-3 overflow-hidden xl:grid-cols-[340px_minmax(0,1fr)]">
+      <div className={cn("min-h-0 flex-1 gap-3 overflow-hidden", isSidebarMode ? "flex flex-col" : "grid xl:grid-cols-[340px_minmax(0,1fr)]")}>
+        {!isSidebarMode && (
         <div className="flex min-h-0 flex-col gap-3 overflow-hidden">
           <Card className="shrink-0 rounded-[1.75rem] bg-card/55">
             <CardContent className="space-y-2 p-3">
@@ -831,6 +845,7 @@ export function ExecutionObservatory() {
             </CardContent>
           </Card>
         </div>
+        )}
 
         <div className="flex min-h-0 flex-col gap-3 overflow-hidden">
           {detailLoading && (
@@ -929,15 +944,15 @@ export function ExecutionObservatory() {
                 </CardContent>
               </Card>
 
-              <Tabs value={activeTab} onValueChange={setActiveTab} className="min-h-0 flex-1">
-                <TabsList className="h-auto flex-wrap gap-1 rounded-2xl bg-card/55 p-1">
+              <Tabs value={activeTab} onValueChange={setActiveTab} className="min-h-0 flex-1 flex flex-col overflow-hidden">
+                <TabsList className="h-auto flex-wrap gap-1 rounded-2xl bg-card/55 p-1 shrink-0">
                   <TabsTrigger value="steps" className="text-xs">Steps</TabsTrigger>
                   <TabsTrigger value="logs" className="text-xs">Logs</TabsTrigger>
                   <TabsTrigger value="insights" className="text-xs">Insights</TabsTrigger>
                   <TabsTrigger value="compare" className="text-xs">Compare</TabsTrigger>
                 </TabsList>
 
-                <TabsContent value="steps" className="mt-3 min-h-0 space-y-3">
+                <TabsContent value="steps" className="mt-3 min-h-0 flex-1 overflow-y-auto space-y-3">
                   {/* Analysis summary */}
                   <div className="rounded-2xl border border-border/60 bg-background/50 p-4 text-sm text-foreground">
                     {traceability.analysis}
@@ -1078,8 +1093,8 @@ export function ExecutionObservatory() {
 
                 {/* Events tab removed — chronology moved to Steps tab */}
 
-                <TabsContent value="logs" className="mt-3 min-h-0">
-                  <Card className="rounded-[1.75rem] bg-card/55">
+                <TabsContent value="logs" className="mt-3 min-h-0 flex-1 overflow-hidden flex flex-col">
+                  <Card className="rounded-[1.75rem] bg-card/55 flex flex-col flex-1 min-h-0 overflow-hidden">
                     <CardHeader className="pb-3">
                       <div className="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
                         <div>
@@ -1147,7 +1162,7 @@ export function ExecutionObservatory() {
                       )}
 
                       <div className="rounded-2xl border border-border/60 bg-background/50">
-                        <ScrollArea className="h-[28rem]">
+                        <ScrollArea className="flex-1 min-h-0">
                           <div className="space-y-1.5 p-3 font-mono text-[11px] leading-relaxed">
                             {!runTraceLoading && filteredLogLines.length === 0 && (
                               <div className="py-12 text-center text-xs text-muted-foreground">
@@ -1174,7 +1189,7 @@ export function ExecutionObservatory() {
                   </Card>
                 </TabsContent>
 
-                <TabsContent value="insights" className="mt-3 min-h-0 space-y-3">
+                <TabsContent value="insights" className="mt-3 min-h-0 flex-1 overflow-y-auto space-y-3">
                   {/* Aggregate metrics */}
                   <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                     <MetricCard icon={BrainCircuit} label="LLM Calls" value={`${detail.llm_call_count}`} subtitle={`${detail.total_tokens} tokens`} />
@@ -1265,7 +1280,7 @@ export function ExecutionObservatory() {
                   </Card>
                 </TabsContent>
 
-                <TabsContent value="compare" className="mt-3 min-h-0">
+                <TabsContent value="compare" className="mt-3 min-h-0 flex-1 overflow-y-auto">
                   <Card className="rounded-[1.75rem] bg-card/55">
                     <CardHeader className="pb-3">
                       <CardTitle className="text-sm">Compare Executions</CardTitle>
