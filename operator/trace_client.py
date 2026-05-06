@@ -258,7 +258,7 @@ class TraceClient:
             self.flush()
 
     def _post_batch(self, batch: list[dict[str, Any]]) -> None:
-        url = f"{self._gateway_url}/api/traces/batch"
+        url = f"{self._gateway_url}/api/v1/traces/batch"
         headers: dict[str, str] = {"Content-Type": "application/json"}
         if self._token:
             headers["Authorization"] = f"Bearer {self._token}"

@@ -1,10 +1,12 @@
 # kubesynapse — Kind/Local Kubernetes Deployment Values
 # 
 # Usage:
-#   kind load docker-image kubesynapse-api-gateway:latest
-#   kind load docker-image kubesynapse-web-ui:latest
-#   kind load docker-image kubesynapse-operator:latest
-#   kind load docker-image kubesynapse-opencode-rt:latest
+#   kind load docker-image kubesynapse/kubesynapse-api-gateway:v2.1.0-run-intelligence --name desktop
+#   kind load docker-image kubesynapse/kubesynapse-web-ui:v2.1.0-run-intelligence --name desktop
+#   kind load docker-image kubesynapse/kubesynapse-operator:v2.1.0-run-intelligence --name desktop
+#   kind load docker-image kubesynapse/kubesynapse-opencode-rt:v2.1.0-run-intelligence --name desktop
+#   kind load docker-image kubesynapse/kubesynapse-pi-rt:v2.1.0-run-intelligence --name desktop
+#   kind load docker-image kubesynapse/kubesynapse-vibe-rt:v2.1.0-run-intelligence --name desktop
 #   helm upgrade --install kubesynapse ./charts/kubesynapse -n kubesynapse --create-namespace -f deploy/values.kind.yaml
 
 global:
@@ -18,12 +20,12 @@ operator:
   enabled: true
   replicaCount: 1
   image:
-    repository: kubesynapse-operator
-    tag: latest
+    repository: kubesynapse/kubesynapse-operator
+    tag: v2.1.0-run-intelligence
     pullPolicy: Never
   workerImage:
-    repository: kubesynapse-operator
-    tag: latest
+    repository: kubesynapse/kubesynapse-operator
+    tag: v2.1.0-run-intelligence
     pullPolicy: Never
   resources:
     requests:
@@ -40,13 +42,23 @@ operator:
       cpu: "500m"
       memory: "512Mi"
   stateDbEnabled: true
+  signalWatch:
+    enabled: true
+    intervalSeconds: 60
+    thresholds:
+      highFailureRate: 0.3
+      errorSpikeCount: 3
+      errorSpikeWindowMinutes: 15
+      costOutlierMultiplier: 3.0
+      tokenSpikeMultiplier: 3.0
+      stuckRunDurationMultiplier: 2.0
 
 apiGateway:
   enabled: true
   replicaCount: 1
   image:
-    repository: kubesynapse-api-gateway
-    tag: latest
+    repository: kubesynapse/kubesynapse-api-gateway
+    tag: v2.1.0-run-intelligence
     pullPolicy: Never
   ingress:
     enabled: false
@@ -69,8 +81,8 @@ webUi:
   enabled: true
   replicaCount: 1
   image:
-    repository: kubesynapse-web-ui
-    tag: latest
+    repository: kubesynapse/kubesynapse-web-ui
+    tag: v2.1.3-landing-fix
     pullPolicy: Never
   service:
     type: ClusterIP
@@ -87,8 +99,8 @@ webUi:
 
 opencodeRuntime:
   image:
-    repository: kubesynapse-opencode-rt
-    tag: v1.0.4
+    repository: kubesynapse/kubesynapse-opencode-rt
+    tag: v2.1.0-run-intelligence
     pullPolicy: Never
   provider: litellm
   limits:
@@ -106,6 +118,25 @@ opencodeRuntime:
     planThresholdChars: 4096
     structuredOutputRetryCount: 3
 
+piRuntime:
+  image:
+    repository: kubesynapse/kubesynapse-pi-rt
+    tag: v2.1.0-run-intelligence
+    pullPolicy: Never
+  provider: ""
+  model: "anthropic/claude-sonnet-4-20250514"
+  thinkingLevel: "medium"
+  tools: []
+  noSession: false
+  permissionLevel: "permissive"
+  env: {}
+
+mistralVibeRuntime:
+  image:
+    repository: kubesynapse/kubesynapse-vibe-rt
+    tag: v2.1.0-run-intelligence
+    pullPolicy: Never
+
 # ---------------------------------------------------------------------------
 # Dependencies
 # ---------------------------------------------------------------------------
@@ -116,7 +147,7 @@ postgresql:
     tag: 16-alpine
     pullPolicy: IfNotPresent
   persistence:
-    size: 2Gi
+    size: 8Gi
     storageClassName: ""
   resources:
     requests:
@@ -317,3 +348,59 @@ telemetry:
   otlpEndpoint: ""
   serviceMonitor:
     enabled: false
+
+# ---------------------------------------------------------------------------
+# Run Intelligence Layer — System Agents
+# ---------------------------------------------------------------------------
+systemAgents:
+  enabled: true
+  namespace: "kubesynapse-system"
+  defaultModel: "gpt-4o-mini"
+  defaultRuntime: "opencode"
+
+  runInspector:
+    enabled: true
+    model: ""
+    runtime: ""
+    description: "Investigates failed workflow runs and anomalous execution patterns."
+    triggers:
+      minFailureRate: 0.3
+      minErrorCount: 3
+    resources:
+      requests:
+        cpu: "50m"
+        memory: "128Mi"
+      limits:
+        cpu: "500m"
+        memory: "512Mi"
+
+  signalSummarizer:
+    enabled: true
+    model: ""
+    runtime: ""
+    description: "Summarizes deterministic anomaly signals into human-readable incident briefs."
+    triggers:
+      maxSignalAgeMinutes: 30
+    resources:
+      requests:
+        cpu: "50m"
+        memory: "128Mi"
+      limits:
+        cpu: "500m"
+        memory: "512Mi"
+
+  spendReviewer:
+    enabled: true
+    model: ""
+    runtime: ""
+    description: "Reviews token/cost spend anomalies across agents and namespaces."
+    triggers:
+      costThresholdUsd: 10.0
+      tokenSpikeMultiplier: 3.0
+    resources:
+      requests:
+        cpu: "50m"
+        memory: "128Mi"
+      limits:
+        cpu: "500m"
+        memory: "512Mi"

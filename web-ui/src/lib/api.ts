@@ -104,6 +104,7 @@ import type {
 } from "../types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL?.trim() ?? "";
+const API_PATH_PREFIX = "/api/v1";
 type JsonRecord = Record<string, unknown>;
 
 // ── Structured API error ──
@@ -262,7 +263,12 @@ let _refreshPromise: Promise<AuthSession> | null = null;
 
 function buildUrl(path: string, namespace?: string): string {
   const baseUrl = API_BASE_URL || window.location.origin;
-  const url = new URL(path, baseUrl);
+  const normalizedPath = path.startsWith("/api/v1")
+    ? path
+    : path.startsWith("/api/")
+      ? `${API_PATH_PREFIX}${path.slice(4)}`
+      : path;
+  const url = new URL(normalizedPath, baseUrl);
   if (namespace) {
     url.searchParams.set("namespace", namespace);
   }
@@ -2918,6 +2924,8 @@ function parseStepTracePayload(payload: unknown, label = "StepTrace"): StepTrace
     error: readOptionalString(record, "error", label) ?? readOptionalString(record, "error_message", label),
     tokens_used: readOptionalNumber(record, "tokens_used", label),
     cost_usd: readOptionalNumber(record, "cost_usd", label),
+    llm_call_count: readOptionalNumber(record, "llm_calls_count", label) ?? 0,
+    tool_call_count: readOptionalNumber(record, "tool_calls_count", label) ?? 0,
     llm_calls: Array.isArray(rawLlmCalls)
       ? rawLlmCalls.map((item, index) => parseLLMCallRecordPayload(item, `${label}.llm_calls[${index}]`))
       : [],

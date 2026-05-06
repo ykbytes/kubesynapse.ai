@@ -94,3 +94,67 @@
 
 - Generated bundles must be explainable, auditable, and operationally useful.
 - The user should gain leverage they would not get from manually writing a few basic prompts in a generic coding assistant.
+
+---
+
+## Agent Team
+
+All agents use the **qwen3.6-plus** model for consistency and quality.
+
+| Agent | Role | Specialties |
+|-------|------|-------------|
+| `kubesynth-scrum-master` | Autonomous orchestrator | Sprint management, delegation, verification |
+| `kubesynth-bug-hunter` | Bug Hunter & QA | pytest, debugging, performance profiling, chaos engineering |
+| `kubesynth-security-guardian` | Security Auditor | OWASP, CIS benchmarks, mTLS, JWT, RBAC, secret scanning |
+| `kubesynth-prod-engineer` | Production Engineer & SRE | Kubernetes SRE, observability, performance tuning |
+| `kubesynth-ui-artist` | UI/UX Designer | React 18, Tailwind CSS v4, Radix UI, Framer Motion, WCAG 2.1 AA |
+| `kubesynth-backend-refactorer` | Backend Architect | FastAPI, SQLAlchemy, OpenAPI, Python type annotations |
+| `kubesynth-docs-storyteller` | Documentation Specialist | Technical writing, Mermaid diagrams, API documentation |
+| `kubesynth-landing-magician` | Landing Page Specialist | Modern SaaS design, scroll animations, conversion optimization |
+
+---
+
+## Runtime API Contract
+
+All runtimes MUST implement the API contract defined in:
+- **OpenAPI Spec:** `docs/runtime-api-spec.yaml`
+- **Documentation:** `docs/runtime-api-spec.md`
+
+### API Tiers
+
+| Tier | Endpoints | Required For |
+|------|-----------|-------------|
+| **Core** | `/health`, `/ready`, `/info`, `/capabilities`, `/invoke`, `/invoke/stream`, `/cancel` | All production runtimes |
+| **Session** | `/todo`, `/question`, `/question/{id}/reply`, `/question/{id}/reject`, `/diff`, `/context-budget` | Agent runtimes with session management |
+| **Artifacts** | `/artifacts/list`, `/artifacts/download`, `/artifacts/zip` | Runtimes with workspace/file access |
+| **Streaming** | `/invoke/stream`, `/events` | Runtimes supporting real-time UI |
+
+### SSE Event Taxonomy
+
+All streaming runtimes MUST emit events using this canonical taxonomy:
+
+| Event | Payload | Description |
+|-------|---------|-------------|
+| `response.started` | `{session_id, model, thread_id}` | Session started |
+| `response.delta` | `{text, session_id}` | Incremental text token |
+| `response.tool_call` | `{name, args, id, session_id}` | Tool call initiated |
+| `response.tool_result` | `{id, result, status, session_id}` | Tool call completed |
+| `todo.updated` | `{todos, session_id}` | Todo list changed |
+| `question.asked` | `{id, question, options, session_id}` | Human approval required |
+| `todo.cleared` | `{session_id}` | Todo list cleared |
+| `response.completed` | `{session_id, tokens, status, finish_reason}` | Session completed |
+| `response.error` | `{session_id, error, code}` | Session failed |
+
+---
+
+## Roadmap
+
+See `docs/ROADMAP.md` for the complete sprint backlog and timeline.
+
+### Current Priorities
+
+1. **API Contract Enforcement** — All runtimes must pass conformance tests
+2. **Reliability & Observability** — Distributed tracing, rate limiting, circuit breakers
+3. **Security & Compliance** — mTLS, RBAC, audit logging, secret management
+4. **Developer Experience** — SDK, runtime template, documentation portal
+5. **Production Hardening** — Performance benchmarking, chaos engineering, multi-cluster

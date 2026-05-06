@@ -82,6 +82,12 @@ init_tracing = worker_tracing.init_tracing
 TraceClient = LOCAL_WORKER_MODULES["trace_client"].TraceClient
 worker_config = LOCAL_WORKER_MODULES["config"]
 
+try:
+    import runtime_events as _runtime_events_mod
+    runtime_events = _runtime_events_mod
+except ImportError:
+    runtime_events = None  # type: ignore[assignment]
+
 # ---------------------------------------------------------------------------
 # §8.1 — Structured JSON logging
 # ---------------------------------------------------------------------------
@@ -103,6 +109,10 @@ trace_client = TraceClient(
     flush_interval_sec=worker_config.WORKER_TRACE_FLUSH_INTERVAL_SEC,
     enabled=worker_config.WORKER_TRACE_ENABLED,
 )
+
+# Start runtime event emitter (Run Intelligence Layer)
+if runtime_events is not None:
+    runtime_events.start_emitter()
 
 _CURRENT_EXECUTION_ID: str | None = None
 _trace_context = threading.local()
@@ -171,6 +181,8 @@ def is_shutting_down() -> bool:
 def _worker_sigterm_handler(signum: int, _frame: object) -> None:
     """Mark worker as shutting down on SIGTERM."""
     _shutting_down.set()
+    if runtime_events is not None:
+        runtime_events.stop_emitter()
     logger.info("Received signal %s — worker shutdown initiated.", signum)
 
 
@@ -1241,6 +1253,21 @@ def execute_workflow_step(
         )
         try:
             wait_for_agent_runtime_ready(agent_ref, TARGET_NAMESPACE)
+            if runtime_events is not None:
+                runtime_events.emit_step_started(
+                    execution_id=getattr(_trace_context, "execution_id", ""),
+                    step_name=step_name,
+                    agent_ref=agent_ref,
+                    attempt=attempt,
+                    thread_id=thread_id,
+                )
+                runtime_events.emit_agent_call(
+                    execution_id=getattr(_trace_context, "execution_id", ""),
+                    caller_agent=TARGET_NAME,
+                    target_agent=agent_ref,
+                    status="started",
+                    thread_id=thread_id,
+                )
             invoke_payload: dict[str, Any] = {
                     "prompt": effective_prompt,
                     "thread_id": thread_id,
@@ -1282,6 +1309,40 @@ def execute_workflow_step(
                 result.get("status", "completed") or "completed"
             )
             completed_at = now_iso()
+
+            if runtime_events is not None:
+                exec_id = getattr(_trace_context, "execution_id", "")
+                metadata = result.get("metadata") or {}
+                total_tokens = int(metadata.get("total_tokens") or metadata.get("context_budget", {}).get("total_tokens") or 0)
+                cost_usd = float(metadata.get("cost_usd") or metadata.get("costUsd") or 0.0) or None
+                runtime_events.emit_agent_call(
+                    execution_id=exec_id,
+                    caller_agent=TARGET_NAME,
+                    target_agent=agent_ref,
+                    status="completed",
+                    thread_id=thread_id,
+                    duration_ms=latency_ms,
+                )
+                runtime_events.emit_step_completed(
+                    execution_id=exec_id,
+                    step_name=step_name,
+                    status=result_status,
+                    thread_id=thread_id,
+                    total_tokens=total_tokens,
+                    cost_usd=cost_usd,
+                    duration_ms=latency_ms,
+                )
+                for tc in result.get("tool_calls") or []:
+                    if isinstance(tc, dict):
+                        runtime_events.emit_tool_call(
+                            execution_id=exec_id,
+                            tool_name=tc.get("tool") or tc.get("name") or "unknown",
+                            tool_args=tc.get("input") or tc.get("args"),
+                            status=tc.get("status") or "completed",
+                            thread_id=thread_id,
+                            step_name=step_name,
+                            duration_ms=tc.get("duration_ms") or tc.get("duration"),
+                        )
 
             if result_status == "approval_pending":
                 approval_payload = {
@@ -1551,6 +1612,24 @@ def execute_workflow_step(
                     "failureClass": failure_class,
                 },
             )
+            if runtime_events is not None:
+                exec_id = getattr(_trace_context, "execution_id", "")
+                runtime_events.emit_agent_call(
+                    execution_id=exec_id,
+                    caller_agent=TARGET_NAME,
+                    target_agent=agent_ref,
+                    status="failed",
+                    thread_id=thread_id,
+                    duration_ms=latency_ms,
+                )
+                runtime_events.emit_step_failed(
+                    execution_id=exec_id,
+                    step_name=step_name,
+                    error=error_text[:2048],
+                    failure_class=failure_class,
+                    thread_id=thread_id,
+                    duration_ms=latency_ms,
+                )
             should_retry = (
                 bool(execution_policy["retryable"])
                 and attempt < int(execution_policy["maxAttempts"])
@@ -2720,6 +2799,11 @@ def run_workflow_worker() -> None:
     metadata = resource.get("metadata", {})
     status = resource.get("status", {}) or {}
     steps = spec.get("steps") or []
+    step_order = {
+        str(step.get("name", "")).strip(): index
+        for index, step in enumerate(steps)
+        if str(step.get("name", "")).strip()
+    }
     graph = validate_workflow_graph(steps)
 
     generation = int(metadata.get("generation", 1))
@@ -2835,6 +2919,13 @@ def run_workflow_worker() -> None:
                 execution_id = ""
             if execution_id:
                 _CURRENT_EXECUTION_ID = execution_id
+                if runtime_events is not None:
+                    runtime_events.emit_workflow_started(
+                        execution_id=execution_id,
+                        workflow_name=TARGET_NAME,
+                        namespace=TARGET_NAMESPACE,
+                        run_id=run_id,
+                    )
         logger.info(
             "Trace state: execution_id=%s, artifact_matches=%s, completed=%d/%d, run_id=%s, ghost=%s",
             execution_id or "(none)", artifact_matches_generation, len(completed), len(steps), run_id, _is_ghost_run,
@@ -2884,6 +2975,7 @@ def run_workflow_worker() -> None:
                         execution_id=_CURRENT_EXECUTION_ID,
                         step_name=step_name,
                         step_type=step_type,
+                        step_index=step_order.get(step_name),
                         inputs={"step": step_name, "type": step_type},
                     )
                 except Exception:
@@ -3342,6 +3434,13 @@ def run_workflow_worker() -> None:
                 )
             except Exception:
                 logger.warning("Trace end_execution failed", exc_info=True)
+            if runtime_events is not None:
+                runtime_events.emit_workflow_completed(
+                    execution_id=execution_id,
+                    workflow_name=TARGET_NAME,
+                    status="completed",
+                    duration_ms=int((time.time() - parse_iso_timestamp(started_at) or time.time()) * 1000),
+                )
         append_journal_event(
             "workflow.completed",
             {"runId": run_id, "completedAt": completed_at},
@@ -3370,6 +3469,12 @@ def run_workflow_worker() -> None:
                 )
             except Exception:
                 logger.warning("Trace end_execution failed", exc_info=True)
+            if runtime_events is not None:
+                runtime_events.emit_workflow_error(
+                    execution_id=execution_id,
+                    workflow_name=TARGET_NAME,
+                    error=str(exc)[:2048],
+                )
         _patch_pending_approval_label(None)
         failed_at = now_iso()
         failure_payload = workflow_snapshot(

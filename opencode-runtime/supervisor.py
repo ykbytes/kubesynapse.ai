@@ -14,7 +14,6 @@ from typing import Any
 
 import httpx
 from config import (
-    DEFAULT_PROVIDER,
     HOME_DIR,
     LITELLM_API_KEY,
     OPENCODE_BIN,
@@ -29,6 +28,7 @@ from config import (
     build_litellm_base_url,
     server_base_url,
 )
+from providers import OPENCODE_GO_PROVIDER, LITELLM_PROVIDER, get_provider
 
 logger = logging.getLogger("opencode-runtime")
 
@@ -72,6 +72,11 @@ def validate_runtime_startup() -> None:
         raise RuntimeError(f"OpenCode binary '{OPENCODE_BIN}' was not found on PATH")
 
 
+def _resolve_provider_id() -> str:
+    """Determine which opencode provider to use."""
+    return os.getenv("OPENCODE_PROVIDER", "litellm").strip().lower() or "litellm"
+
+
 def build_server_env(config_content: dict[str, Any]) -> dict[str, str]:
     """Build the environment dict for the OpenCode subprocess."""
     env = os.environ.copy()
@@ -89,13 +94,51 @@ def build_server_env(config_content: dict[str, Any]) -> dict[str, str]:
             "OPENCODE_SERVER_PASSWORD": env.get("OPENCODE_SERVER_PASSWORD", ""),
         }
     )
-    if DEFAULT_PROVIDER.lower() == "litellm":
+
+    provider_id = _resolve_provider_id()
+    provider = get_provider(provider_id)
+
+    # Resolve provider-specific env vars from the provider mapping
+    resolved = provider.resolve_env()
+    for key, value in resolved.items():
+        env[key] = value
+
+    # Extract API key from OPENCODE_AUTH_CONTENT for opencode/openai-compatible providers
+    # The Vercel AI SDK reads OPENAI_API_KEY for @ai-sdk/openai-compatible
+    _inject_auth_key_from_content(env, provider_id)
+
+    # Special case: litellm constructs BASE_URL from LITELLM_HOST+LITELLM_BASE_PATH
+    if provider.id == "litellm":
         base_url = build_litellm_base_url()
         if base_url:
             env["OPENAI_BASE_URL"] = base_url
-        if LITELLM_API_KEY:
+        if LITELLM_API_KEY and "OPENAI_API_KEY" not in env:
             env["OPENAI_API_KEY"] = LITELLM_API_KEY
+
     return env
+
+
+def _inject_auth_key_from_content(env: dict[str, str], provider_id: str) -> None:
+    """Read OPENCODE_AUTH_CONTENT and inject OPENAI_API_KEY for the AI SDK."""
+    auth_content = os.getenv("OPENCODE_AUTH_CONTENT", "").strip()
+    if not auth_content:
+        return
+    try:
+        auth_data = json.loads(auth_content)
+    except (json.JSONDecodeError, TypeError):
+        return
+    if not isinstance(auth_data, dict):
+        return
+    # Try exact provider ID first, then try without dash suffix
+    for key in (provider_id, provider_id.replace("-go", ""), provider_id.replace("-", "")):
+        entry = auth_data.get(key)
+        if isinstance(entry, dict) and entry.get("type") == "api":
+            api_key = str(entry.get("key", "")).strip()
+            if api_key:
+                env.setdefault("OPENAI_API_KEY", api_key)
+                env.setdefault("OPENCODE_API_KEY", api_key)
+                logger.info("Injected API key from OPENCODE_AUTH_CONTENT for provider '%s' (matched key '%s')", provider_id, key)
+                return
 
 
 # ---------------------------------------------------------------------------

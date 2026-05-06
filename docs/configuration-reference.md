@@ -84,6 +84,23 @@ This document describes every environment variable, Helm value, and configuratio
 | `AGENT_HITL_MODE` | `enforce` | Default HITL mode: `enforce`, `audit`, `disabled` |
 | `ORPHAN_PRUNING_ENABLED` | `true` | Enable orphan resource pruning |
 | `OTEL_ENDPOINT` | `""` | OpenTelemetry collector endpoint |
+| `SIGNAL_WATCH_INTERVAL_SEC` | `60` | Signal watch anomaly detection interval |
+| `SIGNAL_WATCH_WINDOW_MINUTES` | `15` | Anomaly detection time window |
+| `SIGNAL_WATCH_FAILURE_RATE` | `0.3` | Failure rate threshold (0.0-1.0) |
+| `SIGNAL_WATCH_ERROR_COUNT` | `3` | Minimum error count to trigger |
+| `SIGNAL_WATCH_COST_MULTIPLIER` | `3.0` | Cost outlier multiplier |
+| `SIGNAL_WATCH_TOKEN_MULTIPLIER` | `3.0` | Token spike multiplier |
+| `SIGNAL_WATCH_STUCK_MULTIPLIER` | `2.0` | Stuck run duration multiplier |
+| `SIGNAL_WATCH_SYSTEM_NS` | `kubesynapse-system` | System agents namespace |
+
+### Runtime Event Emission (All Runtimes)
+
+| Variable | Default | Description |
+|---|---|---|
+| `RUNTIME_EVENTS_QUEUE_SIZE` | `500` | Max events in queue before dropping |
+| `RUNTIME_EVENTS_BATCH_SIZE` | `50` | Events per batch flush |
+| `RUNTIME_EVENTS_FLUSH_INTERVAL` | `2.0` | Flush interval (seconds) |
+| `RUNTIME_EVENTS_HTTP_TIMEOUT` | `10.0` | HTTP request timeout (seconds) |
 
 ### OpenCode Runtime
 
@@ -143,6 +160,7 @@ See [`values.schema.json`](../charts/kubesynapse/values.schema.json) for the com
 - `platformSecrets` — Secret management mode
 - `skillsCatalog` — Skills catalog JSON
 - `intelligence` — Metrics and alerting
+- `systemAgents` — Run Intelligence Layer system agents
 
 ---
 
@@ -409,6 +427,26 @@ platformSecrets:
 intelligence:
   enabled: true
   prometheusRetention: "30d"
+
+systemAgents:
+  enabled: true
+  namespace: "kubesynapse-system"
+  defaultModel: "gpt-4"
+  defaultRuntime: "opencode"
+  runInspector:
+    enabled: true
+    triggers:
+      minFailureRate: 0.3
+      minErrorCount: 3
+  signalSummarizer:
+    enabled: true
+    triggers:
+      maxSignalAgeMinutes: 30
+  spendReviewer:
+    enabled: true
+    triggers:
+      costThresholdUsd: 10.0
+      tokenSpikeMultiplier: 3.0
 ```
 
 ---

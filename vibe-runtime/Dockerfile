@@ -13,6 +13,7 @@ RUN /opt/venv/bin/pip install --no-cache-dir -r requirements.txt \
     && /opt/vibe-venv/bin/pip install --no-cache-dir mistral-vibe
 
 COPY main.py ./main.py
+COPY runtime_events.py ./runtime_events.py
 
 RUN useradd --uid 1000 --create-home vibeuser \
     && mkdir -p /app/state/home/.vibe /workspace \

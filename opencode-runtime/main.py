@@ -242,6 +242,18 @@ from tracing import (
     get_tracer,
     init_tracing,
 )
+from runtime_events import (
+    EMITTER,
+    emit_llm_call,
+    emit_question_asked,
+    emit_run_completed,
+    emit_run_error,
+    emit_run_started,
+    emit_todo_updated,
+    emit_tool_call,
+    start_sync_emitter,
+    stop_sync_emitter,
+)
 from workspace import (  # noqa: F401 — re-exported
     capture_workspace_snapshot,
     get_or_refresh_snapshot,
@@ -298,6 +310,10 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
     init_tracing()
 
+    # Start runtime event emitter (Run Intelligence Layer)
+    start_sync_emitter()
+    await EMITTER.start()
+
     ensure_runtime_directories()
     configure_git_credentials()
     validate_runtime_startup()
@@ -337,6 +353,10 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     finally:
         _shutdown_event.set()
         supervisor_thread.join(timeout=5)
+
+        # Flush remaining runtime events before shutdown
+        stop_sync_emitter()
+        await EMITTER.stop()
 
         with _runtime_lock:
             _supervisor_mod._runtime_ready = False
@@ -484,6 +504,16 @@ def info() -> dict[str, Any]:
 @app.post("/invoke", response_model=InvokeResponse)
 def invoke(request: InvokeRequest) -> InvokeResponse:
     """Invoke the OpenCode agent with optional OTEL tracing."""
+    thread_id = request.thread_id or str(uuid.uuid4())
+    execution_id = f"exec-{thread_id[:16]}"
+    start_time = time.monotonic()
+
+    emit_run_started(
+        execution_id=execution_id,
+        thread_id=thread_id,
+        model=request.model or DEFAULT_MODEL_REF,
+    )
+
     tracer = get_tracer()
     if tracer is not None:
         with tracer.start_as_current_span(
@@ -499,12 +529,45 @@ def invoke(request: InvokeRequest) -> InvokeResponse:
             try:
                 result = invoke_opencode(request)
                 span.set_attribute("agent.status", result.status)
+
+                duration_ms = int((time.monotonic() - start_time) * 1000)
+                total_tokens = (result.metadata or {}).get("context_budget", {}).get("total_tokens", 0) if result.metadata else 0
+                emit_run_completed(
+                    execution_id=execution_id,
+                    thread_id=thread_id,
+                    status=result.status,
+                    total_tokens=total_tokens,
+                    duration_ms=duration_ms,
+                )
                 return result
             except Exception as exc:
                 if _OTEL_AVAILABLE and StatusCode is not None:
                     span.set_status(StatusCode.ERROR, str(exc))
+                emit_run_error(
+                    execution_id=execution_id,
+                    thread_id=thread_id,
+                    error=str(exc)[:2048],
+                )
                 raise
-    return invoke_opencode(request)
+    try:
+        result = invoke_opencode(request)
+        duration_ms = int((time.monotonic() - start_time) * 1000)
+        total_tokens = (result.metadata or {}).get("context_budget", {}).get("total_tokens", 0) if result.metadata else 0
+        emit_run_completed(
+            execution_id=execution_id,
+            thread_id=thread_id,
+            status=result.status,
+            total_tokens=total_tokens,
+            duration_ms=duration_ms,
+        )
+        return result
+    except Exception as exc:
+        emit_run_error(
+            execution_id=execution_id,
+            thread_id=thread_id,
+            error=str(exc)[:2048],
+        )
+        raise
 
 
 @app.post("/cancel")
@@ -617,8 +680,16 @@ def context_budget(thread_id: str | None = None) -> dict[str, Any]:
 async def invoke_stream(request: InvokeRequest) -> StreamingResponse:
     async def event_generator() -> AsyncIterator[str]:
         thread_id = request.thread_id or str(uuid.uuid4())
+        execution_id = f"exec-{thread_id[:16]}"
         request_with_thread = request.model_copy(update={"thread_id": thread_id})
         streamed_delta_count = 0
+        start_time = time.monotonic()
+
+        emit_run_started(
+            execution_id=execution_id,
+            thread_id=thread_id,
+            model=request.model or DEFAULT_MODEL_REF,
+        )
         yield sse_event("response.started", {"thread_id": thread_id, "source": "opencode"})
 
         event_queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
@@ -683,6 +754,11 @@ async def invoke_stream(request: InvokeRequest) -> StreamingResponse:
                                         },
                                     }
                                 )
+                        emit_question_asked(
+                            execution_id=execution_id,
+                            question=new_ids.pop() if new_ids else "",
+                            thread_id=thread_id,
+                        )
                     last_ids = current_ids
                 except Exception:
                     logger.debug("Question poller callback failed", exc_info=True)
@@ -725,6 +801,11 @@ async def invoke_stream(request: InvokeRequest) -> StreamingResponse:
                         "todo.cleared",
                         {"thread_id": thread_id, "session_id": final_session, "todos": final_todos, "source": "opencode"},
                     )
+                    emit_todo_updated(
+                        execution_id=execution_id,
+                        todos=final_todos,
+                        thread_id=thread_id,
+                    )
         except Exception:
             logger.debug("Todo stream cleanup failed", exc_info=True)
 
@@ -732,15 +813,39 @@ async def invoke_stream(request: InvokeRequest) -> StreamingResponse:
             response = await task
         except HTTPException as exc:
             yield sse_event("response.error", {"thread_id": thread_id, "error": str(exc.detail)})
+            emit_run_error(
+                execution_id=execution_id,
+                thread_id=thread_id,
+                error=str(exc.detail)[:2048],
+            )
             return
         except Exception as exc:
             yield sse_event("response.error", {"thread_id": thread_id, "error": str(exc)})
+            emit_run_error(
+                execution_id=execution_id,
+                thread_id=thread_id,
+                error=str(exc)[:2048],
+            )
             return
 
         if response.response and streamed_delta_count == 0:
             yield sse_event(
                 "response.delta", {"thread_id": response.thread_id, "delta": response.response, "source": "opencode"}
             )
+
+        # Emit tool call events from response
+        for tc in (response.tool_calls or []):
+            emit_tool_call(
+                execution_id=execution_id,
+                tool_name=tc.get("name", "unknown"),
+                tool_args=tc.get("args"),
+                status=tc.get("status", "completed"),
+                thread_id=thread_id,
+            )
+
+        duration_ms = int((time.monotonic() - start_time) * 1000)
+        total_tokens = (response.metadata or {}).get("context_budget", {}).get("total_tokens", 0) if response.metadata else 0
+
         yield sse_event(
             "response.completed",
             {
@@ -755,6 +860,14 @@ async def invoke_stream(request: InvokeRequest) -> StreamingResponse:
                 "tool_calls": response.tool_calls,
                 "metadata": response.metadata,
             },
+        )
+
+        emit_run_completed(
+            execution_id=execution_id,
+            thread_id=thread_id,
+            status=response.status,
+            total_tokens=total_tokens,
+            duration_ms=duration_ms,
         )
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")

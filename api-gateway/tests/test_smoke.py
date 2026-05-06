@@ -6,7 +6,15 @@ requiring a real Kubernetes cluster or database.
 
 from __future__ import annotations
 
+import uuid
+from pathlib import Path
+
 from fastapi.testclient import TestClient
+
+from auth_store import db_session
+
+import trace_store
+import traces_router
 
 
 class TestHealthEndpoints:
@@ -107,3 +115,130 @@ class TestTraceEndpoints:
         """Requests without auth to batch ingest should be rejected."""
         response = client.post("/api/traces/batch", json={"events": []})
         assert response.status_code == 401
+
+    def test_batch_ingest_persists_step_timing_and_order(self, client: TestClient, auth_headers: dict) -> None:
+        """Batch ingest helpers should preserve step order and derive duration from event timestamps."""
+        trace_store.init_trace_database()
+        execution_id = f"exec-{uuid.uuid4().hex[:12]}"
+        step_id = f"step-{uuid.uuid4().hex[:12]}"
+
+        events = [
+            {
+                "event_type": "execution_started",
+                "execution_id": execution_id,
+                "timestamp": 1000,
+                "payload": {
+                    "namespace": "default",
+                    "workflow_name": "observatory-demo",
+                    "agent_name": "observatory-demo",
+                    "run_id": "wf-run-test",
+                    "inputs": {"input": "hello"},
+                    "triggered_by": "test",
+                },
+            },
+            {
+                "event_type": "step_started",
+                "execution_id": execution_id,
+                "step_id": step_id,
+                "timestamp": 1001,
+                "payload": {
+                    "step_name": "verify",
+                    "step_type": "agent",
+                    "step_index": 3,
+                    "inputs": {"step": "verify"},
+                },
+            },
+            {
+                "event_type": "step_completed",
+                "execution_id": execution_id,
+                "step_id": step_id,
+                "timestamp": 1004,
+                "payload": {
+                    "status": "completed",
+                    "outputs": {"ok": True},
+                },
+            },
+        ]
+
+        with db_session() as session:
+            for event in events:
+                traces_router._upsert_from_event(session, event)
+
+        payload = trace_store.get_execution(execution_id)
+        assert payload is not None
+        assert payload["total_steps"] == 1
+        assert len(payload["steps"]) == 1
+        assert payload["steps"][0]["step_index"] == 3
+        assert payload["steps"][0]["started_at"] is not None
+        assert payload["steps"][0]["duration_ms"] is not None
+        assert payload["steps"][0]["duration_ms"] == 3000.0
+
+        with db_session() as session:
+            step = session.query(trace_store.StepExecution).filter_by(id=step_id).one()
+            session.delete(step)
+            execution = session.query(trace_store.WorkflowExecution).filter_by(id=execution_id).one()
+            session.delete(execution)
+
+    def test_execution_events_survive_missing_jsonl_file(self, client: TestClient, auth_headers: dict) -> None:
+        """Raw execution events should still be readable after pod-local trace files are gone."""
+        trace_store.init_trace_database()
+        execution_id = f"exec-{uuid.uuid4().hex[:12]}"
+
+        events = [
+            {
+                "event_type": "execution_started",
+                "execution_id": execution_id,
+                "timestamp": 2000,
+                "payload": {
+                    "namespace": "default",
+                    "workflow_name": "observatory-demo",
+                    "agent_name": "observatory-demo",
+                    "run_id": "wf-run-durable-events",
+                },
+            },
+            {
+                "event_type": "execution_completed",
+                "execution_id": execution_id,
+                "timestamp": 2002,
+                "payload": {
+                    "status": "completed",
+                    "outputs": {"ok": True},
+                },
+            },
+        ]
+
+        for event in events:
+            trace_store.TRACER._get_writer(execution_id).emit(
+                trace_store.TraceEvent(
+                    event_type=trace_store.EventType(event["event_type"]),
+                    execution_id=execution_id,
+                    step_id=event.get("step_id"),
+                    timestamp=event["timestamp"],
+                    payload=event["payload"],
+                )
+            )
+
+        with db_session() as session:
+            for event in events:
+                traces_router._upsert_from_event(session, event)
+
+        trace_path = Path(trace_store.TRACE_STORAGE_DIR) / execution_id / "trace.jsonl"
+        if trace_path.exists():
+            trace_path.unlink()
+
+        summary = trace_store.get_execution_summary(execution_id)
+        assert summary is not None
+
+        payload = trace_store.read_trace_events(execution_id) or trace_store.TRACER.read_trace(execution_id)
+        assert len(payload) == 2
+        assert payload[0]["event_type"] == "execution_started"
+        assert payload[1]["event_type"] == "execution_completed"
+
+        with db_session() as session:
+            (
+                session.query(trace_store.ExecutionTraceEventRecord)
+                .filter_by(execution_id=execution_id)
+                .delete(synchronize_session=False)
+            )
+            execution = session.query(trace_store.WorkflowExecution).filter_by(id=execution_id).one()
+            session.delete(execution)

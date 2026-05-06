@@ -9,6 +9,7 @@ This guide covers monitoring, alerting, scaling, upgrades, backups, troubleshoot
 ## Table of Contents
 
 - [Monitoring](#monitoring)
+- [Run Intelligence Layer](#run-intelligence-layer)
 - [Alerting](#alerting)
 - [Scaling](#scaling)
 - [Upgrades](#upgrades)
@@ -79,6 +80,86 @@ The project ships three curated dashboards in `deploy/grafana/dashboards/`:
 | LLM Usage | `llm-usage.json` | Token rate, cost, latency per model, provider errors |
 
 Import them via ConfigMap or Grafana UI.
+
+---
+
+## Run Intelligence Layer
+
+The Run Intelligence Layer provides semantic event indexing, deterministic anomaly detection, and AI-powered analysis across all runtimes.
+
+### Signal Watch Controller
+
+The operator runs a periodic anomaly detection controller (`controllers/signal_watch.py`) that executes deterministic SQL checks against the `runtime_run_events` and `workflow_executions` tables.
+
+**Schedule:** Every 60 seconds (configurable via `SIGNAL_WATCH_INTERVAL_SEC`)
+
+**Anomaly Checks:**
+
+| Check | SQL Query | Threshold | Default |
+|---|---|---|---|
+| High failure rate | `failed_steps / total_steps >= threshold` | 30% | `SIGNAL_WATCH_FAILURE_RATE=0.3` |
+| Error spikes | `COUNT(*) WHERE severity='error' >= threshold` | 3 errors in 15m | `SIGNAL_WATCH_ERROR_COUNT=3` |
+| Cost outliers | `cost_usd / avg_cost >= multiplier` | 3x namespace avg | `SIGNAL_WATCH_COST_MULTIPLIER=3.0` |
+| Token spikes | `total_tokens / avg_tokens >= multiplier` | 3x agent avg | `SIGNAL_WATCH_TOKEN_MULTIPLIER=3.0` |
+| Stuck runs | `duration_ms / median_ms >= multiplier` | 2x median duration | `SIGNAL_WATCH_STUCK_MULTIPLIER=2.0` |
+
+**Output:** When a check fires, an `ObservationReport` CR is created with:
+- Severity classification (low, medium, high, critical)
+- Affected execution IDs
+- Detailed metrics and timestamps
+
+### System Agents
+
+Three predefined AIAgent CRs provide AI-powered analysis on top of deterministic detection:
+
+| Agent | Purpose | Invoked When |
+|---|---|---|
+| `ks-run-inspector` | Root-cause analysis of failed runs | Failure rate > 30% or >= 3 errors |
+| `ks-signal-summarizer` | Converts anomaly signals to incident briefs | Any anomaly signal fires |
+| `ks-spend-reviewer` | Reviews cost/token anomalies | Cost > $10 or tokens > 3x average |
+
+**Configuration:** Set via Helm values under `systemAgents`:
+
+```yaml
+systemAgents:
+  enabled: true
+  namespace: "kubesynapse-system"
+  defaultModel: "gpt-4"
+  runInspector:
+    enabled: true
+    triggers:
+      minFailureRate: 0.3
+      minErrorCount: 3
+```
+
+### Troubleshooting
+
+**Signal watch not running:**
+```bash
+# Check controller is loaded
+kubectl logs -l app=kubesynapse-operator -c operator | grep signal-watch
+
+# Verify env vars
+kubectl get deployment kubesynapse-operator -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="SIGNAL_WATCH_INTERVAL_SEC")].value}'
+```
+
+**ObservationReports not created:**
+```bash
+# Check for SQL errors
+kubectl logs -l app=kubesynapse-operator -c operator | grep "signal watch"
+
+# Verify database connectivity
+kubectl exec -it deploy/kubesynapse-api-gateway -- python -c "from auth_store import ENGINE; print(ENGINE)"
+```
+
+**System agents not invoked:**
+```bash
+# Check system agent CRs exist
+kubectl get aiagents -n kubesynapse-system
+
+# Verify A2A allowed callers
+kubectl get aiagent ks-run-inspector -n kubesynapse-system -o jsonpath='{.spec.a2a}'
+```
 
 ---
 

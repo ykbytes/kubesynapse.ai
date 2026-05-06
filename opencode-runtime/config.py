@@ -116,11 +116,19 @@ DEFAULT_SYSTEM_PROMPT = (os.getenv("OPENCODE_SYSTEM_PROMPT") or os.getenv("AGENT
 DEFAULT_AGENT = os.getenv("OPENCODE_DEFAULT_AGENT", "build").strip() or "build"
 
 # ---------------------------------------------------------------------------
-# LiteLLM
+# LiteLLM (legacy — provider system handles this now)
 # ---------------------------------------------------------------------------
 LITELLM_HOST = os.getenv("LITELLM_HOST", "http://localhost:4000").strip() or "http://localhost:4000"
 LITELLM_BASE_PATH = os.getenv("LITELLM_BASE_PATH", "v1/chat/completions").strip() or "v1/chat/completions"
 LITELLM_API_KEY = os.getenv("LITELLM_API_KEY", "").strip()
+
+# ---------------------------------------------------------------------------
+# Provider API keys
+# ---------------------------------------------------------------------------
+OPENCODE_API_KEY = os.getenv("OPENCODE_API_KEY", "").strip()
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "").strip()
+COPILOT_API_KEY = os.getenv("COPILOT_API_KEY", "").strip()
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "").strip()
 
 # ---------------------------------------------------------------------------
 # Selected provider

@@ -1,48 +1,38 @@
-FROM node:20-slim AS opencode-install
+# OpenCode Runtime for KubeSynth
+# Multi-stage: official opencode binary + Python wrapper
+#
+# To update the opencode version:
+#   docker build --build-arg OPENCODE_TAG=latest .
+#   docker build --build-arg OPENCODE_TAG=v1.30.0 .
 
-RUN npm install -g opencode-ai && \
-    cd /usr/local/lib/node_modules/opencode-ai && \
-    npm install opencode-linux-x64 opencode-linux-x64-baseline 2>/dev/null || true && \
-    command -v opencode >/dev/null && \
-    opencode --version && \
-    echo "OpenCode installed and verified"
+# ── Stage 1: Extract opencode binary from official image ──
+FROM ghcr.io/anomalyco/opencode:latest AS opencode-bin
 
-FROM python:3.12-slim
+# ── Stage 2: Python runtime with opencode ──
+FROM python:3.12-alpine
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends git nodejs npm curl unzip ca-certificates \
-    && python3 -m venv /opt/venv \
-    && rm -rf /var/lib/apt/lists/*
+# Copy opencode binary (both stages use musl/Alpine, binary compatible)
+COPY --from=opencode-bin /usr/local/bin/opencode /usr/local/bin/opencode
 
-COPY --from=opencode-install /usr/local/lib/node_modules /usr/local/lib/node_modules
-COPY --from=opencode-install /usr/local/bin/opencode /usr/local/bin/opencode
-# The wrapper uses fs.realpathSync(__filename) to find .opencode next to itself;
-# after COPY (not symlink), scriptDir resolves to /usr/local/bin/ instead of the
-# original node_modules path, so copy the cached binary there too.
-COPY --from=opencode-install /usr/local/lib/node_modules/opencode-ai/bin/.opencode /usr/local/bin/.opencode
-
-RUN BUN_VERSION="1.1.45" \
-    && curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}" \
-    && mv /root/.bun /opt/bun \
-    && ln -sf /opt/bun/bin/bun /usr/local/bin/bun
+# Install runtime deps only (no node/npm/bun needed)
+RUN apk add --no-cache git curl ca-certificates ripgrep libgcc libstdc++
 
 WORKDIR /app
 
 COPY requirements.txt .
-RUN /opt/venv/bin/pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
-COPY main.py hitl.py config.py tracing.py utils.py prompts.py models.py session.py skills.py opencode_client.py analysis.py invoke.py supervisor.py workspace.py sanitize_secrets.py ./
+COPY main.py hitl.py config.py tracing.py utils.py prompts.py models.py session.py skills.py opencode_client.py analysis.py invoke.py supervisor.py workspace.py sanitize_secrets.py runtime_events.py ./
+COPY providers.py config_generator.py ./
 COPY memory/ ./memory/
 
-RUN test -x /usr/local/bin/opencode && test -x /usr/local/bin/bun
-
-RUN useradd --uid 1000 --create-home opencodeuser \
+RUN adduser -D -u 1000 opencodeuser \
     && mkdir -p /app/state /workspace \
     && chown -R opencodeuser:opencodeuser /app /workspace
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PATH=/opt/venv/bin:/usr/local/bin:$PATH \
+    PATH=/usr/local/bin:$PATH \
     HOME=/app/state/home \
     XDG_CONFIG_HOME=/app/state/home/.config \
     XDG_DATA_HOME=/app/state/home/.local/share \

@@ -1255,6 +1255,8 @@ export interface StepTrace {
   error?: string | null;
   tokens_used?: number | null;
   cost_usd?: number | null;
+  llm_call_count?: number | null;
+  tool_call_count?: number | null;
   llm_calls: LLMCallRecord[];
   tool_calls: ToolCallRecord[];
   input_preview?: string | null;

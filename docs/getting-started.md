@@ -289,13 +289,16 @@ The gateway routes the request to `security-specialist`, which processes it and 
 | Goal | Resource |
 |------|----------|
 | Deploy to production | [Production Deployment Guide](production-deployment-guide.md) |
-| Understand architecture | [Architecture Overview](architecture.md) |
+| Understand architecture | [Architecture Overview](architecture-overview.md) |
 | Configure auth, secrets, policies | [Configuration Reference](configuration-reference.md) |
 | Monitor and alert | [Operator Guide](operator-guide.md) |
+| Explore observability & traces | [Observability Explained](observability-explained.md) |
+| Run Intelligence Layer | [ROADMAP — Stories 5-10](ROADMAP.md) |
 | Troubleshoot issues | [Troubleshooting](troubleshooting.md) |
 | Join the community | [Community](community.md) |
 
 ---
 
-**Last Updated:** April 27, 2026  
-**Platform Version:** 1.0.0
+**Last Updated:** May 4, 2026  
+**Platform Version:** 1.0.0  
+**Run Intelligence Layer:** ✅ Complete (Stories 5-10)

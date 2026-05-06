@@ -9,8 +9,8 @@ Provides comprehensive traceability for every workflow execution:
 - Replay support
 
 Storage:
-  - PostgreSQL/SQLite for trace metadata and step index
-  - JSONL files for full trace events (large payloads)
+  - PostgreSQL/SQLite for trace metadata, indexed events, and raw trace events
+  - JSONL files for raw trace event fallback and artifact payloads
   - Artifact files in trace-specific directories
 """
 
@@ -38,7 +38,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import declarative_base
 
 from auth_store import ENGINE as _AUTH_ENGINE
-from auth_store import db_session, utc_now
+from auth_store import db_session, ensure_utc, utc_now
 
 logger = logging.getLogger("api-gateway.trace-store")
 
@@ -48,7 +48,7 @@ Base = declarative_base()
 # Trace storage paths
 # ---------------------------------------------------------------------------
 
-TRACE_STORAGE_DIR = Path(os.getenv("TRACE_STORAGE_DIR", "/app/state/traces"))
+TRACE_STORAGE_DIR = Path(os.getenv("TRACE_STORAGE_DIR", "/tmp/kubesynapse-traces"))
 
 
 def _ensure_trace_dir(execution_id: str) -> Path:
@@ -329,6 +329,87 @@ class ToolCallRecord(Base):
 
 
 # ---------------------------------------------------------------------------
+# Runtime Run Event — Semantic Event Index (Run Intelligence Layer)
+# ---------------------------------------------------------------------------
+
+class RuntimeRunEvent(Base):
+    """Queryable semantic event index for runtime sessions.
+
+    Stores structured events from all runtimes (opencode, pi, vibe) and
+    workers. JSONB payload provides flexibility; indexed columns enable
+    fast filtering and aggregation.
+
+    This is the core of the Run Intelligence Layer — AI-ready operational
+    context stored alongside raw JSONL trace archives.
+    """
+    __tablename__ = "runtime_run_events"
+
+    id = Column(String(64), primary_key=True)
+    event_id = Column(String(128), nullable=False, unique=True, index=True)
+    execution_id = Column(String(64), nullable=False, index=True)
+    session_id = Column(String(128), nullable=True, index=True)
+    thread_id = Column(String(128), nullable=True, index=True)
+    namespace = Column(String(128), nullable=False, index=True)
+    agent_name = Column(String(128), nullable=True, index=True)
+    runtime_kind = Column(String(50), nullable=False, index=True)
+    event_type = Column(String(64), nullable=False, index=True)
+    seq = Column(Integer, nullable=False)
+    severity = Column(String(16), nullable=True, default="info")
+    payload = Column(JSON, nullable=False, server_default="{}")
+    duration_ms = Column(Integer, nullable=True)
+    prompt_tokens = Column(Integer, nullable=True)
+    completion_tokens = Column(Integer, nullable=True)
+    total_tokens = Column(Integer, nullable=True)
+    cost_usd = Column(Float, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now, index=True)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "event_id": self.event_id,
+            "execution_id": self.execution_id,
+            "session_id": self.session_id,
+            "thread_id": self.thread_id,
+            "namespace": self.namespace,
+            "agent_name": self.agent_name,
+            "runtime_kind": self.runtime_kind,
+            "event_type": self.event_type,
+            "seq": self.seq,
+            "severity": self.severity,
+            "payload": self.payload,
+            "duration_ms": self.duration_ms,
+            "prompt_tokens": self.prompt_tokens,
+            "completion_tokens": self.completion_tokens,
+            "total_tokens": self.total_tokens,
+            "cost_usd": self.cost_usd,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class ExecutionTraceEventRecord(Base):
+    """Durable raw trace event archive for observatory detail views."""
+
+    __tablename__ = "execution_trace_events"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    execution_id = Column(String(64), nullable=False, index=True)
+    step_id = Column(String(64), nullable=True, index=True)
+    event_type = Column(String(64), nullable=False, index=True)
+    timestamp = Column(Float, nullable=False, index=True)
+    payload = Column(JSON, nullable=False, server_default="{}")
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now, index=True)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "event_type": self.event_type,
+            "execution_id": self.execution_id,
+            "step_id": self.step_id,
+            "timestamp": self.timestamp,
+            "payload": self.payload or {},
+        }
+
+
+# ---------------------------------------------------------------------------
 # Trace Event (stored in JSONL, not DB)
 # ---------------------------------------------------------------------------
 
@@ -382,6 +463,24 @@ class TraceWriter:
                 f.write(event.to_jsonl())
             self._event_count += 1
 
+        try:
+            with db_session() as session:
+                session.add(
+                    ExecutionTraceEventRecord(
+                        execution_id=event.execution_id,
+                        step_id=event.step_id,
+                        event_type=event.event_type.value,
+                        timestamp=event.timestamp,
+                        payload=event.payload,
+                    )
+                )
+        except Exception:
+            logger.warning(
+                "Failed to persist raw trace event for execution %s",
+                event.execution_id,
+                exc_info=True,
+            )
+
     def write_artifact(self, name: str, content: str | bytes) -> Path:
         path = self._dir / "artifacts" / name
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -391,6 +490,10 @@ class TraceWriter:
         return path
 
     def read_events(self) -> list[dict[str, Any]]:
+        events = read_trace_events(self.execution_id)
+        if events:
+            return events
+
         if not self._path.exists():
             return []
         events: list[dict[str, Any]] = []
@@ -486,8 +589,7 @@ class ExecutionTracer:
                 execution.completed_at = utc_now()
                 execution.output_summary = outputs
                 execution.error_message = error_message
-                if execution.started_at:
-                    execution.duration_ms = (execution.completed_at - execution.started_at).total_seconds() * 1000
+                execution.duration_ms = duration_ms_between(execution.started_at, execution.completed_at)
                 if metrics:
                     execution.total_tokens = metrics.get("total_tokens", execution.total_tokens)
                     execution.prompt_tokens = metrics.get("prompt_tokens", execution.prompt_tokens)
@@ -565,8 +667,7 @@ class ExecutionTracer:
                 step.completed_at = utc_now()
                 step.output_summary = outputs
                 step.error_message = error_message
-                if step.started_at:
-                    step.duration_ms = (step.completed_at - step.started_at).total_seconds() * 1000
+                step.duration_ms = duration_ms_between(step.started_at, step.completed_at)
 
     def record_llm_call(
         self,
@@ -694,6 +795,80 @@ def init_trace_database() -> None:
 # Query helpers
 # ---------------------------------------------------------------------------
 
+def _serialize_execution(session: Any, execution: WorkflowExecution, include_related: bool = False) -> dict[str, Any]:
+    result = execution.to_dict()
+
+    step_rows = (
+        session.query(StepExecution)
+        .filter_by(execution_id=execution.id)
+        .order_by(StepExecution.step_index)
+        .all()
+    )
+    llm_rows = (
+        session.query(LLMCallRecord)
+        .filter_by(execution_id=execution.id)
+        .order_by(LLMCallRecord.started_at)
+        .all()
+    )
+    tool_rows = (
+        session.query(ToolCallRecord)
+        .filter_by(execution_id=execution.id)
+        .order_by(ToolCallRecord.started_at)
+        .all()
+    )
+
+    result["total_steps"] = len(step_rows)
+    result["completed_steps"] = sum(1 for step in step_rows if step.status == StepStatus.COMPLETED.value)
+    result["failed_steps"] = sum(1 for step in step_rows if step.status == StepStatus.FAILED.value)
+    result["total_llm_calls"] = len(llm_rows)
+    result["total_tool_calls"] = len(tool_rows)
+    result["prompt_tokens"] = sum((row.prompt_tokens or 0) for row in llm_rows)
+    result["completion_tokens"] = sum((row.completion_tokens or 0) for row in llm_rows)
+    result["total_tokens"] = sum((row.total_tokens or 0) for row in llm_rows)
+
+    known_costs = [row.cost_usd for row in llm_rows if row.cost_usd is not None]
+    if known_costs:
+        result["estimated_cost_usd"] = sum(known_costs)
+
+    if not include_related:
+        return result
+
+    steps = [row.to_dict() for row in step_rows]
+    llm_calls = [row.to_dict() for row in llm_rows]
+    tool_calls = [row.to_dict() for row in tool_rows]
+
+    llm_calls_by_step: dict[str, list[dict[str, Any]]] = {}
+    for call in llm_calls:
+        step_id = call.get("step_id")
+        if step_id:
+            llm_calls_by_step.setdefault(step_id, []).append(call)
+
+    tool_calls_by_step: dict[str, list[dict[str, Any]]] = {}
+    for call in tool_calls:
+        step_id = call.get("step_id")
+        if step_id:
+            tool_calls_by_step.setdefault(step_id, []).append(call)
+
+    for step in steps:
+        step_id = step.get("id")
+        step["llm_calls"] = llm_calls_by_step.get(step_id, [])
+        step["tool_calls"] = tool_calls_by_step.get(step_id, [])
+
+    result["steps"] = steps
+    result["llm_calls"] = llm_calls
+    result["tool_calls"] = tool_calls
+    result["events"] = TRACER.read_trace(execution.id)
+    return result
+
+
+def duration_ms_between(started_at: Any, completed_at: Any) -> float | None:
+    start = ensure_utc(started_at)
+    end = ensure_utc(completed_at)
+    if start is None or end is None:
+        return None
+    return (end - start).total_seconds() * 1000
+
+
 def list_executions(
     namespace: str | None = None,
     workflow_name: str | None = None,
@@ -714,7 +889,7 @@ def list_executions(
             query = query.filter_by(status=status)
         query = query.order_by(WorkflowExecution.started_at.desc())
         executions = query.limit(limit).offset(offset).all()
-        return [e.to_dict() for e in executions]
+        return [_serialize_execution(session, execution) for execution in executions]
 
 
 def get_execution(execution_id: str) -> dict[str, Any] | None:
@@ -722,12 +897,7 @@ def get_execution(execution_id: str) -> dict[str, Any] | None:
         execution = session.query(WorkflowExecution).filter_by(id=execution_id).one_or_none()
         if not execution:
             return None
-        result = execution.to_dict()
-        result["steps"] = [s.to_dict() for s in session.query(StepExecution).filter_by(execution_id=execution_id).order_by(StepExecution.step_index).all()]
-        result["llm_calls"] = [llm.to_dict() for llm in session.query(LLMCallRecord).filter_by(execution_id=execution_id).order_by(LLMCallRecord.started_at).all()]
-        result["tool_calls"] = [t.to_dict() for t in session.query(ToolCallRecord).filter_by(execution_id=execution_id).order_by(ToolCallRecord.started_at).all()]
-        result["events"] = TRACER.read_trace(execution_id)
-        return result
+        return _serialize_execution(session, execution, include_related=True)
 
 
 def get_execution_summary(execution_id: str) -> dict[str, Any] | None:
@@ -735,7 +905,7 @@ def get_execution_summary(execution_id: str) -> dict[str, Any] | None:
         execution = session.query(WorkflowExecution).filter_by(id=execution_id).one_or_none()
         if not execution:
             return None
-        return execution.to_dict()
+        return _serialize_execution(session, execution)
 
 
 def get_step_detail(step_id: str) -> dict[str, Any] | None:
@@ -747,3 +917,290 @@ def get_step_detail(step_id: str) -> dict[str, Any] | None:
         result["llm_calls"] = [llm.to_dict() for llm in session.query(LLMCallRecord).filter_by(step_id=step_id).order_by(LLMCallRecord.started_at).all()]
         result["tool_calls"] = [t.to_dict() for t in session.query(ToolCallRecord).filter_by(step_id=step_id).order_by(ToolCallRecord.started_at).all()]
         return result
+
+
+def read_trace_events(execution_id: str) -> list[dict[str, Any]]:
+    with db_session() as session:
+        rows = (
+            session.query(ExecutionTraceEventRecord)
+            .filter_by(execution_id=execution_id)
+            .order_by(ExecutionTraceEventRecord.id.asc())
+            .all()
+        )
+        return [row.to_dict() for row in rows]
+
+
+def delete_trace_events(execution_id: str) -> None:
+    with db_session() as session:
+        (
+            session.query(ExecutionTraceEventRecord)
+            .filter_by(execution_id=execution_id)
+            .delete(synchronize_session=False)
+        )
+
+
+# ---------------------------------------------------------------------------
+# Runtime Run Event Ingestion (Run Intelligence Layer)
+# ---------------------------------------------------------------------------
+
+def ingest_runtime_events(events: list[dict[str, Any]]) -> int:
+    """Batch ingest runtime events with idempotent upsert on event_id.
+
+    Returns the number of events successfully inserted.
+    Duplicate event_ids are silently ignored (upsert semantics).
+    """
+    if not events:
+        return 0
+
+    inserted = 0
+    with db_session() as session:
+        for evt in events:
+            event_id = evt.get("event_id")
+            if not event_id:
+                continue
+
+            existing = session.query(RuntimeRunEvent).filter_by(event_id=event_id).one_or_none()
+            if existing:
+                continue
+
+            record = RuntimeRunEvent(
+                id=evt.get("id", f"rre-{uuid.uuid4().hex[:16]}"),
+                event_id=event_id,
+                execution_id=evt.get("execution_id", ""),
+                session_id=evt.get("session_id"),
+                thread_id=evt.get("thread_id"),
+                namespace=evt.get("namespace", "default"),
+                agent_name=evt.get("agent_name"),
+                runtime_kind=evt.get("runtime_kind", "unknown"),
+                event_type=evt.get("event_type", "custom"),
+                seq=evt.get("seq", 0),
+                severity=evt.get("severity", "info"),
+                payload=evt.get("payload", {}),
+                duration_ms=evt.get("duration_ms"),
+                prompt_tokens=evt.get("prompt_tokens"),
+                completion_tokens=evt.get("completion_tokens"),
+                total_tokens=evt.get("total_tokens"),
+                cost_usd=evt.get("cost_usd"),
+            )
+            session.add(record)
+            inserted += 1
+
+    return inserted
+
+
+# ---------------------------------------------------------------------------
+# Runtime Run Event Query Helpers
+# ---------------------------------------------------------------------------
+
+def get_run_timeline(
+    execution_id: str,
+    event_type: str | None = None,
+    from_seq: int | None = None,
+    limit: int = 500,
+) -> list[dict[str, Any]]:
+    """Get ordered semantic timeline for a run."""
+    with db_session() as session:
+        query = session.query(RuntimeRunEvent).filter_by(execution_id=execution_id)
+        if event_type:
+            query = query.filter_by(event_type=event_type)
+        if from_seq is not None:
+            query = query.filter(RuntimeRunEvent.seq >= from_seq)
+        query = query.order_by(RuntimeRunEvent.seq.asc())
+        query = query.limit(limit)
+        return [e.to_dict() for e in query.all()]
+
+
+def query_runtime_events(
+    namespace: str | None = None,
+    runtime_kind: str | None = None,
+    event_type: str | None = None,
+    agent_name: str | None = None,
+    session_id: str | None = None,
+    severity: str | None = None,
+    from_ts: str | None = None,
+    to_ts: str | None = None,
+    limit: int = 200,
+    offset: int = 0,
+) -> dict[str, Any]:
+    """Filter runtime events across runs."""
+    from datetime import datetime, timezone
+
+    with db_session() as session:
+        query = session.query(RuntimeRunEvent)
+        if namespace:
+            query = query.filter_by(namespace=namespace)
+        if runtime_kind:
+            query = query.filter_by(runtime_kind=runtime_kind)
+        if event_type:
+            query = query.filter_by(event_type=event_type)
+        if agent_name:
+            query = query.filter_by(agent_name=agent_name)
+        if session_id:
+            query = query.filter_by(session_id=session_id)
+        if severity:
+            query = query.filter_by(severity=severity)
+        if from_ts:
+            try:
+                dt = datetime.fromisoformat(from_ts.replace("Z", "+00:00"))
+                query = query.filter(RuntimeRunEvent.created_at >= dt)
+            except ValueError:
+                pass
+        if to_ts:
+            try:
+                dt = datetime.fromisoformat(to_ts.replace("Z", "+00:00"))
+                query = query.filter(RuntimeRunEvent.created_at <= dt)
+            except ValueError:
+                pass
+
+        total = query.count()
+        query = query.order_by(RuntimeRunEvent.created_at.desc())
+        query = query.limit(min(limit, 1000)).offset(max(offset, 0))
+        items = [e.to_dict() for e in query.all()]
+
+    return {"items": items, "total": total, "limit": limit, "offset": offset}
+
+
+def get_run_summary(execution_id: str) -> dict[str, Any] | None:
+    """Aggregate summary for a run from indexed events."""
+    with db_session() as session:
+        events = session.query(RuntimeRunEvent).filter_by(execution_id=execution_id).all()
+        if not events:
+            return None
+
+        tool_calls = [e for e in events if e.event_type.startswith("tool.")]
+        tool_failures = [e for e in tool_calls if e.payload.get("status") == "failed"]
+        errors = [e for e in events if e.severity == "error"]
+
+        total_tokens = sum(e.total_tokens or 0 for e in events)
+        total_cost = sum(e.cost_usd or 0.0 for e in events)
+        total_duration = sum(e.duration_ms or 0 for e in events)
+
+        return {
+            "execution_id": execution_id,
+            "event_count": len(events),
+            "tool_call_count": len(tool_calls),
+            "tool_failure_count": len(tool_failures),
+            "error_count": len(errors),
+            "total_tokens": total_tokens,
+            "estimated_cost_usd": round(total_cost, 6),
+            "total_duration_ms": total_duration,
+            "runtime_kinds": list(set(e.runtime_kind for e in events)),
+            "first_event": events[0].created_at.isoformat() if events else None,
+            "last_event": events[-1].created_at.isoformat() if events else None,
+        }
+
+
+def get_agent_interaction_graph(
+    namespace: str | None = None,
+    hours: int = 24,
+) -> dict[str, Any]:
+    """Build agent-to-agent dependency graph from A2A events."""
+    from datetime import datetime, timedelta, timezone
+
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+
+    with db_session() as session:
+        query = session.query(RuntimeRunEvent).filter(
+            RuntimeRunEvent.event_type.like("agent.call.%"),
+            RuntimeRunEvent.created_at >= cutoff,
+        )
+        if namespace:
+            query = query.filter_by(namespace=namespace)
+
+        events = query.all()
+
+    edges: dict[str, dict[str, Any]] = {}
+    nodes: set[str] = set()
+
+    for evt in events:
+        caller = evt.payload.get("caller_agent", evt.agent_name)
+        target = evt.payload.get("target_agent", "")
+        if not caller or not target:
+            continue
+
+        nodes.add(caller)
+        nodes.add(target)
+
+        key = f"{caller}→{target}"
+        if key not in edges:
+            edges[key] = {
+                "source": caller,
+                "target": target,
+                "call_count": 0,
+                "error_count": 0,
+                "total_duration_ms": 0,
+                "last_seen": None,
+            }
+
+        edge = edges[key]
+        edge["call_count"] += 1
+        if evt.severity == "error" or evt.payload.get("status") == "failed":
+            edge["error_count"] += 1
+        if evt.duration_ms:
+            edge["total_duration_ms"] += evt.duration_ms
+        evt_ts = evt.created_at.isoformat()
+        if not edge["last_seen"] or evt_ts > edge["last_seen"]:
+            edge["last_seen"] = evt_ts
+
+    for edge in edges.values():
+        if edge["call_count"] > 0 and edge["total_duration_ms"] > 0:
+            edge["avg_latency_ms"] = round(edge["total_duration_ms"] / edge["call_count"], 1)
+
+    return {
+        "nodes": sorted(nodes),
+        "edges": list(edges.values()),
+        "window_hours": hours,
+    }
+
+
+def get_spend_breakdown(
+    namespace: str | None = None,
+    hours: int = 24,
+) -> list[dict[str, Any]]:
+    """Aggregate token/cost spend by agent, model, runtime, namespace."""
+    from datetime import datetime, timedelta, timezone
+
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+
+    with db_session() as session:
+        query = session.query(RuntimeRunEvent).filter(
+            RuntimeRunEvent.created_at >= cutoff,
+            RuntimeRunEvent.total_tokens.isnot(None),
+        )
+        if namespace:
+            query = query.filter_by(namespace=namespace)
+
+        events = query.all()
+
+    buckets: dict[str, dict[str, Any]] = {}
+    for evt in events:
+        key = f"{evt.namespace}/{evt.agent_name or 'unknown'}/{evt.runtime_kind}"
+        if key not in buckets:
+            buckets[key] = {
+                "namespace": evt.namespace,
+                "agent_name": evt.agent_name or "unknown",
+                "runtime_kind": evt.runtime_kind,
+                "model": evt.payload.get("model", "unknown"),
+                "total_tokens": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "estimated_cost_usd": 0.0,
+                "run_count": 0,
+                "error_count": 0,
+            }
+
+        bucket = buckets[key]
+        bucket["total_tokens"] += evt.total_tokens or 0
+        bucket["prompt_tokens"] += evt.prompt_tokens or 0
+        bucket["completion_tokens"] += evt.completion_tokens or 0
+        bucket["estimated_cost_usd"] += evt.cost_usd or 0.0
+        if evt.event_type == "run.completed" or evt.event_type == "run.started":
+            bucket["run_count"] += 1
+        if evt.severity == "error":
+            bucket["error_count"] += 1
+
+    result = list(buckets.values())
+    for r in result:
+        r["estimated_cost_usd"] = round(r["estimated_cost_usd"], 6)
+
+    return sorted(result, key=lambda x: x["total_tokens"], reverse=True)

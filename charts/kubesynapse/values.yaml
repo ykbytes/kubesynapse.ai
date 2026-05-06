@@ -70,7 +70,7 @@ runtimeServiceAccount:
 opencodeRuntime:
   image:
     repository: docker.io/kubesynapse/kubesynapse-opencode-rt
-    tag: v1.0.0
+    tag: v2.1.0-run-intelligence
     pullPolicy: IfNotPresent
   provider: litellm
   limits:
@@ -110,7 +110,7 @@ opencodeRuntime:
 piRuntime:
   image:
     repository: docker.io/kubesynapse/kubesynapse-pi-rt
-    tag: v1.0.4-fifo-fix
+    tag: v2.1.0-run-intelligence
     pullPolicy: IfNotPresent
   # Default provider auto-detected from API keys (ANTHROPIC_API_KEY, OPENAI_API_KEY, etc.)
   provider: ""
@@ -130,7 +130,7 @@ piRuntime:
 mistralVibeRuntime:
   image:
     repository: docker.io/kubesynapse/kubesynapse-vibe-rt
-    tag: v0.1.2-mistral-vibe-defaultfix
+    tag: v2.1.0-run-intelligence
     pullPolicy: IfNotPresent
 
 operator:
@@ -138,11 +138,11 @@ operator:
   replicaCount: 2
   image:
     repository: docker.io/kubesynapse/kubesynapse-operator
-    tag: v1.0.5-mistral-vibe-defaultfix
+    tag: v2.1.0-run-intelligence
     pullPolicy: IfNotPresent
   workerImage:
     repository: docker.io/kubesynapse/kubesynapse-operator
-    tag: v1.0.5-mistral-vibe-defaultfix
+    tag: v2.1.0-run-intelligence
     pullPolicy: IfNotPresent
   resources:
     requests:
@@ -171,6 +171,16 @@ operator:
     size: 2Gi
     storageClassName: ""
   stateDbEnabled: true
+  signalWatch:
+    enabled: true
+    intervalSeconds: 60
+    thresholds:
+      highFailureRate: 0.3
+      errorSpikeCount: 3
+      errorSpikeWindowMinutes: 15
+      costOutlierMultiplier: 3.0
+      tokenSpikeMultiplier: 3.0
+      stuckRunDurationMultiplier: 2.0
 
 autoscaling:
   enabled: false
@@ -186,7 +196,7 @@ apiGateway:
   replicaCount: 1
   image:
     repository: docker.io/kubesynapse/kubesynapse-api-gateway
-    tag: v1.0.5-mistral-vibe
+    tag: v2.1.0-run-intelligence
     pullPolicy: IfNotPresent
   ingressClassName: ""
   ingressHost: ""  # leave empty for a hostless ingress, or set e.g. "agents.mycompany.com"
@@ -264,7 +274,7 @@ webUi:
   replicaCount: 1
   image:
     repository: docker.io/kubesynapse/kubesynapse-web-ui
-    tag: v1.0.24-runtime-branding
+    tag: v2.1.0-run-intelligence
     pullPolicy: IfNotPresent
   service:
     type: ClusterIP
@@ -606,3 +616,68 @@ agentRuntime:
   # Kubernetes MCP sidecar).  Disabled by default — enable only
   # when agents genuinely need cross-namespace cluster visibility.
   clusterReadAccess: false
+
+# ---------------------------------------------------------------------------
+# Run Intelligence Layer — System Agents (Story 7)
+# ---------------------------------------------------------------------------
+# Predefined AIAgent CRs that are invoked on triggers (failures, anomalies,
+# spend thresholds) rather than running continuously.  Deterministic SQL/rule
+# checks fire first; LLM agents are only invoked for explanation/escalation.
+systemAgents:
+  enabled: true
+  namespace: "kubesynapse-system"
+  # Default model used by all system agents unless overridden per-agent
+  defaultModel: "gpt-4"
+  defaultRuntime: "opencode"
+
+  # ks-run-inspector — invoked when workflow steps fail or error rates spike
+  runInspector:
+    enabled: true
+    model: ""  # inherits defaultModel
+    runtime: ""  # inherits defaultRuntime
+    description: "Investigates failed workflow runs and anomalous execution patterns. Produces concise root-cause summaries with actionable remediation steps."
+    # Trigger thresholds
+    triggers:
+      minFailureRate: 0.3  # invoke when >30% of steps in a run fail
+      minErrorCount: 3     # invoke when >=3 errors detected in a time window
+    # Resource overrides
+    resources:
+      requests:
+        cpu: "50m"
+        memory: "128Mi"
+      limits:
+        cpu: "500m"
+        memory: "512Mi"
+
+  # ks-signal-summarizer — invoked when deterministic anomaly checks fire
+  signalSummarizer:
+    enabled: true
+    model: ""  # inherits defaultModel
+    runtime: ""  # inherits defaultRuntime
+    description: "Summarizes deterministic anomaly signals into human-readable incident briefs. Correlates related events and suggests severity levels."
+    triggers:
+      maxSignalAgeMinutes: 30  # only summarize signals from the last 30 minutes
+    resources:
+      requests:
+        cpu: "50m"
+        memory: "128Mi"
+      limits:
+        cpu: "500m"
+        memory: "512Mi"
+
+  # ks-spend-reviewer — invoked when spend anomalies are detected
+  spendReviewer:
+    enabled: true
+    model: ""  # inherits defaultModel
+    runtime: ""  # inherits defaultRuntime
+    description: "Reviews token/cost spend anomalies across agents and namespaces. Identifies cost outliers and recommends budget adjustments or runtime changes."
+    triggers:
+      costThresholdUsd: 10.0  # invoke when estimated spend exceeds this in the window
+      tokenSpikeMultiplier: 3.0  # invoke when tokens are 3x the rolling average
+    resources:
+      requests:
+        cpu: "50m"
+        memory: "128Mi"
+      limits:
+        cpu: "500m"
+        memory: "512Mi"

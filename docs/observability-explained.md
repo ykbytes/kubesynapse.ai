@@ -1,12 +1,19 @@
 # Execution Observatory — Explained
 
-This document covers the **Execution Observatory**: the real-time trace pipeline that captures workflow execution steps, LLM calls, tool calls, events, and worker logs for every run. It replaces the older ObservationTarget/ObservationReport system with a direct, deterministic event stream.
+This document covers the **Execution Observatory** and **Run Intelligence Layer**: the real-time trace pipeline that captures workflow execution steps, LLM calls, tool calls, events, and worker logs for every run, plus the semantic event indexing system that enables anomaly detection, cost analysis, and agent topology mapping.
 
 ## Table of Contents
 
 - [Architecture](#architecture)
 - [How It Works](#how-it-works)
 - [Trace Pipeline](#trace-pipeline)
+- [Run Intelligence Layer](#run-intelligence-layer)
+  - [Semantic Event Index](#semantic-event-index)
+  - [Runtime Event Emission](#runtime-event-emission)
+  - [Query & Timeline APIs](#query--timeline-apis)
+  - [System Agents](#system-agents)
+  - [Signal Watch Controller](#signal-watch-controller)
+  - [Analytics APIs](#analytics-apis)
 - [Data Model](#data-model)
 - [Demo Workflow](#demo-workflow)
 - [Troubleshooting](#troubleshooting)
@@ -58,7 +65,220 @@ The API gateway's `_execution_trace_to_dict` function enriches each step record 
 - `tokens_used`: Sum of prompt + completion tokens across all LLM calls for that step
 - `step_index`: The order of the step in the workflow (1-based in UI)
 
+## Run Intelligence Layer
+
+The Run Intelligence Layer extends the Execution Observatory with **semantic event indexing**, **system agents**, and **analytics APIs**. It transforms raw trace data into actionable operational intelligence.
+
+### Architecture
+
+```
+Runtime (opencode/pi/vibe) ──→ runtime_events.py ──→ POST /api/v1/traces/runtime-events
+Operator Worker ──────────────→ runtime_events.py ──→      │
+                                                        ▼
+                                              runtime_run_events table
+                                                        │
+                    ┌───────────────────────────────────┼───────────────────────────────────┐
+                    ▼                                   ▼                                   ▼
+          GET /traces/{id}/timeline          Signal Watch Controller          GET /observability/*
+          GET /traces/runtime-events         (every 60s SQL checks)           - /agent-graph
+          GET /traces/{id}/runtime-summary   Creates ObservationReport CRs    - /spend
+                                                                                - system agents
+```
+
+### Semantic Event Index
+
+The `runtime_run_events` table stores structured events from all runtimes and workers:
+
+| Column | Type | Description |
+|---|---|---|
+| `id` | `VARCHAR(64)` | Primary key (`rre-{uuid}`) |
+| `event_id` | `VARCHAR(128)` | Unique per event (`{execution_id}-{seq}`), idempotent upsert |
+| `execution_id` | `VARCHAR(64)` | Parent execution/run ID |
+| `session_id` | `VARCHAR(128)` | Runtime session ID |
+| `thread_id` | `VARCHAR(128)` | Logical thread ID |
+| `namespace` | `VARCHAR(128)` | Kubernetes namespace |
+| `agent_name` | `VARCHAR(128)` | Agent that generated the event |
+| `runtime_kind` | `VARCHAR(50)` | `opencode`, `pi`, `vibe`, `operator-worker` |
+| `event_type` | `VARCHAR(64)` | Canonical event type (see taxonomy below) |
+| `seq` | `INTEGER` | Per-execution sequence number |
+| `severity` | `VARCHAR(16)` | `info`, `warning`, `error` |
+| `payload` | `JSONB` | Flexible event data |
+| `duration_ms` | `INTEGER` | Operation duration |
+| `prompt_tokens` | `INTEGER` | LLM prompt tokens |
+| `completion_tokens` | `INTEGER` | LLM completion tokens |
+| `total_tokens` | `INTEGER` | Total tokens |
+| `cost_usd` | `FLOAT` | Estimated cost |
+| `created_at` | `TIMESTAMPTZ` | Event timestamp |
+
+### Event Taxonomy
+
+All runtimes emit events using this canonical taxonomy:
+
+| Event Type | Emitted By | Description |
+|---|---|---|
+| `run.started` | All runtimes | Session/invoke started |
+| `run.completed` | All runtimes | Session/invoke completed |
+| `run.error` | All runtimes | Session/invoke failed |
+| `tool.started` | All runtimes | Tool call initiated |
+| `tool.completed` | All runtimes | Tool call succeeded |
+| `tool.failed` | All runtimes | Tool call failed |
+| `llm.call` | All runtimes | LLM interaction completed |
+| `agent.call.started` | Operator worker | A2A agent call initiated |
+| `agent.call.completed` | Operator worker | A2A agent call succeeded |
+| `agent.call.failed` | Operator worker | A2A agent call failed |
+| `step.started` | Operator worker | Workflow step started |
+| `step.completed` | Operator worker | Workflow step completed |
+| `step.failed` | Operator worker | Workflow step failed |
+| `human.question` | opencode-runtime | HITL question asked |
+| `todo.updated` | opencode-runtime | Todo list changed |
+
+### Runtime Event Emission
+
+Each runtime has a `runtime_events` module that:
+
+1. **Queues events** in a bounded async/sync queue (max 500 events)
+2. **Batch flushes** every 2 seconds or when 50 events accumulate
+3. **Sanitizes payloads** — secrets redacted, large strings truncated
+4. **Generates idempotent event IDs** — `{execution_id}-{seq}` format
+5. **Graceful shutdown** — drains queue before exit
+
+**Configuration (env vars):**
+
+| Variable | Default | Description |
+|---|---|---|
+| `RUNTIME_EVENTS_QUEUE_SIZE` | `500` | Max events in queue |
+| `RUNTIME_EVENTS_BATCH_SIZE` | `50` | Events per batch |
+| `RUNTIME_EVENTS_FLUSH_INTERVAL` | `2.0` | Flush interval (seconds) |
+| `RUNTIME_EVENTS_HTTP_TIMEOUT` | `10.0` | HTTP timeout (seconds) |
+
+### Query & Timeline APIs
+
+| Endpoint | Description |
+|---|---|
+| `POST /api/v1/traces/runtime-events` | Batch ingest events (max 500 per request) |
+| `GET /api/v1/traces/{execution_id}/timeline` | Ordered semantic timeline for a run |
+| `GET /api/v1/traces/{execution_id}/runtime-summary` | Aggregate stats (tokens, cost, duration, errors) |
+| `GET /api/v1/traces/runtime-events` | Cross-run filtering with pagination |
+
+**Timeline query parameters:**
+- `event_type` — filter by event type
+- `from_seq` — start from sequence number
+- `limit` — max events (default 500)
+
+**Cross-run query parameters:**
+- `namespace`, `runtime_kind`, `event_type`, `agent_name`, `session_id`, `severity`
+- `from_ts`, `to_ts` — ISO 8601 timestamps
+- `limit`, `offset` — pagination
+
+### System Agents
+
+Three predefined AIAgent CRs provide AI-powered analysis on top of deterministic detection:
+
+| Agent | Trigger | Purpose |
+|---|---|---|
+| `ks-run-inspector` | Workflow step failures, high error rates | Investigates failed runs, produces root-cause summaries |
+| `ks-signal-summarizer` | Anomaly signals from signal watch | Converts raw signals to human-readable incident briefs |
+| `ks-spend-reviewer` | Cost/token spend anomalies | Reviews spend outliers, recommends optimizations |
+
+**Configuration (Helm values):**
+
+```yaml
+systemAgents:
+  enabled: true
+  namespace: "kubesynapse-system"
+  defaultModel: "gpt-4"
+  defaultRuntime: "opencode"
+  runInspector:
+    enabled: true
+    triggers:
+      minFailureRate: 0.3
+      minErrorCount: 3
+  signalSummarizer:
+    enabled: true
+    triggers:
+      maxSignalAgeMinutes: 30
+  spendReviewer:
+    enabled: true
+    triggers:
+      costThresholdUsd: 10.0
+      tokenSpikeMultiplier: 3.0
+```
+
+### Signal Watch Controller
+
+The operator runs a periodic anomaly detection controller (`signal_watch.py`) that executes deterministic SQL checks every 60 seconds:
+
+| Check | Threshold | Severity Mapping |
+|---|---|---|
+| High failure rate | >30% steps failed in window | 30%=medium, 50%=high, 70%=critical |
+| Error spikes | >=3 errors in 15m window | 1x=medium, 2x=high, 5x=critical |
+| Cost outliers | >3x namespace average | 3x=medium, 5x=high, 10x=critical |
+| Token spikes | >3x agent rolling average | 3x=medium, 5x=high, 10x=critical |
+| Stuck runs | >2x median duration | 2x=medium, 3x=high, 5x=critical |
+
+When a check fires, an `ObservationReport` CR is created with severity classification. System agents can be invoked to provide AI-powered explanations.
+
+**Configuration (env vars):**
+
+| Variable | Default | Description |
+|---|---|---|
+| `SIGNAL_WATCH_INTERVAL_SEC` | `60` | Check interval |
+| `SIGNAL_WATCH_WINDOW_MINUTES` | `15` | Anomaly detection window |
+| `SIGNAL_WATCH_FAILURE_RATE` | `0.3` | Failure rate threshold |
+| `SIGNAL_WATCH_ERROR_COUNT` | `3` | Error count threshold |
+| `SIGNAL_WATCH_COST_MULTIPLIER` | `3.0` | Cost outlier multiplier |
+| `SIGNAL_WATCH_TOKEN_MULTIPLIER` | `3.0` | Token spike multiplier |
+| `SIGNAL_WATCH_STUCK_MULTIPLIER` | `2.0` | Stuck run multiplier |
+
+### Analytics APIs
+
+| Endpoint | Description |
+|---|---|
+| `GET /api/v1/observability/agent-graph` | Agent-to-agent dependency graph from A2A events |
+| `GET /api/v1/observability/spend` | Token/cost breakdown by agent, model, runtime, namespace |
+
+**Agent Graph Response:**
+```json
+{
+  "nodes": ["agent-a", "agent-b", "agent-c"],
+  "edges": [
+    {
+      "source": "agent-a",
+      "target": "agent-b",
+      "call_count": 42,
+      "error_count": 2,
+      "avg_latency_ms": 1250,
+      "last_seen": "2026-05-04T12:00:00Z"
+    }
+  ],
+  "window_hours": 24
+}
+```
+
+**Spend Response:**
+```json
+{
+  "items": [
+    {
+      "namespace": "default",
+      "agent_name": "build-agent",
+      "runtime_kind": "opencode",
+      "model": "gpt-4",
+      "total_tokens": 125000,
+      "prompt_tokens": 80000,
+      "completion_tokens": 45000,
+      "estimated_cost_usd": 3.75,
+      "run_count": 12,
+      "error_count": 1
+    }
+  ],
+  "window_hours": 24
+}
+```
+
 ## Data Model
+
+### Execution Observatory Tables
 
 ### execution_traces Table
 
@@ -174,11 +394,22 @@ kubectl get deployment kubesynapse-operator -n kubesynapse -o jsonpath='{.spec.t
 
 ## Runtime Compatibility
 
-| Runtime | Agent Example | LLM Calls | Tool Calls | Logs | Status |
-|---|---|---|---|---|---|
-| **pi-runtime** | `minimax` (mistral/devstral-small) | ✅ | ✅ | ✅ | Full support |
-| **mistral-vibe** | `mistral-vibe-smoke` (devstral-small) | ✅ | ✅ | ✅ | Full support |
-| **opencode** | `opencode-test` (gpt-4o-mini) | Requires image build | — | — | Image must be built locally for kind |
+| Runtime | Agent Example | LLM Calls | Tool Calls | Logs | Runtime Events | Status |
+|---|---|---|---|---|---|---|
+| **pi-runtime** | `minimax` (mistral/devstral-small) | ✅ | ✅ | ✅ | ✅ | Full support |
+| **mistral-vibe** | `mistral-vibe-smoke` (devstral-small) | ✅ | ✅ | ✅ | ✅ | Full support |
+| **opencode** | `opencode-test` (gpt-4o-mini) | Requires image build | — | — | ✅ | Image must be built locally for kind |
+
+### Runtime Event Emission
+
+All runtimes now emit structured events to the Run Intelligence Layer via their `runtime_events` module:
+
+- **opencode-runtime**: `runtime_events.py` — sync + async emitter, integrated into `/invoke`, `/invoke/stream`, lifespan
+- **pi-runtime**: `runtime_events.js` — Node.js emitter, integrated into `/invoke`, `/invoke/stream`, shutdown
+- **vibe-runtime**: `runtime_events.py` — lightweight sync emitter, integrated into `/invoke`, `/invoke/stream`, signals
+- **operator worker**: `runtime_events.py` — emits workflow/step/agent/tool events alongside existing TraceClient
+
+Events are batched, idempotent, and sanitized before being sent to `POST /api/v1/traces/runtime-events`.
 
 ### Pi-Runtime Specific Notes
 - LLM calls are recorded when the runtime returns a `response` field (model is inferred from the agent spec or marked as "unknown")

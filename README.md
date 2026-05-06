@@ -166,6 +166,7 @@ agentctl health
 | 7 | **Multi-Tenant Isolation** | `AgentTenant` CRDs provision isolated namespaces, resource quotas, RBAC, and network policies per team. |
 | 8 | **Workflow Engine** | `AgentWorkflow` CRDs define DAG-based multi-agent pipelines with dependency chains, parallel execution, and human-in-the-loop approval gates. |
 | 9 | **Continuous Evaluation** | `AgentEval` CRDs run scheduled test suites measuring relevance, toxicity, latency, and exact-match thresholds against live agents. |
+| 10 | **Run Intelligence Layer** | Semantic event indexing, deterministic anomaly detection, system agents for root-cause analysis, and analytics APIs for agent topology and spend visibility. |
 
 ---
 

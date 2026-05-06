@@ -5,6 +5,17 @@ from typing import Any, cast
 
 # Re-import all shared symbols from the gateway core
 from _core import *
+from routers.auth import (
+    MCP_HUB_SERVERS,
+    MCP_PROFILES,
+    MCP_REGISTRY,
+    MCP_TOOL_CATEGORIES,
+    _build_mcp_registry_entry,
+    _build_mcp_registry_results,
+    _resolve_sidecar_image,
+    _resolve_sidecar_port,
+)
+import trace_store
 from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response
 
 router = APIRouter(tags=["observability"])
@@ -1502,3 +1513,42 @@ def _build_auto_intelligence_context(
         if total_len >= max_chars:
             break
     return "\n".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# Run Intelligence Layer — Agent Graph & Spend Lens
+# ---------------------------------------------------------------------------
+
+
+@router.get("/agent-graph")
+def get_agent_interaction_graph(
+    namespace: str | None = None,
+    hours: int = 24,
+    user=Depends(verify_token),
+) -> dict[str, Any]:
+    """Build agent-to-agent dependency graph from A2A events."""
+    if namespace:
+        ensure_namespace_access(user, namespace)
+
+    graph = trace_store.get_agent_interaction_graph(
+        namespace=namespace,
+        hours=min(hours, 168),
+    )
+    return graph
+
+
+@router.get("/spend")
+def get_spend_breakdown(
+    namespace: str | None = None,
+    hours: int = 24,
+    user=Depends(verify_token),
+) -> dict[str, Any]:
+    """Aggregate token/cost spend by agent, model, runtime, namespace."""
+    if namespace:
+        ensure_namespace_access(user, namespace)
+
+    items = trace_store.get_spend_breakdown(
+        namespace=namespace,
+        hours=min(hours, 720),
+    )
+    return {"items": items, "window_hours": hours}

@@ -239,6 +239,14 @@ async def lifespan(app: FastAPI):
             else:
                 logger.exception("Failed to initialize auth database after %d attempts: %s", max_db_retries, exc)
                 raise RuntimeError("Auth database initialization failed") from exc
+
+    # Initialize trace database (runtime_run_events table for Run Intelligence Layer)
+    try:
+        from trace_store import init_trace_database
+        init_trace_database()
+        logger.info("Trace database initialized (Run Intelligence Layer).")
+    except Exception as exc:
+        logger.warning("Trace database init failed (non-critical): %s", exc)
     try:
         try:
             _load_collectors_from_db()
@@ -1918,6 +1926,12 @@ def serialize_agent_github_config(config: Any) -> dict[str, Any] | None:
 
 
 MCP_CONNECTION_VALIDATION_STATES = {"draft", "valid", "warning", "invalid"}
+
+
+def _build_mcp_registry_results() -> list[dict[str, Any]]:
+    from routers.auth import _build_mcp_registry_results as _auth_build_mcp_registry_results
+
+    return _auth_build_mcp_registry_results()
 
 
 def _mcp_registry_index() -> dict[str, dict[str, Any]]:
@@ -5275,3 +5289,7 @@ def a2a_card_http_exception(error: A2AJSONRPCError) -> HTTPException:
 # ---------------------------------------------------------------------------
 # Authentication
 # ---------------------------------------------------------------------------
+
+# Export the complete shared gateway surface, including underscore-prefixed
+# helpers used by split router modules via ``from _core import *``.
+__all__ = [name for name in globals() if not name.startswith("__")]

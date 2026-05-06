@@ -571,7 +571,7 @@ async def stream_workflow_activities(
     request: Request,
     namespace: str = "default",
     tail: int = 100,
-    user=Depends(verify_token),
+    user=Depends(verify_token_or_query),
 ):
     """SSE stream that pushes workflow journal/activity events in real-time.
 
@@ -590,10 +590,16 @@ async def stream_workflow_activities(
     phase = str(status.get("phase") or "").strip()
     is_active = phase in {"queued", "running", "waiting-approval"}
 
-    # Resolve PVC + path so we can read the journal from the operator namespace
+    # Resolve PVC + path so we can read the journal from the operator namespace.
+    # These fields can change as a queued workflow becomes active, so the stream
+    # refreshes them during polling instead of relying only on the initial snapshot.
     pvc_name = str(artifact_ref.get("pvcName") or "").strip()
+    artifact_namespace = str(artifact_ref.get("namespace") or "").strip()
     generation = int(status.get("observedGeneration") or 1)
     run_id = str(status.get("runId") or "").strip()
+    worker_job = status.get("workerJob") or {}
+    worker_job_name = str(worker_job.get("name") or "").strip()
+    worker_namespace = str(worker_job.get("namespace") or artifact_namespace or "").strip()
 
     async def activity_event_generator():
         import time
@@ -603,23 +609,18 @@ async def stream_workflow_activities(
             {"workflow_name": workflow_name, "phase": phase, "run_id": run_id, "is_active": is_active},
         )
 
-        # If we have no journal path, return a graceful empty stream
-        if not journal_path:
+        # If we have no journal path for a terminal workflow, return a graceful
+        # empty stream. Active workflows may populate it shortly after enqueue.
+        if not journal_path and not is_active:
             yield sse_event("activities.done", {"reason": "no_journal_path"})
             return
 
-        # Try to read journal via artifact API fallback (same mechanism used by
-        # artifact downloads).  Build the artifact relative path from the
-        # known prefix pattern: /artifacts/workflows/{ns}/{name}/...
-        artifact_rel = journal_path
-        if artifact_rel.startswith("/artifacts/"):
-            artifact_rel = artifact_rel[len("/artifacts/"):]
-
         seen_ids: set[str] = set()
         last_event_time = time.monotonic()
+        seen_status_ids: set[str] = set()
 
         try:
-            if is_active and pvc_name:
+            if is_active:
                 # Active workflow — tail the journal file via k8s exec into a
                 # lightweight sidecar or by polling the artifact read endpoint.
                 # For simplicity we poll the artifact endpoint every second.
@@ -628,9 +629,38 @@ async def stream_workflow_activities(
                     if await request.is_disconnected():
                         break
                     try:
+                        fresh = read_custom_resource("agentworkflows", workflow_name, namespace, "Workflow")
+                        fresh_status = (fresh.get("status") or {}) if isinstance(fresh, dict) else {}
+                        fresh_artifact_ref = fresh_status.get("artifactRef") or {}
+                        fresh_worker_job = fresh_status.get("workerJob") or {}
+                        fresh_phase = str(fresh_status.get("phase") or phase).strip()
+                        current_journal_path = str(fresh_artifact_ref.get("journalPath") or journal_path).strip()
+                        current_pvc_name = str(fresh_artifact_ref.get("pvcName") or pvc_name).strip()
+                        current_worker_job_name = str(fresh_worker_job.get("name") or worker_job_name).strip()
+                        current_worker_namespace = str(
+                            fresh_worker_job.get("namespace") or fresh_artifact_ref.get("namespace") or worker_namespace
+                        ).strip()
+
+                        if not current_journal_path or not current_pvc_name:
+                            if fresh_phase in {"completed", "failed", "cancelled"}:
+                                yield sse_event("activities.done", {"phase": fresh_phase, "reason": "no_journal_path"})
+                                return
+                            await asyncio.sleep(1)
+                            continue
+
+                        artifact_rel = current_journal_path
+                        if artifact_rel.startswith("/artifacts/"):
+                            artifact_rel = artifact_rel[len("/artifacts/"):]
+
                         content = await asyncio.get_event_loop().run_in_executor(
                             None,
-                            lambda: _read_artifact_from_pvc_sync(pvc_name, artifact_rel, namespace),
+                            lambda: _read_artifact_from_pvc_sync(
+                                current_pvc_name,
+                                artifact_rel,
+                                namespace,
+                                worker_job_name=current_worker_job_name,
+                                worker_namespace=current_worker_namespace,
+                            ),
                         )
                         if content:
                             lines = content.strip().splitlines()
@@ -646,6 +676,13 @@ async def stream_workflow_activities(
                             prev_size = len(lines)
                         else:
                             prev_size = 0
+
+                        if not content:
+                            for activity in _status_step_state_activities(fresh_status, run_id):
+                                activity_id = str(activity.get("id") or "")
+                                if activity_id and activity_id not in seen_status_ids:
+                                    seen_status_ids.add(activity_id)
+                                    yield sse_event("activity", activity)
                     except Exception as exc:
                         logger.debug("Activity stream poll error for %s: %s", workflow_name, exc)
                     await asyncio.sleep(1)
@@ -654,8 +691,6 @@ async def stream_workflow_activities(
                         last_event_time = time.monotonic()
                     # Stop polling if workflow reached terminal phase
                     try:
-                        fresh = read_custom_resource("agentworkflows", workflow_name, namespace, "Workflow")
-                        fresh_phase = str((fresh.get("status") or {}).get("phase", "")).strip()
                         if fresh_phase in {"completed", "failed", "cancelled"}:
                             yield sse_event("activities.done", {"phase": fresh_phase})
                             return
@@ -663,9 +698,18 @@ async def stream_workflow_activities(
                         pass
             else:
                 # Terminal workflow — one-shot read
+                artifact_rel = journal_path
+                if artifact_rel.startswith("/artifacts/"):
+                    artifact_rel = artifact_rel[len("/artifacts/"):]
                 content = await asyncio.get_event_loop().run_in_executor(
                     None,
-                    lambda: _read_artifact_from_pvc_sync(pvc_name, artifact_rel, namespace),
+                    lambda: _read_artifact_from_pvc_sync(
+                        pvc_name,
+                        artifact_rel,
+                        namespace,
+                        worker_job_name=worker_job_name,
+                        worker_namespace=worker_namespace,
+                    ),
                 )
                 if content:
                     lines = content.strip().splitlines()
@@ -690,7 +734,13 @@ async def stream_workflow_activities(
     )
 
 
-def _read_artifact_from_pvc_sync(pvc_name: str, artifact_rel: str, namespace: str) -> str | None:
+def _read_artifact_from_pvc_sync(
+    pvc_name: str,
+    artifact_rel: str,
+    namespace: str,
+    worker_job_name: str = "",
+    worker_namespace: str = "",
+) -> str | None:
     """Best-effort read of an artifact file from a PVC via a transient pod."""
     if not pvc_name or not artifact_rel:
         return None
@@ -705,20 +755,27 @@ def _read_artifact_from_pvc_sync(pvc_name: str, artifact_rel: str, namespace: st
 
         core = k8s_client.CoreV1Api()
         # Use the operator namespace for artifact PVCs
-        op_ns = os.getenv("OPERATOR_NAMESPACE", namespace).strip() or namespace
+        op_ns = worker_namespace or os.getenv("OPERATOR_NAMESPACE", namespace).strip() or namespace
 
-        # Try to find an existing pod that has the PVC mounted (e.g. worker pod)
-        pods = core.list_namespaced_pod(namespace=op_ns, limit=5)
         candidate_pod = None
-        for pod in pods.items:
-            if not pod.spec or not pod.spec.volumes:
-                continue
-            for vol in pod.spec.volumes:
-                if getattr(vol, "persistent_volume_claim", None) and vol.persistent_volume_claim.claim_name == pvc_name:
-                    candidate_pod = pod.metadata.name
+
+        if worker_job_name:
+            pods = core.list_namespaced_pod(namespace=op_ns, label_selector=f"job-name={worker_job_name}")
+            if pods.items:
+                candidate_pod = pods.items[0].metadata.name
+
+        if not candidate_pod:
+            # Fallback: find any pod that currently mounts the artifact PVC.
+            pods = core.list_namespaced_pod(namespace=op_ns)
+            for pod in pods.items:
+                if not pod.spec or not pod.spec.volumes:
+                    continue
+                for vol in pod.spec.volumes:
+                    if getattr(vol, "persistent_volume_claim", None) and vol.persistent_volume_claim.claim_name == pvc_name:
+                        candidate_pod = pod.metadata.name
+                        break
+                if candidate_pod:
                     break
-            if candidate_pod:
-                break
 
         if not candidate_pod:
             return None
@@ -777,9 +834,13 @@ def _parse_journal_line(line: str) -> dict[str, Any] | None:
         elif "handoff" in event_type:
             activity_type = "a2a"
 
-        payload = record.get("payload") or {}
+        payload = record.get("payload")
         if not isinstance(payload, dict):
-            payload = {}
+            payload = {
+                key: value
+                for key, value in record.items()
+                if key not in {"timestamp", "event", "kind", "resource", "payload"}
+            }
 
         return {
             "id": hashlib.sha256(line.encode()).hexdigest()[:16],
@@ -795,6 +856,74 @@ def _parse_journal_line(line: str) -> dict[str, Any] | None:
         }
     except Exception:
         return None
+
+
+def _build_status_activity(
+    *,
+    event_type: str,
+    timestamp: str | None,
+    payload: dict[str, Any],
+) -> dict[str, Any] | None:
+    record = {
+        "timestamp": timestamp or datetime.now(UTC).isoformat(),
+        "event": event_type,
+        "payload": payload,
+    }
+    parsed = _parse_journal_line(json.dumps(record, sort_keys=True))
+    if parsed:
+        parsed["source"] = "status"
+    return parsed
+
+
+def _status_step_state_activities(status: dict[str, Any], run_id: str) -> list[dict[str, Any]]:
+    step_states = status.get("stepStates") or {}
+    if not isinstance(step_states, dict):
+        return []
+
+    activities: list[dict[str, Any]] = []
+    for step_name, raw_state in step_states.items():
+        if not isinstance(raw_state, dict):
+            continue
+        state = raw_state
+        status_name = str(state.get("status") or "").strip().lower()
+        if not status_name:
+            continue
+
+        event_type = {
+            "running": "workflow.step.started",
+            "completed": "workflow.step.completed",
+            "failed": "workflow.step.failed",
+            "denied": "workflow.step.failed",
+            "cancelled": "workflow.step.failed",
+            "waiting-approval": "workflow.review.started",
+        }.get(status_name, "workflow.step.updated")
+
+        payload: dict[str, Any] = {
+            "runId": run_id,
+            "step": str(state.get("stepName") or step_name),
+            "agentRef": str(state.get("agentRef") or ""),
+            "status": status_name,
+            "latencyMs": state.get("latencyMs"),
+            "toolCallCount": state.get("toolCallCount"),
+            "warnings": state.get("warnings") or [],
+            "error": state.get("error"),
+            "responsePreview": state.get("responsePreview"),
+            "verificationResult": state.get("verificationResult"),
+            "reviewResult": state.get("reviewResult"),
+        }
+
+        timestamp = (
+            str(state.get("updatedAt") or "").strip()
+            or str(state.get("completedAt") or "").strip()
+            or str(state.get("startedAt") or "").strip()
+            or None
+        )
+        activity = _build_status_activity(event_type=event_type, timestamp=timestamp, payload=payload)
+        if activity:
+            activities.append(activity)
+
+    activities.sort(key=lambda item: str(item.get("timestamp") or ""))
+    return activities
 
 
 def _activity_message(event_type: str, payload: dict[str, Any]) -> str:

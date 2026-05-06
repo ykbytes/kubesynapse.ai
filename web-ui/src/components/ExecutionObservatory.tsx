@@ -254,12 +254,12 @@ function computeTraceability(detail: ExecutionTrace | null) {
   const errorEvents = detail.events.filter((event) => event.event_type === "ERROR" || event.event_type === "STEP_FAILED").length;
   const artifactEvents = detail.events.filter((event) => event.event_type === "ARTIFACT_CREATED").length;
   const coveredSteps = detail.steps.filter(
-    (step) => step.llm_calls.length > 0 || step.tool_calls.length > 0 || Boolean(step.input_preview) || Boolean(step.output_preview),
+    (step) => (step.llm_call_count ?? step.llm_calls.length) > 0 || (step.tool_call_count ?? step.tool_calls.length) > 0 || Boolean(step.input_preview) || Boolean(step.output_preview),
   ).length;
   const coverage = detail.steps.length > 0 ? Math.round((coveredSteps / detail.steps.length) * 100) : 0;
   const hotSteps = [...detail.steps].sort((left, right) => {
-    const rightWeight = (right.latency_ms ?? 0) + right.llm_calls.length * 100 + right.tool_calls.length * 50;
-    const leftWeight = (left.latency_ms ?? 0) + left.llm_calls.length * 100 + left.tool_calls.length * 50;
+    const rightWeight = (right.latency_ms ?? 0) + (right.llm_call_count ?? right.llm_calls.length) * 100 + (right.tool_call_count ?? right.tool_calls.length) * 50;
+    const leftWeight = (left.latency_ms ?? 0) + (left.llm_call_count ?? left.llm_calls.length) * 100 + (left.tool_call_count ?? left.tool_calls.length) * 50;
     return rightWeight - leftWeight;
   }).slice(0, 3);
 
@@ -993,8 +993,8 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
                               </div>
                               <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
                                 <span>{formatDuration(step.latency_ms)}</span>
-                                <span>{step.llm_calls.length} LLM</span>
-                                <span>{step.tool_calls.length} tools</span>
+                                <span>{step.llm_call_count ?? step.llm_calls.length} LLM</span>
+                                <span>{step.tool_call_count ?? step.tool_calls.length} tools</span>
                                 {step.tokens_used != null && <span>{step.tokens_used} tokens</span>}
                                 {step.cost_usd != null && <span>{formatCurrency(step.cost_usd)}</span>}
                               </div>
@@ -1036,8 +1036,8 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
                             </div>
                             <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
                               <span>{formatDuration(step.latency_ms)}</span>
-                              <span>{step.llm_calls.length} LLM</span>
-                              <span>{step.tool_calls.length} tools</span>
+                              <span>{step.llm_call_count ?? step.llm_calls.length} LLM</span>
+                              <span>{step.tool_call_count ?? step.tool_calls.length} tools</span>
                               {step.step_type && <span>{step.step_type}</span>}
                             </div>
                           </button>

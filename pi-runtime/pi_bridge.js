@@ -24,6 +24,9 @@ const os = require("os");
 const path = require("path");
 const { spawn, execSync } = require("child_process");
 
+// Run Intelligence Layer — runtime event emitter
+const runtimeEvents = require("./runtime_events");
+
 const HOST = process.env.PI_BRIDGE_HOST || "0.0.0.0";
 const PORT = parseInt(process.env.PI_BRIDGE_PORT || "8080", 10);
 const PI_STDIN_FIFO = "/tmp/pi-stdin";
@@ -500,7 +503,7 @@ async function ensurePiWithConfig(requestedConfig) {
       inv.error = "Pi restarting for model change";
       inv.done = true;
       if (inv.stream && !inv.stream.destroyed) {
-        inv.stream.write(`event: response.error\ndata: ${JSON.stringify({ error: inv.error })}\n\n`);
+        inv.stream.write(`event: response.error\ndata: ${JSON.stringify({ session_id: invId, error: inv.error, code: 503 })}\n\n`);
         inv.stream.end();
       }
       ACTIVE_INVOCATIONS.delete(invId);
@@ -595,7 +598,7 @@ function handlePiOutput(line) {
             inv.error = errorMessage;
             inv.done = true;
             if (inv.stream) {
-              inv.stream.write(`event: response.error\ndata: ${JSON.stringify({ error: errorMessage })}\n\n`);
+              inv.stream.write(`event: response.error\ndata: ${JSON.stringify({ session_id: inv.id || null, error: errorMessage, code: 502 })}\n\n`);
             }
           }
           handler.reject(new Error(errorMessage));
@@ -615,7 +618,7 @@ function handlePiOutput(line) {
         for (const inv of ACTIVE_INVOCATIONS.values()) {
           inv.chunks.push(evt.delta);
           if (inv.stream) {
-            inv.stream.write(`event: response.delta\ndata: ${JSON.stringify({ delta: evt.delta, source: "pi" })}\n\n`);
+            inv.stream.write(`event: response.delta\ndata: ${JSON.stringify({ text: evt.delta, session_id: inv.id || null })}\n\n`);
           }
         }
       }
@@ -644,10 +647,10 @@ function handlePiOutput(line) {
         inv.tools.push({ tool: data.toolName, status: "running", input: data.args });
         if (inv.stream) {
           inv.stream.write(`event: response.tool_call\ndata: ${JSON.stringify({
-            tool: data.toolName,
-            status: "running",
-            input: data.args,
-            source: "pi"
+            name: data.toolName,
+            args: data.args,
+            id: `tool-${++commandCounter}`,
+            session_id: inv.id || null,
           })}\n\n`);
         }
       }
@@ -658,11 +661,11 @@ function handlePiOutput(line) {
         const t = inv.tools.find((x) => x.tool === data.toolName && x.status === "running");
         if (t) t.status = data.isError ? "error" : "completed";
         if (inv.stream) {
-          inv.stream.write(`event: response.tool_call\ndata: ${JSON.stringify({
-            tool: data.toolName,
+          inv.stream.write(`event: response.tool_result\ndata: ${JSON.stringify({
+            id: `tool-${commandCounter}`,
+            result: data.result ? JSON.stringify(data.result) : "",
             status: data.isError ? "error" : "completed",
-            output: data.result ? JSON.stringify(data.result) : "",
-            source: "pi"
+            session_id: inv.id || null,
           })}\n\n`);
         }
       }
@@ -675,7 +678,7 @@ function handlePiOutput(line) {
         inv.done = true;
         if (inv.stream) {
           const responseText = inv.chunks.join("");
-          inv.stream.write(`event: response.completed\ndata: ${JSON.stringify({ status: "completed", response: responseText })}\n\n`);
+          inv.stream.write(`event: response.completed\ndata: ${JSON.stringify({ session_id: inv.id || null, tokens: 0, status: "completed", finish_reason: "stop", response: responseText })}\n\n`);
         }
       }
     }
@@ -686,7 +689,7 @@ function handlePiOutput(line) {
         inv.error = data.error || "Unknown error";
         inv.done = true;
         if (inv.stream) {
-          inv.stream.write(`event: response.error\ndata: ${JSON.stringify({ error: inv.error })}\n\n`);
+          inv.stream.write(`event: response.error\ndata: ${JSON.stringify({ session_id: inv.id || null, error: inv.error, code: 500 })}\n\n`);
         }
       }
     }
@@ -713,6 +716,26 @@ function handleExtensionUIRequest(data) {
   if (["notify", "setStatus", "setWidget", "setTitle", "set_editor_text"].includes(method)) {
     console.log("[pi-bridge] Extension UI:", method, data.message || data.statusText || "");
     return;
+  }
+
+  // Emit question.asked SSE event for interactive methods
+  if (["confirm", "select", "input", "editor"].includes(method)) {
+    const questionEvent = {
+      id: `q-${id}`,
+      question: data.title || data.message || "",
+      options: data.options || [],
+      session_id: null,
+      method,
+    };
+    const sseData = `event: question.asked\ndata: ${JSON.stringify(questionEvent)}\n\n`;
+    for (const stream of eventStreams) {
+      try { stream.write(sseData); } catch (e) { eventStreams.delete(stream); }
+    }
+    for (const inv of ACTIVE_INVOCATIONS.values()) {
+      if (inv.stream) {
+        try { inv.stream.write(sseData); } catch (e) {}
+      }
+    }
   }
 
   let response = { type: "extension_ui_response", id };
@@ -962,6 +985,15 @@ async function handleRequest(req, res) {
         return jsonResponse(res, 400, { error: "prompt is required" });
       }
 
+      const threadId = parsed.thread_id || `pi-${++commandCounter}`;
+      const executionId = `exec-${threadId.slice(0, 16)}`;
+      const startTime = Date.now();
+
+      runtimeEvents.emitRunStarted(executionId, {
+        thread_id: threadId,
+        model: parsed.model || currentConfig.model,
+      });
+
       // Dynamic model switching: check if request specifies different config
       await ensurePiWithConfig({
         model: parsed.model || "",
@@ -972,7 +1004,7 @@ async function handleRequest(req, res) {
       // Handle image attachments
       const finalMessage = handleImageAttachments(message, parsed.images);
 
-      const invId = `invoke-${++commandCounter}`;
+      const invId = `invoke-${commandCounter}`;
       const invocation = { chunks: [], tools: [], done: false, error: null, stream: null };
       ACTIVE_INVOCATIONS.set(invId, invocation);
 
@@ -992,9 +1024,15 @@ async function handleRequest(req, res) {
 
       ACTIVE_INVOCATIONS.delete(invId);
 
+      const durationMs = Date.now() - startTime;
+
       if (invocation.error) {
+        runtimeEvents.emitRunError(executionId, {
+          thread_id: threadId,
+          error: invocation.error,
+        });
         return jsonResponse(res, 502, {
-          thread_id: parsed.thread_id || invId,
+          thread_id: threadId,
           response: "",
           model: currentConfig.model,
           status: "failed",
@@ -1006,8 +1044,24 @@ async function handleRequest(req, res) {
       }
 
       const responseText = invocation.chunks.join("");
+      runtimeEvents.emitRunCompleted(executionId, {
+        thread_id: threadId,
+        status: "completed",
+        duration_ms: durationMs,
+      });
+
+      // Emit tool call events
+      for (const tc of invocation.tools) {
+        runtimeEvents.emitToolCall(executionId, {
+          tool_name: tc.name || "unknown",
+          tool_args: tc.args,
+          status: tc.status || "completed",
+          thread_id: threadId,
+        });
+      }
+
       return jsonResponse(res, 200, {
-        thread_id: parsed.thread_id || invId,
+        thread_id: threadId,
         response: responseText,
         model: currentConfig.model,
         status: "completed",
@@ -1030,6 +1084,15 @@ async function handleRequest(req, res) {
         return jsonResponse(res, 400, { error: "prompt is required" });
       }
 
+      const threadId = parsed.thread_id || `pi-${++commandCounter}`;
+      const executionId = `exec-${threadId.slice(0, 16)}`;
+      const startTime = Date.now();
+
+      runtimeEvents.emitRunStarted(executionId, {
+        thread_id: threadId,
+        model: parsed.model || currentConfig.model,
+      });
+
       // Dynamic model switching: check if request specifies different config
       await ensurePiWithConfig({
         model: parsed.model || "",
@@ -1040,8 +1103,8 @@ async function handleRequest(req, res) {
       // Handle image attachments
       const finalMessage = handleImageAttachments(message, parsed.images);
 
-      const invId = `stream-${++commandCounter}`;
-      const invocation = { chunks: [], tools: [], done: false, error: null, stream: res };
+      const invId = `stream-${commandCounter}`;
+      const invocation = { chunks: [], tools: [], done: false, error: null, stream: res, id: invId };
       ACTIVE_INVOCATIONS.set(invId, invocation);
 
       // Set model timeout
@@ -1052,9 +1115,13 @@ async function handleRequest(req, res) {
           invocation.error = timeoutErr;
           invocation.done = true;
           if (!invocation.stream.destroyed) {
-            invocation.stream.write(`event: response.error\ndata: ${JSON.stringify({ error: timeoutErr })}\n\n`);
+            invocation.stream.write(`event: response.error\ndata: ${JSON.stringify({ session_id: invId, error: timeoutErr, code: 504 })}\n\n`);
             invocation.stream.end();
           }
+          runtimeEvents.emitRunError(executionId, {
+            thread_id: threadId,
+            error: timeoutErr,
+          });
           sendToPi({ type: "abort" }).catch(() => {});
         }
       }, MODEL_TIMEOUT_MS);
@@ -1066,12 +1133,33 @@ async function handleRequest(req, res) {
         Connection: "keep-alive",
       });
 
-      // Send config info as first SSE event so frontend knows the active model
-      res.write(`event: response.config\ndata: ${JSON.stringify({ config: currentConfig })}\n\n`);
+      // Send response.started as first SSE event
+      res.write(`event: response.started\ndata: ${JSON.stringify({ session_id: invId, model: currentConfig.model, thread_id: threadId })}\n\n`);
 
       req.on("close", () => {
         clearTimeout(invocation.timer);
         ACTIVE_INVOCATIONS.delete(invId);
+        if (invocation.done && !invocation.error) {
+          const durationMs = Date.now() - startTime;
+          runtimeEvents.emitRunCompleted(executionId, {
+            thread_id: threadId,
+            status: "completed",
+            duration_ms: durationMs,
+          });
+          for (const tc of invocation.tools) {
+            runtimeEvents.emitToolCall(executionId, {
+              tool_name: tc.name || "unknown",
+              tool_args: tc.args,
+              status: tc.status || "completed",
+              thread_id: threadId,
+            });
+          }
+        } else if (invocation.error) {
+          runtimeEvents.emitRunError(executionId, {
+            thread_id: threadId,
+            error: invocation.error,
+          });
+        }
       });
 
       await sendToPi({ type: "prompt", message: finalMessage });
@@ -1131,6 +1219,184 @@ async function handleRequest(req, res) {
     return;
   }
 
+  // ── /info (runtime metadata) ──────────────────────────────────────
+  if (requestPath === "/info" && method === "GET") {
+    return jsonResponse(res, 200, {
+      runtime: "pi",
+      contract_version: "v1",
+      service: process.env.AGENT_NAME || "pi-agent",
+      namespace: process.env.AGENT_NAMESPACE || "default",
+      provider: currentConfig.provider || "auto",
+      model: currentConfig.model || "default",
+      agent: "build",
+      version: "1.0.0",
+      capabilities: {
+        native_tools: ["bash", "read", "write", "edit", "glob", "grep", "webfetch", "websearch", "codesearch", "skill", "task", "todowrite"],
+        output_formats: ["text", "json", "markdown", "code"],
+        structured_output: { supported: true, json_schema: true },
+        autonomous_execution: { supported: true, default_max_turns: 10 },
+        session_management: { abort: true, summarize: false, compaction: false },
+        mcp_usage: { supported: false },
+        a2a: { outbound_supported: true },
+      },
+    });
+  }
+
+  // ── /capabilities ─────────────────────────────────────────────────
+  if (requestPath === "/capabilities" && method === "GET") {
+    return jsonResponse(res, 200, {
+      runtime: "pi",
+      service: process.env.AGENT_NAME || "pi-agent",
+      capabilities: {
+        native_tools: ["bash", "read", "write", "edit", "glob", "grep", "webfetch", "websearch", "codesearch", "skill", "task", "todowrite"],
+        output_formats: ["text", "json", "markdown", "code"],
+        structured_output: { supported: true, json_schema: true },
+        autonomous_execution: { supported: true, default_max_turns: 10 },
+        session_management: { abort: true, summarize: false, compaction: false },
+        mcp_usage: { supported: false },
+        a2a: { outbound_supported: true },
+        tiers: ["core", "session", "artifacts", "streaming"],
+      },
+    });
+  }
+
+  // ── /cancel (alias for /abort) ────────────────────────────────────
+  if (requestPath === "/cancel" && method === "POST") {
+    try {
+      await sendToPi({ type: "abort" });
+      return jsonResponse(res, 200, { status: "cancelled", session_id: null, thread_id: url.searchParams.get("thread_id") || null });
+    } catch (err) {
+      return jsonResponse(res, 500, { error: err.message });
+    }
+  }
+
+  // ── /todo ─────────────────────────────────────────────────────────
+  if (requestPath === "/todo" && method === "GET") {
+    const threadId = url.searchParams.get("thread_id");
+    if (!threadId) {
+      return jsonResponse(res, 400, { error: "thread_id query parameter is required" });
+    }
+    const etag = '"d41d8cd98f00b204e9800998ecf8427e"'; // empty todos
+    const clientEtag = (req.headers["if-none-match"] || "").trim().replace(/^"|"$/g, "");
+    if (clientEtag && clientEtag === etag.replace(/^"|"$/g, "")) {
+      res.writeHead(304, { ETag: etag });
+      return res.end();
+    }
+    return jsonResponse(res, 200, { thread_id: threadId, session_id: null, todos: [] }, { ETag: etag });
+  }
+
+  // ── /question ─────────────────────────────────────────────────────
+  if (requestPath === "/question" && method === "GET") {
+    return jsonResponse(res, 200, []);
+  }
+
+  // ── /question/{id}/reply ──────────────────────────────────────────
+  if (requestPath.match(/^\/question\/[^/]+\/reply$/) && method === "POST") {
+    const requestId = requestPath.split("/")[2];
+    try {
+      const parsed = await readBody(req);
+      await sendToPi({ type: "extension_ui_response", id: `bridge-${++commandCounter}`, confirmed: true, value: parsed.answer || "" });
+      return jsonResponse(res, 200, { status: "accepted", request_id: requestId });
+    } catch (err) {
+      return jsonResponse(res, 500, { error: err.message });
+    }
+  }
+
+  // ── /question/{id}/reject ─────────────────────────────────────────
+  if (requestPath.match(/^\/question\/[^/]+\/reject$/) && method === "POST") {
+    const requestId = requestPath.split("/")[2];
+    try {
+      await sendToPi({ type: "extension_ui_response", id: `bridge-${++commandCounter}`, confirmed: false, cancelled: true });
+      return jsonResponse(res, 200, { status: "rejected", request_id: requestId });
+    } catch (err) {
+      return jsonResponse(res, 500, { error: err.message });
+    }
+  }
+
+  // ── /diff ─────────────────────────────────────────────────────────
+  if (requestPath === "/diff" && method === "GET") {
+    const threadId = url.searchParams.get("thread_id");
+    if (!threadId) {
+      return jsonResponse(res, 400, { error: "thread_id query parameter is required" });
+    }
+    return jsonResponse(res, 200, { thread_id: threadId, session_id: null, diff: "" });
+  }
+
+  // ── /context-budget ───────────────────────────────────────────────
+  if (requestPath === "/context-budget" && method === "GET") {
+    const threadId = url.searchParams.get("thread_id");
+    if (!threadId) {
+      return jsonResponse(res, 400, { error: "thread_id query parameter is required" });
+    }
+    return jsonResponse(res, 200, {
+      model_context_limit: 128000,
+      tokens_used: 0,
+      tokens_remaining: 128000,
+      usage_percent: 0.0,
+      status: "ok",
+      compaction_available: false,
+    });
+  }
+
+  // ── /openapi.json (OpenAPI spec) ──────────────────────────────────
+  if (requestPath === "/openapi.json" && method === "GET") {
+    try {
+      const specPath = path.join(__dirname, "openapi.json");
+      const spec = JSON.parse(fs.readFileSync(specPath, "utf8"));
+      return jsonResponse(res, 200, spec);
+    } catch (err) {
+      return jsonResponse(res, 500, { error: "OpenAPI spec not available" });
+    }
+  }
+
+  // ── /docs (Swagger UI) ────────────────────────────────────────────
+  if (requestPath === "/docs" && method === "GET") {
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    res.end(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>KubeSynth Runtime API — Swagger UI</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css">
+  <style>body{margin:0;padding:0}#swagger-ui{max-width:1400px;margin:0 auto}</style>
+</head>
+<body>
+  <div id="swagger-ui"></div>
+  <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+  <script>
+    window.onload = () => {
+      SwaggerUIBundle({
+        url: "/openapi.json",
+        dom_id: "#swagger-ui",
+        deepLinking: true,
+        presets: [SwaggerUIBundle.presets.apis, SwaggerUIBundle.StandalonePreset],
+        layout: "BaseLayout",
+      });
+    };
+  </script>
+</body>
+</html>`);
+    return;
+  }
+
+  // ── /events (SSE event subscription) ──────────────────────────────
+  if (requestPath === "/events" && method === "GET") {
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    });
+    res.write(":connected\n\n");
+    eventStreams.add(res);
+    req.on("close", () => {
+      eventStreams.delete(res);
+      if (!res.destroyed) res.end();
+    });
+    return;
+  }
+
   // 404
   jsonResponse(res, 404, { error: "Not found" });
 }
@@ -1139,6 +1405,9 @@ async function handleRequest(req, res) {
 
 console.log("[pi-bridge] Starting subprocess manager on", HOST + ":" + PORT);
 console.log("[pi-bridge] Default config:", JSON.stringify(currentConfig));
+
+// Start runtime event emitter (Run Intelligence Layer)
+runtimeEvents.startEmitter();
 
 // Start the HTTP server first, then spawn pi
 const server = http.createServer(handleRequest);
@@ -1158,6 +1427,7 @@ server.listen(PORT, HOST, async () => {
 // Graceful shutdown
 async function shutdown(signal) {
   console.log(`[pi-bridge] Received ${signal}, shutting down...`);
+  runtimeEvents.stopEmitter();
   await stopPi();
   server.close(() => {
     console.log("[pi-bridge] HTTP server closed");
