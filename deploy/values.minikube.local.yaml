@@ -2,17 +2,17 @@ operator:
   replicaCount: 1
   image:
     repository: localhost/kubesynapse/kubesynapse-operator
-    tag: dev5
+    tag: dev
     pullPolicy: IfNotPresent
   workerImage:
     repository: localhost/kubesynapse/kubesynapse-operator
-    tag: dev5
+    tag: dev
     pullPolicy: IfNotPresent
 
 opencodeRuntime:
   image:
-    repository: localhost/kubesynapse/kubesynapse-opencode-runtime
-    tag: dev13
+    repository: localhost/kubesynapse/kubesynapse-opencode-rt
+    tag: dev
     pullPolicy: IfNotPresent
   limits:
     maxPromptChars: 256000
@@ -30,7 +30,7 @@ opencodeRuntime:
 apiGateway:
   image:
     repository: localhost/kubesynapse/kubesynapse-api-gateway
-    tag: collector-1
+    tag: dev
     pullPolicy: IfNotPresent
   auth:
     mode: shared_token
@@ -39,7 +39,25 @@ webUi:
   enabled: true
   image:
     repository: localhost/kubesynapse/kubesynapse-web-ui
-    tag: redeploy-20260409-ui-1
+    tag: dev
+    pullPolicy: IfNotPresent
+
+piRuntime:
+  image:
+    repository: localhost/kubesynapse/kubesynapse-pi-rt
+    tag: dev
+    pullPolicy: IfNotPresent
+
+mistralVibeRuntime:
+  image:
+    repository: localhost/kubesynapse/kubesynapse-vibe-rt
+    tag: dev
+    pullPolicy: IfNotPresent
+
+litellm:
+  image:
+    repository: docker.io/litellm/litellm
+    tag: v1.82.3-stable
     pullPolicy: IfNotPresent
 
 platformSecrets:

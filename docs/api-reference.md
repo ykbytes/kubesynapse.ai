@@ -858,6 +858,8 @@ Delete a connector.
 
 ## Traces
 
+New integrations should use the `executions` resource paths below. Temporary compatibility aliases remain available at `GET /api/v1/traces` and `GET /api/v1/traces/{execution_id}`; they return the same payloads with `Deprecation`, `Sunset`, and `Link` headers so older callers can migrate without a hard break.
+
 #### `GET /api/v1/traces/executions`
 
 List workflow executions.

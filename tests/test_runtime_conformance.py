@@ -32,10 +32,13 @@ from tests.runtime_conftest import (
     create_thread,
     parse_sse_events,
     runtime_auth_headers,
+    runtime_auth_enforced,
     runtime_client,
     runtime_env,
     runtime_name,
+    runtime_timeout_probe,
     runtime_url,
+    unauthenticated_runtime_client,
     validate_json_schema,
 )
 
@@ -168,3 +171,43 @@ class TestErrorResponseSchema:
             assert "trace_id" in error_obj or "message" in error_obj, (
                 "Error object should contain at least message"
             )
+
+
+class TestOptionalSecurityAndTimeoutCoverage:
+    """Opt-in coverage for auth enforcement and timeout behavior."""
+
+    def test_missing_auth_is_rejected_when_enforced(
+        self,
+        unauthenticated_runtime_client: httpx.Client,
+        runtime_auth_enforced: bool,
+    ) -> None:
+        if not runtime_auth_enforced:
+            pytest.skip("Set RUNTIME_EXPECT_AUTH=1 to enable auth enforcement coverage")
+
+        resp = unauthenticated_runtime_client.get("/info")
+        assert resp.status_code in (401, 403), (
+            f"Expected 401/403 for unauthenticated request, got {resp.status_code}: {resp.text[:200]}"
+        )
+
+    def test_timeout_probe_surfaces_timeout_when_configured(
+        self,
+        runtime_client: httpx.Client,
+        runtime_timeout_probe: dict[str, object] | None,
+    ) -> None:
+        if runtime_timeout_probe is None:
+            pytest.skip("Set RUNTIME_TIMEOUT_PROMPT to enable timeout coverage")
+
+        resp = runtime_client.post(
+            "/invoke",
+            json={
+                "prompt": runtime_timeout_probe["prompt"],
+                "timeout_seconds": runtime_timeout_probe["timeout_seconds"],
+            },
+        )
+        assert resp.status_code != 200, "Timeout probe should not complete successfully"
+        assert resp.status_code in (408, 502, 504), (
+            f"Expected timeout-oriented status code, got {resp.status_code}: {resp.text[:200]}"
+        )
+        assert "timeout" in resp.text.lower() or "timed out" in resp.text.lower(), (
+            f"Timeout response should mention timeout semantics: {resp.text[:200]}"
+        )

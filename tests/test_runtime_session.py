@@ -13,6 +13,8 @@ Tests are skipped when the runtime does not advertise ``session`` in its
 
 from __future__ import annotations
 
+import uuid
+
 import httpx
 import pytest
 
@@ -102,3 +104,42 @@ class TestSessionTierEndpoints:
                 ],
             )
             assert data["status"] in ("ok", "warning", "critical", "overflow")
+
+    def test_reused_thread_keeps_session_identity_when_continuity_is_supported(self, runtime_client: httpx.Client) -> None:
+        """Repeated invokes with the same thread_id should keep the same logical session when the runtime exposes continuity."""
+        skip_if_tier_not_supported(runtime_client, "session")
+        thread_id = f"continuity-{uuid.uuid4().hex[:12]}"
+
+        first = runtime_client.post(
+            "/invoke",
+            json={"prompt": "Say hello", "thread_id": thread_id, "timeout_seconds": 15},
+        )
+        if first.status_code != 200:
+            pytest.skip(f"First invoke failed with HTTP {first.status_code}: {first.text[:200]}")
+
+        todo_first = runtime_client.get("/todo", params={"thread_id": thread_id})
+        second = runtime_client.post(
+            "/invoke",
+            json={"prompt": "Continue", "thread_id": thread_id, "timeout_seconds": 15},
+        )
+        if second.status_code != 200:
+            pytest.skip(f"Second invoke failed with HTTP {second.status_code}: {second.text[:200]}")
+
+        todo_second = runtime_client.get("/todo", params={"thread_id": thread_id})
+        first_data = first.json()
+        second_data = second.json()
+        first_continuity = first_data.get("continuity")
+        second_continuity = second_data.get("continuity")
+        if not isinstance(first_continuity, dict) or not isinstance(second_continuity, dict):
+            pytest.skip("Runtime does not expose continuity metadata")
+
+        assert first_continuity.get("created_new_session") is True, first_continuity
+        assert second_continuity.get("created_new_session") is False, second_continuity
+
+        if todo_first.status_code == 200 and todo_second.status_code == 200:
+            first_session_id = todo_first.json().get("session_id")
+            second_session_id = todo_second.json().get("session_id")
+            if first_session_id and second_session_id:
+                assert first_session_id == second_session_id, (
+                    f"Expected stable session_id for reused thread_id, got {first_session_id!r} and {second_session_id!r}"
+                )

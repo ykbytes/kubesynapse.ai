@@ -247,6 +247,40 @@ paths:
         "404":
           description: No active session for this thread
 
+  /abort:
+    post:
+      tags: [Control]
+      summary: Abort a running session
+      description: |
+        Compatibility alias for `/cancel`.
+        Wrappers around upstream runtimes that already use abort semantics may
+        expose this path, but clients should prefer `/cancel` for new integrations.
+      operationId: abortSession
+      parameters:
+        - name: thread_id
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Logical thread identifier
+      responses:
+        "200":
+          description: Session aborted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [cancelled, cancel_failed]
+                  session_id:
+                    type: string
+                  thread_id:
+                    type: string
+        "404":
+          description: No active session for this thread
+
   /todo:
     get:
       tags: [Session]

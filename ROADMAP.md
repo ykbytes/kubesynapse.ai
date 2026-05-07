@@ -24,6 +24,18 @@ This document outlines the planned evolution of KubeSynapse. Timelines are best-
 
 > **Note**: Pi runtime support shipped as dual-runtime alongside OpenCode. Live observability and artifact APIs completed.
 
+### v1.0.1 — Observability Consistency Hardening
+
+Implementation details: `docs/observability-remediation-plan.md`
+
+- [ ] Replace demo-only `ObservationTarget` status reconciliation with connector-backed health, scrape, and report state
+- [ ] Harden signal watch: use `sqlalchemy.text`, query `estimated_cost_usd`, isolate detector failures, and run the sweep once per leader instead of once per system agent
+- [ ] Align Python and TypeScript SDKs to the live `/api/v1/traces/executions` contract and response envelopes
+- [ ] Emit semantic `llm.call` runtime events across OpenCode, Pi, and Vibe direct runtime paths
+- [ ] Add observability contract tests and smoke coverage for trace APIs, signal watch, and runtime event parity
+
+**Target**: May 2026
+
 ---
 
 ## Q3 2026

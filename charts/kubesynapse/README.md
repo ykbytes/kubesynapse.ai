@@ -5,13 +5,15 @@ Main platform Helm chart for deploying KubeSynapse on Kubernetes.
 ## Installation
 
 ```bash
-helm install kubesynapse ./charts/kubesynapse -n kubesynapse --create-namespace
+helm upgrade --install kubesynapse ./charts/kubesynapse -n kubesynapse --create-namespace
 ```
 
 ## Bootstrap Behavior
 
 - LiteLLM schema initialization is automatic.
 - The chart runs `prisma db push` in a LiteLLM init container during install and upgrade.
+- System agent `AIAgent` resources are created in a post-install/post-upgrade hook, so first installs do not need `systemAgents.enabled=false`.
+- Local and air-gapped installs must preload `docker.io/litellm/litellm:v1.82.3-stable` alongside the platform images.
 - You should not need to run manual database bootstrap commands after a normal Helm deploy.
 
 ## Key Values

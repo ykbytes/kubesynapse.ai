@@ -7,17 +7,17 @@ global:
 operator:
   image:
     repository: docker.io/kubesynapse/kubesynapse-operator
-    tag: deploy-20260401-225700-hotfix
+    tag: v2.1.0-run-intelligence
     pullPolicy: IfNotPresent
   workerImage:
     repository: docker.io/kubesynapse/kubesynapse-operator
-    tag: deploy-20260401-225700-hotfix
+    tag: v2.1.0-run-intelligence
     pullPolicy: IfNotPresent
 
 opencodeRuntime:
   image:
     repository: docker.io/kubesynapse/kubesynapse-opencode-rt
-    tag: deploy-20260401-212102-opencode
+    tag: v2.1.0-run-intelligence
     pullPolicy: IfNotPresent
   limits:
     maxPromptChars: 256000
@@ -32,10 +32,22 @@ opencodeRuntime:
     planThresholdChars: 4096
     structuredOutputRetryCount: 3
 
+piRuntime:
+  image:
+    repository: docker.io/kubesynapse/kubesynapse-pi-rt
+    tag: v2.1.0-run-intelligence
+    pullPolicy: IfNotPresent
+
+mistralVibeRuntime:
+  image:
+    repository: docker.io/kubesynapse/kubesynapse-vibe-rt
+    tag: v2.1.0-run-intelligence
+    pullPolicy: IfNotPresent
+
 apiGateway:
   image:
     repository: docker.io/kubesynapse/kubesynapse-api-gateway
-    tag: deploy-20260401-212102
+    tag: v2.1.0-run-intelligence
     pullPolicy: IfNotPresent
   ingressClassName: ""
   ingressHost: ""
@@ -52,10 +64,14 @@ webUi:
   enabled: true
   image:
     repository: docker.io/kubesynapse/kubesynapse-web-ui
-    tag: deploy-20260401-225700-hotfix
+    tag: v2.1.0-run-intelligence
     pullPolicy: IfNotPresent
 
 litellm:
+  image:
+    repository: docker.io/litellm/litellm
+    tag: v1.82.3-stable
+    pullPolicy: IfNotPresent
   config:
     model_list:
       - model_name: gpt-4
@@ -114,7 +130,7 @@ mcpToolSidecars:
     tag: deploy-20260401-212102
   messaging:
     image: docker.io/kubesynapse/mcp-messaging
-    tag: latest
+    tag: deploy-20260401-212102
   rag:
     image: docker.io/kubesynapse/mcp-rag
-    tag: latest
+    tag: deploy-20260401-212102

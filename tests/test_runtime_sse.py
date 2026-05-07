@@ -135,3 +135,27 @@ class TestSSEEventTaxonomy:
             assert_has_fields(
                 data, ["session_id", "error", "code"], path="response.error payload"
             )
+
+    def test_tool_events_have_required_payloads_when_present(self, runtime_client: httpx.Client) -> None:
+        """Tool-call and tool-result events must carry the required fields when emitted."""
+        payload = {"prompt": "Say hello", "timeout_seconds": 15}
+        resp = runtime_client.post("/invoke/stream", json=payload)
+        assert resp.status_code == 200, (
+            f"Expected 200, got {resp.status_code}: {resp.text[:200]}"
+        )
+
+        events = parse_sse_events(resp.text)
+        tool_call_events = [e for e in events if e.get("event") == "response.tool_call"]
+        tool_result_events = [e for e in events if e.get("event") == "response.tool_result"]
+
+        for evt in tool_call_events:
+            data = evt.get("data", {})
+            assert_has_fields(data, ["name", "id", "session_id"], path="response.tool_call payload")
+            assert isinstance(data["name"], str) and data["name"], "response.tool_call name must be a non-empty string"
+
+        for evt in tool_result_events:
+            data = evt.get("data", {})
+            assert_has_fields(data, ["id", "result", "status", "session_id"], path="response.tool_result payload")
+            assert data["status"] in ("completed", "error", "cancelled"), (
+                f"response.tool_result status must be completed/error/cancelled, got {data['status']}"
+            )

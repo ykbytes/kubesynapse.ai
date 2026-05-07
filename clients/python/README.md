@@ -44,9 +44,9 @@ response = await client.invoke("my-agent", "Explain Kubernetes")
 async for delta in client.stream("my-agent", "Build a REST API"):
     print(delta, end="")
 
-# Traces
-traces = await client.list_traces()
-trace = await client.get_trace("run-id")
+# Execution Observatory
+executions = await client.list_executions()
+execution = await client.get_execution("run-id")
 ```
 
 ## Sync Wrapper

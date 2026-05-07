@@ -2014,6 +2014,24 @@ class InvokeOpenCodeLoopTests(unittest.TestCase):
         self.assertIn("created_new_session", resp.continuity)
         self.assertIn("remote_session_id", resp.continuity)
 
+    def test_existing_thread_reuses_logical_session(self) -> None:
+        payload = self._make_payload("All done", "stop")
+        req = opencode_runtime_main.InvokeRequest(prompt="Build it", thread_id="thread-1")
+        with (
+            self._patch_server_running(),
+            patch.object(invoke_mod.SESSION_REGISTRY, "get", return_value="ses_existing"),
+            patch.object(invoke_mod, "create_remote_session") as mock_create_session,
+            self._patch_send_prompt([payload]),
+        ):
+            patches = self._patch_session_helpers()
+            with patches[0], patches[1], patches[2], patches[3], patches[4]:
+                resp = opencode_runtime_main.invoke_opencode(req)
+
+        mock_create_session.assert_not_called()
+        self.assertIsNotNone(resp.continuity)
+        self.assertFalse(resp.continuity["created_new_session"])
+        self.assertEqual(resp.continuity["remote_session_id"], "ses_existing")
+
     def test_session_init_called_for_new_autonomous_session(self) -> None:
         payload = self._make_payload("All done", "stop")
         req = opencode_runtime_main.InvokeRequest(prompt="Build feature", autonomous=True)

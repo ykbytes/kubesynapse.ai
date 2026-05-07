@@ -9,7 +9,9 @@ This guide ensures the KubeSynapse platform is ready for production deployment o
 #### ✅ Image Versions
 - [x] All images have explicit versioned tags (no `latest` or `main-latest` tags)
 - [x] Image registry: `docker.io/kubesynapse/*` 
-- [x] Current web-ui tag: `deploy-20260319-172000`
+- [x] Current tested platform tag: `v2.1.0-run-intelligence`
+- [x] Bundled MCP sidecars pinned to `deploy-20260401-212102`
+- [x] Fixed LiteLLM image pinned to `v1.82.3-stable`
 - [x] All Python services use multi-stage builds where applicable
 - [x] No build tools or package managers in final runtime images
 
@@ -89,15 +91,11 @@ kubectl create secret docker-registry dockerhub-regcred \
 
 #### 4. Deploy Helm Chart
 ```bash
-# Deploy with production values
-helm install KubeSynapse ./charts/kubesynapse \
+# Deploy or upgrade with production values
+helm upgrade --install KubeSynapse ./charts/kubesynapse \
   -f deploy/values.dockerhub.local.yaml \
-  -n ai-platform
-
-# Or update existing deployment
-helm upgrade KubeSynapse ./charts/kubesynapse \
-  -f deploy/values.dockerhub.local.yaml \
-  -n ai-platform
+  -n ai-platform \
+  --create-namespace
 ```
 
 #### 5. Verify Deployment
@@ -136,7 +134,7 @@ curl -X GET http://<gateway-ip:port>/api/agents?namespace=default \
 
 | Item | Status | Notes |
 |------|--------|-------|
-| Image tags versioned | ✅ | deploy-20260319-172000 format |
+| Image tags versioned | ✅ | Core platform uses `v2.1.0-run-intelligence`; bundled MCP sidecars use `deploy-20260401-212102` |
 | No `latest` tags | ✅ | All images have explicit versions |
 | Helm chart cluster-agnostic | ✅ | No hardcoded values |
 | Secrets externalized | ✅ | Provided via values file |

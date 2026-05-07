@@ -126,6 +126,8 @@ pwsh -File .\scripts\observability-smoke-test.ps1
 
 Also read `docs/observability-explained.md` for the intended resource flow.
 
+The smoke path now validates more than CRUD. It also checks that the live `/api/v1/` observability routes respond with the expected execution, runtime-event, spend, and agent-graph envelopes so contract drift is caught before UI or SDK consumers break.
+
 ## Current operational assumptions
 
 These are the assumptions that match the codebase now:

@@ -22,6 +22,8 @@
 | **Artifacts** | `/artifacts/list`, `/artifacts/download`, `/artifacts/zip` | Runtimes with workspace/file access |
 | **Streaming** | `/invoke/stream`, `/events` | Runtimes supporting real-time UI |
 
+`POST /abort` is a compatibility alias for `POST /cancel`. New integrations should target `/cancel`, but runtime wrappers over existing upstream products may continue to expose `/abort` to avoid breaking existing clients.
+
 ---
 
 ## OpenAPI 3.0 Specification
@@ -289,6 +291,28 @@ paths:
                     type: string
                   thread_id:
                     type: string
+        "404":
+          description: No active session for this thread
+
+  /abort:
+    post:
+      tags: [Control]
+      summary: Abort a running session
+      description: |
+        Compatibility alias for `/cancel`.
+        New integrations should use `/cancel`, but runtimes may expose `/abort`
+        when wrapping upstream products that already use abort terminology.
+      operationId: abortSession
+      parameters:
+        - name: thread_id
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Logical thread identifier
+      responses:
+        "200":
+          description: Session aborted
         "404":
           description: No active session for this thread
 

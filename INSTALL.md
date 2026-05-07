@@ -317,9 +317,11 @@ kind create cluster --name kubesynapse-dev
 make docker-build REGISTRY=localhost/kubesynapse VERSION=dev CONTAINER_CLI=docker
 # Produces platform images such as:
 #   localhost/kubesynapse/kubesynapse-operator:dev
-#   localhost/kubesynapse/kubesynapse-opencode-runtime:dev
+#   localhost/kubesynapse/kubesynapse-opencode-rt:dev
 #   localhost/kubesynapse/kubesynapse-api-gateway:dev
 #   localhost/kubesynapse/kubesynapse-web-ui:dev
+#   localhost/kubesynapse/kubesynapse-pi-rt:dev
+#   localhost/kubesynapse/kubesynapse-vibe-rt:dev
 #   localhost/kubesynapse/mcp-code-exec:dev
 #   localhost/kubesynapse/mcp-web-search:dev
 #   localhost/kubesynapse/mcp-documents:dev
@@ -330,7 +332,7 @@ Or build individual components with Docker:
 
 ```bash
 docker build -t localhost/kubesynapse/kubesynapse-operator:dev ./operator
-docker build -t localhost/kubesynapse/kubesynapse-opencode-runtime:dev ./opencode-runtime
+docker build -t localhost/kubesynapse/kubesynapse-opencode-rt:dev ./opencode-runtime
 docker build -t localhost/kubesynapse/kubesynapse-api-gateway:dev ./api-gateway
 docker build -t localhost/kubesynapse/kubesynapse-web-ui:dev ./web-ui
 ```
@@ -343,11 +345,11 @@ The Makefile builds all of them in one pass and is the recommended approach.
 ```bash
 mkdir -p dist
 docker save -o dist/kubesynapse-operator.tar localhost/kubesynapse/kubesynapse-operator:dev
-docker save -o dist/kubesynapse-opencode-runtime.tar localhost/kubesynapse/kubesynapse-opencode-runtime:dev
+docker save -o dist/kubesynapse-opencode-rt.tar localhost/kubesynapse/kubesynapse-opencode-rt:dev
 docker save -o dist/kubesynapse-api-gateway.tar localhost/kubesynapse/kubesynapse-api-gateway:dev
 docker save -o dist/kubesynapse-web-ui.tar localhost/kubesynapse/kubesynapse-web-ui:dev
 kind load image-archive dist/kubesynapse-operator.tar --name kubesynapse-dev
-kind load image-archive dist/kubesynapse-opencode-runtime.tar --name kubesynapse-dev
+kind load image-archive dist/kubesynapse-opencode-rt.tar --name kubesynapse-dev
 kind load image-archive dist/kubesynapse-api-gateway.tar --name kubesynapse-dev
 kind load image-archive dist/kubesynapse-web-ui.tar --name kubesynapse-dev
 ```
@@ -370,21 +372,22 @@ platformSecrets:
   ### 5. Install the Helm chart with the local-image override
 
 ```bash
-  helm install kubesynapse ./charts/kubesynapse -f ./deploy/values.local-images.example.yaml
+  helm upgrade --install kubesynapse ./charts/kubesynapse -n kubesynapse --create-namespace \
+    -f ./deploy/values.local-images.example.yaml
 ```
 
   `deploy/values.local-images.example.yaml` remaps the core platform images to the
-  `localhost/kubesynapse/*:dev` tags shown above. Extend it with
+  `localhost/kubesynapse/*:dev` tags shown above and keeps LiteLLM pinned to the
+  fixed `docker.io/litellm/litellm:v1.82.3-stable` image. Load that LiteLLM image
+  into the cluster cache alongside the locally built platform images. Extend it with
   `mcpToolSidecars` entries only if your agents use locally built sidecar images
   instead of the default published ones.
 
-  **Minikube alternative:** if you use Minikube instead of Kind, use the matching override:
-
-  ```bash
-  eval $(minikube docker-env)   # build directly into Minikube's Docker daemon
-  make docker-build REGISTRY=localhost/kubesynapse VERSION=dev CONTAINER_CLI=docker
-  helm install kubesynapse ./charts/kubesynapse -f ./deploy/values.minikube.local.yaml
-  ```
+  **Minikube alternative:** for the validated Windows + PowerShell + Podman + VMware flow, use
+  `deploy/MINIKUBE-RUNBOOK.md`. That runbook builds the chart-default image
+  references, loads them into Minikube with `minikube image load`, packages the
+  chart, and installs with the same `helm upgrade --install ... --wait` sequence
+  used for the clean smoke validation.
 
   ### 6. Verify pods are running
 
@@ -450,10 +453,13 @@ curl -X POST http://localhost:8080/api/agents/research-assistant/invoke \
 export REGISTRY=ghcr.io/your-org
 export VERSION=1.0.0
 
-docker build -t $REGISTRY/ai-operator:$VERSION           ./operator
-docker build -t $REGISTRY/ai-opencode-runtime:$VERSION   ./opencode-runtime
-docker build -t $REGISTRY/ai-api-gateway:$VERSION        ./api-gateway
+docker build -t $REGISTRY/kubesynapse-operator:$VERSION ./operator
+docker build -t $REGISTRY/kubesynapse-opencode-rt:$VERSION ./opencode-runtime
+docker build -t $REGISTRY/kubesynapse-api-gateway:$VERSION ./api-gateway
 docker build -t $REGISTRY/kubesynapse-web-ui:$VERSION ./web-ui
+docker build -t $REGISTRY/kubesynapse-pi-rt:$VERSION ./pi-runtime
+docker build -t $REGISTRY/kubesynapse-vibe-rt:$VERSION ./vibe-runtime
+docker build -t $REGISTRY/litellm:$VERSION -f deploy/litellm/Dockerfile deploy/litellm
 
 # MCP sidecars (one Dockerfile per sidecar under ./mcp-sidecars/)
 docker build -t $REGISTRY/mcp-code-exec:$VERSION   -f mcp-sidecars/code-exec/Dockerfile   mcp-sidecars
@@ -479,16 +485,19 @@ docker build -t $REGISTRY/mcp-github-adapter:$VERSION -f mcp-sidecars/github-ada
   -Push
 ```
 
-This builds the platform images referenced by the chart plus all bundled MCP sidecars, generates a `values-generated.yaml` with pinned image references, and optionally pushes everything to the registry.
+This builds the platform images referenced by the chart, the optional Pi and Vibe runtimes, the fixed LiteLLM image, and all bundled MCP sidecars; it generates `kubesynapse-bundle-values.yaml` with pinned image references and optionally pushes everything to the registry.
 
 ### 2. Push to Registry
 
 ```bash
 docker login ghcr.io
-docker push $REGISTRY/ai-operator:$VERSION
-docker push $REGISTRY/ai-opencode-runtime:$VERSION
-docker push $REGISTRY/ai-api-gateway:$VERSION
+docker push $REGISTRY/kubesynapse-operator:$VERSION
+docker push $REGISTRY/kubesynapse-opencode-rt:$VERSION
+docker push $REGISTRY/kubesynapse-api-gateway:$VERSION
 docker push $REGISTRY/kubesynapse-web-ui:$VERSION
+docker push $REGISTRY/kubesynapse-pi-rt:$VERSION
+docker push $REGISTRY/kubesynapse-vibe-rt:$VERSION
+docker push $REGISTRY/litellm:$VERSION
 # Push all mcp-* images the same way, or use the -Push flag on the packaging script above
 ```
 
@@ -508,12 +517,12 @@ operator:
   replicaCount: 2
   clusterSecretStoreName: "mycompany-vault-store"
   image:
-    repository: ghcr.io/your-org/ai-operator
+    repository: ghcr.io/your-org/kubesynapse-operator
     tag: "1.0.0"
 
 opencodeRuntime:
   image:
-    repository: ghcr.io/your-org/ai-opencode-runtime
+    repository: ghcr.io/your-org/kubesynapse-opencode-rt
     tag: "1.0.0"
   env:
     OPENCODE_RUNTIME_CONFIG_FILES_JSON:
@@ -531,7 +540,7 @@ opencodeRuntime:
 apiGateway:
   replicaCount: 2
   image:
-    repository: ghcr.io/your-org/ai-api-gateway
+    repository: ghcr.io/your-org/kubesynapse-api-gateway
     tag: "1.0.0"
   ingress:
     enabled: true

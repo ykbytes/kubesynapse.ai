@@ -106,20 +106,35 @@ For local development with [Kind](https://kind.sigs.k8s.io/):
 
 ```bash
 # Build and load images into the Kind cluster
-make docker-build
-kind load docker-image docker.io/kubesynapse/kubesynapse-operator:v1.0.0 --name desktop
-kind load docker-image docker.io/kubesynapse/kubesynapse-api-gateway:v1.0.0 --name desktop
-kind load docker-image docker.io/kubesynapse/kubesynapse-web-ui:v1.0.0 --name desktop
-kind load docker-image docker.io/kubesynapse/kubesynapse-pi-rt:v1.0.0 --name desktop
+make docker-build REGISTRY=localhost/kubesynapse VERSION=dev
+docker build -f deploy/litellm/Dockerfile -t docker.io/litellm/litellm:v1.82.3-stable deploy/litellm
+kind load docker-image localhost/kubesynapse/kubesynapse-operator:dev --name desktop
+kind load docker-image localhost/kubesynapse/kubesynapse-api-gateway:dev --name desktop
+kind load docker-image localhost/kubesynapse/kubesynapse-web-ui:dev --name desktop
+kind load docker-image localhost/kubesynapse/kubesynapse-opencode-rt:dev --name desktop
+kind load docker-image localhost/kubesynapse/kubesynapse-pi-rt:dev --name desktop
+kind load docker-image localhost/kubesynapse/kubesynapse-vibe-rt:dev --name desktop
+kind load docker-image docker.io/litellm/litellm:v1.82.3-stable --name desktop
 
 # Deploy with local image values
-helm install kubesynapse ./charts/kubesynapse -n kubesynapse \
+helm upgrade --install kubesynapse ./charts/kubesynapse -n kubesynapse --create-namespace \
   -f deploy/values.dev.yaml \
   -f deploy/values.local-images.example.yaml
 ```
 
 See `deploy/values.local-images.example.yaml` for the full local-image registry and
 tag overrides.
+
+For the validated Windows/PowerShell Minikube path that uses the VMware driver,
+Podman-built chart-default images, chart packaging, and the exact Helm install
+command set, use `deploy/MINIKUBE-RUNBOOK.md`.
+
+## Chart Packaging
+
+```bash
+helm lint ./charts/kubesynapse
+helm package ./charts/kubesynapse -d ./dist
+```
 
 ---
 
@@ -149,7 +164,7 @@ See `deploy/values.*.yaml` for environment-specific examples:
 ```yaml
 image:
   registry: docker.io/kubesynapse
-  tag: v1.0.0
+  tag: v2.1.0-run-intelligence
 
 apiGateway:
   sharedToken: "change-me"

@@ -16,15 +16,20 @@ Schedule: every 60 seconds (configurable via SIGNAL_WATCH_INTERVAL_SEC)
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
+import re
+import threading
 import time
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import kopf
 import kubernetes.client  # type: ignore[import-untyped]
 from kubernetes.client.rest import ApiException  # type: ignore[import-untyped]
+from sqlalchemy import text as sql_text
 
 logger = logging.getLogger("operator.signal-watch")
 
@@ -50,6 +55,8 @@ SYSTEM_AGENT_NAMESPACE = os.getenv("SIGNAL_WATCH_SYSTEM_NS", "kubesynapse-system
 # ---------------------------------------------------------------------------
 
 _db_engine = None
+_cycle_lock = threading.Lock()
+_last_cycle_started_at = 0.0
 
 
 def _get_db_engine():
@@ -63,13 +70,13 @@ def _get_db_engine():
     return _db_engine
 
 
-def _query(sql: str, params: tuple = ()) -> list[dict[str, Any]]:
+def _query(sql: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     """Execute a raw SQL query and return rows as dicts."""
     engine = _get_db_engine()
     if engine is None:
         return []
     with engine.connect() as conn:
-        result = conn.execute(kopf.text(sql), params)
+        result = conn.execute(sql_text(sql), params or {})
         columns = result.keys()
         return [dict(zip(columns, row)) for row in result]
 
@@ -131,27 +138,27 @@ def _check_cost_outliers() -> list[dict[str, Any]]:
         WITH namespace_avg AS (
             SELECT
                 namespace,
-                AVG(cost_usd) AS avg_cost
+                                AVG(estimated_cost_usd) AS avg_cost
             FROM workflow_executions
             WHERE started_at >= :cutoff
-              AND cost_usd IS NOT NULL
-              AND cost_usd > 0
+                            AND estimated_cost_usd IS NOT NULL
+                            AND estimated_cost_usd > 0
             GROUP BY namespace
         )
         SELECT
             we.namespace,
             we.workflow_name,
             we.id AS execution_id,
-            we.cost_usd,
+                        we.estimated_cost_usd,
             na.avg_cost,
-            ROUND(we.cost_usd / NULLIF(na.avg_cost, 0), 2) AS cost_multiplier,
+                        ROUND(we.estimated_cost_usd / NULLIF(na.avg_cost, 0), 2) AS cost_multiplier,
             we.started_at
         FROM workflow_executions we
         JOIN namespace_avg na ON we.namespace = na.namespace
         WHERE we.started_at >= :cutoff
-          AND we.cost_usd IS NOT NULL
-          AND we.cost_usd > 0
-          AND we.cost_usd / NULLIF(na.avg_cost, 0) >= :multiplier
+                    AND we.estimated_cost_usd IS NOT NULL
+                    AND we.estimated_cost_usd > 0
+                    AND we.estimated_cost_usd / NULLIF(na.avg_cost, 0) >= :multiplier
         ORDER BY cost_multiplier DESC
         LIMIT 20
     """
@@ -244,8 +251,13 @@ def _create_observation_report(
     affected_executions: list[str] | None = None,
 ) -> None:
     """Create an ObservationReport CR for a detected anomaly."""
-    report_name = f"signal-{anomaly_type}-{int(time.time())}-{name[:8]}"
-    report_name = report_name[:253].lower().replace("_", "-")
+    report_name = _build_report_name(
+        namespace=namespace,
+        name=name,
+        anomaly_type=anomaly_type,
+        details=details,
+        affected_executions=affected_executions,
+    )
 
     body = {
         "apiVersion": f"{GROUP}/{VERSION}",
@@ -297,6 +309,38 @@ def _create_observation_report(
             logger.warning("Failed to create ObservationReport: %s", exc)
 
 
+def _build_report_name(
+    *,
+    namespace: str,
+    name: str,
+    anomaly_type: str,
+    details: dict[str, Any],
+    affected_executions: list[str] | None,
+) -> str:
+    """Build a deterministic report name so retries in the same window dedupe cleanly."""
+    bucket = int(time.time() // max(WATCH_INTERVAL_SEC, 1))
+    slug = re.sub(r"[^a-z0-9-]+", "-", name.lower()).strip("-") or "target"
+    slug = slug[:32]
+    fingerprint_parts = [namespace, name, anomaly_type, str(details.get("execution_id") or "")]
+    if affected_executions:
+        fingerprint_parts.extend(str(item) for item in affected_executions[:10])
+    digest = hashlib.sha256("|".join(fingerprint_parts).encode("utf-8")).hexdigest()[:12]
+    report_name = f"signal-{anomaly_type.replace('_', '-')}-{slug}-{bucket}-{digest}"
+    return report_name[:253]
+
+
+def _claim_cycle_slot(now: float | None = None) -> bool:
+    """Allow only one signal-watch sweep to run per configured interval."""
+    current = time.monotonic() if now is None else now
+    interval = max(float(WATCH_INTERVAL_SEC), 1.0)
+    global _last_cycle_started_at
+    with _cycle_lock:
+        if current - _last_cycle_started_at < interval:
+            return False
+        _last_cycle_started_at = current
+        return True
+
+
 def _severity_from_rate(rate: float, thresholds: tuple[float, float, float]) -> str:
     """Map a numeric rate to severity level."""
     low, medium, high = thresholds
@@ -307,6 +351,168 @@ def _severity_from_rate(rate: float, thresholds: tuple[float, float, float]) -> 
     if rate >= low:
         return "medium"
     return "low"
+
+
+def _emit_high_failure_rate_reports() -> int:
+    failures = _check_high_failure_rate()
+    for row in failures:
+        severity = _severity_from_rate(
+            row.get("failure_rate", 0),
+            (0.3, 0.5, 0.7),
+        )
+        _create_observation_report(
+            namespace=row["namespace"],
+            name=row["workflow_name"],
+            anomaly_type="high_failure_rate",
+            severity=severity,
+            title=f"High failure rate in {row['workflow_name']}",
+            description=f"{row['failed_steps']}/{row['total_steps']} steps failed ({row['failure_rate']*100:.0f}%)",
+            details={
+                "execution_id": row["execution_id"],
+                "total_steps": row["total_steps"],
+                "failed_steps": row["failed_steps"],
+                "failure_rate": row["failure_rate"],
+                "started_at": row["started_at"],
+            },
+            affected_executions=[row["execution_id"]],
+        )
+    return len(failures)
+
+
+def _emit_error_spike_reports() -> int:
+    spikes = _check_error_spikes()
+    for row in spikes:
+        severity = _severity_from_rate(
+            row.get("error_count", 0) / max(ERROR_COUNT_THRESHOLD, 1),
+            (1.0, 2.0, 5.0),
+        )
+        affected = row.get("affected_executions") or []
+        _create_observation_report(
+            namespace=row["namespace"],
+            name=row["agent_name"] or "unknown",
+            anomaly_type="error_spike",
+            severity=severity,
+            title=f"Error spike in {row['agent_name']}",
+            description=f"{row['error_count']} errors in {ANOMALY_WINDOW_MINUTES}m window",
+            details={
+                "agent_name": row["agent_name"],
+                "runtime_kind": row["runtime_kind"],
+                "error_count": row["error_count"],
+                "first_error": row["first_error"],
+                "last_error": row["last_error"],
+            },
+            affected_executions=[str(e) for e in affected[:10]] if affected else None,
+        )
+    return len(spikes)
+
+
+def _emit_cost_outlier_reports() -> int:
+    outliers = _check_cost_outliers()
+    for row in outliers:
+        severity = _severity_from_rate(
+            row.get("cost_multiplier", 0),
+            (3.0, 5.0, 10.0),
+        )
+        _create_observation_report(
+            namespace=row["namespace"],
+            name=row["workflow_name"],
+            anomaly_type="cost_outlier",
+            severity=severity,
+            title=f"Cost outlier in {row['workflow_name']}",
+            description=(
+                f"Cost ${row['estimated_cost_usd']:.2f} is {row['cost_multiplier']}x namespace avg ${row['avg_cost']:.2f}"
+            ),
+            details={
+                "execution_id": row["execution_id"],
+                "estimated_cost_usd": row["estimated_cost_usd"],
+                "avg_cost": row["avg_cost"],
+                "cost_multiplier": row["cost_multiplier"],
+                "started_at": row["started_at"],
+            },
+            affected_executions=[row["execution_id"]],
+        )
+    return len(outliers)
+
+
+def _emit_token_spike_reports() -> int:
+    token_spikes = _check_token_spikes()
+    for row in token_spikes:
+        severity = _severity_from_rate(
+            row.get("token_multiplier", 0),
+            (3.0, 5.0, 10.0),
+        )
+        _create_observation_report(
+            namespace=row["namespace"],
+            name=row["agent_name"] or "unknown",
+            anomaly_type="token_spike",
+            severity=severity,
+            title=f"Token spike in {row['agent_name']}",
+            description=f"{row['total_tokens']} tokens is {row['token_multiplier']}x agent avg {row['avg_tokens']:.0f}",
+            details={
+                "execution_id": row["execution_id"],
+                "total_tokens": row["total_tokens"],
+                "avg_tokens": row["avg_tokens"],
+                "token_multiplier": row["token_multiplier"],
+                "started_at": row["started_at"],
+            },
+            affected_executions=[row["execution_id"]],
+        )
+    return len(token_spikes)
+
+
+def _emit_stuck_run_reports() -> int:
+    stuck = _check_stuck_runs()
+    for row in stuck:
+        severity = _severity_from_rate(
+            row.get("duration_multiplier", 0),
+            (2.0, 3.0, 5.0),
+        )
+        _create_observation_report(
+            namespace=row["namespace"],
+            name=row["workflow_name"],
+            anomaly_type="stuck_run",
+            severity=severity,
+            title=f"Stuck run: {row['workflow_name']}",
+            description=(
+                f"Running {row['current_duration']}ms ({row['duration_multiplier']}x median {row['median_ms']}ms)"
+            ),
+            details={
+                "execution_id": row["execution_id"],
+                "current_duration_ms": row["current_duration"],
+                "median_duration_ms": row["median_ms"],
+                "duration_multiplier": row["duration_multiplier"],
+                "started_at": row["started_at"],
+            },
+            affected_executions=[row["execution_id"]],
+        )
+    return len(stuck)
+
+
+def _run_detector(detector_name: str, detector: Callable[[], int]) -> int:
+    try:
+        result = detector()
+        if result > 0:
+            logger.info("Signal watch: detector '%s' found %d anomalies", detector_name, result)
+        return result
+    except Exception:
+        logger.warning("Signal watch: detector '%s' failed", detector_name, exc_info=True)
+        return 0
+
+
+def run_signal_watch_cycle() -> int:
+    """Run one anomaly-detection sweep and return the total anomalies emitted."""
+    logger.debug("Signal watch: running anomaly detection checks")
+    totals = [
+        _run_detector("high_failure_rate", _emit_high_failure_rate_reports),
+        _run_detector("error_spike", _emit_error_spike_reports),
+        _run_detector("cost_outlier", _emit_cost_outlier_reports),
+        _run_detector("token_spike", _emit_token_spike_reports),
+        _run_detector("stuck_run", _emit_stuck_run_reports),
+    ]
+    total = sum(totals)
+    if total > 0:
+        logger.info("Signal watch: detected %d anomalies", total)
+    return total
 
 
 # ---------------------------------------------------------------------------
@@ -326,133 +532,8 @@ def signal_watch_timer(**kwargs: Any) -> None:
     if kwargs.get("settings"):
         return  # startup only
 
-    logger.debug("Signal watch: running anomaly detection checks")
+    if not _claim_cycle_slot():
+        logger.debug("Signal watch: skipping duplicate timer invocation inside the current interval")
+        return
 
-    try:
-        # 1. High failure rate
-        failures = _check_high_failure_rate()
-        for row in failures:
-            severity = _severity_from_rate(
-                row.get("failure_rate", 0),
-                (0.3, 0.5, 0.7),
-            )
-            _create_observation_report(
-                namespace=row["namespace"],
-                name=row["workflow_name"],
-                anomaly_type="high_failure_rate",
-                severity=severity,
-                title=f"High failure rate in {row['workflow_name']}",
-                description=f"{row['failed_steps']}/{row['total_steps']} steps failed ({row['failure_rate']*100:.0f}%)",
-                details={
-                    "execution_id": row["execution_id"],
-                    "total_steps": row["total_steps"],
-                    "failed_steps": row["failed_steps"],
-                    "failure_rate": row["failure_rate"],
-                    "started_at": row["started_at"],
-                },
-                affected_executions=[row["execution_id"]],
-            )
-
-        # 2. Error spikes
-        spikes = _check_error_spikes()
-        for row in spikes:
-            severity = _severity_from_rate(
-                row.get("error_count", 0) / max(ERROR_COUNT_THRESHOLD, 1),
-                (1.0, 2.0, 5.0),
-            )
-            affected = row.get("affected_executions") or []
-            _create_observation_report(
-                namespace=row["namespace"],
-                name=row["agent_name"] or "unknown",
-                anomaly_type="error_spike",
-                severity=severity,
-                title=f"Error spike in {row['agent_name']}",
-                description=f"{row['error_count']} errors in {ANOMALY_WINDOW_MINUTES}m window",
-                details={
-                    "agent_name": row["agent_name"],
-                    "runtime_kind": row["runtime_kind"],
-                    "error_count": row["error_count"],
-                    "first_error": row["first_error"],
-                    "last_error": row["last_error"],
-                },
-                affected_executions=[str(e) for e in affected[:10]] if affected else None,
-            )
-
-        # 3. Cost outliers
-        outliers = _check_cost_outliers()
-        for row in outliers:
-            severity = _severity_from_rate(
-                row.get("cost_multiplier", 0),
-                (3.0, 5.0, 10.0),
-            )
-            _create_observation_report(
-                namespace=row["namespace"],
-                name=row["workflow_name"],
-                anomaly_type="cost_outlier",
-                severity=severity,
-                title=f"Cost outlier in {row['workflow_name']}",
-                description=f"Cost ${row['cost_usd']:.2f} is {row['cost_multiplier']}x namespace avg ${row['avg_cost']:.2f}",
-                details={
-                    "execution_id": row["execution_id"],
-                    "cost_usd": row["cost_usd"],
-                    "avg_cost": row["avg_cost"],
-                    "cost_multiplier": row["cost_multiplier"],
-                    "started_at": row["started_at"],
-                },
-                affected_executions=[row["execution_id"]],
-            )
-
-        # 4. Token spikes
-        token_spikes = _check_token_spikes()
-        for row in token_spikes:
-            severity = _severity_from_rate(
-                row.get("token_multiplier", 0),
-                (3.0, 5.0, 10.0),
-            )
-            _create_observation_report(
-                namespace=row["namespace"],
-                name=row["agent_name"] or "unknown",
-                anomaly_type="token_spike",
-                severity=severity,
-                title=f"Token spike in {row['agent_name']}",
-                description=f"{row['total_tokens']} tokens is {row['token_multiplier']}x agent avg {row['avg_tokens']:.0f}",
-                details={
-                    "execution_id": row["execution_id"],
-                    "total_tokens": row["total_tokens"],
-                    "avg_tokens": row["avg_tokens"],
-                    "token_multiplier": row["token_multiplier"],
-                    "started_at": row["started_at"],
-                },
-                affected_executions=[row["execution_id"]],
-            )
-
-        # 5. Stuck runs
-        stuck = _check_stuck_runs()
-        for row in stuck:
-            severity = _severity_from_rate(
-                row.get("duration_multiplier", 0),
-                (2.0, 3.0, 5.0),
-            )
-            _create_observation_report(
-                namespace=row["namespace"],
-                name=row["workflow_name"],
-                anomaly_type="stuck_run",
-                severity=severity,
-                title=f"Stuck run: {row['workflow_name']}",
-                description=f"Running {row['current_duration']}ms ({row['duration_multiplier']}x median {row['median_ms']}ms)",
-                details={
-                    "execution_id": row["execution_id"],
-                    "current_duration_ms": row["current_duration"],
-                    "median_duration_ms": row["median_ms"],
-                    "duration_multiplier": row["duration_multiplier"],
-                    "started_at": row["started_at"],
-                },
-                affected_executions=[row["execution_id"]],
-            )
-
-        total = len(failures) + len(spikes) + len(outliers) + len(token_spikes) + len(stuck)
-        if total > 0:
-            logger.info("Signal watch: detected %d anomalies", total)
-
-    except Exception:
-        logger.warning("Signal watch: anomaly detection failed", exc_info=True)
+    run_signal_watch_cycle()

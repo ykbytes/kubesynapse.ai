@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import uuid
 from pathlib import Path
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -101,6 +102,20 @@ class TestTraceEndpoints:
         response = client.get("/api/traces/executions", headers=auth_headers)
         assert response.status_code in {200, 404, 500}
 
+    def test_legacy_trace_list_alias_returns_deprecation_headers(
+        self, client: TestClient, auth_headers: dict
+    ) -> None:
+        """The legacy trace list alias should keep working while advertising the canonical route."""
+        with patch.object(trace_store, "list_executions", return_value=[]):
+            response = client.get("/api/v1/traces?limit=1", headers=auth_headers)
+
+        assert response.status_code == 200
+        data = response.json()
+        assert "items" in data
+        assert response.headers.get("Deprecation") == "true"
+        assert response.headers.get("Sunset")
+        assert "/api/v1/traces/executions?limit=1" in response.headers.get("Link", "")
+
     def test_get_trace_detail_without_auth_returns_401(self, client: TestClient) -> None:
         """Requests without auth to trace detail should be rejected."""
         response = client.get("/api/traces/executions/exec-nonexistent")
@@ -110,6 +125,49 @@ class TestTraceEndpoints:
         """Authenticated requests to trace detail should not return 401."""
         response = client.get("/api/traces/executions/exec-nonexistent", headers=auth_headers)
         assert response.status_code in {200, 404, 500}
+
+    def test_legacy_trace_detail_alias_returns_execution_payload(
+        self, client: TestClient, auth_headers: dict
+    ) -> None:
+        """The legacy trace detail alias should serve the canonical execution payload."""
+        execution_id = f"exec-{uuid.uuid4().hex[:12]}"
+        execution = {
+            "id": execution_id,
+            "namespace": "default",
+            "workflow_name": "observatory-demo",
+            "agent_name": "observatory-demo",
+            "run_id": "wf-run-alias-detail",
+            "status": "completed",
+            "started_at": None,
+            "completed_at": None,
+            "duration_ms": None,
+            "input_summary": None,
+            "output_summary": None,
+            "total_steps": 0,
+            "completed_steps": 0,
+            "failed_steps": 0,
+            "total_llm_calls": 0,
+            "total_tool_calls": 0,
+            "total_tokens": 0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "estimated_cost_usd": None,
+            "triggered_by": None,
+            "error_message": None,
+            "trace_file_path": None,
+            "steps": [],
+            "llm_calls": [],
+            "tool_calls": [],
+            "events": [],
+        }
+
+        with patch.object(trace_store, "get_execution", return_value=execution):
+            response = client.get(f"/api/v1/traces/{execution_id}", headers=auth_headers)
+            assert response.status_code == 200
+            data = response.json()
+            assert data["id"] == execution_id
+            assert response.headers.get("Deprecation") == "true"
+            assert f"/api/v1/traces/executions/{execution_id}" in response.headers.get("Link", "")
 
     def test_batch_ingest_without_auth_returns_401(self, client: TestClient) -> None:
         """Requests without auth to batch ingest should be rejected."""

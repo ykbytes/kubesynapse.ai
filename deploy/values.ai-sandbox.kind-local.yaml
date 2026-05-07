@@ -11,7 +11,7 @@ global:
 
 opencodeRuntime:
   image:
-    repository: localhost/kubesynapse/kubesynapse-opencode-runtime
+    repository: localhost/kubesynapse/kubesynapse-opencode-rt
     tag: mcp-structured-20260413-4
     pullPolicy: IfNotPresent
 
@@ -39,5 +39,5 @@ webUi:
 
 collector:
   image:
-    repository: localhost/kubesynapse/collector-agent
+    repository: localhost/kubesynapse/kubesynapse-collector
     tag: dev

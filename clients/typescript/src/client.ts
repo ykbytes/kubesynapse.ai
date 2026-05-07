@@ -14,6 +14,8 @@ import type {
   AgentPolicy,
   AgentWorkflow,
   AgentWorkflowCreate,
+  ExecutionDetailResponse,
+  ExecutionListResponse,
   HealthStatus,
 } from "./models.js";
 
@@ -197,17 +199,31 @@ export class KubeSynapseClient {
 
   // ── Observability ───────────────────────────────────────────────
 
-  async listTraces(
+  async listExecutions(
     workflowName?: string,
     limit: number = 50,
-  ): Promise<Record<string, unknown>[]> {
-    return this.request("GET", "/api/v1/traces", undefined, {
+    offset: number = 0,
+  ): Promise<ExecutionListResponse> {
+    return this.request("GET", "/api/v1/traces/executions", undefined, {
       workflow_name: workflowName,
       limit,
+      offset,
     });
   }
 
-  async getTrace(traceId: string): Promise<Record<string, unknown>> {
-    return this.request("GET", `/api/v1/traces/${traceId}`);
+  async getExecution(executionId: string): Promise<ExecutionDetailResponse> {
+    return this.request("GET", `/api/v1/traces/executions/${executionId}`);
+  }
+
+  async listTraces(
+    workflowName?: string,
+    limit: number = 50,
+    offset: number = 0,
+  ): Promise<ExecutionListResponse> {
+    return this.listExecutions(workflowName, limit, offset);
+  }
+
+  async getTrace(traceId: string): Promise<ExecutionDetailResponse> {
+    return this.getExecution(traceId);
   }
 }

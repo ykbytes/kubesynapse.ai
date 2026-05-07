@@ -46,8 +46,8 @@ for await (const delta of client.stream("my-agent", "Build a REST API")) {
 }
 
 // Traces
-const traces = await client.listTraces();
-const trace = await client.getTrace("run-id");
+const executions = await client.listExecutions();
+const execution = await client.getExecution("run-id");
 ```
 
 ## Timeouts & Error Handling

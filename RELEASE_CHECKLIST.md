@@ -56,8 +56,10 @@ Use this checklist before tagging a new release.
 
 | Component | Current Tag |
 |-----------|-------------|
-| Operator | `kubesynapse-operator:v1.0.15` |
-| API Gateway | `kubesynapse-api-gateway:v1.0.15` |
-| Web UI | `kubesynapse-web-ui:v1.2.0` |
-| Pi Runtime | `kubesynapse-pi-rt:v0.2.13` |
-| OpenCode Runtime | `kubesynapse-opencode-rt:v1.0.5` |
+| Operator | `kubesynapse-operator:v2.1.0-run-intelligence` |
+| API Gateway | `kubesynapse-api-gateway:v2.1.0-run-intelligence` |
+| Web UI | `kubesynapse-web-ui:v2.1.0-run-intelligence` |
+| Pi Runtime | `kubesynapse-pi-rt:v2.1.0-run-intelligence` |
+| OpenCode Runtime | `kubesynapse-opencode-rt:v2.1.0-run-intelligence` |
+| Mistral Vibe Runtime | `kubesynapse-vibe-rt:v2.1.0-run-intelligence` |
+| LiteLLM | `litellm/litellm:v1.82.3-stable` |

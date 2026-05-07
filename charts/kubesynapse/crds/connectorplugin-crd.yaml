@@ -113,6 +113,15 @@ spec:
                 lastHealthCheck:
                   type: string
                   format: date-time
+                lastScrapeTime:
+                  type: string
+                  format: date-time
+                lastScrapeError:
+                  type: string
+                metricsCollected:
+                  type: integer
+                findingCount:
+                  type: integer
                 conditions:
                   type: array
                   items:

@@ -143,7 +143,14 @@ INVOKE_RESPONSE_SCHEMA: dict[str, Any] = {
         "warnings": {"type": "array", "items": {"type": "string"}},
         "artifacts": {"type": "array"},
         "tool_calls": {"type": "array"},
-        "continuity": {"type": "object"},
+        "continuity": {
+            "type": "object",
+            "properties": {
+                "created_new_session": {"type": "boolean"},
+                "session_recovered": {"type": "boolean"},
+                "has_prior_memory": {"type": "boolean"},
+            },
+        },
         "metadata": {"type": "object"},
     },
 }
@@ -246,6 +253,10 @@ def _runtime_params() -> list[Any]:
     return params
 
 
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 @pytest.fixture(params=_runtime_params())
 def runtime_url(request: pytest.FixtureRequest) -> str:
     """Parametrized fixture that yields the base URL for each configured runtime.
@@ -291,6 +302,35 @@ def runtime_client(runtime_url: str, runtime_auth_headers: dict[str, str]) -> ht
     )
     yield client
     client.close()
+
+
+@pytest.fixture
+def unauthenticated_runtime_client(runtime_url: str) -> httpx.Client:
+    client = httpx.Client(
+        base_url=runtime_url,
+        headers={"Accept": "application/json"},
+        timeout=RUNTIME_TIMEOUT,
+    )
+    yield client
+    client.close()
+
+
+@pytest.fixture
+def runtime_auth_enforced() -> bool:
+    return _env_flag("RUNTIME_EXPECT_AUTH")
+
+
+@pytest.fixture
+def runtime_timeout_probe() -> dict[str, Any] | None:
+    prompt = os.environ.get("RUNTIME_TIMEOUT_PROMPT", "").strip()
+    if not prompt:
+        return None
+    raw_timeout = os.environ.get("RUNTIME_TIMEOUT_SECONDS", "1").strip()
+    try:
+        timeout_seconds = max(float(raw_timeout), 1.0)
+    except ValueError:
+        timeout_seconds = 1.0
+    return {"prompt": prompt, "timeout_seconds": timeout_seconds}
 
 
 # ---------------------------------------------------------------------------

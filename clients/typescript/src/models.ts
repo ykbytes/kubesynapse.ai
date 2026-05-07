@@ -114,6 +114,42 @@ export interface AgentWorkflow {
   updated_at: string | null;
 }
 
+export interface ExecutionListResponse {
+  items: Record<string, unknown>[];
+  limit: number;
+  offset: number;
+}
+
+export interface ExecutionDetailResponse {
+  id: string;
+  namespace: string;
+  workflow_name: string;
+  agent_name: string;
+  run_id: string;
+  status: string;
+  started_at: string | null;
+  completed_at: string | null;
+  duration_ms: number | null;
+  input_summary: Record<string, unknown> | null;
+  output_summary: Record<string, unknown> | null;
+  total_steps: number;
+  completed_steps: number;
+  failed_steps: number;
+  total_llm_calls: number;
+  total_tool_calls: number;
+  total_tokens: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  estimated_cost_usd: number | null;
+  triggered_by: string | null;
+  error_message: string | null;
+  trace_file_path: string | null;
+  steps: Record<string, unknown>[];
+  llm_calls: Record<string, unknown>[];
+  tool_calls: Record<string, unknown>[];
+  events: Record<string, unknown>[];
+}
+
 export interface APIError {
   error: string;
   message: string;

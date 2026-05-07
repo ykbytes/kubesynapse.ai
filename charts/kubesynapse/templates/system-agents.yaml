@@ -13,6 +13,10 @@ kind: AIAgent
 metadata:
   name: ks-run-inspector
   namespace: {{ $ns }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-delete-policy: before-hook-creation
+    helm.sh/hook-weight: "10"
   labels:
     app.kubernetes.io/name: ks-run-inspector
     app.kubernetes.io/component: system-agent
@@ -79,6 +83,10 @@ kind: AIAgent
 metadata:
   name: ks-signal-summarizer
   namespace: {{ $ns }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-delete-policy: before-hook-creation
+    helm.sh/hook-weight: "10"
   labels:
     app.kubernetes.io/name: ks-signal-summarizer
     app.kubernetes.io/component: system-agent
@@ -140,6 +148,10 @@ kind: AIAgent
 metadata:
   name: ks-spend-reviewer
   namespace: {{ $ns }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-delete-policy: before-hook-creation
+    helm.sh/hook-weight: "10"
   labels:
     app.kubernetes.io/name: ks-spend-reviewer
     app.kubernetes.io/component: system-agent

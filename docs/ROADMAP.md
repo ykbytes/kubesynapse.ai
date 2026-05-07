@@ -1,7 +1,7 @@
 # KubeSynth Runtime Platform — Master Roadmap
 
-> **Updated:** 2026-05-04  
-> **Status:** Active — Run Intelligence Layer Complete  
+> **Updated:** 2026-05-07  
+> **Status:** Active — Run Intelligence shipped, consistency hardening in progress  
 > **Owner:** KubeSynth Scrum Master
 
 ---
@@ -25,7 +25,7 @@ Build the most **reliable, observable, and enterprise-ready** AI agent runtime p
 | pi-runtime | ✅ Production-ready | `v1.x` | All Core + Session + Artifacts + Streaming tiers implemented, SSE taxonomy normalized |
 | vibe-runtime | ✅ Production-ready | `v1.x` | All 4 API tiers implemented, /cancel and /abort functional |
 | API contract | ✅ Defined | `runtime-api-spec.yaml` + `.md` | OpenAPI 3.0 spec with Core/Session/Artifacts/Streaming tiers |
-| Run Intelligence Layer | ✅ Complete | — | Phases 1-6: trace_store, runtime emission, system agents, signal watch, analytics APIs |
+| Run Intelligence Layer | ⚠️ Shipped with follow-up backlog | — | Core trace store, runtime emission, system agents, signal watch, and analytics APIs landed; follow-up fixes are planned for connector-backed status, signal watch hardening, SDK contract parity, and `llm.call` runtime parity |
 
 ---
 
@@ -160,6 +160,67 @@ Build the most **reliable, observable, and enterprise-ready** AI agent runtime p
 - **Assignee:** kubesynth-backend-refactorer
 - **Estimated:** 3h
 - **Actual:** 1.5h
+
+### Phase 2.5: Observability Consistency Hardening (Stories 10.1-10.5)
+
+Implementation details: `docs/observability-remediation-plan.md`
+
+#### Story 10.1: Connector-Backed ObservationTarget Status
+- **Goal:** Remove synthetic target health and report generation from the live observability path.
+- **DoD:**
+  1. `observation_controller.py` splits demo reconciliation from production reconciliation
+  2. Production path reads connector or collector status instead of incrementing synthetic counters
+  3. `phase`, `connectorHealth`, `lastScrapeTime`, and `metricsCollected` derive from real scrape outcomes
+  4. `ObservationReport` creation is based on collector findings or deterministic rule outputs, not demo text
+  5. Demo mode remains opt-in and clearly isolated for sample environments only
+  6. UI and API responses continue to work without schema regressions
+- **Assignee:** kubesynth-prod-engineer
+- **Estimated:** 6h
+
+#### Story 10.2: Signal Watch Query And Scheduling Hardening
+- **Goal:** Make anomaly detection correct, singleton, and resilient to partial failures.
+- **DoD:**
+  1. Raw SQL helper uses `sqlalchemy.text` instead of `kopf.text`
+  2. Workflow spend queries use `workflow_executions.estimated_cost_usd`
+  3. Signal watch runs once per leader cycle, not once per labeled `AIAgent`
+  4. Each detector runs in its own failure boundary so one broken query does not suppress later checks
+  5. `ObservationReport` creation is idempotent or deduplicated per anomaly window
+  6. Helm config still controls interval and thresholds without behavior drift
+- **Assignee:** kubesynth-prod-engineer
+- **Estimated:** 5h
+
+#### Story 10.3: Trace SDK Contract Alignment
+- **Goal:** Bring Python and TypeScript SDK trace methods back in sync with the gateway.
+- **DoD:**
+  1. SDKs call `/api/v1/traces/executions` and `/api/v1/traces/executions/{execution_id}`
+  2. SDK return types match `ExecutionListResponse` and `ExecutionDetailResponse`
+  3. Deprecated `list_traces` and `get_trace` wrappers remain available or server aliases exist during transition
+  4. API reference and examples reflect the live contract
+  5. Contract tests fail if route or payload shape drifts again
+- **Assignee:** kubesynth-backend-refactorer
+- **Estimated:** 4h
+
+#### Story 10.4: Runtime `llm.call` Event Parity
+- **Goal:** Emit the same semantic LLM event coverage from direct runtimes that workflow workers already record.
+- **DoD:**
+  1. OpenCode runtime emits `llm.call` from `/invoke` and `/invoke/stream` when model metadata is available
+  2. Pi runtime emits `llm.call` from bridge result and stream paths
+  3. Vibe runtime emits `llm.call` from both invoke paths
+  4. Event payloads normalize provider, model, token, cost, duration, and prompt/response preview fields
+  5. Spend and runtime-summary analytics include direct runtime runs with no worker involvement
+- **Assignee:** kubesynth-backend-refactorer
+- **Estimated:** 6h
+
+#### Story 10.5: Observability Contract And Smoke Coverage
+- **Goal:** Lock the observability surfaces with tests so these drifts do not recur.
+- **DoD:**
+  1. Unit tests cover live vs demo observation reconciliation
+  2. Signal watch tests cover query schema alignment, per-detector isolation, and duplicate-safe report creation
+  3. SDK contract tests validate routes and response envelopes against the gateway
+  4. Runtime tests assert `llm.call` emission alongside run and tool events
+  5. Smoke script validates timeline, runtime-summary, spend, and signal-watch flows after deploy
+- **Assignee:** kubesynth-bug-hunter
+- **Estimated:** 5h
 
 ### Phase 3: Reliability & Observability (Stories 11-14)
 

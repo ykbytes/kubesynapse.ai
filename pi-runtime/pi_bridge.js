@@ -19,6 +19,7 @@
  */
 
 const http = require("http");
+const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -26,6 +27,7 @@ const { spawn, execSync } = require("child_process");
 
 // Run Intelligence Layer — runtime event emitter
 const runtimeEvents = require("./runtime_events");
+const { SessionStore } = require("./session_state");
 
 const HOST = process.env.PI_BRIDGE_HOST || "0.0.0.0";
 const PORT = parseInt(process.env.PI_BRIDGE_PORT || "8080", 10);
@@ -33,6 +35,9 @@ const PI_STDIN_FIFO = "/tmp/pi-stdin";
 const PI_STDOUT_FIFO = "/tmp/pi-stdout";
 const WORKDIR = path.resolve(process.env.OPENCODE_WORKDIR || "/workspace");
 const HOME_DIR = path.resolve(process.env.HOME || "/home/piuser");
+const SERVICE_NAME = (process.env.AGENT_NAME || "pi-agent").trim() || "pi-agent";
+const SERVICE_NAMESPACE = (process.env.AGENT_NAMESPACE || "default").trim() || "default";
+const RUNTIME_TIERS = ["core", "session", "artifacts", "streaming"];
 const SESSION_DIR = process.env.PI_CODING_AGENT_DIR
   ? path.join(process.env.PI_CODING_AGENT_DIR, "sessions")
   : "/home/piuser/.pi/agent/sessions";
@@ -62,6 +67,7 @@ const pendingResponses = new Map();
 const eventStreams = new Set();
 const ACTIVE_INVOCATIONS = new Map(); // invocationId -> { res, chunks, tools, done, timer }
 const MODEL_TIMEOUT_MS = Math.max(parseInt(process.env.PI_MODEL_TIMEOUT_MS || "120000", 10) || 120000, 10000);
+const sessionStore = new SessionStore({ workspaceDir: WORKDIR, modelContextLimit: 128000 });
 
 // ── Pi Subprocess State ─────────────────────────────────────────────
 
@@ -77,6 +83,83 @@ let currentConfig = {
   provider: process.env.PI_PROVIDER || "",
   thinkingLevel: process.env.PI_THINKING_LEVEL || "medium",
 };
+
+function buildPiMetadata(config, overrides = {}) {
+  return {
+    runtime: "pi",
+    config: { ...(config || currentConfig) },
+    tokens: {
+      total: 0,
+      input: 0,
+      output: 0,
+      reasoning: 0,
+      cache: { read: 0, write: 0 },
+    },
+    finish_reason: "stop",
+    ...overrides,
+  };
+}
+
+function formatToolCalls(toolCalls) {
+  return (toolCalls || []).map((toolCall) => ({
+    name: toolCall.name || toolCall.tool || "tool",
+    args: toolCall.args !== undefined ? toolCall.args : toolCall.input,
+    result: toolCall.result !== undefined ? toolCall.result : "",
+    status: toolCall.status || "completed",
+  }));
+}
+
+const ERROR_CODES = {
+  400: "invalid_request",
+  401: "unauthorized",
+  403: "forbidden",
+  404: "not_found",
+  408: "timeout",
+  409: "conflict",
+  413: "payload_too_large",
+  422: "invalid_request",
+  429: "rate_limited",
+  500: "internal_error",
+  502: "upstream_error",
+  503: "service_unavailable",
+  504: "timeout",
+};
+
+function errorCodeForStatus(status) {
+  if (ERROR_CODES[status]) {
+    return ERROR_CODES[status];
+  }
+  return status >= 500 ? "upstream_error" : "runtime_error";
+}
+
+function normalizeErrorDetails(details) {
+  if (details === undefined || details === null || details === "") {
+    return null;
+  }
+  if (Array.isArray(details) && details.length === 0) {
+    return null;
+  }
+  if (typeof details === "object" && !Array.isArray(details) && Object.keys(details).length === 0) {
+    return null;
+  }
+  return details;
+}
+
+function buildErrorPayload(status, message, options = {}) {
+  const traceId = options.traceId || options.trace_id || null;
+  const error = {
+    code: options.code || errorCodeForStatus(status),
+    message: message || "Unexpected error",
+  };
+  const details = normalizeErrorDetails(options.details);
+  if (details !== null) {
+    error.details = details;
+  }
+  if (traceId) {
+    error.trace_id = traceId;
+  }
+  return { error };
+}
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
@@ -232,9 +315,26 @@ function contentTypeForFile(filePath) {
   return MIME_TYPES[path.extname(filePath).toLowerCase()] || "application/octet-stream";
 }
 
+function piCapabilities() {
+  return {
+    native_tools: ["bash", "read", "write", "edit", "glob", "grep", "webfetch", "websearch", "codesearch", "skill", "task", "todowrite"],
+    output_formats: ["text", "json", "markdown", "code"],
+    structured_output: { supported: true, json_schema: true },
+    autonomous_execution: { supported: true, default_max_turns: 10 },
+    session_management: { abort: true, summarize: false, compaction: false },
+    mcp_usage: { supported: false },
+    a2a: { outbound_supported: true },
+    tiers: RUNTIME_TIERS,
+  };
+}
+
 function sendError(res, err, fallbackStatus = 500) {
   const status = Number.isInteger(err?.statusCode) ? err.statusCode : fallbackStatus;
-  return jsonResponse(res, status, { error: err?.message || "Unexpected error" });
+  return jsonError(res, status, err?.message || "Unexpected error", {
+    code: err?.code,
+    details: err?.details,
+    traceId: err?.traceId || err?.trace_id,
+  });
 }
 
 function streamArtifactsZip(res, root = "") {
@@ -597,8 +697,14 @@ function handlePiOutput(line) {
             clearTimeout(inv.timer);
             inv.error = errorMessage;
             inv.done = true;
+            sessionStore.complete(inv.threadId, {
+              status: "error",
+              toolCalls: inv.tools,
+              metadata: buildPiMetadata(inv.config, { finish_reason: "error" }),
+              responseText: "",
+            });
             if (inv.stream) {
-              inv.stream.write(`event: response.error\ndata: ${JSON.stringify({ session_id: inv.id || null, error: errorMessage, code: 502 })}\n\n`);
+              inv.stream.write(`event: response.error\ndata: ${JSON.stringify({ session_id: inv.sessionId || null, error: errorMessage, code: 502 })}\n\n`);
             }
           }
           handler.reject(new Error(errorMessage));
@@ -618,7 +724,7 @@ function handlePiOutput(line) {
         for (const inv of ACTIVE_INVOCATIONS.values()) {
           inv.chunks.push(evt.delta);
           if (inv.stream) {
-            inv.stream.write(`event: response.delta\ndata: ${JSON.stringify({ text: evt.delta, session_id: inv.id || null })}\n\n`);
+            inv.stream.write(`event: response.delta\ndata: ${JSON.stringify({ text: evt.delta, session_id: inv.sessionId || null })}\n\n`);
           }
         }
       }
@@ -644,13 +750,13 @@ function handlePiOutput(line) {
 
     if (data.type === "tool_execution_start") {
       for (const inv of ACTIVE_INVOCATIONS.values()) {
-        inv.tools.push({ tool: data.toolName, status: "running", input: data.args });
+        inv.tools.push({ name: data.toolName, args: data.args, result: "", status: "running" });
         if (inv.stream) {
           inv.stream.write(`event: response.tool_call\ndata: ${JSON.stringify({
             name: data.toolName,
             args: data.args,
             id: `tool-${++commandCounter}`,
-            session_id: inv.id || null,
+            session_id: inv.sessionId || null,
           })}\n\n`);
         }
       }
@@ -658,14 +764,17 @@ function handlePiOutput(line) {
 
     if (data.type === "tool_execution_end") {
       for (const inv of ACTIVE_INVOCATIONS.values()) {
-        const t = inv.tools.find((x) => x.tool === data.toolName && x.status === "running");
-        if (t) t.status = data.isError ? "error" : "completed";
+        const t = inv.tools.find((x) => x.name === data.toolName && x.status === "running");
+        if (t) {
+          t.status = data.isError ? "error" : "completed";
+          t.result = data.result ? JSON.stringify(data.result) : "";
+        }
         if (inv.stream) {
           inv.stream.write(`event: response.tool_result\ndata: ${JSON.stringify({
             id: `tool-${commandCounter}`,
             result: data.result ? JSON.stringify(data.result) : "",
             status: data.isError ? "error" : "completed",
-            session_id: inv.id || null,
+            session_id: inv.sessionId || null,
           })}\n\n`);
         }
       }
@@ -676,9 +785,15 @@ function handlePiOutput(line) {
       for (const inv of ACTIVE_INVOCATIONS.values()) {
         clearTimeout(inv.timer);
         inv.done = true;
+        const responseText = inv.chunks.join("");
+        sessionStore.complete(inv.threadId, {
+          status: "completed",
+          toolCalls: inv.tools,
+          metadata: buildPiMetadata(inv.config, { finish_reason: "stop" }),
+          responseText,
+        });
         if (inv.stream) {
-          const responseText = inv.chunks.join("");
-          inv.stream.write(`event: response.completed\ndata: ${JSON.stringify({ session_id: inv.id || null, tokens: 0, status: "completed", finish_reason: "stop", response: responseText })}\n\n`);
+          inv.stream.write(`event: response.completed\ndata: ${JSON.stringify({ session_id: inv.sessionId || null, tokens: buildPiMetadata(inv.config).tokens, status: "completed", finish_reason: "stop", response: responseText })}\n\n`);
         }
       }
     }
@@ -688,8 +803,14 @@ function handlePiOutput(line) {
         clearTimeout(inv.timer);
         inv.error = data.error || "Unknown error";
         inv.done = true;
+        sessionStore.complete(inv.threadId, {
+          status: "error",
+          toolCalls: inv.tools,
+          metadata: buildPiMetadata(inv.config, { finish_reason: "error" }),
+          responseText: "",
+        });
         if (inv.stream) {
-          inv.stream.write(`event: response.error\ndata: ${JSON.stringify({ session_id: inv.id || null, error: inv.error, code: 500 })}\n\n`);
+          inv.stream.write(`event: response.error\ndata: ${JSON.stringify({ session_id: inv.sessionId || null, error: inv.error, code: 500 })}\n\n`);
         }
       }
     }
@@ -820,9 +941,17 @@ function startStdoutReaderFromFd(fd) {
 
 // ── HTTP Helpers ────────────────────────────────────────────────────
 
-function jsonResponse(res, status, data) {
-  res.writeHead(status, { "Content-Type": "application/json" });
+function jsonResponse(res, status, data, headers = {}) {
+  res.writeHead(status, { "Content-Type": "application/json", ...headers });
   res.end(JSON.stringify(data));
+}
+
+function jsonError(res, status, message, options = {}) {
+  const traceId = options.traceId || options.trace_id || res.getHeader("x-request-id");
+  return jsonResponse(res, status, buildErrorPayload(status, message, {
+    ...options,
+    traceId,
+  }));
 }
 
 function sseEvent(res, event, data) {
@@ -880,9 +1009,11 @@ async function handleRequest(req, res) {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const requestPath = url.pathname;
   const method = req.method;
+  const requestId = String(req.headers["x-request-id"] || crypto.randomUUID());
 
   // CORS
   res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("x-request-id", requestId);
   if (method === "OPTIONS") {
     res.writeHead(204, {
       "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
@@ -895,8 +1026,20 @@ async function handleRequest(req, res) {
   // Health check — includes current config
   if (requestPath === "/health") {
     const alive = isPiAlive();
+    const activeInvocations = Array.from(ACTIVE_INVOCATIONS.values()).filter((invocation) => !invocation.done).length;
     return jsonResponse(res, alive ? 200 : 503, {
       status: alive ? "healthy" : "unhealthy",
+      runtime: "pi",
+      service: SERVICE_NAME,
+      namespace: SERVICE_NAMESPACE,
+      provider: currentConfig.provider || "auto",
+      agent: "build",
+      sessions: {
+        total: ACTIVE_INVOCATIONS.size,
+        active: activeInvocations,
+      },
+      uptime_seconds: Math.max(Math.round(process.uptime() * 10) / 10, 0),
+      timestamp: new Date().toISOString(),
       pi: alive ? "running" : "not running",
       pid: piProcess?.pid || null,
       config: currentConfig,
@@ -905,15 +1048,26 @@ async function handleRequest(req, res) {
 
   // Readiness check
   if (requestPath === "/ready") {
-    if (!isPiAlive()) {
-      return jsonResponse(res, 503, { status: "not ready", error: "pi not running" });
-    }
+    const checks = {
+      pi_alive: isPiAlive(),
+      state_accessible: false,
+    };
+    let error = null;
     try {
       await sendToPi({ type: "get_state" });
-      return jsonResponse(res, 200, { status: "ready" });
+      checks.state_accessible = true;
     } catch (err) {
-      return jsonResponse(res, 503, { status: "not ready", error: err.message });
+      error = err.message;
     }
+    if (!checks.pi_alive && error === null) {
+      error = "pi not running";
+    }
+    return jsonResponse(res, checks.pi_alive && checks.state_accessible ? 200 : 503, {
+      status: checks.pi_alive && checks.state_accessible ? "ready" : "not_ready",
+      runtime: "pi",
+      checks,
+      error,
+    });
   }
 
   // Get state — includes current config
@@ -925,7 +1079,7 @@ async function handleRequest(req, res) {
         currentConfig,
       });
     } catch (err) {
-      return jsonResponse(res, 500, { error: err.message });
+      return jsonError(res, 500, err.message);
     }
   }
 
@@ -935,7 +1089,7 @@ async function handleRequest(req, res) {
       await sendToPi({ type: "abort" });
       return jsonResponse(res, 200, { status: "aborted" });
     } catch (err) {
-      return jsonResponse(res, 500, { error: err.message });
+      return jsonError(res, 500, err.message);
     }
   }
 
@@ -951,13 +1105,13 @@ async function handleRequest(req, res) {
     try {
       const requestedPath = url.searchParams.get("path") || "";
       if (!requestedPath) {
-        return jsonResponse(res, 400, { error: "path is required" });
+        return jsonError(res, 400, "path is required");
       }
 
       const artifactPath = resolveArtifactFile(requestedPath);
       const stat = fs.statSync(artifactPath);
       if (stat.size > ARTIFACT_DOWNLOAD_MAX_SIZE) {
-        return jsonResponse(res, 413, { error: `file exceeds max download size of ${ARTIFACT_DOWNLOAD_MAX_SIZE} bytes` });
+        return jsonError(res, 413, `file exceeds max download size of ${ARTIFACT_DOWNLOAD_MAX_SIZE} bytes`);
       }
 
       res.writeHead(200, {
@@ -982,7 +1136,7 @@ async function handleRequest(req, res) {
       const parsed = await readBody(req);
       const message = parsed.prompt || parsed.message || "";
       if (!message) {
-        return jsonResponse(res, 400, { error: "prompt is required" });
+        return jsonError(res, 400, "prompt is required");
       }
 
       const threadId = parsed.thread_id || `pi-${++commandCounter}`;
@@ -1004,8 +1158,25 @@ async function handleRequest(req, res) {
       // Handle image attachments
       const finalMessage = handleImageAttachments(message, parsed.images);
 
+      const { session, continuity } = sessionStore.begin(threadId, {
+        model: currentConfig.model,
+        prompt: finalMessage,
+      });
+
       const invId = `invoke-${commandCounter}`;
-      const invocation = { chunks: [], tools: [], done: false, error: null, stream: null };
+      const invocation = {
+        chunks: [],
+        tools: [],
+        done: false,
+        error: null,
+        stream: null,
+        threadId,
+        executionId,
+        model: currentConfig.model,
+        config: { ...currentConfig },
+        continuity,
+        sessionId: session.sessionId,
+      };
       ACTIVE_INVOCATIONS.set(invId, invocation);
 
       await sendToPi({ type: "prompt", message: finalMessage });
@@ -1020,6 +1191,12 @@ async function handleRequest(req, res) {
       if (!invocation.done) {
         await sendToPi({ type: "abort" }).catch(() => {});
         invocation.error = `Model call timed out after ${MODEL_TIMEOUT_MS}ms`;
+        sessionStore.complete(threadId, {
+          status: "error",
+          toolCalls: invocation.tools,
+          metadata: buildPiMetadata(invocation.config, { finish_reason: "error" }),
+          responseText: "",
+        });
       }
 
       ACTIVE_INVOCATIONS.delete(invId);
@@ -1031,19 +1208,29 @@ async function handleRequest(req, res) {
           thread_id: threadId,
           error: invocation.error,
         });
-        return jsonResponse(res, 502, {
-          thread_id: threadId,
-          response: "",
-          model: currentConfig.model,
-          status: "failed",
-          warnings: [invocation.error],
-          artifacts: [],
-          tool_calls: invocation.tools,
-          metadata: { runtime: "pi", config: currentConfig },
+        const timeoutError = invocation.error.toLowerCase().includes("timed out");
+        return jsonError(res, timeoutError ? 504 : 502, invocation.error, {
+          code: timeoutError ? "timeout" : "upstream_error",
+          details: {
+            thread_id: threadId,
+            model: currentConfig.model,
+          },
         });
       }
 
       const responseText = invocation.chunks.join("");
+      sessionStore.complete(threadId, {
+        status: "completed",
+        toolCalls: invocation.tools,
+        metadata: buildPiMetadata(invocation.config, { finish_reason: "stop" }),
+        responseText,
+      });
+      runtimeEvents.emitLlmCall(executionId, {
+        thread_id: threadId,
+        model: currentConfig.model,
+        total_tokens: 0,
+        duration_ms: durationMs,
+      });
       runtimeEvents.emitRunCompleted(executionId, {
         thread_id: threadId,
         status: "completed",
@@ -1067,11 +1254,12 @@ async function handleRequest(req, res) {
         status: "completed",
         warnings: [],
         artifacts: [],
-        tool_calls: invocation.tools,
-        metadata: { runtime: "pi", config: currentConfig },
+        tool_calls: formatToolCalls(invocation.tools),
+        continuity: invocation.continuity,
+        metadata: buildPiMetadata(invocation.config, { finish_reason: "stop" }),
       });
     } catch (err) {
-      return jsonResponse(res, 400, { error: err.message });
+      return jsonError(res, 400, err.message);
     }
   }
 
@@ -1081,7 +1269,7 @@ async function handleRequest(req, res) {
       const parsed = await readBody(req);
       const message = parsed.prompt || parsed.message || "";
       if (!message) {
-        return jsonResponse(res, 400, { error: "prompt is required" });
+        return jsonError(res, 400, "prompt is required");
       }
 
       const threadId = parsed.thread_id || `pi-${++commandCounter}`;
@@ -1103,8 +1291,26 @@ async function handleRequest(req, res) {
       // Handle image attachments
       const finalMessage = handleImageAttachments(message, parsed.images);
 
+      const { session, continuity } = sessionStore.begin(threadId, {
+        model: currentConfig.model,
+        prompt: finalMessage,
+      });
+
       const invId = `stream-${commandCounter}`;
-      const invocation = { chunks: [], tools: [], done: false, error: null, stream: res, id: invId };
+      const invocation = {
+        chunks: [],
+        tools: [],
+        done: false,
+        error: null,
+        stream: res,
+        id: invId,
+        threadId,
+        executionId,
+        model: currentConfig.model,
+        config: { ...currentConfig },
+        continuity,
+        sessionId: session.sessionId,
+      };
       ACTIVE_INVOCATIONS.set(invId, invocation);
 
       // Set model timeout
@@ -1114,8 +1320,14 @@ async function handleRequest(req, res) {
           console.error(`[pi-bridge] ${timeoutErr} for ${invId}`);
           invocation.error = timeoutErr;
           invocation.done = true;
+          sessionStore.complete(threadId, {
+            status: "error",
+            toolCalls: invocation.tools,
+            metadata: buildPiMetadata(invocation.config, { finish_reason: "error" }),
+            responseText: "",
+          });
           if (!invocation.stream.destroyed) {
-            invocation.stream.write(`event: response.error\ndata: ${JSON.stringify({ session_id: invId, error: timeoutErr, code: 504 })}\n\n`);
+            invocation.stream.write(`event: response.error\ndata: ${JSON.stringify({ session_id: invocation.sessionId, error: timeoutErr, code: 504 })}\n\n`);
             invocation.stream.end();
           }
           runtimeEvents.emitRunError(executionId, {
@@ -1134,13 +1346,19 @@ async function handleRequest(req, res) {
       });
 
       // Send response.started as first SSE event
-      res.write(`event: response.started\ndata: ${JSON.stringify({ session_id: invId, model: currentConfig.model, thread_id: threadId })}\n\n`);
+      res.write(`event: response.started\ndata: ${JSON.stringify({ session_id: invocation.sessionId, model: currentConfig.model, thread_id: threadId })}\n\n`);
 
       req.on("close", () => {
         clearTimeout(invocation.timer);
         ACTIVE_INVOCATIONS.delete(invId);
         if (invocation.done && !invocation.error) {
           const durationMs = Date.now() - startTime;
+          runtimeEvents.emitLlmCall(executionId, {
+            thread_id: threadId,
+            model: invocation.model,
+            total_tokens: 0,
+            duration_ms: durationMs,
+          });
           runtimeEvents.emitRunCompleted(executionId, {
             thread_id: threadId,
             status: "completed",
@@ -1183,7 +1401,7 @@ async function handleRequest(req, res) {
       if (res.headersSent) {
         res.end();
       } else {
-        jsonResponse(res, 400, { error: err.message });
+        jsonError(res, 400, err.message);
       }
     }
   }
@@ -1197,7 +1415,7 @@ async function handleRequest(req, res) {
         const parsed = JSON.parse(body);
         const message = parsed.message || parsed.prompt || "";
         if (!message) {
-          return jsonResponse(res, 400, { error: "message is required" });
+          return jsonError(res, 400, "message is required");
         }
 
         res.writeHead(200, {
@@ -1213,7 +1431,7 @@ async function handleRequest(req, res) {
           res.write(`data: ${JSON.stringify({ type: "error", error: err.message })}\n\n`);
         });
       } catch (err) {
-        jsonResponse(res, 400, { error: err.message });
+        jsonError(res, 400, err.message);
       }
     });
     return;
@@ -1224,21 +1442,13 @@ async function handleRequest(req, res) {
     return jsonResponse(res, 200, {
       runtime: "pi",
       contract_version: "v1",
-      service: process.env.AGENT_NAME || "pi-agent",
-      namespace: process.env.AGENT_NAMESPACE || "default",
+      service: SERVICE_NAME,
+      namespace: SERVICE_NAMESPACE,
       provider: currentConfig.provider || "auto",
       model: currentConfig.model || "default",
       agent: "build",
       version: "1.0.0",
-      capabilities: {
-        native_tools: ["bash", "read", "write", "edit", "glob", "grep", "webfetch", "websearch", "codesearch", "skill", "task", "todowrite"],
-        output_formats: ["text", "json", "markdown", "code"],
-        structured_output: { supported: true, json_schema: true },
-        autonomous_execution: { supported: true, default_max_turns: 10 },
-        session_management: { abort: true, summarize: false, compaction: false },
-        mcp_usage: { supported: false },
-        a2a: { outbound_supported: true },
-      },
+      capabilities: piCapabilities(),
     });
   }
 
@@ -1246,27 +1456,36 @@ async function handleRequest(req, res) {
   if (requestPath === "/capabilities" && method === "GET") {
     return jsonResponse(res, 200, {
       runtime: "pi",
-      service: process.env.AGENT_NAME || "pi-agent",
-      capabilities: {
-        native_tools: ["bash", "read", "write", "edit", "glob", "grep", "webfetch", "websearch", "codesearch", "skill", "task", "todowrite"],
-        output_formats: ["text", "json", "markdown", "code"],
-        structured_output: { supported: true, json_schema: true },
-        autonomous_execution: { supported: true, default_max_turns: 10 },
-        session_management: { abort: true, summarize: false, compaction: false },
-        mcp_usage: { supported: false },
-        a2a: { outbound_supported: true },
-        tiers: ["core", "session", "artifacts", "streaming"],
-      },
+      service: SERVICE_NAME,
+      capabilities: piCapabilities(),
     });
   }
 
   // ── /cancel (alias for /abort) ────────────────────────────────────
   if (requestPath === "/cancel" && method === "POST") {
+    const threadId = url.searchParams.get("thread_id") || "";
+    if (!threadId) {
+      return jsonError(res, 400, "thread_id query parameter is required");
+    }
+    const session = sessionStore.get(threadId);
+    if (!session) {
+      return jsonError(res, 404, `No session found for thread_id '${threadId}'`);
+    }
     try {
       await sendToPi({ type: "abort" });
-      return jsonResponse(res, 200, { status: "cancelled", session_id: null, thread_id: url.searchParams.get("thread_id") || null });
+      const cancelled = sessionStore.cancel(threadId);
+      return jsonResponse(res, 200, {
+        status: cancelled && cancelled.status === "cancelled" ? "cancelled" : "cancel_failed",
+        session_id: session.sessionId,
+        thread_id: threadId,
+      });
     } catch (err) {
-      return jsonResponse(res, 500, { error: err.message });
+      sessionStore.cancel(threadId);
+      return jsonResponse(res, 200, {
+        status: "cancel_failed",
+        session_id: session.sessionId,
+        thread_id: threadId,
+      });
     }
   }
 
@@ -1274,15 +1493,20 @@ async function handleRequest(req, res) {
   if (requestPath === "/todo" && method === "GET") {
     const threadId = url.searchParams.get("thread_id");
     if (!threadId) {
-      return jsonResponse(res, 400, { error: "thread_id query parameter is required" });
+      return jsonError(res, 400, "thread_id query parameter is required");
     }
-    const etag = '"d41d8cd98f00b204e9800998ecf8427e"'; // empty todos
+    const session = sessionStore.get(threadId);
+    if (!session) {
+      return jsonError(res, 404, `No session found for thread_id '${threadId}'`);
+    }
+    const todos = session.todos || [];
+    const etag = `"${crypto.createHash("md5").update(JSON.stringify(todos)).digest("hex")}"`;
     const clientEtag = (req.headers["if-none-match"] || "").trim().replace(/^"|"$/g, "");
     if (clientEtag && clientEtag === etag.replace(/^"|"$/g, "")) {
       res.writeHead(304, { ETag: etag });
       return res.end();
     }
-    return jsonResponse(res, 200, { thread_id: threadId, session_id: null, todos: [] }, { ETag: etag });
+    return jsonResponse(res, 200, { thread_id: threadId, session_id: session.sessionId, todos }, { ETag: etag });
   }
 
   // ── /question ─────────────────────────────────────────────────────
@@ -1298,7 +1522,7 @@ async function handleRequest(req, res) {
       await sendToPi({ type: "extension_ui_response", id: `bridge-${++commandCounter}`, confirmed: true, value: parsed.answer || "" });
       return jsonResponse(res, 200, { status: "accepted", request_id: requestId });
     } catch (err) {
-      return jsonResponse(res, 500, { error: err.message });
+      return jsonError(res, 500, err.message);
     }
   }
 
@@ -1309,7 +1533,7 @@ async function handleRequest(req, res) {
       await sendToPi({ type: "extension_ui_response", id: `bridge-${++commandCounter}`, confirmed: false, cancelled: true });
       return jsonResponse(res, 200, { status: "rejected", request_id: requestId });
     } catch (err) {
-      return jsonResponse(res, 500, { error: err.message });
+      return jsonError(res, 500, err.message);
     }
   }
 
@@ -1317,24 +1541,29 @@ async function handleRequest(req, res) {
   if (requestPath === "/diff" && method === "GET") {
     const threadId = url.searchParams.get("thread_id");
     if (!threadId) {
-      return jsonResponse(res, 400, { error: "thread_id query parameter is required" });
+      return jsonError(res, 400, "thread_id query parameter is required");
     }
-    return jsonResponse(res, 200, { thread_id: threadId, session_id: null, diff: "" });
+    const session = sessionStore.get(threadId);
+    if (!session) {
+      return jsonError(res, 404, `No session found for thread_id '${threadId}'`);
+    }
+    return jsonResponse(res, 200, { thread_id: threadId, session_id: session.sessionId, diff: session.diff || "" });
   }
 
   // ── /context-budget ───────────────────────────────────────────────
   if (requestPath === "/context-budget" && method === "GET") {
     const threadId = url.searchParams.get("thread_id");
     if (!threadId) {
-      return jsonResponse(res, 400, { error: "thread_id query parameter is required" });
+      return jsonError(res, 400, "thread_id query parameter is required");
+    }
+    const session = sessionStore.get(threadId);
+    if (!session) {
+      return jsonError(res, 404, `No session found for thread_id '${threadId}'`);
     }
     return jsonResponse(res, 200, {
-      model_context_limit: 128000,
-      tokens_used: 0,
-      tokens_remaining: 128000,
-      usage_percent: 0.0,
-      status: "ok",
-      compaction_available: false,
+      thread_id: threadId,
+      session_id: session.sessionId,
+      ...session.contextBudget,
     });
   }
 
@@ -1345,7 +1574,7 @@ async function handleRequest(req, res) {
       const spec = JSON.parse(fs.readFileSync(specPath, "utf8"));
       return jsonResponse(res, 200, spec);
     } catch (err) {
-      return jsonResponse(res, 500, { error: "OpenAPI spec not available" });
+      return jsonError(res, 500, "OpenAPI spec not available");
     }
   }
 
@@ -1398,37 +1627,43 @@ async function handleRequest(req, res) {
   }
 
   // 404
-  jsonResponse(res, 404, { error: "Not found" });
+  jsonError(res, 404, "Not found");
 }
 
 // ── Main ─────────────────────────────────────────────────────────────
+let server = null;
 
-console.log("[pi-bridge] Starting subprocess manager on", HOST + ":" + PORT);
-console.log("[pi-bridge] Default config:", JSON.stringify(currentConfig));
+function startServer() {
+  console.log("[pi-bridge] Starting subprocess manager on", HOST + ":" + PORT);
+  console.log("[pi-bridge] Default config:", JSON.stringify(currentConfig));
 
-// Start runtime event emitter (Run Intelligence Layer)
-runtimeEvents.startEmitter();
+  runtimeEvents.startEmitter();
 
-// Start the HTTP server first, then spawn pi
-const server = http.createServer(handleRequest);
-server.listen(PORT, HOST, async () => {
-  console.log("[pi-bridge] HTTP server listening on", HOST + ":" + PORT);
+  server = http.createServer(handleRequest);
+  server.listen(PORT, HOST, async () => {
+    console.log("[pi-bridge] HTTP server listening on", HOST + ":" + PORT);
 
-  // Spawn pi with default config from env vars
-  try {
-    await startPi(currentConfig);
-    console.log("[pi-bridge] Pi subprocess started successfully");
-  } catch (err) {
-    console.error("[pi-bridge] Failed to start pi subprocess:", err.message);
-    console.error("[pi-bridge] Bridge will retry when first invoke request arrives");
-  }
-});
+    try {
+      await startPi(currentConfig);
+      console.log("[pi-bridge] Pi subprocess started successfully");
+    } catch (err) {
+      console.error("[pi-bridge] Failed to start pi subprocess:", err.message);
+      console.error("[pi-bridge] Bridge will retry when first invoke request arrives");
+    }
+  });
+
+  return server;
+}
 
 // Graceful shutdown
 async function shutdown(signal) {
   console.log(`[pi-bridge] Received ${signal}, shutting down...`);
   runtimeEvents.stopEmitter();
   await stopPi();
+  if (!server) {
+    process.exit(0);
+    return;
+  }
   server.close(() => {
     console.log("[pi-bridge] HTTP server closed");
     process.exit(0);
@@ -1439,3 +1674,16 @@ async function shutdown(signal) {
 
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
+
+if (require.main === module) {
+  startServer();
+}
+
+module.exports = {
+  buildErrorPayload,
+  handleRequest,
+  jsonError,
+  jsonResponse,
+  sendError,
+  startServer,
+};

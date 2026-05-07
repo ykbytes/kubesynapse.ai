@@ -79,3 +79,39 @@ class TestArtifactsTierEndpoints:
                 "application/zip" in content_type
                 or "application/octet-stream" in content_type
             ), f"Expected application/zip or octet-stream, got {content_type}"
+
+    def test_artifacts_list_rejects_outside_workspace_root(self, runtime_client: httpx.Client) -> None:
+        """GET /artifacts/list must reject roots outside the runtime workspace."""
+        skip_if_tier_not_supported(runtime_client, "artifacts")
+        thread_id = create_thread(
+            runtime_client, prompt="Say hello", timeout_seconds=15
+        )
+        resp = runtime_client.get("/artifacts/list", params={"thread_id": thread_id, "root": "/etc"})
+        assert 400 <= resp.status_code < 500, (
+            f"Expected client error for outside-workspace root, got {resp.status_code}: {resp.text[:200]}"
+        )
+
+    def test_artifacts_download_rejects_outside_workspace_path(self, runtime_client: httpx.Client) -> None:
+        """GET /artifacts/download must reject absolute paths outside the runtime workspace."""
+        skip_if_tier_not_supported(runtime_client, "artifacts")
+        thread_id = create_thread(
+            runtime_client, prompt="Say hello", timeout_seconds=15
+        )
+        resp = runtime_client.get(
+            "/artifacts/download",
+            params={"thread_id": thread_id, "path": "/etc/passwd"},
+        )
+        assert 400 <= resp.status_code < 500, (
+            f"Expected client error for outside-workspace download, got {resp.status_code}: {resp.text[:200]}"
+        )
+
+    def test_artifacts_zip_rejects_outside_workspace_root(self, runtime_client: httpx.Client) -> None:
+        """GET /artifacts/zip must reject roots outside the runtime workspace."""
+        skip_if_tier_not_supported(runtime_client, "artifacts")
+        thread_id = create_thread(
+            runtime_client, prompt="Say hello", timeout_seconds=15
+        )
+        resp = runtime_client.get("/artifacts/zip", params={"thread_id": thread_id, "root": "/etc"})
+        assert 400 <= resp.status_code < 500, (
+            f"Expected client error for outside-workspace zip root, got {resp.status_code}: {resp.text[:200]}"
+        )

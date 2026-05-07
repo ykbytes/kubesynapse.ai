@@ -97,9 +97,9 @@ function Remove-TestResource {
 }
 
 try {
-    $initialOverview = Invoke-JsonApi -Method "GET" -Url "${BaseUrl}/api/observability/overview?namespace=${Namespace}"
+    $initialOverview = Invoke-JsonApi -Method "GET" -Url "${BaseUrl}/api/v1/observability/overview?namespace=${Namespace}"
 
-    $connector = Invoke-JsonApi -Method "POST" -Url "${BaseUrl}/api/observability/connectors?namespace=${Namespace}" -Body @{
+    $connector = Invoke-JsonApi -Method "POST" -Url "${BaseUrl}/api/v1/observability/connectors?namespace=${Namespace}" -Body @{
         name = $connectorName
         description = "Smoke-test connector proving that connector create, update, and delete flows work through the live gateway."
         image = "docker.io/kubesynapse/connector-kubernetes:smoke"
@@ -113,12 +113,12 @@ try {
         }
     }
 
-    $connectorPatched = Invoke-JsonApi -Method "PATCH" -Url "${BaseUrl}/api/observability/connectors/${connectorName}?namespace=${Namespace}" -Body @{
+    $connectorPatched = Invoke-JsonApi -Method "PATCH" -Url "${BaseUrl}/api/v1/observability/connectors/${connectorName}?namespace=${Namespace}" -Body @{
         port = 9091
         healthEndpoint = "/readyz"
     }
 
-    $policy = Invoke-JsonApi -Method "POST" -Url "${BaseUrl}/api/observability/policies?namespace=${Namespace}" -Body @{
+    $policy = Invoke-JsonApi -Method "POST" -Url "${BaseUrl}/api/v1/observability/policies?namespace=${Namespace}" -Body @{
         name = $policyName
         description = "Smoke-test policy proving that retention, anomaly, and notification settings can be created, updated, and deleted through the live gateway."
         retention = @{ days = 30; downsampling = @{ after = "7d"; resolution = "5m" } }
@@ -129,12 +129,12 @@ try {
         notifications = @{ natsSubject = "aiops.smoke" }
     }
 
-    $policyPatched = Invoke-JsonApi -Method "PATCH" -Url "${BaseUrl}/api/observability/policies/${policyName}?namespace=${Namespace}" -Body @{
+    $policyPatched = Invoke-JsonApi -Method "PATCH" -Url "${BaseUrl}/api/v1/observability/policies/${policyName}?namespace=${Namespace}" -Body @{
         retention = @{ days = 14 }
         notifications = @{ natsSubject = "aiops.smoke.updated" }
     }
 
-    $target = Invoke-JsonApi -Method "POST" -Url "${BaseUrl}/api/observability/targets?namespace=${Namespace}" -Body @{
+    $target = Invoke-JsonApi -Method "POST" -Url "${BaseUrl}/api/v1/observability/targets?namespace=${Namespace}" -Body @{
         name = $targetName
         description = "Smoke-test target proving that a real observed system can be connected to a connector and policy through the live gateway."
         targetType = "kubernetes-api"
@@ -146,12 +146,16 @@ try {
         tlsConfig = @{ insecureSkipVerify = $true }
     }
 
-    $targetPatched = Invoke-JsonApi -Method "PATCH" -Url "${BaseUrl}/api/observability/targets/${targetName}?namespace=${Namespace}" -Body @{
+    $targetPatched = Invoke-JsonApi -Method "PATCH" -Url "${BaseUrl}/api/v1/observability/targets/${targetName}?namespace=${Namespace}" -Body @{
         scrapeInterval = "45s"
         labels = @{ smoke = "updated"; environment = "dev" }
     }
 
-    $overview = Invoke-JsonApi -Method "GET" -Url "${BaseUrl}/api/observability/overview?namespace=${Namespace}"
+    $overview = Invoke-JsonApi -Method "GET" -Url "${BaseUrl}/api/v1/observability/overview?namespace=${Namespace}"
+    $executions = Invoke-JsonApi -Method "GET" -Url "${BaseUrl}/api/v1/traces/executions?namespace=${Namespace}&limit=1"
+    $runtimeEvents = Invoke-JsonApi -Method "GET" -Url "${BaseUrl}/api/v1/traces/runtime-events?namespace=${Namespace}&limit=1"
+    $spend = Invoke-JsonApi -Method "GET" -Url "${BaseUrl}/api/v1/observability/spend?namespace=${Namespace}&window_hours=1"
+    $agentGraph = Invoke-JsonApi -Method "GET" -Url "${BaseUrl}/api/v1/observability/agent-graph?namespace=${Namespace}&window_hours=1"
 
     if (($overview.connectors | Where-Object { $_.name -eq $connectorName }).Count -ne 1) {
         throw "Connector not present in overview after create"
@@ -171,12 +175,24 @@ try {
     if ($targetPatched.spec.scrapeInterval -ne "45s") {
         throw "Target patch did not persist"
     }
+    if ($null -eq $executions.items) {
+        throw "Execution list response does not expose an items envelope"
+    }
+    if ($runtimeEvents.limit -lt 1) {
+        throw "Runtime events response did not return pagination metadata"
+    }
+    if ($null -eq $spend.items) {
+        throw "Spend analytics response is missing items"
+    }
+    if ($null -eq $agentGraph.nodes -or $null -eq $agentGraph.edges) {
+        throw "Agent graph response is missing nodes or edges"
+    }
 
     Remove-TestResource -Plural "targets" -Name $targetName
     Remove-TestResource -Plural "policies" -Name $policyName
     Remove-TestResource -Plural "connectors" -Name $connectorName
 
-    $finalOverview = Invoke-JsonApi -Method "GET" -Url "${BaseUrl}/api/observability/overview?namespace=${Namespace}"
+    $finalOverview = Invoke-JsonApi -Method "GET" -Url "${BaseUrl}/api/v1/observability/overview?namespace=${Namespace}"
 
     if (($finalOverview.connectors | Where-Object { $_.name -eq $connectorName }).Count -ne 0) {
         throw "Connector delete did not persist"
@@ -203,6 +219,13 @@ try {
             connectors = $overview.summary.connectors.total
             policies = $overview.summary.policies.total
             targets = $overview.summary.targets.total
+        }
+        traceChecks = @{
+            executionItems = $executions.items.Count
+            runtimeEventItems = $runtimeEvents.items.Count
+            spendItems = $spend.items.Count
+            agentGraphNodes = $agentGraph.nodes.Count
+            agentGraphEdges = $agentGraph.edges.Count
         }
         finalCounts = @{
             connectors = $finalOverview.summary.connectors.total

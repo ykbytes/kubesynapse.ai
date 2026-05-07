@@ -27,6 +27,7 @@ from pydantic import BaseModel, ConfigDict, Field
 logger = logging.getLogger("api-gateway.traces-router")
 
 router = APIRouter(prefix="/traces", tags=["traces"])
+TRACE_ALIAS_SUNSET = "Wed, 01 Oct 2026 00:00:00 GMT"
 
 
 # ---------------------------------------------------------------------------
@@ -185,6 +186,16 @@ def _catch_errors(func: Callable[..., Any]) -> Callable[..., Any]:
             return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
     return wrapper
+
+
+def _set_trace_alias_headers(response: Response, request: Request, canonical_path: str) -> None:
+    """Mark compatibility trace aliases as deprecated and point to the canonical URL."""
+
+    canonical_url = str(request.url.replace(path=canonical_path))
+    response.headers["Deprecation"] = "true"
+    response.headers["Sunset"] = TRACE_ALIAS_SUNSET
+    response.headers["Link"] = f'<{canonical_url}>; rel="successor-version"'
+    response.headers["Warning"] = f'299 - "Deprecated API; use {canonical_path}"'
 
 
 # ---------------------------------------------------------------------------
@@ -666,6 +677,33 @@ async def list_executions(
     return ExecutionListResponse(items=items, limit=limit, offset=offset)
 
 
+@router.get("", response_model=ExecutionListResponse, include_in_schema=False)
+@_catch_errors
+async def list_traces_alias(
+    request: Request,
+    response: Response,
+    namespace: str | None = None,
+    workflow_name: str | None = None,
+    agent_name: str | None = None,
+    status: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+    user: dict[str, Any] = Depends(verify_token),
+) -> ExecutionListResponse:
+    """Compatibility alias for older clients still calling GET /traces."""
+
+    _set_trace_alias_headers(response, request, "/api/v1/traces/executions")
+    return await list_executions(
+        namespace=namespace,
+        workflow_name=workflow_name,
+        agent_name=agent_name,
+        status=status,
+        limit=limit,
+        offset=offset,
+        user=user,
+    )
+
+
 @router.get("/executions/{execution_id}", response_model=ExecutionDetailResponse)
 @_catch_errors
 async def get_execution_detail(
@@ -678,6 +716,20 @@ async def get_execution_detail(
         raise HTTPException(status_code=404, detail="Execution not found")
     ensure_namespace_access(user, execution["namespace"])
     return ExecutionDetailResponse.model_validate(execution)
+
+
+@router.get("/{execution_id}", response_model=ExecutionDetailResponse, include_in_schema=False)
+@_catch_errors
+async def get_trace_detail_alias(
+    execution_id: str,
+    request: Request,
+    response: Response,
+    user: dict[str, Any] = Depends(verify_token),
+) -> ExecutionDetailResponse:
+    """Compatibility alias for older clients still calling GET /traces/{execution_id}."""
+
+    _set_trace_alias_headers(response, request, f"/api/v1/traces/executions/{execution_id}")
+    return await get_execution_detail(execution_id=execution_id, user=user)
 
 
 @router.get("/executions/{execution_id}/summary")

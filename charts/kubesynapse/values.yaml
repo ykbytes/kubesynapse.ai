@@ -484,11 +484,13 @@ mcpHub:
 namespace:
   create: false
   podSecurity:
-    enforce: restricted
+    # The bundled PostgreSQL and LiteLLM workloads still require baseline.
+    # Override to restricted only after hardening those manifests.
+    enforce: baseline
     enforceVersion: latest
-    audit: restricted
+    audit: baseline
     auditVersion: latest
-    warn: restricted
+    warn: baseline
     warnVersion: latest
 
 # ---------------------------------------------------------------------------

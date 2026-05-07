@@ -1084,4 +1084,5 @@ def runtime_capabilities() -> dict[str, Any]:
             "max_timeout_seconds": A2A_MAX_TIMEOUT_SECONDS,
             "requires_hitl": A2A_REQUIRE_HITL,
         },
+        "tiers": ["core", "session", "artifacts"],
     }
