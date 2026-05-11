@@ -79,7 +79,7 @@ spec:
                     files:
                       type: object
                       description: |
-                        Map of relative Markdown skill paths, typically .github/skills/<name>/SKILL.md,
+                        Map of relative Markdown skill paths, typically skills/<name>/SKILL.md,
                         to the file contents that should be materialized inside the runtime.
                         The skill file body steers the agent and optional frontmatter can declare
                         allowed sandbox tools, MCP servers, A2A targets, and subagent usage.

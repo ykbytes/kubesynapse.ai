@@ -45,7 +45,7 @@ spec:
   enableGVisor: false
   skills:
     files:
-      .github/skills/j8-audio-architecture/SKILL.md: |
+      skills/j8-audio-architecture/SKILL.md: |
         ---
         name: j8-audio-architecture
         description: Patterns for implementing the Jupiter-8 style synth engine.
@@ -60,7 +60,7 @@ spec:
         - Dispose and rebuild nodes safely when architecture changes.
         - Keep polyphony responsive with predictable defaults.
 
-      .github/skills/j8-ui-patterns/SKILL.md: |
+      skills/j8-ui-patterns/SKILL.md: |
         ---
         name: j8-ui-patterns
         description: UI guidance for a premium hardware-inspired synth layout.
@@ -74,7 +74,7 @@ spec:
         - Keep the virtual keyboard always playable on desktop.
         - Make narrow layouts stack cleanly instead of overflowing.
 
-      .github/skills/j8-verification/SKILL.md: |
+      skills/j8-verification/SKILL.md: |
         ---
         name: j8-verification
         description: Mandatory verification gates after each build phase.

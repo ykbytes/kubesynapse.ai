@@ -30,7 +30,7 @@ Important current chart characteristics:
 - OpenCode is the only runtime the CRD allows
 - bundled MCP sidecars are still defined in values for per-agent local tools
 - the chart includes both shared MCP hub servers and structured MCP connection support
-- local Kind refresh is now a first-class path through `scripts/deploy-ai-sandbox-kind.ps1` and `deploy/values.ai-sandbox.kind-local.yaml`
+- published-image installs use `deploy/values.cluster.example.yaml`, while local image development starts from `deploy/values.local-images.example.yaml`
 
 ## 2. Operator and Reconciliation Model
 
@@ -155,19 +155,16 @@ The current implementation intentionally includes demo-driven report generation 
 
 ## 8. Deployment and Operations Paths
 
-There are now three real ways operators use this repository:
+There are now two real ways operators use this repository:
 
 1. Deploy published images with Helm and values overrides.
 2. Build core images and the bundled MCP sidecars locally using the `Makefile`.
-3. Refresh the existing local Kind release with `scripts/deploy-ai-sandbox-kind.ps1`.
 
 Operationally important files:
 
-- `deploy/values.dockerhub.local.yaml`
 - `deploy/values.cluster.example.yaml`
-- `deploy/values.ai-sandbox.kind-local.yaml`
-- `scripts/deploy-ai-sandbox-kind.ps1`
-- `scripts/observability-smoke-test.ps1`
+- `deploy/values.local-images.example.yaml`
+- `tests/test_production_readiness.py`
 
 ## 9. What Changed from the Older Walkthrough
 

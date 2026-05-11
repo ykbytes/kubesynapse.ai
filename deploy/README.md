@@ -125,9 +125,9 @@ helm upgrade --install kubesynapse ./charts/kubesynapse -n kubesynapse --create-
 See `deploy/values.local-images.example.yaml` for the full local-image registry and
 tag overrides.
 
-For the validated Windows/PowerShell Minikube path that uses the VMware driver,
-Podman-built chart-default images, chart packaging, and the exact Helm install
-command set, use `deploy/MINIKUBE-RUNBOOK.md`.
+If your cluster cannot pull `localhost/kubesynapse/*:dev` images directly,
+push them to a reachable registry or load them into the cluster runtime before
+running the Helm install.
 
 ## Chart Packaging
 

@@ -7,8 +7,8 @@
   <a href="https://kubernetes.io/"><img src="https://img.shields.io/badge/Kubernetes-1.25%2B-326CE5" alt="Kubernetes 1.25+"></a>
 </p>
 
-**The production-grade, Kubernetes-native AI agent platform.**
-Deploy, orchestrate, and govern AI agents using declarative custom resources. KubeSynapse unifies an operator-driven control plane, A2A-ready API gateway, OpenCode runtime, and an extensible MCP tool ecosystem into a single Helm install.
+**Kubernetes-native agent orchestration for teams that want a real cluster install.**
+Deploy, govern, and operate AI agents with CRDs, an operator-driven control plane, a gateway, and bundled runtime integrations.
 
 ---
 
@@ -53,103 +53,86 @@ flowchart LR
 
 ## Quick Start
 
-### Production Install (Helm OCI + Docker Hub)
+### Cluster Install
 
-The fastest path uses pre-built images from Docker Hub. Requires Kubernetes 1.25+, Helm 3.12+, and an LLM API key.
+Start from the checked-in cluster example and keep your real secrets in a local copy.
 
 ```bash
-# 1. Install via Helm OCI (no git clone needed)
-helm install KubeSynapse oci://docker.io/kubesynapse/charts/kubesynapse \
-  --set platformSecrets.native.openaiApiKey="sk-..." \
-  --set litellm.masterKey="your-secure-key"
+cp ./deploy/values.cluster.example.yaml ./deploy/values.cluster.yaml
+# Edit deploy/values.cluster.yaml before installing.
 
-# 2. Verify
-kubectl port-forward svc/kubesynapse-api-gateway 8080:8080
+helm upgrade --install kubesynapse ./charts/kubesynapse \
+  --namespace kubesynapse \
+  --create-namespace \
+  -f ./deploy/values.cluster.yaml
+
+kubectl port-forward -n kubesynapse svc/kubesynapse-api-gateway 8080:8080
 curl http://localhost:8080/api/health
 
-# 3. Create your first agent (runtimeKind: opencode or pi)
-kubectl apply -f - <<EOF
-apiVersion: kubesynapse.ai/v1alpha1
-kind: AIAgent
-metadata:
-  name: my-agent
-  namespace: default
-spec:
-  runtimeKind: opencode   # or runtimeKind: pi
-  systemPrompt: "You are a helpful assistant."
-  model: gpt-4o
-  storageSize: 1Gi
-EOF
+kubectl apply -f ./examples/sample-policy.yaml
+kubectl apply -f ./examples/sample-agent.yaml
 ```
 
-### Install via Python SDK
+The sample agent manifest uses the current CRD shape, including `runtime.kind` and `storage.size`.
+
+### Python SDK
 
 ```bash
-pip install kubesynapse-sdk
+pip install ./clients/python
 ```
 
 ```python
 from KubeSynapse import KubeSynapseClient
 
 client = KubeSynapseClient(base_url="http://localhost:8080")
-health = await client.health_check()
+health = await client.health()
 print(health)  # {"status": "ok"}
 ```
 
-### Install via TypeScript SDK
+### TypeScript SDK
 
 ```bash
-npm install @kubesynapse/sdk
+npm install ./clients/typescript
 ```
 
 ```typescript
 import { KubeSynapseClient } from "@kubesynapse/sdk";
 
-const client = new KubeSynapseClient({ baseUrl: "http://localhost:8080" });
+const client = new KubeSynapseClient({ baseURL: "http://localhost:8080" });
 const agents = await client.listAgents();
 console.log(agents);
 ```
 
-### Install CLI
+### CLI
 
 ```bash
-pip install kubesynapse-cli
+pip install ./cli
 
 agentctl health
 agentctl agent list
 agentctl workflow create --file my-workflow.yaml
 ```
 
-### Install via Homebrew (macOS/Linux)
+### Local Image Development
+
+Build locally, then push or load those images into the cluster runtime your environment uses.
 
 ```bash
-brew tap KubeSynapse/tap
-brew install kubesynapse-cli
-```
-
-### Local Development (Kind)
-
-Build locally and load into a Kind cluster. No registry required.
-
-```bash
-# 1. Create cluster
-kind create cluster --name kubesynapse-dev
-
-# 2. Build platform images + MCP sidecars
+# 1. Build platform images + MCP sidecars
 make docker-build REGISTRY=localhost/kubesynapse VERSION=dev CONTAINER_CLI=docker
 
-# 3. Install
-helm upgrade --install KubeSynapse ./charts/kubesynapse \
+# 2. Make the images reachable from your cluster, then install
+helm upgrade --install kubesynapse ./charts/kubesynapse \
+  --namespace kubesynapse \
+  --create-namespace \
   -f ./deploy/values.local-images.example.yaml
 
-# 4. Port-forward
-kubectl port-forward svc/kubesynapse-api-gateway 8080:8080
-kubectl port-forward svc/kubesynapse-web-ui 3000:80
-
-# 5. Install CLI
-pip install ./cli
-agentctl health
+# 3. Verify
+kubectl port-forward -n kubesynapse svc/kubesynapse-api-gateway 8080:8080
+kubectl port-forward -n kubesynapse svc/kubesynapse-web-ui 3000:80
 ```
+
+`deploy/values.local-images.example.yaml` assumes `localhost/kubesynapse/*:dev` image names. Adjust it if your cluster reaches a different registry.
 
 ---
 
@@ -157,7 +140,7 @@ agentctl health
 
 | # | Capability | What it means |
 |---|------------|---------------|
-| 1 | **Kubernetes-Native Orchestration** | Agents, policies, workflows, and tenants are `KubeSynapse.ai/v1alpha1` CRDs reconciled by a production Kopf operator. |
+| 1 | **Kubernetes-Native Orchestration** | Agents, policies, workflows, and tenants are `KubeSynapse.ai/v1alpha1` CRDs reconciled by a Kopf operator. |
 | 2 | **A2A Protocol Support** | Native JSON-RPC and Server-Sent Events (SSE) streaming for agent-to-agent delegation and real-time responses. |
 | 3 | **Dual Runtime Support** | OpenCode runtime (FastAPI wrapper) AND Pi runtime (Node.js RPC bridge) with session persistence and checkpoint recovery. |
 | 4 | **MCP Tool Ecosystem** | 11 bundled sidecar containers including code execution, web search, browser automation, database, git, Kubernetes ops, RAG, messaging, and more. |
@@ -215,8 +198,8 @@ make test
 # Lint Python services
 make lint
 
-# Deploy to local Kind
-make deploy-ai-sandbox-kind
+# Install with the example cluster values
+helm upgrade --install kubesynapse ./charts/kubesynapse -f ./deploy/values.cluster.example.yaml
 ```
 
 ---

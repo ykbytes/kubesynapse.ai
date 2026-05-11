@@ -283,7 +283,7 @@ class OperatorManifestTests(unittest.TestCase):
                 "systemPrompt": "Be precise.",
                 "skills": {
                     "files": {
-                        ".github/skills/repo-review/SKILL.md": (
+                        "skills/repo-review/SKILL.md": (
                             "---\n"
                             "name: repo-review\n"
                             "description: Review code changes carefully.\n"
@@ -309,7 +309,7 @@ class OperatorManifestTests(unittest.TestCase):
         self.assertEqual(
             json.loads(env[_config.AGENT_SKILL_FILES_ENV]),
             {
-                ".github/skills/repo-review/SKILL.md": (
+                "skills/repo-review/SKILL.md": (
                     "---\n"
                     "name: repo-review\n"
                     "description: Review code changes carefully.\n"
@@ -332,7 +332,7 @@ class OperatorManifestTests(unittest.TestCase):
                 "systemPrompt": "Be precise.",
                 "skills": {
                     "files": {
-                        ".github/skills/repo-review/SKILL.md": (
+                        "skills/repo-review/SKILL.md": (
                             "---\n"
                             "name: repo-review\n"
                             "description: Review code changes carefully.\n"
@@ -358,7 +358,7 @@ class OperatorManifestTests(unittest.TestCase):
         self.assertEqual(
             json.loads(env[_config.AGENT_SKILL_FILES_ENV]),
             {
-                ".github/skills/repo-review/SKILL.md": (
+                "skills/repo-review/SKILL.md": (
                     "---\n"
                     "name: repo-review\n"
                     "description: Review code changes carefully.\n"
@@ -454,7 +454,7 @@ class OperatorManifestTests(unittest.TestCase):
                         "systemPrompt": "Be precise.",
                         "skills": {
                             "files": {
-                                ".github/skills/browser/SKILL.md": (
+                                "skills/browser/SKILL.md": (
                                     "---\n"
                                     "name: browser\n"
                                     "allowedMcpServers:\n"

@@ -64,18 +64,20 @@ function GettingStartedSection() {
       <div id="gs-install">
         <SectionHeading icon={Rocket}>Step 1: Install kubesynapse</SectionHeading>
         <p className="mt-2 text-base leading-7 text-[oklch(0.80_0.01_264)]">
-          The fastest path uses pre-built images from Docker Hub. Clone the repository and deploy with Helm.
+          Start from the checked-in cluster example, copy it locally, then deploy the chart with Helm.
         </p>
         <CodeBlock
-          code={`# 1. Clone the repository
-git clone https://github.com/ykbytes/kubesynapse.ai.git && cd kubesynapse.ai
+          code={`# 1. Copy the example values file and edit it locally
+cp ./deploy/values.cluster.example.yaml ./deploy/values.cluster.yaml
 
-# 2. Deploy with the default local-values example
-helm upgrade --install kubesynapse ./charts/kubesynapse \\
-  -f ./deploy/values.dockerhub.local.yaml
+# 2. Deploy with Helm
+helm upgrade --install kubesynapse ./charts/kubesynapse \
+  --namespace kubesynapse \
+  --create-namespace \
+  -f ./deploy/values.cluster.yaml
 
 # 3. Wait for pods to become ready
-kubectl wait --for=condition=ready pod -l app=kubesynapse-api-gateway --timeout=120s
+kubectl wait --for=condition=ready pod -n kubesynapse -l app=kubesynapse-api-gateway --timeout=120s
 
 # 4. Verify health
 curl http://localhost:8080/api/health`}
@@ -94,25 +96,21 @@ curl http://localhost:8080/api/health`}
           secrets to authenticate with upstream providers.
         </p>
         <CodeBlock
-          code={`# Create a secret for your OpenAI API key
-kubectl create secret generic kubesynapse-secrets \\
-  --from-literal=openaiApiKey="sk-..." \\
-  --namespace kubesynapse
-
-# Reference it in your Helm values (values.dockerhub.local.yaml)
+          code={`# Edit your local copy of the cluster values file
 platformSecrets:
+  mode: native
   native:
-    openaiApiKey:
-      secretName: kubesynapse-secrets
-      secretKey: openaiApiKey`}
-          lang="bash"
+    openaiApiKey: "sk-..."
+    litellmMasterKey: "replace-with-a-long-random-string"
+    apiGatewaySharedToken: "replace-with-a-long-random-bearer-token"`}
+          lang="yaml"
         />
         <Callout variant="warning" title="Never commit secrets to Git">
           Use external secret operators (e.g., External Secrets Operator, Sealed Secrets, or Vault CSI) for production.
         </Callout>
         <Callout variant="info" title="Helm Values Path">
-          The exact <code>platformSecrets</code> path depends on your Helm values schema version. Consult the latest
-          chart documentation or run <code>helm show values ./charts/kubesynapse</code> to verify the correct structure.
+          The checked-in examples under <code>deploy/</code> match the current chart schema. Use them as the starting point
+          for cluster installs instead of older local-only overlays.
         </Callout>
       </div>
 
@@ -124,8 +122,9 @@ platformSecrets:
               title: "Port-forward the gateway",
               children: (
                 <>
-                  <CodeBlock code={`kubectl port-forward svc/kubesynapse-api-gateway 8080:8080 -n kubesynapse`} lang="bash" />
-                  <p>Open http://localhost:8080 in your browser.</p>
+                  <CodeBlock code={`kubectl port-forward svc/kubesynapse-api-gateway 8080:8080 -n kubesynapse
+kubectl port-forward svc/kubesynapse-web-ui 3000:80 -n kubesynapse`} lang="bash" />
+                  <p>Open http://localhost:3000 in your browser.</p>
                 </>
               ),
             },

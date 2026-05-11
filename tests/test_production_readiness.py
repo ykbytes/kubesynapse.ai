@@ -74,10 +74,10 @@ class ProductionReadinessValidator:
         """Verify all Docker images have explicit version tags"""
         self.log("Validating image tags...", "INFO")
         
-        values_file = self.workspace_root / "deploy/values.dockerhub.local.yaml"
+        values_file = self.workspace_root / "deploy/values.cluster.example.yaml"
         if not values_file.exists():
             self.add_result("images", "values_file_exists", False, 
-                          "values.dockerhub.local.yaml not found", "critical")
+                          "values.cluster.example.yaml not found", "critical")
             return
 
         content = values_file.read_text()
@@ -158,7 +158,7 @@ class ProductionReadinessValidator:
         self.log("Validating values files...", "INFO")
         
         values_files = [
-            self.workspace_root / "deploy/values.dockerhub.local.yaml",
+            self.workspace_root / "deploy/values.cluster.example.yaml",
             self.workspace_root / "deploy/values.local-images.example.yaml",
         ]
 
@@ -314,7 +314,7 @@ class ProductionReadinessValidator:
         self.log("Validating RBAC configuration...", "INFO")
         
         # Check Helm values for RBAC
-        values_file = self.workspace_root / "deploy/values.dockerhub.local.yaml"
+        values_file = self.workspace_root / "deploy/values.cluster.example.yaml"
         if values_file.exists():
             content = values_file.read_text()
             
@@ -361,7 +361,7 @@ class ProductionReadinessValidator:
         """Validate pod security contexts"""
         self.log("Validating pod security contexts...", "INFO")
         
-        values_file = self.workspace_root / "deploy/values.dockerhub.local.yaml"
+        values_file = self.workspace_root / "deploy/values.cluster.example.yaml"
         if values_file.exists():
             content = values_file.read_text()
             

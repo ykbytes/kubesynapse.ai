@@ -171,9 +171,17 @@ The fastest way to get running. Pre-built platform and sidecar images are publis
 - `kubectl` configured for your cluster
 - An LLM API key (OpenAI, Anthropic, or any LiteLLM-supported provider)
 
-### 1. Create an image-pull secret
+### 1. Copy the example values file
 
-DockerHub rate-limits unauthenticated pulls. Create a pull secret first:
+Create a local working copy of the public cluster example:
+
+```bash
+cp ./deploy/values.cluster.example.yaml ./deploy/values.cluster.yaml
+```
+
+### 2. Optional: create an image-pull secret
+
+If your registry requires authentication, create a pull secret first:
 
 ```bash
 kubectl create secret docker-registry dockerhub-regcred \
@@ -182,9 +190,9 @@ kubectl create secret docker-registry dockerhub-regcred \
   --docker-email=you@example.com
 ```
 
-### 2. Set your LLM API key
+### 3. Set your platform secrets
 
-Edit `deploy/values.dockerhub.local.yaml` and fill in your keys under `platformSecrets.native`:
+Edit `deploy/values.cluster.yaml` and fill in your keys under `platformSecrets.native`:
 
 ```yaml
 platformSecrets:
@@ -196,16 +204,18 @@ platformSecrets:
     apiGatewaySharedToken: "my-secure-bearer-token"
 ```
 
-> **Never commit real keys.** Use a local gitignored copy of the values file, or pass `--set platformSecrets.native.openaiApiKey=sk-...` on the Helm command line.
+> **Never commit real keys.** Keep the edited file local, or pass sensitive values through your deployment pipeline.
 
-### 3. Deploy
+### 4. Deploy
 
 ```bash
 helm upgrade --install KubeSynapse ./charts/kubesynapse \
-  -f ./deploy/values.dockerhub.local.yaml
+  --namespace kubesynapse \
+  --create-namespace \
+  -f ./deploy/values.cluster.yaml
 ```
 
-### 4. Verify pods
+### 5. Verify pods
 
 ```bash
 kubectl get pods -w
@@ -223,7 +233,7 @@ Expected pods once everything is ready:
 | `KubeSynapse-nats-*` | NATS message bus |
 | `kubesynapse-web-ui-*` | Web dashboard |
 
-### 5. Port-forward and test
+### 6. Port-forward and test
 
 ```bash
 # API Gateway
@@ -253,8 +263,8 @@ curl -X POST http://localhost:8080/api/agents/research-assistant/invoke \
 
 #### Image tag and registry reference
 
-The `deploy/values.dockerhub.local.yaml` file pins all components to a specific tested tag (`deploy-YYYYMMDD-HHMMSS`).
-All images live under `docker.io/kubesynapse`:
+`deploy/values.cluster.example.yaml` pins the published image repositories and tags used by the current public install path.
+All default images live under `docker.io/kubesynapse` except LiteLLM:
 
 | Image | Description |
 |---|---|
@@ -383,11 +393,9 @@ platformSecrets:
   `mcpToolSidecars` entries only if your agents use locally built sidecar images
   instead of the default published ones.
 
-  **Minikube alternative:** for the validated Windows + PowerShell + Podman + VMware flow, use
-  `deploy/MINIKUBE-RUNBOOK.md`. That runbook builds the chart-default image
-  references, loads them into Minikube with `minikube image load`, packages the
-  chart, and installs with the same `helm upgrade --install ... --wait` sequence
-  used for the clean smoke validation.
+  If your local cluster cannot pull `localhost/kubesynapse/*:dev` images directly,
+  load or push those images into a registry that the cluster nodes can reach before
+  running the Helm install.
 
   ### 6. Verify pods are running
 
@@ -863,7 +871,7 @@ spec:
         namespace: team-b
   skills:
     files:
-      .github/skills/research-brief/SKILL.md: |
+      skills/research-brief/SKILL.md: |
         ---
         name: research-brief
         description: Prepare evidence-backed research notes and concise briefings.

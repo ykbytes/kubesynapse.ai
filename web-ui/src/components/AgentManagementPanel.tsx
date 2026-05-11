@@ -1476,7 +1476,7 @@ export function AgentManagementPanel({
                     entries={skillFileDrafts}
                     addLabel="Add custom skill file"
                     emptyMessage="No skill documents attached. Use the library above or add a custom file manually."
-                    pathHint="Repo-relative Markdown path, e.g. .github/skills/reviewer/SKILL.md"
+                    pathHint="Repo-relative Markdown path, e.g. skills/reviewer/SKILL.md"
                     contentHint="Full skill document including optional frontmatter."
                     onAdd={() => setSkillFileDrafts((current) => [...current, createSkillFileDraft()])}
                     onChange={setSkillFileDrafts}

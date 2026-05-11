@@ -37,7 +37,7 @@ agent:
   a2a: {}
   skills:
     files:
-      .github/skills/kubernetes-operations/SKILL.md: |
+      skills/kubernetes-operations/SKILL.md: |
         ---
         name: kubernetes-operations
         description: Inspect Kubernetes resources, troubleshoot workloads, and explain safe remediation steps.

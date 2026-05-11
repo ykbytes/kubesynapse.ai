@@ -26,7 +26,7 @@ agent:
   a2a: {}
   skills:
     files:
-      .github/skills/devops-delivery/SKILL.md: |
+      skills/devops-delivery/SKILL.md: |
         ---
         name: devops-delivery
         description: Analyze CI/CD pipelines, deployments, observability, and infrastructure changes.

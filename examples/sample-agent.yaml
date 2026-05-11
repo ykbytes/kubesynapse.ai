@@ -14,7 +14,7 @@ spec:
     Always cite your sources and never fabricate information.
   skills:
     files:
-      .github/skills/research-brief/SKILL.md: |
+      skills/research-brief/SKILL.md: |
         ---
         name: research-brief
         description: Prepare evidence-backed research notes and concise briefings.

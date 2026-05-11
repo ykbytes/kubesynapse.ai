@@ -901,7 +901,7 @@ class WorkflowSchemaTests(unittest.TestCase):
             parsed,
             {
                 "files": {
-                    ".github/skills/reviewer/SKILL.md": "---\nname: reviewer\n---\nReview carefully.\n",
+                    "skills/reviewer/SKILL.md": "---\nname: reviewer\n---\nReview carefully.\n",
                 }
             },
         )
@@ -909,7 +909,7 @@ class WorkflowSchemaTests(unittest.TestCase):
     def test_parse_agent_skills_config_rejects_non_markdown_paths(self) -> None:
         with self.assertRaises(HTTPException) as context:
             api_gateway_main.parse_agent_skills_config(
-                {"files": {".github/skills/reviewer/config.yaml": "name: reviewer"}},
+                {"files": {"skills/reviewer/config.yaml": "name: reviewer"}},
                 source="skills",
                 strict=True,
             )
@@ -980,7 +980,7 @@ class WorkflowSchemaTests(unittest.TestCase):
             runtime_kind="opencode",
             skills={
                 "files": {
-                    ".github/skills/research/SKILL.md": (
+                    "skills/research/SKILL.md": (
                         "---\n"
                         "name: research\n"
                         "description: Gather evidence carefully.\n"
@@ -996,7 +996,7 @@ class WorkflowSchemaTests(unittest.TestCase):
         spec = api_gateway_main.build_agent_spec(request)
 
         self.assertIn("skills", spec)
-        self.assertIn(".github/skills/research/SKILL.md", spec["skills"]["files"])
+        self.assertIn("skills/research/SKILL.md", spec["skills"]["files"])
 
     def test_build_agent_spec_includes_structured_mcp_connections(self) -> None:
         request = api_gateway_main.CreateAgentRequest(
@@ -1128,7 +1128,7 @@ class WorkflowSchemaTests(unittest.TestCase):
                 "runtime": {"kind": "opencode"},
                 "skills": {
                     "files": {
-                        ".github/skills/research/SKILL.md": "---\nname: research\n---\nRead first.\n",
+                        "skills/research/SKILL.md": "---\nname: research\n---\nRead first.\n",
                     }
                 },
             },
@@ -1138,7 +1138,7 @@ class WorkflowSchemaTests(unittest.TestCase):
             spec["skills"],
             {
                 "files": {
-                    ".github/skills/research/SKILL.md": "---\nname: research\n---\nRead first.\n",
+                    "skills/research/SKILL.md": "---\nname: research\n---\nRead first.\n",
                 }
             },
         )
@@ -1278,7 +1278,7 @@ class WorkflowSchemaTests(unittest.TestCase):
                     "runtime": {"kind": "opencode"},
                     "skills": {
                         "files": {
-                            ".github/skills/research/SKILL.md": (
+                            "skills/research/SKILL.md": (
                                 "---\n"
                                 "name: research\n"
                                 "description: Gather evidence carefully.\n"
@@ -1297,7 +1297,7 @@ class WorkflowSchemaTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual(set(detail.skills["files"].keys()), {".github/skills/research/SKILL.md"})
+        self.assertEqual(set(detail.skills["files"].keys()), {"skills/research/SKILL.md"})
         self.assertEqual(len(detail.skill_summaries), 1)
         self.assertEqual(detail.skill_summaries[0]["name"], "research")
         self.assertEqual(detail.skill_summaries[0]["allowed_sandbox_tools"], ["sandbox.filesystem.read"])

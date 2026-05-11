@@ -1,6 +1,5 @@
 .PHONY: all build test test-services test-integration lint \
 	docker-build docker-push helm-lint helm-package deploy deploy-sample undeploy clean \
-	deploy-ai-sandbox-kind deploy-ai-sandbox-kind-dry-run \
 	ui-install ui-dev ui-build ui-preview \
 	docker-build-operator docker-build-opencode-runtime docker-build-gateway \
 	docker-build-ui docker-build-mcp-sidecars \
@@ -23,12 +22,6 @@ REGISTRY ?= docker.io/kubesynapse
 VERSION ?= latest
 SKILLS_CATALOG_FILE ?= ./catalog/skills-catalog.json
 HELM_SKILLS_CATALOG_ARG := $(if $(wildcard $(SKILLS_CATALOG_FILE)),--set-file skillsCatalog.catalogJson=$(SKILLS_CATALOG_FILE),)
-AI_SANDBOX_RELEASE ?= ai-sandbox
-AI_SANDBOX_NAMESPACE ?= ai-agent-sandbox
-AI_SANDBOX_KIND_VALUES_FILE ?= ./deploy/values.ai-sandbox.kind-local.yaml
-AI_SANDBOX_KIND_EXTRA_VALUES_FILES ?=
-AI_SANDBOX_KIND_EXTRA_VALUES_ARGS := $(foreach file,$(AI_SANDBOX_KIND_EXTRA_VALUES_FILES),-f $(file))
-
 # ===========================
 # Build
 # ===========================
@@ -194,12 +187,6 @@ helm-template:
 
 deploy:
 	helm upgrade --install kubesynapse ./charts/kubesynapse $(HELM_SKILLS_CATALOG_ARG)
-
-deploy-ai-sandbox-kind-dry-run:
-	helm upgrade $(AI_SANDBOX_RELEASE) ./charts/kubesynapse -n $(AI_SANDBOX_NAMESPACE) --reuse-values --server-side=true --force-conflicts -f $(AI_SANDBOX_KIND_VALUES_FILE) $(AI_SANDBOX_KIND_EXTRA_VALUES_ARGS) $(HELM_SKILLS_CATALOG_ARG) --dry-run
-
-deploy-ai-sandbox-kind:
-	helm upgrade $(AI_SANDBOX_RELEASE) ./charts/kubesynapse -n $(AI_SANDBOX_NAMESPACE) --reuse-values --server-side=true --force-conflicts -f $(AI_SANDBOX_KIND_VALUES_FILE) $(AI_SANDBOX_KIND_EXTRA_VALUES_ARGS) $(HELM_SKILLS_CATALOG_ARG)
 
 deploy-sample:
 	kubectl apply -f examples/sample-agent.yaml

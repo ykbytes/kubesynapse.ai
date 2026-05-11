@@ -123,7 +123,7 @@ class OpenCodeRuntimeTests(unittest.TestCase):
                 os.environ,
                 {
                     opencode_runtime_main.AGENT_SKILL_FILES_ENV: json.dumps(
-                        {".github/skills/reviewer/SKILL.md": skill_text}
+                        {"skills/reviewer/SKILL.md": skill_text}
                     )
                 },
                 clear=False,
@@ -143,7 +143,7 @@ class OpenCodeRuntimeTests(unittest.TestCase):
     def test_parse_skill_frontmatter_normalizes_invalid_name(self) -> None:
         content = "---\nname: My_Invalid Skill Name!!!\ndescription: Test skill\n---\nBody\n"
         name, description, warnings = opencode_runtime_main.parse_skill_frontmatter(
-            ".github/skills/reviewer/SKILL.md",
+            "skills/reviewer/SKILL.md",
             content,
         )
         self.assertEqual(name, "my-invalid-skill-name")
@@ -159,7 +159,7 @@ class OpenCodeRuntimeTests(unittest.TestCase):
             "Body\n"
         )
         name, _description, warnings = opencode_runtime_main.parse_skill_frontmatter(
-            ".github/skills/reviewer/SKILL.md",
+            "skills/reviewer/SKILL.md",
             content,
         )
         self.assertEqual(name, "reviewer")
