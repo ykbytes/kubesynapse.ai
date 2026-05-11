@@ -6,6 +6,32 @@ from typing import Any, cast
 # Re-import all shared symbols from the gateway core
 from _core import *
 from _core import _SHUTDOWN
+from routers.observability import (
+    _COLLECTOR_TOKEN_MISSING_ERROR,
+    _INTELLIGENCE_ALERT_CONDITION_TYPES,
+    _INTELLIGENCE_ALERT_ACTIONS,
+    _build_auto_intelligence_context,
+    _build_intelligence_task_record,
+    _build_namespace_scoped_collector_id,
+    _collector_auth_headers,
+    _collector_registry,
+    _collection_tasks,
+    _decrypt_collector_token,
+    _delete_collection_tasks,
+    _encrypt_collector_token,
+    _enforce_collection_tasks_cap,
+    _get_namespaced_collectors,
+    _load_collectors_from_db,
+    _normalize_collection_payload,
+    _normalize_intelligence_namespace,
+    _persist_task,
+    _remove_namespaced_collector,
+    _resolve_collection_targets,
+    _set_namespaced_collector,
+    _tasks_lock,
+    _validate_collector_url,
+    COLLECTOR_TIMEOUT,
+)
 from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response
 
 router = APIRouter(tags=["admin"])

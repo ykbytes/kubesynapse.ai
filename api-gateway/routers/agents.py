@@ -5,6 +5,7 @@ from typing import Any
 
 # Re-import all shared symbols from the gateway core
 from _core import *
+from routers.observability import _agent_wants_intelligence, _build_auto_intelligence_context
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 

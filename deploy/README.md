@@ -28,11 +28,13 @@ make compose-down
 | API Gateway | http://localhost:8080 | FastAPI backend |
 | Web UI | http://localhost:3000 | React frontend |
 | LiteLLM | http://localhost:4000 | Model proxy |
-| OpenCode RT | http://localhost:8081 | Agent runtime |
+| OpenCode RT | http://localhost:8081 | Default local agent runtime profile |
 | Postgres | localhost:5432 | State + trace database |
 | Redis | localhost:6379 | Cache / sessions |
 | NATS | localhost:4222 | Message bus |
 | Qdrant | localhost:6333 | Vector DB |
+
+The default local compose profile exposes the OpenCode runtime only. Pi and Mistral Vibe remain supported in Kubernetes and are selected per agent through `spec.runtime.kind`.
 
 ### Default Credentials
 
@@ -186,13 +188,28 @@ ingress:
 
 ### Pi Runtime Deployment
 
-The Pi runtime is **opt-in**. Enable it in your values file:
+The Pi runtime is **opt-in per agent**. The chart exposes Pi image and default model settings through `piRuntime`:
 
 ```yaml
-agentRuntime:
-  pi:
-    enabled: true
+piRuntime:
+  model: "anthropic/claude-sonnet-4-20250514"
+  thinkingLevel: "medium"
 ```
+
+Create agents with `spec.runtime.kind: pi` to launch the Pi runtime.
+
+### Mistral Vibe Runtime Deployment
+
+Mistral Vibe is also **opt-in per agent**. Configure its runtime image defaults through `mistralVibeRuntime`:
+
+```yaml
+mistralVibeRuntime:
+  image:
+    repository: docker.io/kubesynapse/kubesynapse-vibe-rt
+    tag: v2.1.0-run-intelligence
+```
+
+Create agents with `spec.runtime.kind: mistral-vibe` to launch the Mistral-backed runtime bridge.
 
 ### LiteLLM Database Bootstrap
 
@@ -231,8 +248,8 @@ docker logs kubesynapse-api-gateway
 kubectl logs -n kubesynapse deployment/kubesynapse-api-gateway
 
 # Check health
-curl http://localhost:8080/api/health
-curl http://localhost:8080/api/ready
+curl http://localhost:8080/api/v1/health
+curl http://localhost:8080/api/v1/ready
 ```
 
 ### Database connection issues

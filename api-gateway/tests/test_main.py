@@ -32,13 +32,49 @@ except ModuleNotFoundError:
     sys.modules["jose.utils"] = jose_utils_module
 
 
-MODULE_PATH = Path(__file__).resolve().parents[1] / "main.py"
-SPEC = importlib.util.spec_from_file_location("api_gateway_main", MODULE_PATH)
-if SPEC is None or SPEC.loader is None:
-    raise RuntimeError("Failed to load api-gateway main module for tests")
-api_gateway_main = importlib.util.module_from_spec(SPEC)
-sys.modules[SPEC.name] = api_gateway_main
-SPEC.loader.exec_module(api_gateway_main)
+MODULE_DIR = Path(__file__).resolve().parents[1]
+if str(MODULE_DIR) not in sys.path:
+    sys.path.insert(0, str(MODULE_DIR))
+
+
+def _load_gateway_module(module_name: str, file_name: str):
+    module_path = MODULE_DIR / file_name
+    spec = importlib.util.spec_from_file_location(module_name, module_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Failed to load api-gateway module {file_name} for tests")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+api_gateway_main = _load_gateway_module("api_gateway_core", "_core.py")
+sys.modules["_core"] = api_gateway_main
+api_gateway_auth = _load_gateway_module("api_gateway_auth", "routers/auth.py")
+sys.modules["routers.auth"] = api_gateway_auth
+api_gateway_observability = _load_gateway_module("api_gateway_observability", "routers/observability.py")
+sys.modules["routers.observability"] = api_gateway_observability
+api_gateway_admin = _load_gateway_module("api_gateway_admin", "routers/admin.py")
+sys.modules["routers.admin"] = api_gateway_admin
+api_gateway_agents = _load_gateway_module("api_gateway_agents", "routers/agents.py")
+sys.modules["routers.agents"] = api_gateway_agents
+api_gateway_llm = _load_gateway_module("api_gateway_llm", "routers/llm.py")
+sys.modules["routers.llm"] = api_gateway_llm
+api_gateway_workflows = _load_gateway_module("api_gateway_workflows", "routers/workflows.py")
+sys.modules["routers.workflows"] = api_gateway_workflows
+api_gateway_evals = _load_gateway_module("api_gateway_evals", "routers/evals.py")
+sys.modules["routers.evals"] = api_gateway_evals
+api_gateway_a2a = _load_gateway_module("api_gateway_a2a", "routers/a2a.py")
+sys.modules["routers.a2a"] = api_gateway_a2a
+api_gateway_app = _load_gateway_module("api_gateway_app", "main.py")
+
+api_gateway_auth.get_tool_categories = api_gateway_observability.get_tool_categories
+
+
+def _bind_gateway_module(test_case: unittest.TestCase, module) -> None:
+    original_module = globals()["api_gateway_main"]
+    globals()["api_gateway_main"] = module
+    test_case.addCleanup(lambda: globals().__setitem__("api_gateway_main", original_module))
 
 
 class GatewayRuntimeValidationTests(unittest.TestCase):
@@ -54,6 +90,14 @@ class GatewayRuntimeValidationTests(unittest.TestCase):
 
         self.assertEqual(context.exception.status_code, 400)
         self.assertIn("runtime kind must be 'opencode'", str(context.exception.detail))
+
+    def test_mistral_vibe_agent_runtime_is_accepted(self) -> None:
+        api_gateway_main.validate_agent_runtime_compatibility(
+            {
+                "runtime": {"kind": "mistral-vibe"},
+                "model": "devstral-small",
+            }
+        )
 
     def test_opencode_agent_rejects_github_config(self) -> None:
         with self.assertRaises(HTTPException) as context:
@@ -75,6 +119,11 @@ class GatewayRuntimeValidationTests(unittest.TestCase):
 
         self.assertEqual(context.exception.status_code, 400)
         self.assertIn("Unsupported AIAgent runtime kind", str(context.exception.detail))
+
+    def test_mistral_vibe_invoke_runtime_accepts_core_request(self) -> None:
+        request = api_gateway_main.InvokeRequest(prompt="hello")
+
+        api_gateway_main.validate_invoke_runtime_compatibility("mistral-vibe", request)
 
     def test_opencode_invoke_rejects_tool_style_fields(self) -> None:
         request = api_gateway_main.InvokeRequest(
@@ -150,7 +199,7 @@ class GatewayRuntimeValidationTests(unittest.TestCase):
     def test_delete_is_allowed_for_cors(self) -> None:
         cors_middleware = next(
             middleware
-            for middleware in api_gateway_main.app.user_middleware
+            for middleware in api_gateway_app.app.user_middleware
             if middleware.cls.__name__ == "CORSMiddleware"
         )
 
@@ -288,17 +337,17 @@ class GatewayRuntimeValidationTests(unittest.TestCase):
         )
 
         with (
-            patch.object(api_gateway_main, "record_workflow_run") as record_workflow_run,
+            patch.object(api_gateway_workflows, "record_workflow_run") as record_workflow_run,
             patch.object(
-                api_gateway_main,
+                api_gateway_workflows,
                 "record_workflow_outcome_memory",
             ) as record_workflow_outcome_memory,
             patch.object(
-                api_gateway_main,
+                api_gateway_workflows,
                 "apply_memory_feedback",
             ) as apply_memory_feedback,
         ):
-            api_gateway_main._sync_workflow_run_history(info)
+            api_gateway_workflows._sync_workflow_run_history(info)
 
         record_workflow_run.assert_called_once()
         record_workflow_outcome_memory.assert_called_once()
@@ -315,13 +364,13 @@ class GatewayRuntimeValidationTests(unittest.TestCase):
         )
 
         with (
-            patch.object(api_gateway_main, "record_eval_outcome_memory") as record_eval_outcome_memory,
+            patch.object(api_gateway_evals, "record_eval_outcome_memory") as record_eval_outcome_memory,
             patch.object(
-                api_gateway_main,
+                api_gateway_evals,
                 "apply_memory_feedback",
             ) as apply_memory_feedback,
         ):
-            api_gateway_main._sync_eval_memory(info)
+            api_gateway_evals._sync_eval_memory(info)
 
         record_eval_outcome_memory.assert_called_once()
         apply_memory_feedback.assert_called_once()
@@ -329,6 +378,7 @@ class GatewayRuntimeValidationTests(unittest.TestCase):
 
 class IntelligenceNamespaceIsolationTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
+        _bind_gateway_module(self, api_gateway_admin)
         self.engine = create_engine(
             "sqlite:///:memory:",
             future=True,
@@ -344,10 +394,16 @@ class IntelligenceNamespaceIsolationTests(unittest.IsolatedAsyncioTestCase):
         )
         self.db_patcher = patch.object(api_gateway_main, "db_session", self._db_session)
         self.audit_patcher = patch.object(api_gateway_main, "safe_record_audit")
+        self.observability_db_patcher = patch.object(api_gateway_observability, "db_session", self._db_session)
+        self.observability_audit_patcher = patch.object(api_gateway_observability, "safe_record_audit")
         self.db_patcher.start()
         self.audit_patcher.start()
+        self.observability_db_patcher.start()
+        self.observability_audit_patcher.start()
         self.addCleanup(self.db_patcher.stop)
         self.addCleanup(self.audit_patcher.stop)
+        self.addCleanup(self.observability_db_patcher.stop)
+        self.addCleanup(self.observability_audit_patcher.stop)
         self.addCleanup(self.engine.dispose)
 
         api_gateway_main._collector_registry.clear()
@@ -471,7 +527,15 @@ class IntelligenceNamespaceIsolationTests(unittest.IsolatedAsyncioTestCase):
             )
 
         api_gateway_main._collector_registry.clear()
-        api_gateway_main._load_collectors_from_db()
+        with (
+            patch.object(api_gateway_observability, "_DEFAULT_COLLECTOR_TOKEN", "collector-dev-token"),
+            patch.object(
+                api_gateway_observability,
+                "_DEFAULT_COLLECTOR_TOKEN_HASH",
+                hashlib.sha256(b"collector-dev-token").hexdigest(),
+            ),
+        ):
+            api_gateway_main._load_collectors_from_db()
 
         recovered = api_gateway_main._get_namespaced_collectors("team-a")
         self.assertEqual(recovered[collector_id]["token"], "collector-dev-token")
@@ -901,7 +965,7 @@ class WorkflowSchemaTests(unittest.TestCase):
             parsed,
             {
                 "files": {
-                    "skills/reviewer/SKILL.md": "---\nname: reviewer\n---\nReview carefully.\n",
+                    ".github/skills/reviewer/SKILL.md": "---\nname: reviewer\n---\nReview carefully.\n",
                 }
             },
         )
@@ -1181,6 +1245,15 @@ class WorkflowSchemaTests(unittest.TestCase):
                 model="gpt-4",
             )
 
+    def test_create_agent_request_accepts_mistral_vibe_runtime_kind(self) -> None:
+        request = api_gateway_main.CreateAgentRequest(
+            name="vibe-agent",
+            model="devstral-small",
+            runtime_kind="mistral-vibe",
+        )
+
+        self.assertEqual(request.runtime_kind, "mistral-vibe")
+
     def test_runtime_kind_from_spec_requires_explicit_kind(self) -> None:
         with self.assertRaises(HTTPException) as context:
             api_gateway_main.runtime_kind_from_spec({"model": "gpt-4"})
@@ -1310,6 +1383,7 @@ class WorkflowSchemaTests(unittest.TestCase):
 
 class GatewayToolCatalogTests(unittest.TestCase):
     def setUp(self) -> None:
+        _bind_gateway_module(self, api_gateway_auth)
         self._original_sidecar_catalog_cache = api_gateway_main._MCP_SIDECAR_CATALOG_CACHE
         api_gateway_main._MCP_SIDECAR_CATALOG_CACHE = None
 
@@ -1581,7 +1655,7 @@ class GatewayA2AProtocolAsyncTests(unittest.IsolatedAsyncioTestCase):
             status="completed",
         )
 
-        with patch.object(api_gateway_main, "invoke_agent", AsyncMock(return_value=invoke_response)) as mock_invoke:
+        with patch.object(api_gateway_agents, "invoke_agent", AsyncMock(return_value=invoke_response)) as mock_invoke:
             response = await api_gateway_main.handle_a2a_send_message(
                 "planner",
                 "default",
@@ -1652,7 +1726,7 @@ class GatewayA2AProtocolAsyncTests(unittest.IsolatedAsyncioTestCase):
         async def fake_invoke_agent_stream(*_args, **_kwargs):
             return api_gateway_main.StreamingResponse(upstream_events(), media_type="text/event-stream")
 
-        with patch.object(api_gateway_main, "invoke_agent_stream", side_effect=fake_invoke_agent_stream):
+        with patch.object(api_gateway_agents, "invoke_agent_stream", side_effect=fake_invoke_agent_stream):
             response = await api_gateway_main.handle_a2a_stream_message(
                 "planner",
                 "default",
@@ -1710,12 +1784,15 @@ class GatewayA2AProtocolAsyncTests(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
-        with patch.object(
-            api_gateway_main,
-            "handle_a2a_send_message",
-            AsyncMock(return_value={"jsonrpc": "2.0", "id": "rpc-1", "result": {"task": {"id": "task-1"}}}),
+        with (
+            patch.object(api_gateway_a2a, "ensure_namespace_access"),
+            patch.object(
+                api_gateway_a2a,
+                "handle_a2a_send_message",
+                AsyncMock(return_value={"jsonrpc": "2.0", "id": "rpc-1", "result": {"task": {"id": "task-1"}}}),
+            ),
         ):
-            response = await api_gateway_main.a2a_jsonrpc("planner", raw_request, namespace="default", user={})
+            response = await api_gateway_a2a.a2a_jsonrpc("planner", raw_request, namespace="default", user={})
 
         payload = json.loads(response.body)
         self.assertEqual(payload["id"], "rpc-1")
@@ -1766,6 +1843,12 @@ class AgentReadCacheTests(unittest.TestCase):
 
 
 class GatewayInvokeProxyTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        _bind_gateway_module(self, api_gateway_agents)
+        self.namespace_access_patcher = patch.object(api_gateway_main, "ensure_namespace_access")
+        self.namespace_access_patcher.start()
+        self.addCleanup(self.namespace_access_patcher.stop)
+
     async def test_download_agent_artifact_proxies_runtime_file_response(self) -> None:
         response = httpx.Response(
             200,
@@ -2266,6 +2349,7 @@ class LogStreamTests(unittest.TestCase):
             sys.modules["kubernetes.watch"] = k8s_watch_mod
 
     def setUp(self):
+        _bind_gateway_module(self, api_gateway_agents)
         self._ensure_k8s_mock()
         from unittest.mock import MagicMock
 
@@ -2413,12 +2497,12 @@ class WorkflowRetryFailedTests(unittest.TestCase):
         self._mock_custom_objects.replace_namespaced_custom_object.return_value = updated
 
         with (
-            patch.object(api_gateway_main, "ensure_namespace_access"),
-            patch.object(api_gateway_main, "record_workflow_run") as record_mock,
+            patch.object(api_gateway_workflows, "ensure_namespace_access"),
+            patch.object(api_gateway_workflows, "record_workflow_run") as record_mock,
         ):
-            result = api_gateway_main.trigger_workflow(
+            result = api_gateway_workflows.trigger_workflow(
                 workflow_name="feature-pipeline",
-                body=api_gateway_main.WorkflowTriggerRequest(input="fresh input"),
+                body=api_gateway_workflows.WorkflowTriggerRequest(input="fresh input"),
                 namespace="default",
                 user={"sub": "user-1", "namespaces": ["default"]},
             )
@@ -2429,7 +2513,20 @@ class WorkflowRetryFailedTests(unittest.TestCase):
         patch_kwargs = self._mock_custom_objects.patch_namespaced_custom_object_status.call_args.kwargs
         self.assertEqual(
             patch_kwargs["body"],
-            {"status": {"phase": "pending", "observedGeneration": None, "pendingApproval": None}},
+            {
+                "status": {
+                    "phase": "pending",
+                    "observedGeneration": None,
+                    "pendingApproval": None,
+                    "stepStates": None,
+                    "summary": None,
+                    "currentStep": "",
+                    "workerJob": None,
+                    "runId": None,
+                    "artifactRef": None,
+                    "journalRef": None,
+                }
+            },
         )
         record_mock.assert_called_once()
         self.assertEqual(result.input, "fresh input")
@@ -2455,8 +2552,8 @@ class WorkflowRetryFailedTests(unittest.TestCase):
         updated["status"]["pendingApproval"] = None
         self._mock_custom_objects.get_namespaced_custom_object.side_effect = [workflow, updated]
 
-        with patch.object(api_gateway_main, "ensure_namespace_access"):
-            result = api_gateway_main.cancel_workflow(
+        with patch.object(api_gateway_workflows, "ensure_namespace_access"):
+            result = api_gateway_workflows.cancel_workflow(
                 workflow_name="feature-pipeline",
                 namespace="default",
                 user={"sub": "user-1", "namespaces": ["default"]},
@@ -2481,10 +2578,10 @@ class WorkflowRetryFailedTests(unittest.TestCase):
         }
 
         with (
-            patch.object(api_gateway_main, "ensure_namespace_access"),
-            patch.object(api_gateway_main, "read_custom_resource", return_value=workflow),
+            patch.object(api_gateway_workflows, "ensure_namespace_access"),
+            patch.object(api_gateway_workflows, "read_custom_resource", return_value=workflow),
         ):
-            result = api_gateway_main.get_workflow_next_action(
+            result = api_gateway_workflows.get_workflow_next_action(
                 workflow_name="feature-pipeline",
                 namespace="default",
                 user={"sub": "user-1", "namespaces": ["default"]},
@@ -2506,10 +2603,10 @@ class WorkflowRetryFailedTests(unittest.TestCase):
         }
 
         with (
-            patch.object(api_gateway_main, "ensure_namespace_access"),
-            patch.object(api_gateway_main, "read_custom_resource", return_value=workflow),
+            patch.object(api_gateway_workflows, "ensure_namespace_access"),
+            patch.object(api_gateway_workflows, "read_custom_resource", return_value=workflow),
         ):
-            result = api_gateway_main.get_workflow_next_action(
+            result = api_gateway_workflows.get_workflow_next_action(
                 workflow_name="feature-pipeline",
                 namespace="default",
                 user={"sub": "user-1", "namespaces": ["default"]},
@@ -2529,11 +2626,11 @@ class WorkflowRetryFailedTests(unittest.TestCase):
         }
 
         with (
-            patch.object(api_gateway_main, "ensure_namespace_access"),
-            patch.object(api_gateway_main, "read_custom_resource", return_value=workflow),
-            patch.object(api_gateway_main, "list_custom_resources", return_value=[]),
+            patch.object(api_gateway_workflows, "ensure_namespace_access"),
+            patch.object(api_gateway_workflows, "read_custom_resource", return_value=workflow),
+            patch.object(api_gateway_workflows, "list_custom_resources", return_value=[]),
         ):
-            result = api_gateway_main.get_workflow_next_action(
+            result = api_gateway_workflows.get_workflow_next_action(
                 workflow_name="feature-pipeline",
                 namespace="default",
                 user={"sub": "user-1", "namespaces": ["default"]},
@@ -2558,10 +2655,10 @@ class WorkflowRetryFailedTests(unittest.TestCase):
         self._mock_custom_objects.get_namespaced_custom_object.return_value = workflow
 
         with (
-            patch.object(api_gateway_main, "ensure_namespace_access"),
-            patch.object(api_gateway_main, "_sync_workflow_run_history"),
+            patch.object(api_gateway_workflows, "ensure_namespace_access"),
+            patch.object(api_gateway_workflows, "_sync_workflow_run_history"),
         ):
-            response = api_gateway_main.stream_workflow_status(
+            response = api_gateway_workflows.stream_workflow_status(
                 workflow_name="feature-pipeline",
                 namespace="default",
                 user={"sub": "user-1", "namespaces": ["default"]},
@@ -2595,13 +2692,13 @@ class WorkflowRetryFailedTests(unittest.TestCase):
         sys.modules["kubernetes"].watch = types.SimpleNamespace(Watch=lambda: fake_watch)
 
         with (
-            patch.object(api_gateway_main, "ensure_namespace_access"),
+            patch.object(api_gateway_workflows, "ensure_namespace_access"),
             patch.object(
-                api_gateway_main,
+                api_gateway_workflows,
                 "read_custom_resource",
                 return_value={"status": {"workerJob": {"name": "worker-job", "namespace": "default"}}},
             ),
-            patch.object(api_gateway_main, "list_job_pods", return_value=[fake_pod]),
+            patch.object(api_gateway_workflows, "list_job_pods", return_value=[fake_pod]),
             patch.object(
                 sys.modules["kubernetes.client"],
                 "CoreV1Api",
@@ -2610,7 +2707,7 @@ class WorkflowRetryFailedTests(unittest.TestCase):
             ),
         ):
             response = asyncio.run(
-                api_gateway_main.stream_workflow_logs(
+                api_gateway_workflows.stream_workflow_logs(
                     workflow_name="feature-pipeline",
                     request=FakeRequest(),
                     namespace="default",
@@ -2666,10 +2763,10 @@ class WorkflowRetryFailedTests(unittest.TestCase):
         }
 
         with (
-            patch.object(api_gateway_main, "ensure_namespace_access"),
+            patch.object(api_gateway_workflows, "ensure_namespace_access"),
             patch.object(api_gateway_main, "load_workflow_run_trace", return_value=trace_row),
         ):
-            payload = api_gateway_main.get_workflow_run_trace_endpoint(
+            payload = api_gateway_workflows.get_workflow_run_trace_endpoint(
                 workflow_name="feature-pipeline",
                 run_id="run-archived-1",
                 namespace="default",
@@ -2755,15 +2852,15 @@ class WorkflowRetryFailedTests(unittest.TestCase):
         }
 
         with (
-            patch.object(api_gateway_main, "ensure_namespace_access"),
+            patch.object(api_gateway_workflows, "ensure_namespace_access"),
             patch.object(
-                api_gateway_main,
+                api_gateway_workflows,
                 "read_custom_resource",
                 return_value={"status": {"runId": "run-archived-2", "workerJob": {}}},
             ),
-            patch.object(api_gateway_main, "_fallback_workflow_logs_from_run", return_value=archived_payload),
+            patch.object(api_gateway_workflows, "_fallback_workflow_logs_from_run", return_value=archived_payload),
         ):
-            payload = api_gateway_main.get_workflow_logs(
+            payload = api_gateway_workflows.get_workflow_logs(
                 workflow_name="feature-pipeline",
                 namespace="default",
                 user={"sub": "user-1", "namespaces": ["default"]},
@@ -2828,15 +2925,15 @@ class WorkflowRetryFailedTests(unittest.TestCase):
         self._mock_custom_objects.get_namespaced_custom_object.side_effect = [workflow, updated]
 
         with (
-            patch.object(api_gateway_main, "ensure_namespace_access"),
+            patch.object(api_gateway_workflows, "ensure_namespace_access"),
             patch.object(
-                api_gateway_main,
+                api_gateway_workflows,
                 "build_retry_workflow_run_id",
                 return_value="wf-run-default-feature-pipeline-5-new",
             ),
-            patch.object(api_gateway_main, "record_workflow_run"),
+            patch.object(api_gateway_workflows, "record_workflow_run"),
         ):
-            result = api_gateway_main.retry_failed_workflow_steps(
+            result = api_gateway_workflows.retry_failed_workflow_steps(
                 workflow_name="feature-pipeline",
                 namespace="default",
                 user={"sub": "user-1", "namespaces": ["default"]},
@@ -2855,6 +2952,9 @@ class WorkflowRetryFailedTests(unittest.TestCase):
 
 
 class GatewayProviderModelTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        _bind_gateway_module(self, api_gateway_llm)
+
     async def test_add_copilot_model_falls_back_when_token_exchange_fails(self) -> None:
         class FakeSecret:
             data = {"GITHUB_COPILOT_TOKEN": "Z2gtb2F1dGgtdG9rZW4="}
@@ -2997,11 +3097,11 @@ class McpOAuthSupportTests(unittest.TestCase):
         }
 
         with (
-            patch.object(api_gateway_main, "ensure_namespace_access", return_value=None),
-            patch.object(api_gateway_main, "get_mcp_connection", return_value=connection_record),
-            patch.object(api_gateway_main, "_read_mcp_connection_secret_values", return_value={"client_secret": "top-secret"}),
+            patch.object(api_gateway_observability, "ensure_namespace_access", return_value=None),
+            patch.object(api_gateway_observability, "get_mcp_connection", return_value=connection_record),
+            patch.object(api_gateway_observability, "_mcp_connection_secret_values_for_record", return_value={"client_secret": "top-secret"}),
         ):
-            response = api_gateway_main.start_saved_mcp_connection_oauth(
+            response = api_gateway_observability.start_saved_mcp_connection_oauth(
                 "conn-gmail",
                 raw_request=types.SimpleNamespace(base_url="https://kubesynapse.example.test/"),
                 namespace="team-a",
@@ -3012,7 +3112,7 @@ class McpOAuthSupportTests(unittest.TestCase):
         self.assertIn("client_id=client-123", response["authorization_url"])
         self.assertIn("state=", response["authorization_url"])
         self.assertIn(
-            "redirect_uri=https%3A%2F%2FKubeSynapse.example.test%2Fapi%2Fmcp%2Fconnections%2Fconn-gmail%2Foauth%2Fcallback",
+            "redirect_uri=https%3A%2F%2Fkubesynapse.example.test%2Fapi%2Fmcp%2Fconnections%2Fconn-gmail%2Foauth%2Fcallback",
             response["authorization_url"],
         )
 

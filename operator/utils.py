@@ -29,7 +29,7 @@ UNSUPPORTED_POLICY_BUDGET_FIELDS = (
     "maxRequestsPerMinute",
     "maxCostPerDayUSD",
 )
-GOOSE_CONFIG_FORBIDDEN_FILES = {"secrets.yaml"}
+RUNTIME_CONFIG_FORBIDDEN_FILES = {"secrets.yaml"}
 MAX_AGENT_SKILL_FILES = get_int_env("AGENT_MAX_SKILL_FILES", 24, minimum=1)
 MAX_AGENT_SKILL_FILE_PATH_CHARS = get_int_env("AGENT_MAX_SKILL_FILE_PATH_CHARS", 256, minimum=32)
 MAX_AGENT_SKILL_FILE_CONTENT_CHARS = get_int_env("AGENT_MAX_SKILL_FILE_CONTENT_CHARS", 16000, minimum=512)
@@ -116,7 +116,7 @@ def parse_runtime_config_files(raw_value: Any, *, source: str) -> dict[str, Any]
     total_chars = 0
     for raw_path, raw_content in raw_value.items():
         path = _normalize_runtime_config_path(raw_path, source=source)
-        if path.lower() in GOOSE_CONFIG_FORBIDDEN_FILES:
+        if path.lower() in RUNTIME_CONFIG_FORBIDDEN_FILES:
             raise ValueError(
                 f"{source} path '{path}' is not allowed. "
                 "Use environment variables or a secret store for sensitive values."

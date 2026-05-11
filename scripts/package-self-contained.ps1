@@ -15,10 +15,10 @@ $outputPath = Join-Path $repoRoot $OutputDir
 $images = @(
   @{ Name = "kubesynapse-operator"; Context = "operator" },
   @{ Name = "kubesynapse-opencode-rt"; Context = "opencode-runtime" },
+  @{ Name = "kubesynapse-vibe-rt"; Context = "vibe-runtime" },
   @{ Name = "kubesynapse-api-gateway"; Context = "api-gateway" },
     @{ Name = "kubesynapse-web-ui"; Context = "web-ui" },
   @{ Name = "kubesynapse-pi-rt"; Context = "pi-runtime" },
-  @{ Name = "kubesynapse-vibe-rt"; Context = "vibe-runtime" },
   @{ Name = "litellm"; Context = "deploy/litellm"; Dockerfile = "deploy/litellm/Dockerfile" },
     @{ Name = "mcp-code-exec"; Context = "mcp-sidecars"; Dockerfile = "mcp-sidecars/code-exec/Dockerfile" },
     @{ Name = "mcp-web-search"; Context = "mcp-sidecars"; Dockerfile = "mcp-sidecars/web-search/Dockerfile" },

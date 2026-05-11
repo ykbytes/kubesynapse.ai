@@ -846,7 +846,7 @@ class CreateAgentRequest(BaseModel):
     system_prompt: str = Field(default="", max_length=AGENT_SYSTEM_PROMPT_MAX_CHARS)
     policy_ref: str | None = Field(default=None, max_length=253)
     storage_size: str | None = Field(default="1Gi", max_length=32)
-    runtime_kind: str = Field(pattern=r"^(opencode|pi)$")
+    runtime_kind: str = Field(pattern=r"^(opencode|pi|mistral-vibe)$")
     enable_gvisor: bool = False
     mcp_connection_ids: list[str] = Field(default_factory=list)
     mcp_servers: list[str] = Field(default_factory=list)
@@ -865,7 +865,7 @@ class UpdateAgentRequest(BaseModel):
     system_prompt: str = Field(default="", max_length=AGENT_SYSTEM_PROMPT_MAX_CHARS)
     policy_ref: str | None = Field(default=None, max_length=253)
     storage_size: str | None = Field(default="1Gi", max_length=32)
-    runtime_kind: str | None = Field(default=None, pattern=r"^(opencode|pi)$")
+    runtime_kind: str | None = Field(default=None, pattern=r"^(opencode|pi|mistral-vibe)$")
     enable_gvisor: bool = False
     mcp_connection_ids: list[str] | None = None
     mcp_servers: list[str] = Field(default_factory=list)
@@ -1192,15 +1192,17 @@ def normalized_runtime_kind(raw_value: str | None) -> str:
     runtime_kind = str(raw_value or "").strip().lower()
     if not runtime_kind:
         raise ValueError("runtime kind must be explicitly set")
-    if runtime_kind not in ("opencode", "pi"):
-        raise ValueError(f"runtime kind must be 'opencode' or 'pi'; '{runtime_kind}' is not supported")
+    if runtime_kind not in ("opencode", "pi", "mistral-vibe"):
+        raise ValueError(
+            f"runtime kind must be 'opencode', 'pi', or 'mistral-vibe'; '{runtime_kind}' is not supported"
+        )
     return runtime_kind
 
 
 def normalized_opencode_runtime_kind(raw_value: str | None, *, field_name: str) -> str:
     runtime_kind = normalized_runtime_kind(raw_value)
-    if runtime_kind not in ("opencode", "pi"):
-        raise ValueError(f"{field_name} must be 'opencode' or 'pi'; '{runtime_kind}' is not supported")
+    if runtime_kind != "opencode":
+        raise ValueError(f"{field_name} must be 'opencode'; '{runtime_kind}' is not supported")
     return runtime_kind
 
 
@@ -1698,7 +1700,7 @@ def runtime_kind_from_spec(spec: dict[str, Any] | None) -> str:
 
 def validate_agent_runtime_compatibility(spec: dict[str, Any]) -> None:
     runtime_kind = runtime_kind_from_spec(spec)
-    if runtime_kind not in ("opencode", "pi"):
+    if runtime_kind not in ("opencode", "pi", "mistral-vibe"):
         raise HTTPException(status_code=400, detail=f"Unsupported AIAgent runtime kind '{runtime_kind}'")
     if runtime_kind == "opencode" and spec.get("githubConfig"):
         raise HTTPException(
@@ -1711,7 +1713,7 @@ def validate_agent_runtime_compatibility(spec: dict[str, Any]) -> None:
 
 
 def validate_invoke_runtime_compatibility(runtime_kind: str, request: InvokeRequest) -> None:
-    if runtime_kind not in ("opencode", "pi"):
+    if runtime_kind not in ("opencode", "pi", "mistral-vibe"):
         raise HTTPException(status_code=400, detail=f"Unsupported AIAgent runtime kind '{runtime_kind}'")
 
     unsupported_fields: list[str] = []
@@ -3890,7 +3892,15 @@ async def handle_a2a_send_message(
         sandbox_session=invoke_options.get("sandbox_session"),
     )
     try:
-        invoke_response = await invoke_agent(agent_name, invoke_request, raw_request, namespace, user={"role": "admin", "allowed_namespaces": ["*"]})
+        from routers.agents import invoke_agent
+
+        invoke_response = await invoke_agent(
+            agent_name,
+            invoke_request,
+            raw_request,
+            namespace,
+            user={"role": "admin", "allowed_namespaces": ["*"]},
+        )
     except HTTPException as exc:
         mark_a2a_task_failed(record, str(exc.detail))
     except Exception as exc:
@@ -3953,7 +3963,15 @@ async def handle_a2a_stream_message(
 
     async def event_generator() -> AsyncGenerator[str, None]:
         try:
-            upstream_response = await invoke_agent_stream(agent_name, invoke_request, raw_request, namespace, user={"role": "admin", "allowed_namespaces": ["*"]})
+            from routers.agents import invoke_agent_stream
+
+            upstream_response = await invoke_agent_stream(
+                agent_name,
+                invoke_request,
+                raw_request,
+                namespace,
+                user={"role": "admin", "allowed_namespaces": ["*"]},
+            )
         except HTTPException as exc:
             mark_a2a_task_failed(record, str(exc.detail))
             yield jsonrpc_sse_message(

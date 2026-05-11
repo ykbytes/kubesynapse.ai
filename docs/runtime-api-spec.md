@@ -962,13 +962,4 @@ All runtimes that implement `/invoke/stream` MUST emit events using this canonic
 | Remove | `/api/*` alias paths (or keep as deprecated) |
 | Remove | `/prompt` legacy endpoint |
 
-### vibe-runtime
-| Action | Endpoint |
-|--------|----------|
-| Enrich | `/health` and `/ready` responses |
-| Add | `GET /info`, `GET /capabilities` |
-| Implement | `/cancel` and `/abort` (currently no-op stubs) |
-| Add | `GET /artifacts/list`, `GET /artifacts/download`, `GET /artifacts/zip` |
-| Add | `GET /todo`, `GET /question`, `POST /question/{id}/reply`, `POST /question/{id}/reject` |
-| Add | `GET /diff`, `GET /context-budget` |
-| Normalize | SSE events to canonical taxonomy |
+The supported in-tree runtime implementations are `opencode-runtime` and `pi-runtime`.

@@ -186,7 +186,7 @@ responsible for configuring them to match your specific compliance requirements.
 
 ### Can I use a custom runtime instead of OpenCode?
 
-Currently, `runtimeKind: opencode` is the supported path. The architecture is designed to allow additional runtimes in the future, but only OpenCode is fully implemented today.
+Currently, the supported in-tree runtime kinds are `opencode`, `pi`, and `mistral-vibe`. The architecture still allows additional runtimes in the future, but those three are the implemented and supported paths today.
 
 ### Can I build my own MCP tool?
 

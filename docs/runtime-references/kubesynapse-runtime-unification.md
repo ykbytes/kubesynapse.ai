@@ -90,23 +90,7 @@ Notable local traits:
 - provider, model, and thinking-level are first-class bridge concerns
 - Windows local validation will not fully initialize the Pi subprocess because FIFO creation relies on `mkfifo`
 
-### Mistral Vibe Runtime
-
-Local adapter: `vibe-runtime/main.py`
-
-Current contract posture:
-
-- core tier: implemented
-- session tier: implemented
-- artifacts tier: implemented
-- streaming tier: not advertised
-- compatibility alias: `POST /abort`
-
-Notable local traits:
-
-- wrapper over CLI or agent-loop behavior
-- strong skill, tool, and agent-profile model upstream
-- some session helper endpoints remain light projections today
+KubeSynapse currently keeps two in-tree runtime adapters in the active matrix: OpenCode as the default runtime and Pi as the supported alternative.
 
 ## Unification Rules for Custom Runtime Authors
 

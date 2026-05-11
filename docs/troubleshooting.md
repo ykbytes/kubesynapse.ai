@@ -129,12 +129,12 @@ helm upgrade KubeSynapse oci://docker.io/kubesynapse/charts/kubesynapse \
 **Invalid runtime config:**
 
 ```bash
-# The only supported runtime kind is "opencode"
-kubectl get aiagent <name> -n <namespace> -o jsonpath='{.spec.runtimeKind}'
+# Supported runtime kinds are "opencode", "pi", and "mistral-vibe"
+kubectl get aiagent <name> -n <namespace> -o jsonpath='{.spec.runtime.kind}'
 
 # Fix if needed
 kubectl patch aiagent <name> -n <namespace> --type merge \
-  -p '{"spec":{"runtimeKind":"opencode"}}'
+  -p '{"spec":{"runtime":{"kind":"opencode"}}}'
 ```
 
 **OOMKilled:**
@@ -190,7 +190,7 @@ Common causes:
 | **Runtime not ready** | Agent pod in `ContainerCreating` or `NotReady` |
 | **NetworkPolicy blocking** | `ingress denied` in CNI logs |
 | **Gateway resource exhaustion** | Gateway pods at CPU/memory limits |
-| **Database unavailable** | `/api/ready` returns `degraded` |
+| **Database unavailable** | `/api/v1/ready` returns `degraded` |
 
 ### Fix
 
@@ -301,8 +301,8 @@ kubectl exec -n kubesynapse deploy/litellm -- curl -s localhost:4000/health/live
 # Check model availability
 kubectl logs -n kubesynapse deployment/litellm | grep "model"
 
-# Verify provider key validity
-curl -s http://localhost:8080/api/health/db
+# Check gateway readiness for downstream dependency errors
+curl -s http://localhost:8080/api/v1/ready
 ```
 
 Common causes:
@@ -367,7 +367,7 @@ kubectl get ingress -n kubesynapse
 kubectl get svc kubesynapse-web-ui -n kubesynapse
 
 # Check gateway connectivity from UI pod
-kubectl exec -n kubesynapse deploy/kubesynapse-web-ui -- curl -s http://kubesynapse-api-gateway:8080/api/health
+kubectl exec -n kubesynapse deploy/kubesynapse-web-ui -- curl -s http://kubesynapse-api-gateway:8080/api/v1/health
 ```
 
 Common causes:
@@ -377,7 +377,7 @@ Common causes:
 | **ImagePullBackOff** | `Back-off pulling image` |
 | **CORS misconfiguration** | `Access-Control-Allow-Origin` missing |
 | **Ingress misconfiguration** | `404` or `502` from ingress controller |
-| **API gateway down** | UI cannot reach `/api/health` |
+| **API gateway down** | UI cannot reach `/api/v1/health` |
 
 ### Fix
 
@@ -420,7 +420,7 @@ kubectl logs -n ingress-nginx deployment/ingress-nginx-controller
 
 ### Symptoms
 
-- Gateway `/api/ready` returns `degraded` with `database: error`
+- Gateway `/api/v1/ready` returns `degraded` with `database: error`
 - Login fails with `500 Internal Server Error`
 - Audit logs or chat history not persisting
 

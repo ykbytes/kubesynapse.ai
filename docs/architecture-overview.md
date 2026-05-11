@@ -8,11 +8,11 @@ KubeSynapse is a Kubernetes-native AI agent platform built around these ideas:
 
 - represent agents, workflows, policies, approvals, evals, tenants, and observability resources as Kubernetes custom resources
 - reconcile desired state with a Python operator and background worker Jobs
-- run each agent as an isolated singleton StatefulSet backed by the OpenCode runtime
+- run each agent as an isolated singleton StatefulSet backed by one of the supported runtime adapters
 - route model calls through LiteLLM and optional retrieval through Qdrant
 - expose the platform through a FastAPI gateway, a React web UI, and the `agentctl` CLI
 
-The platform supports dual runtimes: OpenCode (`runtime.kind: opencode`) and Pi (`runtime.kind: pi`).
+The platform supports three in-tree runtimes: OpenCode (`runtime.kind: opencode`), Pi (`runtime.kind: pi`), and Mistral Vibe (`runtime.kind: mistral-vibe`).
 
 ## 2. Top-Level Architecture
 
@@ -151,7 +151,7 @@ Current responsibilities include:
 
 ### Runtime sandboxes
 
-Each agent runs in an isolated sandbox. The supported runtime paths are OpenCode and Pi.
+Each agent runs in an isolated sandbox. The supported runtime paths are OpenCode, Pi, and Mistral Vibe.
 
 An OpenCode agent sandbox typically contains:
 
@@ -162,6 +162,8 @@ An OpenCode agent sandbox typically contains:
 - policy and approval enforcement hooks
 
 The Pi runtime runs as a separate StatefulSet using a Node.js HTTP bridge (`pi-runtime/pi_bridge.js`) that wraps Pi's RPC mode. It exposes artifact APIs (`/artifacts/list`, `/artifacts/download`, `/artifacts/zip`) backed by a pod-local filesystem and enforces a 120-second model timeout (`MODEL_TIMEOUT_MS`) with auto-abort and retry to prevent runaway sessions.
+
+The Mistral Vibe runtime runs as a separate StatefulSet using the Python HTTP bridge in `vibe-runtime/`. It exposes the same core contract endpoints, uses pod-local workspace and state volumes, and binds Mistral-specific model settings through `spec.runtime.mistralVibe` plus the shared runtime API surface.
 
 ### Worker Jobs
 
@@ -281,7 +283,7 @@ Security is enforced across several layers:
 
 If you need the shortest possible architectural summary, these are the points that matter most:
 
-1. The supported runtime path is OpenCode.
+1. The supported in-tree runtimes are OpenCode, Pi, and Mistral Vibe.
 2. The gateway is now a substantive application backend, not just a thin router.
 3. Workflow and eval detail lives in worker artifacts more than CRD status.
 4. MCP is both sidecar-based and connection-driven.

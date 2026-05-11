@@ -80,7 +80,7 @@ helm upgrade --install kubesynapse ./charts/kubesynapse \
 kubectl wait --for=condition=ready pod -n kubesynapse -l app=kubesynapse-api-gateway --timeout=120s
 
 # 4. Verify health
-curl http://localhost:8080/api/health`}
+curl http://localhost:8080/api/v1/health`}
           lang="bash"
         />
         <Callout variant="config" title="Namespace">

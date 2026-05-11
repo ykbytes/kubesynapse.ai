@@ -397,7 +397,6 @@ kubectl get deployment kubesynapse-operator -n kubesynapse -o jsonpath='{.spec.t
 | Runtime | Agent Example | LLM Calls | Tool Calls | Logs | Runtime Events | Status |
 |---|---|---|---|---|---|---|
 | **pi-runtime** | `minimax` (mistral/devstral-small) | ✅ | ✅ | ✅ | ✅ | Full support |
-| **mistral-vibe** | `mistral-vibe-smoke` (devstral-small) | ✅ | ✅ | ✅ | ✅ | Full support |
 | **opencode** | `opencode-test` (gpt-4o-mini) | Requires image build | — | — | ✅ | Image must be built locally for kind |
 
 ### Runtime Event Emission
@@ -406,7 +405,6 @@ All runtimes now emit structured events to the Run Intelligence Layer via their 
 
 - **opencode-runtime**: `runtime_events.py` — sync + async emitter, integrated into `/invoke`, `/invoke/stream`, lifespan
 - **pi-runtime**: `runtime_events.js` — Node.js emitter, integrated into `/invoke`, `/invoke/stream`, shutdown
-- **vibe-runtime**: `runtime_events.py` — lightweight sync emitter, integrated into `/invoke`, `/invoke/stream`, signals
 - **operator worker**: `runtime_events.py` — emits workflow/step/agent/tool events alongside existing TraceClient
 
 Events are batched, idempotent, and sanitized before being sent to `POST /api/v1/traces/runtime-events`.
@@ -415,10 +413,6 @@ Events are batched, idempotent, and sanitized before being sent to `POST /api/v1
 - LLM calls are recorded when the runtime returns a `response` field (model is inferred from the agent spec or marked as "unknown")
 - Token counts are **not reported** by the pi-runtime — this is a known limitation
 - Tool calls are fully captured with args, results, and error messages
-
-### Vibe-Runtime Specific Notes
-- Uses the Mistral provider; API keys must be configured in `kubesynapse-llm-api-keys` secret
-- Responds to prompts with text; verification criteria should accommodate the response style
 
 ### Configuration
 

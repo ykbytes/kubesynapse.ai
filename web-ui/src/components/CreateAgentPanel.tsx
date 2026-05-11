@@ -540,7 +540,7 @@ export function CreateAgentPanel({
                       <div className="rounded-2xl border border-fuchsia-500/30 bg-fuchsia-500/5 px-4 py-3 text-left text-foreground">
                         <p className="font-medium text-sm">Mistral Vibe runtime</p>
                         <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                          Dedicated Mistral Vibe runtime for lightweight prompt-driven execution with streaming support and Mistral-native model aliases.
+                          Mistral-backed coding runtime with the same core invoke, session, and artifact surfaces exposed through the KubeSynapse runtime bridge.
                         </p>
                       </div>
                     )}

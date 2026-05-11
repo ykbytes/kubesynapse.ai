@@ -310,7 +310,7 @@ class TestTranslateAgent(unittest.TestCase):
                 policy_spec=None,
             )
 
-        self.assertIn("Only 'opencode' is supported", str(context.exception))
+        self.assertIn("Unsupported AIAgent.spec.runtime.kind 'goose'", str(context.exception))
 
     def test_translate_opencode_runtime(self) -> None:
         spec = {"model": "gpt-4", "runtime": {"kind": "opencode"}}
@@ -322,6 +322,24 @@ class TestTranslateAgent(unittest.TestCase):
             policy_spec=None,
         )
         self.assertEqual(outputs.runtime_kind, "opencode")
+
+    def test_translate_mistral_vibe_runtime(self) -> None:
+        spec = {
+            "model": "devstral-small",
+            "runtime": {
+                "kind": "mistral-vibe",
+                "mistralVibe": {"model": "devstral-small", "noSession": True},
+            },
+        }
+        outputs = translate_agent(
+            spec=spec,
+            name="vibe-agent",
+            namespace="ns-vibe",
+            policy_name=None,
+            policy_spec=None,
+        )
+        self.assertEqual(outputs.runtime_kind, "mistral-vibe")
+        self.assertIsNone(outputs.provider_bootstrap_secret)
 
     def test_translate_codex_runtime_is_rejected(self) -> None:
         spec = {"model": "gpt-4", "runtime": {"kind": "codex"}}
@@ -335,7 +353,7 @@ class TestTranslateAgent(unittest.TestCase):
                 policy_spec=None,
             )
 
-        self.assertIn("Only 'opencode' is supported", str(context.exception))
+        self.assertIn("Unsupported AIAgent.spec.runtime.kind 'codex'", str(context.exception))
 
     def test_translate_agent_owned_manifests_count(self) -> None:
         spec = {"model": "gpt-4", "runtime": {"kind": "opencode"}}

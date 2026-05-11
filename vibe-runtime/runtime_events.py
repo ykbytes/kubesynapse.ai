@@ -31,9 +31,9 @@ logger = logging.getLogger("vibe-runtime.events")
 _API_GATEWAY_URL = os.getenv("API_GATEWAY_INTERNAL_URL", "").strip().rstrip("/")
 _API_GATEWAY_TOKEN = os.getenv("API_GATEWAY_SHARED_TOKEN", "").strip()
 _EMIT_ENABLED = bool(_API_GATEWAY_URL and _API_GATEWAY_TOKEN)
-_RUNTIME_KIND = "vibe"
-_AGENT_NAME = os.getenv("AGENT_NAME", "mistral-vibe-agent").strip() or "mistral-vibe-agent"
-_NAMESPACE = os.getenv("AGENT_NAMESPACE", "default").strip() or "default"
+_RUNTIME_KIND = "mistral-vibe"
+_AGENT_NAME = (os.getenv("AGENT_NAME") or os.getenv("KUBESYNAPSE_AGENT_NAME") or "mistral-vibe-agent").strip() or "mistral-vibe-agent"
+_NAMESPACE = (os.getenv("AGENT_NAMESPACE") or os.getenv("KUBESYNAPSE_NAMESPACE") or "default").strip() or "default"
 
 _QUEUE_MAX_SIZE = int(os.getenv("RUNTIME_EVENTS_QUEUE_SIZE", "500"))
 _BATCH_MAX_SIZE = int(os.getenv("RUNTIME_EVENTS_BATCH_SIZE", "50"))

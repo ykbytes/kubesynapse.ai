@@ -91,7 +91,7 @@ If you are exercising the observability stack, apply `examples/observability-dem
 
 These are the assumptions that match the codebase now:
 
-- the supported runtime is OpenCode only
+- the supported in-tree runtimes are OpenCode, Pi, and Mistral Vibe
 - PostgreSQL backs gateway auth and session state
 - workflows and evals use worker Jobs plus artifact PVC references
 - observability CRDs are part of the chart

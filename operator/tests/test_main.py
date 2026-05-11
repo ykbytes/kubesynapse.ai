@@ -1362,6 +1362,38 @@ class AllowedNamespacesTests(unittest.TestCase):
 
         self.assertIn("sidecar-based GitHub MCP", str(context.exception))
 
+    def test_mistral_vibe_runtime_manifest_includes_bridge_env(self) -> None:
+        manifest = _builders_manifests.create_agent_statefulset_manifest(
+            "vibe-assistant",
+            "default",
+            {
+                "model": "devstral-small",
+                "runtime": {
+                    "kind": "mistral-vibe",
+                    "mistralVibe": {"model": "mistral-medium", "noSession": True},
+                },
+                "storage": {"size": "1Gi"},
+                "systemPrompt": "Stay precise.",
+            },
+            None,
+            {},
+        )
+
+        pod_spec = manifest["spec"]["template"]["spec"]
+        runtime_container = pod_spec["containers"][0]
+        env = {item["name"]: item.get("value") for item in runtime_container["env"] if "value" in item}
+        env_refs = {
+            item["name"]: item.get("valueFrom") for item in runtime_container["env"] if "valueFrom" in item
+        }
+
+        self.assertEqual(runtime_container["image"], _config.MISTRAL_VIBE_RUNTIME_IMAGE)
+        self.assertEqual(manifest["metadata"]["annotations"]["kubesynapse.ai/runtime"], "mistral-vibe")
+        self.assertEqual(env["VIBE_ACTIVE_MODEL"], "mistral-medium")
+        self.assertEqual(env["VIBE_NO_SESSION"], "true")
+        self.assertEqual(env["VIBE_SYSTEM_PROMPT"], "Stay precise.")
+        self.assertEqual(env_refs["MISTRAL_API_KEY"]["secretKeyRef"]["key"], "MISTRAL_API_KEY")
+        self.assertEqual(runtime_container["readinessProbe"]["httpGet"]["path"], "/ready")
+
     # ------------------------------------------------------------------
     # §2.7 — MAX_PARALLEL_STEPS env injected into worker job manifest
     # ------------------------------------------------------------------

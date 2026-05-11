@@ -9,6 +9,14 @@ The operator watches `AIAgent`, `AgentWorkflow`, and `AgentEval` CRDs and materi
 them into Deployments, Services, PVCs, Jobs, and ConfigMaps. It is the control plane
 that turns declarative agent specs into live runtime pods.
 
+## Supported Runtimes
+
+The operator currently reconciles three in-tree runtime kinds:
+
+- `opencode` is the default runtime and the path used by the checked-in examples and most local workflows.
+- `pi` is the supported alternative runtime and is translated into the same StatefulSet, Service, and PVC control-plane surfaces.
+- `mistral-vibe` is the supported Mistral-backed runtime bridge and is translated into the same StatefulSet, Service, and PVC control-plane surfaces.
+
 ## Architecture
 
 ```mermaid

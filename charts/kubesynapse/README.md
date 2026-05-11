@@ -16,6 +16,12 @@ helm upgrade --install kubesynapse ./charts/kubesynapse -n kubesynapse --create-
 - Local and air-gapped installs must preload `docker.io/litellm/litellm:v1.82.3-stable` alongside the platform images.
 - You should not need to run manual database bootstrap commands after a normal Helm deploy.
 
+## Runtime Support
+
+- `opencode` is the default runtime kind exposed by the chart and the path used by the checked-in examples.
+- `pi` remains the supported alternative runtime kind and is wired through the chart values and operator deployment.
+- `mistral-vibe` remains a supported runtime kind and is wired through the chart values and operator deployment.
+
 ## Key Values
 
 | Path | Description | Default |

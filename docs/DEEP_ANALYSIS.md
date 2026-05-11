@@ -11,7 +11,7 @@
 KubeSynapse is a **Kubernetes-native AI agent platform**. It treats AI agents as first-class Kubernetes resources, providing a complete control plane to build, deploy, govern, and observe AI agents inside a cluster.
 
 **Core Philosophy:**
-- **OpenCode-first runtime** — The only supported agent runtime is `opencode` (an AI CLI/server).
+- **OpenCode-default runtime family** — `opencode` is the default agent runtime, with `pi` and `mistral-vibe` also supported as active in-tree runtime paths.
 - **Everything is a CRD** — Agents, workflows, policies, approvals, evaluations, and tenants are all Kubernetes Custom Resources.
 - **File-backed configuration** — Skills, system prompts, and OpenCode config files are versioned directly in manifests.
 - **Governance by default** — Policies, HITL (human-in-the-loop), A2A routing, and guardrails are built-in, not bolted on.
@@ -393,7 +393,7 @@ Each is a separate Docker image, running as sidecars in agent pods or shared ser
 ### 9.3 Production Hardening
 
 11. **Health Checks & Readiness Probes**
-    - Gateway has `/api/health`. Add liveness/readiness probes to all chart components.
+    - Gateway has `/api/v1/health`. Add liveness/readiness probes to all chart components.
 
 12. **Graceful Shutdown**
     - Operator handles `SIGTERM`. Verify gateway and runtime also drain connections.

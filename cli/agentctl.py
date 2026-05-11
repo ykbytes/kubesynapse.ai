@@ -519,12 +519,19 @@ def snake_or_camel(payload: dict[str, Any], snake_key: str, camel_key: str, defa
     return default
 
 
-def require_explicit_opencode_runtime_kind(value: Any, field_name: str) -> str:
+def require_supported_runtime_kind(value: Any, field_name: str) -> str:
     runtime_kind = str(value or "").strip().lower()
     if not runtime_kind:
-        fatal(f"{field_name} is required and must be set to 'opencode'.")
+        fatal(f"{field_name} is required and must be set to 'opencode', 'pi', or 'mistral-vibe'.")
+    if runtime_kind not in {"opencode", "pi", "mistral-vibe"}:
+        fatal(f"{field_name} must be 'opencode', 'pi', or 'mistral-vibe'. '{runtime_kind}' is not supported.")
+    return runtime_kind
+
+
+def require_explicit_opencode_runtime_kind(value: Any, field_name: str) -> str:
+    runtime_kind = require_supported_runtime_kind(value, field_name)
     if runtime_kind != "opencode":
-        fatal(f"{field_name} must be 'opencode'. Legacy runtimes are no longer supported.")
+        fatal(f"{field_name} must be 'opencode' when applying OpenCode config overrides.")
     return runtime_kind
 
 
@@ -668,7 +675,7 @@ def agent_payload_from_detail(detail: dict[str, Any]) -> dict[str, Any]:
         "system_prompt": str(detail.get("system_prompt", "")),
         "policy_ref": detail.get("policy_ref"),
         "storage_size": detail.get("storage_size") or "1Gi",
-        "runtime_kind": require_explicit_opencode_runtime_kind(detail.get("runtime_kind"), "runtime_kind"),
+        "runtime_kind": require_supported_runtime_kind(detail.get("runtime_kind"), "runtime_kind"),
         "enable_gvisor": bool(detail.get("enable_gvisor", False)),
         "mcp_servers": normalize_list_of_strings(detail.get("mcp_servers"), "mcp_servers"),
         "mcp_sidecars": normalize_sidecars(detail.get("mcp_sidecars")),
@@ -691,19 +698,19 @@ def coerce_agent_payload(document: dict[str, Any], *, for_update: bool) -> tuple
         unsupported_runtime_blocks = [
             f"spec.runtime.{key}"
             for key in runtime
-            if key not in {"kind", "opencode"}
+            if key not in {"kind", "opencode", "pi", "mistralVibe"}
         ]
         if unsupported_runtime_blocks:
             fatal(
                 "Unsupported legacy runtime configuration blocks are present: "
-                f"{', '.join(sorted(unsupported_runtime_blocks))}. Keep only spec.runtime.kind and spec.runtime.opencode."
+                f"{', '.join(sorted(unsupported_runtime_blocks))}. Keep only spec.runtime.kind, spec.runtime.opencode, spec.runtime.pi, and spec.runtime.mistralVibe."
             )
         payload: dict[str, Any] = {
             "model": str(spec.get("model", "")),
             "system_prompt": str(spec.get("systemPrompt", "")),
             "policy_ref": spec.get("policyRef"),
             "storage_size": storage.get("size", "1Gi"),
-            "runtime_kind": require_explicit_opencode_runtime_kind(runtime.get("kind"), "spec.runtime.kind"),
+            "runtime_kind": require_supported_runtime_kind(runtime.get("kind"), "spec.runtime.kind"),
             "enable_gvisor": bool(spec.get("enableGVisor", False)),
             "mcp_servers": normalize_list_of_strings(spec.get("mcpServers"), "mcpServers"),
             "mcp_sidecars": normalize_sidecars(spec.get("mcpSidecars")),
@@ -725,7 +732,7 @@ def coerce_agent_payload(document: dict[str, Any], *, for_update: bool) -> tuple
         "system_prompt": str(snake_or_camel(payload, "system_prompt", "systemPrompt", "")),
         "policy_ref": snake_or_camel(payload, "policy_ref", "policyRef"),
         "storage_size": snake_or_camel(payload, "storage_size", "storageSize", "1Gi"),
-        "runtime_kind": require_explicit_opencode_runtime_kind(
+        "runtime_kind": require_supported_runtime_kind(
             snake_or_camel(payload, "runtime_kind", "runtimeKind"),
             "runtime_kind",
         ),

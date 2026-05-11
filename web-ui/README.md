@@ -2,6 +2,14 @@
 
 Vite + React + TypeScript frontend for the KubeSynapse API gateway.
 
+## Supported runtimes
+
+The console creates and manages agents for the three supported runtime kinds:
+
+- `opencode` is the default runtime and gets the richer config-file editing flows.
+- `pi` is the supported alternative runtime and uses the same create, edit, inspect, and invoke surfaces.
+- `mistral-vibe` is the supported Mistral-backed runtime bridge and uses the same create, edit, inspect, and invoke surfaces.
+
 ## Local development
 
 1. Copy `.env.example` to `.env.local` if you need to point at a non-default gateway.

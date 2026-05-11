@@ -23,7 +23,6 @@ Build the most **reliable, observable, and enterprise-ready** AI agent runtime p
 |-----------|--------|-------|-------|
 | opencode-runtime | ✅ Production-ready | `v2.0.0` (480MB) | All 16 endpoints working, opencode-go provider functional |
 | pi-runtime | ✅ Production-ready | `v1.x` | All Core + Session + Artifacts + Streaming tiers implemented, SSE taxonomy normalized |
-| vibe-runtime | ✅ Production-ready | `v1.x` | All 4 API tiers implemented, /cancel and /abort functional |
 | API contract | ✅ Defined | `runtime-api-spec.yaml` + `.md` | OpenAPI 3.0 spec with Core/Session/Artifacts/Streaming tiers |
 | Run Intelligence Layer | ⚠️ Shipped with follow-up backlog | — | Core trace store, runtime emission, system agents, signal watch, and analytics APIs landed; follow-up fixes are planned for connector-backed status, signal watch hardening, SDK contract parity, and `llm.call` runtime parity |
 
@@ -59,18 +58,16 @@ Build the most **reliable, observable, and enterprise-ready** AI agent runtime p
 - **Estimated:** 6h
 - **Actual:** 2h
 
-#### Story 3: vibe-runtime API Gap Closure
-- **Goal:** vibe-runtime implements all Core + Session + Artifacts tier endpoints
+#### Story 3: Supported Runtime Contract Parity
+- **Goal:** the supported in-tree runtimes stay aligned on the shared contract surface
 - **DoD:**
-  1. `/health` and `/ready` return rich responses (not bare `{"status": "ok"}`)
-  2. `GET /info`, `GET /capabilities` implemented
-  3. `/cancel` and `/abort` are functional (not no-op stubs)
-  4. `GET /artifacts/list`, `/artifacts/download`, `/artifacts/zip` implemented
-  5. Session endpoints implemented (`/todo`, `/question/*`, `/diff`, `/context-budget`)
-  6. SSE events normalized to canonical taxonomy
-  7. All endpoints return proper error responses
+  1. `opencode-runtime` and `pi-runtime` keep `GET /health`, `GET /ready`, `GET /info`, and `GET /capabilities` aligned with the published contract
+  2. Session helper endpoints remain available across both runtimes where the contract marks them supported
+  3. Artifact endpoints remain compatible with the gateway and worker download flows
+  4. SSE events keep the canonical taxonomy used by the shared trace and UI surfaces
+  5. Both runtimes return contract-compliant error bodies
 - **Assignee:** kubesynth-backend-refactorer
-- **Estimated:** 8h
+- **Estimated:** 4h
 
 #### Story 4: OpenAPI Auto-Generation ✅ COMPLETE
 - **Goal:** Every runtime serves its OpenAPI spec at `/openapi.json`
@@ -103,11 +100,10 @@ Build the most **reliable, observable, and enterprise-ready** AI agent runtime p
   1. ✅ Shared event envelope with `event_id`, `execution_id`, `session_id`, `seq`, `event_type`, `payload`, `duration_ms`, `tokens`, `cost_usd`
   2. ✅ opencode-runtime emits: `run.started`, `tool.started`, `tool.completed`, `run.completed`, `run.failed`
   3. ✅ pi-runtime emits same events mapped from Pi RPC protocol
-  4. ✅ vibe-runtime emits same events mapped from Vibe output
-  5. ✅ Worker emits workflow step events, approval events, retry events
-  6. ✅ A2A router emits `agent.call.started`, `agent.call.completed`, `agent.call.failed`
-  7. ✅ Payloads sanitized (no secrets, prompts truncated, hashes stored)
-  8. ✅ Bounded async queue with shutdown flush
+  4. ✅ Worker emits workflow step events, approval events, retry events
+  5. ✅ A2A router emits `agent.call.started`, `agent.call.completed`, `agent.call.failed`
+  6. ✅ Payloads sanitized (no secrets, prompts truncated, hashes stored)
+  7. ✅ Bounded async queue with shutdown flush
 - **Assignee:** kubesynth-backend-refactorer
 - **Estimated:** 6h
 - **Actual:** 4h

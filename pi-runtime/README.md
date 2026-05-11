@@ -8,6 +8,10 @@ The Pi runtime connects KubeSynapse agents to the [Pi](https://pi.ai) model
 backend. It exposes an Express server that translates HTTP calls into Pi RPC
 commands and returns structured responses suitable for workflow steps and chat.
 
+## Runtime Role
+
+`pi` is the supported alternative runtime in KubeSynapse. It stays wired through the CRD, gateway, operator, Helm chart, CLI, and UI as the second in-tree runtime kind beside `opencode`.
+
 ## Architecture
 
 - **`pi_bridge.js`** — Express server with the Pi RPC client, artifact endpoints,
@@ -59,3 +63,7 @@ docker pull docker.io/kubesynapse/kubesynapse-pi-rt:v0.2.13
 
 The runtime expects a PVC mounted at `/app/session`. Always clear this directory
 when the pod is recreated to avoid stale session locks.
+
+## Current Status
+
+Supported. Pi remains part of the active runtime matrix and shares the same gateway, operator, and UI surfaces as OpenCode agents.

@@ -269,8 +269,6 @@ Every runtime should emit `llm.call` whenever it has enough metadata to describe
 - `opencode-runtime/runtime_events.py`
 - `pi-runtime/pi_bridge.js`
 - `pi-runtime/runtime_events.js`
-- `vibe-runtime/main.py`
-- `vibe-runtime/runtime_events.py`
 - `api-gateway/trace_store.py` only if new payload fields need indexing or summary support
 
 ### Shared event contract

@@ -273,7 +273,7 @@ agentRuntime:
 5. **Smoke test:**
 
    ```bash
-   curl -f http://localhost:8080/api/health
+  curl -f http://localhost:8080/api/v1/health
    agentctl health
    ```
 

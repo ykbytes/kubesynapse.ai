@@ -205,6 +205,20 @@
         "env": { "type": "object" }
       }
     },
+    "mistralVibeRuntime": {
+      "type": "object",
+      "description": "Mistral Vibe agent runtime configuration",
+      "properties": {
+        "image": {
+          "type": "object",
+          "properties": {
+            "repository": { "type": "string", "default": "kubesynapse-vibe-rt" },
+            "tag": { "type": "string", "default": "v0.1.0" },
+            "pullPolicy": { "type": "string", "default": "IfNotPresent" }
+          }
+        }
+      }
+    },
     "operator": {
       "type": "object",
       "description": "kubesynapse operator settings",

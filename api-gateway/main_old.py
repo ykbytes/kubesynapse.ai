@@ -1052,7 +1052,7 @@ def normalized_runtime_kind(raw_value: str | None) -> str:
         raise ValueError("runtime kind must be explicitly set")
     if runtime_kind not in ("opencode", "pi", "mistral-vibe"):
         raise ValueError(
-            f"runtime kind must be 'opencode', 'pi', or 'mistral-vibe'; '{runtime_kind}' is no longer supported"
+            f"runtime kind must be 'opencode', 'pi', or 'mistral-vibe'; '{runtime_kind}' is not supported"
         )
     return runtime_kind
 
@@ -1560,7 +1560,7 @@ def validate_agent_runtime_compatibility(spec: dict[str, Any]) -> None:
     runtime_kind = runtime_kind_from_spec(spec)
     if runtime_kind not in ("opencode", "pi", "mistral-vibe"):
         raise HTTPException(status_code=400, detail=f"Unsupported AIAgent runtime kind '{runtime_kind}'")
-    if spec.get("githubConfig"):
+    if runtime_kind == "opencode" and spec.get("githubConfig"):
         raise HTTPException(
             status_code=400,
             detail=(

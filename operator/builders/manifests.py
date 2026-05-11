@@ -37,8 +37,6 @@ from config import (
     IMAGE_PULL_SECRETS,
     LITELLM_SVC,
     MCP_AUTH_SECRET_NAME,
-    MISTRAL_VIBE_RUNTIME_IMAGE,
-    MISTRAL_VIBE_RUNTIME_IMAGE_PULL_POLICY,
     MCP_HUB_NAMESPACE,
     MCP_SIDECAR_CATALOG,
     OPA_SIDECAR_IMAGE,
@@ -53,6 +51,8 @@ from config import (
     OPENCODE_RUNTIME_IMAGE_PULL_POLICY,
     OPERATOR_NAMESPACE,
     OTEL_ENDPOINT,
+    MISTRAL_VIBE_RUNTIME_IMAGE,
+    MISTRAL_VIBE_RUNTIME_IMAGE_PULL_POLICY,
     PI_DEFAULT_MODEL,
     PI_DEFAULT_PROVIDER,
     PI_DEFAULT_THINKING_LEVEL,
@@ -351,13 +351,13 @@ def resolve_runtime_kind(spec: dict[str, Any]) -> str:
     runtime_spec = spec.get("runtime")
     if not isinstance(runtime_spec, dict):
         raise kopf.PermanentError(
-            "AIAgent.spec.runtime.kind must be explicitly set to 'opencode' or 'pi'."
+            "AIAgent.spec.runtime.kind must be explicitly set to 'opencode', 'pi', or 'mistral-vibe'."
         )
 
     runtime_kind = str(runtime_spec.get("kind") or "").strip().lower()
     if not runtime_kind:
         raise kopf.PermanentError(
-            "AIAgent.spec.runtime.kind must be explicitly set to 'opencode' or 'pi'."
+            "AIAgent.spec.runtime.kind must be explicitly set to 'opencode', 'pi', or 'mistral-vibe'."
         )
     if runtime_kind not in SUPPORTED_RUNTIME_KINDS:
         raise kopf.PermanentError(
@@ -373,6 +373,7 @@ def validate_runtime_configuration(runtime_kind: str, spec: dict[str, Any]) -> N
     goose_spec = runtime_spec.get("goose") if isinstance(runtime_spec, dict) else None
     codex_spec = runtime_spec.get("codex") if isinstance(runtime_spec, dict) else None
     opencode_spec = runtime_spec.get("opencode") if isinstance(runtime_spec, dict) else None
+    vibe_spec = runtime_spec.get("mistralVibe") if isinstance(runtime_spec, dict) else None
     explicit_sidecars = spec.get("mcpSidecars")
     github_config = spec.get("githubConfig")
     try:
@@ -405,6 +406,8 @@ def validate_runtime_configuration(runtime_kind: str, spec: dict[str, Any]) -> N
         raise kopf.PermanentError("AIAgent.spec.runtime.codex is no longer supported. Use spec.runtime.opencode instead.")
     if opencode_spec is not None and not isinstance(opencode_spec, dict):
         raise kopf.PermanentError("AIAgent.spec.runtime.opencode must be an object when provided.")
+    if vibe_spec is not None and not isinstance(vibe_spec, dict):
+        raise kopf.PermanentError("AIAgent.spec.runtime.mistralVibe must be an object when provided.")
     try:
         parse_runtime_config_files(
             (opencode_spec or {}).get("configFiles") if isinstance(opencode_spec, dict) else None,
@@ -412,7 +415,7 @@ def validate_runtime_configuration(runtime_kind: str, spec: dict[str, Any]) -> N
         )
     except ValueError as exc:
         raise kopf.PermanentError(str(exc)) from exc
-    if spec.get("githubConfig"):
+    if runtime_kind == "opencode" and spec.get("githubConfig"):
         raise kopf.PermanentError(
             "OpenCode runtime does not support spec.githubConfig in the OpenCode-only build. Use sidecar-based GitHub MCP credentials instead."
         )

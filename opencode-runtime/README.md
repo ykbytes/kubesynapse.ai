@@ -9,6 +9,10 @@ The OpenCode runtime turns OpenCode configuration bundles into long-running
 agent pods with session persistence, checkpoint recovery, and a tiered memory
 system.
 
+## Runtime Role
+
+`opencode` is the default supported runtime in KubeSynapse. It is the primary path used by the checked-in examples, the CLI and UI OpenCode configuration flows, and the operator's default runtime wiring.
+
 ## Features
 
 - **Session Persistence** — Workspace state survives pod restarts via PVC.
@@ -37,4 +41,4 @@ The server binds to `0.0.0.0:8081` by default.
 
 ## Current Status
 
-Stable. Deployed alongside the Pi runtime as an alternative agent backend.
+Stable. This is the default in-tree runtime, with Pi supported alongside it as the secondary runtime option.

@@ -1,7 +1,7 @@
 # KubeSynapse API Gateway
 
-FastAPI monolith (~13 k lines) that exposes the public surface of KubeSynapse:
-REST APIs, A2A JSON-RPC, SSE streaming, hybrid authentication, and trace storage.
+FastAPI gateway surface for KubeSynapse: a thin application factory, modular
+routers, shared gateway core logic, hybrid authentication, and trace storage.
 
 ## Purpose
 
@@ -9,11 +9,23 @@ The gateway is the single entry point for the UI, CLI, SDKs, and external
 integrations. It handles CRUD for agents, workflows, and evaluations; invokes
 agents synchronously or via SSE; routes A2A requests; and stores execution traces.
 
+## Supported Runtimes
+
+The gateway validates and serves three runtime kinds:
+
+- `opencode` is the default runtime path used by the checked-in examples and the OpenCode config-file workflow.
+- `pi` is the supported alternative runtime and uses the same CRUD, invoke, artifact, and SSE surfaces.
+- `mistral-vibe` is the supported Mistral-backed runtime bridge and uses the same CRUD, invoke, artifact, and SSE surfaces.
+
+Only `opencode`, `pi`, and `mistral-vibe` belong to the supported request surface.
+
 ## Architecture
 
 | Module | Responsibility |
 |--------|--------------|
-| `main_old.py` | Deployed app entry point — routers, lifespan, and middleware wiring |
+| `main.py` | Deployed app entry point — app factory, middleware, and router mounting |
+| `_core.py` | Shared gateway models, runtime validation, Kubernetes helpers, and response shaping |
+| `routers/` | Modular REST route handlers for agents, workflows, evals, auth, chat, webhooks, and observability |
 | `constants.py` | Centralized defaults, feature flags, and path constants |
 | `utils.py` | Shared helpers for serialization, pagination, and request context |
 | `auth_middleware.py` | Hybrid auth: shared token, OIDC PKCE, JWT rotation, brute-force protection |
@@ -24,15 +36,15 @@ agents synchronously or via SSE; routes A2A requests; and stores execution trace
 
 | Category | Endpoints |
 |----------|-----------|
-| Health | `GET /api/health`, `GET /api/ready` |
-| Agents | `GET /api/agents`, `POST /api/agents`, `GET /api/agents/{name}`, `PATCH /api/agents/{name}`, `DELETE /api/agents/{name}` |
-| Workflows | `GET /api/workflows`, `POST /api/workflows`, `GET /api/workflows/{name}`, `PATCH /api/workflows/{name}`, `DELETE /api/workflows/{name}` |
-| Evaluations | `GET /api/evals`, `POST /api/evals`, `GET /api/evals/{name}`, `PATCH /api/evals/{name}`, `DELETE /api/evals/{name}` |
-| Invoke | `POST /api/agents/{name}/invoke`, `POST /api/agents/{name}/invoke/stream` |
-| A2A | `POST /api/a2a` — JSON-RPC routing between agents |
-| Artifacts | `GET /api/artifacts/{agent}/list`, `GET /api/artifacts/{agent}/download`, `GET /api/artifacts/{agent}/zip` |
-| Traces | `GET /api/traces`, `GET /api/traces/{run_id}`, `GET /api/traces/live` |
-| Activity | `GET /api/activity/stream` — Live SSE feed of step-level status transitions |
+| Health | `GET /api/v1/health`, `GET /api/v1/ready` |
+| Agents | `GET /api/v1/agents`, `POST /api/v1/agents`, `GET /api/v1/agents/{name}`, `PATCH /api/v1/agents/{name}`, `DELETE /api/v1/agents/{name}` |
+| Workflows | `GET /api/v1/workflows`, `POST /api/v1/workflows`, `GET /api/v1/workflows/{name}`, `PATCH /api/v1/workflows/{name}`, `DELETE /api/v1/workflows/{name}` |
+| Evaluations | `GET /api/v1/evals`, `POST /api/v1/evals`, `GET /api/v1/evals/{name}`, `PATCH /api/v1/evals/{name}`, `DELETE /api/v1/evals/{name}` |
+| Invoke | `POST /api/v1/agents/{name}/invoke`, `POST /api/v1/agents/{name}/invoke/stream` |
+| A2A | `POST /api/v1/a2a` — JSON-RPC routing between agents |
+| Artifacts | `GET /api/v1/artifacts/{agent}/list`, `GET /api/v1/artifacts/{agent}/download`, `GET /api/v1/artifacts/{agent}/zip` |
+| Traces | `GET /api/v1/traces`, `GET /api/v1/traces/{run_id}`, `GET /api/v1/traces/live` |
+| Activity | `GET /api/v1/activity/stream` — Live SSE feed of step-level status transitions |
 
 ## Authentication
 
@@ -59,7 +71,7 @@ pip install -r requirements.txt
 Run the server locally:
 
 ```bash
-uvicorn main_old:app --host 0.0.0.0 --port 8080
+uvicorn main:app --host 0.0.0.0 --port 8080
 ```
 
 ## Testing

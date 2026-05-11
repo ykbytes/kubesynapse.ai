@@ -31,9 +31,11 @@ jobs:
         run: cd api-gateway && mypy --config-file ../pyproject.toml . --ignore-missing-imports || true
       - name: Mypy opencode-runtime
         run: cd opencode-runtime && mypy --config-file ../pyproject.toml . --ignore-missing-imports || true
+      - name: Mypy vibe-runtime
+        run: cd vibe-runtime && mypy --config-file ../pyproject.toml . --ignore-missing-imports || true
       - name: SHA-1 ban check
         run: |
-          if grep -rn 'hashlib\.sha1' operator/ api-gateway/ opencode-runtime/ --include='*.py'; then
+          if grep -rn 'hashlib\.sha1' operator/ api-gateway/ opencode-runtime/ vibe-runtime/ --include='*.py'; then
             echo "ERROR: hashlib.sha1 usage found. Use sha256 instead."
             exit 1
           fi
@@ -71,15 +73,15 @@ jobs:
           else
             echo "No opencode-runtime tests found"
           fi
+      - name: Run Pi Runtime Tests
+        run: npm test --prefix pi-runtime
       - name: Run Vibe Runtime Tests
         run: |
           if [ -d vibe-runtime/tests ]; then
-            cd vibe-runtime && python -m pytest tests/ -v
+            cd vibe-runtime && python -m pytest tests/ -v --cov=. --cov-report=term-missing --cov-fail-under=30
           else
             echo "No vibe-runtime tests found"
           fi
-      - name: Run Pi Runtime Tests
-        run: npm test --prefix pi-runtime
       - name: Run Shared Runtime Contract Tests
         env:
           RUNTIME_BEARER_TOKEN: test-token
@@ -119,6 +121,7 @@ jobs:
             api-gateway/.coverage
             operator/.coverage
             opencode-runtime/.coverage
+            vibe-runtime/.coverage
 
   helm-lint:
     runs-on: ubuntu-latest
@@ -161,6 +164,11 @@ jobs:
           podman build --format docker -t ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynapse-opencode-runtime:${{ env.VERSION }} ./opencode-runtime
           podman push ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynapse-opencode-runtime:${{ env.VERSION }}
 
+      - name: Build & Push Vibe Runtime
+        run: |
+          podman build --format docker -t ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynapse-vibe-rt:${{ env.VERSION }} ./vibe-runtime
+          podman push ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynapse-vibe-rt:${{ env.VERSION }}
+
       - name: Build & Push API Gateway
         run: |
           podman build --format docker -t ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynapse-api-gateway:${{ env.VERSION }} ./api-gateway
@@ -180,6 +188,8 @@ jobs:
             --set operator.workerImage.tag=${{ env.VERSION }} \
             --set opencodeRuntime.image.repository=${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynapse-opencode-runtime \
             --set opencodeRuntime.image.tag=${{ env.VERSION }} \
+            --set mistralVibeRuntime.image.repository=${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynapse-vibe-rt \
+            --set mistralVibeRuntime.image.tag=${{ env.VERSION }} \
             --set apiGateway.image.repository=${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynapse-api-gateway \
             --set apiGateway.image.tag=${{ env.VERSION }} \
             --set webUi.image.repository=${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynapse-web-ui \

@@ -5,6 +5,7 @@ from typing import Any, cast
 
 # Re-import all shared symbols from the gateway core
 from _core import *
+from routers.chat import _LLM_PROXY_TIMEOUT, _PROVIDER_META, _litellm_headers
 from fastapi import APIRouter, Depends, HTTPException, Response
 
 router = APIRouter(tags=["llm"])

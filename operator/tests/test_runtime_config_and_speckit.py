@@ -1,4 +1,4 @@
-"""Tests for Codex runtime integration and Spec Kit workflow patterns."""
+"""Tests for runtime config parsing and Spec Kit workflow patterns."""
 
 import importlib.util
 import json
@@ -36,33 +36,32 @@ render_prompt = operator_utils.render_prompt
 validate_workflow_graph = operator_utils.validate_workflow_graph
 
 
-class CodexConfigFileTests(unittest.TestCase):
-    """Validates that parse_runtime_config_files (reused for codex) handles
-    codex-specific configFiles the same way as goose config files."""
+class RuntimeConfigFileTests(unittest.TestCase):
+    """Validates the shared runtime configFiles parser."""
 
-    def test_accepts_valid_codex_config_files(self) -> None:
+    def test_accepts_valid_runtime_config_files(self) -> None:
         parsed = parse_runtime_config_files(
             {
-                "config.yaml": {"CODEX_MODE": "auto"},
+                "config.yaml": {"OPENCODE_MODE": "auto"},
                 "prompts/system.md": "You are a helpful assistant.",
             },
-            source="AIAgent.spec.runtime.codex.configFiles",
+            source="AIAgent.spec.runtime.opencode.configFiles",
         )
-        self.assertEqual(parsed["config.yaml"], {"CODEX_MODE": "auto"})
+        self.assertEqual(parsed["config.yaml"], {"OPENCODE_MODE": "auto"})
         self.assertEqual(parsed["prompts/system.md"], "You are a helpful assistant.")
 
     def test_accepts_none_config_files(self) -> None:
         parsed = parse_runtime_config_files(
             None,
-            source="AIAgent.spec.runtime.codex.configFiles",
+            source="AIAgent.spec.runtime.opencode.configFiles",
         )
         self.assertEqual(parsed, {})
 
-    def test_rejects_secrets_yaml_in_codex_config(self) -> None:
+    def test_rejects_secrets_yaml_in_runtime_config(self) -> None:
         with self.assertRaisesRegex(ValueError, "environment variables"):
             parse_runtime_config_files(
                 {"secrets.yaml": {"API_KEY": "secret"}},
-                source="AIAgent.spec.runtime.codex.configFiles",
+                source="AIAgent.spec.runtime.opencode.configFiles",
             )
 
 

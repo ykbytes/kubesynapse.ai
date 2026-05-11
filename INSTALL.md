@@ -57,7 +57,7 @@ For the most current deployment entry points, prefer these docs first:
 
 **KubeSynapse** is a Kubernetes-native platform for deploying, governing, and orchestrating AI agents at enterprise scale. It lets you define agents, policies, multi-agent workflows, evaluation suites, and observability resources as Kubernetes custom resources while a Python operator reconciles them into running infrastructure.
 
-The current supported runtime is OpenCode. Older references in the repository to LangGraph, Goose, or Codex describe earlier architecture phases rather than the primary runtime path used by the current code.
+The current supported runtimes are OpenCode, Pi, and Mistral Vibe. Older references in the repository to LangGraph, Goose, or Codex describe earlier architecture phases rather than the primary runtime paths used by the current code.
 
 Key capabilities:
 
@@ -238,7 +238,7 @@ Expected pods once everything is ready:
 ```bash
 # API Gateway
 kubectl port-forward svc/kubesynapse-api-gateway 8080:8080
-curl http://localhost:8080/api/health
+curl http://localhost:8080/api/v1/health
 
 # Web UI (open in browser)
 kubectl port-forward svc/kubesynapse-web-ui 3000:80
@@ -422,7 +422,7 @@ Expected pods:
 kubectl port-forward svc/kubesynapse-api-gateway 8080:8080
 
 # Health check
-curl http://localhost:8080/api/health
+curl http://localhost:8080/api/v1/health
 
 # Web UI
 kubectl port-forward svc/kubesynapse-web-ui 3000:80
@@ -700,7 +700,7 @@ kubectl logs -n ai-platform -l app=operator --tail=50
 
 # API Gateway reachable
 kubectl port-forward -n ai-platform svc/kubesynapse-api-gateway 8080:8080
-curl http://localhost:8080/api/health
+curl http://localhost:8080/api/v1/health
 ```
 
 ---
@@ -1238,8 +1238,8 @@ All endpoints are prefixed with `/api` and require an `Authorization: Bearer <to
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/api/health` | Health check (always 200) |
-| `GET` | `/api/ready` | Readiness check |
+| `GET` | `/api/v1/health` | Health check (always 200) |
+| `GET` | `/api/v1/ready` | Readiness check |
 
 ### Agents
 

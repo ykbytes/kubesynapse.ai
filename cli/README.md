@@ -1,6 +1,6 @@
 # agentctl
 
-**Modern CLI for KubeSynapse** — a Kubernetes-native OpenCode-first AI agent orchestration platform.
+**Modern CLI for KubeSynapse** — a Kubernetes-native multi-runtime AI agent orchestration platform.
 
 `agentctl` provides full control over agents, workflows, evaluations, policies, approvals, credentials, authentication, and the skills catalog from the terminal.
 

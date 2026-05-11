@@ -1,6 +1,6 @@
 # KubeSynapse Implementation Walkthrough
 
-This document is a current implementation walkthrough of the platform that exists in this repository today. It replaces the earlier multi-runtime narrative with the actual OpenCode-first architecture, current operator model, and the new observability surfaces now shipped in the chart and UI.
+This document is a current implementation walkthrough of the platform that exists in this repository today. It replaces the earlier stale runtime narrative with the current multi-runtime architecture, operator model, and observability surfaces now shipped in the chart and UI.
 
 ## Platform Snapshot
 
@@ -8,7 +8,7 @@ As of April 2026, the shipped platform is centered on these paths:
 
 - `AIAgent`, `AgentPolicy`, `AgentWorkflow`, `AgentEval`, `AgentApproval`, and `AgentTenant` remain the core control-plane CRDs
 - `ConnectorPlugin`, `ObservationTarget`, `ObservationPolicy`, and `ObservationReport` extend the control plane with an observability model
-- the runtime surface is now OpenCode-only: `runtime.kind: opencode`
+- the runtime surface supports the three in-tree runtime kinds exposed by the CRD: `opencode`, `pi`, and `mistral-vibe`
 - the operator provisions singleton runtime sandboxes and worker Jobs from Kubernetes resources instead of maintaining an external workflow service
 - the gateway owns auth, CRUD, invoke, session persistence, memory persistence, and MCP connection management
 - the web UI exposes agents, chat, workflows, evaluations, MCP management, intelligence, and observability
@@ -27,7 +27,7 @@ What the chart installs now:
 
 Important current chart characteristics:
 
-- OpenCode is the only runtime the CRD allows
+- the CRD allows OpenCode, Pi, and Mistral Vibe runtime kinds, each with its own nested runtime config block
 - bundled MCP sidecars are still defined in values for per-agent local tools
 - the chart includes both shared MCP hub servers and structured MCP connection support
 - published-image installs use `deploy/values.cluster.example.yaml`, while local image development starts from `deploy/values.local-images.example.yaml`
@@ -51,9 +51,9 @@ Notable implementation changes relative to the old docs:
 - observability is implemented in `operator/controllers/observation_controller.py`
 - workflow execution state is more artifact-oriented than before, with status holding summaries and references instead of full payload blobs
 
-## 3. Runtime Path: OpenCode Only
+## 3. Runtime Paths
 
-The old LangGraph, Goose, and Codex runtime paths are no longer the active architecture described by this repository. The supported runtime is now the OpenCode runtime under `opencode-runtime/`.
+The old LangGraph, Goose, and Codex runtime paths are no longer the active architecture described by this repository. The supported in-tree runtimes are OpenCode under `opencode-runtime/`, Pi under `pi-runtime/`, and Mistral Vibe under `vibe-runtime/`.
 
 What the runtime does today:
 
