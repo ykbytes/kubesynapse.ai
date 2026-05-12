@@ -14,6 +14,7 @@ Each issue follows this pattern: **Symptoms -> Diagnosis -> Fix -> Prevention**
 - [A2A Delegation Fails](#a2a-delegation-fails)
 - [LLM Calls Timeout](#llm-calls-timeout)
 - [Web UI Not Loading](#web-ui-not-loading)
+- [Settings Page Shows "Failed to Load Providers"](#settings-page-shows-failed-to-load-providers)
 - [Database Connection Failures](#database-connection-failures)
 - [Workflow Eval Failures](#workflow-eval-failures)
 - [Auth and OIDC Issues](#auth-and-oidc-issues)
@@ -413,6 +414,65 @@ kubectl logs -n ingress-nginx deployment/ingress-nginx-controller
 - Pin web-ui image tags in values files
 - Test CORS configuration in staging before production
 - Use health-check endpoints in ingress backend rules
+
+---
+
+## Settings Page Shows "Failed to Load Providers"
+
+### Symptoms
+
+- The Settings workspace shows a toast with `Failed to load providers`
+- The provider list stays empty even though the gateway and web UI are otherwise reachable
+- Direct calls to `/api/v1/providers` return `500 Internal Server Error`
+
+### Diagnosis
+
+```bash
+# Confirm the provider registry endpoint that powers Settings
+curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/v1/providers
+
+# Check the adjacent provider endpoints used by the settings workspace
+curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/v1/providers/catalog
+curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/v1/llm/providers
+
+# Inspect gateway logs for router traceback details
+kubectl logs -n kubesynapse deployment/kubesynapse-api-gateway --tail=200
+```
+
+Common causes:
+
+| Cause | Indicator |
+|-------|-----------|
+| **Gateway split-router import drift** | Traceback shows `NameError` for `_provider_registry_response` or another provider helper in `api-gateway/routers/llm.py` |
+| **Stale gateway image** | Source includes the provider helper imports but the running deployment still returns `500` |
+| **Auth/token mismatch** | Endpoint returns `401` or `403` instead of provider JSON |
+
+### Fix
+
+**Gateway split-router import drift:**
+
+```bash
+# Rebuild and redeploy the api-gateway image after restoring the missing imports in api-gateway/routers/llm.py
+podman build -t docker.io/kubesynapse/kubesynapse-api-gateway:<tag> -f api-gateway/Dockerfile api-gateway
+minikube image load docker.io/kubesynapse/kubesynapse-api-gateway:<tag> -p <profile>
+helm upgrade --install kubesynapse ./charts/kubesynapse -n kubesynapse \
+  -f deploy/values.kind.yaml \
+  --set apiGateway.image.tag=<tag>
+```
+
+**Stale gateway image:**
+
+```bash
+# Roll the updated gateway deployment and verify the live endpoint before reloading the UI
+kubectl rollout status deployment/kubesynapse-api-gateway -n kubesynapse --timeout=300s
+curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/v1/providers
+```
+
+### Prevention
+
+- When extracting gateway routes, re-import every shared helper and request model used by the new router module.
+- Verify `/api/v1/providers`, `/api/v1/providers/catalog`, and `/api/v1/llm/providers` after gateway refactors before publishing a new image.
+- Prefer fresh image tags for local redeploys so the cluster does not keep serving an older gateway build.
 
 ---
 

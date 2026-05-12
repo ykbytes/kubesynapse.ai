@@ -935,19 +935,19 @@ Create or update a key.
 
 #### `GET /api/v1/llm/providers`
 
-List LLM providers.
+List LiteLLM-backed providers grouped with configured model deployments for the Settings workspace.
 
 #### `GET /api/v1/providers`
 
-List provider configurations.
+List built-in and custom provider configurations for the provider registry shown in Settings.
 
 #### `GET /api/v1/providers/catalog`
 
-Get provider catalog.
+Get the flattened provider and model catalog used by provider and model pickers.
 
 #### `PUT /api/v1/providers/{provider_id}/credentials`
 
-Update provider credentials.
+Create or update stored credentials for a provider entry.
 
 ---
 

@@ -118,6 +118,7 @@ The UI is built around the same production surfaces exposed by the API gateway a
 
 - The admin workspace exposes user management, audit logs, usage and cost reporting, and a system health dashboard.
 - The settings workspace is provider-centric: operators search providers on the left and manage API keys and enabled models in a focused detail pane on the right.
+- The Settings provider list is backed by `/api/v1/providers`, with model and catalog detail coming from `/api/v1/llm/providers` and `/api/v1/providers/catalog`. If Settings toasts `Failed to load providers`, verify those gateway endpoints before debugging the frontend.
 - The catalog workspace opens on `MCP` first for connection and registry management, with reusable skill bundles on the `Skills` tab.
 - The intelligence workspace opens on `Observatory` first for run tracing, with collector and alert workflows on the `Intelligence` tab.
 - The workflow composer includes conditional and loop step editing, live execution state, inline approvals, and recent run history.
