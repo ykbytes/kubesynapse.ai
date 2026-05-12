@@ -242,7 +242,7 @@ export interface AgentInfo {
   runtime_kind?: RuntimeKind;
 }
 
-export type WorkspaceView = "agents" | "chat" | "workflows" | "evals" | "catalog" | "composer" | "policies" | "intelligence" | "mcp" | "settings" | "admin" | "observatory" | "docs" | "webhooks";
+export type WorkspaceView = "agents" | "chat" | "workflows" | "evals" | "catalog" | "composer" | "policies" | "intelligence" | "settings" | "admin" | "docs" | "webhooks";
 
 /* ── LLM Provider types ── */
 

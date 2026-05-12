@@ -5,6 +5,7 @@ from typing import Any, cast
 
 # Re-import all shared symbols from the gateway core
 from _core import *
+import routers.auth as auth_router
 from routers.auth import (
     MCP_HUB_SERVERS,
     MCP_PROFILES,
@@ -27,7 +28,7 @@ def get_skills_catalog(
     user=Depends(verify_token),
 ) -> list[dict[str, Any]]:
     del user
-    catalog = _load_skills_catalog()
+    catalog = auth_router._load_skills_catalog()
     results = catalog
 
     if category:
@@ -68,9 +69,8 @@ def refresh_skills_catalog(
 ) -> dict[str, Any]:
     """Invalidate the in-memory skills catalog cache so the next read reloads from disk."""
     del user
-    global _SKILLS_CATALOG_CACHE
-    _SKILLS_CATALOG_CACHE = None
-    reloaded = _load_skills_catalog()
+    auth_router._SKILLS_CATALOG_CACHE = None
+    reloaded = auth_router._load_skills_catalog()
     return {"refreshed": True, "count": len(reloaded)}
 
 
@@ -80,7 +80,7 @@ def get_skill_detail(
     user=Depends(verify_token),
 ) -> dict[str, Any]:
     del user
-    catalog = _load_skills_catalog()
+    catalog = auth_router._load_skills_catalog()
     for s in catalog:
         if s.get("id") == skill_id:
             return s

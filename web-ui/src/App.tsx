@@ -28,16 +28,14 @@ const CreateAgentPanel = lazy(() => import("./components/CreateAgentPanel").then
 const ConfirmDialog = lazy(() => import("./components/ConfirmDialog").then((m) => ({ default: m.ConfirmDialog })));
 const EvalManager = lazy(() => import("./components/EvalManager").then((m) => ({ default: m.EvalManager })));
 const PolicyEditor = lazy(() => import("./components/PolicyEditor").then((m) => ({ default: m.PolicyEditor })));
+const CatalogPanel = lazy(() => import("./components/CatalogPanel").then((m) => ({ default: m.CatalogPanel })));
 import { AgentInspectorDrawer, ResourceInspectorDrawer } from "./components/InspectorDrawer";
 const SettingsPanel = lazy(() => import("./components/SettingsPanel").then((m) => ({ default: m.SettingsPanel })));
-const SkillsCatalogPanel = lazy(() => import("./components/SkillsCatalogPanel").then((m) => ({ default: m.SkillsCatalogPanel })));
 const TopBar = lazy(() => import("./components/TopBar").then((m) => ({ default: m.TopBar })));
 const CommandPalette = lazy(() => import("./components/CommandPalette").then((m) => ({ default: m.CommandPalette })));
 const MobileNav = lazy(() => import("./components/MobileNav").then((m) => ({ default: m.MobileNav })));
 const WorkflowManager = lazy(() => import("./components/WorkflowManager").then((m) => ({ default: m.WorkflowManager })));
-const IntelligenceDashboard = lazy(() => import("./components/IntelligenceDashboard").then((m) => ({ default: m.IntelligenceDashboard })));
-const McpManagementPanel = lazy(() => import("./components/McpManagementPanel").then((m) => ({ default: m.McpManagementPanel })));
-const ExecutionObservatory = lazy(() => import("./components/ExecutionObservatory").then((m) => ({ default: m.ExecutionObservatory })));
+const IntelligencePanel = lazy(() => import("./components/IntelligencePanel").then((m) => ({ default: m.IntelligencePanel })));
 const DocumentationPanel = lazy(() => import("./components/DocumentationPanel").then((m) => ({ default: m.DocumentationPanel })));
 const EventTriggersPanel = lazy(() => import("./components/EventTriggersPanel").then((m) => ({ default: m.EventTriggersPanel })));
 import { Button } from "@/components/ui/button";
@@ -54,8 +52,8 @@ import { ChatProvider, useChat } from "./contexts/ChatContext";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import { NotificationProvider } from "./contexts/NotificationContext";
 
-import type { EvalInfo, ExecutionListItem, UiMessage, WorkflowInfo, WorkspaceView } from "./types";
-import { cloneAgent, deleteExecution, downloadAgentArtifact, downloadAgentArtifactZip, exportBundleUrl, importBundle, listAgentArtifacts, listExecutions, previewAgentArtifact } from "./lib/api";
+import type { EvalInfo, UiMessage, WorkflowInfo, WorkspaceView } from "./types";
+import { cloneAgent, downloadAgentArtifact, downloadAgentArtifactZip, exportBundleUrl, importBundle, listAgentArtifacts, previewAgentArtifact } from "./lib/api";
 import { toast } from "sonner";
 
 // ── Pure utility functions ──
@@ -96,26 +94,6 @@ function evalStatusFromResource(resource: EvalInfo | null): Record<string, unkno
 
 function supportsInspector(view: WorkspaceView): boolean {
   return view === "agents" || view === "chat" || view === "workflows" || view === "composer" || view === "evals";
-}
-
-function formatDuration(ms?: number | null): string {
-  if (ms == null || !Number.isFinite(ms)) return "—";
-  if (ms < 1000) return `${Math.round(ms)} ms`;
-  const seconds = ms / 1000;
-  if (seconds < 60) return `${seconds.toFixed(1)} s`;
-  const minutes = Math.floor(seconds / 60);
-  const rem = Math.round(seconds % 60);
-  return `${minutes}m ${rem}s`;
-}
-
-function executionToSidebarItem(e: ExecutionListItem): import("./components/AppSidebar").SidebarResourceItem {
-  return {
-    id: e.id,
-    title: e.workflow_name,
-    subtitle: e.agent_name || e.run_id || "",
-    status: e.status,
-    note: `${e.step_count} steps · ${formatDuration(e.duration_ms)}`,
-  };
 }
 
 // ── NotificationShell — NotificationProvider needs Connection values ──
@@ -218,38 +196,12 @@ function AppLayout() {
   const [showAuth, setShowAuth] = useState(false);
   const inspectorSupported = supportsInspector(ws.activeView);
 
-  // ── Observatory sidebar state ──
-  const [observatoryItems, setObservatoryItems] = useState<ExecutionListItem[]>([]);
-  const [observatorySelectedId, setObservatorySelectedId] = useState<string | null>(null);
-  const [observatoryLoading, setObservatoryLoading] = useState(false);
-
   // ⚠️  All hooks must be declared BEFORE any conditional returns (Rules of Hooks)
   useEffect(() => {
     if (!inspectorSupported && ws.inspectorOpen) {
       ws.setInspectorOpen(false);
     }
   }, [inspectorSupported, ws.inspectorOpen, ws.setInspectorOpen]);
-
-  // Fetch executions for Observatory sidebar
-  useEffect(() => {
-    if (ws.activeView !== "observatory") return;
-    let cancelled = false;
-    setObservatoryLoading(true);
-    listExecutions(conn.token, conn.namespace, { limit: 200 })
-      .then((result) => {
-        if (cancelled) return;
-        setObservatoryItems(result.items);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        toast.error("Failed to load executions");
-      })
-      .finally(() => {
-        if (cancelled) return;
-        setObservatoryLoading(false);
-      });
-    return () => { cancelled = true; };
-  }, [ws.activeView, conn.token, conn.namespace]);
 
   const handleSidebarDeleteRequest = useCallback((id: string) => {
     setSidebarDeleteTarget({ id, view: ws.activeView });
@@ -264,6 +216,12 @@ function AppLayout() {
     if (view === "chat") {
       handleOpenChatView();
       return;
+    }
+    if (view === "catalog") {
+      ws.setCatalogTab("mcp");
+    }
+    if (view === "intelligence") {
+      ws.setIntelligenceTab("observatory");
     }
     ws.setActiveView(view);
   }, [handleOpenChatView, ws]);
@@ -393,7 +351,7 @@ function AppLayout() {
           : ws.activeView === "catalog"
             ? {
                 title: "Catalog",
-                description: "Browse reusable skills, templates, and MCP-ready building blocks.",
+                description: "Browse reusable skills and manage MCP integrations from one catalog workspace.",
               }
             : ws.activeView === "policies"
               ? {
@@ -403,13 +361,8 @@ function AppLayout() {
               : ws.activeView === "intelligence"
                 ? {
                     title: "Intelligence",
-                    description: "Collect read-only cluster intelligence and attach that context to agents.",
+                    description: "Collect cluster intelligence and inspect execution traces from one observability workspace.",
                   }
-                : ws.activeView === "mcp"
-                  ? {
-                      title: "MCP Servers",
-                      description: "Discover, configure, and manage Model Context Protocol integrations across remote, hub, and sidecar transports.",
-                    }
                   : ws.activeView === "settings"
                   ? {
                       title: "Settings",
@@ -420,11 +373,6 @@ function AppLayout() {
                         title: "Admin",
                         description: "Inspect users, audit activity, usage, and platform health.",
                       }
-                    : ws.activeView === "observatory"
-                      ? {
-                          title: "Observatory",
-                          description: "Inspect, replay, and compare workflow execution traces.",
-                        }
                       : ws.activeView === "docs"
                         ? {
                             title: "Documentation",
@@ -500,29 +448,15 @@ function AppLayout() {
               collapsed={ws.sidebarCollapsed}
               onToggleCollapse={() => ws.setSidebarCollapsed((prev) => !prev)}
               activeView={ws.activeView}
-              counts={ws.activeView === "observatory" ? { ...ws.sidebarCounts, observatory: observatoryItems.length } : ws.sidebarCounts}
-              items={ws.activeView === "observatory" ? observatoryItems.map(executionToSidebarItem) : ws.sidebarItems}
-              selectedId={ws.activeView === "observatory" ? (observatorySelectedId ?? "") : ws.sidebarSelectedId}
-              loading={ws.activeView === "observatory" ? observatoryLoading : ws.catalogLoading}
-              emptyMessage={ws.activeView === "observatory" ? "No executions recorded yet." : ws.emptySidebarMessage}
+              counts={ws.sidebarCounts}
+              items={ws.sidebarItems}
+              selectedId={ws.sidebarSelectedId}
+              loading={ws.catalogLoading}
+              emptyMessage={ws.emptySidebarMessage}
               isAdmin={conn.isAdmin}
               onViewChange={handleWorkspaceViewChange}
-              onRefresh={
-                ws.activeView === "observatory"
-                  ? () => {
-                      setObservatoryLoading(true);
-                      listExecutions(conn.token, conn.namespace, { limit: 200 })
-                        .then((result) => setObservatoryItems(result.items))
-                        .catch(() => toast.error("Failed to load executions"))
-                        .finally(() => setObservatoryLoading(false));
-                    }
-                  : () => void ws.refreshWorkspaceData({ silent: false })
-              }
-              onSelect={
-                ws.activeView === "observatory"
-                  ? (id) => setObservatorySelectedId(id)
-                  : ws.handleSelectResource
-              }
+              onRefresh={() => void ws.refreshWorkspaceData({ silent: false })}
+              onSelect={ws.handleSelectResource}
               onCreateNew={ws.handleCreateNew}
               onQuickRun={
                 ws.activeView === "agents"
@@ -545,16 +479,6 @@ function AppLayout() {
               onDeleteItem={
                 ws.activeView === "agents" || ws.activeView === "chat" || ws.activeView === "workflows" || ws.activeView === "composer" || ws.activeView === "evals"
                   ? handleSidebarDeleteRequest
-                  : ws.activeView === "observatory"
-                    ? (id) => {
-                        deleteExecution(conn.token, id)
-                          .then(() => {
-                            toast.success("Execution deleted");
-                            setObservatoryItems((prev) => prev.filter((e) => e.id !== id));
-                            if (observatorySelectedId === id) setObservatorySelectedId(null);
-                          })
-                          .catch(() => toast.error("Failed to delete execution"));
-                      }
                     : undefined
               }
             />
@@ -825,8 +749,11 @@ function AppLayout() {
             </Suspense>
           ) : ws.activeView === "catalog" ? (
             <ContentShell>
-              <SkillsCatalogPanel
+              <CatalogPanel
                 token={conn.token}
+                namespace={conn.namespace}
+                activeTab={ws.catalogTab}
+                onTabChange={ws.setCatalogTab}
                 onAttachSkill={(_skillId, files) => {
                   const newDrafts = Object.entries(files).map(([path, content]) => ({
                     id: createId(),
@@ -838,13 +765,6 @@ function AppLayout() {
                   ws.setActiveView("agents");
                   toast.success("Skill files added to the new agent form");
                 }}
-                onAttachTool={(toolId) => {
-                  const prev = ws.createAgentMcpSidecarsText.trim();
-                  ws.setCreateAgentMcpSidecarsText(prev ? `${prev}, ${toolId}` : toolId);
-                  ws.setAgentCreateMode(true);
-                  ws.setActiveView("agents");
-                  toast.success(`MCP sidecar "${toolId}" added to the new agent form`);
-                }}
               />
             </ContentShell>
           ) : ws.activeView === "policies" ? (
@@ -853,11 +773,7 @@ function AppLayout() {
             </ContentShell>
           ) : ws.activeView === "intelligence" ? (
             <ContentShell>
-              <IntelligenceDashboard />
-            </ContentShell>
-          ) : ws.activeView === "mcp" ? (
-            <ContentShell>
-              <McpManagementPanel token={conn.token} namespace={conn.namespace} />
+              <IntelligencePanel activeTab={ws.intelligenceTab} onTabChange={ws.setIntelligenceTab} />
             </ContentShell>
           ) : ws.activeView === "settings" ? (
             <ContentShell>
@@ -892,10 +808,6 @@ function AppLayout() {
                   </ContentShell>
                 </TabsContent>
               </Tabs>
-          ) : ws.activeView === "observatory" ? (
-            <ContentShell>
-              <ExecutionObservatory selectedExecutionId={observatorySelectedId} sidebarMode={true} />
-            </ContentShell>
           ) : ws.activeView === "docs" ? (
             <ContentShell>
               <DocumentationPanel />

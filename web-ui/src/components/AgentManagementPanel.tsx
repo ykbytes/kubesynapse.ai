@@ -576,7 +576,8 @@ export function AgentManagementPanel({
 
   function handleOpenMcpManagement() {
     ws.setAgentCreateMode(false);
-    ws.setActiveView("mcp");
+    ws.setCatalogTab("mcp");
+    ws.setActiveView("catalog");
     setCatalogError("");
   }
 

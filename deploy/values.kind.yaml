@@ -1,13 +1,13 @@
 # kubesynapse — Kind/Local Kubernetes Deployment Values
 # 
 # Usage:
-#   kind load docker-image kubesynapse/kubesynapse-api-gateway:v2.1.0-run-intelligence --name desktop
-#   kind load docker-image kubesynapse/kubesynapse-web-ui:v2.1.0-run-intelligence --name desktop
-#   kind load docker-image kubesynapse/kubesynapse-operator:v2.1.0-run-intelligence --name desktop
-#   kind load docker-image kubesynapse/kubesynapse-opencode-rt:v2.1.0-run-intelligence --name desktop
-#   kind load docker-image kubesynapse/kubesynapse-pi-rt:v2.1.0-run-intelligence --name desktop
-#   kind load docker-image kubesynapse/kubesynapse-vibe-rt:v2.1.0-run-intelligence --name desktop
-#   kind load docker-image litellm/litellm:v1.82.3-stable --name desktop
+#   kind load docker-image docker.io/kubesynapse/kubesynapse-api-gateway:v2.1.0-run-intelligence --name desktop
+#   kind load docker-image docker.io/kubesynapse/kubesynapse-web-ui:v2.1.0-run-intelligence --name desktop
+#   kind load docker-image docker.io/kubesynapse/kubesynapse-operator:v2.1.0-run-intelligence --name desktop
+#   kind load docker-image docker.io/kubesynapse/kubesynapse-opencode-rt:v2.1.0-run-intelligence --name desktop
+#   kind load docker-image docker.io/kubesynapse/kubesynapse-pi-rt:v2.1.0-run-intelligence --name desktop
+#   kind load docker-image docker.io/kubesynapse/kubesynapse-vibe-rt:v2.1.0-run-intelligence --name desktop
+#   kind load docker-image docker.io/litellm/litellm:v1.82.3-stable --name desktop
 #   helm upgrade --install kubesynapse ./charts/kubesynapse -n kubesynapse --create-namespace -f deploy/values.kind.yaml
 
 global:
@@ -21,11 +21,11 @@ operator:
   enabled: true
   replicaCount: 1
   image:
-    repository: kubesynapse/kubesynapse-operator
+    repository: docker.io/kubesynapse/kubesynapse-operator
     tag: v2.1.0-run-intelligence
     pullPolicy: Never
   workerImage:
-    repository: kubesynapse/kubesynapse-operator
+    repository: docker.io/kubesynapse/kubesynapse-operator
     tag: v2.1.0-run-intelligence
     pullPolicy: Never
   resources:
@@ -58,7 +58,7 @@ apiGateway:
   enabled: true
   replicaCount: 1
   image:
-    repository: kubesynapse/kubesynapse-api-gateway
+    repository: docker.io/kubesynapse/kubesynapse-api-gateway
     tag: v2.1.0-run-intelligence
     pullPolicy: Never
   ingress:
@@ -82,7 +82,7 @@ webUi:
   enabled: true
   replicaCount: 1
   image:
-    repository: kubesynapse/kubesynapse-web-ui
+    repository: docker.io/kubesynapse/kubesynapse-web-ui
     tag: v2.1.0-run-intelligence
     pullPolicy: Never
   service:
@@ -100,7 +100,7 @@ webUi:
 
 opencodeRuntime:
   image:
-    repository: kubesynapse/kubesynapse-opencode-rt
+    repository: docker.io/kubesynapse/kubesynapse-opencode-rt
     tag: v2.1.0-run-intelligence
     pullPolicy: Never
   provider: litellm
@@ -121,7 +121,7 @@ opencodeRuntime:
 
 piRuntime:
   image:
-    repository: kubesynapse/kubesynapse-pi-rt
+    repository: docker.io/kubesynapse/kubesynapse-pi-rt
     tag: v2.1.0-run-intelligence
     pullPolicy: Never
   provider: ""
@@ -134,7 +134,7 @@ piRuntime:
 
 mistralVibeRuntime:
   image:
-    repository: kubesynapse/kubesynapse-vibe-rt
+    repository: docker.io/kubesynapse/kubesynapse-vibe-rt
     tag: v2.1.0-run-intelligence
     pullPolicy: Never
 
@@ -144,7 +144,7 @@ mistralVibeRuntime:
 postgresql:
   enabled: true
   image:
-    repository: postgres
+    repository: docker.io/postgres
     tag: 16-alpine
     pullPolicy: IfNotPresent
   persistence:
@@ -161,7 +161,7 @@ postgresql:
 redis:
   enabled: true
   image:
-    repository: redis
+    repository: docker.io/redis
     tag: 7-alpine
     pullPolicy: IfNotPresent
   persistence:
@@ -177,7 +177,7 @@ redis:
 qdrant:
   enabled: true
   image:
-    repository: qdrant/qdrant
+    repository: docker.io/qdrant/qdrant
     tag: v1.7.4
     pullPolicy: IfNotPresent
   resources:
@@ -191,7 +191,7 @@ qdrant:
 nats:
   enabled: true
   image:
-    repository: nats
+    repository: docker.io/nats
     tag: 2.10-alpine
     pullPolicy: IfNotPresent
   resources:
@@ -205,7 +205,7 @@ nats:
 litellm:
   enabled: true
   image:
-    repository: litellm/litellm
+    repository: docker.io/litellm/litellm
     tag: v1.82.3-stable
     pullPolicy: Never
   replicaCount: 1

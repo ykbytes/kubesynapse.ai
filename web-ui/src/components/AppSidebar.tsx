@@ -1,4 +1,4 @@
-import { Activity, BookOpen, Bot, GitBranch, FlaskConical, Inbox, MessageSquare, Package, Play, Plug, Plus, Radar, RefreshCw, PanelLeftClose, PanelLeft, Search, Blocks, Settings, ShieldCheck, ShieldAlert, Trash2, Webhook } from "lucide-react";
+import { BookOpen, Bot, GitBranch, FlaskConical, Inbox, MessageSquare, Package, Play, Plus, Radar, RefreshCw, PanelLeftClose, PanelLeft, Search, Blocks, Settings, ShieldCheck, ShieldAlert, Trash2, Webhook } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AgentVisualSignals } from "@/lib/agentSignals";
 import { cn } from "@/lib/utils";
@@ -48,10 +48,8 @@ const VIEW_META: Record<WorkspaceView, { label: string; icon: typeof Bot }> = {
   catalog: { label: "Catalog", icon: Package },
   policies: { label: "Policies", icon: ShieldAlert },
   intelligence: { label: "Intelligence", icon: Radar },
-  mcp: { label: "MCP Servers", icon: Plug },
   settings: { label: "Settings", icon: Settings },
   admin: { label: "Admin", icon: ShieldCheck },
-  observatory: { label: "Execution Observatory", icon: Activity },
   docs: { label: "Documentation", icon: BookOpen },
   webhooks: { label: "Webhooks", icon: Webhook },
 };

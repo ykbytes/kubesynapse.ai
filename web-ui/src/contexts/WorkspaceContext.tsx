@@ -113,6 +113,10 @@ export interface WorkspaceContextValue {
   setInspectorOpen: (open: boolean) => void;
   agentViewTab: "config" | "chat";
   setAgentViewTab: (tab: "config" | "chat") => void;
+  catalogTab: "skills" | "mcp";
+  setCatalogTab: (tab: "skills" | "mcp") => void;
+  intelligenceTab: "intelligence" | "observatory";
+  setIntelligenceTab: (tab: "intelligence" | "observatory") => void;
   configPanelCollapsed: boolean;
   setConfigPanelCollapsed: (collapsed: boolean) => void;
   chatFocused: boolean;
@@ -264,6 +268,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [agentViewTab, setAgentViewTab] = useState<"config" | "chat">("chat");
+  const [catalogTab, setCatalogTab] = useState<"skills" | "mcp">("mcp");
+  const [intelligenceTab, setIntelligenceTab] = useState<"intelligence" | "observatory">("observatory");
   const [configPanelCollapsed, setConfigPanelCollapsed] = useState(false);
   const [chatFocused, setChatFocused] = useState(false);
   const [observatoryFocus, setObservatoryFocus] = useState<{
@@ -324,10 +330,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     catalog: 0,
     policies: policies.length,
     intelligence: 0,
-    mcp: 0,
     settings: 0,
     admin: 0,
-    observatory: 0,
     docs: 0,
     webhooks: 0,
   }), [agents.length, workflows.length, evals.length, policies.length]);
@@ -363,9 +367,9 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       : activeView === "workflows" || activeView === "composer"
         ? `No workflows are defined in namespace '${namespace}'. Create one to orchestrate agent steps.`
         : activeView === "catalog"
-          ? "Browse the catalog in the main panel."
-          : activeView === "mcp"
-            ? "Browse and manage MCP server integrations in the main panel."
+          ? "Browse skills and MCP integrations in the main panel."
+          : activeView === "intelligence"
+            ? "Browse cluster intelligence and execution observability in the main panel."
             : activeView === "settings"
             ? "Manage LLM providers and API keys."
             : activeView === "admin"
@@ -867,11 +871,22 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
 
     if (view === "policies") {
       setSelectedPolicyName(name ?? "");
+      return;
+    }
+
+    if (view === "catalog") {
+      setCatalogTab("mcp");
+      return;
+    }
+
+    if (view === "intelligence") {
+      setIntelligenceTab("observatory");
     }
   }, []);
 
   const openObservatoryForWorkflowRun = useCallback((workflowName: string, runId?: string | null) => {
-    setActiveView("observatory");
+    setIntelligenceTab("observatory");
+    setActiveView("intelligence");
     setInspectorOpen(false);
     setObservatoryFocus({ workflowName, runId: runId ?? null, requestedAt: Date.now() });
   }, []);
@@ -888,7 +903,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     catalogLoading, workspaceError, setWorkspaceError, agentManageError, setAgentManageError, workflowError, evalError,
     discoverablePeers, discoveryLoading, discoveryError,
     savingAgent, deletingAgent, isCreatingAgent, savingWorkflow, deletingWorkflow, runningWorkflow, cancellingWorkflow, retryingWorkflow, savingEval, deletingEval,
-    sidebarCollapsed, setSidebarCollapsed, inspectorOpen, setInspectorOpen, agentViewTab, setAgentViewTab, configPanelCollapsed, setConfigPanelCollapsed, chatFocused, setChatFocused,
+    sidebarCollapsed, setSidebarCollapsed, inspectorOpen, setInspectorOpen, agentViewTab, setAgentViewTab, catalogTab, setCatalogTab, intelligenceTab, setIntelligenceTab, configPanelCollapsed, setConfigPanelCollapsed, chatFocused, setChatFocused,
     createAgentName, createAgentModel, createAgentSystemPrompt, createAgentRuntimeKind, createAgentMcpConnectionIds,
     createAgentMcpServersText, createAgentMcpSidecarsText, createAgentA2AAllowedCallersText,
     createAgentSkillFileDrafts, createAgentOpenCodeConfigFileDrafts, createAgentGitForm, createAgentGitHubForm, createError,
@@ -906,7 +921,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     catalogLoading, workspaceError, agentManageError, workflowError, evalError,
     discoverablePeers, discoveryLoading, discoveryError,
     savingAgent, deletingAgent, isCreatingAgent, savingWorkflow, deletingWorkflow, runningWorkflow, cancellingWorkflow, retryingWorkflow, savingEval, deletingEval,
-    sidebarCollapsed, inspectorOpen, agentViewTab, configPanelCollapsed, chatFocused,
+    sidebarCollapsed, inspectorOpen, agentViewTab, catalogTab, intelligenceTab, configPanelCollapsed, chatFocused,
     createAgentName, createAgentModel, createAgentSystemPrompt, createAgentRuntimeKind, createAgentMcpConnectionIds,
     createAgentMcpServersText, createAgentMcpSidecarsText, createAgentA2AAllowedCallersText,
     createAgentSkillFileDrafts, createAgentOpenCodeConfigFileDrafts, createAgentGitForm, createAgentGitHubForm, createError,

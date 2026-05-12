@@ -8,6 +8,15 @@ Main platform Helm chart for deploying KubeSynapse on Kubernetes.
 helm upgrade --install kubesynapse ./charts/kubesynapse -n kubesynapse --create-namespace
 ```
 
+The chart leaves the browsable Skills catalog empty unless you provide catalog JSON. To populate the `Catalog > Skills` tab during install or upgrade, pass the checked-in catalog file:
+
+```bash
+helm upgrade --install kubesynapse ./charts/kubesynapse \
+	-n kubesynapse \
+	--create-namespace \
+	--set-file skillsCatalog.catalogJson=catalog/skills-catalog.json
+```
+
 ## Bootstrap Behavior
 
 - LiteLLM schema initialization is automatic.
@@ -30,6 +39,7 @@ helm upgrade --install kubesynapse ./charts/kubesynapse -n kubesynapse --create-
 | `image.tag` | Image tag for all components | `v1.0.0` |
 | `apiGateway.sharedToken` | Bearer token for dev/test auth | `change-me` |
 | `apiGateway.authMode` | `shared_token`, `oidc`, or `saml` | `shared_token` |
+| `skillsCatalog.catalogJson` | JSON payload served to the `Catalog > Skills` UI tab | `[]` |
 | `apiGateway.replicas` | Gateway replica count | `2` |
 | `operator.workerTraceEnabled` | Enable worker trace shipping | `true` |
 | `operator.workerTraceBatchSize` | Trace batch size before flush | `50` |

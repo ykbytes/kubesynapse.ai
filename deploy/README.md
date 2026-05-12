@@ -121,11 +121,14 @@ kind load docker-image docker.io/litellm/litellm:v1.82.3-stable --name desktop
 # Deploy with local image values
 helm upgrade --install kubesynapse ./charts/kubesynapse -n kubesynapse --create-namespace \
   -f deploy/values.dev.yaml \
-  -f deploy/values.local-images.example.yaml
+  -f deploy/values.local-images.example.yaml \
+  --set-file skillsCatalog.catalogJson=catalog/skills-catalog.json
 ```
 
 See `deploy/values.local-images.example.yaml` for the full local-image registry and
 tag overrides.
+
+The extra `--set-file` keeps the `Catalog > Skills` tab populated in local clusters. Without it, the chart defaults the browsable Skills catalog to an empty list.
 
 If your cluster cannot pull `localhost/kubesynapse/*:dev` images directly,
 push them to a reachable registry or load them into the cluster runtime before
