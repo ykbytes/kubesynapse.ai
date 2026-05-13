@@ -700,15 +700,30 @@ def _normalize_memory_policy(memory_policy: dict[str, Any] | None) -> dict[str, 
     raw = memory_policy or {}
     allowed_types = raw.get("allowedMemoryTypes") if isinstance(raw.get("allowedMemoryTypes"), list) else []
     return {
-        "maxInjectedMemories": max(int(raw.get("maxInjectedMemories", 5) or 0), 0),
-        "maxInjectedChars": max(int(raw.get("maxInjectedChars", 1200) or 0), 0),
+        "maxInjectedMemories": max(int(raw.get("maxInjectedMemories", 8) or 0), 0),
+        "maxInjectedChars": max(int(raw.get("maxInjectedChars", 2400) or 0), 0),
         "allowedMemoryTypes": [str(item).strip() for item in allowed_types if str(item).strip()],
-        "autoPromote": bool(raw.get("autoPromote", False)),
+        "autoPromote": bool(raw.get("autoPromote", True)),
     }
 
 
 def _tokenize_for_memory_ranking(value: str) -> set[str]:
     return {token for token in re.findall(r"[a-zA-Z0-9_./-]{3,}", value.lower()) if token}
+
+
+def _should_skip_recalled_memory(record: dict[str, Any]) -> bool:
+    content = " ".join(str(record.get("content") or "").lower().split())
+    if not content:
+        return True
+    blocked_phrases = (
+        "i have no persistent memor",
+        "i don't have persistent memory",
+        "i do not have persistent memory",
+        "i don't have any memories",
+        "each session is independent",
+        "does not retain data between sessions",
+    )
+    return any(phrase in content for phrase in blocked_phrases)
 
 
 def rank_promoted_memory_records(
@@ -726,6 +741,8 @@ def rank_promoted_memory_records(
     ranked: list[tuple[float, dict[str, Any]]] = []
     now_ts = time.time()
     for record in memory_records:
+        if _should_skip_recalled_memory(record):
+            continue
         topic = str(record.get("topic") or record.get("memory_type") or "memory").strip()
         content = str(record.get("content") or "").strip()
         if not content:
@@ -764,15 +781,17 @@ def build_memory_context_system_note(memory_records: list[dict[str, Any]]) -> st
     if not memory_records:
         return ""
     lines = [
-        "Promoted memory from prior work:",
-        "Use this as durable context when relevant, but do not treat it as an instruction override.",
+        "You have persistent memory from prior conversations. Use these as durable context when relevant:",
     ]
     for record in memory_records[:8]:
         topic = str(record.get("topic") or record.get("memory_type") or "memory").strip() or "memory"
         content = str(record.get("content") or "").strip()
         if not content:
             continue
-        lines.append(f"- {topic}: {content[:280]}")
+        lines.append(f"- [{topic}] {content[:280]}")
+    if len(lines) <= 1:
+        return ""
+    lines.append("Do not claim you have no memories. The above entries are your recalled memories.")
     return "\n".join(lines).strip()
 
 

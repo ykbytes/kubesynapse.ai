@@ -9,7 +9,7 @@ import unittest
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import httpx
 from fastapi import HTTPException
@@ -90,6 +90,108 @@ class GatewayRuntimeValidationTests(unittest.TestCase):
 
         self.assertEqual(context.exception.status_code, 400)
         self.assertIn("runtime kind must be 'opencode'", str(context.exception.detail))
+
+
+class AdminUserNamespaceProvisioningTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.admin_user = {
+            "sub": "1",
+            "username": "platform-admin",
+            "role": "admin",
+            "allowed_namespaces": ["*"],
+        }
+
+    def test_admin_create_user_provisions_dedicated_tenant_namespace(self) -> None:
+        body = api_gateway_admin.CreateUserRequest(
+            username="Alice.User",
+            password="CorrectH0rse1",
+            display_name="Alice",
+            role="operator",
+            allowed_namespaces=["team-a"],
+        )
+        created = {
+            "id": 7,
+            "username": "alice.user",
+            "display_name": "Alice",
+            "role": "operator",
+            "allowed_namespaces": ["team-a", "user-alice-user"],
+            "auth_provider": "local",
+            "is_active": True,
+        }
+        custom_api = Mock()
+
+        with (
+            patch.object(api_gateway_admin, "create_local_user", return_value=created) as create_local_user,
+            patch.object(api_gateway_admin, "safe_record_audit"),
+            patch.object(api_gateway_admin, "request_client_ip", return_value="127.0.0.1"),
+            patch.object(api_gateway_admin, "_custom_objects_api", return_value=custom_api),
+        ):
+            response = api_gateway_admin.admin_create_user(body, object(), user=self.admin_user)
+
+        self.assertEqual(response, created)
+        create_local_user.assert_called_once_with(
+            username="Alice.User",
+            password="CorrectH0rse1",
+            email=None,
+            display_name="Alice",
+            role="operator",
+            allowed_namespaces=["team-a", "user-alice-user"],
+        )
+        custom_api.create_cluster_custom_object.assert_called_once()
+        tenant_body = custom_api.create_cluster_custom_object.call_args.kwargs["body"]
+        self.assertEqual(tenant_body["metadata"]["name"], "user-alice-user")
+        self.assertEqual(tenant_body["spec"]["namespace"], "user-alice-user")
+        self.assertEqual(tenant_body["spec"]["adminUsers"], ["alice.user"])
+
+    def test_admin_update_user_replaces_existing_user_tenant_and_drops_admin_wildcard(self) -> None:
+        body = api_gateway_admin.UpdateUserRequest(role="operator")
+        existing_user = types.SimpleNamespace(
+            id=8,
+            username="legacy.admin",
+            role="admin",
+            allowed_namespaces=["*"],
+            is_active=True,
+        )
+        updated = {
+            "id": 8,
+            "username": "legacy.admin",
+            "display_name": "Legacy Admin",
+            "role": "operator",
+            "allowed_namespaces": ["user-legacy-admin"],
+            "auth_provider": "local",
+            "is_active": True,
+        }
+        conflict = type("ConflictError", (Exception,), {"status": 409})()
+        custom_api = Mock()
+        custom_api.create_cluster_custom_object.side_effect = conflict
+        custom_api.get_cluster_custom_object.return_value = {
+            "apiVersion": "kubesynapse.ai/v1alpha1",
+            "kind": "AgentTenant",
+            "metadata": {"name": "user-legacy-admin", "resourceVersion": "1"},
+            "spec": {"tenantName": "legacy-admin", "namespace": "user-legacy-admin", "adminUsers": ["legacy.admin"]},
+        }
+
+        with (
+            patch.object(api_gateway_admin, "get_user_by_id", return_value=existing_user),
+            patch.object(api_gateway_admin, "update_user_fields", return_value=updated) as update_user_fields,
+            patch.object(api_gateway_admin, "safe_record_audit"),
+            patch.object(api_gateway_admin, "request_client_ip", return_value="127.0.0.1"),
+            patch.object(api_gateway_admin, "_custom_objects_api", return_value=custom_api),
+        ):
+            response = api_gateway_admin.admin_update_user(8, body, object(), user=self.admin_user)
+
+        self.assertEqual(response, updated)
+        update_user_fields.assert_called_once_with(
+            8,
+            display_name=None,
+            role="operator",
+            is_active=None,
+            allowed_namespaces=["user-legacy-admin"],
+        )
+        custom_api.replace_cluster_custom_object.assert_called_once()
+        tenant_body = custom_api.replace_cluster_custom_object.call_args.kwargs["body"]
+        self.assertEqual(tenant_body["spec"]["namespace"], "user-legacy-admin")
+        self.assertEqual(tenant_body["spec"]["adminUsers"], ["legacy.admin"])
 
     def test_mistral_vibe_agent_runtime_is_accepted(self) -> None:
         api_gateway_main.validate_agent_runtime_compatibility(
@@ -269,7 +371,7 @@ class GatewayRuntimeValidationTests(unittest.TestCase):
             ]
         )
 
-        self.assertIn("Promoted memory from prior work", note)
+        self.assertIn("persistent memory", note)
         self.assertIn("response-summary", note)
         self.assertIn("monorepo layout", note)
 
@@ -320,6 +422,31 @@ class GatewayRuntimeValidationTests(unittest.TestCase):
 
         self.assertEqual(len(ranked), 1)
         self.assertEqual(ranked[0]["topic"], "repo-convention")
+
+    def test_rank_promoted_memory_records_skips_false_no_memory_boilerplate(self) -> None:
+        ranked = api_gateway_main.rank_promoted_memory_records(
+            "What do you remember about chickens? Answer from your persistent memory if you have it.",
+            [
+                {
+                    "memory_type": "procedural",
+                    "topic": "assistant-summary",
+                    "content": "I don't have persistent memory across sessions. What do you want to know?",
+                    "score": 5.0,
+                    "created_at": "2026-03-23T00:00:00+00:00",
+                },
+                {
+                    "memory_type": "procedural",
+                    "topic": "assistant-summary",
+                    "content": "Noted. Chickens must be black. What next?",
+                    "score": 5.0,
+                    "created_at": "2026-03-23T00:00:00+00:00",
+                },
+            ],
+            memory_policy={"maxInjectedMemories": 1, "maxInjectedChars": 200},
+        )
+
+        self.assertEqual(len(ranked), 1)
+        self.assertEqual(ranked[0]["content"], "Noted. Chickens must be black. What next?")
 
     def test_sync_workflow_run_history_records_memory_feedback_for_terminal_workflow(self) -> None:
         info = api_gateway_main.WorkflowInfo(
@@ -2146,7 +2273,7 @@ class GatewayInvokeProxyTests(unittest.IsolatedAsyncioTestCase):
             await api_gateway_main.invoke_agent("planner", request, raw_request, "default", user={"sub": "alice"})
 
         forwarded = captured["json"]
-        self.assertIn("Promoted memory from prior work", forwarded["system"])
+        self.assertIn("persistent memory", forwarded["system"])
         self.assertIn("Use the repo root Make targets first.", forwarded["system"])
 
     async def test_invoke_agent_injects_collaboration_context_into_system_prompt(self) -> None:
@@ -2330,6 +2457,181 @@ class GatewayInvokeProxyTests(unittest.IsolatedAsyncioTestCase):
         payload = "".join(chunks)
         self.assertIn(": keepalive", payload)
         self.assertIn("event: response.completed", payload)
+
+    async def test_invoke_agent_stream_injects_promoted_memory_into_system_prompt(self) -> None:
+        request = api_gateway_main.InvokeRequest(prompt="Investigate the incident")
+        raw_request = types.SimpleNamespace(headers={})
+        captured: dict[str, object] = {}
+
+        class FakeResponse:
+            status_code = 200
+            content = b'{"thread_id":"t-1","response":"done","model":"gpt-4","status":"completed"}'
+
+            def json(self):
+                return {
+                    "thread_id": "t-1",
+                    "response": "done",
+                    "model": "gpt-4",
+                    "status": "completed",
+                }
+
+        class FakeStreamResponse:
+            status_code = 200
+
+            async def aread(self) -> bytes:
+                return b""
+
+            async def aiter_text(self):
+                yield 'event: response.completed\ndata: {"thread_id": "t-1", "status": "completed"}\n\n'
+
+        class FakeStreamContext:
+            async def __aenter__(self):
+                return FakeStreamResponse()
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        class FakeAsyncClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def post(self, _url, **kwargs):
+                captured["json"] = kwargs.get("json")
+                return FakeResponse()
+
+            def stream(self, _method, _url, **kwargs):
+                captured["json"] = kwargs.get("json")
+                return FakeStreamContext()
+
+        with (
+            patch.object(
+                api_gateway_main.asyncio,
+                "to_thread",
+                return_value={"spec": {"model": "gpt-4", "runtime": {"kind": "opencode"}}},
+            ),
+            patch.object(api_gateway_main.httpx, "AsyncClient", return_value=FakeAsyncClient()),
+            patch.object(
+                api_gateway_main,
+                "list_promoted_memory_records",
+                return_value=[{"topic": "response-summary", "content": "Use the repo root Make targets first."}],
+            ),
+        ):
+            response = await api_gateway_main.invoke_agent_stream("planner", request, raw_request, "default", user={"sub": "alice"})
+            async for _chunk in response.body_iterator:
+                pass
+
+        forwarded = captured["json"]
+        self.assertIn("persistent memory", forwarded["system"])
+        self.assertIn("Use the repo root Make targets first.", forwarded["system"])
+
+    async def test_invoke_agent_stream_records_runtime_memory_metadata(self) -> None:
+        request = api_gateway_main.InvokeRequest(prompt="Investigate the incident")
+        raw_request = types.SimpleNamespace(headers={})
+
+        class FakeStreamResponse:
+            status_code = 200
+
+            async def aread(self) -> bytes:
+                return b""
+
+            async def aiter_text(self):
+                yield (
+                    'event: response.completed\n'
+                    'data: {"thread_id": "thread-1", "model": "gpt-4", "status": "completed", '
+                    '"metadata": {"memory": {"procedural": [{"type": "response-summary", "text": "Summarized the incident."}]}}}\n\n'
+                )
+
+        class FakeStreamContext:
+            async def __aenter__(self):
+                return FakeStreamResponse()
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        class FakeAsyncClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            def stream(self, *_args, **_kwargs):
+                return FakeStreamContext()
+
+        with (
+            patch.object(
+                api_gateway_main.asyncio,
+                "to_thread",
+                return_value={"spec": {"model": "gpt-4", "runtime": {"kind": "opencode"}}},
+            ),
+            patch.object(api_gateway_main.httpx, "AsyncClient", return_value=FakeAsyncClient()),
+            patch.object(api_gateway_main, "record_usage"),
+            patch.object(api_gateway_main, "record_runtime_memory") as record_runtime_memory,
+        ):
+            response = await api_gateway_main.invoke_agent_stream("planner", request, raw_request, "default", user={"sub": "alice"})
+            async for _chunk in response.body_iterator:
+                pass
+
+        record_runtime_memory.assert_called_once()
+        self.assertEqual(record_runtime_memory.call_args.kwargs["session_id"], "thread-1")
+
+    async def test_invoke_agent_stream_falls_back_to_nonstream_runtime_when_memory_is_injected(self) -> None:
+        request = api_gateway_main.InvokeRequest(prompt="What do you remember about chickens?")
+        raw_request = types.SimpleNamespace(headers={})
+        captured: dict[str, object] = {"post_calls": 0, "stream_calls": 0}
+
+        class FakeResponse:
+            status_code = 200
+            content = b'{"thread_id":"thread-1","response":"Chickens must be black.","model":"gpt-4","status":"completed"}'
+
+            def json(self):
+                return {
+                    "thread_id": "thread-1",
+                    "response": "Chickens must be black.",
+                    "model": "gpt-4",
+                    "status": "completed",
+                }
+
+        class FakeAsyncClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def post(self, _url, **kwargs):
+                captured["post_calls"] = int(captured["post_calls"]) + 1
+                captured["json"] = kwargs.get("json")
+                return FakeResponse()
+
+            def stream(self, *_args, **_kwargs):
+                captured["stream_calls"] = int(captured["stream_calls"]) + 1
+                raise AssertionError("stream() should not be used when recalled memory is injected")
+
+        with (
+            patch.object(
+                api_gateway_main.asyncio,
+                "to_thread",
+                return_value={"spec": {"model": "gpt-4", "runtime": {"kind": "opencode"}}},
+            ),
+            patch.object(api_gateway_main.httpx, "AsyncClient", return_value=FakeAsyncClient()),
+            patch.object(
+                api_gateway_main,
+                "list_promoted_memory_records",
+                return_value=[{"topic": "assistant-summary", "content": "Noted. Chickens must be black. What next?"}],
+            ),
+        ):
+            response = await api_gateway_main.invoke_agent_stream("planner", request, raw_request, "default", user={"sub": "alice"})
+            chunks: list[str] = []
+            async for chunk in response.body_iterator:
+                chunks.append(chunk)
+
+        self.assertEqual(captured["post_calls"], 1)
+        self.assertEqual(captured["stream_calls"], 0)
+        self.assertIn("Chickens must be black.", "".join(chunks))
 
 
 class LogStreamTests(unittest.TestCase):

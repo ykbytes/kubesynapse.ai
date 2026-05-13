@@ -117,10 +117,13 @@ The UI is built around the same production surfaces exposed by the API gateway a
 ## Admin and operations
 
 - The admin workspace exposes user management, audit logs, usage and cost reporting, and a system health dashboard.
+- Creating or updating a non-admin local user now provisions a dedicated `user-<slug>` tenant namespace through the gateway + operator flow. Admin users normalize to wildcard namespace access.
 - The settings workspace is provider-centric: operators search providers on the left and manage API keys and enabled models in a focused detail pane on the right.
 - The Settings provider list is backed by `/api/v1/providers`, with model and catalog detail coming from `/api/v1/llm/providers` and `/api/v1/providers/catalog`. If Settings toasts `Failed to load providers`, verify those gateway endpoints before debugging the frontend.
+- Live model suggestions for OpenRouter, OpenCode Zen, OpenCode Go, and GitHub Copilot only appear after the corresponding credential or token is configured successfully.
 - The catalog workspace opens on `MCP` first for connection and registry management, with reusable skill bundles on the `Skills` tab.
 - The intelligence workspace opens on `Observatory` first for run tracing, with collector and alert workflows on the `Intelligence` tab.
 - The workflow composer includes conditional and loop step editing, live execution state, inline approvals, and recent run history.
+- Chat session history and editable memory records are backed by the gateway PostgreSQL store, and streamed invokes use the same durable-memory recall path as sync invokes.
 
 For release verification, run `npm run build` before publishing a new image.

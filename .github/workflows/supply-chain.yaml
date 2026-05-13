@@ -88,7 +88,7 @@ jobs:
         image:
           - kubesynapse-operator
           - kubesynapse-api-gateway
-          - kubesynapse-opencode-runtime
+          - kubesynapse-opencode-rt
           - kubesynapse-web-ui
     steps:
       - uses: actions/checkout@v4
@@ -109,7 +109,7 @@ jobs:
         run: |
           podman build --format docker \
             -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/${{ matrix.image }}:${{ steps.tag.outputs.tag }} \
-            ./${{ matrix.image == 'kubesynapse-operator' && 'operator' || matrix.image == 'kubesynapse-api-gateway' && 'api-gateway' || matrix.image == 'kubesynapse-opencode-runtime' && 'opencode-runtime' || 'web-ui' }}
+            ./${{ matrix.image == 'kubesynapse-operator' && 'operator' || matrix.image == 'kubesynapse-api-gateway' && 'api-gateway' || matrix.image == 'kubesynapse-opencode-rt' && 'opencode-runtime' || 'web-ui' }}
 
       - name: Sign image with Cosign (keyless)
         run: |

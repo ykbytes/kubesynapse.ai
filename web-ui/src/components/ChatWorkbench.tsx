@@ -1956,47 +1956,47 @@ export function ChatWorkbench({
   return (
     <div className="flex h-full min-w-0 flex-1 flex-col overflow-hidden rounded-none border border-border/60 bg-[linear-gradient(180deg,rgba(255,255,255,0.04),rgba(255,255,255,0.01)_14rem)] shadow-[0_26px_70px_-48px_rgba(0,0,0,0.8)]">
       {/* Header */}
-      <div className="flex items-center justify-between border-b border-border/70 bg-background/80 px-2.5 py-1.5 backdrop-blur-md">
-        <div className="flex items-center gap-2">
+      <div className="flex items-center justify-between border-b border-border/70 bg-background/80 px-2.5 py-1 backdrop-blur-md">
+        <div className="flex items-center gap-1.5">
           {agentName && (
-            <span className={`h-2 w-2 shrink-0 rounded-full ${
+            <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${
               selectedAgent?.status === "running" ? "bg-emerald-400" :
               selectedAgent?.status === "pending" || selectedAgent?.status === "creating" ? "bg-amber-400" :
               selectedAgent?.status === "error" || selectedAgent?.status === "failed" ? "bg-red-400" :
               "bg-muted-foreground/40"
             }`} />
           )}
-          <h2 className="text-[13px] font-semibold tracking-tight">
+          <h2 className="text-[12px] font-semibold tracking-tight">
             {agentName ?? "Choose an agent"}
           </h2>
           {agentName && selectedAgent?.status && (
-            <span className="rounded-full border border-border/60 bg-muted/30 px-1.5 py-0 text-[9px] font-medium text-muted-foreground">
+            <span className="rounded-full border border-border/60 bg-muted/30 px-1.5 py-0 text-[8px] font-medium text-muted-foreground">
               {selectedAgent.status}
             </span>
           )}
           {agentName && selectedAgent?.model && (
-            <span className="hidden text-[10px] text-muted-foreground/70 xl:block">{selectedAgent.model}</span>
+            <span className="hidden text-[9px] text-muted-foreground/70 xl:block">{selectedAgent.model}</span>
           )}
           {agentName && canMutate && (
-            <Button variant="ghost" size="sm" className="h-6 gap-0.5 rounded-full px-1.5 text-[10px]" onClick={handleCreateNew}>
-              <Plus className="h-3 w-3" />
+            <Button variant="ghost" size="sm" className="h-5 gap-0.5 rounded-full px-1.5 text-[9px]" onClick={handleCreateNew}>
+              <Plus className="h-2.5 w-2.5" />
               New
             </Button>
           )}
           {agentName && (
-            <Button variant="ghost" size="sm" className="h-6 gap-0.5 rounded-full px-1.5 text-[10px]" onClick={() => navigateToResource("agents", agentName)}>
-              <Cog className="h-3 w-3" />
+            <Button variant="ghost" size="sm" className="h-5 gap-0.5 rounded-full px-1.5 text-[9px]" onClick={() => navigateToResource("agents", agentName)}>
+              <Cog className="h-2.5 w-2.5" />
               Manage
             </Button>
           )}
           {agentName && visibleChatMcpCapabilities.length > 0 && (
             <TooltipProvider delayDuration={120}>
-              <div className="flex flex-wrap items-center gap-1.5">
+              <div className="flex flex-wrap items-center gap-1">
                 {visibleChatMcpCapabilities.map((capability) => (
                   <Tooltip key={capability.id}>
                     <TooltipTrigger asChild>
-                      <Badge variant="outline" className={`h-5 rounded-full px-1.5 text-[9px] ${capability.tone}`}>
-                        <capability.icon className="mr-0.5 h-2.5 w-2.5" />
+                      <Badge variant="outline" className={`h-4 rounded-full px-1 text-[8px] ${capability.tone}`}>
+                        <capability.icon className="mr-0.5 h-2 w-2" />
                         {capability.shortLabel}
                       </Badge>
                     </TooltipTrigger>
@@ -2011,7 +2011,7 @@ export function ChatWorkbench({
                 {overflowChatMcpCapabilities.length > 0 ? (
                   <Tooltip>
                     <TooltipTrigger asChild>
-                      <Badge variant="outline" className="h-6 rounded-full border-border/60 bg-background/70 px-2 text-[10px] text-muted-foreground">
+                      <Badge variant="outline" className="h-5 rounded-full border-border/60 bg-background/70 px-1.5 text-[9px] text-muted-foreground">
                         +{overflowChatMcpCapabilities.length}
                       </Badge>
                     </TooltipTrigger>
@@ -2027,12 +2027,12 @@ export function ChatWorkbench({
             </TooltipProvider>
           )}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5">
           {activeSessionId && (
-            <div className="hidden items-center gap-2 rounded-full border border-border/70 bg-muted/20 px-2.5 py-1 text-[11px] text-muted-foreground lg:flex">
-              <Brain className="h-3.5 w-3.5 text-primary" />
-              <span className="font-mono text-[10px] text-foreground/80">{activeSessionId.slice(0, 8)}</span>
-              <Badge variant={sessionSaving ? "default" : sessionDirty ? "secondary" : "outline"} className="px-1 py-0 text-[10px]">
+            <div className="hidden items-center gap-1.5 rounded-full border border-border/70 bg-muted/20 px-2 py-0.5 text-[10px] text-muted-foreground lg:flex">
+              <Brain className="h-3 w-3 text-primary" />
+              <span className="font-mono text-[9px] text-foreground/80">{activeSessionId.slice(0, 8)}</span>
+              <Badge variant={sessionSaving ? "default" : sessionDirty ? "secondary" : "outline"} className="px-1 py-0 text-[9px]">
                 {sessionSaving ? "Saving" : sessionDirty ? "Unsaved" : "Saved"}
               </Badge>
               {lastSessionSaveAt && <span>{formatRelativeTime(lastSessionSaveAt)}</span>}
@@ -2048,12 +2048,12 @@ export function ChatWorkbench({
               type="button"
               variant="ghost"
               size="sm"
-              className="h-6 gap-0.5 rounded-full px-1.5 text-[10px]"
+              className="h-5 gap-0.5 rounded-full px-1.5 text-[9px]"
               onClick={() => { planDock.toggle(); if (!planOpen) { setDetailsOpen(false); setFilesOpen(false); setMemoryOpen(false); } }}
             >
-              {planOpen ? <PanelRightClose className="h-3 w-3" /> : <PanelRightOpen className="h-3 w-3" />}
+              {planOpen ? <PanelRightClose className="h-2.5 w-2.5" /> : <PanelRightOpen className="h-2.5 w-2.5" />}
               Plan
-              <Badge variant="outline" className="ml-0.5 px-1 py-0 text-[9px]">
+              <Badge variant="outline" className="ml-0.5 px-0.5 py-0 text-[8px]">
                 {planCount}
               </Badge>
             </Button>
@@ -2063,7 +2063,7 @@ export function ChatWorkbench({
               type="button"
               variant="ghost"
               size="sm"
-              className="h-6 gap-0.5 rounded-full px-1.5 text-[10px]"
+              className="h-5 gap-0.5 rounded-full px-1.5 text-[9px]"
               onClick={() => {
                 const nextOpen = !(filesOpen && fileExplorerView === "all");
                 setFileExplorerView("all");
@@ -2075,7 +2075,7 @@ export function ChatWorkbench({
                 }
               }}
             >
-              <FolderOpen className="h-3 w-3" />
+              <FolderOpen className="h-2.5 w-2.5" />
               Files
             </Button>
           )}
@@ -2084,7 +2084,7 @@ export function ChatWorkbench({
               type="button"
               variant="ghost"
               size="sm"
-              className="h-6 gap-0.5 rounded-full px-1.5 text-[10px]"
+              className="h-5 gap-0.5 rounded-full px-1.5 text-[9px]"
               onClick={() => {
                 const nextOpen = !(filesOpen && fileExplorerView === "changed");
                 setFileExplorerView("changed");
@@ -2096,7 +2096,7 @@ export function ChatWorkbench({
                 }
               }}
             >
-              <FileDiff className="h-3 w-3" />
+              <FileDiff className="h-2.5 w-2.5" />
               Changes
             </Button>
           )}
@@ -2105,12 +2105,12 @@ export function ChatWorkbench({
               type="button"
               variant="ghost"
               size="sm"
-              className="h-6 gap-0.5 rounded-full px-1.5 text-[10px]"
+              className="h-5 gap-0.5 rounded-full px-1.5 text-[9px]"
               onClick={() => { setMemoryOpen((open) => !open); if (!memoryOpen) { setDetailsOpen(false); if (planOpen) planDock.toggle(); setFilesOpen(false); } }}
             >
-              <MemoryStick className="h-3 w-3" />
+              <MemoryStick className="h-2.5 w-2.5" />
               Memory
-              <Badge variant="outline" className="ml-0.5 px-1 py-0 text-[9px]">
+              <Badge variant="outline" className="ml-0.5 px-0.5 py-0 text-[8px]">
                 {memoryCount}
               </Badge>
             </Button>
@@ -2120,29 +2120,29 @@ export function ChatWorkbench({
               type="button"
               variant="ghost"
               size="sm"
-              className="h-6 gap-0.5 rounded-full px-1.5 text-[10px]"
+              className="h-5 gap-0.5 rounded-full px-1.5 text-[9px]"
               onClick={() => { setDetailsOpen((open) => !open); if (!detailsOpen) { if (planOpen) planDock.toggle(); setFilesOpen(false); setMemoryOpen(false); } }}
             >
-              {detailsOpen ? <PanelRightClose className="h-3 w-3" /> : <PanelRightOpen className="h-3 w-3" />}
+              {detailsOpen ? <PanelRightClose className="h-2.5 w-2.5" /> : <PanelRightOpen className="h-2.5 w-2.5" />}
               Details
-              <Badge variant="outline" className="ml-0.5 px-1 py-0 text-[9px]">
+              <Badge variant="outline" className="ml-0.5 px-0.5 py-0 text-[8px]">
                 {detailCount}
               </Badge>
             </Button>
           )}
-          <Badge variant={streamMode ? "default" : "secondary"} className="text-[9px] px-1.5 py-0 h-5">
+          <Badge variant={streamMode ? "default" : "secondary"} className="text-[8px] px-1 py-0 h-4">
             {streamMode ? "stream" : "single"}
           </Badge>
           <Button
             type="button"
             variant="ghost"
-            size="icon"
-            className="h-6 w-6 rounded-full"
+            size="icon-xs"
+            className="h-5 w-5 rounded-full"
             onClick={() => setChatFocused(!chatFocused)}
             title={chatFocused ? "Exit focused mode" : "Focused mode"}
             aria-label={chatFocused ? "Exit focused mode" : "Enter focused mode"}
           >
-            {chatFocused ? <Minimize2 className="h-3 w-3" /> : <Maximize2 className="h-3 w-3" />}
+            {chatFocused ? <Minimize2 className="h-2.5 w-2.5" /> : <Maximize2 className="h-2.5 w-2.5" />}
           </Button>
         </div>
       </div>

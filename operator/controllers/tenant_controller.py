@@ -179,15 +179,19 @@ def _reconcile_tenant(spec: dict[str, Any], name: str, logger: logging.Logger) -
             else:
                 raise
 
+        desired_binding_names: set[str] = set()
         for user in admin_users:
             safe_user = re.sub(r"[^a-z0-9-]", "-", user.lower().strip()).strip("-")
             if not safe_user:
                 logger.warning("Skipping empty or invalid user string: %s", user)
                 continue
 
+            binding_name = f"{tenant_name}-{safe_user}-binding"
+            desired_binding_names.add(binding_name)
+
             binding = kubernetes.client.V1RoleBinding(
                 metadata=kubernetes.client.V1ObjectMeta(
-                    name=f"{tenant_name}-{safe_user}-binding",
+                    name=binding_name,
                     namespace=target_ns,
                 ),
                 role_ref=kubernetes.client.V1RoleRef(
@@ -209,11 +213,37 @@ def _reconcile_tenant(spec: dict[str, Any], name: str, logger: logging.Logger) -
             except ApiException as exc:
                 if exc.status == 409:
                     rbac_api.patch_namespaced_role_binding(
-                        name=f"{tenant_name}-{safe_user}-binding",
+                        name=binding_name,
                         namespace=target_ns,
                         body=binding,
                     )
                 else:
+                    raise
+
+        existing_bindings = rbac_api.list_namespaced_role_binding(namespace=target_ns)
+        binding_items = getattr(existing_bindings, "items", None)
+        if not isinstance(binding_items, list):
+            binding_items = []
+
+        tenant_role_name = f"{tenant_name}-agent-admin"
+        binding_prefix = f"{tenant_name}-"
+        for existing_binding in binding_items:
+            metadata = getattr(existing_binding, "metadata", None)
+            binding_name = str(getattr(metadata, "name", "") or "")
+            if not binding_name or binding_name in desired_binding_names:
+                continue
+            if not binding_name.startswith(binding_prefix) or not binding_name.endswith("-binding"):
+                continue
+
+            role_ref = getattr(existing_binding, "role_ref", None)
+            if str(getattr(role_ref, "name", "") or "") != tenant_role_name:
+                continue
+
+            try:
+                rbac_api.delete_namespaced_role_binding(name=binding_name, namespace=target_ns)
+                logger.info("RoleBinding '%s' removed from tenant '%s'", binding_name, tenant_name)
+            except ApiException as exc:
+                if exc.status != 404:
                     raise
 
         ensure_runtime_namespace_secret(target_ns, tenant_name, logger)

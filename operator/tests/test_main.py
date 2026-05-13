@@ -1344,6 +1344,47 @@ class AllowedNamespacesTests(unittest.TestCase):
         )
         self.assertIn("mcp-browser", container_names)
 
+    def test_opencode_runtime_manifest_makes_hub_bearer_optional_for_saved_remote_mcp_connections(self) -> None:
+        manifest = _builders_manifests.create_agent_statefulset_manifest(
+            "workspace-assistant",
+            "default",
+            {
+                "model": "gpt-4",
+                "runtime": {"kind": "opencode"},
+                "storage": {"size": "1Gi"},
+                "systemPrompt": "Be precise.",
+                "mcpConnections": [
+                    {
+                        "connectionId": "conn-docs",
+                        "serverId": "microsoft-learn",
+                        "transport": "remote",
+                        "runtime": {
+                            "kind": "remote",
+                            "configKey": "microsoft-learn",
+                            "url": "https://learn.microsoft.com/api/mcp",
+                            "headers": [],
+                        },
+                    }
+                ],
+                "mcpServers": ["microsoft-learn"],
+            },
+            None,
+            {},
+        )
+
+        env_refs = {
+            item["name"]: item.get("valueFrom") for item in manifest["spec"]["template"]["spec"]["containers"][0]["env"] if "valueFrom" in item
+        }
+        env_values = {
+            item["name"]: item.get("value") for item in manifest["spec"]["template"]["spec"]["containers"][0]["env"] if "value" in item
+        }
+
+        self.assertEqual(
+            env_refs["MCP_BEARER_TOKEN"]["secretKeyRef"]["optional"],
+            True,
+        )
+        self.assertIn(_config.OPENCODE_MCP_CONNECTIONS_ENV, env_values)
+
     def test_opencode_runtime_rejects_shared_github_adapter_config(self) -> None:
         with self.assertRaises(operator_main.kopf.PermanentError) as context:
             _builders_manifests.create_agent_statefulset_manifest(

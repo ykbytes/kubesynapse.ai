@@ -238,6 +238,31 @@ agentRuntime:
 
 **GPU support:** Set `runtimeClassName: nvidia` in agent spec and ensure GPU nodes are available.
 
+### Tenant Automation and Dedicated User Namespaces
+
+The operator's tenant controller now matters even for admin user CRUD, not just manually created tenant manifests.
+
+Current behavior:
+
+- the API gateway can reconcile a cluster-scoped `AgentTenant` named `user-<slug>` when an admin creates or updates a non-admin local user
+- the tenant controller materializes the target namespace, quota objects, limit ranges, and tenant RBAC for that dedicated namespace
+- when `adminUsers` membership changes, the controller removes stale tenant-managed RoleBindings instead of leaving orphaned access behind
+
+Operational checks:
+
+```bash
+kubectl get agenttenants
+kubectl get rolebindings -n user-alice-user
+kubectl describe agenttenant user-alice-user
+```
+
+If a user namespace is missing after admin user creation, inspect both the gateway logs and the operator logs:
+
+```bash
+kubectl logs -n kubesynapse deploy/kubesynapse-api-gateway
+kubectl logs -n kubesynapse deploy/kubesynapse-operator
+```
+
 ---
 
 ## Upgrades

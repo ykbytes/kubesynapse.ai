@@ -399,7 +399,7 @@ function AppLayout() {
       <SkipToContent />
       <AriaLiveRegion />
       {/* ── TopBar ── */}
-      <Suspense fallback={<div className="h-12 border-b border-border bg-background" />}>
+      <Suspense fallback={<div className="h-10 border-b border-border bg-background" />}>
         <TopBar
           health={conn.health}
           gatewayError={conn.gatewayError}
@@ -440,8 +440,8 @@ function AppLayout() {
         {/* ── Sidebar ── */}
         <div
           className={`hidden shrink-0 overflow-hidden transition-[width] duration-200 ease-productive md:flex ${ws.sidebarCollapsed
-            ? "md:w-14"
-            : "md:w-[clamp(11.5rem,15vw,14rem)] xl:w-[clamp(12rem,16vw,15rem)]"}`}
+            ? "md:w-12"
+            : "md:w-[clamp(10.5rem,14vw,13rem)] xl:w-[clamp(11rem,15vw,14rem)]"}`}
         >
           <SidebarShell>
             <AppSidebar

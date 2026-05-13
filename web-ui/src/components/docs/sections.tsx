@@ -64,10 +64,15 @@ function GettingStartedSection() {
       <div id="gs-install">
         <SectionHeading icon={Rocket}>Step 1: Install kubesynapse</SectionHeading>
         <p className="mt-2 text-base leading-7 text-[oklch(0.80_0.01_264)]">
-          Start from the checked-in cluster example, copy it locally, then deploy the chart with Helm.
+          For local development, use the checked-in Kind helper. For shared clusters, start from the
+          cluster values example and install with Helm.
         </p>
         <CodeBlock
-          code={`# 1. Copy the example values file and edit it locally
+          code={`# Local Kind quickstart (PowerShell)
+pwsh ./scripts/deploy-kind.ps1
+
+# Cluster install
+# 1. Copy the example values file and edit it locally
 cp ./deploy/values.cluster.example.yaml ./deploy/values.cluster.yaml
 
 # 2. Deploy with Helm
@@ -91,10 +96,6 @@ curl http://localhost:8080/api/v1/health`}
 
       <div id="gs-secrets">
         <SectionHeading icon={Settings}>Step 2: Configure Secrets</SectionHeading>
-        <p className="mt-2 text-base leading-7 text-[oklch(0.80_0.01_264)]">
-          Store LLM API keys and other sensitive values as Kubernetes Secrets. The operator and gateway read these
-          secrets to authenticate with upstream providers.
-        </p>
         <CodeBlock
           code={`# Edit your local copy of the cluster values file
 platformSecrets:
@@ -495,22 +496,34 @@ function ChatSessionsSection() {
   return (
     <div className="space-y-8">
       <QuickRefCard title="Chat Reference" items={[
-        { label: "Endpoint", value: "POST /api/v1/chat/{agentId}" },
-        { label: "Protocol", value: "SSE + JSON-RPC" },
-        { label: "Max Context", value: "128k tokens" },
+        { label: "History API", value: "GET /api/v1/chat-sessions" },
+        { label: "Streaming Invoke", value: "POST /api/v1/agents/{name}/invoke/stream" },
+        { label: "Storage", value: "PostgreSQL + runtime thread state" },
       ]} />
       <div id="chat-basics">
         <SectionHeading icon={MessageSquare}>Chat Session Basics</SectionHeading>
         <p className="mt-2 text-base leading-7 text-[oklch(0.80_0.01_264)]">
-          Chat sessions use Server-Sent Events (SSE) for real-time streaming. The runtime maintains conversation
-          state in the agent's PVC, enabling session continuation across restarts.
+          Live responses and saved history are related but separate. Invoke calls hit the agent runtime,
+          while chat-session history is stored by the gateway and listed per <code>agent_name</code> and namespace.
         </p>
-        <CodeBlock code={`curl -N -X POST http://localhost:8080/api/v1/chat/my-agent \\
+        <CodeBlock code={`# List sessions for one agent
+curl "http://localhost:8080/api/v1/chat-sessions?agent_name=my-agent&namespace=default" \
+  -H "Authorization: Bearer $TOKEN"
+
+# Replace the full stored message list for a session
+curl -X PUT http://localhost:8080/api/v1/chat-sessions/session-123/messages \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"messages":[{"message_id":"msg-1","role":"user","content":"Explain Kubernetes controllers","status":"complete"}]}'
+
+# Stream a live invoke
+curl -N -X POST http://localhost:8080/api/v1/agents/my-agent/invoke/stream \
   -H "Authorization: Bearer $TOKEN" \\
   -H "Content-Type: application/json" \\
   -d '{"message":"Explain Kubernetes controllers"}'`} lang="bash" />
-        <Callout variant="info" title="Session IDs">
-          Each chat session is assigned a unique ID. Pass the session ID in subsequent requests to continue the conversation.
+        <Callout variant="info" title="Persistence semantics">
+          Saving chat messages replaces the stored message array for that session. Session saves can also
+          auto-promote a durable memory summary, while the runtime continues to manage its own thread state.
         </Callout>
       </div>
     </div>
@@ -520,17 +533,22 @@ function ChatSessionsSection() {
 function MemorySection() {
   return (
     <div className="space-y-8">
-      <SectionHeading icon={GitBranch}>Agent Memory Architecture</SectionHeading>
+      <SectionHeading icon={GitBranch}>Memory & Context</SectionHeading>
       <p className="mt-2 text-base leading-7 text-[oklch(0.80_0.01_264)]">
-        kubesynapse uses Qdrant as the vector database for agent memory. Each agent's conversation history,
-        retrieved documents, and learned context are stored as embeddings for semantic retrieval.
+        kubesynapse now uses a layered memory model. The user-visible durable recall path lives in the
+        API gateway, while the OpenCode runtime still keeps its own local memory store for thread continuity
+        and optional semantic retrieval.
       </p>
       <DocsTable headers={["Component", "Technology", "Purpose"]} rows={[
-        ["Vector Store", "Qdrant", "Semantic search across agent memories"],
-        ["Embeddings", "text-embedding-3-small", "OpenAI embedding model (configurable)"],
-        ["Retrieval", "MMR", "Maximum Marginal Relevance for diverse results"],
-        ["Storage", "PVC", "Persistent Qdrant data per agent"],
+        ["Gateway durable memory", "PostgreSQL memory_records", "Cross-session promoted recall and ranking"],
+        ["Runtime-local memory", "JSONL under OPENCODE_MEMORY_DIR", "Thread continuity and handoff inside the runtime pod"],
+        ["Semantic provider", "Optional Qdrant", "Runtime-local semantic retrieval when enabled"],
+        ["Policy layer", "AgentPolicy.memoryPolicy", "Controls maxInjectedMemories, maxInjectedChars, and auto-promotion"],
       ]} />
+      <Callout variant="info" title="Stream parity">
+        Durable memory is injected on both sync and streamed invokes. If the gateway needs to assemble a
+        memory-heavy system prompt first, it can preserve parity by emitting SSE from a non-stream runtime invoke.
+      </Callout>
     </div>
   );
 }
@@ -573,17 +591,19 @@ function McpSection() {
     <div className="space-y-8">
       <SectionHeading icon={Plug}>MCP (Model Context Protocol)</SectionHeading>
       <p className="mt-2 text-base leading-7 text-[oklch(0.80_0.01_264)]">
-        MCP connections provide tools to your agents. Use <code>McpConnection</code> CRDs for native Kubernetes
-        management or the API gateway's <code>/api/v1/mcp/connections</code> endpoints.
+        MCP connections provide tool surfaces to agents. kubesynapse supports shared hub-backed servers,
+        direct remote MCP endpoints, and sidecar-local tool containers, all managed from the catalog and
+        agent editors.
       </p>
       <DocsTable headers={["Transport", "Use Case", "Security"]} rows={[
-        ["remote", "External SaaS APIs (GitHub, Slack)", "Bearer/OAuth2 token"],
-        ["hub", "Shared enterprise MCP servers", "Internal bearer token"],
-        ["sidecar", "Per-agent local containers", "localhost-only, no network egress"],
+        ["remote", "External MCP servers and SaaS bridges", "Stored credentials; some servers require a shared bearer token"],
+        ["hub", "Shared in-cluster MCP services", "Enabled with mcpHub.enabled and reused across agents"],
+        ["sidecar", "Per-agent local tool containers", "localhost-only, strongest isolation boundary"],
       ]} />
-      <Callout variant="tip" title="Prefer sidecars for sensitive tools">
-        Sidecar MCP servers run inside the agent pod and communicate over localhost, providing the strongest
-        isolation. Use remote connections only for external services that cannot run locally.
+      <Callout variant="tip" title="Choose the transport intentionally">
+        Use sidecars for the most sensitive tools, hub connections for shared internal services, and remote
+        connections for external systems that cannot run in-cluster. The gateway manages connection records,
+        while the operator/runtime enforce the actual auth and mount behavior.
       </Callout>
     </div>
   );
@@ -700,8 +720,14 @@ function ApiReferenceSection() {
         ["GET", "/api/v1/health", "Health check"],
         ["GET", "/api/v1/agents", "List agents"],
         ["POST", "/api/v1/agents", "Create agent"],
-        ["GET", "/api/v1/agents/{id}", "Get agent details"],
-        ["POST", "/api/v1/agents/{id}/invoke", "Invoke agent"],
+        ["GET", "/api/v1/agents/{name}", "Get agent details"],
+        ["POST", "/api/v1/agents/{name}/invoke", "Invoke agent synchronously"],
+        ["POST", "/api/v1/agents/{name}/invoke/stream", "Invoke agent as SSE"],
+        ["GET", "/api/v1/chat-sessions?agent_name=...", "List saved sessions for one agent"],
+        ["PATCH", "/api/v1/memory/{record_id}", "Edit a durable memory record"],
+        ["GET", "/api/v1/providers", "List provider registry entries"],
+        ["GET", "/api/v1/llm/providers/{provider}/suggestions", "Fetch live provider model suggestions"],
+        ["POST", "/api/v1/admin/users", "Create a local user and reconcile dedicated tenant access"],
         ["GET", "/api/v1/workflows", "List workflows"],
         ["POST", "/api/v1/evals/{id}/run", "Run evaluation"],
         ["GET", "/api/v1/mcp/connections", "List MCP connections"],
@@ -715,16 +741,20 @@ function LlmProvidersSection() {
     <div className="space-y-8">
       <SectionHeading icon={Zap}>LLM Providers</SectionHeading>
       <p className="mt-2 text-base leading-7 text-[oklch(0.80_0.01_264)]">
-        LiteLLM proxies all model requests, supporting 100+ providers. Configure provider API keys via
-        Kubernetes Secrets referenced in the Helm values.
+        The Settings workspace is provider-centric. The left rail comes from the gateway provider registry,
+        and live model suggestions come from provider-specific gateway integrations once credentials are configured.
       </p>
-      <DocsTable headers={["Provider", "Model Example", "Config"]} rows={[
-        ["OpenAI", "gpt-4o, gpt-4-turbo", "openaiApiKey secret"],
-        ["Anthropic", "claude-3-5-sonnet", "anthropicApiKey secret"],
-        ["Google", "gemini-2.0-flash", "googleApiKey secret"],
-        ["OpenRouter", "openrouter/*", "openrouterApiKey secret"],
-        ["Azure OpenAI", "azure/gpt-4", "azureOpenAI* secrets"],
+      <DocsTable headers={["Provider", "Credential", "Live Suggestions", "Notes"]} rows={[
+        ["OpenRouter", "OPENROUTER_API_KEY", "Yes", "Queries the live OpenRouter catalog"],
+        ["OpenCode Zen", "OPENCODE_API_KEY", "Yes", "Uses the OpenCode provider suggestions endpoint"],
+        ["OpenCode Go", "OPENCODE_GO_API_KEY", "Yes", "Uses the OpenCode Go provider suggestions endpoint"],
+        ["GitHub Copilot", "Stored device-flow token", "Yes", "Suggestions appear after sign-in succeeds"],
+        ["Static LiteLLM providers", "Provider-specific secret", "Usually no", "Add models manually when the upstream catalog is not queried live"],
       ]} />
+      <Callout variant="info" title="Why suggestions may be empty">
+        If the provider has no configured credential yet, the gateway returns no live suggestions. Check the
+        provider detail pane first before assuming the frontend is broken.
+      </Callout>
     </div>
   );
 }
@@ -751,8 +781,10 @@ function TroubleshootingSection() {
       <SectionHeading icon={Bug}>Troubleshooting</SectionHeading>
       <DocsTable headers={["Issue", "Symptom", "Resolution"]} rows={[
         ["Agent stuck in Pending", "Pod never starts", "Check resource quotas and node capacity"],
-        ["Model returns errors", "401/403 from LiteLLM", "Verify API key secret and provider config"],
-        ["MCP tool unavailable", "Tool call timeouts", "Check sidecar container logs"],
+        ["Provider suggestions are empty", "Settings shows no models", "Configure the provider credential first, then reload suggestions"],
+        ["Durable memory is not recalled", "Saved history exists but the agent forgets", "Verify memoryPolicy is enabled, then inspect gateway memory_records for the right user, namespace, and agent"],
+        ["Local fix does not show up", "Kind still serves old code after loading :dev", "Run kubectl rollout restart on the touched deployment when the image tag did not change"],
+        ["MCP tool unavailable", "Tool call timeouts", "Check sidecar logs or the remote MCP endpoint auth configuration"],
         ["Workflow never completes", "Step stuck in Running", "Verify approval was submitted"],
       ]} />
       <Callout variant="troubleshoot" title="Debug Commands">
@@ -764,7 +796,10 @@ function TroubleshootingSection() {
             kubectl logs -l app=operator -n kubesynapse
           </code>
           <code className="block rounded-md bg-background/70 px-2.5 py-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-words">
-            kubectl exec -n kubesynapse kubesynapse-postgresql-0 -- psql -U kubesynapse -c "SELECT * FROM mcp_connections;"
+            kubectl exec -n kubesynapse kubesynapse-postgresql-0 -- psql -U kubesynapse -c "SELECT namespace, agent_name, topic, promoted, username FROM memory_records ORDER BY id DESC LIMIT 10;"
+          </code>
+          <code className="block rounded-md bg-background/70 px-2.5 py-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-words">
+            kubectl rollout restart deploy/kubesynapse-api-gateway -n kubesynapse
           </code>
         </div>
       </Callout>
@@ -854,7 +889,7 @@ export const SECTIONS: DocSection[] = [
     id: "chat-sessions",
     title: "Chat Sessions",
     icon: MessageSquare,
-    searchText: "chat sessions conversation streaming sse real-time message history session persistence stateful",
+    searchText: "chat sessions conversation streaming sse message history session persistence invoke stream postgres saved messages",
     subsections: [{ id: "chat-basics", title: "Chat Session Basics" }],
     content: <ChatSessionsSection />,
   },
@@ -862,7 +897,7 @@ export const SECTIONS: DocSection[] = [
     id: "memory",
     title: "Memory & Context",
     icon: GitBranch,
-    searchText: "memory context vector database qdrant embeddings retrieval semantic search rag",
+    searchText: "memory context durable recall postgres memory records runtime local jsonl qdrant semantic retrieval injected system prompt",
     content: <MemorySection />,
   },
   {
@@ -877,7 +912,7 @@ export const SECTIONS: DocSection[] = [
     id: "mcp",
     title: "MCP Connections",
     icon: Plug,
-    searchText: "mcp model context protocol tools sidecars remote hub connections tool configuration capabilities runtime metadata",
+    searchText: "mcp model context protocol tools sidecars remote hub connections shared bearer token catalog runtime metadata",
     content: <McpSection />,
   },
   {
@@ -919,14 +954,14 @@ export const SECTIONS: DocSection[] = [
     id: "api-reference",
     title: "API Reference",
     icon: Wrench,
-    searchText: "api reference rest endpoints openapi swagger documentation crud agents workflows evals policies health metrics",
+    searchText: "api reference rest endpoints openapi swagger agents invoke stream chat sessions memory providers admin users workflows evals",
     content: <ApiReferenceSection />,
   },
   {
     id: "llm-providers",
     title: "LLM Providers",
     icon: Zap,
-    searchText: "llm providers litellm openai anthropic google azure openrouter api keys model routing configuration",
+    searchText: "llm providers litellm provider registry openrouter opencode opencode go github copilot live suggestions api keys",
     content: <LlmProvidersSection />,
   },
   {
@@ -940,7 +975,7 @@ export const SECTIONS: DocSection[] = [
     id: "troubleshooting",
     title: "Troubleshooting",
     icon: Bug,
-    searchText: "troubleshooting debugging common issues faq error resolution logs diagnostics health check support",
+    searchText: "troubleshooting debugging memory recall provider suggestions kind rollout restart logs diagnostics health check support",
     content: <TroubleshootingSection />,
   },
   {

@@ -1,11 +1,13 @@
 """Auto-generated router — extracted from api-gateway main.py."""
 from __future__ import annotations
 
+import re
 from typing import Any, cast
 
 # Re-import all shared symbols from the gateway core
 from _core import *
 from _core import _SHUTDOWN
+from auth_store import get_user_by_id
 from routers.observability import (
     _COLLECTOR_TOKEN_MISSING_ERROR,
     _INTELLIGENCE_ALERT_CONDITION_TYPES,
@@ -36,6 +38,87 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response
 
 router = APIRouter(tags=["admin"])
 
+_USER_NAMESPACE_SLUG_RE = re.compile(r"[^a-z0-9]+")
+
+
+def _user_namespace_slug(username: str) -> str:
+    slug = _USER_NAMESPACE_SLUG_RE.sub("-", username.strip().lower()).strip("-")
+    return (slug[:57].strip("-") or "user")
+
+
+def _user_namespace_name(username: str) -> str:
+    return f"user-{_user_namespace_slug(username)}"
+
+
+def _user_allowed_namespaces(username: str, role: str, allowed_namespaces: list[str] | None) -> list[str]:
+    if role == "admin":
+        return ["*"]
+
+    dedicated_namespace = _user_namespace_name(username)
+    requested = [str(item).strip() for item in (allowed_namespaces or []) if str(item).strip() and str(item).strip() != "*"]
+    requested.append(dedicated_namespace)
+    return sorted(set(requested))
+
+
+def _user_tenant_admin_users(username: str, role: str, is_active: bool) -> list[str]:
+    if not is_active or role == "viewer":
+        return []
+    return [username]
+
+
+def _custom_objects_api():
+    from kubernetes import client
+
+    return client.CustomObjectsApi()
+
+
+def _reconcile_user_tenant(username: str, role: str, is_active: bool) -> None:
+    tenant_name = _user_namespace_name(username)
+    tenant_body = {
+        "apiVersion": f"{RESOURCE_GROUP}/{RESOURCE_VERSION}",
+        "kind": "AgentTenant",
+        "metadata": {"name": tenant_name},
+        "spec": {
+            "tenantName": _user_namespace_slug(username),
+            "namespace": tenant_name,
+            "adminUsers": _user_tenant_admin_users(username, role, is_active),
+        },
+    }
+
+    api = _custom_objects_api()
+    try:
+        api.create_cluster_custom_object(
+            group=RESOURCE_GROUP,
+            version=RESOURCE_VERSION,
+            plural="agenttenants",
+            body=tenant_body,
+        )
+        return
+    except Exception as exc:
+        if getattr(exc, "status", None) != 409:
+            raise HTTPException(status_code=502, detail="Failed to provision the user's dedicated namespace") from exc
+
+    try:
+        existing = cast(
+            dict[str, Any],
+            api.get_cluster_custom_object(
+                group=RESOURCE_GROUP,
+                version=RESOURCE_VERSION,
+                plural="agenttenants",
+                name=tenant_name,
+            ),
+        )
+        existing["spec"] = tenant_body["spec"]
+        api.replace_cluster_custom_object(
+            group=RESOURCE_GROUP,
+            version=RESOURCE_VERSION,
+            plural="agenttenants",
+            name=tenant_name,
+            body=existing,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="Failed to update the user's dedicated namespace") from exc
+
 @router.get("/admin/users")
 def admin_list_users(user=Depends(verify_token)) -> list[dict[str, Any]]:
     ensure_role(user, "admin")
@@ -49,6 +132,7 @@ def admin_create_user(
     user=Depends(verify_token),
 ) -> dict[str, Any]:
     ensure_role(user, "admin")
+    requested_namespaces = _user_allowed_namespaces(body.username, body.role, body.allowed_namespaces)
     try:
         created = create_local_user(
             username=body.username,
@@ -56,10 +140,16 @@ def admin_create_user(
             email=body.email,
             display_name=body.display_name,
             role=body.role,
-            allowed_namespaces=body.allowed_namespaces or ["default"],
+            allowed_namespaces=requested_namespaces,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    _reconcile_user_tenant(
+        str(created.get("username") or body.username).strip().lower(),
+        str(created.get("role") or body.role),
+        bool(created.get("is_active", True)),
+    )
 
     safe_record_audit(
         action="admin.create-user",
@@ -80,6 +170,9 @@ def admin_update_user(
     user=Depends(verify_token),
 ) -> dict[str, Any]:
     ensure_role(user, "admin")
+    existing = get_user_by_id(user_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="User was not found.")
 
     # Prevent admin from demoting themselves
     acting_user_id = int(str(user.get("sub") or "0"))
@@ -88,16 +181,26 @@ def admin_update_user(
     if acting_user_id == user_id and body.is_active is False:
         raise HTTPException(status_code=400, detail="Cannot deactivate your own account")
 
+    next_role = body.role or str(existing.role or "viewer")
+    next_is_active = bool(existing.is_active if body.is_active is None else body.is_active)
+    next_allowed_namespaces = _user_allowed_namespaces(
+        str(existing.username),
+        next_role,
+        body.allowed_namespaces if body.allowed_namespaces is not None else cast(list[str] | None, existing.allowed_namespaces),
+    )
+
     try:
         updated = update_user_fields(
             user_id,
             display_name=body.display_name,
             role=body.role,
             is_active=body.is_active,
-            allowed_namespaces=body.allowed_namespaces,
+            allowed_namespaces=next_allowed_namespaces,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    _reconcile_user_tenant(str(existing.username), next_role, next_is_active)
 
     safe_record_audit(
         action="admin.update-user",

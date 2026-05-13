@@ -75,7 +75,7 @@ case "${1:-up}" in
 
   push)
     echo "📤 Pushing images to $REGISTRY..."
-    for image in kubesynapse-api-gateway kubesynapse-operator kubesynapse-web-ui kubesynapse-opencode-runtime; do
+    for image in kubesynapse-api-gateway kubesynapse-operator kubesynapse-web-ui kubesynapse-opencode-rt; do
       docker tag "$image:$VERSION" "$REGISTRY/$image:$VERSION"
       docker push "$REGISTRY/$image:$VERSION"
     done

@@ -1,8 +1,16 @@
-# Memory System Architecture
+# Durable Memory Architecture
 
 ## Overview
 
-The agent memory system is **not** a vector database. It is a **JSONL flat-file store** backed by a Kubernetes Persistent Volume Claim (PVC). Memory entries are plain JSON objects appended to `.jsonl` files on disk, recalled by reading the last N lines, and injected into the LLM system prompt as plain text. There is no embedding, no similarity search, and no external database — just append-only log files with atomic pruning.
+KubeSynapse now uses a **layered memory model** rather than a single memory store.
+
+There are two persisted memory surfaces:
+
+1. **Gateway durable memory** in PostgreSQL, used for cross-session recall in the UI and API.
+2. **Runtime-local memory** inside the OpenCode runtime, used for session continuity, handoff, and optional semantic retrieval.
+
+The gateway layer is what powers user-visible persistent recall. The runtime layer still exists,
+but it is no longer the only or primary durable-memory path.
 
 ---
 
@@ -10,236 +18,166 @@ The agent memory system is **not** a vector database. It is a **JSONL flat-file 
 
 ```mermaid
 flowchart TD
-    subgraph Invocation["Agent Invocation (invoke.py)"]
-        A[New request arrives] --> B{Thread has memory?}
-        B -- Yes --> C[Check for handoff entry]
-        C -- Handoff found --> D["build_handoff_resumption_prompt()"]
-        C -- No handoff --> E["build_memory_context(thread_id)"]
-        B -- No --> F["recall_workspace_memory(limit=5)"]
+	 U[User prompt] --> G[API Gateway invoke or invoke/stream]
+	 G --> P[Resolve AgentPolicy memoryPolicy]
+	 P --> R[List promoted or high-score memory_records]
+	 R --> K[Rank and filter recalled memories]
+	 K --> N[Build memory system note]
+	 N --> O[Forward request to runtime]
 
-        D --> G["format_memory_context()"]
-        E --> G
-        F --> G
-
-        G --> H["Inject into system prompt<br/>via combine_system_prompt()"]
-        H --> I[LLM generates response]
-        I --> J["build_task_summary_entry()"]
-        J --> K["save_memory(thread_id, entry)"]
-        J --> L["save_workspace_memory(entry)"]
-    end
-
-    subgraph Storage["JSONL Storage (PVC)"]
-        K --> M["threads/{thread_id}.jsonl"]
-        L --> N["workspace.jsonl"]
-    end
+	 O --> RT[OpenCode runtime]
+	 RT --> RESP[Response + metadata.memory]
+	 RESP --> SIDE[Gateway side effects]
+	 SIDE --> PG[(PostgreSQL memory_records)]
+	 SIDE --> TRACE[(Usage / traces / chat session state)]
 ```
 
 ---
 
-## Two-Tier Architecture
+## Layer 1: Gateway Durable Memory
 
-The system has **two tiers** of memory, stored as separate JSONL files:
+### What it stores
 
-```mermaid
-flowchart LR
-    subgraph Workspace["Workspace Memory (shared)"]
-        W["workspace.jsonl<br/>──────────────<br/>Max 50 entries<br/>Shared across all threads<br/>Codebase insights, patterns"]
-    end
+The gateway stores durable memory in PostgreSQL `memory_records` rows. Records are scoped by:
 
-    subgraph Thread["Thread Memory (per-thread)"]
-        T["threads/{id}.jsonl<br/>──────────────<br/>Max 100 entries<br/>Scoped to one conversation<br/>Task summaries, decisions, errors"]
-    end
+- namespace
+- agent name
+- username when the memory is user-specific
+- topic / memory type
+- promotion state and score
 
-    Workspace -.->|"recalled first<br/>(general context)"| Combine["build_memory_context()"]
-    Thread -.->|"recalled second<br/>(specific context)"| Combine
+### Where durable memory comes from
+
+The gateway persists memory from two main sources:
+
+1. **Runtime-emitted memory candidates**
+	The OpenCode runtime can return `metadata.memory` on invoke completion. The gateway records
+	those candidates with `record_runtime_memory(...)`.
+2. **Saved chat sessions**
+	Saving chat messages can summarize the session and write an auto-promoted durable memory record.
+
+### How recall works
+
+At invoke time the gateway:
+
+1. resolves the effective memory policy from the agent or chart defaults
+2. loads promoted memories, or high-score fallback memories if nothing is promoted yet
+3. ranks the candidates against the current prompt
+4. filters out bad legacy memories such as `I don't have persistent memory...`
+5. injects the ranked results into the request `system` prompt as a durable-memory note
+
+The default chart-managed memory policy is:
+
+```yaml
+memoryPolicy:
+  enabled: true
+  name: default-memory-policy
+  namespace: default
+  autoPromote: true
+  maxInjectedMemories: 8
+  maxInjectedChars: 2400
+  allowedMemoryTypes: []
 ```
 
-| Tier | File | Max Entries | Scope | Purpose |
-|------|------|-------------|-------|---------|
-| **Workspace** | `workspace.jsonl` | 50 | All threads | Codebase structure, recurring patterns, tech stack info |
-| **Thread** | `threads/{thread_id}.jsonl` | 100 | Single thread | Task summaries, decisions, errors, handoffs |
+### Stream parity
 
-When composing context, `build_memory_context()` returns **workspace entries first** (general knowledge), then **thread entries** (specific to the conversation).
+Both invoke surfaces use the same recall path:
+
+- `POST /api/v1/agents/{name}/invoke`
+- `POST /api/v1/agents/{name}/invoke/stream`
+
+When recalled memory is injected on a streamed request, the gateway can fall back to a non-stream
+runtime invoke and emit **synthetic SSE** so the streamed path preserves the same answer and still
+records memory side effects.
 
 ---
 
-## Entry Types
+## Layer 2: Runtime-Local Memory
 
-There are **6 valid entry types**:
+The OpenCode runtime still keeps its own local memory manager under `OPENCODE_MEMORY_DIR`.
 
-| Type | Purpose |
-|------|---------|
-| `task_summary` | Summary of completed work: prompt, status, artifacts, tools used, todos |
-| `decision` | A key decision made during a session (e.g. "chose X over Y because Z") |
-| `error_pattern` | An error that was encountered and how it was resolved |
-| `codebase_insight` | Structural knowledge about the codebase (tech stack, conventions) |
-| `file_map` | Key files and their roles in the project |
-| `handoff` | Full context dump when a session exhausts its token budget |
+This layer is responsible for:
 
-Every entry is a JSON object with at least `type`, `content`, and an auto-set `timestamp`:
+- thread and workspace continuity inside the runtime pod
+- handoff entries when the runtime needs to resume work later
+- local context fencing and retention rules
+- optional semantic retrieval through Qdrant when `OPENCODE_MEMORY_SEMANTIC_ENABLED=true`
 
-```json
-{
-  "type": "task_summary",
-  "content": {
-    "prompt_summary": "Fix the workspace persistence bug...",
-    "status": "completed",
-    "artifacts": ["operator/builders/manifests.py"],
-    "tools_used": ["read_file", "grep_search", "run_in_terminal"],
-    "completed": ["Mount PVC with subPath"],
-    "remaining": [],
-    "response_excerpt": "Changed all 4 runtime types..."
-  },
-  "timestamp": 1718900000.0
-}
-```
+The runtime-local layer is file-backed by default and survives pod restarts when the runtime PVC is preserved.
+
+### Runtime-local configuration
+
+Important runtime-local settings include:
+
+- `OPENCODE_MEMORY_ENABLED`
+- `OPENCODE_MEMORY_DIR`
+- `OPENCODE_MEMORY_MAX_THREAD_ENTRIES`
+- `OPENCODE_MEMORY_MAX_WORKSPACE_ENTRIES`
+- `OPENCODE_MEMORY_CONTEXT_FENCING`
+- `OPENCODE_MEMORY_CONTEXT_MAX_TOKENS`
+- `OPENCODE_MEMORY_SEMANTIC_ENABLED`
+- `OPENCODE_MEMORY_QDRANT_URL`
+
+This layer is complementary to the gateway layer. It does **not** replace PostgreSQL-backed durable recall.
 
 ---
 
-## Storage & Persistence Layer
+## Memory Types
 
-```mermaid
-flowchart TB
-    subgraph K8s["Kubernetes Pod (agent sandbox)"]
-        subgraph Container["opencode-runtime"]
-            SM["SessionMemory<br/>(Python singleton)"]
-            SM -->|"_append()"| FS["Filesystem<br/>/home/opencodeuser/.local/share/<br/>opencode-runtime/memory/"]
-        end
-        FS --> PVC
-    end
+The current durable path commonly uses these practical categories:
 
-    subgraph PVC["PVC: state-volume"]
-        direction TB
-        WS["workspace.jsonl"]
-        TH["threads/<br/>  ├── abc123.jsonl<br/>  ├── def456.jsonl<br/>  └── ..."]
-    end
-```
+| Category | Source | Typical use |
+|---|---|---|
+| `procedural` | Runtime `metadata.memory` or chat summaries | Stable instructions, preferences, conventions |
+| `episodic` | Runtime `metadata.memory` | Tool-use history, notable completed work |
+| `assistant-summary` / topic labels | Runtime summary text | Fast recall for user-visible facts |
 
-- **Base directory**: `$XDG_DATA_HOME/opencode-runtime/memory/` (overridable via `OPENCODE_MEMORY_DIR`)
-- **Kubernetes volume**: The `state-volume` PVC is mounted at `/workspace` with subPath, and the memory directory lives on the same PVC — so **memory survives pod restarts**
-- **Thread ID sanitization**: Thread IDs are cleaned to `[a-zA-Z0-9_-]`, truncated to 64 chars
-
-### Atomic Writes & Pruning
-
-Writes use a **threading.Lock** for per-process thread safety. Pruning is **crash-safe** via atomic file replacement:
-
-```mermaid
-sequenceDiagram
-    participant Caller
-    participant SessionMemory
-    participant Filesystem
-
-    Caller->>SessionMemory: save_memory(thread_id, entry)
-    SessionMemory->>SessionMemory: Acquire lock
-    SessionMemory->>Filesystem: Append JSON line to .jsonl
-    SessionMemory->>Filesystem: Read all lines, count entries
-
-    alt entries > max_entries
-        SessionMemory->>Filesystem: Write pruned entries to .tmp file
-        SessionMemory->>Filesystem: os.replace(.tmp → .jsonl) [atomic]
-    end
-
-    SessionMemory->>SessionMemory: Release lock
-    SessionMemory-->>Caller: True
-```
-
-This ensures that if the pod crashes mid-prune, the original file is untouched — `os.replace()` is an atomic filesystem operation.
+The gateway can also rank by topic and score, and it can restrict injection through
+`allowedMemoryTypes` when a policy uses that field.
 
 ---
 
-## Recall & Injection into LLM
+## User and Ownership Model
 
-When a new request arrives, memory is loaded and injected into the system prompt:
+Durable memories can be user-specific.
 
-```mermaid
-sequenceDiagram
-    participant User
-    participant invoke.py
-    participant SessionMemory
-    participant prompts.py
-    participant LLM
+- user-scoped memories are recalled only for the matching user
+- shared memories can be stored with no username and recalled more broadly within the namespace/agent scope
+- memory edit and delete endpoints enforce namespace access and user ownership
 
-    User->>invoke.py: Send message (thread_id)
+Available mutation endpoints:
 
-    alt Thread has memory
-        invoke.py->>SessionMemory: get_handoff_memory(thread_id)
-        alt Handoff entry exists
-            SessionMemory-->>invoke.py: handoff dict
-            invoke.py->>prompts.py: build_handoff_resumption_prompt(handoff)
-        else No handoff
-            invoke.py->>SessionMemory: build_memory_context(thread_id)
-            SessionMemory-->>invoke.py: [workspace + thread entries]
-            invoke.py->>prompts.py: format_memory_context(entries)
-        end
-    else New thread (no thread memory)
-        invoke.py->>SessionMemory: recall_workspace_memory(limit=5)
-        SessionMemory-->>invoke.py: [workspace entries]
-        invoke.py->>prompts.py: format_memory_context(entries)
-    end
-
-    prompts.py-->>invoke.py: Memory text block
-    invoke.py->>invoke.py: combine_system_prompt(base, memory_text, ...)
-    invoke.py->>LLM: System prompt + user message
-    LLM-->>invoke.py: Response
-
-    invoke.py->>invoke.py: build_task_summary_entry(prompt, response, ...)
-    invoke.py->>SessionMemory: save_memory(thread_id, summary)
-    invoke.py->>SessionMemory: save_workspace_memory(summary)
-```
-
-The formatted memory text looks like this in the system prompt:
-
-```
-PRIOR SESSION MEMORY (context carried from previous sessions):
-- [codebase_insight] This project uses FastAPI with a Helm-based deployment...
-- [task_summary] {"prompt_summary": "Fix workspace persistence...", "status": "completed", ...}
-- [error_pattern] PVC mount was emptyDir — changed to subPath: workspace
-```
+- `PATCH /api/v1/memory/{record_id}`
+- `DELETE /api/v1/memory/{record_id}`
 
 ---
 
-## Handoff Mechanism (Context Exhaustion)
+## Failure Modes the Current Design Handles
 
-When the LLM's token budget is nearly exhausted, a **handoff entry** is saved instead of a normal task summary. This captures the full state needed to resume in a new session:
+### Legacy false-denial memories
 
-```mermaid
-flowchart TD
-    A[Session running] --> B{Token budget exhausted?}
-    B -- No --> C[Normal save: task_summary]
-    B -- Yes --> D["build_handoff_entry()"]
-    D --> E["Save handoff to thread JSONL"]
+Older records like `I don't have persistent memory` can poison recall if they rank highly.
+The gateway now filters those phrases during recall ranking so they are not reinjected as durable context.
 
-    E --> F[New session starts]
-    F --> G["get_handoff_memory(thread_id)"]
-    G --> H["build_handoff_resumption_prompt()"]
-    H --> I["System prompt includes:<br/>RESUMING FROM PRIOR SESSION<br/>• Original task<br/>• Progress summary<br/>• Completed todos<br/>• Remaining todos<br/>• Modified files"]
-```
+### Stream / non-stream divergence
 
-A handoff entry captures:
-- `original_prompt` (up to 1000 chars)
-- `summary` of progress (up to 2000 chars)
-- `todos` — completed and pending (up to 30)
-- `artifacts` — files created/modified (up to 30)
-- `context_budget` — token usage stats
+It is possible for `/invoke` to behave correctly while `/invoke/stream` diverges. The current design avoids
+that by applying the same recall path on both endpoints and using sync-to-SSE fallback when required.
+
+### Same-tag local redeploys
+
+In local Kind development, reloading the same `:dev` image tag does not automatically roll workloads.
+If the image reference string does not change, explicitly restart the touched deployment after loading the image.
 
 ---
 
-## Configuration
+## Mental Model
 
-| Environment Variable | Default | Description |
-|---------------------|---------|-------------|
-| `OPENCODE_MEMORY_ENABLED` | `true` | Enable/disable the memory system |
-| `OPENCODE_MEMORY_DIR` | `$XDG_DATA_HOME/opencode-runtime/memory` | Base directory for memory files |
-| `MEMORY_MAX_THREAD_ENTRIES` | `100` | Max entries per thread JSONL file |
-| `MEMORY_MAX_WORKSPACE_ENTRIES` | `50` | Max entries in workspace.jsonl |
+Use this simplified model when reasoning about memory in KubeSynapse:
 
----
+- **Runtime memory** keeps the pod's own short-horizon working context alive.
+- **Gateway durable memory** is the platform memory that users experience as persistent recall.
+- **Policies** decide how much durable memory gets injected.
+- **Chat saves and runtime metadata** are the main ways new durable memory is created.
 
-## Key Design Decisions
-
-1. **JSONL over a database**: Simple, no dependencies, human-readable, easy to debug. `cat workspace.jsonl` shows everything.
-2. **No vector search**: Memory is injected as plain text into the system prompt — the LLM itself decides what's relevant. This avoids embedding model dependencies and keeps the system self-contained.
-3. **Two tiers**: Workspace memory provides cross-thread continuity (the agent "remembers" the codebase); thread memory provides session-specific context.
-4. **Atomic pruning**: `tempfile` + `os.replace()` ensures no data loss on crash.
-5. **Bounded size**: Hard caps on entries (100 thread, 50 workspace) prevent unbounded growth that would blow up the system prompt.
-6. **Handoff for continuity**: When tokens run out, a structured handoff entry preserves enough state for the next session to pick up exactly where it left off.
+That split is the key difference between the current implementation and the older JSONL-only design.

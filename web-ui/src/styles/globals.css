@@ -403,6 +403,7 @@
   }
 
   html {
+    font-size: 15px;
     scroll-behavior: smooth;
     background: var(--color-background);
   }

@@ -3,7 +3,7 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 
 const statusBadgeVariants = cva(
-  "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium tracking-[0.02em] transition-[background-color,border-color,color,box-shadow] duration-150 ease-productive",
+  "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium tracking-[0.02em] transition-[background-color,border-color,color,box-shadow] duration-150 ease-productive",
   {
     variants: {
       status: {
@@ -33,7 +33,7 @@ export function StatusBadge({ icon: Icon, status, children, className, "aria-lab
     <span className={cn(statusBadgeVariants({ status }), className)} aria-label={ariaLabel}>
       {Icon && (
         <Icon
-          className={cn("h-3 w-3 transition-all duration-200", status === "running" && "animate-spin")}
+          className={cn("h-2.5 w-2.5 transition-all duration-200", status === "running" && "animate-spin")}
           aria-hidden="true"
         />
       )}

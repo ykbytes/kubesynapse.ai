@@ -161,8 +161,8 @@ jobs:
 
       - name: Build & Push OpenCode Runtime
         run: |
-          podman build --format docker -t ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynapse-opencode-runtime:${{ env.VERSION }} ./opencode-runtime
-          podman push ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynapse-opencode-runtime:${{ env.VERSION }}
+          podman build --format docker -t ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynapse-opencode-rt:${{ env.VERSION }} ./opencode-runtime
+          podman push ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynapse-opencode-rt:${{ env.VERSION }}
 
       - name: Build & Push Vibe Runtime
         run: |
@@ -186,7 +186,7 @@ jobs:
             --set operator.image.tag=${{ env.VERSION }} \
             --set operator.workerImage.repository=${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynapse-operator \
             --set operator.workerImage.tag=${{ env.VERSION }} \
-            --set opencodeRuntime.image.repository=${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynapse-opencode-runtime \
+            --set opencodeRuntime.image.repository=${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynapse-opencode-rt \
             --set opencodeRuntime.image.tag=${{ env.VERSION }} \
             --set mistralVibeRuntime.image.repository=${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynapse-vibe-rt \
             --set mistralVibeRuntime.image.tag=${{ env.VERSION }} \

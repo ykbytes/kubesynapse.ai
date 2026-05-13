@@ -131,7 +131,7 @@ export function AdminPanel({ token }: AdminPanelProps) {
         .split(",")
         .map((s) => s.trim())
         .filter(Boolean);
-      const created = await createUser(token, { ...createForm, allowed_namespaces: ns.length ? ns : ["default"] });
+      const created = await createUser(token, { ...createForm, allowed_namespaces: ns });
       setUsers((prev) => [...prev, created]);
       setCreateOpen(false);
       setCreateForm({ ...EMPTY_CREATE });
@@ -395,11 +395,11 @@ export function AdminPanel({ token }: AdminPanelProps) {
               </Select>
             </div>
             <div className="space-y-1">
-              <Label className="text-xs">Allowed Namespaces</Label>
+              <Label className="text-xs">Additional Namespaces</Label>
               <Input
                 value={createNamespaces}
                 onChange={(e) => setCreateNamespaces(e.target.value)}
-                placeholder="default, ai-platform (comma-separated)"
+                placeholder="team-a, ai-platform (optional)"
                 className="h-8 text-sm"
               />
             </div>

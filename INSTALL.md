@@ -314,6 +314,26 @@ Optional:
 This guide builds images locally and loads them directly into a Kind cluster (no registry needed).
 To skip the build step entirely, see [Quick Start — DockerHub Images](#quick-start--dockerhub-images) above.
 
+Recommended local path on Windows and for repeatable re-installs:
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File ./scripts/deploy-kind.ps1 `
+  -ClusterName kubesynapse-dev `
+  -Namespace kubesynapse `
+  -ReleaseName kubesynapse `
+  -AdminPassword "KubesynapseAdmin9!"
+```
+
+The script creates or reuses the Kind cluster, builds and loads the required local images,
+applies both `deploy/values.local-images.example.yaml` and
+`deploy/values.kind.quickstart.yaml`, injects `catalog/skills-catalog.json`, and
+reconciles the persisted PostgreSQL password on repeat upgrades so local installs stay
+repeatable. Use `-SkipBuild` and/or `-SkipLoad` on subsequent runs when the images are
+already present in Docker and Kind.
+
+The manual steps below are still useful when you need to customize the build, load, or
+Helm phases individually.
+
 ### 1. Create a Kind cluster
 
 ```bash
@@ -362,6 +382,9 @@ kind load image-archive dist/kubesynapse-operator.tar --name kubesynapse-dev
 kind load image-archive dist/kubesynapse-opencode-rt.tar --name kubesynapse-dev
 kind load image-archive dist/kubesynapse-api-gateway.tar --name kubesynapse-dev
 kind load image-archive dist/kubesynapse-web-ui.tar --name kubesynapse-dev
+
+docker build -f deploy/litellm/Dockerfile -t docker.io/litellm/litellm:v1.82.3-stable deploy/litellm
+kind load docker-image docker.io/litellm/litellm:v1.82.3-stable --name kubesynapse-dev
 ```
 
 ### 4. Set your LLM API key
@@ -383,7 +406,9 @@ platformSecrets:
 
 ```bash
   helm upgrade --install kubesynapse ./charts/kubesynapse -n kubesynapse --create-namespace \
-    -f ./deploy/values.local-images.example.yaml
+    -f ./deploy/values.local-images.example.yaml \
+    -f ./deploy/values.kind.quickstart.yaml \
+    --set-file skillsCatalog.catalogJson=./catalog/skills-catalog.json
 ```
 
   `deploy/values.local-images.example.yaml` remaps the core platform images to the
@@ -392,6 +417,10 @@ platformSecrets:
   into the cluster cache alongside the locally built platform images. Extend it with
   `mcpToolSidecars` entries only if your agents use locally built sidecar images
   instead of the default published ones.
+
+  `deploy/values.kind.quickstart.yaml` disables optional local-only friction points such as
+  MCP Hub, system agents, PodDisruptionBudgets, and NetworkPolicies so a single-node Kind
+  cluster can converge more reliably.
 
   If your local cluster cannot pull `localhost/kubesynapse/*:dev` images directly,
   load or push those images into a registry that the cluster nodes can reach before

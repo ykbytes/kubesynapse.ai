@@ -274,7 +274,7 @@ def normalize_principal(
 ) -> dict[str, Any]:
     """Build a normalized principal dict from auth claims."""
     normalized_role = role if role in ROLE_PRIORITY else "viewer"
-    normalized_namespaces = normalize_namespaces(allowed_namespaces or ["*"]) or ["*"]
+    normalized_namespaces = ["*"] if normalized_role == "admin" else normalize_namespaces(allowed_namespaces or ["*"]) or ["*"]
     return {
         "sub": sub,
         "id": sub,
@@ -436,6 +436,8 @@ def ensure_role(user: dict[str, Any], minimum_role: str) -> dict[str, Any]:
 def ensure_namespace_access(user: dict[str, Any], namespace: str, minimum_role: str = "viewer") -> dict[str, Any]:
     """Raise 403 if user cannot access the given namespace."""
     ensure_role(user, minimum_role)
+    if str(user.get("role") or "viewer") == "admin":
+        return user
     allowed_namespaces = normalize_namespaces(user.get("allowed_namespaces") or ["*"]) or ["*"]
     if "*" in allowed_namespaces or namespace in allowed_namespaces:
         return user

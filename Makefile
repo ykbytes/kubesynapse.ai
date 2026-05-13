@@ -53,7 +53,7 @@ docker-build-operator:
 	$(CONTAINER_CLI) build $(CONTAINER_BUILD_FLAGS) -t $(REGISTRY)/kubesynapse-operator:$(VERSION) ./operator
 
 docker-build-opencode-runtime:
-	$(CONTAINER_CLI) build $(CONTAINER_BUILD_FLAGS) -t $(REGISTRY)/kubesynapse-opencode-runtime:$(VERSION) ./opencode-runtime
+	$(CONTAINER_CLI) build $(CONTAINER_BUILD_FLAGS) -t $(REGISTRY)/kubesynapse-opencode-rt:$(VERSION) ./opencode-runtime
 
 docker-build-gateway:
 	$(CONTAINER_CLI) build $(CONTAINER_BUILD_FLAGS) -t $(REGISTRY)/kubesynapse-api-gateway:$(VERSION) ./api-gateway
@@ -99,7 +99,7 @@ docker-push-operator:
 	$(CONTAINER_CLI) push $(REGISTRY)/kubesynapse-operator:$(VERSION)
 
 docker-push-opencode-runtime:
-	$(CONTAINER_CLI) push $(REGISTRY)/kubesynapse-opencode-runtime:$(VERSION)
+	$(CONTAINER_CLI) push $(REGISTRY)/kubesynapse-opencode-rt:$(VERSION)
 
 docker-push-gateway:
 	$(CONTAINER_CLI) push $(REGISTRY)/kubesynapse-api-gateway:$(VERSION)
@@ -240,22 +240,22 @@ K8S_RELEASE ?= kubesynapse
 K8S_VALUES ?= ./deploy/values.production.yaml
 
 k8s-install:
-	./scripts/deploy-k8s.sh install
+	NAMESPACE=$(K8S_NAMESPACE) RELEASE_NAME=$(K8S_RELEASE) VALUES_FILE=$(K8S_VALUES) ./scripts/deploy-k8s.sh install
 
 k8s-upgrade:
-	./scripts/deploy-k8s.sh upgrade
+	NAMESPACE=$(K8S_NAMESPACE) RELEASE_NAME=$(K8S_RELEASE) VALUES_FILE=$(K8S_VALUES) ./scripts/deploy-k8s.sh upgrade
 
 k8s-uninstall:
-	./scripts/deploy-k8s.sh uninstall
+	NAMESPACE=$(K8S_NAMESPACE) RELEASE_NAME=$(K8S_RELEASE) VALUES_FILE=$(K8S_VALUES) ./scripts/deploy-k8s.sh uninstall
 
 k8s-status:
-	./scripts/deploy-k8s.sh status
+	NAMESPACE=$(K8S_NAMESPACE) RELEASE_NAME=$(K8S_RELEASE) VALUES_FILE=$(K8S_VALUES) ./scripts/deploy-k8s.sh status
 
 k8s-logs:
-	./scripts/deploy-k8s.sh logs $(SERVICE)
+	NAMESPACE=$(K8S_NAMESPACE) RELEASE_NAME=$(K8S_RELEASE) VALUES_FILE=$(K8S_VALUES) ./scripts/deploy-k8s.sh logs $(SERVICE)
 
 k8s-port-forward:
-	./scripts/deploy-k8s.sh port-forward
+	NAMESPACE=$(K8S_NAMESPACE) RELEASE_NAME=$(K8S_RELEASE) VALUES_FILE=$(K8S_VALUES) ./scripts/deploy-k8s.sh port-forward
 
 # ===========================
 # Clean
@@ -264,7 +264,7 @@ k8s-port-forward:
 clean:
 	rm -rf bin/ dist/
 	$(CONTAINER_CLI) rmi $(REGISTRY)/kubesynapse-operator:$(VERSION) || true
-	$(CONTAINER_CLI) rmi $(REGISTRY)/kubesynapse-opencode-runtime:$(VERSION) || true
+	$(CONTAINER_CLI) rmi $(REGISTRY)/kubesynapse-opencode-rt:$(VERSION) || true
 	$(CONTAINER_CLI) rmi $(REGISTRY)/kubesynapse-api-gateway:$(VERSION) || true
 	$(CONTAINER_CLI) rmi $(REGISTRY)/kubesynapse-web-ui:$(VERSION) || true
 	$(CONTAINER_CLI) rmi $(REGISTRY)/mcp-code-exec:$(VERSION) || true

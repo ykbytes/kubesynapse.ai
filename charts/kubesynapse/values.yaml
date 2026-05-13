@@ -620,6 +620,21 @@ agentRuntime:
   clusterReadAccess: false
 
 # ---------------------------------------------------------------------------
+# Default Memory Policy
+# ---------------------------------------------------------------------------
+# Creates an AgentPolicy CR with memory defaults.  Agents that have no
+# explicit policyRef will use the gateway's built-in fallback, but agents
+# that reference this policy get autoPromote + higher injection limits.
+memoryPolicy:
+  enabled: true
+  name: "default-memory-policy"
+  namespace: "default"
+  autoPromote: true
+  maxInjectedMemories: 8
+  maxInjectedChars: 2400
+  allowedMemoryTypes: []
+
+# ---------------------------------------------------------------------------
 # Run Intelligence Layer — System Agents (Story 7)
 # ---------------------------------------------------------------------------
 # Predefined AIAgent CRs that are invoked on triggers (failures, anomalies,

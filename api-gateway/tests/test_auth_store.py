@@ -116,6 +116,34 @@ class AuthStoreTests(unittest.TestCase):
         self.assertTrue(self.auth_store.verify_password("NewPassw0rd", stored_user.password_hash))
         self.assertFalse(self.auth_store.verify_password("OldPassw0rd", stored_user.password_hash))
 
+    def test_admin_users_are_serialized_with_wildcard_namespace_access(self) -> None:
+        user = self.auth_store.create_local_user(
+            username="Admin",
+            password="AdminPass1",
+            email="admin@example.com",
+            display_name="Admin User",
+            role="admin",
+            allowed_namespaces=["team-a"],
+        )
+
+        self.assertEqual(user["allowed_namespaces"], ["*"])
+
+        updated = self.auth_store.update_user_fields(
+            int(user["id"]),
+            role="operator",
+            allowed_namespaces=["team-b", "*"],
+        )
+
+        self.assertEqual(updated["allowed_namespaces"], ["team-b"])
+
+        promoted = self.auth_store.update_user_fields(
+            int(user["id"]),
+            role="admin",
+            allowed_namespaces=["team-c"],
+        )
+
+        self.assertEqual(promoted["allowed_namespaces"], ["*"])
+
     def test_init_database_adds_namespace_columns_to_legacy_intelligence_tables(self) -> None:
         database_path = Path(self.temp_dir.name) / "legacy-auth-store.db"
         module_name, auth_store = load_auth_store(database_path)

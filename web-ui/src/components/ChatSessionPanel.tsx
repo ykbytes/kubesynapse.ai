@@ -60,7 +60,7 @@ const SessionItem = memo(function SessionItem({
 
   return (
     <div
-      className={`group cursor-pointer rounded-sm border px-2 py-1.5 text-sm transition-colors ${
+      className={`group cursor-pointer rounded-sm border px-1.5 py-1 text-xs transition-colors ${
         isActive
           ? "border-primary/30 bg-primary/8 text-foreground shadow-sm"
           : "border-transparent text-muted-foreground hover:border-border hover:bg-muted/40 hover:text-foreground"
@@ -70,9 +70,9 @@ const SessionItem = memo(function SessionItem({
       role="button"
       tabIndex={0}
     >
-      <div className="flex items-start gap-2">
-        <div className={`mt-1 rounded-sm p-1 ${isActive ? "bg-primary/12 text-primary" : "bg-muted/60 text-muted-foreground"}`}>
-          <MessageSquare className="h-3.5 w-3.5 shrink-0" />
+      <div className="flex items-start gap-1.5">
+        <div className={`mt-0.5 rounded-sm p-0.5 ${isActive ? "bg-primary/12 text-primary" : "bg-muted/60 text-muted-foreground"}`}>
+          <MessageSquare className="h-3 w-3 shrink-0" />
         </div>
         <div className="min-w-0 flex-1">
           {editing ? (
@@ -124,11 +124,11 @@ const SessionItem = memo(function SessionItem({
         </div>
         {!editing && (
           <div className="flex gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
-            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={(e) => { e.stopPropagation(); setEditing(true); }} title="Rename session">
-              <Pencil className="h-3 w-3" />
+            <Button variant="ghost" size="icon" className="h-6 w-6" onClick={(e) => { e.stopPropagation(); setEditing(true); }} title="Rename session">
+              <Pencil className="h-2.5 w-2.5" />
             </Button>
-            <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={(e) => { e.stopPropagation(); onDelete(); }} title="Delete session">
-              <Trash2 className="h-3 w-3" />
+            <Button variant="ghost" size="icon" className="h-6 w-6 text-destructive" onClick={(e) => { e.stopPropagation(); onDelete(); }} title="Delete session">
+              <Trash2 className="h-2.5 w-2.5" />
             </Button>
           </div>
         )}
@@ -167,31 +167,31 @@ export const ChatSessionPanel = memo(function ChatSessionPanel({
   }, [search, sessions]);
 
   return (
-    <div className="flex h-[20rem] w-full shrink-0 flex-col overflow-hidden rounded-none border border-border/70 bg-card/55 shadow-[0_18px_48px_-28px_rgba(15,23,42,0.45)] lg:h-full lg:w-[15rem] xl:w-[17rem]">
-      <div className="border-b border-border px-2.5 py-2">
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-xs font-semibold uppercase tracking-wider text-foreground/75">Sessions</span>
-          <div className="flex gap-1">
-            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onSaveCurrent} title="Save current session">
-              <Clock className="h-3.5 w-3.5" />
+    <div className="flex h-[20rem] w-full shrink-0 flex-col overflow-hidden rounded-none border border-border/70 bg-card/55 shadow-[0_18px_48px_-28px_rgba(15,23,42,0.45)] lg:h-full lg:w-[14rem] xl:w-[15.5rem]">
+      <div className="border-b border-border px-2 py-1.5">
+        <div className="flex items-center justify-between gap-1.5">
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-foreground/75">Sessions</span>
+          <div className="flex gap-0.5">
+            <Button variant="ghost" size="icon" className="h-6 w-6" onClick={onSaveCurrent} title="Save current session">
+              <Clock className="h-3 w-3" />
             </Button>
-            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onNewSession} title="Start empty session">
-              <Plus className="h-3.5 w-3.5" />
+            <Button variant="ghost" size="icon" className="h-6 w-6" onClick={onNewSession} title="Start empty session">
+              <Plus className="h-3 w-3" />
             </Button>
           </div>
         </div>
-          <div className="mt-1.5 space-y-1">
+          <div className="mt-1 space-y-1">
           <div className="relative">
-            <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+            <Search className="pointer-events-none absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground" />
             <Input
               value={search}
               onChange={(e) => onSearchChange(e.target.value)}
               placeholder="Search sessions"
-              className="h-8 pl-7 text-xs"
+              className="h-7 pl-7 text-[11px]"
             />
           </div>
-          <div className="flex flex-wrap items-center gap-1.5 text-[10px] text-muted-foreground">
-            <Badge variant={sessionSaving ? "default" : sessionDirty ? "secondary" : "outline"} className="h-5 px-1.5 text-[10px]">
+          <div className="flex flex-wrap items-center gap-1 text-[9px] text-muted-foreground">
+            <Badge variant={sessionSaving ? "default" : sessionDirty ? "secondary" : "outline"} className="h-4 px-1 text-[9px]">
               {sessionSaving ? "Saving" : sessionDirty ? "Unsaved" : "Saved"}
             </Badge>
             {lastSessionSaveAt && <span>Last save {formatRelativeTime(lastSessionSaveAt)}</span>}

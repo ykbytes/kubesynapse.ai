@@ -145,7 +145,7 @@ export function ConnectionDialog({
   const [createDisplayName, setCreateDisplayName] = useState("");
   const [createEmail, setCreateEmail] = useState("");
   const [createRole, setCreateRole] = useState<UserRole>("viewer");
-  const [createAllowedNamespaces, setCreateAllowedNamespaces] = useState("default");
+  const [createAllowedNamespaces, setCreateAllowedNamespaces] = useState("");
 
   const isAdmin = currentUser?.role === "admin";
   const canChangePassword = currentUser?.auth_provider === "local";
@@ -228,7 +228,7 @@ export function ConnectionDialog({
     setCreateDisplayName("");
     setCreateEmail("");
     setCreateRole("viewer");
-    setCreateAllowedNamespaces("default");
+    setCreateAllowedNamespaces("");
   }
 
   async function handleChangePassword() {
@@ -693,12 +693,12 @@ export function ConnectionDialog({
                           </Select>
                         </div>
                         <div className="grid gap-2">
-                          <Label htmlFor="create-namespaces">Allowed namespaces</Label>
+                          <Label htmlFor="create-namespaces">Additional namespaces</Label>
                           <Input
                             id="create-namespaces"
                             value={createAllowedNamespaces}
                             onChange={(e) => setCreateAllowedNamespaces(e.target.value)}
-                            placeholder="default, team-a"
+                            placeholder="team-a, finance"
                           />
                         </div>
                       </div>

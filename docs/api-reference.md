@@ -353,13 +353,28 @@ Delete GitHub credential secret.
 
 ## Chat Sessions
 
+Chat sessions are stored in PostgreSQL and owned by the authenticated user.
+
 #### `GET /api/v1/chat-sessions`
 
-List chat sessions.
+List chat sessions for a specific agent.
+
+**Query parameters:**
+
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `agent_name` | string | *(required)* | Agent whose sessions should be listed |
+| `namespace` | string | `default` | Target namespace |
 
 #### `POST /api/v1/chat-sessions`
 
 Create a new chat session.
+
+**Query parameters:**
+
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `namespace` | string | `default` | Target namespace |
 
 **Request body:**
 
@@ -376,20 +391,40 @@ Get messages for a session.
 
 #### `PUT /api/v1/chat-sessions/{session_id}/messages`
 
-Add a message to a session.
+Replace the full stored message list for a session.
 
 **Request body:**
 
 ```json
 {
-  "role": "user",
-  "content": "How do I rotate a secret?"
+  "messages": [
+    {
+      "message_id": "msg-1",
+      "role": "user",
+      "content": "How do I rotate a secret?",
+      "status": "complete"
+    },
+    {
+      "message_id": "msg-2",
+      "role": "assistant",
+      "content": "Use kubectl create secret ...",
+      "status": "complete"
+    }
+  ]
 }
 ```
 
 #### `PATCH /api/v1/chat-sessions/{session_id}`
 
-Update session metadata (title, agent).
+Update session metadata.
+
+**Request body:**
+
+```json
+{
+  "title": "Updated session title"
+}
+```
 
 #### `DELETE /api/v1/chat-sessions/{session_id}`
 
@@ -397,11 +432,21 @@ Delete a chat session.
 
 #### `PATCH /api/v1/memory/{record_id}`
 
-Update a promoted memory record.
+Update a durable memory record owned by the current user.
+
+**Request body:**
+
+```json
+{
+  "promoted": true,
+  "topic": "repo-convention",
+  "content": "Use the repo root Make targets first."
+}
+```
 
 #### `DELETE /api/v1/memory/{record_id}`
 
-Delete a promoted memory record.
+Delete a durable memory record owned by the current user.
 
 ---
 
@@ -703,22 +748,26 @@ kind: AgentTenant
 metadata:
   name: team-alpha
 spec:
-  namespaces:
-    - team-alpha
-  quotas:
-    cpu: "10"
-    memory: "20Gi"
-    agents: 5
+  tenantName: team-alpha
+  namespace: team-alpha
+  resourceQuota:
+    maxCPU: "10"
+    maxMemory: "20Gi"
+    maxPods: 5
   allowedModels:
     - gpt-4o
     - gpt-4o-mini
-  admins:
+  adminUsers:
     - alice@example.com
 ```
 
 ```bash
 kubectl apply -f tenant.yaml
 ```
+
+The admin user flow can also create `AgentTenant` resources automatically. When an admin
+creates or updates a non-admin local user through `/api/v1/admin/users`, the gateway reconciles
+an `AgentTenant` named `user-<slug>` that targets the user's dedicated namespace.
 
 #### List tenants
 
@@ -937,6 +986,19 @@ Create or update a key.
 
 List LiteLLM-backed providers grouped with configured model deployments for the Settings workspace.
 
+#### `GET /api/v1/llm/providers/{provider}/suggestions`
+
+Return model suggestions for a provider.
+
+This endpoint is live-backed for providers with dynamic catalogs:
+
+- `OPENROUTER_API_KEY`
+- `OPENCODE_API_KEY`
+- `OPENCODE_GO_API_KEY`
+- `GITHUB_COPILOT_TOKEN`
+
+Providers that require credentials return no live suggestions until the credential is configured.
+
 #### `GET /api/v1/providers`
 
 List built-in and custom provider configurations for the provider registry shown in Settings.
@@ -948,6 +1010,12 @@ Get the flattened provider and model catalog used by provider and model pickers.
 #### `PUT /api/v1/providers/{provider_id}/credentials`
 
 Create or update stored credentials for a provider entry.
+
+For the built-in OpenCode providers, the expected secret-backed keys are:
+
+- `OPENCODE_API_KEY` for OpenCode Zen
+- `OPENCODE_GO_API_KEY` for OpenCode Go
+- `GITHUB_COPILOT_TOKEN` for GitHub Copilot
 
 ---
 
@@ -961,9 +1029,28 @@ List local users (admin only).
 
 Create a local user (admin only).
 
+**Request body:**
+
+```json
+{
+  "username": "alice.user",
+  "password": "CorrectH0rse1",
+  "display_name": "Alice",
+  "role": "operator",
+  "allowed_namespaces": ["team-a"]
+}
+```
+
+For non-admin roles, `allowed_namespaces` is treated as **additional namespaces**. The gateway
+automatically appends the dedicated namespace `user-<slug>` and reconciles a matching `AgentTenant`.
+For admin users, namespace access is normalized to `[*]`.
+
 #### `PATCH /api/v1/admin/users/{user_id}`
 
 Update a user (admin only).
+
+Updating a user's role or `allowed_namespaces` also updates the dedicated tenant's `adminUsers`
+membership and namespace policy. Demoting a user away from admin removes wildcard namespace access.
 
 #### `GET /api/v1/admin/audit`
 

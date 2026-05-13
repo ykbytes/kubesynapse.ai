@@ -8,6 +8,24 @@ Main platform Helm chart for deploying KubeSynapse on Kubernetes.
 helm upgrade --install kubesynapse ./charts/kubesynapse -n kubesynapse --create-namespace
 ```
 
+## Local Kind Quickstart
+
+For repeatable local installs on Windows, use the checked-in PowerShell helper:
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File ./scripts/deploy-kind.ps1 `
+	-ClusterName kubesynapse-dev `
+	-Namespace kubesynapse `
+	-ReleaseName kubesynapse `
+	-AdminPassword "KubesynapseAdmin9!"
+```
+
+The script builds and loads the local platform images, applies both
+`deploy/values.local-images.example.yaml` and `deploy/values.kind.quickstart.yaml`,
+syncs the persisted PostgreSQL password on repeat upgrades, injects the checked-in
+skills catalog, and restarts the core deployments so unchanged `:dev` image tags are
+picked up reliably.
+
 The chart leaves the browsable Skills catalog empty unless you provide catalog JSON. To populate the `Catalog > Skills` tab during install or upgrade, pass the checked-in catalog file:
 
 ```bash
@@ -31,6 +49,29 @@ helm upgrade --install kubesynapse ./charts/kubesynapse \
 - `pi` remains the supported alternative runtime kind and is wired through the chart values and operator deployment.
 - `mistral-vibe` remains a supported runtime kind and is wired through the chart values and operator deployment.
 
+## Default Memory Policy
+
+When `memoryPolicy.enabled=true`, the chart creates a post-install/post-upgrade
+`AgentPolicy` named `default-memory-policy` with these defaults:
+
+- `autoPromote: true`
+- `maxInjectedMemories: 8`
+- `maxInjectedChars: 2400`
+- `allowedMemoryTypes: []`
+
+Agents that explicitly reference that policy get those recall defaults. Agents with no
+`policyRef` still use the gateway's built-in fallback behavior, but the chart-managed
+policy is the preferred shared default for durable recall.
+
+## MCP Hub Behavior
+
+`mcpHub.enabled` now gates the shared MCP hub namespace, network policies, and shared
+server deployments. This matters for single-node Kind installs because the recommended
+`deploy/values.kind.quickstart.yaml` overlay disables the MCP hub entirely.
+
+Structured remote MCP connections do not require the shared hub bearer token unless the
+connection actually uses hub transport or explicitly references `MCP_BEARER_TOKEN`.
+
 ## Key Values
 
 | Path | Description | Default |
@@ -45,6 +86,11 @@ helm upgrade --install kubesynapse ./charts/kubesynapse \
 | `operator.workerTraceBatchSize` | Trace batch size before flush | `50` |
 | `database.enabled` | Deploy Postgres sub-chart | `true` |
 | `database.url` | External Postgres URL (optional) | `""` |
+| `memoryPolicy.enabled` | Create the chart-managed default memory `AgentPolicy` | `true` |
+| `memoryPolicy.autoPromote` | Auto-promote runtime memory candidates persisted by the gateway | `true` |
+| `memoryPolicy.maxInjectedMemories` | Max recalled memories injected into prompts | `8` |
+| `memoryPolicy.maxInjectedChars` | Max characters injected for recalled memory context | `2400` |
+| `mcpHub.enabled` | Enable the shared MCP hub namespace and server pool | `true` |
 | `ingress.enabled` | Enable Ingress resource | `false` |
 | `ingress.host` | Primary ingress host | `kubesynapse.local` |
 | `agentRuntime.pi.enabled` | Opt-in to deploy the Pi runtime sidecar | `false` |

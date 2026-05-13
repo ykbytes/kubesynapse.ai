@@ -60,9 +60,9 @@ function ThemePicker() {
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <Button variant="outline" size="sm" className="h-8 gap-1.5 rounded-xl border-border/70 bg-card/72 px-2.5 text-xs text-foreground hover:bg-accent/70 sm:h-9 sm:gap-2 sm:px-3">
-          <span className={`inline-block h-3.5 w-3.5 rounded-full border border-white/40 shadow-sm ${THEME_SWATCHES[theme]}`} aria-hidden="true" />
-          <Palette className="h-3.5 w-3.5" />
+        <Button variant="outline" size="sm" className="h-7 gap-1 rounded-lg border-border/70 bg-card/72 px-2 text-[11px] text-foreground hover:bg-accent/70">
+          <span className={`inline-block h-3 w-3 rounded-full border border-white/40 shadow-sm ${THEME_SWATCHES[theme]}`} aria-hidden="true" />
+          <Palette className="h-3 w-3" />
           <span className="hidden sm:inline">{labelFor(theme)}</span>
         </Button>
       </PopoverTrigger>
@@ -131,7 +131,7 @@ function NamespaceSwitcher({
       <PopoverTrigger asChild>
         <button
           type="button"
-          className="inline-flex h-9 max-w-[9rem] min-w-0 items-center gap-1.5 rounded-xl border border-border/70 bg-card/72 px-3 font-mono text-[11px] text-foreground transition-colors duration-150 ease-productive hover:bg-accent/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/35 sm:max-w-[12rem]"
+          className="inline-flex h-7 max-w-[9rem] min-w-0 items-center gap-1 rounded-lg border border-border/70 bg-card/72 px-2 font-mono text-[10px] text-foreground transition-colors duration-150 ease-productive hover:bg-accent/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/35 sm:max-w-[12rem]"
         >
           <span className="truncate">{namespace}</span>
           <ChevronDown className="h-3 w-3 text-muted-foreground" />
@@ -215,21 +215,21 @@ export function TopBar({
 
   return (
     <TooltipProvider delayDuration={200}>
-      <header className="sticky top-0 z-50 flex min-h-14 flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b border-sidebar-border/80 bg-sidebar/88 px-3 py-2 shadow-sm backdrop-blur-xl animate-slide-from-left md:h-14 md:flex-nowrap md:px-5 md:py-0">
-        <div className="flex min-w-0 flex-1 items-center gap-3">
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[calc(var(--radius-lg)+2px)] border border-border/70 bg-card/72 text-primary shadow-sm">
-            <LayoutPanelTop className="h-4.5 w-4.5" />
+      <header className="sticky top-0 z-50 flex h-10 flex-wrap items-center justify-between gap-x-2 gap-y-1 border-b border-sidebar-border/80 bg-sidebar/88 px-3 py-0 shadow-sm backdrop-blur-xl animate-slide-from-left md:flex-nowrap md:px-4">
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-border/70 bg-card/72 text-primary shadow-sm">
+            <LayoutPanelTop className="h-3.5 w-3.5" />
           </div>
           <div className="min-w-0">
-            <p className="text-[10px] font-medium uppercase tracking-[0.24em] text-muted-foreground">Operations Console</p>
-            <div className="flex min-w-0 items-center gap-2">
-              <span className="truncate text-sm font-semibold text-foreground">{BRAND.name}</span>
-              <span className="hidden truncate text-xs text-muted-foreground lg:inline">{BRAND.tagline}</span>
+            <p className="text-[9px] font-medium uppercase tracking-[0.24em] text-muted-foreground">Operations Console</p>
+            <div className="flex min-w-0 items-center gap-1.5">
+              <span className="truncate text-xs font-semibold text-foreground">{BRAND.name}</span>
+              <span className="hidden truncate text-[10px] text-muted-foreground lg:inline">{BRAND.tagline}</span>
             </div>
           </div>
         </div>
 
-        <div className="ml-auto flex max-w-full flex-wrap items-center justify-end gap-1.5 sm:gap-2">
+        <div className="ml-auto flex max-w-full flex-wrap items-center justify-end gap-1">
           <Tooltip>
             <TooltipTrigger asChild>
               <span>
@@ -250,7 +250,7 @@ export function TopBar({
               />
             </div>
           )}
-          {currentUser ? <Badge variant="outline" className="hidden bg-card/72 text-muted-foreground sm:inline-flex">{currentUser.role}</Badge> : null}
+          {currentUser ? <Badge variant="outline" className="hidden h-5 bg-card/72 px-1.5 text-[10px] text-muted-foreground sm:inline-flex">{currentUser.role}</Badge> : null}
           <ThemePicker />
           <NotificationCenter />
           <ConnectionDialog

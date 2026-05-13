@@ -331,14 +331,14 @@ export function SettingsPanel({ token, isAdmin }: SettingsPanelProps) {
         toast.success(`${label} credential updated`);
         setProviderDraft(providerId, "");
         setProviderKeyVisibleByProvider((previous) => ({ ...previous, [providerId]: false }));
-        await refreshConnected();
+        await refreshAll();
       } catch (error) {
         toast.error(error instanceof Error ? error.message : "Failed to update provider credential");
       } finally {
         setSavingProviderId(null);
       }
     },
-    [refreshConnected, token],
+    [refreshAll, token],
   );
 
   const saveLiteLLMKey = useCallback(
@@ -352,14 +352,14 @@ export function SettingsPanel({ token, isAdmin }: SettingsPanelProps) {
         toast.success(`${provider?.label ?? providerKey} key updated`);
         setLiteLLMDraft(providerKey, "");
         setLitellmKeyVisibleByProvider((previous) => ({ ...previous, [providerKey]: false }));
-        await refreshLiteLLM();
+        await refreshAll();
       } catch (error) {
         toast.error(error instanceof Error ? error.message : "Failed to update LiteLLM key");
       } finally {
         setSavingLiteLLMKeyProvider(null);
       }
     },
-    [litellmProviders, refreshLiteLLM, token],
+    [litellmProviders, refreshAll, token],
   );
 
   const handleDeleteModel = useCallback(
@@ -400,7 +400,7 @@ export function SettingsPanel({ token, isAdmin }: SettingsPanelProps) {
             setCopilotFlowActive(false);
             setCopilotConnected(true);
             toast.success("GitHub Copilot connected");
-            await refreshConnected();
+            await refreshAll();
           } else if (result.status === "error") {
             stopCopilotPolling();
             setCopilotFlowActive(false);
@@ -597,6 +597,11 @@ export function SettingsPanel({ token, isAdmin }: SettingsPanelProps) {
                   const isCopilot = provider.id === "github-copilot";
                   const isSavingCredential = savingProviderId === provider.id;
                   const isDeletingCustom = deletingCustomProviderId === provider.id;
+                  const emptyModelsMessage = provider.connected
+                    ? "No live models returned for this provider yet. Refresh or reconnect to try again."
+                    : isCopilot
+                      ? "Connect with GitHub to load available models."
+                      : "Connect this provider to load its live model catalog.";
                   return (
                     <Card key={provider.id} className="rounded-[1.25rem] border-border/70 bg-background/70 shadow-sm">
                       <CardHeader className="px-4 py-3 pb-2">
@@ -780,7 +785,7 @@ export function SettingsPanel({ token, isAdmin }: SettingsPanelProps) {
                         <div className="space-y-1.5">
                           <Label className="text-xs text-muted-foreground">Models</Label>
                           {providerModels.length === 0 ? (
-                            <p className="text-xs text-muted-foreground">No models registered for this provider.</p>
+                            <p className="text-xs text-muted-foreground">{emptyModelsMessage}</p>
                           ) : (
                             <div className="space-y-1.5">
                               {providerModels.map((model) => (
@@ -1204,11 +1209,13 @@ export function SettingsPanel({ token, isAdmin }: SettingsPanelProps) {
                   ))}
                 </div>
               </ScrollArea>
-            ) : modelSearch ? (
+            ) : (
               <p className="py-2 text-center text-xs text-muted-foreground">
-                No suggestions match. You can still add "{modelSearch}" as a custom model.
+                {modelSearch
+                  ? `No suggestions match. You can still add "${modelSearch}" as a custom model.`
+                  : "No live suggestions are available right now. You can still type a custom model ID."}
               </p>
-            ) : null}
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setAddDialogProvider(null)}>

@@ -376,6 +376,20 @@ def _memory_score(
     score = 0.0
     reason: str | None = None
     content_len = len(content)
+
+    # Penalize boilerplate / generic greeting content
+    _lower = content.lower().strip()
+    _boilerplate = (
+        "i have no persistent memor",
+        "how can i help",
+        "hi! how can i",
+        "hello! how can i",
+        "i'm opencode, an open source",
+        "i don't have any memories",
+    )
+    if any(_lower.startswith(bp) for bp in _boilerplate):
+        return round(score, 2), None  # 0.0 — never auto-promote
+
     if memory_type == "procedural":
         score += 2.5
     elif memory_type == "episodic":
@@ -727,8 +741,10 @@ def list_promoted_memory_records(
     username: str | None = None,
     limit: int = 8,
 ) -> list[dict[str, Any]]:
+    """Return promoted memories, falling back to high-score unpromoted records."""
     try:
         with db_session() as session:
+            # Primary: promoted records
             q = session.query(MemoryRecord).filter(
                 MemoryRecord.namespace == namespace,
                 MemoryRecord.agent_name == agent_name,
@@ -739,6 +755,29 @@ def list_promoted_memory_records(
             rows = (
                 q.order_by(MemoryRecord.created_at.desc(), MemoryRecord.id.desc()).limit(min(max(limit, 1), 20)).all()
             )
+
+            # Fallback: if no promoted records, use high-score unpromoted ones
+            if not rows:
+                fallback_q = session.query(MemoryRecord).filter(
+                    MemoryRecord.namespace == namespace,
+                    MemoryRecord.agent_name == agent_name,
+                    MemoryRecord.score >= 3.5,
+                )
+                if username:
+                    fallback_q = fallback_q.filter(
+                        (MemoryRecord.username == username) | (MemoryRecord.username.is_(None))
+                    )
+                rows = (
+                    fallback_q.order_by(MemoryRecord.score.desc(), MemoryRecord.created_at.desc())
+                    .limit(min(max(limit, 1), 20))
+                    .all()
+                )
+                if rows:
+                    logger.info(
+                        "Memory fallback: no promoted records for %s/%s, using %d high-score records",
+                        namespace, agent_name, len(rows),
+                    )
+
             return [
                 {
                     "id": r.id,
@@ -1355,6 +1394,24 @@ def normalize_namespaces(value: Any) -> list[str]:
     return sorted(set(items))
 
 
+def normalize_allowed_namespaces_for_role(
+    role: str,
+    allowed_namespaces: Any,
+    *,
+    default_namespaces: list[str] | None = None,
+) -> list[str]:
+    normalized_role = role if role in ROLE_PRIORITY else "viewer"
+    if normalized_role == "admin":
+        return ["*"]
+
+    normalized = [namespace for namespace in normalize_namespaces(allowed_namespaces) if namespace != "*"]
+    if normalized:
+        return normalized
+    if default_namespaces is None:
+        return []
+    return [namespace for namespace in normalize_namespaces(default_namespaces) if namespace != "*"]
+
+
 def hash_password(password: str) -> str:
     return PASSWORD_CONTEXT.hash(password)
 
@@ -1400,7 +1457,7 @@ def serialize_user(user: User) -> dict[str, Any]:
         "email": user.email,
         "display_name": user.display_name,
         "role": user.role,
-        "allowed_namespaces": normalize_namespaces(user.allowed_namespaces),
+        "allowed_namespaces": normalize_allowed_namespaces_for_role(user.role, user.allowed_namespaces),
         "auth_provider": user.auth_provider,
         "is_active": bool(user.is_active),
         "created_at": ensure_utc(user.created_at).isoformat() if user.created_at else None,
@@ -1672,7 +1729,11 @@ def ensure_bootstrap_admin() -> None:
                 display_name=display_name or username,
                 password_hash=hash_password(password),
                 role="admin",
-                allowed_namespaces=normalize_namespaces(allowed_namespaces) or DEFAULT_ALLOWED_NAMESPACES,
+                allowed_namespaces=normalize_allowed_namespaces_for_role(
+                    "admin",
+                    allowed_namespaces,
+                    default_namespaces=DEFAULT_ALLOWED_NAMESPACES,
+                ),
                 auth_provider="local",
                 is_active=True,
             )
@@ -1704,6 +1765,11 @@ def create_local_user(
     if role not in ROLE_PRIORITY:
         raise ValueError(f"Unsupported role '{role}'.")
     validated_email = validate_email(email)
+    normalized_allowed_namespaces = normalize_allowed_namespaces_for_role(
+        role,
+        allowed_namespaces,
+        default_namespaces=DEFAULT_ALLOWED_NAMESPACES,
+    )
 
     with db_session() as session:
         if session.query(User).filter(User.username == normalized_username).one_or_none() is not None:
@@ -1717,7 +1783,7 @@ def create_local_user(
             display_name=display_name or normalized_username,
             password_hash=hash_password(password),
             role=role,
-            allowed_namespaces=normalize_namespaces(allowed_namespaces) or DEFAULT_ALLOWED_NAMESPACES,
+            allowed_namespaces=normalized_allowed_namespaces,
             auth_provider=auth_provider,
             external_id=external_id,
             is_active=True,
@@ -1748,7 +1814,11 @@ def upsert_external_user(
     allowed_namespaces: list[str] | None = None,
 ) -> dict[str, Any]:
     normalized_username = username.strip().lower()
-    normalized_namespaces = normalize_namespaces(allowed_namespaces)
+    normalized_namespaces = normalize_allowed_namespaces_for_role(
+        role,
+        allowed_namespaces,
+        default_namespaces=DEFAULT_ALLOWED_NAMESPACES,
+    )
     with db_session() as session:
         user = (
             session.query(User)
@@ -1765,7 +1835,7 @@ def upsert_external_user(
                 display_name=display_name or normalized_username,
                 password_hash=None,
                 role=role if role in ROLE_PRIORITY else "viewer",
-                allowed_namespaces=normalized_namespaces or DEFAULT_ALLOWED_NAMESPACES,
+                allowed_namespaces=normalized_namespaces,
                 auth_provider=auth_provider,
                 external_id=external_id,
                 is_active=True,
@@ -1797,16 +1867,28 @@ def update_user_fields(
         user = session.get(User, user_id)
         if user is None:
             raise ValueError(f"User id '{user_id}' was not found.")
+        next_role = str(user.role or "viewer")
         if role is not None:
             if role not in ROLE_PRIORITY:
                 raise ValueError(f"Unsupported role '{role}'.")
             user.role = role
+            next_role = role
         if display_name is not None:
             user.display_name = display_name.strip() or user.display_name
         if is_active is not None:
             user.is_active = bool(is_active)
         if allowed_namespaces is not None:
-            user.allowed_namespaces = normalize_namespaces(allowed_namespaces)
+            user.allowed_namespaces = normalize_allowed_namespaces_for_role(
+                next_role,
+                allowed_namespaces,
+                default_namespaces=DEFAULT_ALLOWED_NAMESPACES,
+            )
+        elif role is not None:
+            user.allowed_namespaces = normalize_allowed_namespaces_for_role(
+                next_role,
+                user.allowed_namespaces,
+                default_namespaces=DEFAULT_ALLOWED_NAMESPACES,
+            )
         user.updated_at = utc_now()
         session.flush()
         session.refresh(user)
@@ -1910,7 +1992,7 @@ def create_password_reset_token(user_id: int) -> str:
 
 def verify_password_reset_token(token: str) -> dict[str, Any] | None:
     """Return the user dict if the token is valid and unused, else None."""
-    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    token_hash = hashlib.sha256(token.encode('utf-8')).hexdigest()
     with db_session() as session:
         record = (
             session.query(PasswordResetToken)
@@ -2524,6 +2606,7 @@ def save_chat_messages(session_id: str, messages: list[dict[str, Any]]) -> None:
                 username=chat_session.username,
                 summary=summary,
                 session=session,
+                auto_promote=True,
             )
 
 

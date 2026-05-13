@@ -1,6 +1,7 @@
 # ---------------------------------------------------------------------------
 # MCP Hub: Dedicated ServiceAccount (no K8s API access for MCP servers)
 # ---------------------------------------------------------------------------
+{{- if .Values.mcpHub.enabled }}
 {{- $fullname := include "kubesynapse.fullname" . }}
 {{- $mcpNamespace := .Values.mcpHub.namespace | default "mcp-hub" }}
 {{- $mcpAuthSecretName := .Values.mcpHub.auth.secretName | default (printf "%s-mcp-auth" $fullname) }}
@@ -185,5 +186,6 @@ spec:
       name: http
   # ClusterIP only – never LoadBalancer; agents reach this via internal DNS
   type: ClusterIP
+{{- end }}
 {{- end }}
 {{- end }}

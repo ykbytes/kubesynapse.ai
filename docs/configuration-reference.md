@@ -39,11 +39,10 @@ Supported runtime kinds are `opencode`, `pi`, and `mistral-vibe`.
 | `DATABASE_PASSWORD` | `""` | Database password |
 | `DATABASE_SSL_MODE` | `prefer` | SSL mode for PostgreSQL |
 | `DATABASE_SQLITE_PATH` | `/tmp/KubeSynapse-gateway.db` | SQLite fallback path |
-| `OPENCODE_MEMORY_ENABLED` | `true` | Enable cross-session memory persistence |
-| `OPENCODE_MEMORY_DIR` | `~/.local/share/opencode-runtime/memory` | Memory storage directory |
-| `OPENCODE_MEMORY_DEFAULT_RETENTION` | `session` | Default memory retention tier |
-| `OPENCODE_MEMORY_SEMANTIC_ENABLED` | `false` | Enable Qdrant vector semantic memory |
-| `OPENCODE_MEMORY_QDRANT_URL` | `http://localhost:6333` | Qdrant server URL |
+
+Gateway-side durable recall is policy-driven rather than controlled by dedicated memory environment variables.
+Use `AgentPolicy.spec.memoryPolicy` or the chart-level `memoryPolicy.*` defaults to tune recall injection.
+The `OPENCODE_MEMORY_*` variables documented below apply only to the runtime-local OpenCode memory layer.
 
 ### Operator
 
@@ -132,9 +131,9 @@ Supported runtime kinds are `opencode`, `pi`, and `mistral-vibe`.
 | `OPENCODE_MEMORY_CONTEXT_MAX_TOKENS` | `2048` | Max memory context tokens |
 | `OPENCODE_MEMORY_PRUNE_INTERVAL_HOURS` | `24` | Memory prune interval |
 | `OPENCODE_MEMORY_ENTITY_EXTRACTION` | `true` | Enable entity extraction |
-| `OPENCODE_MEMORY_SEMANTIC_ENABLED` | `false` | Enable semantic memory |
+| `OPENCODE_MEMORY_SEMANTIC_ENABLED` | `false` | Enable the optional Qdrant semantic-memory provider |
 | `OPENCODE_MEMORY_QDRANT_URL` | `http://localhost:6333` | Qdrant URL |
-| `OPENCODE_MEMORY_QDRANT_COLLECTION` | `KubeSynapse_memory` | Qdrant collection name |
+| `OPENCODE_MEMORY_QDRANT_COLLECTION` | `KUBESYNAPSE_memory` | Qdrant collection name |
 | `OPENCODE_MEMORY_QDRANT_DIMENSION` | `768` | Embedding dimension |
 | `OPENCODE_MEMORY_QDRANT_TIMEOUT` | `5.0` | Qdrant connection timeout |
 | `OPENCODE_MEMORY_RELEVANCE_DECAY_HOURS` | `168` | Memory relevance decay (hours) |
@@ -160,10 +159,30 @@ See [`values.schema.json`](../charts/kubesynapse/values.schema.json) for the com
 - `apiGateway` — Gateway replicas, auth, DB
 - `webUi` — Frontend settings
 - `ingress` — Ingress rules and TLS
+- `memoryPolicy` — Chart-managed default durable-recall policy rendered as an `AgentPolicy`
 - `platformSecrets` — Secret management mode
 - `skillsCatalog` — Skills catalog JSON
 - `intelligence` — Metrics and alerting
 - `systemAgents` — Run Intelligence Layer system agents
+
+### Memory Policy Defaults
+
+The Helm chart can render a default `AgentPolicy` for durable recall:
+
+```yaml
+memoryPolicy:
+  enabled: true
+  name: "default-memory-policy"
+  namespace: "default"
+  autoPromote: true
+  maxInjectedMemories: 8
+  maxInjectedChars: 2400
+  allowedMemoryTypes: []
+```
+
+These values control gateway-side recall injection for agents that reference the policy.
+They are separate from the runtime-local `OPENCODE_MEMORY_*` settings, which still govern
+the JSONL and optional semantic-memory layer inside the OpenCode runtime.
 
 ---
 

@@ -100,7 +100,7 @@ case "${1:-install}" in
     echo "  API Gateway -> http://localhost:8080"
     echo "  Web UI      -> http://localhost:3000"
     kubectl port-forward svc/$RELEASE_NAME-api-gateway 8080:8080 -n "$NAMESPACE" &
-    kubectl port-forward svc/$RELEASE_NAME-web-ui 3000:8080 -n "$NAMESPACE" &
+    kubectl port-forward svc/$RELEASE_NAME-web-ui 3000:80 -n "$NAMESPACE" &
     wait
     ;;
 

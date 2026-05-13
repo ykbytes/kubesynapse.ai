@@ -832,6 +832,32 @@ def create_mcp_auth_secret_manifest(namespace: str) -> dict[str, Any]:
     }
 
 
+def mcp_connections_require_shared_bearer_token(mcp_connections: list[dict[str, Any]], mcp_servers: list[str]) -> bool:
+    """Return True when an agent still needs the shared MCP hub bearer token.
+
+    Structured saved MCP connections can be fully self-contained remote endpoints.
+    Those should not force the operator to mirror the hub auth secret just because
+    legacy mcpServers was backfilled for compatibility.
+    """
+    if not mcp_connections:
+        return bool(mcp_servers)
+
+    for connection in mcp_connections:
+        if not isinstance(connection, dict):
+            continue
+        transport = str(connection.get("transport") or "").strip().lower()
+        if transport == "hub":
+            return True
+        runtime = connection.get("runtime") if isinstance(connection.get("runtime"), dict) else {}
+        headers = runtime.get("headers") if isinstance(runtime.get("headers"), list) else []
+        for header in headers:
+            if not isinstance(header, dict):
+                continue
+            if str(header.get("envVar") or "").strip() == "MCP_BEARER_TOKEN":
+                return True
+    return False
+
+
 # Built-in provider ID -> secret key mapping
 _BUILTIN_PROVIDER_SECRET_KEYS: dict[str, str] = {
     "opencode": "OPENCODE_API_KEY",
@@ -1090,6 +1116,7 @@ def _create_pi_statefulset_spec(
 
     runtime_spec = spec.get("runtime") or {}
     pi_spec = (runtime_spec.get("pi") or {}) if isinstance(runtime_spec, dict) else {}
+    needs_shared_mcp_bearer = mcp_connections_require_shared_bearer_token(mcp_connections, mcp_servers)
 
     agent_image = PI_RUNTIME_IMAGE
     agent_image_pull_policy = PI_RUNTIME_IMAGE_PULL_POLICY
@@ -1139,7 +1166,7 @@ def _create_pi_statefulset_spec(
                     "secretKeyRef": {
                         "name": MCP_AUTH_SECRET_NAME,
                         "key": "bearer-token",
-                        "optional": not bool(mcp_servers),
+                        "optional": not needs_shared_mcp_bearer,
                     }
                 },
             },
@@ -1594,6 +1621,7 @@ def create_agent_statefulset_manifest(
     mcp_connections = spec.get("mcpConnections") if isinstance(spec.get("mcpConnections"), list) else []
     mcp_servers = spec.get("mcpServers") or []
     mcp_sidecars = _extract_structured_mcp_sidecars(mcp_connections) or (spec.get("mcpSidecars") or [])
+    needs_shared_mcp_bearer = mcp_connections_require_shared_bearer_token(mcp_connections, mcp_servers)
     enable_gvisor = spec.get("enableGVisor", False)
     system_prompt = spec.get("systemPrompt", "")
     agent_resources = resolve_agent_container_resources(spec)
@@ -1931,7 +1959,7 @@ def create_agent_statefulset_manifest(
                     "secretKeyRef": {
                         "name": MCP_AUTH_SECRET_NAME,
                         "key": "bearer-token",
-                        "optional": not bool(mcp_servers),
+                        "optional": not needs_shared_mcp_bearer,
                     }
                 },
             },

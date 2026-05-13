@@ -44,9 +44,29 @@ make docker-build REGISTRY=localhost/kubesynapse VERSION=dev CONTAINER_CLI=docke
 
 Then deploy with a values file that points at your registry.
 
+For the current repeatable Kind path on Windows, prefer:
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File ./scripts/deploy-kind.ps1 `
+  -ClusterName kubesynapse-dev `
+  -Namespace kubesynapse `
+  -ReleaseName kubesynapse `
+  -AdminPassword "KubesynapseAdmin9!"
+```
+
+That helper builds and loads the local images, applies
+`deploy/values.local-images.example.yaml` plus `deploy/values.kind.quickstart.yaml`,
+injects `catalog/skills-catalog.json`, reconciles the persisted PostgreSQL password on
+repeat upgrades, and restarts the core deployments so unchanged `:dev` image tags are
+actually picked up.
+
 ## 3. Configure the environment-specific overlay
 
 For local image builds, start from `deploy/values.local-images.example.yaml` and adjust the registry coordinates if your cluster does not reach `localhost/kubesynapse/*:dev` directly.
+
+For single-node Kind clusters, also layer in `deploy/values.kind.quickstart.yaml`.
+It disables optional friction points such as the shared MCP hub, PodDisruptionBudgets,
+and NetworkPolicies so the local cluster converges more reliably.
 
 ## Validation flow
 

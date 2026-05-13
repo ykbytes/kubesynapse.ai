@@ -846,6 +846,10 @@ def context_budget(thread_id: str | None = None) -> dict[str, Any]:
 
 @app.post("/invoke/stream")
 async def invoke_stream(request: InvokeRequest) -> StreamingResponse:
+    use_sync_memory_invoke = "you have persistent memory from prior conversations" in str(
+        request.system or ""
+    ).lower()
+
     async def event_generator() -> AsyncIterator[str]:
         thread_id = request.thread_id or str(uuid.uuid4())
         execution_id = f"exec-{thread_id[:16]}"
@@ -869,6 +873,8 @@ async def invoke_stream(request: InvokeRequest) -> StreamingResponse:
 
         def _run_invoke() -> InvokeResponse:
             try:
+                if use_sync_memory_invoke:
+                    return invoke_opencode(request_with_thread)
                 return invoke_opencode(request_with_thread, stream_callback=_stream_callback)
             finally:
                 loop.call_soon_threadsafe(event_queue.put_nowait, None)

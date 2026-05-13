@@ -106,33 +106,60 @@ make k8s-port-forward
 
 For local development with [Kind](https://kind.sigs.k8s.io/):
 
+Recommended local loop on Windows and for repeatable upgrades:
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File ./scripts/deploy-kind.ps1 `
+  -ClusterName kubesynapse-dev `
+  -Namespace kubesynapse `
+  -ReleaseName kubesynapse `
+  -AdminPassword "KubesynapseAdmin9!"
+```
+
+The script creates or reuses the `kind-kubesynapse-dev` context, builds the required
+platform images and the pinned LiteLLM image, loads them into Kind, applies the local
+image override plus `deploy/values.kind.quickstart.yaml`, injects the skills catalog,
+and reconciles the persisted PostgreSQL password on repeat upgrades.
+
+It also restarts the core deployments after Helm succeeds. That restart matters when
+you keep reusing the same local `:dev` image tag, because `kind load docker-image`
+alone does not change the Kubernetes image string.
+
+Manual equivalent:
+
 ```bash
-# Build and load images into the Kind cluster
 make docker-build REGISTRY=localhost/kubesynapse VERSION=dev
 docker build -f deploy/litellm/Dockerfile -t docker.io/litellm/litellm:v1.82.3-stable deploy/litellm
-kind load docker-image localhost/kubesynapse/kubesynapse-operator:dev --name desktop
-kind load docker-image localhost/kubesynapse/kubesynapse-api-gateway:dev --name desktop
-kind load docker-image localhost/kubesynapse/kubesynapse-web-ui:dev --name desktop
-kind load docker-image localhost/kubesynapse/kubesynapse-opencode-rt:dev --name desktop
-kind load docker-image localhost/kubesynapse/kubesynapse-pi-rt:dev --name desktop
-kind load docker-image localhost/kubesynapse/kubesynapse-vibe-rt:dev --name desktop
-kind load docker-image docker.io/litellm/litellm:v1.82.3-stable --name desktop
+kind load docker-image localhost/kubesynapse/kubesynapse-operator:dev --name kubesynapse-dev
+kind load docker-image localhost/kubesynapse/kubesynapse-api-gateway:dev --name kubesynapse-dev
+kind load docker-image localhost/kubesynapse/kubesynapse-web-ui:dev --name kubesynapse-dev
+kind load docker-image localhost/kubesynapse/kubesynapse-opencode-rt:dev --name kubesynapse-dev
+kind load docker-image docker.io/litellm/litellm:v1.82.3-stable --name kubesynapse-dev
 
-# Deploy with local image values
 helm upgrade --install kubesynapse ./charts/kubesynapse -n kubesynapse --create-namespace \
-  -f deploy/values.dev.yaml \
   -f deploy/values.local-images.example.yaml \
+  -f deploy/values.kind.quickstart.yaml \
   --set-file skillsCatalog.catalogJson=catalog/skills-catalog.json
 ```
 
 See `deploy/values.local-images.example.yaml` for the full local-image registry and
-tag overrides.
+tag overrides. `deploy/values.kind.quickstart.yaml` is the recommended single-node Kind
+overlay because it disables optional MCP Hub and system-agent workloads.
 
 The extra `--set-file` keeps the `Catalog > Skills` tab populated in local clusters. Without it, the chart defaults the browsable Skills catalog to an empty list.
 
 If your cluster cannot pull `localhost/kubesynapse/*:dev` images directly,
 push them to a reachable registry or load them into the cluster runtime before
 running the Helm install.
+
+If you are doing the manual loop with unchanged image tags, explicitly restart the
+deployments you touched after `kind load docker-image`, for example:
+
+```bash
+kubectl rollout restart deployment/kubesynapse-api-gateway -n kubesynapse --context kind-kubesynapse-dev
+kubectl rollout restart deployment/kubesynapse-operator -n kubesynapse --context kind-kubesynapse-dev
+kubectl rollout restart deployment/kubesynapse-web-ui -n kubesynapse --context kind-kubesynapse-dev
+```
 
 ## Chart Packaging
 

@@ -135,19 +135,19 @@ export function AppSidebar({
   if (collapsed) {
     return (
       <TooltipProvider delayDuration={100}>
-        <aside className="flex w-14 flex-col items-center border-r border-sidebar-border/80 bg-sidebar/92 backdrop-blur-xl">
+        <aside className="flex w-12 flex-col items-center border-r border-sidebar-border/80 bg-sidebar/92 backdrop-blur-xl">
           {/* Match header height */}
           <div className="flex h-10 w-full items-center justify-center border-b border-sidebar-border/80">
             <Tooltip>
               <TooltipTrigger asChild>
-                <Button variant="ghost" size="icon" className="h-9 w-9 rounded-xl text-muted-foreground hover:bg-sidebar-accent/75 hover:text-sidebar-accent-foreground" onClick={onToggleCollapse} aria-label="Expand sidebar">
-                  <PanelLeft className="h-4 w-4" />
+                <Button variant="ghost" size="icon" className="h-7 w-7 rounded-lg text-muted-foreground hover:bg-sidebar-accent/75 hover:text-sidebar-accent-foreground" onClick={onToggleCollapse} aria-label="Expand sidebar">
+                  <PanelLeft className="h-3.5 w-3.5" />
                 </Button>
               </TooltipTrigger>
               <TooltipContent side="right">Expand sidebar</TooltipContent>
             </Tooltip>
           </div>
-          <nav className="flex flex-col items-center gap-1 py-2" aria-label="Workspace views">
+          <nav className="flex flex-col items-center gap-0.5 py-1.5" aria-label="Workspace views">
             {visibleViews.map((view) => {
               const { icon: Icon, label } = VIEW_META[view];
               const isActive = activeView === view;
@@ -158,14 +158,14 @@ export function AppSidebar({
                       variant="ghost"
                       size="icon"
                       className={cn(
-                        "h-9 w-9 rounded-xl transition-colors duration-150 ease-productive",
+                        "h-7 w-7 rounded-lg transition-colors duration-150 ease-productive",
                         isActive ? "bg-sidebar-primary/15 text-primary shadow-sm hover:bg-sidebar-primary/18" : "text-muted-foreground hover:bg-sidebar-accent/75 hover:text-sidebar-accent-foreground",
                       )}
                       onClick={() => onViewChange(view)}
                       aria-label={`${label} (${counts[view]})`}
                       aria-pressed={isActive}
                     >
-                      <Icon className="h-4 w-4" />
+                      <Icon className="h-3.5 w-3.5" />
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent side="right">
@@ -179,8 +179,8 @@ export function AppSidebar({
             <div className="mt-auto border-t border-sidebar-border/80 py-2">
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <Button variant="ghost" size="icon" className="h-9 w-9 rounded-xl text-muted-foreground hover:bg-sidebar-accent/75 hover:text-sidebar-accent-foreground" onClick={onCreateNew} aria-label="Create new">
-                    <Plus className="h-4 w-4" />
+                  <Button variant="ghost" size="icon" className="h-7 w-7 rounded-lg text-muted-foreground hover:bg-sidebar-accent/75 hover:text-sidebar-accent-foreground" onClick={onCreateNew} aria-label="Create new">
+                    <Plus className="h-3.5 w-3.5" />
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent side="right">Create new</TooltipContent>
@@ -196,19 +196,19 @@ export function AppSidebar({
     <TooltipProvider delayDuration={100}>
     <aside className="flex h-full w-full min-w-0 flex-col border-r border-sidebar-border/80 bg-sidebar/92 backdrop-blur-xl">
       {/* Header */}
-      <div className="flex h-10 items-center justify-between border-b border-sidebar-border/80 px-2.5">
+      <div className="flex h-10 items-center justify-between border-b border-sidebar-border/80 px-2">
         <div className="min-w-0">
-          <p className="text-[10px] font-medium uppercase tracking-[0.22em] text-muted-foreground">Workspace</p>
-          <p className="truncate text-sm font-semibold text-sidebar-foreground">{VIEW_META[activeView].label}</p>
+          <p className="text-[9px] font-medium uppercase tracking-[0.22em] text-muted-foreground">Workspace</p>
+          <p className="truncate text-xs font-semibold text-sidebar-foreground">{VIEW_META[activeView].label}</p>
         </div>
-        <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0 rounded-xl text-muted-foreground hover:bg-sidebar-accent/75 hover:text-sidebar-accent-foreground" onClick={onToggleCollapse} aria-label="Collapse sidebar">
-          <PanelLeftClose className="h-3.5 w-3.5" />
+        <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0 rounded-lg text-muted-foreground hover:bg-sidebar-accent/75 hover:text-sidebar-accent-foreground" onClick={onToggleCollapse} aria-label="Collapse sidebar">
+          <PanelLeftClose className="h-3 w-3" />
         </Button>
       </div>
 
       {/* Vertical nav */}
-      <nav className="border-b border-sidebar-border/80 px-1.5 py-1.5" aria-label="Workspace views">
-        <div className="space-y-0.5">
+      <nav className="border-b border-sidebar-border/80 px-1 py-1" aria-label="Workspace views">
+        <div className="space-y-px">
           {visibleViews.map((view) => {
             const { icon: Icon, label } = VIEW_META[view];
             const count = counts[view];
@@ -218,7 +218,7 @@ export function AppSidebar({
                 key={view}
                 onClick={() => onViewChange(view)}
                 className={cn(
-                  "flex w-full items-center gap-2 rounded-lg border px-2 py-1 text-xs font-medium transition-all duration-150 ease-productive",
+                  "flex w-full items-center gap-1.5 rounded-md border px-1.5 py-0.5 text-[11px] font-medium transition-all duration-150 ease-productive",
                   isActive
                     ? "border-sidebar-border bg-sidebar-primary/15 text-sidebar-foreground shadow-sm"
                     : "border-transparent text-muted-foreground hover:bg-sidebar-accent/70 hover:text-sidebar-accent-foreground",
@@ -226,12 +226,12 @@ export function AppSidebar({
                 aria-label={`${label} (${count})`}
                 aria-pressed={isActive}
               >
-                <Icon className={cn("h-4 w-4 shrink-0 transition-colors", isActive ? "text-primary" : "")} />
+                <Icon className={cn("h-3.5 w-3.5 shrink-0 transition-colors", isActive ? "text-primary" : "")} />
                 <span className="flex-1 text-left">{label}</span>
                 {count > 0 && (
                   <span
                     className={cn(
-                      "ml-auto flex h-5 min-w-[1.25rem] items-center justify-center rounded-full border px-1.5 text-[10px] font-semibold tabular-nums",
+                      "ml-auto flex h-4 min-w-[1rem] items-center justify-center rounded-full border px-1 text-[9px] font-semibold tabular-nums",
                       isActive ? "border-primary/25 bg-primary/14 text-primary" : "border-border/55 bg-secondary/70 text-muted-foreground",
                     )}
                   >
@@ -245,27 +245,27 @@ export function AppSidebar({
       </nav>
 
       {/* Actions */}
-      <div className="flex gap-1.5 border-b border-sidebar-border/80 px-2.5 py-1.5">
+      <div className="flex gap-1 border-b border-sidebar-border/80 px-2 py-1">
         {canMutate && (
-          <Button size="sm" className="h-8 flex-1 gap-1.5 rounded-xl text-xs" onClick={onCreateNew}>
-            <Plus className="h-3.5 w-3.5" />
+          <Button size="sm" className="h-7 flex-1 gap-1 rounded-lg text-[11px]" onClick={onCreateNew}>
+            <Plus className="h-3 w-3" />
             New
           </Button>
         )}
-        <Button variant="outline" size="icon" className="h-8 w-8 rounded-xl" onClick={onRefresh} disabled={loading} aria-label="Refresh list">
-          <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
+        <Button variant="outline" size="icon" className="h-7 w-7 rounded-lg" onClick={onRefresh} disabled={loading} aria-label="Refresh list">
+          <RefreshCw className={cn("h-3 w-3", loading && "animate-spin")} />
         </Button>
       </div>
 
       {/* Search */}
-      <div className="border-b border-sidebar-border/80 px-2.5 py-1.5">
+      <div className="border-b border-sidebar-border/80 px-2 py-1">
         <div className="relative">
-          <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+          <Search className="absolute left-2.5 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground" />
           <Input
             value={filter}
             onChange={(e) => handleFilterChange(e.target.value)}
             placeholder={`Search ${VIEW_META[activeView].label.toLowerCase()}...`}
-            className="h-9 border-sidebar-border/70 bg-card/68 pl-9 text-xs"
+            className="h-7 border-sidebar-border/70 bg-card/68 pl-7 text-[11px]"
             aria-label="Filter resources"
           />
         </div>
@@ -273,15 +273,15 @@ export function AppSidebar({
 
       {/* Resource list */}
       <ScrollArea className="flex-1">
-        <div className="space-y-1 p-2" role="listbox" aria-label={`${VIEW_META[activeView].label} list`}>
+        <div className="space-y-px p-1" role="listbox" aria-label={`${VIEW_META[activeView].label} list`}>
           {loading && filteredItems.length === 0 && (
             <>
               {[0, 1, 2, 3].map((i) => (
-                <div key={i} className="flex items-start gap-2 rounded-xl border border-transparent px-2.5 py-2">
-                  <Skeleton className="mt-1 h-2 w-2 shrink-0 rounded-full" />
-                  <div className="min-w-0 flex-1 space-y-1">
-                    <Skeleton className="h-3.5 w-3/4 rounded" />
-                    <Skeleton className="h-3 w-1/2 rounded" />
+                <div key={i} className="flex items-start gap-1.5 rounded-lg border border-transparent px-1.5 py-1">
+                  <Skeleton className="mt-0.5 h-1.5 w-1.5 shrink-0 rounded-full" />
+                  <div className="min-w-0 flex-1 space-y-0.5">
+                    <Skeleton className="h-3 w-3/4 rounded" />
+                    <Skeleton className="h-2.5 w-1/2 rounded" />
                   </div>
                 </div>
               ))}
@@ -343,7 +343,7 @@ const SidebarItem = memo(function SidebarItem({
   const hasActions = onQuickRun || onDelete;
   const runtimeSignal = item.signals?.runtime;
   const accessSignal = item.signals?.access;
-  const secondaryMeta = [item.note, runtimeSignal?.label, accessSignal?.label].filter(Boolean).join(" • ");
+  const secondaryMeta = [item.note, runtimeSignal?.label, accessSignal?.label].filter(Boolean).join(" · ");
   return (
     <div
       role="option"
@@ -353,36 +353,33 @@ const SidebarItem = memo(function SidebarItem({
       tabIndex={0}
       style={{ animationDelay: `${index * 30}ms` }}
       className={cn(
-        "group flex w-full cursor-pointer flex-col rounded-[calc(var(--radius-lg)+2px)] border px-2.5 py-2 text-left text-sm",
-        "transition-all duration-150 ease-productive hover:border-sidebar-border/65 hover:bg-sidebar-accent/55 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
+        "group flex w-full cursor-pointer items-start gap-1.5 rounded-lg border px-1.5 py-1 text-left",
+        "transition-all duration-150 ease-productive hover:border-sidebar-border/65 hover:bg-sidebar-accent/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
         "animate-slide-up opacity-0 [animation-fill-mode:forwards]",
         isSelected ? "border-sidebar-border bg-sidebar-accent/82 shadow-sm" : "border-transparent",
       )}
     >
-      <div className="flex w-full items-start gap-2.5">
-        {runtimeSignal ? (
-          <span className={cn("mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border shadow-inner", runtimeSignal.tone)} aria-hidden="true">
-            <runtimeSignal.icon className="h-4 w-4" />
-          </span>
-        ) : (
-          <span className={cn("mt-1.5 h-2 w-2 shrink-0 rounded-full", statusDotClasses(item.status))} aria-hidden="true" />
-        )}
-        <span className="sr-only">Status: {item.status}</span>
-        <div className="min-w-0 flex-1 space-y-1.5">
-          <div className="flex items-start justify-between gap-2">
-            <p className="min-w-0 flex-1 line-clamp-2 break-words text-[12.5px] font-medium leading-5 text-sidebar-foreground">{item.title}</p>
-            {runtimeSignal ? <span className={cn("mt-1 inline-flex h-2 w-2 shrink-0 rounded-full", statusDotClasses(item.status))} aria-hidden="true" /> : null}
-          </div>
-          <p className="line-clamp-1 break-all text-[11px] leading-5 text-muted-foreground">{item.subtitle}</p>
-          {secondaryMeta ? <p className="line-clamp-2 break-all text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground/85">{secondaryMeta}</p> : null}
+      {runtimeSignal ? (
+        <span className={cn("mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md border shadow-inner", runtimeSignal.tone)} aria-hidden="true">
+          <runtimeSignal.icon className="h-3 w-3" />
+        </span>
+      ) : (
+        <span className={cn("mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full", statusDotClasses(item.status))} aria-hidden="true" />
+      )}
+      <span className="sr-only">Status: {item.status}</span>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center justify-between gap-1">
+          <p className="min-w-0 flex-1 truncate text-[11px] font-medium leading-tight text-sidebar-foreground">{item.title}</p>
+          {runtimeSignal ? <span className={cn("inline-flex h-1.5 w-1.5 shrink-0 rounded-full", statusDotClasses(item.status))} aria-hidden="true" /> : null}
         </div>
+        <p className="truncate text-[10px] leading-tight text-muted-foreground">{item.subtitle}</p>
+        {secondaryMeta ? <p className="truncate text-[9px] font-medium uppercase tracking-[0.1em] text-muted-foreground/75">{secondaryMeta}</p> : null}
       </div>
       {hasActions && (
         <div
           className={cn(
-            "mt-2 items-center gap-1.5 group-focus-within:flex",
-            isSelected ? "flex" : "hidden group-hover:flex",
-            item.signals ? "ml-11" : "ml-4.5 pl-0.5",
+            "flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100",
+            isSelected && "opacity-100",
           )}
         >
           {onQuickRun && (
@@ -393,10 +390,9 @@ const SidebarItem = memo(function SidebarItem({
               title={actionLabel}
               onClick={(e) => { e.stopPropagation(); onQuickRun(item.id); }}
               onKeyDown={(e) => { if (e.key === "Enter") { e.stopPropagation(); onQuickRun(item.id); } }}
-              className="inline-flex items-center gap-1 rounded-full border border-border/60 bg-card/64 px-2 py-1 text-[10px] font-medium uppercase tracking-[0.1em] text-muted-foreground hover:border-primary/25 hover:bg-primary/12 hover:text-primary"
+              className="inline-flex h-5 w-5 items-center justify-center rounded-md border border-border/50 bg-card/60 text-muted-foreground hover:border-primary/25 hover:bg-primary/12 hover:text-primary"
             >
-              <Play className="h-3 w-3" />
-              {quickRunLabel}
+              <Play className="h-2.5 w-2.5" />
             </span>
           )}
           {onDelete && (
@@ -407,10 +403,9 @@ const SidebarItem = memo(function SidebarItem({
               title={`Delete ${item.title}`}
               onClick={(e) => { e.stopPropagation(); onDelete(item.id); }}
               onKeyDown={(e) => { if (e.key === "Enter") { e.stopPropagation(); onDelete(item.id); } }}
-              className="inline-flex items-center gap-1 rounded-full border border-border/60 bg-card/64 px-2 py-1 text-[10px] font-medium uppercase tracking-[0.1em] text-muted-foreground hover:border-destructive/25 hover:bg-destructive/12 hover:text-destructive"
+              className="inline-flex h-5 w-5 items-center justify-center rounded-md border border-border/50 bg-card/60 text-muted-foreground hover:border-destructive/25 hover:bg-destructive/12 hover:text-destructive"
             >
-              <Trash2 className="h-3 w-3" />
-              Delete
+              <Trash2 className="h-2.5 w-2.5" />
             </span>
           )}
         </div>
