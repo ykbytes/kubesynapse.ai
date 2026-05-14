@@ -6,12 +6,12 @@ This document is a current implementation walkthrough of the platform that exist
 
 As of April 2026, the shipped platform is centered on these paths:
 
-- `AIAgent`, `AgentPolicy`, `AgentWorkflow`, `AgentEval`, `AgentApproval`, and `AgentTenant` remain the core control-plane CRDs
+- `AIAgent`, `AgentPolicy`, `AgentWorkflow`, `AgentApproval`, and `AgentTenant` remain the core control-plane CRDs
 - `ConnectorPlugin`, `ObservationTarget`, `ObservationPolicy`, and `ObservationReport` extend the control plane with an observability model
 - the runtime surface supports the three in-tree runtime kinds exposed by the CRD: `opencode`, `pi`, and `mistral-vibe`
 - the operator provisions singleton runtime sandboxes and worker Jobs from Kubernetes resources instead of maintaining an external workflow service
 - the gateway owns auth, CRUD, invoke, session persistence, memory persistence, and MCP connection management
-- the web UI exposes agents, chat, workflows, evaluations, MCP management, intelligence, and observability
+- the web UI exposes agents, chat, workflows, MCP management, intelligence, and observability
 
 ## 1. Helm Chart Foundation
 
@@ -19,7 +19,7 @@ The platform chart in `charts/KubeSynapse` is still the entry point for the full
 
 What the chart installs now:
 
-- the control-plane CRDs for agents, policies, workflows, evals, approvals, tenants, and observability
+- the control-plane CRDs for agents, policies, workflows, approvals, tenants, and observability
 - the operator deployment and worker configuration
 - the API gateway, web UI, LiteLLM, Redis, Qdrant, NATS, and PostgreSQL
 - the shared MCP hub namespace and hub-server deployment model
@@ -39,8 +39,8 @@ The operator has moved to a more modular controller layout under `operator/contr
 Current responsibilities:
 
 - reconcile `AIAgent` resources into singleton StatefulSets, Services, service accounts, and runtime wiring
-- queue worker Jobs for `AgentWorkflow` and `AgentEval` execution
-- project compact workflow and eval state back into CRD status while keeping detailed artifacts on PVC-backed JSON files
+- queue worker Jobs for `AgentWorkflow` execution
+- project compact workflow state back into CRD status while keeping detailed artifacts on PVC-backed JSON files
 - reconcile approval decisions so waiting workflows resume or fail deterministically
 - conditionally register optional controllers when their CRDs are installed
 - reconcile the observability CRDs when `observationtargets.kubesynapse.ai` exists
@@ -181,7 +181,7 @@ The current code instead reflects:
 
 - `opencode-runtime/` as the supported runtime path
 - gateway-managed auth, sessions, memory, and MCP connections
-- worker-artifact-first workflow and eval execution
+- worker-artifact-first workflow execution
 - observability CRDs, collector support, and related UI views
 
 ## 10. Recommended Companion Docs

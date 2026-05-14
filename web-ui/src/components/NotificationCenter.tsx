@@ -6,7 +6,6 @@ import {
   CheckCheck,
   CheckCircle2,
   ChevronRight,
-  FlaskConical,
   Info,
   Trash2,
   Workflow,
@@ -27,7 +26,6 @@ type NotificationFilter = "all" | "unread" | "attention";
 function kindIcon(notif: Notification) {
   if (notif.resourceType === "agent") return <Bot className="h-3.5 w-3.5" />;
   if (notif.resourceType === "workflow") return <Workflow className="h-3.5 w-3.5" />;
-  if (notif.resourceType === "eval") return <FlaskConical className="h-3.5 w-3.5" />;
   return notif.severity === "error"
     ? <AlertTriangle className="h-3.5 w-3.5" />
     : <Info className="h-3.5 w-3.5" />;
@@ -90,7 +88,6 @@ function relativeTime(ts: string): string {
 function targetViewForNotification(kind: NotificationKind): WorkspaceView | null {
   if (kind.startsWith("agent.")) return "agents";
   if (kind.startsWith("workflow.")) return "workflows";
-  if (kind.startsWith("eval.")) return "evals";
   return null;
 }
 
@@ -211,7 +208,7 @@ export function NotificationCenter() {
                 {attentionCount > 0 ? <Badge variant="destructive">{attentionCount} attention</Badge> : null}
               </div>
               <p className="text-[11px] leading-5 text-muted-foreground">
-                Live agent, workflow, eval, and platform updates for the active namespace.
+                Live agent, workflow, and platform updates for the active namespace.
               </p>
             </div>
             <div className="flex items-center gap-1">
@@ -254,7 +251,7 @@ export function NotificationCenter() {
               </p>
               <p className="mt-1 text-[12px] leading-5 text-muted-foreground">
                 {filter === "all"
-                  ? "This feed will populate as agents, workflows, evals, and system events arrive."
+                  ? "This feed will populate as agents, workflows, and system events arrive."
                   : filter === "unread"
                     ? "New items will appear here until you open or mark them as read."
                     : "Warnings and errors will stay grouped here for quick triage."}

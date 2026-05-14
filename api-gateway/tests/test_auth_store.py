@@ -581,26 +581,6 @@ class AuthStoreTests(unittest.TestCase):
         after = max(float(record["score"]) for record in after_records)
         self.assertGreaterEqual(after, before)
 
-    def test_record_eval_outcome_memory_and_feedback(self) -> None:
-        inserted = self.auth_store.record_eval_outcome_memory(
-            "default",
-            "reviewer",
-            "reviewer-eval",
-            phase="completed",
-            passed=True,
-            summary={"score": 0.91},
-        )
-        self.assertGreaterEqual(inserted, 1)
-
-        records = self.auth_store.list_memory_records("default", "reviewer", session_id="reviewer-eval")
-        self.assertTrue(any(record["topic"] == "eval-success" for record in records))
-        before = max(float(record["score"]) for record in records)
-        updated = self.auth_store.apply_memory_feedback("default", "reviewer", session_id="reviewer-eval", success=True)
-        self.assertGreater(updated, 0)
-        after_records = self.auth_store.list_memory_records("default", "reviewer", session_id="reviewer-eval")
-        after = max(float(record["score"]) for record in after_records)
-        self.assertGreaterEqual(after, before)
-
     def test_workflow_run_trace_helpers_expose_archived_logs(self) -> None:
         with self.auth_store.db_session() as session:
             session.add(

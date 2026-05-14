@@ -1004,17 +1004,17 @@ class OptionalCrdWatchingTests(unittest.TestCase):
         }
 
         with patch.object(_services_k8s.kubernetes.client, "ApiextensionsV1Api", return_value=api, create=True):
-            exists = _services_k8s.crd_exists("kubesynapse.ai", "v1alpha1", "agentevals")
+            exists = _services_k8s.crd_exists("kubesynapse.ai", "v1alpha1", "agentpolicies")
 
         self.assertTrue(exists)
-        api.read_custom_resource_definition.assert_called_once_with(name="agentevals.kubesynapse.ai")
+        api.read_custom_resource_definition.assert_called_once_with(name="agentpolicies.kubesynapse.ai")
 
     def test_crd_exists_returns_false_for_missing_crd(self) -> None:
         api = Mock()
         api.read_custom_resource_definition.side_effect = _api_exception(404)
 
         with patch.object(_services_k8s.kubernetes.client, "ApiextensionsV1Api", return_value=api, create=True):
-            exists = _services_k8s.crd_exists("kubesynapse.ai", "v1alpha1", "agentevals")
+            exists = _services_k8s.crd_exists("kubesynapse.ai", "v1alpha1", "agentpolicies")
 
         self.assertFalse(exists)
 
@@ -1045,7 +1045,6 @@ class OptionalCrdWatchingTests(unittest.TestCase):
         self.assertIn("controllers.workflow_controller", imported)
         self.assertIn("controllers.status_projection", imported)
         self.assertIn("controllers.policy_controller", imported)
-        self.assertNotIn("controllers.eval_controller", imported)
         self.assertNotIn("controllers.approval_controller", imported)
         self.assertNotIn("controllers.tenant_controller", imported)
         sys.modules.pop("controllers", None)

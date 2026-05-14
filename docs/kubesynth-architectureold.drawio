@@ -45,7 +45,7 @@
         <mxCell id="k8s_api" parent="ctrl_plane" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#1E88E5;strokeColor=#1565C0;fontColor=#FFFFFF;fontSize=12;shadow=1;arcSize=10;" value="&lt;b&gt;Kubernetes API&lt;/b&gt;&lt;br&gt;&lt;font style=&#39;font-size:9px&#39;&gt;CRDs · RBAC · Admission Control&lt;/font&gt;" vertex="1">
           <mxGeometry height="46" width="520" x="15" y="26" as="geometry" />
         </mxCell>
-        <mxCell id="crds" parent="ctrl_plane" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#1565C0;strokeColor=#0D47A1;fontColor=#FFFFFF;fontSize=10;shadow=1;arcSize=10;" value="&lt;b&gt;Custom Resource Definitions&lt;/b&gt;  &lt;font style=&#39;font-size:8px&#39;&gt;AIAgent · AgentPolicy · AgentWorkflow · AgentEval · AgentApproval · AgentTenant&lt;/font&gt;" vertex="1">
+        <mxCell id="crds" parent="ctrl_plane" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#1565C0;strokeColor=#0D47A1;fontColor=#FFFFFF;fontSize=10;shadow=1;arcSize=10;" value="&lt;b&gt;Custom Resource Definitions&lt;/b&gt;  &lt;font style=&#39;font-size:8px&#39;&gt;AIAgent · AgentPolicy · AgentWorkflow · AgentApproval · AgentTenant&lt;/font&gt;" vertex="1">
           <mxGeometry height="36" width="520" x="15" y="82" as="geometry" />
         </mxCell>
         <mxCell id="operator" parent="ctrl_plane" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#0D47A1;strokeColor=#0A3069;fontColor=#FFFFFF;fontSize=11;shadow=1;arcSize=10;" value="&lt;b&gt;Operator&lt;/b&gt;&lt;br&gt;&lt;font style=&#39;font-size:9px&#39;&gt;Kopf Controller&lt;/font&gt;" vertex="1">

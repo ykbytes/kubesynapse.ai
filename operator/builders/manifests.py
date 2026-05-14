@@ -2426,7 +2426,7 @@ def create_worker_job_manifest(
     git_config: dict[str, Any] | None = None,
     max_parallel_steps: int | None = None,
 ) -> dict[str, Any]:
-    """Build a Kubernetes Job manifest for a workflow/eval worker."""
+    """Build a Kubernetes Job manifest for a workflow worker."""
     timestamp = int(time.time())
     job_name = hashed_resource_name(kind, resource_namespace, resource_name, suffix=f"{generation}-{timestamp}")
     artifact_journal_path = workflow_journal_path(artifact_path)
@@ -2510,7 +2510,6 @@ def create_worker_job_manifest(
                                 {"name": "ARTIFACT_PVC_NAME", "value": artifact_pvc_name},
                                 {"name": "AGENT_RUNTIME_TIMEOUT_SECONDS", "value": AGENT_RUNTIME_TIMEOUT_SECONDS},
                                 {"name": "WORKFLOW_RUN_ID", "value": run_id or ""},
-                                {"name": "EVAL_RUN_ID", "value": run_id or ""},
                                 {"name": "PYTHONDONTWRITEBYTECODE", "value": "1"},
                                 {
                                     "name": "MAX_PARALLEL_STEPS",

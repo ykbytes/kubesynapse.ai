@@ -49,7 +49,6 @@ operator/
     __init__.py
     agent.py               # AIAgent create/update/resume/delete
     workflow.py             # AgentWorkflow handlers
-    eval.py                # AgentEval handlers
     policy.py              # AgentPolicy handlers
     tenant.py              # AgentTenant handlers
     approval.py            # AgentApproval handlers
@@ -139,7 +138,7 @@ agent-runtime/
 
 **Steps**:
 1. Create `operator/alembic/` directory with `env.py`, `alembic.ini`
-2. Generate initial migration from existing models (`WorkflowRun`, `EvalRun`, `ChatSession`, `ChatMessage`)
+2. Generate initial migration from existing models (`WorkflowRun`, `ChatSession`, `ChatMessage`)
 3. Replace `init_database()` to run `alembic upgrade head` instead of `create_all()`
 4. Add migration init container to `charts/kubesynapse/templates/operator-deployment.yaml`
 5. Add schema version check on operator startup (refuse to start if migration is behind)
@@ -169,8 +168,8 @@ agent-runtime/
 **Current**: `worker.py` calls both `patch_workflow_status()` (CRD) AND `safe_record_workflow_state()` (PostgreSQL) in sequence.
 
 **Steps**:
-1. Create `operator/services/status_projector.py` — a Kopf field watcher that watches `.status` changes on Workflow/Eval CRDs and writes to PostgreSQL
-2. Remove `safe_record_workflow_state()` and `safe_record_eval_state()` calls from `worker.py`
+1. Create `operator/services/status_projector.py` — a Kopf field watcher that watches `.status` changes on workflow CRDs and writes to PostgreSQL
+2. Remove `safe_record_workflow_state()` calls from `worker.py`
 3. Worker now only patches CRD status (single source of truth for active state)
 4. The projector asynchronously syncs CRD status → PostgreSQL (for gateway/UI queries)
 5. Handle 409 conflicts in worker status patches with retry
@@ -196,7 +195,7 @@ agent-runtime/
 
 **Current**: All 6 CRDs use custom `phase` field only. No `conditions[]` array.
 
-**Steps per CRD** (aiagent, agentworkflow, agenteval, agentpolicy, agenttenant, agentapproval):
+**Steps per CRD** (aiagent, agentworkflow, agentpolicy, agenttenant, agentapproval):
 1. Add `conditions` array to `.status` in CRD `openAPIV3Schema`:
    ```yaml
    conditions:
@@ -213,7 +212,6 @@ agent-runtime/
 2. Condition types per CRD:
    - **AIAgent**: `Ready`, `Progressing`, `RuntimeAvailable`, `Degraded`
    - **AgentWorkflow**: `Ready`, `Progressing`, `StepFailed`, `ApprovalPending`
-   - **AgentEval**: `Ready`, `Progressing`, `EvalPassed`, `EvalFailed`
    - **AgentPolicy**: `Ready`
    - **AgentTenant**: `Ready`, `NamespaceProvisioned`
    - **AgentApproval**: `Decided`, `Expired`

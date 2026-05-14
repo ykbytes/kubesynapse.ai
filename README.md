@@ -29,7 +29,7 @@ flowchart LR
 
     subgraph Execute[Execution plane]
         RT[Per-agent runtimes\nOpenCode default, Pi and Mistral Vibe supported]
-        JOB[Worker Jobs\nworkflows and evals]
+        JOB[Worker Jobs\nworkflow runs]
         PVC[State and artifact PVCs]
         SIDE[Per-agent MCP sidecars]
         HUB[Shared MCP hub]
@@ -75,9 +75,9 @@ flowchart LR
 
 Current repo truths:
 
-- Agents, policies, workflows, evals, approvals, tenants, MCP, and observability resources are modeled as CRDs.
+- Agents, policies, workflows, approvals, tenants, MCP, and observability resources are modeled as CRDs.
 - The API gateway owns authentication, session handling, CRUD, invoke routing, A2A, SSE, trace APIs, and UI-facing metadata.
-- The operator reconciles `AIAgent` resources into singleton runtime StatefulSets and turns workflows or evals into worker Jobs.
+- The operator reconciles `AIAgent` resources into singleton runtime StatefulSets and turns workflows into worker Jobs.
 - `runtime.kind: opencode` is the default path used in most checked-in examples and tooling. `runtime.kind: pi` and `runtime.kind: mistral-vibe` remain wired through the CRD, gateway, operator, CLI, chart, and UI.
 - New clients should use `/api/v1/*`. Legacy `/api/*` routes are redirected with deprecation headers.
 
@@ -92,12 +92,12 @@ For the full architecture, see [docs/architecture-overview.md](docs/architecture
 
 ## What The Platform Includes
 
-- Kubernetes-native control plane for agents, policies, workflows, evals, approvals, and tenants.
+- Kubernetes-native control plane for agents, policies, workflows, approvals, and tenants.
 - Gateway-backed UI, CLI, Python SDK, and TypeScript SDK.
 - Three supported in-tree agent runtimes: OpenCode for the default persistent/memory-heavy path, Pi for an alternative bridge-based backend, and Mistral Vibe for a Mistral-backed runtime bridge.
 - Shared services for model routing and state: LiteLLM, PostgreSQL, Redis, Qdrant, and NATS.
 - MCP integration in two forms: per-agent sidecars and the shared MCP hub.
-- Worker-job execution for workflows and evals, with detailed artifacts and summary CRD status.
+- Worker-job execution for workflows, with detailed artifacts and summary CRD status.
 - Run-intelligence plumbing: runtime events, trace storage, signal watch, system agents, and an optional collector path.
 
 ## Quick Start

@@ -1,4 +1,4 @@
-import { BookOpen, Bot, GitBranch, FlaskConical, Inbox, MessageSquare, Package, Play, Plus, Radar, RefreshCw, PanelLeftClose, PanelLeft, Search, Blocks, Settings, ShieldCheck, ShieldAlert, Trash2, Webhook } from "lucide-react";
+import { Blocks, BookOpen, Bot, GitBranch, Inbox, MessageSquare, Package, PanelLeft, PanelLeftClose, Play, Plus, Radar, RefreshCw, Search, Settings, ShieldAlert, ShieldCheck, Trash2, Webhook } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AgentVisualSignals } from "@/lib/agentSignals";
 import { cn } from "@/lib/utils";
@@ -44,7 +44,6 @@ const VIEW_META: Record<WorkspaceView, { label: string; icon: typeof Bot }> = {
   chat: { label: "Chat", icon: MessageSquare },
   workflows: { label: "Workflows", icon: GitBranch },
   composer: { label: "Composer", icon: Blocks },
-  evals: { label: "Evals", icon: FlaskConical },
   catalog: { label: "Catalog", icon: Package },
   policies: { label: "Policies", icon: ShieldAlert },
   intelligence: { label: "Intelligence", icon: Radar },
@@ -293,7 +292,7 @@ export function AppSidebar({
               title={filter.trim() ? "No matches" : emptyMessage}
               description={filter.trim() ? `No items match "${debouncedFilter}"` : undefined}
               action={
-                !filter.trim() && canMutate && (activeView === "agents" || activeView === "chat" || activeView === "workflows" || activeView === "evals")
+                !filter.trim() && canMutate && (activeView === "agents" || activeView === "chat" || activeView === "workflows")
                   ? {
                       label: activeView === "chat" ? "Create Agent" : `Create ${VIEW_META[activeView].label.replace(/s$/, "")}`,
                       onClick: onCreateNew,

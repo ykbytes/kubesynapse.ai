@@ -6,7 +6,6 @@ import {
   GitBranch,
   ShieldCheck,
   Plug,
-  FlaskConical,
   Eye,
   Wrench,
   Globe,
@@ -282,7 +281,6 @@ function ArchitectureSection() {
             ["AgentPolicy", "Namespaced", "Defines input/output guardrails, per-request token caps, and allowed models."],
             ["AgentApproval", "Namespaced", "Represents human approval requests for high-risk actions."],
             ["AgentWorkflow", "Namespaced", "Defines multi-step agent DAGs with dependencies and optional approval gates."],
-            ["AgentEval", "Namespaced", "Defines evaluation suites and thresholds for an agent."],
             ["AgentTenant", "Cluster", "Defines namespace isolation, quotas, allowed models, and tenant admins."],
             ["ConnectorPlugin", "Namespaced", "Declares how observability data is collected."],
             ["ObservationTarget", "Namespaced", "Declares what is being observed."],
@@ -294,7 +292,6 @@ function ArchitectureSection() {
           chart={`erDiagram
     AIAgent ||--o{ AgentPolicy : references
     AIAgent ||--o{ AgentApproval : creates
-    AIAgent ||--o{ AgentEval : tested_by
     AgentWorkflow ||--o{ AIAgent : steps_use
     AgentWorkflow ||--o{ AgentApproval : gates_with
     AIAgent ||--o{ ConnectorPlugin : observes_via
@@ -328,9 +325,9 @@ function ArchitectureSection() {
         <SectionHeading icon={Globe}>API Gateway Responsibilities</SectionHeading>
         <ul className="mt-2 list-disc space-y-1.5 pl-5 text-base leading-7 text-[oklch(0.80_0.01_264)]">
           <li>Authentication and authorization (Bearer tokens, OIDC, SAML, local auth)</li>
-          <li>RESTful CRUD for agents, workflows, evals, policies, and tenants</li>
+          <li>RESTful CRUD for agents, workflows, policies, and tenants</li>
           <li>A2A JSON-RPC and Server-Sent Events (SSE) for real-time streaming</li>
-          <li>Workflow triggers, approval decisions, and evaluation execution</li>
+          <li>Workflow triggers and approval decisions</li>
           <li>LLM routing through LiteLLM with model fallbacks and cost tracking</li>
         </ul>
       </div>
@@ -644,29 +641,6 @@ function PoliciesSection() {
   );
 }
 
-function EvaluationsSection() {
-  return (
-    <div className="space-y-8">
-      <SectionHeading icon={FlaskConical}>Evaluations</SectionHeading>
-      <p className="mt-2 text-base leading-7 text-[oklch(0.80_0.01_264)]">
-        AgentEval runs evaluation suites against agents. Define test cases, pass/fail criteria,
-        and schedule recurring evaluations via cron expressions.
-      </p>
-      <CodeBlock code={`apiVersion: kubesynapse.ai/v1alpha1
-kind: AgentEval
-metadata:
-  name: accuracy-eval
-spec:
-  agentRef: code-reviewer
-  schedule: "0 */6 * * *"
-  cases:
-    - input: "Review: function add(a,b) { return a+b }"
-      expected: "Consider TypeScript type annotations"
-      threshold: 0.7`} lang="yaml" />
-    </div>
-  );
-}
-
 function ObservabilitySection() {
   return (
     <div className="space-y-8">
@@ -700,9 +674,6 @@ agentctl create -f agent.yaml
 # Invoke an agent
 agentctl invoke my-agent --prompt "Summarize this PR"
 
-# Run an evaluation
-agentctl eval run accuracy-eval
-
 # Check system health
 agentctl health`} lang="bash" />
     </div>
@@ -729,7 +700,6 @@ function ApiReferenceSection() {
         ["GET", "/api/v1/llm/providers/{provider}/suggestions", "Fetch live provider model suggestions"],
         ["POST", "/api/v1/admin/users", "Create a local user and reconcile dedicated tenant access"],
         ["GET", "/api/v1/workflows", "List workflows"],
-        ["POST", "/api/v1/evals/{id}/run", "Run evaluation"],
         ["GET", "/api/v1/mcp/connections", "List MCP connections"],
       ]} />
     </div>
@@ -930,13 +900,6 @@ export const SECTIONS: DocSection[] = [
     content: <PoliciesSection />,
   },
   {
-    id: "evaluations",
-    title: "Evaluations",
-    icon: FlaskConical,
-    searchText: "evaluations testing quality assurance accuracy benchmarks agent testing evaluation suite pass fail criteria cron schedule",
-    content: <EvaluationsSection />,
-  },
-  {
     id: "observability",
     title: "Observability",
     icon: Eye,
@@ -954,7 +917,7 @@ export const SECTIONS: DocSection[] = [
     id: "api-reference",
     title: "API Reference",
     icon: Wrench,
-    searchText: "api reference rest endpoints openapi swagger agents invoke stream chat sessions memory providers admin users workflows evals",
+    searchText: "api reference rest endpoints openapi swagger agents invoke stream chat sessions memory providers admin users workflows",
     content: <ApiReferenceSection />,
   },
   {

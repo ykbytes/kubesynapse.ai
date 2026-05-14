@@ -29,7 +29,7 @@ This guide covers monitoring, alerting, scaling, upgrades, backups, troubleshoot
 | **Control Plane** | Operator reconciliation latency | Slow reconciliation = delayed agent provisioning |
 | **Control Plane** | CRD watch errors | Losing watch = stale state |
 | **Execution Plane** | Agent pod restarts | Runtime instability or OOM |
-| **Execution Plane** | Worker job duration | Evals/workflows hanging or failing |
+| **Execution Plane** | Worker job duration | Workflow runs hanging or failing |
 | **Gateway** | HTTP request latency P99 | User-facing performance |
 | **Gateway** | Auth failure rate | Brute force or IdP issues |
 | **LLM** | LiteLLM error rate | Provider outages or misconfiguration |
@@ -342,7 +342,7 @@ kubectl exec -n $NAMESPACE deploy/kubesynapse-api-gateway -- \
   sh -c 'sqlite3 /data/auth.db .dump' > auth-db-$DATE.sql
 
 # CRDs
-for crd in aiagents agentworkflows agentevals agentpolicies agentapprovals agenttenants; do
+for crd in aiagents agentworkflows agentpolicies agentapprovals agenttenants; do
   kubectl get $crd --all-namespaces -o yaml > $crd-$DATE.yaml
 done
 

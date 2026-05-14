@@ -18,7 +18,6 @@
 - [MCP Connections](#mcp-connections)
 - [Policies](#policies)
 - [Approvals](#approvals)
-- [Evaluations](#evaluations)
 - [Tenants](#tenants)
 - [A2A Protocol](#a2a-protocol)
 - [Observability](#observability)
@@ -693,48 +692,6 @@ Record an approval decision.
   "reason": "Verified by SRE team"
 }
 ```
-
----
-
-## Evaluations
-
-#### `GET /api/v1/evals`
-
-List evaluation suites.
-
-#### `POST /api/v1/evals`
-
-Create an evaluation suite.
-
-**Request body:**
-
-```json
-{
-  "name": "onboarding-eval",
-  "agent_name": "onboarding-bot",
-  "test_cases": [
-    {
-      "prompt": "How do I rotate a secret?",
-      "expected_contains": ["kubectl", "secret"]
-    }
-  ],
-  "threshold": 0.8
-}
-```
-
-#### `GET /api/v1/evals/{eval_name}`
-
-Get evaluation details.
-
-#### `PATCH /api/v1/evals/{eval_name}`
-
-Update an evaluation.
-
-#### `DELETE /api/v1/evals/{eval_name}`
-
-Delete an evaluation.
-
----
 
 ## Tenants
 

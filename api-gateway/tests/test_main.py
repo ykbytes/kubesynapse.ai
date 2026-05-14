@@ -62,8 +62,6 @@ api_gateway_llm = _load_gateway_module("api_gateway_llm", "routers/llm.py")
 sys.modules["routers.llm"] = api_gateway_llm
 api_gateway_workflows = _load_gateway_module("api_gateway_workflows", "routers/workflows.py")
 sys.modules["routers.workflows"] = api_gateway_workflows
-api_gateway_evals = _load_gateway_module("api_gateway_evals", "routers/evals.py")
-sys.modules["routers.evals"] = api_gateway_evals
 api_gateway_a2a = _load_gateway_module("api_gateway_a2a", "routers/a2a.py")
 sys.modules["routers.a2a"] = api_gateway_a2a
 api_gateway_app = _load_gateway_module("api_gateway_app", "main.py")
@@ -478,28 +476,6 @@ class AdminUserNamespaceProvisioningTests(unittest.TestCase):
 
         record_workflow_run.assert_called_once()
         record_workflow_outcome_memory.assert_called_once()
-        apply_memory_feedback.assert_called_once()
-
-    def test_sync_eval_memory_records_memory_feedback_for_terminal_eval(self) -> None:
-        info = api_gateway_main.EvalInfo(
-            name="reviewer-eval",
-            namespace="default",
-            agent_ref="reviewer",
-            phase="completed",
-            passed=True,
-            summary={"score": 0.91},
-        )
-
-        with (
-            patch.object(api_gateway_evals, "record_eval_outcome_memory") as record_eval_outcome_memory,
-            patch.object(
-                api_gateway_evals,
-                "apply_memory_feedback",
-            ) as apply_memory_feedback,
-        ):
-            api_gateway_evals._sync_eval_memory(info)
-
-        record_eval_outcome_memory.assert_called_once()
         apply_memory_feedback.assert_called_once()
 
 
@@ -2917,7 +2893,7 @@ class WorkflowRetryFailedTests(unittest.TestCase):
         self.assertEqual(result["action"], "Approve or reject step 'deploy-bundle'")
         self.assertEqual(result["reason"], "Workflow is waiting for human approval.")
 
-    def test_get_workflow_next_action_recommends_eval_after_success(self) -> None:
+    def test_get_workflow_next_action_recommends_promotion_after_success(self) -> None:
         workflow = {
             "metadata": {"name": "feature-pipeline", "namespace": "default"},
             "spec": {},
@@ -2930,7 +2906,6 @@ class WorkflowRetryFailedTests(unittest.TestCase):
         with (
             patch.object(api_gateway_workflows, "ensure_namespace_access"),
             patch.object(api_gateway_workflows, "read_custom_resource", return_value=workflow),
-            patch.object(api_gateway_workflows, "list_custom_resources", return_value=[]),
         ):
             result = api_gateway_workflows.get_workflow_next_action(
                 workflow_name="feature-pipeline",
@@ -2938,7 +2913,7 @@ class WorkflowRetryFailedTests(unittest.TestCase):
                 user={"sub": "user-1", "namespaces": ["default"]},
             )
 
-        self.assertEqual(result, {"action": "Run evaluation", "reason": "Workflow completed successfully but has no evaluation."})
+        self.assertEqual(result, {"action": "Deploy or promote", "reason": "All steps completed and verified successfully."})
 
     def test_stream_workflow_status_emits_status_and_done_events(self) -> None:
         workflow = {

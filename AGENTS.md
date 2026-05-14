@@ -12,9 +12,9 @@ This file gives AI coding agents the minimum repo-specific context needed to wor
 
 - Kubernetes CRDs are the control-plane source of truth.
 - Treat the API gateway as a substantial backend, not a thin proxy. It owns auth, CRUD, invoke routing, A2A, SSE, traces, and UI-facing metadata.
-- Treat the operator as the active control-plane engine. It reconciles agents into runtime StatefulSets and workflows or evals into Jobs.
+- Treat the operator as the active control-plane engine. It reconciles agents into runtime StatefulSets and workflows into Jobs.
 - OpenCode is the default runtime assumption for most work. Pi and Mistral Vibe are also supported and remain wired through the chart, operator, gateway, CLI, and UI.
-- Workflow and eval detail lives mainly in worker artifacts and logs; CRD status is summary-level.
+- Workflow detail lives mainly in worker artifacts and logs; CRD status is summary-level.
 - MCP exists in two forms: per-agent sidecars and the shared MCP hub.
 - Run intelligence is built into the platform: runtime events flow into the gateway trace store, then into signal watch and system-agent driven analysis.
 

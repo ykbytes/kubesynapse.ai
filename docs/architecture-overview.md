@@ -6,7 +6,7 @@ This document describes the architecture that the repository currently implement
 
 KubeSynapse is a Kubernetes-native AI agent platform built around these ideas:
 
-- represent agents, workflows, policies, approvals, evals, tenants, and observability resources as Kubernetes custom resources
+- represent agents, workflows, policies, approvals, tenants, and observability resources as Kubernetes custom resources
 - reconcile desired state with a Python operator and background worker Jobs
 - run each agent as an isolated singleton StatefulSet backed by one of the supported runtime adapters
 - route model calls through LiteLLM and optional retrieval through Qdrant
@@ -23,7 +23,7 @@ flowchart LR
     Gateway[API Gateway]
     K8s[Kubernetes API]
     Operator[Operator]
-    Worker[Workflow and Eval Workers]
+    Worker[Workflow Workers]
 
     subgraph AgentPlane[Per-Agent Runtime Plane]
         OpenCodeSTS[OpenCode Runtime StatefulSet]
@@ -95,7 +95,7 @@ flowchart LR
 
 - external clients enter through the ingress and API gateway
 - the operator provisions singleton runtime StatefulSets from `AIAgent` resources
-- workflow and evaluation execution is delegated to background worker Jobs
+- workflow execution is delegated to background worker Jobs
 - runtime StatefulSets call LiteLLM for model access and Qdrant for retrieval
 - the gateway persists application state beyond simple request routing, especially for auth and connection metadata
 - observability now exists as a first-class module with its own CRDs, controller logic, UI surfaces, and collector path
@@ -112,7 +112,6 @@ The Kubernetes API remains the control-plane source of truth. The chart installs
 | `AgentPolicy` | Namespaced | Defines input guardrails, output guardrails, per-request token caps, and allowed models |
 | `AgentApproval` | Namespaced | Represents human approval requests for high-risk actions |
 | `AgentWorkflow` | Namespaced | Defines multi-step agent DAGs with dependencies and optional approval gates |
-| `AgentEval` | Namespaced | Defines evaluation suites and thresholds for an agent |
 | `AgentTenant` | Cluster | Defines namespace isolation, quotas, allowed models, and tenant admins |
 | `ConnectorPlugin` | Namespaced | Declares how observability data is collected |
 | `ObservationTarget` | Namespaced | Declares what is being observed |
@@ -126,8 +125,8 @@ The Python operator is the reconciliation core.
 Current responsibilities include:
 
 - reconciling agents into runtime StatefulSets, Services, PVCs, ConfigMaps, and policies
-- reconciling workflows and evals into worker Jobs
-- tracking workflow and eval status from artifacts and logs
+- reconciling workflows into worker Jobs
+- tracking workflow status from artifacts and logs
 - managing approval-state transitions
 - reconciling observability resources when the observability CRDs are present
 
@@ -143,7 +142,7 @@ Current responsibilities include:
 
 - authentication and session handling
 - namespace-aware authorization
-- CRUD endpoints for agents, workflows, evals, policies, approvals, MCP connections, and observability resources
+- CRUD endpoints for agents, workflows, policies, approvals, MCP connections, and observability resources
 - invoke routing to runtime sandboxes
 - workflow trigger endpoints
 - runtime metadata and validation endpoints used by the UI
@@ -167,7 +166,7 @@ The Mistral Vibe runtime runs as a separate StatefulSet using the Python HTTP br
 
 ### Worker Jobs
 
-Workflows and evaluations rely on short-lived worker Jobs plus artifact persistence rather than trying to project every execution detail directly into CRD status.
+Workflows rely on short-lived worker Jobs plus artifact persistence rather than trying to project every execution detail directly into CRD status.
 
 That means:
 
@@ -233,7 +232,7 @@ The current platform uses two MCP access patterns:
 
 The `AIAgent` contract now includes connection-oriented MCP metadata, and the UI uses gateway-provided validation and runtime preview information to present attachable MCP connections.
 
-## 8. Workflow and Eval Execution
+## 8. Workflow Execution
 
 ### AgentWorkflow
 
@@ -244,14 +243,6 @@ The `AIAgent` contract now includes connection-oriented MCP metadata, and the UI
 3. a worker Job performs the orchestration work
 4. step-level detail is persisted as artifacts and logs
 5. summary state is projected back into workflow status and the UI
-
-### AgentEval
-
-Evals follow a similar pattern:
-
-- the CRD declares the suite
-- execution runs in a worker context
-- results and summaries are persisted and surfaced through the API and UI
 
 ## 9. Observability Architecture
 
@@ -285,7 +276,7 @@ If you need the shortest possible architectural summary, these are the points th
 
 1. The supported in-tree runtimes are OpenCode, Pi, and Mistral Vibe.
 2. The gateway is now a substantive application backend, not just a thin router.
-3. Workflow and eval detail lives in worker artifacts more than CRD status.
+3. Workflow detail lives in worker artifacts more than CRD status.
 4. MCP is both sidecar-based and connection-driven.
 5. Observability is implemented through CRDs, controller logic, UI views, and collector support.
 6. The Run Intelligence Layer provides semantic event indexing, deterministic anomaly detection, and AI-powered analysis across all runtimes.

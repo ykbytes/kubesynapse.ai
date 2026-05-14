@@ -32,10 +32,6 @@ await client.deleteAgent("my-agent");
 const workflows = await client.listWorkflows();
 await client.triggerWorkflow("my-workflow", { input: "data" });
 
-// Evaluations
-const evals = await client.listEvals();
-await client.runEval("my-eval");
-
 // Policies
 const policies = await client.listPolicies();
 

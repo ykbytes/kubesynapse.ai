@@ -182,10 +182,6 @@ spec:
               value: {{ (($agentRuntime).storage).size | default "1Gi" | quote }}
             - name: AGENT_RUNTIME_TIMEOUT_SECONDS
               value: {{ .Values.operator.runtimeTimeoutSeconds | quote }}
-            - name: EVAL_SCHEDULE_POLL_SECONDS
-              value: {{ .Values.operator.evalSchedulePollSeconds | quote }}
-            - name: SCHEDULED_EVAL_QUEUE_STALE_SECONDS
-              value: {{ .Values.operator.evalQueueStaleSeconds | quote }}
             - name: WORKFLOW_POLL_SECONDS
               value: {{ .Values.operator.workflowPollSeconds | quote }}
             - name: WORKFLOW_QUEUE_STALE_SECONDS

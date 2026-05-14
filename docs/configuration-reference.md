@@ -60,8 +60,6 @@ The `OPENCODE_MEMORY_*` variables documented below apply only to the runtime-loc
 | `WORKFLOW_POLL_SECONDS` | `30` | Workflow status poll interval |
 | `WORKFLOW_QUEUE_STALE_SECONDS` | `300` | Workflow queue staleness threshold |
 | `WORKFLOW_RUNNING_STALE_SECONDS` | `1800` | Running workflow staleness threshold |
-| `EVAL_SCHEDULE_POLL_SECONDS` | `60` | Evaluation schedule poll interval |
-| `SCHEDULED_EVAL_QUEUE_STALE_SECONDS` | `600` | Eval queue staleness threshold |
 | `AGENT_CPU_REQUEST` | `100m` | Agent container CPU request |
 | `AGENT_CPU_LIMIT` | `1` | Agent container CPU limit |
 | `AGENT_MEMORY_REQUEST` | `256Mi` | Agent container memory request |

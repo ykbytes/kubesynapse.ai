@@ -12,7 +12,7 @@ KubeSynapse is a **Kubernetes-native AI agent platform**. It treats AI agents as
 
 **Core Philosophy:**
 - **OpenCode-default runtime family** — `opencode` is the default agent runtime, with `pi` and `mistral-vibe` also supported as active in-tree runtime paths.
-- **Everything is a CRD** — Agents, workflows, policies, approvals, evaluations, and tenants are all Kubernetes Custom Resources.
+- **Everything is a CRD** — Agents, workflows, policies, approvals, and tenants are all Kubernetes Custom Resources.
 - **File-backed configuration** — Skills, system prompts, and OpenCode config files are versioned directly in manifests.
 - **Governance by default** — Policies, HITL (human-in-the-loop), A2A routing, and guardrails are built-in, not bolted on.
 
@@ -62,8 +62,8 @@ The platform has a **control plane / data plane** split:
 | `main.py` | Bootstraps operator and lifecycle hooks |
 | `config.py` | ~260 lines of typed env-var config |
 | `reconcile.py` | Shared reconciliation with retry logic, error classification (`PermanentError` vs `TemporaryError`), K8s status conditions |
-| `state_store.py` | SQLAlchemy ORM for `WorkflowRun`, `EvalRun`, `AgentSession`, `ChatSession`, `ChatMessage` |
-| `worker.py` | **~3,500 lines.** Workflow/eval execution engine. Runs as ephemeral K8s Jobs |
+| `state_store.py` | SQLAlchemy ORM for `WorkflowRun`, `AgentSession`, `ChatSession`, `ChatMessage` |
+| `worker.py` | **~3,500 lines.** Workflow execution engine. Runs as ephemeral K8s Jobs |
 | `utils.py` | Prompt templating, DAG validation, execution wave computation, runtime HTTP invocation |
 | `errors.py` | Machine-readable error taxonomy |
 | `services/k8s.py` | K8s API interaction — idempotent `ensure_*`, worker job enqueue/cancel |
@@ -75,7 +75,6 @@ The platform has a **control plane / data plane** split:
 - **`agent_controller.py`** — Reconciles `AIAgent` → StatefulSet + Service + NetworkPolicies + Secrets. Resolves policies/tenants, validates models, prunes orphans.
 - **`workflow_controller.py`** — Reconciles `AgentWorkflow` → worker Job. Watchdog timer (30s) detects stale jobs and auto-requeues. Supports cancellation.
 - **`approval_controller.py`** — Watches `AgentApproval.status.decision`. On approval: re-enqueues workflow. On denial: marks failed.
-- **`eval_controller.py`** — Reconciles `AgentEval` → worker Job. Supports cron scheduling with `croniter`.
 - **`tenant_controller.py`** — Reconciles `AgentTenant` → Namespace + ResourceQuota + LimitRange + RBAC.
 - **`policy_controller.py`** — Pure validation for `AgentPolicy`.
 - **`observation_controller.py`** — Demo-mode observability CRD reconciliation.
@@ -207,7 +206,6 @@ Before forwarding to runtime, enriches prompt with:
 | `agents` | `AgentManagementPanel`, `CreateAgentPanel` |
 | `chat` | `ChatSessionPanel`, `ChatWorkbench`, `TeamView` |
 | `workflows` / `composer` | `WorkflowManager`, `WorkflowComposer` (XYFlow DAG editor) |
-| `evals` | `EvalManager` |
 | `catalog` | `SkillsCatalogPanel` |
 | `policies` | `PolicyEditor` |
 | `intelligence` | `IntelligenceDashboard` |
@@ -274,7 +272,6 @@ Each is a separate Docker image, running as sidecars in agent pods or shared ser
 |-----|---------|---------------|
 | `AIAgent` | Agent definition | StatefulSet + Service + NetworkPolicies + Secrets |
 | `AgentWorkflow` | Multi-step DAG | Worker Job (ephemeral) |
-| `AgentEval` | Evaluation test suite | Worker Job (scheduled/manual) |
 | `AgentPolicy` | Guardrails and constraints | Validation only |
 | `AgentApproval` | HITL decision gate | Watched by approval controller |
 | `AgentTenant` | Multi-tenancy | Namespace + ResourceQuota + LimitRange + RBAC |
@@ -317,7 +314,7 @@ Each is a separate Docker image, running as sidecars in agent pods or shared ser
 
 1. **Translator Pattern (`builders/translator.py`)** — Pure function from `AIAgent` spec to complete manifest bundle. Deterministic and testable.
 2. **Controller-per-CRD** — Clean separation; optional controllers load only if CRD exists.
-3. **Worker-as-Job** — Workflow/eval execution isolated in ephemeral K8s Jobs.
+3. **Worker-as-Job** — Workflow execution isolated in ephemeral K8s Jobs.
 4. **Dual Storage** — CRDs for source of truth, SQL for operational querying.
 5. **Gateway Enrichment** — Single point where memory, A2A context, and intelligence are injected.
 6. **File-backed Config** — Skills and OpenCode configs stored as container files, not fetched externally.

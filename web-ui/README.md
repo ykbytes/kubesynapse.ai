@@ -109,7 +109,7 @@ Useful for debugging model reasoning loops and tool-use decisions.
 
 The UI is built around the same production surfaces exposed by the API gateway and operator:
 
-- connect once with a namespace and bearer token, then browse agents, workflows, and evaluations from the same session
+- connect once with a namespace and bearer token, then browse agents, workflows, and approvals from the same session
 - create and edit agents without raw JSON for `skills.files` or OpenCode config bundles
 - inspect runtime-facing configuration, parsed skill summaries, tool and A2A metadata, logs, and approval state side-by-side with chat
 - use the chat workbench for standard prompts or explicit A2A delegation

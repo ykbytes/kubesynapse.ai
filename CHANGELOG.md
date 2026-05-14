@@ -304,7 +304,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 - Initial platform release
-- 6 CRDs: AIAgent, AgentPolicy, AgentApproval, AgentTenant, AgentWorkflow, AgentEval
+- 5 core CRDs: AIAgent, AgentPolicy, AgentApproval, AgentTenant, AgentWorkflow
 - Kopf-based Kubernetes operator
 - LangGraph agent runtime with guardrails, HITL approval, and RAG
 - Goose runtime adapter

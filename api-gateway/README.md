@@ -6,7 +6,7 @@ routers, shared gateway core logic, hybrid authentication, and trace storage.
 ## Purpose
 
 The gateway is the single entry point for the UI, CLI, SDKs, and external
-integrations. It handles CRUD for agents, workflows, and evaluations; invokes
+integrations. It handles CRUD for agents, workflows, policies, approvals, and tenants; invokes
 agents synchronously or via SSE; routes A2A requests; stores execution traces;
 persists durable memory records; and exposes the provider and admin APIs used by
 the web console.
@@ -27,7 +27,7 @@ Only `opencode`, `pi`, and `mistral-vibe` belong to the supported request surfac
 |--------|--------------|
 | `main.py` | Deployed app entry point — app factory, middleware, and router mounting |
 | `_core.py` | Shared gateway models, runtime validation, Kubernetes helpers, and response shaping |
-| `routers/` | Modular REST route handlers for agents, workflows, evals, auth, chat, webhooks, and observability |
+| `routers/` | Modular REST route handlers for agents, workflows, auth, chat, webhooks, and observability |
 | `constants.py` | Centralized defaults, feature flags, and path constants |
 | `utils.py` | Shared helpers for serialization, pagination, and request context |
 | `auth_middleware.py` | Hybrid auth: shared token, OIDC PKCE, JWT rotation, brute-force protection |
@@ -86,7 +86,6 @@ Admin user CRUD now provisions dedicated tenant namespaces for non-admin users.
 | Health | `GET /api/v1/health`, `GET /api/v1/ready` |
 | Agents | `GET /api/v1/agents`, `POST /api/v1/agents`, `GET /api/v1/agents/{name}`, `PATCH /api/v1/agents/{name}`, `DELETE /api/v1/agents/{name}` |
 | Workflows | `GET /api/v1/workflows`, `POST /api/v1/workflows`, `GET /api/v1/workflows/{name}`, `PATCH /api/v1/workflows/{name}`, `DELETE /api/v1/workflows/{name}` |
-| Evaluations | `GET /api/v1/evals`, `POST /api/v1/evals`, `GET /api/v1/evals/{name}`, `PATCH /api/v1/evals/{name}`, `DELETE /api/v1/evals/{name}` |
 | Invoke | `POST /api/v1/agents/{name}/invoke`, `POST /api/v1/agents/{name}/invoke/stream` |
 | Chat & Memory | `GET/POST/PATCH/DELETE /api/v1/chat-sessions*`, `PATCH/DELETE /api/v1/memory/{record_id}` |
 | A2A | `POST /api/v1/a2a` — JSON-RPC routing between agents |

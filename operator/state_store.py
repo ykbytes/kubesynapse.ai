@@ -1,4 +1,4 @@
-"""Database-backed mirrors for workflow and eval execution state."""
+"""Database-backed mirrors for workflow execution state."""
 
 from __future__ import annotations
 
@@ -143,27 +143,6 @@ class WorkflowRun(Base):
     completed_at = Column(DateTime(timezone=True), nullable=True)
 
 
-class EvalRun(Base):
-    __tablename__ = "eval_runs"
-    __table_args__ = (UniqueConstraint("namespace", "resource_name", "run_id", name="uq_eval_runs_identity"),)
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    namespace = Column(String(128), nullable=False, index=True)
-    resource_name = Column(String(128), nullable=False, index=True)
-    generation = Column(Integer, nullable=False)
-    run_id = Column(String(128), nullable=False, index=True)
-    phase = Column(String(64), nullable=False, index=True)
-    passed = Column(Boolean, nullable=True)
-    spec_json = Column(JSON, nullable=True)
-    status_json = Column(JSON, nullable=True)
-    summary_json = Column(JSON, nullable=True)
-    artifact_path = Column(String(512), nullable=True)
-    worker_job_name = Column(String(128), nullable=True)
-    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
-    updated_at = Column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
-    completed_at = Column(DateTime(timezone=True), nullable=True)
-
-
 class AgentSession(Base):
     __tablename__ = "agent_sessions"
     __table_args__ = (UniqueConstraint("session_id", name="uq_agent_sessions_identity"),)
@@ -268,30 +247,6 @@ def check_workflow_run_conflict(namespace: str, resource_name: str, generation: 
     return None
 
 
-def check_eval_run_conflict(namespace: str, resource_name: str, generation: int, run_id: str) -> str | None:
-    """Return conflicting run_id if another eval run is active for this eval+generation."""
-    if not STATE_DB_ENABLED:
-        return None
-    try:
-        with db_session() as session:
-            record = (
-                session.query(EvalRun)
-                .filter(
-                    EvalRun.namespace == namespace,
-                    EvalRun.resource_name == resource_name,
-                    EvalRun.generation == generation,
-                    EvalRun.phase.in_(["queued", "running"]),
-                    EvalRun.run_id != run_id,
-                )
-                .first()
-            )
-            if record is not None:
-                return str(record.run_id)
-    except Exception:
-        logger.exception("Failed to check eval run conflict for %s/%s gen %d.", namespace, resource_name, generation)
-    return None
-
-
 def safe_record_workflow_state(
     *,
     namespace: str,
@@ -367,79 +322,6 @@ def safe_record_workflow_state(
             record.updated_at = utc_now()
     except Exception:
         logger.exception("Failed to mirror workflow state for %s/%s run %s.", namespace, resource_name, run_id)
-
-
-def safe_record_eval_state(
-    *,
-    namespace: str,
-    resource_name: str,
-    generation: int,
-    run_id: str,
-    phase: str,
-    passed: bool | None,
-    spec: dict[str, Any],
-    status: dict[str, Any],
-) -> None:
-    if not STATE_DB_ENABLED or not run_id:
-        return
-    try:
-        with db_session() as session:
-            superseded_at = utc_now()
-            stale_records = (
-                session.query(EvalRun)
-                .filter(
-                    EvalRun.namespace == namespace,
-                    EvalRun.resource_name == resource_name,
-                    EvalRun.generation == generation,
-                    EvalRun.run_id != run_id,
-                    EvalRun.phase.in_(["queued", "running"]),
-                )
-                .all()
-            )
-            for stale_record in stale_records:
-                stale_status = _json_clone(stale_record.status_json)
-                if not isinstance(stale_status, dict):
-                    stale_status = {}
-                stale_summary = _json_clone(stale_record.summary_json)
-                if not isinstance(stale_summary, dict):
-                    stale_summary = {}
-                stale_record.phase = "cancelled"
-                stale_status["phase"] = "cancelled"
-                stale_summary.setdefault("error", f"Superseded by run {run_id}")
-                stale_summary["cancelledAt"] = superseded_at.isoformat()
-                stale_record.status_json = stale_status
-                stale_record.summary_json = stale_summary
-                stale_record.completed_at = superseded_at
-                stale_record.updated_at = superseded_at
-
-            record = (
-                session.query(EvalRun)
-                .filter(
-                    EvalRun.namespace == namespace,
-                    EvalRun.resource_name == resource_name,
-                    EvalRun.run_id == run_id,
-                )
-                .one_or_none()
-            )
-            if record is None:
-                record = EvalRun(namespace=namespace, resource_name=resource_name, run_id=run_id, generation=generation)
-                session.add(record)
-
-            artifact_ref = status.get("artifactRef", {}) or {}
-            worker_job = status.get("workerJob", {}) or {}
-
-            record.generation = generation
-            record.phase = phase
-            record.passed = passed
-            record.spec_json = _json_clone(spec)
-            record.status_json = _json_clone(status)
-            record.summary_json = _json_clone(status.get("summary", {}) or {})
-            record.artifact_path = str(artifact_ref.get("path") or "").strip() or None
-            record.worker_job_name = str(worker_job.get("name") or "").strip() or None
-            record.completed_at = _completed_timestamp(phase, status)
-            record.updated_at = utc_now()
-    except Exception:
-        logger.exception("Failed to mirror eval state for %s/%s run %s.", namespace, resource_name, run_id)
 
 
 def record_workflow_log_archive(

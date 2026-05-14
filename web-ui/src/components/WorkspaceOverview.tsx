@@ -3,7 +3,6 @@ import {
   ArrowRight,
   Bot,
   CheckCircle2,
-  FlaskConical,
   GitBranch,
   LayoutPanelTop,
   Plus,
@@ -25,13 +24,11 @@ interface WorkspaceOverviewProps {
   currentUser: AuthenticatedUser | null;
   agentCount: number;
   workflowCount: number;
-  evalCount: number;
   policyCount: number;
   hasConversation: boolean;
   onCreateAgent: () => void;
   onOpenCatalog: () => void;
   onOpenWorkflowBuilder: () => void;
-  onOpenEvals: () => void;
   onOpenOperations: () => void;
 }
 
@@ -108,13 +105,11 @@ export function WorkspaceOverview({
   currentUser,
   agentCount,
   workflowCount,
-  evalCount,
   policyCount,
   hasConversation,
   onCreateAgent,
   onOpenCatalog,
   onOpenWorkflowBuilder,
-  onOpenEvals,
   onOpenOperations,
 }: WorkspaceOverviewProps) {
   const posture = gatewayTone(gatewayStatus);
@@ -140,9 +135,9 @@ export function WorkspaceOverview({
       detail: "Model one repeatable orchestration path instead of operating agents one request at a time.",
     },
     {
-      label: "Evaluation coverage added",
-      done: evalCount > 0,
-      detail: "Back the platform with regression checks before teams rely on it in production.",
+      label: "Guardrails configured",
+      done: policyCount > 0,
+      detail: "Attach a policy so governance, model limits, and safety controls are explicit instead of implicit.",
     },
   ];
   const completed = checklist.filter((item) => item.done).length;
@@ -226,13 +221,6 @@ export function WorkspaceOverview({
               icon={GitBranch}
             />
             <ResourceStat
-              label="Evaluations"
-              value={evalCount}
-              description={evalCount === 0 ? "Quality coverage is still manual." : "Regression checks are defined for agent quality."}
-              tone={evalCount > 0 ? "success" : "default"}
-              icon={FlaskConical}
-            />
-            <ResourceStat
               label="Policies"
               value={policyCount}
               description={policyCount === 0 ? "Guardrails are relying on defaults only." : "Governance and model controls are in place."}
@@ -292,12 +280,12 @@ export function WorkspaceOverview({
                   ? "Use an existing agent to validate live chat, session continuity, and tool execution."
                   : workflowCount === 0
                     ? "Turn a successful manual agent flow into a workflow so the platform starts to feel operational, not manual."
-                    : evalCount === 0
-                      ? "Add one evaluation suite to move from demo-grade usage into measurable quality control."
+                    : policyCount === 0
+                      ? "Attach a policy so the platform moves from permissive defaults into explicit operational guardrails."
                       : "Open operations to review health and governance posture before broadening adoption."}
             </p>
-            <Button variant="ghost" size="sm" className="mt-3 gap-1 px-0 text-primary hover:bg-transparent hover:text-primary/90" onClick={evalCount === 0 ? onOpenEvals : onOpenOperations}>
-              {evalCount === 0 ? "Open evaluations" : "Review operations"}
+            <Button variant="ghost" size="sm" className="mt-3 gap-1 px-0 text-primary hover:bg-transparent hover:text-primary/90" onClick={onOpenOperations}>
+              Review operations
               <ArrowRight className="h-3.5 w-3.5" />
             </Button>
           </div>

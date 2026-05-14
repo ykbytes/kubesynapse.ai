@@ -271,27 +271,6 @@ class WorkflowRun(Base):
     completed_at = Column(DateTime(timezone=True), nullable=True)
 
 
-class EvalRun(Base):
-    __tablename__ = "eval_runs"
-    __table_args__ = (UniqueConstraint("namespace", "resource_name", "run_id", name="uq_eval_runs_identity"),)
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    namespace = Column(String(128), nullable=False, index=True)
-    resource_name = Column(String(128), nullable=False, index=True)
-    generation = Column(Integer, nullable=False)
-    run_id = Column(String(128), nullable=False, index=True)
-    phase = Column(String(64), nullable=False, index=True)
-    passed = Column(Boolean, nullable=True)
-    spec_json = Column(JSON, nullable=True)
-    status_json = Column(JSON, nullable=True)
-    summary_json = Column(JSON, nullable=True)
-    artifact_path = Column(String(512), nullable=True)
-    worker_job_name = Column(String(128), nullable=True)
-    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
-    updated_at = Column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
-    completed_at = Column(DateTime(timezone=True), nullable=True)
-
-
 class ChatSession(Base):
     __tablename__ = "chat_sessions"
     __table_args__ = (UniqueConstraint("namespace", "agent_name", "session_id", name="uq_chat_sessions_identity"),)
@@ -648,52 +627,6 @@ def apply_memory_feedback(
             record.score = max(float(record.score or 0.0) + delta, 0.0)
             updated += 1
     return updated
-
-
-def record_eval_outcome_memory(
-    namespace: str,
-    agent_name: str,
-    eval_name: str,
-    *,
-    phase: str,
-    passed: bool | None,
-    summary: dict[str, Any] | None = None,
-) -> int:
-    normalized_summary = summary if isinstance(summary, dict) else {}
-    memory_candidates: dict[str, list[dict[str, Any]]] = {"episodic": [], "procedural": []}
-    memory_candidates["episodic"].append(
-        {
-            "type": "eval-outcome",
-            "text": f"Eval '{eval_name}' finished with phase '{phase}'.",
-            "eval": eval_name,
-            "phase": phase,
-        }
-    )
-    if passed is True:
-        memory_candidates["procedural"].append(
-            {
-                "type": "eval-success",
-                "text": f"Eval '{eval_name}' passed and validated expected agent behavior.",
-                "eval": eval_name,
-                "score": normalized_summary.get("score"),
-            }
-        )
-    elif passed is False or phase == "failed":
-        memory_candidates["procedural"].append(
-            {
-                "type": "eval-failure",
-                "text": f"Eval '{eval_name}' failed and indicates a regression or unmet expectation.",
-                "eval": eval_name,
-                "score": normalized_summary.get("score"),
-            }
-        )
-    return record_memory_items(
-        namespace,
-        agent_name,
-        session_id=eval_name,
-        summary={"memory_candidates": memory_candidates},
-        auto_promote=(passed is True),
-    )
 
 
 def list_memory_records(

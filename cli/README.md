@@ -2,7 +2,7 @@
 
 **Modern CLI for KubeSynapse** — a Kubernetes-native multi-runtime AI agent orchestration platform.
 
-`agentctl` provides full control over agents, workflows, evaluations, policies, approvals, credentials, authentication, and the skills catalog from the terminal.
+`agentctl` provides full control over agents, workflows, policies, approvals, credentials, authentication, and the skills catalog from the terminal.
 
 ---
 
@@ -88,7 +88,6 @@ Every command inherits these global options:
 |-------|-------------|
 | `agentctl agents` | Manage and inspect agents |
 | `agentctl workflows` | Manage, trigger, and cancel workflows |
-| `agentctl evals` | Manage and inspect eval suites |
 | `agentctl approvals` | List, review, and decide on approvals |
 | `agentctl policies` | List policies |
 | `agentctl auth` | Authentication and user session management |
@@ -303,19 +302,6 @@ agentctl workflows logs my-workflow
 ```
 
 Streams the runtime logs for the most recent workflow execution.
-
----
-
-## Evaluations
-
-```bash
-agentctl evals list
-agentctl evals create -f examples/sample-eval.yaml
-agentctl evals show my-eval
-agentctl evals update my-eval -f updated-eval.yaml
-agentctl evals delete my-eval --yes
-agentctl evals delete --file examples/sample-eval.yaml --yes
-```
 
 ---
 
@@ -580,13 +566,11 @@ agentctl artifacts zip my-agent
 ```bash
 agentctl apply examples/sample-agent.yaml
 agentctl apply examples/sample-workflow.yaml
-agentctl apply examples/sample-eval.yaml
 ```
 
 `apply` auto-detects the resource kind from the `kind` field or document structure:
 - `AIAgent` or documents with a `model` field → Agent
 - `AgentWorkflow` or documents with a `steps` field → Workflow
-- `AgentEval` or documents with a `test_suite` field → Evaluation
 
 If the resource already exists (HTTP 409), it falls back to an update (PATCH).
 
@@ -604,21 +588,6 @@ kind: AIAgent
 metadata:
   name: research-assistant
   namespace: default
-spec:
-  model: gpt-4
-  systemPrompt: "You are a research assistant."
-  runtime:
-    kind: opencode
-  storage:
-    size: 2Gi
-  enableGVisor: false
-  mcpServers:
-    - web-search
-    - documents
-  mcpSidecars:
-    - image: my-custom-mcp:latest
-      port: 9100
-      env:
         - name: API_KEY
           value: secret
   a2a:
@@ -700,12 +669,6 @@ agentctl workflows trigger NAME [INPUT] # Trigger workflow execution
 agentctl workflows cancel NAME          # Cancel running workflow
 agentctl workflows status NAME          # Show focused run status
 agentctl workflows logs NAME            # Fetch workflow logs
-
-agentctl evals list                     # List eval suites
-agentctl evals create -f FILE           # Create eval
-agentctl evals show NAME                # Show eval details
-agentctl evals update NAME -f FILE      # Update eval
-agentctl evals delete NAME              # Delete eval
 
 agentctl approvals list                 # List pending approvals
 agentctl approvals show NAME            # Show approval details

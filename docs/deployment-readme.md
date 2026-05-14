@@ -60,6 +60,12 @@ injects `catalog/skills-catalog.json`, reconciles the persisted PostgreSQL passw
 repeat upgrades, and restarts the core deployments so unchanged `:dev` image tags are
 actually picked up.
 
+The default quickstart admin username is `admin`. The helper prints the effective
+username, password, and port-forward commands after a successful run.
+
+If the local `:dev` images are already built, add `-SkipBuild` to reuse them while
+still loading the images into Kind and running the Helm upgrade.
+
 ## 3. Configure the environment-specific overlay
 
 For local image builds, start from `deploy/values.local-images.example.yaml` and adjust the registry coordinates if your cluster does not reach `localhost/kubesynapse/*:dev` directly.
@@ -103,6 +109,15 @@ cd web-ui
 npm run build
 ```
 
+For a live local Kind deployment, verify the upgraded release with:
+
+```bash
+kubectl get deploy,pods -n kubesynapse
+kubectl port-forward svc/kubesynapse-api-gateway -n kubesynapse 8080:8080
+curl http://127.0.0.1:8080/api/v1/health
+kubectl port-forward svc/kubesynapse-web-ui -n kubesynapse 3000:80
+```
+
 ## 4. Observability validation
 
 If you are exercising the observability stack, apply `examples/observability-demo-fire.yaml`, verify the created resources reconcile, and inspect the UI and gateway responses described in `docs/observability-explained.md`.
@@ -113,7 +128,7 @@ These are the assumptions that match the codebase now:
 
 - the supported in-tree runtimes are OpenCode, Pi, and Mistral Vibe
 - PostgreSQL backs gateway auth and session state
-- workflows and evals use worker Jobs plus artifact PVC references
+- workflows use worker Jobs plus artifact PVC references
 - observability CRDs are part of the chart
 - a collector DaemonSet path exists in the platform chart
 - the MCP model includes both per-agent sidecars and shared MCP hub connections

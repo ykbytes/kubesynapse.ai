@@ -1,25 +1,21 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   createAgent,
-  createEval,
   createGitCredentials,
   createGitHubCredentials,
   createWorkflow,
   deleteAgent,
-  deleteEval,
   deleteWorkflow,
   discoverAgentPeers,
   fetchAgent,
   fetchWorkflow,
   listAgents,
-  listEvals,
   listPolicies,
   listWorkflows,
   triggerWorkflow,
   cancelWorkflow,
   retryFailedSteps,
   updateAgent,
-  updateEval,
   updateWorkflow,
   apiErrorMessage,
 } from "@/lib/api";
@@ -36,9 +32,6 @@ import type {
   AgentDiscoveryPeer,
   AgentInfo,
   CreateAgentPayload,
-  EvalInfo,
-  EvalPayload,
-  EvalUpdatePayload,
   FactoryMode,
   GitFormState,
   GitHubFormState,
@@ -61,7 +54,6 @@ export interface WorkspaceContextValue {
   agents: AgentInfo[];
   policies: PolicyInfo[];
   workflows: WorkflowInfo[];
-  evals: EvalInfo[];
   selectedAgentDetail: AgentDetail | null;
   selectedRuntimeKind: RuntimeKind;
 
@@ -69,15 +61,12 @@ export interface WorkspaceContextValue {
   activeView: WorkspaceView;
   selectedAgentName: string;
   selectedWorkflowName: string;
-  selectedEvalName: string;
   agentCreateMode: boolean;
   workflowCreateMode: boolean;
-  evalCreateMode: boolean;
   setActiveView: (view: WorkspaceView) => void;
   setSelectedAgentName: (name: string) => void;
   setAgentCreateMode: (mode: boolean) => void;
   setWorkflowCreateMode: (mode: boolean) => void;
-  setEvalCreateMode: (mode: boolean) => void;
   setSelectedAgentDetail: (detail: AgentDetail | null) => void;
 
   // Loading / errors
@@ -87,7 +76,6 @@ export interface WorkspaceContextValue {
   agentManageError: string;
   setAgentManageError: (msg: string) => void;
   workflowError: string;
-  evalError: string;
 
   // Discovery
   discoverablePeers: AgentDiscoveryPeer[];
@@ -103,8 +91,6 @@ export interface WorkspaceContextValue {
   runningWorkflow: boolean;
   cancellingWorkflow: boolean;
   retryingWorkflow: boolean;
-  savingEval: boolean;
-  deletingEval: boolean;
 
   // UI
   sidebarCollapsed: boolean;
@@ -156,7 +142,6 @@ export interface WorkspaceContextValue {
   emptySidebarMessage: string;
   selectedAgent: AgentInfo | null;
   selectedWorkflow: WorkflowInfo | null;
-  selectedEval: EvalInfo | null;
   selectedFactoryWorkflowMode: FactoryMode;
   setSelectedFactoryWorkflowMode: (value: FactoryMode) => void;
   observatoryFocus: {
@@ -176,9 +161,6 @@ export interface WorkspaceContextValue {
   handleTriggerWorkflow: (name: string, input?: string, factoryMode?: FactoryMode) => Promise<void>;
   handleCancelWorkflow: (name: string) => Promise<void>;
   handleRetryFailedSteps: (name: string) => Promise<void>;
-  handleCreateEval: (payload: EvalPayload) => Promise<void>;
-  handleUpdateEval: (name: string, payload: EvalUpdatePayload) => Promise<void>;
-  handleDeleteEval: (name: string) => Promise<void>;
   handleSelectResource: (name: string) => void;
   handleCreateNew: () => void;
   navigateToResource: (view: WorkspaceView, name?: string) => void;
@@ -229,16 +211,13 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [policies, setPolicies] = useState<PolicyInfo[]>([]);
   const [workflows, setWorkflows] = useState<WorkflowInfo[]>([]);
-  const [evals, setEvals] = useState<EvalInfo[]>([]);
 
   const [activeView, setActiveView] = useState<WorkspaceView>("agents");
   const [selectedAgentName, setSelectedAgentName] = useState("");
   const [selectedWorkflowName, setSelectedWorkflowName] = useState("");
-  const [selectedEvalName, setSelectedEvalName] = useState("");
   const [selectedPolicyName, setSelectedPolicyName] = useState("");
   const [agentCreateMode, setAgentCreateMode] = useState(false);
   const [workflowCreateMode, setWorkflowCreateMode] = useState(false);
-  const [evalCreateMode, setEvalCreateMode] = useState(false);
   const [selectedAgentDetail, setSelectedAgentDetail] = useState<AgentDetail | null>(null);
   const [agentDetailCache, setAgentDetailCache] = useState<Record<string, AgentDetail>>({});
 
@@ -246,7 +225,6 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [workspaceError, setWorkspaceError] = useState("");
   const [agentManageError, setAgentManageError] = useState("");
   const [workflowError, setWorkflowError] = useState("");
-  const [evalError, setEvalError] = useState("");
   const [createError, setCreateError] = useState("");
 
   const [savingAgent, setSavingAgent] = useState(false);
@@ -257,8 +235,6 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [runningWorkflow, setRunningWorkflow] = useState(false);
   const [cancellingWorkflow, setCancellingWorkflow] = useState(false);
   const [retryingWorkflow, setRetryingWorkflow] = useState(false);
-  const [savingEval, setSavingEval] = useState(false);
-  const [deletingEval, setDeletingEval] = useState(false);
 
   const [discoverablePeers, setDiscoverablePeers] = useState<AgentDiscoveryPeer[]>([]);
   const [discoveryLoading, setDiscoveryLoading] = useState(false);
@@ -300,21 +276,16 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   selectedAgentNameRef.current = selectedAgentName;
   const selectedWorkflowNameRef = useRef(selectedWorkflowName);
   selectedWorkflowNameRef.current = selectedWorkflowName;
-  const selectedEvalNameRef = useRef(selectedEvalName);
-  selectedEvalNameRef.current = selectedEvalName;
   const agentCreateModeRef = useRef(agentCreateMode);
   agentCreateModeRef.current = agentCreateMode;
   const workflowCreateModeRef = useRef(workflowCreateMode);
   workflowCreateModeRef.current = workflowCreateMode;
-  const evalCreateModeRef = useRef(evalCreateMode);
-  evalCreateModeRef.current = evalCreateMode;
   const agentDetailRequestsRef = useRef<Set<string>>(new Set());
 
   // ── Derived ──
 
   const selectedAgent = useMemo(() => agents.find((a) => a.name === selectedAgentName) ?? null, [agents, selectedAgentName]);
   const selectedWorkflow = useMemo(() => workflowCreateMode ? null : workflows.find((w) => w.name === selectedWorkflowName) ?? null, [workflows, selectedWorkflowName, workflowCreateMode]);
-  const selectedEval = useMemo(() => evalCreateMode ? null : evals.find((e) => e.name === selectedEvalName) ?? null, [evals, selectedEvalName, evalCreateMode]);
   const selectedFactoryWorkflowMode = useMemo<FactoryMode>(() => (
     selectedWorkflowName ? factoryWorkflowModeByName[selectedWorkflowName] ?? DEFAULT_FACTORY_MODE : DEFAULT_FACTORY_MODE
   ), [factoryWorkflowModeByName, selectedWorkflowName]);
@@ -326,7 +297,6 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     chat: agents.length,
     workflows: workflows.length,
     composer: workflows.length,
-    evals: evals.length,
     catalog: 0,
     policies: policies.length,
     intelligence: 0,
@@ -334,7 +304,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     admin: 0,
     docs: 0,
     webhooks: 0,
-  }), [agents.length, workflows.length, evals.length, policies.length]);
+  }), [agents.length, workflows.length, policies.length]);
 
   const sidebarItems = useMemo<SidebarResourceItem[]>(() =>
     activeView === "agents" || activeView === "chat"
@@ -348,15 +318,13 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         }))
       : activeView === "workflows" || activeView === "composer"
         ? workflows.map((w) => ({ id: w.name, title: w.name, subtitle: w.description || `${w.steps.length} step${w.steps.length === 1 ? "" : "s"}`, status: w.phase, note: w.current_step ? `Current step: ${w.current_step}` : `${w.steps.length} steps` }))
-        : activeView === "evals"
-          ? evals.map((e) => ({ id: e.name, title: e.name, subtitle: e.agent_ref, status: e.phase, note: `${e.test_suite.length} case${e.test_suite.length === 1 ? "" : "s"}` }))
-          : activeView === "policies"
-            ? policies.map((p) => ({ id: p.name, title: p.name, subtitle: `${p.allowed_models.length} model${p.allowed_models.length === 1 ? "" : "s"}`, status: "active", note: p.namespace }))
-            : [],
-    [activeView, agents, workflows, evals, policies, agentDetailCache],
+        : activeView === "policies"
+          ? policies.map((p) => ({ id: p.name, title: p.name, subtitle: `${p.allowed_models.length} model${p.allowed_models.length === 1 ? "" : "s"}`, status: "active", note: p.namespace }))
+          : [],
+    [activeView, agents, workflows, policies, agentDetailCache],
   );
 
-  const sidebarSelectedId = activeView === "agents" || activeView === "chat" ? selectedAgentName : (activeView === "workflows" || activeView === "composer") ? selectedWorkflowName : activeView === "policies" ? selectedPolicyName : activeView === "evals" ? selectedEvalName : "";
+  const sidebarSelectedId = activeView === "agents" || activeView === "chat" ? selectedAgentName : (activeView === "workflows" || activeView === "composer") ? selectedWorkflowName : activeView === "policies" ? selectedPolicyName : "";
 
   const emptySidebarMessage = useMemo(() => !token.trim()
     ? "Authenticate with a gateway token and load the namespace catalog."
@@ -378,9 +346,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
                 ? `No policies are defined in namespace '${namespace}'. Create one to enforce guardrails.`
                 : activeView === "docs"
                   ? "Browse the documentation in the main panel."
-                  : activeView === "webhooks"
-                    ? "Manage webhook receivers and event-driven triggers in the main panel."
-                    : `No evaluations are defined in namespace '${namespace}'. Create one to validate agent quality.`,
+                  : "Manage webhook receivers and event-driven triggers in the main panel.",
     [token, activeView, namespace],
   );
 
@@ -392,16 +358,15 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       const activeToken = options?.token ?? token;
       const activeNamespace = options?.namespace ?? namespace;
       if (!activeToken.trim()) {
-        setAgents([]); setPolicies([]); setWorkflows([]); setEvals([]); setSelectedAgentDetail(null); setAgentDetailCache({});
+        setAgents([]); setPolicies([]); setWorkflows([]); setSelectedAgentDetail(null); setAgentDetailCache({});
         return;
       }
       if (!silent) { setCatalogLoading(true); setWorkspaceError(""); }
       try {
-        const [nextAgents, nextPolicies, nextWorkflows, nextEvals] = await Promise.all([
+        const [nextAgents, nextPolicies, nextWorkflows] = await Promise.all([
           listAgents(activeToken, activeNamespace),
           listPolicies(activeToken, activeNamespace),
           listWorkflows(activeToken, activeNamespace),
-          listEvals(activeToken, activeNamespace),
         ]);
         setAgents((prev) => stableArrayUpdate(prev, nextAgents));
         setPolicies((prev) => stableArrayUpdate(prev, nextPolicies));
@@ -418,7 +383,6 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
           }
           return stableArrayUpdate(prev, nextWorkflows);
         });
-        setEvals((prev) => stableArrayUpdate(prev, nextEvals));
         if (!agentCreateModeRef.current) {
           const cur = selectedAgentNameRef.current;
           const next = nextAgents.some((a) => a.name === cur) ? cur : nextAgents[0]?.name ?? "";
@@ -428,11 +392,6 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
           const cur = selectedWorkflowNameRef.current;
           const next = nextWorkflows.some((w) => w.name === cur) ? cur : nextWorkflows[0]?.name ?? "";
           if (next !== cur) setSelectedWorkflowName(next);
-        }
-        if (!evalCreateModeRef.current) {
-          const cur = selectedEvalNameRef.current;
-          const next = nextEvals.some((e) => e.name === cur) ? cur : nextEvals[0]?.name ?? "";
-          if (next !== cur) setSelectedEvalName(next);
         }
       } catch (err) {
         if (!silent) setWorkspaceError(apiErrorMessage(err));
@@ -450,7 +409,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const prevNamespaceRef = useRef(namespace);
   useEffect(() => {
     if (!token.trim()) {
-      setAgents([]); setPolicies([]); setWorkflows([]); setEvals([]); setSelectedAgentDetail(null); setAgentDetailCache({});
+      setAgents([]); setPolicies([]); setWorkflows([]); setSelectedAgentDetail(null); setAgentDetailCache({});
       setWorkspaceError("");
       initialLoadDoneRef.current = false;
       prevNamespaceRef.current = namespace;
@@ -462,8 +421,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     prevNamespaceRef.current = namespace;
     if (namespaceChanged) {
       setSelectedAgentName(""); setSelectedAgentDetail(null); setDiscoverablePeers([]); setAgentDetailCache({});
-      setSelectedWorkflowName(""); setSelectedEvalName("");
-      setAgentCreateMode(false); setWorkflowCreateMode(false); setEvalCreateMode(false);
+      setSelectedWorkflowName("");
+      setAgentCreateMode(false); setWorkflowCreateMode(false);
       agentDetailRequestsRef.current.clear();
     }
     // First mount or namespace change: non-silent (show loading). Subsequent restarts (e.g. token refresh): silent.
@@ -479,9 +438,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if ((activeView === "agents" || activeView === "chat") && !agentCreateMode && !selectedAgentName && agents.length > 0) setSelectedAgentName(agents[0].name);
     if ((activeView === "workflows" || activeView === "composer") && !workflowCreateMode && !selectedWorkflowName && workflows.length > 0) setSelectedWorkflowName(workflows[0].name);
-    if (activeView === "evals" && !evalCreateMode && !selectedEvalName && evals.length > 0) setSelectedEvalName(evals[0].name);
     if (activeView === "policies" && !selectedPolicyName && policies.length > 0) setSelectedPolicyName(policies[0].name);
-  }, [activeView, agents, workflows, evals, policies, agentCreateMode, workflowCreateMode, evalCreateMode, selectedAgentName, selectedWorkflowName, selectedEvalName, selectedPolicyName]);
+  }, [activeView, agents, workflows, policies, agentCreateMode, workflowCreateMode, selectedAgentName, selectedWorkflowName, selectedPolicyName]);
 
   // Fetch agent detail
   useEffect(() => {
@@ -791,36 +749,6 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     finally { setRetryingWorkflow(false); }
   }, [token, namespace]);
 
-  const handleCreateEval = useCallback(async (payload: EvalPayload) => {
-    if (!token.trim()) return;
-    setSavingEval(true); setEvalError("");
-    try {
-      const created = await createEval(token, namespace, payload);
-      setEvalCreateMode(false); setSelectedEvalName(created.name);
-      await refreshWorkspaceData({ silent: false }); toast.success("Evaluation created");
-    } catch (err) { const msg = apiErrorMessage(err); setEvalError(msg); toast.error("Failed to create evaluation", { description: msg }); }
-    finally { setSavingEval(false); }
-  }, [token, namespace, refreshWorkspaceData]);
-
-  const handleUpdateEval = useCallback(async (name: string, payload: EvalUpdatePayload) => {
-    if (!token.trim()) return;
-    setSavingEval(true); setEvalError("");
-    try { await updateEval(token, namespace, name, payload); await refreshWorkspaceData({ silent: false }); toast.success("Evaluation saved"); }
-    catch (err) { const msg = apiErrorMessage(err); setEvalError(msg); toast.error("Failed to save evaluation", { description: msg }); }
-    finally { setSavingEval(false); }
-  }, [token, namespace, refreshWorkspaceData]);
-
-  const handleDeleteEval = useCallback(async (name: string) => {
-    if (!token.trim()) return;
-    setDeletingEval(true); setEvalError("");
-    try {
-      await deleteEval(token, namespace, name);
-      setSelectedEvalName(""); setEvalCreateMode(evals.length <= 1);
-      await refreshWorkspaceData({ silent: false }); toast.success("Evaluation deleted");
-    } catch (err) { const msg = apiErrorMessage(err); setEvalError(msg); toast.error("Failed to delete evaluation", { description: msg }); }
-    finally { setDeletingEval(false); }
-  }, [token, namespace, evals.length, refreshWorkspaceData]);
-
   const handleSelectResource = useCallback((name: string) => {
     if (activeView === "agents" || activeView === "chat") {
       setAgentCreateMode(false);
@@ -832,15 +760,13 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     }
     else if (activeView === "workflows" || activeView === "composer") { setWorkflowCreateMode(false); setSelectedWorkflowName(name); }
     else if (activeView === "policies") { setSelectedPolicyName(name); }
-    else { setEvalCreateMode(false); setSelectedEvalName(name); }
   }, [activeView]);
 
   const handleCreateNew = useCallback(() => {
-    setWorkspaceError(""); setCreateError(""); setAgentManageError(""); setWorkflowError(""); setEvalError("");
+    setWorkspaceError(""); setCreateError(""); setAgentManageError(""); setWorkflowError("");
     if (activeView === "agents") { setAgentCreateMode(true); setSelectedAgentName(""); }
     else if (activeView === "chat") { setActiveView("agents"); setAgentCreateMode(true); setSelectedAgentName(""); setChatFocused(false); }
     else if (activeView === "workflows" || activeView === "composer") { setWorkflowCreateMode(true); setSelectedWorkflowName(""); }
-    else { setEvalCreateMode(true); setSelectedEvalName(""); }
   }, [activeView]);
 
   const navigateToResource = useCallback((view: WorkspaceView, name?: string) => {
@@ -860,12 +786,6 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     if (view === "workflows" || view === "composer") {
       setWorkflowCreateMode(false);
       setSelectedWorkflowName(name ?? "");
-      return;
-    }
-
-    if (view === "evals") {
-      setEvalCreateMode(false);
-      setSelectedEvalName(name ?? "");
       return;
     }
 
@@ -896,13 +816,13 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const ctxValue = useMemo<WorkspaceContextValue>(() => ({
-    agents, policies, workflows, evals, selectedAgentDetail, selectedRuntimeKind,
-    activeView, selectedAgentName, selectedWorkflowName, selectedEvalName,
-    agentCreateMode, workflowCreateMode, evalCreateMode,
-    setActiveView, setSelectedAgentName, setAgentCreateMode, setWorkflowCreateMode, setEvalCreateMode, setSelectedAgentDetail,
-    catalogLoading, workspaceError, setWorkspaceError, agentManageError, setAgentManageError, workflowError, evalError,
+    agents, policies, workflows, selectedAgentDetail, selectedRuntimeKind,
+    activeView, selectedAgentName, selectedWorkflowName,
+    agentCreateMode, workflowCreateMode,
+    setActiveView, setSelectedAgentName, setAgentCreateMode, setWorkflowCreateMode, setSelectedAgentDetail,
+    catalogLoading, workspaceError, setWorkspaceError, agentManageError, setAgentManageError, workflowError,
     discoverablePeers, discoveryLoading, discoveryError,
-    savingAgent, deletingAgent, isCreatingAgent, savingWorkflow, deletingWorkflow, runningWorkflow, cancellingWorkflow, retryingWorkflow, savingEval, deletingEval,
+    savingAgent, deletingAgent, isCreatingAgent, savingWorkflow, deletingWorkflow, runningWorkflow, cancellingWorkflow, retryingWorkflow,
     sidebarCollapsed, setSidebarCollapsed, inspectorOpen, setInspectorOpen, agentViewTab, setAgentViewTab, catalogTab, setCatalogTab, intelligenceTab, setIntelligenceTab, configPanelCollapsed, setConfigPanelCollapsed, chatFocused, setChatFocused,
     createAgentName, createAgentModel, createAgentSystemPrompt, createAgentRuntimeKind, createAgentMcpConnectionIds,
     createAgentMcpServersText, createAgentMcpSidecarsText, createAgentA2AAllowedCallersText,
@@ -910,25 +830,25 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     setCreateAgentName, setCreateAgentModel, setCreateAgentSystemPrompt, setCreateAgentRuntimeKind, setCreateAgentMcpConnectionIds,
     setCreateAgentMcpServersText, setCreateAgentMcpSidecarsText, setCreateAgentA2AAllowedCallersText,
     setCreateAgentSkillFileDrafts, setCreateAgentOpenCodeConfigFileDrafts, setCreateAgentGitForm, setCreateAgentGitHubForm,
-    sidebarCounts, sidebarItems, sidebarSelectedId, emptySidebarMessage, selectedAgent, selectedWorkflow, selectedEval, selectedFactoryWorkflowMode, setSelectedFactoryWorkflowMode, observatoryFocus,
+    sidebarCounts, sidebarItems, sidebarSelectedId, emptySidebarMessage, selectedAgent, selectedWorkflow, selectedFactoryWorkflowMode, setSelectedFactoryWorkflowMode, observatoryFocus,
     refreshWorkspaceData, handleCreateAgent, handleSaveAgent, handleDeleteAgent,
     handleCreateWorkflow, handleUpdateWorkflow, handleDeleteWorkflow, handleTriggerWorkflow, handleCancelWorkflow, handleRetryFailedSteps,
-    handleCreateEval, handleUpdateEval, handleDeleteEval, handleSelectResource, handleCreateNew, navigateToResource, openObservatoryForWorkflowRun, clearObservatoryFocus,
+    handleSelectResource, handleCreateNew, navigateToResource, openObservatoryForWorkflowRun, clearObservatoryFocus,
   }), [
-    agents, policies, workflows, evals, selectedAgentDetail, selectedRuntimeKind,
-    activeView, selectedAgentName, selectedWorkflowName, selectedEvalName,
-    agentCreateMode, workflowCreateMode, evalCreateMode,
-    catalogLoading, workspaceError, agentManageError, workflowError, evalError,
+    agents, policies, workflows, selectedAgentDetail, selectedRuntimeKind,
+    activeView, selectedAgentName, selectedWorkflowName,
+    agentCreateMode, workflowCreateMode,
+    catalogLoading, workspaceError, agentManageError, workflowError,
     discoverablePeers, discoveryLoading, discoveryError,
-    savingAgent, deletingAgent, isCreatingAgent, savingWorkflow, deletingWorkflow, runningWorkflow, cancellingWorkflow, retryingWorkflow, savingEval, deletingEval,
+    savingAgent, deletingAgent, isCreatingAgent, savingWorkflow, deletingWorkflow, runningWorkflow, cancellingWorkflow, retryingWorkflow,
     sidebarCollapsed, inspectorOpen, agentViewTab, catalogTab, intelligenceTab, configPanelCollapsed, chatFocused,
     createAgentName, createAgentModel, createAgentSystemPrompt, createAgentRuntimeKind, createAgentMcpConnectionIds,
     createAgentMcpServersText, createAgentMcpSidecarsText, createAgentA2AAllowedCallersText,
     createAgentSkillFileDrafts, createAgentOpenCodeConfigFileDrafts, createAgentGitForm, createAgentGitHubForm, createError,
-    sidebarCounts, sidebarItems, sidebarSelectedId, emptySidebarMessage, selectedAgent, selectedWorkflow, selectedEval, selectedFactoryWorkflowMode, observatoryFocus,
+    sidebarCounts, sidebarItems, sidebarSelectedId, emptySidebarMessage, selectedAgent, selectedWorkflow, selectedFactoryWorkflowMode, observatoryFocus,
     refreshWorkspaceData, handleCreateAgent, handleSaveAgent, handleDeleteAgent,
     handleCreateWorkflow, handleUpdateWorkflow, handleDeleteWorkflow, handleTriggerWorkflow, handleCancelWorkflow, handleRetryFailedSteps,
-    handleCreateEval, handleUpdateEval, handleDeleteEval, handleSelectResource, handleCreateNew, navigateToResource, setSelectedFactoryWorkflowMode, openObservatoryForWorkflowRun, clearObservatoryFocus,
+    handleSelectResource, handleCreateNew, navigateToResource, setSelectedFactoryWorkflowMode, openObservatoryForWorkflowRun, clearObservatoryFocus,
   ]);
 
   return (

@@ -55,7 +55,6 @@ worker_utils = LOCAL_WORKER_MODULES["utils"]
 worker_state_store = LOCAL_WORKER_MODULES["state_store"]
 worker_tracing = LOCAL_WORKER_MODULES["tracing"]
 
-build_eval_run_id = worker_utils.build_eval_run_id
 build_thread_id = worker_utils.build_thread_id
 build_workflow_run_id = worker_utils.build_workflow_run_id
 cancel_agent_session = worker_utils.cancel_agent_session
@@ -74,7 +73,6 @@ runtime_url = worker_utils.runtime_url
 validate_workflow_graph = worker_utils.validate_workflow_graph
 workflow_journal_path = worker_utils.workflow_journal_path
 
-check_eval_run_conflict = worker_state_store.check_eval_run_conflict
 check_workflow_run_conflict = worker_state_store.check_workflow_run_conflict
 init_state_database = worker_state_store.init_database
 init_tracing = worker_tracing.init_tracing
@@ -141,7 +139,6 @@ ARTIFACT_JOURNAL_PATH = (
 )
 ARTIFACT_PVC_NAME = os.getenv("ARTIFACT_PVC_NAME", "").strip()
 WORKFLOW_RUN_ID = os.getenv("WORKFLOW_RUN_ID", "").strip()
-EVAL_RUN_ID = os.getenv("EVAL_RUN_ID", "").strip()
 AGENT_RUNTIME_READY_TIMEOUT_SECONDS = max(
     float(os.getenv("AGENT_RUNTIME_READY_TIMEOUT_SECONDS", "180")),
     5.0,
@@ -374,12 +371,9 @@ def stop_lease_renewal() -> None:
 
 def check_run_id_conflict(kind: str, namespace: str, name: str, generation: int, run_id: str) -> None:
     """Raise RuntimeError if a different run_id is already active for this resource+generation."""
-    if kind == "workflow":
-        conflict = check_workflow_run_conflict(namespace, name, generation, run_id)
-    elif kind == "eval":
-        conflict = check_eval_run_conflict(namespace, name, generation, run_id)
-    else:
+    if kind != "workflow":
         return
+    conflict = check_workflow_run_conflict(namespace, name, generation, run_id)
     if conflict:
         raise RuntimeError(
             f"Another {kind} run (run_id={conflict}) is already active "
@@ -390,8 +384,6 @@ def check_run_id_conflict(kind: str, namespace: str, name: str, generation: int,
 def resource_plural() -> str:
     if WORKER_KIND == "workflow":
         return "agentworkflows"
-    if WORKER_KIND == "eval":
-        return "agentevals"
     raise ValueError(f"Unsupported WORKER_KIND '{WORKER_KIND}'")
 
 
@@ -3515,256 +3507,6 @@ def run_workflow_worker() -> None:
             logger.warning("Trace flush failed", exc_info=True)
 
 
-def run_eval_worker() -> None:
-    plural = resource_plural()
-    resource = get_resource(plural)
-    spec = resource.get("spec", {})
-    metadata = resource.get("metadata", {})
-    test_suite = spec.get("testSuite") or []
-    if not test_suite:
-        raise ValueError("AgentEval must contain at least one test case")
-
-    generation = int(metadata.get("generation", 1))
-    artifact = load_artifact()
-    run_id = str(
-        EVAL_RUN_ID
-        or resource.get("status", {}).get("runId")
-        or artifact.get("runId")
-        or build_eval_run_id(TARGET_NAMESPACE, TARGET_NAME, generation)
-    ).strip()
-    failure_threshold = spec.get("failureThreshold", {})
-    results: list[dict[str, Any]] = []
-    passed = True
-    started_at = now_iso()
-    worker_job = {"name": WORKER_JOB_NAME, "namespace": OPERATOR_NAMESPACE}
-
-    eval_status_payload = {
-        "phase": "running",
-        "runId": run_id,
-        "observedGeneration": generation,
-        "artifactRef": artifact_ref(generation),
-        "workerJob": worker_job,
-        "summary": {
-            "caseCount": len(test_suite),
-            "completedCases": 0,
-            "updatedAt": now_iso(),
-            "runId": run_id,
-            "startedAt": started_at,
-        },
-    }
-    patch_custom_status(plural, eval_status_payload)
-    # §2.5 — DB mirroring is now handled by the status projection controller.
-
-    try:
-        for index, test_case in enumerate(test_suite):
-            started = time.perf_counter()
-            response_text = ""
-            error_msg = ""
-            result_status = "completed"
-            thread_id = build_thread_id("eval", TARGET_NAME, generation, index)
-            try:
-                response = invoke_agent_runtime(
-                    spec["agentRef"],
-                    TARGET_NAMESPACE,
-                    {
-                        "prompt": test_case["input"],
-                        "thread_id": thread_id,
-                    },
-                )
-                response_text = str(response.get("response", ""))
-                result_status = str(
-                    response.get("status", "completed") or "completed"
-                )
-                # Accept "incomplete" as usable partial output (e.g. opencode
-                # context overflow that still produced a response).
-                if result_status == "incomplete":
-                    result_status = "completed"
-                # Prefer structured output from metadata when available
-                eval_metadata = response.get("metadata") or {}
-                if isinstance(eval_metadata, dict) and eval_metadata.get("structured_output"):
-                    response_text = json.dumps(
-                        eval_metadata["structured_output"], ensure_ascii=False
-                    )
-                if result_status != "completed":
-                    error_msg = (
-                        f"Runtime returned status '{result_status}': "
-                        f"{response_text}"
-                    )
-                    passed = False
-                elif response_text.startswith("Request blocked"):
-                    error_msg = response_text
-                    result_status = "blocked"
-                    passed = False
-            except Exception as exc:
-                logger.exception("Eval step failed: %s", exc)
-                error_msg = str(exc)
-                result_status = "failed"
-                passed = False
-
-            latency_ms = int((time.perf_counter() - started) * 1000)
-            expected_output = test_case.get("expectedOutput", "")
-            metrics = test_case.get("metrics", [])
-
-            relevance = (
-                exact_match_score(response_text, expected_output)
-                if not error_msg
-                else 0.0
-            )
-            if expected_output:
-                faithfulness = (
-                    exact_match_score(response_text, expected_output)
-                    if not error_msg
-                    else 0.0
-                )
-            else:
-                faithfulness = 1.0 if not error_msg else 0.0
-            toxicity = (
-                estimate_toxicity(response_text) if not error_msg else 0.0
-            )
-
-            case_result = {
-                "input": test_case["input"],
-                "expectedOutput": expected_output,
-                "response": response_text,
-                "error": error_msg,
-                "latencyMs": latency_ms,
-                "status": result_status,
-                "threadId": thread_id,
-                "metrics": {
-                    "relevance": relevance,
-                    "faithfulness": faithfulness,
-                    "toxicity": toxicity,
-                },
-            }
-            results.append(case_result)
-
-            if (
-                "relevance" in metrics
-                and failure_threshold.get("minRelevance") is not None
-            ):
-                passed = passed and relevance >= float(
-                    failure_threshold["minRelevance"]
-                )
-            if (
-                "faithfulness" in metrics
-                and failure_threshold.get("minFaithfulness") is not None
-            ):
-                passed = passed and faithfulness >= float(
-                    failure_threshold["minFaithfulness"]
-                )
-            if (
-                "toxicity" in metrics
-                and failure_threshold.get("maxToxicity") is not None
-            ):
-                passed = passed and toxicity <= float(
-                    failure_threshold["maxToxicity"]
-                )
-            if (
-                "latency" in metrics
-                and failure_threshold.get("maxLatencyMs") is not None
-            ):
-                passed = passed and latency_ms <= int(
-                    failure_threshold["maxLatencyMs"]
-                )
-
-            write_artifact(
-                {
-                    "kind": "eval",
-                    "generation": generation,
-                    "runId": run_id,
-                    "updatedAt": now_iso(),
-                    "startedAt": started_at,
-                    "cases": results,
-                }
-            )
-            eval_status_payload = {
-                "phase": "running",
-                "runId": run_id,
-                "observedGeneration": generation,
-                "artifactRef": artifact_ref(generation),
-                "workerJob": worker_job,
-                "summary": {
-                    "caseCount": len(test_suite),
-                    "completedCases": len(results),
-                    "updatedAt": now_iso(),
-                    "runId": run_id,
-                    "startedAt": started_at,
-                },
-            }
-            patch_custom_status(plural, eval_status_payload)
-            # §2.5 — DB mirroring is now handled by the status projection controller.
-
-        completed_at = now_iso()
-        summary = {
-            "caseCount": len(results),
-            "passed": passed,
-            "scheduleConfigured": bool(spec.get("schedule")),
-            "completedCases": len(results),
-            "startedAt": started_at,
-            "completedAt": completed_at,
-            "runId": run_id,
-        }
-        write_artifact(
-            {
-                "kind": "eval",
-                "generation": generation,
-                "runId": run_id,
-                "updatedAt": completed_at,
-                "startedAt": started_at,
-                "completedAt": completed_at,
-                "summary": summary,
-                "cases": results,
-            }
-        )
-        eval_status_payload = {
-            "phase": "completed",
-            "runId": run_id,
-            "lastRun": completed_at,
-            "passed": passed,
-            "observedGeneration": generation,
-            "artifactRef": artifact_ref(generation),
-            "workerJob": worker_job,
-            "summary": summary,
-            "cases": results,
-        }
-        patch_custom_status(plural, eval_status_payload)
-        # §2.5 — DB mirroring is now handled by the status projection controller.
-    except Exception as exc:
-        failed_at = now_iso()
-        write_artifact(
-            {
-                "kind": "eval",
-                "generation": generation,
-                "runId": run_id,
-                "updatedAt": failed_at,
-                "startedAt": started_at,
-                "failedAt": failed_at,
-                "error": str(exc),
-                "cases": results,
-            }
-        )
-        eval_status_payload = {
-            "phase": "failed",
-            "runId": run_id,
-            "lastRun": failed_at,
-            "passed": False,
-            "observedGeneration": generation,
-            "artifactRef": artifact_ref(generation),
-            "workerJob": worker_job,
-            "summary": {
-                "caseCount": len(test_suite),
-                "completedCases": len(results),
-                "failedAt": failed_at,
-                "error": str(exc),
-                "runId": run_id,
-            },
-            "cases": results,
-        }
-        patch_custom_status(plural, eval_status_payload)
-        # §2.5 — DB mirroring is now handled by the status projection controller.
-        raise
-
-
 # ---------------------------------------------------------------------------
 # §8.3 — Dead-letter queue for failed jobs
 # ---------------------------------------------------------------------------
@@ -3843,7 +3585,6 @@ def main() -> int:
     run_id = (
         str(
             WORKFLOW_RUN_ID
-            or EVAL_RUN_ID
             or (resource.get("status", {}) or {}).get("runId")
             or ""
         ).strip()
@@ -3865,9 +3606,7 @@ def main() -> int:
     try:
         # §8.2 — Run worker with a global execution timeout
         with ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(
-                run_workflow_worker if WORKER_KIND == "workflow" else run_eval_worker
-            )
+            future = executor.submit(run_workflow_worker)
             try:
                 deadline = time.monotonic() + WORKER_EXECUTION_TIMEOUT_SECONDS
                 while not future.done():

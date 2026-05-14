@@ -41,7 +41,6 @@ def _optional_controller(module_name: str, plural: str) -> None:
     )
 
 
-_optional_controller("eval_controller", "agentevals")
 _optional_controller("approval_controller", "agentapprovals")
 _optional_controller("tenant_controller", "agenttenants")
 _optional_controller("policy_controller", "agentpolicies")

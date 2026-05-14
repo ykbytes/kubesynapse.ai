@@ -17,10 +17,10 @@ rules:
     resources: [clusterkopfpeerings]
     verbs: [list, watch, patch, get]
   - apiGroups: ["kubesynapse.ai"]
-    resources: [aiagents, agenttenants, agentpolicies, agentapprovals, agentworkflows, agentevals]
+    resources: [aiagents, agenttenants, agentpolicies, agentapprovals, agentworkflows]
     verbs: [create, delete, get, list, patch, update, watch]
   - apiGroups: ["kubesynapse.ai"]
-    resources: [aiagents/status, agentapprovals/status, agentworkflows/status, agentevals/status, agenttenants/status]
+    resources: [aiagents/status, agentapprovals/status, agentworkflows/status, agenttenants/status]
     verbs: [get, patch, update]
   - apiGroups: ["kubesynapse.ai"]
     resources: [observationtargets, observationpolicies, observationreports, connectorplugins, mcpconnections]
@@ -106,7 +106,7 @@ metadata:
   name: {{ include "kubesynapse.fullname" . }}-api-gateway-role
 rules:
   - apiGroups: ["kubesynapse.ai"]
-    resources: [aiagents, agentworkflows, agentevals]
+    resources: [aiagents, agentworkflows]
     verbs: [create, delete, get, list, patch, update, watch]
   - apiGroups: ["kubesynapse.ai"]
     resources: [agentpolicies]

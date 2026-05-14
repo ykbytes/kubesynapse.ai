@@ -107,7 +107,6 @@ from auth_store import (
     query_usage_detail,
     query_usage_summary,
     record_audit_log,
-    record_eval_outcome_memory,
     record_failed_login,
     record_runtime_memory,
     record_trigger_execution,
@@ -1000,49 +999,6 @@ class WorkflowInfo(BaseModel):
     created_at: str | None = None
 
 
-class EvalTestCaseRequest(BaseModel):
-    input: str = Field(min_length=1, max_length=4000)
-    expected_output: str = Field(default="", max_length=4000)
-    metrics: list[str] = Field(default_factory=list)
-
-
-class EvalRequest(BaseModel):
-    name: str = Field(
-        min_length=1,
-        max_length=63,
-        pattern=r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
-    )
-    agent_ref: str = Field(min_length=1, max_length=63)
-    schedule: str | None = Field(default=None, max_length=128)
-    test_suite: list[EvalTestCaseRequest] = Field(default_factory=list)
-    failure_threshold: dict[str, Any] = Field(default_factory=dict)
-
-
-class EvalUpdateRequest(BaseModel):
-    agent_ref: str = Field(min_length=1, max_length=63)
-    schedule: str | None = Field(default=None, max_length=128)
-    test_suite: list[EvalTestCaseRequest] = Field(default_factory=list)
-    failure_threshold: dict[str, Any] = Field(default_factory=dict)
-
-
-class EvalInfo(BaseModel):
-    name: str
-    namespace: str
-    agent_ref: str
-    schedule: str | None = None
-    test_suite: list[EvalTestCaseRequest] = Field(default_factory=list)
-    failure_threshold: dict[str, Any] = Field(default_factory=dict)
-    phase: str = "pending"
-    passed: bool | None = None
-    last_run: str | None = None
-    observed_generation: int | None = None
-    summary: dict[str, Any] | None = None
-    artifact_ref: dict[str, Any] | None = None
-    worker_job: dict[str, Any] | None = None
-    cases: list[dict[str, Any]] | None = None
-    created_at: str | None = None
-
-
 class DeleteResponse(BaseModel):
     status: str
     kind: str
@@ -1193,7 +1149,6 @@ RESOURCE_KIND_BY_PLURAL = {
     "aiagents": "AIAgent",
     "agentpolicies": "AgentPolicy",
     "agentworkflows": "AgentWorkflow",
-    "agentevals": "AgentEval",
     "observationtargets": "ObservationTarget",
     "observationpolicies": "ObservationPolicy",
     "observationreports": "ObservationReport",
@@ -4337,24 +4292,6 @@ def _detect_workflow_cycles(steps: list[dict[str, Any]]) -> None:
         raise HTTPException(status_code=400, detail="Workflow steps contain a dependency cycle.")
 
 
-def build_eval_spec(body: EvalRequest | EvalUpdateRequest) -> dict[str, Any]:
-    spec: dict[str, Any] = {
-        "agentRef": body.agent_ref.strip(),
-        "testSuite": [
-            {
-                "input": test_case.input,
-                "expectedOutput": test_case.expected_output,
-                "metrics": test_case.metrics,
-            }
-            for test_case in body.test_suite
-        ],
-        "failureThreshold": body.failure_threshold,
-    }
-    if body.schedule and body.schedule.strip():
-        spec["schedule"] = body.schedule.strip()
-    return spec
-
-
 def list_custom_resources(plural: str, namespace: str) -> list[dict[str, Any]]:
     try:
         from kubernetes import client
@@ -5005,36 +4942,6 @@ def _fallback_workflow_logs_from_run(
     if not trace_payload.get("logs"):
         return None
     return _workflow_logs_response_from_trace(trace_payload)
-
-
-def eval_info_from_resource(eval_resource: dict[str, Any]) -> EvalInfo:
-    metadata = eval_resource.get("metadata", {})
-    spec = eval_resource.get("spec", {})
-    status = eval_resource.get("status", {})
-    return EvalInfo(
-        name=metadata.get("name", ""),
-        namespace=metadata.get("namespace", "default"),
-        agent_ref=spec.get("agentRef", ""),
-        schedule=spec.get("schedule"),
-        test_suite=[
-            EvalTestCaseRequest(
-                input=test_case.get("input", ""),
-                expected_output=test_case.get("expectedOutput", "") or "",
-                metrics=test_case.get("metrics") or [],
-            )
-            for test_case in spec.get("testSuite") or []
-        ],
-        failure_threshold=spec.get("failureThreshold") or {},
-        phase=status.get("phase", "pending") or "pending",
-        passed=status.get("passed"),
-        last_run=status.get("lastRun"),
-        observed_generation=status.get("observedGeneration"),
-        summary=status.get("summary"),
-        artifact_ref=status.get("artifactRef"),
-        worker_job=status.get("workerJob"),
-        cases=status.get("cases"),
-        created_at=metadata.get("creationTimestamp"),
-    )
 
 
 def get_agents(namespace: str = "default") -> list[dict[str, Any]]:

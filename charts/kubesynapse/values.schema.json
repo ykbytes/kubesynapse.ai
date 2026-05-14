@@ -263,7 +263,6 @@
         "runtimeTimeoutSeconds": { "type": "integer", "default": 360 },
         "workerActiveDeadlineSeconds": { "type": "integer", "default": 14400 },
         "workerTtlSecondsAfterFinished": { "type": "integer", "default": 3600 },
-        "evalSchedulePollSeconds": { "type": "integer", "default": 60 },
         "workerResources": {
           "type": "object",
           "properties": {

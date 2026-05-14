@@ -1,10 +1,10 @@
-"""Status projection controller — mirrors CRD status to PostgreSQL.
+"""Status projection controller — mirrors workflow CRD status to PostgreSQL.
 
 §2.5 of the road-to-prod plan: CRD status is authoritative for K8s
 consumers; PostgreSQL is the derived store for the API gateway, UI,
-and historical queries.  This controller watches `.status.phase`
-changes on AgentWorkflow and AgentEval CRDs and projects the current
-state into the database, replacing the previous dual-write pattern.
+and historical queries. This controller watches `.status.phase`
+changes on AgentWorkflow CRDs and projects the current state into the
+database, replacing the previous dual-write pattern.
 """
 
 from __future__ import annotations
@@ -14,9 +14,8 @@ import os
 from typing import Any
 
 import kopf
-from services import crd_exists
 
-from state_store import record_workflow_log_archive, safe_record_eval_state, safe_record_workflow_state
+from state_store import record_workflow_log_archive, safe_record_workflow_state
 
 logger = logging.getLogger("operator.controllers.status_projection")
 WORKFLOW_LOG_ARCHIVE_MAX_CHARS = max(int(os.getenv("WORKFLOW_LOG_ARCHIVE_MAX_CHARS", "0") or "0"), 0)
@@ -129,37 +128,6 @@ def _project_workflow_status_snapshot(
     )
 
 
-def _project_eval_status_snapshot(
-    *,
-    name: str,
-    namespace: str,
-    spec: dict[str, Any],
-    status: dict[str, Any],
-    meta: dict[str, Any],
-) -> None:
-    phase = str((status or {}).get("phase") or "")
-    if not phase:
-        return
-    generation = int((meta or {}).get("generation", 1))
-    run_id = str((status or {}).get("runId") or "")
-    if not run_id:
-        return
-    passed_field = (status or {}).get("passed")
-    passed: bool | None = None
-    if passed_field is not None:
-        passed = bool(passed_field)
-    safe_record_eval_state(
-        namespace=namespace,
-        resource_name=name,
-        generation=generation,
-        run_id=run_id,
-        phase=phase,
-        passed=passed,
-        spec=spec or {},
-        status=status or {},
-    )
-
-
 @kopf.on.field("kubesynapse.ai", "v1alpha1", "agentworkflows", field="status.phase")  # type: ignore[arg-type]
 def project_workflow_status(
     old: str | None,
@@ -223,69 +191,3 @@ def project_workflow_run_id(
         new,
         str((status or {}).get("phase") or ""),
     )
-
-
-if crd_exists("kubesynapse.ai", "v1alpha1", "agentevals"):
-
-    @kopf.on.field("kubesynapse.ai", "v1alpha1", "agentevals", field="status.phase")  # type: ignore[arg-type]
-    def project_eval_status(
-        old: str | None,
-        new: str | None,
-        name: str,
-        namespace: str,
-        spec: dict[str, Any],
-        status: dict[str, Any],
-        meta: dict[str, Any],
-        **kwargs: Any,
-    ) -> None:
-        """Mirror eval CRD status to PostgreSQL whenever phase changes."""
-        del kwargs
-        if not new:
-            return
-        _project_eval_status_snapshot(
-            name=name,
-            namespace=namespace,
-            spec=spec,
-            status=status,
-            meta=meta,
-        )
-        logger.debug(
-            "Projected eval '%s/%s' phase %s → %s (run=%s).",
-            namespace,
-            name,
-            old,
-            new,
-            str((status or {}).get("runId") or ""),
-        )
-
-
-    @kopf.on.field("kubesynapse.ai", "v1alpha1", "agentevals", field="status.runId")  # type: ignore[arg-type]
-    def project_eval_run_id(
-        old: str | None,
-        new: str | None,
-        name: str,
-        namespace: str,
-        spec: dict[str, Any],
-        status: dict[str, Any],
-        meta: dict[str, Any],
-        **kwargs: Any,
-    ) -> None:
-        """Mirror eval CRD status to PostgreSQL whenever runId changes."""
-        del kwargs
-        if not new:
-            return
-        _project_eval_status_snapshot(
-            name=name,
-            namespace=namespace,
-            spec=spec,
-            status=status,
-            meta=meta,
-        )
-        logger.debug(
-            "Projected eval '%s/%s' runId %s → %s (phase=%s).",
-            namespace,
-            name,
-            old,
-            new,
-            str((status or {}).get("phase") or ""),
-        )

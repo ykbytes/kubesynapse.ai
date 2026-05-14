@@ -335,7 +335,7 @@ export function AgentInspectorDrawer({
   );
 }
 
-// ── Resource Inspector (workflows / evals) ──
+// ── Resource Inspector (workflows) ──
 
 interface ResourceInspectorDrawerProps {
   open: boolean;

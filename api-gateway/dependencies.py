@@ -110,7 +110,6 @@ from auth_store import (  # noqa: E402
     query_usage_detail,
     query_usage_summary,
     record_audit_log,
-    record_eval_outcome_memory,
     record_failed_login,
     record_runtime_memory,
     record_usage,

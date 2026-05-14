@@ -1417,7 +1417,6 @@ rules:
       - agentpolicies
       - agentworkflows
       - agenttenants
-      - agentevals
       - agentapprovals
     verbs: ["get", "list", "watch"]
 

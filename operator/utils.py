@@ -77,12 +77,6 @@ def build_workflow_run_id(namespace: str, workflow_name: str, generation: int) -
     return build_thread_id("wf-run", namespace, workflow_name, generation, epoch_ms, digest, max_length=96)
 
 
-def build_eval_run_id(namespace: str, eval_name: str, generation: int) -> str:
-    epoch_ms = int(time.time() * 1000)
-    digest = hashlib.sha256(f"eval:{namespace}:{eval_name}:{generation}:{epoch_ms}".encode()).hexdigest()[:8]
-    return build_thread_id("eval-run", namespace, eval_name, generation, epoch_ms, digest, max_length=96)
-
-
 def workflow_journal_path(artifact_path: str) -> str:
     if artifact_path.endswith(".json"):
         return f"{artifact_path[:-5]}.journal.ndjson"

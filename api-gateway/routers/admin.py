@@ -571,12 +571,12 @@ def export_yaml_bundle(
     namespace: str = "default",
     user=Depends(verify_token),
 ):
-    """Export all agents, workflows, and evals in the namespace as a multi-document YAML bundle."""
+    """Export all agents, workflows, and policies in the namespace as a multi-document YAML bundle."""
     ensure_namespace_access(user, namespace)
     import yaml as _yaml
 
     documents: list[dict[str, Any]] = []
-    for plural in ("aiagents", "agentworkflows", "agentevals", "agentpolicies"):
+    for plural in ("aiagents", "agentworkflows", "agentpolicies"):
         items = list_custom_resources(plural, namespace)
         for item in items:
             # Strip runtime status and server-managed metadata fields
@@ -631,7 +631,6 @@ async def import_yaml_bundle(
         plural_map = {
             "AIAgent": "aiagents",
             "AgentWorkflow": "agentworkflows",
-            "AgentEval": "agentevals",
             "AgentPolicy": "agentpolicies",
         }
         plural = plural_map.get(kind)
@@ -739,7 +738,6 @@ def system_health(
     try:
         agents = list_custom_resources("aiagents", namespace)
         workflows = list_custom_resources("agentworkflows", namespace)
-        evals = list_custom_resources("agentevals", namespace)
         policies = list_custom_resources("agentpolicies", namespace)
 
         agent_phases: dict[str, int] = {}
@@ -756,7 +754,6 @@ def system_health(
             "status": "ok",
             "agents": {"total": len(agents), "by_phase": agent_phases},
             "workflows": {"total": len(workflows), "by_phase": workflow_phases},
-            "evals": {"total": len(evals)},
             "policies": {"total": len(policies)},
         }
     except Exception as exc:

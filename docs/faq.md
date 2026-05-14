@@ -24,7 +24,7 @@
 
 KubeSynapse is a production-grade, Kubernetes-native AI agent platform. It deploys,
 orchestrates, and governs AI agents using declarative custom resources (CRDs).
-You define agents, workflows, policies, and evaluations as YAML, and the platform
+You define agents, workflows, policies, and approvals as YAML, and the platform
 handles runtime provisioning, security, monitoring, and scaling.
 
 ### Who should use KubeSynapse?

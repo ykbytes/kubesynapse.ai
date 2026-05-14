@@ -10,13 +10,10 @@ export type NotificationKind =
   | "workflow.failed"
   | "workflow.approval_needed"
   | "workflow.status_changed"
-  | "eval.completed"
-  | "eval.failed"
-  | "eval.status_changed"
   | "system.error";
 
 export type NotificationSeverity = "success" | "error" | "warning" | "info";
-export type NotificationResourceType = "agent" | "workflow" | "eval" | "system";
+export type NotificationResourceType = "agent" | "workflow" | "system";
 
 interface NotificationPayload {
   kind?: NotificationKind | string;
@@ -72,9 +69,6 @@ function normalizeKind(kind: string | undefined): NotificationKind {
     case "workflow.failed":
     case "workflow.approval_needed":
     case "workflow.status_changed":
-    case "eval.completed":
-    case "eval.failed":
-    case "eval.status_changed":
     case "system.error":
       return kind;
     default:
@@ -102,7 +96,6 @@ function phaseLabel(rawPhase: string): string {
 function resourceTypeForKind(kind: NotificationKind): NotificationResourceType {
   if (kind.startsWith("agent.")) return "agent";
   if (kind.startsWith("workflow.")) return "workflow";
-  if (kind.startsWith("eval.")) return "eval";
   return "system";
 }
 
@@ -112,8 +105,6 @@ function resourceLabel(type: NotificationResourceType): string {
       return "Agent";
     case "workflow":
       return "Workflow";
-    case "eval":
-      return "Eval";
     default:
       return "System";
   }
@@ -139,10 +130,6 @@ function buildTitle(kind: NotificationKind, resourceType: NotificationResourceTy
       return `${label} failed`;
     case "workflow.approval_needed":
       return `${label} needs approval`;
-    case "eval.completed":
-      return `${label} completed`;
-    case "eval.failed":
-      return `${label} failed`;
     case "system.error":
       return "System error";
     default:
@@ -316,9 +303,6 @@ export function NotificationProvider({
       "workflow.failed",
       "workflow.approval_needed",
       "workflow.status_changed",
-      "eval.completed",
-      "eval.failed",
-      "eval.status_changed",
       "system.error",
     ];
     for (const t of eventTypes) {

@@ -30,11 +30,6 @@ import type {
   CustomProviderPayload,
   CreateAgentPayload,
   DeleteResponse,
-  EvalCaseResult,
-  EvalInfo,
-  EvalPayload,
-  EvalTestCase,
-  EvalUpdatePayload,
   ExecutionTrace,
   FactoryMode,
   GatewayHealth,
@@ -1199,39 +1194,6 @@ function parseWorkflowInfoPayload(payload: unknown, label = "WorkflowInfo"): Wor
         )
       : null,
     worker_job: readOptionalRecord(record, "worker_job", label),
-    created_at: readOptionalString(record, "created_at", label),
-  };
-}
-
-function parseEvalTestCasePayload(payload: unknown, label = "EvalTestCase"): EvalTestCase {
-  const record = expectRecord(payload, label);
-  return {
-    input: readString(record, "input", label),
-    expected_output: readString(record, "expected_output", label, ""),
-    metrics: readStringArray(record, "metrics", label),
-  };
-}
-
-function parseEvalInfoPayload(payload: unknown, label = "EvalInfo"): EvalInfo {
-  const record = expectRecord(payload, label);
-  const rawCases = record.cases;
-  return {
-    name: readString(record, "name", label),
-    namespace: readString(record, "namespace", label),
-    agent_ref: readString(record, "agent_ref", label),
-    schedule: readOptionalString(record, "schedule", label),
-    test_suite: (record.test_suite === undefined ? [] : readRecordArray(record, "test_suite", label)).map((item, index) =>
-      parseEvalTestCasePayload(item, `${label}.test_suite[${index}]`)
-    ),
-    failure_threshold: readRecord(record, "failure_threshold", label),
-    phase: readString(record, "phase", label, "pending"),
-    passed: readOptionalBoolean(record, "passed", label),
-    last_run: readOptionalString(record, "last_run", label),
-    observed_generation: readOptionalNumber(record, "observed_generation", label),
-    summary: readOptionalRecord(record, "summary", label),
-    artifact_ref: readOptionalRecord(record, "artifact_ref", label),
-    worker_job: readOptionalRecord(record, "worker_job", label),
-    cases: Array.isArray(rawCases) ? rawCases as EvalCaseResult[] : null,
     created_at: readOptionalString(record, "created_at", label),
   };
 }
@@ -3056,50 +3018,6 @@ export function createNotificationStream(
 ): EventSource {
   const url = buildUrl("/api/notifications/stream", namespace);
   return new EventSource(`${url}&token=${encodeURIComponent(token)}`);
-}
-
-export async function listEvals(token: string, namespace: string): Promise<EvalInfo[]> {
-  const response = await fetchAuthenticated(buildUrl("/api/evals", namespace), token);
-  return parseJsonResponse(response, (payload) => {
-    if (!Array.isArray(payload)) {
-      throw new Error("Eval list response must be an array.");
-    }
-    return payload.map((item, index) => parseEvalInfoPayload(item ?? {}, `EvalInfo[${index}]`));
-  });
-}
-
-export async function createEval(token: string, namespace: string, payload: EvalPayload): Promise<EvalInfo> {
-  const response = await fetchAuthenticated(buildUrl("/api/evals", namespace), token, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(payload),
-  });
-  return parseJsonResponse(response, parseEvalInfoPayload);
-}
-
-export async function updateEval(
-  token: string,
-  namespace: string,
-  evalName: string,
-  payload: EvalUpdatePayload,
-): Promise<EvalInfo> {
-  const response = await fetchAuthenticated(buildUrl(`/api/evals/${evalName}`, namespace), token, {
-    method: "PATCH",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(payload),
-  });
-  return parseJsonResponse(response, parseEvalInfoPayload);
-}
-
-export async function deleteEval(token: string, namespace: string, evalName: string): Promise<DeleteResponse> {
-  const response = await fetchAuthenticated(buildUrl(`/api/evals/${evalName}`, namespace), token, {
-    method: "DELETE",
-  });
-  return parseJsonResponse(response, parseDeleteResponsePayload);
 }
 
 export interface StreamHandlers {

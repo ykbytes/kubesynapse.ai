@@ -157,7 +157,7 @@ def _reconcile_tenant(spec: dict[str, Any], name: str, logger: logging.Logger) -
             rules=[
                 kubernetes.client.V1PolicyRule(
                     api_groups=["kubesynapse.ai"],
-                    resources=["aiagents", "agentpolicies", "agentapprovals", "agentworkflows", "agentevals"],
+                    resources=["aiagents", "agentpolicies", "agentapprovals", "agentworkflows"],
                     verbs=["*"],
                 ),
                 kubernetes.client.V1PolicyRule(

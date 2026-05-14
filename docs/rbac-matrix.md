@@ -27,8 +27,8 @@ KubeSynapse uses **least-privilege RBAC** with one ServiceAccount per component.
 | API Group | Resource | Verbs | Justification |
 |-----------|----------|-------|---------------|
 | `kopf.dev` | `clusterkopfpeerings` | list, watch, patch, get | Kopf framework leader election and peering |
-| `kubesynapse.ai` | `aiagents`, `agenttenants`, `agentpolicies`, `agentapprovals`, `agentworkflows`, `agentevals` | full CRUD | Core CRD reconciliation — the operator MUST create/update/delete these resources |
-| `kubesynapse.ai` | `*/status` (6 resources) | get, patch, update | Write status subresource for reconciliation state reporting |
+| `kubesynapse.ai` | `aiagents`, `agenttenants`, `agentpolicies`, `agentapprovals`, `agentworkflows` | full CRUD | Core CRD reconciliation — the operator MUST create/update/delete these resources |
+| `kubesynapse.ai` | `*/status` (5 resources) | get, patch, update | Write status subresource for reconciliation state reporting |
 | `kubesynapse.ai` | `observationtargets`, `observationpolicies`, `observationreports`, `connectorplugins` | full CRUD | Observability CRD reconciliation |
 | `kubesynapse.ai` | `observation*/status` (4 resources) | get, patch, update | Observability status updates |
 | `apiextensions.k8s.io` | `customresourcedefinitions` | get, list, watch | **Read-only** — discover CRD versions and schemas at startup |
@@ -65,7 +65,7 @@ KubeSynapse uses **least-privilege RBAC** with one ServiceAccount per component.
 
 | API Group | Resource | Verbs | Justification |
 |-----------|----------|-------|---------------|
-| `kubesynapse.ai` | `aiagents`, `agentworkflows`, `agentevals` | full CRUD | User-facing CRUD operations via REST API |
+| `kubesynapse.ai` | `aiagents`, `agentworkflows` | full CRUD | User-facing CRUD operations via REST API |
 | `kubesynapse.ai` | `agentpolicies` | full CRUD | Policy management API |
 | `kubesynapse.ai` | `agenttenants` | create, get, update | Admin user provisioning reconciles dedicated per-user `AgentTenant` resources |
 | `kubesynapse.ai` | `agentapprovals` | get, list, watch | Read approval requests (approvals handled by operator) |

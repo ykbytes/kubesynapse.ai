@@ -2,7 +2,6 @@ import { useCallback, useEffect, useState } from "react";
 import {
   BookOpen,
   Bot,
-  FlaskConical,
   GitBranch,
   Blocks,
   MessageSquare,
@@ -40,7 +39,6 @@ interface CommandPaletteProps {
   onNavigate: (view: WorkspaceView) => void;
   onCreateAgent?: () => void;
   onCreateWorkflow?: () => void;
-  onCreateEval?: () => void;
   onToggleTheme?: () => void;
   onExportBundle?: () => void;
   onImportBundle?: () => void;
@@ -51,7 +49,6 @@ const NAV_ITEMS: { view: WorkspaceView; label: string; icon: LucideIcon; keyword
   { view: "chat", label: "Go to Chat", icon: MessageSquare, keywords: "chat conversation messages agent" },
   { view: "workflows", label: "Go to Workflows", icon: GitBranch, keywords: "workflow pipeline" },
   { view: "composer", label: "Go to Composer", icon: Blocks, keywords: "compose dag" },
-  { view: "evals", label: "Go to Evals", icon: FlaskConical, keywords: "eval evaluation test" },
   { view: "catalog", label: "Go to Catalog", icon: Package, keywords: "catalog skills mcp" },
   { view: "policies", label: "Go to Policies", icon: ShieldAlert, keywords: "policy guard" },
   { view: "settings", label: "Go to Settings", icon: Settings, keywords: "settings config provider" },
@@ -63,7 +60,6 @@ export function CommandPalette({
   onNavigate,
   onCreateAgent,
   onCreateWorkflow,
-  onCreateEval,
   onToggleTheme,
   onExportBundle,
   onImportBundle,
@@ -122,18 +118,6 @@ export function CommandPalette({
             group: "Actions",
             keywords: "new workflow create",
             action: () => run(onCreateWorkflow),
-          },
-        ]
-      : []),
-    ...(onCreateEval
-      ? [
-          {
-            id: "create-eval",
-            label: "Create new Eval",
-            icon: Plus,
-            group: "Actions",
-            keywords: "new eval create",
-            action: () => run(onCreateEval),
           },
         ]
       : []),

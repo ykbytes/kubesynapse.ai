@@ -200,7 +200,6 @@ undeploy:
 	kubectl delete crd agentapprovals.kubesynapse.ai || true
 	kubectl delete crd agenttenants.kubesynapse.ai || true
 	kubectl delete crd agentworkflows.kubesynapse.ai || true
-	kubectl delete crd agentevals.kubesynapse.ai || true
 
 # ===========================
 # Docker Compose (local dev)

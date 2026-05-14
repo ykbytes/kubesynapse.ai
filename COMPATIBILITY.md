@@ -43,7 +43,7 @@
 |-----------|---------|-------|
 | Kubernetes API | v1.25–v1.32 | Uses `apps/v1`, `batch/v1`, `networking.k8s.io/v1`, `policy/v1` |
 | Helm | v3.12+ | Uses `helm.sh/chart` v2, OCI registry support |
-| CRDs | `KubeSynapse.ai/v1alpha1` | 11 custom resources (AIAgent, AgentPolicy, AgentApproval, AgentTenant, AgentWorkflow, AgentEval, ObservationTarget, ObservationPolicy, ObservationReport, ConnectorPlugin, McpConnection) |
+| CRDs | `KubeSynapse.ai/v1alpha1` | 10 custom resources (AIAgent, AgentPolicy, AgentApproval, AgentTenant, AgentWorkflow, ObservationTarget, ObservationPolicy, ObservationReport, ConnectorPlugin, McpConnection) |
 
 ### Infrastructure Dependencies
 

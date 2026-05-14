@@ -26,6 +26,30 @@ syncs the persisted PostgreSQL password on repeat upgrades, injects the checked-
 skills catalog, and restarts the core deployments so unchanged `:dev` image tags are
 picked up reliably.
 
+The default quickstart admin username is `admin`. The helper prints the effective
+username, password, and port-forward commands when the install or upgrade completes.
+
+If the local `:dev` images already exist and you only want to reload them into Kind
+and run the Helm upgrade, add `-SkipBuild`:
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File ./scripts/deploy-kind.ps1 `
+	-ClusterName kubesynapse-dev `
+	-Namespace kubesynapse `
+	-ReleaseName kubesynapse `
+	-AdminPassword "KubesynapseAdmin9!" `
+	-SkipBuild
+```
+
+Post-upgrade verification:
+
+```bash
+kubectl get deploy,pods -n kubesynapse
+kubectl port-forward svc/kubesynapse-api-gateway -n kubesynapse 8080:8080
+curl http://127.0.0.1:8080/api/v1/health
+kubectl port-forward svc/kubesynapse-web-ui -n kubesynapse 3000:80
+```
+
 The chart leaves the browsable Skills catalog empty unless you provide catalog JSON. To populate the `Catalog > Skills` tab during install or upgrade, pass the checked-in catalog file:
 
 ```bash

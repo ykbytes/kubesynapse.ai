@@ -242,7 +242,7 @@ export interface AgentInfo {
   runtime_kind?: RuntimeKind;
 }
 
-export type WorkspaceView = "agents" | "chat" | "workflows" | "evals" | "catalog" | "composer" | "policies" | "intelligence" | "settings" | "admin" | "docs" | "webhooks";
+export type WorkspaceView = "agents" | "chat" | "workflows" | "catalog" | "composer" | "policies" | "intelligence" | "settings" | "admin" | "docs" | "webhooks";
 
 /* ── LLM Provider types ── */
 
@@ -1006,60 +1006,6 @@ export interface WorkflowInfo {
   run_id?: string | null;
   step_states?: Record<string, WorkflowStepState> | null;
   worker_job?: Record<string, unknown> | null;
-  created_at?: string | null;
-}
-
-export interface EvalTestCase {
-  input: string;
-  expected_output: string;
-  metrics: string[];
-}
-
-export interface EvalPayload {
-  name: string;
-  agent_ref: string;
-  schedule?: string;
-  test_suite: EvalTestCase[];
-  failure_threshold?: Record<string, unknown>;
-}
-
-export interface EvalUpdatePayload {
-  agent_ref: string;
-  schedule?: string;
-  test_suite: EvalTestCase[];
-  failure_threshold?: Record<string, unknown>;
-}
-
-export interface EvalCaseResult {
-  input: string;
-  expectedOutput: string;
-  response: string;
-  error: string;
-  latencyMs: number;
-  status: string;
-  threadId?: string;
-  metrics: {
-    relevance: number;
-    faithfulness: number;
-    toxicity: number;
-  };
-}
-
-export interface EvalInfo {
-  name: string;
-  namespace: string;
-  agent_ref: string;
-  schedule?: string | null;
-  test_suite: EvalTestCase[];
-  failure_threshold: Record<string, unknown>;
-  phase: string;
-  passed?: boolean | null;
-  last_run?: string | null;
-  observed_generation?: number | null;
-  summary?: Record<string, unknown> | null;
-  artifact_ref?: Record<string, unknown> | null;
-  worker_job?: Record<string, unknown> | null;
-  cases?: EvalCaseResult[] | null;
   created_at?: string | null;
 }
 

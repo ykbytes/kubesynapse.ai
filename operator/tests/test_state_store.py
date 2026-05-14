@@ -194,47 +194,6 @@ class StateStoreTests(unittest.TestCase):
 
         self.assertIsNone(conflict)
 
-    def test_safe_record_eval_state_persists_summary_and_pass_fail(self) -> None:
-        self.state_store.safe_record_eval_state(
-            namespace="team-b",
-            resource_name="eval-one",
-            generation=7,
-            run_id="eval-one-7",
-            phase="running",
-            passed=None,
-            spec={"cases": 4},
-            status={
-                "summary": {"progress": 0.5},
-                "artifactRef": {"path": "/tmp/eval.json"},  # noqa: S108
-                "workerJob": {"name": "eval-worker"},
-            },
-        )
-
-        self.state_store.safe_record_eval_state(
-            namespace="team-b",
-            resource_name="eval-one",
-            generation=7,
-            run_id="eval-one-7",
-            phase="completed",
-            passed=True,
-            spec={"cases": 4},
-            status={
-                "summary": {"passed": 4, "failed": 0, "completedAt": "2026-03-12T01:00:00Z"},
-                "artifactRef": {"path": "/tmp/eval.json"},  # noqa: S108
-                "workerJob": {"name": "eval-worker"},
-            },
-        )
-
-        with self.state_store.db_session() as session:
-            records = session.query(self.state_store.EvalRun).all()
-
-        self.assertEqual(len(records), 1)
-        self.assertEqual(records[0].phase, "completed")
-        self.assertTrue(records[0].passed)
-        self.assertEqual(records[0].artifact_path, "/tmp/eval.json")  # noqa: S108
-        self.assertEqual(records[0].worker_job_name, "eval-worker")
-        self.assertIsNotNone(records[0].completed_at)
-
 
 class DatabaseDriverValidationTests(unittest.TestCase):
     """state_store rejects unsupported DATABASE_DRIVER values."""

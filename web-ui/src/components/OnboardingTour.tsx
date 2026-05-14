@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { Bot, GitBranch, FlaskConical, MessageSquare, ArrowRight, X } from "lucide-react";
+import { Bot, GitBranch, ShieldCheck, MessageSquare, ArrowRight, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 const STORAGE_KEY = "kubesynapse/onboarding-done";
@@ -22,9 +22,9 @@ const STEPS: TourStep[] = [
     icon: GitBranch,
   },
   {
-    title: "Run Evaluations",
-    description: "Create evaluation suites to test agent quality on repeatable inputs. Compare metrics across runs and catch regressions before they ship.",
-    icon: FlaskConical,
+    title: "Set Guardrails",
+    description: "Attach policies to control model access, enforce safety checks, and make operational limits explicit before teams scale usage.",
+    icon: ShieldCheck,
   },
   {
     title: "Chat & Collaborate",

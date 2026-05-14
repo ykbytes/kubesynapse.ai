@@ -282,12 +282,12 @@
 7. Regression test: existing OpenCode workflows still work
 8. Integration test: pi workflow completes successfully
 
-### Story P5.2: Pi Eval Runner
-**Goal**: AIEval can run test suites against pi agents
+### Story P5.2: Pi Workflow Runner
+**Goal**: AgentWorkflow can execute steps against pi agents
 **DoD**:
-1. `eval_controller.py` / `worker.py` supports pi runtime for evals
-2. For each test case: new_session → prompt → collect result → compare
-3. Captures pass/fail with reasoning
+1. `worker.py` supports pi runtime for workflow step execution
+2. For each step: new_session → prompt → collect result → hand off outputs
+3. Captures step status, output, and failure reasoning consistently
 4. Eval report includes pi session ID for debugging
 5. Works with the same eval CRD format
 6. Test: eval runs against pi agent, produces report

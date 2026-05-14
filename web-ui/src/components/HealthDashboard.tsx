@@ -81,14 +81,12 @@ export function HealthDashboard() {
     if (!raw) return null;
     const agents = (raw.agents as Record<string, unknown> | undefined)?.total as number | undefined;
     const workflows = (raw.workflows as Record<string, unknown> | undefined)?.total as number | undefined;
-    const evals = (raw.evals as Record<string, unknown> | undefined)?.total as number | undefined;
     const policies = (raw.policies as Record<string, unknown> | undefined)?.total as number | undefined;
     return {
       agents: agents ?? 0,
       workflows: workflows ?? 0,
-      evals: evals ?? 0,
       policies: policies ?? 0,
-      total: (agents ?? 0) + (workflows ?? 0) + (evals ?? 0) + (policies ?? 0),
+      total: (agents ?? 0) + (workflows ?? 0) + (policies ?? 0),
     };
   }, [data]);
   const postureNotes = useMemo(() => {
@@ -113,7 +111,7 @@ export function HealthDashboard() {
       notes.push({
         tone: "warning",
         title: "No managed resources yet",
-        body: "The control plane is reachable, but there are no provisioned agents, workflows, evaluations, or policies in this namespace.",
+        body: "The control plane is reachable, but there are no provisioned agents, workflows, or policies in this namespace.",
       });
     }
     if (notes.length === 0) {
@@ -179,7 +177,7 @@ export function HealthDashboard() {
             <CardContent className="py-4">
               <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">Resources</div>
               <div className="mt-1 text-lg font-semibold text-foreground">{resourceCheck?.total ?? 0}</div>
-              <p className="mt-1 text-xs text-muted-foreground">Agents, workflows, evaluations, and policies tracked in this namespace.</p>
+              <p className="mt-1 text-xs text-muted-foreground">Agents, workflows, and policies tracked in this namespace.</p>
             </CardContent>
           </Card>
           <Card className="border-border/70 bg-card/80">
@@ -282,7 +280,6 @@ export function HealthDashboard() {
                     <div className="flex flex-wrap gap-2 mt-1">
                       <span>Agents: <strong>{(check.agents as Record<string, unknown>).total as number}</strong></span>
                       <span>Workflows: <strong>{(check.workflows as Record<string, unknown>).total as number}</strong></span>
-                      <span>Evals: <strong>{(check.evals as Record<string, unknown>).total as number}</strong></span>
                       <span>Policies: <strong>{(check.policies as Record<string, unknown>).total as number}</strong></span>
                     </div>
                   )}

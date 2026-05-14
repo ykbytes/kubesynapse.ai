@@ -1181,27 +1181,6 @@ def get_workflow_next_action(
                 "reason": "One or more steps failed verification.",
                 "verifyFailures": verify_failures,
             }
-        # Check if there's a matching eval
-        try:
-            evals = list_custom_resources("agentevals", namespace)
-            matching_evals = [
-                e
-                for e in evals
-                if isinstance(e, dict) and str((e.get("spec") or {}).get("workflowRef", "")) == workflow_name
-            ]
-            if not matching_evals:
-                return {"action": "Run evaluation", "reason": "Workflow completed successfully but has no evaluation."}
-            # Check eval status
-            for ev in matching_evals:
-                ev_status = ev.get("status") or {}
-                ev_phase = str(ev_status.get("phase", "")).strip()
-                if ev_phase == "failed":
-                    return {
-                        "action": "Check failing eval test cases",
-                        "reason": f"Eval '{ev.get('metadata', {}).get('name', '')}' has failures.",
-                    }
-        except Exception:
-            logger.warning("Eval status check failed (best-effort)", exc_info=True)
         return {"action": "Deploy or promote", "reason": "All steps completed and verified successfully."}
 
     if phase == "running":

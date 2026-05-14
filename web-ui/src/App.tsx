@@ -26,7 +26,6 @@ const ChatWorkbench = lazy(() => import("./components/ChatWorkbench").then((m) =
 const TeamView = lazy(() => import("./components/TeamView").then((m) => ({ default: m.TeamView })));
 const CreateAgentPanel = lazy(() => import("./components/CreateAgentPanel").then((m) => ({ default: m.CreateAgentPanel })));
 const ConfirmDialog = lazy(() => import("./components/ConfirmDialog").then((m) => ({ default: m.ConfirmDialog })));
-const EvalManager = lazy(() => import("./components/EvalManager").then((m) => ({ default: m.EvalManager })));
 const PolicyEditor = lazy(() => import("./components/PolicyEditor").then((m) => ({ default: m.PolicyEditor })));
 const CatalogPanel = lazy(() => import("./components/CatalogPanel").then((m) => ({ default: m.CatalogPanel })));
 import { AgentInspectorDrawer, ResourceInspectorDrawer } from "./components/InspectorDrawer";
@@ -52,7 +51,7 @@ import { ChatProvider, useChat } from "./contexts/ChatContext";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import { NotificationProvider } from "./contexts/NotificationContext";
 
-import type { EvalInfo, UiMessage, WorkflowInfo, WorkspaceView } from "./types";
+import type { UiMessage, WorkflowInfo, WorkspaceView } from "./types";
 import { cloneAgent, downloadAgentArtifact, downloadAgentArtifactZip, exportBundleUrl, importBundle, listAgentArtifacts, previewAgentArtifact } from "./lib/api";
 import { toast } from "sonner";
 
@@ -78,22 +77,8 @@ function workflowStatusFromResource(resource: WorkflowInfo | null): Record<strin
   };
 }
 
-function evalSpecFromResource(resource: EvalInfo | null): Record<string, unknown> | null {
-  if (!resource) return null;
-  return { agent_ref: resource.agent_ref, schedule: resource.schedule, test_suite: resource.test_suite, failure_threshold: resource.failure_threshold };
-}
-
-function evalStatusFromResource(resource: EvalInfo | null): Record<string, unknown> | null {
-  if (!resource) return null;
-  return {
-    phase: resource.phase, passed: resource.passed, last_run: resource.last_run,
-    observed_generation: resource.observed_generation, artifact_ref: resource.artifact_ref,
-    worker_job: resource.worker_job, created_at: resource.created_at,
-  };
-}
-
 function supportsInspector(view: WorkspaceView): boolean {
-  return view === "agents" || view === "chat" || view === "workflows" || view === "composer" || view === "evals";
+  return view === "agents" || view === "chat" || view === "workflows" || view === "composer";
 }
 
 // ── NotificationShell — NotificationProvider needs Connection values ──
@@ -295,8 +280,6 @@ function AppLayout() {
         if (deletedName) chat.removeAgentChatState(deletedName);
       } else if (view === "workflows" || view === "composer") {
         await ws.handleDeleteWorkflow(id);
-      } else if (view === "evals") {
-        await ws.handleDeleteEval(id);
       }
     } catch (err) {
       ws.setWorkspaceError(err instanceof Error ? err.message : String(err));
@@ -378,14 +361,9 @@ function AppLayout() {
                             title: "Documentation",
                             description: "Learn how to deploy, operate, and extend kubesynapse.",
                           }
-                        : ws.activeView === "webhooks"
-                          ? {
-                              title: "Webhooks & Triggers",
-                              description: "Configure webhook receivers and event-driven workflow triggers.",
-                            }
-                          : {
-                            title: "Evaluations",
-                            description: "Create evaluation suites and track regression coverage.",
+                        : {
+                            title: "Webhooks & Triggers",
+                            description: "Configure webhook receivers and event-driven workflow triggers.",
                           };
   const showCompactPageHeader = ws.activeView !== "composer" && !(ws.activeView === "chat" && ws.selectedAgentName);
   const mainContentClasses = ws.activeView === "composer"
@@ -477,7 +455,7 @@ function AppLayout() {
                     : undefined
               }
               onDeleteItem={
-                ws.activeView === "agents" || ws.activeView === "chat" || ws.activeView === "workflows" || ws.activeView === "composer" || ws.activeView === "evals"
+                ws.activeView === "agents" || ws.activeView === "chat" || ws.activeView === "workflows" || ws.activeView === "composer"
                   ? handleSidebarDeleteRequest
                     : undefined
               }
@@ -818,20 +796,7 @@ function AppLayout() {
                 <EventTriggersPanel />
               </Suspense>
             </ContentShell>
-          ) : (
-            <ContentShell>
-              <EvalManager
-                evalResource={ws.evalCreateMode || ws.evals.length === 0 ? null : ws.selectedEval}
-                agents={ws.agents}
-                isSaving={ws.savingEval}
-                isDeleting={ws.deletingEval}
-                error={ws.evalError}
-                onCreate={(payload) => void ws.handleCreateEval(payload)}
-                onUpdate={(name, payload) => void ws.handleUpdateEval(name, payload)}
-                onDelete={(name) => void ws.handleDeleteEval(name)}
-              />
-            </ContentShell>
-          )}
+          ) : null}
         </main>
       </div>
 
@@ -881,18 +846,6 @@ function AppLayout() {
           onApprove={() => void chat.handleWorkflowApprovalDecision("approved")}
           onDeny={() => void chat.handleWorkflowApprovalDecision("denied")}
         />
-      ) : ws.activeView === "evals" ? (
-        <ResourceInspectorDrawer
-          open={ws.inspectorOpen}
-          onOpenChange={ws.setInspectorOpen}
-          title="Evaluation Inspector"
-          selectedName={ws.selectedEval?.name ?? ""}
-          status={ws.selectedEval?.phase ?? (ws.evalCreateMode ? "draft" : "none")}
-          summary={ws.selectedEval?.summary}
-          spec={evalSpecFromResource(ws.selectedEval)}
-          details={evalStatusFromResource(ws.selectedEval)}
-          emptyMessage="Select an evaluation or create a new one."
-        />
       ) : null}
 
       <Suspense fallback={null}>
@@ -915,7 +868,7 @@ function AppLayout() {
               onSelect={ws.handleSelectResource}
               onCreateNew={ws.handleCreateNew}
               onDeleteItem={
-                ws.activeView === "agents" || ws.activeView === "chat" || ws.activeView === "workflows" || ws.activeView === "composer" || ws.activeView === "evals"
+                ws.activeView === "agents" || ws.activeView === "chat" || ws.activeView === "workflows" || ws.activeView === "composer"
                   ? handleSidebarDeleteRequest
                   : undefined
               }
@@ -930,7 +883,6 @@ function AppLayout() {
           onNavigate={handleWorkspaceViewChange}
           onCreateAgent={() => { ws.setActiveView("agents"); ws.setAgentCreateMode(true); }}
           onCreateWorkflow={() => { ws.setActiveView("workflows"); ws.setWorkflowCreateMode(true); }}
-          onCreateEval={() => { ws.setActiveView("evals"); ws.setEvalCreateMode(true); }}
           onExportBundle={() => {
             const url = exportBundleUrl(conn.token, conn.namespace);
             window.open(url, "_blank");

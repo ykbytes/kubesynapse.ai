@@ -796,14 +796,12 @@ def stream_notifications(
     async def notification_generator():
         last_agents: dict[str, str] = {}
         last_workflows: dict[str, str] = {}
-        last_evals: dict[str, str] = {}
         first_poll = True
 
         while True:
             try:
                 agents = list_custom_resources("aiagents", namespace)
                 workflows = list_custom_resources("agentworkflows", namespace)
-                evals = list_custom_resources("agentevals", namespace)
 
                 current_agents: dict[str, str] = {}
                 for a in agents:
@@ -816,12 +814,6 @@ def stream_notifications(
                     name = (w.get("metadata") or {}).get("name", "")
                     phase = ((w.get("status") or {}).get("phase") or "unknown").lower()
                     current_workflows[name] = phase
-
-                current_evals: dict[str, str] = {}
-                for e in evals:
-                    name = (e.get("metadata") or {}).get("name", "")
-                    phase = ((e.get("status") or {}).get("phase") or "unknown").lower()
-                    current_evals[name] = phase
 
                 if not first_poll:
                     # Agent status changes
@@ -889,44 +881,8 @@ def stream_notifications(
                             },
                         )
 
-                    # Eval status changes
-                    for name, phase in current_evals.items():
-                        prev = last_evals.get(name)
-                        if prev != phase:
-                            event_type = (
-                                "eval.completed"
-                                if phase in ("succeeded",)
-                                else "eval.failed"
-                                if phase in ("failed",)
-                                else "eval.status_changed"
-                            )
-                            yield sse_event(
-                                event_type,
-                                {
-                                    "name": name,
-                                    "namespace": namespace,
-                                    "phase": phase,
-                                    "previousPhase": prev,
-                                    "timestamp": now_iso(),
-                                },
-                            )
-
-                    # Deleted evals
-                    for name in set(last_evals) - set(current_evals):
-                        yield sse_event(
-                            "eval.status_changed",
-                            {
-                                "name": name,
-                                "namespace": namespace,
-                                "phase": "deleted",
-                                "previousPhase": last_evals[name],
-                                "timestamp": now_iso(),
-                            },
-                        )
-
                 last_agents = current_agents
                 last_workflows = current_workflows
-                last_evals = current_evals
                 first_poll = False
 
             except Exception as exc:

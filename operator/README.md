@@ -5,7 +5,7 @@ Kubernetes workloads. Built with [Kopf](https://kopf.dev/) and Python 3.11+.
 
 ## Purpose
 
-The operator watches `AIAgent`, `AgentWorkflow`, and `AgentEval` CRDs and materializes
+The operator watches `AIAgent` and `AgentWorkflow` CRDs and materializes
 them into Deployments, Services, PVCs, Jobs, and ConfigMaps. It is the control plane
 that turns declarative agent specs into live runtime pods.
 
@@ -30,7 +30,7 @@ graph LR
     F --> H[Circuit Breaker]
 ```
 
-- **Controllers** — Kopf handlers for `AIAgent`, `AgentWorkflow`, and `AgentEval`.
+- **Controllers** — Kopf handlers for `AIAgent` and `AgentWorkflow`.
   Enqueue events, manage finalizers, and drive status updates.
 - **Manifest Builders** — Generate K8s objects (Deployment, Service, PVC, Job) from
   CRD spec snippets with sane defaults and label inheritance.

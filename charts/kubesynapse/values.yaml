@@ -155,8 +155,6 @@ operator:
   runtimeTimeoutSeconds: 360
   workerActiveDeadlineSeconds: 14400
   workerTtlSecondsAfterFinished: 3600
-  evalSchedulePollSeconds: 60
-  evalQueueStaleSeconds: 600
   workflowPollSeconds: 30
   workflowQueueStaleSeconds: 300
   workflowRunningStaleSeconds: 1800
