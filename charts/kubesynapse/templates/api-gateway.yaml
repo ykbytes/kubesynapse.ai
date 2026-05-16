@@ -12,6 +12,7 @@ spec:
 {{- if not (and .Values.autoscaling (.Values.autoscaling.enabled)) }}
   replicas: {{ .Values.apiGateway.replicaCount | default 1 }}
 {{- end }}
+  revisionHistoryLimit: {{ .Values.apiGateway.revisionHistoryLimit | default 3 }}
   selector:
     matchLabels:
       app: api-gateway

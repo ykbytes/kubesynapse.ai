@@ -2,7 +2,7 @@
 
 Each provider knows:
 - What env vars it needs for the opencode subprocess
-- How to map KubeSynth env vars to opencode env vars
+- How to map KubeSynapse env vars to opencode env vars
 - Default model reference format
 - opencode.json config overrides
 """
@@ -19,7 +19,7 @@ logger = logging.getLogger("opencode-runtime")
 
 @dataclass(frozen=True)
 class EnvMapping:
-    """Maps an opencode env var to a KubeSynth source env var."""
+    """Maps an opencode env var to a KubeSynapse source env var."""
 
     opencode_env: str
     source_env: str

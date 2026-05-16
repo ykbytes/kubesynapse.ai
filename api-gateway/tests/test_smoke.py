@@ -10,12 +10,11 @@ import uuid
 from pathlib import Path
 from unittest.mock import patch
 
+import trace_store
+import traces_router
 from fastapi.testclient import TestClient
 
 from auth_store import db_session
-
-import trace_store
-import traces_router
 
 
 class TestHealthEndpoints:

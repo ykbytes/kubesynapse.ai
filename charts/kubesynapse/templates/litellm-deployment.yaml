@@ -11,6 +11,7 @@ spec:
 {{- if not (and .Values.autoscaling (.Values.autoscaling.enabled)) }}
   replicas: {{ .Values.litellm.replicaCount }}
 {{- end }}
+  revisionHistoryLimit: {{ .Values.litellm.revisionHistoryLimit | default 3 }}
   selector:
     matchLabels:
       app: litellm
@@ -93,7 +94,10 @@ spec:
           imagePullPolicy: {{ .Values.litellm.image.pullPolicy }}
           securityContext:
             allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: false
+            readOnlyRootFilesystem: true  # §security-P1: writable paths via emptyDir volumes
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
             capabilities:
               drop:
                 - ALL
@@ -108,6 +112,8 @@ spec:
             - name: prisma-schema
               mountPath: /app/schema.prisma
               subPath: schema.prisma
+            - name: home-litellm
+              mountPath: /home/litellm
             - name: tmp
               mountPath: /tmp
           env:
@@ -123,6 +129,8 @@ spec:
               value: "INFO"
             - name: DISABLE_SCHEMA_UPDATE
               value: "true"
+            - name: LITELLM_LOCAL_MODEL_COST_MAP
+              value: "True"
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
@@ -193,6 +201,9 @@ spec:
             name: {{ include "kubesynapse.fullname" . }}-litellm-config
         - name: prisma-schema
           emptyDir: {}
+        - name: home-litellm
+          emptyDir:
+            sizeLimit: 256Mi
         - name: tmp
           emptyDir:
             sizeLimit: 512Mi
@@ -242,11 +253,26 @@ spec:
       ports:
         - protocol: TCP
           port: 5432
+    # DNS egress — allow resolution via kube-dns in any namespace
     - to:
         - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
       ports:
         - protocol: UDP
           port: 53
         - protocol: TCP
           port: 53
+    # Allow HTTPS to internet for model cost map and provider API calls
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443
 {{- end }}

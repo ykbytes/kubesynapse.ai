@@ -23,8 +23,8 @@ from builders.manifests import (
     create_mcp_network_policy_manifest,
     create_opencode_provider_bootstrap_secret,
     create_pi_provider_bootstrap_secret,
-    resolve_runtime_kind,
     mcp_connections_require_shared_bearer_token,
+    resolve_runtime_kind,
 )
 from utils import (
     parse_a2a_peer_refs,

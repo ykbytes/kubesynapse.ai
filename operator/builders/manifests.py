@@ -39,6 +39,8 @@ from config import (
     MCP_AUTH_SECRET_NAME,
     MCP_HUB_NAMESPACE,
     MCP_SIDECAR_CATALOG,
+    MISTRAL_VIBE_RUNTIME_IMAGE,
+    MISTRAL_VIBE_RUNTIME_IMAGE_PULL_POLICY,
     OPA_SIDECAR_IMAGE,
     OPA_SIDECAR_PORT,
     OPA_SIDECAR_RESOURCES,
@@ -51,8 +53,6 @@ from config import (
     OPENCODE_RUNTIME_IMAGE_PULL_POLICY,
     OPERATOR_NAMESPACE,
     OTEL_ENDPOINT,
-    MISTRAL_VIBE_RUNTIME_IMAGE,
-    MISTRAL_VIBE_RUNTIME_IMAGE_PULL_POLICY,
     PI_DEFAULT_MODEL,
     PI_DEFAULT_PROVIDER,
     PI_DEFAULT_THINKING_LEVEL,
@@ -2219,7 +2219,7 @@ def create_agent_statefulset_manifest(
             "selector": {"matchLabels": {"app": "ai-agent", "agent-name": name}},
             "updateStrategy": {"type": "RollingUpdate"},
             "persistentVolumeClaimRetentionPolicy": {
-                "whenDeleted": "Retain",
+                "whenDeleted": "Delete",
                 "whenScaled": "Retain",
             },
             "template": {

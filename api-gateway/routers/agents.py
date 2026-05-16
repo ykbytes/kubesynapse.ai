@@ -6,9 +6,10 @@ from typing import Any
 
 # Re-import all shared symbols from the gateway core
 from _core import *
-from routers.observability import _agent_wants_intelligence, _build_auto_intelligence_context
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
+
+from routers.observability import _agent_wants_intelligence, _build_auto_intelligence_context
 
 router = APIRouter(tags=["agents"])
 
@@ -579,7 +580,7 @@ async def invoke_agent_stream(
         stream_buffer = ""
 
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=10.0), trust_env=False) as client:  # noqa: SIM117
+            async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=10.0), trust_env=False) as client:
                 if memory_injected:
                     thread_id = str(request_payload.get("thread_id") or "").strip() or str(uuid.uuid4())
                     request_payload["thread_id"] = thread_id

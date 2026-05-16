@@ -1,4 +1,4 @@
-"""Core tier conformance tests for KubeSynth Runtime API v1.
+"""Core tier conformance tests for KubeSynapse Runtime API v1.
 
 These tests validate the **Core** API tier which every production runtime MUST
 implement:

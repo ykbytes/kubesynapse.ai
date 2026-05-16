@@ -2887,7 +2887,7 @@ def run_workflow_worker() -> None:
     )
     # §2.5 — DB mirroring is now handled by the status projection controller.
 
-    global _CURRENT_EXECUTION_ID  # noqa: PLW0603 — module-level used by nested funcs
+    global _CURRENT_EXECUTION_ID
 
     # §2.6 — Detect "ghost" executions: if the artifact was loaded and ALL
     # steps are already completed, this worker has nothing to do.  Skip trace

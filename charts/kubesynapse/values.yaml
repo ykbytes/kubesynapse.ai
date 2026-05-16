@@ -24,11 +24,12 @@ litellm:
     repository: litellm/litellm
     tag: v1.82.3-stable
     pullPolicy: IfNotPresent
-  replicaCount: 1
+  replicaCount: 2  # §reliability-P1: minimum 2 replicas for PDB efficacy
+  revisionHistoryLimit: 3
   service:
     type: ClusterIP
     port: 4000
-  masterKey: "replace-me-litellm-master-key"  # fallback when platformSecrets.native.litellmMasterKey is not set
+  masterKey: ""  # §security-P0: must be set via platformSecrets.native.litellmMasterKey
   resources:
     requests:
       cpu: "200m"
@@ -136,6 +137,7 @@ mistralVibeRuntime:
 operator:
   enabled: true
   replicaCount: 2
+  revisionHistoryLimit: 3
   image:
     repository: docker.io/kubesynapse/kubesynapse-operator
     tag: v2.1.0-run-intelligence
@@ -191,7 +193,8 @@ autoscaling:
 
 apiGateway:
   enabled: true
-  replicaCount: 1
+  replicaCount: 2  # §reliability-P1: minimum 2 replicas for PDB efficacy
+  revisionHistoryLimit: 3
   image:
     repository: docker.io/kubesynapse/kubesynapse-api-gateway
     tag: v2.1.0-run-intelligence
@@ -269,7 +272,8 @@ postgresql:
 
 webUi:
   enabled: true
-  replicaCount: 1
+  replicaCount: 2  # §reliability-P1: minimum 2 replicas for PDB efficacy
+  revisionHistoryLimit: 3
   image:
     repository: docker.io/kubesynapse/kubesynapse-web-ui
     tag: v2.1.0-run-intelligence
@@ -344,10 +348,13 @@ platformSecrets:
     mistralApiKey: ""
     opencodeApiKey: ""
     opencodeGoApiKey: ""
-    litellmMasterKey: "replace-me"
-    apiGatewaySharedToken: "replace-me-with-a-long-random-bearer-token"
-    databasePassword: "replace-me-with-a-long-random-database-password"
-    jwtSecret: "replace-me-with-a-long-random-jwt-secret" # also used as the default INTELLIGENCE_COLLECTOR_TOKEN_KEY in the gateway
+    # §security-P0: The following four secrets are REQUIRED.
+    # Install will fail with a clear error if these are not overridden.
+    # Generate with: openssl rand -base64 48
+    litellmMasterKey: ""
+    apiGatewaySharedToken: ""
+    databasePassword: ""
+    jwtSecret: "" # also used as the default INTELLIGENCE_COLLECTOR_TOKEN_KEY in the gateway
     authBootstrapAdminPassword: ""
     ldapBindPassword: ""
     # JSON array of OIDC provider objects, for example:
@@ -407,7 +414,9 @@ mcpHub:
   # validate inbound requests. Rotate via ExternalSecret / Vault in production.
   # NEVER leave the default value in a real deployment.
   auth:
-    bearerToken: "replace-me-with-a-strong-random-secret"
+    # §security-P0: This must be overridden with a strong random value.
+    # If using ExternalSecret, set secretName instead.
+    bearerToken: ""
     # If using ExternalSecret, set secretName to the K8s secret that holds
     # the bearer-token key and leave bearerToken empty. The deployment template
     # will reference that secret instead of creating a new one.

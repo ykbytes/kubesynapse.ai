@@ -1,11 +1,11 @@
 {
   "openapi": "3.0.3",
   "info": {
-    "title": "KubeSynth Runtime API",
-    "description": "Standard API contract for KubeSynth agent runtimes.\nEvery runtime (opencode, pi, vibe, or custom) MUST implement at least the Core tier.\nRuntimes advertise their supported capabilities via GET /capabilities.\n\n## API Tiers\n- **Core**: /health, /ready, /info, /capabilities, /invoke, /invoke/stream, /cancel\n- **Session**: /todo, /question, /question/{id}/reply, /question/{id}/reject, /diff, /context-budget\n- **Artifacts**: /artifacts/list, /artifacts/download, /artifacts/zip\n- **Streaming**: /invoke/stream, /events\n\n## Authentication\nUse Bearer token authentication. The token is provided by the KubeSynapse operator\nand injected into each runtime pod via environment variables.\n\n## Error Handling\nAll errors follow a consistent schema with machine-readable codes and human-readable messages.\nEvery error response includes a `trace_id` for debugging.\n",
+    "title": "KubeSynapse Runtime API",
+    "description": "Standard API contract for KubeSynapse agent runtimes.\nEvery runtime (opencode, pi, vibe, or custom) MUST implement at least the Core tier.\nRuntimes advertise their supported capabilities via GET /capabilities.\n\n## API Tiers\n- **Core**: /health, /ready, /info, /capabilities, /invoke, /invoke/stream, /cancel\n- **Session**: /todo, /question, /question/{id}/reply, /question/{id}/reject, /diff, /context-budget\n- **Artifacts**: /artifacts/list, /artifacts/download, /artifacts/zip\n- **Streaming**: /invoke/stream, /events\n\n## Authentication\nUse Bearer token authentication. The token is provided by the KubeSynapse operator\nand injected into each runtime pod via environment variables.\n\n## Error Handling\nAll errors follow a consistent schema with machine-readable codes and human-readable messages.\nEvery error response includes a `trace_id` for debugging.\n",
     "version": "1.0.0",
     "contact": {
-      "name": "KubeSynth",
+      "name": "KubeSynapse",
       "url": "https://github.com/anomalyco/opencode"
     },
     "license": {

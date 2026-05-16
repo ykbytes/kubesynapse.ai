@@ -7,42 +7,44 @@ import "@fontsource/ibm-plex-mono/500.css";
 import { AlertTriangle, Bot, MessageSquare, PanelRightOpen, RefreshCw } from "lucide-react";
 import React, { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import { Toaster } from "sonner";
-import { SkipToContent } from "./components/SkipToContent";
-import { AriaLiveRegion } from "./components/AriaLiveRegion";
+import { SkipToContent } from "./components/app/SkipToContent";
+import { AriaLiveRegion } from "./components/app/AriaLiveRegion";
 
-const LandingPage = lazy(() => import("./components/LandingPage").then((m) => ({ default: m.LandingPage })));
+const LandingPage = lazy(() => import("./components/landing/LandingPage").then((m) => ({ default: m.LandingPage })));
 
-const AgentManagementPanel = lazy(() => import("./components/AgentManagementPanel").then((m) => ({ default: m.AgentManagementPanel })));
-const AdminPanel = lazy(() => import("./components/AdminPanel").then((m) => ({ default: m.AdminPanel })));
-const HealthDashboard = lazy(() => import("./components/HealthDashboard").then((m) => ({ default: m.HealthDashboard })));
-const AuditLogPanel = lazy(() => import("./components/AuditLogPanel").then((m) => ({ default: m.AuditLogPanel })));
-const UsageDashboard = lazy(() => import("./components/UsageDashboard"));
-const AgentTemplateWizard = lazy(() => import("./components/AgentTemplateWizard").then((m) => ({ default: m.AgentTemplateWizard })));
-const OnboardingTour = lazy(() => import("./components/OnboardingTour").then((m) => ({ default: m.OnboardingTour })));
-const AppSidebar = lazy(() => import("./components/AppSidebar").then((m) => ({ default: m.AppSidebar })));
-const AuthPage = lazy(() => import("./components/AuthPage").then((m) => ({ default: m.AuthPage })));
-const ChatSessionPanel = lazy(() => import("./components/ChatSessionPanel").then((m) => ({ default: m.ChatSessionPanel })));
-const ChatWorkbench = lazy(() => import("./components/ChatWorkbench").then((m) => ({ default: m.ChatWorkbench })));
-const TeamView = lazy(() => import("./components/TeamView").then((m) => ({ default: m.TeamView })));
-const CreateAgentPanel = lazy(() => import("./components/CreateAgentPanel").then((m) => ({ default: m.CreateAgentPanel })));
-const ConfirmDialog = lazy(() => import("./components/ConfirmDialog").then((m) => ({ default: m.ConfirmDialog })));
-const PolicyEditor = lazy(() => import("./components/PolicyEditor").then((m) => ({ default: m.PolicyEditor })));
-const CatalogPanel = lazy(() => import("./components/CatalogPanel").then((m) => ({ default: m.CatalogPanel })));
-import { AgentInspectorDrawer, ResourceInspectorDrawer } from "./components/InspectorDrawer";
-const SettingsPanel = lazy(() => import("./components/SettingsPanel").then((m) => ({ default: m.SettingsPanel })));
-const TopBar = lazy(() => import("./components/TopBar").then((m) => ({ default: m.TopBar })));
-const CommandPalette = lazy(() => import("./components/CommandPalette").then((m) => ({ default: m.CommandPalette })));
-const MobileNav = lazy(() => import("./components/MobileNav").then((m) => ({ default: m.MobileNav })));
-const WorkflowManager = lazy(() => import("./components/WorkflowManager").then((m) => ({ default: m.WorkflowManager })));
-const IntelligencePanel = lazy(() => import("./components/IntelligencePanel").then((m) => ({ default: m.IntelligencePanel })));
-const DocumentationPanel = lazy(() => import("./components/DocumentationPanel").then((m) => ({ default: m.DocumentationPanel })));
-const EventTriggersPanel = lazy(() => import("./components/EventTriggersPanel").then((m) => ({ default: m.EventTriggersPanel })));
+const AgentManagementPanel = lazy(() => import("./components/agents/AgentManagementPanel").then((m) => ({ default: m.AgentManagementPanel })));
+const AdminPanel = lazy(() => import("./components/admin/AdminPanel").then((m) => ({ default: m.AdminPanel })));
+const HealthDashboard = lazy(() => import("./components/admin/HealthDashboard").then((m) => ({ default: m.HealthDashboard })));
+const AuditLogPanel = lazy(() => import("./components/admin/AuditLogPanel").then((m) => ({ default: m.AuditLogPanel })));
+const UsageDashboard = lazy(() => import("./components/admin/UsageDashboard"));
+const AgentTemplateWizard = lazy(() => import("./components/agents/AgentTemplateWizard").then((m) => ({ default: m.AgentTemplateWizard })));
+const OnboardingTour = lazy(() => import("./components/app/OnboardingTour").then((m) => ({ default: m.OnboardingTour })));
+const AppSidebar = lazy(() => import("./components/app/AppSidebar").then((m) => ({ default: m.AppSidebar })));
+const AuthPage = lazy(() => import("./components/auth/AuthPage").then((m) => ({ default: m.AuthPage })));
+const ChatSessionPanel = lazy(() => import("./components/chat/ChatSessionPanel").then((m) => ({ default: m.ChatSessionPanel })));
+const ChatWorkbench = lazy(() => import("./components/chat/ChatWorkbench").then((m) => ({ default: m.ChatWorkbench })));
+const TeamView = lazy(() => import("./components/chat/TeamView").then((m) => ({ default: m.TeamView })));
+const CreateAgentPanel = lazy(() => import("./components/agents/CreateAgentPanel").then((m) => ({ default: m.CreateAgentPanel })));
+const ConfirmDialog = lazy(() => import("./components/shared/ConfirmDialog").then((m) => ({ default: m.ConfirmDialog })));
+const PolicyEditor = lazy(() => import("./components/policies/PolicyEditor").then((m) => ({ default: m.PolicyEditor })));
+const CatalogPanel = lazy(() => import("./components/catalog/CatalogPanel").then((m) => ({ default: m.CatalogPanel })));
+import { AgentInspectorDrawer, ResourceInspectorDrawer } from "./components/workflows/InspectorDrawer";
+const SettingsPanel = lazy(() => import("./components/settings/SettingsPanel").then((m) => ({ default: m.SettingsPanel })));
+const TopBar = lazy(() => import("./components/app/TopBar").then((m) => ({ default: m.TopBar })));
+
+const CommandPalette = lazy(() => import("./components/app/CommandPalette").then((m) => ({ default: m.CommandPalette })));
+
+const MobileNav = lazy(() => import("./components/app/MobileNav").then((m) => ({ default: m.MobileNav })));
+const WorkflowManager = lazy(() => import("./components/workflows/WorkflowManager").then((m) => ({ default: m.WorkflowManager })));
+const IntelligencePanel = lazy(() => import("./components/intelligence/IntelligencePanel").then((m) => ({ default: m.IntelligencePanel })));
+const DocumentationPanel = lazy(() => import("./components/docs/DocumentationPanel").then((m) => ({ default: m.DocumentationPanel })));
+const EventTriggersPanel = lazy(() => import("./components/workflows/EventTriggersPanel").then((m) => ({ default: m.EventTriggersPanel })));
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { EmptyState } from "@/components/EmptyState";
+import { EmptyState } from "@/components/shared/EmptyState";
 
 const WorkflowComposer = lazy(() =>
-  import("./components/WorkflowComposer").then((m) => ({ default: m.WorkflowComposer })),
+  import("./components/workflows/WorkflowComposer").then((m) => ({ default: m.WorkflowComposer })),
 );
 
 import { ConnectionProvider, useConnection } from "./contexts/ConnectionContext";

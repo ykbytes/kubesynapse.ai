@@ -27,9 +27,8 @@ Only `opencode`, `pi`, and `mistral-vibe` belong to the supported request surfac
 |--------|--------------|
 | `main.py` | Deployed app entry point — app factory, middleware, and router mounting |
 | `_core.py` | Shared gateway models, runtime validation, Kubernetes helpers, and response shaping |
+| `constants.py` | Centralized defaults for env vars, A2A protocol, JSON-RPC codes, runtime limits |
 | `routers/` | Modular REST route handlers for agents, workflows, auth, chat, webhooks, and observability |
-| `constants.py` | Centralized defaults, feature flags, and path constants |
-| `utils.py` | Shared helpers for serialization, pagination, and request context |
 | `auth_middleware.py` | Hybrid auth: shared token, OIDC PKCE, JWT rotation, brute-force protection |
 | `trace_store.py` | Trace persistence layer with batching and retention policies |
 | `traces_router.py` | REST endpoints for trace querying, export, and live activity streams |

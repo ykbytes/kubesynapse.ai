@@ -7,23 +7,22 @@ from typing import Any, cast
 # Re-import all shared symbols from the gateway core
 from _core import *
 from _core import _SHUTDOWN
+from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response
+
 from auth_store import get_user_by_id
 from routers.observability import (
     _COLLECTOR_TOKEN_MISSING_ERROR,
-    _INTELLIGENCE_ALERT_CONDITION_TYPES,
     _INTELLIGENCE_ALERT_ACTIONS,
-    _build_auto_intelligence_context,
+    _INTELLIGENCE_ALERT_CONDITION_TYPES,
+    COLLECTOR_TIMEOUT,
     _build_intelligence_task_record,
     _build_namespace_scoped_collector_id,
-    _collector_auth_headers,
-    _collector_registry,
     _collection_tasks,
-    _decrypt_collector_token,
+    _collector_auth_headers,
     _delete_collection_tasks,
     _encrypt_collector_token,
     _enforce_collection_tasks_cap,
     _get_namespaced_collectors,
-    _load_collectors_from_db,
     _normalize_collection_payload,
     _normalize_intelligence_namespace,
     _persist_task,
@@ -32,9 +31,7 @@ from routers.observability import (
     _set_namespaced_collector,
     _tasks_lock,
     _validate_collector_url,
-    COLLECTOR_TIMEOUT,
 )
-from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response
 
 router = APIRouter(tags=["admin"])
 
@@ -393,10 +390,15 @@ def get_approval(
 @router.get("/policies", response_model=list[PolicyInfo])
 def list_policies(namespace: str = "default", user=Depends(verify_token)):
     ensure_namespace_access(user, namespace)
-    return sorted(
-        [policy_info_from_resource(policy) for policy in get_policies(namespace)],
-        key=lambda item: item.name,
-    )
+    try:
+        raw_policies = get_policies(namespace)
+        return sorted(
+            [policy_info_from_resource(p) for p in raw_policies],
+            key=lambda item: item.name,
+        )
+    except Exception:
+        logger.exception("Failed to list policies in namespace '%s'", namespace)
+        return []
 
 
 class PolicyRequest(BaseModel):
@@ -458,9 +460,18 @@ def create_policy(
     user=Depends(verify_token),
 ):
     ensure_namespace_access(user, namespace, "operator")
+    # Validate required fields
+    if not body.name or not body.name.strip():
+        raise HTTPException(status_code=400, detail="Policy name is required.")
     spec = build_policy_spec(body)
-    created = create_custom_resource("agentpolicies", namespace, body.name, spec)
-    return policy_info_from_resource(created)
+    try:
+        created = create_custom_resource("agentpolicies", namespace, body.name.strip(), spec)
+        return policy_info_from_resource(created)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Failed to create policy '%s/%s'", namespace, body.name)
+        raise HTTPException(status_code=502, detail=f"Failed to create policy: {exc}")
 
 
 @router.get("/policies/{policy_name}", response_model=PolicyInfo)
@@ -478,12 +489,16 @@ def update_policy(
     user=Depends(verify_token),
 ):
     ensure_namespace_access(user, namespace, "operator")
-    existing = read_custom_resource("agentpolicies", policy_name, namespace, "Policy")
+    try:
+        existing = read_custom_resource("agentpolicies", policy_name, namespace, "Policy")
+    except HTTPException as exc:
+        if exc.status_code == 404:
+            raise HTTPException(status_code=404, detail=f"Policy '{policy_name}' not found.")
+        raise
     existing_spec = existing.get("spec", {})
     updated_spec = build_policy_spec(body, existing_spec)
     try:
         from kubernetes import client
-
         updated = client.CustomObjectsApi().patch_namespaced_custom_object(
             group=RESOURCE_GROUP,
             version=RESOURCE_VERSION,
@@ -492,9 +507,17 @@ def update_policy(
             name=policy_name,
             body={"spec": updated_spec},
         )
+        return policy_info_from_resource(updated)
     except Exception as exc:
-        raise HTTPException(status_code=502, detail="Failed to update policy") from exc
-    return policy_info_from_resource(updated)
+        status = getattr(exc, "status", None)
+        if status == 404:
+            raise HTTPException(status_code=404, detail=f"Policy '{policy_name}' not found.")
+        if status == 409:
+            raise HTTPException(status_code=409, detail=f"Policy '{policy_name}' was modified by another request. Please retry.")
+        if status == 422:
+            raise HTTPException(status_code=400, detail=f"Invalid policy spec: {exc}")
+        logger.exception("Failed to update policy '%s/%s'", namespace, policy_name)
+        raise HTTPException(status_code=502, detail=f"Failed to update policy: {exc}") from exc
 
 
 @router.delete("/policies/{policy_name}", response_model=DeleteResponse)
@@ -504,7 +527,15 @@ def delete_policy(
     user=Depends(verify_token),
 ):
     ensure_namespace_access(user, namespace, "operator")
-    delete_custom_resource("agentpolicies", policy_name, namespace, "Policy")
+    try:
+        delete_custom_resource("agentpolicies", policy_name, namespace, "Policy")
+    except HTTPException as exc:
+        if exc.status_code == 404:
+            raise HTTPException(status_code=404, detail=f"Policy '{policy_name}' not found.")
+        raise
+    except Exception as exc:
+        logger.exception("Failed to delete policy '%s/%s'", namespace, policy_name)
+        raise HTTPException(status_code=502, detail=f"Failed to delete policy: {exc}")
     return DeleteResponse(status="deleted", kind="policy", name=policy_name, namespace=namespace)
 
 

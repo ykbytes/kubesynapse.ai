@@ -80,6 +80,7 @@ sys.modules.setdefault("kopf", kopf_module)
 
 # Kubernetes mocks are already set up by conftest.py — add any missing attributes
 import kubernetes.client as _k8s_client
+
 _missing_k8s_attrs = {
     "V1RoleRef": MagicMock,
     "V1Subject": MagicMock,

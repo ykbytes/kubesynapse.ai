@@ -815,9 +815,7 @@ def _parse_journal_line(line: str) -> dict[str, Any] | None:
 
         # Map journal event types to UI activity types
         activity_type = "system"
-        if "step" in event_type and "started" in event_type:
-            activity_type = "operation"
-        elif "step" in event_type and ("completed" in event_type or "failed" in event_type):
+        if ("step" in event_type and "started" in event_type) or ("step" in event_type and ("completed" in event_type or "failed" in event_type)):
             activity_type = "operation"
         elif "loop" in event_type:
             activity_type = "reasoning"

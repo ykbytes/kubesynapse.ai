@@ -1,7 +1,7 @@
 import { Wrench } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
-import { McpServerBadgeIcon } from "@/components/McpServerBadgeIcon";
+import { McpServerBadgeIcon } from "@/components/shared/McpServerBadgeIcon";
 import type { McpRegistryServer } from "@/types";
 import {
   CATEGORY_COLORS,

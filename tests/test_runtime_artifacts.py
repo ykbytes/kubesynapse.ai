@@ -1,4 +1,4 @@
-"""Artifacts tier conformance tests for KubeSynth Runtime API v1.
+"""Artifacts tier conformance tests for KubeSynapse Runtime API v1.
 
 These tests validate the **Artifacts** tier endpoints:
 

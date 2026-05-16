@@ -44,7 +44,7 @@ import type {
   WorkflowUpdatePayload,
   WorkspaceView,
 } from "@/types";
-import type { SidebarResourceItem } from "@/components/AppSidebar";
+import type { SidebarResourceItem } from "@/components/app/AppSidebar";
 import { DEFAULT_FACTORY_MODE, isFactoryWorkflowName } from "@/lib/factoryModes";
 
 // ── Context value type ──
@@ -56,6 +56,7 @@ export interface WorkspaceContextValue {
   workflows: WorkflowInfo[];
   selectedAgentDetail: AgentDetail | null;
   selectedRuntimeKind: RuntimeKind;
+  selectedPolicyName: string;
 
   // Selection
   activeView: WorkspaceView;
@@ -68,6 +69,7 @@ export interface WorkspaceContextValue {
   setAgentCreateMode: (mode: boolean) => void;
   setWorkflowCreateMode: (mode: boolean) => void;
   setSelectedAgentDetail: (detail: AgentDetail | null) => void;
+  selectPolicy: (name: string) => void;
 
   // Loading / errors
   catalogLoading: boolean;
@@ -816,7 +818,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const ctxValue = useMemo<WorkspaceContextValue>(() => ({
-    agents, policies, workflows, selectedAgentDetail, selectedRuntimeKind,
+    agents, policies, workflows, selectedAgentDetail, selectedRuntimeKind, selectedPolicyName,
     activeView, selectedAgentName, selectedWorkflowName,
     agentCreateMode, workflowCreateMode,
     setActiveView, setSelectedAgentName, setAgentCreateMode, setWorkflowCreateMode, setSelectedAgentDetail,
@@ -834,8 +836,9 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     refreshWorkspaceData, handleCreateAgent, handleSaveAgent, handleDeleteAgent,
     handleCreateWorkflow, handleUpdateWorkflow, handleDeleteWorkflow, handleTriggerWorkflow, handleCancelWorkflow, handleRetryFailedSteps,
     handleSelectResource, handleCreateNew, navigateToResource, openObservatoryForWorkflowRun, clearObservatoryFocus,
+    selectPolicy: (name: string) => setSelectedPolicyName(name),
   }), [
-    agents, policies, workflows, selectedAgentDetail, selectedRuntimeKind,
+    agents, policies, workflows, selectedAgentDetail, selectedRuntimeKind, selectedPolicyName,
     activeView, selectedAgentName, selectedWorkflowName,
     agentCreateMode, workflowCreateMode,
     catalogLoading, workspaceError, agentManageError, workflowError,

@@ -11,7 +11,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { ExpandableMarkdownEditor } from "../ExpandableMarkdownEditor";
+import { ExpandableMarkdownEditor } from "../shared/ExpandableMarkdownEditor";
 import type { AgentInfo, WorkflowStep } from "../../types";
 
 interface WorkflowStepCardProps {

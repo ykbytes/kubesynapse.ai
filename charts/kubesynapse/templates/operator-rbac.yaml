@@ -8,6 +8,10 @@ kind: ServiceAccount
 metadata:
   name: {{ include "kubesynapse.fullname" . }}-api-gateway-sa
 ---
+# ---------------------------------------------------------------------------
+# Operator ClusterRole — cluster-scoped read + namespace-scoped mutations
+# §security-P0: Tightened from cluster-wide secrets/nodes/events mutation.
+# ---------------------------------------------------------------------------
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -16,6 +20,7 @@ rules:
   - apiGroups: [kopf.dev]
     resources: [clusterkopfpeerings]
     verbs: [list, watch, patch, get]
+  # --- KubeSynapse CRDs (cluster-scoped) ---
   - apiGroups: ["kubesynapse.ai"]
     resources: [aiagents, agenttenants, agentpolicies, agentapprovals, agentworkflows]
     verbs: [create, delete, get, list, patch, update, watch]
@@ -34,9 +39,11 @@ rules:
   - apiGroups: ["kubesynapse.ai"]
     resources: [webhookreceivers/status, workflowtriggers/status]
     verbs: [get, patch, update]
+  # --- API extensions (read-only) ---
   - apiGroups: ["apiextensions.k8s.io"]
     resources: [customresourcedefinitions]
     verbs: [get, list, watch]
+  # --- Workloads (cluster-scoped to create across namespaces) ---
   - apiGroups: ["apps"]
     resources: [statefulsets]
     verbs: [create, delete, get, list, watch, patch, update]
@@ -46,21 +53,39 @@ rules:
   - apiGroups: ["coordination.k8s.io"]
     resources: [leases]
     verbs: [create, delete, get, list, watch, patch, update]
+  # --- Core resources (namespace-scoped; ClusterRole needed for cross-namespace ops) ---
   - apiGroups: [""]
-    resources: [pods, services, persistentvolumeclaims, serviceaccounts, resourcequotas, limitranges, configmaps]
+    resources: [pods, services, persistentvolumeclaims, serviceaccounts, configmaps]
     verbs: [create, delete, get, list, watch, patch, update]
+  # ResourceQuota and LimitRange — read-only (mutated via tenant controller with explicit opt-in)
+  - apiGroups: [""]
+    resources: [resourcequotas, limitranges]
+    verbs: [get, list, watch]
+  # --- Namespace read ---
   - apiGroups: [""]
     resources: [namespaces]
     verbs: [get, list, watch]
+  # --- Nodes: read-only (was: create, patch) ---
   - apiGroups: [""]
-    resources: [nodes, endpoints, events]
-    verbs: [create, get, list, watch, patch]
+    resources: [nodes]
+    verbs: [get, list, watch]
+  # --- Events: create-only (was: patch) ---
+  - apiGroups: [""]
+    resources: [events]
+    verbs: [create, get, list, watch]
+  # --- Endpoints: read-only ---
+  - apiGroups: [""]
+    resources: [endpoints]
+    verbs: [get, list, watch]
+  # --- Pod logs ---
   - apiGroups: [""]
     resources: [pods/log]
     verbs: [get]
+  # --- RBAC for tenant namespace setup ---
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources: [roles, rolebindings]
     verbs: [create, delete, get, list, watch, patch, update]
+  # --- Read-only workload introspection ---
   - apiGroups: ["apps"]
     resources: [deployments, daemonsets, replicasets]
     verbs: [get, list, watch]
@@ -73,19 +98,20 @@ rules:
   - apiGroups: ["autoscaling"]
     resources: [horizontalpodautoscalers]
     verbs: [get, list, watch]
+  # --- External secrets (cluster-scoped) ---
   - apiGroups: ["external-secrets.io"]
     resources: [externalsecrets]
     verbs: [create, delete, get, list, watch, patch, update]
-  # Operator creates per-agent NetworkPolicy egress rules that restrict which
-  # mcp-server pods are reachable based on AgentPolicy.spec.allowedMcpServers.
+  # --- NetworkPolicies (per-agent isolation rules) ---
   - apiGroups: ["networking.k8s.io"]
     resources: [networkpolicies]
     verbs: [create, delete, get, list, watch, patch, update]
-  # Operator reads the mcp-auth secret to pass the bearer token as an env var
-  # into the agent StatefulSet, so agents can authenticate to MCP servers.
+  # --- Secrets: create/patch/update cross-namespace for agent bootstrap;
+  #     delete and list require the namespace-scoped Role below.
+  #     §security-P0: was create, delete, get, patch, update cluster-wide.
   - apiGroups: [""]
     resources: [secrets]
-    verbs: [create, delete, get, patch, update]
+    verbs: [create, get, patch, update]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -100,6 +126,41 @@ subjects:
     name: {{ include "kubesynapse.fullname" . }}-operator-sa
     namespace: {{ .Release.Namespace | default "default" }}
 ---
+# ---------------------------------------------------------------------------
+# Operator Namespace-Scoped Role — secrets list/delete, configmaps
+# §security-P0: secrets list/delete restricted to the operator namespace.
+# Cross-namespace secret creation still goes through the ClusterRole above.
+# ---------------------------------------------------------------------------
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "kubesynapse.fullname" . }}-operator-local
+  namespace: {{ .Release.Namespace | default "default" }}
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [list, delete]
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "kubesynapse.fullname" . }}-operator-local-binding
+  namespace: {{ .Release.Namespace | default "default" }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "kubesynapse.fullname" . }}-operator-local
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "kubesynapse.fullname" . }}-operator-sa
+    namespace: {{ .Release.Namespace | default "default" }}
+---
+# ---------------------------------------------------------------------------
+# API Gateway ClusterRole
+# ---------------------------------------------------------------------------
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -149,9 +210,10 @@ subjects:
     name: {{ include "kubesynapse.fullname" . }}-api-gateway-sa
     namespace: {{ .Release.Namespace | default "default" }}
 ---
-# P0-2: Namespace-scoped Role for secret/configmap access in the operator
-# namespace only (provider registry, credential store).  Replaces the
-# former cluster-wide ClusterRole that allowed reading all secrets.
+# ---------------------------------------------------------------------------
+# API Gateway Namespace-Scoped Role (operator namespace)
+# §security-P0: pods/exec REMOVED — replaced by artifact-reader sidecar pattern.
+# ---------------------------------------------------------------------------
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -160,16 +222,15 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: [secrets]
-    verbs: [get, list, create, update, delete]
+    verbs: [get, list, create, update]
   - apiGroups: [""]
     resources: [configmaps]
     verbs: [get, create, update]
   - apiGroups: [""]
     resources: [pods/log]
     verbs: [get]
-  - apiGroups: [""]
-    resources: [pods/exec]
-    verbs: [create]
+  # §security-P0: pods/exec verb removed.
+  # Artifact reads now use the dedicated artifact-reader sidecar HTTP endpoint.
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

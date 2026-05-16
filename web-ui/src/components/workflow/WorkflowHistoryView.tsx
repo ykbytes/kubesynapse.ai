@@ -2,7 +2,7 @@ import { useCallback, useMemo, useState } from "react";
 import { ArrowUpRight, Download, FolderOpen, TerminalSquare } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { FileExplorer } from "../FileExplorer";
+import { FileExplorer } from "../shared/FileExplorer";
 import { RunHistoryPanel, phaseIcon, phaseColor, phaseAccent, durationSeconds, formatDuration, formatTimestampFull } from "../composer/RunHistoryPanel";
 import { useConnection } from "@/contexts/ConnectionContext";
 import { useWorkspace } from "@/contexts/WorkspaceContext";

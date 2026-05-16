@@ -1,4 +1,4 @@
-"""Session tier conformance tests for KubeSynth Runtime API v1.
+"""Session tier conformance tests for KubeSynapse Runtime API v1.
 
 These tests validate the **Session** tier endpoints:
 

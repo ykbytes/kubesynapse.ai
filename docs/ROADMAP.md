@@ -1,8 +1,8 @@
-# KubeSynth Runtime Platform — Master Roadmap
+# KubeSynapse Runtime Platform — Master Roadmap
 
 > **Updated:** 2026-05-07  
 > **Status:** Active — Run Intelligence shipped, consistency hardening in progress  
-> **Owner:** KubeSynth Scrum Master
+> **Owner:** KubeSynapse Scrum Master
 
 ---
 
@@ -409,7 +409,7 @@ Implementation details: `docs/observability-remediation-plan.md`
 ## Agent Definitions
 
 ### kubesynth-scrum-master (Me)
-**Role:** Autonomous orchestrator for the KubeSynth project  
+**Role:** Autonomous orchestrator for the KubeSynapse project  
 **Mission:** Manage sprint execution, delegate to specialist agents, verify completion, ensure production-ready deliverables  
 **Tools:** task, bash, edit, write, read, glob, grep  
 **Working Directory:** `C:\Users\ahmed\OneDrive\Desktop\repos\kubesynth\kubemininions`  

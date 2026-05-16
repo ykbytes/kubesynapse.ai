@@ -3,8 +3,12 @@ from __future__ import annotations
 
 from typing import Any, cast
 
+import trace_store
+
 # Re-import all shared symbols from the gateway core
 from _core import *
+from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response
+
 import routers.auth as auth_router
 from routers.auth import (
     MCP_HUB_SERVERS,
@@ -16,8 +20,6 @@ from routers.auth import (
     _resolve_sidecar_image,
     _resolve_sidecar_port,
 )
-import trace_store
-from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response
 
 router = APIRouter(tags=["observability"])
 

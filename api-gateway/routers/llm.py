@@ -5,32 +5,32 @@ from typing import Any, cast
 
 # Re-import all shared symbols from the gateway core
 from _core import *
+from fastapi import APIRouter, Depends, HTTPException, Response
+
 from routers.chat import (
-    LITELLM_MASTER_KEY,
+    _ALLOWED_SECRET_KEYS,
+    _LLM_PROXY_TIMEOUT,
+    _PROVIDER_META,
+    _PROVIDER_POPULAR_MODELS,
+    _PROVIDER_REGISTRY_META,
     LLM_SECRET_NAME,
     CustomProviderRequest,
     LLMKeyUpdate,
     LLMModelDeleteRequest,
     LLMModelEntry,
     ProviderCredentialUpdate,
-    _ALLOWED_SECRET_KEYS,
     _custom_provider_secret_key,
     _fetch_copilot_models,
     _fetch_opencode_go_models,
     _fetch_opencode_zen_models,
     _fetch_openrouter_models,
-    _LLM_PROXY_TIMEOUT,
     _litellm_headers,
     _normalize_provider_id,
     _provider_registry_response,
-    _PROVIDER_META,
-    _PROVIDER_POPULAR_MODELS,
-    _PROVIDER_REGISTRY_META,
     _read_or_create_provider_registry_configmap,
     _save_provider_registry_state,
     _update_provider_auth_secret,
 )
-from fastapi import APIRouter, Depends, HTTPException, Response
 
 router = APIRouter(tags=["llm"])
 

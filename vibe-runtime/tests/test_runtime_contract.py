@@ -47,7 +47,7 @@ class VibeRuntimeContractTests(unittest.TestCase):
     def test_openapi_uses_published_runtime_contract(self) -> None:
         schema = vibe_runtime_main.app.openapi()
 
-        self.assertEqual(schema["info"]["title"], "KubeSynth Runtime API")
+        self.assertEqual(schema["info"]["title"], "KubeSynapse Runtime API")
         self.assertIn("/abort", schema["paths"])
         self.assertIn("/invoke", schema["paths"])
 

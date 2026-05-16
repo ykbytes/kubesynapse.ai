@@ -329,7 +329,7 @@ class InvokeResponse(BaseModel):
 app = FastAPI(
     title="KubeSynapse Mistral Vibe Runtime",
     version="1.0.0",
-    description="Mistral Vibe agent runtime for KubeSynapse. Implements the KubeSynth Runtime API v1 contract.",
+    description="Mistral Vibe agent runtime for KubeSynapse. Implements the KubeSynapse Runtime API v1 contract.",
 )
 
 _ERROR_CODES: dict[int, str] = {

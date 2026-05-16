@@ -24,10 +24,13 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { spawn, execSync } = require("child_process");
+const { logger } = require("./logger");
 
 // Run Intelligence Layer — runtime event emitter
 const runtimeEvents = require("./runtime_events");
 const { SessionStore } = require("./session_state");
+
+const log = logger("pi-bridge");
 
 const HOST = process.env.PI_BRIDGE_HOST || "0.0.0.0";
 const PORT = parseInt(process.env.PI_BRIDGE_PORT || "8080", 10);
@@ -515,7 +518,7 @@ function startPi(config) {
     };
 
     const args = buildPiArgs(currentConfig);
-    console.log(`[pi-bridge] Starting pi subprocess: pi ${args.join(" ")}`);
+    log.info(`Starting pi subprocess: pi ${args.join(" ")}`);
 
     // Create FIFOs
     try { fs.unlinkSync(PI_STDIN_FIFO); } catch {}
@@ -558,7 +561,7 @@ function startPi(config) {
 
       piProcess.stderr.on("data", (chunk) => {
         const text = chunk.toString().trim();
-        if (text) console.log(`[pi-stderr] ${text}`);
+        if (text) log.error({ component: "pi-stderr" }, text.trim());
       });
 
       piProcess.on("error", (err) => {
@@ -569,7 +572,7 @@ function startPi(config) {
       });
 
       piProcess.on("exit", (code, signal) => {
-        console.log(`[pi-bridge] Pi subprocess exited: code=${code}, signal=${signal}`);
+        log.warn(`Pi subprocess exited: code=${code}, signal=${signal}`);
         piProcess = null;
         piReady = false;
       });
@@ -579,7 +582,7 @@ function startPi(config) {
         piReady = piProcess !== null;
         piStarting = false;
         if (piReady) {
-          console.log(`[pi-bridge] Pi subprocess ready (PID: ${piProcess.pid}, model: ${currentConfig.model || "default"}, provider: ${currentConfig.provider || "auto"})`);
+          log.info(`Pi subprocess ready (PID: ${piProcess.pid}, model: ${currentConfig.model || "default"}, provider: ${currentConfig.provider || "auto"})`);
           resolve();
         } else {
           reject(new Error("Pi process exited before becoming ready"));
@@ -595,7 +598,7 @@ async function ensurePiWithConfig(requestedConfig) {
     const newModel = requestedConfig.model || currentConfig.model;
     const newProvider = requestedConfig.provider || currentConfig.provider;
     const newThinking = requestedConfig.thinkingLevel || requestedConfig.thinking_level || currentConfig.thinkingLevel;
-    console.log(`[pi-bridge] Model config change detected: ${currentConfig.provider}/${currentConfig.model} -> ${newProvider}/${newModel}`);
+    log.info(`Model config change detected: ${currentConfig.provider}/${currentConfig.model} -> ${newProvider}/${newModel}`);
 
     // Fail any active invocations
     for (const [invId, inv] of ACTIVE_INVOCATIONS) {
@@ -835,7 +838,7 @@ function handleExtensionUIRequest(data) {
   const { id, method } = data;
 
   if (["notify", "setStatus", "setWidget", "setTitle", "set_editor_text"].includes(method)) {
-    console.log("[pi-bridge] Extension UI:", method, data.message || data.statusText || "");
+    log.info("Extension UI:", method, data.message || data.statusText || "");
     return;
   }
 
@@ -863,10 +866,10 @@ function handleExtensionUIRequest(data) {
 
   if (method === "confirm") {
     response.confirmed = true;
-    console.log("[pi-bridge] Auto-approved confirm:", data.title);
+    log.info("Auto-approved confirm:", data.title);
   } else if (method === "select") {
     response.value = (data.options && data.options[0]) || "Allow";
-    console.log("[pi-bridge] Auto-selected:", response.value);
+    log.info("Auto-selected:", response.value);
   } else if (method === "input") {
     response.value = "";
   } else if (method === "editor") {
@@ -918,14 +921,14 @@ function startStdoutReaderFromFd(fd) {
       buffer = lines.pop();
       for (const line of lines) {
         if (line.trim()) {
-          console.log("[pi-stdout]", line.trim());
+          log.info({ component: "pi-stdout" }, line.trim());
           handlePiOutput(line);
         }
       }
     });
 
     stdoutReader.on("end", () => {
-      console.log("[pi-bridge] stdout stream ended");
+      log.info("stdout stream ended");
       stdoutReader = null;
     });
 
@@ -1586,7 +1589,7 @@ async function handleRequest(req, res) {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>KubeSynth Runtime API — Swagger UI</title>
+  <title>KubeSynapse Runtime API — Swagger UI</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css">
   <style>body{margin:0;padding:0}#swagger-ui{max-width:1400px;margin:0 auto}</style>
 </head>
@@ -1634,18 +1637,18 @@ async function handleRequest(req, res) {
 let server = null;
 
 function startServer() {
-  console.log("[pi-bridge] Starting subprocess manager on", HOST + ":" + PORT);
-  console.log("[pi-bridge] Default config:", JSON.stringify(currentConfig));
+  log.info("Starting subprocess manager on", HOST + ":" + PORT);
+  log.info("Default config:", JSON.stringify(currentConfig));
 
   runtimeEvents.startEmitter();
 
   server = http.createServer(handleRequest);
   server.listen(PORT, HOST, async () => {
-    console.log("[pi-bridge] HTTP server listening on", HOST + ":" + PORT);
+    log.info("HTTP server listening on", HOST + ":" + PORT);
 
     try {
       await startPi(currentConfig);
-      console.log("[pi-bridge] Pi subprocess started successfully");
+      log.info("Pi subprocess started successfully");
     } catch (err) {
       console.error("[pi-bridge] Failed to start pi subprocess:", err.message);
       console.error("[pi-bridge] Bridge will retry when first invoke request arrives");
@@ -1657,7 +1660,7 @@ function startServer() {
 
 // Graceful shutdown
 async function shutdown(signal) {
-  console.log(`[pi-bridge] Received ${signal}, shutting down...`);
+  log.info(`Received ${signal}, shutting down...`);
   runtimeEvents.stopEmitter();
   await stopPi();
   if (!server) {
@@ -1665,7 +1668,7 @@ async function shutdown(signal) {
     return;
   }
   server.close(() => {
-    console.log("[pi-bridge] HTTP server closed");
+    log.info("HTTP server closed");
     process.exit(0);
   });
   // Force exit after 10 seconds

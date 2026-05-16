@@ -12,7 +12,7 @@ import {
   SheetDescription,
   SheetClose,
 } from "@/components/ui/sheet";
-import { McpServerBadgeIcon } from "@/components/McpServerBadgeIcon";
+import { McpServerBadgeIcon } from "@/components/shared/McpServerBadgeIcon";
 import { formatContainerImageDisplay } from "@/lib/mcp";
 import type { McpRegistryServer } from "@/types";
 import {

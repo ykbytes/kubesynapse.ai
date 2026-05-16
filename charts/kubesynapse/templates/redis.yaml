@@ -9,6 +9,7 @@ metadata:
     app: redis
 spec:
   replicas: 1
+  revisionHistoryLimit: 3
   selector:
     matchLabels:
       app: redis
@@ -117,4 +118,36 @@ spec:
       port: 6379
       targetPort: 6379
       name: redis
+---
+# §security-P0: Redis NetworkPolicy — restrict ingress to control-plane services only.
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kubesynapse.fullname" . }}-redis-isolation
+  labels:
+    {{- include "kubesynapse.labels" . | nindent 4 }}
+    app.kubernetes.io/component: redis
+    app: redis
+spec:
+  podSelector:
+    matchLabels:
+      app: redis
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: litellm
+        - podSelector:
+            matchLabels:
+              app: api-gateway
+        - podSelector:
+            matchLabels:
+              app: operator
+      ports:
+        - protocol: TCP
+          port: 6379
+{{- end }}
 {{- end }}

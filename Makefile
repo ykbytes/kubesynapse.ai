@@ -239,22 +239,34 @@ K8S_RELEASE ?= kubesynapse
 K8S_VALUES ?= ./deploy/values.production.yaml
 
 k8s-install:
-	NAMESPACE=$(K8S_NAMESPACE) RELEASE_NAME=$(K8S_RELEASE) VALUES_FILE=$(K8S_VALUES) ./scripts/deploy-k8s.sh install
+	@kubectl get namespace $(K8S_NAMESPACE) >/dev/null 2>&1 || kubectl create namespace $(K8S_NAMESPACE)
+	helm upgrade --install $(K8S_RELEASE) ./charts/kubesynapse --namespace $(K8S_NAMESPACE) --values $(K8S_VALUES) --wait --timeout 10m
+	@echo ""
+	@echo "✅ kubesynapse installed in namespace $(K8S_NAMESPACE)"
 
 k8s-upgrade:
-	NAMESPACE=$(K8S_NAMESPACE) RELEASE_NAME=$(K8S_RELEASE) VALUES_FILE=$(K8S_VALUES) ./scripts/deploy-k8s.sh upgrade
+	@kubectl get namespace $(K8S_NAMESPACE) >/dev/null 2>&1 || kubectl create namespace $(K8S_NAMESPACE)
+	helm upgrade $(K8S_RELEASE) ./charts/kubesynapse --namespace $(K8S_NAMESPACE) --values $(K8S_VALUES) --wait --timeout 10m
+	@echo ""
+	@echo "✅ kubesynapse upgraded in namespace $(K8S_NAMESPACE)"
 
 k8s-uninstall:
-	NAMESPACE=$(K8S_NAMESPACE) RELEASE_NAME=$(K8S_RELEASE) VALUES_FILE=$(K8S_VALUES) ./scripts/deploy-k8s.sh uninstall
+	helm uninstall $(K8S_RELEASE) --namespace $(K8S_NAMESPACE) || true
+	kubectl delete crd aiagents.kubesynapse.ai || true
+	kubectl delete crd agentpolicies.kubesynapse.ai || true
+	kubectl delete crd agentapprovals.kubesynapse.ai || true
+	kubectl delete crd agenttenants.kubesynapse.ai || true
+	kubectl delete crd agentworkflows.kubesynapse.ai || true
 
 k8s-status:
-	NAMESPACE=$(K8S_NAMESPACE) RELEASE_NAME=$(K8S_RELEASE) VALUES_FILE=$(K8S_VALUES) ./scripts/deploy-k8s.sh status
+	kubectl get pods,svc -n $(K8S_NAMESPACE)
 
 k8s-logs:
-	NAMESPACE=$(K8S_NAMESPACE) RELEASE_NAME=$(K8S_RELEASE) VALUES_FILE=$(K8S_VALUES) ./scripts/deploy-k8s.sh logs $(SERVICE)
+	kubectl logs -n $(K8S_NAMESPACE) -l app=$(or $(SERVICE),api-gateway) --tail=100 -f
 
 k8s-port-forward:
-	NAMESPACE=$(K8S_NAMESPACE) RELEASE_NAME=$(K8S_RELEASE) VALUES_FILE=$(K8S_VALUES) ./scripts/deploy-k8s.sh port-forward
+	@echo "Port-forwarding api-gateway -> http://localhost:8080"
+	kubectl port-forward svc/$(K8S_RELEASE)-api-gateway 8080:8080 -n $(K8S_NAMESPACE)
 
 # ===========================
 # Clean

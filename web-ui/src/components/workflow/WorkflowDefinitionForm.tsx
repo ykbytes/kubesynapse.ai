@@ -1,6 +1,6 @@
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { ExpandableMarkdownEditor } from "../ExpandableMarkdownEditor";
+import { ExpandableMarkdownEditor } from "../shared/ExpandableMarkdownEditor";
 
 interface WorkflowDefinitionFormProps {
   name: string;

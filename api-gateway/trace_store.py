@@ -22,6 +22,7 @@ import os
 import threading
 import time
 import uuid
+from datetime import UTC
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -1023,7 +1024,7 @@ def query_runtime_events(
     offset: int = 0,
 ) -> dict[str, Any]:
     """Filter runtime events across runs."""
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     with db_session() as session:
         query = session.query(RuntimeRunEvent)
@@ -1095,9 +1096,9 @@ def get_agent_interaction_graph(
     hours: int = 24,
 ) -> dict[str, Any]:
     """Build agent-to-agent dependency graph from A2A events."""
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
 
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    cutoff = datetime.now(UTC) - timedelta(hours=hours)
 
     with db_session() as session:
         query = session.query(RuntimeRunEvent).filter(
@@ -1158,9 +1159,9 @@ def get_spend_breakdown(
     hours: int = 24,
 ) -> list[dict[str, Any]]:
     """Aggregate token/cost spend by agent, model, runtime, namespace."""
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
 
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    cutoff = datetime.now(UTC) - timedelta(hours=hours)
 
     with db_session() as session:
         query = session.query(RuntimeRunEvent).filter(

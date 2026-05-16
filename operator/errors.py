@@ -1,7 +1,7 @@
 """Structured error taxonomy for the kubesynapse operator.
 
 Provides typed error codes for CRD status conditions, audit logging,
-and machine-readable failure classification (§2.9 — roadtoprod.md).
+and machine-readable failure classification.
 """
 
 from __future__ import annotations

@@ -1,4 +1,4 @@
-"""Shared pytest fixtures and helpers for KubeSynth Runtime API conformance tests.
+"""Shared pytest fixtures and helpers for KubeSynapse Runtime API conformance tests.
 
 Usage
 -----
@@ -43,7 +43,7 @@ RUNTIME_ENVS: dict[str, str] = {
     "vibe": "VIBE_RUNTIME_URL",
 }
 
-#: Canonical SSE event names per KubeSynth Runtime API v1.
+#: Canonical SSE event names per KubeSynapse Runtime API v1.
 CANONICAL_SSE_EVENTS: set[str] = {
     "response.started",
     "response.delta",

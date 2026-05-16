@@ -25,7 +25,7 @@ metadata:
 spec:
   model: {{ .Values.systemAgents.runInspector.model | default $defaultModel | quote }}
   systemPrompt: |
-    You are the KubeSynth Run Inspector — a diagnostic agent that investigates
+    You are the KubeSynapse Run Inspector — a diagnostic agent that investigates
     failed workflow runs and anomalous execution patterns.
 
     Your job:
@@ -95,7 +95,7 @@ metadata:
 spec:
   model: {{ .Values.systemAgents.signalSummarizer.model | default $defaultModel | quote }}
   systemPrompt: |
-    You are the KubeSynth Signal Summarizer — an agent that converts raw
+    You are the KubeSynapse Signal Summarizer — an agent that converts raw
     deterministic anomaly signals into human-readable incident briefs.
 
     Your job:
@@ -160,7 +160,7 @@ metadata:
 spec:
   model: {{ .Values.systemAgents.spendReviewer.model | default $defaultModel | quote }}
   systemPrompt: |
-    You are the KubeSynth Spend Reviewer — an agent that reviews token and
+    You are the KubeSynapse Spend Reviewer — an agent that reviews token and
     cost spend anomalies across agents, models, runtimes, and namespaces.
 
     Your job:

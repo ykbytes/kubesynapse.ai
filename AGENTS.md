@@ -48,7 +48,9 @@ This file gives AI coding agents the minimum repo-specific context needed to wor
 - For auth or secret work, inspect both application code and chart wiring, especially [charts/kubesynapse/templates/api-gateway.yaml](charts/kubesynapse/templates/api-gateway.yaml) and [charts/kubesynapse/templates/external-secrets.yaml](charts/kubesynapse/templates/external-secrets.yaml).
 - System agents are installed as post-install and post-upgrade Helm hooks. Do not rename or remove them casually.
 - Local and air-gapped installs must account for the LiteLLM image preload called out in [charts/kubesynapse/README.md](charts/kubesynapse/README.md).
-- The gateway container starts `uvicorn main:app`. [api-gateway/main.py](api-gateway/main.py) re-exports the app, while [api-gateway/main_old.py](api-gateway/main_old.py) still exists as a large legacy implementation surface. Check the Dockerfile before changing entrypoints.
+- The gateway container starts ``uvicorn main:app``. The FastAPI application is defined in
+  ``api-gateway/_core.py`` (with router modules under ``api-gateway/routers/``) and
+  re-exported by ``api-gateway/main.py``.
 - The root Makefile uses POSIX shell constructs. On Windows, prefer Git Bash, WSL, or the equivalent direct component commands if `make` is not running under a POSIX shell.
 
 ## Conventions

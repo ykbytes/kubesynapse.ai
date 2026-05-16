@@ -1,8 +1,8 @@
 openapi: "3.0.3"
 info:
-  title: KubeSynth Runtime API
+  title: KubeSynapse Runtime API
   description: |
-    Standard API contract for KubeSynth agent runtimes.
+    Standard API contract for KubeSynapse agent runtimes.
     Every runtime (opencode, pi, vibe, or custom) MUST implement at least the Core tier.
     Runtimes advertise their supported capabilities via GET /capabilities.
 
@@ -21,7 +21,7 @@ info:
     Every error response includes a `trace_id` for debugging.
   version: "1.0.0"
   contact:
-    name: KubeSynth
+    name: KubeSynapse
     url: https://github.com/anomalyco/opencode
   license:
     name: Apache 2.0

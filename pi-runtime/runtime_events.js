@@ -15,6 +15,9 @@
 
 const http = require("http");
 const crypto = require("crypto");
+const { logger } = require("./logger");
+
+const log = logger("pi-runtime-events");
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -175,7 +178,7 @@ function startEmitter() {
   if (running || !EMIT_ENABLED) return;
   running = true;
   flushLoop();
-  console.log(`[pi-runtime-events] Emitter started → ${API_GATEWAY_URL}`);
+  log.info(`Emitter started → ${API_GATEWAY_URL}`);
 }
 
 function stopEmitter() {
@@ -186,7 +189,7 @@ function stopEmitter() {
   if (queue.length > 0) {
     sendBatch(queue.splice(0));
   }
-  console.log(`[pi-runtime-events] Emitter stopped (sent=${sentCount}, dropped=${droppedCount})`);
+  log.info(`Emitter stopped (sent=${sentCount}, dropped=${droppedCount})`);
 }
 
 function emitRunStarted(executionId, opts = {}) {

@@ -1,4 +1,4 @@
-# OpenCode Runtime for KubeSynth
+# OpenCode Runtime for KubeSynapse
 # Multi-stage: official opencode binary + Python wrapper
 #
 # To update the opencode version:

@@ -1,7 +1,7 @@
-# KubeSynth Runtime API Specification v1.0.0
+# KubeSynapse Runtime API Specification v1.0.0
 
 > **Contract Version:** `v1`  
-> **Purpose:** Define the minimum API surface every KubeSynth runtime MUST implement to be compatible with the KubeSynapse platform.
+> **Purpose:** Define the minimum API surface every KubeSynapse runtime MUST implement to be compatible with the KubeSynapse platform.
 
 ## Design Principles
 
@@ -31,14 +31,14 @@
 ```yaml
 openapi: "3.0.3"
 info:
-  title: KubeSynth Runtime API
+  title: KubeSynapse Runtime API
   description: |
-    Standard API contract for KubeSynth agent runtimes.
+    Standard API contract for KubeSynapse agent runtimes.
     Every runtime (opencode, pi, vibe, or custom) MUST implement at least the Core tier.
     Runtimes advertise their supported capabilities via GET /capabilities.
   version: "1.0.0"
   contact:
-    name: KubeSynth
+    name: KubeSynapse
     url: https://github.com/anomalyco/opencode
   license:
     name: Apache 2.0

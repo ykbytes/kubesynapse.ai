@@ -65,6 +65,7 @@ metadata:
     app: web-ui
 spec:
   replicas: {{ .Values.webUi.replicaCount }}
+  revisionHistoryLimit: {{ .Values.webUi.revisionHistoryLimit | default 3 }}
   selector:
     matchLabels:
       app: web-ui

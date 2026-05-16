@@ -519,9 +519,7 @@ def _build_live_target_status(*, namespace: str, spec: dict[str, Any]) -> dict[s
     last_scrape_error = str(connector_snapshot.get("lastScrapeError") or "").strip()
 
     phase = "Pending"
-    if not connector_snapshot.get("exists"):
-        phase = "Failed"
-    elif ready == "False":
+    if not connector_snapshot.get("exists") or ready == "False":
         phase = "Failed"
     elif ready == "True" and last_scrape_error:
         phase = "Degraded"

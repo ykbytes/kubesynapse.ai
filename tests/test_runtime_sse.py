@@ -1,4 +1,4 @@
-"""SSE event taxonomy conformance tests for KubeSynth Runtime API v1.
+"""SSE event taxonomy conformance tests for KubeSynapse Runtime API v1.
 
 These tests validate that ``POST /invoke/stream`` produces Server-Sent Events
 following the canonical taxonomy defined in the Runtime API contract:

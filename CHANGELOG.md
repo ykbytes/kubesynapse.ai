@@ -275,7 +275,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - `deploy/README.md` — comprehensive deployment guide with quick start, troubleshooting, production checklist
   - Makefile targets: `compose-up`, `compose-down`, `compose-build`, `compose-logs`, `compose-status`, `k8s-install`, `k8s-upgrade`, `k8s-uninstall`, `k8s-status`, `k8s-logs`, `k8s-port-forward`
 - **Dockerfile updates**:
-  - `api-gateway/Dockerfile` — includes `trace_store.py`, `traces_router.py`, `constants.py`, `utils.py`
+  - `api-gateway/Dockerfile` — includes `trace_store.py`, `traces_router.py`
   - `operator/Dockerfile` — includes `trace_client.py`, `circuit_breaker.py`
   - `opencode-runtime/Dockerfile` — includes `memory/` package
   - `.dockerignore` files expanded (IDE files, venv, logs, OS files)

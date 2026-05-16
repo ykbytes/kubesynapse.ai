@@ -1,1 +1,1 @@
-"""KubeSynth runtime conformance test package."""
+"""KubeSynapse runtime conformance test package."""

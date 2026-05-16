@@ -10,6 +10,7 @@ metadata:
     app: nats
 spec:
   replicas: 1
+  revisionHistoryLimit: 3
   selector:
     matchLabels:
       app: nats
@@ -100,4 +101,44 @@ spec:
       port: 8222
       targetPort: 8222
       name: monitor
+---
+# §security-P0: NATS NetworkPolicy — restrict ingress to control-plane + workers.
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kubesynapse.fullname" . }}-nats-isolation
+  labels:
+    {{- include "kubesynapse.labels" . | nindent 4 }}
+    app.kubernetes.io/component: nats
+    app: nats
+spec:
+  podSelector:
+    matchLabels:
+      app: nats
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: api-gateway
+        - podSelector:
+            matchLabels:
+              app: operator
+        - podSelector:
+            matchLabels:
+              app: operator-worker
+      ports:
+        - protocol: TCP
+          port: 4222
+    # Monitor port — internal only
+    - from:
+        - podSelector:
+            matchLabels:
+              app: operator
+      ports:
+        - protocol: TCP
+          port: 8222
+{{- end }}
 {{- end }}

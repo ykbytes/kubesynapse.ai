@@ -666,6 +666,15 @@ def run_workflow_watchdog(
     del kwargs
 
     current_status = status or {}
+    phase = str(current_status.get("phase", "") or "")
+
+    # §reliability-P1: Short-circuit for terminal phases to avoid Kopf event spam.
+    # Completed and cancelled workflows do not need watchdog polling.
+    # NOTE: "failed" is intentionally NOT short-circuited — auto-retry logic
+    # in the watchdog can re-enqueue recoverable failures.
+    if phase in {"completed", "cancelled"}:
+        return
+
     worker_job = current_status.get("workerJob", {}) or {}
     job_state = read_job_state(
         str(worker_job.get("name") or ""),
