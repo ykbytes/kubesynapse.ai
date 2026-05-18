@@ -1,5 +1,6 @@
 import { useState, useMemo } from "react";
-import { AlertCircle, ArrowLeft, Check, KeyRound, LayoutPanelTop, Loader2, ShieldCheck, UserPlus, X } from "lucide-react";
+import { AlertCircle, ArrowLeft, Check, KeyRound, Loader2, ShieldCheck, UserPlus, X } from "lucide-react";
+import { KubeSynapseLogo } from "@/components/shared/KubeSynapseLogo";
 import { useConnection } from "@/contexts/ConnectionContext";
 import { BRAND } from "@/lib/brand";
 import {
@@ -103,7 +104,7 @@ export function AuthPage({ onBack }: AuthPageProps) {
       {/* Logo + title */}
       <div className="mb-8 flex flex-col items-center gap-3 animate-fade-in">
         <div className="flex h-14 w-14 items-center justify-center rounded-xl bg-primary/10 text-primary animate-bounce-in">
-          <LayoutPanelTop className="h-8 w-8" />
+          <KubeSynapseLogo className="h-8 w-8" />
         </div>
         <div className="text-center">
           <h1 className="text-2xl font-bold tracking-tight text-foreground">{BRAND.name}</h1>

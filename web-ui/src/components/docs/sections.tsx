@@ -39,7 +39,7 @@ function GettingStartedSection() {
           { label: "Min Helm", value: "3.12+" },
           { label: "Runtime", value: "OpenCode" },
           { label: "CRD Kind", value: "AIAgent" },
-          { label: "API Base", value: "/api" },
+          { label: "API Base", value: "/api/v1" },
         ]}
       />
       <div id="gs-prerequisites">
@@ -289,14 +289,20 @@ function ArchitectureSection() {
             ["ObservationTarget", "Namespaced", "Declares what is being observed."],
             ["ObservationPolicy", "Namespaced", "Declares how collected telemetry is evaluated."],
             ["ObservationReport", "Namespaced", "Stores the resulting health or anomaly output."],
+            ["McpConnection", "Namespaced", "Defines a connection to an MCP server (transport, auth, capabilities)."],
+            ["WebhookReceiver", "Namespaced", "Receives external webhook events with signature verification and IP filtering."],
+            ["WorkflowTrigger", "Namespaced", "Triggers workflows based on webhook events or schedule criteria."],
           ]}
         />
         <MermaidDiagram
           chart={`erDiagram
     AIAgent ||--o{ AgentPolicy : references
     AIAgent ||--o{ AgentApproval : creates
+    AIAgent ||--o{ McpConnection : uses
     AgentWorkflow ||--o{ AIAgent : steps_use
     AgentWorkflow ||--o{ AgentApproval : gates_with
+    AgentWorkflow ||--o{ WorkflowTrigger : launched_by
+    WorkflowTrigger ||--o{ WebhookReceiver : listens_to
     AIAgent ||--o{ ConnectorPlugin : observes_via
     ConnectorPlugin ||--o{ ObservationTarget : targets
     ObservationTarget ||--o{ ObservationPolicy : evaluates_with
@@ -1327,7 +1333,7 @@ agentctl import -f bundle.yaml          # Import a YAML bundle
 
 # ── System ──
 agentctl health                         # System health check
-agentctl login                          # Authenticate (enterprise auth setups)
+  agentctl login                          # Authenticate (OIDC/SAML/production auth setups)
 agentctl logs my-agent                  # Stream agent pod logs`} lang="bash" />
     </div>
   );
@@ -1745,7 +1751,7 @@ function TracesSection() {
         <DocsTable headers={["Event Field", "Type", "Description"]} rows={[
           ["event_id", "string", "Unique event ID (upsert key)"],
           ["namespace", "string", "Namespace of the agent or workflow"],
-          ["runtime_kind", "string", "openencode | pi | mistral-vibe"],
+          ["runtime_kind", "string", "opencode | pi | mistral-vibe"],
           ["event_type", "string", "error | warning | metric | lifecycle"],
           ["agent_name", "string", "Agent that produced the event"],
           ["session_id", "string", "Session this event belongs to"],

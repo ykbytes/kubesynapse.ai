@@ -43,24 +43,10 @@ No local-only toy frameworks. No vendor lock-in. Just your cluster, your models,
 
 ### Prerequisites
 
-- [Docker Desktop](https://www.docker.com/products/docker-desktop/) or [Kind](https://kind.sigs.k8s.io/) + [Helm](https://helm.sh/) 3.x
+- [Kind](https://kind.sigs.k8s.io/) or any Kubernetes cluster + [Helm](https://helm.sh/) 3.x
 - 8 GB RAM, 4 CPUs
 
-### Option 1 — Docker Compose (fastest, no K8s needed)
-
-```bash
-# Clone and start
-git clone https://github.com/ykbytes/kubesynapse.ai.git
-cd kubesynapse.ai
-docker compose up -d
-
-# Open the web console
-open http://localhost:3000
-```
-
-Services running: API Gateway (`:8080`), Web UI (`:3000`), LiteLLM (`:4000`), PostgreSQL, Redis, NATS, Qdrant, OpenCode runtime — all pre-wired.
-
-### Option 2 — Kubernetes with Helm (production-style)
+### Local Kind Deployment
 
 ```bash
 # Create a local Kind cluster (skip if you have one)
@@ -270,9 +256,6 @@ make helm-lint
 
 # Build web UI
 make ui-build
-
-# Start dev stack
-make compose-up
 
 # Targeted checks
 cd api-gateway && python -m pytest tests/ -v

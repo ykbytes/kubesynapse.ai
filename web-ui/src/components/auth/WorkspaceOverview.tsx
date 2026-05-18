@@ -4,12 +4,12 @@ import {
   Bot,
   CheckCircle2,
   GitBranch,
-  LayoutPanelTop,
   Plus,
   Settings2,
   ShieldCheck,
   ShieldAlert,
 } from "lucide-react";
+import { KubeSynapseLogo } from "@/components/shared/KubeSynapseLogo";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -164,7 +164,7 @@ export function WorkspaceOverview({
           <div className="space-y-2">
             <div className="flex items-center gap-3">
               <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-primary/20 bg-primary/10 text-primary">
-                <LayoutPanelTop className="h-5 w-5" />
+                <KubeSynapseLogo className="h-5 w-5" />
               </div>
               <div>
                 <CardTitle className="text-xl tracking-tight">Operational command center</CardTitle>

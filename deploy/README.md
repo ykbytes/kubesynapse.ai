@@ -1,24 +1,39 @@
 # KubeSynapse Deployment Guide
 
-## Quick Start (Docker Compose)
+## Quick Start (Kind + Helm)
 
-The fastest way to run KubeSynapse locally:
+The fastest way to run KubeSynapse locally for development:
 
 ```bash
-# Start the full stack
-docker compose up -d
+kind create cluster
 
-# Or use Make
-make compose-up
+# Build images
+docker build -t kubesynapse/kubesynapse-api-gateway:latest api-gateway/
+docker build -t kubesynapse/kubesynapse-operator:latest operator/
+docker build -t kubesynapse/kubesynapse-web-ui:latest web-ui/
 
-# View status
-make compose-status
+# Load into Kind
+kind load docker-image kubesynapse/kubesynapse-api-gateway:latest kubesynapse/kubesynapse-operator:latest kubesynapse/kubesynapse-web-ui:latest
 
-# View logs
-make compose-logs
+# Generate secrets
+export LITELLM_KEY=$(openssl rand -hex 16)
+export API_TOKEN=$(openssl rand -hex 32)
+export DB_PASS=$(openssl rand -hex 16)
+export JWT_SECRET=$(openssl rand -hex 32)
 
-# Stop
-make compose-down
+# Install
+helm install kubesynapse ./charts/kubesynapse \
+  --namespace kubesynapse --create-namespace \
+  --values deploy/values.kind.quickstart.yaml \
+  --set global.imagePullPolicy=Never \
+  --set platformSecrets.native.litellmMasterKey="$LITELLM_KEY" \
+  --set platformSecrets.native.apiGatewaySharedToken="$API_TOKEN" \
+  --set platformSecrets.native.databasePassword="$DB_PASS" \
+  --set platformSecrets.native.jwtSecret="$JWT_SECRET" \
+  --wait --timeout 3m
+
+# Connect
+kubectl port-forward -n kubesynapse svc/kubesynapse-web-ui 3000:80
 ```
 
 ### Services
@@ -28,20 +43,11 @@ make compose-down
 | API Gateway | http://localhost:8080 | FastAPI backend |
 | Web UI | http://localhost:3000 | React frontend |
 | LiteLLM | http://localhost:4000 | Model proxy |
-| OpenCode RT | http://localhost:8081 | Default local agent runtime profile |
+| OpenCode RT | http://localhost:8081 | Default agent runtime |
 | Postgres | localhost:5432 | State + trace database |
 | Redis | localhost:6379 | Cache / sessions |
 | NATS | localhost:4222 | Message bus |
 | Qdrant | localhost:6333 | Vector DB |
-
-The default local compose profile exposes the OpenCode runtime only. Pi and Mistral Vibe remain supported in Kubernetes and are selected per agent through `spec.runtime.kind`.
-
-### Default Credentials
-
-- **Shared Token**: `dev-shared-token-change-in-production`
-- **Postgres**: `kubesynapse` / `kubesynapse-dev-password`
-
-⚠️ **Change these before exposing to the internet.**
 
 ---
 
@@ -171,17 +177,6 @@ helm package ./charts/kubesynapse -d ./dist
 ---
 
 ## Configuration
-
-### Docker Compose
-
-Edit `docker-compose.yml` or create a `.env` file:
-
-```env
-API_GATEWAY_SHARED_TOKEN=your-secure-token-here
-DATABASE_URL=postgresql+psycopg://user:pass@postgres:5432/db
-OPENAI_API_KEY=sk-...
-ANTHROPIC_API_KEY=sk-ant-...
-```
 
 ### Helm Values
 

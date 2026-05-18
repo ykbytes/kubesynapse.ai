@@ -1,4 +1,5 @@
-import { Check, CheckCircle2, ChevronDown, LayoutPanelTop, Loader2, Palette, XCircle } from "lucide-react";
+import { Check, CheckCircle2, ChevronDown, Loader2, Palette, XCircle } from "lucide-react";
+import { KubeSynapseLogo } from "@/components/shared/KubeSynapseLogo";
 import { useState, useEffect, useCallback } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -218,7 +219,7 @@ export function TopBar({
       <header className="sticky top-0 z-50 flex h-10 flex-wrap items-center justify-between gap-x-2 gap-y-1 border-b border-sidebar-border/80 bg-sidebar/88 px-3 py-0 shadow-sm backdrop-blur-xl animate-slide-from-left md:flex-nowrap md:px-4">
         <div className="flex min-w-0 flex-1 items-center gap-2">
           <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-border/70 bg-card/72 text-primary shadow-sm">
-            <LayoutPanelTop className="h-3.5 w-3.5" />
+            <KubeSynapseLogo className="h-3.5 w-3.5" />
           </div>
           <div className="min-w-0">
             <p className="text-[9px] font-medium uppercase tracking-[0.24em] text-muted-foreground">Operations Console</p>

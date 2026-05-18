@@ -28,7 +28,7 @@ function MiniToc({
 
   return (
     <div className="space-y-3">
-      <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground/70">On this page</p>
+      <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">On this page</p>
       <nav className="space-y-1" aria-label="On this page">
         {section.subsections.map((sub) => (
           <button
@@ -231,7 +231,7 @@ export function DocumentationPanel() {
                       <h2 className="text-lg font-bold tracking-tight text-foreground sm:text-xl">{section.title}</h2>
                     </div>
                     <div className="my-5 h-px bg-border" />
-                    <div className="docs-content min-w-0 max-w-full break-words text-sm leading-7 text-foreground/85 [overflow-wrap:anywhere] [&>*]:min-w-0 sm:text-[15px]">{section.content}</div>
+                    <div className="docs-content min-w-0 max-w-full break-words text-sm leading-7 text-foreground [overflow-wrap:anywhere] [&>*]:min-w-0 sm:text-[15px]">{section.content}</div>
                   </section>
                 ))}
               </div>
@@ -246,7 +246,7 @@ export function DocumentationPanel() {
               <MiniToc activeSection={activeSection} onClick={scrollToSection} />
 
               <div className="space-y-3">
-                <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground/70">Quick Links</p>
+                <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Quick Links</p>
                 <nav className="space-y-1.5" aria-label="Quick links">
                   <a
                     href="https://github.com/ykbytes/kubesynapse.ai"

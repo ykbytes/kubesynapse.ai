@@ -324,10 +324,10 @@ When a check fires, an `ObservationReport` CR is created with severity classific
 
 ## Demo Workflow
 
-Use `examples/observatory-demo.yaml` in the repo root. It defines a 4-step workflow that researches Kubernetes scheduling from two angles, synthesizes findings, and does a quality review. Each step is verified.
+Use `examples/observability-demo-fire.yaml`. It defines a 4-step workflow that researches Kubernetes scheduling from two angles, synthesizes findings, and does a quality review.
 
 ```bash
-kubectl apply -f observatory-demo.yaml -n default
+kubectl apply -f examples/observability-demo-fire.yaml -n default
 # Wait for the workflow to appear in the UI, then trigger it
 ```
 

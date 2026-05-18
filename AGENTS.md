@@ -32,7 +32,6 @@ This file gives AI coding agents the minimum repo-specific context needed to wor
 ## Build, Test, and Validation
 
 - Root checks: `make test`, `make lint`, `make helm-lint`, `make helm-template`, `make ui-build`
-- Local stack: `make compose-up`, `make compose-down`, `make compose-status`, `make compose-logs`
 - Image and packaging: `make docker-build`, `make helm-package`
 - Targeted checks:
   - `cd api-gateway && python -m pytest tests/ -v`

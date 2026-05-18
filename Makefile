@@ -13,7 +13,6 @@
 	docker-push-mcp-browser docker-push-mcp-database docker-push-mcp-git \
 	docker-push-mcp-github-adapter docker-push-mcp-kubernetes docker-push-mcp-messaging \
 	docker-push-mcp-rag \
-	compose-up compose-down compose-build compose-logs compose-status \
 	k8s-install k8s-upgrade k8s-uninstall k8s-status
 
 CONTAINER_CLI ?= docker
@@ -200,35 +199,6 @@ undeploy:
 	kubectl delete crd agentapprovals.kubesynapse.ai || true
 	kubectl delete crd agenttenants.kubesynapse.ai || true
 	kubectl delete crd agentworkflows.kubesynapse.ai || true
-
-# ===========================
-# Docker Compose (local dev)
-# ===========================
-
-COMPOSE_FILE ?= docker-compose.yml
-
-compose-up:
-	docker compose -f $(COMPOSE_FILE) up -d
-	@echo ""
-	@echo "kubesynapse is running:"
-	@echo "  API Gateway:  http://localhost:8080"
-	@echo "  Web UI:       http://localhost:3000"
-	@echo "  LiteLLM:      http://localhost:4000"
-
-compose-down:
-	docker compose -f $(COMPOSE_FILE) down
-
-compose-down-volumes:
-	docker compose -f $(COMPOSE_FILE) down -v
-
-compose-build:
-	docker compose -f $(COMPOSE_FILE) build --no-cache
-
-compose-logs:
-	docker compose -f $(COMPOSE_FILE) logs -f
-
-compose-status:
-	docker compose -f $(COMPOSE_FILE) ps
 
 # ===========================
 # Kubernetes deployment

@@ -51,14 +51,14 @@ export function CodeBlock({ code, lang = "bash", showLineNumbers = true }: CodeB
     <div className="group relative my-5 max-w-full overflow-hidden rounded-lg border border-border bg-[oklch(0.11_0.005_264)]">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/60 px-3 py-2 sm:px-4">
         <div className="flex flex-wrap items-center gap-2.5">
-          <span className="text-[11px] font-semibold uppercase tracking-wider text-foreground/80">{lang}</span>
+          <span className="text-[11px] font-semibold uppercase tracking-wider text-foreground">{lang}</span>
           <span className="text-[11px] text-border">|</span>
-          <span className="text-[11px] text-foreground/80">{lines.length} lines</span>
+          <span className="text-[11px] text-foreground">{lines.length} lines</span>
         </div>
         <Button
           variant="ghost"
           size="icon"
-          className="h-7 w-7 text-muted-foreground/60 hover:text-foreground"
+          className="h-7 w-7 text-foreground/70 hover:text-foreground"
           onClick={handleCopy}
           aria-label={copied ? "Copied" : "Copy code"}
         >
@@ -74,7 +74,7 @@ export function CodeBlock({ code, lang = "bash", showLineNumbers = true }: CodeB
                 return (
                   <div key={i} {...lineProps} className="table-row">
                     {showLineNumbers && (
-                      <span className="hidden select-none pr-4 text-right text-foreground/60 sm:table-cell" style={{ minWidth: "2.5rem" }}>
+                      <span className="hidden select-none pr-4 text-right text-foreground/80 sm:table-cell" style={{ minWidth: "2.5rem" }}>
                         {i + 1}
                       </span>
                     )}
@@ -112,7 +112,7 @@ export function Callout({ children, variant = "info", title }: CalloutProps) {
         <Icon className={cn("mt-0.5 h-5 w-5 shrink-0", v.iconColor)} aria-hidden="true" />
         <div className="min-w-0 space-y-1.5">
           {title && <p className={cn("text-sm font-bold", v.titleColor)}>{title}</p>}
-          <div className="text-sm leading-6 text-foreground/85 sm:leading-7">{children}</div>
+          <div className="text-sm leading-6 text-foreground sm:leading-7">{children}</div>
         </div>
       </div>
     </div>
@@ -134,10 +134,10 @@ export function DocsTable({ headers, rows }: DocsTableProps) {
                   ci > 0 && "border-t border-border/60",
                 )}
               >
-                <span className="text-[10px] font-bold uppercase tracking-wider text-foreground/85">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-foreground">
                   {headers[ci]}
                 </span>
-                <span className={cn("min-w-0 break-words text-xs", ci === 0 ? "font-medium text-foreground" : "text-foreground/80")}>
+                <span className={cn("min-w-0 break-words text-xs", ci === 0 ? "font-medium text-foreground" : "text-foreground")}>
                   {cell}
                 </span>
               </div>
@@ -152,7 +152,7 @@ export function DocsTable({ headers, rows }: DocsTableProps) {
             <thead>
               <tr className="border-b-2 border-border bg-card">
                 {headers.map((h, i) => (
-                  <th key={i} className="whitespace-nowrap px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-foreground/85">{h}</th>
+                  <th key={i} className="whitespace-nowrap px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-foreground">{h}</th>
                 ))}
               </tr>
             </thead>
@@ -165,7 +165,7 @@ export function DocsTable({ headers, rows }: DocsTableProps) {
                   {row.map((cell, ci) => (
                     <td key={ci} className={cn(
                       "align-top break-words px-4 py-3",
-                      ci === 0 ? "font-medium text-foreground" : "text-foreground/80"
+                      ci === 0 ? "font-medium text-foreground" : "text-foreground"
                     )}>{cell}</td>
                   ))}
                 </tr>
@@ -186,7 +186,7 @@ export function QuickRefCard({ title, items }: QuickRefCardProps) {
       <div className="space-y-3">
         {items.map((item, i) => (
           <div key={i} className="flex flex-col items-start gap-1 sm:flex-row sm:items-center sm:justify-between">
-            <span className="text-sm text-foreground/80">{item.label}</span>
+            <span className="text-sm text-foreground">{item.label}</span>
             <code className="block w-full max-w-full break-all whitespace-normal rounded-md bg-muted px-2.5 py-1 font-mono text-xs font-semibold text-foreground sm:w-auto sm:overflow-x-auto sm:whitespace-nowrap sm:break-normal">{item.value}</code>
           </div>
         ))}
@@ -206,7 +206,7 @@ export function StepGuide({ steps }: StepGuideProps) {
           </div>
           <div className="min-w-0">
             <h4 className="mb-1.5 font-bold text-foreground">{step.title}</h4>
-            <div className="text-sm leading-7 text-foreground/75">{step.children}</div>
+            <div className="text-sm leading-7 text-foreground">{step.children}</div>
           </div>
         </div>
       ))}
