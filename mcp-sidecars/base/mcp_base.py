@@ -22,6 +22,9 @@ from typing import Any
 from urllib.parse import urlparse
 
 from fastmcp import FastMCP
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 log = logging.getLogger("mcp-base")
 
@@ -265,6 +268,41 @@ class _HealthHandler(BaseHTTPRequestHandler):
             self.end_headers()
 
 
+class BearerAuthMiddleware(BaseHTTPMiddleware):
+    """ASGI middleware that enforces bearer token authentication.
+
+    Requests to /healthz and /readyz are exempt (k8s probes don't carry auth).
+    All other requests must include a valid Authorization: Bearer <token> header.
+    Fail-secure: if MCP_BEARER_TOKEN is not configured, ALL non-health
+    requests are denied (401).
+    """
+
+    EXEMPT_PATHS = frozenset({"/healthz", "/readyz"})
+
+    async def dispatch(self, request: Request, call_next):  # type: ignore[override]
+        if request.url.path in self.EXEMPT_PATHS:
+            return await call_next(request)
+
+        auth_header = (request.headers.get("authorization") or "").strip()
+        token: str | None = None
+        if auth_header.lower().startswith("bearer "):
+            token = auth_header[7:].strip()
+
+        if not verify_bearer_token(token):
+            log.warning(
+                "mcp_auth_denied server=%s path=%s remote=%s",
+                MCP_SERVER_TYPE,
+                request.url.path,
+                request.client.host if request.client else "unknown",
+            )
+            return JSONResponse(
+                {"error": "unauthorized", "detail": "Invalid or missing bearer token"},
+                status_code=401,
+            )
+
+        return await call_next(request)
+
+
 def _start_health_server() -> None:
     """Start a background thread serving health checks."""
     def serve() -> None:
@@ -295,10 +333,28 @@ def create_mcp_server(name: str, description: str) -> FastMCP:
 
 
 def run_server(server: FastMCP) -> None:
-    """Run the MCP server with streamable HTTP transport and health checks."""
+    """Run the MCP server with streamable HTTP transport and health checks.
+
+    Wraps the ASGI app with BearerAuthMiddleware so every request (except
+    /healthz and /readyz) must present a valid Authorization: Bearer <token>.
+    """
     _start_health_server()
-    server.run(
-        transport="streamable-http",
+    import uvicorn
+
+    asgi_app = server.http_app()  # type: ignore[attr-defined]
+    wrapped_app = BearerAuthMiddleware(asgi_app)
+
+    log.info(
+        "mcp_server_starting server=%s port=%d auth=%s",
+        MCP_SERVER_TYPE,
+        MCP_LISTEN_PORT,
+        "enabled" if MCP_BEARER_TOKEN else "TOKEN_NOT_CONFIGURED",
+    )
+
+    uvicorn.run(
+        wrapped_app,
         host="0.0.0.0",
         port=MCP_LISTEN_PORT,
+        log_level="warning",
+        access_log=False,
     )
