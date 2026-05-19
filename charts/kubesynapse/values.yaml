@@ -216,6 +216,8 @@ apiGateway:
   tls:
     enabled: false
     secretName: ""  # TLS secret name in the Ingress namespace; create via cert-manager or manually
+    # §security-P0: Never allow insecure TLS connections in production.
+    allowInsecure: false
   auth:
     mode: hybrid
     localAuthEnabled: true
@@ -223,7 +225,7 @@ apiGateway:
     jwtIssuer: kubesynapse
     accessTokenTtlSeconds: 900
     refreshTokenTtlSeconds: 604800
-    cookieSecure: false
+    cookieSecure: true
     cookieSameSite: lax
     cookieDomain: ""
     bootstrapAdminUsername: admin
@@ -308,6 +310,10 @@ redis:
     enabled: false
     size: "1Gi"
     storageClassName: ""
+  auth:
+    password: ""
+    existingSecret: ""
+    existingSecretKey: "REDIS_PASSWORD"
 
 qdrant:
   enabled: true
@@ -338,6 +344,10 @@ nats:
     limits:
       cpu: "200m"
       memory: "256Mi"
+  auth:
+    token: ""
+    existingSecret: ""
+    existingSecretKey: "NATS_TOKEN"
 
 platformSecrets:
   mode: native

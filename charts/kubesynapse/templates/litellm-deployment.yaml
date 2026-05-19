@@ -161,6 +161,12 @@ spec:
                   name: {{ include "kubesynapse.fullname" . }}-llm-api-keys
                   key: ANTHROPIC_API_KEY
                   optional: true
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kubesynapse.fullname" . }}-llm-api-keys
+                  key: REDIS_PASSWORD
+                  optional: true
             # NOTE: GITHUB_COPILOT_TOKEN intentionally omitted — the device auth
             # flow blocks LiteLLM startup for 5+ minutes when no valid token exists.
             # GitHub Copilot models will be skipped until a valid token is provided.

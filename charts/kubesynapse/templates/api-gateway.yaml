@@ -163,8 +163,20 @@ spec:
             - name: DATABASE_SQLITE_PATH
               value: /tmp/kubesynapse-gateway.db
 {{- end }}
+            - name: NATS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kubesynapse.fullname" . }}-llm-api-keys
+                  key: NATS_TOKEN
+                  optional: true
             - name: NATS_URL
-              value: "nats://{{ include "kubesynapse.fullname" . }}-nats:4222"
+              value: "nats://$(NATS_TOKEN)@{{ include "kubesynapse.fullname" . }}-nats:4222"
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kubesynapse.fullname" . }}-llm-api-keys
+                  key: REDIS_PASSWORD
+                  optional: true
             - name: QDRANT_URL
               value: "http://{{ include "kubesynapse.fullname" . }}-qdrant:6333"
             - name: LITELLM_INTERNAL_URL
