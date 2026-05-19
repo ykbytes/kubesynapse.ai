@@ -78,6 +78,10 @@ opencodeRuntime:
     tag: v2.1.0-run-intelligence
     pullPolicy: IfNotPresent
   provider: litellm
+  # §security-P0: Mount a hardened, immutable ConfigMap at /etc/kubesynapse/opencode.json.
+  # Prevents config-driven RCE via plugins, MCP commands, or provider baseURL redirect.
+  # Set to false only for development/debugging.
+  immutableConfig: true
   limits:
     maxPromptChars: 256000
     maxSystemPromptChars: 64000
@@ -117,6 +121,10 @@ piRuntime:
     repository: docker.io/kubesynapse/kubesynapse-pi-rt
     tag: v2.1.0-run-intelligence
     pullPolicy: IfNotPresent
+  # §security-P0: Mount a hardened, immutable ConfigMap at /etc/kubesynapse/pi-config/.
+  # Prevents extension loading via jiti.import(), SYSTEM.md injection, and !-prefix RCE.
+  # Set to false only for development/debugging.
+  immutableConfig: true
   # Default provider auto-detected from API keys (ANTHROPIC_API_KEY, OPENAI_API_KEY, etc.)
   provider: ""
   # Default model in provider/id format

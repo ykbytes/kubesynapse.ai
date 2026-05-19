@@ -186,7 +186,12 @@
           }
         },
         "autonomy": { "type": "object" },
-        "env": { "type": "object" }
+        "env": { "type": "object" },
+        "immutableConfig": {
+          "type": "boolean",
+          "default": true,
+          "description": "Mount a hardened, immutable ConfigMap at /etc/kubesynapse/opencode.json. Prevents config-driven RCE."
+        }
       }
     },
     "piRuntime": {
@@ -207,7 +212,12 @@
         "tools": { "type": "array", "items": { "type": "string" } },
         "noSession": { "type": "boolean", "default": false },
         "permissionLevel": { "type": "string", "default": "permissive" },
-        "env": { "type": "object" }
+        "env": { "type": "object" },
+        "immutableConfig": {
+          "type": "boolean",
+          "default": true,
+          "description": "Mount a hardened, immutable ConfigMap at /etc/kubesynapse/pi-config/. Prevents extension loading and !-prefix RCE."
+        }
       }
     },
     "mistralVibeRuntime": {

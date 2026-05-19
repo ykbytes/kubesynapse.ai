@@ -1,0 +1,34 @@
+{{/*
+§security-P0: Hardened OpenCode runtime configuration.
+Mounted read-only at /etc/kubesynapse/opencode.json to prevent
+config-driven RCE via plugins, MCP server commands, or provider
+baseURL redirect.
+*/}}
+{{- if .Values.opencodeRuntime.immutableConfig | default true }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "kubesynapse.fullname" . }}-opencode-safe-config
+  labels:
+    {{- include "kubesynapse.labels" . | nindent 4 }}
+    app.kubernetes.io/component: opencode-runtime-config
+  annotations:
+    helm.sh/resource-policy: keep
+immutable: true
+data:
+  opencode.json: |
+    {
+      "plugin": [],
+      "permission": {
+        "bash": "ask",
+        "external_directory": "deny",
+        "edit": "ask",
+        "write": "ask",
+        "webfetch": "deny",
+        "websearch": "deny"
+      },
+      "mcp": {},
+      "skills": { "urls": [] },
+      "provider": {}
+    }
+{{- end }}

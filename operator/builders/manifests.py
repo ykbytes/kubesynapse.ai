@@ -73,6 +73,8 @@ from config import (
     WORKER_MEMORY_REQUEST,
     WORKER_SERVICE_ACCOUNT_NAME,
     WORKER_TTL_SECONDS_AFTER_FINISHED,
+    OPENCODE_IMMUTABLE_CONFIG,
+    PI_IMMUTABLE_CONFIG,
     serialize_env_value,
 )
 from kubernetes.client.rest import ApiException  # type: ignore[import-untyped]
@@ -419,6 +421,38 @@ def validate_runtime_configuration(runtime_kind: str, spec: dict[str, Any]) -> N
         raise kopf.PermanentError(
             "OpenCode runtime does not support spec.githubConfig in the OpenCode-only build. Use sidecar-based GitHub MCP credentials instead."
         )
+
+    # §security-P0: Reject dangerous runtime config that could enable RCE.
+    # Block !-prefix env values (Pi config RCE via shell execution).
+    pi_runtime_spec = (spec.get("runtime") or {}).get("pi") if isinstance(spec.get("runtime"), dict) else None
+    if isinstance(pi_runtime_spec, dict):
+        pi_env_spec = pi_runtime_spec.get("env")
+        if isinstance(pi_env_spec, dict):
+            for _ek, _ev in pi_env_spec.items():
+                if isinstance(_ev, str) and _ev.startswith("!"):
+                    raise kopf.PermanentError(
+                        f"AIAgent spec.runtime.pi.env.{_ek} starts with '!' — "
+                        f"this enables shell execution in Pi config and is a security risk."
+                    )
+
+    # Block plugin arrays in OpenCode configFiles (config-driven RCE).
+    opencode_runtime_spec = (spec.get("runtime") or {}).get("opencode") if isinstance(spec.get("runtime"), dict) else None
+    if isinstance(opencode_runtime_spec, dict):
+        opencode_cf = opencode_runtime_spec.get("configFiles")
+        if isinstance(opencode_cf, dict):
+            for _cf_path, _cf_content in opencode_cf.items():
+                if isinstance(_cf_content, str) and '"plugin"' in _cf_content:
+                    import re as _re
+
+                    if _re.search(r'"plugin"\s*:\s*\[', _cf_content) or _re.search(r"'plugin'\s*:\s*\[", _cf_content):
+                        _has_nonempty = _re.search(r'"plugin"\s*:\s*\[.+\]', _cf_content) or _re.search(
+                            r"'plugin'\s*:\s*\[.+\]", _cf_content
+                        )
+                        if _has_nonempty:
+                            raise kopf.PermanentError(
+                                f"AIAgent spec.runtime.opencode.configFiles contains non-empty 'plugin' "
+                                f"array in '{_cf_path}' — this enables config-driven RCE and is blocked."
+                            )
 
 
 # ---------------------------------------------------------------------------
@@ -1139,6 +1173,22 @@ def _create_pi_statefulset_spec(
     volumes = list(volumes)
     volumes.append({"name": "workspace-volume", "emptyDir": {"sizeLimit": "5Gi"}})
 
+    # §security-P0: Mount hardened immutable config read-only
+    if PI_IMMUTABLE_CONFIG:
+        release_prefix = HELM_RELEASE_NAME or "kubesynapse"
+        pi_cfg_cm_name = f"{release_prefix}-pi-safe-config"
+        volume_mounts.append(
+            {"name": "pi-immutable-config", "mountPath": "/etc/kubesynapse/pi-config/pi-config.json", "subPath": "pi-config.json", "readOnly": True}
+        )
+        volumes.append(
+            {"name": "pi-immutable-config", "configMap": {"name": pi_cfg_cm_name}}
+        )
+        # Mount empty read-only dirs to block extension/skill discovery
+        volume_mounts.append({"name": "pi-ext-block", "mountPath": "/home/piuser/.pi/agent/extensions", "readOnly": True})
+        volumes.append({"name": "pi-ext-block", "emptyDir": {}})
+        volume_mounts.append({"name": "pi-skills-block", "mountPath": "/home/piuser/.pi/agent/skills", "readOnly": True})
+        volumes.append({"name": "pi-skills-block", "emptyDir": {}})
+
     # Pi-specific environment variables
     pi_env = list(env)
     pi_env.extend(
@@ -1150,6 +1200,12 @@ def _create_pi_statefulset_spec(
             {"name": "PI_THINKING_LEVEL", "value": pi_thinking_level},
             {"name": "PI_NO_SESSION", "value": "true" if pi_no_session else "false"},
             {"name": "PI_SYSTEM_PROMPT", "value": system_prompt},
+        ]
+    )
+    if PI_IMMUTABLE_CONFIG:
+        pi_env.append({"name": "PI_CONFIG_DIR", "value": "/etc/kubesynapse/pi-config"})
+    pi_env.extend(
+        [
             {
                 "name": "LITELLM_API_KEY",
                 "valueFrom": {
@@ -1958,6 +2014,18 @@ def create_agent_statefulset_manifest(
     opencode_config_files = merged_opencode_runtime_config_files(spec)
     volume_mounts.append({"name": "workspace-volume", "mountPath": "/workspace"})
     volumes.append({"name": "workspace-volume", "emptyDir": {"sizeLimit": "5Gi"}})
+
+    # §security-P0: Mount hardened immutable config read-only
+    if OPENCODE_IMMUTABLE_CONFIG:
+        release_prefix = HELM_RELEASE_NAME or "kubesynapse"
+        cfg_cm_name = f"{release_prefix}-opencode-safe-config"
+        volume_mounts.append(
+            {"name": "opencode-immutable-config", "mountPath": "/etc/kubesynapse/opencode.json", "subPath": "opencode.json", "readOnly": True}
+        )
+        volumes.append(
+            {"name": "opencode-immutable-config", "configMap": {"name": cfg_cm_name}}
+        )
+        env.append({"name": "OPENCODE_CONFIG", "value": "/etc/kubesynapse/opencode.json"})
 
     # Build a deterministic per-agent secret name for provider bootstrap data
     provider_bootstrap_secret_name = f"{sandbox_name(name)}-opencode-provider"

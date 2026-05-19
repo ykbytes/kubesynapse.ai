@@ -168,6 +168,11 @@ spec:
             # §security-P0: tenant exec access opt-in (pods/exec, pods/portforward)
             - name: TENANT_EXEC_ACCESS
               value: {{ .Values.agentRuntime.tenantExecAccess | default false | toString | quote }}
+            # §security-P0: Immutable runtime configs (mounted read-only ConfigMaps)
+            - name: OPENCODE_IMMUTABLE_CONFIG
+              value: {{ .Values.opencodeRuntime.immutableConfig | default true | toString | quote }}
+            - name: PI_IMMUTABLE_CONFIG
+              value: {{ .Values.piRuntime.immutableConfig | default true | toString | quote }}
             - name: WORKER_ARTIFACT_SIZE
               value: {{ .Values.operator.workerArtifacts.size | quote }}
             - name: WORKER_ARTIFACT_STORAGE_CLASS

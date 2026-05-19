@@ -1,0 +1,26 @@
+{{/*
+§security-P0: Hardened Pi runtime configuration.
+Mounted read-only at /etc/kubesynapse/pi-config/ to prevent
+extension loading via jiti.import(), SYSTEM.md injection, and
+shell execution via !-prefix config values.
+*/}}
+{{- if .Values.piRuntime.immutableConfig | default true }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "kubesynapse.fullname" . }}-pi-safe-config
+  labels:
+    {{- include "kubesynapse.labels" . | nindent 4 }}
+    app.kubernetes.io/component: pi-runtime-config
+  annotations:
+    helm.sh/resource-policy: keep
+immutable: true
+data:
+  pi-config.json: |
+    {
+      "extensions": [],
+      "packages": [],
+      "permissionLevel": "strict",
+      "models": {}
+    }
+{{- end }}
