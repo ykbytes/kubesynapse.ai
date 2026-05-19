@@ -1204,9 +1204,12 @@ def _create_pi_statefulset_spec(
     permission_level = str(pi_spec.get("permissionLevel") or "permissive").strip()
     pi_env.append({"name": "KS_PERMISSION_LEVEL", "value": permission_level})
 
-    # API key env vars for pi provider auto-detection
-    # Map kubesynapse LLM secret to pi-compatible env vars
-    for provider_key in [
+    # §security-P0: Provider-scoped API key injection.
+    # When pi_provider is set, only that provider's keys are injected into the
+    # runtime pod.  When empty (auto-detect mode), all keys are injected with a
+    # WARNING logged.  This prevents a compromised runtime from exfiltrating
+    # keys for providers it was never configured to use.
+    _ALL_PI_SECRET_KEYS: list[str] = [
         "ANTHROPIC_API_KEY",
         "AZURE_OPENAI_API_KEY",
         "OPENAI_API_KEY",
@@ -1228,19 +1231,45 @@ def _create_pi_statefulset_spec(
         "MINIMAX_API_KEY",
         "MINIMAX_CN_API_KEY",
         "COHERE_API_KEY",
-    ]:
-        pi_env.append(
-            {
-                "name": provider_key,
-                "valueFrom": {
-                    "secretKeyRef": {
-                        "name": SECRET_NAME,
-                        "key": provider_key,
-                        "optional": True,
-                    }
-                },
-            }
-        )
+    ]
+    if pi_provider and pi_provider in _PI_PROVIDER_SECRET_KEYS:
+        provider_keys = list(_PI_PROVIDER_SECRET_KEYS[pi_provider])
+        for key in provider_keys:
+            pi_env.append(
+                {
+                    "name": key,
+                    "valueFrom": {
+                        "secretKeyRef": {
+                            "name": SECRET_NAME,
+                            "key": key,
+                            "optional": True,
+                        }
+                    },
+                }
+            )
+    else:
+        if not pi_provider:
+            logger.warning(
+                "Pi runtime for agent %s has no explicit provider "
+                "(PI_DEFAULT_PROVIDER is empty); all %d API keys will be "
+                "injected. Set pi.provider or PI_DEFAULT_PROVIDER to scope "
+                "key exposure.",
+                name,
+                len(_ALL_PI_SECRET_KEYS),
+            )
+        for key in _ALL_PI_SECRET_KEYS:
+            pi_env.append(
+                {
+                    "name": key,
+                    "valueFrom": {
+                        "secretKeyRef": {
+                            "name": SECRET_NAME,
+                            "key": key,
+                            "optional": True,
+                        }
+                    },
+                }
+            )
 
     # Provider-specific auth from provider registry (same pattern as OpenCode)
     provider_bootstrap_secret_name = f"{sandbox_name(name)}-pi-provider"
