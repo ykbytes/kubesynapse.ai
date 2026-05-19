@@ -118,6 +118,15 @@ def check_egress_url(url: str) -> str | None:
     if not hostname:
         return "URL has no hostname"
 
+    caps = get_capabilities()
+    network = caps.get("networkEgress") or {}
+
+    # §security-P0: Explicit deny-all mode blocks all outbound network access.
+    # When mode is "deny-all", no egress is permitted regardless of domains/ips.
+    mode = (network.get("mode") or "").lower()
+    if mode == "deny-all":
+        return f"Egress denied: code-exec sidecar has no network access"
+
     allowed_domains, allowed_cidrs = _parse_egress_allowlists()
 
     # If no allowlists configured, permit all (backward compatible)

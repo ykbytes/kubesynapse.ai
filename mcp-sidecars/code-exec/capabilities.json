@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "allowedTools": ["run_python", "run_bash", "run_node"],
   "networkEgress": {
+    "mode": "deny-all",
     "domains": [],
     "ips": [],
     "ports": []
