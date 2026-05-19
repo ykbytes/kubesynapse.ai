@@ -64,6 +64,10 @@ agentRuntime:
   hitl:
     mode: enforce
     notificationWebhookUrl: ""
+  # §security-P0: When false (default), tenant admin Roles do NOT include
+  # pods/exec or pods/portforward — prevents shell access to tenant workloads.
+  # Set to true only if you need interactive debugging within tenant namespaces.
+  tenantExecAccess: false
 
 runtimeServiceAccount:
   name: kubesynapse-agent-runtime

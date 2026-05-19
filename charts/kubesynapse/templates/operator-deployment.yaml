@@ -161,8 +161,13 @@ spec:
               value: {{ .Values.operator.workerImage.pullPolicy | default "IfNotPresent" | quote }}
             - name: IMAGE_PULL_SECRETS
               value: {{ join "," .Values.global.imagePullSecrets | quote }}
+            # §security-P0: Workers use a dedicated, minimally-privileged SA.
+            # Was: kubesynapse-operator-sa (full cluster-wide access).
             - name: WORKER_SERVICE_ACCOUNT_NAME
-              value: {{ include "kubesynapse.fullname" . }}-operator-sa
+              value: {{ include "kubesynapse.fullname" . }}-worker-sa
+            # §security-P0: tenant exec access opt-in (pods/exec, pods/portforward)
+            - name: TENANT_EXEC_ACCESS
+              value: {{ .Values.agentRuntime.tenantExecAccess | default false | toString | quote }}
             - name: WORKER_ARTIFACT_SIZE
               value: {{ .Values.operator.workerArtifacts.size | quote }}
             - name: WORKER_ARTIFACT_STORAGE_CLASS

@@ -106,12 +106,12 @@ rules:
   - apiGroups: ["networking.k8s.io"]
     resources: [networkpolicies]
     verbs: [create, delete, get, list, watch, patch, update]
-  # --- Secrets: create/patch/update cross-namespace for agent bootstrap;
-  #     delete and list require the namespace-scoped Role below.
-  #     §security-P0: was create, delete, get, patch, update cluster-wide.
+  # --- Secrets: cluster-wide read for cross-namespace secret lookups (e.g. MCP hub auth);
+  #     create/patch/update is namespace-scoped via the Role below.
+  #     §security-P0: was create, delete, get, patch, update cluster-wide; scoped down.
   - apiGroups: [""]
     resources: [secrets]
-    verbs: [create, get, patch, update]
+    verbs: [get, list, watch]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -127,9 +127,9 @@ subjects:
     namespace: {{ .Release.Namespace | default "default" }}
 ---
 # ---------------------------------------------------------------------------
-# Operator Namespace-Scoped Role — secrets list/delete, configmaps
-# §security-P0: secrets list/delete restricted to the operator namespace.
-# Cross-namespace secret creation still goes through the ClusterRole above.
+# Operator Namespace-Scoped Role — secrets full CRUD, configmaps
+# §security-P0: secrets create/patch/update moved here from ClusterRole.
+# Cross-namespace secret reads still go through the ClusterRole above.
 # ---------------------------------------------------------------------------
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -139,10 +139,10 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: [secrets]
-    verbs: [list, delete]
+    verbs: [create, delete, get, list, patch, update]
   - apiGroups: [""]
     resources: [configmaps]
-    verbs: [get, list]
+    verbs: [get, list, create, update]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -282,6 +282,50 @@ rules:
   - apiGroups: ["kubesynapse.ai"]
     resources: [agentapprovals]
     verbs: [create, get, list, watch]
+---
+# ---------------------------------------------------------------------------
+# §security-P0: Dedicated worker ServiceAccount with minimal permissions.
+# Workers must NOT inherit the operator's broad cluster-wide RBAC.
+# ---------------------------------------------------------------------------
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "kubesynapse.fullname" . }}-worker-sa
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "kubesynapse.fullname" . }}-worker-role
+rules:
+  # Workers need to update CRD status for workflows and agents
+  - apiGroups: ["kubesynapse.ai"]
+    resources: [aiagents/status, agentworkflows/status]
+    verbs: [get, patch, update]
+  # Workers need to report logs back to the gateway
+  - apiGroups: [""]
+    resources: [pods/log]
+    verbs: [get]
+  # Workers create configmaps for result reporting
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [get, create, update, patch]
+  # Workers read artifacts from PVCs
+  - apiGroups: [""]
+    resources: [persistentvolumeclaims]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "kubesynapse.fullname" . }}-worker-rolebinding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "kubesynapse.fullname" . }}-worker-role
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "kubesynapse.fullname" . }}-worker-sa
+    namespace: {{ .Release.Namespace | default "default" }}
 ---
 apiVersion: v1
 kind: ServiceAccount

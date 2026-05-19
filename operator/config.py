@@ -152,6 +152,7 @@ OPERATOR_PEERING_NAME: str = get_string_env("OPERATOR_PEERING_NAME", "kubesynaps
 
 WORKER_IMAGE: str = os.getenv("WORKER_IMAGE", "docker.io/kubesynapse/kubesynapse-operator:v1.0.0")
 WORKER_SERVICE_ACCOUNT_NAME: str = os.getenv("WORKER_SERVICE_ACCOUNT_NAME", "default").strip() or "default"
+TENANT_EXEC_ACCESS: bool = os.getenv("TENANT_EXEC_ACCESS", "").strip().lower() in ("1", "true", "yes")
 WORKER_ARTIFACT_SIZE: str = os.getenv("WORKER_ARTIFACT_SIZE", "2Gi")
 WORKER_ARTIFACT_STORAGE_CLASS: str = os.getenv("WORKER_ARTIFACT_STORAGE_CLASS", "").strip()
 WORKER_TTL_SECONDS_AFTER_FINISHED: int = get_int_env("WORKER_TTL_SECONDS_AFTER_FINISHED", 3600, minimum=0)

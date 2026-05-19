@@ -11,7 +11,7 @@ from typing import Any
 
 import kopf
 import kubernetes.client  # type: ignore[import-untyped]
-from config import OPERATOR_NAMESPACE, PROTECTED_NAMESPACES
+from config import OPERATOR_NAMESPACE, PROTECTED_NAMESPACES, TENANT_EXEC_ACCESS
 from kubernetes.client.rest import ApiException  # type: ignore[import-untyped]
 from reconcile import execute_reconcile, log_operator_event, raise_reconcile_error
 from services import (
@@ -162,7 +162,11 @@ def _reconcile_tenant(spec: dict[str, Any], name: str, logger: logging.Logger) -
                 ),
                 kubernetes.client.V1PolicyRule(
                     api_groups=[""],
-                    resources=["pods", "pods/exec", "pods/portforward", "pods/log", "services"],
+                    resources=(
+                        ["pods", "pods/exec", "pods/portforward", "pods/log", "services"]
+                        if TENANT_EXEC_ACCESS
+                        else ["pods", "pods/log", "services"]
+                    ),
                     verbs=["get", "list", "watch", "create"],
                 ),
             ],
