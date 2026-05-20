@@ -297,10 +297,27 @@ kind: ClusterRole
 metadata:
   name: {{ include "kubesynapse.fullname" . }}-worker-role
 rules:
+  # Workers must read and patch the workflow resource itself to load spec,
+  # manage pending-approval labels, and keep run state in sync.
+  - apiGroups: ["kubesynapse.ai"]
+    resources: [agentworkflows]
+    verbs: [get, list, watch, patch]
+  # Workers may need read-only agent access for workflow orchestration.
+  - apiGroups: ["kubesynapse.ai"]
+    resources: [aiagents]
+    verbs: [get, list, watch]
   # Workers need to update CRD status for workflows and agents
   - apiGroups: ["kubesynapse.ai"]
     resources: [aiagents/status, agentworkflows/status]
     verbs: [get, patch, update]
+  # Workers use Kubernetes leases for workflow/job idempotency and recovery.
+  - apiGroups: ["coordination.k8s.io"]
+    resources: [leases]
+    verbs: [create, delete, get, update]
+  # Workers inspect the prior worker Job before taking over an orphaned lease.
+  - apiGroups: ["batch"]
+    resources: [jobs]
+    verbs: [get]
   # Workers need to report logs back to the gateway
   - apiGroups: [""]
     resources: [pods/log]

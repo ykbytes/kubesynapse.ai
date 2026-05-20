@@ -3669,6 +3669,11 @@ def main() -> int:
         record_dead_letter(WORKER_KIND, TARGET_NAMESPACE, TARGET_NAME, generation, run_id, error_text)
         return 1
     finally:
+        if runtime_events is not None:
+            try:
+                runtime_events.stop_emitter()
+            except Exception:
+                logger.warning("Runtime event emitter stop failed", exc_info=True)
         stop_lease_renewal()
         release_worker_lease(WORKER_KIND, TARGET_NAME, generation)
     return 0

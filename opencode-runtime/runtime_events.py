@@ -112,22 +112,7 @@ def _sync_flush_loop() -> None:
             batch.append(event)
 
         if len(batch) >= _BATCH_MAX_SIZE or (event is None and not _sync_running and batch):
-            try:
-                resp = httpx.post(
-                    f"{_API_GATEWAY_URL}/api/v1/traces/runtime-events",
-                    json={"events": batch},
-                    headers={
-                        "Authorization": f"Bearer {_API_GATEWAY_TOKEN}",
-                        "Content-Type": "application/json",
-                    },
-                    timeout=_HTTP_TIMEOUT_S,
-                )
-                if resp.status_code in (200, 201):
-                    _sync_sent += len(batch)
-                else:
-                    logger.warning("Runtime event ingestion failed: status=%d", resp.status_code)
-            except Exception:
-                logger.warning("Runtime event batch send failed", exc_info=True)
+            _sync_flush_batch(batch)
             batch.clear()
 
 
@@ -165,6 +150,29 @@ def _sync_emit(event: dict[str, Any]) -> None:
         _sync_dropped += 1
 
 
+def _sync_flush_batch(batch: list[dict[str, Any]]) -> None:
+    """Send a batch of events to the API gateway. Used by both the background flusher and explicit flush."""
+    global _sync_sent, _sync_dropped
+    if not batch:
+        return
+    try:
+        resp = httpx.post(
+            f"{_API_GATEWAY_URL}/api/v1/traces/runtime-events",
+            json={"events": batch},
+            headers={
+                "Authorization": f"Bearer {_API_GATEWAY_TOKEN}",
+                "Content-Type": "application/json",
+            },
+            timeout=_HTTP_TIMEOUT_S,
+        )
+        if resp.status_code in (200, 201):
+            _sync_sent += len(batch)
+        else:
+            logger.warning("Runtime event ingestion failed: status=%d", resp.status_code)
+    except Exception:
+        logger.warning("Runtime event batch send failed", exc_info=True)
+
+
 def start_sync_emitter() -> None:
     global _sync_running, _sync_flusher_thread
     if _sync_running or not _EMIT_ENABLED:
@@ -184,6 +192,25 @@ def stop_sync_emitter() -> None:
     if _sync_flusher_thread:
         _sync_flusher_thread.join(timeout=10)
     logger.info("Runtime event emitter (sync) stopped (sent=%d, dropped=%d)", _sync_sent, _sync_dropped)
+
+
+def flush_sync_queue() -> None:
+    """Drain and send all queued sync events immediately.
+
+    Called after each invoke to ensure observability data reaches the
+    gateway promptly rather than waiting for the batch threshold or
+    process shutdown.
+    """
+    batch: list[dict[str, Any]] = []
+    while True:
+        try:
+            event = _sync_queue.get_nowait()
+        except Exception:
+            break
+        if event is not None:
+            batch.append(event)
+    if batch:
+        _sync_flush_batch(batch)
 
 
 # ---------------------------------------------------------------------------

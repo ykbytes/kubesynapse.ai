@@ -254,6 +254,7 @@ from runtime_events import (
     emit_run_started,
     emit_todo_updated,
     emit_tool_call,
+    flush_sync_queue,
     start_sync_emitter,
     stop_sync_emitter,
 )
@@ -721,6 +722,7 @@ def invoke(request: InvokeRequest) -> InvokeResponse:
             total_tokens=total_tokens,
             duration_ms=duration_ms,
         )
+        flush_sync_queue()
         return result
     except Exception as exc:
         emit_run_error(
@@ -728,6 +730,7 @@ def invoke(request: InvokeRequest) -> InvokeResponse:
             thread_id=thread_id,
             error=str(exc)[:2048],
         )
+        flush_sync_queue()
         raise
 
 
@@ -1051,6 +1054,7 @@ async def invoke_stream(request: InvokeRequest) -> StreamingResponse:
             total_tokens=total_tokens,
             duration_ms=duration_ms,
         )
+        flush_sync_queue()
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 

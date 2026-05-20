@@ -160,6 +160,8 @@ Each runtime has a `runtime_events` module that:
 | `GET /api/v1/traces/{execution_id}/runtime-summary` | Aggregate stats (tokens, cost, duration, errors) |
 | `GET /api/v1/traces/runtime-events` | Cross-run filtering with pagination |
 
+For workflow jobs, the semantic timeline is now expected to include the full worker lifecycle through the terminal `run.completed` or `run.error` event. The operator worker drains any queued runtime events during shutdown so short-lived jobs do not lose the tail of the run.
+
 **Timeline query parameters:**
 - `event_type` — filter by event type
 - `from_seq` — start from sequence number
@@ -303,6 +305,20 @@ When a check fires, an `ObservationReport` CR is created with severity classific
 | `tool_calls_json` | `JSONB` | All tool call records |
 | `events_json` | `JSONB` | All trace events (timeline) |
 
+### workflow_executions Table
+
+| Column | Type | Description |
+|---|---|---|
+| `id` | `VARCHAR(64)` | Unique execution ID (`exec-{uuid}`) |
+| `run_id` | `VARCHAR(128)` | Workflow run identifier mirrored from the worker |
+| `workflow_name` | `VARCHAR` | Name of the workflow |
+| `namespace` | `VARCHAR` | Target namespace |
+| `status` | `VARCHAR` | `running`, `completed`, `failed`, `cancelled` |
+| `started_at` | `TIMESTAMPTZ` | Execution start time |
+| `completed_at` | `TIMESTAMPTZ` | Execution end time |
+
+The API gateway self-heals this table at startup. If the trace tables are missing, `ensure_trace_database()` recreates them on demand. If an older PostgreSQL install still has `workflow_executions.run_id` at `VARCHAR(64)`, the gateway widens it to `VARCHAR(128)` before serving trace queries so workflow run IDs are not truncated.
+
 ### Step Record
 
 ```json
@@ -324,11 +340,23 @@ When a check fires, an `ObservationReport` CR is created with severity classific
 
 ## Demo Workflow
 
-Use `examples/observability-demo-fire.yaml`. It defines a 4-step workflow that researches Kubernetes scheduling from two angles, synthesizes findings, and does a quality review.
+Use `examples/context7-demo-agents.yaml` and `examples/context7-demo-workflow.yaml` for the currently verified end-to-end workflow path. This demo exercises Context7 MCP, workspace file writes and reads, A2A, workflow logs, execution traces, and semantic runtime events.
 
 ```bash
-kubectl apply -f examples/observability-demo-fire.yaml -n default
-# Wait for the workflow to appear in the UI, then trigger it
+kubectl apply -f examples/context7-demo-agents.yaml -n default
+kubectl apply -f examples/context7-demo-workflow.yaml -n default
+```
+
+Trigger the workflow through the gateway and inspect the resulting execution:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/workflows/context7-research-analysis/trigger?namespace=default \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"input":"Research the FastAPI dependency injection system and its middleware patterns"}'
+
+curl http://localhost:8080/api/v1/traces/executions?namespace=default&limit=20 \
+  -H "Authorization: Bearer $TOKEN"
 ```
 
 Open the **Execution Observatory** workspace in the UI. Select the completed execution to inspect:
@@ -336,6 +364,31 @@ Open the **Execution Observatory** workspace in the UI. Select the completed exe
 - **Logs tab**: Worker logs (live or archived fallback)
 - **Insights tab**: All LLM calls and tool calls with previews
 - **Compare tab**: Side-by-side execution diff
+
+For a live workflow verification run, the following API checks should all return real data for the same execution:
+
+```bash
+curl http://localhost:8080/api/v1/traces/executions/<execution_id> \
+  -H "Authorization: Bearer $TOKEN"
+
+curl http://localhost:8080/api/v1/traces/<execution_id>/timeline?limit=200 \
+  -H "Authorization: Bearer $TOKEN"
+
+curl http://localhost:8080/api/v1/traces/<execution_id>/runtime-summary \
+  -H "Authorization: Bearer $TOKEN"
+
+curl http://localhost:8080/api/v1/traces/runtime-events?namespace=default&runtime_kind=operator-worker&limit=50 \
+  -H "Authorization: Bearer $TOKEN"
+
+curl http://localhost:8080/api/v1/workflows/context7-research-analysis/runs?namespace=default \
+  -H "Authorization: Bearer $TOKEN"
+
+curl http://localhost:8080/api/v1/workflows/context7-research-analysis/runs/<run_id>/trace?namespace=default \
+  -H "Authorization: Bearer $TOKEN"
+
+curl http://localhost:8080/api/v1/workflows/context7-research-analysis/logs?namespace=default \
+  -H "Authorization: Bearer $TOKEN"
+```
 
 ## Troubleshooting
 
@@ -356,6 +409,8 @@ Open the **Execution Observatory** workspace in the UI. Select the completed exe
    # Check operator has the correct gateway URL
    kubectl get deployment kubesynapse-operator -n kubesynapse -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="API_GATEWAY_INTERNAL_URL")].value}'
    ```
+
+   Workflow workers now fall back to `API_GATEWAY_INTERNAL_URL` when `API_GATEWAY_URL` or `GATEWAY_URL` is unset. In the worker logs you should see `Runtime event emitter started -> http://...` followed by `Runtime event emitter stopped (sent=..., dropped=...)` at normal completion.
 
 3. **Old run before fix**: Pre-existing runs won't retroactively get trace data. Re-run the workflow to populate the Observatory.
 
@@ -379,9 +434,9 @@ Open the **Execution Observatory** workspace in the UI. Select the completed exe
 
 ### Worker logs show "No worker pod found"
 
-**Cause:** The API gateway's log endpoint was looking up worker pods in the workflow's namespace (e.g., `default`) instead of the operator's namespace (`kubesynapse`).
+**Cause:** The API gateway's live log lookup needs the operator namespace where workflow jobs actually run, not the workflow resource namespace.
 
-**Fix:** The log endpoint now uses `kubesynapse` namespace for pod lookups. Falls back to archived logs if live logs are unavailable.
+**Fix:** The log endpoint now uses the recorded worker job namespace and falls back to archived logs if live logs are unavailable.
 
 ### Helm upgrade breaks trace pipeline
 
@@ -405,7 +460,7 @@ All runtimes now emit structured events to the Run Intelligence Layer via their 
 
 - **opencode-runtime**: `runtime_events.py` — sync + async emitter, integrated into `/invoke`, `/invoke/stream`, lifespan
 - **pi-runtime**: `runtime_events.js` — Node.js emitter, integrated into `/invoke`, `/invoke/stream`, shutdown
-- **operator worker**: `runtime_events.py` — emits workflow/step/agent/tool events alongside existing TraceClient
+- **operator worker**: `runtime_events.py` — emits workflow/step/agent/tool events alongside existing TraceClient and drains queued terminal events during worker shutdown
 
 Events are batched, idempotent, and sanitized before being sent to `POST /api/v1/traces/runtime-events`.
 

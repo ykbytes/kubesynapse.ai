@@ -161,6 +161,27 @@ kubectl get aiagents -n kubesynapse-system
 kubectl get aiagent ks-run-inspector -n kubesynapse-system -o jsonpath='{.spec.a2a}'
 ```
 
+**Workflow runtime timeline missing terminal events:**
+```bash
+# Confirm the worker can resolve the in-cluster gateway URL
+kubectl get deployment kubesynapse-operator -n kubesynapse \
+  -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="API_GATEWAY_INTERNAL_URL")].value}'
+
+# Confirm the operator RBAC covers workflow workers
+kubectl auth can-i --as=system:serviceaccount:kubesynapse:kubesynapse-operator-sa get agentworkflows.kubesynapse.ai -n default
+kubectl auth can-i --as=system:serviceaccount:kubesynapse:kubesynapse-operator-sa create leases.coordination.k8s.io -n kubesynapse
+
+# Check the worker log for emitter startup and shutdown
+kubectl logs job/wf-<workflow-name> -n kubesynapse | grep "Runtime event emitter"
+```
+
+Expected behavior on a healthy run:
+
+- worker logs show `Runtime event emitter started -> http://...`
+- worker logs show `Runtime event emitter stopped (sent=..., dropped=...)` before lease release
+- `GET /api/v1/traces/<execution_id>/timeline` ends with `run.completed` or `run.error`
+- `GET /api/v1/traces/runtime-events?namespace=<tenant-ns>&runtime_kind=operator-worker` returns the same execution's events
+
 ---
 
 ## Alerting

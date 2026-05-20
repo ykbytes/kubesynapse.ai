@@ -20,7 +20,7 @@ import logging
 import os
 import threading
 import uuid
-from queue import Queue
+from queue import Empty, Queue
 from typing import Any
 
 import httpx
@@ -31,7 +31,12 @@ logger = logging.getLogger("operator.runtime-events")
 # Configuration
 # ---------------------------------------------------------------------------
 
-_API_GATEWAY_URL = os.getenv("API_GATEWAY_URL", os.getenv("GATEWAY_URL", "")).strip().rstrip("/")
+_API_GATEWAY_URL = (
+    os.getenv("API_GATEWAY_URL")
+    or os.getenv("GATEWAY_URL")
+    or os.getenv("API_GATEWAY_INTERNAL_URL")
+    or ""
+).strip().rstrip("/")
 _API_GATEWAY_TOKEN = (
     os.getenv("WORKER_TRACE_TOKEN")
     or os.getenv("API_GATEWAY_SHARED_TOKEN")
@@ -99,7 +104,6 @@ _dropped = 0
 
 
 def _flush_loop() -> None:
-    global _sent, _dropped
     batch: list[dict[str, Any]] = []
 
     while _running or batch:
@@ -118,23 +122,30 @@ def _flush_loop() -> None:
             should_flush = True
 
         if should_flush:
-            try:
-                resp = httpx.post(
-                    f"{_API_GATEWAY_URL}/api/v1/traces/runtime-events",
-                    json={"events": batch},
-                    headers={
-                        "Authorization": f"Bearer {_API_GATEWAY_TOKEN}",
-                        "Content-Type": "application/json",
-                    },
-                    timeout=_HTTP_TIMEOUT_S,
-                )
-                if resp.status_code in (200, 201):
-                    _sent += len(batch)
-                else:
-                    logger.warning("Runtime event ingestion failed: status=%d", resp.status_code)
-            except Exception:
-                logger.warning("Runtime event batch send failed", exc_info=True)
+            _flush_batch(batch)
             batch.clear()
+
+
+def _flush_batch(batch: list[dict[str, Any]]) -> None:
+    global _sent
+    if not batch:
+        return
+    try:
+        resp = httpx.post(
+            f"{_API_GATEWAY_URL}/api/v1/traces/runtime-events",
+            json={"events": batch},
+            headers={
+                "Authorization": f"Bearer {_API_GATEWAY_TOKEN}",
+                "Content-Type": "application/json",
+            },
+            timeout=_HTTP_TIMEOUT_S,
+        )
+        if resp.status_code in (200, 201):
+            _sent += len(batch)
+        else:
+            logger.warning("Runtime event ingestion failed: status=%d", resp.status_code)
+    except Exception:
+        logger.warning("Runtime event batch send failed", exc_info=True)
 
 
 def _emit(event: dict[str, Any]) -> None:
@@ -181,14 +192,42 @@ def start_emitter() -> None:
 
 
 def stop_emitter() -> None:
-    global _running
-    if not _running:
-        return
+    global _running, _flusher_thread
     _running = False
-    _queue.put(None)
-    if _flusher_thread:
-        _flusher_thread.join(timeout=10)
+    thread = _flusher_thread
+    if thread is not None:
+        try:
+            _queue.put_nowait(None)
+        except Exception:
+            logger.debug("Runtime event flusher wake-up signal dropped", exc_info=True)
+        try:
+            thread.join(timeout=10)
+        except RuntimeError:
+            logger.debug("Runtime event flusher thread was never started", exc_info=True)
+    flush_queue()
+    _flusher_thread = None
     logger.info("Runtime event emitter stopped (sent=%d, dropped=%d)", _sent, _dropped)
+
+
+def flush_queue() -> None:
+    """Drain and send any queued runtime events immediately."""
+
+    batch: list[dict[str, Any]] = []
+    while True:
+        try:
+            event = _queue.get_nowait()
+        except Empty:
+            break
+
+        if event is None:
+            continue
+        batch.append(event)
+        if len(batch) >= _BATCH_MAX_SIZE:
+            _flush_batch(batch)
+            batch.clear()
+
+    if batch:
+        _flush_batch(batch)
 
 
 # ---------------------------------------------------------------------------

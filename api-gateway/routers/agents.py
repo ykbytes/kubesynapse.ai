@@ -18,6 +18,136 @@ def _invoke_username(user: dict[str, Any]) -> str | None:
     return str(user.get("sub") or user.get("username") or "").strip() or None
 
 
+def _record_invoke_trace(
+    namespace: str,
+    agent_name: str,
+    agent: dict[str, Any],
+    data: dict[str, Any],
+    request_id: str,
+) -> None:
+    """Record a WorkflowExecution with LLM/tool metadata from an invoke response.
+
+    This creates an observatory-visible execution record so that direct
+    agent invokes (not just workflow steps) appear in the Execution
+    Observatory with token counts, cost, duration, and tool-call details.
+    """
+    from datetime import UTC, datetime
+
+    from trace_store import (
+        ExecutionStatus,
+        LLMCallRecord,
+        ToolCallRecord,
+        WorkflowExecution,
+        db_session,
+        ensure_trace_database,
+        utc_now,
+    )
+
+    try:
+        ensure_trace_database()
+    except Exception:
+        logger.warning("Trace database not available for invoke trace recording", exc_info=True)
+        return
+
+    thread_id = str(data.get("thread_id") or "").strip() or request_id
+    execution_id = f"exec-{thread_id[:16]}" if thread_id else f"exec-{request_id[:16]}"
+    now = utc_now()
+    metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+    token_info = metadata.get("tokens") if isinstance(metadata.get("tokens"), dict) else {}
+    if not token_info and isinstance(data.get("usage"), dict):
+        token_info = data["usage"]
+    context_budget = metadata.get("context_budget", {}) if isinstance(metadata.get("context_budget"), dict) else {}
+    time_info = metadata.get("time", {}) if isinstance(metadata.get("time"), dict) else {}
+    cost_info = metadata.get("cost", 0)
+    status = str(data.get("status", "completed") or "completed")
+    if status not in {s.value for s in ExecutionStatus}:
+        status = "completed"
+    created_ms = int(time_info.get("created", 0)) if time_info else 0
+    completed_ms = int(time_info.get("completed", 0)) if time_info else 0
+    duration_ms = (completed_ms - created_ms) if created_ms and completed_ms else None
+    prompt_tokens = int(token_info.get("input", token_info.get("prompt_tokens", 0)))
+    completion_tokens = int(token_info.get("output", token_info.get("completion_tokens", 0)))
+    total_tokens = int(token_info.get("total", token_info.get("total_tokens", 0)))
+    tool_calls = data.get("tool_calls") or []
+    tool_calls_count = len(tool_calls)
+    llm_calls_count = 1 if total_tokens > 0 else 0
+    started_at = datetime.fromtimestamp(created_ms / 1000, tz=UTC) if created_ms else now
+    completed_at = datetime.fromtimestamp(completed_ms / 1000, tz=UTC) if completed_ms else now
+    if not duration_ms and started_at and completed_at:
+        duration_ms = int((completed_at - started_at).total_seconds() * 1000)
+
+    step_id = f"step-{execution_id[:12]}"
+
+    with db_session() as session:
+        try:
+            existing = session.query(WorkflowExecution).filter_by(id=execution_id).one_or_none()
+            if existing is not None:
+                return
+            execution = WorkflowExecution(
+                id=execution_id,
+                namespace=namespace,
+                workflow_name=f"invoke-{agent_name}",
+                agent_name=agent_name,
+                run_id=request_id[:64] if request_id else execution_id,
+                status=status,
+                started_at=started_at,
+                completed_at=completed_at,
+                duration_ms=duration_ms,
+                input_summary=data.get("prompt") if isinstance(data.get("prompt"), str) else None,
+                output_summary=str(data.get("response", ""))[:4096] if data.get("response") else None,
+                total_steps=0,
+                completed_steps=0,
+                failed_steps=0,
+                total_llm_calls=llm_calls_count,
+                total_tool_calls=tool_calls_count,
+                total_tokens=total_tokens,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                estimated_cost_usd=float(cost_info) if cost_info else None,
+                triggered_by="direct-invoke",
+                error_message=data.get("error_message") or (str(data.get("detail", ""))[:4096] if data.get("detail") else None),
+            )
+            session.add(execution)
+            session.flush()
+
+            if llm_calls_count > 0:
+                model_name = str(data.get("model") or agent.get("spec", {}).get("model", "unknown"))
+                llm_record = LLMCallRecord(
+                    id=f"llm-{execution_id[:12]}",
+                    execution_id=execution_id,
+                    step_id=step_id,
+                    model=model_name,
+                    provider=model_name.split("/")[0] if "/" in model_name else None,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    total_tokens=total_tokens,
+                    cost_usd=float(cost_info) if cost_info else None,
+                    latency_ms=duration_ms,
+                    started_at=started_at,
+                )
+                session.add(llm_record)
+
+            for idx, tc in enumerate(tool_calls):
+                tc_id = f"tc-{execution_id[:12]}-{idx}"
+                tc_record = ToolCallRecord(
+                    id=tc_id,
+                    execution_id=execution_id,
+                    step_id=step_id,
+                    tool_name=str(tc.get("name", "unknown")),
+                    tool_args=tc.get("args") if isinstance(tc.get("args"), (dict, list)) else None,
+                    tool_result=str(tc.get("result", ""))[:4096] if tc.get("result") else None,
+                    error_message=str(tc.get("error", ""))[:4096] if tc.get("error") else None,
+                    duration_ms=duration_ms,
+                    started_at=started_at,
+                )
+                session.add(tc_record)
+
+            session.commit()
+        except Exception:
+            session.rollback()
+            logger.warning("Failed to record invoke trace for %s", agent_name, exc_info=True)
+
+
 def _apply_recalled_memory_to_request(
     agent_name: str,
     namespace: str,
@@ -72,7 +202,7 @@ def _record_invoke_response_side_effects(
     request_id: str,
     normalized_memory_policy: dict[str, Any],
 ) -> None:
-    usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
+    usage = data.get("usage") if isinstance(data.get("usage"), dict) else None
     agent_spec = agent.get("spec") if isinstance(agent.get("spec"), dict) else {}
     if usage or data.get("model"):
         try:
@@ -81,9 +211,9 @@ def _record_invoke_response_side_effects(
                 namespace=namespace,
                 user_id=user.get("sub"),
                 model=data.get("model") or agent_spec.get("model"),
-                prompt_tokens=int(usage.get("prompt_tokens", 0)),
-                completion_tokens=int(usage.get("completion_tokens", 0)),
-                total_tokens=int(usage.get("total_tokens", 0)),
+                prompt_tokens=int((usage or {}).get("prompt_tokens", 0)),
+                completion_tokens=int((usage or {}).get("completion_tokens", 0)),
+                total_tokens=int((usage or {}).get("total_tokens", 0)),
                 session_id=data.get("thread_id"),
                 request_id=request_id,
             )
@@ -100,6 +230,13 @@ def _record_invoke_response_side_effects(
         )
     except Exception:
         logger.warning("Failed to record runtime memory for %s", agent_name, exc_info=True)
+    _record_invoke_trace(
+        namespace=namespace,
+        agent_name=agent_name,
+        agent=agent,
+        data=data,
+        request_id=request_id,
+    )
 
 @router.get("/agents", response_model=list[AgentInfo])
 def list_agents(namespace: str = "default", user=Depends(verify_token)):

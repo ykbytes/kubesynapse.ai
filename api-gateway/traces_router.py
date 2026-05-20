@@ -59,8 +59,8 @@ class ExecutionDetailResponse(BaseModel):
     started_at: str | None = None
     completed_at: str | None = None
     duration_ms: float | None = None
-    input_summary: dict[str, Any] | None = None
-    output_summary: dict[str, Any] | None = None
+    input_summary: dict[str, Any] | str | None = None
+    output_summary: dict[str, Any] | str | None = None
     total_steps: int = 0
     completed_steps: int = 0
     failed_steps: int = 0
@@ -95,8 +95,8 @@ class StepDetailResponse(BaseModel):
     started_at: str | None = None
     completed_at: str | None = None
     duration_ms: float | None = None
-    input_summary: dict[str, Any] | None = None
-    output_summary: dict[str, Any] | None = None
+    input_summary: dict[str, Any] | str | None = None
+    output_summary: dict[str, Any] | str | None = None
     error_message: str | None = None
     llm_calls_count: int = 0
     tool_calls_count: int = 0
@@ -718,20 +718,6 @@ async def get_execution_detail(
     return ExecutionDetailResponse.model_validate(execution)
 
 
-@router.get("/{execution_id}", response_model=ExecutionDetailResponse, include_in_schema=False)
-@_catch_errors
-async def get_trace_detail_alias(
-    execution_id: str,
-    request: Request,
-    response: Response,
-    user: dict[str, Any] = Depends(verify_token),
-) -> ExecutionDetailResponse:
-    """Compatibility alias for older clients still calling GET /traces/{execution_id}."""
-
-    _set_trace_alias_headers(response, request, f"/api/v1/traces/executions/{execution_id}")
-    return await get_execution_detail(execution_id=execution_id, user=user)
-
-
 @router.get("/executions/{execution_id}/summary")
 @_catch_errors
 async def get_execution_summary(
@@ -976,3 +962,17 @@ async def query_runtime_events(
         offset=offset,
     )
     return EventQueryResponse(**result)
+
+
+@router.get("/{execution_id}", response_model=ExecutionDetailResponse, include_in_schema=False)
+@_catch_errors
+async def get_trace_detail_alias(
+    execution_id: str,
+    request: Request,
+    response: Response,
+    user: dict[str, Any] = Depends(verify_token),
+) -> ExecutionDetailResponse:
+    """Compatibility alias for older clients still calling GET /traces/{execution_id}."""
+
+    _set_trace_alias_headers(response, request, f"/api/v1/traces/executions/{execution_id}")
+    return await get_execution_detail(execution_id=execution_id, user=user)

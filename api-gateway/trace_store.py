@@ -34,14 +34,28 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Integer,
+    inspect,
     String,
+    text,
 )
+from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.orm import declarative_base
 
 from auth_store import ENGINE as _AUTH_ENGINE
 from auth_store import db_session, ensure_utc, utc_now
 
 logger = logging.getLogger("api-gateway.trace-store")
+
+_TRACE_SCHEMA_ERRORS = (OperationalError, ProgrammingError)
+_TRACE_TABLES = (
+    "workflow_executions",
+    "step_executions",
+    "llm_call_records",
+    "tool_call_records",
+    "execution_trace_events",
+    "runtime_run_events",
+)
+_WORKFLOW_EXECUTION_RUN_ID_LENGTH = 128
 
 Base = declarative_base()
 
@@ -171,7 +185,7 @@ class WorkflowExecution(Base):
     namespace = Column(String(128), nullable=False, index=True)
     workflow_name = Column(String(128), nullable=False, index=True)
     agent_name = Column(String(128), nullable=False, index=True)
-    run_id = Column(String(64), nullable=False, index=True)
+    run_id = Column(String(_WORKFLOW_EXECUTION_RUN_ID_LENGTH), nullable=False, index=True)
     status = Column(String(32), nullable=False, default=ExecutionStatus.PENDING.value)
     started_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
     completed_at = Column(DateTime(timezone=True), nullable=True)
@@ -786,10 +800,59 @@ class ExecutionTracer:
 TRACER = ExecutionTracer()
 
 
+def _compile_type_sql(column_type: Any, dialect: Any) -> str:
+    return str(column_type.compile(dialect=dialect))
+
+
+def _ensure_workflow_execution_run_id_capacity() -> None:
+    with _AUTH_ENGINE.begin() as connection:
+        inspector = inspect(connection)
+        if "workflow_executions" not in inspector.get_table_names():
+            return
+
+        columns = {
+            str(column.get("name") or ""): column
+            for column in inspector.get_columns("workflow_executions")
+        }
+        run_id_column = columns.get("run_id")
+        if not run_id_column:
+            return
+
+        current_length = getattr(run_id_column.get("type"), "length", None)
+        if current_length is None or current_length >= _WORKFLOW_EXECUTION_RUN_ID_LENGTH:
+            return
+
+        # PostgreSQL enforces VARCHAR widths, so widen the existing column in place.
+        if connection.dialect.name != "postgresql":
+            return
+
+        target_type = _compile_type_sql(String(_WORKFLOW_EXECUTION_RUN_ID_LENGTH), connection.dialect)
+        connection.execute(text(f"ALTER TABLE workflow_executions ALTER COLUMN run_id TYPE {target_type}"))
+        logger.info("Widened workflow_executions.run_id column to %s", target_type)
+
+
 def init_trace_database() -> None:
     """Create trace tables if they don't exist."""
     Base.metadata.create_all(bind=_AUTH_ENGINE)
+    _ensure_workflow_execution_run_id_capacity()
     logger.info("Trace database initialized")
+
+
+def ensure_trace_database() -> None:
+    """Create trace tables on demand when startup ordering leaves them absent."""
+    try:
+        with _AUTH_ENGINE.connect() as connection:
+            existing_tables = set(inspect(connection).get_table_names())
+    except _TRACE_SCHEMA_ERRORS:
+        logger.exception("Failed to inspect trace database state")
+        raise
+
+    if set(_TRACE_TABLES).issubset(existing_tables):
+        _ensure_workflow_execution_run_id_capacity()
+        return
+
+    logger.warning("Trace tables missing; reinitializing trace database")
+    init_trace_database()
 
 
 # ---------------------------------------------------------------------------
@@ -878,6 +941,7 @@ def list_executions(
     limit: int = 50,
     offset: int = 0,
 ) -> list[dict[str, Any]]:
+    ensure_trace_database()
     with db_session() as session:
         query = session.query(WorkflowExecution)
         if namespace:
@@ -894,6 +958,7 @@ def list_executions(
 
 
 def get_execution(execution_id: str) -> dict[str, Any] | None:
+    ensure_trace_database()
     with db_session() as session:
         execution = session.query(WorkflowExecution).filter_by(id=execution_id).one_or_none()
         if not execution:
@@ -902,6 +967,7 @@ def get_execution(execution_id: str) -> dict[str, Any] | None:
 
 
 def get_execution_summary(execution_id: str) -> dict[str, Any] | None:
+    ensure_trace_database()
     with db_session() as session:
         execution = session.query(WorkflowExecution).filter_by(id=execution_id).one_or_none()
         if not execution:
@@ -910,6 +976,7 @@ def get_execution_summary(execution_id: str) -> dict[str, Any] | None:
 
 
 def get_step_detail(step_id: str) -> dict[str, Any] | None:
+    ensure_trace_database()
     with db_session() as session:
         step = session.query(StepExecution).filter_by(id=step_id).one_or_none()
         if not step:
@@ -921,6 +988,7 @@ def get_step_detail(step_id: str) -> dict[str, Any] | None:
 
 
 def read_trace_events(execution_id: str) -> list[dict[str, Any]]:
+    ensure_trace_database()
     with db_session() as session:
         rows = (
             session.query(ExecutionTraceEventRecord)
@@ -932,6 +1000,7 @@ def read_trace_events(execution_id: str) -> list[dict[str, Any]]:
 
 
 def delete_trace_events(execution_id: str) -> None:
+    ensure_trace_database()
     with db_session() as session:
         (
             session.query(ExecutionTraceEventRecord)

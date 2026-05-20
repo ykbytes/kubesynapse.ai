@@ -999,6 +999,16 @@ spec:
 kubectl apply -f my-workflow.yaml
 ```
 
+If a workflow step invokes an agent through the gateway, the caller identity is the workflow resource itself, not the agent running the previous step. That means every target agent must allow the workflow in `spec.a2a.allowedCallers`.
+
+```yaml
+spec:
+  a2a:
+    allowedCallers:
+      - name: research-pipeline
+        namespace: agent-tenant-my-team
+```
+
 The operator launches a Kubernetes Job that:
 1. Validates the whole DAG before execution starts
 2. Executes each ready frontier in dependency order and runs independent non-approval steps in parallel
@@ -1013,8 +1023,8 @@ Monitor workflow progress:
 # Status
 kubectl get agentworkflow research-pipeline -n agent-tenant-my-team -o yaml
 
-# Worker job logs
-kubectl logs job/wf-research-pipeline -n agent-tenant-my-team
+# Worker job logs (jobs run in the operator namespace)
+kubectl logs job/wf-research-pipeline -n kubesynapse
 ```
 
 Via API:
@@ -1421,6 +1431,43 @@ The agent runtime exposes Prometheus metrics at `/metrics` via `prometheus-fasta
 - **API Gateway logs**: `kubectl logs -l app=api-gateway`
 - **Per-agent logs via API**: `GET /api/agents/{name}/logs?namespace=`
 
+### Execution Observatory and Workflow Runs
+
+Workflow runs write two complementary observability streams:
+
+- `POST /api/traces/batch` stores execution detail, step detail, LLM calls, tool calls, and raw trace events
+- `POST /api/v1/traces/runtime-events` stores semantic runtime events for the ordered run timeline and run-intelligence queries
+
+Useful verification endpoints for a completed workflow run:
+
+```bash
+curl http://localhost:8080/api/v1/traces/executions?namespace=<tenant-ns>&limit=20 \
+  -H "Authorization: Bearer $TOKEN"
+
+curl http://localhost:8080/api/v1/traces/executions/<execution_id> \
+  -H "Authorization: Bearer $TOKEN"
+
+curl http://localhost:8080/api/v1/traces/<execution_id>/timeline?limit=200 \
+  -H "Authorization: Bearer $TOKEN"
+
+curl http://localhost:8080/api/v1/traces/<execution_id>/runtime-summary \
+  -H "Authorization: Bearer $TOKEN"
+
+curl http://localhost:8080/api/v1/traces/runtime-events?namespace=<tenant-ns>&runtime_kind=operator-worker&limit=50 \
+  -H "Authorization: Bearer $TOKEN"
+
+curl http://localhost:8080/api/v1/workflows/<workflow-name>/runs?namespace=<tenant-ns> \
+  -H "Authorization: Bearer $TOKEN"
+
+curl http://localhost:8080/api/v1/workflows/<workflow-name>/runs/<run_id>/trace?namespace=<tenant-ns> \
+  -H "Authorization: Bearer $TOKEN"
+
+curl http://localhost:8080/api/v1/workflows/<workflow-name>/logs?namespace=<tenant-ns> \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+The API gateway self-heals missing trace tables on access and widens `workflow_executions.run_id` to `VARCHAR(128)` on PostgreSQL if an older install still has the shorter column definition.
+
 ---
 
 ## Scaling & High Availability
@@ -1524,12 +1571,20 @@ Common causes:
 
 ```bash
 # Check the worker Job
-kubectl get jobs -n <tenant-ns> | grep wf-
-kubectl logs job/wf-<workflow-name> -n <tenant-ns>
+kubectl get jobs -n kubesynapse | grep wf-
+kubectl logs job/wf-<workflow-name> -n kubesynapse
 
 # Check for pending approvals
 kubectl get agentapprovals -n <tenant-ns>
 ```
+
+If workflow detail is present but the semantic timeline is incomplete, check the worker logs for runtime event delivery:
+
+```bash
+kubectl logs job/wf-<workflow-name> -n kubesynapse | grep "Runtime event emitter"
+```
+
+Normal completion should include both the startup log and a final `Runtime event emitter stopped (sent=..., dropped=...)` line.
 
 ### LiteLLM errors
 

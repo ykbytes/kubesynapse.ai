@@ -168,6 +168,26 @@ class TestTraceEndpoints:
             assert response.headers.get("Deprecation") == "true"
             assert f"/api/v1/traces/executions/{execution_id}" in response.headers.get("Link", "")
 
+    def test_runtime_events_query_endpoint_is_not_shadowed_by_trace_alias(
+        self, client: TestClient, auth_headers: dict
+    ) -> None:
+        """The static runtime-events route should win over the legacy trace detail alias."""
+
+        with patch.object(
+            trace_store,
+            "query_runtime_events",
+            return_value={"items": [], "total": 0, "limit": 1, "offset": 0},
+        ):
+            response = client.get(
+                "/api/v1/traces/runtime-events?namespace=default&limit=1",
+                headers=auth_headers,
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["items"] == []
+        assert data["total"] == 0
+
     def test_batch_ingest_without_auth_returns_401(self, client: TestClient) -> None:
         """Requests without auth to batch ingest should be rejected."""
         response = client.post("/api/traces/batch", json={"events": []})
@@ -299,3 +319,66 @@ class TestTraceEndpoints:
             )
             execution = session.query(trace_store.WorkflowExecution).filter_by(id=execution_id).one()
             session.delete(execution)
+
+    def test_list_traces_recreates_missing_trace_tables(self, client: TestClient, auth_headers: dict) -> None:
+        trace_store.init_trace_database()
+
+        with db_session() as session:
+            session.query(trace_store.ExecutionTraceEventRecord).delete(synchronize_session=False)
+            session.query(trace_store.ToolCallRecord).delete(synchronize_session=False)
+            session.query(trace_store.LLMCallRecord).delete(synchronize_session=False)
+            session.query(trace_store.StepExecution).delete(synchronize_session=False)
+            session.query(trace_store.RuntimeRunEvent).delete(synchronize_session=False)
+            session.query(trace_store.WorkflowExecution).delete(synchronize_session=False)
+
+        with trace_store._AUTH_ENGINE.begin() as connection:
+            connection.exec_driver_sql("DROP TABLE execution_trace_events")
+            connection.exec_driver_sql("DROP TABLE tool_call_records")
+            connection.exec_driver_sql("DROP TABLE llm_call_records")
+            connection.exec_driver_sql("DROP TABLE step_executions")
+            connection.exec_driver_sql("DROP TABLE runtime_run_events")
+            connection.exec_driver_sql("DROP TABLE workflow_executions")
+
+        response = client.get("/api/v1/traces/executions?namespace=default&limit=10", headers=auth_headers)
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["items"] == []
+
+    def test_trace_database_widens_workflow_execution_run_id_for_postgres(self) -> None:
+        from contextlib import contextmanager
+
+        from sqlalchemy.dialects import postgresql
+
+        executed_sql: list[str] = []
+
+        class FakeConnection:
+            def __init__(self) -> None:
+                self.dialect = postgresql.dialect()
+
+            def execute(self, statement: object) -> None:
+                executed_sql.append(str(statement))
+
+        class FakeInspector:
+            def get_table_names(self) -> list[str]:
+                return ["workflow_executions"]
+
+            def get_columns(self, table_name: str) -> list[dict[str, object]]:
+                assert table_name == "workflow_executions"
+                return [{"name": "run_id", "type": trace_store.String(64)}]
+
+        class FakeEngine:
+            @contextmanager
+            def begin(self) -> object:
+                yield FakeConnection()
+
+        with patch.object(trace_store, "_AUTH_ENGINE", FakeEngine()), patch.object(
+            trace_store,
+            "inspect",
+            new=lambda _connection: FakeInspector(),
+        ):
+            trace_store._ensure_workflow_execution_run_id_capacity()
+
+        assert any(
+            "ALTER TABLE workflow_executions ALTER COLUMN run_id TYPE VARCHAR(128)" in sql
+            for sql in executed_sql
+        )
