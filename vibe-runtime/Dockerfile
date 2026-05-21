@@ -10,9 +10,12 @@ WORKDIR /app
 
 COPY requirements.txt .
 RUN /opt/venv/bin/pip install --no-cache-dir -r requirements.txt \
-    && /opt/vibe-venv/bin/pip install --no-cache-dir mistral-vibe
+    && /opt/vibe-venv/bin/pip install --no-cache-dir \
+        'mistralai @ https://files.pythonhosted.org/packages/0f/74/0f6188190e79eef4363754c71414c1a791537b1e506cbee615bb581cb05f/mistralai-2.4.4-py3-none-any.whl#sha256=43dd3b1f0f4f960a723359165c4da0d035590b27c050028322934fe4f189f14e' \
+        mistral-vibe==2.9.5
 
 COPY main.py ./main.py
+COPY runtime_events.py ./runtime_events.py
 
 RUN useradd --uid 1000 --create-home vibeuser \
     && mkdir -p /app/state/home/.vibe /workspace \

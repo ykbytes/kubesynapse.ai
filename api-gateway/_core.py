@@ -32,9 +32,6 @@ CURRENT_DIR = Path(__file__).resolve().parent
 if str(CURRENT_DIR) not in sys.path:
     sys.path.insert(0, str(CURRENT_DIR))
 
-MCP_HUB_NAMESPACE = os.getenv("MCP_HUB_NAMESPACE", "mcp-hub").strip() or "mcp-hub"
-HELM_RELEASE_NAME = os.getenv("HELM_RELEASE_NAME", "kubesynapse").strip() or "kubesynapse"
-
 from auth_middleware import (  # §4.1 — extracted auth middleware
     AUTH_MODE,
     OIDC_TRANSACTION_COOKIE_NAME,
@@ -56,6 +53,58 @@ from auth_middleware import (  # §4.1 — extracted auth middleware
     shared_token_enabled,
     verify_token,
     verify_token_or_query,
+)
+from constants import (
+    A2A_CONTENT_TYPE_NOT_SUPPORTED_ERROR,
+    A2A_INTERRUPTED_STATES,
+    A2A_PROTOCOL_VERSION,
+    A2A_PROVIDER_ORGANIZATION,
+    A2A_PROVIDER_URL,
+    A2A_PUBLIC_BASE_URL,
+    A2A_PUSH_NOTIFICATION_NOT_SUPPORTED_ERROR,
+    A2A_TASK_NOT_FOUND_ERROR,
+    A2A_TASK_RETENTION_SECONDS,
+    A2A_TASK_STORE_LOCK,
+    A2A_TERMINAL_STATES,
+    A2A_UNSUPPORTED_OPERATION_ERROR,
+    A2A_VERSION_NOT_SUPPORTED_ERROR,
+    AGENT_READ_CACHE_MAX_ENTRIES,
+    AGENT_READ_CACHE_TTL_SECONDS,
+    AGENT_RUNTIME_TIMEOUT_SECONDS,
+    AGENT_SYSTEM_PROMPT_MAX_CHARS,
+    DEFAULT_FACTORY_MODE,
+    FACTORY_AGENT_NAME,
+    FACTORY_CONTEXT_NAME,
+    FACTORY_MODES,
+    FACTORY_WORKFLOW_NAME,
+    GIT_AUTH_METHODS,
+    GIT_PUSH_POLICIES,
+    HELM_RELEASE_NAME,
+    JSONRPC_INTERNAL_ERROR,
+    JSONRPC_INVALID_PARAMS,
+    JSONRPC_INVALID_REQUEST,
+    JSONRPC_METHOD_NOT_FOUND,
+    JSONRPC_PARSE_ERROR,
+    K8S_NAME_PATTERN,
+    K8S_NAME_RE,
+    LITELLM_INTERNAL_URL,
+    LITELLM_MASTER_KEY,
+    LLM_SECRET_NAME,
+    MAX_AGENT_SKILL_FILE_CONTENT_CHARS,
+    MAX_AGENT_SKILL_FILE_PATH_CHARS,
+    MAX_AGENT_SKILL_FILES,
+    MAX_AGENT_SKILL_TOTAL_CHARS,
+    MAX_SUBAGENT_FILE_CHARS,
+    MAX_SUBAGENT_METADATA_CHARS,
+    MAX_SUBAGENTS,
+    MCP_HUB_NAMESPACE,
+    NATS_URL,
+    PROVIDER_AUTH_SECRET_NAME,
+    PROVIDER_REGISTRY_CONFIGMAP_NAME,
+    QDRANT_URL,
+    STREAM_KEEPALIVE_SECONDS,
+    SUBAGENT_STRATEGIES,
+    TEAM_CONTEXT_MAX_CHARS,
 )
 
 from auth_store import (
@@ -107,7 +156,6 @@ from auth_store import (
     query_usage_detail,
     query_usage_summary,
     record_audit_log,
-    record_eval_outcome_memory,
     record_failed_login,
     record_runtime_memory,
     record_trigger_execution,
@@ -199,11 +247,6 @@ def _configure_logging() -> None:
 _configure_logging()
 logger = logging.getLogger("api-gateway")
 _SHUTDOWN = threading.Event()
-K8S_NAME_PATTERN = r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
-K8S_NAME_RE = re.compile(K8S_NAME_PATTERN)
-GIT_AUTH_METHODS = {"token", "basic", "ssh"}
-GIT_PUSH_POLICIES = {"after-each-commit", "end-of-session", "on-approval", "never"}
-
 
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -239,6 +282,14 @@ async def lifespan(app: FastAPI):
             else:
                 logger.exception("Failed to initialize auth database after %d attempts: %s", max_db_retries, exc)
                 raise RuntimeError("Auth database initialization failed") from exc
+
+    # Initialize trace database (runtime_run_events table for Run Intelligence Layer)
+    try:
+        from trace_store import init_trace_database
+        init_trace_database()
+        logger.info("Trace database initialized (Run Intelligence Layer).")
+    except Exception as exc:
+        logger.warning("Trace database init failed (non-critical): %s", exc)
     try:
         try:
             _load_collectors_from_db()
@@ -291,67 +342,11 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type", "Accept", "X-Request-Id"],
 )
 
-NATS_URL = os.getenv("NATS_URL", "nats://kubesynapse-nats:4222")
-QDRANT_URL = os.getenv("QDRANT_URL", "http://kubesynapse-qdrant:6333")
 # Auth constants (AUTH_MODE, SHARED_TOKEN, etc.) moved to auth_middleware.py — §4.1
-AGENT_RUNTIME_TIMEOUT_SECONDS = max(float(os.getenv("AGENT_RUNTIME_TIMEOUT_SECONDS", "360")), 1.0)
-LITELLM_INTERNAL_URL = os.getenv("LITELLM_INTERNAL_URL", "").strip() or "http://kubesynapse-litellm:4000"
-LITELLM_MASTER_KEY = os.getenv("LITELLM_MASTER_KEY", "").strip()
-LLM_SECRET_NAME = os.getenv("LLM_SECRET_NAME", "kubesynapse-llm-api-keys")
-PROVIDER_REGISTRY_CONFIGMAP_NAME = (
-    os.getenv("PROVIDER_REGISTRY_CONFIGMAP_NAME", f"{HELM_RELEASE_NAME}-provider-registry").strip()
-    or f"{HELM_RELEASE_NAME}-provider-registry"
-)
-PROVIDER_AUTH_SECRET_NAME = (
-    os.getenv("PROVIDER_AUTH_SECRET_NAME", LLM_SECRET_NAME).strip()
-    or LLM_SECRET_NAME
-)
-STREAM_KEEPALIVE_SECONDS = max(float(os.getenv("API_GATEWAY_STREAM_KEEPALIVE_SECONDS", "15")), 5.0)
-AGENT_READ_CACHE_TTL_SECONDS = max(float(os.getenv("API_GATEWAY_AGENT_READ_CACHE_TTL_SECONDS", "2.0")), 0.0)
-AGENT_READ_CACHE_MAX_ENTRIES = max(int(os.getenv("API_GATEWAY_AGENT_READ_CACHE_MAX_ENTRIES", "256")), 1)
-A2A_PROTOCOL_VERSION = "1.0"
-A2A_TASK_RETENTION_SECONDS = max(int(os.getenv("A2A_TASK_RETENTION_SECONDS", "3600")), 60)
-A2A_PUBLIC_BASE_URL = os.getenv("API_GATEWAY_PUBLIC_BASE_URL", "").strip()
-A2A_PROVIDER_ORGANIZATION = os.getenv("A2A_PROVIDER_ORGANIZATION", "KubeSynapse").strip()
-A2A_PROVIDER_URL = os.getenv("A2A_PROVIDER_URL", "").strip()
-A2A_TERMINAL_STATES = {
-    "TASK_STATE_COMPLETED",
-    "TASK_STATE_FAILED",
-    "TASK_STATE_CANCELED",
-    "TASK_STATE_REJECTED",
-}
-A2A_INTERRUPTED_STATES = {
-    "TASK_STATE_INPUT_REQUIRED",
-    "TASK_STATE_AUTH_REQUIRED",
-}
-JSONRPC_PARSE_ERROR = -32700
-JSONRPC_INVALID_REQUEST = -32600
-JSONRPC_METHOD_NOT_FOUND = -32601
-JSONRPC_INVALID_PARAMS = -32602
-JSONRPC_INTERNAL_ERROR = -32603
-A2A_TASK_NOT_FOUND_ERROR = -32001
-A2A_PUSH_NOTIFICATION_NOT_SUPPORTED_ERROR = -32003
-A2A_UNSUPPORTED_OPERATION_ERROR = -32004
-A2A_CONTENT_TYPE_NOT_SUPPORTED_ERROR = -32005
-A2A_VERSION_NOT_SUPPORTED_ERROR = -32009
-A2A_TASK_STORE_LOCK = threading.Lock()
+# All other shared constants now in constants.py — imported above
 _AGENT_READ_CACHE_LOCK = threading.Lock()
 _AGENT_READ_CACHE: dict[tuple[str, str], tuple[float, dict[str, Any]]] = {}
 A2A_TASK_STORE: dict[tuple[str, str, str], dict[str, Any]] = {}
-TEAM_CONTEXT_MAX_CHARS = max(int(os.getenv("A2A_TEAM_CONTEXT_MAX_CHARS", "4096")), 256)
-MAX_SUBAGENT_FILE_CHARS = max(int(os.getenv("AGENT_MAX_SUBAGENT_FILE_CHARS", "4000")), 256)
-MAX_SUBAGENT_METADATA_CHARS = max(int(os.getenv("AGENT_MAX_SUBAGENT_METADATA_CHARS", "2048")), 256)
-MAX_SUBAGENTS = max(int(os.getenv("AGENT_MAX_SUBAGENTS", "6")), 1)
-SUBAGENT_STRATEGIES = frozenset({"sequential", "parallel"})
-MAX_AGENT_SKILL_FILES = max(int(os.getenv("AGENT_MAX_SKILL_FILES", "24")), 1)
-MAX_AGENT_SKILL_FILE_PATH_CHARS = max(int(os.getenv("AGENT_MAX_SKILL_FILE_PATH_CHARS", "256")), 32)
-MAX_AGENT_SKILL_FILE_CONTENT_CHARS = max(int(os.getenv("AGENT_MAX_SKILL_FILE_CONTENT_CHARS", "16000")), 512)
-MAX_AGENT_SKILL_TOTAL_CHARS = max(int(os.getenv("AGENT_MAX_SKILL_TOTAL_CHARS", "64000")), 4096)
-FACTORY_AGENT_NAME = "kubesynapse-factory"
-FACTORY_WORKFLOW_NAME = "kubesynapse-factory-pipeline"
-FACTORY_CONTEXT_NAME = "kubesynapse-factory-context"
-DEFAULT_FACTORY_MODE = "governed-bundle"
-FACTORY_MODES = frozenset({"lightweight-draft", "governed-bundle", "fully-autonomous"})
 FACTORY_MODE_SYSTEM_NOTES = {
     "lightweight-draft": (
         "Factory mode: lightweight-draft. Produce the fastest useful first-pass blueprint that still respects the real kubesynapse CRDs. "
@@ -692,15 +687,30 @@ def _normalize_memory_policy(memory_policy: dict[str, Any] | None) -> dict[str, 
     raw = memory_policy or {}
     allowed_types = raw.get("allowedMemoryTypes") if isinstance(raw.get("allowedMemoryTypes"), list) else []
     return {
-        "maxInjectedMemories": max(int(raw.get("maxInjectedMemories", 5) or 0), 0),
-        "maxInjectedChars": max(int(raw.get("maxInjectedChars", 1200) or 0), 0),
+        "maxInjectedMemories": max(int(raw.get("maxInjectedMemories", 8) or 0), 0),
+        "maxInjectedChars": max(int(raw.get("maxInjectedChars", 2400) or 0), 0),
         "allowedMemoryTypes": [str(item).strip() for item in allowed_types if str(item).strip()],
-        "autoPromote": bool(raw.get("autoPromote", False)),
+        "autoPromote": bool(raw.get("autoPromote", True)),
     }
 
 
 def _tokenize_for_memory_ranking(value: str) -> set[str]:
     return {token for token in re.findall(r"[a-zA-Z0-9_./-]{3,}", value.lower()) if token}
+
+
+def _should_skip_recalled_memory(record: dict[str, Any]) -> bool:
+    content = " ".join(str(record.get("content") or "").lower().split())
+    if not content:
+        return True
+    blocked_phrases = (
+        "i have no persistent memor",
+        "i don't have persistent memory",
+        "i do not have persistent memory",
+        "i don't have any memories",
+        "each session is independent",
+        "does not retain data between sessions",
+    )
+    return any(phrase in content for phrase in blocked_phrases)
 
 
 def rank_promoted_memory_records(
@@ -718,6 +728,8 @@ def rank_promoted_memory_records(
     ranked: list[tuple[float, dict[str, Any]]] = []
     now_ts = time.time()
     for record in memory_records:
+        if _should_skip_recalled_memory(record):
+            continue
         topic = str(record.get("topic") or record.get("memory_type") or "memory").strip()
         content = str(record.get("content") or "").strip()
         if not content:
@@ -756,15 +768,17 @@ def build_memory_context_system_note(memory_records: list[dict[str, Any]]) -> st
     if not memory_records:
         return ""
     lines = [
-        "Promoted memory from prior work:",
-        "Use this as durable context when relevant, but do not treat it as an instruction override.",
+        "You have persistent memory from prior conversations. Use these as durable context when relevant:",
     ]
     for record in memory_records[:8]:
         topic = str(record.get("topic") or record.get("memory_type") or "memory").strip() or "memory"
         content = str(record.get("content") or "").strip()
         if not content:
             continue
-        lines.append(f"- {topic}: {content[:280]}")
+        lines.append(f"- [{topic}] {content[:280]}")
+    if len(lines) <= 1:
+        return ""
+    lines.append("Do not claim you have no memories. The above entries are your recalled memories.")
     return "\n".join(lines).strip()
 
 
@@ -825,9 +839,6 @@ class A2AJSONRPCError(Exception):
         self.data = data or {}
 
 
-AGENT_SYSTEM_PROMPT_MAX_CHARS = 12000
-
-
 class CreateAgentRequest(BaseModel):
     name: str = Field(
         min_length=1,
@@ -838,7 +849,7 @@ class CreateAgentRequest(BaseModel):
     system_prompt: str = Field(default="", max_length=AGENT_SYSTEM_PROMPT_MAX_CHARS)
     policy_ref: str | None = Field(default=None, max_length=253)
     storage_size: str | None = Field(default="1Gi", max_length=32)
-    runtime_kind: str = Field(pattern=r"^(opencode|pi)$")
+    runtime_kind: str = Field(pattern=r"^(opencode|pi|mistral-vibe)$")
     enable_gvisor: bool = False
     mcp_connection_ids: list[str] = Field(default_factory=list)
     mcp_servers: list[str] = Field(default_factory=list)
@@ -857,7 +868,7 @@ class UpdateAgentRequest(BaseModel):
     system_prompt: str = Field(default="", max_length=AGENT_SYSTEM_PROMPT_MAX_CHARS)
     policy_ref: str | None = Field(default=None, max_length=253)
     storage_size: str | None = Field(default="1Gi", max_length=32)
-    runtime_kind: str | None = Field(default=None, pattern=r"^(opencode|pi)$")
+    runtime_kind: str | None = Field(default=None, pattern=r"^(opencode|pi|mistral-vibe)$")
     enable_gvisor: bool = False
     mcp_connection_ids: list[str] | None = None
     mcp_servers: list[str] = Field(default_factory=list)
@@ -973,49 +984,6 @@ class WorkflowInfo(BaseModel):
     created_at: str | None = None
 
 
-class EvalTestCaseRequest(BaseModel):
-    input: str = Field(min_length=1, max_length=4000)
-    expected_output: str = Field(default="", max_length=4000)
-    metrics: list[str] = Field(default_factory=list)
-
-
-class EvalRequest(BaseModel):
-    name: str = Field(
-        min_length=1,
-        max_length=63,
-        pattern=r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
-    )
-    agent_ref: str = Field(min_length=1, max_length=63)
-    schedule: str | None = Field(default=None, max_length=128)
-    test_suite: list[EvalTestCaseRequest] = Field(default_factory=list)
-    failure_threshold: dict[str, Any] = Field(default_factory=dict)
-
-
-class EvalUpdateRequest(BaseModel):
-    agent_ref: str = Field(min_length=1, max_length=63)
-    schedule: str | None = Field(default=None, max_length=128)
-    test_suite: list[EvalTestCaseRequest] = Field(default_factory=list)
-    failure_threshold: dict[str, Any] = Field(default_factory=dict)
-
-
-class EvalInfo(BaseModel):
-    name: str
-    namespace: str
-    agent_ref: str
-    schedule: str | None = None
-    test_suite: list[EvalTestCaseRequest] = Field(default_factory=list)
-    failure_threshold: dict[str, Any] = Field(default_factory=dict)
-    phase: str = "pending"
-    passed: bool | None = None
-    last_run: str | None = None
-    observed_generation: int | None = None
-    summary: dict[str, Any] | None = None
-    artifact_ref: dict[str, Any] | None = None
-    worker_job: dict[str, Any] | None = None
-    cases: list[dict[str, Any]] | None = None
-    created_at: str | None = None
-
-
 class DeleteResponse(BaseModel):
     status: str
     kind: str
@@ -1075,6 +1043,7 @@ class WebhookReceiverUpdateRequest(BaseModel):
 
 
 class WebhookReceiverInfo(BaseModel):
+    id: int
     name: str
     namespace: str
     secret_ref: str
@@ -1083,52 +1052,53 @@ class WebhookReceiverInfo(BaseModel):
     max_payload_bytes: int = 1048576
     enabled: bool = True
     created_at: str | None = None
+    updated_at: str | None = None
 
 
 class WorkflowTriggerRequest(BaseModel):
     name: str = Field(min_length=1, max_length=63, pattern=K8S_NAME_PATTERN)
     source_kind: str = Field(default="WebhookReceiver", pattern=r"^(WebhookReceiver|AgentEvent)$")
-    source_name: str = Field(min_length=1, max_length=63)
+    source_ref: str = Field(min_length=1, max_length=63)
     event_filter: dict[str, Any] | None = Field(default=None)
-    target_workflow_name: str = Field(min_length=1, max_length=63)
-    target_workflow_namespace: str = Field(default="default", min_length=1, max_length=63)
+    workflow_ref: dict[str, str] = Field(default_factory=dict)
     payload_mapping: dict[str, str] = Field(default_factory=dict)
-    retry_max_retries: int = Field(default=3, ge=0, le=10)
-    retry_backoff_seconds: int = Field(default=60, ge=1, le=3600)
+    max_retries: int = Field(default=3, ge=0, le=10)
+    backoff_seconds: int = Field(default=60, ge=0, le=3600)
     notifications_on_success: list[str] = Field(default_factory=list)
     notifications_on_failure: list[str] = Field(default_factory=list)
     enabled: bool = True
 
 
 class WorkflowTriggerUpdateRequest(BaseModel):
-    source_kind: str = Field(default="WebhookReceiver", pattern=r"^(WebhookReceiver|AgentEvent)$")
-    source_name: str = Field(default="", min_length=1, max_length=63)
+    source_kind: str | None = Field(default=None, pattern=r"^(WebhookReceiver|AgentEvent)$")
+    source_ref: str | None = Field(default=None, min_length=1, max_length=63)
     event_filter: dict[str, Any] | None = Field(default=None)
-    target_workflow_name: str = Field(default="", min_length=1, max_length=63)
-    target_workflow_namespace: str = Field(default="default", min_length=1, max_length=63)
-    payload_mapping: dict[str, str] = Field(default_factory=dict)
-    retry_max_retries: int = Field(default=3, ge=0, le=10)
-    retry_backoff_seconds: int = Field(default=60, ge=1, le=3600)
-    notifications_on_success: list[str] = Field(default_factory=list)
-    notifications_on_failure: list[str] = Field(default_factory=list)
-    enabled: bool = True
+    workflow_ref: dict[str, str] | None = Field(default=None)
+    payload_mapping: dict[str, str] | None = Field(default=None)
+    max_retries: int | None = Field(default=None, ge=0, le=10)
+    backoff_seconds: int | None = Field(default=None, ge=0, le=3600)
+    notifications_on_success: list[str] | None = None
+    notifications_on_failure: list[str] | None = None
+    enabled: bool | None = None
 
 
 class WorkflowTriggerInfo(BaseModel):
+    id: int
     name: str
     namespace: str
     source_kind: str = "WebhookReceiver"
-    source_name: str
+    source_ref: str
     event_filter: dict[str, Any] | None = None
-    target_workflow_name: str
-    target_workflow_namespace: str = "default"
+    workflow_ref: dict[str, str] = Field(default_factory=dict)
     payload_mapping: dict[str, str] = Field(default_factory=dict)
-    retry_max_retries: int = 3
-    retry_backoff_seconds: int = 60
+    max_retries: int = 3
+    backoff_seconds: int = 60
     notifications_on_success: list[str] = Field(default_factory=list)
     notifications_on_failure: list[str] = Field(default_factory=list)
     enabled: bool = True
     created_at: str | None = None
+    execution_count: int = 0
+    last_triggered: str | None = None
 
 
 class WebhookInvocationInfo(BaseModel):
@@ -1136,28 +1106,28 @@ class WebhookInvocationInfo(BaseModel):
     namespace: str
     webhook_name: str
     event_id: str
+    invocation_id: str
     source_ip: str | None = None
     signature_valid: bool
+    signature_verified: bool
     payload_size: int
     payload_snippet: str | None = None
-    matched_triggers: list[str] = Field(default_factory=list)
+    matched_triggers: list[str] | int = Field(default_factory=list)
     error_message: str | None = None
     created_at: str | None = None
+    received_at: str | None = None
+    status: str = "received"
 
 
 class TriggerExecutionInfo(BaseModel):
     id: int
-    trigger_namespace: str
+    namespace: str
     trigger_name: str
-    event_id: str
-    workflow_name: str
-    workflow_namespace: str
-    payload_json: dict[str, Any] | None = None
+    webhook_name: str
+    executed_at: str | None = None
     status: str
+    workflow_run_id: str | None = None
     error_message: str | None = None
-    attempt_count: int
-    created_at: str | None = None
-    completed_at: str | None = None
 
 
 RESOURCE_GROUP = "kubesynapse.ai"
@@ -1166,7 +1136,6 @@ RESOURCE_KIND_BY_PLURAL = {
     "aiagents": "AIAgent",
     "agentpolicies": "AgentPolicy",
     "agentworkflows": "AgentWorkflow",
-    "agentevals": "AgentEval",
     "observationtargets": "ObservationTarget",
     "observationpolicies": "ObservationPolicy",
     "observationreports": "ObservationReport",
@@ -1184,15 +1153,17 @@ def normalized_runtime_kind(raw_value: str | None) -> str:
     runtime_kind = str(raw_value or "").strip().lower()
     if not runtime_kind:
         raise ValueError("runtime kind must be explicitly set")
-    if runtime_kind not in ("opencode", "pi"):
-        raise ValueError(f"runtime kind must be 'opencode' or 'pi'; '{runtime_kind}' is not supported")
+    if runtime_kind not in ("opencode", "pi", "mistral-vibe"):
+        raise ValueError(
+            f"runtime kind must be 'opencode', 'pi', or 'mistral-vibe'; '{runtime_kind}' is not supported"
+        )
     return runtime_kind
 
 
 def normalized_opencode_runtime_kind(raw_value: str | None, *, field_name: str) -> str:
     runtime_kind = normalized_runtime_kind(raw_value)
-    if runtime_kind not in ("opencode", "pi"):
-        raise ValueError(f"{field_name} must be 'opencode' or 'pi'; '{runtime_kind}' is not supported")
+    if runtime_kind != "opencode":
+        raise ValueError(f"{field_name} must be 'opencode'; '{runtime_kind}' is not supported")
     return runtime_kind
 
 
@@ -1690,7 +1661,7 @@ def runtime_kind_from_spec(spec: dict[str, Any] | None) -> str:
 
 def validate_agent_runtime_compatibility(spec: dict[str, Any]) -> None:
     runtime_kind = runtime_kind_from_spec(spec)
-    if runtime_kind not in ("opencode", "pi"):
+    if runtime_kind not in ("opencode", "pi", "mistral-vibe"):
         raise HTTPException(status_code=400, detail=f"Unsupported AIAgent runtime kind '{runtime_kind}'")
     if runtime_kind == "opencode" and spec.get("githubConfig"):
         raise HTTPException(
@@ -1703,7 +1674,7 @@ def validate_agent_runtime_compatibility(spec: dict[str, Any]) -> None:
 
 
 def validate_invoke_runtime_compatibility(runtime_kind: str, request: InvokeRequest) -> None:
-    if runtime_kind not in ("opencode", "pi"):
+    if runtime_kind not in ("opencode", "pi", "mistral-vibe"):
         raise HTTPException(status_code=400, detail=f"Unsupported AIAgent runtime kind '{runtime_kind}'")
 
     unsupported_fields: list[str] = []
@@ -1918,6 +1889,12 @@ def serialize_agent_github_config(config: Any) -> dict[str, Any] | None:
 
 
 MCP_CONNECTION_VALIDATION_STATES = {"draft", "valid", "warning", "invalid"}
+
+
+def _build_mcp_registry_results() -> list[dict[str, Any]]:
+    from routers.auth import _build_mcp_registry_results as _auth_build_mcp_registry_results
+
+    return _auth_build_mcp_registry_results()
 
 
 def _mcp_registry_index() -> dict[str, dict[str, Any]]:
@@ -3876,7 +3853,15 @@ async def handle_a2a_send_message(
         sandbox_session=invoke_options.get("sandbox_session"),
     )
     try:
-        invoke_response = await invoke_agent(agent_name, invoke_request, raw_request, namespace, user={"role": "admin", "allowed_namespaces": ["*"]})
+        from routers.agents import invoke_agent
+
+        invoke_response = await invoke_agent(
+            agent_name,
+            invoke_request,
+            raw_request,
+            namespace,
+            user={"role": "admin", "allowed_namespaces": ["*"]},
+        )
     except HTTPException as exc:
         mark_a2a_task_failed(record, str(exc.detail))
     except Exception as exc:
@@ -3939,7 +3924,15 @@ async def handle_a2a_stream_message(
 
     async def event_generator() -> AsyncGenerator[str, None]:
         try:
-            upstream_response = await invoke_agent_stream(agent_name, invoke_request, raw_request, namespace, user={"role": "admin", "allowed_namespaces": ["*"]})
+            from routers.agents import invoke_agent_stream
+
+            upstream_response = await invoke_agent_stream(
+                agent_name,
+                invoke_request,
+                raw_request,
+                namespace,
+                user={"role": "admin", "allowed_namespaces": ["*"]},
+            )
         except HTTPException as exc:
             mark_a2a_task_failed(record, str(exc.detail))
             yield jsonrpc_sse_message(
@@ -4284,24 +4277,6 @@ def _detect_workflow_cycles(steps: list[dict[str, Any]]) -> None:
                     queue.append(dep)
     if visited != len(adj):
         raise HTTPException(status_code=400, detail="Workflow steps contain a dependency cycle.")
-
-
-def build_eval_spec(body: EvalRequest | EvalUpdateRequest) -> dict[str, Any]:
-    spec: dict[str, Any] = {
-        "agentRef": body.agent_ref.strip(),
-        "testSuite": [
-            {
-                "input": test_case.input,
-                "expectedOutput": test_case.expected_output,
-                "metrics": test_case.metrics,
-            }
-            for test_case in body.test_suite
-        ],
-        "failureThreshold": body.failure_threshold,
-    }
-    if body.schedule and body.schedule.strip():
-        spec["schedule"] = body.schedule.strip()
-    return spec
 
 
 def list_custom_resources(plural: str, namespace: str) -> list[dict[str, Any]]:
@@ -4956,36 +4931,6 @@ def _fallback_workflow_logs_from_run(
     return _workflow_logs_response_from_trace(trace_payload)
 
 
-def eval_info_from_resource(eval_resource: dict[str, Any]) -> EvalInfo:
-    metadata = eval_resource.get("metadata", {})
-    spec = eval_resource.get("spec", {})
-    status = eval_resource.get("status", {})
-    return EvalInfo(
-        name=metadata.get("name", ""),
-        namespace=metadata.get("namespace", "default"),
-        agent_ref=spec.get("agentRef", ""),
-        schedule=spec.get("schedule"),
-        test_suite=[
-            EvalTestCaseRequest(
-                input=test_case.get("input", ""),
-                expected_output=test_case.get("expectedOutput", "") or "",
-                metrics=test_case.get("metrics") or [],
-            )
-            for test_case in spec.get("testSuite") or []
-        ],
-        failure_threshold=spec.get("failureThreshold") or {},
-        phase=status.get("phase", "pending") or "pending",
-        passed=status.get("passed"),
-        last_run=status.get("lastRun"),
-        observed_generation=status.get("observedGeneration"),
-        summary=status.get("summary"),
-        artifact_ref=status.get("artifactRef"),
-        worker_job=status.get("workerJob"),
-        cases=status.get("cases"),
-        created_at=metadata.get("creationTimestamp"),
-    )
-
-
 def get_agents(namespace: str = "default") -> list[dict[str, Any]]:
     try:
         from kubernetes import client
@@ -5275,3 +5220,7 @@ def a2a_card_http_exception(error: A2AJSONRPCError) -> HTTPException:
 # ---------------------------------------------------------------------------
 # Authentication
 # ---------------------------------------------------------------------------
+
+# Export the complete shared gateway surface, including underscore-prefixed
+# helpers used by split router modules via ``from _core import *``.
+__all__ = [name for name in globals() if not name.startswith("__")]

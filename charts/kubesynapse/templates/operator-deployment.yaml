@@ -28,6 +28,7 @@ spec:
 {{- if not (and .Values.autoscaling (.Values.autoscaling.enabled)) }}
   replicas: {{ .Values.operator.replicaCount | default 2 }}
 {{- end }}
+  revisionHistoryLimit: {{ .Values.operator.revisionHistoryLimit | default 3 }}
   selector:
     matchLabels:
       app: operator
@@ -160,8 +161,18 @@ spec:
               value: {{ .Values.operator.workerImage.pullPolicy | default "IfNotPresent" | quote }}
             - name: IMAGE_PULL_SECRETS
               value: {{ join "," .Values.global.imagePullSecrets | quote }}
+            # §security-P0: Workers use a dedicated, minimally-privileged SA.
+            # Was: kubesynapse-operator-sa (full cluster-wide access).
             - name: WORKER_SERVICE_ACCOUNT_NAME
-              value: {{ include "kubesynapse.fullname" . }}-operator-sa
+              value: {{ include "kubesynapse.fullname" . }}-worker-sa
+            # §security-P0: tenant exec access opt-in (pods/exec, pods/portforward)
+            - name: TENANT_EXEC_ACCESS
+              value: {{ .Values.agentRuntime.tenantExecAccess | default false | toString | quote }}
+            # §security-P0: Immutable runtime configs (mounted read-only ConfigMaps)
+            - name: OPENCODE_IMMUTABLE_CONFIG
+              value: {{ .Values.opencodeRuntime.immutableConfig | default true | toString | quote }}
+            - name: PI_IMMUTABLE_CONFIG
+              value: {{ .Values.piRuntime.immutableConfig | default true | toString | quote }}
             - name: WORKER_ARTIFACT_SIZE
               value: {{ .Values.operator.workerArtifacts.size | quote }}
             - name: WORKER_ARTIFACT_STORAGE_CLASS
@@ -182,10 +193,6 @@ spec:
               value: {{ (($agentRuntime).storage).size | default "1Gi" | quote }}
             - name: AGENT_RUNTIME_TIMEOUT_SECONDS
               value: {{ .Values.operator.runtimeTimeoutSeconds | quote }}
-            - name: EVAL_SCHEDULE_POLL_SECONDS
-              value: {{ .Values.operator.evalSchedulePollSeconds | quote }}
-            - name: SCHEDULED_EVAL_QUEUE_STALE_SECONDS
-              value: {{ .Values.operator.evalQueueStaleSeconds | quote }}
             - name: WORKFLOW_POLL_SECONDS
               value: {{ .Values.operator.workflowPollSeconds | quote }}
             - name: WORKFLOW_QUEUE_STALE_SECONDS
@@ -251,8 +258,8 @@ spec:
             failureThreshold: 30
           readinessProbe:
             httpGet:
-              path: /ready
-              port: readiness
+              path: /healthz
+              port: http
             initialDelaySeconds: 5
             periodSeconds: 10
             timeoutSeconds: 3

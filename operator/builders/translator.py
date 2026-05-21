@@ -23,6 +23,7 @@ from builders.manifests import (
     create_mcp_network_policy_manifest,
     create_opencode_provider_bootstrap_secret,
     create_pi_provider_bootstrap_secret,
+    mcp_connections_require_shared_bearer_token,
     resolve_runtime_kind,
 )
 from utils import (
@@ -153,7 +154,8 @@ def translate_agent(
     requested_mcp_servers: list[str] = sorted(
         {str(item).strip() for item in (spec.get("mcpServers") or []) if str(item).strip()}
     )
-    has_structured_mcp_connections = bool(spec.get("mcpConnections") or [])
+    structured_mcp_connections = spec.get("mcpConnections") if isinstance(spec.get("mcpConnections"), list) else []
+    needs_shared_mcp_bearer = mcp_connections_require_shared_bearer_token(structured_mcp_connections, requested_mcp_servers)
 
     # --- Build manifests (reuse existing builder functions) ---
     service_manifest = create_agent_service_manifest(name, namespace)
@@ -171,7 +173,7 @@ def translate_agent(
     )
 
     mcp_auth_secret: dict[str, Any] | None = None
-    if allowed_mcp or requested_mcp_servers or has_structured_mcp_connections:
+    if needs_shared_mcp_bearer:
         mcp_auth_secret = create_mcp_auth_secret_manifest(namespace)
 
     runtime_kind = resolve_runtime_kind(spec)

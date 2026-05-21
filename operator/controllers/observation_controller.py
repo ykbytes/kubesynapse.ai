@@ -55,20 +55,33 @@ def _parse_namespaced_ref(raw_ref: str | None) -> tuple[str | None, str | None]:
 
 
 def _get_demo_mode(meta: dict[str, Any], spec: dict[str, Any]) -> str:
+    raw_mode = _get_raw_demo_mode(meta, spec)
+    if raw_mode is None:
+        return "healthy"
+    mode = raw_mode
+    if mode == "firing":
+        return "critical"
+    if mode in {"healthy", "warning", "critical", "failed"}:
+        return mode
+    return "healthy"
+
+
+def _get_raw_demo_mode(meta: dict[str, Any], spec: dict[str, Any]) -> str | None:
     annotations = meta.get("annotations") or {}
     labels = spec.get("labels") or {}
     raw_mode = (
         annotations.get("observability.kubesynapse.ai/demo-mode")
         or labels.get("demoMode")
         or labels.get("demo-mode")
-        or "healthy"
     )
+    if raw_mode is None:
+        return None
     mode = str(raw_mode).strip().lower()
-    if mode == "firing":
-        return "critical"
-    if mode in {"healthy", "warning", "critical", "failed"}:
-        return mode
-    return "healthy"
+    return mode or None
+
+
+def _is_demo_target(meta: dict[str, Any], spec: dict[str, Any]) -> bool:
+    return _get_raw_demo_mode(meta, spec) is not None
 
 
 def _metric_seed(name: str) -> int:
@@ -149,8 +162,11 @@ def _build_report_status(
     target_spec: dict[str, Any],
     target_status: dict[str, Any],
     policy_spec: dict[str, Any],
-    demo_mode: str,
+    demo_mode: str | None,
 ) -> dict[str, Any]:
+    if demo_mode is None:
+        return _build_live_report_status(target_name=target_name, target_status=target_status)
+
     algorithm = ((policy_spec.get("anomalyDetection") or {}).get("algorithm") or "demo-evaluator")
     metric_name = _select_metric_name(policy_spec, target_name)
     findings = _build_findings(
@@ -195,6 +211,50 @@ def _build_report_status(
     }
 
 
+def _build_live_report_status(*, target_name: str, target_status: dict[str, Any]) -> dict[str, Any]:
+    phase = str(target_status.get("phase") or "Pending")
+    connector_health = str(target_status.get("connectorHealth") or "Unknown")
+    metrics_collected = int(target_status.get("metricsCollected") or 0)
+    last_scrape_time = str(target_status.get("lastScrapeTime") or "").strip()
+    last_scrape_error = str(target_status.get("lastScrapeError") or "").strip()
+
+    summary = {
+        "Pending": (
+            f"{target_name} is waiting for connector-backed scrape data. No successful scrape has been reported yet."
+        ),
+        "Active": (
+            f"{target_name} is active based on connector-reported health and scrape state. "
+            f"Latest projection includes {metrics_collected} collected metrics."
+        ),
+        "Degraded": (
+            f"{target_name} is degraded because the connector reported partial health or scrape errors."
+        ),
+        "Failed": (
+            f"{target_name} is failed because the connector is unavailable or no usable scrape state could be projected."
+        ),
+    }.get(phase, f"{target_name} has connector-backed status projection information available.")
+    if last_scrape_time:
+        summary += f" Last scrape timestamp: {last_scrape_time}."
+    if last_scrape_error:
+        summary += f" Last scrape error: {last_scrape_error}."
+
+    return {
+        "phase": "Complete",
+        "healthScore": {
+            "Pending": 60,
+            "Active": 96,
+            "Degraded": 42,
+            "Failed": 18,
+        }.get(phase, 60),
+        "findingsCount": 0,
+        "lastEvaluated": _now_iso(),
+        "findings": [],
+        "summary": summary,
+        "sourcePhase": phase,
+        "connectorHealth": connector_health,
+    }
+
+
 def _ensure_report_for_target(
     *,
     name: str,
@@ -224,11 +284,11 @@ def _ensure_report_for_target(
             if exc.status != 404:
                 raise
 
-    demo_mode = _get_demo_mode(meta, spec)
+    demo_mode = _get_demo_mode(meta, spec) if _is_demo_target(meta, spec) else None
     report_spec = {
         "targetRef": name,
         "policyRef": policy_ref or None,
-        "reportType": "anomaly" if demo_mode != "healthy" else "health-check",
+        "reportType": "anomaly" if demo_mode not in {None, "healthy"} else "health-check",
     }
     target_uid = str(meta.get("uid") or "")
     report_body = {
@@ -350,18 +410,133 @@ def _reconcile_connector_status(namespace: str, connector_ref: str | None) -> No
             return
         raise
 
-    image = str((connector.get("spec") or {}).get("image") or "")
-    version = image.rsplit(":", 1)[1] if ":" in image else "unknown"
-    _patch_status_with_retry(
-        CONNECTOR_PLURAL,
-        namespace,
-        connector_name,
-        {
-            "ready": "True",
-            "version": version,
-            "lastHealthCheck": _now_iso(),
-        },
-    )
+    status = connector.get("status") or {}
+    if not status:
+        return
+
+
+def _normalize_ready_state(raw_ready: Any) -> str:
+    value = str(raw_ready or "Unknown").strip().lower()
+    if value in {"true", "ready", "healthy"}:
+        return "True"
+    if value in {"false", "unhealthy", "failed", "error"}:
+        return "False"
+    return "Unknown"
+
+
+def _extract_connector_version(spec: dict[str, Any]) -> str:
+    image = str((spec or {}).get("image") or "")
+    return image.rsplit(":", 1)[1] if ":" in image else "unknown"
+
+
+def _to_int(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _get_connector_status_snapshot(namespace: str, connector_ref: str | None) -> dict[str, Any]:
+    connector_namespace, connector_name = _parse_namespaced_ref(connector_ref)
+    resolved_namespace = connector_namespace or namespace
+    name = str(connector_name or "").strip()
+    if not name:
+        return {
+            "exists": False,
+            "ready": "Unknown",
+            "metricsCollected": 0,
+            "findingCount": 0,
+            "lastHealthCheck": None,
+            "lastScrapeTime": None,
+            "lastScrapeError": "connectorRef is required for live ObservationTarget reconciliation.",
+        }
+
+    custom_api = kubernetes.client.CustomObjectsApi()
+    try:
+        connector = custom_api.get_namespaced_custom_object(
+            group=GROUP,
+            version=VERSION,
+            namespace=resolved_namespace,
+            plural=CONNECTOR_PLURAL,
+            name=name,
+        )
+    except ApiException as exc:
+        if exc.status == 404:
+            return {
+                "exists": False,
+                "ready": "Unknown",
+                "metricsCollected": 0,
+                "findingCount": 0,
+                "lastHealthCheck": None,
+                "lastScrapeTime": None,
+                "lastScrapeError": f"ConnectorPlugin {resolved_namespace}/{name} was not found.",
+            }
+        raise
+
+    connector_status = connector.get("status") or {}
+    return {
+        "exists": True,
+        "ready": _normalize_ready_state(connector_status.get("ready")),
+        "metricsCollected": _to_int(connector_status.get("metricsCollected")),
+        "findingCount": _to_int(connector_status.get("findingCount")),
+        "lastHealthCheck": connector_status.get("lastHealthCheck"),
+        "lastScrapeTime": connector_status.get("lastScrapeTime") or connector_status.get("lastHealthCheck"),
+        "lastScrapeError": connector_status.get("lastScrapeError"),
+    }
+
+
+def _connector_health_from_ready(ready: str) -> str:
+    return {
+        "True": "Healthy",
+        "False": "Unhealthy",
+    }.get(ready, "Unknown")
+
+
+def _build_demo_target_status(*, meta: dict[str, Any], spec: dict[str, Any], name: str) -> dict[str, Any]:
+    demo_mode = _get_demo_mode(meta, spec)
+    phase = "Active"
+    connector_health = "Healthy"
+    if demo_mode in {"warning", "critical"}:
+        phase = "Degraded"
+    elif demo_mode == "failed":
+        phase = "Failed"
+        connector_health = "Unhealthy"
+
+    return {
+        "phase": phase,
+        "connectorHealth": connector_health,
+        "lastScrapeTime": _now_iso(),
+        "lastScrapeError": "",
+        "metricsCollected": 12 + (_metric_seed(name) % 5),
+    }
+
+
+def _build_live_target_status(*, namespace: str, spec: dict[str, Any]) -> dict[str, Any]:
+    connector_snapshot = _get_connector_status_snapshot(namespace, spec.get("connectorRef"))
+    ready = str(connector_snapshot.get("ready") or "Unknown")
+    connector_health = _connector_health_from_ready(ready)
+    last_scrape_time = connector_snapshot.get("lastScrapeTime")
+    last_scrape_error = str(connector_snapshot.get("lastScrapeError") or "").strip()
+
+    phase = "Pending"
+    if not connector_snapshot.get("exists") or ready == "False":
+        phase = "Failed"
+    elif ready == "True" and last_scrape_error:
+        phase = "Degraded"
+    elif ready == "True" and last_scrape_time:
+        phase = "Active"
+    elif last_scrape_error:
+        phase = "Failed"
+
+    projected = {
+        "phase": phase,
+        "connectorHealth": connector_health,
+        "metricsCollected": _to_int(connector_snapshot.get("metricsCollected")),
+        "lastScrapeError": last_scrape_error,
+    }
+    if last_scrape_time:
+        projected["lastScrapeTime"] = last_scrape_time
+    return projected
 
 
 # ---------------------------------------------------------------------------
@@ -485,16 +660,20 @@ def create_connector_plugin(
     logger.info("ConnectorPlugin %s/%s created (image=%s, protocol=%s)",
                 namespace, name, spec.get("image"), spec.get("protocol"))
     patch.status["ready"] = "Unknown"
+    patch.status["version"] = _extract_connector_version(spec)
+    patch.status["metricsCollected"] = 0
+    patch.status["findingCount"] = 0
     return {"message": f"ConnectorPlugin {name} accepted, awaiting health check."}
 
 
 @kopf.on.update("kubesynapse.ai", "v1alpha1", "connectorplugins")  # type: ignore[arg-type]
 def update_connector_plugin(
-    spec: dict[str, Any], name: str, namespace: str,
+    spec: dict[str, Any], name: str, namespace: str, patch: kopf.Patch,
     logger: logging.Logger, **kwargs: Any,
 ) -> dict[str, Any]:
     del kwargs
     logger.info("ConnectorPlugin %s/%s updated", namespace, name)
+    patch.status["version"] = _extract_connector_version(spec)
     return {"message": f"ConnectorPlugin {name} spec updated."}
 
 
@@ -522,29 +701,23 @@ def reconcile_target_status(
     """
     del kwargs
     try:
-        demo_mode = _get_demo_mode(meta, spec)
-        current_metrics = int(status.get("metricsCollected") or 0)
-        phase = "Active"
-        connector_health = "Healthy"
-        if demo_mode == "warning" or demo_mode == "critical":
-            phase = "Degraded"
-        elif demo_mode == "failed":
-            phase = "Failed"
+        if _is_demo_target(meta, spec):
+            projected_status = _build_demo_target_status(meta=meta, spec=spec, name=name)
+            demo_mode = _get_demo_mode(meta, spec)
+        else:
+            projected_status = _build_live_target_status(namespace=namespace, spec=spec)
+            demo_mode = None
 
-        patch.status["phase"] = phase
-        patch.status["connectorHealth"] = connector_health
-        patch.status["lastScrapeTime"] = _now_iso()
-        patch.status["metricsCollected"] = current_metrics + 12 + (_metric_seed(name) % 5)
+        for key, value in projected_status.items():
+            patch.status[key] = value
 
-        _reconcile_connector_status(namespace, spec.get("connectorRef"))
         _ensure_report_for_target(
             name=name,
             namespace=namespace,
             spec=spec,
             status={
                 **status,
-                "phase": phase,
-                "connectorHealth": connector_health,
+                **projected_status,
             },
             meta=meta,
             logger=logger,
@@ -554,8 +727,8 @@ def reconcile_target_status(
             "ObservationTarget %s/%s reconciled (mode=%s, phase=%s)",
             namespace,
             name,
-            demo_mode,
-            phase,
+            demo_mode or "live",
+            projected_status.get("phase"),
         )
     except kubernetes.client.ApiException as exc:
         logger.warning("ObservationTarget %s/%s reconciliation failed: %s", namespace, name, exc)

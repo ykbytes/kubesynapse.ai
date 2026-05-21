@@ -11,7 +11,7 @@ function createDraftId(): string {
 export function createSkillFileDraft(initial?: Partial<TextFileDraft>): TextFileDraft {
   return {
     id: initial?.id ?? createDraftId(),
-    path: initial?.path ?? ".github/skills/new-skill/SKILL.md",
+    path: initial?.path ?? "skills/new-skill/SKILL.md",
     content:
       initial?.content ??
       [

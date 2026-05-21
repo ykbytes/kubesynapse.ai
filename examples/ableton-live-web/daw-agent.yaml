@@ -52,7 +52,7 @@ spec:
         in useEffect cleanup or engine teardown methods.
   skills:
     files:
-      .github/skills/known-pitfalls/SKILL.md: |
+      skills/known-pitfalls/SKILL.md: |
         ---
         name: known-pitfalls
         description: Critical failure patterns for web audio DAW development. Study these BEFORE writing any code.
@@ -176,7 +176,7 @@ spec:
         AudioEngine ← MixerStore (store calls engine)
         ```
 
-      .github/skills/audio-engine/SKILL.md: |
+      skills/audio-engine/SKILL.md: |
         ---
         name: audio-engine
         description: Tone.js audio engine architecture patterns for the DAW.
@@ -284,7 +284,7 @@ spec:
         - Filter: `new Tone.Filter({ frequency: 1000, type: 'lowpass', rolloff: -24 })`
         - Distortion: `new Tone.Distortion({ distortion: 0.4, wet: 0.5 })`
 
-      .github/skills/ui-layout/SKILL.md: |
+      skills/ui-layout/SKILL.md: |
         ---
         name: ui-layout
         description: CSS Grid layout specification for the Ableton-inspired DAW UI.
@@ -372,7 +372,7 @@ spec:
             └── MasterChannel (fader, meter, output)
         ```
 
-      .github/skills/integration-wiring/SKILL.md: |
+      skills/integration-wiring/SKILL.md: |
         ---
         name: integration-wiring
         description: Mandatory data-flow paths connecting stores to the audio engine.
@@ -448,7 +448,7 @@ spec:
         # Should be >= 2 (transportStore, mixerStore at minimum)
         ```
 
-      .github/skills/strict-types/SKILL.md: |
+      skills/strict-types/SKILL.md: |
         ---
         name: strict-types
         description: TypeScript type patterns and Zustand store conventions.
@@ -601,7 +601,7 @@ spec:
         - Store actions that affect audio MUST call the corresponding engine method
         - Export interfaces from `src/types/index.ts` — import everywhere else
 
-      .github/skills/verification-gates/SKILL.md: |
+      skills/verification-gates/SKILL.md: |
         ---
         name: verification-gates
         description: Automated quality checks to run at the end of each step.

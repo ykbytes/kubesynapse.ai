@@ -111,6 +111,40 @@
   100% { background-position: 200% 0; }
 }
 
+/* ── Landing page: floating orbs ── */
+@keyframes float-orb-1 {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  33% { transform: translate(30px, -20px) scale(1.05); }
+  66% { transform: translate(-20px, 15px) scale(0.95); }
+}
+
+@keyframes float-orb-2 {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  33% { transform: translate(-25px, 20px) scale(0.97); }
+  66% { transform: translate(15px, -25px) scale(1.03); }
+}
+
+@keyframes rotate-gradient {
+  0%   { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+@keyframes typing-cursor {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0; }
+}
+
+/* ── Landing page: kube matrix spin ── */
+@keyframes kube-spin {
+  0%   { transform: rotateX(-20deg) rotateY(0deg); }
+  100% { transform: rotateX(-20deg) rotateY(360deg); }
+}
+
+@keyframes kube-spin-reverse {
+  0%   { transform: rotateX(25deg) rotateY(360deg); }
+  100% { transform: rotateX(25deg) rotateY(0deg); }
+}
+
 /* ── Landing page: shimmer text gradient ── */
 @keyframes shimmer-text {
   0%   { background-position: -200% center; }
@@ -403,6 +437,7 @@
   }
 
   html {
+    font-size: 15px;
     scroll-behavior: smooth;
     background: var(--color-background);
   }

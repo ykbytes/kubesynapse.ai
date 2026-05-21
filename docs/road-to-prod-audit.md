@@ -63,7 +63,6 @@ operator/
   controllers/
     agent_controller.py       # AIAgent reconciler
     workflow_controller.py    # AgentWorkflow reconciler  
-    eval_controller.py        # AgentEval reconciler
     policy_controller.py      # AgentPolicy reconciler
     tenant_controller.py      # AgentTenant reconciler
     approval_controller.py    # AgentApproval field handler
@@ -114,10 +113,10 @@ operator/
 
 ### 2.4 — Artifact Storage Architecture (P0)
 
-**Problem**: Workflow and eval results are stored as JSON files on PVCs mounted to worker Jobs. This is the single biggest scalability limitation.
+**Problem**: Workflow results are stored as JSON files on PVCs mounted to worker Jobs. This is the single biggest scalability limitation.
 
 **Issues**:
-- **PVC lifecycle** — Each workflow/eval run creates a PVC (`worker_artifact_pvc_name`). At scale, you accumulate hundreds of PVCs that are never garbage-collected (TTL on Jobs doesn't clean PVCs).
+- **PVC lifecycle** — Each workflow run creates a PVC (`worker_artifact_pvc_name`). At scale, you accumulate hundreds of PVCs that are never garbage-collected (TTL on Jobs doesn't clean PVCs).
 - **No retention policy** — Artifacts grow unbounded. There is no `ARTIFACT_RETENTION_DAYS` or `MAX_ARTIFACTS_PER_WORKFLOW`.
 - **Access after Job completion** — To read artifacts, you need to mount the PVC to another pod. The API gateway cannot serve artifacts directly without this indirection.
 - **No indexing** — Finding "all failed runs for workflow X in the last 24 hours" requires listing PVCs, mounting them, and reading JSON files.
@@ -130,7 +129,7 @@ operator/
 
 ### 2.5 — Dual Source of Truth (P0)
 
-**Problem**: `state_store.py` mirrors workflow/eval state to PostgreSQL, but the CRD `.status` subresource is also updated. The code explicitly calls both `patch_custom_status()` AND `safe_record_workflow_state()`. When they disagree (and they will, because the DB write can succeed while the CRD patch hits a 409 conflict), you have split-brain state.
+**Problem**: `state_store.py` mirrors workflow state to PostgreSQL, but the CRD `.status` subresource is also updated. The code explicitly calls both `patch_custom_status()` AND `safe_record_workflow_state()`. When they disagree (and they will, because the DB write can succeed while the CRD patch hits a 409 conflict), you have split-brain state.
 
 **Current code** in `worker.py`:
 ```python
@@ -1285,7 +1284,7 @@ These are the specific lines of code and patterns that a senior infrastructure e
 
 ## Closing Note
 
-The fundamental idea — Kubernetes as the orchestration layer for autonomous AI agents — is compelling and increasingly validated by the market. The CRD model (AIAgent, AgentWorkflow, AgentPolicy, AgentTenant, AgentApproval, AgentEval) is well-designed and covers the domain comprehensively. The multi-runtime approach (LangGraph, OpenCode, Goose, Codex) is a genuine differentiator.
+The fundamental idea — Kubernetes as the orchestration layer for autonomous AI agents — is compelling and increasingly validated by the market. The CRD model (AIAgent, AgentWorkflow, AgentPolicy, AgentTenant, AgentApproval) is well-designed and covers the domain comprehensively. The multi-runtime approach (LangGraph, OpenCode, Goose, Codex) is a genuine differentiator.
 
 What separates this from a competitive production system is execution discipline: modular code, standard protocols, proper state management, observability, and the test/CI rigor that makes teams trust the system under load.
 

@@ -8,6 +8,8 @@ from _core import *
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
+from routers.agents import ChatMessagesSave, ChatSessionCreate, ChatSessionUpdate, _validate_session_ownership
+
 router = APIRouter(tags=["chat"])
 
 @router.get("/chat-sessions")
@@ -145,6 +147,11 @@ async def _fetch_copilot_models(copilot_token: str) -> list[dict[str, str]]:
     """Fetch available models from GitHub Copilot API with caching."""
     global _copilot_model_cache, _copilot_cache_ts
 
+    # chat.py owns the public Copilot model fetcher, but the device-flow and
+    # token-exchange helpers live in llm.py. Import lazily to avoid a module
+    # cycle during router initialization.
+    from routers import llm as llm_router
+
     now = time.monotonic()
     if _copilot_model_cache and (now - _copilot_cache_ts) < _COPILOT_CACHE_TTL:
         return _copilot_model_cache
@@ -155,13 +162,13 @@ async def _fetch_copilot_models(copilot_token: str) -> list[dict[str, str]]:
         session_token = copilot_token
         models_url = "https://api.githubcopilot.com/models"
         try:
-            exchanged, api_endpoint = await _exchange_copilot_session_token(copilot_token)
+            exchanged, api_endpoint = await llm_router._exchange_copilot_session_token(copilot_token)
             session_token = exchanged
             if api_endpoint:
                 models_url = f"{api_endpoint.rstrip('/')}/models"
         except Exception as exc:
             logger.info("Copilot token exchange failed, using OAuth token directly: %s", exc)
-        data = await _copilot_get_json(
+        data = await llm_router._copilot_get_json(
             models_url,
             {
                 "Authorization": f"Bearer {session_token}",
@@ -200,7 +207,7 @@ async def _fetch_copilot_models(copilot_token: str) -> list[dict[str, str]]:
         return result
     except Exception as exc:
         logger.warning("Failed to fetch Copilot models: %s", exc)
-        return _copilot_model_cache  # return stale cache on error
+        return _copilot_model_cache if _copilot_model_cache else []
 
 
 async def _fetch_openrouter_models(api_key: str | None = None) -> list[dict[str, str]]:
@@ -264,6 +271,8 @@ _ALLOWED_SECRET_KEYS = frozenset(
     {
         "OPENAI_API_KEY",
         "OPENROUTER_API_KEY",
+        "OPENCODE_API_KEY",
+        "OPENCODE_GO_API_KEY",
         "ANTHROPIC_API_KEY",
         "AZURE_API_KEY",
         "GOOGLE_API_KEY",
@@ -281,6 +290,18 @@ _ALLOWED_SECRET_KEYS = frozenset(
 _PROVIDER_META: dict[str, dict[str, str]] = {
     "OPENAI_API_KEY": {"label": "OpenAI", "prefix": "openai/", "placeholder": "sk-..."},
     "OPENROUTER_API_KEY": {"label": "OpenRouter", "prefix": "openrouter/", "placeholder": "sk-or-..."},
+    "OPENCODE_API_KEY": {
+        "label": "OpenCode Zen",
+        "prefix": "openai/",
+        "placeholder": "sk-...",
+        "api_base": "https://opencode.ai/zen/v1",
+    },
+    "OPENCODE_GO_API_KEY": {
+        "label": "OpenCode Go",
+        "prefix": "openai/",
+        "placeholder": "sk-...",
+        "api_base": "https://opencode.ai/zen/go/v1",
+    },
     "ANTHROPIC_API_KEY": {"label": "Anthropic", "prefix": "anthropic/", "placeholder": "sk-ant-..."},
     "AZURE_API_KEY": {"label": "Azure OpenAI", "prefix": "azure/", "placeholder": "..."},
     "GOOGLE_API_KEY": {"label": "Google AI", "prefix": "gemini/", "placeholder": "AIza..."},
@@ -404,6 +425,7 @@ _PROVIDER_REGISTRY_VERSION = 1
 _PROVIDER_ID_RE = re.compile(r"^[a-z0-9](?:[-a-z0-9]{0,62})$")
 _OPENCODE_ZEN_MODELS_URL = "https://opencode.ai/zen/v1/models"
 _OPENCODE_ZEN_BASE_URL = "https://opencode.ai/zen/v1"
+_OPENCODE_ZEN_GO_MODELS_URL = "https://opencode.ai/zen/go/v1/models"
 _PROVIDER_AUTH_PLACEHOLDERS: dict[str, str] = {
     "opencode": "sk-...",
     "opencode-go": "sk-...",
@@ -423,7 +445,7 @@ _PROVIDER_REGISTRY_META: dict[str, dict[str, Any]] = {
         "description": "Low-cost OpenCode provider tuned for reliable coding workloads.",
         "auth_type": "apiKey",
         "secret_key": "OPENCODE_GO_API_KEY",
-        "base_url": None,
+        "base_url": "https://opencode.ai/zen/go/v1",
         "docs_url": "https://opencode.ai/docs/providers/#opencode-go",
     },
     "github-copilot": {
@@ -574,10 +596,16 @@ def _provider_registry_model_entries(raw_models: list[dict[str, str]]) -> list[d
     ]
 
 
-async def _fetch_opencode_zen_models() -> list[dict[str, str]]:
+async def _fetch_opencode_zen_models(api_key: str) -> list[dict[str, str]]:
     try:
         async with httpx.AsyncClient(timeout=15.0, trust_env=False) as client:
-            response = await client.get(_OPENCODE_ZEN_MODELS_URL, headers={"Accept": "application/json"})
+            response = await client.get(
+                _OPENCODE_ZEN_MODELS_URL,
+                headers={
+                    "Accept": "application/json",
+                    "Authorization": f"Bearer {api_key}",
+                },
+            )
             response.raise_for_status()
             payload = response.json()
         data = payload.get("data") if isinstance(payload, dict) else []
@@ -594,52 +622,54 @@ async def _fetch_opencode_zen_models() -> list[dict[str, str]]:
         return result
     except Exception as exc:
         logger.warning("Failed to fetch OpenCode Zen models: %s", exc)
-        return [
-            {"model_id": "kimi-k2.6", "display_name": "kimi-k2.6", "description": "kubesynapse default"},
-            {"model_id": "gpt-5.4", "display_name": "gpt-5.4", "description": "Latest GPT family"},
-            {"model_id": "claude-sonnet-4", "display_name": "claude-sonnet-4", "description": "Claude Sonnet"},
-        ]
+        return []
 
 
-async def _fetch_opencode_go_models() -> list[dict[str, str]]:
+async def _fetch_opencode_go_models(api_key: str) -> list[dict[str, str]]:
     try:
-        async with httpx.AsyncClient(timeout=20.0, trust_env=False) as client:
+        async with httpx.AsyncClient(timeout=15.0, trust_env=False) as client:
             response = await client.get(
-                "https://models.dev/api.json",
-                headers={"Accept": "application/json", "User-Agent": "kubesynapse-api-gateway/1.0"},
+                _OPENCODE_ZEN_GO_MODELS_URL,
+                headers={
+                    "Accept": "application/json",
+                    "Authorization": f"Bearer {api_key}",
+                },
             )
             response.raise_for_status()
-            data = response.json()
-        go_data = data.get("opencode-go") if isinstance(data, dict) else None
-        if not isinstance(go_data, dict):
-            return _OPENCODE_GO_FALLBACK_MODELS
-        models_raw = go_data.get("models") or {}
-        if not isinstance(models_raw, dict):
-            return _OPENCODE_GO_FALLBACK_MODELS
+            payload = response.json()
+        data = payload.get("data") if isinstance(payload, dict) else []
+        if not isinstance(data, list):
+            return []
         result: list[dict[str, str]] = []
-        for model_id in sorted(models_raw.keys()):
-            model_id = str(model_id).strip()
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            model_id = str(item.get("id") or "").strip()
             if not model_id:
                 continue
             result.append({"model_id": model_id, "display_name": model_id, "description": "Live model catalog"})
-        return result if result else _OPENCODE_GO_FALLBACK_MODELS
+        return result
     except Exception as exc:
-        logger.warning("Failed to fetch opencode-go models from models.dev: %s", exc)
-        return _OPENCODE_GO_FALLBACK_MODELS
+        logger.warning("Failed to fetch OpenCode Go models: %s", exc)
+        return []
 
 
 async def _provider_registry_models_for_builtin(provider_id: str, auth_data: dict[str, str]) -> list[dict[str, str | None]]:
     if provider_id == "opencode":
-        return _provider_registry_model_entries(await _fetch_opencode_zen_models())
+        api_key = _decode_secret_value(auth_data.get("OPENCODE_API_KEY", ""))
+        if not api_key:
+            return []
+        return _provider_registry_model_entries(await _fetch_opencode_zen_models(api_key))
     if provider_id == "opencode-go":
-        return _provider_registry_model_entries(await _fetch_opencode_go_models())
+        api_key = _decode_secret_value(auth_data.get("OPENCODE_GO_API_KEY", ""))
+        if not api_key:
+            return []
+        return _provider_registry_model_entries(await _fetch_opencode_go_models(api_key))
     if provider_id == "github-copilot":
         copilot_token = _decode_secret_value(auth_data.get("GITHUB_COPILOT_TOKEN", ""))
-        if copilot_token:
-            live_models = await _fetch_copilot_models(copilot_token)
-            if live_models:
-                return _provider_registry_model_entries(live_models)
-        return _provider_registry_model_entries(_PROVIDER_POPULAR_MODELS.get("GITHUB_COPILOT_TOKEN", []))
+        if not copilot_token:
+            return []
+        return _provider_registry_model_entries(await _fetch_copilot_models(copilot_token))
     return []
 
 
@@ -767,14 +797,12 @@ def stream_notifications(
     async def notification_generator():
         last_agents: dict[str, str] = {}
         last_workflows: dict[str, str] = {}
-        last_evals: dict[str, str] = {}
         first_poll = True
 
         while True:
             try:
                 agents = list_custom_resources("aiagents", namespace)
                 workflows = list_custom_resources("agentworkflows", namespace)
-                evals = list_custom_resources("agentevals", namespace)
 
                 current_agents: dict[str, str] = {}
                 for a in agents:
@@ -787,12 +815,6 @@ def stream_notifications(
                     name = (w.get("metadata") or {}).get("name", "")
                     phase = ((w.get("status") or {}).get("phase") or "unknown").lower()
                     current_workflows[name] = phase
-
-                current_evals: dict[str, str] = {}
-                for e in evals:
-                    name = (e.get("metadata") or {}).get("name", "")
-                    phase = ((e.get("status") or {}).get("phase") or "unknown").lower()
-                    current_evals[name] = phase
 
                 if not first_poll:
                     # Agent status changes
@@ -860,44 +882,8 @@ def stream_notifications(
                             },
                         )
 
-                    # Eval status changes
-                    for name, phase in current_evals.items():
-                        prev = last_evals.get(name)
-                        if prev != phase:
-                            event_type = (
-                                "eval.completed"
-                                if phase in ("succeeded",)
-                                else "eval.failed"
-                                if phase in ("failed",)
-                                else "eval.status_changed"
-                            )
-                            yield sse_event(
-                                event_type,
-                                {
-                                    "name": name,
-                                    "namespace": namespace,
-                                    "phase": phase,
-                                    "previousPhase": prev,
-                                    "timestamp": now_iso(),
-                                },
-                            )
-
-                    # Deleted evals
-                    for name in set(last_evals) - set(current_evals):
-                        yield sse_event(
-                            "eval.status_changed",
-                            {
-                                "name": name,
-                                "namespace": namespace,
-                                "phase": "deleted",
-                                "previousPhase": last_evals[name],
-                                "timestamp": now_iso(),
-                            },
-                        )
-
                 last_agents = current_agents
                 last_workflows = current_workflows
-                last_evals = current_evals
                 first_poll = False
 
             except Exception as exc:

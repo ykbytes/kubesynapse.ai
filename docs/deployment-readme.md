@@ -1,16 +1,8 @@
 # Deployment README
 
-This directory contains the current deployment-facing documents and helper assets for KubeSynapse. The goal of this file is to point at the real entry points that exist in the repository today rather than older generic production prose.
+This directory contains the public deployment-facing documentation that remains after pruning local-only helpers and scratch files.
 
 ## What is here
-
-### `production-deployment-guide.md`
-
-Use this for broader production planning, hardening, and rollout guidance.
-
-### `deployment-checklist.yaml`
-
-Use this as a deployment checklist during an actual install, upgrade, or validation pass.
 
 ### `tests/test_production_readiness.py`
 
@@ -20,18 +12,9 @@ Use this for automated production-readiness validation from the repository root.
 
 Use these to choose the deployment mode you actually want:
 
-- `deploy/values.dockerhub.local.yaml` for published image deployment
-- `deploy/values.cluster.example.yaml` for a more general cluster example
-- `deploy/values.ai-sandbox.kind-local.yaml` for refreshing the current local Kind release
+- `deploy/values.cluster.example.yaml` for published-image installs
+- `deploy/values.local-images.example.yaml` for local image development
 - `deploy/values.google-oidc.example.yaml` as a safe managed sign-in overlay template
-
-### `scripts/deploy-ai-sandbox-kind.ps1`
-
-Use this when you already have the local Kind release installed and only want to refresh images and chart-managed values without replaying a stale broad values file.
-
-### `scripts/observability-smoke-test.ps1`
-
-Use this to validate the observability path after deploying the new connector, target, policy, and report CRDs.
 
 ## Current deployment paths
 
@@ -40,11 +23,16 @@ Use this to validate the observability path after deploying the new connector, t
 From the repository root:
 
 ```bash
-helm upgrade --install KubeSynapse ./charts/kubesynapse \
-  -f ./deploy/values.dockerhub.local.yaml
+cp ./deploy/values.cluster.example.yaml ./deploy/values.cluster.yaml
+# Edit deploy/values.cluster.yaml before installing.
+
+helm upgrade --install kubesynapse ./charts/kubesynapse \
+  --namespace kubesynapse \
+  --create-namespace \
+  -f ./deploy/values.cluster.yaml
 ```
 
-This is the fastest path when you want to use the checked-in published image references.
+This is the supported public install path when you want to use the checked-in published image references.
 
 ## 2. Build locally, then deploy
 
@@ -56,29 +44,35 @@ make docker-build REGISTRY=localhost/kubesynapse VERSION=dev CONTAINER_CLI=docke
 
 Then deploy with a values file that points at your registry.
 
-## 3. Refresh the live Kind sandbox release
-
-Dry run first:
+For the current repeatable Kind path on Windows, prefer:
 
 ```powershell
-pwsh -File ./scripts/deploy-ai-sandbox-kind.ps1 -DryRun
+pwsh -NoProfile -ExecutionPolicy Bypass -File ./scripts/deploy-kind.ps1 `
+  -ClusterName kubesynapse-dev `
+  -Namespace kubesynapse `
+  -ReleaseName kubesynapse `
+  -AdminPassword "KubesynapseAdmin9!"
 ```
 
-Apply the refresh:
+That helper builds and loads the local images, applies
+`deploy/values.local-images.example.yaml` plus `deploy/values.kind.quickstart.yaml`,
+injects `catalog/skills-catalog.json`, reconciles the persisted PostgreSQL password on
+repeat upgrades, and restarts the core deployments so unchanged `:dev` image tags are
+actually picked up.
 
-```powershell
-pwsh -File ./scripts/deploy-ai-sandbox-kind.ps1
-```
+The default quickstart admin username is `admin`. The helper prints the effective
+username, password, and port-forward commands after a successful run.
 
-This script wraps:
+If the local `:dev` images are already built, add `-SkipBuild` to reuse them while
+still loading the images into Kind and running the Helm upgrade.
 
-- `helm upgrade`
-- `--reuse-values`
-- `--server-side=true`
-- `--force-conflicts`
-- `-f deploy/values.ai-sandbox.kind-local.yaml`
+## 3. Configure the environment-specific overlay
 
-That matters because it updates the existing local release with the current image references while avoiding a full reapplication of older environment-wide settings.
+For local image builds, start from `deploy/values.local-images.example.yaml` and adjust the registry coordinates if your cluster does not reach `localhost/kubesynapse/*:dev` directly.
+
+For single-node Kind clusters, also layer in `deploy/values.kind.quickstart.yaml`.
+It disables optional friction points such as the shared MCP hub, PodDisruptionBudgets,
+and NetworkPolicies so the local cluster converges more reliably.
 
 ## Validation flow
 
@@ -115,24 +109,26 @@ cd web-ui
 npm run build
 ```
 
-## 4. Observability validation
+For a live local Kind deployment, verify the upgraded release with:
 
-If you are exercising the observability stack, apply the example resources and run the smoke path:
-
-```powershell
-kubectl apply -f .\examples\observability-demo-fire.yaml
-pwsh -File .\scripts\observability-smoke-test.ps1
+```bash
+kubectl get deploy,pods -n kubesynapse
+kubectl port-forward svc/kubesynapse-api-gateway -n kubesynapse 8080:8080
+curl http://127.0.0.1:8080/api/v1/health
+kubectl port-forward svc/kubesynapse-web-ui -n kubesynapse 3000:80
 ```
 
-Also read `docs/observability-explained.md` for the intended resource flow.
+## 4. Observability validation
+
+If you are exercising the observability stack, apply `examples/observability-demo-fire.yaml`, verify the created resources reconcile, and inspect the UI and gateway responses described in `docs/observability-explained.md`.
 
 ## Current operational assumptions
 
 These are the assumptions that match the codebase now:
 
-- the supported runtime is OpenCode only
+- the supported in-tree runtimes are OpenCode, Pi, and Mistral Vibe
 - PostgreSQL backs gateway auth and session state
-- workflows and evals use worker Jobs plus artifact PVC references
+- workflows use worker Jobs plus artifact PVC references
 - observability CRDs are part of the chart
 - a collector DaemonSet path exists in the platform chart
 - the MCP model includes both per-agent sidecars and shared MCP hub connections
@@ -141,9 +137,9 @@ These are the assumptions that match the codebase now:
 
 1. Run the automated readiness checks.
 2. Choose the correct values file for your environment.
-3. Use `helm upgrade --install` or the Kind refresh script.
+3. Use `helm upgrade --install` with the values file that matches your environment.
 4. Verify pods, gateway health, and UI availability.
-5. If relevant, run the observability smoke test and inspect the UI.
+5. If relevant, apply the observability example resources and inspect the UI.
 
 ## Related docs
 

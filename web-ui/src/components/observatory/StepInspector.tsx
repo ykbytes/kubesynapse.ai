@@ -53,7 +53,7 @@ export function StepInspector({ step, open, onOpenChange }: StepInspectorProps) 
                 Calls
               </div>
               <p className="mt-1 text-sm font-medium text-foreground">
-                {step.llm_calls.length + step.tool_calls.length}
+                {(step.llm_call_count ?? step.llm_calls.length) + (step.tool_call_count ?? step.tool_calls.length)}
               </p>
             </div>
           </div>

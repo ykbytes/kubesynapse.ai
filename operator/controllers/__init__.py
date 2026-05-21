@@ -25,6 +25,9 @@ _import_controller("agent_controller")
 _import_controller("workflow_controller")
 _import_controller("status_projection")
 
+# Run Intelligence Layer — signal watch (timer-based, no CRD dependency)
+_import_controller("signal_watch")
+
 
 def _optional_controller(module_name: str, plural: str) -> None:
     """Import an optional controller only when its CRD exists."""
@@ -38,7 +41,6 @@ def _optional_controller(module_name: str, plural: str) -> None:
     )
 
 
-_optional_controller("eval_controller", "agentevals")
 _optional_controller("approval_controller", "agentapprovals")
 _optional_controller("tenant_controller", "agenttenants")
 _optional_controller("policy_controller", "agentpolicies")

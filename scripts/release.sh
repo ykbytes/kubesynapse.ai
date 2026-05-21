@@ -70,7 +70,7 @@ if command -v cosign &> /dev/null; then
         "kubesynapse-operator" \
         "kubesynapse-api-gateway" \
         "kubesynapse-web-ui" \
-        "kubesynapse-opencode-runtime"; do
+        "kubesynapse-opencode-rt"; do
         cosign sign --yes "$REGISTRY/$image:$VERSION"
     done
 else
@@ -86,7 +86,7 @@ if command -v syft &> /dev/null; then
         "kubesynapse-operator" \
         "kubesynapse-api-gateway" \
         "kubesynapse-web-ui" \
-        "kubesynapse-opencode-runtime"; do
+        "kubesynapse-opencode-rt"; do
         syft "$REGISTRY/$image:$VERSION" -o spdx-json > "dist/sbom-$image-$VERSION.json"
     done
 else

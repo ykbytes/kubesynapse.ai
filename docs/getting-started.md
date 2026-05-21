@@ -83,7 +83,7 @@ kubectl port-forward -n kubesynapse svc/kubesynapse-web-ui 3000:80
 Verify the gateway is healthy:
 
 ```bash
-curl http://localhost:8080/api/health
+curl http://localhost:8080/api/v1/health
 ```
 
 **Expected response:**
@@ -130,10 +130,12 @@ metadata:
   name: onboarding-bot
   namespace: default
 spec:
-  runtimeKind: opencode
+  runtime:
+    kind: opencode
   systemPrompt: "You are a friendly DevOps onboarding assistant."
   model: gpt-4o
-  storageSize: 1Gi
+  storage:
+    size: 1Gi
 ```
 
 Apply it:
@@ -164,13 +166,14 @@ metadata:
   name: pi-onboarding-bot
   namespace: default
 spec:
-  runtimeKind: pi
   runtime:
+    kind: pi
     pi:
       provider: opencode
   systemPrompt: "You are a friendly DevOps onboarding assistant."
   model: gpt-4o
-  storageSize: 1Gi
+  storage:
+    size: 1Gi
 ```
 
 Apply it:
@@ -233,10 +236,12 @@ metadata:
   name: security-specialist
   namespace: default
 spec:
-  runtimeKind: opencode
+  runtime:
+    kind: opencode
   systemPrompt: "You are a security expert focused on secret rotation and PKI."
   model: gpt-4o
-  storageSize: 1Gi
+  storage:
+    size: 1Gi
 ```
 
 ```bash
@@ -289,13 +294,16 @@ The gateway routes the request to `security-specialist`, which processes it and 
 | Goal | Resource |
 |------|----------|
 | Deploy to production | [Production Deployment Guide](production-deployment-guide.md) |
-| Understand architecture | [Architecture Overview](architecture.md) |
+| Understand architecture | [Architecture Overview](architecture-overview.md) |
 | Configure auth, secrets, policies | [Configuration Reference](configuration-reference.md) |
 | Monitor and alert | [Operator Guide](operator-guide.md) |
+| Explore observability & traces | [Observability Explained](observability-explained.md) |
+| Run Intelligence Layer | [ROADMAP — Stories 5-10](ROADMAP.md) |
 | Troubleshoot issues | [Troubleshooting](troubleshooting.md) |
 | Join the community | [Community](community.md) |
 
 ---
 
-**Last Updated:** April 27, 2026  
-**Platform Version:** 1.0.0
+**Last Updated:** May 4, 2026  
+**Platform Version:** 1.0.0  
+**Run Intelligence Layer:** ✅ Complete (Stories 5-10)

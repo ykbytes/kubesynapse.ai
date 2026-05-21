@@ -1,24 +1,39 @@
 # KubeSynapse Deployment Guide
 
-## Quick Start (Docker Compose)
+## Quick Start (Kind + Helm)
 
-The fastest way to run KubeSynapse locally:
+The fastest way to run KubeSynapse locally for development:
 
 ```bash
-# Start the full stack
-docker compose up -d
+kind create cluster
 
-# Or use Make
-make compose-up
+# Build images
+docker build -t kubesynapse/kubesynapse-api-gateway:latest api-gateway/
+docker build -t kubesynapse/kubesynapse-operator:latest operator/
+docker build -t kubesynapse/kubesynapse-web-ui:latest web-ui/
 
-# View status
-make compose-status
+# Load into Kind
+kind load docker-image kubesynapse/kubesynapse-api-gateway:latest kubesynapse/kubesynapse-operator:latest kubesynapse/kubesynapse-web-ui:latest
 
-# View logs
-make compose-logs
+# Generate secrets
+export LITELLM_KEY=$(openssl rand -hex 16)
+export API_TOKEN=$(openssl rand -hex 32)
+export DB_PASS=$(openssl rand -hex 16)
+export JWT_SECRET=$(openssl rand -hex 32)
 
-# Stop
-make compose-down
+# Install
+helm install kubesynapse ./charts/kubesynapse \
+  --namespace kubesynapse --create-namespace \
+  --values deploy/values.kind.quickstart.yaml \
+  --set global.imagePullPolicy=Never \
+  --set platformSecrets.native.litellmMasterKey="$LITELLM_KEY" \
+  --set platformSecrets.native.apiGatewaySharedToken="$API_TOKEN" \
+  --set platformSecrets.native.databasePassword="$DB_PASS" \
+  --set platformSecrets.native.jwtSecret="$JWT_SECRET" \
+  --wait --timeout 3m
+
+# Connect
+kubectl port-forward -n kubesynapse svc/kubesynapse-web-ui 3000:80
 ```
 
 ### Services
@@ -28,18 +43,11 @@ make compose-down
 | API Gateway | http://localhost:8080 | FastAPI backend |
 | Web UI | http://localhost:3000 | React frontend |
 | LiteLLM | http://localhost:4000 | Model proxy |
-| OpenCode RT | http://localhost:8081 | Agent runtime |
+| OpenCode RT | http://localhost:8081 | Default agent runtime |
 | Postgres | localhost:5432 | State + trace database |
 | Redis | localhost:6379 | Cache / sessions |
 | NATS | localhost:4222 | Message bus |
 | Qdrant | localhost:6333 | Vector DB |
-
-### Default Credentials
-
-- **Shared Token**: `dev-shared-token-change-in-production`
-- **Postgres**: `kubesynapse` / `kubesynapse-dev-password`
-
-⚠️ **Change these before exposing to the internet.**
 
 ---
 
@@ -104,37 +112,71 @@ make k8s-port-forward
 
 For local development with [Kind](https://kind.sigs.k8s.io/):
 
-```bash
-# Build and load images into the Kind cluster
-make docker-build
-kind load docker-image docker.io/kubesynapse/kubesynapse-operator:v1.0.0 --name desktop
-kind load docker-image docker.io/kubesynapse/kubesynapse-api-gateway:v1.0.0 --name desktop
-kind load docker-image docker.io/kubesynapse/kubesynapse-web-ui:v1.0.0 --name desktop
-kind load docker-image docker.io/kubesynapse/kubesynapse-pi-rt:v1.0.0 --name desktop
+Recommended local loop on Windows and for repeatable upgrades:
 
-# Deploy with local image values
-helm install kubesynapse ./charts/kubesynapse -n kubesynapse \
-  -f deploy/values.dev.yaml \
-  -f deploy/values.local-images.example.yaml
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File ./scripts/deploy-kind.ps1 `
+  -ClusterName kubesynapse-dev `
+  -Namespace kubesynapse `
+  -ReleaseName kubesynapse `
+  -AdminPassword "KubesynapseAdmin9!"
+```
+
+The script creates or reuses the `kind-kubesynapse-dev` context, builds the required
+platform images and the pinned LiteLLM image, loads them into Kind, applies the local
+image override plus `deploy/values.kind.quickstart.yaml`, injects the skills catalog,
+and reconciles the persisted PostgreSQL password on repeat upgrades.
+
+It also restarts the core deployments after Helm succeeds. That restart matters when
+you keep reusing the same local `:dev` image tag, because `kind load docker-image`
+alone does not change the Kubernetes image string.
+
+Manual equivalent:
+
+```bash
+make docker-build REGISTRY=localhost/kubesynapse VERSION=dev
+docker build -f deploy/litellm/Dockerfile -t docker.io/litellm/litellm:v1.82.3-stable deploy/litellm
+kind load docker-image localhost/kubesynapse/kubesynapse-operator:dev --name kubesynapse-dev
+kind load docker-image localhost/kubesynapse/kubesynapse-api-gateway:dev --name kubesynapse-dev
+kind load docker-image localhost/kubesynapse/kubesynapse-web-ui:dev --name kubesynapse-dev
+kind load docker-image localhost/kubesynapse/kubesynapse-opencode-rt:dev --name kubesynapse-dev
+kind load docker-image docker.io/litellm/litellm:v1.82.3-stable --name kubesynapse-dev
+
+helm upgrade --install kubesynapse ./charts/kubesynapse -n kubesynapse --create-namespace \
+  -f deploy/values.local-images.example.yaml \
+  -f deploy/values.kind.quickstart.yaml \
+  --set-file skillsCatalog.catalogJson=catalog/skills-catalog.json
 ```
 
 See `deploy/values.local-images.example.yaml` for the full local-image registry and
-tag overrides.
+tag overrides. `deploy/values.kind.quickstart.yaml` is the recommended single-node Kind
+overlay because it disables optional MCP Hub and system-agent workloads.
+
+The extra `--set-file` keeps the `Catalog > Skills` tab populated in local clusters. Without it, the chart defaults the browsable Skills catalog to an empty list.
+
+If your cluster cannot pull `localhost/kubesynapse/*:dev` images directly,
+push them to a reachable registry or load them into the cluster runtime before
+running the Helm install.
+
+If you are doing the manual loop with unchanged image tags, explicitly restart the
+deployments you touched after `kind load docker-image`, for example:
+
+```bash
+kubectl rollout restart deployment/kubesynapse-api-gateway -n kubesynapse --context kind-kubesynapse-dev
+kubectl rollout restart deployment/kubesynapse-operator -n kubesynapse --context kind-kubesynapse-dev
+kubectl rollout restart deployment/kubesynapse-web-ui -n kubesynapse --context kind-kubesynapse-dev
+```
+
+## Chart Packaging
+
+```bash
+helm lint ./charts/kubesynapse
+helm package ./charts/kubesynapse -d ./dist
+```
 
 ---
 
 ## Configuration
-
-### Docker Compose
-
-Edit `docker-compose.yml` or create a `.env` file:
-
-```env
-API_GATEWAY_SHARED_TOKEN=your-secure-token-here
-DATABASE_URL=postgresql+psycopg://user:pass@postgres:5432/db
-OPENAI_API_KEY=sk-...
-ANTHROPIC_API_KEY=sk-ant-...
-```
 
 ### Helm Values
 
@@ -149,7 +191,7 @@ See `deploy/values.*.yaml` for environment-specific examples:
 ```yaml
 image:
   registry: docker.io/kubesynapse
-  tag: v1.0.0
+  tag: v2.1.0-run-intelligence
 
 apiGateway:
   sharedToken: "change-me"
@@ -171,13 +213,28 @@ ingress:
 
 ### Pi Runtime Deployment
 
-The Pi runtime is **opt-in**. Enable it in your values file:
+The Pi runtime is **opt-in per agent**. The chart exposes Pi image and default model settings through `piRuntime`:
 
 ```yaml
-agentRuntime:
-  pi:
-    enabled: true
+piRuntime:
+  model: "anthropic/claude-sonnet-4-20250514"
+  thinkingLevel: "medium"
 ```
+
+Create agents with `spec.runtime.kind: pi` to launch the Pi runtime.
+
+### Mistral Vibe Runtime Deployment
+
+Mistral Vibe is also **opt-in per agent**. Configure its runtime image defaults through `mistralVibeRuntime`:
+
+```yaml
+mistralVibeRuntime:
+  image:
+    repository: docker.io/kubesynapse/kubesynapse-vibe-rt
+    tag: v2.1.0-run-intelligence
+```
+
+Create agents with `spec.runtime.kind: mistral-vibe` to launch the Mistral-backed runtime bridge.
 
 ### LiteLLM Database Bootstrap
 
@@ -216,8 +273,8 @@ docker logs kubesynapse-api-gateway
 kubectl logs -n kubesynapse deployment/kubesynapse-api-gateway
 
 # Check health
-curl http://localhost:8080/api/health
-curl http://localhost:8080/api/ready
+curl http://localhost:8080/api/v1/health
+curl http://localhost:8080/api/v1/ready
 ```
 
 ### Database connection issues

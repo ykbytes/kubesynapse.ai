@@ -1,225 +1,281 @@
-# KubeSynapse
-
 <p align="center">
-  <a href="https://github.com/ykbytes/kubesynapse.ai/stargazers"><img src="https://img.shields.io/github/stars/ykbytes/kubesynapse.ai" alt="GitHub Stars"></a>
-  <a href="https://github.com/ykbytes/kubesynapse.ai/blob/main/LICENSE"><img src="https://img.shields.io/github/license/ykbytes/kubesynapse.ai" alt="License"></a>
-  <a href="https://github.com/ykbytes/kubesynapse.ai/releases"><img src="https://img.shields.io/github/v/release/ykbytes/kubesynapse.ai" alt="Release"></a>
-  <a href="https://kubernetes.io/"><img src="https://img.shields.io/badge/Kubernetes-1.25%2B-326CE5" alt="Kubernetes 1.25+"></a>
+  <picture>
+    <source media="(prefers-color-scheme: light)">
+    <img alt="KubeSynapse" src="https://img.shields.io/badge/KubeSynapse-Kubernetes--native%20AI%20Agent%20Platform-326CE5?style=for-the-badge&logo=kubernetes&logoColor=white" height="48">
+  </picture>
 </p>
 
-**The production-grade, Kubernetes-native AI agent platform.**
-Deploy, orchestrate, and govern AI agents using declarative custom resources. KubeSynapse unifies an operator-driven control plane, A2A-ready API gateway, OpenCode runtime, and an extensible MCP tool ecosystem into a single Helm install.
+<p align="center">
+  <a href="https://github.com/ykbytes/kubesynapse.ai/stargazers"><img src="https://img.shields.io/github/stars/ykbytes/kubesynapse.ai?style=flat&color=326CE5" alt="Stars"></a>
+  <a href="https://github.com/ykbytes/kubesynapse.ai/blob/main/LICENSE"><img src="https://img.shields.io/github/license/ykbytes/kubesynapse.ai?style=flat&color=326CE5" alt="Apache 2.0"></a>
+  <a href="https://github.com/ykbytes/kubesynapse.ai/releases"><img src="https://img.shields.io/github/v/release/ykbytes/kubesynapse.ai?style=flat&color=326CE5" alt="Release"></a>
+  <a href="https://kubernetes.io/"><img src="https://img.shields.io/badge/Kubernetes-native-326CE5?style=flat&logo=kubernetes" alt="Kubernetes native"></a>
+  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-3.11+-326CE5?style=flat&logo=python" alt="Python 3.11+"></a>
+  <a href="https://react.dev/"><img src="https://img.shields.io/badge/React-18-326CE5?style=flat&logo=react" alt="React 18"></a>
+</p>
+
+<br>
+
+# KubeSynapse
+
+**Ship AI agents the same way you ship everything else — as Kubernetes resources.**
+
+KubeSynapse is an open-source, Kubernetes-native platform that turns AI agents into first-class cluster citizens. Define agents, workflows, policies, and observability targets as CRDs. The operator materializes them into runtime pods. The gateway handles auth, invoke routing, streaming, and traces. The web console gives you a real-time dashboard over everything.
+
+No local-only toy frameworks. No vendor lock-in. Just your cluster, your models, your rules.
 
 ---
 
-## Architecture
+## Why KubeSynapse?
 
-KubeSynapse separates the **control plane** (CRDs, operator, gateway) from the **execution plane** (per-agent runtimes and sidecars).
-
-```mermaid
-flowchart LR
-    subgraph Clients
-        UI["Web UI\nReact 18 + Vite + Tailwind v4"]
-        CLI["agentctl CLI\nTyper-based"]
-        EXT["External API Clients"]
-    end
-
-    subgraph ControlPlane[Control Plane]
-        GW["API Gateway\nFastAPI monolith\nA2A JSON-RPC + SSE"]
-        K8S["Kubernetes API Server"]
-        OP["Operator\nKopf-based engine\n~3,500-line worker"]
-        CRD["CRDs: KubeSynapse.ai/v1alpha1\nAIAgent, AgentWorkflow, AgentEval\nAgentPolicy, AgentApproval, AgentTenant"]
-    end
-
-    subgraph ExecutionPlane[Execution Plane]
-        RT["OpenCode Runtime STS\nFastAPI wrapper\naround opencode serve"]
-        PI["Pi Runtime STS\nNode.js RPC bridge\nHTTP bridge mode"]
-        MCP["MCP Sidecars\nBundled tool containers"]
-    end
-
-    UI -->|HTTP| GW
-    CLI -->|HTTP| GW
-    EXT -->|A2A JSON-RPC / SSE| GW
-    GW -->|CRUD / Watch| K8S
-    K8S -->|Stores| CRD
-    OP -->|Reconciles| K8S
-    OP -->|Manages| RT
-    OP -->|Manages| PI
-    RT -->|Localhost| MCP
-    PI -->|Localhost| MCP
-```
+| Need | How KubeSynapse Solves It |
+|---|---|
+| **Lifecycle management** | Agents are CRDs — create, update, scale, and delete with `kubectl`. The operator handles StatefulSet provisioning, PVCs, and health checks. |
+| **Security & compliance** | Policy CRDs enforce model allowlists, tool restrictions, MCP access, rate limits, and memory rules. RBAC integrates with your existing OIDC provider. |
+| **Multi-agent coordination** | Workflow CRDs define multi-step pipelines with agents, reviews, loops, and conditional branching. Worker Jobs execute them with full artifact capture. |
+| **Observability** | Built-in trace store captures every LLM call, tool invocation, and step execution. Signal watch detects anomalies. System agents investigate automatically. |
+| **No vendor lock-in** | Bring your own models via LiteLLM (OpenAI, Anthropic, OpenRouter, Mistral, and 100+ providers). BYO runtimes with the standard Runtime API. |
+| **Team-ready** | Multi-tenancy via AgentTenant CRDs. A2A protocol for agent-to-agent communication. Shared MCP hub for tool discovery. |
 
 ---
 
 ## Quick Start
 
-### Production Install (Helm OCI + Docker Hub)
+### Prerequisites
 
-The fastest path uses pre-built images from Docker Hub. Requires Kubernetes 1.25+, Helm 3.12+, and an LLM API key.
+- [Kind](https://kind.sigs.k8s.io/) or any Kubernetes cluster + [Helm](https://helm.sh/) 3.x
+- 8 GB RAM, 4 CPUs
 
-```bash
-# 1. Install via Helm OCI (no git clone needed)
-helm install KubeSynapse oci://docker.io/kubesynapse/charts/kubesynapse \
-  --set platformSecrets.native.openaiApiKey="sk-..." \
-  --set litellm.masterKey="your-secure-key"
-
-# 2. Verify
-kubectl port-forward svc/kubesynapse-api-gateway 8080:8080
-curl http://localhost:8080/api/health
-
-# 3. Create your first agent (runtimeKind: opencode or pi)
-kubectl apply -f - <<EOF
-apiVersion: kubesynapse.ai/v1alpha1
-kind: AIAgent
-metadata:
-  name: my-agent
-  namespace: default
-spec:
-  runtimeKind: opencode   # or runtimeKind: pi
-  systemPrompt: "You are a helpful assistant."
-  model: gpt-4o
-  storageSize: 1Gi
-EOF
-```
-
-### Install via Python SDK
+### Local Kind Deployment
 
 ```bash
-pip install kubesynapse-sdk
+# Create a local Kind cluster (skip if you have one)
+kind create cluster
+
+# Build and load images (or use pre-built from GHCR)
+docker build -t kubesynapse/kubesynapse-api-gateway:latest api-gateway/
+docker build -t kubesynapse/kubesynapse-operator:latest operator/
+docker build -t kubesynapse/kubesynapse-web-ui:latest web-ui/
+kind load docker-image kubesynapse/kubesynapse-api-gateway:latest kubesynapse/kubesynapse-operator:latest kubesynapse/kubesynapse-web-ui:latest
+
+# Generate secrets (keep these safe in production)
+export LITELLM_KEY=$(openssl rand -hex 16)
+export API_TOKEN=$(openssl rand -hex 32)
+export DB_PASS=$(openssl rand -hex 16)
+export JWT_SECRET=$(openssl rand -hex 32)
+
+# Install
+helm install kubesynapse ./charts/kubesynapse \
+  --namespace kubesynapse --create-namespace \
+  --values deploy/values.kind.quickstart.yaml \
+  --set global.imagePullPolicy=Never \
+  --set platformSecrets.native.litellmMasterKey="$LITELLM_KEY" \
+  --set platformSecrets.native.apiGatewaySharedToken="$API_TOKEN" \
+  --set platformSecrets.native.databasePassword="$DB_PASS" \
+  --set platformSecrets.native.jwtSecret="$JWT_SECRET" \
+  --wait --timeout 3m
+
+# Connect
+kubectl port-forward -n kubesynapse svc/kubesynapse-web-ui 3000:80
+# Open http://localhost:3000
 ```
 
-```python
-from KubeSynapse import KubeSynapseClient
-
-client = KubeSynapseClient(base_url="http://localhost:8080")
-health = await client.health_check()
-print(health)  # {"status": "ok"}
-```
-
-### Install via TypeScript SDK
+### Deploy Your First Agent
 
 ```bash
-npm install @kubesynapse/sdk
+kubectl apply -f examples/sample-policy.yaml
+kubectl apply -f examples/sample-agent.yaml
+
+# Watch it come to life
+kubectl get aiagents -w
+kubectl get pods -l app=ai-agent
 ```
 
-```typescript
-import { KubeSynapseClient } from "@kubesynapse/sdk";
+---
 
-const client = new KubeSynapseClient({ baseUrl: "http://localhost:8080" });
-const agents = await client.listAgents();
-console.log(agents);
+## What's Inside
+
 ```
-
-### Install CLI
-
-```bash
-pip install kubesynapse-cli
-
-agentctl health
-agentctl agent list
-agentctl workflow create --file my-workflow.yaml
-```
-
-### Install via Homebrew (macOS/Linux)
-
-```bash
-brew tap KubeSynapse/tap
-brew install kubesynapse-cli
-```
-
-### Local Development (Kind)
-
-Build locally and load into a Kind cluster. No registry required.
-
-```bash
-# 1. Create cluster
-kind create cluster --name kubesynapse-dev
-
-# 2. Build platform images + MCP sidecars
-make docker-build REGISTRY=localhost/kubesynapse VERSION=dev CONTAINER_CLI=docker
-
-# 3. Install
-helm upgrade --install KubeSynapse ./charts/kubesynapse \
-  -f ./deploy/values.local-images.example.yaml
-
-# 4. Port-forward
-kubectl port-forward svc/kubesynapse-api-gateway 8080:8080
-kubectl port-forward svc/kubesynapse-web-ui 3000:80
-
-# 5. Install CLI
-pip install ./cli
-agentctl health
+kubesynapse/
+├── api-gateway/        FastAPI backend — auth, CRUD, invoke, SSE, A2A, traces
+├── operator/           Kopf controllers — reconcile CRDs into pods and jobs
+├── opencode-runtime/   Default agent runtime (OpenCode-powered)
+├── pi-runtime/         Alternative runtime bridge (Pi-powered)
+├── vibe-runtime/       Mistral-backed runtime bridge
+├── web-ui/             React 18 + Vite console with live agent dashboard
+├── mcp-sidecars/       10+ bundled MCP tools (git, web, db, k8s, etc.)
+├── cli/                Python CLI (`agentctl`)
+├── charts/             Helm chart with 12 CRDs, control plane, and shared services
+├── deploy/             Environment overlays (Kind, staging, production)
+├── examples/           Sample CRDs, workflows, and demo bundles
+└── docs/               Architecture, API reference, operator guide, troubleshooting
 ```
 
 ---
 
 ## Features
 
-| # | Capability | What it means |
-|---|------------|---------------|
-| 1 | **Kubernetes-Native Orchestration** | Agents, policies, workflows, and tenants are `KubeSynapse.ai/v1alpha1` CRDs reconciled by a production Kopf operator. |
-| 2 | **A2A Protocol Support** | Native JSON-RPC and Server-Sent Events (SSE) streaming for agent-to-agent delegation and real-time responses. |
-| 3 | **Dual Runtime Support** | OpenCode runtime (FastAPI wrapper) AND Pi runtime (Node.js RPC bridge) with session persistence and checkpoint recovery. |
-| 4 | **MCP Tool Ecosystem** | 11 bundled sidecar containers including code execution, web search, browser automation, database, git, Kubernetes ops, RAG, messaging, and more. |
-| 5 | **Live Agent Observability** | Terminal-style live reasoning logs, execution trace replay, step-level status streaming, and artifact browsing with ZIP download. |
-| 6 | **Policy-Driven Governance** | `AgentPolicy` CRDs enforce input/output guardrails, token caps, PII masking, prompt-injection detection, and allowed model lists. |
-| 7 | **Multi-Tenant Isolation** | `AgentTenant` CRDs provision isolated namespaces, resource quotas, RBAC, and network policies per team. |
-| 8 | **Workflow Engine** | `AgentWorkflow` CRDs define DAG-based multi-agent pipelines with dependency chains, parallel execution, and human-in-the-loop approval gates. |
-| 9 | **Continuous Evaluation** | `AgentEval` CRDs run scheduled test suites measuring relevance, toxicity, latency, and exact-match thresholds against live agents. |
+### Agent Lifecycle
+- **CRD-native:** `AIAgent` resources become StatefulSets with PVCs, env vars, and health probes
+- **Multiple runtimes:** OpenCode (default), Pi, Mistral Vibe — swap with one field
+- **Skills & MCP:** Attach skill files and MCP tool connections via the CRD spec
+- **A2A protocol:** Agents discover and invoke peers via JSON-RPC with NetworkPolicy enforcement
+- **Git integration:** Clone repos, manage credentials, auto-checkout on startup
+
+### Security & Policy
+- **Policy CRDs:** 22+ fields covering model allowlists, tool restrictions, rate limits, MCP access, memory rules, and approval requirements
+- **Hybrid auth:** Shared token, OIDC PKCE, JWT rotation, brute-force protection — all in one middleware stack
+- **Network policies:** Per-component isolation policies generated by the Helm chart
+- **Enterprise auth:** SAML and LDAP support with session management
+
+### Workflow Engine
+- **DAG-based pipelines:** Define sequential and parallel steps with dependency edges
+- **Step types:** Agent invocation, review/eval, loop iteration, conditional branching
+- **Artifact capture:** Every run produces structured artifacts on persistent volumes
+- **Retry & resume:** Failed steps retry; long workflows resume from checkpoints
+- **Webhook triggers:** Kick off workflows from external events with signature verification
+
+### Observability & Intelligence
+- **Trace store:** Every LLM call, tool invocation, and step execution recorded with timestamps
+- **Execution observatory:** Compare runs side-by-side, inspect logs, replay timelines
+- **Signal watch:** Automated anomaly detection across traces
+- **System agents:** Built-in diagnostic agents investigate issues autonomously
+- **Observation CRDs:** Define collection targets, policies, and generate structured reports
+
+### Console
+- **Real-time dashboard:** Live agent status, resource usage, workflow progress
+- **Agent composer:** YAML-aware editor with template wizard and validation
+- **Workflow designer:** Visual DAG editor with step configuration
+- **Chat interface:** Interact with agents directly from the browser with SSE streaming
+- **Documentation panel:** Built-in CRD reference, API docs, and architecture guide
+- **Dark theme:** High-contrast design with keyboard navigation and screen reader support
+
+### Tooling
+- **CLI (`agentctl`):** Rich terminal UI for managing agents, workflows, policies, and users
+- **Python SDK:** Programmatic access to all 100+ API endpoints
+- **TypeScript SDK:** Type-safe client for Node.js and browser applications
 
 ---
 
-## Comparison
+## Architecture
 
-| Capability | KubeSynapse | LangChain | AutoGen | CrewAI | Dify | LangFlow |
-|------------|-----------|-----------|---------|--------|------|----------|
-| **Kubernetes Native** | Yes (Operator + CRDs) | No | No | No | Partial | Partial |
-| **Self-Hosted** | Yes (Full stack via Helm) | Library only | Partial | Partial | Yes | Yes |
-| **Multi-Agent Orchestration** | Yes (CRD-based DAGs) | LangGraph | Code-based | Code-based | Yes | Yes |
-| **A2A Protocol (JSON-RPC/SSE)** | Yes (Native gateway) | No | No | No | No | No |
-| **MCP Tool Ecosystem** | Yes (11 sidecars) | Requires setup | Requires setup | Requires setup | Limited | Limited |
-| **Policy & Governance** | Yes (CRD guardrails) | Manual | Manual | Manual | Basic | Basic |
-| **Human-in-the-Loop** | Yes (AgentApproval CRD) | External | External | External | Basic | Basic |
-| **Eval Framework** | Yes (Built-in CRD) | External | External | External | Limited | Limited |
-| **Live Observability & Artifacts** | Yes (trace replay + ZIP) | No | No | No | Limited | Limited |
-| **Primary Model** | Platform | Library | Framework | Framework | Platform | Platform |
+```mermaid
+flowchart LR
+    subgraph Clients[Clients]
+        UI[Web UI]
+        CLI[CLI and SDKs]
+        EXT[External apps]
+    end
+
+    subgraph Control[Control Plane]
+        GW[API Gateway\nauth, CRUD, invoke,\nSSE, A2A, traces]
+        K8S[Kubernetes API + CRDs]
+        OP[Operator\nreconcile engine]
+    end
+
+    subgraph Execute[Execution Plane]
+        RT[Per-agent runtimes\nOpenCode / Pi / Vibe]
+        JOB[Worker Jobs\nworkflow execution]
+        PVC[State + artifact PVCs]
+        SIDE[MCP sidecars]
+        HUB[MCP hub]
+    end
+
+    subgraph Shared[Shared Services]
+        LLM[LiteLLM]
+        PG[PostgreSQL]
+        REDIS[Redis]
+        QDRANT[Qdrant]
+        NATS[NATS]
+    end
+
+    subgraph Intelligence[Run Intelligence]
+        TRACE[Trace store + API]
+        SIGNAL[Signal watch]
+        SYS[System agents]
+        COL[Collector]
+    end
+
+    UI -->|same-host /api| GW
+    CLI --> GW
+    EXT -->|REST, SSE, A2A| GW
+    GW -->|CRUD| K8S
+    OP -->|watch, reconcile| K8S
+    OP -->|provision| RT
+    OP -->|trigger| JOB
+    RT --> LLM
+    RT --> REDIS
+    RT --> QDRANT
+    GW --> PG
+    RT -. localhost .-> SIDE
+    RT -. shared .-> HUB
+    RT -. events .-> TRACE
+    JOB -. events .-> TRACE
+    TRACE --> SIGNAL
+    SIGNAL --> SYS
+    COL --> GW
+```
+
+**12 CRDs** drive the platform: `AIAgent`, `AgentPolicy`, `AgentWorkflow`, `AgentApproval`, `AgentTenant`, `McpConnection`, `WebhookReceiver`, `WorkflowTrigger`, `ObservationTarget`, `ObservationPolicy`, `ObservationReport`, `ConnectorPlugin`.
+
+**100+ API endpoints** across 10 router groups: agents, workflows, policies, chat, auth, admin, LLM, A2A, observability, webhooks.
+
+For deeper architecture docs, see [docs/architecture-overview.md](docs/architecture-overview.md) and [docs/architecture.md](docs/architecture.md).
 
 ---
 
-## Screenshots
+## Documentation
 
-> **Dashboard Overview** — Real-time agent status, tenant utilization, and system health.
-> ![KubeSynapse Dashboard](docs/screenshots/dashboard-overview.png)
+| Topic | Link |
+|---|---|
+| Architecture overview | [docs/architecture-overview.md](docs/architecture-overview.md) |
+| Full architecture reference | [docs/architecture.md](docs/architecture.md) |
+| Configuration reference | [docs/configuration-reference.md](docs/configuration-reference.md) |
+| Runtime API spec | [docs/runtime-api-spec.md](docs/runtime-api-spec.md) |
+| Deployment guide | [deploy/README.md](deploy/README.md) |
+| Helm chart guide | [charts/kubesynapse/README.md](charts/kubesynapse/README.md) |
+| API gateway guide | [api-gateway/README.md](api-gateway/README.md) |
+| Operator guide | [operator/README.md](operator/README.md) |
+| Web UI guide | [web-ui/README.md](web-ui/README.md) |
+| CLI guide | [cli/README.md](cli/README.md) |
+| Getting started | [docs/getting-started.md](docs/getting-started.md) |
+| Troubleshooting | [docs/troubleshooting.md](docs/troubleshooting.md) |
+| FAQ | [docs/faq.md](docs/faq.md) |
 
-> **Agent Workflow Editor** — Visual DAG builder for multi-agent pipelines with approval gates.
-> ![Workflow Editor](docs/screenshots/workflow-editor.png)
+---
 
-> **Policy Governance Panel** — Guardrail configuration, blocked patterns, and audit logs.
-> ![Policy Panel](docs/screenshots/policy-governance.png)
+## Development
+
+```bash
+# Run tests
+make test
+
+# Lint (Python + Helm)
+make lint
+make helm-lint
+
+# Build web UI
+make ui-build
+
+# Targeted checks
+cd api-gateway && python -m pytest tests/ -v
+cd operator && python -m pytest tests/ -v
+cd web-ui && npm run build
+
+# Build all images
+make docker-build
+```
+
+> **Windows users:** The root Makefile uses POSIX shell. Use Git Bash, WSL, or run component commands directly. See [INSTALL.md](INSTALL.md) for platform-specific guidance.
 
 ---
 
 ## Contributing
 
-We welcome contributions. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full guide.
-
-```bash
-# Fork, clone, and build
-git clone https://github.com/your-username/kubesynapse.ai.git
-cd kubesynapse.ai
-
-# Run the test suite
-make test
-
-# Lint Python services
-make lint
-
-# Deploy to local Kind
-make deploy-ai-sandbox-kind
-```
+KubeSynapse is Apache 2.0 licensed and welcomes contributions. See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines and [AGENTS.md](AGENTS.md) for repo context used by AI coding agents.
 
 ---
 
 ## License
 
-KubeSynapse is licensed under the Apache License 2.0. See [LICENSE](LICENSE) for details.
+[Apache License 2.0](LICENSE) — use it, modify it, ship it.

@@ -22,6 +22,8 @@ from .models import (
     AgentPolicy,
     AgentWorkflow,
     AgentWorkflowCreate,
+    ExecutionDetailResponse,
+    ExecutionListResponse,
     HealthStatus,
 )
 
@@ -229,20 +231,38 @@ class KubeSynapseClient:
 
     # ── Observability ──────────────────────────────────────────────
 
+    async def list_executions(
+        self,
+        workflow_name: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> ExecutionListResponse:
+        """List workflow executions from the Execution Observatory."""
+        params: dict[str, Any] = {"limit": limit}
+        if workflow_name:
+            params["workflow_name"] = workflow_name
+        if offset:
+            params["offset"] = offset
+        data = await self._request("GET", "/api/v1/traces/executions", params=params)
+        return ExecutionListResponse(**data)
+
+    async def get_execution(self, execution_id: str) -> ExecutionDetailResponse:
+        """Get a specific execution from the Execution Observatory."""
+        data = await self._request("GET", f"/api/v1/traces/executions/{execution_id}")
+        return ExecutionDetailResponse(**data)
+
     async def list_traces(
         self,
         workflow_name: str | None = None,
         limit: int = 50,
-    ) -> list[dict]:
-        """List execution traces."""
-        params: dict[str, Any] = {"limit": limit}
-        if workflow_name:
-            params["workflow_name"] = workflow_name
-        return await self._request("GET", "/api/v1/traces", params=params)
+        offset: int = 0,
+    ) -> ExecutionListResponse:
+        """Deprecated wrapper for list_executions()."""
+        return await self.list_executions(workflow_name=workflow_name, limit=limit, offset=offset)
 
-    async def get_trace(self, trace_id: str) -> dict:
-        """Get a specific execution trace."""
-        return await self._request("GET", f"/api/v1/traces/{trace_id}")
+    async def get_trace(self, trace_id: str) -> ExecutionDetailResponse:
+        """Deprecated wrapper for get_execution()."""
+        return await self.get_execution(trace_id)
 
 
 # ── Convenience sync wrapper ───────────────────────────────────────

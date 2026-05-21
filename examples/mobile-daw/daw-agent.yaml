@@ -41,7 +41,7 @@ spec:
       7. All components meet the react-native-quality skill standards
   skills:
     files:
-      ".github/skills/known-pitfalls/SKILL.md": |
+      "skills/known-pitfalls/SKILL.md": |
         ---
         name: known-pitfalls
         description: >
@@ -159,7 +159,7 @@ spec:
         }
         ```
 
-      ".github/skills/audio-engine/SKILL.md": |
+      "skills/audio-engine/SKILL.md": |
         ---
         name: audio-engine
         description: >
@@ -390,7 +390,7 @@ spec:
         console.log('Done. All samples ready.');
         ```
 
-      ".github/skills/integration-wiring/SKILL.md": |
+      "skills/integration-wiring/SKILL.md": |
         ---
         name: integration-wiring
         description: >
@@ -502,7 +502,7 @@ spec:
         # Should be > 8
         ```
 
-      ".github/skills/strict-types/SKILL.md": |
+      "skills/strict-types/SKILL.md": |
         ---
         name: strict-types
         description: >
@@ -592,7 +592,7 @@ spec:
           });
         ```
 
-      ".github/skills/react-native-quality/SKILL.md": |
+      "skills/react-native-quality/SKILL.md": |
         ---
         name: react-native-quality
         description: >
@@ -719,7 +719,7 @@ spec:
         - Reset All button → resets all stores to defaults
         - App version display from app.json
 
-      ".github/skills/verification-gates/SKILL.md": |
+      "skills/verification-gates/SKILL.md": |
         ---
         name: verification-gates
         description: >

@@ -526,7 +526,7 @@ spec:
 ---
 # ---------------------------------------------------------------------------
 # Allow Egress from API Gateway to Kubernetes API
-# The gateway lists CRDs (aiagents, agentworkflows, agentpolicies, agentevals)
+# The gateway lists CRDs (aiagents, agentworkflows, agentpolicies)
 # directly from the K8s API to serve /api/agents, /api/workflows, etc.
 # ---------------------------------------------------------------------------
 apiVersion: networking.k8s.io/v1

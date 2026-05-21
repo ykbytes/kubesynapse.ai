@@ -19,7 +19,7 @@ spec:
     read, glob, grep) for all file and code operations.
   skills:
     files:
-      .github/skills/code-review/SKILL.md: |
+      skills/code-review/SKILL.md: |
         ---
         name: code-review
         description: Review pull requests and suggest improvements.

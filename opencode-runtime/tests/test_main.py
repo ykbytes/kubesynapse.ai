@@ -123,7 +123,7 @@ class OpenCodeRuntimeTests(unittest.TestCase):
                 os.environ,
                 {
                     opencode_runtime_main.AGENT_SKILL_FILES_ENV: json.dumps(
-                        {".github/skills/reviewer/SKILL.md": skill_text}
+                        {"skills/reviewer/SKILL.md": skill_text}
                     )
                 },
                 clear=False,
@@ -143,7 +143,7 @@ class OpenCodeRuntimeTests(unittest.TestCase):
     def test_parse_skill_frontmatter_normalizes_invalid_name(self) -> None:
         content = "---\nname: My_Invalid Skill Name!!!\ndescription: Test skill\n---\nBody\n"
         name, description, warnings = opencode_runtime_main.parse_skill_frontmatter(
-            ".github/skills/reviewer/SKILL.md",
+            "skills/reviewer/SKILL.md",
             content,
         )
         self.assertEqual(name, "my-invalid-skill-name")
@@ -159,7 +159,7 @@ class OpenCodeRuntimeTests(unittest.TestCase):
             "Body\n"
         )
         name, _description, warnings = opencode_runtime_main.parse_skill_frontmatter(
-            ".github/skills/reviewer/SKILL.md",
+            "skills/reviewer/SKILL.md",
             content,
         )
         self.assertEqual(name, "reviewer")
@@ -1915,6 +1915,47 @@ class InvokeOpenCodeLoopTests(unittest.TestCase):
         self.assertTrue(any("non-retryable" in w.lower() for w in resp.warnings))
         self.assertFalse(any("retrying" in w.lower() for w in resp.warnings))
 
+    def test_error_response_uses_warning_fallback_instead_of_no_output(self) -> None:
+        payload = self._make_payload(
+            "",
+            "error",
+            error={
+                "name": "APIError",
+                "data": {
+                    "message": "Insufficient balance. Manage billing.",
+                    "isRetryable": False,
+                    "statusCode": 402,
+                },
+            },
+        )
+        session_messages = [
+            {
+                "parts": [
+                    {
+                        "type": "tool",
+                        "tool": "api",
+                        "state": {"status": "error", "error": "Insufficient balance. Manage billing."},
+                    }
+                ]
+            }
+        ]
+        req = opencode_runtime_main.InvokeRequest(prompt="Task", max_retries=3)
+        with (
+            self._patch_server_running(),
+            self._patch_create_session(),
+            self._patch_send_prompt([payload]),
+            patch.object(invoke_mod, "get_session_messages", return_value=session_messages),
+            patch.object(invoke_mod, "get_session_todos", return_value=[]),
+            patch.object(invoke_mod, "wait_for_session_idle", return_value={"type": "idle"}),
+            patch.object(invoke_mod, "abort_session", return_value=True),
+            patch.object(invoke_mod, "summarize_session", return_value=True),
+        ):
+            resp = opencode_runtime_main.invoke_opencode(req)
+
+        self.assertEqual(resp.status, "error")
+        self.assertIn("Insufficient balance", resp.response)
+        self.assertNotEqual(resp.response, "(no output)")
+
     def test_plan_agent_switch_to_build(self) -> None:
         """When plan agent finishes, loop should switch to build agent."""
         with (
@@ -2013,6 +2054,24 @@ class InvokeOpenCodeLoopTests(unittest.TestCase):
         self.assertIsNotNone(resp.continuity)
         self.assertIn("created_new_session", resp.continuity)
         self.assertIn("remote_session_id", resp.continuity)
+
+    def test_existing_thread_reuses_logical_session(self) -> None:
+        payload = self._make_payload("All done", "stop")
+        req = opencode_runtime_main.InvokeRequest(prompt="Build it", thread_id="thread-1")
+        with (
+            self._patch_server_running(),
+            patch.object(invoke_mod.SESSION_REGISTRY, "get", return_value="ses_existing"),
+            patch.object(invoke_mod, "create_remote_session") as mock_create_session,
+            self._patch_send_prompt([payload]),
+        ):
+            patches = self._patch_session_helpers()
+            with patches[0], patches[1], patches[2], patches[3], patches[4]:
+                resp = opencode_runtime_main.invoke_opencode(req)
+
+        mock_create_session.assert_not_called()
+        self.assertIsNotNone(resp.continuity)
+        self.assertFalse(resp.continuity["created_new_session"])
+        self.assertEqual(resp.continuity["remote_session_id"], "ses_existing")
 
     def test_session_init_called_for_new_autonomous_session(self) -> None:
         payload = self._make_payload("All done", "stop")
@@ -2761,6 +2820,46 @@ class ContextBudgetEndpointTests(unittest.TestCase):
 class StreamingEventsTests(unittest.TestCase):
     """Tests for per-turn SSE streaming events."""
 
+    def test_live_updates_fall_back_to_sync_send_when_system_prompt_is_present(self) -> None:
+        final_payload = {
+            "info": {
+                "id": "msg_assistant_final",
+                "role": "assistant",
+                "parentID": "msg_user",
+                "finish": "stop",
+                "time": {"completed": 1},
+            },
+            "parts": [{"type": "text", "text": "Done!"}],
+        }
+
+        with (
+            patch.object(
+                invoke_mod,
+                "_send_prompt_with_session_recovery",
+                return_value=("ses_test", final_payload),
+            ) as sync_send,
+            patch.object(invoke_mod, "send_prompt_async") as async_send,
+        ):
+            session_id, payload = invoke_mod._send_prompt_with_live_updates_and_recovery(
+                session_id="ses_test",
+                prompt="Do something",
+                model="gpt-4",
+                system_prompt="You have persistent memory from prior conversations.",
+                prompt_format=None,
+                working_directory="/workspace",
+                agent="build",
+                logical_thread_id="thread-1",
+                allow_session_recovery=False,
+                turn=0,
+                emit=lambda *_args, **_kwargs: None,
+            )
+
+        self.assertEqual(session_id, "ses_test")
+        self.assertEqual(payload["parts"][0]["text"], "Done!")
+        self.assertFalse(payload["_live_streamed"])
+        sync_send.assert_called_once()
+        async_send.assert_not_called()
+
     def test_live_updates_wait_for_terminal_assistant_payload(self) -> None:
         """Live-update polling should ignore intermediate tool-call assistant messages."""
         intermediate_payload = {
@@ -2861,6 +2960,46 @@ class StreamingEventsTests(unittest.TestCase):
         self.assertIn("event: response.completed", text)
         self.assertIn("response.turn_started", text)
         self.assertIn("response.turn_completed", text)
+
+    def test_stream_uses_sync_invoke_for_memory_context_requests(self) -> None:
+        captured: dict[str, Any] = {}
+
+        def mock_invoke(request, stream_callback=None):
+            captured["thread_id"] = request.thread_id
+            captured["stream_callback"] = stream_callback
+            return opencode_runtime_main.InvokeResponse(
+                thread_id=request.thread_id or "thread-1",
+                response="Chickens must be black.",
+                model="gpt-4",
+                status="completed",
+            )
+
+        async def collect_stream() -> tuple[int, str]:
+            response = await opencode_runtime_main.invoke_stream(
+                opencode_runtime_main.InvokeRequest(
+                    prompt="What do you remember about chickens?",
+                    system=(
+                        "You have persistent memory from prior conversations. "
+                        "Use these as durable context when relevant:\n"
+                        "- [assistant-summary] Noted. Chickens must be black. What next?"
+                    ),
+                )
+            )
+            chunks: list[str] = []
+            async for chunk in response.body_iterator:
+                chunks.append(chunk)
+            return response.status_code, "".join(chunks)
+
+        with (
+            patch.object(opencode_runtime_main, "invoke_opencode", side_effect=mock_invoke),
+            patch.object(opencode_runtime_main, "list_pending_questions", return_value=[]),
+            patch.object(opencode_runtime_main, "get_session_todos", return_value=[]),
+        ):
+            status_code, text = asyncio.run(collect_stream())
+
+        self.assertEqual(status_code, 200)
+        self.assertIn("Chickens must be black.", text)
+        self.assertIsNone(captured["stream_callback"])
 
     def test_stream_emits_live_reasoning_snapshots(self) -> None:
         """Streaming endpoint should forward live reasoning snapshots from async OpenCode prompts."""

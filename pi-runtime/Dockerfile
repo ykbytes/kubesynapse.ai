@@ -38,6 +38,7 @@ COPY --chown=piuser:piuser settings.json /home/piuser/.pi/agent/settings.json
 # Copy entrypoint and bridge
 COPY --chown=piuser:piuser entrypoint.sh /entrypoint.sh
 COPY --chown=piuser:piuser pi_bridge.js /pi_bridge.js
+COPY --chown=piuser:piuser runtime_events.js /runtime_events.js
 RUN chmod +x /entrypoint.sh /pi_bridge.js
 
 WORKDIR /workspace

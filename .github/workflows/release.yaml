@@ -41,43 +41,43 @@ jobs:
           podman build --format docker -t ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAMESPACE_GHCR }}/kubesynapse-operator:${{ steps.version.outputs.version }} ./operator
           podman push ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAMESPACE_GHCR }}/kubesynapse-operator:${{ steps.version.outputs.version }}
           # Docker Hub
-          podman tag ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAMESPACE_GHCR }}/kubesynapse-operator:${{ steps.version.outputs.version }} ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAMESPACE_DOCKERHUB }}/operator:${{ steps.version.outputs.version }}
-          podman push ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAMESPACE_DOCKERHUB }}/operator:${{ steps.version.outputs.version }}
+          podman tag ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAMESPACE_GHCR }}/kubesynapse-operator:${{ steps.version.outputs.version }} ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAMESPACE_DOCKERHUB }}/kubesynapse-operator:${{ steps.version.outputs.version }}
+          podman push ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAMESPACE_DOCKERHUB }}/kubesynapse-operator:${{ steps.version.outputs.version }}
           # latest tag
-          podman tag ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAMESPACE_DOCKERHUB }}/operator:${{ steps.version.outputs.version }} ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAMESPACE_DOCKERHUB }}/operator:latest
-          podman push ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAMESPACE_DOCKERHUB }}/operator:latest
+          podman tag ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAMESPACE_DOCKERHUB }}/kubesynapse-operator:${{ steps.version.outputs.version }} ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAMESPACE_DOCKERHUB }}/kubesynapse-operator:latest
+          podman push ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAMESPACE_DOCKERHUB }}/kubesynapse-operator:latest
 
       - name: Build & Push API Gateway
         run: |
           podman build --format docker -t ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAMESPACE_GHCR }}/kubesynapse-api-gateway:${{ steps.version.outputs.version }} ./api-gateway
           podman push ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAMESPACE_GHCR }}/kubesynapse-api-gateway:${{ steps.version.outputs.version }}
-          podman tag ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAMESPACE_GHCR }}/kubesynapse-api-gateway:${{ steps.version.outputs.version }} ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAMESPACE_DOCKERHUB }}/api-gateway:${{ steps.version.outputs.version }}
-          podman push ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAMESPACE_DOCKERHUB }}/api-gateway:${{ steps.version.outputs.version }}
-          podman tag ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAMESPACE_DOCKERHUB }}/api-gateway:${{ steps.version.outputs.version }} ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAMESPACE_DOCKERHUB }}/api-gateway:latest
-          podman push ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAMESPACE_DOCKERHUB }}/api-gateway:latest
+          podman tag ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAMESPACE_GHCR }}/kubesynapse-api-gateway:${{ steps.version.outputs.version }} ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAMESPACE_DOCKERHUB }}/kubesynapse-api-gateway:${{ steps.version.outputs.version }}
+          podman push ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAMESPACE_DOCKERHUB }}/kubesynapse-api-gateway:${{ steps.version.outputs.version }}
+          podman tag ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAMESPACE_DOCKERHUB }}/kubesynapse-api-gateway:${{ steps.version.outputs.version }} ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAMESPACE_DOCKERHUB }}/kubesynapse-api-gateway:latest
+          podman push ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAMESPACE_DOCKERHUB }}/kubesynapse-api-gateway:latest
 
       - name: Build & Push OpenCode Runtime
         run: |
-          podman build --format docker -t ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAMESPACE_GHCR }}/kubesynapse-opencode-runtime:${{ steps.version.outputs.version }} ./opencode-runtime
-          podman push ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAMESPACE_GHCR }}/kubesynapse-opencode-runtime:${{ steps.version.outputs.version }}
-          podman tag ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAMESPACE_GHCR }}/kubesynapse-opencode-runtime:${{ steps.version.outputs.version }} ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAMESPACE_DOCKERHUB }}/opencode-runtime:${{ steps.version.outputs.version }}
-          podman push ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAMESPACE_DOCKERHUB }}/opencode-runtime:${{ steps.version.outputs.version }}
-          podman tag ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAMESPACE_DOCKERHUB }}/opencode-runtime:${{ steps.version.outputs.version }} ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAMESPACE_DOCKERHUB }}/opencode-runtime:latest
-          podman push ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAMESPACE_DOCKERHUB }}/opencode-runtime:latest
+          podman build --format docker -t ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAMESPACE_GHCR }}/kubesynapse-opencode-rt:${{ steps.version.outputs.version }} ./opencode-runtime
+          podman push ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAMESPACE_GHCR }}/kubesynapse-opencode-rt:${{ steps.version.outputs.version }}
+          podman tag ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAMESPACE_GHCR }}/kubesynapse-opencode-rt:${{ steps.version.outputs.version }} ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAMESPACE_DOCKERHUB }}/kubesynapse-opencode-rt:${{ steps.version.outputs.version }}
+          podman push ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAMESPACE_DOCKERHUB }}/kubesynapse-opencode-rt:${{ steps.version.outputs.version }}
+          podman tag ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAMESPACE_DOCKERHUB }}/kubesynapse-opencode-rt:${{ steps.version.outputs.version }} ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAMESPACE_DOCKERHUB }}/kubesynapse-opencode-rt:latest
+          podman push ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAMESPACE_DOCKERHUB }}/kubesynapse-opencode-rt:latest
 
       - name: Build & Push Web UI
         run: |
           podman build --format docker -t ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAMESPACE_GHCR }}/kubesynapse-web-ui:${{ steps.version.outputs.version }} ./web-ui
           podman push ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAMESPACE_GHCR }}/kubesynapse-web-ui:${{ steps.version.outputs.version }}
-          podman tag ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAMESPACE_GHCR }}/kubesynapse-web-ui:${{ steps.version.outputs.version }} ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAMESPACE_DOCKERHUB }}/web-ui:${{ steps.version.outputs.version }}
-          podman push ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAMESPACE_DOCKERHUB }}/web-ui:${{ steps.version.outputs.version }}
-          podman tag ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAMESPACE_DOCKERHUB }}/web-ui:${{ steps.version.outputs.version }} ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAMESPACE_DOCKERHUB }}/web-ui:latest
-          podman push ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAMESPACE_DOCKERHUB }}/web-ui:latest
+          podman tag ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAMESPACE_GHCR }}/kubesynapse-web-ui:${{ steps.version.outputs.version }} ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAMESPACE_DOCKERHUB }}/kubesynapse-web-ui:${{ steps.version.outputs.version }}
+          podman push ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAMESPACE_DOCKERHUB }}/kubesynapse-web-ui:${{ steps.version.outputs.version }}
+          podman tag ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAMESPACE_DOCKERHUB }}/kubesynapse-web-ui:${{ steps.version.outputs.version }} ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAMESPACE_DOCKERHUB }}/kubesynapse-web-ui:latest
+          podman push ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAMESPACE_DOCKERHUB }}/kubesynapse-web-ui:latest
 
       - name: Generate SBOMs
         run: |
           mkdir -p dist/sbom
-          for img in kubesynapse-operator kubesynapse-api-gateway kubesynapse-opencode-runtime kubesynapse-web-ui; do
+          for img in kubesynapse-operator kubesynapse-api-gateway kubesynapse-opencode-rt kubesynapse-web-ui; do
             podman run --rm aquasec/trivy image \
               --format spdx-json \
               --output dist/sbom/${img}.spdx.json \
@@ -86,13 +86,13 @@ jobs:
 
       - name: Sign GHCR images with cosign
         run: |
-          for img in kubesynapse-operator kubesynapse-api-gateway kubesynapse-opencode-runtime kubesynapse-web-ui; do
+          for img in kubesynapse-operator kubesynapse-api-gateway kubesynapse-opencode-rt kubesynapse-web-ui; do
             cosign sign --yes ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAMESPACE_GHCR }}/${img}:${{ steps.version.outputs.version }}
           done
 
       - name: Sign Docker Hub images with cosign
         run: |
-          for img in operator api-gateway opencode-runtime web-ui; do
+          for img in kubesynapse-operator kubesynapse-api-gateway kubesynapse-opencode-rt kubesynapse-web-ui; do
             cosign sign --yes ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAMESPACE_DOCKERHUB }}/${img}:${{ steps.version.outputs.version }}
           done
 

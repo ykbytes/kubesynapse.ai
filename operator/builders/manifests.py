@@ -37,10 +37,10 @@ from config import (
     IMAGE_PULL_SECRETS,
     LITELLM_SVC,
     MCP_AUTH_SECRET_NAME,
-    MISTRAL_VIBE_RUNTIME_IMAGE,
-    MISTRAL_VIBE_RUNTIME_IMAGE_PULL_POLICY,
     MCP_HUB_NAMESPACE,
     MCP_SIDECAR_CATALOG,
+    MISTRAL_VIBE_RUNTIME_IMAGE,
+    MISTRAL_VIBE_RUNTIME_IMAGE_PULL_POLICY,
     OPA_SIDECAR_IMAGE,
     OPA_SIDECAR_PORT,
     OPA_SIDECAR_RESOURCES,
@@ -73,6 +73,8 @@ from config import (
     WORKER_MEMORY_REQUEST,
     WORKER_SERVICE_ACCOUNT_NAME,
     WORKER_TTL_SECONDS_AFTER_FINISHED,
+    OPENCODE_IMMUTABLE_CONFIG,
+    PI_IMMUTABLE_CONFIG,
     serialize_env_value,
 )
 from kubernetes.client.rest import ApiException  # type: ignore[import-untyped]
@@ -351,13 +353,13 @@ def resolve_runtime_kind(spec: dict[str, Any]) -> str:
     runtime_spec = spec.get("runtime")
     if not isinstance(runtime_spec, dict):
         raise kopf.PermanentError(
-            "AIAgent.spec.runtime.kind must be explicitly set to 'opencode' or 'pi'."
+            "AIAgent.spec.runtime.kind must be explicitly set to 'opencode', 'pi', or 'mistral-vibe'."
         )
 
     runtime_kind = str(runtime_spec.get("kind") or "").strip().lower()
     if not runtime_kind:
         raise kopf.PermanentError(
-            "AIAgent.spec.runtime.kind must be explicitly set to 'opencode' or 'pi'."
+            "AIAgent.spec.runtime.kind must be explicitly set to 'opencode', 'pi', or 'mistral-vibe'."
         )
     if runtime_kind not in SUPPORTED_RUNTIME_KINDS:
         raise kopf.PermanentError(
@@ -373,6 +375,7 @@ def validate_runtime_configuration(runtime_kind: str, spec: dict[str, Any]) -> N
     goose_spec = runtime_spec.get("goose") if isinstance(runtime_spec, dict) else None
     codex_spec = runtime_spec.get("codex") if isinstance(runtime_spec, dict) else None
     opencode_spec = runtime_spec.get("opencode") if isinstance(runtime_spec, dict) else None
+    vibe_spec = runtime_spec.get("mistralVibe") if isinstance(runtime_spec, dict) else None
     explicit_sidecars = spec.get("mcpSidecars")
     github_config = spec.get("githubConfig")
     try:
@@ -405,6 +408,8 @@ def validate_runtime_configuration(runtime_kind: str, spec: dict[str, Any]) -> N
         raise kopf.PermanentError("AIAgent.spec.runtime.codex is no longer supported. Use spec.runtime.opencode instead.")
     if opencode_spec is not None and not isinstance(opencode_spec, dict):
         raise kopf.PermanentError("AIAgent.spec.runtime.opencode must be an object when provided.")
+    if vibe_spec is not None and not isinstance(vibe_spec, dict):
+        raise kopf.PermanentError("AIAgent.spec.runtime.mistralVibe must be an object when provided.")
     try:
         parse_runtime_config_files(
             (opencode_spec or {}).get("configFiles") if isinstance(opencode_spec, dict) else None,
@@ -412,10 +417,42 @@ def validate_runtime_configuration(runtime_kind: str, spec: dict[str, Any]) -> N
         )
     except ValueError as exc:
         raise kopf.PermanentError(str(exc)) from exc
-    if spec.get("githubConfig"):
+    if runtime_kind == "opencode" and spec.get("githubConfig"):
         raise kopf.PermanentError(
             "OpenCode runtime does not support spec.githubConfig in the OpenCode-only build. Use sidecar-based GitHub MCP credentials instead."
         )
+
+    # §security-P0: Reject dangerous runtime config that could enable RCE.
+    # Block !-prefix env values (Pi config RCE via shell execution).
+    pi_runtime_spec = (spec.get("runtime") or {}).get("pi") if isinstance(spec.get("runtime"), dict) else None
+    if isinstance(pi_runtime_spec, dict):
+        pi_env_spec = pi_runtime_spec.get("env")
+        if isinstance(pi_env_spec, dict):
+            for _ek, _ev in pi_env_spec.items():
+                if isinstance(_ev, str) and _ev.startswith("!"):
+                    raise kopf.PermanentError(
+                        f"AIAgent spec.runtime.pi.env.{_ek} starts with '!' — "
+                        f"this enables shell execution in Pi config and is a security risk."
+                    )
+
+    # Block plugin arrays in OpenCode configFiles (config-driven RCE).
+    opencode_runtime_spec = (spec.get("runtime") or {}).get("opencode") if isinstance(spec.get("runtime"), dict) else None
+    if isinstance(opencode_runtime_spec, dict):
+        opencode_cf = opencode_runtime_spec.get("configFiles")
+        if isinstance(opencode_cf, dict):
+            for _cf_path, _cf_content in opencode_cf.items():
+                if isinstance(_cf_content, str) and '"plugin"' in _cf_content:
+                    import re as _re
+
+                    if _re.search(r'"plugin"\s*:\s*\[', _cf_content) or _re.search(r"'plugin'\s*:\s*\[", _cf_content):
+                        _has_nonempty = _re.search(r'"plugin"\s*:\s*\[.+\]', _cf_content) or _re.search(
+                            r"'plugin'\s*:\s*\[.+\]", _cf_content
+                        )
+                        if _has_nonempty:
+                            raise kopf.PermanentError(
+                                f"AIAgent spec.runtime.opencode.configFiles contains non-empty 'plugin' "
+                                f"array in '{_cf_path}' — this enables config-driven RCE and is blocked."
+                            )
 
 
 # ---------------------------------------------------------------------------
@@ -829,6 +866,32 @@ def create_mcp_auth_secret_manifest(namespace: str) -> dict[str, Any]:
     }
 
 
+def mcp_connections_require_shared_bearer_token(mcp_connections: list[dict[str, Any]], mcp_servers: list[str]) -> bool:
+    """Return True when an agent still needs the shared MCP hub bearer token.
+
+    Structured saved MCP connections can be fully self-contained remote endpoints.
+    Those should not force the operator to mirror the hub auth secret just because
+    legacy mcpServers was backfilled for compatibility.
+    """
+    if not mcp_connections:
+        return bool(mcp_servers)
+
+    for connection in mcp_connections:
+        if not isinstance(connection, dict):
+            continue
+        transport = str(connection.get("transport") or "").strip().lower()
+        if transport == "hub":
+            return True
+        runtime = connection.get("runtime") if isinstance(connection.get("runtime"), dict) else {}
+        headers = runtime.get("headers") if isinstance(runtime.get("headers"), list) else []
+        for header in headers:
+            if not isinstance(header, dict):
+                continue
+            if str(header.get("envVar") or "").strip() == "MCP_BEARER_TOKEN":
+                return True
+    return False
+
+
 # Built-in provider ID -> secret key mapping
 _BUILTIN_PROVIDER_SECRET_KEYS: dict[str, str] = {
     "opencode": "OPENCODE_API_KEY",
@@ -1087,6 +1150,7 @@ def _create_pi_statefulset_spec(
 
     runtime_spec = spec.get("runtime") or {}
     pi_spec = (runtime_spec.get("pi") or {}) if isinstance(runtime_spec, dict) else {}
+    needs_shared_mcp_bearer = mcp_connections_require_shared_bearer_token(mcp_connections, mcp_servers)
 
     agent_image = PI_RUNTIME_IMAGE
     agent_image_pull_policy = PI_RUNTIME_IMAGE_PULL_POLICY
@@ -1109,6 +1173,22 @@ def _create_pi_statefulset_spec(
     volumes = list(volumes)
     volumes.append({"name": "workspace-volume", "emptyDir": {"sizeLimit": "5Gi"}})
 
+    # §security-P0: Mount hardened immutable config read-only
+    if PI_IMMUTABLE_CONFIG:
+        release_prefix = HELM_RELEASE_NAME or "kubesynapse"
+        pi_cfg_cm_name = f"{release_prefix}-pi-safe-config"
+        volume_mounts.append(
+            {"name": "pi-immutable-config", "mountPath": "/etc/kubesynapse/pi-config/pi-config.json", "subPath": "pi-config.json", "readOnly": True}
+        )
+        volumes.append(
+            {"name": "pi-immutable-config", "configMap": {"name": pi_cfg_cm_name}}
+        )
+        # Mount empty read-only dirs to block extension/skill discovery
+        volume_mounts.append({"name": "pi-ext-block", "mountPath": "/home/piuser/.pi/agent/extensions", "readOnly": True})
+        volumes.append({"name": "pi-ext-block", "emptyDir": {}})
+        volume_mounts.append({"name": "pi-skills-block", "mountPath": "/home/piuser/.pi/agent/skills", "readOnly": True})
+        volumes.append({"name": "pi-skills-block", "emptyDir": {}})
+
     # Pi-specific environment variables
     pi_env = list(env)
     pi_env.extend(
@@ -1120,6 +1200,12 @@ def _create_pi_statefulset_spec(
             {"name": "PI_THINKING_LEVEL", "value": pi_thinking_level},
             {"name": "PI_NO_SESSION", "value": "true" if pi_no_session else "false"},
             {"name": "PI_SYSTEM_PROMPT", "value": system_prompt},
+        ]
+    )
+    if PI_IMMUTABLE_CONFIG:
+        pi_env.append({"name": "PI_CONFIG_DIR", "value": "/etc/kubesynapse/pi-config"})
+    pi_env.extend(
+        [
             {
                 "name": "LITELLM_API_KEY",
                 "valueFrom": {
@@ -1136,7 +1222,7 @@ def _create_pi_statefulset_spec(
                     "secretKeyRef": {
                         "name": MCP_AUTH_SECRET_NAME,
                         "key": "bearer-token",
-                        "optional": not bool(mcp_servers),
+                        "optional": not needs_shared_mcp_bearer,
                     }
                 },
             },
@@ -1174,9 +1260,12 @@ def _create_pi_statefulset_spec(
     permission_level = str(pi_spec.get("permissionLevel") or "permissive").strip()
     pi_env.append({"name": "KS_PERMISSION_LEVEL", "value": permission_level})
 
-    # API key env vars for pi provider auto-detection
-    # Map kubesynapse LLM secret to pi-compatible env vars
-    for provider_key in [
+    # §security-P0: Provider-scoped API key injection.
+    # When pi_provider is set, only that provider's keys are injected into the
+    # runtime pod.  When empty (auto-detect mode), all keys are injected with a
+    # WARNING logged.  This prevents a compromised runtime from exfiltrating
+    # keys for providers it was never configured to use.
+    _ALL_PI_SECRET_KEYS: list[str] = [
         "ANTHROPIC_API_KEY",
         "AZURE_OPENAI_API_KEY",
         "OPENAI_API_KEY",
@@ -1198,19 +1287,45 @@ def _create_pi_statefulset_spec(
         "MINIMAX_API_KEY",
         "MINIMAX_CN_API_KEY",
         "COHERE_API_KEY",
-    ]:
-        pi_env.append(
-            {
-                "name": provider_key,
-                "valueFrom": {
-                    "secretKeyRef": {
-                        "name": SECRET_NAME,
-                        "key": provider_key,
-                        "optional": True,
-                    }
-                },
-            }
-        )
+    ]
+    if pi_provider and pi_provider in _PI_PROVIDER_SECRET_KEYS:
+        provider_keys = list(_PI_PROVIDER_SECRET_KEYS[pi_provider])
+        for key in provider_keys:
+            pi_env.append(
+                {
+                    "name": key,
+                    "valueFrom": {
+                        "secretKeyRef": {
+                            "name": SECRET_NAME,
+                            "key": key,
+                            "optional": True,
+                        }
+                    },
+                }
+            )
+    else:
+        if not pi_provider:
+            logger.warning(
+                "Pi runtime for agent %s has no explicit provider "
+                "(PI_DEFAULT_PROVIDER is empty); all %d API keys will be "
+                "injected. Set pi.provider or PI_DEFAULT_PROVIDER to scope "
+                "key exposure.",
+                name,
+                len(_ALL_PI_SECRET_KEYS),
+            )
+        for key in _ALL_PI_SECRET_KEYS:
+            pi_env.append(
+                {
+                    "name": key,
+                    "valueFrom": {
+                        "secretKeyRef": {
+                            "name": SECRET_NAME,
+                            "key": key,
+                            "optional": True,
+                        }
+                    },
+                }
+            )
 
     # Provider-specific auth from provider registry (same pattern as OpenCode)
     provider_bootstrap_secret_name = f"{sandbox_name(name)}-pi-provider"
@@ -1591,6 +1706,7 @@ def create_agent_statefulset_manifest(
     mcp_connections = spec.get("mcpConnections") if isinstance(spec.get("mcpConnections"), list) else []
     mcp_servers = spec.get("mcpServers") or []
     mcp_sidecars = _extract_structured_mcp_sidecars(mcp_connections) or (spec.get("mcpSidecars") or [])
+    needs_shared_mcp_bearer = mcp_connections_require_shared_bearer_token(mcp_connections, mcp_servers)
     enable_gvisor = spec.get("enableGVisor", False)
     system_prompt = spec.get("systemPrompt", "")
     agent_resources = resolve_agent_container_resources(spec)
@@ -1899,6 +2015,18 @@ def create_agent_statefulset_manifest(
     volume_mounts.append({"name": "workspace-volume", "mountPath": "/workspace"})
     volumes.append({"name": "workspace-volume", "emptyDir": {"sizeLimit": "5Gi"}})
 
+    # §security-P0: Mount hardened immutable config read-only
+    if OPENCODE_IMMUTABLE_CONFIG:
+        release_prefix = HELM_RELEASE_NAME or "kubesynapse"
+        cfg_cm_name = f"{release_prefix}-opencode-safe-config"
+        volume_mounts.append(
+            {"name": "opencode-immutable-config", "mountPath": "/etc/kubesynapse/opencode.json", "subPath": "opencode.json", "readOnly": True}
+        )
+        volumes.append(
+            {"name": "opencode-immutable-config", "configMap": {"name": cfg_cm_name}}
+        )
+        env.append({"name": "OPENCODE_CONFIG", "value": "/etc/kubesynapse/opencode.json"})
+
     # Build a deterministic per-agent secret name for provider bootstrap data
     provider_bootstrap_secret_name = f"{sandbox_name(name)}-opencode-provider"
 
@@ -1928,7 +2056,7 @@ def create_agent_statefulset_manifest(
                     "secretKeyRef": {
                         "name": MCP_AUTH_SECRET_NAME,
                         "key": "bearer-token",
-                        "optional": not bool(mcp_servers),
+                        "optional": not needs_shared_mcp_bearer,
                     }
                 },
             },
@@ -2188,7 +2316,7 @@ def create_agent_statefulset_manifest(
             "selector": {"matchLabels": {"app": "ai-agent", "agent-name": name}},
             "updateStrategy": {"type": "RollingUpdate"},
             "persistentVolumeClaimRetentionPolicy": {
-                "whenDeleted": "Retain",
+                "whenDeleted": "Delete",
                 "whenScaled": "Retain",
             },
             "template": {
@@ -2395,7 +2523,7 @@ def create_worker_job_manifest(
     git_config: dict[str, Any] | None = None,
     max_parallel_steps: int | None = None,
 ) -> dict[str, Any]:
-    """Build a Kubernetes Job manifest for a workflow/eval worker."""
+    """Build a Kubernetes Job manifest for a workflow worker."""
     timestamp = int(time.time())
     job_name = hashed_resource_name(kind, resource_namespace, resource_name, suffix=f"{generation}-{timestamp}")
     artifact_journal_path = workflow_journal_path(artifact_path)
@@ -2479,7 +2607,6 @@ def create_worker_job_manifest(
                                 {"name": "ARTIFACT_PVC_NAME", "value": artifact_pvc_name},
                                 {"name": "AGENT_RUNTIME_TIMEOUT_SECONDS", "value": AGENT_RUNTIME_TIMEOUT_SECONDS},
                                 {"name": "WORKFLOW_RUN_ID", "value": run_id or ""},
-                                {"name": "EVAL_RUN_ID", "value": run_id or ""},
                                 {"name": "PYTHONDONTWRITEBYTECODE", "value": "1"},
                                 {
                                     "name": "MAX_PARALLEL_STEPS",

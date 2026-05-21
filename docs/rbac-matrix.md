@@ -27,8 +27,8 @@ KubeSynapse uses **least-privilege RBAC** with one ServiceAccount per component.
 | API Group | Resource | Verbs | Justification |
 |-----------|----------|-------|---------------|
 | `kopf.dev` | `clusterkopfpeerings` | list, watch, patch, get | Kopf framework leader election and peering |
-| `kubesynapse.ai` | `aiagents`, `agenttenants`, `agentpolicies`, `agentapprovals`, `agentworkflows`, `agentevals` | full CRUD | Core CRD reconciliation — the operator MUST create/update/delete these resources |
-| `kubesynapse.ai` | `*/status` (6 resources) | get, patch, update | Write status subresource for reconciliation state reporting |
+| `kubesynapse.ai` | `aiagents`, `agenttenants`, `agentpolicies`, `agentapprovals`, `agentworkflows` | full CRUD | Core CRD reconciliation — the operator MUST create/update/delete these resources |
+| `kubesynapse.ai` | `*/status` (5 resources) | get, patch, update | Write status subresource for reconciliation state reporting |
 | `kubesynapse.ai` | `observationtargets`, `observationpolicies`, `observationreports`, `connectorplugins` | full CRUD | Observability CRD reconciliation |
 | `kubesynapse.ai` | `observation*/status` (4 resources) | get, patch, update | Observability status updates |
 | `apiextensions.k8s.io` | `customresourcedefinitions` | get, list, watch | **Read-only** — discover CRD versions and schemas at startup |
@@ -65,8 +65,9 @@ KubeSynapse uses **least-privilege RBAC** with one ServiceAccount per component.
 
 | API Group | Resource | Verbs | Justification |
 |-----------|----------|-------|---------------|
-| `kubesynapse.ai` | `aiagents`, `agentworkflows`, `agentevals` | full CRUD | User-facing CRUD operations via REST API |
+| `kubesynapse.ai` | `aiagents`, `agentworkflows` | full CRUD | User-facing CRUD operations via REST API |
 | `kubesynapse.ai` | `agentpolicies` | full CRUD | Policy management API |
+| `kubesynapse.ai` | `agenttenants` | create, get, update | Admin user provisioning reconciles dedicated per-user `AgentTenant` resources |
 | `kubesynapse.ai` | `agentapprovals` | get, list, watch | Read approval requests (approvals handled by operator) |
 | `kubesynapse.ai` | `agentapprovals/status` | patch, update | Update approval status (approve/reject) |
 | `kubesynapse.ai` | `agentworkflows/status` | patch, update | Update workflow execution status |
@@ -79,14 +80,24 @@ KubeSynapse uses **least-privilege RBAC** with one ServiceAccount per component.
 
 | API Group | Resource | Verbs | Justification |
 |-----------|----------|-------|---------------|
-| `""` (core) | `secrets` | get, update | Read provider credentials, update refresh tokens (**namespace only, NOT cluster-wide**) |
+| `""` (core) | `secrets` | get, list, create, update, delete | Manage provider credentials and stored tokens in the gateway namespace only |
 | `""` (core) | `configmaps` | get, create, update | Read/store runtime configuration, feature flags |
 | `""` (core) | `pods/log` | get | Stream agent pod logs to WebUI |
+| `""` (core) | `pods/exec` | create | Namespace-scoped exec support for selected admin and maintenance workflows |
 
 ### Justification Summary
-- **Why ClusterRole?** The gateway needs cluster-wide CRD read/write access to serve the REST API. It does NOT create infrastructure (pods, services) — that's the operator's job.
+- **Why ClusterRole?** The gateway needs cluster-wide CRD read/write access to serve the REST API. It also creates or updates `AgentTenant` CRs when admins create or modify local users, but it still does NOT create pods, services, or StatefulSets directly.
 - **Why separate Namespace Role for secrets?** P0 security fix: previously the gateway had cluster-wide secret read. Now restricted to its own namespace only.
-- **What it CANNOT do:** Create/delete pods, services, statefulsets, namespaces, RBAC. No `pods/exec`. No `secrets list` on other namespaces.
+- **What it CANNOT do:** Create/delete pods, services, statefulsets, namespaces, or RBAC bindings directly. It has no cluster-wide secret access.
+
+### Dedicated User Namespaces
+
+Admin user CRUD now provisions dedicated tenant namespaces for non-admin local users:
+
+- gateway user creation/update reconciles `AgentTenant` objects named `user-<slug>`
+- non-admin users always retain their dedicated namespace in `allowed_namespaces`
+- admin users serialize as wildcard namespace access `[*]`
+- the tenant controller removes stale tenant-managed RoleBindings when `adminUsers` membership changes
 
 ---
 
@@ -162,7 +173,7 @@ No K8s API access needed. LiteLLM is a pure HTTP proxy that only talks to LLM pr
 |-------|--------|
 | ✅ No `*` verbs (wildcard) — all verbs explicitly listed | PASS |
 | ✅ No `*` resources (wildcard) — all resources explicitly listed | PASS |
-| ✅ No `pods/exec` on any SA (prevents container escape) | PASS |
+| ✅ `pods/exec` is limited to the API gateway namespace role only | PASS |
 | ✅ API Gateway secrets access namespace-scoped, not cluster-wide | PASS |
 | ✅ Agent runtime cannot mutate platform CRDs (except approval create) | PASS |
 | ✅ Agent runtime cluster access gated behind explicit opt-in toggle | PASS |

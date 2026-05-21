@@ -13,6 +13,7 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 import uuid
 from collections.abc import AsyncIterator
 from pathlib import Path, PurePosixPath
@@ -20,10 +21,12 @@ from typing import Any
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
 _RUNTIME_DIR = Path(__file__).resolve().parent
+_OPENAPI_SPEC_PATH = _RUNTIME_DIR / "openapi.json"
 _RUNTIME_LOCAL_MODULES = (
     "analysis",
     "config",
@@ -242,6 +245,19 @@ from tracing import (
     get_tracer,
     init_tracing,
 )
+from runtime_events import (
+    EMITTER,
+    emit_llm_call,
+    emit_question_asked,
+    emit_run_completed,
+    emit_run_error,
+    emit_run_started,
+    emit_todo_updated,
+    emit_tool_call,
+    flush_sync_queue,
+    start_sync_emitter,
+    stop_sync_emitter,
+)
 from workspace import (  # noqa: F401 — re-exported
     capture_workspace_snapshot,
     get_or_refresh_snapshot,
@@ -298,6 +314,10 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
     init_tracing()
 
+    # Start runtime event emitter (Run Intelligence Layer)
+    start_sync_emitter()
+    await EMITTER.start()
+
     ensure_runtime_directories()
     configure_git_credentials()
     validate_runtime_startup()
@@ -338,6 +358,10 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         _shutdown_event.set()
         supervisor_thread.join(timeout=5)
 
+        # Flush remaining runtime events before shutdown
+        stop_sync_emitter()
+        await EMITTER.stop()
+
         with _runtime_lock:
             _supervisor_mod._runtime_ready = False
             _supervisor_mod._runtime_process = None
@@ -358,23 +382,150 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 # ---------------------------------------------------------------------------
 
 app = FastAPI(title="OpenCode Runtime", version="1.0.0", lifespan=lifespan)
+_RUNTIME_STARTED_AT = time.time()
+_ERROR_CODES: dict[int, str] = {
+    400: "invalid_request",
+    401: "unauthorized",
+    403: "forbidden",
+    404: "not_found",
+    408: "timeout",
+    409: "conflict",
+    413: "payload_too_large",
+    422: "invalid_request",
+    429: "rate_limited",
+    500: "internal_error",
+    502: "upstream_error",
+    503: "service_unavailable",
+    504: "timeout",
+}
+
+
+def _load_published_openapi() -> dict[str, Any]:
+    if app.openapi_schema is None:
+        app.openapi_schema = json.loads(_OPENAPI_SPEC_PATH.read_text(encoding="utf-8"))
+    return app.openapi_schema
+
+
+app.openapi = _load_published_openapi
+
+
+def _error_code_for_status(status_code: int) -> str:
+    if status_code in _ERROR_CODES:
+        return _ERROR_CODES[status_code]
+    return "upstream_error" if status_code >= 500 else "runtime_error"
+
+
+def _error_message(detail: Any, fallback: str) -> str:
+    if isinstance(detail, str):
+        message = detail.strip()
+        if message:
+            return message
+    if isinstance(detail, dict):
+        candidate = detail.get("message") or detail.get("detail")
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()
+    return fallback
+
+
+def _json_safe(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, BaseException):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe(item) for item in value]
+    return str(value)
+
+
+def _normalized_error_details(details: Any) -> Any:
+    if details in (None, "", [], {}):
+        return None
+    return _json_safe(details)
+
+
+def _validation_error_message(exc: RequestValidationError) -> str:
+    errors = exc.errors()
+    if errors:
+        message = str(errors[0].get("msg") or "").strip()
+        prefix = "Value error, "
+        if message.startswith(prefix):
+            message = message[len(prefix) :].strip()
+        if message:
+            return message
+    return "Request validation failed"
+
+
+def _build_error_response(
+    request: Request,
+    *,
+    status_code: int,
+    message: str,
+    details: Any = None,
+    code: str | None = None,
+) -> JSONResponse:
+    trace_id = getattr(request.state, "request_id", None) or request.headers.get("x-request-id")
+    error: dict[str, Any] = {
+        "code": code or _error_code_for_status(status_code),
+        "message": message,
+    }
+    normalized_details = _normalized_error_details(details)
+    if normalized_details is not None:
+        error["details"] = normalized_details
+    if trace_id:
+        error["trace_id"] = trace_id
+    headers = {"x-request-id": trace_id} if trace_id else None
+    return JSONResponse(status_code=status_code, content={"error": error}, headers=headers)
 
 
 @app.middleware("http")
 async def add_request_id(request: Request, call_next):  # type: ignore[no-untyped-def]
     request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
+    request.state.request_id = request_id
     response = await call_next(request)
     response.headers["x-request-id"] = request_id
     return response
+
+
+@app.exception_handler(HTTPException)
+async def _handle_http_exception(request: Request, exc: HTTPException) -> JSONResponse:
+    details = exc.detail if not isinstance(exc.detail, str) else None
+    return _build_error_response(
+        request,
+        status_code=exc.status_code,
+        message=_error_message(exc.detail, f"HTTP {exc.status_code} error"),
+        details=details,
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def _handle_validation_exception(request: Request, exc: RequestValidationError) -> JSONResponse:
+    return _build_error_response(
+        request,
+        status_code=422,
+        message=_validation_error_message(exc),
+        details=exc.errors(),
+    )
+
+
+@app.exception_handler(Exception)
+async def _handle_unhandled_exception(request: Request, exc: Exception) -> JSONResponse:
+    logger.exception("Unhandled OpenCode runtime error")
+    return _build_error_response(
+        request,
+        status_code=500,
+        message="Internal server error",
+    )
 
 
 @app.get("/health")
 def health() -> dict[str, Any]:
     total_sessions = SESSION_REGISTRY.size
     stale_sessions = SESSION_REGISTRY.stale_count(3600)
-    status = "shutting_down" if is_shutting_down() else ("healthy" if _supervisor_mod._runtime_ready else "starting")
+    runtime_ready = bool(_supervisor_mod._runtime_ready) and not is_shutting_down()
     return {
-        "status": status,
+        "status": "healthy" if runtime_ready else "unhealthy",
         "runtime": "opencode",
         "service": SERVICE_NAME,
         "namespace": SERVICE_NAMESPACE,
@@ -395,27 +546,36 @@ def health() -> dict[str, Any]:
             "restart_count": _supervisor_mod._supervisor_restart_count,
             "max_restarts": SUPERVISOR_MAX_RESTARTS,
         },
+        "lifecycle_status": "shutting_down" if is_shutting_down() else ("ready" if runtime_ready else "starting"),
+        "uptime_seconds": round(time.time() - _RUNTIME_STARTED_AT, 1),
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "capabilities": runtime_capabilities(),
     }
 
 
 @app.get("/ready")
-def ready() -> dict[str, Any]:
+def ready() -> JSONResponse:
     ensure_runtime_directories()
     if Path(OPENCODE_BIN).is_absolute():
         resolved_binary = OPENCODE_BIN if Path(OPENCODE_BIN).exists() else None
     else:
         resolved_binary = shutil.which(OPENCODE_BIN)
-    if not resolved_binary:
-        raise HTTPException(status_code=503, detail=f"opencode binary '{OPENCODE_BIN}' is not available on PATH")
-    ensure_server_running()
+    binary_available = resolved_binary is not None
+    startup_error: str | None = None
+    if binary_available:
+        try:
+            ensure_server_running()
+        except Exception as exc:
+            startup_error = str(exc)
+            logger.debug("OpenCode server startup failed", exc_info=True)
     opencode_server_healthy = False
-    try:
-        with httpx.Client(timeout=5.0) as probe:
-            resp = probe.get(f"http://{OPENCODE_SERVER_HOST}:{OPENCODE_SERVER_PORT}/session")
-            opencode_server_healthy = resp.status_code < 500
-    except Exception:
-        logger.debug("OpenCode server health probe failed", exc_info=True)
+    if binary_available and startup_error is None:
+        try:
+            with httpx.Client(timeout=5.0) as probe:
+                resp = probe.get(f"http://{OPENCODE_SERVER_HOST}:{OPENCODE_SERVER_PORT}/session")
+                opencode_server_healthy = resp.status_code < 500
+        except Exception:
+            logger.debug("OpenCode server health probe failed", exc_info=True)
     session_registry_writable = False
     try:
         session_registry_writable = os.access(SESSION_REGISTRY.path.parent, os.W_OK)
@@ -426,21 +586,28 @@ def ready() -> dict[str, Any]:
         proc = _supervisor_mod._runtime_process
     if proc is not None and proc.poll() is None:
         subprocess_alive = True
-    return {
-        "status": "ready",
-        "runtime": "opencode",
-        "opencode_binary": OPENCODE_BIN,
-        "opencode_binary_path": resolved_binary,
+    checks = {
+        "binary_available": binary_available,
+        "server_started": startup_error is None,
         "opencode_server_healthy": opencode_server_healthy,
         "subprocess_alive": subprocess_alive,
         "session_registry_writable": session_registry_writable,
+    }
+    payload = {
+        "status": "ready" if all(checks.values()) else "not_ready",
+        "runtime": "opencode",
+        "checks": checks,
+        "opencode_binary": OPENCODE_BIN,
+        "opencode_binary_path": resolved_binary,
         "config_root": OPENCODE_CONFIG_DIR,
         "workspace_root": OPENCODE_WORKDIR,
         "config_files": SKILL_RUNTIME_CONFIG.get("configFiles") or [],
         "skill_files": SKILL_RUNTIME_CONFIG.get("skillFiles") or [],
         "mcp_sidecars": SKILL_RUNTIME_CONFIG.get("mcpSidecars") or [],
+        "error": startup_error,
         "capabilities": runtime_capabilities(),
     }
+    return JSONResponse(status_code=200 if payload["status"] == "ready" else 503, content=payload)
 
 
 @app.get("/capabilities")
@@ -455,7 +622,7 @@ def capabilities() -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # §3.6 — Runtime contract /info endpoint
 # ---------------------------------------------------------------------------
-RUNTIME_CONTRACT_VERSION = "v1alpha1"
+RUNTIME_CONTRACT_VERSION = "v1"
 
 
 @app.get("/info")
@@ -469,6 +636,7 @@ def info() -> dict[str, Any]:
         "provider": DEFAULT_PROVIDER,
         "model": DEFAULT_MODEL_REF,
         "agent": DEFAULT_AGENT,
+        "version": app.version,
         "capabilities": runtime_capabilities(),
         "supervisor": {
             "restart_count": _supervisor_mod._supervisor_restart_count,
@@ -484,6 +652,16 @@ def info() -> dict[str, Any]:
 @app.post("/invoke", response_model=InvokeResponse)
 def invoke(request: InvokeRequest) -> InvokeResponse:
     """Invoke the OpenCode agent with optional OTEL tracing."""
+    thread_id = request.thread_id or str(uuid.uuid4())
+    execution_id = f"exec-{thread_id[:16]}"
+    start_time = time.monotonic()
+
+    emit_run_started(
+        execution_id=execution_id,
+        thread_id=thread_id,
+        model=request.model or DEFAULT_MODEL_REF,
+    )
+
     tracer = get_tracer()
     if tracer is not None:
         with tracer.start_as_current_span(
@@ -499,12 +677,61 @@ def invoke(request: InvokeRequest) -> InvokeResponse:
             try:
                 result = invoke_opencode(request)
                 span.set_attribute("agent.status", result.status)
+
+                duration_ms = int((time.monotonic() - start_time) * 1000)
+                total_tokens = (result.metadata or {}).get("context_budget", {}).get("total_tokens", 0) if result.metadata else 0
+                _emit_llm_call_from_response(
+                    execution_id=execution_id,
+                    thread_id=thread_id,
+                    session_id=SESSION_REGISTRY.get(thread_id),
+                    response=result,
+                    fallback_duration_ms=duration_ms,
+                )
+                emit_run_completed(
+                    execution_id=execution_id,
+                    thread_id=thread_id,
+                    status=result.status,
+                    total_tokens=total_tokens,
+                    duration_ms=duration_ms,
+                )
                 return result
             except Exception as exc:
                 if _OTEL_AVAILABLE and StatusCode is not None:
                     span.set_status(StatusCode.ERROR, str(exc))
+                emit_run_error(
+                    execution_id=execution_id,
+                    thread_id=thread_id,
+                    error=str(exc)[:2048],
+                )
                 raise
-    return invoke_opencode(request)
+    try:
+        result = invoke_opencode(request)
+        duration_ms = int((time.monotonic() - start_time) * 1000)
+        total_tokens = (result.metadata or {}).get("context_budget", {}).get("total_tokens", 0) if result.metadata else 0
+        _emit_llm_call_from_response(
+            execution_id=execution_id,
+            thread_id=thread_id,
+            session_id=SESSION_REGISTRY.get(thread_id),
+            response=result,
+            fallback_duration_ms=duration_ms,
+        )
+        emit_run_completed(
+            execution_id=execution_id,
+            thread_id=thread_id,
+            status=result.status,
+            total_tokens=total_tokens,
+            duration_ms=duration_ms,
+        )
+        flush_sync_queue()
+        return result
+    except Exception as exc:
+        emit_run_error(
+            execution_id=execution_id,
+            thread_id=thread_id,
+            error=str(exc)[:2048],
+        )
+        flush_sync_queue()
+        raise
 
 
 @app.post("/cancel")
@@ -519,6 +746,13 @@ def cancel_session(thread_id: str | None = None) -> dict[str, Any]:
     if aborted:
         return {"status": "cancelled", "session_id": session_id, "thread_id": thread_id}
     return {"status": "cancel_failed", "session_id": session_id, "thread_id": thread_id}
+
+
+@app.post("/abort")
+def abort_session_alias(thread_id: str | None = None) -> dict[str, Any]:
+    """Compatibility alias for runtimes that use /abort instead of /cancel."""
+
+    return cancel_session(thread_id=thread_id)
 
 
 @app.get("/todo")
@@ -615,10 +849,22 @@ def context_budget(thread_id: str | None = None) -> dict[str, Any]:
 
 @app.post("/invoke/stream")
 async def invoke_stream(request: InvokeRequest) -> StreamingResponse:
+    use_sync_memory_invoke = "you have persistent memory from prior conversations" in str(
+        request.system or ""
+    ).lower()
+
     async def event_generator() -> AsyncIterator[str]:
         thread_id = request.thread_id or str(uuid.uuid4())
+        execution_id = f"exec-{thread_id[:16]}"
         request_with_thread = request.model_copy(update={"thread_id": thread_id})
         streamed_delta_count = 0
+        start_time = time.monotonic()
+
+        emit_run_started(
+            execution_id=execution_id,
+            thread_id=thread_id,
+            model=request.model or DEFAULT_MODEL_REF,
+        )
         yield sse_event("response.started", {"thread_id": thread_id, "source": "opencode"})
 
         event_queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
@@ -630,6 +876,8 @@ async def invoke_stream(request: InvokeRequest) -> StreamingResponse:
 
         def _run_invoke() -> InvokeResponse:
             try:
+                if use_sync_memory_invoke:
+                    return invoke_opencode(request_with_thread)
                 return invoke_opencode(request_with_thread, stream_callback=_stream_callback)
             finally:
                 loop.call_soon_threadsafe(event_queue.put_nowait, None)
@@ -683,6 +931,11 @@ async def invoke_stream(request: InvokeRequest) -> StreamingResponse:
                                         },
                                     }
                                 )
+                        emit_question_asked(
+                            execution_id=execution_id,
+                            question=new_ids.pop() if new_ids else "",
+                            thread_id=thread_id,
+                        )
                     last_ids = current_ids
                 except Exception:
                     logger.debug("Question poller callback failed", exc_info=True)
@@ -725,6 +978,11 @@ async def invoke_stream(request: InvokeRequest) -> StreamingResponse:
                         "todo.cleared",
                         {"thread_id": thread_id, "session_id": final_session, "todos": final_todos, "source": "opencode"},
                     )
+                    emit_todo_updated(
+                        execution_id=execution_id,
+                        todos=final_todos,
+                        thread_id=thread_id,
+                    )
         except Exception:
             logger.debug("Todo stream cleanup failed", exc_info=True)
 
@@ -732,15 +990,47 @@ async def invoke_stream(request: InvokeRequest) -> StreamingResponse:
             response = await task
         except HTTPException as exc:
             yield sse_event("response.error", {"thread_id": thread_id, "error": str(exc.detail)})
+            emit_run_error(
+                execution_id=execution_id,
+                thread_id=thread_id,
+                error=str(exc.detail)[:2048],
+            )
             return
         except Exception as exc:
             yield sse_event("response.error", {"thread_id": thread_id, "error": str(exc)})
+            emit_run_error(
+                execution_id=execution_id,
+                thread_id=thread_id,
+                error=str(exc)[:2048],
+            )
             return
 
         if response.response and streamed_delta_count == 0:
             yield sse_event(
                 "response.delta", {"thread_id": response.thread_id, "delta": response.response, "source": "opencode"}
             )
+
+        # Emit tool call events from response
+        for tc in (response.tool_calls or []):
+            emit_tool_call(
+                execution_id=execution_id,
+                tool_name=tc.get("name", "unknown"),
+                tool_args=tc.get("args"),
+                status=tc.get("status", "completed"),
+                thread_id=thread_id,
+            )
+
+        duration_ms = int((time.monotonic() - start_time) * 1000)
+        total_tokens = (response.metadata or {}).get("context_budget", {}).get("total_tokens", 0) if response.metadata else 0
+
+        _emit_llm_call_from_response(
+            execution_id=execution_id,
+            thread_id=thread_id,
+            session_id=SESSION_REGISTRY.get(thread_id),
+            response=response,
+            fallback_duration_ms=duration_ms,
+        )
+
         yield sse_event(
             "response.completed",
             {
@@ -757,7 +1047,63 @@ async def invoke_stream(request: InvokeRequest) -> StreamingResponse:
             },
         )
 
+        emit_run_completed(
+            execution_id=execution_id,
+            thread_id=thread_id,
+            status=response.status,
+            total_tokens=total_tokens,
+            duration_ms=duration_ms,
+        )
+        flush_sync_queue()
+
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+def _coerce_int(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _coerce_float(value: Any) -> float:
+    try:
+        return float(value or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _emit_llm_call_from_response(
+    *,
+    execution_id: str,
+    thread_id: str,
+    session_id: str | None,
+    response: InvokeResponse,
+    fallback_duration_ms: int,
+) -> None:
+    metadata = response.metadata or {}
+    tokens = metadata.get("tokens") if isinstance(metadata.get("tokens"), dict) else {}
+    context_budget = metadata.get("context_budget") if isinstance(metadata.get("context_budget"), dict) else {}
+    time_info = metadata.get("time") if isinstance(metadata.get("time"), dict) else {}
+
+    prompt_tokens = _coerce_int(tokens.get("input") or tokens.get("prompt"))
+    completion_tokens = _coerce_int(tokens.get("output") or tokens.get("completion"))
+    total_tokens = _coerce_int(tokens.get("total") or context_budget.get("total_tokens"))
+    if total_tokens == 0:
+        total_tokens = prompt_tokens + completion_tokens
+    duration_ms = _coerce_int(time_info.get("total_ms") or time_info.get("duration_ms") or fallback_duration_ms)
+
+    emit_llm_call(
+        execution_id=execution_id,
+        model=response.model,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=total_tokens,
+        cost_usd=_coerce_float(metadata.get("cost")),
+        duration_ms=duration_ms,
+        session_id=session_id,
+        thread_id=thread_id,
+    )
 
 
 @app.get("/artifacts/download")

@@ -32,10 +32,6 @@ await client.deleteAgent("my-agent");
 const workflows = await client.listWorkflows();
 await client.triggerWorkflow("my-workflow", { input: "data" });
 
-// Evaluations
-const evals = await client.listEvals();
-await client.runEval("my-eval");
-
 // Policies
 const policies = await client.listPolicies();
 
@@ -46,8 +42,8 @@ for await (const delta of client.stream("my-agent", "Build a REST API")) {
 }
 
 // Traces
-const traces = await client.listTraces();
-const trace = await client.getTrace("run-id");
+const executions = await client.listExecutions();
+const execution = await client.getExecution("run-id");
 ```
 
 ## Timeouts & Error Handling

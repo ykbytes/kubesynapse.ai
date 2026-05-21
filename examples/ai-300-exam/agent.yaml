@@ -37,7 +37,7 @@ spec:
   enableGVisor: false
   skills:
     files:
-      .github/skills/serpapi-search/SKILL.md: |
+      skills/serpapi-search/SKILL.md: |
         ---
         name: serpapi-search
         description: Search Google via SerpAPI for authoritative Microsoft documentation on Azure ML, Foundry, MLOps, and GenAIOps.
@@ -220,7 +220,7 @@ spec:
   enableGVisor: false
   skills:
     files:
-      .github/skills/serpapi-search/SKILL.md: |
+      skills/serpapi-search/SKILL.md: |
         ---
         name: serpapi-search
         description: Search Google via SerpAPI to verify facts about Azure ML, Foundry, MLOps, and GenAIOps for exam questions.
@@ -481,7 +481,7 @@ spec:
   enableGVisor: false
   skills:
     files:
-      .github/skills/serpapi-search/SKILL.md: |
+      skills/serpapi-search/SKILL.md: |
         ---
         name: serpapi-search
         description: Search Google via SerpAPI to fact-check AI-300 exam questions on MLOps, GenAIOps, Azure ML, and Foundry.

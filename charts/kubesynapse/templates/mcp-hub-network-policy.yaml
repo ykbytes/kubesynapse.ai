@@ -17,6 +17,7 @@
 # ---------------------------------------------------------------------------
 
 # Rule 1: Default-deny all – the mcp-hub namespace is locked down by default.
+{{- if .Values.mcpHub.enabled }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -126,3 +127,4 @@ spec:
         # LiteLLM (if an MCP server proxies model invocations)
         - protocol: TCP
           port: 4000
+{{- end }}

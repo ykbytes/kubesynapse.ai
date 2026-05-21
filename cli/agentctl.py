@@ -51,7 +51,6 @@ app = typer.Typer(
 )
 agents_app = typer.Typer(no_args_is_help=True, help="Manage and inspect agents.")
 workflows_app = typer.Typer(no_args_is_help=True, help="Manage and inspect workflows.")
-evals_app = typer.Typer(no_args_is_help=True, help="Manage and inspect eval suites.")
 approvals_app = typer.Typer(no_args_is_help=True, help="Review and decide approvals.")
 policies_app = typer.Typer(no_args_is_help=True, help="List policies.")
 auth_app = typer.Typer(no_args_is_help=True, help="Authentication and user session management.")
@@ -61,7 +60,6 @@ get_app = typer.Typer(no_args_is_help=True, hidden=True)
 
 app.add_typer(agents_app, name="agents")
 app.add_typer(workflows_app, name="workflows")
-app.add_typer(evals_app, name="evals")
 app.add_typer(approvals_app, name="approvals")
 app.add_typer(policies_app, name="policies")
 app.add_typer(auth_app, name="auth")
@@ -245,37 +243,6 @@ def render_workflows(items: list[dict[str, Any]], json_output: bool, namespace: 
         )
     if not items:
         console.print(Panel("No workflows found.", title="Workflows", border_style="warn"))
-        return
-    console.print(table)
-
-
-def render_evals(items: list[dict[str, Any]], json_output: bool, namespace: str) -> None:
-    if json_output:
-        print_json(items)
-        return
-    table = Table(title=f"Evaluations in {namespace}", box=box.ROUNDED)
-    table.add_column("Name", style="title")
-    table.add_column("Agent", style="accent")
-    table.add_column("Phase")
-    table.add_column("Passed")
-    table.add_column("Schedule", style="muted")
-    for item in items:
-        passed = item.get("passed")
-        if passed is True:
-            passed_text = Text("YES", style="ok")
-        elif passed is False:
-            passed_text = Text("NO", style="error")
-        else:
-            passed_text = Text("-", style="muted")
-        table.add_row(
-            str(item.get("name", "")),
-            str(item.get("agent_ref", "")),
-            styled_status(str(item.get("phase", "pending"))),
-            passed_text,
-            str(item.get("schedule") or "manual"),
-        )
-    if not items:
-        console.print(Panel("No evals found.", title="Evaluations", border_style="warn"))
         return
     console.print(table)
 
@@ -519,12 +486,19 @@ def snake_or_camel(payload: dict[str, Any], snake_key: str, camel_key: str, defa
     return default
 
 
-def require_explicit_opencode_runtime_kind(value: Any, field_name: str) -> str:
+def require_supported_runtime_kind(value: Any, field_name: str) -> str:
     runtime_kind = str(value or "").strip().lower()
     if not runtime_kind:
-        fatal(f"{field_name} is required and must be set to 'opencode'.")
+        fatal(f"{field_name} is required and must be set to 'opencode', 'pi', or 'mistral-vibe'.")
+    if runtime_kind not in {"opencode", "pi", "mistral-vibe"}:
+        fatal(f"{field_name} must be 'opencode', 'pi', or 'mistral-vibe'. '{runtime_kind}' is not supported.")
+    return runtime_kind
+
+
+def require_explicit_opencode_runtime_kind(value: Any, field_name: str) -> str:
+    runtime_kind = require_supported_runtime_kind(value, field_name)
     if runtime_kind != "opencode":
-        fatal(f"{field_name} must be 'opencode'. Legacy runtimes are no longer supported.")
+        fatal(f"{field_name} must be 'opencode' when applying OpenCode config overrides.")
     return runtime_kind
 
 
@@ -668,7 +642,7 @@ def agent_payload_from_detail(detail: dict[str, Any]) -> dict[str, Any]:
         "system_prompt": str(detail.get("system_prompt", "")),
         "policy_ref": detail.get("policy_ref"),
         "storage_size": detail.get("storage_size") or "1Gi",
-        "runtime_kind": require_explicit_opencode_runtime_kind(detail.get("runtime_kind"), "runtime_kind"),
+        "runtime_kind": require_supported_runtime_kind(detail.get("runtime_kind"), "runtime_kind"),
         "enable_gvisor": bool(detail.get("enable_gvisor", False)),
         "mcp_servers": normalize_list_of_strings(detail.get("mcp_servers"), "mcp_servers"),
         "mcp_sidecars": normalize_sidecars(detail.get("mcp_sidecars")),
@@ -691,19 +665,19 @@ def coerce_agent_payload(document: dict[str, Any], *, for_update: bool) -> tuple
         unsupported_runtime_blocks = [
             f"spec.runtime.{key}"
             for key in runtime
-            if key not in {"kind", "opencode"}
+            if key not in {"kind", "opencode", "pi", "mistralVibe"}
         ]
         if unsupported_runtime_blocks:
             fatal(
                 "Unsupported legacy runtime configuration blocks are present: "
-                f"{', '.join(sorted(unsupported_runtime_blocks))}. Keep only spec.runtime.kind and spec.runtime.opencode."
+                f"{', '.join(sorted(unsupported_runtime_blocks))}. Keep only spec.runtime.kind, spec.runtime.opencode, spec.runtime.pi, and spec.runtime.mistralVibe."
             )
         payload: dict[str, Any] = {
             "model": str(spec.get("model", "")),
             "system_prompt": str(spec.get("systemPrompt", "")),
             "policy_ref": spec.get("policyRef"),
             "storage_size": storage.get("size", "1Gi"),
-            "runtime_kind": require_explicit_opencode_runtime_kind(runtime.get("kind"), "spec.runtime.kind"),
+            "runtime_kind": require_supported_runtime_kind(runtime.get("kind"), "spec.runtime.kind"),
             "enable_gvisor": bool(spec.get("enableGVisor", False)),
             "mcp_servers": normalize_list_of_strings(spec.get("mcpServers"), "mcpServers"),
             "mcp_sidecars": normalize_sidecars(spec.get("mcpSidecars")),
@@ -725,7 +699,7 @@ def coerce_agent_payload(document: dict[str, Any], *, for_update: bool) -> tuple
         "system_prompt": str(snake_or_camel(payload, "system_prompt", "systemPrompt", "")),
         "policy_ref": snake_or_camel(payload, "policy_ref", "policyRef"),
         "storage_size": snake_or_camel(payload, "storage_size", "storageSize", "1Gi"),
-        "runtime_kind": require_explicit_opencode_runtime_kind(
+        "runtime_kind": require_supported_runtime_kind(
             snake_or_camel(payload, "runtime_kind", "runtimeKind"),
             "runtime_kind",
         ),
@@ -802,61 +776,6 @@ def coerce_workflow_payload(document: dict[str, Any], *, for_update: bool) -> tu
         "input": str(snake_or_camel(payload, "input", "input", "")),
         "message_bus": str(snake_or_camel(payload, "message_bus", "messageBus", "in-memory")),
         "steps": normalize_workflow_steps(snake_or_camel(payload, "steps", "steps", [])),
-    }
-    resource_name = str(snake_or_camel(payload, "name", "name", metadata.get("name", "")) or "")
-    if not for_update:
-        normalized["name"] = resource_name
-    return normalized, resource_name
-
-
-def normalize_eval_test_suite(test_suite: Any) -> list[dict[str, Any]]:
-    if not test_suite:
-        return []
-    if not isinstance(test_suite, list):
-        fatal("test_suite/testSuite must be a list.")
-    normalized: list[dict[str, Any]] = []
-    for item in test_suite:
-        if not isinstance(item, dict):
-            fatal("Each eval test case must be an object.")
-        normalized.append(
-            {
-                "input": str(snake_or_camel(item, "input", "input", "")),
-                "expected_output": str(
-                    snake_or_camel(item, "expected_output", "expectedOutput", "")
-                ),
-                "metrics": normalize_list_of_strings(
-                    snake_or_camel(item, "metrics", "metrics", []),
-                    "metrics",
-                ),
-            }
-        )
-    return normalized
-
-
-def coerce_eval_payload(document: dict[str, Any], *, for_update: bool) -> tuple[dict[str, Any], str | None]:
-    metadata = document.get("metadata") if isinstance(document.get("metadata"), dict) else {}
-    if document.get("kind") == "AgentEval" and isinstance(document.get("spec"), dict):
-        spec = document["spec"]
-        payload: dict[str, Any] = {
-            "agent_ref": str(spec.get("agentRef", "")),
-            "schedule": spec.get("schedule"),
-            "test_suite": normalize_eval_test_suite(spec.get("testSuite", [])),
-            "failure_threshold": dict(spec.get("failureThreshold") or {}),
-        }
-        if not for_update:
-            payload["name"] = str(metadata.get("name", ""))
-        return payload, str(metadata.get("name", "") or "")
-
-    payload = dict(document)
-    normalized = {
-        "agent_ref": str(snake_or_camel(payload, "agent_ref", "agentRef", "")),
-        "schedule": snake_or_camel(payload, "schedule", "schedule"),
-        "test_suite": normalize_eval_test_suite(
-            snake_or_camel(payload, "test_suite", "testSuite", []),
-        ),
-        "failure_threshold": dict(
-            snake_or_camel(payload, "failure_threshold", "failureThreshold", {}) or {}
-        ),
     }
     resource_name = str(snake_or_camel(payload, "name", "name", metadata.get("name", "")) or "")
     if not for_update:
@@ -1590,122 +1509,6 @@ def workflows_delete(
     render_delete_result(data, settings.json_output)
 
 
-@evals_app.command("list")
-def evals_list(ctx: typer.Context) -> None:
-    """List eval suites."""
-    settings = ctx_settings(ctx)
-    try:
-        with console.status("[accent]Loading evals...[/accent]"):
-            with ApiClient(settings) as client:
-                data = client.json("GET", "/api/evals", params=namespace_params(settings))
-    except ApiError as exc:
-        fatal(str(exc), status_code=exc.status_code)
-    render_evals(data, settings.json_output, settings.namespace)
-
-
-@evals_app.command("create")
-def evals_create(
-    ctx: typer.Context,
-    file_path: Path = typer.Option(..., "--file", "-f", exists=True, file_okay=True, dir_okay=False),
-) -> None:
-    """Create an eval suite from a JSON or YAML file."""
-    settings = ctx_settings(ctx)
-    document = read_structured_file(file_path)
-    payload, inferred_name = coerce_eval_payload(document, for_update=False)
-    namespace = resolve_namespace(settings, document)
-    eval_name = resolve_resource_name(None, file_path, inferred_name, "eval")
-    payload["name"] = eval_name
-
-    try:
-        with console.status(f"[accent]Creating eval {eval_name}...[/accent]"):
-            with ApiClient(settings) as client:
-                data = client.json(
-                    "POST",
-                    "/api/evals",
-                    params={"namespace": namespace},
-                    payload=payload,
-                )
-    except ApiError as exc:
-        fatal(str(exc), status_code=exc.status_code)
-    render_generic_detail(f"Eval Created: {eval_name}", data, settings.json_output)
-
-
-@evals_app.command("show")
-def evals_show(ctx: typer.Context, eval_name: str = typer.Argument(..., help="Eval name.")) -> None:
-    """Show eval details."""
-    settings = ctx_settings(ctx)
-    try:
-        with console.status(f"[accent]Loading eval {eval_name}...[/accent]"):
-            with ApiClient(settings) as client:
-                data = client.json(
-                    "GET",
-                    f"/api/evals/{eval_name}",
-                    params=namespace_params(settings),
-                )
-    except ApiError as exc:
-        fatal(str(exc), status_code=exc.status_code)
-    render_generic_detail(f"Eval: {eval_name}", data, settings.json_output)
-
-
-@evals_app.command("update")
-def evals_update(
-    ctx: typer.Context,
-    eval_name: str | None = typer.Argument(None, help="Eval name. Optional when the file contains metadata.name."),
-    file_path: Path = typer.Option(..., "--file", "-f", exists=True, file_okay=True, dir_okay=False),
-) -> None:
-    """Update an eval suite from a JSON or YAML file."""
-    settings = ctx_settings(ctx)
-    document = read_structured_file(file_path)
-    payload, inferred_name = coerce_eval_payload(document, for_update=True)
-    namespace = resolve_namespace(settings, document)
-    resolved_name = resolve_resource_name(eval_name, file_path, inferred_name, "eval")
-
-    try:
-        with console.status(f"[accent]Updating eval {resolved_name}...[/accent]"):
-            with ApiClient(settings) as client:
-                data = client.json(
-                    "PATCH",
-                    f"/api/evals/{resolved_name}",
-                    params={"namespace": namespace},
-                    payload=payload,
-                )
-    except ApiError as exc:
-        fatal(str(exc), status_code=exc.status_code)
-    render_generic_detail(f"Eval Updated: {resolved_name}", data, settings.json_output)
-
-
-@evals_app.command("delete")
-def evals_delete(
-    ctx: typer.Context,
-    eval_name: str | None = typer.Argument(None, help="Eval name. Optional when using --file."),
-    file_path: Path | None = typer.Option(None, "--file", "-f", exists=True, file_okay=True, dir_okay=False),
-    assume_yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation."),
-) -> None:
-    """Delete an eval suite by name or from a file."""
-    settings = ctx_settings(ctx)
-    document: dict[str, Any] = {}
-    inferred_name = ""
-    namespace = settings.namespace
-    if file_path is not None:
-        document = read_structured_file(file_path)
-        _, inferred_name = coerce_eval_payload(document, for_update=True)
-        namespace = resolve_namespace(settings, document)
-    resolved_name = resolve_resource_name(eval_name, file_path, inferred_name, "eval")
-    confirm_delete("eval", resolved_name, namespace, assume_yes)
-
-    try:
-        with console.status(f"[accent]Deleting eval {resolved_name}...[/accent]"):
-            with ApiClient(settings) as client:
-                data = client.json(
-                    "DELETE",
-                    f"/api/evals/{resolved_name}",
-                    params={"namespace": namespace},
-                )
-    except ApiError as exc:
-        fatal(str(exc), status_code=exc.status_code)
-    render_delete_result(data, settings.json_output)
-
-
 @policies_app.command("list")
 def policies_list(ctx: typer.Context) -> None:
     """List policies."""
@@ -1793,12 +1596,6 @@ def get_agents(ctx: typer.Context) -> None:
 def get_workflows(ctx: typer.Context) -> None:
     """Compatibility alias for `agentctl workflows list`."""
     workflows_list(ctx)
-
-
-@get_app.command("evals")
-def get_evals(ctx: typer.Context) -> None:
-    """Compatibility alias for `agentctl evals list`."""
-    evals_list(ctx)
 
 
 @get_app.command("policies")
@@ -2666,31 +2463,10 @@ def apply(
             fatal(str(exc), status_code=exc.status_code)
         console.print(Panel(f"Workflow [bold]{name}[/bold] {action}.", title=f"Workflow {action.title()}", border_style="ok"))
 
-    elif kind == "AgentEval" or (not kind and "test_suite" in document):
-        payload, inferred_name = coerce_eval_payload(document, for_update=False)
-        name = resolve_resource_name(None, file_path, inferred_name, "eval")
-        payload["name"] = name
-        try:
-            with console.status(f"[accent]Applying eval {name}...[/accent]"):
-                with ApiClient(settings) as client:
-                    try:
-                        data = client.json("POST", "/api/evals", params={"namespace": namespace}, payload=payload)
-                        action = "created"
-                    except ApiError as create_exc:
-                        if create_exc.status_code == 409:
-                            update_payload, _ = coerce_eval_payload(document, for_update=True)
-                            data = client.json("PATCH", f"/api/evals/{name}", params={"namespace": namespace}, payload=update_payload)
-                            action = "updated"
-                        else:
-                            raise
-        except ApiError as exc:
-            fatal(str(exc), status_code=exc.status_code)
-        console.print(Panel(f"Eval [bold]{name}[/bold] {action}.", title=f"Eval {action.title()}", border_style="ok"))
-
     else:
         fatal(
             f"Unsupported or unrecognized resource kind '{kind or '(none)'}'. "
-            "Supported: AIAgent, AgentWorkflow, AgentEval."
+            "Supported: AIAgent, AgentWorkflow."
         )
 
 

@@ -68,7 +68,6 @@ def _load_kubernetes_config() -> None:
 
 
 from config import (  # noqa: E402 — after logging setup
-    EVAL_SCHEDULE_POLL_SECONDS,
     OPERATOR_NAMESPACE,
     OPERATOR_PEERING_NAME,
     SECRET_PROVISIONING_MODE,
@@ -225,7 +224,6 @@ def configure(settings: kopf.OperatorSettings, **_) -> None:
         peering=OPERATOR_PEERING_NAME,
         secretProvisioningMode=SECRET_PROVISIONING_MODE,
         workflowPollSeconds=WORKFLOW_POLL_SECONDS,
-        evalSchedulePollSeconds=EVAL_SCHEDULE_POLL_SECONDS,
         workerImage=WORKER_IMAGE,
     )
 

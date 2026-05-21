@@ -283,7 +283,7 @@ class OperatorManifestTests(unittest.TestCase):
                 "systemPrompt": "Be precise.",
                 "skills": {
                     "files": {
-                        ".github/skills/repo-review/SKILL.md": (
+                        "skills/repo-review/SKILL.md": (
                             "---\n"
                             "name: repo-review\n"
                             "description: Review code changes carefully.\n"
@@ -309,7 +309,7 @@ class OperatorManifestTests(unittest.TestCase):
         self.assertEqual(
             json.loads(env[_config.AGENT_SKILL_FILES_ENV]),
             {
-                ".github/skills/repo-review/SKILL.md": (
+                "skills/repo-review/SKILL.md": (
                     "---\n"
                     "name: repo-review\n"
                     "description: Review code changes carefully.\n"
@@ -332,7 +332,7 @@ class OperatorManifestTests(unittest.TestCase):
                 "systemPrompt": "Be precise.",
                 "skills": {
                     "files": {
-                        ".github/skills/repo-review/SKILL.md": (
+                        "skills/repo-review/SKILL.md": (
                             "---\n"
                             "name: repo-review\n"
                             "description: Review code changes carefully.\n"
@@ -358,7 +358,7 @@ class OperatorManifestTests(unittest.TestCase):
         self.assertEqual(
             json.loads(env[_config.AGENT_SKILL_FILES_ENV]),
             {
-                ".github/skills/repo-review/SKILL.md": (
+                "skills/repo-review/SKILL.md": (
                     "---\n"
                     "name: repo-review\n"
                     "description: Review code changes carefully.\n"
@@ -454,7 +454,7 @@ class OperatorManifestTests(unittest.TestCase):
                         "systemPrompt": "Be precise.",
                         "skills": {
                             "files": {
-                                ".github/skills/browser/SKILL.md": (
+                                "skills/browser/SKILL.md": (
                                     "---\n"
                                     "name: browser\n"
                                     "allowedMcpServers:\n"
@@ -1004,17 +1004,17 @@ class OptionalCrdWatchingTests(unittest.TestCase):
         }
 
         with patch.object(_services_k8s.kubernetes.client, "ApiextensionsV1Api", return_value=api, create=True):
-            exists = _services_k8s.crd_exists("kubesynapse.ai", "v1alpha1", "agentevals")
+            exists = _services_k8s.crd_exists("kubesynapse.ai", "v1alpha1", "agentpolicies")
 
         self.assertTrue(exists)
-        api.read_custom_resource_definition.assert_called_once_with(name="agentevals.kubesynapse.ai")
+        api.read_custom_resource_definition.assert_called_once_with(name="agentpolicies.kubesynapse.ai")
 
     def test_crd_exists_returns_false_for_missing_crd(self) -> None:
         api = Mock()
         api.read_custom_resource_definition.side_effect = _api_exception(404)
 
         with patch.object(_services_k8s.kubernetes.client, "ApiextensionsV1Api", return_value=api, create=True):
-            exists = _services_k8s.crd_exists("kubesynapse.ai", "v1alpha1", "agentevals")
+            exists = _services_k8s.crd_exists("kubesynapse.ai", "v1alpha1", "agentpolicies")
 
         self.assertFalse(exists)
 
@@ -1045,7 +1045,6 @@ class OptionalCrdWatchingTests(unittest.TestCase):
         self.assertIn("controllers.workflow_controller", imported)
         self.assertIn("controllers.status_projection", imported)
         self.assertIn("controllers.policy_controller", imported)
-        self.assertNotIn("controllers.eval_controller", imported)
         self.assertNotIn("controllers.approval_controller", imported)
         self.assertNotIn("controllers.tenant_controller", imported)
         sys.modules.pop("controllers", None)
@@ -1344,6 +1343,47 @@ class AllowedNamespacesTests(unittest.TestCase):
         )
         self.assertIn("mcp-browser", container_names)
 
+    def test_opencode_runtime_manifest_makes_hub_bearer_optional_for_saved_remote_mcp_connections(self) -> None:
+        manifest = _builders_manifests.create_agent_statefulset_manifest(
+            "workspace-assistant",
+            "default",
+            {
+                "model": "gpt-4",
+                "runtime": {"kind": "opencode"},
+                "storage": {"size": "1Gi"},
+                "systemPrompt": "Be precise.",
+                "mcpConnections": [
+                    {
+                        "connectionId": "conn-docs",
+                        "serverId": "microsoft-learn",
+                        "transport": "remote",
+                        "runtime": {
+                            "kind": "remote",
+                            "configKey": "microsoft-learn",
+                            "url": "https://learn.microsoft.com/api/mcp",
+                            "headers": [],
+                        },
+                    }
+                ],
+                "mcpServers": ["microsoft-learn"],
+            },
+            None,
+            {},
+        )
+
+        env_refs = {
+            item["name"]: item.get("valueFrom") for item in manifest["spec"]["template"]["spec"]["containers"][0]["env"] if "valueFrom" in item
+        }
+        env_values = {
+            item["name"]: item.get("value") for item in manifest["spec"]["template"]["spec"]["containers"][0]["env"] if "value" in item
+        }
+
+        self.assertEqual(
+            env_refs["MCP_BEARER_TOKEN"]["secretKeyRef"]["optional"],
+            True,
+        )
+        self.assertIn(_config.OPENCODE_MCP_CONNECTIONS_ENV, env_values)
+
     def test_opencode_runtime_rejects_shared_github_adapter_config(self) -> None:
         with self.assertRaises(operator_main.kopf.PermanentError) as context:
             _builders_manifests.create_agent_statefulset_manifest(
@@ -1361,6 +1401,38 @@ class AllowedNamespacesTests(unittest.TestCase):
             )
 
         self.assertIn("sidecar-based GitHub MCP", str(context.exception))
+
+    def test_mistral_vibe_runtime_manifest_includes_bridge_env(self) -> None:
+        manifest = _builders_manifests.create_agent_statefulset_manifest(
+            "vibe-assistant",
+            "default",
+            {
+                "model": "devstral-small",
+                "runtime": {
+                    "kind": "mistral-vibe",
+                    "mistralVibe": {"model": "mistral-medium", "noSession": True},
+                },
+                "storage": {"size": "1Gi"},
+                "systemPrompt": "Stay precise.",
+            },
+            None,
+            {},
+        )
+
+        pod_spec = manifest["spec"]["template"]["spec"]
+        runtime_container = pod_spec["containers"][0]
+        env = {item["name"]: item.get("value") for item in runtime_container["env"] if "value" in item}
+        env_refs = {
+            item["name"]: item.get("valueFrom") for item in runtime_container["env"] if "valueFrom" in item
+        }
+
+        self.assertEqual(runtime_container["image"], _config.MISTRAL_VIBE_RUNTIME_IMAGE)
+        self.assertEqual(manifest["metadata"]["annotations"]["kubesynapse.ai/runtime"], "mistral-vibe")
+        self.assertEqual(env["VIBE_ACTIVE_MODEL"], "mistral-medium")
+        self.assertEqual(env["VIBE_NO_SESSION"], "true")
+        self.assertEqual(env["VIBE_SYSTEM_PROMPT"], "Stay precise.")
+        self.assertEqual(env_refs["MISTRAL_API_KEY"]["secretKeyRef"]["key"], "MISTRAL_API_KEY")
+        self.assertEqual(runtime_container["readinessProbe"]["httpGet"]["path"], "/ready")
 
     # ------------------------------------------------------------------
     # §2.7 — MAX_PARALLEL_STEPS env injected into worker job manifest

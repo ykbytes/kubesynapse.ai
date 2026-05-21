@@ -149,6 +149,48 @@ class AgentWorkflow(BaseModel):
     updated_at: datetime | None = None
 
 
+# ── Execution Observatory ─────────────────────────────────────────
+
+class ExecutionListResponse(BaseModel):
+    """Paginated list of execution records."""
+
+    items: list[dict[str, Any]] = Field(default_factory=list)
+    limit: int = 50
+    offset: int = 0
+
+
+class ExecutionDetailResponse(BaseModel):
+    """Detailed execution record with steps, calls, and events."""
+
+    id: str
+    namespace: str
+    workflow_name: str
+    agent_name: str
+    run_id: str
+    status: str
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    duration_ms: float | None = None
+    input_summary: dict[str, Any] | None = None
+    output_summary: dict[str, Any] | None = None
+    total_steps: int = 0
+    completed_steps: int = 0
+    failed_steps: int = 0
+    total_llm_calls: int = 0
+    total_tool_calls: int = 0
+    total_tokens: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    estimated_cost_usd: float | None = None
+    triggered_by: str | None = None
+    error_message: str | None = None
+    trace_file_path: str | None = None
+    steps: list[dict[str, Any]] = Field(default_factory=list)
+    llm_calls: list[dict[str, Any]] = Field(default_factory=list)
+    tool_calls: list[dict[str, Any]] = Field(default_factory=list)
+    events: list[dict[str, Any]] = Field(default_factory=list)
+
+
 # ── Error ──────────────────────────────────────────────────────────
 
 class APIError(BaseModel):

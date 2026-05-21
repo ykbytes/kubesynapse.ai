@@ -1,6 +1,7 @@
 """Auto-generated router — extracted from api-gateway main.py."""
 from __future__ import annotations
 
+import json
 from typing import Any
 
 # Re-import all shared symbols from the gateway core
@@ -8,7 +9,234 @@ from _core import *
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from routers.observability import _agent_wants_intelligence, _build_auto_intelligence_context
+
 router = APIRouter(tags=["agents"])
+
+
+def _invoke_username(user: dict[str, Any]) -> str | None:
+    return str(user.get("sub") or user.get("username") or "").strip() or None
+
+
+def _record_invoke_trace(
+    namespace: str,
+    agent_name: str,
+    agent: dict[str, Any],
+    data: dict[str, Any],
+    request_id: str,
+) -> None:
+    """Record a WorkflowExecution with LLM/tool metadata from an invoke response.
+
+    This creates an observatory-visible execution record so that direct
+    agent invokes (not just workflow steps) appear in the Execution
+    Observatory with token counts, cost, duration, and tool-call details.
+    """
+    from datetime import UTC, datetime
+
+    from trace_store import (
+        ExecutionStatus,
+        LLMCallRecord,
+        ToolCallRecord,
+        WorkflowExecution,
+        db_session,
+        ensure_trace_database,
+        utc_now,
+    )
+
+    try:
+        ensure_trace_database()
+    except Exception:
+        logger.warning("Trace database not available for invoke trace recording", exc_info=True)
+        return
+
+    thread_id = str(data.get("thread_id") or "").strip() or request_id
+    execution_id = f"exec-{thread_id[:16]}" if thread_id else f"exec-{request_id[:16]}"
+    now = utc_now()
+    metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+    token_info = metadata.get("tokens") if isinstance(metadata.get("tokens"), dict) else {}
+    if not token_info and isinstance(data.get("usage"), dict):
+        token_info = data["usage"]
+    context_budget = metadata.get("context_budget", {}) if isinstance(metadata.get("context_budget"), dict) else {}
+    time_info = metadata.get("time", {}) if isinstance(metadata.get("time"), dict) else {}
+    cost_info = metadata.get("cost", 0)
+    status = str(data.get("status", "completed") or "completed")
+    if status not in {s.value for s in ExecutionStatus}:
+        status = "completed"
+    created_ms = int(time_info.get("created", 0)) if time_info else 0
+    completed_ms = int(time_info.get("completed", 0)) if time_info else 0
+    duration_ms = (completed_ms - created_ms) if created_ms and completed_ms else None
+    prompt_tokens = int(token_info.get("input", token_info.get("prompt_tokens", 0)))
+    completion_tokens = int(token_info.get("output", token_info.get("completion_tokens", 0)))
+    total_tokens = int(token_info.get("total", token_info.get("total_tokens", 0)))
+    tool_calls = data.get("tool_calls") or []
+    tool_calls_count = len(tool_calls)
+    llm_calls_count = 1 if total_tokens > 0 else 0
+    started_at = datetime.fromtimestamp(created_ms / 1000, tz=UTC) if created_ms else now
+    completed_at = datetime.fromtimestamp(completed_ms / 1000, tz=UTC) if completed_ms else now
+    if not duration_ms and started_at and completed_at:
+        duration_ms = int((completed_at - started_at).total_seconds() * 1000)
+
+    step_id = f"step-{execution_id[:12]}"
+
+    with db_session() as session:
+        try:
+            existing = session.query(WorkflowExecution).filter_by(id=execution_id).one_or_none()
+            if existing is not None:
+                return
+            execution = WorkflowExecution(
+                id=execution_id,
+                namespace=namespace,
+                workflow_name=f"invoke-{agent_name}",
+                agent_name=agent_name,
+                run_id=request_id[:64] if request_id else execution_id,
+                status=status,
+                started_at=started_at,
+                completed_at=completed_at,
+                duration_ms=duration_ms,
+                input_summary=data.get("prompt") if isinstance(data.get("prompt"), str) else None,
+                output_summary=str(data.get("response", ""))[:4096] if data.get("response") else None,
+                total_steps=0,
+                completed_steps=0,
+                failed_steps=0,
+                total_llm_calls=llm_calls_count,
+                total_tool_calls=tool_calls_count,
+                total_tokens=total_tokens,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                estimated_cost_usd=float(cost_info) if cost_info else None,
+                triggered_by="direct-invoke",
+                error_message=data.get("error_message") or (str(data.get("detail", ""))[:4096] if data.get("detail") else None),
+            )
+            session.add(execution)
+            session.flush()
+
+            if llm_calls_count > 0:
+                model_name = str(data.get("model") or agent.get("spec", {}).get("model", "unknown"))
+                llm_record = LLMCallRecord(
+                    id=f"llm-{execution_id[:12]}",
+                    execution_id=execution_id,
+                    step_id=step_id,
+                    model=model_name,
+                    provider=model_name.split("/")[0] if "/" in model_name else None,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    total_tokens=total_tokens,
+                    cost_usd=float(cost_info) if cost_info else None,
+                    latency_ms=duration_ms,
+                    started_at=started_at,
+                )
+                session.add(llm_record)
+
+            for idx, tc in enumerate(tool_calls):
+                tc_id = f"tc-{execution_id[:12]}-{idx}"
+                tc_record = ToolCallRecord(
+                    id=tc_id,
+                    execution_id=execution_id,
+                    step_id=step_id,
+                    tool_name=str(tc.get("name", "unknown")),
+                    tool_args=tc.get("args") if isinstance(tc.get("args"), (dict, list)) else None,
+                    tool_result=str(tc.get("result", ""))[:4096] if tc.get("result") else None,
+                    error_message=str(tc.get("error", ""))[:4096] if tc.get("error") else None,
+                    duration_ms=duration_ms,
+                    started_at=started_at,
+                )
+                session.add(tc_record)
+
+            session.commit()
+        except Exception:
+            session.rollback()
+            logger.warning("Failed to record invoke trace for %s", agent_name, exc_info=True)
+
+
+def _apply_recalled_memory_to_request(
+    agent_name: str,
+    namespace: str,
+    agent: dict[str, Any],
+    prompt: str,
+    request_payload: dict[str, Any],
+    user: dict[str, Any],
+) -> dict[str, Any]:
+    policy_memory = resolve_agent_memory_policy(agent, namespace)
+    normalized_memory_policy = _normalize_memory_policy(policy_memory)
+    promoted_memory = list_promoted_memory_records(
+        namespace,
+        agent_name,
+        username=_invoke_username(user),
+    )
+    ranked_memory = rank_promoted_memory_records(
+        prompt,
+        promoted_memory,
+        memory_policy=normalized_memory_policy,
+    )
+    memory_note = build_memory_context_system_note(ranked_memory)
+    if memory_note:
+        existing_system = str(request_payload.get("system") or "").strip()
+        request_payload["system"] = f"{memory_note}\n\n{existing_system}" if existing_system else memory_note
+        logger.info(
+            "Memory injected for %s/%s: %d candidates → %d ranked → %d chars injected",
+            namespace,
+            agent_name,
+            len(promoted_memory),
+            len(ranked_memory),
+            len(memory_note),
+        )
+    else:
+        logger.info(
+            "No memory injected for %s/%s: %d candidates, %d ranked (policy: autoPromote=%s, max=%d)",
+            namespace,
+            agent_name,
+            len(promoted_memory),
+            len(ranked_memory),
+            normalized_memory_policy.get("autoPromote", False),
+            normalized_memory_policy.get("maxInjectedMemories", 5),
+        )
+    return normalized_memory_policy
+
+
+def _record_invoke_response_side_effects(
+    namespace: str,
+    agent_name: str,
+    agent: dict[str, Any],
+    data: dict[str, Any],
+    user: dict[str, Any],
+    request_id: str,
+    normalized_memory_policy: dict[str, Any],
+) -> None:
+    usage = data.get("usage") if isinstance(data.get("usage"), dict) else None
+    agent_spec = agent.get("spec") if isinstance(agent.get("spec"), dict) else {}
+    if usage or data.get("model"):
+        try:
+            record_usage(
+                agent_name=agent_name,
+                namespace=namespace,
+                user_id=user.get("sub"),
+                model=data.get("model") or agent_spec.get("model"),
+                prompt_tokens=int((usage or {}).get("prompt_tokens", 0)),
+                completion_tokens=int((usage or {}).get("completion_tokens", 0)),
+                total_tokens=int((usage or {}).get("total_tokens", 0)),
+                session_id=data.get("thread_id"),
+                request_id=request_id,
+            )
+        except Exception:
+            logger.warning("Failed to record usage for %s", agent_name, exc_info=True)
+    try:
+        record_runtime_memory(
+            namespace,
+            agent_name,
+            session_id=str(data.get("thread_id") or "").strip() or None,
+            username=_invoke_username(user),
+            metadata=data.get("metadata") if isinstance(data.get("metadata"), dict) else None,
+            auto_promote=bool(normalized_memory_policy.get("autoPromote", False)),
+        )
+    except Exception:
+        logger.warning("Failed to record runtime memory for %s", agent_name, exc_info=True)
+    _record_invoke_trace(
+        namespace=namespace,
+        agent_name=agent_name,
+        agent=agent,
+        data=data,
+        request_id=request_id,
+    )
 
 @router.get("/agents", response_model=list[AgentInfo])
 def list_agents(namespace: str = "default", user=Depends(verify_token)):
@@ -360,21 +588,16 @@ async def invoke_agent(
     request_payload = request.model_dump(exclude={"factory_mode"})
     policy_memory = resolve_agent_memory_policy(agent, namespace)
     _log_invoke_step("memory_policy_resolved")
-    normalized_memory_policy = _normalize_memory_policy(policy_memory)
-    promoted_memory = list_promoted_memory_records(
-        namespace,
+    normalized_memory_policy = _apply_recalled_memory_to_request(
         agent_name,
-        username=str(user.get("sub") or user.get("username") or "").strip() or None,
+        namespace,
+        agent,
+        request.prompt,
+        request_payload,
+        user,
     )
     _log_invoke_step("promoted_memory_loaded")
-    ranked_memory = rank_promoted_memory_records(
-        request.prompt, promoted_memory, memory_policy=normalized_memory_policy
-    )
     _log_invoke_step("promoted_memory_ranked")
-    memory_note = build_memory_context_system_note(ranked_memory)
-    if memory_note:
-        existing_system = str(request_payload.get("system") or "").strip()
-        request_payload["system"] = f"{memory_note}\n\n{existing_system}" if existing_system else memory_note
     append_system_note(request_payload, build_agent_collaboration_system_note(agent_name, namespace, agent))
     _log_invoke_step("collaboration_note_appended")
     # Auto-inject intelligence context for intelligence-aware agents
@@ -406,34 +629,15 @@ async def invoke_agent(
 
     data = parse_json_object_response(response, context="Agent runtime /invoke")
     _log_invoke_step("runtime_response_parsed")
-    # Record token usage if present
-    _usage = data.get("usage") or {}
-    if _usage or data.get("model"):
-        try:
-            record_usage(
-                agent_name=agent_name,
-                namespace=namespace,
-                user_id=user.get("sub"),
-                model=data.get("model") or agent["spec"].get("model"),
-                prompt_tokens=int(_usage.get("prompt_tokens", 0)),
-                completion_tokens=int(_usage.get("completion_tokens", 0)),
-                total_tokens=int(_usage.get("total_tokens", 0)),
-                session_id=data.get("thread_id"),
-                request_id=request_id,
-            )
-        except Exception:
-            logger.warning("Failed to record usage for %s", agent_name, exc_info=True)
-    try:
-        record_runtime_memory(
-            namespace,
-            agent_name,
-            session_id=str(data.get("thread_id") or "").strip() or None,
-            username=str(user.get("sub") or user.get("username") or "").strip() or None,
-            metadata=data.get("metadata") if isinstance(data.get("metadata"), dict) else None,
-            auto_promote=bool(normalized_memory_policy.get("autoPromote", False)),
-        )
-    except Exception:
-        logger.warning("Failed to record runtime memory for %s", agent_name, exc_info=True)
+    _record_invoke_response_side_effects(
+        namespace,
+        agent_name,
+        agent,
+        data,
+        user,
+        request_id,
+        normalized_memory_policy,
+    )
     return InvokeResponse(
         agent_name=agent_name,
         response=data.get("response", ""),
@@ -487,6 +691,17 @@ async def invoke_agent_stream(
     if request.factory_mode and not is_factory_agent_resource(agent_name, agent):
         raise HTTPException(status_code=400, detail="factory_mode is only supported for the kubesynapse factory agent.")
     request_payload = request.model_dump(exclude={"factory_mode"})
+    normalized_memory_policy = _apply_recalled_memory_to_request(
+        agent_name,
+        namespace,
+        agent,
+        request.prompt,
+        request_payload,
+        user,
+    )
+    memory_injected = str(request_payload.get("system") or "").startswith(
+        "You have persistent memory from prior conversations"
+    )
     append_system_note(request_payload, build_agent_collaboration_system_note(agent_name, namespace, agent))
     # Auto-inject intelligence context for intelligence-aware agents
     if _agent_wants_intelligence(agent):
@@ -499,8 +714,62 @@ async def invoke_agent_stream(
     request_id = raw_request.headers.get("x-request-id") or str(uuid.uuid4())
 
     async def event_generator():
+        stream_buffer = ""
+
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=10.0), trust_env=False) as client:  # noqa: SIM117
+            async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=10.0), trust_env=False) as client:
+                if memory_injected:
+                    thread_id = str(request_payload.get("thread_id") or "").strip() or str(uuid.uuid4())
+                    request_payload["thread_id"] = thread_id
+                    yield sse_event("response.started", {"thread_id": thread_id, "source": "gateway"})
+                    response = await client.post(
+                        f"{agent_runtime_url(agent_name, namespace)}/invoke",
+                        json=request_payload,
+                        headers={"x-request-id": request_id},
+                    )
+                    if response.status_code >= 400:
+                        yield sse_event(
+                            "response.error",
+                            error_payload_from_body(response.content, "Agent invocation failed"),
+                        )
+                        return
+                    data = parse_json_object_response(response, context="Agent runtime /invoke")
+                    _record_invoke_response_side_effects(
+                        namespace,
+                        agent_name,
+                        agent,
+                        data,
+                        user,
+                        request_id,
+                        normalized_memory_policy,
+                    )
+                    response_text = str(data.get("response") or "")
+                    if response_text:
+                        yield sse_event(
+                            "response.delta",
+                            {
+                                "thread_id": data.get("thread_id") or thread_id,
+                                "delta": response_text,
+                                "source": "gateway",
+                            },
+                        )
+                    yield sse_event(
+                        "response.completed",
+                        {
+                            "thread_id": data.get("thread_id") or thread_id,
+                            "response": response_text,
+                            "model": data.get("model") or agent["spec"].get("model", "unknown"),
+                            "status": data.get("status", "completed"),
+                            "approval_name": data.get("approval_name"),
+                            "a2a": data.get("a2a"),
+                            "warnings": data.get("warnings") or [],
+                            "artifacts": data.get("artifacts") or [],
+                            "tool_calls": data.get("tool_calls") or [],
+                            "metadata": data.get("metadata"),
+                        },
+                    )
+                    return
+
                 async with client.stream(
                     "POST",
                     f"{agent_runtime_url(agent_name, namespace)}/invoke/stream",
@@ -534,6 +803,34 @@ async def invoke_agent_stream(
 
                             if chunk:
                                 yield chunk
+                                stream_buffer += chunk
+                                while "\n\n" in stream_buffer:
+                                    raw_event, stream_buffer = stream_buffer.split("\n\n", 1)
+                                    event_name = "message"
+                                    data_lines: list[str] = []
+                                    for line in raw_event.splitlines():
+                                        if line.startswith(":"):
+                                            continue
+                                        if line.startswith("event:"):
+                                            event_name = line[6:].strip() or "message"
+                                        elif line.startswith("data:"):
+                                            data_lines.append(line[5:].strip())
+                                    if event_name != "response.completed" or not data_lines:
+                                        continue
+                                    try:
+                                        completion_payload = json.loads("\n".join(data_lines))
+                                    except json.JSONDecodeError:
+                                        continue
+                                    if isinstance(completion_payload, dict):
+                                        _record_invoke_response_side_effects(
+                                            namespace,
+                                            agent_name,
+                                            agent,
+                                            completion_payload,
+                                            user,
+                                            request_id,
+                                            normalized_memory_policy,
+                                        )
 
                             next_chunk_task = asyncio.create_task(_next_chunk())
                     finally:

@@ -1,6 +1,7 @@
 """Auto-generated router — extracted from api-gateway main.py."""
 from __future__ import annotations
 
+import re
 from typing import Any, cast
 
 # Re-import all shared symbols from the gateway core
@@ -8,7 +9,112 @@ from _core import *
 from _core import _SHUTDOWN
 from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response
 
+from auth_store import get_user_by_id
+from routers.observability import (
+    _COLLECTOR_TOKEN_MISSING_ERROR,
+    _INTELLIGENCE_ALERT_ACTIONS,
+    _INTELLIGENCE_ALERT_CONDITION_TYPES,
+    COLLECTOR_TIMEOUT,
+    _build_intelligence_task_record,
+    _build_namespace_scoped_collector_id,
+    _collection_tasks,
+    _collector_auth_headers,
+    _delete_collection_tasks,
+    _encrypt_collector_token,
+    _enforce_collection_tasks_cap,
+    _get_namespaced_collectors,
+    _normalize_collection_payload,
+    _normalize_intelligence_namespace,
+    _persist_task,
+    _remove_namespaced_collector,
+    _resolve_collection_targets,
+    _set_namespaced_collector,
+    _tasks_lock,
+    _validate_collector_url,
+)
+
 router = APIRouter(tags=["admin"])
+
+_USER_NAMESPACE_SLUG_RE = re.compile(r"[^a-z0-9]+")
+
+
+def _user_namespace_slug(username: str) -> str:
+    slug = _USER_NAMESPACE_SLUG_RE.sub("-", username.strip().lower()).strip("-")
+    return (slug[:57].strip("-") or "user")
+
+
+def _user_namespace_name(username: str) -> str:
+    return f"user-{_user_namespace_slug(username)}"
+
+
+def _user_allowed_namespaces(username: str, role: str, allowed_namespaces: list[str] | None) -> list[str]:
+    if role == "admin":
+        return ["*"]
+
+    dedicated_namespace = _user_namespace_name(username)
+    requested = [str(item).strip() for item in (allowed_namespaces or []) if str(item).strip() and str(item).strip() != "*"]
+    requested.append(dedicated_namespace)
+    return sorted(set(requested))
+
+
+def _user_tenant_admin_users(username: str, role: str, is_active: bool) -> list[str]:
+    if not is_active or role == "viewer":
+        return []
+    return [username]
+
+
+def _custom_objects_api():
+    from kubernetes import client
+
+    return client.CustomObjectsApi()
+
+
+def _reconcile_user_tenant(username: str, role: str, is_active: bool) -> None:
+    tenant_name = _user_namespace_name(username)
+    tenant_body = {
+        "apiVersion": f"{RESOURCE_GROUP}/{RESOURCE_VERSION}",
+        "kind": "AgentTenant",
+        "metadata": {"name": tenant_name},
+        "spec": {
+            "tenantName": _user_namespace_slug(username),
+            "namespace": tenant_name,
+            "adminUsers": _user_tenant_admin_users(username, role, is_active),
+        },
+    }
+
+    api = _custom_objects_api()
+    try:
+        api.create_cluster_custom_object(
+            group=RESOURCE_GROUP,
+            version=RESOURCE_VERSION,
+            plural="agenttenants",
+            body=tenant_body,
+        )
+        return
+    except Exception as exc:
+        if getattr(exc, "status", None) != 409:
+            raise HTTPException(status_code=502, detail="Failed to provision the user's dedicated namespace") from exc
+
+    try:
+        existing = cast(
+            dict[str, Any],
+            api.get_cluster_custom_object(
+                group=RESOURCE_GROUP,
+                version=RESOURCE_VERSION,
+                plural="agenttenants",
+                name=tenant_name,
+            ),
+        )
+        existing["spec"] = tenant_body["spec"]
+        api.replace_cluster_custom_object(
+            group=RESOURCE_GROUP,
+            version=RESOURCE_VERSION,
+            plural="agenttenants",
+            name=tenant_name,
+            body=existing,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="Failed to update the user's dedicated namespace") from exc
 
 @router.get("/admin/users")
 def admin_list_users(user=Depends(verify_token)) -> list[dict[str, Any]]:
@@ -23,6 +129,7 @@ def admin_create_user(
     user=Depends(verify_token),
 ) -> dict[str, Any]:
     ensure_role(user, "admin")
+    requested_namespaces = _user_allowed_namespaces(body.username, body.role, body.allowed_namespaces)
     try:
         created = create_local_user(
             username=body.username,
@@ -30,10 +137,16 @@ def admin_create_user(
             email=body.email,
             display_name=body.display_name,
             role=body.role,
-            allowed_namespaces=body.allowed_namespaces or ["default"],
+            allowed_namespaces=requested_namespaces,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    _reconcile_user_tenant(
+        str(created.get("username") or body.username).strip().lower(),
+        str(created.get("role") or body.role),
+        bool(created.get("is_active", True)),
+    )
 
     safe_record_audit(
         action="admin.create-user",
@@ -54,6 +167,9 @@ def admin_update_user(
     user=Depends(verify_token),
 ) -> dict[str, Any]:
     ensure_role(user, "admin")
+    existing = get_user_by_id(user_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="User was not found.")
 
     # Prevent admin from demoting themselves
     acting_user_id = int(str(user.get("sub") or "0"))
@@ -62,16 +178,26 @@ def admin_update_user(
     if acting_user_id == user_id and body.is_active is False:
         raise HTTPException(status_code=400, detail="Cannot deactivate your own account")
 
+    next_role = body.role or str(existing.role or "viewer")
+    next_is_active = bool(existing.is_active if body.is_active is None else body.is_active)
+    next_allowed_namespaces = _user_allowed_namespaces(
+        str(existing.username),
+        next_role,
+        body.allowed_namespaces if body.allowed_namespaces is not None else cast(list[str] | None, existing.allowed_namespaces),
+    )
+
     try:
         updated = update_user_fields(
             user_id,
             display_name=body.display_name,
             role=body.role,
             is_active=body.is_active,
-            allowed_namespaces=body.allowed_namespaces,
+            allowed_namespaces=next_allowed_namespaces,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    _reconcile_user_tenant(str(existing.username), next_role, next_is_active)
 
     safe_record_audit(
         action="admin.update-user",
@@ -264,10 +390,15 @@ def get_approval(
 @router.get("/policies", response_model=list[PolicyInfo])
 def list_policies(namespace: str = "default", user=Depends(verify_token)):
     ensure_namespace_access(user, namespace)
-    return sorted(
-        [policy_info_from_resource(policy) for policy in get_policies(namespace)],
-        key=lambda item: item.name,
-    )
+    try:
+        raw_policies = get_policies(namespace)
+        return sorted(
+            [policy_info_from_resource(p) for p in raw_policies],
+            key=lambda item: item.name,
+        )
+    except Exception:
+        logger.exception("Failed to list policies in namespace '%s'", namespace)
+        return []
 
 
 class PolicyRequest(BaseModel):
@@ -329,9 +460,18 @@ def create_policy(
     user=Depends(verify_token),
 ):
     ensure_namespace_access(user, namespace, "operator")
+    # Validate required fields
+    if not body.name or not body.name.strip():
+        raise HTTPException(status_code=400, detail="Policy name is required.")
     spec = build_policy_spec(body)
-    created = create_custom_resource("agentpolicies", namespace, body.name, spec)
-    return policy_info_from_resource(created)
+    try:
+        created = create_custom_resource("agentpolicies", namespace, body.name.strip(), spec)
+        return policy_info_from_resource(created)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Failed to create policy '%s/%s'", namespace, body.name)
+        raise HTTPException(status_code=502, detail=f"Failed to create policy: {exc}")
 
 
 @router.get("/policies/{policy_name}", response_model=PolicyInfo)
@@ -349,12 +489,16 @@ def update_policy(
     user=Depends(verify_token),
 ):
     ensure_namespace_access(user, namespace, "operator")
-    existing = read_custom_resource("agentpolicies", policy_name, namespace, "Policy")
+    try:
+        existing = read_custom_resource("agentpolicies", policy_name, namespace, "Policy")
+    except HTTPException as exc:
+        if exc.status_code == 404:
+            raise HTTPException(status_code=404, detail=f"Policy '{policy_name}' not found.")
+        raise
     existing_spec = existing.get("spec", {})
     updated_spec = build_policy_spec(body, existing_spec)
     try:
         from kubernetes import client
-
         updated = client.CustomObjectsApi().patch_namespaced_custom_object(
             group=RESOURCE_GROUP,
             version=RESOURCE_VERSION,
@@ -363,9 +507,17 @@ def update_policy(
             name=policy_name,
             body={"spec": updated_spec},
         )
+        return policy_info_from_resource(updated)
     except Exception as exc:
-        raise HTTPException(status_code=502, detail="Failed to update policy") from exc
-    return policy_info_from_resource(updated)
+        status = getattr(exc, "status", None)
+        if status == 404:
+            raise HTTPException(status_code=404, detail=f"Policy '{policy_name}' not found.")
+        if status == 409:
+            raise HTTPException(status_code=409, detail=f"Policy '{policy_name}' was modified by another request. Please retry.")
+        if status == 422:
+            raise HTTPException(status_code=400, detail=f"Invalid policy spec: {exc}")
+        logger.exception("Failed to update policy '%s/%s'", namespace, policy_name)
+        raise HTTPException(status_code=502, detail=f"Failed to update policy: {exc}") from exc
 
 
 @router.delete("/policies/{policy_name}", response_model=DeleteResponse)
@@ -375,7 +527,15 @@ def delete_policy(
     user=Depends(verify_token),
 ):
     ensure_namespace_access(user, namespace, "operator")
-    delete_custom_resource("agentpolicies", policy_name, namespace, "Policy")
+    try:
+        delete_custom_resource("agentpolicies", policy_name, namespace, "Policy")
+    except HTTPException as exc:
+        if exc.status_code == 404:
+            raise HTTPException(status_code=404, detail=f"Policy '{policy_name}' not found.")
+        raise
+    except Exception as exc:
+        logger.exception("Failed to delete policy '%s/%s'", namespace, policy_name)
+        raise HTTPException(status_code=502, detail=f"Failed to delete policy: {exc}")
     return DeleteResponse(status="deleted", kind="policy", name=policy_name, namespace=namespace)
 
 
@@ -442,12 +602,12 @@ def export_yaml_bundle(
     namespace: str = "default",
     user=Depends(verify_token),
 ):
-    """Export all agents, workflows, and evals in the namespace as a multi-document YAML bundle."""
+    """Export all agents, workflows, and policies in the namespace as a multi-document YAML bundle."""
     ensure_namespace_access(user, namespace)
     import yaml as _yaml
 
     documents: list[dict[str, Any]] = []
-    for plural in ("aiagents", "agentworkflows", "agentevals", "agentpolicies"):
+    for plural in ("aiagents", "agentworkflows", "agentpolicies"):
         items = list_custom_resources(plural, namespace)
         for item in items:
             # Strip runtime status and server-managed metadata fields
@@ -502,7 +662,6 @@ async def import_yaml_bundle(
         plural_map = {
             "AIAgent": "aiagents",
             "AgentWorkflow": "agentworkflows",
-            "AgentEval": "agentevals",
             "AgentPolicy": "agentpolicies",
         }
         plural = plural_map.get(kind)
@@ -610,7 +769,6 @@ def system_health(
     try:
         agents = list_custom_resources("aiagents", namespace)
         workflows = list_custom_resources("agentworkflows", namespace)
-        evals = list_custom_resources("agentevals", namespace)
         policies = list_custom_resources("agentpolicies", namespace)
 
         agent_phases: dict[str, int] = {}
@@ -627,7 +785,6 @@ def system_health(
             "status": "ok",
             "agents": {"total": len(agents), "by_phase": agent_phases},
             "workflows": {"total": len(workflows), "by_phase": workflow_phases},
-            "evals": {"total": len(evals)},
             "policies": {"total": len(policies)},
         }
     except Exception as exc:

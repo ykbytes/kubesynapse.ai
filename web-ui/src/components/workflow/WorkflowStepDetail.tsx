@@ -13,8 +13,8 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { CopyButton } from "../CopyButton";
-import { JsonBlock } from "../JsonBlock";
+import { CopyButton } from "../shared/CopyButton";
+import { JsonBlock } from "../shared/JsonBlock";
 import {
   formatMs,
   isJsonContractFailure,

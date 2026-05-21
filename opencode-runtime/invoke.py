@@ -511,6 +511,24 @@ def build_invoke_warnings(request: InvokeRequest) -> list[str]:
     return dedupe_items(warnings)
 
 
+def _best_warning_response(warnings: list[str]) -> str:
+    """Return the most actionable warning text to surface as a fallback response."""
+    for warning in warnings:
+        text = str(warning or "").strip()
+        if not text:
+            continue
+        if text.startswith("Tool error:"):
+            return text
+    for warning in warnings:
+        text = str(warning or "").strip()
+        if not text:
+            continue
+        if ": " in text:
+            return text.split(": ", 1)[1].strip() or text
+        return text
+    return ""
+
+
 def resolve_working_directory(raw_value: str | None) -> str:
     """Resolve and validate the working directory for an invocation."""
     root = Path(OPENCODE_WORKDIR).resolve()
@@ -620,6 +638,22 @@ def _send_prompt_with_live_updates_and_recovery(
     emit: Any,
 ) -> tuple[str, dict[str, Any]]:
     """Send a streamed prompt via OpenCode's async endpoint and poll live message snapshots."""
+    if system_prompt:
+        session_id, payload = _send_prompt_with_session_recovery(
+            session_id=session_id,
+            prompt=prompt,
+            model=model,
+            system_prompt=system_prompt,
+            prompt_format=prompt_format,
+            working_directory=working_directory,
+            agent=agent,
+            logical_thread_id=logical_thread_id,
+            allow_session_recovery=allow_session_recovery,
+        )
+        if isinstance(payload, dict):
+            payload["_live_streamed"] = False
+        return session_id, payload
+
     recovered = False
     max_idle_retries = 3
     idle_retry_count = 0
@@ -1217,14 +1251,6 @@ def invoke_opencode(request: InvokeRequest, stream_callback: StreamCallback = No
     except Exception as exc:
         logger.warning("Failed to collect session history for %s: %s", session_id, exc)
 
-    response_text = extract_response_text(authoritative_payload).strip()
-    if not response_text and collected_tool_calls:
-        response_text = build_tool_only_response(collected_tool_calls)
-    if not response_text:
-        response_text = "(no output)"
-    # Defense-in-depth: redact any leaked secrets from the response text and warnings
-    response_text = redact_secrets(response_text)
-    all_warnings = [redact_secrets(w) for w in all_warnings]
     final_status_str = detect_completion_status(authoritative_payload)
     response_metadata = _build_response_metadata(authoritative_payload)
     if response_metadata is None:
@@ -1239,6 +1265,17 @@ def invoke_opencode(request: InvokeRequest, stream_callback: StreamCallback = No
         response_status = "incomplete"
     if response_status != final_status_str:
         response_metadata["raw_status"] = final_status_str
+
+    response_text = extract_response_text(authoritative_payload).strip()
+    if not response_text and response_status == "error":
+        response_text = _best_warning_response(all_warnings)
+    if not response_text and collected_tool_calls:
+        response_text = build_tool_only_response(collected_tool_calls)
+    if not response_text:
+        response_text = "(no output)"
+    # Defense-in-depth: redact any leaked secrets from the response text and warnings
+    response_text = redact_secrets(response_text)
+    all_warnings = [redact_secrets(w) for w in all_warnings]
 
     ctx_budget = compute_context_budget(authoritative_payload)
     response_metadata["context_budget"] = ctx_budget
@@ -1257,6 +1294,19 @@ def invoke_opencode(request: InvokeRequest, stream_callback: StreamCallback = No
 
     if handoff_summary:
         response_metadata["handoff_summary"] = handoff_summary
+
+    # Emit memory candidates for the gateway to persist in PostgreSQL
+    if response_text and response_status in ("completed", "incomplete"):
+        _mem_candidates: dict[str, list[dict[str, Any]]] = {}
+        _summary_text = response_text[:280].strip()
+        if _summary_text:
+            _mem_candidates["procedural"] = [{"type": "assistant-summary", "text": _summary_text}]
+        if collected_tool_calls:
+            _tool_names = sorted({str(tc.get("tool") or tc.get("name") or "") for tc in collected_tool_calls if isinstance(tc, dict)} - {""})
+            if _tool_names:
+                _mem_candidates["episodic"] = [{"type": "tool-usage", "names": _tool_names}]
+        if _mem_candidates:
+            response_metadata["memory"] = _mem_candidates
 
     continuity = {
         "created_new_session": created_new_session,

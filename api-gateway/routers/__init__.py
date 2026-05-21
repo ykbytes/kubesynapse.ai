@@ -8,7 +8,6 @@ from .admin import router as admin_router
 from .agents import router as agents_router
 from .auth import router as auth_router
 from .chat import router as chat_router
-from .evals import router as evals_router
 from .llm import router as llm_router
 from .observability import router as observability_router
 from .webhooks import router as webhooks_router
@@ -20,7 +19,6 @@ __all__ = [
     "agents_router",
     "auth_router",
     "chat_router",
-    "evals_router",
     "llm_router",
     "observability_router",
     "webhooks_router",

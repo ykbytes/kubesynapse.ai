@@ -7,7 +7,48 @@ from typing import Any, cast
 from _core import *
 from fastapi import APIRouter, Depends, HTTPException, Response
 
+from routers.chat import (
+    _ALLOWED_SECRET_KEYS,
+    _LLM_PROXY_TIMEOUT,
+    _PROVIDER_META,
+    _PROVIDER_POPULAR_MODELS,
+    _PROVIDER_REGISTRY_META,
+    LLM_SECRET_NAME,
+    CustomProviderRequest,
+    LLMKeyUpdate,
+    LLMModelDeleteRequest,
+    LLMModelEntry,
+    ProviderCredentialUpdate,
+    _custom_provider_secret_key,
+    _fetch_copilot_models,
+    _fetch_opencode_go_models,
+    _fetch_opencode_zen_models,
+    _fetch_openrouter_models,
+    _litellm_headers,
+    _normalize_provider_id,
+    _provider_registry_response,
+    _read_or_create_provider_registry_configmap,
+    _save_provider_registry_state,
+    _update_provider_auth_secret,
+)
+
 router = APIRouter(tags=["llm"])
+
+
+def _read_secret_key_value(key_name: str) -> str | None:
+    try:
+        import base64
+
+        from kubernetes import client as k8s_client
+
+        ns = os.getenv("POD_NAMESPACE", "ai-platform")
+        secret = k8s_client.CoreV1Api().read_namespaced_secret(name=LLM_SECRET_NAME, namespace=ns)
+        raw = (getattr(secret, "data", None) or {}).get(key_name, "")
+        if raw:
+            return base64.b64decode(raw).decode("utf-8").strip() or None
+    except Exception:
+        pass
+    return (os.getenv(key_name) or "").strip() or None
 
 @router.get("/providers")
 async def provider_registry_list(user=Depends(verify_token)):
@@ -356,8 +397,8 @@ async def llm_list_providers(response: Response, user=Depends(verify_token)):
 async def llm_provider_suggestions(provider: str, q: str = "", user=Depends(verify_token)):
     """Return model suggestions for a provider.
 
-    Merges already-configured models from LiteLLM with the static popular-models
-    list (excluding duplicates). Supports ``?q=`` for server-side filtering.
+    Merges already-configured models from LiteLLM with live provider catalogs when
+    available. Supports ``?q=`` for server-side filtering.
     """
     ensure_role(user, "viewer")
     if provider not in _PROVIDER_META:
@@ -399,21 +440,7 @@ async def llm_provider_suggestions(provider: str, q: str = "", user=Depends(veri
 
     # For OpenRouter, fetch live models from the API
     if provider == "OPENROUTER_API_KEY":
-        # Read OpenRouter API key from K8s secret or env
-        or_key: str | None = None
-        try:
-            from kubernetes import client as k8s_client
-
-            ns = os.getenv("POD_NAMESPACE", "ai-platform")
-            secret = k8s_client.CoreV1Api().read_namespaced_secret(name=LLM_SECRET_NAME, namespace=ns)
-            raw = (getattr(secret, "data", None) or {}).get("OPENROUTER_API_KEY", "")
-            if raw:
-                import base64
-
-                or_key = base64.b64decode(raw).decode("utf-8").strip() or None
-        except Exception:
-            or_key = os.getenv("OPENROUTER_API_KEY") or None
-
+        or_key = _read_secret_key_value("OPENROUTER_API_KEY")
         live_models = await _fetch_openrouter_models(or_key)
         # Mark already-configured and merge
         live_suggestions = []
@@ -440,41 +467,50 @@ async def llm_provider_suggestions(provider: str, q: str = "", user=Depends(veri
         combined = configured_live + unconfigured_live
         return {"provider": provider, "suggestions": combined[:100]}
 
+    if provider in {"OPENCODE_API_KEY", "OPENCODE_GO_API_KEY"}:
+        provider_key = _read_secret_key_value(provider)
+        live_models = []
+        if provider_key:
+            live_models = (
+                await _fetch_opencode_zen_models(provider_key)
+                if provider == "OPENCODE_API_KEY"
+                else await _fetch_opencode_go_models(provider_key)
+            )
+
+        live_suggestions = []
+        for lm in live_models:
+            entry = dict(lm)
+            if lm["model_id"] in configured_ids:
+                entry["description"] = "Already configured"
+            live_suggestions.append(entry)
+
+        combined = configured + live_suggestions
+        if q:
+            combined = [s for s in combined if _suggestion_matches(s, q)]
+
+        configured_live = [s for s in combined if s.get("description") == "Already configured"]
+        unconfigured_live = [s for s in combined if s.get("description") != "Already configured"]
+        return {"provider": provider, "suggestions": (configured_live + unconfigured_live)[:100]}
+
     # For GitHub Copilot, fetch live models from the Copilot API
     if provider == "GITHUB_COPILOT_TOKEN":
-        cp_token: str | None = None
-        try:
-            import base64
+        cp_token = _read_secret_key_value("GITHUB_COPILOT_TOKEN")
 
-            from kubernetes import client as k8s_client
-
-            ns = os.getenv("POD_NAMESPACE", "ai-platform")
-            secret = k8s_client.CoreV1Api().read_namespaced_secret(name=LLM_SECRET_NAME, namespace=ns)
-            raw = (getattr(secret, "data", None) or {}).get("GITHUB_COPILOT_TOKEN", "")
-            if raw:
-                cp_token = base64.b64decode(raw).decode("utf-8").strip() or None
-        except Exception:
-            cp_token = os.getenv("GITHUB_COPILOT_TOKEN") or None
-
+        live_suggestions = configured.copy()
         if cp_token:
             live_models = await _fetch_copilot_models(cp_token)
-            if live_models:
-                live_suggestions = []
-                for lm in live_models:
-                    entry = dict(lm)
-                    if lm["model_id"] in configured_ids:
-                        entry["description"] = "Already configured"
-                    live_suggestions.append(entry)
+            for lm in live_models:
+                entry = dict(lm)
+                if lm["model_id"] in configured_ids:
+                    entry["description"] = "Already configured"
+                live_suggestions.append(entry)
 
-                if q:
-                    ql = q.lower()
-                    live_suggestions = [s for s in live_suggestions if _suggestion_matches(s, q)]
+        if q:
+            live_suggestions = [s for s in live_suggestions if _suggestion_matches(s, q)]
 
-                configured_live = [s for s in live_suggestions if s.get("description") == "Already configured"]
-                unconfigured_live = [s for s in live_suggestions if s.get("description") != "Already configured"]
-                combined = configured_live + unconfigured_live
-                return {"provider": provider, "suggestions": combined[:100]}
-        # Fall through to static suggestions if no token or fetch failed
+        configured_live = [s for s in live_suggestions if s.get("description") == "Already configured"]
+        unconfigured_live = [s for s in live_suggestions if s.get("description") != "Already configured"]
+        return {"provider": provider, "suggestions": (configured_live + unconfigured_live)[:100]}
 
     # Static popular suggestions, excluding already-configured
     static = [s for s in _PROVIDER_POPULAR_MODELS.get(provider, []) if s["model_id"] not in configured_ids]
@@ -508,37 +544,22 @@ async def llm_add_provider_model(provider: str, body: ProviderModelAdd, user=Dep
     # pod start so the env var may not be present.
     actual_api_key: str | None = None
     actual_api_base: str | None = None
-    if provider == "GITHUB_COPILOT_TOKEN":
-        try:
-            import base64
-
-            from kubernetes import client as k8s_client
-
-            ns = os.getenv("POD_NAMESPACE", "ai-platform")
-            secret = k8s_client.CoreV1Api().read_namespaced_secret(
-                name=LLM_SECRET_NAME,
-                namespace=ns,
-            )
-            raw_b64 = (getattr(secret, "data", None) or {}).get("GITHUB_COPILOT_TOKEN", "")
-            if raw_b64:
-                actual_api_key = base64.b64decode(raw_b64).decode("utf-8")
-            else:
-                logger.warning("GITHUB_COPILOT_TOKEN is empty in secret %s/%s", ns, LLM_SECRET_NAME)
-        except Exception as exc:
-            logger.error("Failed to read Copilot token from K8s secret: %s", exc)
+    if provider in {"GITHUB_COPILOT_TOKEN", "OPENCODE_API_KEY", "OPENCODE_GO_API_KEY"}:
+        actual_api_key = _read_secret_key_value(provider)
         if not actual_api_key:
-            raise HTTPException(
-                status_code=400, detail="GitHub Copilot is not authenticated. Please connect via the device flow first."
-            )
-        try:
-            exchanged_token, resolved_api_endpoint = await _exchange_copilot_session_token(actual_api_key)
-            actual_api_key = exchanged_token
-            actual_api_base = resolved_api_endpoint or meta.get("api_base") or None
-        except Exception as exc:
-            logger.warning(
-                "Failed to exchange GitHub token for Copilot session token; falling back to stored OAuth token: %s",
-                exc,
-            )
+            raise HTTPException(status_code=400, detail=f"{meta['label']} credential is not configured.")
+        if provider == "GITHUB_COPILOT_TOKEN":
+            try:
+                exchanged_token, resolved_api_endpoint = await _exchange_copilot_session_token(actual_api_key)
+                actual_api_key = exchanged_token
+                actual_api_base = resolved_api_endpoint or meta.get("api_base") or None
+            except Exception as exc:
+                logger.warning(
+                    "Failed to exchange GitHub token for Copilot session token; falling back to stored OAuth token: %s",
+                    exc,
+                )
+                actual_api_base = meta.get("api_base") or None
+        else:
             actual_api_base = meta.get("api_base") or None
 
     litellm_params: dict[str, Any] = {

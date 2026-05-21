@@ -4,12 +4,14 @@ import hashlib
 import importlib.util
 import json
 import sys
+import tempfile
 import types
 import unittest
+import uuid
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import httpx
 from fastapi import HTTPException
@@ -32,13 +34,47 @@ except ModuleNotFoundError:
     sys.modules["jose.utils"] = jose_utils_module
 
 
-MODULE_PATH = Path(__file__).resolve().parents[1] / "main.py"
-SPEC = importlib.util.spec_from_file_location("api_gateway_main", MODULE_PATH)
-if SPEC is None or SPEC.loader is None:
-    raise RuntimeError("Failed to load api-gateway main module for tests")
-api_gateway_main = importlib.util.module_from_spec(SPEC)
-sys.modules[SPEC.name] = api_gateway_main
-SPEC.loader.exec_module(api_gateway_main)
+MODULE_DIR = Path(__file__).resolve().parents[1]
+if str(MODULE_DIR) not in sys.path:
+    sys.path.insert(0, str(MODULE_DIR))
+
+
+def _load_gateway_module(module_name: str, file_name: str):
+    module_path = MODULE_DIR / file_name
+    spec = importlib.util.spec_from_file_location(module_name, module_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Failed to load api-gateway module {file_name} for tests")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+api_gateway_main = _load_gateway_module("api_gateway_core", "_core.py")
+sys.modules["_core"] = api_gateway_main
+api_gateway_auth = _load_gateway_module("api_gateway_auth", "routers/auth.py")
+sys.modules["routers.auth"] = api_gateway_auth
+api_gateway_observability = _load_gateway_module("api_gateway_observability", "routers/observability.py")
+sys.modules["routers.observability"] = api_gateway_observability
+api_gateway_admin = _load_gateway_module("api_gateway_admin", "routers/admin.py")
+sys.modules["routers.admin"] = api_gateway_admin
+api_gateway_agents = _load_gateway_module("api_gateway_agents", "routers/agents.py")
+sys.modules["routers.agents"] = api_gateway_agents
+api_gateway_llm = _load_gateway_module("api_gateway_llm", "routers/llm.py")
+sys.modules["routers.llm"] = api_gateway_llm
+api_gateway_workflows = _load_gateway_module("api_gateway_workflows", "routers/workflows.py")
+sys.modules["routers.workflows"] = api_gateway_workflows
+api_gateway_a2a = _load_gateway_module("api_gateway_a2a", "routers/a2a.py")
+sys.modules["routers.a2a"] = api_gateway_a2a
+api_gateway_app = _load_gateway_module("api_gateway_app", "main.py")
+
+api_gateway_auth.get_tool_categories = api_gateway_observability.get_tool_categories
+
+
+def _bind_gateway_module(test_case: unittest.TestCase, module) -> None:
+    original_module = globals()["api_gateway_main"]
+    globals()["api_gateway_main"] = module
+    test_case.addCleanup(lambda: globals().__setitem__("api_gateway_main", original_module))
 
 
 class GatewayRuntimeValidationTests(unittest.TestCase):
@@ -54,6 +90,116 @@ class GatewayRuntimeValidationTests(unittest.TestCase):
 
         self.assertEqual(context.exception.status_code, 400)
         self.assertIn("runtime kind must be 'opencode'", str(context.exception.detail))
+
+
+class AdminUserNamespaceProvisioningTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.admin_user = {
+            "sub": "1",
+            "username": "platform-admin",
+            "role": "admin",
+            "allowed_namespaces": ["*"],
+        }
+
+    def test_admin_create_user_provisions_dedicated_tenant_namespace(self) -> None:
+        body = api_gateway_admin.CreateUserRequest(
+            username="Alice.User",
+            password="CorrectH0rse1",
+            display_name="Alice",
+            role="operator",
+            allowed_namespaces=["team-a"],
+        )
+        created = {
+            "id": 7,
+            "username": "alice.user",
+            "display_name": "Alice",
+            "role": "operator",
+            "allowed_namespaces": ["team-a", "user-alice-user"],
+            "auth_provider": "local",
+            "is_active": True,
+        }
+        custom_api = Mock()
+
+        with (
+            patch.object(api_gateway_admin, "create_local_user", return_value=created) as create_local_user,
+            patch.object(api_gateway_admin, "safe_record_audit"),
+            patch.object(api_gateway_admin, "request_client_ip", return_value="127.0.0.1"),
+            patch.object(api_gateway_admin, "_custom_objects_api", return_value=custom_api),
+        ):
+            response = api_gateway_admin.admin_create_user(body, object(), user=self.admin_user)
+
+        self.assertEqual(response, created)
+        create_local_user.assert_called_once_with(
+            username="Alice.User",
+            password="CorrectH0rse1",
+            email=None,
+            display_name="Alice",
+            role="operator",
+            allowed_namespaces=["team-a", "user-alice-user"],
+        )
+        custom_api.create_cluster_custom_object.assert_called_once()
+        tenant_body = custom_api.create_cluster_custom_object.call_args.kwargs["body"]
+        self.assertEqual(tenant_body["metadata"]["name"], "user-alice-user")
+        self.assertEqual(tenant_body["spec"]["namespace"], "user-alice-user")
+        self.assertEqual(tenant_body["spec"]["adminUsers"], ["alice.user"])
+
+    def test_admin_update_user_replaces_existing_user_tenant_and_drops_admin_wildcard(self) -> None:
+        body = api_gateway_admin.UpdateUserRequest(role="operator")
+        existing_user = types.SimpleNamespace(
+            id=8,
+            username="legacy.admin",
+            role="admin",
+            allowed_namespaces=["*"],
+            is_active=True,
+        )
+        updated = {
+            "id": 8,
+            "username": "legacy.admin",
+            "display_name": "Legacy Admin",
+            "role": "operator",
+            "allowed_namespaces": ["user-legacy-admin"],
+            "auth_provider": "local",
+            "is_active": True,
+        }
+        conflict = type("ConflictError", (Exception,), {"status": 409})()
+        custom_api = Mock()
+        custom_api.create_cluster_custom_object.side_effect = conflict
+        custom_api.get_cluster_custom_object.return_value = {
+            "apiVersion": "kubesynapse.ai/v1alpha1",
+            "kind": "AgentTenant",
+            "metadata": {"name": "user-legacy-admin", "resourceVersion": "1"},
+            "spec": {"tenantName": "legacy-admin", "namespace": "user-legacy-admin", "adminUsers": ["legacy.admin"]},
+        }
+
+        with (
+            patch.object(api_gateway_admin, "get_user_by_id", return_value=existing_user),
+            patch.object(api_gateway_admin, "update_user_fields", return_value=updated) as update_user_fields,
+            patch.object(api_gateway_admin, "safe_record_audit"),
+            patch.object(api_gateway_admin, "request_client_ip", return_value="127.0.0.1"),
+            patch.object(api_gateway_admin, "_custom_objects_api", return_value=custom_api),
+        ):
+            response = api_gateway_admin.admin_update_user(8, body, object(), user=self.admin_user)
+
+        self.assertEqual(response, updated)
+        update_user_fields.assert_called_once_with(
+            8,
+            display_name=None,
+            role="operator",
+            is_active=None,
+            allowed_namespaces=["user-legacy-admin"],
+        )
+        custom_api.replace_cluster_custom_object.assert_called_once()
+        tenant_body = custom_api.replace_cluster_custom_object.call_args.kwargs["body"]
+        self.assertEqual(tenant_body["spec"]["namespace"], "user-legacy-admin")
+        self.assertEqual(tenant_body["spec"]["adminUsers"], ["legacy.admin"])
+
+    def test_mistral_vibe_agent_runtime_is_accepted(self) -> None:
+        api_gateway_main.validate_agent_runtime_compatibility(
+            {
+                "runtime": {"kind": "mistral-vibe"},
+                "model": "devstral-small",
+            }
+        )
 
     def test_opencode_agent_rejects_github_config(self) -> None:
         with self.assertRaises(HTTPException) as context:
@@ -75,6 +221,11 @@ class GatewayRuntimeValidationTests(unittest.TestCase):
 
         self.assertEqual(context.exception.status_code, 400)
         self.assertIn("Unsupported AIAgent runtime kind", str(context.exception.detail))
+
+    def test_mistral_vibe_invoke_runtime_accepts_core_request(self) -> None:
+        request = api_gateway_main.InvokeRequest(prompt="hello")
+
+        api_gateway_main.validate_invoke_runtime_compatibility("mistral-vibe", request)
 
     def test_opencode_invoke_rejects_tool_style_fields(self) -> None:
         request = api_gateway_main.InvokeRequest(
@@ -150,7 +301,7 @@ class GatewayRuntimeValidationTests(unittest.TestCase):
     def test_delete_is_allowed_for_cors(self) -> None:
         cors_middleware = next(
             middleware
-            for middleware in api_gateway_main.app.user_middleware
+            for middleware in api_gateway_app.app.user_middleware
             if middleware.cls.__name__ == "CORSMiddleware"
         )
 
@@ -220,7 +371,7 @@ class GatewayRuntimeValidationTests(unittest.TestCase):
             ]
         )
 
-        self.assertIn("Promoted memory from prior work", note)
+        self.assertIn("persistent memory", note)
         self.assertIn("response-summary", note)
         self.assertIn("monorepo layout", note)
 
@@ -272,6 +423,31 @@ class GatewayRuntimeValidationTests(unittest.TestCase):
         self.assertEqual(len(ranked), 1)
         self.assertEqual(ranked[0]["topic"], "repo-convention")
 
+    def test_rank_promoted_memory_records_skips_false_no_memory_boilerplate(self) -> None:
+        ranked = api_gateway_main.rank_promoted_memory_records(
+            "What do you remember about chickens? Answer from your persistent memory if you have it.",
+            [
+                {
+                    "memory_type": "procedural",
+                    "topic": "assistant-summary",
+                    "content": "I don't have persistent memory across sessions. What do you want to know?",
+                    "score": 5.0,
+                    "created_at": "2026-03-23T00:00:00+00:00",
+                },
+                {
+                    "memory_type": "procedural",
+                    "topic": "assistant-summary",
+                    "content": "Noted. Chickens must be black. What next?",
+                    "score": 5.0,
+                    "created_at": "2026-03-23T00:00:00+00:00",
+                },
+            ],
+            memory_policy={"maxInjectedMemories": 1, "maxInjectedChars": 200},
+        )
+
+        self.assertEqual(len(ranked), 1)
+        self.assertEqual(ranked[0]["content"], "Noted. Chickens must be black. What next?")
+
     def test_sync_workflow_run_history_records_memory_feedback_for_terminal_workflow(self) -> None:
         info = api_gateway_main.WorkflowInfo(
             name="repo-check",
@@ -288,47 +464,26 @@ class GatewayRuntimeValidationTests(unittest.TestCase):
         )
 
         with (
-            patch.object(api_gateway_main, "record_workflow_run") as record_workflow_run,
+            patch.object(api_gateway_workflows, "record_workflow_run") as record_workflow_run,
             patch.object(
-                api_gateway_main,
+                api_gateway_workflows,
                 "record_workflow_outcome_memory",
             ) as record_workflow_outcome_memory,
             patch.object(
-                api_gateway_main,
+                api_gateway_workflows,
                 "apply_memory_feedback",
             ) as apply_memory_feedback,
         ):
-            api_gateway_main._sync_workflow_run_history(info)
+            api_gateway_workflows._sync_workflow_run_history(info)
 
         record_workflow_run.assert_called_once()
         record_workflow_outcome_memory.assert_called_once()
         apply_memory_feedback.assert_called_once()
 
-    def test_sync_eval_memory_records_memory_feedback_for_terminal_eval(self) -> None:
-        info = api_gateway_main.EvalInfo(
-            name="reviewer-eval",
-            namespace="default",
-            agent_ref="reviewer",
-            phase="completed",
-            passed=True,
-            summary={"score": 0.91},
-        )
-
-        with (
-            patch.object(api_gateway_main, "record_eval_outcome_memory") as record_eval_outcome_memory,
-            patch.object(
-                api_gateway_main,
-                "apply_memory_feedback",
-            ) as apply_memory_feedback,
-        ):
-            api_gateway_main._sync_eval_memory(info)
-
-        record_eval_outcome_memory.assert_called_once()
-        apply_memory_feedback.assert_called_once()
-
 
 class IntelligenceNamespaceIsolationTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
+        _bind_gateway_module(self, api_gateway_admin)
         self.engine = create_engine(
             "sqlite:///:memory:",
             future=True,
@@ -344,10 +499,16 @@ class IntelligenceNamespaceIsolationTests(unittest.IsolatedAsyncioTestCase):
         )
         self.db_patcher = patch.object(api_gateway_main, "db_session", self._db_session)
         self.audit_patcher = patch.object(api_gateway_main, "safe_record_audit")
+        self.observability_db_patcher = patch.object(api_gateway_observability, "db_session", self._db_session)
+        self.observability_audit_patcher = patch.object(api_gateway_observability, "safe_record_audit")
         self.db_patcher.start()
         self.audit_patcher.start()
+        self.observability_db_patcher.start()
+        self.observability_audit_patcher.start()
         self.addCleanup(self.db_patcher.stop)
         self.addCleanup(self.audit_patcher.stop)
+        self.addCleanup(self.observability_db_patcher.stop)
+        self.addCleanup(self.observability_audit_patcher.stop)
         self.addCleanup(self.engine.dispose)
 
         api_gateway_main._collector_registry.clear()
@@ -471,7 +632,15 @@ class IntelligenceNamespaceIsolationTests(unittest.IsolatedAsyncioTestCase):
             )
 
         api_gateway_main._collector_registry.clear()
-        api_gateway_main._load_collectors_from_db()
+        with (
+            patch.object(api_gateway_observability, "_DEFAULT_COLLECTOR_TOKEN", "collector-dev-token"),
+            patch.object(
+                api_gateway_observability,
+                "_DEFAULT_COLLECTOR_TOKEN_HASH",
+                hashlib.sha256(b"collector-dev-token").hexdigest(),
+            ),
+        ):
+            api_gateway_main._load_collectors_from_db()
 
         recovered = api_gateway_main._get_namespaced_collectors("team-a")
         self.assertEqual(recovered[collector_id]["token"], "collector-dev-token")
@@ -909,7 +1078,7 @@ class WorkflowSchemaTests(unittest.TestCase):
     def test_parse_agent_skills_config_rejects_non_markdown_paths(self) -> None:
         with self.assertRaises(HTTPException) as context:
             api_gateway_main.parse_agent_skills_config(
-                {"files": {".github/skills/reviewer/config.yaml": "name: reviewer"}},
+                {"files": {"skills/reviewer/config.yaml": "name: reviewer"}},
                 source="skills",
                 strict=True,
             )
@@ -980,7 +1149,7 @@ class WorkflowSchemaTests(unittest.TestCase):
             runtime_kind="opencode",
             skills={
                 "files": {
-                    ".github/skills/research/SKILL.md": (
+                    "skills/research/SKILL.md": (
                         "---\n"
                         "name: research\n"
                         "description: Gather evidence carefully.\n"
@@ -996,7 +1165,7 @@ class WorkflowSchemaTests(unittest.TestCase):
         spec = api_gateway_main.build_agent_spec(request)
 
         self.assertIn("skills", spec)
-        self.assertIn(".github/skills/research/SKILL.md", spec["skills"]["files"])
+        self.assertIn("skills/research/SKILL.md", spec["skills"]["files"])
 
     def test_build_agent_spec_includes_structured_mcp_connections(self) -> None:
         request = api_gateway_main.CreateAgentRequest(
@@ -1128,7 +1297,7 @@ class WorkflowSchemaTests(unittest.TestCase):
                 "runtime": {"kind": "opencode"},
                 "skills": {
                     "files": {
-                        ".github/skills/research/SKILL.md": "---\nname: research\n---\nRead first.\n",
+                        "skills/research/SKILL.md": "---\nname: research\n---\nRead first.\n",
                     }
                 },
             },
@@ -1138,7 +1307,7 @@ class WorkflowSchemaTests(unittest.TestCase):
             spec["skills"],
             {
                 "files": {
-                    ".github/skills/research/SKILL.md": "---\nname: research\n---\nRead first.\n",
+                    "skills/research/SKILL.md": "---\nname: research\n---\nRead first.\n",
                 }
             },
         )
@@ -1180,6 +1349,15 @@ class WorkflowSchemaTests(unittest.TestCase):
                 name="opencode-agent",
                 model="gpt-4",
             )
+
+    def test_create_agent_request_accepts_mistral_vibe_runtime_kind(self) -> None:
+        request = api_gateway_main.CreateAgentRequest(
+            name="vibe-agent",
+            model="devstral-small",
+            runtime_kind="mistral-vibe",
+        )
+
+        self.assertEqual(request.runtime_kind, "mistral-vibe")
 
     def test_runtime_kind_from_spec_requires_explicit_kind(self) -> None:
         with self.assertRaises(HTTPException) as context:
@@ -1278,7 +1456,7 @@ class WorkflowSchemaTests(unittest.TestCase):
                     "runtime": {"kind": "opencode"},
                     "skills": {
                         "files": {
-                            ".github/skills/research/SKILL.md": (
+                            "skills/research/SKILL.md": (
                                 "---\n"
                                 "name: research\n"
                                 "description: Gather evidence carefully.\n"
@@ -1297,7 +1475,7 @@ class WorkflowSchemaTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual(set(detail.skills["files"].keys()), {".github/skills/research/SKILL.md"})
+        self.assertEqual(set(detail.skills["files"].keys()), {"skills/research/SKILL.md"})
         self.assertEqual(len(detail.skill_summaries), 1)
         self.assertEqual(detail.skill_summaries[0]["name"], "research")
         self.assertEqual(detail.skill_summaries[0]["allowed_sandbox_tools"], ["sandbox.filesystem.read"])
@@ -1310,6 +1488,7 @@ class WorkflowSchemaTests(unittest.TestCase):
 
 class GatewayToolCatalogTests(unittest.TestCase):
     def setUp(self) -> None:
+        _bind_gateway_module(self, api_gateway_auth)
         self._original_sidecar_catalog_cache = api_gateway_main._MCP_SIDECAR_CATALOG_CACHE
         api_gateway_main._MCP_SIDECAR_CATALOG_CACHE = None
 
@@ -1581,7 +1760,7 @@ class GatewayA2AProtocolAsyncTests(unittest.IsolatedAsyncioTestCase):
             status="completed",
         )
 
-        with patch.object(api_gateway_main, "invoke_agent", AsyncMock(return_value=invoke_response)) as mock_invoke:
+        with patch.object(api_gateway_agents, "invoke_agent", AsyncMock(return_value=invoke_response)) as mock_invoke:
             response = await api_gateway_main.handle_a2a_send_message(
                 "planner",
                 "default",
@@ -1652,7 +1831,7 @@ class GatewayA2AProtocolAsyncTests(unittest.IsolatedAsyncioTestCase):
         async def fake_invoke_agent_stream(*_args, **_kwargs):
             return api_gateway_main.StreamingResponse(upstream_events(), media_type="text/event-stream")
 
-        with patch.object(api_gateway_main, "invoke_agent_stream", side_effect=fake_invoke_agent_stream):
+        with patch.object(api_gateway_agents, "invoke_agent_stream", side_effect=fake_invoke_agent_stream):
             response = await api_gateway_main.handle_a2a_stream_message(
                 "planner",
                 "default",
@@ -1710,12 +1889,15 @@ class GatewayA2AProtocolAsyncTests(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
-        with patch.object(
-            api_gateway_main,
-            "handle_a2a_send_message",
-            AsyncMock(return_value={"jsonrpc": "2.0", "id": "rpc-1", "result": {"task": {"id": "task-1"}}}),
+        with (
+            patch.object(api_gateway_a2a, "ensure_namespace_access"),
+            patch.object(
+                api_gateway_a2a,
+                "handle_a2a_send_message",
+                AsyncMock(return_value={"jsonrpc": "2.0", "id": "rpc-1", "result": {"task": {"id": "task-1"}}}),
+            ),
         ):
-            response = await api_gateway_main.a2a_jsonrpc("planner", raw_request, namespace="default", user={})
+            response = await api_gateway_a2a.a2a_jsonrpc("planner", raw_request, namespace="default", user={})
 
         payload = json.loads(response.body)
         self.assertEqual(payload["id"], "rpc-1")
@@ -1766,6 +1948,12 @@ class AgentReadCacheTests(unittest.TestCase):
 
 
 class GatewayInvokeProxyTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        _bind_gateway_module(self, api_gateway_agents)
+        self.namespace_access_patcher = patch.object(api_gateway_main, "ensure_namespace_access")
+        self.namespace_access_patcher.start()
+        self.addCleanup(self.namespace_access_patcher.stop)
+
     async def test_download_agent_artifact_proxies_runtime_file_response(self) -> None:
         response = httpx.Response(
             200,
@@ -2063,7 +2251,7 @@ class GatewayInvokeProxyTests(unittest.IsolatedAsyncioTestCase):
             await api_gateway_main.invoke_agent("planner", request, raw_request, "default", user={"sub": "alice"})
 
         forwarded = captured["json"]
-        self.assertIn("Promoted memory from prior work", forwarded["system"])
+        self.assertIn("persistent memory", forwarded["system"])
         self.assertIn("Use the repo root Make targets first.", forwarded["system"])
 
     async def test_invoke_agent_injects_collaboration_context_into_system_prompt(self) -> None:
@@ -2248,6 +2436,181 @@ class GatewayInvokeProxyTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(": keepalive", payload)
         self.assertIn("event: response.completed", payload)
 
+    async def test_invoke_agent_stream_injects_promoted_memory_into_system_prompt(self) -> None:
+        request = api_gateway_main.InvokeRequest(prompt="Investigate the incident")
+        raw_request = types.SimpleNamespace(headers={})
+        captured: dict[str, object] = {}
+
+        class FakeResponse:
+            status_code = 200
+            content = b'{"thread_id":"t-1","response":"done","model":"gpt-4","status":"completed"}'
+
+            def json(self):
+                return {
+                    "thread_id": "t-1",
+                    "response": "done",
+                    "model": "gpt-4",
+                    "status": "completed",
+                }
+
+        class FakeStreamResponse:
+            status_code = 200
+
+            async def aread(self) -> bytes:
+                return b""
+
+            async def aiter_text(self):
+                yield 'event: response.completed\ndata: {"thread_id": "t-1", "status": "completed"}\n\n'
+
+        class FakeStreamContext:
+            async def __aenter__(self):
+                return FakeStreamResponse()
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        class FakeAsyncClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def post(self, _url, **kwargs):
+                captured["json"] = kwargs.get("json")
+                return FakeResponse()
+
+            def stream(self, _method, _url, **kwargs):
+                captured["json"] = kwargs.get("json")
+                return FakeStreamContext()
+
+        with (
+            patch.object(
+                api_gateway_main.asyncio,
+                "to_thread",
+                return_value={"spec": {"model": "gpt-4", "runtime": {"kind": "opencode"}}},
+            ),
+            patch.object(api_gateway_main.httpx, "AsyncClient", return_value=FakeAsyncClient()),
+            patch.object(
+                api_gateway_main,
+                "list_promoted_memory_records",
+                return_value=[{"topic": "response-summary", "content": "Use the repo root Make targets first."}],
+            ),
+        ):
+            response = await api_gateway_main.invoke_agent_stream("planner", request, raw_request, "default", user={"sub": "alice"})
+            async for _chunk in response.body_iterator:
+                pass
+
+        forwarded = captured["json"]
+        self.assertIn("persistent memory", forwarded["system"])
+        self.assertIn("Use the repo root Make targets first.", forwarded["system"])
+
+    async def test_invoke_agent_stream_records_runtime_memory_metadata(self) -> None:
+        request = api_gateway_main.InvokeRequest(prompt="Investigate the incident")
+        raw_request = types.SimpleNamespace(headers={})
+
+        class FakeStreamResponse:
+            status_code = 200
+
+            async def aread(self) -> bytes:
+                return b""
+
+            async def aiter_text(self):
+                yield (
+                    'event: response.completed\n'
+                    'data: {"thread_id": "thread-1", "model": "gpt-4", "status": "completed", '
+                    '"metadata": {"memory": {"procedural": [{"type": "response-summary", "text": "Summarized the incident."}]}}}\n\n'
+                )
+
+        class FakeStreamContext:
+            async def __aenter__(self):
+                return FakeStreamResponse()
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        class FakeAsyncClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            def stream(self, *_args, **_kwargs):
+                return FakeStreamContext()
+
+        with (
+            patch.object(
+                api_gateway_main.asyncio,
+                "to_thread",
+                return_value={"spec": {"model": "gpt-4", "runtime": {"kind": "opencode"}}},
+            ),
+            patch.object(api_gateway_main.httpx, "AsyncClient", return_value=FakeAsyncClient()),
+            patch.object(api_gateway_main, "record_usage"),
+            patch.object(api_gateway_main, "record_runtime_memory") as record_runtime_memory,
+        ):
+            response = await api_gateway_main.invoke_agent_stream("planner", request, raw_request, "default", user={"sub": "alice"})
+            async for _chunk in response.body_iterator:
+                pass
+
+        record_runtime_memory.assert_called_once()
+        self.assertEqual(record_runtime_memory.call_args.kwargs["session_id"], "thread-1")
+
+    async def test_invoke_agent_stream_falls_back_to_nonstream_runtime_when_memory_is_injected(self) -> None:
+        request = api_gateway_main.InvokeRequest(prompt="What do you remember about chickens?")
+        raw_request = types.SimpleNamespace(headers={})
+        captured: dict[str, object] = {"post_calls": 0, "stream_calls": 0}
+
+        class FakeResponse:
+            status_code = 200
+            content = b'{"thread_id":"thread-1","response":"Chickens must be black.","model":"gpt-4","status":"completed"}'
+
+            def json(self):
+                return {
+                    "thread_id": "thread-1",
+                    "response": "Chickens must be black.",
+                    "model": "gpt-4",
+                    "status": "completed",
+                }
+
+        class FakeAsyncClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def post(self, _url, **kwargs):
+                captured["post_calls"] = int(captured["post_calls"]) + 1
+                captured["json"] = kwargs.get("json")
+                return FakeResponse()
+
+            def stream(self, *_args, **_kwargs):
+                captured["stream_calls"] = int(captured["stream_calls"]) + 1
+                raise AssertionError("stream() should not be used when recalled memory is injected")
+
+        with (
+            patch.object(
+                api_gateway_main.asyncio,
+                "to_thread",
+                return_value={"spec": {"model": "gpt-4", "runtime": {"kind": "opencode"}}},
+            ),
+            patch.object(api_gateway_main.httpx, "AsyncClient", return_value=FakeAsyncClient()),
+            patch.object(
+                api_gateway_main,
+                "list_promoted_memory_records",
+                return_value=[{"topic": "assistant-summary", "content": "Noted. Chickens must be black. What next?"}],
+            ),
+        ):
+            response = await api_gateway_main.invoke_agent_stream("planner", request, raw_request, "default", user={"sub": "alice"})
+            chunks: list[str] = []
+            async for chunk in response.body_iterator:
+                chunks.append(chunk)
+
+        self.assertEqual(captured["post_calls"], 1)
+        self.assertEqual(captured["stream_calls"], 0)
+        self.assertIn("Chickens must be black.", "".join(chunks))
+
 
 class LogStreamTests(unittest.TestCase):
     """Tests for the agent log endpoints including the new SSE streaming endpoint."""
@@ -2266,6 +2629,7 @@ class LogStreamTests(unittest.TestCase):
             sys.modules["kubernetes.watch"] = k8s_watch_mod
 
     def setUp(self):
+        _bind_gateway_module(self, api_gateway_agents)
         self._ensure_k8s_mock()
         from unittest.mock import MagicMock
 
@@ -2413,12 +2777,12 @@ class WorkflowRetryFailedTests(unittest.TestCase):
         self._mock_custom_objects.replace_namespaced_custom_object.return_value = updated
 
         with (
-            patch.object(api_gateway_main, "ensure_namespace_access"),
-            patch.object(api_gateway_main, "record_workflow_run") as record_mock,
+            patch.object(api_gateway_workflows, "ensure_namespace_access"),
+            patch.object(api_gateway_workflows, "record_workflow_run") as record_mock,
         ):
-            result = api_gateway_main.trigger_workflow(
+            result = api_gateway_workflows.trigger_workflow(
                 workflow_name="feature-pipeline",
-                body=api_gateway_main.WorkflowTriggerRequest(input="fresh input"),
+                body=api_gateway_workflows.WorkflowTriggerRequest(input="fresh input"),
                 namespace="default",
                 user={"sub": "user-1", "namespaces": ["default"]},
             )
@@ -2429,7 +2793,20 @@ class WorkflowRetryFailedTests(unittest.TestCase):
         patch_kwargs = self._mock_custom_objects.patch_namespaced_custom_object_status.call_args.kwargs
         self.assertEqual(
             patch_kwargs["body"],
-            {"status": {"phase": "pending", "observedGeneration": None, "pendingApproval": None}},
+            {
+                "status": {
+                    "phase": "pending",
+                    "observedGeneration": None,
+                    "pendingApproval": None,
+                    "stepStates": None,
+                    "summary": None,
+                    "currentStep": "",
+                    "workerJob": None,
+                    "runId": None,
+                    "artifactRef": None,
+                    "journalRef": None,
+                }
+            },
         )
         record_mock.assert_called_once()
         self.assertEqual(result.input, "fresh input")
@@ -2455,8 +2832,8 @@ class WorkflowRetryFailedTests(unittest.TestCase):
         updated["status"]["pendingApproval"] = None
         self._mock_custom_objects.get_namespaced_custom_object.side_effect = [workflow, updated]
 
-        with patch.object(api_gateway_main, "ensure_namespace_access"):
-            result = api_gateway_main.cancel_workflow(
+        with patch.object(api_gateway_workflows, "ensure_namespace_access"):
+            result = api_gateway_workflows.cancel_workflow(
                 workflow_name="feature-pipeline",
                 namespace="default",
                 user={"sub": "user-1", "namespaces": ["default"]},
@@ -2481,10 +2858,10 @@ class WorkflowRetryFailedTests(unittest.TestCase):
         }
 
         with (
-            patch.object(api_gateway_main, "ensure_namespace_access"),
-            patch.object(api_gateway_main, "read_custom_resource", return_value=workflow),
+            patch.object(api_gateway_workflows, "ensure_namespace_access"),
+            patch.object(api_gateway_workflows, "read_custom_resource", return_value=workflow),
         ):
-            result = api_gateway_main.get_workflow_next_action(
+            result = api_gateway_workflows.get_workflow_next_action(
                 workflow_name="feature-pipeline",
                 namespace="default",
                 user={"sub": "user-1", "namespaces": ["default"]},
@@ -2506,10 +2883,10 @@ class WorkflowRetryFailedTests(unittest.TestCase):
         }
 
         with (
-            patch.object(api_gateway_main, "ensure_namespace_access"),
-            patch.object(api_gateway_main, "read_custom_resource", return_value=workflow),
+            patch.object(api_gateway_workflows, "ensure_namespace_access"),
+            patch.object(api_gateway_workflows, "read_custom_resource", return_value=workflow),
         ):
-            result = api_gateway_main.get_workflow_next_action(
+            result = api_gateway_workflows.get_workflow_next_action(
                 workflow_name="feature-pipeline",
                 namespace="default",
                 user={"sub": "user-1", "namespaces": ["default"]},
@@ -2518,7 +2895,7 @@ class WorkflowRetryFailedTests(unittest.TestCase):
         self.assertEqual(result["action"], "Approve or reject step 'deploy-bundle'")
         self.assertEqual(result["reason"], "Workflow is waiting for human approval.")
 
-    def test_get_workflow_next_action_recommends_eval_after_success(self) -> None:
+    def test_get_workflow_next_action_recommends_promotion_after_success(self) -> None:
         workflow = {
             "metadata": {"name": "feature-pipeline", "namespace": "default"},
             "spec": {},
@@ -2529,17 +2906,16 @@ class WorkflowRetryFailedTests(unittest.TestCase):
         }
 
         with (
-            patch.object(api_gateway_main, "ensure_namespace_access"),
-            patch.object(api_gateway_main, "read_custom_resource", return_value=workflow),
-            patch.object(api_gateway_main, "list_custom_resources", return_value=[]),
+            patch.object(api_gateway_workflows, "ensure_namespace_access"),
+            patch.object(api_gateway_workflows, "read_custom_resource", return_value=workflow),
         ):
-            result = api_gateway_main.get_workflow_next_action(
+            result = api_gateway_workflows.get_workflow_next_action(
                 workflow_name="feature-pipeline",
                 namespace="default",
                 user={"sub": "user-1", "namespaces": ["default"]},
             )
 
-        self.assertEqual(result, {"action": "Run evaluation", "reason": "Workflow completed successfully but has no evaluation."})
+        self.assertEqual(result, {"action": "Deploy or promote", "reason": "All steps completed and verified successfully."})
 
     def test_stream_workflow_status_emits_status_and_done_events(self) -> None:
         workflow = {
@@ -2558,10 +2934,10 @@ class WorkflowRetryFailedTests(unittest.TestCase):
         self._mock_custom_objects.get_namespaced_custom_object.return_value = workflow
 
         with (
-            patch.object(api_gateway_main, "ensure_namespace_access"),
-            patch.object(api_gateway_main, "_sync_workflow_run_history"),
+            patch.object(api_gateway_workflows, "ensure_namespace_access"),
+            patch.object(api_gateway_workflows, "_sync_workflow_run_history"),
         ):
-            response = api_gateway_main.stream_workflow_status(
+            response = api_gateway_workflows.stream_workflow_status(
                 workflow_name="feature-pipeline",
                 namespace="default",
                 user={"sub": "user-1", "namespaces": ["default"]},
@@ -2595,13 +2971,13 @@ class WorkflowRetryFailedTests(unittest.TestCase):
         sys.modules["kubernetes"].watch = types.SimpleNamespace(Watch=lambda: fake_watch)
 
         with (
-            patch.object(api_gateway_main, "ensure_namespace_access"),
+            patch.object(api_gateway_workflows, "ensure_namespace_access"),
             patch.object(
-                api_gateway_main,
+                api_gateway_workflows,
                 "read_custom_resource",
                 return_value={"status": {"workerJob": {"name": "worker-job", "namespace": "default"}}},
             ),
-            patch.object(api_gateway_main, "list_job_pods", return_value=[fake_pod]),
+            patch.object(api_gateway_workflows, "list_job_pods", return_value=[fake_pod]),
             patch.object(
                 sys.modules["kubernetes.client"],
                 "CoreV1Api",
@@ -2610,7 +2986,7 @@ class WorkflowRetryFailedTests(unittest.TestCase):
             ),
         ):
             response = asyncio.run(
-                api_gateway_main.stream_workflow_logs(
+                api_gateway_workflows.stream_workflow_logs(
                     workflow_name="feature-pipeline",
                     request=FakeRequest(),
                     namespace="default",
@@ -2666,10 +3042,10 @@ class WorkflowRetryFailedTests(unittest.TestCase):
         }
 
         with (
-            patch.object(api_gateway_main, "ensure_namespace_access"),
+            patch.object(api_gateway_workflows, "ensure_namespace_access"),
             patch.object(api_gateway_main, "load_workflow_run_trace", return_value=trace_row),
         ):
-            payload = api_gateway_main.get_workflow_run_trace_endpoint(
+            payload = api_gateway_workflows.get_workflow_run_trace_endpoint(
                 workflow_name="feature-pipeline",
                 run_id="run-archived-1",
                 namespace="default",
@@ -2755,15 +3131,15 @@ class WorkflowRetryFailedTests(unittest.TestCase):
         }
 
         with (
-            patch.object(api_gateway_main, "ensure_namespace_access"),
+            patch.object(api_gateway_workflows, "ensure_namespace_access"),
             patch.object(
-                api_gateway_main,
+                api_gateway_workflows,
                 "read_custom_resource",
                 return_value={"status": {"runId": "run-archived-2", "workerJob": {}}},
             ),
-            patch.object(api_gateway_main, "_fallback_workflow_logs_from_run", return_value=archived_payload),
+            patch.object(api_gateway_workflows, "_fallback_workflow_logs_from_run", return_value=archived_payload),
         ):
-            payload = api_gateway_main.get_workflow_logs(
+            payload = api_gateway_workflows.get_workflow_logs(
                 workflow_name="feature-pipeline",
                 namespace="default",
                 user={"sub": "user-1", "namespaces": ["default"]},
@@ -2828,15 +3204,15 @@ class WorkflowRetryFailedTests(unittest.TestCase):
         self._mock_custom_objects.get_namespaced_custom_object.side_effect = [workflow, updated]
 
         with (
-            patch.object(api_gateway_main, "ensure_namespace_access"),
+            patch.object(api_gateway_workflows, "ensure_namespace_access"),
             patch.object(
-                api_gateway_main,
+                api_gateway_workflows,
                 "build_retry_workflow_run_id",
                 return_value="wf-run-default-feature-pipeline-5-new",
             ),
-            patch.object(api_gateway_main, "record_workflow_run"),
+            patch.object(api_gateway_workflows, "record_workflow_run"),
         ):
-            result = api_gateway_main.retry_failed_workflow_steps(
+            result = api_gateway_workflows.retry_failed_workflow_steps(
                 workflow_name="feature-pipeline",
                 namespace="default",
                 user={"sub": "user-1", "namespaces": ["default"]},
@@ -2855,6 +3231,9 @@ class WorkflowRetryFailedTests(unittest.TestCase):
 
 
 class GatewayProviderModelTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        _bind_gateway_module(self, api_gateway_llm)
+
     async def test_add_copilot_model_falls_back_when_token_exchange_fails(self) -> None:
         class FakeSecret:
             data = {"GITHUB_COPILOT_TOKEN": "Z2gtb2F1dGgtdG9rZW4="}
@@ -2997,11 +3376,11 @@ class McpOAuthSupportTests(unittest.TestCase):
         }
 
         with (
-            patch.object(api_gateway_main, "ensure_namespace_access", return_value=None),
-            patch.object(api_gateway_main, "get_mcp_connection", return_value=connection_record),
-            patch.object(api_gateway_main, "_read_mcp_connection_secret_values", return_value={"client_secret": "top-secret"}),
+            patch.object(api_gateway_observability, "ensure_namespace_access", return_value=None),
+            patch.object(api_gateway_observability, "get_mcp_connection", return_value=connection_record),
+            patch.object(api_gateway_observability, "_mcp_connection_secret_values_for_record", return_value={"client_secret": "top-secret"}),
         ):
-            response = api_gateway_main.start_saved_mcp_connection_oauth(
+            response = api_gateway_observability.start_saved_mcp_connection_oauth(
                 "conn-gmail",
                 raw_request=types.SimpleNamespace(base_url="https://kubesynapse.example.test/"),
                 namespace="team-a",
@@ -3012,9 +3391,235 @@ class McpOAuthSupportTests(unittest.TestCase):
         self.assertIn("client_id=client-123", response["authorization_url"])
         self.assertIn("state=", response["authorization_url"])
         self.assertIn(
-            "redirect_uri=https%3A%2F%2FKubeSynapse.example.test%2Fapi%2Fmcp%2Fconnections%2Fconn-gmail%2Foauth%2Fcallback",
+            "redirect_uri=https%3A%2F%2Fkubesynapse.example.test%2Fapi%2Fmcp%2Fconnections%2Fconn-gmail%2Foauth%2Fcallback",
             response["authorization_url"],
         )
+
+
+class WebhookTriggerApiTests(unittest.TestCase):
+    def setUp(self) -> None:
+        from sqlalchemy.orm import sessionmaker
+
+        import auth_store as canonical_auth_store
+
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp_dir.cleanup)
+
+        self.engine = create_engine(
+            f"sqlite:///{(Path(self.temp_dir.name) / 'webhooks.db').as_posix()}",
+            future=True,
+            connect_args={"check_same_thread": False},
+        )
+        self.SessionLocal = sessionmaker(
+            bind=self.engine,
+            autoflush=False,
+            autocommit=False,
+            expire_on_commit=False,
+            future=True,
+        )
+
+        self.original_auth_engine = canonical_auth_store.ENGINE
+        self.original_auth_session_local = canonical_auth_store.SessionLocal
+        canonical_auth_store.ENGINE = self.engine
+        canonical_auth_store.SessionLocal = self.SessionLocal
+        self.addCleanup(setattr, canonical_auth_store, "ENGINE", self.original_auth_engine)
+        self.addCleanup(setattr, canonical_auth_store, "SessionLocal", self.original_auth_session_local)
+        self.addCleanup(self.engine.dispose)
+        canonical_auth_store.init_database()
+
+        self.webhooks_router = _load_gateway_module(f"api_gateway_webhooks_{uuid.uuid4().hex}", "routers/webhooks.py")
+        self.addCleanup(lambda: sys.modules.pop(self.webhooks_router.__name__, None))
+
+        self.recent_patcher = patch.object(self.webhooks_router, "count_recent_webhook_invocations", lambda *_args, **_kwargs: 0)
+        self.signature_patcher = patch.object(self.webhooks_router, "verify_webhook_signature", lambda *_args, **_kwargs: True)
+        self.timestamp_patcher = patch.object(self.webhooks_router, "verify_webhook_timestamp", lambda *_args, **_kwargs: None)
+        self.rate_limit_patcher = patch.object(self.webhooks_router, "check_webhook_rate_limit", lambda *_args, **_kwargs: None)
+        self.secret_patcher = patch.object(self.webhooks_router, "_resolve_webhook_secret", lambda *_args, **_kwargs: "secret")
+        self.client_ip_patcher = patch.object(self.webhooks_router, "resolve_trusted_client_ip", lambda *_args, **_kwargs: "127.0.0.1")
+        self.namespace_access_patcher = patch.object(self.webhooks_router, "ensure_namespace_access", lambda *_args, **_kwargs: None)
+        self.role_patcher = patch.object(self.webhooks_router, "ensure_role", lambda *_args, **_kwargs: None)
+
+        self.recent_patcher.start()
+        self.signature_patcher.start()
+        self.timestamp_patcher.start()
+        self.rate_limit_patcher.start()
+        self.secret_patcher.start()
+        self.client_ip_patcher.start()
+        self.namespace_access_patcher.start()
+        self.role_patcher.start()
+
+        self.addCleanup(self.recent_patcher.stop)
+        self.addCleanup(self.signature_patcher.stop)
+        self.addCleanup(self.timestamp_patcher.stop)
+        self.addCleanup(self.rate_limit_patcher.stop)
+        self.addCleanup(self.secret_patcher.stop)
+        self.addCleanup(self.client_ip_patcher.stop)
+        self.addCleanup(self.namespace_access_patcher.stop)
+        self.addCleanup(self.role_patcher.stop)
+
+        self.auth_store = canonical_auth_store
+        self.operator_user = {"sub": "test-user", "role": "operator", "allowed_namespaces": ["*"]}
+
+    def test_create_trigger_returns_ui_contract_shape(self) -> None:
+        created_webhook = self.webhooks_router.create_webhook(
+            body=self.webhooks_router.WebhookReceiverRequest(
+                name="incident-alerts",
+                secret_ref="default/incident-webhook-secret#hmac-key",
+                ip_allowlist=[],
+                rate_limit=30,
+                max_payload_bytes=1048576,
+                enabled=True,
+            ),
+            namespace="default",
+            user=self.operator_user,
+        )
+        self.assertEqual(created_webhook.name, "incident-alerts")
+
+        result = self.webhooks_router.create_trigger(
+            body=self.webhooks_router.WorkflowTriggerRequest(
+                name="incident-alert-trigger",
+                source_kind="WebhookReceiver",
+                source_ref="incident-alerts",
+                event_filter={
+                    "conditions": [
+                        {"field": "severity", "operator": "equals", "value": "critical"},
+                    ]
+                },
+                workflow_ref={"name": "incident-webhook-response", "namespace": "default"},
+                max_retries=1,
+                backoff_seconds=30,
+                enabled=True,
+            ),
+            namespace="default",
+            user=self.operator_user,
+        )
+
+        self.assertIsInstance(result.id, int)
+        self.assertEqual(result.source_ref, "incident-alerts")
+        self.assertEqual(result.workflow_ref, {"name": "incident-webhook-response", "namespace": "default"})
+        self.assertEqual(result.max_retries, 1)
+        self.assertEqual(result.backoff_seconds, 30)
+        self.assertEqual(result.execution_count, 0)
+        self.assertIsNone(result.last_triggered)
+
+    def test_update_trigger_preserves_omitted_fields(self) -> None:
+        self.auth_store.create_workflow_trigger(
+            namespace="default",
+            name="incident-alert-trigger",
+            source_kind="WebhookReceiver",
+            source_name="incident-alerts",
+            event_filter={"conditions": [{"field": "severity", "operator": "equals", "value": "critical"}]},
+            target_workflow_name="incident-webhook-response",
+            target_workflow_namespace="default",
+            retry_max_retries=2,
+            retry_backoff_seconds=45,
+            enabled=True,
+        )
+
+        result = self.webhooks_router.update_trigger(
+            name="incident-alert-trigger",
+            body=self.webhooks_router.WorkflowTriggerUpdateRequest(enabled=False),
+            namespace="default",
+            user=self.operator_user,
+        )
+
+        self.assertEqual(result.source_ref, "incident-alerts")
+        self.assertEqual(result.workflow_ref, {"name": "incident-webhook-response", "namespace": "default"})
+        self.assertEqual(result.max_retries, 2)
+        self.assertEqual(result.backoff_seconds, 45)
+        self.assertFalse(result.enabled)
+
+    def test_invoke_webhook_records_matched_trigger_history(self) -> None:
+        from starlette.requests import Request
+
+        self.auth_store.create_webhook_receiver(
+            namespace="default",
+            name="incident-alerts",
+            secret_ref="default/incident-webhook-secret#hmac-key",
+            rate_limit=30,
+            max_payload_bytes=1048576,
+            enabled=True,
+        )
+        self.auth_store.create_workflow_trigger(
+            namespace="default",
+            name="incident-alert-trigger",
+            source_kind="WebhookReceiver",
+            source_name="incident-alerts",
+            event_filter={
+                "conditions": [
+                    {"field": "severity", "operator": "equals", "value": "critical"},
+                    {"field": "service", "operator": "equals", "value": "api-gateway"},
+                ]
+            },
+            target_workflow_name="incident-webhook-response",
+            target_workflow_namespace="default",
+            retry_max_retries=1,
+            retry_backoff_seconds=30,
+            enabled=True,
+        )
+
+        async def receive() -> dict[str, object]:
+            return {
+                "type": "http.request",
+                "body": json.dumps(
+                    {"severity": "critical", "service": "api-gateway", "summary": "latency spike"}
+                ).encode("utf-8"),
+                "more_body": False,
+            }
+
+        raw_request = Request(
+            {
+                "type": "http",
+                "http_version": "1.1",
+                "method": "POST",
+                "scheme": "http",
+                "path": "/api/v1/webhooks/incident-alerts/invoke",
+                "raw_path": b"/api/v1/webhooks/incident-alerts/invoke",
+                "query_string": b"namespace=default",
+                "headers": [],
+                "client": ("127.0.0.1", 12345),
+                "server": ("testserver", 80),
+            },
+            receive,
+        )
+
+        response = asyncio.run(
+            self.webhooks_router.invoke_webhook(
+                name="incident-alerts",
+                raw_request=raw_request,
+                namespace="default",
+                x_KUBESYNAPSE_signature="sha256=test",
+                x_KUBESYNAPSE_timestamp="1710000000",
+            )
+        )
+        self.assertEqual(response.status_code, 200)
+        invoke_payload = json.loads(response.body.decode("utf-8"))
+        self.assertEqual(invoke_payload["matched_triggers"], 1)
+
+        history = self.webhooks_router.get_trigger_history(
+            name="incident-alert-trigger",
+            namespace="default",
+            user=self.operator_user,
+        )
+        self.assertEqual(len(history), 1)
+        execution = history[0]
+        self.assertEqual(execution.trigger_name, "incident-alert-trigger")
+        self.assertEqual(execution.webhook_name, "incident-alerts")
+        self.assertEqual(execution.status, "dispatched")
+        self.assertEqual(execution.namespace, "default")
+
+        webhook_history = self.webhooks_router.get_webhook_history(
+            name="incident-alerts",
+            namespace="default",
+            user=self.operator_user,
+        )
+        self.assertEqual(len(webhook_history), 1)
+        invocation = webhook_history[0]
+        self.assertEqual(invocation.webhook_name, "incident-alerts")
+        self.assertEqual(invocation.matched_triggers, 1)
+        self.assertEqual(invocation.status, "received")
+        self.assertTrue(invocation.signature_verified)
+        self.assertEqual(invocation.invocation_id, invoke_payload["invocation_id"])
 
 
 if __name__ == "__main__":

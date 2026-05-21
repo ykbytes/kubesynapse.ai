@@ -1565,5 +1565,36 @@ class MaxParallelStepsTests(unittest.TestCase):
         self.assertEqual(max(int("-5"), 1), 1)
 
 
+class WorkerMainCleanupTests(unittest.TestCase):
+    def test_main_stops_runtime_event_emitter_on_success(self) -> None:
+        import worker
+
+        fake_resource = {
+            "metadata": {"generation": 3},
+            "status": {"runId": "wf-run-cleanup"},
+        }
+
+        with (
+            patch.object(worker, "WORKER_KIND", "workflow"),
+            patch.object(worker, "TARGET_NAMESPACE", "default"),
+            patch.object(worker, "TARGET_NAME", "context7-research-analysis"),
+            patch.object(worker, "load_kubernetes_config"),
+            patch.object(worker, "init_state_database"),
+            patch.object(worker, "init_tracing"),
+            patch.object(worker, "get_resource", return_value=fake_resource),
+            patch.object(worker, "check_run_id_conflict"),
+            patch.object(worker, "acquire_worker_lease", return_value=True),
+            patch.object(worker, "start_lease_renewal"),
+            patch.object(worker, "stop_lease_renewal"),
+            patch.object(worker, "release_worker_lease"),
+            patch.object(worker, "run_workflow_worker", return_value=None),
+            patch.object(worker, "runtime_events", create=True) as runtime_events,
+        ):
+            exit_code = worker.main()
+
+        self.assertEqual(exit_code, 0)
+        runtime_events.stop_emitter.assert_called_once_with()
+
+
 if __name__ == "__main__":
     unittest.main()

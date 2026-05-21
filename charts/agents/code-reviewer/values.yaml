@@ -26,7 +26,7 @@ agent:
   a2a: {}
   skills:
     files:
-      .github/skills/code-review/SKILL.md: |
+      skills/code-review/SKILL.md: |
         ---
         name: code-review
         description: Review diffs for bugs, regressions, unsafe changes, and missing tests.

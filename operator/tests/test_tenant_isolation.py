@@ -80,6 +80,7 @@ sys.modules.setdefault("kopf", kopf_module)
 
 # Kubernetes mocks are already set up by conftest.py — add any missing attributes
 import kubernetes.client as _k8s_client
+
 _missing_k8s_attrs = {
     "V1RoleRef": MagicMock,
     "V1Subject": MagicMock,
@@ -262,6 +263,45 @@ class TestMultiTenancyIsolation(unittest.TestCase):
                 field_path="AIAgent.spec.policyRef",
                 target_kind="AgentPolicy",
             )
+
+    def test_reconcile_tenant_removes_stale_role_bindings(self):
+        """Verify that AgentTenant updates remove stale tenant-managed role bindings."""
+        from controllers.tenant_controller import _reconcile_tenant
+
+        self.mock_rbac_api.list_namespaced_role_binding.return_value = types.SimpleNamespace(
+            items=[
+                types.SimpleNamespace(
+                    metadata=types.SimpleNamespace(name="team-a-alice-binding"),
+                    role_ref=types.SimpleNamespace(name="team-a-agent-admin"),
+                ),
+                types.SimpleNamespace(
+                    metadata=types.SimpleNamespace(name="team-a-bob-binding"),
+                    role_ref=types.SimpleNamespace(name="team-a-agent-admin"),
+                ),
+                types.SimpleNamespace(
+                    metadata=types.SimpleNamespace(name="unrelated-binding"),
+                    role_ref=types.SimpleNamespace(name="different-role"),
+                ),
+            ]
+        )
+
+        spec = {
+            "tenantName": "team-a",
+            "namespace": "agent-tenant-team-a",
+            "resourceQuota": {},
+            "adminUsers": ["alice"],
+        }
+
+        with patch(
+            "kubernetes.client.V1LimitRange",
+            side_effect=lambda **kwargs: types.SimpleNamespace(**kwargs),
+        ):
+            _reconcile_tenant(spec, "team-a", self.mock_logger)
+
+        self.mock_rbac_api.delete_namespaced_role_binding.assert_called_once_with(
+            name="team-a-bob-binding",
+            namespace="agent-tenant-team-a",
+        )
 
     # -----------------------------------------------------------------------
     # Test 5: Delete AgentTenant → cleanup (namespace stays, quota removed)

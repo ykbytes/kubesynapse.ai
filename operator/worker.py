@@ -55,7 +55,6 @@ worker_utils = LOCAL_WORKER_MODULES["utils"]
 worker_state_store = LOCAL_WORKER_MODULES["state_store"]
 worker_tracing = LOCAL_WORKER_MODULES["tracing"]
 
-build_eval_run_id = worker_utils.build_eval_run_id
 build_thread_id = worker_utils.build_thread_id
 build_workflow_run_id = worker_utils.build_workflow_run_id
 cancel_agent_session = worker_utils.cancel_agent_session
@@ -74,13 +73,18 @@ runtime_url = worker_utils.runtime_url
 validate_workflow_graph = worker_utils.validate_workflow_graph
 workflow_journal_path = worker_utils.workflow_journal_path
 
-check_eval_run_conflict = worker_state_store.check_eval_run_conflict
 check_workflow_run_conflict = worker_state_store.check_workflow_run_conflict
 init_state_database = worker_state_store.init_database
 init_tracing = worker_tracing.init_tracing
 
 TraceClient = LOCAL_WORKER_MODULES["trace_client"].TraceClient
 worker_config = LOCAL_WORKER_MODULES["config"]
+
+try:
+    import runtime_events as _runtime_events_mod
+    runtime_events = _runtime_events_mod
+except ImportError:
+    runtime_events = None  # type: ignore[assignment]
 
 # ---------------------------------------------------------------------------
 # §8.1 — Structured JSON logging
@@ -103,6 +107,10 @@ trace_client = TraceClient(
     flush_interval_sec=worker_config.WORKER_TRACE_FLUSH_INTERVAL_SEC,
     enabled=worker_config.WORKER_TRACE_ENABLED,
 )
+
+# Start runtime event emitter (Run Intelligence Layer)
+if runtime_events is not None:
+    runtime_events.start_emitter()
 
 _CURRENT_EXECUTION_ID: str | None = None
 _trace_context = threading.local()
@@ -131,7 +139,6 @@ ARTIFACT_JOURNAL_PATH = (
 )
 ARTIFACT_PVC_NAME = os.getenv("ARTIFACT_PVC_NAME", "").strip()
 WORKFLOW_RUN_ID = os.getenv("WORKFLOW_RUN_ID", "").strip()
-EVAL_RUN_ID = os.getenv("EVAL_RUN_ID", "").strip()
 AGENT_RUNTIME_READY_TIMEOUT_SECONDS = max(
     float(os.getenv("AGENT_RUNTIME_READY_TIMEOUT_SECONDS", "180")),
     5.0,
@@ -171,6 +178,8 @@ def is_shutting_down() -> bool:
 def _worker_sigterm_handler(signum: int, _frame: object) -> None:
     """Mark worker as shutting down on SIGTERM."""
     _shutting_down.set()
+    if runtime_events is not None:
+        runtime_events.stop_emitter()
     logger.info("Received signal %s — worker shutdown initiated.", signum)
 
 
@@ -362,12 +371,9 @@ def stop_lease_renewal() -> None:
 
 def check_run_id_conflict(kind: str, namespace: str, name: str, generation: int, run_id: str) -> None:
     """Raise RuntimeError if a different run_id is already active for this resource+generation."""
-    if kind == "workflow":
-        conflict = check_workflow_run_conflict(namespace, name, generation, run_id)
-    elif kind == "eval":
-        conflict = check_eval_run_conflict(namespace, name, generation, run_id)
-    else:
+    if kind != "workflow":
         return
+    conflict = check_workflow_run_conflict(namespace, name, generation, run_id)
     if conflict:
         raise RuntimeError(
             f"Another {kind} run (run_id={conflict}) is already active "
@@ -378,8 +384,6 @@ def check_run_id_conflict(kind: str, namespace: str, name: str, generation: int,
 def resource_plural() -> str:
     if WORKER_KIND == "workflow":
         return "agentworkflows"
-    if WORKER_KIND == "eval":
-        return "agentevals"
     raise ValueError(f"Unsupported WORKER_KIND '{WORKER_KIND}'")
 
 
@@ -1241,6 +1245,21 @@ def execute_workflow_step(
         )
         try:
             wait_for_agent_runtime_ready(agent_ref, TARGET_NAMESPACE)
+            if runtime_events is not None:
+                runtime_events.emit_step_started(
+                    execution_id=getattr(_trace_context, "execution_id", ""),
+                    step_name=step_name,
+                    agent_ref=agent_ref,
+                    attempt=attempt,
+                    thread_id=thread_id,
+                )
+                runtime_events.emit_agent_call(
+                    execution_id=getattr(_trace_context, "execution_id", ""),
+                    caller_agent=TARGET_NAME,
+                    target_agent=agent_ref,
+                    status="started",
+                    thread_id=thread_id,
+                )
             invoke_payload: dict[str, Any] = {
                     "prompt": effective_prompt,
                     "thread_id": thread_id,
@@ -1282,6 +1301,40 @@ def execute_workflow_step(
                 result.get("status", "completed") or "completed"
             )
             completed_at = now_iso()
+
+            if runtime_events is not None:
+                exec_id = getattr(_trace_context, "execution_id", "")
+                metadata = result.get("metadata") or {}
+                total_tokens = int(metadata.get("total_tokens") or metadata.get("context_budget", {}).get("total_tokens") or 0)
+                cost_usd = float(metadata.get("cost_usd") or metadata.get("costUsd") or 0.0) or None
+                runtime_events.emit_agent_call(
+                    execution_id=exec_id,
+                    caller_agent=TARGET_NAME,
+                    target_agent=agent_ref,
+                    status="completed",
+                    thread_id=thread_id,
+                    duration_ms=latency_ms,
+                )
+                runtime_events.emit_step_completed(
+                    execution_id=exec_id,
+                    step_name=step_name,
+                    status=result_status,
+                    thread_id=thread_id,
+                    total_tokens=total_tokens,
+                    cost_usd=cost_usd,
+                    duration_ms=latency_ms,
+                )
+                for tc in result.get("tool_calls") or []:
+                    if isinstance(tc, dict):
+                        runtime_events.emit_tool_call(
+                            execution_id=exec_id,
+                            tool_name=tc.get("tool") or tc.get("name") or "unknown",
+                            tool_args=tc.get("input") or tc.get("args"),
+                            status=tc.get("status") or "completed",
+                            thread_id=thread_id,
+                            step_name=step_name,
+                            duration_ms=tc.get("duration_ms") or tc.get("duration"),
+                        )
 
             if result_status == "approval_pending":
                 approval_payload = {
@@ -1551,6 +1604,24 @@ def execute_workflow_step(
                     "failureClass": failure_class,
                 },
             )
+            if runtime_events is not None:
+                exec_id = getattr(_trace_context, "execution_id", "")
+                runtime_events.emit_agent_call(
+                    execution_id=exec_id,
+                    caller_agent=TARGET_NAME,
+                    target_agent=agent_ref,
+                    status="failed",
+                    thread_id=thread_id,
+                    duration_ms=latency_ms,
+                )
+                runtime_events.emit_step_failed(
+                    execution_id=exec_id,
+                    step_name=step_name,
+                    error=error_text[:2048],
+                    failure_class=failure_class,
+                    thread_id=thread_id,
+                    duration_ms=latency_ms,
+                )
             should_retry = (
                 bool(execution_policy["retryable"])
                 and attempt < int(execution_policy["maxAttempts"])
@@ -2720,6 +2791,11 @@ def run_workflow_worker() -> None:
     metadata = resource.get("metadata", {})
     status = resource.get("status", {}) or {}
     steps = spec.get("steps") or []
+    step_order = {
+        str(step.get("name", "")).strip(): index
+        for index, step in enumerate(steps)
+        if str(step.get("name", "")).strip()
+    }
     graph = validate_workflow_graph(steps)
 
     generation = int(metadata.get("generation", 1))
@@ -2811,7 +2887,7 @@ def run_workflow_worker() -> None:
     )
     # §2.5 — DB mirroring is now handled by the status projection controller.
 
-    global _CURRENT_EXECUTION_ID  # noqa: PLW0603 — module-level used by nested funcs
+    global _CURRENT_EXECUTION_ID
 
     # §2.6 — Detect "ghost" executions: if the artifact was loaded and ALL
     # steps are already completed, this worker has nothing to do.  Skip trace
@@ -2835,6 +2911,13 @@ def run_workflow_worker() -> None:
                 execution_id = ""
             if execution_id:
                 _CURRENT_EXECUTION_ID = execution_id
+                if runtime_events is not None:
+                    runtime_events.emit_workflow_started(
+                        execution_id=execution_id,
+                        workflow_name=TARGET_NAME,
+                        namespace=TARGET_NAMESPACE,
+                        run_id=run_id,
+                    )
         logger.info(
             "Trace state: execution_id=%s, artifact_matches=%s, completed=%d/%d, run_id=%s, ghost=%s",
             execution_id or "(none)", artifact_matches_generation, len(completed), len(steps), run_id, _is_ghost_run,
@@ -2884,6 +2967,7 @@ def run_workflow_worker() -> None:
                         execution_id=_CURRENT_EXECUTION_ID,
                         step_name=step_name,
                         step_type=step_type,
+                        step_index=step_order.get(step_name),
                         inputs={"step": step_name, "type": step_type},
                     )
                 except Exception:
@@ -3342,6 +3426,13 @@ def run_workflow_worker() -> None:
                 )
             except Exception:
                 logger.warning("Trace end_execution failed", exc_info=True)
+            if runtime_events is not None:
+                runtime_events.emit_workflow_completed(
+                    execution_id=execution_id,
+                    workflow_name=TARGET_NAME,
+                    status="completed",
+                    duration_ms=int((time.time() - parse_iso_timestamp(started_at) or time.time()) * 1000),
+                )
         append_journal_event(
             "workflow.completed",
             {"runId": run_id, "completedAt": completed_at},
@@ -3370,6 +3461,12 @@ def run_workflow_worker() -> None:
                 )
             except Exception:
                 logger.warning("Trace end_execution failed", exc_info=True)
+            if runtime_events is not None:
+                runtime_events.emit_workflow_error(
+                    execution_id=execution_id,
+                    workflow_name=TARGET_NAME,
+                    error=str(exc)[:2048],
+                )
         _patch_pending_approval_label(None)
         failed_at = now_iso()
         failure_payload = workflow_snapshot(
@@ -3408,256 +3505,6 @@ def run_workflow_worker() -> None:
             trace_client.flush()
         except Exception:
             logger.warning("Trace flush failed", exc_info=True)
-
-
-def run_eval_worker() -> None:
-    plural = resource_plural()
-    resource = get_resource(plural)
-    spec = resource.get("spec", {})
-    metadata = resource.get("metadata", {})
-    test_suite = spec.get("testSuite") or []
-    if not test_suite:
-        raise ValueError("AgentEval must contain at least one test case")
-
-    generation = int(metadata.get("generation", 1))
-    artifact = load_artifact()
-    run_id = str(
-        EVAL_RUN_ID
-        or resource.get("status", {}).get("runId")
-        or artifact.get("runId")
-        or build_eval_run_id(TARGET_NAMESPACE, TARGET_NAME, generation)
-    ).strip()
-    failure_threshold = spec.get("failureThreshold", {})
-    results: list[dict[str, Any]] = []
-    passed = True
-    started_at = now_iso()
-    worker_job = {"name": WORKER_JOB_NAME, "namespace": OPERATOR_NAMESPACE}
-
-    eval_status_payload = {
-        "phase": "running",
-        "runId": run_id,
-        "observedGeneration": generation,
-        "artifactRef": artifact_ref(generation),
-        "workerJob": worker_job,
-        "summary": {
-            "caseCount": len(test_suite),
-            "completedCases": 0,
-            "updatedAt": now_iso(),
-            "runId": run_id,
-            "startedAt": started_at,
-        },
-    }
-    patch_custom_status(plural, eval_status_payload)
-    # §2.5 — DB mirroring is now handled by the status projection controller.
-
-    try:
-        for index, test_case in enumerate(test_suite):
-            started = time.perf_counter()
-            response_text = ""
-            error_msg = ""
-            result_status = "completed"
-            thread_id = build_thread_id("eval", TARGET_NAME, generation, index)
-            try:
-                response = invoke_agent_runtime(
-                    spec["agentRef"],
-                    TARGET_NAMESPACE,
-                    {
-                        "prompt": test_case["input"],
-                        "thread_id": thread_id,
-                    },
-                )
-                response_text = str(response.get("response", ""))
-                result_status = str(
-                    response.get("status", "completed") or "completed"
-                )
-                # Accept "incomplete" as usable partial output (e.g. opencode
-                # context overflow that still produced a response).
-                if result_status == "incomplete":
-                    result_status = "completed"
-                # Prefer structured output from metadata when available
-                eval_metadata = response.get("metadata") or {}
-                if isinstance(eval_metadata, dict) and eval_metadata.get("structured_output"):
-                    response_text = json.dumps(
-                        eval_metadata["structured_output"], ensure_ascii=False
-                    )
-                if result_status != "completed":
-                    error_msg = (
-                        f"Runtime returned status '{result_status}': "
-                        f"{response_text}"
-                    )
-                    passed = False
-                elif response_text.startswith("Request blocked"):
-                    error_msg = response_text
-                    result_status = "blocked"
-                    passed = False
-            except Exception as exc:
-                logger.exception("Eval step failed: %s", exc)
-                error_msg = str(exc)
-                result_status = "failed"
-                passed = False
-
-            latency_ms = int((time.perf_counter() - started) * 1000)
-            expected_output = test_case.get("expectedOutput", "")
-            metrics = test_case.get("metrics", [])
-
-            relevance = (
-                exact_match_score(response_text, expected_output)
-                if not error_msg
-                else 0.0
-            )
-            if expected_output:
-                faithfulness = (
-                    exact_match_score(response_text, expected_output)
-                    if not error_msg
-                    else 0.0
-                )
-            else:
-                faithfulness = 1.0 if not error_msg else 0.0
-            toxicity = (
-                estimate_toxicity(response_text) if not error_msg else 0.0
-            )
-
-            case_result = {
-                "input": test_case["input"],
-                "expectedOutput": expected_output,
-                "response": response_text,
-                "error": error_msg,
-                "latencyMs": latency_ms,
-                "status": result_status,
-                "threadId": thread_id,
-                "metrics": {
-                    "relevance": relevance,
-                    "faithfulness": faithfulness,
-                    "toxicity": toxicity,
-                },
-            }
-            results.append(case_result)
-
-            if (
-                "relevance" in metrics
-                and failure_threshold.get("minRelevance") is not None
-            ):
-                passed = passed and relevance >= float(
-                    failure_threshold["minRelevance"]
-                )
-            if (
-                "faithfulness" in metrics
-                and failure_threshold.get("minFaithfulness") is not None
-            ):
-                passed = passed and faithfulness >= float(
-                    failure_threshold["minFaithfulness"]
-                )
-            if (
-                "toxicity" in metrics
-                and failure_threshold.get("maxToxicity") is not None
-            ):
-                passed = passed and toxicity <= float(
-                    failure_threshold["maxToxicity"]
-                )
-            if (
-                "latency" in metrics
-                and failure_threshold.get("maxLatencyMs") is not None
-            ):
-                passed = passed and latency_ms <= int(
-                    failure_threshold["maxLatencyMs"]
-                )
-
-            write_artifact(
-                {
-                    "kind": "eval",
-                    "generation": generation,
-                    "runId": run_id,
-                    "updatedAt": now_iso(),
-                    "startedAt": started_at,
-                    "cases": results,
-                }
-            )
-            eval_status_payload = {
-                "phase": "running",
-                "runId": run_id,
-                "observedGeneration": generation,
-                "artifactRef": artifact_ref(generation),
-                "workerJob": worker_job,
-                "summary": {
-                    "caseCount": len(test_suite),
-                    "completedCases": len(results),
-                    "updatedAt": now_iso(),
-                    "runId": run_id,
-                    "startedAt": started_at,
-                },
-            }
-            patch_custom_status(plural, eval_status_payload)
-            # §2.5 — DB mirroring is now handled by the status projection controller.
-
-        completed_at = now_iso()
-        summary = {
-            "caseCount": len(results),
-            "passed": passed,
-            "scheduleConfigured": bool(spec.get("schedule")),
-            "completedCases": len(results),
-            "startedAt": started_at,
-            "completedAt": completed_at,
-            "runId": run_id,
-        }
-        write_artifact(
-            {
-                "kind": "eval",
-                "generation": generation,
-                "runId": run_id,
-                "updatedAt": completed_at,
-                "startedAt": started_at,
-                "completedAt": completed_at,
-                "summary": summary,
-                "cases": results,
-            }
-        )
-        eval_status_payload = {
-            "phase": "completed",
-            "runId": run_id,
-            "lastRun": completed_at,
-            "passed": passed,
-            "observedGeneration": generation,
-            "artifactRef": artifact_ref(generation),
-            "workerJob": worker_job,
-            "summary": summary,
-            "cases": results,
-        }
-        patch_custom_status(plural, eval_status_payload)
-        # §2.5 — DB mirroring is now handled by the status projection controller.
-    except Exception as exc:
-        failed_at = now_iso()
-        write_artifact(
-            {
-                "kind": "eval",
-                "generation": generation,
-                "runId": run_id,
-                "updatedAt": failed_at,
-                "startedAt": started_at,
-                "failedAt": failed_at,
-                "error": str(exc),
-                "cases": results,
-            }
-        )
-        eval_status_payload = {
-            "phase": "failed",
-            "runId": run_id,
-            "lastRun": failed_at,
-            "passed": False,
-            "observedGeneration": generation,
-            "artifactRef": artifact_ref(generation),
-            "workerJob": worker_job,
-            "summary": {
-                "caseCount": len(test_suite),
-                "completedCases": len(results),
-                "failedAt": failed_at,
-                "error": str(exc),
-                "runId": run_id,
-            },
-            "cases": results,
-        }
-        patch_custom_status(plural, eval_status_payload)
-        # §2.5 — DB mirroring is now handled by the status projection controller.
-        raise
 
 
 # ---------------------------------------------------------------------------
@@ -3738,7 +3585,6 @@ def main() -> int:
     run_id = (
         str(
             WORKFLOW_RUN_ID
-            or EVAL_RUN_ID
             or (resource.get("status", {}) or {}).get("runId")
             or ""
         ).strip()
@@ -3760,9 +3606,7 @@ def main() -> int:
     try:
         # §8.2 — Run worker with a global execution timeout
         with ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(
-                run_workflow_worker if WORKER_KIND == "workflow" else run_eval_worker
-            )
+            future = executor.submit(run_workflow_worker)
             try:
                 deadline = time.monotonic() + WORKER_EXECUTION_TIMEOUT_SECONDS
                 while not future.done():
@@ -3825,6 +3669,11 @@ def main() -> int:
         record_dead_letter(WORKER_KIND, TARGET_NAMESPACE, TARGET_NAME, generation, run_id, error_text)
         return 1
     finally:
+        if runtime_events is not None:
+            try:
+                runtime_events.stop_emitter()
+            except Exception:
+                logger.warning("Runtime event emitter stop failed", exc_info=True)
         stop_lease_renewal()
         release_worker_lease(WORKER_KIND, TARGET_NAME, generation)
     return 0

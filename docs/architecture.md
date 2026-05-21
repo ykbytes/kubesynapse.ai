@@ -77,7 +77,7 @@ flowchart LR
     subgraph Execution["Execution Plane"]
         RT[OpenCode Runtime<br/>per-agent StatefulSet]
         MCP[MCP Sidecars]
-        Worker[Worker Jobs<br/>Workflows & Evals]
+        Worker[Worker Jobs<br/>Workflow Runs]
     end
 
     subgraph Shared["Shared Services"]
@@ -124,7 +124,6 @@ The Kubernetes API is the source of truth. The platform installs 11 CRDs:
 | `AgentPolicy` | Namespaced | Guardrails, token caps, allowed models, A2A rules |
 | `AgentApproval` | Namespaced | Human-in-the-loop approval requests |
 | `AgentWorkflow` | Namespaced | DAG-based multi-agent pipelines |
-| `AgentEval` | Namespaced | Evaluation suites and thresholds |
 | `AgentTenant` | Cluster | Namespace isolation, quotas, RBAC |
 | `MCPConnection` | Namespaced | Connection-driven tool integrations |
 | `ConnectorPlugin` | Namespaced | Observability data collection |
@@ -137,8 +136,8 @@ The Kubernetes API is the source of truth. The platform installs 11 CRDs:
 The Kopf-based Python operator is the active reconciliation engine:
 
 - Reconciles `AIAgent` into StatefulSets, Services, PVCs, ConfigMaps
-- Reconciles `AgentWorkflow` and `AgentEval` into worker Jobs
-- Tracks workflow and eval status from artifacts and logs
+- Reconciles `AgentWorkflow` into worker Jobs
+- Tracks workflow status from artifacts and logs
 - Manages approval-state transitions
 - Reconciles observability resources when CRDs are present
 
@@ -169,7 +168,7 @@ Each agent runs as an isolated singleton StatefulSet:
 
 ### Worker Jobs
 
-Workflows and evaluations run as short-lived Jobs:
+Workflows run as short-lived Jobs:
 
 - CRD status carries summary state only
 - Detailed execution evidence lives in worker artifacts and logs
@@ -259,7 +258,6 @@ flowchart TB
 
     subgraph Automation["Automation"]
         W[AgentWorkflow]
-        E[AgentEval]
     end
 
     subgraph Observability["Observability"]

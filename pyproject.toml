@@ -91,7 +91,6 @@ known-first-party = [
     "jwt_utils",
     "api_gateway",
     "opencode_runtime",
-    "constants",
 ]
 
 [tool.pytest.ini_options]

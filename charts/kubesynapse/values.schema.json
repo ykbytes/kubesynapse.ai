@@ -148,6 +148,11 @@
             },
             "notificationWebhookUrl": { "type": "string", "default": "" }
           }
+        },
+        "tenantExecAccess": {
+          "type": "boolean",
+          "default": false,
+          "description": "When false (default), tenant admin Roles do NOT include pods/exec or pods/portforward. Set to true only if you need interactive debugging within tenant namespaces."
         }
       }
     },
@@ -181,7 +186,12 @@
           }
         },
         "autonomy": { "type": "object" },
-        "env": { "type": "object" }
+        "env": { "type": "object" },
+        "immutableConfig": {
+          "type": "boolean",
+          "default": true,
+          "description": "Mount a hardened, immutable ConfigMap at /etc/kubesynapse/opencode.json. Prevents config-driven RCE."
+        }
       }
     },
     "piRuntime": {
@@ -202,7 +212,26 @@
         "tools": { "type": "array", "items": { "type": "string" } },
         "noSession": { "type": "boolean", "default": false },
         "permissionLevel": { "type": "string", "default": "permissive" },
-        "env": { "type": "object" }
+        "env": { "type": "object" },
+        "immutableConfig": {
+          "type": "boolean",
+          "default": true,
+          "description": "Mount a hardened, immutable ConfigMap at /etc/kubesynapse/pi-config/. Prevents extension loading and !-prefix RCE."
+        }
+      }
+    },
+    "mistralVibeRuntime": {
+      "type": "object",
+      "description": "Mistral Vibe agent runtime configuration",
+      "properties": {
+        "image": {
+          "type": "object",
+          "properties": {
+            "repository": { "type": "string", "default": "kubesynapse-vibe-rt" },
+            "tag": { "type": "string", "default": "v0.1.0" },
+            "pullPolicy": { "type": "string", "default": "IfNotPresent" }
+          }
+        }
       }
     },
     "operator": {
@@ -249,7 +278,6 @@
         "runtimeTimeoutSeconds": { "type": "integer", "default": 360 },
         "workerActiveDeadlineSeconds": { "type": "integer", "default": 14400 },
         "workerTtlSecondsAfterFinished": { "type": "integer", "default": 3600 },
-        "evalSchedulePollSeconds": { "type": "integer", "default": 60 },
         "workerResources": {
           "type": "object",
           "properties": {
@@ -509,6 +537,120 @@
       "properties": {
         "enabled": { "type": "boolean", "default": false },
         "prometheusRetention": { "type": "string", "default": "15d" }
+      }
+    },
+    "systemAgents": {
+      "type": "object",
+      "description": "Run Intelligence Layer system agents configuration",
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "namespace": { "type": "string", "default": "kubesynapse-system" },
+        "defaultModel": { "type": "string", "default": "gpt-4" },
+        "defaultRuntime": { "type": "string", "default": "opencode" },
+        "runInspector": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean", "default": true },
+            "model": { "type": "string" },
+            "runtime": { "type": "string" },
+            "description": { "type": "string" },
+            "triggers": {
+              "type": "object",
+              "properties": {
+                "minFailureRate": { "type": "number", "default": 0.3 },
+                "minErrorCount": { "type": "integer", "default": 3 }
+              }
+            },
+            "resources": {
+              "type": "object",
+              "properties": {
+                "requests": {
+                  "type": "object",
+                  "properties": {
+                    "cpu": { "type": "string", "default": "50m" },
+                    "memory": { "type": "string", "default": "128Mi" }
+                  }
+                },
+                "limits": {
+                  "type": "object",
+                  "properties": {
+                    "cpu": { "type": "string", "default": "500m" },
+                    "memory": { "type": "string", "default": "512Mi" }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "signalSummarizer": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean", "default": true },
+            "model": { "type": "string" },
+            "runtime": { "type": "string" },
+            "description": { "type": "string" },
+            "triggers": {
+              "type": "object",
+              "properties": {
+                "maxSignalAgeMinutes": { "type": "integer", "default": 30 }
+              }
+            },
+            "resources": {
+              "type": "object",
+              "properties": {
+                "requests": {
+                  "type": "object",
+                  "properties": {
+                    "cpu": { "type": "string", "default": "50m" },
+                    "memory": { "type": "string", "default": "128Mi" }
+                  }
+                },
+                "limits": {
+                  "type": "object",
+                  "properties": {
+                    "cpu": { "type": "string", "default": "500m" },
+                    "memory": { "type": "string", "default": "512Mi" }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "spendReviewer": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean", "default": true },
+            "model": { "type": "string" },
+            "runtime": { "type": "string" },
+            "description": { "type": "string" },
+            "triggers": {
+              "type": "object",
+              "properties": {
+                "costThresholdUsd": { "type": "number", "default": 10.0 },
+                "tokenSpikeMultiplier": { "type": "number", "default": 3.0 }
+              }
+            },
+            "resources": {
+              "type": "object",
+              "properties": {
+                "requests": {
+                  "type": "object",
+                  "properties": {
+                    "cpu": { "type": "string", "default": "50m" },
+                    "memory": { "type": "string", "default": "128Mi" }
+                  }
+                },
+                "limits": {
+                  "type": "object",
+                  "properties": {
+                    "cpu": { "type": "string", "default": "500m" },
+                    "memory": { "type": "string", "default": "512Mi" }
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     }
   }

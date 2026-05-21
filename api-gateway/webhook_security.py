@@ -12,11 +12,9 @@ Security Best Practices
 from __future__ import annotations
 
 import os
-import time
-import hmac
-import hashlib
 import threading
-from typing import Optional
+import time
+
 from fastapi import HTTPException, Request
 
 # In-memory rate limiting state. In production, replace with Redis.
@@ -38,7 +36,7 @@ def check_webhook_rate_limit(webhook_key: str, limit: int, window_seconds: int =
             _webhook_rate_state.clear()  # prevent memory leak
 
 
-def verify_webhook_timestamp(timestamp_header: Optional[str], max_age_seconds: int = 300) -> None:
+def verify_webhook_timestamp(timestamp_header: str | None, max_age_seconds: int = 300) -> None:
     """Prevent replay attacks by checking timestamp freshness."""
     if not timestamp_header:
         raise HTTPException(status_code=401, detail="Missing X-kubesynapse-Timestamp header")

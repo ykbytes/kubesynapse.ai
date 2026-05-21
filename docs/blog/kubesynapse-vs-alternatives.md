@@ -114,7 +114,6 @@ Think of it as: LangChain gives you the engine, KubeSynapse gives you the factor
 | **A2A protocol** | ❌ | ❌ | ❌ | ✅ |
 | **Helm deploy** | ❌ | ❌ | ❌ | ✅ |
 | **HITL approval** | ❌ | ❌ | ❌ | ✅ (CRD) |
-| **Eval framework** | ✅ LangSmith | ❌ | ❌ | ✅ AgentEval CRD |
 
 ## Next Steps
 

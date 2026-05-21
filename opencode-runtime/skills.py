@@ -465,8 +465,10 @@ def build_generated_config(
         config["instructions"] = [KUBESYNAPSE_instruction_path]
 
     provider: dict[str, Any] = {}
-    if DEFAULT_PROVIDER.lower() == "litellm":
-        provider[DEFAULT_PROVIDER] = {
+    provider_id = DEFAULT_PROVIDER.lower()
+
+    if provider_id == "litellm":
+        provider[provider_id] = {
             "npm": "@ai-sdk/openai-compatible",
             "name": DEFAULT_PROVIDER,
             "options": {
@@ -483,6 +485,73 @@ def build_generated_config(
                 }
             },
         }
+    elif provider_id in ("opencode", "opencode-go", "openai-compatible"):
+        from providers import get_provider
+
+        prov = get_provider(provider_id)
+        provider_block: dict[str, Any] = {
+            "npm": "@ai-sdk/openai-compatible",
+            "name": provider_id,
+        }
+        resolved = prov.resolve_env()
+        if "OPENAI_BASE_URL" in resolved:
+            provider_block.setdefault("options", {})["baseURL"] = resolved["OPENAI_BASE_URL"]
+        elif provider_id == "opencode-go":
+            provider_block.setdefault("options", {})["baseURL"] = "https://opencode.ai/zen/go/v1"
+        elif provider_id == "opencode":
+            provider_block.setdefault("options", {})["baseURL"] = "https://opencode.ai/zen/v1"
+        # Extract API key from OPENCODE_AUTH_CONTENT if not in env
+        api_key = resolved.get("OPENCODE_API_KEY", "")
+        if not api_key:
+            auth_content = os.getenv("OPENCODE_AUTH_CONTENT", "").strip()
+            if auth_content:
+                try:
+                    auth_data = json.loads(auth_content)
+                    for key in (provider_id, provider_id.replace("-go", ""), provider_id.replace("-", "")):
+                        entry = auth_data.get(key)
+                        if isinstance(entry, dict) and entry.get("type") == "api":
+                            api_key = str(entry.get("key", "")).strip()
+                            if api_key:
+                                break
+                except (json.JSONDecodeError, TypeError):
+                    pass
+        provider_block.setdefault("options", {})["apiKey"] = api_key
+        provider_block["models"] = {
+            DEFAULT_MODEL: {
+                "name": DEFAULT_MODEL,
+                "limit": {
+                    "context": MODEL_CONTEXT_LIMIT,
+                    "output": MODEL_OUTPUT_LIMIT,
+                },
+            }
+        }
+        provider[provider_id] = provider_block
+    elif provider_id == "copilot":
+        from providers import get_provider
+
+        prov = get_provider("copilot")
+        provider_block: dict[str, Any] = {
+            "npm": "@ai-sdk/openai-compatible",
+            "name": "copilot",
+        }
+        resolved = prov.resolve_env()
+        if "GITHUB_TOKEN" in resolved:
+            provider_block.setdefault("options", {})["headers"] = {
+                "Authorization": f"Bearer {resolved['GITHUB_TOKEN']}"
+            }
+        provider[provider_id] = provider_block
+    elif provider_id == "anthropic":
+        from providers import get_provider
+
+        prov = get_provider("anthropic")
+        provider_block: dict[str, Any] = {
+            "npm": "@ai-sdk/anthropic",
+            "name": "anthropic",
+        }
+        resolved = prov.resolve_env()
+        if "ANTHROPIC_API_KEY" in resolved:
+            provider_block.setdefault("options", {})["apiKey"] = resolved["ANTHROPIC_API_KEY"]
+        provider[provider_id] = provider_block
     elif SELECTED_PROVIDER_JSON:
         try:
             payload = json.loads(SELECTED_PROVIDER_JSON)

@@ -30,11 +30,6 @@ import type {
   CustomProviderPayload,
   CreateAgentPayload,
   DeleteResponse,
-  EvalCaseResult,
-  EvalInfo,
-  EvalPayload,
-  EvalTestCase,
-  EvalUpdatePayload,
   ExecutionTrace,
   FactoryMode,
   GatewayHealth,
@@ -104,6 +99,7 @@ import type {
 } from "../types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL?.trim() ?? "";
+const API_PATH_PREFIX = "/api/v1";
 type JsonRecord = Record<string, unknown>;
 
 // ── Structured API error ──
@@ -262,7 +258,12 @@ let _refreshPromise: Promise<AuthSession> | null = null;
 
 function buildUrl(path: string, namespace?: string): string {
   const baseUrl = API_BASE_URL || window.location.origin;
-  const url = new URL(path, baseUrl);
+  const normalizedPath = path.startsWith("/api/v1")
+    ? path
+    : path.startsWith("/api/")
+      ? `${API_PATH_PREFIX}${path.slice(4)}`
+      : path;
+  const url = new URL(normalizedPath, baseUrl);
   if (namespace) {
     url.searchParams.set("namespace", namespace);
   }
@@ -1193,39 +1194,6 @@ function parseWorkflowInfoPayload(payload: unknown, label = "WorkflowInfo"): Wor
         )
       : null,
     worker_job: readOptionalRecord(record, "worker_job", label),
-    created_at: readOptionalString(record, "created_at", label),
-  };
-}
-
-function parseEvalTestCasePayload(payload: unknown, label = "EvalTestCase"): EvalTestCase {
-  const record = expectRecord(payload, label);
-  return {
-    input: readString(record, "input", label),
-    expected_output: readString(record, "expected_output", label, ""),
-    metrics: readStringArray(record, "metrics", label),
-  };
-}
-
-function parseEvalInfoPayload(payload: unknown, label = "EvalInfo"): EvalInfo {
-  const record = expectRecord(payload, label);
-  const rawCases = record.cases;
-  return {
-    name: readString(record, "name", label),
-    namespace: readString(record, "namespace", label),
-    agent_ref: readString(record, "agent_ref", label),
-    schedule: readOptionalString(record, "schedule", label),
-    test_suite: (record.test_suite === undefined ? [] : readRecordArray(record, "test_suite", label)).map((item, index) =>
-      parseEvalTestCasePayload(item, `${label}.test_suite[${index}]`)
-    ),
-    failure_threshold: readRecord(record, "failure_threshold", label),
-    phase: readString(record, "phase", label, "pending"),
-    passed: readOptionalBoolean(record, "passed", label),
-    last_run: readOptionalString(record, "last_run", label),
-    observed_generation: readOptionalNumber(record, "observed_generation", label),
-    summary: readOptionalRecord(record, "summary", label),
-    artifact_ref: readOptionalRecord(record, "artifact_ref", label),
-    worker_job: readOptionalRecord(record, "worker_job", label),
-    cases: Array.isArray(rawCases) ? rawCases as EvalCaseResult[] : null,
     created_at: readOptionalString(record, "created_at", label),
   };
 }
@@ -2918,6 +2886,8 @@ function parseStepTracePayload(payload: unknown, label = "StepTrace"): StepTrace
     error: readOptionalString(record, "error", label) ?? readOptionalString(record, "error_message", label),
     tokens_used: readOptionalNumber(record, "tokens_used", label),
     cost_usd: readOptionalNumber(record, "cost_usd", label),
+    llm_call_count: readOptionalNumber(record, "llm_calls_count", label) ?? 0,
+    tool_call_count: readOptionalNumber(record, "tool_calls_count", label) ?? 0,
     llm_calls: Array.isArray(rawLlmCalls)
       ? rawLlmCalls.map((item, index) => parseLLMCallRecordPayload(item, `${label}.llm_calls[${index}]`))
       : [],
@@ -3048,50 +3018,6 @@ export function createNotificationStream(
 ): EventSource {
   const url = buildUrl("/api/notifications/stream", namespace);
   return new EventSource(`${url}&token=${encodeURIComponent(token)}`);
-}
-
-export async function listEvals(token: string, namespace: string): Promise<EvalInfo[]> {
-  const response = await fetchAuthenticated(buildUrl("/api/evals", namespace), token);
-  return parseJsonResponse(response, (payload) => {
-    if (!Array.isArray(payload)) {
-      throw new Error("Eval list response must be an array.");
-    }
-    return payload.map((item, index) => parseEvalInfoPayload(item ?? {}, `EvalInfo[${index}]`));
-  });
-}
-
-export async function createEval(token: string, namespace: string, payload: EvalPayload): Promise<EvalInfo> {
-  const response = await fetchAuthenticated(buildUrl("/api/evals", namespace), token, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(payload),
-  });
-  return parseJsonResponse(response, parseEvalInfoPayload);
-}
-
-export async function updateEval(
-  token: string,
-  namespace: string,
-  evalName: string,
-  payload: EvalUpdatePayload,
-): Promise<EvalInfo> {
-  const response = await fetchAuthenticated(buildUrl(`/api/evals/${evalName}`, namespace), token, {
-    method: "PATCH",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(payload),
-  });
-  return parseJsonResponse(response, parseEvalInfoPayload);
-}
-
-export async function deleteEval(token: string, namespace: string, evalName: string): Promise<DeleteResponse> {
-  const response = await fetchAuthenticated(buildUrl(`/api/evals/${evalName}`, namespace), token, {
-    method: "DELETE",
-  });
-  return parseJsonResponse(response, parseDeleteResponsePayload);
 }
 
 export interface StreamHandlers {
@@ -4911,7 +4837,7 @@ function parseWorkflowTriggerPayload(payload: unknown, label = "WorkflowTriggerI
     workflow_ref: readRecord(record, "workflow_ref", label, {}) as Record<string, string>,
     payload_mapping: readRecord(record, "payload_mapping", label, {}) as Record<string, string>,
     max_retries: readOptionalNumber(record, "max_retries", label) ?? 3,
-    backoff_seconds: readOptionalNumber(record, "backoff_seconds", label) ?? 5,
+    backoff_seconds: readOptionalNumber(record, "backoff_seconds", label) ?? 60,
     enabled: readBoolean(record, "enabled", label, true),
     execution_count: readOptionalNumber(record, "execution_count", label) ?? 0,
     last_triggered: readOptionalString(record, "last_triggered", label),

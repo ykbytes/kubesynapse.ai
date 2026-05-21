@@ -1,7 +1,7 @@
 """Structured error taxonomy for the kubesynapse operator.
 
 Provides typed error codes for CRD status conditions, audit logging,
-and machine-readable failure classification (§2.9 — roadtoprod.md).
+and machine-readable failure classification.
 """
 
 from __future__ import annotations
@@ -45,11 +45,6 @@ WORKFLOW_STEP_FAILED = "WORKFLOW_STEP_FAILED"
 WORKFLOW_STEP_TIMEOUT = "WORKFLOW_STEP_TIMEOUT"
 WORKFLOW_DUPLICATE_RUN = "WORKFLOW_DUPLICATE_RUN"
 WORKFLOW_SPEC_INVALID = "WORKFLOW_SPEC_INVALID"
-
-# Eval execution
-EVAL_SCHEDULE_INVALID = "EVAL_SCHEDULE_INVALID"
-EVAL_CASE_FAILED = "EVAL_CASE_FAILED"
-EVAL_AGENT_UNREACHABLE = "EVAL_AGENT_UNREACHABLE"
 
 # Tenant management
 TENANT_NAMESPACE_FAILED = "TENANT_NAMESPACE_FAILED"

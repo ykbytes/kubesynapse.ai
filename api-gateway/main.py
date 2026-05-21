@@ -24,7 +24,6 @@ from routers.admin import router as admin_router
 from routers.agents import router as agents_router
 from routers.auth import router as auth_router
 from routers.chat import router as chat_router
-from routers.evals import router as evals_router
 from routers.llm import router as llm_router
 from routers.observability import router as observability_router
 from routers.webhooks import router as webhooks_router
@@ -90,7 +89,6 @@ app.include_router(admin_router, prefix="/api/v1")
 app.include_router(auth_router, prefix="/api/v1")
 app.include_router(agents_router, prefix="/api/v1")
 app.include_router(workflows_router, prefix="/api/v1")
-app.include_router(evals_router, prefix="/api/v1")
 app.include_router(chat_router, prefix="/api/v1")
 app.include_router(llm_router, prefix="/api/v1")
 app.include_router(observability_router, prefix="/api/v1")

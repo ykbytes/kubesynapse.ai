@@ -13,10 +13,13 @@ $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $outputPath = Join-Path $repoRoot $OutputDir
 
 $images = @(
-    @{ Name = "ai-operator"; Context = "operator" },
-    @{ Name = "ai-opencode-runtime"; Context = "opencode-runtime" },
-    @{ Name = "ai-api-gateway"; Context = "api-gateway" },
+  @{ Name = "kubesynapse-operator"; Context = "operator" },
+  @{ Name = "kubesynapse-opencode-rt"; Context = "opencode-runtime" },
+  @{ Name = "kubesynapse-vibe-rt"; Context = "vibe-runtime" },
+  @{ Name = "kubesynapse-api-gateway"; Context = "api-gateway" },
     @{ Name = "kubesynapse-web-ui"; Context = "web-ui" },
+  @{ Name = "kubesynapse-pi-rt"; Context = "pi-runtime" },
+  @{ Name = "litellm"; Context = "deploy/litellm"; Dockerfile = "deploy/litellm/Dockerfile" },
     @{ Name = "mcp-code-exec"; Context = "mcp-sidecars"; Dockerfile = "mcp-sidecars/code-exec/Dockerfile" },
     @{ Name = "mcp-web-search"; Context = "mcp-sidecars"; Dockerfile = "mcp-sidecars/web-search/Dockerfile" },
     @{ Name = "mcp-documents"; Context = "mcp-sidecars"; Dockerfile = "mcp-sidecars/documents/Dockerfile" },
@@ -63,26 +66,41 @@ try {
 # Fill in real secrets and ingress settings before deploying this bundle.
 operator:
   image:
-    repository: "$Registry/ai-operator"
+    repository: "$Registry/kubesynapse-operator"
     tag: "$Version"
   workerImage:
-    repository: "$Registry/ai-operator"
+    repository: "$Registry/kubesynapse-operator"
     tag: "$Version"
 
 opencodeRuntime:
   image:
-    repository: "$Registry/ai-opencode-runtime"
+    repository: "$Registry/kubesynapse-opencode-rt"
+    tag: "$Version"
+
+piRuntime:
+  image:
+    repository: "$Registry/kubesynapse-pi-rt"
+    tag: "$Version"
+
+mistralVibeRuntime:
+  image:
+    repository: "$Registry/kubesynapse-vibe-rt"
     tag: "$Version"
 
 apiGateway:
   image:
-    repository: "$Registry/ai-api-gateway"
+    repository: "$Registry/kubesynapse-api-gateway"
     tag: "$Version"
   ingressHost: "agents.example.com"
 
 webUi:
   image:
     repository: "$Registry/kubesynapse-web-ui"
+    tag: "$Version"
+
+litellm:
+  image:
+    repository: "$Registry/litellm"
     tag: "$Version"
 
 mcpHub:

@@ -32,10 +32,6 @@ await client.delete_agent("my-agent")
 workflows = await client.list_workflows()
 await client.trigger_workflow("my-workflow", {"input": "data"})
 
-# Evaluations
-evals = await client.list_evals()
-await client.run_eval("my-eval")
-
 # Policies
 policies = await client.list_policies()
 
@@ -44,9 +40,9 @@ response = await client.invoke("my-agent", "Explain Kubernetes")
 async for delta in client.stream("my-agent", "Build a REST API"):
     print(delta, end="")
 
-# Traces
-traces = await client.list_traces()
-trace = await client.get_trace("run-id")
+# Execution Observatory
+executions = await client.list_executions()
+execution = await client.get_execution("run-id")
 ```
 
 ## Sync Wrapper

@@ -82,3 +82,17 @@ Reuse an existing Secret value when the provided value is empty or still set to 
 {{- $value -}}
 {{- end -}}
 {{- end }}
+
+{{/*
+Return the secret name for Redis auth.
+*/}}
+{{- define "kubesynapse.redisAuthSecretName" -}}
+{{- .Values.redis.auth.existingSecret | default (printf "%s-redis-auth" (include "kubesynapse.fullname" .)) -}}
+{{- end }}
+
+{{/*
+Return the secret name for NATS auth.
+*/}}
+{{- define "kubesynapse.natsAuthSecretName" -}}
+{{- .Values.nats.auth.existingSecret | default (printf "%s-nats-auth" (include "kubesynapse.fullname" .)) -}}
+{{- end }}

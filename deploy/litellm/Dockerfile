@@ -17,12 +17,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc libpq-dev && \
     rm -rf /var/lib/apt/lists/*
 
+# Generate Prisma artifacts against the same home/cache path used at runtime.
+RUN groupadd -g 1000 litellm && \
+    useradd -u 1000 -g litellm -m -d /home/litellm -s /bin/bash litellm
+ENV HOME=/home/litellm
+ENV PRISMA_HOME_DIR=/home/litellm
+RUN mkdir -p /home/litellm/.cache && chown -R 1000:1000 /home/litellm
+
 # Install litellm with proxy extras (includes prisma, uvicorn, fastapi, etc.)
 RUN pip install --no-cache-dir 'litellm[proxy,extra_proxy]==1.82.3'
+
+RUN chown -R 1000:1000 /usr/local/lib/python3.12/site-packages
+USER 1000
 
 # Generate Prisma client using litellm's embedded schema
 RUN python -m prisma generate \
     --schema=/usr/local/lib/python3.12/site-packages/litellm/proxy/schema.prisma
+RUN sed -i 's#/root/.cache/prisma-python#/home/litellm/.cache/prisma-python#g' /usr/local/lib/python3.12/site-packages/prisma/client.py
 
 # ---------------------------------------------------------------------------
 FROM python:3.12-slim-bookworm
@@ -42,19 +53,27 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 
 # Copy Prisma engine cache to the non-root user's home.
 # Only copy debian-openssl-3.0.x engines (the platform we run on).
-COPY --from=builder --chown=1000:1000 /root/.cache/prisma-python /home/litellm/.cache/prisma-python
-COPY --from=builder --chown=1000:1000 /root/.cache/prisma /home/litellm/.cache/prisma
+COPY --from=builder --chown=1000:1000 /home/litellm/.cache/prisma-python /home/litellm/.cache/prisma-python
+COPY --from=builder --chown=1000:1000 /home/litellm/.cache/prisma /home/litellm/.cache/prisma
 
 # Ensure the home dir is fully owned by litellm
 RUN chown -R 1000:1000 /home/litellm
 
+# The generated prisma client hardcodes its cache roots. Patch the final image
+# layer as well so future copy-order changes cannot reintroduce /root paths.
+RUN sed -i 's#/root/.cache/prisma-python#/home/litellm/.cache/prisma-python#g' /usr/local/lib/python3.12/site-packages/prisma/client.py && \
+    grep -q '/home/litellm/.cache/prisma-python' /usr/local/lib/python3.12/site-packages/prisma/client.py
+
 WORKDIR /app
+COPY --from=builder --chown=1000:1000 /usr/local/lib/python3.12/site-packages/litellm/proxy/schema.prisma /app/schema.prisma
 RUN chown 1000:1000 /app
 
 # Switch to non-root user
 USER 1000
 
 ENV HOME=/home/litellm
+ENV XDG_CACHE_HOME=/home/litellm/.cache
+ENV PRISMA_HOME_DIR=/home/litellm
 
 EXPOSE 4000
 

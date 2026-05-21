@@ -1,7 +1,7 @@
 # KubeSynapse Observability Research Notes
 
 > **Status**: Historical research and design context
-> **Current implementation**: See `docs/architecture-overview.md`, `docs/observability-explained.md`, `examples/observability-targets.yaml`, and `scripts/observability-smoke-test.ps1`
+> **Current implementation**: See `docs/architecture-overview.md`, `docs/observability-explained.md`, `examples/observability-targets.yaml`, and `examples/observability-demo-fire.yaml`
 > **Date captured**: 2026-04-05
 > **Scope**: Background research that informed the implemented observability module
 
@@ -1417,7 +1417,6 @@ rules:
       - agentpolicies
       - agentworkflows
       - agenttenants
-      - agentevals
       - agentapprovals
     verbs: ["get", "list", "watch"]
 

@@ -1,0 +1,62 @@
+{{- if .Values.operator.enabled }}
+{{- $migrationEnabled := .Values.operator.pvcRetentionMigrationEnabled | default true -}}
+{{- if $migrationEnabled }}
+# §reliability-P1: One-time migration to set StatefulSet PVC retention policy
+# from Retain to Delete for existing agents that were created before the fix.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "kubesynapse.fullname" . }}-pvc-retention-migration
+  annotations:
+    "helm.sh/hook": post-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    "helm.sh/hook-weight": "10"
+  labels:
+    {{- include "kubesynapse.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migration
+spec:
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      labels:
+        app: pvc-retention-migration
+    spec:
+      serviceAccountName: {{ include "kubesynapse.fullname" . }}-operator-sa
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: migrate
+          image: bitnami/kubectl:latest
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              echo "Migrating StatefulSet PVC retention policy from Retain -> Delete for existing agents..."
+              for sts in $(kubectl get statefulsets -A -l app=ai-agent -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}{"\n"}{end}'); do
+                ns=$(echo "$sts" | cut -d/ -f1)
+                name=$(echo "$sts" | cut -d/ -f2)
+                current=$(kubectl get sts -n "$ns" "$name" -o jsonpath='{.spec.persistentVolumeClaimRetentionPolicy.whenDeleted}' 2>/dev/null || echo "")
+                if [ "$current" = "Retain" ] || [ -z "$current" ]; then
+                  echo "Patching $ns/$name (current=$current -> Delete)"
+                  kubectl patch sts -n "$ns" "$name" --type=merge -p \
+                    '{"spec":{"persistentVolumeClaimRetentionPolicy":{"whenDeleted":"Delete","whenScaled":"Retain"}}}'
+                else
+                  echo "Skipping $ns/$name (already $current)"
+                fi
+              done
+              echo "PVC retention migration complete."
+{{- end }}
+{{- end }}

@@ -9,6 +9,7 @@ This guide covers monitoring, alerting, scaling, upgrades, backups, troubleshoot
 ## Table of Contents
 
 - [Monitoring](#monitoring)
+- [Run Intelligence Layer](#run-intelligence-layer)
 - [Alerting](#alerting)
 - [Scaling](#scaling)
 - [Upgrades](#upgrades)
@@ -28,7 +29,7 @@ This guide covers monitoring, alerting, scaling, upgrades, backups, troubleshoot
 | **Control Plane** | Operator reconciliation latency | Slow reconciliation = delayed agent provisioning |
 | **Control Plane** | CRD watch errors | Losing watch = stale state |
 | **Execution Plane** | Agent pod restarts | Runtime instability or OOM |
-| **Execution Plane** | Worker job duration | Evals/workflows hanging or failing |
+| **Execution Plane** | Worker job duration | Workflow runs hanging or failing |
 | **Gateway** | HTTP request latency P99 | User-facing performance |
 | **Gateway** | Auth failure rate | Brute force or IdP issues |
 | **LLM** | LiteLLM error rate | Provider outages or misconfiguration |
@@ -79,6 +80,107 @@ The project ships three curated dashboards in `deploy/grafana/dashboards/`:
 | LLM Usage | `llm-usage.json` | Token rate, cost, latency per model, provider errors |
 
 Import them via ConfigMap or Grafana UI.
+
+---
+
+## Run Intelligence Layer
+
+The Run Intelligence Layer provides semantic event indexing, deterministic anomaly detection, and AI-powered analysis across all runtimes.
+
+### Signal Watch Controller
+
+The operator runs a periodic anomaly detection controller (`controllers/signal_watch.py`) that executes deterministic SQL checks against the `runtime_run_events` and `workflow_executions` tables.
+
+**Schedule:** Every 60 seconds (configurable via `SIGNAL_WATCH_INTERVAL_SEC`)
+
+**Anomaly Checks:**
+
+| Check | SQL Query | Threshold | Default |
+|---|---|---|---|
+| High failure rate | `failed_steps / total_steps >= threshold` | 30% | `SIGNAL_WATCH_FAILURE_RATE=0.3` |
+| Error spikes | `COUNT(*) WHERE severity='error' >= threshold` | 3 errors in 15m | `SIGNAL_WATCH_ERROR_COUNT=3` |
+| Cost outliers | `cost_usd / avg_cost >= multiplier` | 3x namespace avg | `SIGNAL_WATCH_COST_MULTIPLIER=3.0` |
+| Token spikes | `total_tokens / avg_tokens >= multiplier` | 3x agent avg | `SIGNAL_WATCH_TOKEN_MULTIPLIER=3.0` |
+| Stuck runs | `duration_ms / median_ms >= multiplier` | 2x median duration | `SIGNAL_WATCH_STUCK_MULTIPLIER=2.0` |
+
+**Output:** When a check fires, an `ObservationReport` CR is created with:
+- Severity classification (low, medium, high, critical)
+- Affected execution IDs
+- Detailed metrics and timestamps
+
+### System Agents
+
+Three predefined AIAgent CRs provide AI-powered analysis on top of deterministic detection:
+
+| Agent | Purpose | Invoked When |
+|---|---|---|
+| `ks-run-inspector` | Root-cause analysis of failed runs | Failure rate > 30% or >= 3 errors |
+| `ks-signal-summarizer` | Converts anomaly signals to incident briefs | Any anomaly signal fires |
+| `ks-spend-reviewer` | Reviews cost/token anomalies | Cost > $10 or tokens > 3x average |
+
+**Configuration:** Set via Helm values under `systemAgents`:
+
+```yaml
+systemAgents:
+  enabled: true
+  namespace: "kubesynapse-system"
+  defaultModel: "gpt-4"
+  runInspector:
+    enabled: true
+    triggers:
+      minFailureRate: 0.3
+      minErrorCount: 3
+```
+
+### Troubleshooting
+
+**Signal watch not running:**
+```bash
+# Check controller is loaded
+kubectl logs -l app=kubesynapse-operator -c operator | grep signal-watch
+
+# Verify env vars
+kubectl get deployment kubesynapse-operator -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="SIGNAL_WATCH_INTERVAL_SEC")].value}'
+```
+
+**ObservationReports not created:**
+```bash
+# Check for SQL errors
+kubectl logs -l app=kubesynapse-operator -c operator | grep "signal watch"
+
+# Verify database connectivity
+kubectl exec -it deploy/kubesynapse-api-gateway -- python -c "from auth_store import ENGINE; print(ENGINE)"
+```
+
+**System agents not invoked:**
+```bash
+# Check system agent CRs exist
+kubectl get aiagents -n kubesynapse-system
+
+# Verify A2A allowed callers
+kubectl get aiagent ks-run-inspector -n kubesynapse-system -o jsonpath='{.spec.a2a}'
+```
+
+**Workflow runtime timeline missing terminal events:**
+```bash
+# Confirm the worker can resolve the in-cluster gateway URL
+kubectl get deployment kubesynapse-operator -n kubesynapse \
+  -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="API_GATEWAY_INTERNAL_URL")].value}'
+
+# Confirm the operator RBAC covers workflow workers
+kubectl auth can-i --as=system:serviceaccount:kubesynapse:kubesynapse-operator-sa get agentworkflows.kubesynapse.ai -n default
+kubectl auth can-i --as=system:serviceaccount:kubesynapse:kubesynapse-operator-sa create leases.coordination.k8s.io -n kubesynapse
+
+# Check the worker log for emitter startup and shutdown
+kubectl logs job/wf-<workflow-name> -n kubesynapse | grep "Runtime event emitter"
+```
+
+Expected behavior on a healthy run:
+
+- worker logs show `Runtime event emitter started -> http://...`
+- worker logs show `Runtime event emitter stopped (sent=..., dropped=...)` before lease release
+- `GET /api/v1/traces/<execution_id>/timeline` ends with `run.completed` or `run.error`
+- `GET /api/v1/traces/runtime-events?namespace=<tenant-ns>&runtime_kind=operator-worker` returns the same execution's events
 
 ---
 
@@ -157,6 +259,31 @@ agentRuntime:
 
 **GPU support:** Set `runtimeClassName: nvidia` in agent spec and ensure GPU nodes are available.
 
+### Tenant Automation and Dedicated User Namespaces
+
+The operator's tenant controller now matters even for admin user CRUD, not just manually created tenant manifests.
+
+Current behavior:
+
+- the API gateway can reconcile a cluster-scoped `AgentTenant` named `user-<slug>` when an admin creates or updates a non-admin local user
+- the tenant controller materializes the target namespace, quota objects, limit ranges, and tenant RBAC for that dedicated namespace
+- when `adminUsers` membership changes, the controller removes stale tenant-managed RoleBindings instead of leaving orphaned access behind
+
+Operational checks:
+
+```bash
+kubectl get agenttenants
+kubectl get rolebindings -n user-alice-user
+kubectl describe agenttenant user-alice-user
+```
+
+If a user namespace is missing after admin user creation, inspect both the gateway logs and the operator logs:
+
+```bash
+kubectl logs -n kubesynapse deploy/kubesynapse-api-gateway
+kubectl logs -n kubesynapse deploy/kubesynapse-operator
+```
+
 ---
 
 ## Upgrades
@@ -192,7 +319,7 @@ agentRuntime:
 5. **Smoke test:**
 
    ```bash
-   curl -f http://localhost:8080/api/health
+  curl -f http://localhost:8080/api/v1/health
    agentctl health
    ```
 
@@ -236,7 +363,7 @@ kubectl exec -n $NAMESPACE deploy/kubesynapse-api-gateway -- \
   sh -c 'sqlite3 /data/auth.db .dump' > auth-db-$DATE.sql
 
 # CRDs
-for crd in aiagents agentworkflows agentevals agentpolicies agentapprovals agenttenants; do
+for crd in aiagents agentworkflows agentpolicies agentapprovals agenttenants; do
   kubectl get $crd --all-namespaces -o yaml > $crd-$DATE.yaml
 done
 

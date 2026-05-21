@@ -7,6 +7,7 @@
          namespaceSelector: {kubesynapse.ai/mcp-hub: "true"}
        resolve correctly without a manual `kubectl label` step.
 */ -}}
+{{- if .Values.mcpHub.enabled }}
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -20,3 +21,4 @@ metadata:
   annotations:
     {{- /* Prevent accidental deletion via `helm uninstall --purge` without --keep-history */}}
     helm.sh/resource-policy: keep
+{{- end }}

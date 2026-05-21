@@ -27,7 +27,7 @@ import {
   ArrowDownUp,
   ArrowLeftRight,
 } from "lucide-react";
-import { ExpandableMarkdownEditor } from "@/components/ExpandableMarkdownEditor";
+import { ExpandableMarkdownEditor } from "@/components/shared/ExpandableMarkdownEditor";
 import { cn } from "@/lib/utils";
 
 import type { WorkflowSummary, WorkflowPendingApproval } from "@/types";

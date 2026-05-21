@@ -2,6 +2,14 @@
 
 Vite + React + TypeScript frontend for the KubeSynapse API gateway.
 
+## Supported runtimes
+
+The console creates and manages agents for the three supported runtime kinds:
+
+- `opencode` is the default runtime and gets the richer config-file editing flows.
+- `pi` is the supported alternative runtime and uses the same create, edit, inspect, and invoke surfaces.
+- `mistral-vibe` is the supported Mistral-backed runtime bridge and uses the same create, edit, inspect, and invoke surfaces.
+
 ## Local development
 
 1. Copy `.env.example` to `.env.local` if you need to point at a non-default gateway.
@@ -31,6 +39,11 @@ The image serves the Vite bundle through Nginx with SPA fallback enabled. In the
 
 Current deployed image: `docker.io/kubesynapse/kubesynapse-web-ui:v1.2.0`.
 
+## Console navigation
+
+- `Catalog` is the shared discovery workspace for reusable assets. It opens on the `MCP` tab by default and also includes the `Skills` tab for reusable skill bundles.
+- `Intelligence` is the shared operational workspace for cluster intelligence and run analysis. It opens on the `Observatory` tab by default and also includes the `Intelligence` tab for collectors, schedules, alerts, and collection tasks.
+
 ## Live Activity Stream
 
 Real-time step-level status transitions with a pulse indicator and a
@@ -40,6 +53,8 @@ approvals, and errors as they happen without polling.
 ## ExecutionObservatory
 
 Post-execution trace analysis suite:
+
+Available from the `Intelligence` workspace under the `Observatory` tab.
 
 - **TracePlayer** — Replay a workflow run step-by-step.
 - **StepInspector** — Deep-dive into inputs, outputs, and timing for any step.
@@ -80,6 +95,8 @@ Useful for debugging model reasoning loops and tool-use decisions.
 - Selected-agent inspector coverage for parsed skill summaries, capability grants, inbound A2A callers, and discovered peer reachability
 - Workflow creation, editing, inspection, deletion, run history, and visual composer execution monitoring
 - Evaluation creation, editing, inspection, deletion, and per-case result visualization
+- Shared `Catalog` workspace with `MCP` and `Skills` tabs
+- Shared `Intelligence` workspace with `Observatory` and `Intelligence` tabs
 - Policy management, admin user management, audit trail review, usage dashboards, and health dashboard access
 - Command palette, mobile navigation shell, onboarding tour, notifications, and redesigned provider-centric settings management
 - Live Activity Stream with real-time step-level status transitions, pulse indicator, and Ctrl+L toggle
@@ -92,7 +109,7 @@ Useful for debugging model reasoning loops and tool-use decisions.
 
 The UI is built around the same production surfaces exposed by the API gateway and operator:
 
-- connect once with a namespace and bearer token, then browse agents, workflows, and evaluations from the same session
+- connect once with a namespace and bearer token, then browse agents, workflows, and approvals from the same session
 - create and edit agents without raw JSON for `skills.files` or OpenCode config bundles
 - inspect runtime-facing configuration, parsed skill summaries, tool and A2A metadata, logs, and approval state side-by-side with chat
 - use the chat workbench for standard prompts or explicit A2A delegation
@@ -100,7 +117,13 @@ The UI is built around the same production surfaces exposed by the API gateway a
 ## Admin and operations
 
 - The admin workspace exposes user management, audit logs, usage and cost reporting, and a system health dashboard.
+- Creating or updating a non-admin local user now provisions a dedicated `user-<slug>` tenant namespace through the gateway + operator flow. Admin users normalize to wildcard namespace access.
 - The settings workspace is provider-centric: operators search providers on the left and manage API keys and enabled models in a focused detail pane on the right.
+- The Settings provider list is backed by `/api/v1/providers`, with model and catalog detail coming from `/api/v1/llm/providers` and `/api/v1/providers/catalog`. If Settings toasts `Failed to load providers`, verify those gateway endpoints before debugging the frontend.
+- Live model suggestions for OpenRouter, OpenCode Zen, OpenCode Go, and GitHub Copilot only appear after the corresponding credential or token is configured successfully.
+- The catalog workspace opens on `MCP` first for connection and registry management, with reusable skill bundles on the `Skills` tab.
+- The intelligence workspace opens on `Observatory` first for run tracing, with collector and alert workflows on the `Intelligence` tab.
 - The workflow composer includes conditional and loop step editing, live execution state, inline approvals, and recent run history.
+- Chat session history and editable memory records are backed by the gateway PostgreSQL store, and streamed invokes use the same durable-memory recall path as sync invokes.
 
 For release verification, run `npm run build` before publishing a new image.

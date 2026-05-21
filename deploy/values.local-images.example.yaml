@@ -10,8 +10,8 @@ operator:
 
 opencodeRuntime:
   image:
-    repository: localhost/kubesynapse/kubesynapse-opencode-runtime
-    tag: dev6
+    repository: localhost/kubesynapse/kubesynapse-opencode-rt
+    tag: dev
     pullPolicy: IfNotPresent
   limits:
     maxPromptChars: 256000
@@ -29,13 +29,31 @@ opencodeRuntime:
 apiGateway:
   image:
     repository: localhost/kubesynapse/kubesynapse-api-gateway
-    tag: dev6
+    tag: dev
     pullPolicy: IfNotPresent
 
 webUi:
   image:
     repository: localhost/kubesynapse/kubesynapse-web-ui
-    tag: dev6
+    tag: dev
+    pullPolicy: IfNotPresent
+
+piRuntime:
+  image:
+    repository: localhost/kubesynapse/kubesynapse-pi-rt
+    tag: dev
+    pullPolicy: IfNotPresent
+
+mistralVibeRuntime:
+  image:
+    repository: localhost/kubesynapse/kubesynapse-vibe-rt
+    tag: dev
+    pullPolicy: IfNotPresent
+
+litellm:
+  image:
+    repository: docker.io/litellm/litellm
+    tag: v1.82.3-stable
     pullPolicy: IfNotPresent
 
 mcpHub:

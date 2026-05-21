@@ -1,4 +1,4 @@
-"""Database-backed mirrors for workflow and eval execution state."""
+"""Database-backed mirrors for workflow execution state."""
 
 from __future__ import annotations
 
@@ -41,6 +41,7 @@ def _ensure_stdlib_operator_module() -> None:
 _ensure_stdlib_operator_module()
 
 from sqlalchemy import JSON, Boolean, Column, DateTime, Integer, String, UniqueConstraint, create_engine
+from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError
 from sqlalchemy.orm import Session, declarative_base, sessionmaker
 
 logger = logging.getLogger("operator.state-store")
@@ -143,27 +144,6 @@ class WorkflowRun(Base):
     completed_at = Column(DateTime(timezone=True), nullable=True)
 
 
-class EvalRun(Base):
-    __tablename__ = "eval_runs"
-    __table_args__ = (UniqueConstraint("namespace", "resource_name", "run_id", name="uq_eval_runs_identity"),)
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    namespace = Column(String(128), nullable=False, index=True)
-    resource_name = Column(String(128), nullable=False, index=True)
-    generation = Column(Integer, nullable=False)
-    run_id = Column(String(128), nullable=False, index=True)
-    phase = Column(String(64), nullable=False, index=True)
-    passed = Column(Boolean, nullable=True)
-    spec_json = Column(JSON, nullable=True)
-    status_json = Column(JSON, nullable=True)
-    summary_json = Column(JSON, nullable=True)
-    artifact_path = Column(String(512), nullable=True)
-    worker_job_name = Column(String(128), nullable=True)
-    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
-    updated_at = Column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
-    completed_at = Column(DateTime(timezone=True), nullable=True)
-
-
 class AgentSession(Base):
     __tablename__ = "agent_sessions"
     __table_args__ = (UniqueConstraint("session_id", name="uq_agent_sessions_identity"),)
@@ -229,10 +209,17 @@ def init_database() -> None:
 
 @contextmanager
 def db_session() -> Iterator[Session]:
+    """Yield a database session with automatic commit/rollback.
+
+    §reliability-P1: Uses typed SQLAlchemy exceptions instead of broad ``except Exception``.
+    """
     session = SessionLocal()
     try:
         yield session
         session.commit()
+    except SQLAlchemyError:
+        session.rollback()
+        raise
     except Exception:
         session.rollback()
         raise
@@ -245,7 +232,13 @@ def db_session() -> Iterator[Session]:
 # ---------------------------------------------------------------------------
 
 def check_workflow_run_conflict(namespace: str, resource_name: str, generation: int, run_id: str) -> str | None:
-    """Return conflicting run_id if another run is active for this workflow+generation."""
+    """Return conflicting run_id if another run is active for this workflow+generation.
+
+    §reliability-P1: Returns None only on "no conflict found", not on DB errors.
+    OperationalError (e.g., connection loss) is logged and treated as no-conflict
+    so the caller can proceed; a subsequent safe_record_workflow_state will retry.
+    IntegrityError is re-raised (duplicate key).
+    """
     if not STATE_DB_ENABLED:
         return None
     try:
@@ -263,32 +256,18 @@ def check_workflow_run_conflict(namespace: str, resource_name: str, generation: 
             )
             if record is not None:
                 return str(record.run_id)
-    except Exception:
-        logger.exception("Failed to check workflow run conflict for %s/%s gen %d.", namespace, resource_name, generation)
-    return None
-
-
-def check_eval_run_conflict(namespace: str, resource_name: str, generation: int, run_id: str) -> str | None:
-    """Return conflicting run_id if another eval run is active for this eval+generation."""
-    if not STATE_DB_ENABLED:
-        return None
-    try:
-        with db_session() as session:
-            record = (
-                session.query(EvalRun)
-                .filter(
-                    EvalRun.namespace == namespace,
-                    EvalRun.resource_name == resource_name,
-                    EvalRun.generation == generation,
-                    EvalRun.phase.in_(["queued", "running"]),
-                    EvalRun.run_id != run_id,
-                )
-                .first()
-            )
-            if record is not None:
-                return str(record.run_id)
-    except Exception:
-        logger.exception("Failed to check eval run conflict for %s/%s gen %d.", namespace, resource_name, generation)
+    except OperationalError as exc:
+        logger.error(
+            "Database unavailable during workflow-run conflict check for %s/%s gen %d: %s",
+            namespace, resource_name, generation, exc,
+        )
+    except IntegrityError:
+        raise
+    except SQLAlchemyError:
+        logger.exception(
+            "Unexpected database error during workflow-run conflict check for %s/%s gen %d.",
+            namespace, resource_name, generation,
+        )
     return None
 
 
@@ -365,81 +344,13 @@ def safe_record_workflow_state(
             record.pending_approval_name = str(pending_approval.get("name") or "").strip() or None
             record.completed_at = _completed_timestamp(phase, status)
             record.updated_at = utc_now()
-    except Exception:
+    except OperationalError as exc:
+        logger.error(
+            "Database unavailable while mirroring workflow state for %s/%s run %s: %s",
+            namespace, resource_name, run_id, exc,
+        )
+    except SQLAlchemyError:
         logger.exception("Failed to mirror workflow state for %s/%s run %s.", namespace, resource_name, run_id)
-
-
-def safe_record_eval_state(
-    *,
-    namespace: str,
-    resource_name: str,
-    generation: int,
-    run_id: str,
-    phase: str,
-    passed: bool | None,
-    spec: dict[str, Any],
-    status: dict[str, Any],
-) -> None:
-    if not STATE_DB_ENABLED or not run_id:
-        return
-    try:
-        with db_session() as session:
-            superseded_at = utc_now()
-            stale_records = (
-                session.query(EvalRun)
-                .filter(
-                    EvalRun.namespace == namespace,
-                    EvalRun.resource_name == resource_name,
-                    EvalRun.generation == generation,
-                    EvalRun.run_id != run_id,
-                    EvalRun.phase.in_(["queued", "running"]),
-                )
-                .all()
-            )
-            for stale_record in stale_records:
-                stale_status = _json_clone(stale_record.status_json)
-                if not isinstance(stale_status, dict):
-                    stale_status = {}
-                stale_summary = _json_clone(stale_record.summary_json)
-                if not isinstance(stale_summary, dict):
-                    stale_summary = {}
-                stale_record.phase = "cancelled"
-                stale_status["phase"] = "cancelled"
-                stale_summary.setdefault("error", f"Superseded by run {run_id}")
-                stale_summary["cancelledAt"] = superseded_at.isoformat()
-                stale_record.status_json = stale_status
-                stale_record.summary_json = stale_summary
-                stale_record.completed_at = superseded_at
-                stale_record.updated_at = superseded_at
-
-            record = (
-                session.query(EvalRun)
-                .filter(
-                    EvalRun.namespace == namespace,
-                    EvalRun.resource_name == resource_name,
-                    EvalRun.run_id == run_id,
-                )
-                .one_or_none()
-            )
-            if record is None:
-                record = EvalRun(namespace=namespace, resource_name=resource_name, run_id=run_id, generation=generation)
-                session.add(record)
-
-            artifact_ref = status.get("artifactRef", {}) or {}
-            worker_job = status.get("workerJob", {}) or {}
-
-            record.generation = generation
-            record.phase = phase
-            record.passed = passed
-            record.spec_json = _json_clone(spec)
-            record.status_json = _json_clone(status)
-            record.summary_json = _json_clone(status.get("summary", {}) or {})
-            record.artifact_path = str(artifact_ref.get("path") or "").strip() or None
-            record.worker_job_name = str(worker_job.get("name") or "").strip() or None
-            record.completed_at = _completed_timestamp(phase, status)
-            record.updated_at = utc_now()
-    except Exception:
-        logger.exception("Failed to mirror eval state for %s/%s run %s.", namespace, resource_name, run_id)
 
 
 def record_workflow_log_archive(
@@ -481,7 +392,10 @@ def record_workflow_log_archive(
             record.log_archive_truncated = bool(truncated)
             record.log_archive_captured_at = archive_timestamp
             record.updated_at = utc_now()
-    except Exception:
+    except OperationalError as exc:
+        logger.error("Database unavailable while persisting workflow log archive for %s/%s run %s: %s",
+                      namespace, resource_name, run_id, exc)
+    except SQLAlchemyError:
         logger.exception("Failed to persist workflow log archive for %s/%s run %s.", namespace, resource_name, run_id)
 
 
@@ -515,7 +429,9 @@ def safe_record_agent_session(snapshot: dict[str, Any]) -> None:
             record.token_usage_json = _json_clone(token_usage)
             record.expires_at = expires_at
             record.updated_at = utc_now()
-    except Exception:
+    except OperationalError as exc:
+        logger.error("Database unavailable while mirroring agent session %s: %s", session_id, exc)
+    except SQLAlchemyError:
         logger.exception("Failed to mirror agent session %s.", session_id)
 
 
@@ -537,7 +453,10 @@ def get_agent_session(session_id: str) -> dict[str, Any] | None:
                 "created_at": record.created_at.isoformat() if record.created_at else None,
                 "updated_at": record.updated_at.isoformat() if record.updated_at else None,
             }
-    except Exception:
+    except OperationalError as exc:
+        logger.error("Database unavailable while fetching agent session %s: %s", session_id, exc)
+        return None
+    except SQLAlchemyError:
         logger.exception("Failed to fetch agent session %s.", session_id)
         return None
 
@@ -598,7 +517,10 @@ def list_chat_sessions(namespace: str, agent_name: str, username: str | None = N
                 }
                 for r in rows
             ]
-    except Exception:
+    except OperationalError as exc:
+        logger.error("Database unavailable while listing chat sessions for %s/%s: %s", namespace, agent_name, exc)
+        return []
+    except SQLAlchemyError:
         logger.exception("Failed to list chat sessions for %s/%s.", namespace, agent_name)
         return []
 
@@ -648,7 +570,10 @@ def get_chat_session_messages(session_id: str) -> list[dict[str, Any]]:
                 }
                 for r in rows
             ]
-    except Exception:
+    except OperationalError as exc:
+        logger.error("Database unavailable while getting messages for session %s: %s", session_id, exc)
+        return []
+    except SQLAlchemyError:
         logger.exception("Failed to get messages for session %s.", session_id)
         return []
 
@@ -675,7 +600,9 @@ def save_chat_messages(session_id: str, messages: list[dict[str, Any]]) -> None:
             chat_session = session.query(ChatSession).filter(ChatSession.session_id == session_id).one_or_none()
             if chat_session:
                 chat_session.updated_at = utc_now()
-    except Exception:
+    except OperationalError as exc:
+        logger.error("Database unavailable while saving messages for session %s: %s", session_id, exc)
+    except SQLAlchemyError:
         logger.exception("Failed to save messages for session %s.", session_id)
 
 
@@ -699,7 +626,10 @@ def update_chat_session_title(session_id: str, title: str) -> dict[str, Any] | N
                 "created_at": record.created_at.isoformat() if record.created_at else None,
                 "updated_at": record.updated_at.isoformat() if record.updated_at else None,
             }
-    except Exception:
+    except OperationalError as exc:
+        logger.error("Database unavailable while updating title for session %s: %s", session_id, exc)
+        return None
+    except SQLAlchemyError:
         logger.exception("Failed to update title for session %s.", session_id)
         return None
 
@@ -713,6 +643,9 @@ def delete_chat_session(session_id: str) -> bool:
             session.query(ChatMessage).filter(ChatMessage.session_id == session_id).delete()
             deleted = session.query(ChatSession).filter(ChatSession.session_id == session_id).delete()
             return deleted > 0
-    except Exception:
+    except OperationalError as exc:
+        logger.error("Database unavailable while deleting session %s: %s", session_id, exc)
+        return False
+    except SQLAlchemyError:
         logger.exception("Failed to delete session %s.", session_id)
         return False

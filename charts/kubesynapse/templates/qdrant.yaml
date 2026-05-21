@@ -10,6 +10,7 @@ metadata:
     app: qdrant
 spec:
   replicas: 1
+  revisionHistoryLimit: 3
   selector:
     matchLabels:
       app: qdrant
@@ -107,4 +108,41 @@ spec:
       port: 6334
       targetPort: 6334
       name: grpc
+---
+# §security-P0: Qdrant NetworkPolicy — restrict ingress to agents + gateway.
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kubesynapse.fullname" . }}-qdrant-isolation
+  labels:
+    {{- include "kubesynapse.labels" . | nindent 4 }}
+    app.kubernetes.io/component: qdrant
+    app: qdrant
+spec:
+  podSelector:
+    matchLabels:
+      app: qdrant
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: ai-agent
+        - namespaceSelector:
+            matchLabels:
+              kubesynapse.ai/tenant: "true"
+          podSelector:
+            matchLabels:
+              app: ai-agent
+        - podSelector:
+            matchLabels:
+              app: api-gateway
+      ports:
+        - protocol: TCP
+          port: 6333
+        - protocol: TCP
+          port: 6334
+{{- end }}
 {{- end }}

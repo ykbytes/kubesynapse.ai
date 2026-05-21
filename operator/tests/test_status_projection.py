@@ -17,7 +17,7 @@ def _identity_decorator(*_args, **_kwargs):
     return decorator
 
 
-def _install_stub_modules() -> tuple[object, object]:
+def _install_stub_modules() -> object:
     kopf_module = types.ModuleType("kopf")
 
     class _KopfOn:
@@ -30,7 +30,6 @@ def _install_stub_modules() -> tuple[object, object]:
 
     state_store_module = types.ModuleType("state_store")
     state_store_module.safe_record_workflow_state = MagicMock()
-    state_store_module.safe_record_eval_state = MagicMock()
     state_store_module.record_workflow_log_archive = MagicMock()
 
     for name, module in [
@@ -40,11 +39,11 @@ def _install_stub_modules() -> tuple[object, object]:
     ]:
         sys.modules[name] = module
 
-    return state_store_module.safe_record_workflow_state, state_store_module.safe_record_eval_state
+    return state_store_module.safe_record_workflow_state
 
 
-def load_status_projection() -> tuple[str, object, object, object]:
-    workflow_mock, eval_mock = _install_stub_modules()
+def load_status_projection() -> tuple[str, object, object]:
+    workflow_mock = _install_stub_modules()
     module_name = f"operator_status_projection_test_{uuid.uuid4().hex}"
     spec = importlib.util.spec_from_file_location(module_name, MODULE_PATH)
     if spec is None or spec.loader is None:
@@ -57,12 +56,12 @@ def load_status_projection() -> tuple[str, object, object, object]:
     except Exception:
         sys.modules.pop(module_name, None)
         raise
-    return module_name, module, workflow_mock, eval_mock
+    return module_name, module, workflow_mock
 
 
 class StatusProjectionTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.module_name, self.module, self.workflow_record_mock, self.eval_record_mock = load_status_projection()
+        self.module_name, self.module, self.workflow_record_mock = load_status_projection()
         self.addCleanup(lambda: sys.modules.pop(self.module_name, None))
         self.addCleanup(self._cleanup_stub_modules)
 
@@ -115,26 +114,4 @@ class StatusProjectionTests(unittest.TestCase):
                 "runId": "wf-run-new",
                 "workerJob": {"name": "worker-job", "namespace": "operators"},
             },
-        )
-
-    def test_projects_eval_state_on_run_id_change(self) -> None:
-        self.module.project_eval_run_id(
-            old="eval-run-old",
-            new="eval-run-new",
-            name="eval-one",
-            namespace="default",
-            spec={"testSuite": []},
-            status={"phase": "queued", "runId": "eval-run-new", "passed": True},
-            meta={"generation": 4},
-        )
-
-        self.eval_record_mock.assert_called_once_with(
-            namespace="default",
-            resource_name="eval-one",
-            generation=4,
-            run_id="eval-run-new",
-            phase="queued",
-            passed=True,
-            spec={"testSuite": []},
-            status={"phase": "queued", "runId": "eval-run-new", "passed": True},
         )

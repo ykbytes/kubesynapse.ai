@@ -12,6 +12,7 @@ spec:
 {{- if not (and .Values.autoscaling (.Values.autoscaling.enabled)) }}
   replicas: {{ .Values.apiGateway.replicaCount | default 1 }}
 {{- end }}
+  revisionHistoryLimit: {{ .Values.apiGateway.revisionHistoryLimit | default 3 }}
   selector:
     matchLabels:
       app: api-gateway
@@ -113,6 +114,10 @@ spec:
                   name: {{ include "kubesynapse.fullname" . }}-llm-api-keys
                   key: JWT_SECRET
                   optional: false
+            # §security-P0: Require JWT_SECRET to be configured. The gateway will
+            # exit with a clear error if JWT_SECRET is empty, preventing ephemeral keys.
+            - name: REQUIRE_JWT_SECRET
+              value: "true"
             - name: INTELLIGENCE_COLLECTOR_TOKEN_KEY
               valueFrom:
                 secretKeyRef:
@@ -162,8 +167,20 @@ spec:
             - name: DATABASE_SQLITE_PATH
               value: /tmp/kubesynapse-gateway.db
 {{- end }}
+            - name: NATS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kubesynapse.fullname" . }}-llm-api-keys
+                  key: NATS_TOKEN
+                  optional: true
             - name: NATS_URL
-              value: "nats://{{ include "kubesynapse.fullname" . }}-nats:4222"
+              value: "nats://$(NATS_TOKEN)@{{ include "kubesynapse.fullname" . }}-nats:4222"
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kubesynapse.fullname" . }}-llm-api-keys
+                  key: REDIS_PASSWORD
+                  optional: true
             - name: QDRANT_URL
               value: "http://{{ include "kubesynapse.fullname" . }}-qdrant:6333"
             - name: LITELLM_INTERNAL_URL
@@ -320,6 +337,10 @@ spec:
 {{- if hasKey $apiGatewayTls "enabled" }}{{- $apiGatewayTlsEnabled = get $apiGatewayTls "enabled" -}}{{- end -}}
 {{- $apiGatewayTlsSecretName := get $apiGatewayTls "secretName" | default "" -}}
 {{- $apiGatewayIngressHost := get $apiGateway "ingressHost" | default "" -}}
+{{- $apiGatewayTlsAllowInsecure := .Values.apiGateway.tls.allowInsecure | default false -}}
+{{- if and $apiGatewayIngressEnabled (not $apiGatewayTlsEnabled) (not $apiGatewayTlsAllowInsecure) }}
+{{- fail "SECURITY: apiGateway.ingress.enabled=true but apiGateway.tls.enabled=false. Set apiGateway.tls.allowInsecure=true to admit HTTP-only traffic (not recommended for production)." -}}
+{{- end }}
 {{- if $apiGatewayIngressEnabled }}
 ---
 apiVersion: networking.k8s.io/v1
@@ -329,8 +350,17 @@ metadata:
   labels:
     {{- include "kubesynapse.labels" . | nindent 4 }}
     app.kubernetes.io/component: api-gateway
-{{- with $apiGatewayIngressAnnotations }}
   annotations:
+    {{- if $apiGatewayTlsEnabled }}
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    {{- end }}
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
+      add_header X-Frame-Options "DENY" always;
+      add_header X-Content-Type-Options "nosniff" always;
+      add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+      add_header Permissions-Policy "accelerometer=(), camera=(), geolocation=(), microphone=()" always;
+{{- with $apiGatewayIngressAnnotations }}
 {{ toYaml . | indent 4 }}
 {{- end }}
 spec:

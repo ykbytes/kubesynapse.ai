@@ -7,45 +7,44 @@ import "@fontsource/ibm-plex-mono/500.css";
 import { AlertTriangle, Bot, MessageSquare, PanelRightOpen, RefreshCw } from "lucide-react";
 import React, { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import { Toaster } from "sonner";
-import { SkipToContent } from "./components/SkipToContent";
-import { AriaLiveRegion } from "./components/AriaLiveRegion";
+import { SkipToContent } from "./components/app/SkipToContent";
+import { AriaLiveRegion } from "./components/app/AriaLiveRegion";
 
-const LandingPage = lazy(() => import("./components/LandingPage").then((m) => ({ default: m.LandingPage })));
+const LandingPage = lazy(() => import("./components/landing/LandingPage").then((m) => ({ default: m.LandingPage })));
 
-const AgentManagementPanel = lazy(() => import("./components/AgentManagementPanel").then((m) => ({ default: m.AgentManagementPanel })));
-const AdminPanel = lazy(() => import("./components/AdminPanel").then((m) => ({ default: m.AdminPanel })));
-const HealthDashboard = lazy(() => import("./components/HealthDashboard").then((m) => ({ default: m.HealthDashboard })));
-const AuditLogPanel = lazy(() => import("./components/AuditLogPanel").then((m) => ({ default: m.AuditLogPanel })));
-const UsageDashboard = lazy(() => import("./components/UsageDashboard"));
-const AgentTemplateWizard = lazy(() => import("./components/AgentTemplateWizard").then((m) => ({ default: m.AgentTemplateWizard })));
-const OnboardingTour = lazy(() => import("./components/OnboardingTour").then((m) => ({ default: m.OnboardingTour })));
-const AppSidebar = lazy(() => import("./components/AppSidebar").then((m) => ({ default: m.AppSidebar })));
-const AuthPage = lazy(() => import("./components/AuthPage").then((m) => ({ default: m.AuthPage })));
-const ChatSessionPanel = lazy(() => import("./components/ChatSessionPanel").then((m) => ({ default: m.ChatSessionPanel })));
-const ChatWorkbench = lazy(() => import("./components/ChatWorkbench").then((m) => ({ default: m.ChatWorkbench })));
-const TeamView = lazy(() => import("./components/TeamView").then((m) => ({ default: m.TeamView })));
-const CreateAgentPanel = lazy(() => import("./components/CreateAgentPanel").then((m) => ({ default: m.CreateAgentPanel })));
-const ConfirmDialog = lazy(() => import("./components/ConfirmDialog").then((m) => ({ default: m.ConfirmDialog })));
-const EvalManager = lazy(() => import("./components/EvalManager").then((m) => ({ default: m.EvalManager })));
-const PolicyEditor = lazy(() => import("./components/PolicyEditor").then((m) => ({ default: m.PolicyEditor })));
-import { AgentInspectorDrawer, ResourceInspectorDrawer } from "./components/InspectorDrawer";
-const SettingsPanel = lazy(() => import("./components/SettingsPanel").then((m) => ({ default: m.SettingsPanel })));
-const SkillsCatalogPanel = lazy(() => import("./components/SkillsCatalogPanel").then((m) => ({ default: m.SkillsCatalogPanel })));
-const TopBar = lazy(() => import("./components/TopBar").then((m) => ({ default: m.TopBar })));
-const CommandPalette = lazy(() => import("./components/CommandPalette").then((m) => ({ default: m.CommandPalette })));
-const MobileNav = lazy(() => import("./components/MobileNav").then((m) => ({ default: m.MobileNav })));
-const WorkflowManager = lazy(() => import("./components/WorkflowManager").then((m) => ({ default: m.WorkflowManager })));
-const IntelligenceDashboard = lazy(() => import("./components/IntelligenceDashboard").then((m) => ({ default: m.IntelligenceDashboard })));
-const McpManagementPanel = lazy(() => import("./components/McpManagementPanel").then((m) => ({ default: m.McpManagementPanel })));
-const ExecutionObservatory = lazy(() => import("./components/ExecutionObservatory").then((m) => ({ default: m.ExecutionObservatory })));
-const DocumentationPanel = lazy(() => import("./components/DocumentationPanel").then((m) => ({ default: m.DocumentationPanel })));
-const EventTriggersPanel = lazy(() => import("./components/EventTriggersPanel").then((m) => ({ default: m.EventTriggersPanel })));
+const AgentManagementPanel = lazy(() => import("./components/agents/AgentManagementPanel").then((m) => ({ default: m.AgentManagementPanel })));
+const AdminPanel = lazy(() => import("./components/admin/AdminPanel").then((m) => ({ default: m.AdminPanel })));
+const HealthDashboard = lazy(() => import("./components/admin/HealthDashboard").then((m) => ({ default: m.HealthDashboard })));
+const AuditLogPanel = lazy(() => import("./components/admin/AuditLogPanel").then((m) => ({ default: m.AuditLogPanel })));
+const UsageDashboard = lazy(() => import("./components/admin/UsageDashboard"));
+const AgentTemplateWizard = lazy(() => import("./components/agents/AgentTemplateWizard").then((m) => ({ default: m.AgentTemplateWizard })));
+const OnboardingTour = lazy(() => import("./components/app/OnboardingTour").then((m) => ({ default: m.OnboardingTour })));
+const AppSidebar = lazy(() => import("./components/app/AppSidebar").then((m) => ({ default: m.AppSidebar })));
+const AuthPage = lazy(() => import("./components/auth/AuthPage").then((m) => ({ default: m.AuthPage })));
+const ChatSessionPanel = lazy(() => import("./components/chat/ChatSessionPanel").then((m) => ({ default: m.ChatSessionPanel })));
+const ChatWorkbench = lazy(() => import("./components/chat/ChatWorkbench").then((m) => ({ default: m.ChatWorkbench })));
+const TeamView = lazy(() => import("./components/chat/TeamView").then((m) => ({ default: m.TeamView })));
+const CreateAgentPanel = lazy(() => import("./components/agents/CreateAgentPanel").then((m) => ({ default: m.CreateAgentPanel })));
+const ConfirmDialog = lazy(() => import("./components/shared/ConfirmDialog").then((m) => ({ default: m.ConfirmDialog })));
+const PolicyEditor = lazy(() => import("./components/policies/PolicyEditor").then((m) => ({ default: m.PolicyEditor })));
+const CatalogPanel = lazy(() => import("./components/catalog/CatalogPanel").then((m) => ({ default: m.CatalogPanel })));
+import { AgentInspectorDrawer, ResourceInspectorDrawer } from "./components/workflows/InspectorDrawer";
+const SettingsPanel = lazy(() => import("./components/settings/SettingsPanel").then((m) => ({ default: m.SettingsPanel })));
+const TopBar = lazy(() => import("./components/app/TopBar").then((m) => ({ default: m.TopBar })));
+
+const CommandPalette = lazy(() => import("./components/app/CommandPalette").then((m) => ({ default: m.CommandPalette })));
+
+const MobileNav = lazy(() => import("./components/app/MobileNav").then((m) => ({ default: m.MobileNav })));
+const WorkflowManager = lazy(() => import("./components/workflows/WorkflowManager").then((m) => ({ default: m.WorkflowManager })));
+const IntelligencePanel = lazy(() => import("./components/intelligence/IntelligencePanel").then((m) => ({ default: m.IntelligencePanel })));
+const DocumentationPanel = lazy(() => import("./components/docs/DocumentationPanel").then((m) => ({ default: m.DocumentationPanel })));
+const EventTriggersPanel = lazy(() => import("./components/workflows/EventTriggersPanel").then((m) => ({ default: m.EventTriggersPanel })));
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { EmptyState } from "@/components/EmptyState";
+import { EmptyState } from "@/components/shared/EmptyState";
 
 const WorkflowComposer = lazy(() =>
-  import("./components/WorkflowComposer").then((m) => ({ default: m.WorkflowComposer })),
+  import("./components/workflows/WorkflowComposer").then((m) => ({ default: m.WorkflowComposer })),
 );
 
 import { ConnectionProvider, useConnection } from "./contexts/ConnectionContext";
@@ -54,8 +53,8 @@ import { ChatProvider, useChat } from "./contexts/ChatContext";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import { NotificationProvider } from "./contexts/NotificationContext";
 
-import type { EvalInfo, ExecutionListItem, UiMessage, WorkflowInfo, WorkspaceView } from "./types";
-import { cloneAgent, deleteExecution, downloadAgentArtifact, downloadAgentArtifactZip, exportBundleUrl, importBundle, listAgentArtifacts, listExecutions, previewAgentArtifact } from "./lib/api";
+import type { UiMessage, WorkflowInfo, WorkspaceView } from "./types";
+import { cloneAgent, downloadAgentArtifact, downloadAgentArtifactZip, exportBundleUrl, importBundle, listAgentArtifacts, previewAgentArtifact } from "./lib/api";
 import { toast } from "sonner";
 
 // ── Pure utility functions ──
@@ -80,42 +79,8 @@ function workflowStatusFromResource(resource: WorkflowInfo | null): Record<strin
   };
 }
 
-function evalSpecFromResource(resource: EvalInfo | null): Record<string, unknown> | null {
-  if (!resource) return null;
-  return { agent_ref: resource.agent_ref, schedule: resource.schedule, test_suite: resource.test_suite, failure_threshold: resource.failure_threshold };
-}
-
-function evalStatusFromResource(resource: EvalInfo | null): Record<string, unknown> | null {
-  if (!resource) return null;
-  return {
-    phase: resource.phase, passed: resource.passed, last_run: resource.last_run,
-    observed_generation: resource.observed_generation, artifact_ref: resource.artifact_ref,
-    worker_job: resource.worker_job, created_at: resource.created_at,
-  };
-}
-
 function supportsInspector(view: WorkspaceView): boolean {
-  return view === "agents" || view === "chat" || view === "workflows" || view === "composer" || view === "evals";
-}
-
-function formatDuration(ms?: number | null): string {
-  if (ms == null || !Number.isFinite(ms)) return "—";
-  if (ms < 1000) return `${Math.round(ms)} ms`;
-  const seconds = ms / 1000;
-  if (seconds < 60) return `${seconds.toFixed(1)} s`;
-  const minutes = Math.floor(seconds / 60);
-  const rem = Math.round(seconds % 60);
-  return `${minutes}m ${rem}s`;
-}
-
-function executionToSidebarItem(e: ExecutionListItem): import("./components/AppSidebar").SidebarResourceItem {
-  return {
-    id: e.id,
-    title: e.workflow_name,
-    subtitle: e.agent_name || e.run_id || "",
-    status: e.status,
-    note: `${e.step_count} steps · ${formatDuration(e.duration_ms)}`,
-  };
+  return view === "agents" || view === "chat" || view === "workflows" || view === "composer";
 }
 
 // ── NotificationShell — NotificationProvider needs Connection values ──
@@ -218,38 +183,12 @@ function AppLayout() {
   const [showAuth, setShowAuth] = useState(false);
   const inspectorSupported = supportsInspector(ws.activeView);
 
-  // ── Observatory sidebar state ──
-  const [observatoryItems, setObservatoryItems] = useState<ExecutionListItem[]>([]);
-  const [observatorySelectedId, setObservatorySelectedId] = useState<string | null>(null);
-  const [observatoryLoading, setObservatoryLoading] = useState(false);
-
   // ⚠️  All hooks must be declared BEFORE any conditional returns (Rules of Hooks)
   useEffect(() => {
     if (!inspectorSupported && ws.inspectorOpen) {
       ws.setInspectorOpen(false);
     }
   }, [inspectorSupported, ws.inspectorOpen, ws.setInspectorOpen]);
-
-  // Fetch executions for Observatory sidebar
-  useEffect(() => {
-    if (ws.activeView !== "observatory") return;
-    let cancelled = false;
-    setObservatoryLoading(true);
-    listExecutions(conn.token, conn.namespace, { limit: 200 })
-      .then((result) => {
-        if (cancelled) return;
-        setObservatoryItems(result.items);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        toast.error("Failed to load executions");
-      })
-      .finally(() => {
-        if (cancelled) return;
-        setObservatoryLoading(false);
-      });
-    return () => { cancelled = true; };
-  }, [ws.activeView, conn.token, conn.namespace]);
 
   const handleSidebarDeleteRequest = useCallback((id: string) => {
     setSidebarDeleteTarget({ id, view: ws.activeView });
@@ -264,6 +203,12 @@ function AppLayout() {
     if (view === "chat") {
       handleOpenChatView();
       return;
+    }
+    if (view === "catalog") {
+      ws.setCatalogTab("mcp");
+    }
+    if (view === "intelligence") {
+      ws.setIntelligenceTab("observatory");
     }
     ws.setActiveView(view);
   }, [handleOpenChatView, ws]);
@@ -337,8 +282,6 @@ function AppLayout() {
         if (deletedName) chat.removeAgentChatState(deletedName);
       } else if (view === "workflows" || view === "composer") {
         await ws.handleDeleteWorkflow(id);
-      } else if (view === "evals") {
-        await ws.handleDeleteEval(id);
       }
     } catch (err) {
       ws.setWorkspaceError(err instanceof Error ? err.message : String(err));
@@ -393,7 +336,7 @@ function AppLayout() {
           : ws.activeView === "catalog"
             ? {
                 title: "Catalog",
-                description: "Browse reusable skills, templates, and MCP-ready building blocks.",
+                description: "Browse reusable skills and manage MCP integrations from one catalog workspace.",
               }
             : ws.activeView === "policies"
               ? {
@@ -403,13 +346,8 @@ function AppLayout() {
               : ws.activeView === "intelligence"
                 ? {
                     title: "Intelligence",
-                    description: "Collect read-only cluster intelligence and attach that context to agents.",
+                    description: "Collect cluster intelligence and inspect execution traces from one observability workspace.",
                   }
-                : ws.activeView === "mcp"
-                  ? {
-                      title: "MCP Servers",
-                      description: "Discover, configure, and manage Model Context Protocol integrations across remote, hub, and sidecar transports.",
-                    }
                   : ws.activeView === "settings"
                   ? {
                       title: "Settings",
@@ -420,24 +358,14 @@ function AppLayout() {
                         title: "Admin",
                         description: "Inspect users, audit activity, usage, and platform health.",
                       }
-                    : ws.activeView === "observatory"
-                      ? {
-                          title: "Observatory",
-                          description: "Inspect, replay, and compare workflow execution traces.",
-                        }
                       : ws.activeView === "docs"
                         ? {
                             title: "Documentation",
                             description: "Learn how to deploy, operate, and extend kubesynapse.",
                           }
-                        : ws.activeView === "webhooks"
-                          ? {
-                              title: "Webhooks & Triggers",
-                              description: "Configure webhook receivers and event-driven workflow triggers.",
-                            }
-                          : {
-                            title: "Evaluations",
-                            description: "Create evaluation suites and track regression coverage.",
+                        : {
+                            title: "Webhooks & Triggers",
+                            description: "Configure webhook receivers and event-driven workflow triggers.",
                           };
   const showCompactPageHeader = ws.activeView !== "composer" && !(ws.activeView === "chat" && ws.selectedAgentName);
   const mainContentClasses = ws.activeView === "composer"
@@ -451,7 +379,7 @@ function AppLayout() {
       <SkipToContent />
       <AriaLiveRegion />
       {/* ── TopBar ── */}
-      <Suspense fallback={<div className="h-12 border-b border-border bg-background" />}>
+      <Suspense fallback={<div className="h-10 border-b border-border bg-background" />}>
         <TopBar
           health={conn.health}
           gatewayError={conn.gatewayError}
@@ -492,37 +420,23 @@ function AppLayout() {
         {/* ── Sidebar ── */}
         <div
           className={`hidden shrink-0 overflow-hidden transition-[width] duration-200 ease-productive md:flex ${ws.sidebarCollapsed
-            ? "md:w-14"
-            : "md:w-[clamp(11.5rem,15vw,14rem)] xl:w-[clamp(12rem,16vw,15rem)]"}`}
+            ? "md:w-12"
+            : "md:w-[clamp(10.5rem,14vw,13rem)] xl:w-[clamp(11rem,15vw,14rem)]"}`}
         >
           <SidebarShell>
             <AppSidebar
               collapsed={ws.sidebarCollapsed}
               onToggleCollapse={() => ws.setSidebarCollapsed((prev) => !prev)}
               activeView={ws.activeView}
-              counts={ws.activeView === "observatory" ? { ...ws.sidebarCounts, observatory: observatoryItems.length } : ws.sidebarCounts}
-              items={ws.activeView === "observatory" ? observatoryItems.map(executionToSidebarItem) : ws.sidebarItems}
-              selectedId={ws.activeView === "observatory" ? (observatorySelectedId ?? "") : ws.sidebarSelectedId}
-              loading={ws.activeView === "observatory" ? observatoryLoading : ws.catalogLoading}
-              emptyMessage={ws.activeView === "observatory" ? "No executions recorded yet." : ws.emptySidebarMessage}
+              counts={ws.sidebarCounts}
+              items={ws.sidebarItems}
+              selectedId={ws.sidebarSelectedId}
+              loading={ws.catalogLoading}
+              emptyMessage={ws.emptySidebarMessage}
               isAdmin={conn.isAdmin}
               onViewChange={handleWorkspaceViewChange}
-              onRefresh={
-                ws.activeView === "observatory"
-                  ? () => {
-                      setObservatoryLoading(true);
-                      listExecutions(conn.token, conn.namespace, { limit: 200 })
-                        .then((result) => setObservatoryItems(result.items))
-                        .catch(() => toast.error("Failed to load executions"))
-                        .finally(() => setObservatoryLoading(false));
-                    }
-                  : () => void ws.refreshWorkspaceData({ silent: false })
-              }
-              onSelect={
-                ws.activeView === "observatory"
-                  ? (id) => setObservatorySelectedId(id)
-                  : ws.handleSelectResource
-              }
+              onRefresh={() => void ws.refreshWorkspaceData({ silent: false })}
+              onSelect={ws.handleSelectResource}
               onCreateNew={ws.handleCreateNew}
               onQuickRun={
                 ws.activeView === "agents"
@@ -543,18 +457,8 @@ function AppLayout() {
                     : undefined
               }
               onDeleteItem={
-                ws.activeView === "agents" || ws.activeView === "chat" || ws.activeView === "workflows" || ws.activeView === "composer" || ws.activeView === "evals"
+                ws.activeView === "agents" || ws.activeView === "chat" || ws.activeView === "workflows" || ws.activeView === "composer"
                   ? handleSidebarDeleteRequest
-                  : ws.activeView === "observatory"
-                    ? (id) => {
-                        deleteExecution(conn.token, id)
-                          .then(() => {
-                            toast.success("Execution deleted");
-                            setObservatoryItems((prev) => prev.filter((e) => e.id !== id));
-                            if (observatorySelectedId === id) setObservatorySelectedId(null);
-                          })
-                          .catch(() => toast.error("Failed to delete execution"));
-                      }
                     : undefined
               }
             />
@@ -825,8 +729,11 @@ function AppLayout() {
             </Suspense>
           ) : ws.activeView === "catalog" ? (
             <ContentShell>
-              <SkillsCatalogPanel
+              <CatalogPanel
                 token={conn.token}
+                namespace={conn.namespace}
+                activeTab={ws.catalogTab}
+                onTabChange={ws.setCatalogTab}
                 onAttachSkill={(_skillId, files) => {
                   const newDrafts = Object.entries(files).map(([path, content]) => ({
                     id: createId(),
@@ -838,13 +745,6 @@ function AppLayout() {
                   ws.setActiveView("agents");
                   toast.success("Skill files added to the new agent form");
                 }}
-                onAttachTool={(toolId) => {
-                  const prev = ws.createAgentMcpSidecarsText.trim();
-                  ws.setCreateAgentMcpSidecarsText(prev ? `${prev}, ${toolId}` : toolId);
-                  ws.setAgentCreateMode(true);
-                  ws.setActiveView("agents");
-                  toast.success(`MCP sidecar "${toolId}" added to the new agent form`);
-                }}
               />
             </ContentShell>
           ) : ws.activeView === "policies" ? (
@@ -853,11 +753,7 @@ function AppLayout() {
             </ContentShell>
           ) : ws.activeView === "intelligence" ? (
             <ContentShell>
-              <IntelligenceDashboard />
-            </ContentShell>
-          ) : ws.activeView === "mcp" ? (
-            <ContentShell>
-              <McpManagementPanel token={conn.token} namespace={conn.namespace} />
+              <IntelligencePanel activeTab={ws.intelligenceTab} onTabChange={ws.setIntelligenceTab} />
             </ContentShell>
           ) : ws.activeView === "settings" ? (
             <ContentShell>
@@ -892,10 +788,6 @@ function AppLayout() {
                   </ContentShell>
                 </TabsContent>
               </Tabs>
-          ) : ws.activeView === "observatory" ? (
-            <ContentShell>
-              <ExecutionObservatory selectedExecutionId={observatorySelectedId} sidebarMode={true} />
-            </ContentShell>
           ) : ws.activeView === "docs" ? (
             <ContentShell>
               <DocumentationPanel />
@@ -906,20 +798,7 @@ function AppLayout() {
                 <EventTriggersPanel />
               </Suspense>
             </ContentShell>
-          ) : (
-            <ContentShell>
-              <EvalManager
-                evalResource={ws.evalCreateMode || ws.evals.length === 0 ? null : ws.selectedEval}
-                agents={ws.agents}
-                isSaving={ws.savingEval}
-                isDeleting={ws.deletingEval}
-                error={ws.evalError}
-                onCreate={(payload) => void ws.handleCreateEval(payload)}
-                onUpdate={(name, payload) => void ws.handleUpdateEval(name, payload)}
-                onDelete={(name) => void ws.handleDeleteEval(name)}
-              />
-            </ContentShell>
-          )}
+          ) : null}
         </main>
       </div>
 
@@ -969,18 +848,6 @@ function AppLayout() {
           onApprove={() => void chat.handleWorkflowApprovalDecision("approved")}
           onDeny={() => void chat.handleWorkflowApprovalDecision("denied")}
         />
-      ) : ws.activeView === "evals" ? (
-        <ResourceInspectorDrawer
-          open={ws.inspectorOpen}
-          onOpenChange={ws.setInspectorOpen}
-          title="Evaluation Inspector"
-          selectedName={ws.selectedEval?.name ?? ""}
-          status={ws.selectedEval?.phase ?? (ws.evalCreateMode ? "draft" : "none")}
-          summary={ws.selectedEval?.summary}
-          spec={evalSpecFromResource(ws.selectedEval)}
-          details={evalStatusFromResource(ws.selectedEval)}
-          emptyMessage="Select an evaluation or create a new one."
-        />
       ) : null}
 
       <Suspense fallback={null}>
@@ -1003,7 +870,7 @@ function AppLayout() {
               onSelect={ws.handleSelectResource}
               onCreateNew={ws.handleCreateNew}
               onDeleteItem={
-                ws.activeView === "agents" || ws.activeView === "chat" || ws.activeView === "workflows" || ws.activeView === "composer" || ws.activeView === "evals"
+                ws.activeView === "agents" || ws.activeView === "chat" || ws.activeView === "workflows" || ws.activeView === "composer"
                   ? handleSidebarDeleteRequest
                   : undefined
               }
@@ -1018,7 +885,6 @@ function AppLayout() {
           onNavigate={handleWorkspaceViewChange}
           onCreateAgent={() => { ws.setActiveView("agents"); ws.setAgentCreateMode(true); }}
           onCreateWorkflow={() => { ws.setActiveView("workflows"); ws.setWorkflowCreateMode(true); }}
-          onCreateEval={() => { ws.setActiveView("evals"); ws.setEvalCreateMode(true); }}
           onExportBundle={() => {
             const url = exportBundleUrl(conn.token, conn.namespace);
             window.open(url, "_blank");

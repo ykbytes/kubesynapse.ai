@@ -24,11 +24,12 @@ litellm:
     repository: litellm/litellm
     tag: v1.82.3-stable
     pullPolicy: IfNotPresent
-  replicaCount: 1
+  replicaCount: 2  # §reliability-P1: minimum 2 replicas for PDB efficacy
+  revisionHistoryLimit: 3
   service:
     type: ClusterIP
     port: 4000
-  masterKey: "replace-me-litellm-master-key"  # fallback when platformSecrets.native.litellmMasterKey is not set
+  masterKey: ""  # §security-P0: must be set via platformSecrets.native.litellmMasterKey
   resources:
     requests:
       cpu: "200m"
@@ -63,6 +64,10 @@ agentRuntime:
   hitl:
     mode: enforce
     notificationWebhookUrl: ""
+  # §security-P0: When false (default), tenant admin Roles do NOT include
+  # pods/exec or pods/portforward — prevents shell access to tenant workloads.
+  # Set to true only if you need interactive debugging within tenant namespaces.
+  tenantExecAccess: false
 
 runtimeServiceAccount:
   name: kubesynapse-agent-runtime
@@ -70,9 +75,13 @@ runtimeServiceAccount:
 opencodeRuntime:
   image:
     repository: docker.io/kubesynapse/kubesynapse-opencode-rt
-    tag: v1.0.0
+    tag: v2.1.0-run-intelligence
     pullPolicy: IfNotPresent
   provider: litellm
+  # §security-P0: Mount a hardened, immutable ConfigMap at /etc/kubesynapse/opencode.json.
+  # Prevents config-driven RCE via plugins, MCP commands, or provider baseURL redirect.
+  # Set to false only for development/debugging.
+  immutableConfig: true
   limits:
     maxPromptChars: 256000
     maxSystemPromptChars: 64000
@@ -110,8 +119,12 @@ opencodeRuntime:
 piRuntime:
   image:
     repository: docker.io/kubesynapse/kubesynapse-pi-rt
-    tag: v1.0.4-fifo-fix
+    tag: v2.1.0-run-intelligence
     pullPolicy: IfNotPresent
+  # §security-P0: Mount a hardened, immutable ConfigMap at /etc/kubesynapse/pi-config/.
+  # Prevents extension loading via jiti.import(), SYSTEM.md injection, and !-prefix RCE.
+  # Set to false only for development/debugging.
+  immutableConfig: true
   # Default provider auto-detected from API keys (ANTHROPIC_API_KEY, OPENAI_API_KEY, etc.)
   provider: ""
   # Default model in provider/id format
@@ -130,19 +143,20 @@ piRuntime:
 mistralVibeRuntime:
   image:
     repository: docker.io/kubesynapse/kubesynapse-vibe-rt
-    tag: v0.1.2-mistral-vibe-defaultfix
+    tag: v2.1.0-run-intelligence
     pullPolicy: IfNotPresent
 
 operator:
   enabled: true
   replicaCount: 2
+  revisionHistoryLimit: 3
   image:
     repository: docker.io/kubesynapse/kubesynapse-operator
-    tag: v1.0.5-mistral-vibe-defaultfix
+    tag: v2.1.0-run-intelligence
     pullPolicy: IfNotPresent
   workerImage:
     repository: docker.io/kubesynapse/kubesynapse-operator
-    tag: v1.0.5-mistral-vibe-defaultfix
+    tag: v2.1.0-run-intelligence
     pullPolicy: IfNotPresent
   resources:
     requests:
@@ -155,8 +169,6 @@ operator:
   runtimeTimeoutSeconds: 360
   workerActiveDeadlineSeconds: 14400
   workerTtlSecondsAfterFinished: 3600
-  evalSchedulePollSeconds: 60
-  evalQueueStaleSeconds: 600
   workflowPollSeconds: 30
   workflowQueueStaleSeconds: 300
   workflowRunningStaleSeconds: 1800
@@ -171,6 +183,16 @@ operator:
     size: 2Gi
     storageClassName: ""
   stateDbEnabled: true
+  signalWatch:
+    enabled: true
+    intervalSeconds: 60
+    thresholds:
+      highFailureRate: 0.3
+      errorSpikeCount: 3
+      errorSpikeWindowMinutes: 15
+      costOutlierMultiplier: 3.0
+      tokenSpikeMultiplier: 3.0
+      stuckRunDurationMultiplier: 2.0
 
 autoscaling:
   enabled: false
@@ -183,10 +205,11 @@ autoscaling:
 
 apiGateway:
   enabled: true
-  replicaCount: 1
+  replicaCount: 2  # §reliability-P1: minimum 2 replicas for PDB efficacy
+  revisionHistoryLimit: 3
   image:
     repository: docker.io/kubesynapse/kubesynapse-api-gateway
-    tag: v1.0.5-mistral-vibe
+    tag: v2.1.0-run-intelligence
     pullPolicy: IfNotPresent
   ingressClassName: ""
   ingressHost: ""  # leave empty for a hostless ingress, or set e.g. "agents.mycompany.com"
@@ -205,6 +228,8 @@ apiGateway:
   tls:
     enabled: false
     secretName: ""  # TLS secret name in the Ingress namespace; create via cert-manager or manually
+    # §security-P0: Never allow insecure TLS connections in production.
+    allowInsecure: false
   auth:
     mode: hybrid
     localAuthEnabled: true
@@ -212,7 +237,7 @@ apiGateway:
     jwtIssuer: kubesynapse
     accessTokenTtlSeconds: 900
     refreshTokenTtlSeconds: 604800
-    cookieSecure: false
+    cookieSecure: true
     cookieSameSite: lax
     cookieDomain: ""
     bootstrapAdminUsername: admin
@@ -261,10 +286,11 @@ postgresql:
 
 webUi:
   enabled: true
-  replicaCount: 1
+  replicaCount: 2  # §reliability-P1: minimum 2 replicas for PDB efficacy
+  revisionHistoryLimit: 3
   image:
     repository: docker.io/kubesynapse/kubesynapse-web-ui
-    tag: v1.0.24-runtime-branding
+    tag: v2.1.0-run-intelligence
     pullPolicy: IfNotPresent
   service:
     type: ClusterIP
@@ -296,6 +322,10 @@ redis:
     enabled: false
     size: "1Gi"
     storageClassName: ""
+  auth:
+    password: ""
+    existingSecret: ""
+    existingSecretKey: "REDIS_PASSWORD"
 
 qdrant:
   enabled: true
@@ -326,6 +356,10 @@ nats:
     limits:
       cpu: "200m"
       memory: "256Mi"
+  auth:
+    token: ""
+    existingSecret: ""
+    existingSecretKey: "NATS_TOKEN"
 
 platformSecrets:
   mode: native
@@ -336,10 +370,13 @@ platformSecrets:
     mistralApiKey: ""
     opencodeApiKey: ""
     opencodeGoApiKey: ""
-    litellmMasterKey: "replace-me"
-    apiGatewaySharedToken: "replace-me-with-a-long-random-bearer-token"
-    databasePassword: "replace-me-with-a-long-random-database-password"
-    jwtSecret: "replace-me-with-a-long-random-jwt-secret" # also used as the default INTELLIGENCE_COLLECTOR_TOKEN_KEY in the gateway
+    # §security-P0: The following four secrets are REQUIRED.
+    # Install will fail with a clear error if these are not overridden.
+    # Generate with: openssl rand -base64 48
+    litellmMasterKey: ""
+    apiGatewaySharedToken: ""
+    databasePassword: ""
+    jwtSecret: "" # also used as the default INTELLIGENCE_COLLECTOR_TOKEN_KEY in the gateway
     authBootstrapAdminPassword: ""
     ldapBindPassword: ""
     # JSON array of OIDC provider objects, for example:
@@ -399,7 +436,9 @@ mcpHub:
   # validate inbound requests. Rotate via ExternalSecret / Vault in production.
   # NEVER leave the default value in a real deployment.
   auth:
-    bearerToken: "replace-me-with-a-strong-random-secret"
+    # §security-P0: This must be overridden with a strong random value.
+    # If using ExternalSecret, set secretName instead.
+    bearerToken: ""
     # If using ExternalSecret, set secretName to the K8s secret that holds
     # the bearer-token key and leave bearerToken empty. The deployment template
     # will reference that secret instead of creating a new one.
@@ -474,11 +513,13 @@ mcpHub:
 namespace:
   create: false
   podSecurity:
-    enforce: restricted
+    # The bundled PostgreSQL and LiteLLM workloads still require baseline.
+    # Override to restricted only after hardening those manifests.
+    enforce: baseline
     enforceVersion: latest
-    audit: restricted
+    audit: baseline
     auditVersion: latest
-    warn: restricted
+    warn: baseline
     warnVersion: latest
 
 # ---------------------------------------------------------------------------
@@ -606,3 +647,83 @@ agentRuntime:
   # Kubernetes MCP sidecar).  Disabled by default — enable only
   # when agents genuinely need cross-namespace cluster visibility.
   clusterReadAccess: false
+
+# ---------------------------------------------------------------------------
+# Default Memory Policy
+# ---------------------------------------------------------------------------
+# Creates an AgentPolicy CR with memory defaults.  Agents that have no
+# explicit policyRef will use the gateway's built-in fallback, but agents
+# that reference this policy get autoPromote + higher injection limits.
+memoryPolicy:
+  enabled: true
+  name: "default-memory-policy"
+  namespace: "default"
+  autoPromote: true
+  maxInjectedMemories: 8
+  maxInjectedChars: 2400
+  allowedMemoryTypes: []
+
+# ---------------------------------------------------------------------------
+# Run Intelligence Layer — System Agents (Story 7)
+# ---------------------------------------------------------------------------
+# Predefined AIAgent CRs that are invoked on triggers (failures, anomalies,
+# spend thresholds) rather than running continuously.  Deterministic SQL/rule
+# checks fire first; LLM agents are only invoked for explanation/escalation.
+systemAgents:
+  enabled: true
+  namespace: "kubesynapse-system"
+  # Default model used by all system agents unless overridden per-agent
+  defaultModel: "gpt-4"
+  defaultRuntime: "opencode"
+
+  # ks-run-inspector — invoked when workflow steps fail or error rates spike
+  runInspector:
+    enabled: true
+    model: ""  # inherits defaultModel
+    runtime: ""  # inherits defaultRuntime
+    description: "Investigates failed workflow runs and anomalous execution patterns. Produces concise root-cause summaries with actionable remediation steps."
+    # Trigger thresholds
+    triggers:
+      minFailureRate: 0.3  # invoke when >30% of steps in a run fail
+      minErrorCount: 3     # invoke when >=3 errors detected in a time window
+    # Resource overrides
+    resources:
+      requests:
+        cpu: "50m"
+        memory: "128Mi"
+      limits:
+        cpu: "500m"
+        memory: "512Mi"
+
+  # ks-signal-summarizer — invoked when deterministic anomaly checks fire
+  signalSummarizer:
+    enabled: true
+    model: ""  # inherits defaultModel
+    runtime: ""  # inherits defaultRuntime
+    description: "Summarizes deterministic anomaly signals into human-readable incident briefs. Correlates related events and suggests severity levels."
+    triggers:
+      maxSignalAgeMinutes: 30  # only summarize signals from the last 30 minutes
+    resources:
+      requests:
+        cpu: "50m"
+        memory: "128Mi"
+      limits:
+        cpu: "500m"
+        memory: "512Mi"
+
+  # ks-spend-reviewer — invoked when spend anomalies are detected
+  spendReviewer:
+    enabled: true
+    model: ""  # inherits defaultModel
+    runtime: ""  # inherits defaultRuntime
+    description: "Reviews token/cost spend anomalies across agents and namespaces. Identifies cost outliers and recommends budget adjustments or runtime changes."
+    triggers:
+      costThresholdUsd: 10.0  # invoke when estimated spend exceeds this in the window
+      tokenSpikeMultiplier: 3.0  # invoke when tokens are 3x the rolling average
+    resources:
+      requests:
+        cpu: "50m"
+        memory: "128Mi"
+      limits:
+        cpu: "500m"
+        memory: "512Mi"

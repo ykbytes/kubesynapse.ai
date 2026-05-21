@@ -1,10 +1,13 @@
 # kubesynapse — Kind/Local Kubernetes Deployment Values
 # 
 # Usage:
-#   kind load docker-image kubesynapse-api-gateway:latest
-#   kind load docker-image kubesynapse-web-ui:latest
-#   kind load docker-image kubesynapse-operator:latest
-#   kind load docker-image kubesynapse-opencode-rt:latest
+#   kind load docker-image docker.io/kubesynapse/kubesynapse-api-gateway:v2.1.0-run-intelligence --name desktop
+#   kind load docker-image docker.io/kubesynapse/kubesynapse-web-ui:v2.1.0-run-intelligence --name desktop
+#   kind load docker-image docker.io/kubesynapse/kubesynapse-operator:v2.1.0-run-intelligence --name desktop
+#   kind load docker-image docker.io/kubesynapse/kubesynapse-opencode-rt:v2.1.0-run-intelligence --name desktop
+#   kind load docker-image docker.io/kubesynapse/kubesynapse-pi-rt:v2.1.0-run-intelligence --name desktop
+#   kind load docker-image docker.io/kubesynapse/kubesynapse-vibe-rt:v2.1.0-run-intelligence --name desktop
+#   kind load docker-image docker.io/litellm/litellm:v1.82.3-stable --name desktop
 #   helm upgrade --install kubesynapse ./charts/kubesynapse -n kubesynapse --create-namespace -f deploy/values.kind.yaml
 
 global:
@@ -18,12 +21,12 @@ operator:
   enabled: true
   replicaCount: 1
   image:
-    repository: kubesynapse-operator
-    tag: latest
+    repository: docker.io/kubesynapse/kubesynapse-operator
+    tag: v2.1.0-run-intelligence
     pullPolicy: Never
   workerImage:
-    repository: kubesynapse-operator
-    tag: latest
+    repository: docker.io/kubesynapse/kubesynapse-operator
+    tag: v2.1.0-run-intelligence
     pullPolicy: Never
   resources:
     requests:
@@ -40,13 +43,23 @@ operator:
       cpu: "500m"
       memory: "512Mi"
   stateDbEnabled: true
+  signalWatch:
+    enabled: true
+    intervalSeconds: 60
+    thresholds:
+      highFailureRate: 0.3
+      errorSpikeCount: 3
+      errorSpikeWindowMinutes: 15
+      costOutlierMultiplier: 3.0
+      tokenSpikeMultiplier: 3.0
+      stuckRunDurationMultiplier: 2.0
 
 apiGateway:
   enabled: true
   replicaCount: 1
   image:
-    repository: kubesynapse-api-gateway
-    tag: latest
+    repository: docker.io/kubesynapse/kubesynapse-api-gateway
+    tag: v2.1.0-run-intelligence
     pullPolicy: Never
   ingress:
     enabled: false
@@ -69,8 +82,8 @@ webUi:
   enabled: true
   replicaCount: 1
   image:
-    repository: kubesynapse-web-ui
-    tag: latest
+    repository: docker.io/kubesynapse/kubesynapse-web-ui
+    tag: v2.1.0-run-intelligence
     pullPolicy: Never
   service:
     type: ClusterIP
@@ -87,8 +100,8 @@ webUi:
 
 opencodeRuntime:
   image:
-    repository: kubesynapse-opencode-rt
-    tag: v1.0.4
+    repository: docker.io/kubesynapse/kubesynapse-opencode-rt
+    tag: v2.1.0-run-intelligence
     pullPolicy: Never
   provider: litellm
   limits:
@@ -106,17 +119,36 @@ opencodeRuntime:
     planThresholdChars: 4096
     structuredOutputRetryCount: 3
 
+piRuntime:
+  image:
+    repository: docker.io/kubesynapse/kubesynapse-pi-rt
+    tag: v2.1.0-run-intelligence
+    pullPolicy: Never
+  provider: ""
+  model: "anthropic/claude-sonnet-4-20250514"
+  thinkingLevel: "medium"
+  tools: []
+  noSession: false
+  permissionLevel: "permissive"
+  env: {}
+
+mistralVibeRuntime:
+  image:
+    repository: docker.io/kubesynapse/kubesynapse-vibe-rt
+    tag: v2.1.0-run-intelligence
+    pullPolicy: Never
+
 # ---------------------------------------------------------------------------
 # Dependencies
 # ---------------------------------------------------------------------------
 postgresql:
   enabled: true
   image:
-    repository: postgres
+    repository: docker.io/postgres
     tag: 16-alpine
     pullPolicy: IfNotPresent
   persistence:
-    size: 2Gi
+    size: 8Gi
     storageClassName: ""
   resources:
     requests:
@@ -129,7 +161,7 @@ postgresql:
 redis:
   enabled: true
   image:
-    repository: redis
+    repository: docker.io/redis
     tag: 7-alpine
     pullPolicy: IfNotPresent
   persistence:
@@ -145,7 +177,7 @@ redis:
 qdrant:
   enabled: true
   image:
-    repository: qdrant/qdrant
+    repository: docker.io/qdrant/qdrant
     tag: v1.7.4
     pullPolicy: IfNotPresent
   resources:
@@ -159,7 +191,7 @@ qdrant:
 nats:
   enabled: true
   image:
-    repository: nats
+    repository: docker.io/nats
     tag: 2.10-alpine
     pullPolicy: IfNotPresent
   resources:
@@ -173,9 +205,9 @@ nats:
 litellm:
   enabled: true
   image:
-    repository: litellm/litellm-database
+    repository: docker.io/litellm/litellm
     tag: v1.82.3-stable
-    pullPolicy: IfNotPresent
+    pullPolicy: Never
   replicaCount: 1
   config:
     model_list:
@@ -317,3 +349,59 @@ telemetry:
   otlpEndpoint: ""
   serviceMonitor:
     enabled: false
+
+# ---------------------------------------------------------------------------
+# Run Intelligence Layer — System Agents
+# ---------------------------------------------------------------------------
+systemAgents:
+  enabled: true
+  namespace: "kubesynapse-system"
+  defaultModel: "gpt-4o-mini"
+  defaultRuntime: "opencode"
+
+  runInspector:
+    enabled: true
+    model: ""
+    runtime: ""
+    description: "Investigates failed workflow runs and anomalous execution patterns."
+    triggers:
+      minFailureRate: 0.3
+      minErrorCount: 3
+    resources:
+      requests:
+        cpu: "50m"
+        memory: "128Mi"
+      limits:
+        cpu: "500m"
+        memory: "512Mi"
+
+  signalSummarizer:
+    enabled: true
+    model: ""
+    runtime: ""
+    description: "Summarizes deterministic anomaly signals into human-readable incident briefs."
+    triggers:
+      maxSignalAgeMinutes: 30
+    resources:
+      requests:
+        cpu: "50m"
+        memory: "128Mi"
+      limits:
+        cpu: "500m"
+        memory: "512Mi"
+
+  spendReviewer:
+    enabled: true
+    model: ""
+    runtime: ""
+    description: "Reviews token/cost spend anomalies across agents and namespaces."
+    triggers:
+      costThresholdUsd: 10.0
+      tokenSpikeMultiplier: 3.0
+    resources:
+      requests:
+        cpu: "50m"
+        memory: "128Mi"
+      limits:
+        cpu: "500m"
+        memory: "512Mi"

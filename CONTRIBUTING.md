@@ -132,8 +132,10 @@ across `kubectl`, CRD schemas, and OpenAPI documentation.
 ```yaml
 spec:
   systemPrompt: "You are an assistant"
-  runtimeKind: opencode
-  storageSize: 1Gi
+  runtime:
+    kind: opencode
+  storage:
+    size: 1Gi
   enableGVisor: false
   mcpConnections: []
 ```

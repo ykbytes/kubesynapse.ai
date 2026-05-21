@@ -11,6 +11,7 @@ spec:
 {{- if not (and .Values.autoscaling (.Values.autoscaling.enabled)) }}
   replicas: {{ .Values.litellm.replicaCount }}
 {{- end }}
+  revisionHistoryLimit: {{ .Values.litellm.revisionHistoryLimit | default 3 }}
   selector:
     matchLabels:
       app: litellm
@@ -29,15 +30,29 @@ spec:
 {{- end }}
       automountServiceAccountToken: false
       terminationGracePeriodSeconds: 60
-      # LiteLLM's official image runs as root.  The Prisma binary engine
-      # needs write access to /root/.cache and /app/schema.prisma (for
-      # migration diff).  Relaxing runAsNonRoot is acceptable because
-      # LiteLLM runs in its own pod behind a NetworkPolicy that restricts
-      # ingress to only api-gateway and ai-agent pods.
       securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
         seccompProfile:
           type: RuntimeDefault
       initContainers:
+        - name: litellm-schema-sync
+          image: "{{ .Values.litellm.image.repository }}:{{ .Values.litellm.image.tag }}"
+          imagePullPolicy: {{ .Values.litellm.image.pullPolicy }}
+          command: ["/bin/sh", "-lc"]
+          args:
+            - cp /usr/local/lib/python3.12/site-packages/litellm/proxy/schema.prisma /work/schema.prisma
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: prisma-schema
+              mountPath: /work
         - name: litellm-db-init
           image: "{{ .Values.litellm.image.repository }}:{{ .Values.litellm.image.tag }}"
           imagePullPolicy: {{ .Values.litellm.image.pullPolicy }}
@@ -45,7 +60,7 @@ spec:
           args:
             - >-
               for attempt in $(seq 1 30); do
-                prisma db push --schema=/app/schema.prisma --accept-data-loss && exit 0;
+                prisma db push --schema=/app/schema.prisma --accept-data-loss --skip-generate && exit 0;
                 echo "[litellm-db-init] prisma db push failed (attempt ${attempt}/30), retrying in 5s";
                 sleep 5;
               done;
@@ -61,6 +76,9 @@ spec:
             - name: config
               mountPath: /app/config.yaml
               subPath: config.yaml
+            - name: prisma-schema
+              mountPath: /app/schema.prisma
+              subPath: schema.prisma
             - name: tmp
               mountPath: /tmp
           env:
@@ -76,7 +94,10 @@ spec:
           imagePullPolicy: {{ .Values.litellm.image.pullPolicy }}
           securityContext:
             allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: false
+            readOnlyRootFilesystem: true  # §security-P1: writable paths via emptyDir volumes
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
             capabilities:
               drop:
                 - ALL
@@ -88,15 +109,28 @@ spec:
             - name: config
               mountPath: /app/config.yaml
               subPath: config.yaml
+            - name: prisma-schema
+              mountPath: /app/schema.prisma
+              subPath: schema.prisma
+            - name: home-litellm
+              mountPath: /home/litellm
             - name: tmp
               mountPath: /tmp
           env:
+            - name: HOME
+              value: /home/litellm
+            - name: XDG_CACHE_HOME
+              value: /home/litellm/.cache
+            - name: PRISMA_HOME_DIR
+              value: /home/litellm
             - name: STORE_MODEL_IN_DB
               value: "True"
             - name: LITELLM_LOG
               value: "INFO"
             - name: DISABLE_SCHEMA_UPDATE
               value: "true"
+            - name: LITELLM_LOCAL_MODEL_COST_MAP
+              value: "True"
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
@@ -126,6 +160,12 @@ spec:
                 secretKeyRef:
                   name: {{ include "kubesynapse.fullname" . }}-llm-api-keys
                   key: ANTHROPIC_API_KEY
+                  optional: true
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kubesynapse.fullname" . }}-llm-api-keys
+                  key: REDIS_PASSWORD
                   optional: true
             # NOTE: GITHUB_COPILOT_TOKEN intentionally omitted — the device auth
             # flow blocks LiteLLM startup for 5+ minutes when no valid token exists.
@@ -165,6 +205,11 @@ spec:
         - name: config
           configMap:
             name: {{ include "kubesynapse.fullname" . }}-litellm-config
+        - name: prisma-schema
+          emptyDir: {}
+        - name: home-litellm
+          emptyDir:
+            sizeLimit: 256Mi
         - name: tmp
           emptyDir:
             sizeLimit: 512Mi
@@ -214,11 +259,26 @@ spec:
       ports:
         - protocol: TCP
           port: 5432
+    # DNS egress — allow resolution via kube-dns in any namespace
     - to:
         - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
       ports:
         - protocol: UDP
           port: 53
         - protocol: TCP
           port: 53
+    # Allow HTTPS to internet for model cost map and provider API calls
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443
 {{- end }}

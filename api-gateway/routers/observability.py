@@ -3,9 +3,23 @@ from __future__ import annotations
 
 from typing import Any, cast
 
+import trace_store
+
 # Re-import all shared symbols from the gateway core
 from _core import *
 from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response
+
+import routers.auth as auth_router
+from routers.auth import (
+    MCP_HUB_SERVERS,
+    MCP_PROFILES,
+    MCP_REGISTRY,
+    MCP_TOOL_CATEGORIES,
+    _build_mcp_registry_entry,
+    _build_mcp_registry_results,
+    _resolve_sidecar_image,
+    _resolve_sidecar_port,
+)
 
 router = APIRouter(tags=["observability"])
 
@@ -16,7 +30,7 @@ def get_skills_catalog(
     user=Depends(verify_token),
 ) -> list[dict[str, Any]]:
     del user
-    catalog = _load_skills_catalog()
+    catalog = auth_router._load_skills_catalog()
     results = catalog
 
     if category:
@@ -57,9 +71,8 @@ def refresh_skills_catalog(
 ) -> dict[str, Any]:
     """Invalidate the in-memory skills catalog cache so the next read reloads from disk."""
     del user
-    global _SKILLS_CATALOG_CACHE
-    _SKILLS_CATALOG_CACHE = None
-    reloaded = _load_skills_catalog()
+    auth_router._SKILLS_CATALOG_CACHE = None
+    reloaded = auth_router._load_skills_catalog()
     return {"refreshed": True, "count": len(reloaded)}
 
 
@@ -69,7 +82,7 @@ def get_skill_detail(
     user=Depends(verify_token),
 ) -> dict[str, Any]:
     del user
-    catalog = _load_skills_catalog()
+    catalog = auth_router._load_skills_catalog()
     for s in catalog:
         if s.get("id") == skill_id:
             return s
@@ -1502,3 +1515,42 @@ def _build_auto_intelligence_context(
         if total_len >= max_chars:
             break
     return "\n".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# Run Intelligence Layer — Agent Graph & Spend Lens
+# ---------------------------------------------------------------------------
+
+
+@router.get("/agent-graph")
+def get_agent_interaction_graph(
+    namespace: str | None = None,
+    hours: int = 24,
+    user=Depends(verify_token),
+) -> dict[str, Any]:
+    """Build agent-to-agent dependency graph from A2A events."""
+    if namespace:
+        ensure_namespace_access(user, namespace)
+
+    graph = trace_store.get_agent_interaction_graph(
+        namespace=namespace,
+        hours=min(hours, 168),
+    )
+    return graph
+
+
+@router.get("/spend")
+def get_spend_breakdown(
+    namespace: str | None = None,
+    hours: int = 24,
+    user=Depends(verify_token),
+) -> dict[str, Any]:
+    """Aggregate token/cost spend by agent, model, runtime, namespace."""
+    if namespace:
+        ensure_namespace_access(user, namespace)
+
+    items = trace_store.get_spend_breakdown(
+        namespace=namespace,
+        hours=min(hours, 720),
+    )
+    return {"items": items, "window_hours": hours}

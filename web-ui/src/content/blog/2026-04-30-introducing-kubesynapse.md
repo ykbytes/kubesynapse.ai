@@ -49,7 +49,7 @@ Six custom resource types give you declarative control:
 - **AgentWorkflow** — Multi-step DAG pipelines with approval gates
 - **AgentPolicy** — Token budgets, allowed models, PII masking, tool whitelists
 - **AgentTenant** — Namespace-scoped multi-tenancy
-- **AgentEvaluation** — Repeatable quality testing
+- **AgentApproval** — Human-in-the-loop control points
 - **ContextBundle** — Shared knowledge bases
 
 ### Visual Workflow Composer

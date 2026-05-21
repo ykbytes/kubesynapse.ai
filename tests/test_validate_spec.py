@@ -3,9 +3,10 @@
 with open('opencode-runtime/openapi.yaml', encoding='utf-8') as f:
     spec = yaml.safe_load(f)
 
-assert spec['openapi'] == '3.1.0', 'Bad openapi version'
+assert spec['openapi'] == '3.0.3', 'Bad openapi version'
 assert 'paths' in spec, 'Missing paths'
 assert 'components' in spec, 'Missing components'
+assert '/abort' in spec['paths'], 'Missing abort compatibility alias'
 
 paths = list(spec['paths'].keys())
 schemas = list(spec['components']['schemas'].keys())

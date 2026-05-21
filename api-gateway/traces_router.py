@@ -10,6 +10,7 @@ import shutil
 import time
 import uuid
 from collections.abc import AsyncGenerator, Callable
+from datetime import UTC, datetime
 from typing import Any
 
 import trace_store
@@ -26,6 +27,7 @@ from pydantic import BaseModel, ConfigDict, Field
 logger = logging.getLogger("api-gateway.traces-router")
 
 router = APIRouter(prefix="/traces", tags=["traces"])
+TRACE_ALIAS_SUNSET = "Wed, 01 Oct 2026 00:00:00 GMT"
 
 
 # ---------------------------------------------------------------------------
@@ -57,8 +59,8 @@ class ExecutionDetailResponse(BaseModel):
     started_at: str | None = None
     completed_at: str | None = None
     duration_ms: float | None = None
-    input_summary: dict[str, Any] | None = None
-    output_summary: dict[str, Any] | None = None
+    input_summary: dict[str, Any] | str | None = None
+    output_summary: dict[str, Any] | str | None = None
     total_steps: int = 0
     completed_steps: int = 0
     failed_steps: int = 0
@@ -93,8 +95,8 @@ class StepDetailResponse(BaseModel):
     started_at: str | None = None
     completed_at: str | None = None
     duration_ms: float | None = None
-    input_summary: dict[str, Any] | None = None
-    output_summary: dict[str, Any] | None = None
+    input_summary: dict[str, Any] | str | None = None
+    output_summary: dict[str, Any] | str | None = None
     error_message: str | None = None
     llm_calls_count: int = 0
     tool_calls_count: int = 0
@@ -109,6 +111,60 @@ class BatchIngestRequest(BaseModel):
     """Batch trace event ingestion from workers."""
 
     events: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class RuntimeEventBatchRequest(BaseModel):
+    """Batch runtime event ingestion for Run Intelligence Layer."""
+
+    events: list[dict[str, Any]] = Field(default_factory=list, min_length=1, max_length=500)
+
+
+class RunTimelineResponse(BaseModel):
+    """Ordered semantic timeline for a run."""
+
+    execution_id: str
+    events: list[dict[str, Any]] = Field(default_factory=list)
+    count: int = 0
+
+
+class RunSummaryResponse(BaseModel):
+    """Aggregate summary for a run from indexed events."""
+
+    execution_id: str
+    event_count: int = 0
+    tool_call_count: int = 0
+    tool_failure_count: int = 0
+    error_count: int = 0
+    total_tokens: int = 0
+    estimated_cost_usd: float = 0.0
+    total_duration_ms: int = 0
+    runtime_kinds: list[str] = Field(default_factory=list)
+    first_event: str | None = None
+    last_event: str | None = None
+
+
+class EventQueryResponse(BaseModel):
+    """Filtered runtime events."""
+
+    items: list[dict[str, Any]] = Field(default_factory=list)
+    total: int = 0
+    limit: int = 200
+    offset: int = 0
+
+
+class AgentGraphResponse(BaseModel):
+    """Agent-to-agent dependency graph."""
+
+    nodes: list[str] = Field(default_factory=list)
+    edges: list[dict[str, Any]] = Field(default_factory=list)
+    window_hours: int = 24
+
+
+class SpendBreakdownResponse(BaseModel):
+    """Token/cost spend breakdown."""
+
+    items: list[dict[str, Any]] = Field(default_factory=list)
+    window_hours: int = 24
 
 
 # ---------------------------------------------------------------------------
@@ -130,6 +186,16 @@ def _catch_errors(func: Callable[..., Any]) -> Callable[..., Any]:
             return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
     return wrapper
+
+
+def _set_trace_alias_headers(response: Response, request: Request, canonical_path: str) -> None:
+    """Mark compatibility trace aliases as deprecated and point to the canonical URL."""
+
+    canonical_url = str(request.url.replace(path=canonical_path))
+    response.headers["Deprecation"] = "true"
+    response.headers["Sunset"] = TRACE_ALIAS_SUNSET
+    response.headers["Link"] = f'<{canonical_url}>; rel="successor-version"'
+    response.headers["Warning"] = f'299 - "Deprecated API; use {canonical_path}"'
 
 
 # ---------------------------------------------------------------------------
@@ -364,6 +430,7 @@ def _get_or_create_execution(session: Any, execution_id: str, payload: dict[str,
         agent_name=payload.get("agent_name", ""),
         run_id=payload.get("run_id", ""),
         status=trace_store.ExecutionStatus.PENDING.value,
+        started_at=_event_timestamp_to_utc(event_timestamp=payload.get("_event_timestamp")) or trace_store.utc_now(),
         input_summary=payload.get("inputs"),
         triggered_by=payload.get("triggered_by"),
         trace_file_path=str(trace_store.TRACE_STORAGE_DIR / execution_id / "trace.jsonl"),
@@ -390,11 +457,21 @@ def _get_or_create_step(session: Any, execution_id: str, step_id: str, payload: 
         step_index=payload.get("step_index", 0),
         parent_step_id=payload.get("parent_step_id"),
         status=trace_store.StepStatus.PENDING.value,
+        started_at=_event_timestamp_to_utc(event_timestamp=payload.get("_event_timestamp")),
         input_summary=payload.get("inputs"),
     )
     session.add(step)
     session.flush()
     return step
+
+
+def _event_timestamp_to_utc(event_timestamp: Any) -> datetime | None:
+    if event_timestamp is None:
+        return None
+    try:
+        return datetime.fromtimestamp(float(event_timestamp), tz=UTC)
+    except (TypeError, ValueError, OSError, OverflowError):
+        return None
 
 
 def _upsert_from_event(session: Any, event_data: dict[str, Any]) -> None:
@@ -403,9 +480,12 @@ def _upsert_from_event(session: Any, event_data: dict[str, Any]) -> None:
     execution_id = event_data.get("execution_id")
     step_id = event_data.get("step_id")
     payload = event_data.get("payload") or {}
+    payload = {**payload, "_event_timestamp": event_data.get("timestamp")}
 
     if event_type == "execution_started":
-        _get_or_create_execution(session, execution_id, payload)
+        execution = _get_or_create_execution(session, execution_id, payload)
+        if execution.started_at is None:
+            execution.started_at = _event_timestamp_to_utc(event_data.get("timestamp")) or trace_store.utc_now()
         return
 
     if event_type in ("execution_completed", "execution_failed", "execution_cancelled"):
@@ -420,7 +500,7 @@ def _upsert_from_event(session: Any, event_data: dict[str, Any]) -> None:
                 "execution_failed": trace_store.ExecutionStatus.FAILED.value,
                 "execution_cancelled": trace_store.ExecutionStatus.CANCELLED.value,
             }.get(event_type, trace_store.ExecutionStatus.FAILED.value)
-            execution.completed_at = trace_store.utc_now()
+            execution.completed_at = _event_timestamp_to_utc(event_data.get("timestamp")) or trace_store.utc_now()
             execution.output_summary = payload.get("outputs")
             execution.error_message = payload.get("error")
             metrics = payload.get("metrics") or {}
@@ -433,12 +513,17 @@ def _upsert_from_event(session: Any, event_data: dict[str, Any]) -> None:
             execution.failed_steps = metrics.get("failed_steps", execution.failed_steps)
             execution.total_llm_calls = metrics.get("total_llm_calls", execution.total_llm_calls)
             execution.total_tool_calls = metrics.get("total_tool_calls", execution.total_tool_calls)
-            if execution.started_at and execution.completed_at:
-                execution.duration_ms = (execution.completed_at - execution.started_at).total_seconds() * 1000
+            execution.duration_ms = trace_store.duration_ms_between(execution.started_at, execution.completed_at)
         return
 
     if event_type == "step_started" and step_id:
-        _get_or_create_step(session, execution_id, step_id, payload)
+        step = _get_or_create_step(session, execution_id, step_id, payload)
+        if payload.get("step_index") is not None:
+            step.step_index = payload.get("step_index", step.step_index)
+        if step.started_at is None:
+            step.started_at = _event_timestamp_to_utc(event_data.get("timestamp"))
+        if payload.get("inputs") is not None:
+            step.input_summary = payload.get("inputs")
         return
 
     if event_type in ("step_completed", "step_failed", "step_skipped") and step_id:
@@ -453,11 +538,10 @@ def _upsert_from_event(session: Any, event_data: dict[str, Any]) -> None:
                 "step_failed": trace_store.StepStatus.FAILED.value,
                 "step_skipped": trace_store.StepStatus.SKIPPED.value,
             }.get(event_type, trace_store.StepStatus.FAILED.value)
-            step.completed_at = trace_store.utc_now()
+            step.completed_at = _event_timestamp_to_utc(event_data.get("timestamp")) or trace_store.utc_now()
             step.output_summary = payload.get("outputs")
             step.error_message = payload.get("error")
-            if step.started_at and step.completed_at:
-                step.duration_ms = (step.completed_at - step.started_at).total_seconds() * 1000
+            step.duration_ms = trace_store.duration_ms_between(step.started_at, step.completed_at)
         return
 
     if event_type == "llm_call_completed" and step_id:
@@ -472,6 +556,7 @@ def _upsert_from_event(session: Any, event_data: dict[str, Any]) -> None:
             total_tokens=(payload.get("prompt_tokens", 0) + payload.get("completion_tokens", 0)),
             cost_usd=payload.get("cost_usd"),
             latency_ms=payload.get("latency_ms"),
+            started_at=_event_timestamp_to_utc(event_data.get("timestamp")) or trace_store.utc_now(),
             prompt_preview=payload.get("prompt_preview", "")[:1024],
             response_preview=payload.get("response_preview", "")[:2048],
         )
@@ -498,6 +583,7 @@ def _upsert_from_event(session: Any, event_data: dict[str, Any]) -> None:
             tool_result=payload.get("tool_result"),
             error_message=payload.get("error"),
             duration_ms=payload.get("duration_ms"),
+            started_at=_event_timestamp_to_utc(event_data.get("timestamp")) or trace_store.utc_now(),
         )
         session.add(record)
         step = (
@@ -591,6 +677,33 @@ async def list_executions(
     return ExecutionListResponse(items=items, limit=limit, offset=offset)
 
 
+@router.get("", response_model=ExecutionListResponse, include_in_schema=False)
+@_catch_errors
+async def list_traces_alias(
+    request: Request,
+    response: Response,
+    namespace: str | None = None,
+    workflow_name: str | None = None,
+    agent_name: str | None = None,
+    status: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+    user: dict[str, Any] = Depends(verify_token),
+) -> ExecutionListResponse:
+    """Compatibility alias for older clients still calling GET /traces."""
+
+    _set_trace_alias_headers(response, request, "/api/v1/traces/executions")
+    return await list_executions(
+        namespace=namespace,
+        workflow_name=workflow_name,
+        agent_name=agent_name,
+        status=status,
+        limit=limit,
+        offset=offset,
+        user=user,
+    )
+
+
 @router.get("/executions/{execution_id}", response_model=ExecutionDetailResponse)
 @_catch_errors
 async def get_execution_detail(
@@ -625,12 +738,12 @@ async def get_execution_events(
     execution_id: str,
     user: dict[str, Any] = Depends(verify_token),
 ) -> list[dict[str, Any]]:
-    """Get raw trace events from the JSONL trace file."""
+    """Get raw trace events from durable storage with JSONL fallback."""
     summary = trace_store.get_execution_summary(execution_id)
     if not summary:
         raise HTTPException(status_code=404, detail="Execution not found")
     ensure_namespace_access(user, summary["namespace"])
-    return trace_store.TRACER.read_trace(execution_id)
+    return trace_store.read_trace_events(execution_id) or trace_store.TRACER.read_trace(execution_id)
 
 
 @router.get("/steps/{step_id}", response_model=StepDetailResponse)
@@ -676,6 +789,8 @@ async def delete_execution(
     trace_dir = trace_store.TRACE_STORAGE_DIR / execution_id
     if trace_dir.exists():
         shutil.rmtree(trace_dir)
+
+    trace_store.delete_trace_events(execution_id)
 
     safe_record_audit(
         action="execution_deleted",
@@ -732,3 +847,132 @@ async def export_execution_html(
             "Content-Disposition": f'attachment; filename="execution-{execution_id}.html"',
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# Run Intelligence Layer — Runtime Event APIs
+# ---------------------------------------------------------------------------
+
+
+@router.post("/runtime-events", status_code=201)
+@_catch_errors
+async def ingest_runtime_events(
+    body: RuntimeEventBatchRequest,
+    user: dict[str, Any] = Depends(verify_token),
+) -> JSONResponse:
+    """Batch ingest runtime events from runtimes and workers.
+
+    Events are upserted by `event_id` for idempotency.
+    Requires valid API token; namespace scoping enforced per event.
+    """
+    if not body.events:
+        raise HTTPException(status_code=400, detail="No events provided")
+
+    if len(body.events) > 500:
+        raise HTTPException(status_code=400, detail="Too many events (max 500 per batch)")
+
+    for evt in body.events:
+        evt_ns = evt.get("namespace", "")
+        if evt_ns:
+            ensure_namespace_access(user, evt_ns)
+
+    inserted = trace_store.ingest_runtime_events(body.events)
+    return JSONResponse(
+        status_code=201,
+        content={"inserted": inserted, "total_submitted": len(body.events)},
+    )
+
+
+@router.get("/{execution_id}/timeline")
+@_catch_errors
+async def get_run_timeline(
+    execution_id: str,
+    event_type: str | None = None,
+    from_seq: int | None = None,
+    limit: int = 500,
+    user: dict[str, Any] = Depends(verify_token),
+) -> RunTimelineResponse:
+    """Get ordered semantic timeline for a run."""
+    summary = trace_store.get_execution_summary(execution_id)
+    if not summary:
+        raise HTTPException(status_code=404, detail="Execution not found")
+    ensure_namespace_access(user, summary["namespace"])
+
+    events = trace_store.get_run_timeline(
+        execution_id=execution_id,
+        event_type=event_type,
+        from_seq=from_seq,
+        limit=min(limit, 1000),
+    )
+    return RunTimelineResponse(
+        execution_id=execution_id,
+        events=events,
+        count=len(events),
+    )
+
+
+@router.get("/{execution_id}/runtime-summary")
+@_catch_errors
+async def get_run_summary(
+    execution_id: str,
+    user: dict[str, Any] = Depends(verify_token),
+) -> JSONResponse:
+    """Get aggregate summary for a run from indexed events."""
+    summary = trace_store.get_execution_summary(execution_id)
+    if not summary:
+        raise HTTPException(status_code=404, detail="Execution not found")
+    ensure_namespace_access(user, summary["namespace"])
+
+    run_summary = trace_store.get_run_summary(execution_id)
+    if not run_summary:
+        return JSONResponse(content={"execution_id": execution_id, "event_count": 0})
+
+    return JSONResponse(content=run_summary)
+
+
+@router.get("/runtime-events")
+@_catch_errors
+async def query_runtime_events(
+    namespace: str | None = None,
+    runtime_kind: str | None = None,
+    event_type: str | None = None,
+    agent_name: str | None = None,
+    session_id: str | None = None,
+    severity: str | None = None,
+    from_ts: str | None = None,
+    to_ts: str | None = None,
+    limit: int = 200,
+    offset: int = 0,
+    user: dict[str, Any] = Depends(verify_token),
+) -> EventQueryResponse:
+    """Filter runtime events across runs."""
+    if namespace:
+        ensure_namespace_access(user, namespace)
+
+    result = trace_store.query_runtime_events(
+        namespace=namespace,
+        runtime_kind=runtime_kind,
+        event_type=event_type,
+        agent_name=agent_name,
+        session_id=session_id,
+        severity=severity,
+        from_ts=from_ts,
+        to_ts=to_ts,
+        limit=limit,
+        offset=offset,
+    )
+    return EventQueryResponse(**result)
+
+
+@router.get("/{execution_id}", response_model=ExecutionDetailResponse, include_in_schema=False)
+@_catch_errors
+async def get_trace_detail_alias(
+    execution_id: str,
+    request: Request,
+    response: Response,
+    user: dict[str, Any] = Depends(verify_token),
+) -> ExecutionDetailResponse:
+    """Compatibility alias for older clients still calling GET /traces/{execution_id}."""
+
+    _set_trace_alias_headers(response, request, f"/api/v1/traces/executions/{execution_id}")
+    return await get_execution_detail(execution_id=execution_id, user=user)

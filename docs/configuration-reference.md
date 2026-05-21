@@ -2,6 +2,8 @@
 
 This document describes every environment variable, Helm value, and configuration option available in KubeSynapse.
 
+Supported runtime kinds are `opencode`, `pi`, and `mistral-vibe`.
+
 ## Table of Contents
 
 - [Environment Variables](#environment-variables)
@@ -37,11 +39,10 @@ This document describes every environment variable, Helm value, and configuratio
 | `DATABASE_PASSWORD` | `""` | Database password |
 | `DATABASE_SSL_MODE` | `prefer` | SSL mode for PostgreSQL |
 | `DATABASE_SQLITE_PATH` | `/tmp/KubeSynapse-gateway.db` | SQLite fallback path |
-| `OPENCODE_MEMORY_ENABLED` | `true` | Enable cross-session memory persistence |
-| `OPENCODE_MEMORY_DIR` | `~/.local/share/opencode-runtime/memory` | Memory storage directory |
-| `OPENCODE_MEMORY_DEFAULT_RETENTION` | `session` | Default memory retention tier |
-| `OPENCODE_MEMORY_SEMANTIC_ENABLED` | `false` | Enable Qdrant vector semantic memory |
-| `OPENCODE_MEMORY_QDRANT_URL` | `http://localhost:6333` | Qdrant server URL |
+
+Gateway-side durable recall is policy-driven rather than controlled by dedicated memory environment variables.
+Use `AgentPolicy.spec.memoryPolicy` or the chart-level `memoryPolicy.*` defaults to tune recall injection.
+The `OPENCODE_MEMORY_*` variables documented below apply only to the runtime-local OpenCode memory layer.
 
 ### Operator
 
@@ -59,8 +60,6 @@ This document describes every environment variable, Helm value, and configuratio
 | `WORKFLOW_POLL_SECONDS` | `30` | Workflow status poll interval |
 | `WORKFLOW_QUEUE_STALE_SECONDS` | `300` | Workflow queue staleness threshold |
 | `WORKFLOW_RUNNING_STALE_SECONDS` | `1800` | Running workflow staleness threshold |
-| `EVAL_SCHEDULE_POLL_SECONDS` | `60` | Evaluation schedule poll interval |
-| `SCHEDULED_EVAL_QUEUE_STALE_SECONDS` | `600` | Eval queue staleness threshold |
 | `AGENT_CPU_REQUEST` | `100m` | Agent container CPU request |
 | `AGENT_CPU_LIMIT` | `1` | Agent container CPU limit |
 | `AGENT_MEMORY_REQUEST` | `256Mi` | Agent container memory request |
@@ -84,6 +83,23 @@ This document describes every environment variable, Helm value, and configuratio
 | `AGENT_HITL_MODE` | `enforce` | Default HITL mode: `enforce`, `audit`, `disabled` |
 | `ORPHAN_PRUNING_ENABLED` | `true` | Enable orphan resource pruning |
 | `OTEL_ENDPOINT` | `""` | OpenTelemetry collector endpoint |
+| `SIGNAL_WATCH_INTERVAL_SEC` | `60` | Signal watch anomaly detection interval |
+| `SIGNAL_WATCH_WINDOW_MINUTES` | `15` | Anomaly detection time window |
+| `SIGNAL_WATCH_FAILURE_RATE` | `0.3` | Failure rate threshold (0.0-1.0) |
+| `SIGNAL_WATCH_ERROR_COUNT` | `3` | Minimum error count to trigger |
+| `SIGNAL_WATCH_COST_MULTIPLIER` | `3.0` | Cost outlier multiplier |
+| `SIGNAL_WATCH_TOKEN_MULTIPLIER` | `3.0` | Token spike multiplier |
+| `SIGNAL_WATCH_STUCK_MULTIPLIER` | `2.0` | Stuck run duration multiplier |
+| `SIGNAL_WATCH_SYSTEM_NS` | `kubesynapse-system` | System agents namespace |
+
+### Runtime Event Emission (All Runtimes)
+
+| Variable | Default | Description |
+|---|---|---|
+| `RUNTIME_EVENTS_QUEUE_SIZE` | `500` | Max events in queue before dropping |
+| `RUNTIME_EVENTS_BATCH_SIZE` | `50` | Events per batch flush |
+| `RUNTIME_EVENTS_FLUSH_INTERVAL` | `2.0` | Flush interval (seconds) |
+| `RUNTIME_EVENTS_HTTP_TIMEOUT` | `10.0` | HTTP request timeout (seconds) |
 
 ### OpenCode Runtime
 
@@ -113,9 +129,9 @@ This document describes every environment variable, Helm value, and configuratio
 | `OPENCODE_MEMORY_CONTEXT_MAX_TOKENS` | `2048` | Max memory context tokens |
 | `OPENCODE_MEMORY_PRUNE_INTERVAL_HOURS` | `24` | Memory prune interval |
 | `OPENCODE_MEMORY_ENTITY_EXTRACTION` | `true` | Enable entity extraction |
-| `OPENCODE_MEMORY_SEMANTIC_ENABLED` | `false` | Enable semantic memory |
+| `OPENCODE_MEMORY_SEMANTIC_ENABLED` | `false` | Enable the optional Qdrant semantic-memory provider |
 | `OPENCODE_MEMORY_QDRANT_URL` | `http://localhost:6333` | Qdrant URL |
-| `OPENCODE_MEMORY_QDRANT_COLLECTION` | `KubeSynapse_memory` | Qdrant collection name |
+| `OPENCODE_MEMORY_QDRANT_COLLECTION` | `KUBESYNAPSE_memory` | Qdrant collection name |
 | `OPENCODE_MEMORY_QDRANT_DIMENSION` | `768` | Embedding dimension |
 | `OPENCODE_MEMORY_QDRANT_TIMEOUT` | `5.0` | Qdrant connection timeout |
 | `OPENCODE_MEMORY_RELEVANCE_DECAY_HOURS` | `168` | Memory relevance decay (hours) |
@@ -134,15 +150,37 @@ See [`values.schema.json`](../charts/kubesynapse/values.schema.json) for the com
 - `networkPolicy` — Network security
 - `litellm` — LLM proxy configuration
 - `agentRuntime` — Agent resource limits and HITL
-- `opencodeRuntime` — OpenCode sidecar settings
+- `opencodeRuntime` — Default OpenCode runtime image, provider, and memory settings
+- `piRuntime` — Pi runtime image, provider, and bridge defaults
 - `operator` — Controller and worker settings
 - `autoscaling` — HPA configuration
 - `apiGateway` — Gateway replicas, auth, DB
 - `webUi` — Frontend settings
 - `ingress` — Ingress rules and TLS
+- `memoryPolicy` — Chart-managed default durable-recall policy rendered as an `AgentPolicy`
 - `platformSecrets` — Secret management mode
 - `skillsCatalog` — Skills catalog JSON
 - `intelligence` — Metrics and alerting
+- `systemAgents` — Run Intelligence Layer system agents
+
+### Memory Policy Defaults
+
+The Helm chart can render a default `AgentPolicy` for durable recall:
+
+```yaml
+memoryPolicy:
+  enabled: true
+  name: "default-memory-policy"
+  namespace: "default"
+  autoPromote: true
+  maxInjectedMemories: 8
+  maxInjectedChars: 2400
+  allowedMemoryTypes: []
+```
+
+These values control gateway-side recall injection for agents that reference the policy.
+They are separate from the runtime-local `OPENCODE_MEMORY_*` settings, which still govern
+the JSONL and optional semantic-memory layer inside the OpenCode runtime.
 
 ---
 
@@ -409,6 +447,26 @@ platformSecrets:
 intelligence:
   enabled: true
   prometheusRetention: "30d"
+
+systemAgents:
+  enabled: true
+  namespace: "kubesynapse-system"
+  defaultModel: "gpt-4"
+  defaultRuntime: "opencode"
+  runInspector:
+    enabled: true
+    triggers:
+      minFailureRate: 0.3
+      minErrorCount: 3
+  signalSummarizer:
+    enabled: true
+    triggers:
+      maxSignalAgeMinutes: 30
+  spendReviewer:
+    enabled: true
+    triggers:
+      costThresholdUsd: 10.0
+      tokenSpikeMultiplier: 3.0
 ```
 
 ---

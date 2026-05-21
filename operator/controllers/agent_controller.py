@@ -215,6 +215,110 @@ def create_agent_resources(spec: dict[str, Any], name: str, namespace: str, hand
 
 
 # ---------------------------------------------------------------------------
+# Agent deletion cleanup (§prod-cleanup-1)
+# ---------------------------------------------------------------------------
+
+
+def _cleanup_agent_resources(name: str, namespace: str, handler_logger: logging.Logger) -> dict[str, list[str]]:
+    """Clean up resources that survive AIAgent deletion.
+
+    Kubernetes garbage-collects owner-referenced resources (Service,
+    StatefulSet, NetworkPolicy, Secrets) when the AIAgent CR is deleted.
+    However, PVCs created by StatefulSet volumeClaimTemplates use the
+    ``whenDeleted: Retain`` policy and are intentionally NOT garbage-collected.
+
+    This function:
+    1. Deletes orphaned PVCs labeled with the agent name.
+    2. Deletes any remaining NetworkPolicies, Services, or Secrets that
+       somehow escaped ownerReference GC.
+
+    Returns a summary of what was cleaned up.
+    """
+    cleaned: dict[str, list[str]] = {"pvcs": [], "network_policies": [], "services": [], "secrets": []}
+
+    # --- Clean up orphaned PVCs ---
+    core_api = kubernetes.client.CoreV1Api()
+    label_selector = f"agent-name={name},app=ai-agent"
+    try:
+        pvcs = core_api.list_namespaced_persistent_volume_claim(
+            namespace=namespace, label_selector=label_selector
+        )
+        for pvc in pvcs.items:
+            pvc_name = pvc.metadata.name
+            try:
+                core_api.delete_namespaced_persistent_volume_claim(
+                    name=pvc_name,
+                    namespace=namespace,
+                    propagation_policy="Background",
+                )
+                cleaned["pvcs"].append(pvc_name)
+                handler_logger.info("Deleted orphaned PVC '%s/%s'.", namespace, pvc_name)
+            except ApiException as exc:
+                if exc.status != 404:
+                    handler_logger.warning(
+                        "Failed to delete PVC '%s/%s': %s", namespace, pvc_name, exc
+                    )
+    except ApiException as exc:
+        handler_logger.warning("Failed to list PVCs for agent '%s/%s': %s", namespace, name, exc)
+
+    # --- Clean up any surviving NetworkPolicies ---
+    networking_api = kubernetes.client.NetworkingV1Api()
+    try:
+        netpols = networking_api.list_namespaced_network_policy(
+            namespace=namespace, label_selector=label_selector
+        )
+        for netpol in netpols.items:
+            netpol_name = netpol.metadata.name
+            try:
+                networking_api.delete_namespaced_network_policy(name=netpol_name, namespace=namespace)
+                cleaned["network_policies"].append(netpol_name)
+                handler_logger.info("Deleted orphaned NetworkPolicy '%s/%s'.", namespace, netpol_name)
+            except ApiException as exc:
+                if exc.status != 404:
+                    handler_logger.warning(
+                        "Failed to delete NetworkPolicy '%s/%s': %s", namespace, netpol_name, exc
+                    )
+    except ApiException as exc:
+        handler_logger.warning("Failed to list NetworkPolicies for agent '%s/%s': %s", namespace, name, exc)
+
+    # --- Clean up any surviving Services ---
+    try:
+        services = core_api.list_namespaced_service(namespace=namespace, label_selector=label_selector)
+        for svc in services.items:
+            svc_name = svc.metadata.name
+            try:
+                core_api.delete_namespaced_service(name=svc_name, namespace=namespace)
+                cleaned["services"].append(svc_name)
+                handler_logger.info("Deleted orphaned Service '%s/%s'.", namespace, svc_name)
+            except ApiException as exc:
+                if exc.status != 404:
+                    handler_logger.warning(
+                        "Failed to delete Service '%s/%s': %s", namespace, svc_name, exc
+                    )
+    except ApiException as exc:
+        handler_logger.warning("Failed to list Services for agent '%s/%s': %s", namespace, name, exc)
+
+    # --- Clean up any surviving Secrets ---
+    try:
+        secrets = core_api.list_namespaced_secret(namespace=namespace, label_selector=label_selector)
+        for secret in secrets.items:
+            secret_name = secret.metadata.name
+            try:
+                core_api.delete_namespaced_secret(name=secret_name, namespace=namespace)
+                cleaned["secrets"].append(secret_name)
+                handler_logger.info("Deleted orphaned Secret '%s/%s'.", namespace, secret_name)
+            except ApiException as exc:
+                if exc.status != 404:
+                    handler_logger.warning(
+                        "Failed to delete Secret '%s/%s': %s", namespace, secret_name, exc
+                    )
+    except ApiException as exc:
+        handler_logger.warning("Failed to list Secrets for agent '%s/%s': %s", namespace, name, exc)
+
+    return cleaned
+
+
+# ---------------------------------------------------------------------------
 # Kopf handlers
 # ---------------------------------------------------------------------------
 
@@ -275,13 +379,117 @@ def resume_agent(spec: dict[str, Any], name: str, namespace: str, logger: loggin
 
 @kopf.on.delete("kubesynapse.ai", "v1alpha1", "aiagents")  # type: ignore[arg-type]
 def delete_agent(spec: dict[str, Any], name: str, namespace: str, logger: logging.Logger, **kwargs: Any) -> None:
+    """Clean up all agent-owned resources including PVCs on AIAgent deletion.
+
+    Kubernetes GC handles owner-referenced resources (StatefulSet, Service,
+    NetworkPolicy, Secrets). This handler explicitly cleans up:
+    - PVCs from StatefulSet volumeClaimTemplates (retained by policy)
+    - Any resources that escaped GC due to race conditions
+    """
     del spec, kwargs
     log_operator_event(
         logger,
         logging.INFO,
-        "AIAgent deleted; Kubernetes-owned resources will be garbage-collected while PVCs are retained.",
+        "AIAgent deleted — cleaning up owned resources including retained PVCs.",
         resource_kind="AIAgent",
         name=name,
         namespace=namespace,
         action="delete-agent",
     )
+    try:
+        cleaned = _cleanup_agent_resources(name, namespace, logger)
+        total_cleaned = sum(len(v) for v in cleaned.values())
+        if total_cleaned > 0:
+            log_operator_event(
+                logger,
+                logging.INFO,
+                f"Cleaned up {total_cleaned} orphaned resources for deleted AIAgent.",
+                resource_kind="AIAgent",
+                name=name,
+                namespace=namespace,
+                action="delete-agent-cleanup",
+                cleanedResources=cleaned,
+            )
+        else:
+            log_operator_event(
+                logger,
+                logging.INFO,
+                "No additional cleanup needed for AIAgent (K8s GC handled owner-referenced resources).",
+                resource_kind="AIAgent",
+                name=name,
+                namespace=namespace,
+                action="delete-agent-cleanup",
+            )
+    except Exception as exc:
+        log_operator_event(
+            logger,
+            logging.ERROR,
+            f"Error during AIAgent deletion cleanup: {exc}",
+            resource_kind="AIAgent",
+            name=name,
+            namespace=namespace,
+            action="delete-agent-cleanup-error",
+            error=str(exc),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Orphan PVC cleanup timer (§prod-cleanup-2)
+# ---------------------------------------------------------------------------
+
+
+@kopf.timer("kubesynapse.ai", "v1alpha1", "aiagents", interval=300)  # type: ignore[arg-type]
+def cleanup_orphan_pvcs(
+    name: str, namespace: str, logger: logging.Logger, **kwargs: Any
+) -> None:
+    """Periodically check for and clean up PVCs belonging to this agent
+    that have no corresponding StatefulSet (orphaned from prior deletions).
+
+    This is a safety net for PVCs that were orphaned before the delete
+    handler was enhanced to clean them up.
+    """
+    del kwargs
+    core_api = kubernetes.client.CoreV1Api()
+    apps_api = kubernetes.client.AppsV1Api()
+    label_selector = f"agent-name={name},app=ai-agent"
+
+    # Check if the StatefulSet still exists
+    try:
+        apps_api.read_namespaced_stateful_set(name=f"{name}-sandbox", namespace=namespace)
+        # StatefulSet exists — no cleanup needed
+        return
+    except ApiException as exc:
+        if exc.status != 404:
+            logger.warning("Error checking StatefulSet for agent '%s/%s': %s", namespace, name, exc)
+            return
+        # StatefulSet not found — check for orphaned PVCs
+
+    try:
+        pvcs = core_api.list_namespaced_persistent_volume_claim(
+            namespace=namespace, label_selector=label_selector
+        )
+        for pvc in pvcs.items:
+            pvc_name = pvc.metadata.name
+            try:
+                core_api.delete_namespaced_persistent_volume_claim(
+                    name=pvc_name,
+                    namespace=namespace,
+                    propagation_policy="Background",
+                )
+                log_operator_event(
+                    logger,
+                    logging.INFO,
+                    f"Cleaned up orphaned PVC '{pvc_name}' with no matching StatefulSet.",
+                    resource_kind="AIAgent",
+                    name=name,
+                    namespace=namespace,
+                    action="orphan-pvc-cleanup",
+                    pvcName=pvc_name,
+                )
+            except ApiException as del_exc:
+                if del_exc.status != 404:
+                    logger.warning(
+                        "Failed to delete orphaned PVC '%s/%s': %s", namespace, pvc_name, del_exc
+                    )
+    except ApiException as exc:
+        logger.warning("Failed to list PVCs for orphan cleanup of agent '%s/%s': %s", namespace, name, exc)

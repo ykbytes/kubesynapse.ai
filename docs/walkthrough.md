@@ -1,17 +1,17 @@
 # KubeSynapse Implementation Walkthrough
 
-This document is a current implementation walkthrough of the platform that exists in this repository today. It replaces the earlier multi-runtime narrative with the actual OpenCode-first architecture, current operator model, and the new observability surfaces now shipped in the chart and UI.
+This document is a current implementation walkthrough of the platform that exists in this repository today. It replaces the earlier stale runtime narrative with the current multi-runtime architecture, operator model, and observability surfaces now shipped in the chart and UI.
 
 ## Platform Snapshot
 
 As of April 2026, the shipped platform is centered on these paths:
 
-- `AIAgent`, `AgentPolicy`, `AgentWorkflow`, `AgentEval`, `AgentApproval`, and `AgentTenant` remain the core control-plane CRDs
+- `AIAgent`, `AgentPolicy`, `AgentWorkflow`, `AgentApproval`, and `AgentTenant` remain the core control-plane CRDs
 - `ConnectorPlugin`, `ObservationTarget`, `ObservationPolicy`, and `ObservationReport` extend the control plane with an observability model
-- the runtime surface is now OpenCode-only: `runtime.kind: opencode`
+- the runtime surface supports the three in-tree runtime kinds exposed by the CRD: `opencode`, `pi`, and `mistral-vibe`
 - the operator provisions singleton runtime sandboxes and worker Jobs from Kubernetes resources instead of maintaining an external workflow service
 - the gateway owns auth, CRUD, invoke, session persistence, memory persistence, and MCP connection management
-- the web UI exposes agents, chat, workflows, evaluations, MCP management, intelligence, and observability
+- the web UI exposes agents, chat, workflows, MCP management, intelligence, and observability
 
 ## 1. Helm Chart Foundation
 
@@ -19,7 +19,7 @@ The platform chart in `charts/KubeSynapse` is still the entry point for the full
 
 What the chart installs now:
 
-- the control-plane CRDs for agents, policies, workflows, evals, approvals, tenants, and observability
+- the control-plane CRDs for agents, policies, workflows, approvals, tenants, and observability
 - the operator deployment and worker configuration
 - the API gateway, web UI, LiteLLM, Redis, Qdrant, NATS, and PostgreSQL
 - the shared MCP hub namespace and hub-server deployment model
@@ -27,10 +27,10 @@ What the chart installs now:
 
 Important current chart characteristics:
 
-- OpenCode is the only runtime the CRD allows
+- the CRD allows OpenCode, Pi, and Mistral Vibe runtime kinds, each with its own nested runtime config block
 - bundled MCP sidecars are still defined in values for per-agent local tools
 - the chart includes both shared MCP hub servers and structured MCP connection support
-- local Kind refresh is now a first-class path through `scripts/deploy-ai-sandbox-kind.ps1` and `deploy/values.ai-sandbox.kind-local.yaml`
+- published-image installs use `deploy/values.cluster.example.yaml`, while local image development starts from `deploy/values.local-images.example.yaml`
 
 ## 2. Operator and Reconciliation Model
 
@@ -39,8 +39,8 @@ The operator has moved to a more modular controller layout under `operator/contr
 Current responsibilities:
 
 - reconcile `AIAgent` resources into singleton StatefulSets, Services, service accounts, and runtime wiring
-- queue worker Jobs for `AgentWorkflow` and `AgentEval` execution
-- project compact workflow and eval state back into CRD status while keeping detailed artifacts on PVC-backed JSON files
+- queue worker Jobs for `AgentWorkflow` execution
+- project compact workflow state back into CRD status while keeping detailed artifacts on PVC-backed JSON files
 - reconcile approval decisions so waiting workflows resume or fail deterministically
 - conditionally register optional controllers when their CRDs are installed
 - reconcile the observability CRDs when `observationtargets.kubesynapse.ai` exists
@@ -51,9 +51,9 @@ Notable implementation changes relative to the old docs:
 - observability is implemented in `operator/controllers/observation_controller.py`
 - workflow execution state is more artifact-oriented than before, with status holding summaries and references instead of full payload blobs
 
-## 3. Runtime Path: OpenCode Only
+## 3. Runtime Paths
 
-The old LangGraph, Goose, and Codex runtime paths are no longer the active architecture described by this repository. The supported runtime is now the OpenCode runtime under `opencode-runtime/`.
+The old LangGraph, Goose, and Codex runtime paths are no longer the active architecture described by this repository. The supported in-tree runtimes are OpenCode under `opencode-runtime/`, Pi under `pi-runtime/`, and Mistral Vibe under `vibe-runtime/`.
 
 What the runtime does today:
 
@@ -155,19 +155,16 @@ The current implementation intentionally includes demo-driven report generation 
 
 ## 8. Deployment and Operations Paths
 
-There are now three real ways operators use this repository:
+There are now two real ways operators use this repository:
 
 1. Deploy published images with Helm and values overrides.
 2. Build core images and the bundled MCP sidecars locally using the `Makefile`.
-3. Refresh the existing local Kind release with `scripts/deploy-ai-sandbox-kind.ps1`.
 
 Operationally important files:
 
-- `deploy/values.dockerhub.local.yaml`
 - `deploy/values.cluster.example.yaml`
-- `deploy/values.ai-sandbox.kind-local.yaml`
-- `scripts/deploy-ai-sandbox-kind.ps1`
-- `scripts/observability-smoke-test.ps1`
+- `deploy/values.local-images.example.yaml`
+- `tests/test_production_readiness.py`
 
 ## 9. What Changed from the Older Walkthrough
 
@@ -184,7 +181,7 @@ The current code instead reflects:
 
 - `opencode-runtime/` as the supported runtime path
 - gateway-managed auth, sessions, memory, and MCP connections
-- worker-artifact-first workflow and eval execution
+- worker-artifact-first workflow execution
 - observability CRDs, collector support, and related UI views
 
 ## 10. Recommended Companion Docs

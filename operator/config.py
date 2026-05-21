@@ -152,6 +152,9 @@ OPERATOR_PEERING_NAME: str = get_string_env("OPERATOR_PEERING_NAME", "kubesynaps
 
 WORKER_IMAGE: str = os.getenv("WORKER_IMAGE", "docker.io/kubesynapse/kubesynapse-operator:v1.0.0")
 WORKER_SERVICE_ACCOUNT_NAME: str = os.getenv("WORKER_SERVICE_ACCOUNT_NAME", "default").strip() or "default"
+TENANT_EXEC_ACCESS: bool = os.getenv("TENANT_EXEC_ACCESS", "").strip().lower() in ("1", "true", "yes")
+OPENCODE_IMMUTABLE_CONFIG: bool = os.getenv("OPENCODE_IMMUTABLE_CONFIG", "true").strip().lower() in ("1", "true", "yes")
+PI_IMMUTABLE_CONFIG: bool = os.getenv("PI_IMMUTABLE_CONFIG", "true").strip().lower() in ("1", "true", "yes")
 WORKER_ARTIFACT_SIZE: str = os.getenv("WORKER_ARTIFACT_SIZE", "2Gi")
 WORKER_ARTIFACT_STORAGE_CLASS: str = os.getenv("WORKER_ARTIFACT_STORAGE_CLASS", "").strip()
 WORKER_TTL_SECONDS_AFTER_FINISHED: int = get_int_env("WORKER_TTL_SECONDS_AFTER_FINISHED", 3600, minimum=0)
@@ -171,8 +174,6 @@ WORKER_MEMORY_LIMIT: str = os.getenv("WORKER_MEMORY_LIMIT", "512Mi").strip() or 
 
 AGENT_RUNTIME_TIMEOUT_SECONDS: str = str(get_float_env("AGENT_RUNTIME_TIMEOUT_SECONDS", 360.0, minimum=1.0))
 
-EVAL_SCHEDULE_POLL_SECONDS: int = get_int_env("EVAL_SCHEDULE_POLL_SECONDS", 60, minimum=15)
-SCHEDULED_EVAL_QUEUE_STALE_SECONDS: int = get_int_env("SCHEDULED_EVAL_QUEUE_STALE_SECONDS", 600, minimum=60)
 WORKFLOW_POLL_SECONDS: int = get_int_env("WORKFLOW_POLL_SECONDS", 30, minimum=15)
 WORKFLOW_QUEUE_STALE_SECONDS: int = get_int_env("WORKFLOW_QUEUE_STALE_SECONDS", 300, minimum=60)
 WORKFLOW_RUNNING_STALE_SECONDS: int = get_int_env("WORKFLOW_RUNNING_STALE_SECONDS", 900, minimum=60)
@@ -247,6 +248,7 @@ OPA_SIDECAR_RESOURCES: Any = get_json_env("OPA_SIDECAR_RESOURCES_JSON", {
 # ---------------------------------------------------------------------------
 
 ORPHAN_PRUNING_ENABLED: bool = os.getenv("ORPHAN_PRUNING_ENABLED", "true").strip().lower() in ("true", "1", "yes")
+ORPHAN_PVC_CLEANUP_INTERVAL: int = get_int_env("ORPHAN_PVC_CLEANUP_INTERVAL_SECONDS", 300, minimum=60)
 
 # ---------------------------------------------------------------------------
 # MCP sidecar catalog (mutable — populated once at import time)

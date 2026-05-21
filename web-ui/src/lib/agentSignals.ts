@@ -23,7 +23,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
-import { RUNTIME_BRAND_ICONS } from "@/components/RuntimeBrandIcon";
+import { RUNTIME_BRAND_ICONS } from "@/components/shared/RuntimeBrandIcon";
 import { ALPHA_RUNTIMES, type AgentMcpConnection, type GitConfig, type GitHubConfig, type RuntimeKind } from "@/types";
 
 export interface AgentSignalSource {
