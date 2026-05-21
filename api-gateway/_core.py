@@ -1043,6 +1043,7 @@ class WebhookReceiverUpdateRequest(BaseModel):
 
 
 class WebhookReceiverInfo(BaseModel):
+    id: int
     name: str
     namespace: str
     secret_ref: str
@@ -1051,52 +1052,53 @@ class WebhookReceiverInfo(BaseModel):
     max_payload_bytes: int = 1048576
     enabled: bool = True
     created_at: str | None = None
+    updated_at: str | None = None
 
 
 class WorkflowTriggerRequest(BaseModel):
     name: str = Field(min_length=1, max_length=63, pattern=K8S_NAME_PATTERN)
     source_kind: str = Field(default="WebhookReceiver", pattern=r"^(WebhookReceiver|AgentEvent)$")
-    source_name: str = Field(min_length=1, max_length=63)
+    source_ref: str = Field(min_length=1, max_length=63)
     event_filter: dict[str, Any] | None = Field(default=None)
-    target_workflow_name: str = Field(min_length=1, max_length=63)
-    target_workflow_namespace: str = Field(default="default", min_length=1, max_length=63)
+    workflow_ref: dict[str, str] = Field(default_factory=dict)
     payload_mapping: dict[str, str] = Field(default_factory=dict)
-    retry_max_retries: int = Field(default=3, ge=0, le=10)
-    retry_backoff_seconds: int = Field(default=60, ge=1, le=3600)
+    max_retries: int = Field(default=3, ge=0, le=10)
+    backoff_seconds: int = Field(default=60, ge=0, le=3600)
     notifications_on_success: list[str] = Field(default_factory=list)
     notifications_on_failure: list[str] = Field(default_factory=list)
     enabled: bool = True
 
 
 class WorkflowTriggerUpdateRequest(BaseModel):
-    source_kind: str = Field(default="WebhookReceiver", pattern=r"^(WebhookReceiver|AgentEvent)$")
-    source_name: str = Field(default="", min_length=1, max_length=63)
+    source_kind: str | None = Field(default=None, pattern=r"^(WebhookReceiver|AgentEvent)$")
+    source_ref: str | None = Field(default=None, min_length=1, max_length=63)
     event_filter: dict[str, Any] | None = Field(default=None)
-    target_workflow_name: str = Field(default="", min_length=1, max_length=63)
-    target_workflow_namespace: str = Field(default="default", min_length=1, max_length=63)
-    payload_mapping: dict[str, str] = Field(default_factory=dict)
-    retry_max_retries: int = Field(default=3, ge=0, le=10)
-    retry_backoff_seconds: int = Field(default=60, ge=1, le=3600)
-    notifications_on_success: list[str] = Field(default_factory=list)
-    notifications_on_failure: list[str] = Field(default_factory=list)
-    enabled: bool = True
+    workflow_ref: dict[str, str] | None = Field(default=None)
+    payload_mapping: dict[str, str] | None = Field(default=None)
+    max_retries: int | None = Field(default=None, ge=0, le=10)
+    backoff_seconds: int | None = Field(default=None, ge=0, le=3600)
+    notifications_on_success: list[str] | None = None
+    notifications_on_failure: list[str] | None = None
+    enabled: bool | None = None
 
 
 class WorkflowTriggerInfo(BaseModel):
+    id: int
     name: str
     namespace: str
     source_kind: str = "WebhookReceiver"
-    source_name: str
+    source_ref: str
     event_filter: dict[str, Any] | None = None
-    target_workflow_name: str
-    target_workflow_namespace: str = "default"
+    workflow_ref: dict[str, str] = Field(default_factory=dict)
     payload_mapping: dict[str, str] = Field(default_factory=dict)
-    retry_max_retries: int = 3
-    retry_backoff_seconds: int = 60
+    max_retries: int = 3
+    backoff_seconds: int = 60
     notifications_on_success: list[str] = Field(default_factory=list)
     notifications_on_failure: list[str] = Field(default_factory=list)
     enabled: bool = True
     created_at: str | None = None
+    execution_count: int = 0
+    last_triggered: str | None = None
 
 
 class WebhookInvocationInfo(BaseModel):
@@ -1104,28 +1106,28 @@ class WebhookInvocationInfo(BaseModel):
     namespace: str
     webhook_name: str
     event_id: str
+    invocation_id: str
     source_ip: str | None = None
     signature_valid: bool
+    signature_verified: bool
     payload_size: int
     payload_snippet: str | None = None
-    matched_triggers: list[str] = Field(default_factory=list)
+    matched_triggers: list[str] | int = Field(default_factory=list)
     error_message: str | None = None
     created_at: str | None = None
+    received_at: str | None = None
+    status: str = "received"
 
 
 class TriggerExecutionInfo(BaseModel):
     id: int
-    trigger_namespace: str
+    namespace: str
     trigger_name: str
-    event_id: str
-    workflow_name: str
-    workflow_namespace: str
-    payload_json: dict[str, Any] | None = None
+    webhook_name: str
+    executed_at: str | None = None
     status: str
+    workflow_run_id: str | None = None
     error_message: str | None = None
-    attempt_count: int
-    created_at: str | None = None
-    completed_at: str | None = None
 
 
 RESOURCE_GROUP = "kubesynapse.ai"

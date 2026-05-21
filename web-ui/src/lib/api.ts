@@ -4837,7 +4837,7 @@ function parseWorkflowTriggerPayload(payload: unknown, label = "WorkflowTriggerI
     workflow_ref: readRecord(record, "workflow_ref", label, {}) as Record<string, string>,
     payload_mapping: readRecord(record, "payload_mapping", label, {}) as Record<string, string>,
     max_retries: readOptionalNumber(record, "max_retries", label) ?? 3,
-    backoff_seconds: readOptionalNumber(record, "backoff_seconds", label) ?? 5,
+    backoff_seconds: readOptionalNumber(record, "backoff_seconds", label) ?? 60,
     enabled: readBoolean(record, "enabled", label, true),
     execution_count: readOptionalNumber(record, "execution_count", label) ?? 0,
     last_triggered: readOptionalString(record, "last_triggered", label),

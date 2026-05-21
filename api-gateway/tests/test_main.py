@@ -4,8 +4,10 @@ import hashlib
 import importlib.util
 import json
 import sys
+import tempfile
 import types
 import unittest
+import uuid
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -3392,6 +3394,232 @@ class McpOAuthSupportTests(unittest.TestCase):
             "redirect_uri=https%3A%2F%2Fkubesynapse.example.test%2Fapi%2Fmcp%2Fconnections%2Fconn-gmail%2Foauth%2Fcallback",
             response["authorization_url"],
         )
+
+
+class WebhookTriggerApiTests(unittest.TestCase):
+    def setUp(self) -> None:
+        from sqlalchemy.orm import sessionmaker
+
+        import auth_store as canonical_auth_store
+
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp_dir.cleanup)
+
+        self.engine = create_engine(
+            f"sqlite:///{(Path(self.temp_dir.name) / 'webhooks.db').as_posix()}",
+            future=True,
+            connect_args={"check_same_thread": False},
+        )
+        self.SessionLocal = sessionmaker(
+            bind=self.engine,
+            autoflush=False,
+            autocommit=False,
+            expire_on_commit=False,
+            future=True,
+        )
+
+        self.original_auth_engine = canonical_auth_store.ENGINE
+        self.original_auth_session_local = canonical_auth_store.SessionLocal
+        canonical_auth_store.ENGINE = self.engine
+        canonical_auth_store.SessionLocal = self.SessionLocal
+        self.addCleanup(setattr, canonical_auth_store, "ENGINE", self.original_auth_engine)
+        self.addCleanup(setattr, canonical_auth_store, "SessionLocal", self.original_auth_session_local)
+        self.addCleanup(self.engine.dispose)
+        canonical_auth_store.init_database()
+
+        self.webhooks_router = _load_gateway_module(f"api_gateway_webhooks_{uuid.uuid4().hex}", "routers/webhooks.py")
+        self.addCleanup(lambda: sys.modules.pop(self.webhooks_router.__name__, None))
+
+        self.recent_patcher = patch.object(self.webhooks_router, "count_recent_webhook_invocations", lambda *_args, **_kwargs: 0)
+        self.signature_patcher = patch.object(self.webhooks_router, "verify_webhook_signature", lambda *_args, **_kwargs: True)
+        self.timestamp_patcher = patch.object(self.webhooks_router, "verify_webhook_timestamp", lambda *_args, **_kwargs: None)
+        self.rate_limit_patcher = patch.object(self.webhooks_router, "check_webhook_rate_limit", lambda *_args, **_kwargs: None)
+        self.secret_patcher = patch.object(self.webhooks_router, "_resolve_webhook_secret", lambda *_args, **_kwargs: "secret")
+        self.client_ip_patcher = patch.object(self.webhooks_router, "resolve_trusted_client_ip", lambda *_args, **_kwargs: "127.0.0.1")
+        self.namespace_access_patcher = patch.object(self.webhooks_router, "ensure_namespace_access", lambda *_args, **_kwargs: None)
+        self.role_patcher = patch.object(self.webhooks_router, "ensure_role", lambda *_args, **_kwargs: None)
+
+        self.recent_patcher.start()
+        self.signature_patcher.start()
+        self.timestamp_patcher.start()
+        self.rate_limit_patcher.start()
+        self.secret_patcher.start()
+        self.client_ip_patcher.start()
+        self.namespace_access_patcher.start()
+        self.role_patcher.start()
+
+        self.addCleanup(self.recent_patcher.stop)
+        self.addCleanup(self.signature_patcher.stop)
+        self.addCleanup(self.timestamp_patcher.stop)
+        self.addCleanup(self.rate_limit_patcher.stop)
+        self.addCleanup(self.secret_patcher.stop)
+        self.addCleanup(self.client_ip_patcher.stop)
+        self.addCleanup(self.namespace_access_patcher.stop)
+        self.addCleanup(self.role_patcher.stop)
+
+        self.auth_store = canonical_auth_store
+        self.operator_user = {"sub": "test-user", "role": "operator", "allowed_namespaces": ["*"]}
+
+    def test_create_trigger_returns_ui_contract_shape(self) -> None:
+        created_webhook = self.webhooks_router.create_webhook(
+            body=self.webhooks_router.WebhookReceiverRequest(
+                name="incident-alerts",
+                secret_ref="default/incident-webhook-secret#hmac-key",
+                ip_allowlist=[],
+                rate_limit=30,
+                max_payload_bytes=1048576,
+                enabled=True,
+            ),
+            namespace="default",
+            user=self.operator_user,
+        )
+        self.assertEqual(created_webhook.name, "incident-alerts")
+
+        result = self.webhooks_router.create_trigger(
+            body=self.webhooks_router.WorkflowTriggerRequest(
+                name="incident-alert-trigger",
+                source_kind="WebhookReceiver",
+                source_ref="incident-alerts",
+                event_filter={
+                    "conditions": [
+                        {"field": "severity", "operator": "equals", "value": "critical"},
+                    ]
+                },
+                workflow_ref={"name": "incident-webhook-response", "namespace": "default"},
+                max_retries=1,
+                backoff_seconds=30,
+                enabled=True,
+            ),
+            namespace="default",
+            user=self.operator_user,
+        )
+
+        self.assertIsInstance(result.id, int)
+        self.assertEqual(result.source_ref, "incident-alerts")
+        self.assertEqual(result.workflow_ref, {"name": "incident-webhook-response", "namespace": "default"})
+        self.assertEqual(result.max_retries, 1)
+        self.assertEqual(result.backoff_seconds, 30)
+        self.assertEqual(result.execution_count, 0)
+        self.assertIsNone(result.last_triggered)
+
+    def test_update_trigger_preserves_omitted_fields(self) -> None:
+        self.auth_store.create_workflow_trigger(
+            namespace="default",
+            name="incident-alert-trigger",
+            source_kind="WebhookReceiver",
+            source_name="incident-alerts",
+            event_filter={"conditions": [{"field": "severity", "operator": "equals", "value": "critical"}]},
+            target_workflow_name="incident-webhook-response",
+            target_workflow_namespace="default",
+            retry_max_retries=2,
+            retry_backoff_seconds=45,
+            enabled=True,
+        )
+
+        result = self.webhooks_router.update_trigger(
+            name="incident-alert-trigger",
+            body=self.webhooks_router.WorkflowTriggerUpdateRequest(enabled=False),
+            namespace="default",
+            user=self.operator_user,
+        )
+
+        self.assertEqual(result.source_ref, "incident-alerts")
+        self.assertEqual(result.workflow_ref, {"name": "incident-webhook-response", "namespace": "default"})
+        self.assertEqual(result.max_retries, 2)
+        self.assertEqual(result.backoff_seconds, 45)
+        self.assertFalse(result.enabled)
+
+    def test_invoke_webhook_records_matched_trigger_history(self) -> None:
+        from starlette.requests import Request
+
+        self.auth_store.create_webhook_receiver(
+            namespace="default",
+            name="incident-alerts",
+            secret_ref="default/incident-webhook-secret#hmac-key",
+            rate_limit=30,
+            max_payload_bytes=1048576,
+            enabled=True,
+        )
+        self.auth_store.create_workflow_trigger(
+            namespace="default",
+            name="incident-alert-trigger",
+            source_kind="WebhookReceiver",
+            source_name="incident-alerts",
+            event_filter={
+                "conditions": [
+                    {"field": "severity", "operator": "equals", "value": "critical"},
+                    {"field": "service", "operator": "equals", "value": "api-gateway"},
+                ]
+            },
+            target_workflow_name="incident-webhook-response",
+            target_workflow_namespace="default",
+            retry_max_retries=1,
+            retry_backoff_seconds=30,
+            enabled=True,
+        )
+
+        async def receive() -> dict[str, object]:
+            return {
+                "type": "http.request",
+                "body": json.dumps(
+                    {"severity": "critical", "service": "api-gateway", "summary": "latency spike"}
+                ).encode("utf-8"),
+                "more_body": False,
+            }
+
+        raw_request = Request(
+            {
+                "type": "http",
+                "http_version": "1.1",
+                "method": "POST",
+                "scheme": "http",
+                "path": "/api/v1/webhooks/incident-alerts/invoke",
+                "raw_path": b"/api/v1/webhooks/incident-alerts/invoke",
+                "query_string": b"namespace=default",
+                "headers": [],
+                "client": ("127.0.0.1", 12345),
+                "server": ("testserver", 80),
+            },
+            receive,
+        )
+
+        response = asyncio.run(
+            self.webhooks_router.invoke_webhook(
+                name="incident-alerts",
+                raw_request=raw_request,
+                namespace="default",
+                x_KUBESYNAPSE_signature="sha256=test",
+                x_KUBESYNAPSE_timestamp="1710000000",
+            )
+        )
+        self.assertEqual(response.status_code, 200)
+        invoke_payload = json.loads(response.body.decode("utf-8"))
+        self.assertEqual(invoke_payload["matched_triggers"], 1)
+
+        history = self.webhooks_router.get_trigger_history(
+            name="incident-alert-trigger",
+            namespace="default",
+            user=self.operator_user,
+        )
+        self.assertEqual(len(history), 1)
+        execution = history[0]
+        self.assertEqual(execution.trigger_name, "incident-alert-trigger")
+        self.assertEqual(execution.webhook_name, "incident-alerts")
+        self.assertEqual(execution.status, "dispatched")
+        self.assertEqual(execution.namespace, "default")
+
+        webhook_history = self.webhooks_router.get_webhook_history(
+            name="incident-alerts",
+            namespace="default",
+            user=self.operator_user,
+        )
+        self.assertEqual(len(webhook_history), 1)
+        invocation = webhook_history[0]
+        self.assertEqual(invocation.webhook_name, "incident-alerts")
+        self.assertEqual(invocation.matched_triggers, 1)
+        self.assertEqual(invocation.status, "received")
+        self.assertTrue(invocation.signature_verified)
+        self.assertEqual(invocation.invocation_id, invoke_payload["invocation_id"])
 
 
 if __name__ == "__main__":

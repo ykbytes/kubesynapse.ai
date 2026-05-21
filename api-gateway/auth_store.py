@@ -1062,19 +1062,25 @@ class WebhookInvocationRow(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
 
     def to_dict(self) -> dict[str, Any]:
+        matched = self.matched_triggers or []
         return {
             "id": self.id,
             "namespace": self.namespace,
             "webhook_name": self.webhook_name,
             "event_id": self.event_id,
+            "invocation_id": self.event_id,
             "source_ip": self.source_ip,
             "signature_valid": self.signature_valid,
+            "signature_verified": self.signature_valid,
             "payload_size": self.payload_size,
             "payload_snippet": self.payload_snippet,
             "headers_json": self.headers_json,
-            "matched_triggers": self.matched_triggers or [],
+            "matched_triggers": len(matched),
+            "matched_trigger_names": matched,
             "error_message": self.error_message,
             "created_at": ensure_utc(self.created_at).isoformat() if self.created_at else None,
+            "received_at": ensure_utc(self.created_at).isoformat() if self.created_at else None,
+            "status": "received" if not self.error_message else "failed",
         }
 
 
@@ -1106,12 +1112,19 @@ class WorkflowTriggerRow(Base):
             "name": self.name,
             "source_kind": self.source_kind,
             "source_name": self.source_name,
+            "source_ref": self.source_name,
             "event_filter": self.event_filter_json,
             "target_workflow_name": self.target_workflow_name,
             "target_workflow_namespace": self.target_workflow_namespace,
+            "workflow_ref": {
+                "name": self.target_workflow_name,
+                "namespace": self.target_workflow_namespace,
+            },
             "payload_mapping": self.payload_mapping_json or {},
             "retry_max_retries": self.retry_max_retries,
             "retry_backoff_seconds": self.retry_backoff_seconds,
+            "max_retries": self.retry_max_retries,
+            "backoff_seconds": self.retry_backoff_seconds,
             "notifications_on_success": self.notifications_on_success or [],
             "notifications_on_failure": self.notifications_on_failure or [],
             "enabled": self.enabled,
@@ -1126,6 +1139,7 @@ class TriggerExecutionRow(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     trigger_namespace = Column(String(128), nullable=False, index=True)
     trigger_name = Column(String(128), nullable=False, index=True)
+    webhook_name = Column(String(128), nullable=False, default="")
     event_id = Column(String(128), nullable=False, index=True)
     workflow_name = Column(String(128), nullable=False)
     workflow_namespace = Column(String(128), nullable=False)
@@ -1140,9 +1154,11 @@ class TriggerExecutionRow(Base):
     def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
+            "namespace": self.trigger_namespace,
             "trigger_namespace": self.trigger_namespace,
             "trigger_name": self.trigger_name,
             "event_id": self.event_id,
+            "webhook_name": self.webhook_name,
             "workflow_name": self.workflow_name,
             "workflow_namespace": self.workflow_namespace,
             "payload_json": self.payload_json,
@@ -1150,8 +1166,10 @@ class TriggerExecutionRow(Base):
             "error_message": self.error_message,
             "attempt_count": self.attempt_count,
             "created_at": ensure_utc(self.created_at).isoformat() if self.created_at else None,
+            "executed_at": ensure_utc(self.created_at).isoformat() if self.created_at else None,
             "updated_at": ensure_utc(self.updated_at).isoformat() if self.updated_at else None,
             "completed_at": ensure_utc(self.completed_at).isoformat() if self.completed_at else None,
+            "workflow_run_id": None,
         }
 
 
@@ -1290,6 +1308,13 @@ def _ensure_webhook_trigger_tables() -> None:
             if table.name not in tables:
                 Base.metadata.create_all(bind=ENGINE, tables=[table])
                 logger.info("Created table %s", table.name)
+        if "trigger_executions" in tables:
+            columns = {column["name"] for column in inspector.get_columns("trigger_executions")}
+            if "webhook_name" not in columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE trigger_executions ADD COLUMN webhook_name VARCHAR(128) NOT NULL DEFAULT ''"
+                )
+                logger.info("Added webhook_name column to trigger_executions")
 
 
 def init_database() -> None:
@@ -3255,7 +3280,32 @@ def list_workflow_triggers(namespace: str) -> list[dict[str, Any]]:
             .order_by(WorkflowTriggerRow.name.asc())
             .all()
         )
-        return [row.to_dict() for row in rows]
+        trigger_names = [str(row.name) for row in rows]
+        execution_counts: dict[str, int] = {}
+        last_triggered: dict[str, str] = {}
+        if trigger_names:
+            execution_rows = (
+                session.query(TriggerExecutionRow)
+                .filter(
+                    TriggerExecutionRow.trigger_namespace == normalized,
+                    TriggerExecutionRow.trigger_name.in_(trigger_names),
+                )
+                .all()
+            )
+            for execution in execution_rows:
+                trigger_name = str(execution.trigger_name)
+                execution_counts[trigger_name] = execution_counts.get(trigger_name, 0) + 1
+                created_at = ensure_utc(execution.created_at).isoformat() if execution.created_at else None
+                if created_at and created_at > last_triggered.get(trigger_name, ""):
+                    last_triggered[trigger_name] = created_at
+
+        payloads: list[dict[str, Any]] = []
+        for row in rows:
+            payload = row.to_dict()
+            payload["execution_count"] = execution_counts.get(str(row.name), 0)
+            payload["last_triggered"] = last_triggered.get(str(row.name))
+            payloads.append(payload)
+        return payloads
 
 
 def get_workflow_trigger(namespace: str, name: str) -> dict[str, Any] | None:
@@ -3269,7 +3319,30 @@ def get_workflow_trigger(namespace: str, name: str) -> dict[str, Any] | None:
             .filter(WorkflowTriggerRow.namespace == normalized_ns, WorkflowTriggerRow.name == normalized_name)
             .one_or_none()
         )
-        return row.to_dict() if row is not None else None
+        if row is None:
+            return None
+        payload = row.to_dict()
+        payload["execution_count"] = (
+            session.query(TriggerExecutionRow)
+            .filter(
+                TriggerExecutionRow.trigger_namespace == normalized_ns,
+                TriggerExecutionRow.trigger_name == normalized_name,
+            )
+            .count()
+        )
+        last_execution = (
+            session.query(TriggerExecutionRow)
+            .filter(
+                TriggerExecutionRow.trigger_namespace == normalized_ns,
+                TriggerExecutionRow.trigger_name == normalized_name,
+            )
+            .order_by(TriggerExecutionRow.created_at.desc())
+            .first()
+        )
+        payload["last_triggered"] = (
+            ensure_utc(last_execution.created_at).isoformat() if last_execution and last_execution.created_at else None
+        )
+        return payload
 
 
 def create_workflow_trigger(
@@ -3305,7 +3378,7 @@ def create_workflow_trigger(
         target_workflow_namespace=str(target_workflow_namespace or "default").strip(),
         payload_mapping_json=_json_clone(payload_mapping) or {},
         retry_max_retries=max(0, int(retry_max_retries or 0)),
-        retry_backoff_seconds=max(1, int(retry_backoff_seconds or 60)),
+        retry_backoff_seconds=max(0, int(60 if retry_backoff_seconds is None else retry_backoff_seconds)),
         notifications_on_success=list(notifications_on_success) if notifications_on_success else [],
         notifications_on_failure=list(notifications_on_failure) if notifications_on_failure else [],
         enabled=bool(enabled),
@@ -3359,7 +3432,7 @@ def update_workflow_trigger(
         if retry_max_retries is not None:
             row.retry_max_retries = max(0, int(retry_max_retries))
         if retry_backoff_seconds is not None:
-            row.retry_backoff_seconds = max(1, int(retry_backoff_seconds))
+            row.retry_backoff_seconds = max(0, int(retry_backoff_seconds))
         if notifications_on_success is not None:
             row.notifications_on_success = list(notifications_on_success)
         if notifications_on_failure is not None:
@@ -3388,6 +3461,7 @@ def delete_workflow_trigger(namespace: str, name: str) -> bool:
 def record_trigger_execution(
     trigger_namespace: str,
     trigger_name: str,
+    webhook_name: str,
     event_id: str,
     workflow_name: str,
     workflow_namespace: str,
@@ -3400,6 +3474,7 @@ def record_trigger_execution(
     row = TriggerExecutionRow(
         trigger_namespace=normalized_ns,
         trigger_name=str(trigger_name or "").strip(),
+        webhook_name=str(webhook_name or "").strip(),
         event_id=str(event_id or "").strip(),
         workflow_name=str(workflow_name or "").strip(),
         workflow_namespace=str(workflow_namespace or "default").strip(),

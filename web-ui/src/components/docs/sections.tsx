@@ -1461,7 +1461,7 @@ function ApiReferenceSection() {
           ["POST", "/api/v1/webhooks", "Create webhook receiver"],
           ["PUT", "/api/v1/webhooks/{name}", "Update webhook receiver"],
           ["DELETE", "/api/v1/webhooks/{name}", "Delete webhook receiver"],
-          ["POST", "/api/v1/webhooks/{name}/invoke", "Public webhook invocation (HMAC-signed)"],
+          ["POST", "/api/v1/webhooks/{name}/invoke?namespace={namespace}", "Public webhook invocation (HMAC-signed)"],
           ["GET", "/api/v1/workflow-triggers", "List workflow triggers"],
           ["POST", "/api/v1/workflow-triggers", "Create workflow trigger"],
           ["PUT", "/api/v1/workflow-triggers/{name}", "Update workflow trigger"],
@@ -1655,7 +1655,7 @@ function WebhooksSection() {
           ["enabled", "boolean", "true", "Whether the webhook receiver is active"],
         ]} />
         <Callout variant="info" title="Public invoke endpoint">
-          External systems call <code>POST /api/v1/webhooks/{'{'}name{'}'}/invoke</code> with HMAC-SHA256
+          External systems call <code>POST /api/v1/webhooks/{'{'}name{'}'}/invoke?namespace=default</code> with HMAC-SHA256
           signatures in the <code>X-kubesynapse-Signature</code> header and a unix timestamp in
           <code>X-kubesynapse-Timestamp</code>. The timestamp must be within 5 minutes of the server clock.
         </Callout>

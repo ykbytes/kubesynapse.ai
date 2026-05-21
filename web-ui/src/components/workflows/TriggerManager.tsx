@@ -154,7 +154,7 @@ export function TriggerManager() {
     setFormWorkflowName("");
     setFormPayloadMapping([]);
     setFormMaxRetries(3);
-    setFormBackoffSeconds(5);
+    setFormBackoffSeconds(60);
     setFormEnabled(true);
     setShowAdvanced(false);
     setError("");
@@ -178,18 +178,21 @@ export function TriggerManager() {
     // Parse event_filter into conditions
     const conditions: Array<{ field: string; operator: Operator; value: string }> = [];
     if (trigger.event_filter && typeof trigger.event_filter === "object") {
-      for (const [key, val] of Object.entries(trigger.event_filter)) {
-        if (val && typeof val === "object") {
-          const obj = val as Record<string, unknown>;
-          const op = Object.keys(obj)[0] as Operator;
-          const v = String(Object.values(obj)[0] ?? "");
-          if (OPERATORS.includes(op)) {
-            conditions.push({ field: key, operator: op, value: v });
-          } else {
-            conditions.push({ field: key, operator: "equals", value: v });
-          }
+      const eventFilterRecord = trigger.event_filter as { conditions?: unknown[] } & Record<string, unknown>;
+      const conditionItems = Array.isArray(eventFilterRecord.conditions)
+        ? eventFilterRecord.conditions
+        : Object.entries(eventFilterRecord).map(([field, value]) => ({ field, value }));
+      for (const item of conditionItems) {
+        if (!item || typeof item !== "object") continue;
+        const record = item as Record<string, unknown>;
+        const field = String(record.field ?? "").trim();
+        if (!field) continue;
+        const operator = String(record.operator ?? "equals") as Operator;
+        const value = String(record.value ?? "");
+        if (OPERATORS.includes(operator)) {
+          conditions.push({ field, operator, value });
         } else {
-          conditions.push({ field: key, operator: "equals", value: String(val) });
+          conditions.push({ field, operator: "equals", value });
         }
       }
     }
@@ -228,11 +231,13 @@ export function TriggerManager() {
     setError("");
 
     try {
-      const eventFilter: Record<string, unknown> = {};
-      for (const cond of formConditions) {
-        if (!cond.field.trim()) continue;
-        eventFilter[cond.field] = { [cond.operator]: cond.value };
-      }
+      const conditions = formConditions
+        .filter((cond) => cond.field.trim())
+        .map((cond) => ({
+          field: cond.field.trim(),
+          operator: cond.operator,
+          value: cond.operator === "exists" ? true : cond.value,
+        }));
 
       const payloadMapping: Record<string, string> = {};
       for (const m of formPayloadMapping) {
@@ -243,7 +248,7 @@ export function TriggerManager() {
         name,
         source_kind: formSourceKind,
         source_ref: formSourceRef.trim(),
-        event_filter: eventFilter,
+        event_filter: conditions.length > 0 ? { conditions } : {},
         workflow_ref: { name: formWorkflowName.trim() },
         payload_mapping: payloadMapping,
         max_retries: Math.max(0, formMaxRetries),
@@ -727,14 +732,25 @@ export function TriggerManager() {
                         <div className="space-y-1">
                           <div className="text-xs font-medium text-foreground">Event Filter</div>
                           <div className="flex flex-wrap gap-1.5">
-                            {Object.entries(trigger.event_filter).map(([key, val]) => {
+                            {(Array.isArray((trigger.event_filter as { conditions?: unknown[] }).conditions)
+                              ? (((trigger.event_filter as { conditions?: unknown[] }).conditions ?? []).map((item) => {
+                                  const record = (item ?? {}) as Record<string, unknown>;
+                                  return [String(record.field ?? ""), record] as const;
+                                }))
+                              : Object.entries(trigger.event_filter)
+                            ).map(([key, val]) => {
                               let display = `${key} = ${String(val)}`;
                               if (val && typeof val === "object") {
-                                const entries = Object.entries(val as Record<string, unknown>);
-                                display = entries.map(([op, v]) => `${key} ${op} ${String(v)}`).join(", ");
+                                const record = val as Record<string, unknown>;
+                                if ("operator" in record || "value" in record) {
+                                  display = `${key} ${String(record.operator ?? "equals")} ${String(record.value ?? "")}`;
+                                } else {
+                                  const entries = Object.entries(record);
+                                  display = entries.map(([op, v]) => `${key} ${op} ${String(v)}`).join(", ");
+                                }
                               }
                               return (
-                                <Badge key={key} variant="outline" className="text-[10px]">
+                                <Badge key={`${key}-${display}`} variant="outline" className="text-[10px]">
                                   {display}
                                 </Badge>
                               );

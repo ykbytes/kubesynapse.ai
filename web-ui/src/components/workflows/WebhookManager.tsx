@@ -231,7 +231,7 @@ export function WebhookManager() {
 
   const gatewayUrl = typeof window !== "undefined" ? window.location.origin : "";
   const webhookUrl = selectedWebhook
-    ? `${gatewayUrl}/api/v1/webhooks/${encodeURIComponent(selectedWebhook.namespace)}/${encodeURIComponent(selectedWebhook.name)}/invoke`
+    ? `${gatewayUrl}/api/v1/webhooks/${encodeURIComponent(selectedWebhook.name)}/invoke?namespace=${encodeURIComponent(selectedWebhook.namespace)}`
     : "";
   const curlExample = selectedWebhook
     ? `curl -X POST "${webhookUrl}" \\\n  -H "Content-Type: application/json" \\\n  -H "X-kubesynapse-Signature: <signature>" \\\n  -d '{"key":"value"}'`

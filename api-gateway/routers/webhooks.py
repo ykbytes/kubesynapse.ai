@@ -29,6 +29,7 @@ from _core import (
     logger,
     record_trigger_execution,
     record_webhook_invocation,
+    update_webhook_invocation_matched_triggers,
     update_webhook_receiver,
     update_workflow_trigger,
 )
@@ -197,7 +198,7 @@ async def invoke_webhook(
     sanitized_payload = sanitize_webhook_payload(parsed_payload) if isinstance(parsed_payload, dict) else parsed_payload
 
     # Record invocation
-    record_webhook_invocation(
+    recorded_invocation = record_webhook_invocation(
         namespace=namespace,
         webhook_name=name,
         event_id=invocation_id,
@@ -211,14 +212,14 @@ async def invoke_webhook(
         },
     )
 
-    # Dispatch matching triggers (placeholder for now)
-    matched_trigger_count = _dispatch_matching_triggers(name, namespace, sanitized_payload)
+    matched_triggers = _dispatch_matching_triggers(name, namespace, invocation_id, sanitized_payload)
+    update_webhook_invocation_matched_triggers(int(recorded_invocation["id"]), matched_triggers)
 
     return JSONResponse(
         content={
             "status": "received",
             "invocation_id": invocation_id,
-            "matched_triggers": matched_trigger_count,
+            "matched_triggers": len(matched_triggers),
         },
         status_code=200,
     )
@@ -230,7 +231,7 @@ async def invoke_webhook(
 @router.get("/webhooks/{name}/history", response_model=list[WebhookInvocationInfo])
 def get_webhook_history(name: str, namespace: str = "default", limit: int = 50, user=Depends(verify_token)):
     ensure_namespace_access(user, namespace)
-    rows = list_webhook_invocations(name, namespace, limit=min(limit, 200))
+    rows = list_webhook_invocations(namespace, name, limit=min(limit, 200))
     return [WebhookInvocationInfo.model_validate(r) for r in rows]
 
 # ---------------------------------------------------------------------------
@@ -248,18 +249,25 @@ def list_triggers(namespace: str = "default", user=Depends(verify_token)):
 @router.post("/workflow-triggers", status_code=201, response_model=WorkflowTriggerInfo)
 def create_trigger(body: WorkflowTriggerRequest, namespace: str = "default", user=Depends(verify_token)):
     ensure_namespace_access(user, namespace, "operator")
-    row = create_workflow_trigger(
-        namespace=namespace,
-        name=body.name,
-        source_ref=body.source_ref,
-        source_kind=body.source_kind or "WebhookReceiver",
-        event_filter=body.event_filter,
-        workflow_ref=body.workflow_ref,
-        payload_mapping=body.payload_mapping,
-        max_retries=body.max_retries or 0,
-        backoff_seconds=body.backoff_seconds or 60,
-        enabled=body.enabled if body.enabled is not None else True,
-    )
+    workflow_ref = body.workflow_ref or {}
+    try:
+        row = create_workflow_trigger(
+            namespace=namespace,
+            name=body.name,
+            source_name=body.source_ref,
+            source_kind=body.source_kind or "WebhookReceiver",
+            event_filter=body.event_filter,
+            target_workflow_name=str(workflow_ref.get("name") or "").strip(),
+            target_workflow_namespace=str(workflow_ref.get("namespace") or namespace).strip() or namespace,
+            payload_mapping=body.payload_mapping,
+            retry_max_retries=body.max_retries,
+            retry_backoff_seconds=body.backoff_seconds,
+            notifications_on_success=body.notifications_on_success,
+            notifications_on_failure=body.notifications_on_failure,
+            enabled=body.enabled if body.enabled is not None else True,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return WorkflowTriggerInfo.model_validate(row)
 
 
@@ -278,18 +286,30 @@ def update_trigger(name: str, body: WorkflowTriggerUpdateRequest, namespace: str
     existing = get_workflow_trigger(namespace, name)
     if existing is None:
         raise HTTPException(status_code=404, detail="Workflow trigger not found")
-    row = update_workflow_trigger(
-        namespace=namespace,
-        name=name,
-        source_ref=body.source_ref,
-        source_kind=body.source_kind,
-        event_filter=body.event_filter,
-        workflow_ref=body.workflow_ref,
-        payload_mapping=body.payload_mapping,
-        max_retries=body.max_retries,
-        backoff_seconds=body.backoff_seconds,
-        enabled=body.enabled,
-    )
+    workflow_ref = body.workflow_ref
+    target_workflow_name = None
+    target_workflow_namespace = None
+    if workflow_ref is not None:
+        target_workflow_name = str(workflow_ref.get("name") or "").strip() or None
+        target_workflow_namespace = str(workflow_ref.get("namespace") or "").strip() or None
+    try:
+        row = update_workflow_trigger(
+            namespace=namespace,
+            name=name,
+            source_name=body.source_ref,
+            source_kind=body.source_kind,
+            event_filter=body.event_filter,
+            target_workflow_name=target_workflow_name,
+            target_workflow_namespace=target_workflow_namespace,
+            payload_mapping=body.payload_mapping,
+            retry_max_retries=body.max_retries,
+            retry_backoff_seconds=body.backoff_seconds,
+            notifications_on_success=body.notifications_on_success,
+            notifications_on_failure=body.notifications_on_failure,
+            enabled=body.enabled,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if row is None:
         raise HTTPException(status_code=404, detail="Workflow trigger not found")
     return WorkflowTriggerInfo.model_validate(row)
@@ -310,7 +330,7 @@ def delete_trigger(name: str, namespace: str = "default", user=Depends(verify_to
 @router.get("/workflow-triggers/{name}/history", response_model=list[TriggerExecutionInfo])
 def get_trigger_history(name: str, namespace: str = "default", limit: int = 50, user=Depends(verify_token)):
     ensure_namespace_access(user, namespace)
-    rows = list_trigger_executions(name, namespace, limit=min(limit, 200))
+    rows = list_trigger_executions(namespace, name, limit=min(limit, 200))
     return [TriggerExecutionInfo.model_validate(r) for r in rows]
 
 # ---------------------------------------------------------------------------
@@ -377,16 +397,21 @@ def _resolve_webhook_secret(secret_ref: str) -> str | None:
     return None
 
 
-def _dispatch_matching_triggers(webhook_name: str, namespace: str, payload: dict[str, Any] | None) -> int:
+def _dispatch_matching_triggers(
+    webhook_name: str,
+    namespace: str,
+    invocation_id: str,
+    payload: dict[str, Any] | None,
+) -> list[str]:
     """Find and dispatch matching workflow triggers for a webhook event.
     
-    For now this is a placeholder that logs and returns 0.
-    Full implementation requires integration with the operator for actual workflow launching.
+    Matching triggers are recorded in the shared DB; the operator dispatch loop
+    claims those rows and launches the workflow jobs.
     """
     if not payload:
-        return 0
+        return []
 
-    matched = 0
+    matched: list[str] = []
     try:
         triggers = list_workflow_triggers(namespace)
         for trigger in triggers:
@@ -394,7 +419,7 @@ def _dispatch_matching_triggers(webhook_name: str, namespace: str, payload: dict
                 continue
             if trigger.get("source_kind") != "WebhookReceiver":
                 continue
-            if trigger.get("source_ref") != webhook_name:
+            if trigger.get("source_ref") != webhook_name and trigger.get("source_name") != webhook_name:
                 continue
 
             event_filter = trigger.get("event_filter") or {}
@@ -402,17 +427,34 @@ def _dispatch_matching_triggers(webhook_name: str, namespace: str, payload: dict
                 continue
 
             # Record trigger execution (will launch workflow in future operator integration)
+            workflow_ref = trigger.get("workflow_ref") or {}
+            workflow_name = str(workflow_ref.get("name") or trigger.get("target_workflow_name") or "").strip()
+            workflow_namespace = (
+                str(workflow_ref.get("namespace") or trigger.get("target_workflow_namespace") or namespace).strip()
+                or namespace
+            )
+            if not workflow_name:
+                logger.warning(
+                    "Webhook trigger %s/%s has no target workflow name; skipping.",
+                    namespace,
+                    trigger.get("name"),
+                )
+                continue
+
             record_trigger_execution(
-                trigger_name=str(trigger.get("name")),
                 trigger_namespace=namespace,
+                trigger_name=str(trigger.get("name") or "").strip(),
                 webhook_name=webhook_name,
-                event_payload=payload,
+                event_id=invocation_id,
+                workflow_name=workflow_name,
+                workflow_namespace=workflow_namespace,
+                payload_json=payload,
                 status="dispatched",
             )
-            matched += 1
+            matched.append(str(trigger.get("name") or "").strip())
             logger.info(
-                "Webhook trigger matched: %s/%s → workflow %s",
-                namespace, trigger.get("name"), trigger.get("workflow_ref"),
+                "Webhook trigger matched: %s/%s → workflow %s/%s",
+                namespace, trigger.get("name"), workflow_namespace, workflow_name,
             )
     except Exception as exc:
         logger.warning("Error dispatching webhook triggers for %s/%s: %s", namespace, webhook_name, exc)
@@ -426,6 +468,15 @@ def _matches_event_filter(payload: dict[str, Any], event_filter: dict[str, Any])
     Supports simple key-value matching. For JSONPath, uses basic dot-notation traversal.
     """
     conditions = event_filter.get("conditions") or []
+    if not conditions and event_filter:
+        for field, raw_value in event_filter.items():
+            if field == "conditions":
+                continue
+            if isinstance(raw_value, dict) and raw_value:
+                operator, expected = next(iter(raw_value.items()))
+                conditions.append({"field": field, "operator": operator, "value": expected})
+            else:
+                conditions.append({"field": field, "operator": "equals", "value": raw_value})
     if not conditions:
         # No conditions = match everything
         return True
