@@ -132,13 +132,16 @@ def register_all(app: typer.Typer) -> None:
                         "POST", f"/api/agents/{agent_name}/invoke/stream", params=_ns_params(), payload=payload
                     ) as response:
                         ApiClient._raise_for_status(response)
+                        from rich import box
                         from rich.panel import Panel
 
                         console.print(
                             Panel(
-                                f"Streaming from [bold]{agent_name}[/bold]",
-                                title="Live Invoke",
+                                f"[bold]{agent_name}[/bold] \u2502 [dim]{settings.namespace}[/dim]",
+                                title="[header]Invoke[/header]",
                                 border_style="bright_cyan",
+                                box=box.ROUNDED,
+                                expand=False,
                             )
                         )
                         for sse in client.iter_sse(response):

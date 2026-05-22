@@ -77,17 +77,38 @@ def _render_invoke_result(data: dict[str, Any]) -> None:
 
     # Response body
     response_text = str(data.get("response", "")).strip() or "(empty response)"
-    console.print(Panel(Markdown(response_text), title="Response", border_style="bright_cyan"))
+    console.print(
+        Panel(
+            Markdown(response_text),
+            title="[header]Response[/header]",
+            border_style="bright_cyan",
+            box=box.ROUNDED,
+        )
+    )
 
     # Tool result
     tool_result = data.get("tool_result")
     if tool_result is not None:
-        console.print(Panel(Pretty(tool_result), title="Tool Result", border_style="bright_cyan"))
+        console.print(
+            Panel(
+                Pretty(tool_result),
+                title="[header]Tool Result[/header]",
+                border_style="bright_cyan",
+                box=box.ROUNDED,
+            )
+        )
 
     # Sandbox
     sandbox = data.get("sandbox_session")
     if sandbox:
-        console.print(Panel(Pretty(sandbox), title="Sandbox Session", border_style="bright_cyan"))
+        console.print(
+            Panel(
+                Pretty(sandbox),
+                title="[header]Sandbox Session[/header]",
+                border_style="bright_cyan",
+                box=box.ROUNDED,
+            )
+        )
 
     # A2A metadata
     a2a = data.get("a2a")
@@ -98,12 +119,12 @@ def _render_invoke_result(data: dict[str, Any]) -> None:
         if a2a.get("callerAgent"):
             a2a_rows.append(("Caller", f"{a2a.get('callerNamespace', '')}/{a2a.get('callerAgent', '')}"))
         if a2a_rows:
-            t = Table(show_header=False, box=box.SIMPLE, border_style="dim")
+            t = Table(show_header=False, box=box.SIMPLE, border_style="grey58")
             t.add_column("", style="bold magenta")
             t.add_column("")
             for k, v in a2a_rows:
                 t.add_row(k, v)
-            console.print(Panel(t, title="A2A", border_style="dim"))
+            console.print(Panel(t, title="[dim]A2A[/dim]", border_style="grey58", box=box.ROUNDED))
 
     # Artifacts
     artifacts = data.get("artifacts")
@@ -391,9 +412,11 @@ def agents_invoke(
                     _AC._raise_for_status(response)
                     console.print(
                         Panel(
-                            f"Streaming from [bold]{agent_name}[/bold] in [bold]{settings.namespace}[/bold]",
-                            title="Live Invoke",
+                            f"[bold]{agent_name}[/bold] \u2502 [dim]{settings.namespace}[/dim]",
+                            title="[header]Invoke[/header]",
                             border_style="bright_cyan",
+                            box=box.ROUNDED,
+                            expand=False,
                         )
                     )
                     completed_payload: dict[str, Any] | None = None
@@ -419,8 +442,10 @@ def agents_invoke(
                         console.print(
                             Panel(
                                 _event_summary(event_name, event_data),
-                                title=event_name,
-                                border_style="dim",
+                                title=f"[dim]{event_name}[/dim]",
+                                border_style="grey58",
+                                box=box.SIMPLE,
+                                expand=False,
                             )
                         )
         except ApiError as exc:
@@ -459,9 +484,10 @@ def agents_logs(
                     _AC._raise_for_status(response)
                     console.print(
                         Panel(
-                            f"Streaming logs for [bold]{agent_name}[/bold] (Ctrl+C to stop)",
-                            title="Live Logs",
+                            f"[bold]{agent_name}[/bold] \u2502 [dim]Ctrl+C to stop[/dim]",
+                            title="[header]Logs[/header]",
                             border_style="bright_cyan",
+                            box=box.ROUNDED,
                         )
                     )
                     for sse in client.iter_sse(response):
@@ -475,7 +501,7 @@ def agents_logs(
                         elif sse["event"] == "log.ended":
                             break
         except KeyboardInterrupt:
-            console.print("\n[dim]Log stream stopped.[/dim]")
+            console.print("\n[dim]\u2514 Log stream stopped[/dim]")
         except ApiError as exc:
             fatal(str(exc))
         return
@@ -521,9 +547,10 @@ def agents_live_events(
                 _AC._raise_for_status(response)
                 console.print(
                     Panel(
-                        f"Streaming events for [bold]{agent_name}[/bold] (Ctrl+C to stop)",
-                        title="Live Events",
+                        f"[bold]{agent_name}[/bold] \u2502 [dim]Ctrl+C to stop[/dim]",
+                        title="[header]Live Events[/header]",
                         border_style="bright_cyan",
+                        box=box.ROUNDED,
                     )
                 )
                 for sse in client.iter_sse(response):
@@ -545,6 +572,6 @@ def agents_live_events(
                     color = style_map.get(event_type, "dim")
                     console.print(f"[dim]{ts}[/dim] [[{color}]{event_type}[/{color}]] {summary[:120]}")
     except KeyboardInterrupt:
-        console.print("\n[dim]Event stream stopped.[/dim]")
+        console.print("\n[dim]\u2514 Event stream stopped[/dim]")
     except ApiError as exc:
         fatal(str(exc))

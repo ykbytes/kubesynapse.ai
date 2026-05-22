@@ -6,9 +6,11 @@ import json
 from typing import Any
 
 import yaml
+from rich import box
 from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
+from rich.style import Style
 from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
@@ -27,30 +29,38 @@ THEME = Theme(
         "ready": "bold green",
         "pending": "bold yellow",
         "failed": "bold red",
+        "accent": "bright_cyan",
+        "muted": "grey58",
     }
 )
 
 console = Console(theme=THEME)
 err_console = Console(stderr=True, theme=THEME)
 
+_STATUS_MAP = {
+    "running": "ready",
+    "active": "ready",
+    "healthy": "ready",
+    "succeeded": "ready",
+    "completed": "ready",
+    "pending": "pending",
+    "waiting": "pending",
+    "unknown": "pending",
+    "initializing": "pending",
+    "failed": "failed",
+    "error": "failed",
+    "degraded": "failed",
+    "crash": "failed",
+}
 
-# ─── Helpers ───
+_ALT_ROW = Style(color="grey58")
 
 
 def status_style(status: str) -> str:
-    """Return a Rich style based on resource status."""
-    s = status.lower()
-    if s in ("running", "active", "healthy", "succeeded", "completed"):
-        return "ready"
-    if s in ("pending", "waiting", "unknown", "initializing"):
-        return "pending"
-    if s in ("failed", "error", "degraded", "crash"):
-        return "failed"
-    return "dim"
+    return _STATUS_MAP.get(status.lower(), "dim")
 
 
 def truncate(text: str, max_len: int = 50) -> str:
-    """Truncate text with ellipsis."""
     if len(text) <= max_len:
         return text
     return text[: max_len - 1] + "\u2026"
@@ -60,19 +70,16 @@ def truncate(text: str, max_len: int = 50) -> str:
 
 
 def print_json_output(data: Any) -> None:
-    """Print as indented JSON."""
     output = json.dumps(data, indent=2, default=str)
     console.print(Syntax(output, "json", theme="monokai", word_wrap=True))
 
 
 def print_yaml_output(data: Any) -> None:
-    """Print as YAML."""
     output = yaml.dump(data, default_flow_style=False, allow_unicode=True)
     console.print(Syntax(output, "yaml", theme="monokai", word_wrap=True))
 
 
 def print_name_output(items: list[dict[str, Any]], name_key: str = "name") -> None:
-    """Print just the names, one per line."""
     for item in items:
         name = item.get(name_key) or item.get("id") or "unknown"
         console.print(name)
@@ -86,12 +93,6 @@ def print_table(
     wide_columns: list[tuple[str, str]] | None = None,
     output_format: str = "table",
 ) -> None:
-    """
-    Unified output for lists.
-
-    columns: list of (header_label, dict_key) — shown in table mode.
-    wide_columns: additional columns shown in 'wide' mode.
-    """
     if not items:
         console.print("[dim]No items found.[/dim]")
         return
@@ -107,12 +108,19 @@ def print_table(
         print_name_output(items, name_key)
         return
 
-    # Table or wide mode
     cols = list(columns)
     if output_format == "wide" and wide_columns:
         cols.extend(wide_columns)
 
-    table = Table(title=title, show_lines=False, expand=False, border_style="bright_black")
+    table = Table(
+        title=title,
+        show_lines=False,
+        expand=False,
+        border_style="bright_black",
+        box=box.ROUNDED,
+        header_style="bold bright_cyan",
+        row_styles=["", _ALT_ROW],
+    )
     for header, _ in cols:
         table.add_column(header, style="bold")
 
@@ -122,7 +130,7 @@ def print_table(
             val = item.get(key)
             if val is None:
                 row.append(Text("-", style="dim"))
-            elif key == "status" or key == "state" or key == "phase":
+            elif key in ("status", "state", "phase"):
                 style = status_style(str(val))
                 row.append(Text(str(val), style=style))
             else:
@@ -139,11 +147,6 @@ def print_detail(
     output_format: str = "table",
     fields: list[tuple[str, str]] | None = None,
 ) -> None:
-    """
-    Display a single resource detail.
-
-    fields: list of (label, dict_key). If None, prints all keys.
-    """
     if output_format == "json":
         print_json_output(data)
         return
@@ -154,7 +157,6 @@ def print_detail(
         console.print(data.get("name") or data.get("id") or "unknown")
         return
 
-    # Render as key-value panel
     lines: list[str] = []
     pairs = fields if fields else [(k.replace("_", " ").title(), k) for k in data]
     for label, key in pairs:
@@ -165,7 +167,9 @@ def print_detail(
 
     content = "\n".join(lines)
     if title:
-        console.print(Panel(content, title=f"[header]{title}[/header]", border_style="bright_cyan", expand=False))
+        console.print(
+            Panel(content, title=f"[header]{title}[/header]", border_style="bright_cyan", box=box.ROUNDED, expand=False)
+        )
     else:
         console.print(content)
 

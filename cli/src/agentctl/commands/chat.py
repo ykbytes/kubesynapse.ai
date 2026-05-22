@@ -7,6 +7,7 @@ import sys
 from typing import Any
 
 import typer
+from rich import box
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.text import Text
@@ -79,27 +80,37 @@ def chat_send(
 
                     _AC._raise_for_status(response)
 
+                    console.print(
+                        Panel(
+                            f"[bold]{agent_name}[/bold]",
+                            title="[header]Chat[/header]",
+                            border_style="bright_cyan",
+                            box=box.ROUNDED,
+                            expand=False,
+                        )
+                    )
+
                     collected = ""
                     for sse in client.iter_sse(response):
                         event = sse["event"]
                         data_str = sse["data"]
-                        if event == "chat.delta" or event == "response.delta":
+                        if event in ("chat.delta", "response.delta"):
                             event_data = json.loads(data_str) if data_str else {}
                             delta = str(event_data.get("delta", ""))
                             if delta:
                                 console.print(delta, end="")
                                 collected += delta
-                        elif event == "chat.completed" or event == "response.completed":
+                        elif event in ("chat.completed", "response.completed"):
                             break
-                        elif event == "chat.error" or event == "response.error":
+                        elif event in ("chat.error", "response.error"):
                             event_data = json.loads(data_str) if data_str else {}
                             fatal(str(event_data.get("error", "Chat error")))
                     if collected:
-                        console.print()  # newline after streaming
+                        console.print()
         except ApiError as exc:
             fatal(str(exc))
         except KeyboardInterrupt:
-            console.print("\n[dim]Chat interrupted.[/dim]")
+            console.print("\n[dim]\u2514 Chat interrupted[/dim]")
         return
 
     # Non-streaming
@@ -122,7 +133,7 @@ def chat_send(
             console.print(f"[dim]Thread: {tid}[/dim]")
 
     if response_text.strip():
-        console.print(Panel(Markdown(response_text), border_style="bright_cyan"))
+        console.print(Panel(Markdown(response_text), border_style="bright_cyan", box=box.ROUNDED))
     else:
         console.print("[dim](empty response)[/dim]")
 
@@ -205,17 +216,23 @@ def chat_interactive(
 
     console.print(
         Panel(
-            f"Chat with [bold]{agent_name}[/bold]\n"
-            "[dim]Type your message and press Enter. Use Ctrl+C or 'exit' to quit.[/dim]",
+            f"Chatting with [bold]{agent_name}[/bold]\n"
+            "[dim]Type your message and press Enter. Type /exit, /quit, or press Ctrl+C to end.[/dim]",
+            title="[header]Chat Session[/header]",
             border_style="bright_cyan",
+            box=box.ROUNDED,
         )
     )
+
+    if current_thread:
+        console.print(f"[dim]Resuming thread: {current_thread}[/dim]\n")
 
     try:
         while True:
             try:
-                user_input = console.input("[bold blue]you>[/bold blue] ").strip()
+                user_input = console.input("[bold bright_cyan]\u2502 you>[/bold bright_cyan] ").strip()
             except EOFError:
+                console.print()
                 break
 
             if not user_input or user_input.lower() in ("exit", "quit", "/exit", "/quit"):
@@ -237,7 +254,8 @@ def chat_interactive(
 
                         _AC._raise_for_status(response)
 
-                        console.print("[bold green]agent>[/bold green] ", end="")
+                        console.print("[bold green]\u2502 agent>[/bold green] ", end="")
+                        collected = ""
                         for sse in client.iter_sse(response):
                             event = sse["event"]
                             data_str = sse["data"]
@@ -246,6 +264,7 @@ def chat_interactive(
                                 delta = str(event_data.get("delta", ""))
                                 if delta:
                                     console.print(delta, end="")
+                                    collected += delta
                             elif event in ("chat.completed", "response.completed"):
                                 event_data = json.loads(data_str) if data_str else {}
                                 if not current_thread:
@@ -253,15 +272,17 @@ def chat_interactive(
                                 break
                             elif event in ("chat.error", "response.error"):
                                 event_data = json.loads(data_str) if data_str else {}
-                                console.print(f"\n[red]Error: {event_data.get('error', 'Unknown')}[/red]")
+                                console.print(f"\n[red]\u2716 Error: {event_data.get('error', 'Unknown')}[/red]")
                                 break
-                        console.print()  # newline
+                        console.print()
             except ApiError as exc:
-                console.print(f"\n[red]Error: {exc}[/red]")
+                console.print(f"\n[red]\u2716 {exc}[/red]")
 
     except KeyboardInterrupt:
         pass
 
-    console.print("\n[dim]Chat session ended.[/dim]")
+    console.print()
+    divider = Panel("Session ended", border_style="dim", box=box.SIMPLE)
+    console.print(divider)
     if current_thread:
-        console.print(f"[dim]Thread ID: {current_thread}[/dim]")
+        console.print(f"[dim]Thread: {current_thread}[/dim]")
