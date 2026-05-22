@@ -10,6 +10,7 @@ on:
     - cron: "0 0 * * 0"  # Weekly on Sundays
 
 permissions:
+  actions: read
   contents: read
   security-events: write
   packages: read
@@ -94,6 +95,7 @@ jobs:
     name: Trivy Container Scan
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         image:
           - api-gateway
@@ -109,15 +111,19 @@ jobs:
           sudo apt-get install -y podman
 
       - name: Build image (${{ matrix.image }})
+        id: build-image
         run: |
           DOCKERFILE_DIR="${{ matrix.image }}"
           IMAGE_TAG="kubesynapse-${{ matrix.image }}:scan"
+          IMAGE_TAR="${RUNNER_TEMP}/kubesynapse-${{ matrix.image }}.tar"
           podman build --format docker -t "$IMAGE_TAG" "./$DOCKERFILE_DIR"
+          podman save --format docker-archive -o "$IMAGE_TAR" "$IMAGE_TAG"
+          echo "image_tar=$IMAGE_TAR" >> "$GITHUB_OUTPUT"
 
       - name: Run Trivy vulnerability scanner on image
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
-          image-ref: "kubesynapse-${{ matrix.image }}:scan"
+          input: ${{ steps.build-image.outputs.image_tar }}
           format: "sarif"
           output: "trivy-image-${{ matrix.image }}.sarif"
           severity: "CRITICAL,HIGH"
@@ -125,20 +131,21 @@ jobs:
           ignore-unfixed: false
 
       - name: Upload Trivy image SARIF to GitHub Security
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
           sarif_file: "trivy-image-${{ matrix.image }}.sarif"
           category: "trivy-image-${{ matrix.image }}"
 
       - name: Block on CRITICAL vulnerabilities
-        run: |
-          podman run --rm aquasec/trivy image \
-            --severity CRITICAL \
-            --ignore-unfixed \
-            --exit-code 1 \
-            "kubesynapse-${{ matrix.image }}:scan"
-          echo "✅ ${{ matrix.image }}: No CRITICAL vulnerabilities"
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          input: ${{ steps.build-image.outputs.image_tar }}
+          format: table
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          skip-setup-trivy: true
 
   # ── Trivy Filesystem Scan ─────────────────────────────────────────
   trivy-fs:
@@ -147,7 +154,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Run Trivy on repo filesystem
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: "fs"
           scan-ref: "."
@@ -157,7 +164,7 @@ jobs:
           exit-code: "0"
           ignore-unfixed: true
       - name: Upload Trivy FS SARIF to GitHub Security
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
           sarif_file: "trivy-fs-results.sarif"
@@ -175,7 +182,9 @@ jobs:
 
       - name: Install kube-linter
         run: |
-          curl -sSfL https://raw.githubusercontent.com/stackrox/kube-linter/main/install.sh | sh -s -- -b /usr/local/bin
+          curl -sSfL https://github.com/stackrox/kube-linter/releases/latest/download/kube-linter-linux.tar.gz \
+            | tar -xz -C "${RUNNER_TEMP}"
+          sudo install "${RUNNER_TEMP}/kube-linter" /usr/local/bin/kube-linter
 
       - name: Render Helm chart to YAML
         run: |
@@ -192,13 +201,13 @@ jobs:
           kube-linter lint /tmp/kubesynapse-manifests.yaml \
             --include "privileged-container,privilege-escalation-container,no-read-only-root-fs,run-as-non-root,dangling-service,env-var-secret,read-secret-from-env-var,sensitive-host-mounts,no-anti-affinity,cluster-admin-role-binding,access-to-secrets" \
             --format sarif \
-            --output /tmp/kube-linter-results.sarif || true
+            --output kube-linter-results.sarif || true
 
       - name: Upload kube-linter SARIF to GitHub Security
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
-          sarif_file: /tmp/kube-linter-results.sarif
+          sarif_file: kube-linter-results.sarif
           category: kube-linter
 
   # ── checkov (IaC Security) ────────────────────────────────────────
@@ -243,14 +252,14 @@ jobs:
             --soft-fail || true
 
       - name: Upload checkov Helm SARIF to GitHub Security
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
           sarif_file: checkov-helm-results.sarif
           category: checkov-helm
 
       - name: Upload checkov K8s SARIF to GitHub Security
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
           sarif_file: checkov-k8s-results.sarif
@@ -268,6 +277,6 @@ jobs:
         uses: trufflesecurity/trufflehog@main
         with:
           path: ./
-          base: ${{ github.event.before || 'main' }}
-          head: HEAD
+          base: ${{ github.event_name == 'push' && github.event.before || github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
+          head: ${{ github.event_name == 'push' && 'HEAD' || github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
           extra_args: --debug --only-verified
