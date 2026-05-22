@@ -35,7 +35,7 @@
     "framer-motion": "^12.38.0",
     "highlight.js": "^11.11.1",
     "lucide-react": "^0.511.0",
-    "mermaid": "^11.14.0",
+    "mermaid": "^11.15.0",
     "monaco-editor": "^0.55.1",
     "prism-react-renderer": "^2.4.1",
     "react": "^18.3.1",
@@ -54,6 +54,12 @@
     "@vitejs/plugin-react": "^4.3.4",
     "tailwindcss": "^4.2.1",
     "typescript": "^5.7.2",
-    "vite": "^6.0.5"
+    "vite": "^6.4.2"
+  },
+  "overrides": {
+    "dompurify": "^3.4.1",
+    "picomatch": "^4.0.4",
+    "postcss": "^8.5.10",
+    "uuid": "^11.1.1"
   }
 }

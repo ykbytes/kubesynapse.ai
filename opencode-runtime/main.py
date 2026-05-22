@@ -213,6 +213,19 @@ from prompts import (  # noqa: F401 — re-exported
     get_continuation_prompt,
     get_task_type_prompt,
 )
+from runtime_events import (
+    EMITTER,
+    emit_llm_call,
+    emit_question_asked,
+    emit_run_completed,
+    emit_run_error,
+    emit_run_started,
+    emit_todo_updated,
+    emit_tool_call,
+    flush_sync_queue,
+    start_sync_emitter,
+    stop_sync_emitter,
+)
 from session import SESSION_REGISTRY, SessionRegistry  # noqa: F401 — re-exported
 from skills import (  # noqa: F401 — re-exported
     SKILL_RUNTIME_CONFIG,
@@ -244,19 +257,6 @@ from tracing import (
     StatusCode,
     get_tracer,
     init_tracing,
-)
-from runtime_events import (
-    EMITTER,
-    emit_llm_call,
-    emit_question_asked,
-    emit_run_completed,
-    emit_run_error,
-    emit_run_started,
-    emit_todo_updated,
-    emit_tool_call,
-    flush_sync_queue,
-    start_sync_emitter,
-    stop_sync_emitter,
 )
 from workspace import (  # noqa: F401 — re-exported
     capture_workspace_snapshot,
@@ -773,7 +773,7 @@ def get_todo_state(thread_id: str | None = None, request: Request = None) -> JSO
         raise HTTPException(status_code=502, detail=f"Failed to fetch session todos: {exc}") from exc
 
     body = {"thread_id": thread_id, "session_id": session_id, "sessionID": session_id, "todos": todos}
-    etag = hashlib.md5(json.dumps(todos, sort_keys=True).encode()).hexdigest()  # noqa: S324
+    etag = hashlib.sha256(json.dumps(todos, sort_keys=True).encode()).hexdigest()
     if request is not None:
         client_etag = request.headers.get("if-none-match", "").strip(' "')
         if client_etag and client_etag == etag:

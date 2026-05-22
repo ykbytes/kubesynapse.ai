@@ -107,6 +107,21 @@ class OpenCodeRuntimeContractTests(unittest.TestCase):
         mock_cancel.assert_called_once_with(thread_id="thread-1")
         self.assertEqual(payload["status"], "cancelled")
 
+    def test_todo_uses_sha256_etag(self) -> None:
+        request = self._request_with_trace_id("trace-opencode-etag")
+
+        with (
+            patch.object(opencode_runtime_main, "SESSION_REGISTRY", {"thread-1": "session-1"}),
+            patch.object(opencode_runtime_main, "get_session_todos", return_value=[{"id": "todo-1", "status": "done"}]),
+        ):
+            response = opencode_runtime_main.get_todo_state(thread_id="thread-1", request=request)
+
+        payload = json.loads(response.body)
+        expected_etag = opencode_runtime_main.hashlib.sha256(
+            json.dumps(payload["todos"], sort_keys=True).encode("utf-8")
+        ).hexdigest()
+        self.assertEqual(response.headers["etag"], f'"{expected_etag}"')
+
     def test_http_exception_handler_returns_canonical_error_envelope(self) -> None:
         request = self._request_with_trace_id("trace-opencode-1")
 

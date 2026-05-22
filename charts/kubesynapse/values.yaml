@@ -37,6 +37,13 @@ litellm:
     limits:
       cpu: "2"
       memory: "4Gi"
+  helperResources:
+    requests:
+      cpu: "25m"
+      memory: "64Mi"
+    limits:
+      cpu: "100m"
+      memory: "128Mi"
   config:
     model_list:
       - model_name: gpt-4
@@ -179,6 +186,13 @@ operator:
     limits:
       cpu: "500m"
       memory: "512Mi"
+  pvcRetentionMigrationResources:
+    requests:
+      cpu: "25m"
+      memory: "64Mi"
+    limits:
+      cpu: "100m"
+      memory: "128Mi"
   workerArtifacts:
     size: 2Gi
     storageClassName: ""
@@ -283,6 +297,13 @@ postgresql:
     limits:
       cpu: "2"
       memory: "2Gi"
+  fixPermissionsResources:
+    requests:
+      cpu: "25m"
+      memory: "64Mi"
+    limits:
+      cpu: "100m"
+      memory: "128Mi"
 
 webUi:
   enabled: true
@@ -460,7 +481,7 @@ mcpHub:
           value: "http://127.0.0.1:8082"
       extraContainers:
         - name: github-upstream
-          image: "ghcr.io/github/github-mcp-server:latest"
+          image: "ghcr.io/github/github-mcp-server:v1.0.5"
           imagePullPolicy: IfNotPresent
           args:
             - http
