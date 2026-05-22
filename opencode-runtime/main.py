@@ -773,7 +773,7 @@ def get_todo_state(thread_id: str | None = None, request: Request = None) -> JSO
         raise HTTPException(status_code=502, detail=f"Failed to fetch session todos: {exc}") from exc
 
     body = {"thread_id": thread_id, "session_id": session_id, "sessionID": session_id, "todos": todos}
-    etag = hashlib.md5(json.dumps(todos, sort_keys=True).encode()).hexdigest()  # noqa: S324
+    etag = hashlib.sha256(json.dumps(todos, sort_keys=True).encode()).hexdigest()
     if request is not None:
         client_etag = request.headers.get("if-none-match", "").strip(' "')
         if client_etag and client_etag == etag:

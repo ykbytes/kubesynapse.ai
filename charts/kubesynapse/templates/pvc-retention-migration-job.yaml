@@ -31,7 +31,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: migrate
-          image: bitnami/kubectl:latest
+          image: bitnami/kubectl:1.30
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false
@@ -39,6 +39,8 @@ spec:
             capabilities:
               drop:
                 - ALL
+          resources:
+{{ toYaml .Values.operator.pvcRetentionMigrationResources | indent 12 }}
           command:
             - /bin/sh
             - -c

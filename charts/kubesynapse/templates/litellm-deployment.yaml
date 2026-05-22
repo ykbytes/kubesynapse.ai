@@ -30,6 +30,35 @@ spec:
 {{- end }}
       automountServiceAccountToken: false
       terminationGracePeriodSeconds: 60
+{{- if .Values.scheduling.priorityClassName }}
+      priorityClassName: {{ .Values.scheduling.priorityClassName | quote }}
+{{- end }}
+{{- if .Values.scheduling.podAntiAffinity.enabled }}
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app: litellm
+                topologyKey: kubernetes.io/hostname
+{{- end }}
+{{- if .Values.scheduling.topologySpread.enabled }}
+      topologySpreadConstraints:
+        - maxSkew: {{ .Values.scheduling.topologySpread.maxSkew }}
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: {{ .Values.scheduling.topologySpread.whenUnsatisfiable }}
+          labelSelector:
+            matchLabels:
+              app: litellm
+        - maxSkew: {{ .Values.scheduling.topologySpread.maxSkew }}
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: {{ .Values.scheduling.topologySpread.whenUnsatisfiable }}
+          labelSelector:
+            matchLabels:
+              app: litellm
+{{- end }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
@@ -50,6 +79,8 @@ spec:
             capabilities:
               drop:
                 - ALL
+          resources:
+{{ toYaml .Values.litellm.helperResources | indent 12 }}
           volumeMounts:
             - name: prisma-schema
               mountPath: /work
@@ -72,6 +103,8 @@ spec:
             capabilities:
               drop:
                 - ALL
+          resources:
+{{ toYaml .Values.litellm.helperResources | indent 12 }}
           volumeMounts:
             - name: config
               mountPath: /app/config.yaml

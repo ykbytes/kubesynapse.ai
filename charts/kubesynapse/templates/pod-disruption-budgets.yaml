@@ -10,6 +10,7 @@ metadata:
     {{- include "kubesynapse.labels" . | nindent 4 }}
     app.kubernetes.io/component: api-gateway
 spec:
+  unhealthyPodEvictionPolicy: AlwaysAllow
   minAvailable: 1
   selector:
     matchLabels:
@@ -24,6 +25,7 @@ metadata:
     {{- include "kubesynapse.labels" . | nindent 4 }}
     app.kubernetes.io/component: operator
 spec:
+  unhealthyPodEvictionPolicy: AlwaysAllow
   minAvailable: 1
   selector:
     matchLabels:
@@ -38,6 +40,7 @@ metadata:
     {{- include "kubesynapse.labels" . | nindent 4 }}
     app.kubernetes.io/component: litellm
 spec:
+  unhealthyPodEvictionPolicy: AlwaysAllow
   minAvailable: 1
   selector:
     matchLabels:
@@ -55,6 +58,7 @@ metadata:
     {{- include "kubesynapse.labels" . | nindent 4 }}
     app.kubernetes.io/component: postgresql
 spec:
+  unhealthyPodEvictionPolicy: AlwaysAllow
   minAvailable: 1
   selector:
     matchLabels:

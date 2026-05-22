@@ -626,7 +626,7 @@ mcpHub:
   servers:
     github:
       enabled: false
-      image: "ghcr.io/github/github-mcp-server:latest"
+      image: "ghcr.io/github/github-mcp-server:v1.0.5"
       args:
         - http
       port: 8082
@@ -1280,7 +1280,7 @@ mcpHub:
   servers:
     github:
       enabled: false
-      image: "ghcr.io/github/github-mcp-server:latest"
+      image: "ghcr.io/github/github-mcp-server:v1.0.5"
       args:
         - http
       port: 8082
