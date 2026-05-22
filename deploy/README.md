@@ -2,7 +2,7 @@
 
 ## Quick Start (Kind + Helm)
 
-The fastest way to run KubeSynapse locally for development:
+The most repeatable local path in this repository is the checked-in Kind helper script. The manual Helm flow below is still useful, but the PowerShell helper is the preferred first stop for local development.
 
 ```bash
 kind create cluster
@@ -11,9 +11,10 @@ kind create cluster
 docker build -t kubesynapse/kubesynapse-api-gateway:latest api-gateway/
 docker build -t kubesynapse/kubesynapse-operator:latest operator/
 docker build -t kubesynapse/kubesynapse-web-ui:latest web-ui/
+docker build -t kubesynapse/kubesynapse-opencode-rt:latest opencode-runtime/
 
 # Load into Kind
-kind load docker-image kubesynapse/kubesynapse-api-gateway:latest kubesynapse/kubesynapse-operator:latest kubesynapse/kubesynapse-web-ui:latest
+kind load docker-image kubesynapse/kubesynapse-api-gateway:latest kubesynapse/kubesynapse-operator:latest kubesynapse/kubesynapse-web-ui:latest kubesynapse/kubesynapse-opencode-rt:latest
 
 # Generate secrets
 export LITELLM_KEY=$(openssl rand -hex 16)
@@ -33,7 +34,18 @@ helm install kubesynapse ./charts/kubesynapse \
   --wait --timeout 3m
 
 # Connect
+kubectl port-forward -n kubesynapse svc/kubesynapse-api-gateway 8080:8080
 kubectl port-forward -n kubesynapse svc/kubesynapse-web-ui 3000:80
+```
+
+For a cleaner local loop on Windows and for repeatable upgrades, prefer:
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File ./scripts/deploy-kind.ps1 `
+  -ClusterName kubesynapse-dev `
+  -Namespace kubesynapse `
+  -ReleaseName kubesynapse `
+  -AdminPassword "KubesynapseAdmin9!"
 ```
 
 ### Services
@@ -43,11 +55,11 @@ kubectl port-forward -n kubesynapse svc/kubesynapse-web-ui 3000:80
 | API Gateway | http://localhost:8080 | FastAPI backend |
 | Web UI | http://localhost:3000 | React frontend |
 | LiteLLM | http://localhost:4000 | Model proxy |
-| OpenCode RT | http://localhost:8081 | Default agent runtime |
+| OpenCode RT | In-cluster service | Default agent runtime for checked-in examples |
 | Postgres | localhost:5432 | State + trace database |
 | Redis | localhost:6379 | Cache / sessions |
-| NATS | localhost:4222 | Message bus |
-| Qdrant | localhost:6333 | Vector DB |
+| NATS | in-cluster | Shared messaging service |
+| Qdrant | in-cluster | Vector DB |
 
 ---
 
@@ -191,20 +203,21 @@ See `deploy/values.*.yaml` for environment-specific examples:
 ```yaml
 image:
   registry: docker.io/kubesynapse
-  tag: v2.1.0-run-intelligence
+  tag: v1.0.0
 
 apiGateway:
-  sharedToken: "change-me"
-  authMode: "shared_token"
-  replicas: 2
+  auth:
+    mode: hybrid
+    localAuthEnabled: true
+    bootstrapAdminUsername: admin
+  replicaCount: 2
 
 operator:
   workerTraceEnabled: true
   workerTraceBatchSize: 50
 
-database:
+postgresql:
   enabled: true
-  url: "postgresql://..."
 
 ingress:
   enabled: true
@@ -213,19 +226,18 @@ ingress:
 
 ### Pi Runtime Deployment
 
-The Pi runtime is **opt-in per agent**. The chart exposes Pi image and default model settings through `piRuntime`:
+The Pi runtime is **opt-in per agent**. Create agents with `spec.runtime.kind: pi` to launch the Pi runtime.
 
 ```yaml
 piRuntime:
-  model: "anthropic/claude-sonnet-4-20250514"
-  thinkingLevel: "medium"
+  image:
+    repository: localhost/kubesynapse/kubesynapse-pi-rt
+    tag: dev
 ```
-
-Create agents with `spec.runtime.kind: pi` to launch the Pi runtime.
 
 ### Mistral Vibe Runtime Deployment
 
-Mistral Vibe is also **opt-in per agent**. Configure its runtime image defaults through `mistralVibeRuntime`:
+Mistral Vibe is also **opt-in per agent**. Configure its runtime image defaults through `mistralVibeRuntime` and create agents with `spec.runtime.kind: mistral-vibe`.
 
 ```yaml
 mistralVibeRuntime:
@@ -283,18 +295,16 @@ curl http://localhost:8080/api/v1/ready
 # Test Postgres connectivity
 docker exec -it kubesynapse-postgres psql -U kubesynapse -d kubesynapse -c "SELECT 1"
 
-# Check migration status
-kubectl exec -n kubesynapse deployment/kubesynapse-api-gateway -- alembic current
+# Check gateway logs and Postgres readiness first
+kubectl logs -n kubesynapse deployment/kubesynapse-api-gateway
+kubectl get pods -n kubesynapse
 ```
 
 ### Trace storage issues
 
 ```bash
-# Check trace directory
-docker exec kubesynapse-api-gateway ls -la /app/state/traces
-
-# Verify trace tables exist
-docker exec -it kubesynapse-postgres psql -U kubesynapse -c "\dt workflow_*"
+# Verify the gateway trace endpoints and the backing tables
+curl http://localhost:8080/api/v1/traces/executions
 ```
 
 ---

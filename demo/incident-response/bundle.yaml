@@ -1,0 +1,225 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: incident-response-context
+  namespace: default
+data:
+  incident-policy.md: |
+    # Incident Handling Policy
+
+    - Triage first, remediation second.
+    - No destructive action without human approval.
+    - Prefer stabilization over aggressive mutation.
+    - Every recommendation must cite evidence from cluster state or incident payload.
+
+  environment.md: |
+    # Environment Notes
+
+    - KubeSynapse runs in the `kubesynapse` namespace.
+    - Agent runtimes and workflows run in `default` for this demo.
+    - The incident workflow is launched by a signed webhook to the gateway.
+    - The remediation step should propose the smallest safe stabilization action.
+
+  acceptance.md: |
+    # Acceptance Criteria
+
+    1. triage identifies likely failing resource or symptom class
+    2. summary names evidence used
+    3. remediation step is approval-gated
+    4. final update explains what was observed and what was or was not changed
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: incident-webhook-secret
+  namespace: default
+type: Opaque
+stringData:
+  hmac-key: demo-incident-webhook-secret
+---
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AgentPolicy
+metadata:
+  name: incident-response-policy
+  namespace: default
+spec:
+  inputGuardrails:
+    blockPromptInjection: true
+    blockedPatterns:
+      - "(?i)ignore approval"
+      - "(?i)delete namespace"
+    maxInputTokens: 10000
+  outputGuardrails:
+    maskPII: true
+    blockedOutputPatterns:
+      - "(?i)private key"
+      - "(?i)session token"
+    maxOutputTokens: 5000
+  allowedModels:
+    - github-copilot/gpt-5-mini
+  toolPolicy:
+    maxDelegationDepth: 0
+  mcpRequireHitl: false
+---
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AIAgent
+metadata:
+  name: incident-triage-agent
+  namespace: default
+spec:
+  model: github-copilot/gpt-5-mini
+  policyRef: incident-response-policy
+  runtime:
+    kind: opencode
+  mcpSidecars:
+    - name: kubernetes
+      image: docker.io/kubesynapse/mcp-kubernetes:deploy-20260401-212102
+      port: 8097
+  systemPrompt: |
+    You are an SRE triage agent.
+
+    Your job is to inspect incident context and cluster evidence, then produce a
+    concise, operator-grade triage summary.
+
+    Required output:
+    - likely symptom class
+    - affected resource candidates
+    - evidence gathered
+    - likely blast radius
+    - recommended stabilization action
+
+    If you cannot verify something from the cluster or payload, say so.
+    Write the detailed triage note to /workspace/triage-summary.md.
+  storage:
+    size: 1Gi
+---
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AIAgent
+metadata:
+  name: incident-remediation-agent
+  namespace: default
+spec:
+  model: github-copilot/gpt-5-mini
+  policyRef: incident-response-policy
+  runtime:
+    kind: opencode
+  mcpSidecars:
+    - name: kubernetes
+      image: docker.io/kubesynapse/mcp-kubernetes:deploy-20260401-212102
+      port: 8097
+  systemPrompt: |
+    You are a Kubernetes remediation agent.
+
+    Your job is to recommend or perform the smallest safe stabilization step.
+
+    Rules:
+    - prefer non-destructive actions
+    - never delete namespaces or data
+    - always explain the expected effect of the action
+    - if the step is approval-gated, wait for approval before doing anything risky
+
+    Write the detailed remediation note to /workspace/remediation-plan.md.
+  storage:
+    size: 1Gi
+---
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AIAgent
+metadata:
+  name: status-comms-agent
+  namespace: default
+spec:
+  model: github-copilot/gpt-5-mini
+  policyRef: incident-response-policy
+  runtime:
+    kind: opencode
+  systemPrompt: |
+    You are an incident status writer.
+
+    Convert triage and remediation context into a crisp incident update suitable
+    for an engineering incident channel or status page draft.
+
+    Required output:
+    - customer-safe summary
+    - internal summary
+    - actions taken or deferred
+    - next checkpoint
+
+    Write the final update to /workspace/incident-update.md.
+  storage:
+    size: 1Gi
+---
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AgentWorkflow
+metadata:
+  name: incident-webhook-response
+  namespace: default
+spec:
+  description: >
+    Event-driven incident workflow launched from a signed webhook. Triage runs
+    first, remediation pauses for approval, and the final status update explains
+    what was observed and what was changed.
+  input: >
+    Investigate the incoming production incident alert, summarize the likely
+    failure mode, and prepare a safe stabilization plan for operator approval.
+  contextRef: incident-response-context
+  messageBus: in-memory
+  steps:
+    - name: triage-incident
+      agentRef: incident-triage-agent
+      prompt: |
+        Investigate this incident.
+
+        Workflow input:
+        {{input}}
+
+        Also consider that this workflow may have been launched by a signed
+        webhook carrying an alert payload. If the exact payload is not directly
+        injected here, proceed with evidence-first cluster triage and note that
+        limitation clearly.
+
+        Write the detailed triage note to /workspace/triage-summary.md.
+        Return a concise operator-facing triage summary.
+      execution:
+        timeoutSeconds: 240
+        maxAttempts: 1
+
+    - name: prepare-remediation
+      agentRef: incident-remediation-agent
+      dependsOn:
+        - triage-incident
+      requireApproval: true
+      prompt: |
+        Build the smallest safe stabilization plan from the triage summary below.
+
+        Triage summary:
+        {{previous_output}}
+
+        Read /workspace/triage-summary.md before responding.
+        Write the detailed remediation plan to /workspace/remediation-plan.md.
+        Return the exact action you recommend and the main risk of taking it.
+      verify: |
+        PASS only if the response names a specific stabilization action and its risk.
+      execution:
+        timeoutSeconds: 240
+        maxAttempts: 1
+        verifyRetries: 1
+
+    - name: publish-status-update
+      agentRef: status-comms-agent
+      dependsOn:
+        - prepare-remediation
+      prompt: |
+        Produce the final incident update.
+
+        Prior step output:
+        {{previous_output}}
+
+        Read these artifacts before answering:
+        - /workspace/triage-summary.md
+        - /workspace/remediation-plan.md
+
+        Write the final update to /workspace/incident-update.md.
+        Return a short internal update and a short external-safe update.
+      execution:
+        timeoutSeconds: 180
+        maxAttempts: 1

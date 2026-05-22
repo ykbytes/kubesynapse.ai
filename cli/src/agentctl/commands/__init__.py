@@ -9,23 +9,23 @@ if TYPE_CHECKING:
     import typer
 
 
-def register_all(app: "typer.Typer") -> None:
+def register_all(app: typer.Typer) -> None:
     """Register all command groups and top-level commands on the main app."""
     import typer as _typer
 
-    from agentctl.commands.agents import agents_app
-    from agentctl.commands.workflows import workflows_app
-    from agentctl.commands.runs import runs_app
-    from agentctl.commands.profile import profile_app
-    from agentctl.commands.observatory import observatory_app
-    from agentctl.commands.webhooks import webhooks_app
-    from agentctl.commands.chat import chat_app
-    from agentctl.commands.auth import auth_app
     from agentctl.commands.admin import admin_app
-    from agentctl.commands.credentials import credentials_app
-    from agentctl.commands.skills import skills_app
+    from agentctl.commands.agents import agents_app
     from agentctl.commands.artifacts import artifacts_app
+    from agentctl.commands.auth import auth_app
+    from agentctl.commands.chat import chat_app
+    from agentctl.commands.credentials import credentials_app
+    from agentctl.commands.observatory import observatory_app
+    from agentctl.commands.profile import profile_app
     from agentctl.commands.providers import providers_app
+    from agentctl.commands.runs import runs_app
+    from agentctl.commands.skills import skills_app
+    from agentctl.commands.webhooks import webhooks_app
+    from agentctl.commands.workflows import workflows_app
 
     # Core command groups
     app.add_typer(agents_app, name="agents", help="Manage AI agents.")
@@ -53,7 +53,7 @@ def register_all(app: "typer.Typer") -> None:
         """Check API gateway health."""
         from agentctl.app import get_settings
         from agentctl.client import ApiClient, ApiError
-        from agentctl.output import console, print_detail, print_json_output, fatal
+        from agentctl.output import console, fatal, print_detail
 
         settings = get_settings()
         try:
@@ -82,6 +82,7 @@ def register_all(app: "typer.Typer") -> None:
     ) -> None:
         """Create or update a resource from a file (auto-detects kind)."""
         from agentctl.commands.runs import apply
+
         apply(file_path)
 
     @app.command("invoke")
@@ -93,13 +94,14 @@ def register_all(app: "typer.Typer") -> None:
         thread_id: str | None = _typer.Option(None, "--thread-id"),
     ) -> None:
         """Invoke an agent with a prompt (shortcut for agents invoke)."""
-        from agentctl.commands.agents import agents_invoke
+        import json
+
         # Call the real implementation with keyword args
         import sys
+
         from agentctl.app import get_settings
         from agentctl.client import ApiClient, ApiError
-        from agentctl.output import console, fatal, print_json_output
-        import json
+        from agentctl.output import console, fatal
 
         settings = get_settings()
 
@@ -126,14 +128,19 @@ def register_all(app: "typer.Typer") -> None:
         if stream:
             try:
                 with ApiClient(settings) as client:
-                    with client.stream("POST", f"/api/agents/{agent_name}/invoke/stream", params=_ns_params(), payload=payload) as response:
+                    with client.stream(
+                        "POST", f"/api/agents/{agent_name}/invoke/stream", params=_ns_params(), payload=payload
+                    ) as response:
                         ApiClient._raise_for_status(response)
                         from rich.panel import Panel
-                        console.print(Panel(
-                            f"Streaming from [bold]{agent_name}[/bold]",
-                            title="Live Invoke",
-                            border_style="bright_cyan",
-                        ))
+
+                        console.print(
+                            Panel(
+                                f"Streaming from [bold]{agent_name}[/bold]",
+                                title="Live Invoke",
+                                border_style="bright_cyan",
+                            )
+                        )
                         for sse in client.iter_sse(response):
                             event = sse["event"]
                             data_str = sse["data"]
@@ -160,9 +167,11 @@ def register_all(app: "typer.Typer") -> None:
             fatal(str(exc))
 
         if settings.output_format == "json":
+            from agentctl.output import print_json_output
             print_json_output(data)
         else:
             from agentctl.commands.agents import _render_invoke_result
+
             _render_invoke_result(data)
 
     @app.command("logs")
@@ -173,4 +182,5 @@ def register_all(app: "typer.Typer") -> None:
     ) -> None:
         """Fetch agent logs (shortcut for agents logs)."""
         from agentctl.commands.agents import agents_logs
+
         agents_logs(agent_name=agent_name, tail=tail, follow=follow)

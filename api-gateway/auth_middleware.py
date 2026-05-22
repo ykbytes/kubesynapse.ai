@@ -24,6 +24,7 @@ from jose.utils import base64url_decode
 
 from auth_store import (
     ROLE_PRIORITY,
+    auth_storage_ready,
     count_users,
     get_active_user_context,
     is_session_active,
@@ -222,26 +223,56 @@ def local_access_enabled() -> bool:
     return LOCAL_AUTH_ENABLED or AUTH_MODE == "local"
 
 
+def browser_auth_storage_ready() -> bool:
+    """Return True if the auth store can back browser sessions."""
+    return auth_storage_ready(require_sessions=True)
+
+
 def browser_auth_enabled() -> bool:
     """Return True if any browser-based auth flow is available."""
-    return local_access_enabled() or ldap_enabled() or bool(oidc_providers()) or bool(saml_providers())
+    return browser_auth_storage_ready() and (
+        local_access_enabled() or ldap_enabled() or bool(oidc_providers()) or bool(saml_providers())
+    )
+
+
+def ensure_browser_auth_available() -> None:
+    """Raise 503 when browser auth is configured but storage is unavailable."""
+    if not browser_auth_storage_ready():
+        raise HTTPException(status_code=503, detail="Browser authentication is temporarily unavailable")
 
 
 def registration_allowed() -> bool:
     """Return True if new user self-registration is permitted."""
-    return local_access_enabled() and (REGISTRATION_ENABLED or count_users() == 0)
+    return browser_auth_storage_ready() and local_access_enabled() and (REGISTRATION_ENABLED or count_users() == 0)
 
 
 def auth_configuration_payload() -> dict[str, Any]:
     """Build the public auth configuration payload for /api/auth/config."""
+    browser_auth_ready = browser_auth_storage_ready()
+    local_enabled = local_access_enabled() and browser_auth_ready
+    provider_config = auth_configuration()
+    provider_config["password_providers"] = [
+        provider
+        for provider in list(provider_config.get("password_providers") or [])
+        if provider != "local" or local_enabled
+    ]
+    if not browser_auth_ready:
+        provider_config["password_providers"] = []
+        provider_config["oidc_providers"] = []
+        provider_config["saml_providers"] = []
+
+    user_count = count_users() if browser_auth_ready else 0
+    browser_auth_available = bool(
+        provider_config["password_providers"] or provider_config["oidc_providers"] or provider_config["saml_providers"]
+    )
     return {
         "auth_mode": AUTH_MODE,
-        "local_enabled": local_access_enabled(),
-        "registration_enabled": registration_allowed(),
+        "local_enabled": local_enabled,
+        "registration_enabled": local_enabled and (REGISTRATION_ENABLED or user_count == 0),
         "shared_token_enabled": shared_token_enabled(),
-        "browser_auth_enabled": browser_auth_enabled(),
-        "bootstrap_complete": count_users() > 0,
-        **auth_configuration(),
+        "browser_auth_enabled": browser_auth_available,
+        "bootstrap_complete": user_count > 0,
+        **provider_config,
     }
 
 

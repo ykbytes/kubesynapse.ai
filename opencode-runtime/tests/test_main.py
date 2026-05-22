@@ -93,14 +93,43 @@ class OpenCodeRuntimeTests(unittest.TestCase):
 
     def test_build_server_env_sets_openai_compat_env_for_litellm(self) -> None:
         with (
-            patch.object(supervisor_mod, "DEFAULT_PROVIDER", "litellm"),
             patch.object(supervisor_mod, "LITELLM_API_KEY", "test-key"),
             patch.object(supervisor_mod, "build_litellm_base_url", return_value="http://litellm.internal/v1"),
+            patch.dict(os.environ, {"OPENCODE_PROVIDER": "litellm"}, clear=False),
         ):
             env = supervisor_mod.build_server_env({"model": "litellm/gpt-4"})
 
         self.assertEqual(env["OPENAI_BASE_URL"], "http://litellm.internal/v1")
         self.assertEqual(env["OPENAI_API_KEY"], "test-key")
+
+    def test_build_server_env_does_not_fall_back_to_litellm_for_github_copilot(self) -> None:
+        auth_content = json.dumps(
+            {
+                "github-copilot": {
+                    "type": "oauth",
+                    "refresh": "gho-test-token",
+                    "access": "gho-test-token",
+                    "expires": 0,
+                }
+            }
+        )
+        with (
+            patch.object(supervisor_mod, "LITELLM_API_KEY", "test-key"),
+            patch.object(supervisor_mod, "build_litellm_base_url", return_value="http://litellm.internal/v1"),
+            patch.dict(
+                os.environ,
+                {
+                    "OPENCODE_PROVIDER": "github-copilot",
+                    "OPENCODE_AUTH_CONTENT": auth_content,
+                },
+                clear=True,
+            ),
+        ):
+            env = supervisor_mod.build_server_env({"model": "github-copilot/gpt-5-mini"})
+
+        self.assertEqual(env["OPENCODE_AUTH_CONTENT"], auth_content)
+        self.assertNotIn("OPENAI_BASE_URL", env)
+        self.assertNotIn("OPENAI_API_KEY", env)
 
     def test_materialize_skill_files_maps_platform_skills_to_opencode_layout(self) -> None:
         skill_text = (
@@ -882,6 +911,153 @@ class InvokeResponseModelTests(unittest.TestCase):
         self.assertEqual(resp.tool_calls, [])
         self.assertIsNone(resp.continuity)
         self.assertIsNone(resp.metadata)
+
+
+class RuntimeEventFlushTests(unittest.TestCase):
+    def test_invoke_flushes_runtime_events_after_traced_success(self) -> None:
+        request = opencode_runtime_main.InvokeRequest(
+            prompt="hello",
+            thread_id="thread-1",
+            caller_request_id="req-1",
+        )
+        result = opencode_runtime_main.InvokeResponse(
+            thread_id="thread-1",
+            response="done",
+            model="gpt-4",
+            status="completed",
+            metadata={"context_budget": {"total_tokens": 42}},
+        )
+        mock_span = MagicMock()
+        mock_scope = MagicMock()
+        mock_scope.__enter__.return_value = mock_span
+        mock_scope.__exit__.return_value = False
+        mock_tracer = MagicMock()
+        mock_tracer.start_as_current_span.return_value = mock_scope
+
+        with (
+            patch.object(opencode_runtime_main, "get_tracer", return_value=mock_tracer),
+            patch.object(opencode_runtime_main, "invoke_opencode", return_value=result),
+            patch.object(opencode_runtime_main, "emit_run_started"),
+            patch.object(opencode_runtime_main, "_emit_llm_call_from_response") as mock_emit_llm,
+            patch.object(opencode_runtime_main, "emit_run_completed") as mock_completed,
+            patch.object(opencode_runtime_main, "flush_sync_queue") as mock_flush,
+            patch.object(opencode_runtime_main.SESSION_REGISTRY, "get", return_value="ses_test"),
+        ):
+            actual = opencode_runtime_main.invoke(request)
+
+        self.assertEqual(actual.response, "done")
+        mock_tracer.start_as_current_span.assert_called_once()
+        mock_span.set_attribute.assert_called_once_with("agent.status", "completed")
+        expected_execution_id = opencode_runtime_main.build_execution_id(
+            thread_id="thread-1",
+            request_id="req-1",
+        )
+        self.assertEqual(mock_emit_llm.call_args.kwargs["execution_id"], expected_execution_id)
+        self.assertEqual(mock_completed.call_args.kwargs["execution_id"], expected_execution_id)
+        mock_flush.assert_called_once()
+
+    def test_invoke_flushes_runtime_events_after_traced_error(self) -> None:
+        request = opencode_runtime_main.InvokeRequest(
+            prompt="hello",
+            thread_id="thread-2",
+            caller_request_id="req-2",
+        )
+        mock_span = MagicMock()
+        mock_scope = MagicMock()
+        mock_scope.__enter__.return_value = mock_span
+        mock_scope.__exit__.return_value = False
+        mock_tracer = MagicMock()
+        mock_tracer.start_as_current_span.return_value = mock_scope
+
+        with (
+            patch.object(opencode_runtime_main, "get_tracer", return_value=mock_tracer),
+            patch.object(opencode_runtime_main, "invoke_opencode", side_effect=RuntimeError("boom")),
+            patch.object(opencode_runtime_main, "emit_run_started"),
+            patch.object(opencode_runtime_main, "emit_run_error") as mock_error,
+            patch.object(opencode_runtime_main, "flush_sync_queue") as mock_flush,
+            patch.object(opencode_runtime_main, "_OTEL_AVAILABLE", False),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "boom"):
+                opencode_runtime_main.invoke(request)
+
+        expected_execution_id = opencode_runtime_main.build_execution_id(
+            thread_id="thread-2",
+            request_id="req-2",
+        )
+        self.assertEqual(mock_error.call_args.kwargs["execution_id"], expected_execution_id)
+        mock_flush.assert_called_once()
+
+    def test_build_execution_id_falls_back_to_thread_id(self) -> None:
+        self.assertEqual(
+            opencode_runtime_main.build_execution_id(thread_id="thread-1"),
+            "exec-thread-1",
+        )
+
+    def test_stream_flushes_runtime_events_on_http_error(self) -> None:
+        async def collect_stream() -> tuple[int, str]:
+            response = await opencode_runtime_main.invoke_stream(
+                opencode_runtime_main.InvokeRequest(
+                    prompt="What do you remember?",
+                    system="You have persistent memory from prior conversations.",
+                    thread_id="thread-stream-http",
+                )
+            )
+            chunks: list[str] = []
+            async for chunk in response.body_iterator:
+                chunks.append(chunk)
+            return response.status_code, "".join(chunks)
+
+        with (
+            patch.object(
+                opencode_runtime_main,
+                "invoke_opencode",
+                side_effect=opencode_runtime_main.HTTPException(status_code=502, detail="boom"),
+            ),
+            patch.object(opencode_runtime_main, "list_pending_questions", return_value=[]),
+            patch.object(opencode_runtime_main, "get_session_todos", return_value=[]),
+            patch.object(opencode_runtime_main, "emit_run_started"),
+            patch.object(opencode_runtime_main, "emit_run_error") as mock_error,
+            patch.object(opencode_runtime_main, "flush_sync_queue") as mock_flush,
+            patch.object(opencode_runtime_main.SESSION_REGISTRY, "get", return_value=None),
+        ):
+            status_code, text = asyncio.run(collect_stream())
+
+        self.assertEqual(status_code, 200)
+        self.assertIn("event: response.error", text)
+        self.assertIn('"error": "boom"', text)
+        self.assertEqual(mock_error.call_args.kwargs["execution_id"], f"exec-{'thread-stream-http'[:16]}")
+        mock_flush.assert_called_once()
+
+    def test_stream_flushes_runtime_events_on_unexpected_error(self) -> None:
+        async def collect_stream() -> tuple[int, str]:
+            response = await opencode_runtime_main.invoke_stream(
+                opencode_runtime_main.InvokeRequest(
+                    prompt="What do you remember?",
+                    system="You have persistent memory from prior conversations.",
+                    thread_id="thread-stream-generic",
+                )
+            )
+            chunks: list[str] = []
+            async for chunk in response.body_iterator:
+                chunks.append(chunk)
+            return response.status_code, "".join(chunks)
+
+        with (
+            patch.object(opencode_runtime_main, "invoke_opencode", side_effect=RuntimeError("boom")),
+            patch.object(opencode_runtime_main, "list_pending_questions", return_value=[]),
+            patch.object(opencode_runtime_main, "get_session_todos", return_value=[]),
+            patch.object(opencode_runtime_main, "emit_run_started"),
+            patch.object(opencode_runtime_main, "emit_run_error") as mock_error,
+            patch.object(opencode_runtime_main, "flush_sync_queue") as mock_flush,
+            patch.object(opencode_runtime_main.SESSION_REGISTRY, "get", return_value=None),
+        ):
+            status_code, text = asyncio.run(collect_stream())
+
+        self.assertEqual(status_code, 200)
+        self.assertIn("event: response.error", text)
+        self.assertIn('"error": "boom"', text)
+        self.assertEqual(mock_error.call_args.kwargs["execution_id"], f"exec-{'thread-stream-generic'[:16]}")
+        mock_flush.assert_called_once()
 
 
 class CombinedSystemPromptTests(unittest.TestCase):

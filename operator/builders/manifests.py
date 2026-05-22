@@ -111,11 +111,15 @@ def _resolve_opencode_model_ref(raw_model: str) -> tuple[str, str]:
         "opencode-go/kimi-k2.6" -> ("opencode-go", "kimi-k2.6")
         "gpt-4"                -> (OPENCODE_DEFAULT_PROVIDER, "gpt-4")
     """
-    cleaned = str(raw_model or "").strip() or "gpt-4"
+    cleaned = str(raw_model or "").strip()
+    if not cleaned:
+        raise kopf.PermanentError("AIAgent.spec.model must be explicitly set.")
     if "/" in cleaned:
         provider_id, model_id = cleaned.split("/", 1)
         provider_id = provider_id.strip()
-        model_id = model_id.strip() or "gpt-4"
+        model_id = model_id.strip()
+        if not model_id:
+            raise kopf.PermanentError("AIAgent.spec.model must include a non-empty model ID.")
         if not provider_id:
             return (OPENCODE_DEFAULT_PROVIDER, model_id)
         return (provider_id, model_id)
@@ -952,7 +956,15 @@ def _build_provider_auth_content(auth_data: dict[str, str]) -> str:
         except Exception:
             decoded = value.strip()
         if decoded:
-            vals[provider_id] = {"type": "api", "key": decoded}
+            if provider_id == "github-copilot":
+                vals[provider_id] = {
+                    "type": "oauth",
+                    "refresh": decoded,
+                    "access": decoded,
+                    "expires": 0,
+                }
+            else:
+                vals[provider_id] = {"type": "api", "key": decoded}
     return json.dumps(vals, ensure_ascii=False)
 
 
@@ -990,7 +1002,7 @@ def create_opencode_provider_bootstrap_secret(
     namespace: str,
     spec: dict[str, Any],
 ) -> dict[str, Any] | None:
-    model = str(spec.get("model") or "").strip() or "gpt-4"
+    model = str(spec.get("model") or "").strip()
     selected_provider_id, _selected_model_id = _resolve_opencode_model_ref(model)
 
     if selected_provider_id == "litellm":
@@ -1702,7 +1714,9 @@ def create_agent_statefulset_manifest(
     """Build a complete StatefulSet manifest for an AIAgent."""
     runtime_kind = resolve_runtime_kind(spec)
     validate_runtime_configuration(runtime_kind, spec)
-    model = spec.get("model", "gpt-4")
+    model = str(spec.get("model") or "").strip()
+    if not model:
+        raise kopf.PermanentError("AIAgent.spec.model must be explicitly set.")
     mcp_connections = spec.get("mcpConnections") if isinstance(spec.get("mcpConnections"), list) else []
     mcp_servers = spec.get("mcpServers") or []
     mcp_sidecars = _extract_structured_mcp_sidecars(mcp_connections) or (spec.get("mcpSidecars") or [])

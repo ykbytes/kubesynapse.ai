@@ -14,6 +14,8 @@ import trace_store
 import traces_router
 from fastapi.testclient import TestClient
 
+import pytest
+
 from auth_store import db_session
 
 
@@ -81,7 +83,16 @@ class TestPrometheusMetrics:
     """Smoke test for Prometheus metrics endpoint."""
 
     def test_metrics_endpoint_returns_200(self, client: TestClient) -> None:
-        """The /metrics endpoint should be accessible without auth and return Prometheus text."""
+        """The /metrics endpoint should be accessible without auth and return Prometheus text.
+
+        If prometheus_fastapi_instrumentator is not installed the /metrics route
+        is never mounted, so the test is skipped rather than failing.
+        """
+        from _core import _Instrumentator
+
+        if _Instrumentator is None:
+            pytest.skip("prometheus_fastapi_instrumentator not installed")
+
         response = client.get("/metrics")
         assert response.status_code == 200
         content_type = response.headers.get("content-type", "")

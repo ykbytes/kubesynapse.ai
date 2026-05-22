@@ -106,12 +106,10 @@ rules:
   - apiGroups: ["networking.k8s.io"]
     resources: [networkpolicies]
     verbs: [create, delete, get, list, watch, patch, update]
-  # --- Secrets: cluster-wide read for cross-namespace secret lookups (e.g. MCP hub auth);
-  #     create/patch/update is namespace-scoped via the Role below.
-  #     §security-P0: was create, delete, get, patch, update cluster-wide; scoped down.
+  # --- Secrets: cross-namespace runtime secret and provider bootstrap provisioning ---
   - apiGroups: [""]
     resources: [secrets]
-    verbs: [get, list, watch]
+    verbs: [create, delete, get, list, watch, patch, update]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -121,38 +119,6 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
   name: {{ include "kubesynapse.fullname" . }}-operator-role
-subjects:
-  - kind: ServiceAccount
-    name: {{ include "kubesynapse.fullname" . }}-operator-sa
-    namespace: {{ .Release.Namespace | default "default" }}
----
-# ---------------------------------------------------------------------------
-# Operator Namespace-Scoped Role — secrets full CRUD, configmaps
-# §security-P0: secrets create/patch/update moved here from ClusterRole.
-# Cross-namespace secret reads still go through the ClusterRole above.
-# ---------------------------------------------------------------------------
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: {{ include "kubesynapse.fullname" . }}-operator-local
-  namespace: {{ .Release.Namespace | default "default" }}
-rules:
-  - apiGroups: [""]
-    resources: [secrets]
-    verbs: [create, delete, get, list, patch, update]
-  - apiGroups: [""]
-    resources: [configmaps]
-    verbs: [get, list, create, update]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: {{ include "kubesynapse.fullname" . }}-operator-local-binding
-  namespace: {{ .Release.Namespace | default "default" }}
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: {{ include "kubesynapse.fullname" . }}-operator-local
 subjects:
   - kind: ServiceAccount
     name: {{ include "kubesynapse.fullname" . }}-operator-sa

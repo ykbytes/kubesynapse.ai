@@ -2,30 +2,39 @@
 
 from __future__ import annotations
 
-import textwrap
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import typer
+from rich import box
 from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
-from rich import box
 
 from agentctl.app import get_settings
 from agentctl.client import ApiClient, ApiError
 from agentctl.output import (
     console,
-    print_table,
+    fatal,
     print_detail,
     print_json_output,
-    success,
-    fatal,
+    print_table,
     status_style,
+    success,
 )
 
-workflows_app = typer.Typer(no_args_is_help=True, rich_markup_mode="rich")
+workflows_app = typer.Typer(
+    no_args_is_help=True,
+    rich_markup_mode="rich",
+    epilog=(
+        "[bold]Examples:[/bold]\n"
+        "  agentctl workflows list\n"
+        "  agentctl workflows trigger my-workflow --param key=val\n"
+        "  agentctl workflows logs my-workflow --run 5\n"
+        "  agentctl workflows cancel my-workflow -y"
+    ),
+)
 
 
 def _ns_params() -> dict[str, Any]:
@@ -83,7 +92,12 @@ def workflows_create(
     file_path: Path = typer.Option(..., "--file", "-f", exists=True, file_okay=True, dir_okay=False),
 ) -> None:
     """Create a workflow from a JSON or YAML file."""
-    from agentctl.commands._parsers import coerce_workflow_payload, read_structured_file, resolve_namespace, resolve_resource_name
+    from agentctl.commands._parsers import (
+        coerce_workflow_payload,
+        read_structured_file,
+        resolve_namespace,
+        resolve_resource_name,
+    )
 
     settings = get_settings()
     document = read_structured_file(file_path)
@@ -95,7 +109,7 @@ def workflows_create(
     try:
         with console.status(f"[bold cyan]Creating workflow {name}...[/bold cyan]"):
             with _api() as client:
-                data = client.post("/api/workflows", params={"namespace": namespace}, payload=payload)
+                client.post("/api/workflows", params={"namespace": namespace}, payload=payload)
     except ApiError as exc:
         fatal(str(exc))
     success(f"Workflow [bold]{name}[/bold] created in {namespace}")
@@ -103,11 +117,16 @@ def workflows_create(
 
 @workflows_app.command("update")
 def workflows_update(
-    workflow_name: Optional[str] = typer.Argument(None, help="Workflow name."),
+    workflow_name: str | None = typer.Argument(None, help="Workflow name."),
     file_path: Path = typer.Option(..., "--file", "-f", exists=True, file_okay=True, dir_okay=False),
 ) -> None:
     """Update a workflow from a file."""
-    from agentctl.commands._parsers import coerce_workflow_payload, read_structured_file, resolve_namespace, resolve_resource_name
+    from agentctl.commands._parsers import (
+        coerce_workflow_payload,
+        read_structured_file,
+        resolve_namespace,
+        resolve_resource_name,
+    )
 
     settings = get_settings()
     document = read_structured_file(file_path)
@@ -118,7 +137,7 @@ def workflows_update(
     try:
         with console.status(f"[bold cyan]Updating workflow {resolved_name}...[/bold cyan]"):
             with _api() as client:
-                data = client.patch(f"/api/workflows/{resolved_name}", params={"namespace": namespace}, payload=payload)
+                client.patch(f"/api/workflows/{resolved_name}", params={"namespace": namespace}, payload=payload)
     except ApiError as exc:
         fatal(str(exc))
     success(f"Workflow [bold]{resolved_name}[/bold] updated")
@@ -126,12 +145,17 @@ def workflows_update(
 
 @workflows_app.command("delete")
 def workflows_delete(
-    workflow_name: Optional[str] = typer.Argument(None, help="Workflow name."),
-    file_path: Optional[Path] = typer.Option(None, "--file", "-f", exists=True, file_okay=True, dir_okay=False),
+    workflow_name: str | None = typer.Argument(None, help="Workflow name."),
+    file_path: Path | None = typer.Option(None, "--file", "-f", exists=True, file_okay=True, dir_okay=False),
     assume_yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation."),
 ) -> None:
     """Delete a workflow."""
-    from agentctl.commands._parsers import coerce_workflow_payload, read_structured_file, resolve_namespace, resolve_resource_name
+    from agentctl.commands._parsers import (
+        coerce_workflow_payload,
+        read_structured_file,
+        resolve_namespace,
+        resolve_resource_name,
+    )
 
     settings = get_settings()
     namespace = settings.namespace
@@ -159,8 +183,8 @@ def workflows_delete(
 @workflows_app.command("trigger")
 def workflows_trigger(
     workflow_name: str = typer.Argument(..., help="Workflow name."),
-    input_parts: Optional[list[str]] = typer.Argument(None, help="Optional input text."),
-    input_file: Optional[Path] = typer.Option(None, "--file", "-f", exists=True, file_okay=True, dir_okay=False),
+    input_parts: list[str] | None = typer.Argument(None, help="Optional input text."),
+    input_file: Path | None = typer.Option(None, "--file", "-f", exists=True, file_okay=True, dir_okay=False),
 ) -> None:
     """Trigger (re-)execution of a workflow."""
     settings = get_settings()
@@ -184,7 +208,9 @@ def workflows_trigger(
         return
     success(f"Workflow [bold]{workflow_name}[/bold] triggered in {settings.namespace}")
     if isinstance(data, dict):
-        console.print(f"  [dim]Phase:[/dim] {data.get('phase', 'pending')}  [dim]Step:[/dim] {data.get('current_step', '-')}")
+        console.print(
+            f"  [dim]Phase:[/dim] {data.get('phase', 'pending')}  [dim]Step:[/dim] {data.get('current_step', '-')}"
+        )
 
 
 @workflows_app.command("cancel")
@@ -193,7 +219,6 @@ def workflows_cancel(
     assume_yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation."),
 ) -> None:
     """Cancel a running workflow."""
-    settings = get_settings()
     if not assume_yes:
         if not typer.confirm(f"Cancel workflow '{workflow_name}'?", default=False):
             raise typer.Exit(0)
@@ -201,7 +226,7 @@ def workflows_cancel(
     try:
         with console.status(f"[bold cyan]Cancelling {workflow_name}...[/bold cyan]"):
             with _api() as client:
-                data = client.post(f"/api/workflows/{workflow_name}/cancel", params=_ns_params())
+                client.post(f"/api/workflows/{workflow_name}/cancel", params=_ns_params())
     except ApiError as exc:
         fatal(str(exc))
     success(f"Workflow [bold]{workflow_name}[/bold] cancelled")
@@ -254,8 +279,8 @@ def workflows_status(workflow_name: str = typer.Argument(..., help="Workflow nam
 @workflows_app.command("logs")
 def workflows_logs(
     workflow_name: str = typer.Argument(..., help="Workflow name."),
-    run_id: Optional[str] = typer.Option(None, "--run-id", help="Specific run ID."),
-    step: Optional[str] = typer.Option(None, "--step", help="Filter to a specific step."),
+    run_id: str | None = typer.Option(None, "--run-id", help="Specific run ID."),
+    step: str | None = typer.Option(None, "--step", help="Filter to a specific step."),
     tail: int = typer.Option(200, "--tail", "-t", min=1, max=5000),
 ) -> None:
     """Fetch workflow runtime logs."""
@@ -297,8 +322,10 @@ def workflows_logs(
     if step:
         title += f" [step {step}]"
 
-    console.print(Panel(
-        Syntax(logs_text, "text", line_numbers=False, word_wrap=True),
-        title=title,
-        border_style="bright_cyan",
-    ))
+    console.print(
+        Panel(
+            Syntax(logs_text, "text", line_numbers=False, word_wrap=True),
+            title=title,
+            border_style="bright_cyan",
+        )
+    )

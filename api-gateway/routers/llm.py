@@ -64,6 +64,8 @@ async def provider_registry_catalog(user=Depends(verify_token)):
     payload = await _provider_registry_response()
     catalog: list[dict[str, Any]] = []
     for provider in cast(list[dict[str, Any]], payload.get("providers") or []):
+        if not bool(provider.get("connected")):
+            continue
         provider_id = str(provider.get("id") or "").strip()
         provider_label = str(provider.get("label") or provider_id).strip()
         for model in cast(list[dict[str, Any]], provider.get("models") or []):

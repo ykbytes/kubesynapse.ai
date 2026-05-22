@@ -91,6 +91,36 @@ class AuthStoreTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.auth_store.verify_refresh_session(refresh_token)
 
+    def test_browser_auth_storage_requires_user_sessions_table(self) -> None:
+        user = self.auth_store.create_local_user(
+            username="Carol",
+            password="CorrectH0rse!",
+            email="carol@example.com",
+            display_name="Carol Operator",
+            role="operator",
+            allowed_namespaces=["default"],
+        )
+
+        session_record, refresh_token = self.auth_store.create_session_for_user(
+            int(user["id"]),
+            auth_provider="local",
+            ip_address="127.0.0.1",
+            user_agent="pytest",
+            ttl_seconds=600,
+        )
+
+        with self.auth_store.ENGINE.begin() as connection:
+            connection.exec_driver_sql("DROP TABLE user_sessions")
+
+        self.assertTrue(self.auth_store.auth_storage_ready())
+        self.assertFalse(self.auth_store.auth_storage_ready(require_sessions=True))
+        self.assertFalse(self.auth_store.is_session_active(session_record["id"], user_id=int(user["id"])))
+
+        with self.assertRaises(ValueError):
+            self.auth_store.verify_refresh_session(refresh_token)
+
+        self.auth_store.revoke_session(session_record["id"])
+
     def test_change_user_password_updates_stored_hash(self) -> None:
         user = self.auth_store.create_local_user(
             username="Bob",

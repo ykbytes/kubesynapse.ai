@@ -6,32 +6,37 @@ import json
 import sys
 import textwrap
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import typer
-from rich.console import Console
+from rich import box
 from rich.panel import Panel
 from rich.pretty import Pretty
 from rich.syntax import Syntax
 from rich.table import Table
-from rich.text import Text
-from rich import box
 
 from agentctl.app import get_settings
 from agentctl.client import ApiClient, ApiError
 from agentctl.output import (
     console,
-    err_console,
-    print_table,
+    fatal,
     print_detail,
     print_json_output,
+    print_table,
     success,
-    error,
-    fatal,
-    status_style,
 )
 
-agents_app = typer.Typer(no_args_is_help=True, rich_markup_mode="rich")
+agents_app = typer.Typer(
+    no_args_is_help=True,
+    rich_markup_mode="rich",
+    epilog=(
+        "[bold]Examples:[/bold]\n"
+        "  agentctl agents list -o wide\n"
+        "  agentctl agents create ./agent.yaml\n"
+        "  agentctl agents invoke my-agent --stream\n"
+        "  agentctl agents logs my-agent --tail 100 -f"
+    ),
+)
 
 
 # ─── Helpers ───
@@ -187,7 +192,12 @@ def agents_create(
     file_path: Path = typer.Option(..., "--file", "-f", exists=True, file_okay=True, dir_okay=False),
 ) -> None:
     """Create an agent from a JSON or YAML file."""
-    from agentctl.commands._parsers import coerce_agent_payload, read_structured_file, resolve_namespace, resolve_resource_name
+    from agentctl.commands._parsers import (
+        coerce_agent_payload,
+        read_structured_file,
+        resolve_namespace,
+        resolve_resource_name,
+    )
 
     settings = get_settings()
     document = read_structured_file(file_path)
@@ -199,7 +209,7 @@ def agents_create(
     try:
         with console.status(f"[bold cyan]Creating agent {agent_name}...[/bold cyan]"):
             with _api() as client:
-                data = client.post("/api/agents", params={"namespace": namespace}, payload=payload)
+                client.post("/api/agents", params={"namespace": namespace}, payload=payload)
     except ApiError as exc:
         fatal(str(exc))
     success(f"Agent [bold]{agent_name}[/bold] created in {namespace}")
@@ -207,11 +217,16 @@ def agents_create(
 
 @agents_app.command("update")
 def agents_update(
-    agent_name: Optional[str] = typer.Argument(None, help="Agent name."),
-    file_path: Optional[Path] = typer.Option(None, "--file", "-f", exists=True, file_okay=True, dir_okay=False),
+    agent_name: str | None = typer.Argument(None, help="Agent name."),
+    file_path: Path | None = typer.Option(None, "--file", "-f", exists=True, file_okay=True, dir_okay=False),
 ) -> None:
     """Update an agent from a file."""
-    from agentctl.commands._parsers import coerce_agent_payload, read_structured_file, resolve_namespace, resolve_resource_name
+    from agentctl.commands._parsers import (
+        coerce_agent_payload,
+        read_structured_file,
+        resolve_namespace,
+        resolve_resource_name,
+    )
 
     settings = get_settings()
     if file_path is None and agent_name is None:
@@ -238,7 +253,7 @@ def agents_update(
     try:
         with console.status(f"[bold cyan]Updating agent {resolved_name}...[/bold cyan]"):
             with _api() as client:
-                data = client.patch(f"/api/agents/{resolved_name}", params={"namespace": namespace}, payload=payload)
+                client.patch(f"/api/agents/{resolved_name}", params={"namespace": namespace}, payload=payload)
     except ApiError as exc:
         fatal(str(exc))
     success(f"Agent [bold]{resolved_name}[/bold] updated")
@@ -246,12 +261,17 @@ def agents_update(
 
 @agents_app.command("delete")
 def agents_delete(
-    agent_name: Optional[str] = typer.Argument(None, help="Agent name."),
-    file_path: Optional[Path] = typer.Option(None, "--file", "-f", exists=True, file_okay=True, dir_okay=False),
+    agent_name: str | None = typer.Argument(None, help="Agent name."),
+    file_path: Path | None = typer.Option(None, "--file", "-f", exists=True, file_okay=True, dir_okay=False),
     assume_yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation."),
 ) -> None:
     """Delete an agent."""
-    from agentctl.commands._parsers import coerce_agent_payload, read_structured_file, resolve_namespace, resolve_resource_name
+    from agentctl.commands._parsers import (
+        coerce_agent_payload,
+        read_structured_file,
+        resolve_namespace,
+        resolve_resource_name,
+    )
 
     settings = get_settings()
     namespace = settings.namespace
@@ -320,14 +340,14 @@ def agents_discover(
 @agents_app.command("invoke")
 def agents_invoke(
     agent_name: str = typer.Argument(..., help="Agent name."),
-    prompt_parts: Optional[list[str]] = typer.Argument(None, help="Prompt text."),
+    prompt_parts: list[str] | None = typer.Argument(None, help="Prompt text."),
     stream: bool = typer.Option(False, "--stream", "-s", help="Use SSE streaming."),
-    prompt_file: Optional[Path] = typer.Option(None, "--file", exists=True, file_okay=True, dir_okay=False),
-    thread_id: Optional[str] = typer.Option(None, "--thread-id", help="Reuse thread."),
-    system: Optional[str] = typer.Option(None, "--system", help="System instructions."),
+    prompt_file: Path | None = typer.Option(None, "--file", exists=True, file_okay=True, dir_okay=False),
+    thread_id: str | None = typer.Option(None, "--thread-id", help="Reuse thread."),
+    system: str | None = typer.Option(None, "--system", help="System instructions."),
     require_approval: bool = typer.Option(False, "--require-approval", help="Request HITL approval."),
     no_session: bool = typer.Option(False, "--no-session", help="Disable session persistence."),
-    max_turns: Optional[int] = typer.Option(None, "--max-turns", min=1),
+    max_turns: int | None = typer.Option(None, "--max-turns", min=1),
     debug: bool = typer.Option(False, "--debug"),
 ) -> None:
     """Invoke an agent with a prompt."""
@@ -363,14 +383,19 @@ def agents_invoke(
     if stream:
         try:
             with _api() as client:
-                with client.stream("POST", f"/api/agents/{agent_name}/invoke/stream", params=_ns_params(), payload=payload) as response:
+                with client.stream(
+                    "POST", f"/api/agents/{agent_name}/invoke/stream", params=_ns_params(), payload=payload
+                ) as response:
                     from agentctl.client import ApiClient as _AC
+
                     _AC._raise_for_status(response)
-                    console.print(Panel(
-                        f"Streaming from [bold]{agent_name}[/bold] in [bold]{settings.namespace}[/bold]",
-                        title="Live Invoke",
-                        border_style="bright_cyan",
-                    ))
+                    console.print(
+                        Panel(
+                            f"Streaming from [bold]{agent_name}[/bold] in [bold]{settings.namespace}[/bold]",
+                            title="Live Invoke",
+                            border_style="bright_cyan",
+                        )
+                    )
                     completed_payload: dict[str, Any] | None = None
                     emitted_delta = False
                     for sse in client.iter_sse(response):
@@ -391,11 +416,13 @@ def agents_invoke(
                             continue
                         if event_name == "response.error":
                             fatal(str(event_data.get("error", "Streaming error.")))
-                        console.print(Panel(
-                            _event_summary(event_name, event_data),
-                            title=event_name,
-                            border_style="dim",
-                        ))
+                        console.print(
+                            Panel(
+                                _event_summary(event_name, event_data),
+                                title=event_name,
+                                border_style="dim",
+                            )
+                        )
         except ApiError as exc:
             fatal(str(exc))
         if completed_payload:
@@ -424,14 +451,19 @@ def agents_logs(
     if follow:
         try:
             with _api() as client:
-                with client.stream("GET", f"/api/agents/{agent_name}/logs/stream", params={**_ns_params(), "tail": tail}) as response:
+                with client.stream(
+                    "GET", f"/api/agents/{agent_name}/logs/stream", params={**_ns_params(), "tail": tail}
+                ) as response:
                     from agentctl.client import ApiClient as _AC
+
                     _AC._raise_for_status(response)
-                    console.print(Panel(
-                        f"Streaming logs for [bold]{agent_name}[/bold] (Ctrl+C to stop)",
-                        title="Live Logs",
-                        border_style="bright_cyan",
-                    ))
+                    console.print(
+                        Panel(
+                            f"Streaming logs for [bold]{agent_name}[/bold] (Ctrl+C to stop)",
+                            title="Live Logs",
+                            border_style="bright_cyan",
+                        )
+                    )
                     for sse in client.iter_sse(response):
                         if sse["event"] == "log.line":
                             try:
@@ -463,11 +495,13 @@ def agents_logs(
     if not logs.strip():
         console.print("[dim]No logs available.[/dim]")
         return
-    console.print(Panel(
-        Syntax(logs, "text", line_numbers=False, word_wrap=True),
-        title=f"Logs: {agent_name}",
-        border_style="bright_cyan",
-    ))
+    console.print(
+        Panel(
+            Syntax(logs, "text", line_numbers=False, word_wrap=True),
+            title=f"Logs: {agent_name}",
+            border_style="bright_cyan",
+        )
+    )
 
 
 @agents_app.command("live-events")
@@ -481,13 +515,17 @@ def agents_live_events(
         with _api() as client:
             with client.stream("GET", f"/api/agents/{agent_name}/events", params=_ns_params()) as response:
                 import json as _json
+
                 from agentctl.client import ApiClient as _AC
+
                 _AC._raise_for_status(response)
-                console.print(Panel(
-                    f"Streaming events for [bold]{agent_name}[/bold] (Ctrl+C to stop)",
-                    title="Live Events",
-                    border_style="bright_cyan",
-                ))
+                console.print(
+                    Panel(
+                        f"Streaming events for [bold]{agent_name}[/bold] (Ctrl+C to stop)",
+                        title="Live Events",
+                        border_style="bright_cyan",
+                    )
+                )
                 for sse in client.iter_sse(response):
                     ts = datetime.now().strftime("%H:%M:%S")
                     event_type = sse["event"]

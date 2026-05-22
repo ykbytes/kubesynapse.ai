@@ -1,0 +1,1052 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>KubeSynapse — AI Agent Operations Platform</title>
+
+<!-- Google Fonts -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<!-- GSAP for animations -->
+<script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js"></script>
+
+<style>
+/* ═══════════════════════════════════════════════════════════════
+   RESET & BASE
+   ═══════════════════════════════════════════════════════════════ */
+*, *::before, *::after { margin:0; padding:0; box-sizing:border-box; }
+html, body { width:100%; height:100%; overflow:hidden; background:#08090d; }
+
+:root {
+  --c-bg: #0b0d14;
+  --c-surface: #13161f;
+  --c-card: #181c28;
+  --c-border: #252a3a;
+  --c-text: #eef0f6;
+  --c-muted: #7a8299;
+  --c-primary: #4fd1c5;
+  --c-blue: #63b3ed;
+  --c-violet: #b794f4;
+  --c-emerald: #68d391;
+  --c-amber: #f6e05e;
+  --c-red: #fc8181;
+  --c-fuchsia: #d53f8c;
+  --c-sky: #76e4f7;
+  --font: 'Inter', system-ui, sans-serif;
+  --mono: 'JetBrains Mono', monospace;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   SLIDE ENGINE — Fixed coordinate system with CSS scaling
+   ═══════════════════════════════════════════════════════════════ */
+#deck {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--c-bg);
+}
+
+#viewport {
+  width: 1600px;
+  height: 900px;
+  position: relative;
+  overflow: hidden;
+  border-radius: 0;
+  background: var(--c-bg);
+}
+
+.slide {
+  position: absolute;
+  inset: 0;
+  width: 1600px;
+  height: 900px;
+  padding: 70px 90px;
+  display: flex;
+  flex-direction: column;
+  font-family: var(--font);
+  color: var(--c-text);
+  opacity: 0;
+  pointer-events: none;
+  transition: none;
+  overflow: hidden;
+  background: var(--c-bg);
+  /* Subtle dot grid */
+  background-image: radial-gradient(circle, rgba(79,209,197,0.03) 1px, transparent 1px);
+  background-size: 40px 40px;
+}
+
+.slide.active {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   TYPOGRAPHY — All in fixed px, designed for 1600x900
+   ═══════════════════════════════════════════════════════════════ */
+h1 { font-size:72px; font-weight:800; letter-spacing:-1.5px; line-height:1.1; color:var(--c-text); }
+h2 { font-size:52px; font-weight:700; letter-spacing:-1px; line-height:1.15; color:var(--c-text); }
+h3 { font-size:28px; font-weight:600; line-height:1.3; color:var(--c-text); }
+.subtitle { font-size:22px; color:var(--c-muted); margin-top:10px; line-height:1.4; }
+p { font-size:18px; line-height:1.6; color:var(--c-muted); }
+
+/* Gradient text */
+.grad { background:linear-gradient(135deg, #4fd1c5, #63b3ed, #b794f4); -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text; }
+.grad-p { background:linear-gradient(135deg, #4fd1c5, #63b3ed); -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text; }
+
+/* ═══════════════════════════════════════════════════════════════
+   LAYOUT UTILITIES
+   ═══════════════════════════════════════════════════════════════ */
+.center { display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; flex:1; }
+.cols { display:grid; gap:40px; flex:1; align-items:start; }
+.cols-2 { grid-template-columns: 1fr 1fr; }
+.cols-3 { grid-template-columns: 1fr 1fr 1fr; }
+.cols-5 { grid-template-columns: repeat(5,1fr); }
+.gap-sm { gap:20px; }
+.gap-lg { gap:60px; }
+.mt-auto { margin-top:auto; }
+.mt-20 { margin-top:20px; }
+.mt-30 { margin-top:30px; }
+.mt-40 { margin-top:40px; }
+.mt-50 { margin-top:50px; }
+.flex-1 { flex:1; }
+.flex-row { display:flex; align-items:center; }
+.flex-col { display:flex; flex-direction:column; }
+.flex-wrap { flex-wrap:wrap; }
+.items-center { align-items:center; }
+.justify-center { justify-content:center; }
+.text-center { text-align:center; }
+
+/* ═══════════════════════════════════════════════════════════════
+   CARDS
+   ═══════════════════════════════════════════════════════════════ */
+.card {
+  background: var(--c-card);
+  border: 1px solid var(--c-border);
+  border-radius: 16px;
+  padding: 32px;
+}
+.card-glass {
+  background: rgba(24,28,40,0.8);
+  backdrop-filter: blur(16px);
+  border: 1px solid rgba(37,42,58,0.9);
+  border-radius: 16px;
+  padding: 32px;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   BADGES
+   ═══════════════════════════════════════════════════════════════ */
+.badge {
+  display:inline-flex; align-items:center; gap:6px;
+  font-size:14px; font-weight:600; padding:6px 14px;
+  border-radius:999px; border:1.5px solid;
+  font-family:var(--font);
+}
+.badge-lg { font-size:16px; padding:8px 18px; }
+.bp { background:rgba(79,209,197,0.1); border-color:rgba(79,209,197,0.35); color:var(--c-primary); }
+.be { background:rgba(104,211,145,0.1); border-color:rgba(104,211,145,0.35); color:var(--c-emerald); }
+.bb { background:rgba(99,179,237,0.1); border-color:rgba(99,179,237,0.35); color:var(--c-blue); }
+.bv { background:rgba(183,148,244,0.1); border-color:rgba(183,148,244,0.35); color:var(--c-violet); }
+.ba { background:rgba(246,224,94,0.1); border-color:rgba(246,224,94,0.35); color:var(--c-amber); }
+.br { background:rgba(252,129,129,0.1); border-color:rgba(252,129,129,0.35); color:var(--c-red); }
+.bf { background:rgba(213,63,140,0.1); border-color:rgba(213,63,140,0.35); color:var(--c-fuchsia); }
+.bs { background:rgba(118,228,247,0.1); border-color:rgba(118,228,247,0.35); color:var(--c-sky); }
+
+/* ═══════════════════════════════════════════════════════════════
+   STATS
+   ═══════════════════════════════════════════════════════════════ */
+.stat-grid { display:flex; gap:20px; }
+.stat-box {
+  text-align:center; padding:24px 32px;
+  background:var(--c-surface); border:1px solid var(--c-border);
+  border-radius:14px; min-width:130px;
+}
+.stat-val { font-size:42px; font-weight:800; font-family:var(--mono); color:var(--c-primary); }
+.stat-lbl { font-size:12px; font-weight:600; color:var(--c-muted); text-transform:uppercase; letter-spacing:1.5px; margin-top:6px; }
+
+/* ═══════════════════════════════════════════════════════════════
+   CODE BLOCKS
+   ═══════════════════════════════════════════════════════════════ */
+pre {
+  background:#080a10; border:1px solid var(--c-border);
+  border-radius:14px; padding:24px 28px;
+  font-family:var(--mono); font-size:15px; line-height:1.7;
+  color:#c9d1d9; overflow:hidden;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+}
+pre .kw { color:var(--c-blue); }
+pre .str { color:var(--c-emerald); }
+pre .val { color:var(--c-violet); }
+pre .cmt { color:#4a5568; }
+pre .fn { color:var(--c-amber); }
+
+/* ═══════════════════════════════════════════════════════════════
+   BROWSER MOCKUP
+   ═══════════════════════════════════════════════════════════════ */
+.browser-mock {
+  border-radius:14px; overflow:hidden;
+  border:1px solid var(--c-border);
+  box-shadow: 0 20px 60px rgba(0,0,0,0.5), 0 0 0 1px rgba(79,209,197,0.05);
+}
+.browser-bar {
+  display:flex; align-items:center; gap:12px;
+  padding:12px 18px; background:#080a10;
+  border-bottom:1px solid var(--c-border);
+}
+.browser-dots { display:flex; gap:7px; }
+.browser-dots i { width:11px; height:11px; border-radius:50%; background:var(--c-border); display:block; }
+.browser-url {
+  flex:1; text-align:center; background:var(--c-surface);
+  border-radius:7px; padding:5px 14px;
+  font-size:12px; font-weight:500; color:var(--c-muted);
+  font-family:var(--mono);
+}
+.browser-content { background:var(--c-surface); position:relative; }
+
+/* ═══════════════════════════════════════════════════════════════
+   ARCHITECTURE LAYERS
+   ═══════════════════════════════════════════════════════════════ */
+.arch-row {
+  display:flex; align-items:center; gap:16px;
+  padding:16px 24px; border-radius:12px;
+  margin-bottom:10px; border:1.5px solid;
+}
+.arch-label {
+  font-size:11px; font-weight:800; text-transform:uppercase;
+  letter-spacing:1.5px; min-width:80px;
+}
+.arch-items { display:flex; flex-wrap:wrap; gap:8px; }
+.arch-chip {
+  font-size:13px; font-weight:600; padding:6px 12px;
+  border-radius:7px; background:rgba(0,0,0,0.35);
+  border:1px solid rgba(255,255,255,0.05); color:var(--c-text);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   CRD GRID
+   ═══════════════════════════════════════════════════════════════ */
+.crd-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; }
+.crd-item {
+  background:var(--c-card); border:1px solid var(--c-border);
+  border-radius:10px; padding:16px; text-align:center; border-top:3px solid;
+}
+.crd-name { font-family:var(--mono); font-size:14px; font-weight:700; color:var(--c-text); }
+.crd-desc { font-size:11px; color:var(--c-muted); margin-top:4px; }
+
+/* ═══════════════════════════════════════════════════════════════
+   WORKFLOW DAG
+   ═══════════════════════════════════════════════════════════════ */
+.dag { position:relative; width:100%; height:320px; }
+.dag-node {
+  position:absolute; background:var(--c-card);
+  border:1.5px solid var(--c-border); border-radius:12px;
+  padding:12px 16px; border-left:4px solid;
+}
+.dag-node .dn-title { font-size:13px; font-weight:700; color:var(--c-text); }
+.dag-node .dn-sub { font-size:11px; font-family:var(--mono); color:var(--c-muted); margin-top:2px; }
+.dag-node .dn-badge {
+  display:inline-flex; align-items:center; gap:4px;
+  font-size:10px; font-weight:700; padding:3px 8px;
+  border-radius:999px; border:1px solid; margin-top:6px;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   TIMELINE
+   ═══════════════════════════════════════════════════════════════ */
+.tl { display:flex; flex-direction:column; gap:8px; }
+.tl-row {
+  display:flex; align-items:center; gap:14px;
+  padding:10px 16px; border-radius:8px;
+  background:rgba(0,0,0,0.2); border-left:3px solid;
+}
+.tl-time { font-family:var(--mono); font-size:12px; color:var(--c-muted); min-width:48px; }
+.tl-label { font-size:14px; font-weight:500; color:var(--c-text); flex:1; }
+.tl-tag { font-size:11px; font-weight:600; padding:3px 8px; border-radius:999px; }
+
+/* ═══════════════════════════════════════════════════════════════
+   FLOW DIAGRAM
+   ═══════════════════════════════════════════════════════════════ */
+.flow-row { display:flex; align-items:center; justify-content:center; gap:0; }
+.flow-box {
+  background:var(--c-card); border:1.5px solid var(--c-border);
+  border-radius:12px; padding:14px 18px; text-align:center;
+  border-top:3px solid; min-width:120px;
+}
+.flow-box .fb-title { font-size:13px; font-weight:700; color:var(--c-text); }
+.flow-box .fb-sub { font-size:10px; color:var(--c-muted); margin-top:3px; }
+.flow-arrow {
+  width:36px; height:2px; background:linear-gradient(90deg,var(--c-primary),var(--c-blue));
+  position:relative; margin:0 2px; flex-shrink:0;
+}
+.flow-arrow::after {
+  content:''; position:absolute; right:-4px; top:-4px;
+  border-left:7px solid var(--c-blue);
+  border-top:5px solid transparent; border-bottom:5px solid transparent;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   GATEWAY GRID
+   ═══════════════════════════════════════════════════════════════ */
+.gw-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; }
+.gw-cell {
+  background:var(--c-card); border:1px solid var(--c-border);
+  border-radius:12px; padding:18px; text-align:center;
+}
+.gw-cell .gw-icon { font-size:28px; margin-bottom:8px; }
+.gw-cell .gw-name { font-size:14px; font-weight:700; color:var(--c-text); }
+.gw-cell .gw-desc { font-size:11px; color:var(--c-muted); margin-top:3px; }
+
+/* ═══════════════════════════════════════════════════════════════
+   PERSONA
+   ═══════════════════════════════════════════════════════════════ */
+.persona-card {
+  background:var(--c-card); border:1px solid var(--c-border);
+  border-radius:14px; padding:28px; border-top:3px solid;
+}
+.persona-card h3 { font-size:20px; margin-bottom:12px; }
+.persona-card .pp { font-size:13px; color:var(--c-muted); margin-bottom:6px; padding-left:14px; position:relative; }
+.persona-card .pp::before { content:''; position:absolute; left:0; top:6px; width:5px; height:5px; border-radius:50%; background:var(--c-red); opacity:0.7; }
+.persona-card .pa { font-size:13px; color:var(--c-emerald); margin-top:14px; font-weight:500; line-height:1.5; border-top:1px solid var(--c-border); padding-top:12px; }
+
+/* ═══════════════════════════════════════════════════════════════
+   POD DIAGRAM
+   ═══════════════════════════════════════════════════════════════ */
+.pod-box {
+  border:2px dashed rgba(79,209,197,0.35); border-radius:14px;
+  padding:28px; position:relative; background:rgba(8,9,13,0.5);
+}
+.pod-title {
+  position:absolute; top:-12px; left:24px;
+  background:var(--c-bg); padding:3px 12px;
+  font-size:13px; font-weight:700; color:var(--c-primary);
+  font-family:var(--mono); border-radius:5px;
+}
+.pod-row {
+  display:flex; align-items:center; gap:12px;
+  border:1.5px solid; border-radius:10px;
+  padding:12px 16px; margin-bottom:8px;
+}
+.pod-row .pr-dot { width:9px; height:9px; border-radius:50%; flex-shrink:0; }
+.pod-row .pr-name { font-size:14px; font-weight:600; color:var(--c-text); }
+.pod-row .pr-desc { font-size:11px; color:var(--c-muted); }
+
+/* ═══════════════════════════════════════════════════════════════
+   BULLET LIST
+   ═══════════════════════════════════════════════════════════════ */
+.blist { list-style:none; padding:0; }
+.blist li {
+  font-size:16px; line-height:1.7; color:#cbd5e1;
+  padding-left:20px; position:relative; margin-bottom:6px;
+}
+.blist li::before {
+  content:''; position:absolute; left:0; top:10px;
+  width:7px; height:7px; border-radius:50%;
+  background:var(--c-primary); opacity:0.6;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   NAV / PROGRESS
+   ═══════════════════════════════════════════════════════════════ */
+#progress {
+  position:fixed; bottom:0; left:0; height:3px;
+  background:linear-gradient(90deg, var(--c-primary), var(--c-blue));
+  transition:width 0.4s cubic-bezier(0.4,0,0.2,1); z-index:999;
+}
+#slide-num {
+  position:fixed; bottom:16px; right:24px;
+  font-family:var(--mono); font-size:13px; color:var(--c-muted);
+  z-index:999;
+}
+#nav-arrows {
+  position:fixed; bottom:16px; left:50%; transform:translateX(-50%);
+  display:flex; gap:8px; z-index:999;
+}
+#nav-arrows button {
+  width:36px; height:36px; border-radius:8px; border:1px solid var(--c-border);
+  background:var(--c-surface); color:var(--c-muted); cursor:pointer;
+  display:flex; align-items:center; justify-content:center;
+  font-size:16px; transition:all 0.2s;
+}
+#nav-arrows button:hover { background:var(--c-card); color:var(--c-text); border-color:var(--c-primary); }
+
+/* ═══════════════════════════════════════════════════════════════
+   ANIMATIONS
+   ═══════════════════════════════════════════════════════════════ */
+@keyframes pulse { 0%,100%{transform:scale(1);opacity:1} 50%{transform:scale(0.85);opacity:0.5} }
+@keyframes spin { to{transform:rotate(360deg)} }
+@keyframes glow { 0%,100%{box-shadow:0 0 20px rgba(79,209,197,0.15)} 50%{box-shadow:0 0 40px rgba(79,209,197,0.35)} }
+@keyframes float { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-8px)} }
+@keyframes dash { to{stroke-dashoffset:-24} }
+.anim-pulse { animation:pulse 2s infinite; }
+.anim-spin { animation:spin 1.5s linear infinite; }
+.anim-glow { animation:glow 3s ease-in-out infinite; }
+.anim-float { animation:float 4s ease-in-out infinite; }
+
+/* Item reveal animation class (GSAP target) */
+.reveal-item { opacity:0; transform:translateY(20px); }
+</style>
+</head>
+<body>
+
+<div id="deck">
+  <div id="viewport">
+
+<!-- ══════════════════════════════════════════════════════════════
+     SLIDE 1 — TITLE
+     ══════════════════════════════════════════════════════════════ -->
+<div class="slide active" data-slide="0">
+  <div class="center">
+    <!-- Logo -->
+    <div class="anim-glow anim-float" style="width:110px;height:110px;border-radius:26px;display:flex;align-items:center;justify-content:center;background:rgba(79,209,197,0.06);border:2px solid rgba(79,209,197,0.25);margin-bottom:32px;">
+      <svg width="60" height="60" viewBox="0 0 56 56" fill="none">
+        <path d="M28 4L48 16v24L28 52 8 40V16L28 4z" stroke="#4fd1c5" stroke-width="2" fill="rgba(79,209,197,0.05)"/>
+        <path d="M28 14L38 20v12L28 38 18 32V20L28 14z" stroke="#4fd1c5" stroke-width="1.5" fill="rgba(79,209,197,0.08)"/>
+        <circle cx="28" cy="26" r="4" fill="#4fd1c5"/>
+        <line x1="28" y1="22" x2="28" y2="14" stroke="#4fd1c5" stroke-width="1" opacity="0.5"/>
+        <line x1="31" y1="28" x2="38" y2="32" stroke="#4fd1c5" stroke-width="1" opacity="0.5"/>
+        <line x1="25" y1="28" x2="18" y2="32" stroke="#4fd1c5" stroke-width="1" opacity="0.5"/>
+      </svg>
+    </div>
+    <h1><span class="grad">KubeSynapse</span></h1>
+    <div class="subtitle">Kubernetes-Native AI Agent Operations Platform</div>
+
+    <div style="display:flex;gap:12px;margin-top:32px;flex-wrap:wrap;justify-content:center;">
+      <span class="badge badge-lg bp">Open Source</span>
+      <span class="badge badge-lg be">Self-Hosted</span>
+      <span class="badge badge-lg bb">Apache 2.0</span>
+      <span class="badge badge-lg bv">Kubernetes-Native</span>
+    </div>
+
+    <div class="stat-grid mt-50">
+      <div class="stat-box"><div class="stat-val">12</div><div class="stat-lbl">CRDs</div></div>
+      <div class="stat-box"><div class="stat-val">3</div><div class="stat-lbl">Runtimes</div></div>
+      <div class="stat-box"><div class="stat-val">11</div><div class="stat-lbl">MCP Sidecars</div></div>
+      <div class="stat-box"><div class="stat-val">100%</div><div class="stat-lbl">Self-Hosted</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════
+     SLIDE 2 — THE PROBLEM
+     ══════════════════════════════════════════════════════════════ -->
+<div class="slide" data-slide="1">
+  <h2>AI Agents Are Easy to Demo.<br><span class="grad-p">Production Is the Hard Part.</span></h2>
+  <div class="cols cols-2 mt-40 flex-1">
+    <div class="card">
+      <h3 style="color:var(--c-emerald);margin-bottom:14px;">The Demo</h3>
+      <pre><span class="str">$</span> python agent.py
+<span class="cmt"># "Look, it works!"</span>
+Agent: I've analyzed your data and
+found 3 critical vulnerabilities.
+<span class="fn">Done in 3.2 seconds</span></pre>
+      <p style="margin-top:14px;font-size:14px;">Single process. No isolation. No trace.<br>No retry. No governance.</p>
+    </div>
+    <div class="card">
+      <h3 style="color:var(--c-red);margin-bottom:14px;">Production Questions</h3>
+      <ul class="blist">
+        <li>Where does it run? Who owns the infra?</li>
+        <li>How is it isolated from other workloads?</li>
+        <li>What happens when it fails at 3 AM?</li>
+        <li>How do you inspect what it actually did?</li>
+        <li>How do you enforce guardrails?</li>
+        <li>How do you orchestrate multi-step flows?</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════
+     SLIDE 3 — THE INSIGHT
+     ══════════════════════════════════════════════════════════════ -->
+<div class="slide" data-slide="2">
+  <h2>What If Agents Were<br><span class="grad">Kubernetes Resources?</span></h2>
+  <div class="cols cols-2 mt-30 flex-1">
+    <pre><span class="kw">apiVersion:</span> kubesynapse.ai/v1alpha1
+<span class="kw">kind:</span> AIAgent
+<span class="kw">metadata:</span>
+  <span class="val">name:</span> security-analyst
+  <span class="val">namespace:</span> production
+<span class="kw">spec:</span>
+  <span class="val">runtime:</span> opencode
+  <span class="val">model:</span> gpt-4o
+  <span class="val">systemPrompt:</span> |
+    Analyze security alerts...
+  <span class="val">mcpSidecars:</span>
+    - code-exec
+    - web-search
+  <span class="val">policy:</span> security-guardrails</pre>
+    <div class="flex-col" style="gap:16px;">
+      <div class="card" style="padding:24px;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
+          <div class="anim-pulse" style="width:10px;height:10px;border-radius:50%;background:var(--c-emerald);"></div>
+          <h3 style="font-size:18px;color:var(--c-primary);">Operator Reconciles Into:</h3>
+        </div>
+        <ul class="blist">
+          <li>StatefulSet <span style="font-family:var(--mono);color:var(--c-primary);font-size:14px;">security-analyst-runtime</span></li>
+          <li>Service <span style="font-family:var(--mono);color:var(--c-primary);font-size:14px;">security-analyst-svc</span></li>
+          <li>PVC <span style="font-family:var(--mono);color:var(--c-primary);font-size:14px;">security-analyst-workspace</span></li>
+          <li>NetworkPolicy <span style="font-family:var(--mono);color:var(--c-primary);font-size:14px;">security-analyst-netpol</span></li>
+          <li>MCP Sidecars: <span style="font-family:var(--mono);color:var(--c-primary);font-size:14px;">code-exec, web-search</span></li>
+        </ul>
+      </div>
+      <div class="card" style="padding:20px;border-left:4px solid var(--c-primary);">
+        <p style="font-size:16px;color:var(--c-text);font-weight:500;">One YAML declares the agent. The operator provisions everything. Kubernetes manages the lifecycle.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════
+     SLIDE 4 — ARCHITECTURE
+     ══════════════════════════════════════════════════════════════ -->
+<div class="slide" data-slide="3">
+  <h2><span class="grad">Architecture</span></h2>
+  <div class="flex-col mt-30 flex-1" style="gap:10px;justify-content:center;">
+    <div class="arch-row" style="border-color:rgba(99,179,237,0.3);background:rgba(99,179,237,0.03);">
+      <span class="arch-label" style="color:var(--c-blue);">Clients</span>
+      <div class="arch-items">
+        <span class="arch-chip">Browser</span><span class="arch-chip">agentctl CLI</span><span class="arch-chip">SDKs</span><span class="arch-chip">Webhook Senders</span><span class="arch-chip">kubectl / GitOps</span>
+      </div>
+    </div>
+    <div class="arch-row" style="border-color:rgba(79,209,197,0.3);background:rgba(79,209,197,0.03);">
+      <span class="arch-label" style="color:var(--c-primary);">Edge</span>
+      <div class="arch-items">
+        <span class="arch-chip" style="color:var(--c-primary);">Web UI</span><span class="arch-chip" style="color:var(--c-primary);">API Gateway</span>
+      </div>
+    </div>
+    <div class="arch-row" style="border-color:rgba(183,148,244,0.3);background:rgba(183,148,244,0.03);">
+      <span class="arch-label" style="color:var(--c-violet);">Control</span>
+      <div class="arch-items">
+        <span class="arch-chip">Kubernetes API</span><span class="arch-chip" style="color:var(--c-violet);">12 CRDs</span><span class="arch-chip" style="color:var(--c-violet);">Operator (Kopf)</span>
+      </div>
+    </div>
+    <div class="arch-row" style="border-color:rgba(104,211,145,0.3);background:rgba(104,211,145,0.03);">
+      <span class="arch-label" style="color:var(--c-emerald);">Runtime</span>
+      <div class="arch-items">
+        <span class="arch-chip" style="color:var(--c-emerald);">Agent StatefulSets</span><span class="arch-chip">MCP Sidecars</span><span class="arch-chip">Workflow Jobs</span><span class="arch-chip">PVCs</span>
+      </div>
+    </div>
+    <div class="arch-row" style="border-color:rgba(246,224,94,0.3);background:rgba(246,224,94,0.03);">
+      <span class="arch-label" style="color:var(--c-amber);">Services</span>
+      <div class="arch-items">
+        <span class="arch-chip">PostgreSQL</span><span class="arch-chip">LiteLLM</span><span class="arch-chip">Redis</span><span class="arch-chip">Qdrant</span><span class="arch-chip">NATS</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════
+     SLIDE 5 — 12 CRDs
+     ══════════════════════════════════════════════════════════════ -->
+<div class="slide" data-slide="4">
+  <h2>The <span class="grad">12 CRDs</span></h2>
+  <div class="subtitle">Kubernetes resources that define the entire platform state</div>
+
+  <div class="crd-grid mt-30">
+    <div class="crd-item" style="border-top-color:var(--c-emerald);"><div class="crd-name">AIAgent</div><div class="crd-desc">Agent definition & spec</div></div>
+    <div class="crd-item" style="border-top-color:var(--c-emerald);"><div class="crd-name">AgentPolicy</div><div class="crd-desc">Guardrails & limits</div></div>
+    <div class="crd-item" style="border-top-color:var(--c-emerald);"><div class="crd-name">AgentWorkflow</div><div class="crd-desc">Multi-step DAG</div></div>
+    <div class="crd-item" style="border-top-color:var(--c-emerald);"><div class="crd-name">AgentTeam</div><div class="crd-desc">Multi-agent groups</div></div>
+    <div class="crd-item" style="border-top-color:var(--c-violet);"><div class="crd-name">McpConnection</div><div class="crd-desc">Tool integrations</div></div>
+    <div class="crd-item" style="border-top-color:var(--c-violet);"><div class="crd-name">WebhookReceiver</div><div class="crd-desc">Inbound event intake</div></div>
+    <div class="crd-item" style="border-top-color:var(--c-violet);"><div class="crd-name">WorkflowTrigger</div><div class="crd-desc">Event-to-workflow map</div></div>
+    <div class="crd-item" style="border-top-color:var(--c-violet);"><div class="crd-name">AgentSchedule</div><div class="crd-desc">Cron-based execution</div></div>
+    <div class="crd-item" style="border-top-color:var(--c-sky);"><div class="crd-name">AgentMetrics</div><div class="crd-desc">Usage tracking</div></div>
+    <div class="crd-item" style="border-top-color:var(--c-sky);"><div class="crd-name">ModelConfig</div><div class="crd-desc">Provider setup</div></div>
+    <div class="crd-item" style="border-top-color:var(--c-sky);"><div class="crd-name">ObservationReport</div><div class="crd-desc">System analysis</div></div>
+    <div class="crd-item" style="border-top-color:var(--c-sky);"><div class="crd-name">AgentAlert</div><div class="crd-desc">Anomaly signals</div></div>
+  </div>
+
+  <div style="display:flex;gap:14px;margin-top:24px;justify-content:center;">
+    <span class="badge be">Workload</span>
+    <span class="badge bv">Integration</span>
+    <span class="badge bs">Observability</span>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════
+     SLIDE 6 — RUNTIME ISOLATION
+     ══════════════════════════════════════════════════════════════ -->
+<div class="slide" data-slide="5">
+  <h2>Runtime Isolation: <span class="grad-p">Every Agent Gets a Sandbox</span></h2>
+  <div class="cols cols-2 mt-30 flex-1" style="gap:50px;">
+    <div class="pod-box">
+      <div class="pod-title">Pod: security-analyst-runtime-0</div>
+      <div class="pod-row" style="border-color:var(--c-emerald);">
+        <div class="pr-dot anim-pulse" style="background:var(--c-emerald);"></div>
+        <div><div class="pr-name" style="color:var(--c-emerald);">opencode-runtime</div><div class="pr-desc">Main agent container</div></div>
+      </div>
+      <div class="pod-row" style="border-color:var(--c-violet);">
+        <div class="pr-dot" style="background:var(--c-violet);"></div>
+        <div><div class="pr-name" style="color:var(--c-violet);">mcp-code-exec</div><div class="pr-desc">Code execution sidecar</div></div>
+      </div>
+      <div class="pod-row" style="border-color:var(--c-blue);">
+        <div class="pr-dot" style="background:var(--c-blue);"></div>
+        <div><div class="pr-name" style="color:var(--c-blue);">mcp-web-search</div><div class="pr-desc">Web search sidecar</div></div>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:8px;">
+        <div class="pod-row" style="border-color:var(--c-amber);flex:1;margin:0;">
+          <div><div class="pr-name" style="color:var(--c-amber);font-size:13px;">PVC</div><div class="pr-desc">Workspace</div></div>
+        </div>
+        <div class="pod-row" style="border-color:var(--c-primary);flex:1;margin:0;">
+          <div><div class="pr-name" style="color:var(--c-primary);font-size:13px;">NetPol</div><div class="pr-desc">Isolation</div></div>
+        </div>
+      </div>
+    </div>
+    <div>
+      <h3 style="margin-bottom:14px;">Security Hardening</h3>
+      <ul class="blist">
+        <li>Non-root container (UID 1000)</li>
+        <li>Read-only root filesystem</li>
+        <li>All Linux capabilities dropped</li>
+        <li>Seccomp: RuntimeDefault</li>
+        <li>Optional gVisor sandbox</li>
+        <li>Per-agent NetworkPolicy</li>
+      </ul>
+      <h3 style="margin-top:28px;margin-bottom:12px;">Three Runtime Types</h3>
+      <div style="display:flex;gap:10px;">
+        <span class="badge be">opencode</span>
+        <span class="badge bv">pi</span>
+        <span class="badge bf">mistral-vibe</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════
+     SLIDE 7 — GATEWAY
+     ══════════════════════════════════════════════════════════════ -->
+<div class="slide" data-slide="6">
+  <h2>The Gateway Is a <span class="grad">Real Backend</span></h2>
+  <div class="subtitle">Not a thin proxy — a substantive application server</div>
+  <div class="gw-grid mt-30">
+    <div class="gw-cell"><div class="gw-icon">&#128274;</div><div class="gw-name">Auth & RBAC</div><div class="gw-desc">OIDC, SAML, JWT, API keys</div></div>
+    <div class="gw-cell"><div class="gw-icon">&#9889;</div><div class="gw-name">Invoke Routing</div><div class="gw-desc">Direct, streaming, A2A</div></div>
+    <div class="gw-cell"><div class="gw-icon">&#128065;</div><div class="gw-name">Observability</div><div class="gw-desc">Traces, events, cost tracking</div></div>
+    <div class="gw-cell"><div class="gw-icon">&#129504;</div><div class="gw-name">Memory</div><div class="gw-desc">Durable ranked recall injection</div></div>
+    <div class="gw-cell"><div class="gw-icon">&#128279;</div><div class="gw-name">Webhooks</div><div class="gw-desc">HMAC-signed event intake</div></div>
+    <div class="gw-cell"><div class="gw-icon">&#129302;</div><div class="gw-name">A2A Protocol</div><div class="gw-desc">Agent-to-agent delegation</div></div>
+    <div class="gw-cell"><div class="gw-icon">&#127760;</div><div class="gw-name">Provider Registry</div><div class="gw-desc">Live model discovery</div></div>
+    <div class="gw-cell"><div class="gw-icon">&#128172;</div><div class="gw-name">Chat Sessions</div><div class="gw-desc">Persistent conversation threads</div></div>
+    <div class="gw-cell"><div class="gw-icon">&#128203;</div><div class="gw-name">CRUD</div><div class="gw-desc">All resource management</div></div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════
+     SLIDE 8 — WORKFLOW COMPOSER
+     ══════════════════════════════════════════════════════════════ -->
+<div class="slide" data-slide="7">
+  <h2><span class="grad">Workflow Composer</span></h2>
+  <div class="browser-mock mt-20" style="flex:1;display:flex;flex-direction:column;">
+    <div class="browser-bar">
+      <div class="browser-dots"><i></i><i style="opacity:0.6"></i><i style="opacity:0.3"></i></div>
+      <div class="browser-url">kubesynapse.local / workflows / incident-response</div>
+    </div>
+    <div class="browser-content" style="flex:1;position:relative;">
+      <div class="dag" style="height:100%;min-height:310px;padding:16px;">
+        <!-- SVG edges -->
+        <svg width="100%" height="100%" style="position:absolute;inset:0;pointer-events:none;z-index:0;">
+          <defs>
+            <marker id="ag" markerWidth="7" markerHeight="5" refX="6" refY="2.5" orient="auto"><polygon points="0 0,7 2.5,0 5" fill="#68d391"/></marker>
+            <marker id="ay" markerWidth="7" markerHeight="5" refX="6" refY="2.5" orient="auto"><polygon points="0 0,7 2.5,0 5" fill="#f6e05e"/></marker>
+            <marker id="am" markerWidth="7" markerHeight="5" refX="6" refY="2.5" orient="auto"><polygon points="0 0,7 2.5,0 5" fill="#4a5568"/></marker>
+          </defs>
+          <path d="M130 155 C170 155,180 80,215 80" fill="none" stroke="#68d391" stroke-width="2" marker-end="url(#ag)" opacity="0.7" stroke-dasharray="5 3"><animate attributeName="stroke-dashoffset" values="0;-16" dur="2s" repeatCount="indefinite"/></path>
+          <path d="M130 170 C170 170,180 245,215 245" fill="none" stroke="#68d391" stroke-width="2" marker-end="url(#ag)" opacity="0.7" stroke-dasharray="5 3"><animate attributeName="stroke-dashoffset" values="0;-16" dur="2s" repeatCount="indefinite"/></path>
+          <path d="M355 80 C395 80,400 160,435 160" fill="none" stroke="#68d391" stroke-width="2" marker-end="url(#ag)" opacity="0.6"/>
+          <path d="M355 245 C395 245,400 160,435 160" fill="none" stroke="#68d391" stroke-width="2" marker-end="url(#ag)" opacity="0.6"/>
+          <path d="M580 150 C620 150,620 80,660 80" fill="none" stroke="#f6e05e" stroke-width="2" stroke-dasharray="4 3" marker-end="url(#ay)" opacity="0.8"><animate attributeName="stroke-dashoffset" values="0;-14" dur="1.2s" repeatCount="indefinite"/></path>
+          <path d="M580 170 C620 170,620 245,660 245" fill="none" stroke="#4a5568" stroke-width="1.5" marker-end="url(#am)" opacity="0.5"/>
+          <path d="M800 80 C830 80,830 160,860 160" fill="none" stroke="#4a5568" stroke-width="1.5" marker-end="url(#am)" opacity="0.4"/>
+          <path d="M800 245 C830 245,830 160,860 160" fill="none" stroke="#4a5568" stroke-width="1.5" marker-end="url(#am)" opacity="0.4"/>
+        </svg>
+        <!-- Nodes -->
+        <div class="dag-node" style="left:30px;top:135px;border-left-color:var(--c-primary);min-width:90px;">
+          <div class="dn-title">Security Alert</div>
+          <div class="dn-badge" style="background:rgba(79,209,197,0.12);color:var(--c-primary);border-color:rgba(79,209,197,0.3);">Trigger</div>
+        </div>
+        <div class="dag-node" style="left:215px;top:50px;border-left-color:var(--c-emerald);">
+          <div class="dn-title">Triage Alert</div><div class="dn-sub">security-analyst</div>
+          <div class="dn-badge" style="background:rgba(104,211,145,0.12);color:var(--c-emerald);border-color:rgba(104,211,145,0.3);">&#10003; Done</div>
+        </div>
+        <div class="dag-node" style="left:215px;top:215px;border-left-color:var(--c-emerald);">
+          <div class="dn-title">Collect Evidence</div><div class="dn-sub">forensics</div>
+          <div class="dn-badge" style="background:rgba(104,211,145,0.12);color:var(--c-emerald);border-color:rgba(104,211,145,0.3);">&#10003; Done</div>
+        </div>
+        <div class="dag-node" style="left:435px;top:128px;border-left-color:var(--c-emerald);border-color:rgba(246,224,94,0.35);box-shadow:0 0 16px rgba(246,224,94,0.06);">
+          <div class="dn-title">Assess Impact</div><div class="dn-sub">security-analyst</div>
+          <div class="dn-badge" style="background:rgba(246,224,94,0.12);color:var(--c-amber);border-color:rgba(246,224,94,0.3);">
+            <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" class="anim-spin"><path d="M21 12a9 9 0 11-6.2-8.6"/></svg>
+            Running
+          </div>
+        </div>
+        <div class="dag-node" style="left:660px;top:50px;border-left-color:var(--c-violet);">
+          <div class="dn-title">Contain Threat</div><div class="dn-sub">incident-response</div>
+          <div style="display:flex;gap:4px;">
+            <div class="dn-badge" style="background:rgba(122,130,153,0.1);color:var(--c-muted);border-color:rgba(122,130,153,0.2);">Waiting</div>
+            <div class="dn-badge" style="background:rgba(246,224,94,0.08);color:var(--c-amber);border-color:rgba(246,224,94,0.2);">HITL</div>
+          </div>
+        </div>
+        <div class="dag-node" style="left:660px;top:215px;border-left-color:var(--c-emerald);">
+          <div class="dn-title">Eradicate & Recover</div><div class="dn-sub">incident-response</div>
+          <div class="dn-badge" style="background:rgba(122,130,153,0.1);color:var(--c-muted);border-color:rgba(122,130,153,0.2);">Waiting</div>
+        </div>
+        <div class="dag-node" style="left:860px;top:133px;border-left-color:var(--c-fuchsia);">
+          <div class="dn-title">Post-Incident Report</div><div class="dn-sub">doc-writer</div>
+          <div class="dn-badge" style="background:rgba(122,130,153,0.1);color:var(--c-muted);border-color:rgba(122,130,153,0.2);">Waiting</div>
+        </div>
+      </div>
+      <!-- Status bar -->
+      <div style="position:absolute;bottom:0;left:0;right:0;padding:10px 20px;background:#080a10;border-top:1px solid var(--c-border);display:flex;align-items:center;justify-content:space-between;">
+        <div style="display:flex;gap:16px;">
+          <span style="font-size:12px;color:var(--c-muted);">7 steps</span>
+          <span style="font-size:12px;color:var(--c-emerald);">3 done</span>
+          <span style="font-size:12px;color:var(--c-amber);">1 running</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <div style="width:120px;height:5px;background:var(--c-card);border-radius:3px;overflow:hidden;">
+            <div style="width:43%;height:100%;background:linear-gradient(90deg,var(--c-emerald),var(--c-amber));border-radius:3px;"></div>
+          </div>
+          <span style="font-size:12px;font-weight:700;color:var(--c-amber);font-family:var(--mono);">43%</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════
+     SLIDE 9 — OBSERVATORY
+     ══════════════════════════════════════════════════════════════ -->
+<div class="slide" data-slide="8">
+  <h2><span class="grad">Execution Observatory</span></h2>
+  <div class="subtitle">Deep inspection of every agent execution</div>
+
+  <div class="browser-mock mt-20" style="flex:1;display:flex;flex-direction:column;">
+    <div class="browser-bar">
+      <div class="browser-dots"><i></i><i style="opacity:0.6"></i><i style="opacity:0.3"></i></div>
+      <div class="browser-url">kubesynapse.local / observatory / exec-4f8a2c</div>
+    </div>
+    <div class="browser-content" style="flex:1;display:flex;">
+      <!-- Left panel -->
+      <div style="width:260px;border-right:1px solid var(--c-border);padding:24px;background:var(--c-bg);">
+        <div style="font-size:14px;font-weight:700;margin-bottom:18px;">Execution Detail</div>
+        <div style="margin-bottom:14px;"><div style="font-size:10px;color:var(--c-muted);text-transform:uppercase;letter-spacing:1px;">Agent</div><div style="font-size:15px;font-weight:600;font-family:var(--mono);color:var(--c-text);">security-analyst</div></div>
+        <div style="margin-bottom:14px;"><div style="font-size:10px;color:var(--c-muted);text-transform:uppercase;letter-spacing:1px;">Duration</div><div style="font-size:15px;font-weight:600;color:var(--c-text);">12.4s</div></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px;">
+          <div style="background:rgba(183,148,244,0.08);border:1px solid rgba(183,148,244,0.2);border-radius:8px;padding:10px;text-align:center;">
+            <div style="font-size:22px;font-weight:800;color:var(--c-violet);">3</div><div style="font-size:9px;color:var(--c-muted);">LLM Calls</div>
+          </div>
+          <div style="background:rgba(118,228,247,0.08);border:1px solid rgba(118,228,247,0.2);border-radius:8px;padding:10px;text-align:center;">
+            <div style="font-size:22px;font-weight:800;color:var(--c-sky);">5</div><div style="font-size:9px;color:var(--c-muted);">Tool Calls</div>
+          </div>
+        </div>
+        <div style="margin-bottom:14px;"><div style="font-size:10px;color:var(--c-muted);text-transform:uppercase;letter-spacing:1px;">Cost</div><div style="font-size:16px;font-weight:700;color:var(--c-emerald);">$0.0042</div></div>
+        <span class="badge be">Completed</span>
+      </div>
+      <!-- Timeline -->
+      <div style="flex:1;padding:24px;background:var(--c-surface);overflow:hidden;">
+        <div style="font-size:14px;font-weight:700;margin-bottom:14px;">Event Chronology</div>
+        <div class="tl">
+          <div class="tl-row" style="border-left-color:var(--c-emerald);"><div class="tl-time">0.0s</div><div class="tl-label">Execution started</div><span class="tl-tag" style="background:rgba(104,211,145,0.12);color:var(--c-emerald);">start</span></div>
+          <div class="tl-row" style="border-left-color:var(--c-violet);"><div class="tl-time">0.2s</div><div class="tl-label">LLM call: gpt-4o (planning)</div><span class="tl-tag" style="background:rgba(183,148,244,0.12);color:var(--c-violet);">llm</span></div>
+          <div class="tl-row" style="border-left-color:var(--c-sky);"><div class="tl-time">2.1s</div><div class="tl-label">Tool: web-search ("CVE-2024-3094")</div><span class="tl-tag" style="background:rgba(118,228,247,0.12);color:var(--c-sky);">tool</span></div>
+          <div class="tl-row" style="border-left-color:var(--c-sky);"><div class="tl-time">4.8s</div><div class="tl-label">Tool: code-exec (parse_logs.py)</div><span class="tl-tag" style="background:rgba(118,228,247,0.12);color:var(--c-sky);">tool</span></div>
+          <div class="tl-row" style="border-left-color:var(--c-violet);"><div class="tl-time">7.3s</div><div class="tl-label">LLM call: gpt-4o (analysis)</div><span class="tl-tag" style="background:rgba(183,148,244,0.12);color:var(--c-violet);">llm</span></div>
+          <div class="tl-row" style="border-left-color:var(--c-emerald);"><div class="tl-time">12.4s</div><div class="tl-label">Execution completed</div><span class="tl-tag" style="background:rgba(104,211,145,0.12);color:var(--c-emerald);">done</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════
+     SLIDE 10 — WEBHOOKS
+     ══════════════════════════════════════════════════════════════ -->
+<div class="slide" data-slide="9">
+  <h2>Event-Driven Automation:<br><span class="grad-p">Webhooks to Workflows</span></h2>
+
+  <div class="flow-row mt-50">
+    <div class="flow-box" style="border-top-color:var(--c-blue);"><div class="fb-title" style="color:var(--c-blue);">External Event</div><div class="fb-sub">GitHub, PagerDuty</div></div>
+    <div class="flow-arrow"></div>
+    <div class="flow-box" style="border-top-color:var(--c-primary);"><div class="fb-title" style="color:var(--c-primary);">WebhookReceiver</div><div class="fb-sub">HMAC verify</div></div>
+    <div class="flow-arrow"></div>
+    <div class="flow-box" style="border-top-color:var(--c-violet);"><div class="fb-title" style="color:var(--c-violet);">WorkflowTrigger</div><div class="fb-sub">Event mapping</div></div>
+    <div class="flow-arrow"></div>
+    <div class="flow-box" style="border-top-color:var(--c-amber);"><div class="fb-title" style="color:var(--c-amber);">Operator</div><div class="fb-sub">Claim + dispatch</div></div>
+    <div class="flow-arrow"></div>
+    <div class="flow-box" style="border-top-color:var(--c-emerald);"><div class="fb-title" style="color:var(--c-emerald);">Workflow Job</div><div class="fb-sub">Executes DAG</div></div>
+  </div>
+
+  <div class="cols cols-2 mt-50">
+    <div class="card" style="padding:24px;">
+      <h3 style="font-size:18px;color:var(--c-primary);margin-bottom:10px;">Webhook Security</h3>
+      <ul class="blist">
+        <li>HMAC-SHA256 signature verification</li>
+        <li>Replay attack defense (timestamp)</li>
+        <li>IP allowlisting</li>
+        <li>Rate limiting per receiver</li>
+      </ul>
+    </div>
+    <div class="card" style="padding:24px;">
+      <h3 style="font-size:18px;color:var(--c-violet);margin-bottom:10px;">Trigger Capabilities</h3>
+      <ul class="blist">
+        <li>Source / event-type filtering</li>
+        <li>JMESPath payload extraction</li>
+        <li>Configurable retries + backoff</li>
+        <li>Full audit trail per dispatch</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════
+     SLIDE 11 — MCP
+     ══════════════════════════════════════════════════════════════ -->
+<div class="slide" data-slide="10">
+  <h2>Tools via <span class="grad">MCP</span></h2>
+  <div class="subtitle">Model Context Protocol — Two Integration Patterns</div>
+  <div class="cols cols-2 mt-30 flex-1" style="gap:30px;">
+    <div class="card">
+      <h3 style="font-size:20px;color:var(--c-primary);margin-bottom:10px;">Per-Agent Sidecars</h3>
+      <p style="font-size:14px;margin-bottom:16px;">Localhost communication. Pod-local trust. Each agent gets exactly the tools it needs.</p>
+      <div style="display:flex;flex-wrap:wrap;gap:7px;">
+        <span class="badge be" style="font-size:12px;">code-exec</span>
+        <span class="badge bb" style="font-size:12px;">web-search</span>
+        <span class="badge bv" style="font-size:12px;">browser</span>
+        <span class="badge ba" style="font-size:12px;">database</span>
+        <span class="badge bp" style="font-size:12px;">git</span>
+        <span class="badge bf" style="font-size:12px;">github</span>
+        <span class="badge bs" style="font-size:12px;">kubernetes</span>
+        <span class="badge br" style="font-size:12px;">messaging</span>
+        <span class="badge be" style="font-size:12px;">RAG</span>
+        <span class="badge bb" style="font-size:12px;">documents</span>
+        <span class="badge bv" style="font-size:12px;">collector</span>
+      </div>
+      <p style="font-size:12px;margin-top:14px;font-style:italic;">11 bundled sidecars, extensible with custom images</p>
+    </div>
+    <div class="card">
+      <h3 style="font-size:20px;color:var(--c-violet);margin-bottom:10px;">Shared MCP Hub</h3>
+      <p style="font-size:14px;margin-bottom:16px;">McpConnection CRD defines saved integrations. Multiple agents share connections.</p>
+      <pre style="font-size:14px;padding:18px;"><span class="kw">kind:</span> McpConnection
+<span class="kw">metadata:</span>
+  <span class="val">name:</span> jira-integration
+<span class="kw">spec:</span>
+  <span class="val">transport:</span> sse
+  <span class="val">url:</span> <span class="str">https://mcp.jira.internal</span>
+  <span class="val">shared:</span> <span class="fn">true</span></pre>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════
+     SLIDE 12 — SECURITY
+     ══════════════════════════════════════════════════════════════ -->
+<div class="slide" data-slide="11">
+  <h2>Security Is <span class="grad">Layered</span>, Not Bolted On</h2>
+  <div class="center flex-1">
+    <svg width="700" height="440" viewBox="0 0 700 440">
+      <ellipse cx="350" cy="220" rx="330" ry="200" fill="none" stroke="rgba(99,179,237,0.25)" stroke-width="2" stroke-dasharray="6 4"/>
+      <text x="350" y="34" text-anchor="middle" font-size="14" font-weight="700" fill="#63b3ed" font-family="Inter">EDGE — Auth, TLS, Rate Limiting, HMAC</text>
+      <ellipse cx="350" cy="220" rx="245" ry="150" fill="none" stroke="rgba(183,148,244,0.3)" stroke-width="2" stroke-dasharray="6 4"/>
+      <text x="350" y="88" text-anchor="middle" font-size="13" font-weight="700" fill="#b794f4" font-family="Inter">CONTROL PLANE — RBAC, Policies, CRD Validation</text>
+      <ellipse cx="350" cy="220" rx="160" ry="100" fill="none" stroke="rgba(104,211,145,0.3)" stroke-width="2" stroke-dasharray="6 4"/>
+      <text x="350" y="138" text-anchor="middle" font-size="13" font-weight="700" fill="#68d391" font-family="Inter">RUNTIME — Isolation, Seccomp, gVisor</text>
+      <ellipse cx="350" cy="225" rx="75" ry="48" fill="rgba(79,209,197,0.04)" stroke="rgba(79,209,197,0.45)" stroke-width="2.5"/>
+      <text x="350" y="222" text-anchor="middle" font-size="13" font-weight="700" fill="#4fd1c5" font-family="Inter">NETWORK</text>
+      <text x="350" y="240" text-anchor="middle" font-size="11" fill="#7a8299" font-family="Inter">NetworkPolicies</text>
+      <!-- Items -->
+      <text x="90" y="170" font-size="12" fill="#7a8299" font-family="JetBrains Mono">OIDC / SAML</text>
+      <text x="540" y="170" font-size="12" fill="#7a8299" font-family="JetBrains Mono">HMAC Webhooks</text>
+      <text x="90" y="290" font-size="12" fill="#7a8299" font-family="JetBrains Mono">JWT Validation</text>
+      <text x="540" y="290" font-size="12" fill="#7a8299" font-family="JetBrains Mono">IP Allowlists</text>
+      <text x="200" y="255" font-size="12" fill="#7a8299" font-family="JetBrains Mono">AgentPolicy</text>
+      <text x="440" y="255" font-size="12" fill="#7a8299" font-family="JetBrains Mono">HITL Gates</text>
+      <text x="230" y="320" font-size="12" fill="#7a8299" font-family="JetBrains Mono">Model Allow</text>
+      <text x="420" y="320" font-size="12" fill="#7a8299" font-family="JetBrains Mono">MCP Filter</text>
+      <circle cx="350" cy="225" r="4" fill="#4fd1c5"><animate attributeName="r" values="4;8;4" dur="2.5s" repeatCount="indefinite"/><animate attributeName="opacity" values="1;0.3;1" dur="2.5s" repeatCount="indefinite"/></circle>
+    </svg>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════
+     SLIDE 13 — PERSONAS
+     ══════════════════════════════════════════════════════════════ -->
+<div class="slide" data-slide="12">
+  <h2>Who Is This For?</h2>
+  <div class="cols cols-3 mt-40 flex-1" style="gap:24px;">
+    <div class="persona-card" style="border-top-color:var(--c-primary);">
+      <h3 style="color:var(--c-primary);">Platform Engineers</h3>
+      <div class="pp">Agents don't fit cluster governance</div>
+      <div class="pp">No standard deployment contract</div>
+      <div class="pp">Bypass resource controls</div>
+      <div class="pa">CRDs + Helm + RBAC + NetworkPolicies = agents as first-class cluster citizens</div>
+    </div>
+    <div class="persona-card" style="border-top-color:var(--c-violet);">
+      <h3 style="color:var(--c-violet);">DevOps / SRE</h3>
+      <div class="pp">Can't tell what agents are doing</div>
+      <div class="pp">No visibility into failures</div>
+      <div class="pp">No anomaly alerting</div>
+      <div class="pa">Observatory + traces + signal_watch + structured runtime events</div>
+    </div>
+    <div class="persona-card" style="border-top-color:var(--c-amber);">
+      <h3 style="color:var(--c-amber);">Enterprise AI Teams</h3>
+      <div class="pp">Need governance and audit trails</div>
+      <div class="pp">Multiple models, changing providers</div>
+      <div class="pp">Workflows need approval gates</div>
+      <div class="pa">AgentPolicy + LiteLLM abstraction + HITL approvals + full audit</div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════
+     SLIDE 14 — CLOSING
+     ══════════════════════════════════════════════════════════════ -->
+<div class="slide" data-slide="13">
+  <div class="center">
+    <div class="anim-glow anim-float" style="width:100px;height:100px;border-radius:24px;display:flex;align-items:center;justify-content:center;background:rgba(79,209,197,0.06);border:2px solid rgba(79,209,197,0.25);margin-bottom:28px;">
+      <svg width="54" height="54" viewBox="0 0 56 56" fill="none">
+        <path d="M28 4L48 16v24L28 52 8 40V16L28 4z" stroke="#4fd1c5" stroke-width="2" fill="rgba(79,209,197,0.05)"/>
+        <path d="M28 14L38 20v12L28 38 18 32V20L28 14z" stroke="#4fd1c5" stroke-width="1.5" fill="rgba(79,209,197,0.08)"/>
+        <circle cx="28" cy="26" r="4" fill="#4fd1c5"/>
+      </svg>
+    </div>
+    <h2 style="text-align:center;font-size:44px;">Ship AI agents the same way<br>you ship everything else.</h2>
+    <p style="font-size:22px;color:var(--c-primary);font-weight:600;margin-top:8px;">As Kubernetes resources with observable runtime behavior.</p>
+
+    <div style="display:flex;gap:18px;margin-top:48px;flex-wrap:wrap;justify-content:center;">
+      <div class="card" style="text-align:center;padding:14px 24px;">
+        <div style="font-size:10px;color:var(--c-muted);text-transform:uppercase;letter-spacing:1px;">Install</div>
+        <div style="font-family:var(--mono);font-size:15px;color:var(--c-primary);margin-top:4px;">helm install kubesynapse</div>
+      </div>
+      <div class="card" style="text-align:center;padding:14px 24px;">
+        <div style="font-size:10px;color:var(--c-muted);text-transform:uppercase;letter-spacing:1px;">Local Dev</div>
+        <div style="font-family:var(--mono);font-size:15px;color:var(--c-primary);margin-top:4px;">scripts/deploy-kind.ps1</div>
+      </div>
+      <div class="card" style="text-align:center;padding:14px 24px;">
+        <div style="font-size:10px;color:var(--c-muted);text-transform:uppercase;letter-spacing:1px;">Source</div>
+        <div style="font-family:var(--mono);font-size:14px;color:var(--c-primary);margin-top:4px;">github.com/ykbytes/kubesynapse.ai</div>
+      </div>
+    </div>
+
+    <div style="display:flex;gap:12px;margin-top:32px;justify-content:center;">
+      <span class="badge badge-lg bp">Open Source</span>
+      <span class="badge badge-lg be">Self-Hosted</span>
+      <span class="badge badge-lg bb">Apache 2.0</span>
+      <span class="badge badge-lg bv">Kubernetes-Native</span>
+    </div>
+  </div>
+</div>
+
+  </div><!-- /#viewport -->
+</div><!-- /#deck -->
+
+<!-- Progress bar -->
+<div id="progress" style="width:7.14%;"></div>
+<div id="slide-num">1 / 14</div>
+<div id="nav-arrows">
+  <button id="btn-prev" aria-label="Previous">&#8592;</button>
+  <button id="btn-next" aria-label="Next">&#8594;</button>
+</div>
+
+<script>
+(function() {
+  // ─── SLIDE ENGINE ───
+  const slides = document.querySelectorAll('.slide');
+  const total = slides.length;
+  let current = 0;
+
+  function goTo(n) {
+    if (n < 0 || n >= total) return;
+    // Animate out
+    const prev = slides[current];
+    prev.style.opacity = '0';
+    prev.style.pointerEvents = 'none';
+    prev.classList.remove('active');
+
+    current = n;
+    const next = slides[current];
+    next.classList.add('active');
+
+    // GSAP entrance
+    gsap.fromTo(next, { opacity:0, x:60 }, { opacity:1, x:0, duration:0.5, ease:'power2.out' });
+    next.style.pointerEvents = 'auto';
+
+    // Animate children
+    const items = next.querySelectorAll('.reveal-item');
+    if (items.length) {
+      gsap.fromTo(items, { opacity:0, y:20 }, { opacity:1, y:0, duration:0.4, stagger:0.08, delay:0.2, ease:'power2.out' });
+    }
+
+    // Update UI
+    document.getElementById('progress').style.width = ((current + 1) / total * 100) + '%';
+    document.getElementById('slide-num').textContent = (current + 1) + ' / ' + total;
+    window.location.hash = '#/' + current;
+  }
+
+  function next() { goTo(current + 1); }
+  function prev() { goTo(current - 1); }
+
+  // Keyboard
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'PageDown') { e.preventDefault(); next(); }
+    if (e.key === 'ArrowLeft' || e.key === 'PageUp') { e.preventDefault(); prev(); }
+    if (e.key === 'Home') { e.preventDefault(); goTo(0); }
+    if (e.key === 'End') { e.preventDefault(); goTo(total - 1); }
+    if (e.key === 'f' || e.key === 'F') {
+      if (!document.fullscreenElement) document.documentElement.requestFullscreen();
+      else document.exitFullscreen();
+    }
+  });
+
+  // Click navigation
+  document.getElementById('btn-next').addEventListener('click', next);
+  document.getElementById('btn-prev').addEventListener('click', prev);
+
+  // Touch swipe
+  let touchStartX = 0;
+  document.addEventListener('touchstart', function(e) { touchStartX = e.touches[0].clientX; });
+  document.addEventListener('touchend', function(e) {
+    const diff = e.changedTouches[0].clientX - touchStartX;
+    if (Math.abs(diff) > 50) { diff < 0 ? next() : prev(); }
+  });
+
+  // Hash navigation
+  const hash = window.location.hash.replace('#/', '');
+  if (hash && !isNaN(parseInt(hash))) {
+    const n = parseInt(hash);
+    if (n > 0 && n < total) {
+      slides[0].classList.remove('active');
+      slides[0].style.opacity = '0';
+      current = n;
+      slides[n].classList.add('active');
+      slides[n].style.opacity = '1';
+      document.getElementById('progress').style.width = ((n + 1) / total * 100) + '%';
+      document.getElementById('slide-num').textContent = (n + 1) + ' / ' + total;
+    }
+  }
+
+  // ─── VIEWPORT SCALING ───
+  function scaleViewport() {
+    const vp = document.getElementById('viewport');
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+    const scaleX = w / 1600;
+    const scaleY = h / 900;
+    const scale = Math.min(scaleX, scaleY);
+    vp.style.transform = 'scale(' + scale + ')';
+    vp.style.transformOrigin = 'center center';
+  }
+  scaleViewport();
+  window.addEventListener('resize', scaleViewport);
+
+  // Initial entrance
+  gsap.fromTo(slides[0], { opacity:0 }, { opacity:1, duration:0.6, ease:'power2.out' });
+})();
+</script>
+</body>
+</html>

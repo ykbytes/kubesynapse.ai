@@ -46,7 +46,7 @@ step builds on files created by the previous one. Each step prompt uses
 
 ## Prerequisites
 
-1. A running AI Agent Sandbox cluster with the operator deployed.
+1. A running KubeSynapse cluster with the operator deployed.
 2. LLM model `copilot-gpt-5.4` configured in LiteLLM.
 3. MCP sidecar `code-exec` available.
 

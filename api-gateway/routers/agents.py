@@ -1,6 +1,7 @@
 """Auto-generated router — extracted from api-gateway main.py."""
 from __future__ import annotations
 
+import hashlib
 import json
 from typing import Any
 
@@ -16,6 +17,23 @@ router = APIRouter(tags=["agents"])
 
 def _invoke_username(user: dict[str, Any]) -> str | None:
     return str(user.get("sub") or user.get("username") or "").strip() or None
+
+
+def _build_invoke_execution_id(
+    *,
+    thread_id: str | None = None,
+    request_id: str | None = None,
+) -> str:
+    request_seed = str(request_id or "").strip()
+    if request_seed:
+        digest = hashlib.sha256(f"request:{request_seed}".encode("utf-8")).hexdigest()[:24]
+        return f"exec-{digest}"
+
+    thread_seed = str(thread_id or "").strip()
+    if thread_seed:
+        return f"exec-{thread_seed[:16]}"
+
+    return f"exec-{uuid.uuid4().hex[:16]}"
 
 
 def _record_invoke_trace(
@@ -50,7 +68,7 @@ def _record_invoke_trace(
         return
 
     thread_id = str(data.get("thread_id") or "").strip() or request_id
-    execution_id = f"exec-{thread_id[:16]}" if thread_id else f"exec-{request_id[:16]}"
+    execution_id = _build_invoke_execution_id(thread_id=thread_id, request_id=request_id)
     now = utc_now()
     metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
     token_info = metadata.get("tokens") if isinstance(metadata.get("tokens"), dict) else {}

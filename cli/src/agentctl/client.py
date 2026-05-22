@@ -37,7 +37,7 @@ class ApiClient:
             trust_env=False,
         )
 
-    def __enter__(self) -> "ApiClient":
+    def __enter__(self) -> ApiClient:
         return self
 
     def __exit__(self, *_: object) -> None:

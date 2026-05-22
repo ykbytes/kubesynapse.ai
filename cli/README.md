@@ -40,6 +40,21 @@ agentctl invoke my-agent "Explain Kubernetes namespaces"
 agentctl invoke my-agent "Build a REST API" --stream
 ```
 
+### Shell Completion
+
+```bash
+# Install (interactive — detects your shell)
+agentctl --install-completion
+
+# Or manually for your shell
+agentctl --show-completion bash        # >> ~/.bashrc
+agentctl --show-completion zsh         # >> ~/.zshrc
+agentctl --show-completion powershell  # >> $PROFILE
+agentctl --show-completion fish        # >> ~/.config/fish/completions
+```
+
+Press **Tab** to complete commands, subcommands, options, and flags.
+
 ---
 
 ## Configuration

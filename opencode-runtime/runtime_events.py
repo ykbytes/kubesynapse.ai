@@ -111,7 +111,13 @@ def _sync_flush_loop() -> None:
         if event is not None:
             batch.append(event)
 
-        if len(batch) >= _BATCH_MAX_SIZE or (event is None and not _sync_running and batch):
+        should_flush = len(batch) >= _BATCH_MAX_SIZE
+        if event is None and batch:
+            should_flush = True
+        if event is None and not _sync_running and batch:
+            should_flush = True
+
+        if should_flush:
             _sync_flush_batch(batch)
             batch.clear()
 
@@ -299,7 +305,13 @@ class RuntimeEventEmitter:
             if event is not None:
                 batch.append(event)
 
-            if len(batch) >= _BATCH_MAX_SIZE or (event is None and not self._running and batch):
+            should_flush = len(batch) >= _BATCH_MAX_SIZE
+            if event is None and batch:
+                should_flush = True
+            if event is None and not self._running and batch:
+                should_flush = True
+
+            if should_flush:
                 await self._send_batch(batch)
                 batch.clear()
 

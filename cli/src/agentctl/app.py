@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Optional
-
 import typer
 from rich.console import Console
 
 from agentctl import __version__
-from agentctl.config import resolve_settings, ResolvedSettings
+from agentctl.config import ResolvedSettings, resolve_settings
 
 # ─── Global state shared across commands ───
 
@@ -31,6 +29,14 @@ app = typer.Typer(
     rich_markup_mode="rich",
     pretty_exceptions_enable=True,
     pretty_exceptions_show_locals=False,
+    epilog=(
+        "[bold]Quick start:[/bold]\n"
+        "  agentctl profile create demo --gateway http://localhost:8080\n"
+        "  agentctl profile use demo\n"
+        "  agentctl agents list\n"
+        "  agentctl invoke my-agent \"Deploy nginx\"\n"
+        "See [underline]docs/cli-architecture.md[/underline] for full documentation."
+    ),
 )
 
 
@@ -43,42 +49,48 @@ def version_callback(value: bool) -> None:
 @app.callback()
 def main_callback(
     ctx: typer.Context,
-    gateway_url: Optional[str] = typer.Option(
+    gateway_url: str | None = typer.Option(
         None,
-        "--gateway", "-g",
+        "--gateway",
+        "-g",
         envvar="AGENT_GATEWAY_URL",
         help="Gateway API base URL.",
     ),
-    token: Optional[str] = typer.Option(
+    token: str | None = typer.Option(
         None,
-        "--token", "-t",
+        "--token",
+        "-t",
         envvar="AGENT_GATEWAY_TOKEN",
         help="Bearer token for authentication.",
     ),
-    namespace: Optional[str] = typer.Option(
+    namespace: str | None = typer.Option(
         None,
-        "--namespace", "-n",
+        "--namespace",
+        "-n",
         envvar="AGENT_NAMESPACE",
         help="Target namespace.",
     ),
-    profile: Optional[str] = typer.Option(
+    profile: str | None = typer.Option(
         None,
-        "--profile", "-p",
+        "--profile",
+        "-p",
         help="Configuration profile to use.",
     ),
     output: str = typer.Option(
         "table",
-        "--output", "-o",
+        "--output",
+        "-o",
         help="Output format: table, json, yaml, wide, name.",
     ),
-    timeout: Optional[float] = typer.Option(
+    timeout: float | None = typer.Option(
         None,
         "--timeout",
         help="Request timeout in seconds.",
     ),
-    _version: Optional[bool] = typer.Option(
+    _version: bool | None = typer.Option(
         None,
-        "--version", "-V",
+        "--version",
+        "-V",
         callback=version_callback,
         is_eager=True,
         help="Show version and exit.",

@@ -2,23 +2,32 @@
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 import typer
-from rich.panel import Panel
 
 from agentctl.app import get_settings
 from agentctl.client import ApiClient, ApiError
 from agentctl.output import (
     console,
-    print_table,
+    fatal,
     print_detail,
     print_json_output,
+    print_table,
     success,
-    fatal,
 )
 
-webhooks_app = typer.Typer(no_args_is_help=True, rich_markup_mode="rich")
+webhooks_app = typer.Typer(
+    no_args_is_help=True,
+    rich_markup_mode="rich",
+    epilog=(
+        "[bold]Examples:[/bold]\n"
+        "  agentctl webhooks list\n"
+        "  agentctl webhooks create hook.yaml\n"
+        "  agentctl webhooks show my-hook\n"
+        "  agentctl webhooks dispatch my-hook --event push"
+    ),
+)
 
 
 def _api() -> ApiClient:
@@ -80,10 +89,9 @@ def webhooks_create(
     name: str = typer.Argument(..., help="Webhook name."),
     workflow: str = typer.Option(..., "--workflow", "-w", help="Target workflow."),
     event_type: str = typer.Option("push", "--event", "-e", help="Event type (e.g. push, pr, custom)."),
-    secret: Optional[str] = typer.Option(None, "--secret", "-s", help="Webhook secret for validation."),
+    secret: str | None = typer.Option(None, "--secret", "-s", help="Webhook secret for validation."),
 ) -> None:
     """Create a new webhook."""
-    settings = get_settings()
     payload: dict[str, Any] = {
         "name": name,
         "workflow_ref": workflow,
@@ -95,7 +103,7 @@ def webhooks_create(
     try:
         with console.status(f"[bold cyan]Creating webhook {name}...[/bold cyan]"):
             with _api() as client:
-                data = client.post("/api/webhooks", params=_ns_params(), payload=payload)
+                client.post("/api/webhooks", params=_ns_params(), payload=payload)
     except ApiError as exc:
         fatal(str(exc))
     success(f"Webhook [bold]{name}[/bold] created")
@@ -169,7 +177,7 @@ def trigger_show(trigger_id: str = typer.Argument(..., help="Trigger ID.")) -> N
 @webhooks_app.command("dispatch")
 def webhooks_dispatch(
     webhook_name: str = typer.Argument(..., help="Webhook name to dispatch."),
-    payload_str: Optional[str] = typer.Option(None, "--payload", "-p", help="JSON payload body."),
+    payload_str: str | None = typer.Option(None, "--payload", "-p", help="JSON payload body."),
 ) -> None:
     """Manually dispatch a webhook (simulate an incoming event)."""
     import json as json_module

@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import typer
 
@@ -12,14 +11,22 @@ from agentctl.app import get_settings
 from agentctl.client import ApiClient, ApiError
 from agentctl.output import (
     console,
-    print_table,
-    print_detail,
-    print_json_output,
-    success,
     fatal,
+    print_detail,
+    print_table,
+    success,
 )
 
-artifacts_app = typer.Typer(no_args_is_help=True, rich_markup_mode="rich")
+artifacts_app = typer.Typer(
+    no_args_is_help=True,
+    rich_markup_mode="rich",
+    epilog=(
+        "[bold]Examples:[/bold]\n"
+        "  agentctl artifacts list my-workflow\n"
+        "  agentctl artifacts show my-workflow output.json\n"
+        "  agentctl artifacts download my-workflow output.json"
+    ),
+)
 
 
 def _api() -> ApiClient:
@@ -32,9 +39,9 @@ def _ns_params() -> dict[str, Any]:
 
 @artifacts_app.command("list")
 def artifacts_list(
-    agent_name: Optional[str] = typer.Option(None, "--agent", "-a", help="Filter by agent."),
-    workflow: Optional[str] = typer.Option(None, "--workflow", "-w", help="Filter by workflow."),
-    run_id: Optional[str] = typer.Option(None, "--run-id", help="Filter by run."),
+    agent_name: str | None = typer.Option(None, "--agent", "-a", help="Filter by agent."),
+    workflow: str | None = typer.Option(None, "--workflow", "-w", help="Filter by workflow."),
+    run_id: str | None = typer.Option(None, "--run-id", help="Filter by run."),
 ) -> None:
     """List artifacts for agents and workflows."""
     settings = get_settings()
@@ -91,7 +98,7 @@ def artifacts_show(
 @artifacts_app.command("download")
 def artifacts_download(
     artifact_id: str = typer.Argument(..., help="Artifact ID."),
-    output_path: Optional[Path] = typer.Option(None, "--output", "-o", help="Output file path."),
+    output_path: Path | None = typer.Option(None, "--output", "-o", help="Output file path."),
 ) -> None:
     """Download an artifact to a file."""
     settings = get_settings()

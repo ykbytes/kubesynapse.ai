@@ -2,31 +2,35 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import typer
-from rich.panel import Panel
-from rich.syntax import Syntax
-from rich.table import Table
-from rich.text import Text
-from rich import box
 
 from agentctl.app import get_settings
 from agentctl.client import ApiClient, ApiError
 from agentctl.output import (
     console,
-    print_table,
+    fatal,
     print_detail,
     print_json_output,
+    print_table,
     success,
-    info,
-    fatal,
-    status_style,
 )
 
-observatory_app = typer.Typer(no_args_is_help=True, rich_markup_mode="rich")
+observatory_app = typer.Typer(
+    no_args_is_help=True,
+    rich_markup_mode="rich",
+    epilog=(
+        "[bold]Examples:[/bold]\n"
+        "  agentctl observatory metrics --since 2h\n"
+        "  agentctl observatory traces my-agent --limit 20\n"
+        "  agentctl observatory alerts --status firing\n"
+        "  agentctl observatory signals\n"
+        "  agentctl observatory export traces.json"
+    ),
+)
 
 
 def _api() -> ApiClient:
@@ -42,7 +46,7 @@ def _ns_params() -> dict[str, Any]:
 
 @observatory_app.command("metrics")
 def observatory_metrics(
-    agent_name: Optional[str] = typer.Option(None, "--agent", "-a", help="Filter by agent."),
+    agent_name: str | None = typer.Option(None, "--agent", "-a", help="Filter by agent."),
     window: str = typer.Option("1h", "--window", "-w", help="Time window (e.g. 1h, 24h, 7d)."),
 ) -> None:
     """View agent and system metrics."""
@@ -99,9 +103,9 @@ def observatory_metrics(
 
 @observatory_app.command("traces")
 def observatory_traces(
-    agent_name: Optional[str] = typer.Option(None, "--agent", "-a", help="Filter by agent."),
+    agent_name: str | None = typer.Option(None, "--agent", "-a", help="Filter by agent."),
     limit: int = typer.Option(20, "--limit", "-l", min=1, max=200),
-    status_filter: Optional[str] = typer.Option(None, "--status", help="Filter by status (completed, failed, etc.)"),
+    status_filter: str | None = typer.Option(None, "--status", help="Filter by status (completed, failed, etc.)"),
 ) -> None:
     """List recent execution traces."""
     settings = get_settings()
@@ -198,7 +202,7 @@ def observatory_alerts(
 
 @observatory_app.command("signals")
 def observatory_signals(
-    agent_name: Optional[str] = typer.Option(None, "--agent", "-a"),
+    agent_name: str | None = typer.Option(None, "--agent", "-a"),
     limit: int = typer.Option(20, "--limit", "-l", min=1, max=200),
 ) -> None:
     """List signal watch events (anomaly detections)."""
@@ -266,14 +270,13 @@ def observatory_health() -> None:
 
 @observatory_app.command("export")
 def observatory_export(
-    output_path: Optional[Path] = typer.Option(None, "--output", "-o", help="Output file path."),
+    output_path: Path | None = typer.Option(None, "--output", "-o", help="Output file path."),
     fmt: str = typer.Option("json", "--format", "-f", help="Export format: json or csv."),
     since: str = typer.Option("24h", "--since", help="Time range (e.g. 24h, 7d, 2025-01-01)."),
-    until: Optional[str] = typer.Option(None, "--until", help="End time."),
-    agent_name: Optional[str] = typer.Option(None, "--agent", "-a", help="Filter by agent."),
+    until: str | None = typer.Option(None, "--until", help="End time."),
+    agent_name: str | None = typer.Option(None, "--agent", "-a", help="Filter by agent."),
 ) -> None:
     """Export traces to a file."""
-    settings = get_settings()
     params: dict[str, Any] = {"format": fmt, "since": since}
     if until:
         params["until"] = until
@@ -288,7 +291,7 @@ def observatory_export(
         fatal(str(exc))
 
     if not output_path:
-        ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+        ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
         output_path = Path(f"traces-{ts}.{fmt}")
 
     output_path.parent.mkdir(parents=True, exist_ok=True)

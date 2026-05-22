@@ -63,6 +63,7 @@ helm upgrade --install kubesynapse ./charts/kubesynapse \
 
 - LiteLLM schema initialization is automatic.
 - The chart runs `prisma db push` in a LiteLLM init container during install and upgrade.
+- When the chart-managed PostgreSQL instance is enabled, LiteLLM targets the dedicated `litellm` database created by the chart so Prisma sync does not modify gateway auth/session tables.
 - System agent `AIAgent` resources are created in a post-install/post-upgrade hook, so first installs do not need `systemAgents.enabled=false`.
 - Local and air-gapped installs must preload `docker.io/litellm/litellm:v1.82.3-stable` alongside the platform images.
 - You should not need to run manual database bootstrap commands after a normal Helm deploy.

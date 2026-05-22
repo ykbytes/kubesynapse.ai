@@ -75,8 +75,8 @@ runtimeServiceAccount:
 opencodeRuntime:
   image:
     repository: docker.io/kubesynapse/kubesynapse-opencode-rt
-    tag: v2.1.0-run-intelligence
-    pullPolicy: IfNotPresent
+    tag: latest
+    pullPolicy: Always
   provider: litellm
   # §security-P0: Mount a hardened, immutable ConfigMap at /etc/kubesynapse/opencode.json.
   # Prevents config-driven RCE via plugins, MCP commands, or provider baseURL redirect.
@@ -119,8 +119,8 @@ opencodeRuntime:
 piRuntime:
   image:
     repository: docker.io/kubesynapse/kubesynapse-pi-rt
-    tag: v2.1.0-run-intelligence
-    pullPolicy: IfNotPresent
+    tag: latest
+    pullPolicy: Always
   # §security-P0: Mount a hardened, immutable ConfigMap at /etc/kubesynapse/pi-config/.
   # Prevents extension loading via jiti.import(), SYSTEM.md injection, and !-prefix RCE.
   # Set to false only for development/debugging.
@@ -143,8 +143,8 @@ piRuntime:
 mistralVibeRuntime:
   image:
     repository: docker.io/kubesynapse/kubesynapse-vibe-rt
-    tag: v2.1.0-run-intelligence
-    pullPolicy: IfNotPresent
+    tag: latest
+    pullPolicy: Always
 
 operator:
   enabled: true
@@ -152,12 +152,12 @@ operator:
   revisionHistoryLimit: 3
   image:
     repository: docker.io/kubesynapse/kubesynapse-operator
-    tag: v2.1.0-run-intelligence
-    pullPolicy: IfNotPresent
+    tag: latest
+    pullPolicy: Always
   workerImage:
     repository: docker.io/kubesynapse/kubesynapse-operator
-    tag: v2.1.0-run-intelligence
-    pullPolicy: IfNotPresent
+    tag: latest
+    pullPolicy: Always
   resources:
     requests:
       cpu: "100m"
@@ -209,8 +209,8 @@ apiGateway:
   revisionHistoryLimit: 3
   image:
     repository: docker.io/kubesynapse/kubesynapse-api-gateway
-    tag: v2.1.0-run-intelligence
-    pullPolicy: IfNotPresent
+    tag: latest
+    pullPolicy: Always
   ingressClassName: ""
   ingressHost: ""  # leave empty for a hostless ingress, or set e.g. "agents.mycompany.com"
   ingress:
@@ -290,8 +290,8 @@ webUi:
   revisionHistoryLimit: 3
   image:
     repository: docker.io/kubesynapse/kubesynapse-web-ui
-    tag: v2.1.0-run-intelligence
-    pullPolicy: IfNotPresent
+    tag: latest
+    pullPolicy: Always
   service:
     type: ClusterIP
     port: 80

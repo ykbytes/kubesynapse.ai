@@ -43,7 +43,7 @@ spec:
           imagePullPolicy: {{ .Values.litellm.image.pullPolicy }}
           command: ["/bin/sh", "-lc"]
           args:
-            - cp /usr/local/lib/python3.12/site-packages/litellm/proxy/schema.prisma /work/schema.prisma
+            - cp /app/schema.prisma /work/schema.prisma
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: false
@@ -53,6 +53,47 @@ spec:
           volumeMounts:
             - name: prisma-schema
               mountPath: /work
+{{- if .Values.postgresql.enabled }}
+        - name: litellm-db-bootstrap
+          image: "{{ .Values.postgresql.image.repository }}:{{ .Values.postgresql.image.tag }}"
+          imagePullPolicy: {{ .Values.postgresql.image.pullPolicy | default "IfNotPresent" }}
+          command: ["/bin/sh", "-lc"]
+          args:
+            - >-
+              for attempt in $(seq 1 30); do
+                if [ "$(psql -Atqc "SELECT 1 FROM pg_database WHERE datname = 'litellm'")" = "1" ]; then
+                  exit 0;
+                fi;
+                if psql -v ON_ERROR_STOP=1 -c "CREATE DATABASE litellm OWNER {{ .Values.postgresql.username }}"; then
+                  exit 0;
+                fi;
+                echo "[litellm-db-bootstrap] ensure database failed (attempt ${attempt}/30), retrying in 5s";
+                sleep 5;
+              done;
+              echo "[litellm-db-bootstrap] unable to ensure litellm database exists";
+              exit 1
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          env:
+            - name: PGHOST
+              value: {{ printf "%s-postgresql" (include "kubesynapse.fullname" .) | quote }}
+            - name: PGPORT
+              value: {{ .Values.postgresql.service.port | quote }}
+            - name: PGUSER
+              value: {{ .Values.postgresql.username | quote }}
+            - name: PGDATABASE
+              value: postgres
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kubesynapse.fullname" . }}-llm-api-keys
+                  key: DATABASE_PASSWORD
+                  optional: true
+{{- end }}
         - name: litellm-db-init
           image: "{{ .Values.litellm.image.repository }}:{{ .Values.litellm.image.tag }}"
           imagePullPolicy: {{ .Values.litellm.image.pullPolicy }}
@@ -82,19 +123,36 @@ spec:
             - name: tmp
               mountPath: /tmp
           env:
+            - name: HOME
+              value: /home/litellm
+            - name: XDG_CACHE_HOME
+              value: /home/litellm/.cache
+            - name: PRISMA_HOME_DIR
+              value: /home/litellm
+{{- if .Values.postgresql.enabled }}
+            - name: DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kubesynapse.fullname" . }}-llm-api-keys
+                  key: DATABASE_PASSWORD
+                  optional: true
+            - name: DATABASE_URL
+              value: {{ printf "postgresql://%s:$(DATABASE_PASSWORD)@%s-postgresql:%s/litellm" .Values.postgresql.username (include "kubesynapse.fullname" .) (toString (.Values.postgresql.service.port | default 5432)) | quote }}
+{{- else }}
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
                   name: {{ include "kubesynapse.fullname" . }}-llm-api-keys
                   key: DATABASE_URL
                   optional: true
+{{- end }}
       containers:
         - name: litellm
           image: "{{ .Values.litellm.image.repository }}:{{ .Values.litellm.image.tag }}"
           imagePullPolicy: {{ .Values.litellm.image.pullPolicy }}
           securityContext:
             allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true  # §security-P1: writable paths via emptyDir volumes
+            readOnlyRootFilesystem: false  # Prisma engine needs writable HOME for lock/socket files
             runAsNonRoot: true
             runAsUser: 1000
             runAsGroup: 1000
@@ -112,8 +170,6 @@ spec:
             - name: prisma-schema
               mountPath: /app/schema.prisma
               subPath: schema.prisma
-            - name: home-litellm
-              mountPath: /home/litellm
             - name: tmp
               mountPath: /tmp
           env:
@@ -131,12 +187,23 @@ spec:
               value: "true"
             - name: LITELLM_LOCAL_MODEL_COST_MAP
               value: "True"
+{{- if .Values.postgresql.enabled }}
+            - name: DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kubesynapse.fullname" . }}-llm-api-keys
+                  key: DATABASE_PASSWORD
+                  optional: true
+            - name: DATABASE_URL
+              value: {{ printf "postgresql://%s:$(DATABASE_PASSWORD)@%s-postgresql:%s/litellm" .Values.postgresql.username (include "kubesynapse.fullname" .) (toString (.Values.postgresql.service.port | default 5432)) | quote }}
+{{- else }}
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
                   name: {{ include "kubesynapse.fullname" . }}-llm-api-keys
                   key: DATABASE_URL
                   optional: true
+{{- end }}
             - name: LITELLM_MASTER_KEY
               valueFrom:
                 secretKeyRef:
@@ -207,9 +274,6 @@ spec:
             name: {{ include "kubesynapse.fullname" . }}-litellm-config
         - name: prisma-schema
           emptyDir: {}
-        - name: home-litellm
-          emptyDir:
-            sizeLimit: 256Mi
         - name: tmp
           emptyDir:
             sizeLimit: 512Mi

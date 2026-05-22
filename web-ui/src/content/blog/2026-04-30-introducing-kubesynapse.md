@@ -1,5 +1,5 @@
 ---
-title: "Introducing KubeSynapse: Your Cluster's AI Companion"
+title: "Introducing KubeSynapse: A Kubernetes-Native AI Agent Platform"
 date: "2026-04-30"
 author: "KubeSynapse Team"
 tags: ["announcement", "release", "kubernetes"]
@@ -34,7 +34,7 @@ Control Plane          Execution Plane         Shared Services
 ├─ Kubernetes API      ├─ OpenCode Runtime     ├─ LiteLLM (Model Router)
 ├─ Operator (Kopf)     ├─ Pi Runtime           ├─ PostgreSQL
 ├─ API Gateway         ├─ MCP Sidecars (11)    ├─ Redis
-└─ CRDs (6 types)     └─ Worker Jobs          └─ Qdrant
+└─ CRDs (12 types)    └─ Worker Jobs          └─ Qdrant
 ```
 
 The operator watches CRD events and reconciles the desired state — provisioning StatefulSets, attaching MCP sidecars, enforcing policies, and managing lifecycle.
@@ -43,14 +43,16 @@ The operator watches CRD events and reconciles the desired state — provisionin
 
 ### CRD-Driven Governance
 
-Six custom resource types give you declarative control:
+The current chart installs 12 custom resource types. The core agent control plane includes:
 
 - **AIAgent** — Define runtime, model, system prompt, MCP tools, and storage
 - **AgentWorkflow** — Multi-step DAG pipelines with approval gates
 - **AgentPolicy** — Token budgets, allowed models, PII masking, tool whitelists
 - **AgentTenant** — Namespace-scoped multi-tenancy
 - **AgentApproval** — Human-in-the-loop control points
-- **ContextBundle** — Shared knowledge bases
+- **McpConnection** — Saved MCP connection definitions
+
+Additional shipped CRDs cover webhook receivers, workflow triggers, and observability resources.
 
 ### Visual Workflow Composer
 
@@ -58,7 +60,7 @@ Build multi-agent pipelines with a drag-and-drop canvas. Trigger → Agent Step 
 
 ### MCP Tool Ecosystem
 
-11 bundled MCP sidecars: Kubernetes ops, web search, browser automation, file system, messaging, Git, and more. Hot-attach any MCP-compatible server to give agents new capabilities without changing their code.
+Bundled MCP sidecars cover code execution, web search, browser automation, database access, Git, GitHub, Kubernetes operations, messaging, RAG, and document parsing. Saved `McpConnection` resources extend that with remote, hub, and sidecar transport patterns.
 
 ### Execution Observatory
 
@@ -82,7 +84,8 @@ metadata:
   name: incident-triage
   namespace: production
 spec:
-  runtimeKind: opencode
+  runtime:
+    kind: opencode
   model: claude-sonnet-4
   systemPrompt: |
     You are an SRE agent. When an alert fires,

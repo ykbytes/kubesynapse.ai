@@ -22,11 +22,11 @@ operator:
   replicaCount: 1
   image:
     repository: docker.io/kubesynapse/kubesynapse-operator
-    tag: v2.1.0-run-intelligence
+    tag: latest
     pullPolicy: Never
   workerImage:
     repository: docker.io/kubesynapse/kubesynapse-operator
-    tag: v2.1.0-run-intelligence
+    tag: latest
     pullPolicy: Never
   resources:
     requests:
@@ -59,7 +59,7 @@ apiGateway:
   replicaCount: 1
   image:
     repository: docker.io/kubesynapse/kubesynapse-api-gateway
-    tag: v2.1.0-run-intelligence
+    tag: latest
     pullPolicy: Never
   ingress:
     enabled: false
@@ -83,7 +83,7 @@ webUi:
   replicaCount: 1
   image:
     repository: docker.io/kubesynapse/kubesynapse-web-ui
-    tag: v2.1.0-run-intelligence
+    tag: latest
     pullPolicy: Never
   service:
     type: ClusterIP
@@ -101,7 +101,7 @@ webUi:
 opencodeRuntime:
   image:
     repository: docker.io/kubesynapse/kubesynapse-opencode-rt
-    tag: v2.1.0-run-intelligence
+    tag: latest
     pullPolicy: Never
   provider: litellm
   limits:
@@ -122,7 +122,7 @@ opencodeRuntime:
 piRuntime:
   image:
     repository: docker.io/kubesynapse/kubesynapse-pi-rt
-    tag: v2.1.0-run-intelligence
+    tag: latest
     pullPolicy: Never
   provider: ""
   model: "anthropic/claude-sonnet-4-20250514"
@@ -135,7 +135,7 @@ piRuntime:
 mistralVibeRuntime:
   image:
     repository: docker.io/kubesynapse/kubesynapse-vibe-rt
-    tag: v2.1.0-run-intelligence
+    tag: latest
     pullPolicy: Never
 
 # ---------------------------------------------------------------------------
@@ -206,91 +206,20 @@ litellm:
   enabled: true
   image:
     repository: docker.io/litellm/litellm
-    tag: v1.82.3-stable
+    tag: slim-1.82.3
     pullPolicy: Never
   replicaCount: 1
   config:
-    model_list:
-      # OpenAI models
-      - model_name: gpt-4
-        litellm_params:
-          model: openai/gpt-4
-          api_key: "os.environ/OPENAI_API_KEY"
-      - model_name: gpt-4o
-        litellm_params:
-          model: openai/gpt-4o
-          api_key: "os.environ/OPENAI_API_KEY"
-      - model_name: gpt-4o-mini
-        litellm_params:
-          model: openai/gpt-4o-mini
-          api_key: "os.environ/OPENAI_API_KEY"
-      - model_name: gpt-4.1
-        litellm_params:
-          model: openai/gpt-4.1
-          api_key: "os.environ/OPENAI_API_KEY"
-      - model_name: gpt-4.1-mini
-        litellm_params:
-          model: openai/gpt-4.1-mini
-          api_key: "os.environ/OPENAI_API_KEY"
-      - model_name: gpt-4.1-nano
-        litellm_params:
-          model: openai/gpt-4.1-nano
-          api_key: "os.environ/OPENAI_API_KEY"
-      - model_name: o3
-        litellm_params:
-          model: openai/o3
-          api_key: "os.environ/OPENAI_API_KEY"
-      - model_name: o3-mini
-        litellm_params:
-          model: openai/o3-mini
-          api_key: "os.environ/OPENAI_API_KEY"
-      - model_name: o4-mini
-        litellm_params:
-          model: openai/o4-mini
-          api_key: "os.environ/OPENAI_API_KEY"
-      # GitHub Copilot models (disabled — device auth blocks startup without valid token)
-      # Uncomment when a valid GITHUB_COPILOT_TOKEN is available:
-      # - model_name: github-copilot/gpt-4o
-      #   litellm_params:
-      #     model: github_copilot/gpt-4o
-      #     api_key: "os.environ/GITHUB_COPILOT_TOKEN"
-      # - model_name: github-copilot/gpt-4.1
-      #   litellm_params:
-      #     model: github_copilot/gpt-4.1
-      #     api_key: "os.environ/GITHUB_COPILOT_TOKEN"
-      # - model_name: github-copilot/claude-sonnet-4
-      #   litellm_params:
-      #     model: github_copilot/claude-sonnet-4
-      #     api_key: "os.environ/GITHUB_COPILOT_TOKEN"
-      # - model_name: github-copilot/claude-opus-4
-      #   litellm_params:
-      #     model: github_copilot/claude-opus-4
-      #     api_key: "os.environ/GITHUB_COPILOT_TOKEN"
-      # - model_name: github-copilot/o4-mini
-      #   litellm_params:
-      #     model: github_copilot/o4-mini
-      #     api_key: "os.environ/GITHUB_COPILOT_TOKEN"
-      # Anthropic models
-      - model_name: claude-sonnet-4
-        litellm_params:
-          model: anthropic/claude-sonnet-4-20250514
-          api_key: "os.environ/ANTHROPIC_API_KEY"
-      - model_name: claude-opus-4
-        litellm_params:
-          model: anthropic/claude-opus-4-20250514
-          api_key: "os.environ/ANTHROPIC_API_KEY"
-      - model_name: claude-3.5-sonnet
-        litellm_params:
-          model: anthropic/claude-3-5-sonnet-20241022
-          api_key: "os.environ/ANTHROPIC_API_KEY"
-      # OpenRouter models
-      - model_name: openrouter-gpt-4o-mini
-        litellm_params:
-          model: openrouter/openai/gpt-4o-mini
-          api_key: "os.environ/OPENROUTER_API_KEY"
+    model_list: []
     general_settings:
       master_key: "os.environ/LITELLM_MASTER_KEY"
       database_url: "os.environ/DATABASE_URL"
+      # Set to true to let LiteLLM auto-detect models from provider API keys
+      # Uses /model/info endpoint to dynamically discover available models
+      litellm_settings:
+        set_verbose: true
+        request_timeout: 120
+        telemetry: false
   resources:
     requests:
       cpu: "200m"

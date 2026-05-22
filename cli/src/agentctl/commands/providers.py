@@ -2,22 +2,29 @@
 
 from __future__ import annotations
 
-from typing import Any, Optional
-
 import typer
 
 from agentctl.app import get_settings
 from agentctl.client import ApiClient, ApiError
 from agentctl.output import (
     console,
-    print_table,
+    fatal,
     print_detail,
     print_json_output,
-    success,
-    fatal,
+    print_table,
 )
 
-providers_app = typer.Typer(no_args_is_help=True, rich_markup_mode="rich")
+providers_app = typer.Typer(
+    no_args_is_help=True,
+    rich_markup_mode="rich",
+    epilog=(
+        "[bold]Examples:[/bold]\n"
+        "  agentctl providers list\n"
+        "  agentctl providers show openai\n"
+        "  agentctl providers models openai\n"
+        "  agentctl providers health"
+    ),
+)
 
 
 def _api() -> ApiClient:

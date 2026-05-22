@@ -329,9 +329,9 @@ function HeroSection({ onOpenDocs }: { onOpenDocs: () => void }) {
           transition={{ duration: 0.6, delay: 0.1 }}
           className="text-3xl font-extrabold tracking-tight text-[oklch(0.958_0.004_264)] sm:text-5xl md:text-6xl lg:text-7xl"
         >
-          Your Kubernetes Cluster&rsquo;s{" "}
+          Kubernetes-native{" "}
           <span className="bg-gradient-to-r from-[oklch(0.708_0.101_188)] to-[oklch(0.742_0.132_233)] bg-clip-text text-transparent">
-            AI Companion
+            AI agent infrastructure
           </span>
         </motion.h1>
 
@@ -341,9 +341,10 @@ function HeroSection({ onOpenDocs }: { onOpenDocs: () => void }) {
           transition={{ duration: 0.6, delay: 0.2 }}
           className="mx-auto mt-6 max-w-2xl text-base leading-relaxed text-[oklch(0.82_0.01_264)] sm:text-lg md:text-xl"
         >
-          The self-hosted command center for DevOps and IT operations.
-          Deploy AI agents that automate incident response, infrastructure management,
-          and deployment pipelines — all governed by Kubernetes-native CRDs.
+          Self-hosted agent infrastructure for teams that want workflows, tools,
+          memory, and observability to live inside the cluster. Deploy AI agents
+          for incident response, infrastructure work, and research pipelines with
+          Kubernetes-native CRDs and operator-managed runtimes.
         </motion.p>
 
         <motion.div
@@ -643,7 +644,7 @@ function ConsoleShowcase({ activeTab }: { activeTab: "composer" | "workflow" | "
               </div>
               <div>
                 <span className="text-sm font-bold text-[oklch(0.99_0.004_264)]">KubeSynapse</span>
-                <span className="ml-1.5 text-[9px] text-[oklch(0.72_0.012_264)]">Agent Sandbox</span>
+                <span className="ml-1.5 text-[9px] text-[oklch(0.72_0.012_264)]">AI Agent Platform</span>
               </div>
             </div>
 

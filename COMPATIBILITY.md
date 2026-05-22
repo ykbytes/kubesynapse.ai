@@ -43,7 +43,7 @@
 |-----------|---------|-------|
 | Kubernetes API | v1.25–v1.32 | Uses `apps/v1`, `batch/v1`, `networking.k8s.io/v1`, `policy/v1` |
 | Helm | v3.12+ | Uses `helm.sh/chart` v2, OCI registry support |
-| CRDs | `KubeSynapse.ai/v1alpha1` | 10 custom resources (AIAgent, AgentPolicy, AgentApproval, AgentTenant, AgentWorkflow, ObservationTarget, ObservationPolicy, ObservationReport, ConnectorPlugin, McpConnection) |
+| CRDs | `KubeSynapse.ai/v1alpha1` | 12 custom resources (AIAgent, AgentPolicy, AgentApproval, AgentTenant, AgentWorkflow, McpConnection, WebhookReceiver, WorkflowTrigger, ObservationTarget, ObservationPolicy, ObservationReport, ConnectorPlugin) |
 
 ### Infrastructure Dependencies
 
@@ -174,7 +174,7 @@ This script:
 ### Tested (CI-verified on every PR)
 - ✅ Kind clusters: 1.25, 1.27, 1.29, 1.31, 1.32
 - ✅ Helm install → health check → agent create → reconcile → cleanup
-- ✅ All 11 CRDs install and validate
+- ✅ All 12 CRDs install and validate
 
 ### Planned (roadmap)
 - 🧪 EKS (AWS) — Q2 2026

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import typer
 
@@ -11,13 +11,23 @@ from agentctl.app import get_settings
 from agentctl.client import ApiClient, ApiError
 from agentctl.output import (
     console,
+    fatal,
     print_detail,
     print_json_output,
     success,
-    fatal,
 )
 
-credentials_app = typer.Typer(no_args_is_help=True, rich_markup_mode="rich")
+credentials_app = typer.Typer(
+    no_args_is_help=True,
+    rich_markup_mode="rich",
+    epilog=(
+        "[bold]Examples:[/bold]\n"
+        "  agentctl credentials git-show my-agent\n"
+        "  agentctl credentials git-set my-agent --url git.example.com\n"
+        "  agentctl credentials git-delete my-agent -y\n"
+        "  agentctl credentials github-show my-agent"
+    ),
+)
 
 
 def _api() -> ApiClient:
@@ -35,10 +45,10 @@ def _ns_params() -> dict[str, Any]:
 def credentials_git_set(
     agent_name: str = typer.Argument(..., help="Agent name."),
     auth_method: str = typer.Option(..., "--method", help="Auth method: token, basic, or ssh."),
-    token: Optional[str] = typer.Option(None, "--token", help="Personal access token (method=token)."),
-    username: Optional[str] = typer.Option(None, "--username", help="Username (method=basic)."),
-    password: Optional[str] = typer.Option(None, "--password", help="Password (method=basic)."),
-    ssh_key_file: Optional[Path] = typer.Option(
+    token: str | None = typer.Option(None, "--token", help="Personal access token (method=token)."),
+    username: str | None = typer.Option(None, "--username", help="Username (method=basic)."),
+    password: str | None = typer.Option(None, "--password", help="Password (method=basic)."),
+    ssh_key_file: Path | None = typer.Option(
         None, "--ssh-key-file", exists=True, file_okay=True, dir_okay=False, help="SSH private key file (method=ssh)."
     ),
 ) -> None:

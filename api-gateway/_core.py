@@ -38,6 +38,7 @@ from auth_middleware import (  # §4.1 — extracted auth middleware
     auth_configuration_payload,
     authenticate_bearer_token,
     browser_auth_enabled,
+    ensure_browser_auth_available,
     clear_oidc_transaction_cookie,
     clear_refresh_cookie,
     ensure_namespace_access,

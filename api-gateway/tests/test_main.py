@@ -67,6 +67,7 @@ sys.modules["routers.workflows"] = api_gateway_workflows
 api_gateway_a2a = _load_gateway_module("api_gateway_a2a", "routers/a2a.py")
 sys.modules["routers.a2a"] = api_gateway_a2a
 api_gateway_app = _load_gateway_module("api_gateway_app", "main.py")
+api_gateway_auth_middleware = sys.modules["auth_middleware"]
 
 api_gateway_auth.get_tool_categories = api_gateway_observability.get_tool_categories
 
@@ -90,6 +91,42 @@ class GatewayRuntimeValidationTests(unittest.TestCase):
 
         self.assertEqual(context.exception.status_code, 400)
         self.assertIn("runtime kind must be 'opencode'", str(context.exception.detail))
+
+
+class AuthConfigurationTests(unittest.TestCase):
+    def test_auth_configuration_payload_hides_browser_auth_when_storage_is_unavailable(self) -> None:
+        with (
+            patch.object(api_gateway_auth_middleware, "AUTH_MODE", "shared_token"),
+            patch.object(api_gateway_auth_middleware, "LOCAL_AUTH_ENABLED", True),
+            patch.object(api_gateway_auth_middleware, "REGISTRATION_ENABLED", True),
+            patch.object(api_gateway_auth_middleware, "SHARED_TOKEN", "test-shared-token"),
+            patch.object(api_gateway_auth_middleware, "auth_storage_ready", return_value=False),
+            patch.object(api_gateway_auth_middleware, "ldap_enabled", return_value=True),
+            patch.object(api_gateway_auth_middleware, "oidc_providers", return_value=[{"id": "oidc"}]),
+            patch.object(api_gateway_auth_middleware, "saml_providers", return_value=[{"id": "saml"}]),
+        ):
+            payload = api_gateway_auth_middleware.auth_configuration_payload()
+
+        self.assertTrue(payload["shared_token_enabled"])
+        self.assertFalse(payload["local_enabled"])
+        self.assertFalse(payload["registration_enabled"])
+        self.assertFalse(payload["browser_auth_enabled"])
+        self.assertFalse(payload["bootstrap_complete"])
+        self.assertEqual(payload["password_providers"], [])
+        self.assertEqual(payload["oidc_providers"], [])
+        self.assertEqual(payload["saml_providers"], [])
+
+    def test_refresh_session_returns_service_unavailable_when_auth_storage_is_missing(self) -> None:
+        raw_request = Mock()
+        raw_request.headers = {"user-agent": "pytest"}
+        raw_request.client = None
+
+        with patch.object(api_gateway_auth_middleware, "auth_storage_ready", return_value=False):
+            with self.assertRaises(HTTPException) as context:
+                api_gateway_auth.refresh_session(raw_request, refresh_token="session.secret")
+
+        self.assertEqual(context.exception.status_code, 503)
+        self.assertEqual(str(context.exception.detail), "Browser authentication is temporarily unavailable")
 
 
 class AdminUserNamespaceProvisioningTests(unittest.TestCase):
@@ -2254,6 +2291,21 @@ class GatewayInvokeProxyTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("persistent memory", forwarded["system"])
         self.assertIn("Use the repo root Make targets first.", forwarded["system"])
 
+    def test_build_invoke_execution_id_prefers_request_id(self) -> None:
+        expected = api_gateway_agents._build_invoke_execution_id(
+            thread_id="thread-1",
+            request_id="req-direct-1",
+        )
+
+        self.assertEqual(
+            expected,
+            api_gateway_agents._build_invoke_execution_id(
+                thread_id="thread-1",
+                request_id="req-direct-1",
+            ),
+        )
+        self.assertNotEqual(expected, api_gateway_agents._build_invoke_execution_id(thread_id="thread-1"))
+
     async def test_invoke_agent_injects_collaboration_context_into_system_prompt(self) -> None:
         request = api_gateway_main.InvokeRequest(prompt="Who can I collaborate with?")
         raw_request = types.SimpleNamespace(headers={})
@@ -3233,6 +3285,62 @@ class WorkflowRetryFailedTests(unittest.TestCase):
 class GatewayProviderModelTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         _bind_gateway_module(self, api_gateway_llm)
+
+    async def test_provider_registry_catalog_only_returns_connected_provider_models(self) -> None:
+        with patch.object(
+            api_gateway_main,
+            "_provider_registry_response",
+            AsyncMock(
+                return_value={
+                    "providers": [
+                        {
+                            "id": "github-copilot",
+                            "label": "GitHub Copilot",
+                            "connected": True,
+                            "kind": "builtin",
+                            "models": [
+                                {
+                                    "id": "gpt-5-mini",
+                                    "name": "GPT-5 Mini",
+                                    "description": "Live model",
+                                }
+                            ],
+                        },
+                        {
+                            "id": "opencode",
+                            "label": "OpenCode Zen",
+                            "connected": False,
+                            "kind": "builtin",
+                            "models": [
+                                {
+                                    "id": "kimi-k2.6",
+                                    "name": "kimi-k2.6",
+                                    "description": "Should be hidden",
+                                }
+                            ],
+                        },
+                    ]
+                }
+            ),
+        ):
+            response = await api_gateway_main.provider_registry_catalog(user={"role": "viewer"})
+
+        self.assertEqual(
+            response,
+            {
+                "models": [
+                    {
+                        "provider_id": "github-copilot",
+                        "provider_label": "GitHub Copilot",
+                        "model_id": "gpt-5-mini",
+                        "model_ref": "github-copilot/gpt-5-mini",
+                        "connected": True,
+                        "kind": "builtin",
+                        "description": "Live model",
+                    }
+                ]
+            },
+        )
 
     async def test_add_copilot_model_falls_back_when_token_exchange_fails(self) -> None:
         class FakeSecret:

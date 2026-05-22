@@ -146,16 +146,18 @@ def normalize_workflow_steps(steps: Any) -> list[dict[str, Any]]:
         if not isinstance(item, dict):
             fatal("Each workflow step must be an object.")
         execution = snake_or_camel(item, "execution", "execution", None)
-        normalized.append({
-            "name": str(snake_or_camel(item, "name", "name", "")),
-            "agent_ref": str(snake_or_camel(item, "agent_ref", "agentRef", "")),
-            "prompt": str(snake_or_camel(item, "prompt", "prompt", "")),
-            "depends_on": normalize_list_of_strings(
-                snake_or_camel(item, "depends_on", "dependsOn", []), "depends_on"
-            ),
-            "require_approval": bool(snake_or_camel(item, "require_approval", "requireApproval", False)),
-            "execution": execution if isinstance(execution, dict) else None,
-        })
+        normalized.append(
+            {
+                "name": str(snake_or_camel(item, "name", "name", "")),
+                "agent_ref": str(snake_or_camel(item, "agent_ref", "agentRef", "")),
+                "prompt": str(snake_or_camel(item, "prompt", "prompt", "")),
+                "depends_on": normalize_list_of_strings(
+                    snake_or_camel(item, "depends_on", "dependsOn", []), "depends_on"
+                ),
+                "require_approval": bool(snake_or_camel(item, "require_approval", "requireApproval", False)),
+                "execution": execution if isinstance(execution, dict) else None,
+            }
+        )
     return normalized
 
 
@@ -201,12 +203,8 @@ def coerce_agent_payload(document: dict[str, Any], *, for_update: bool) -> tuple
             snake_or_camel(document, "mcp_servers", "mcpServers", []), "mcp_servers"
         ),
         "mcp_sidecars": normalize_sidecars(snake_or_camel(document, "mcp_sidecars", "mcpSidecars", [])),
-        "a2a_config": normalize_a2a_config_value(
-            snake_or_camel(document, "a2a_config", "a2aConfig", {}), "a2a_config"
-        ),
-        "skills": normalize_agent_skills_value(
-            snake_or_camel(document, "skills", "skills", {}), "skills"
-        ),
+        "a2a_config": normalize_a2a_config_value(snake_or_camel(document, "a2a_config", "a2aConfig", {}), "a2a_config"),
+        "skills": normalize_agent_skills_value(snake_or_camel(document, "skills", "skills", {}), "skills"),
         "opencode_config_files": normalize_opencode_config_files_value(
             snake_or_camel(document, "opencode_config_files", "opencodeConfigFiles", {}), "opencode_config_files"
         ),

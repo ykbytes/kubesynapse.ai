@@ -173,7 +173,6 @@ export interface WorkspaceContextValue {
 const WorkspaceContext = createContext<WorkspaceContextValue | null>(null);
 
 const DEFAULT_AGENT_NAME = "workspace-assistant";
-const DEFAULT_AGENT_MODEL = "gpt-4";
 const DEFAULT_SYSTEM_PROMPT =
   "You are a helpful enterprise assistant. Answer clearly, stay factual, and do not fabricate information.";
 
@@ -258,7 +257,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
 
   // Create-agent form
   const [createAgentName, setCreateAgentName] = useState(DEFAULT_AGENT_NAME);
-  const [createAgentModel, setCreateAgentModel] = useState(DEFAULT_AGENT_MODEL);
+  const [createAgentModel, setCreateAgentModel] = useState("");
   const [createAgentSystemPrompt, setCreateAgentSystemPrompt] = useState(DEFAULT_SYSTEM_PROMPT);
   const [createAgentRuntimeKind, setCreateAgentRuntimeKind] = useState<RuntimeKind>("opencode");
   const [createAgentMcpConnectionIds, setCreateAgentMcpConnectionIds] = useState<string[]>([]);
@@ -540,6 +539,13 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         toast.error("Failed to create agent", { description: promptValidationError });
         return null;
       }
+      const agentModel = createAgentModel.trim();
+      if (!agentModel) {
+        const message = "Select a connected model before creating an agent.";
+        setCreateError(message);
+        toast.error("Failed to create agent", { description: message });
+        return null;
+      }
       const agentName = createAgentName.trim();
       if (createAgentGitForm.enabled) {
         if (!createAgentGitForm.repoUrl.trim()) throw new Error("Git repository URL is required when git integration is enabled.");
@@ -574,7 +580,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       }
 
       const payload: CreateAgentPayload = {
-        name: agentName, model: createAgentModel.trim(), system_prompt: createAgentSystemPrompt.trim(),
+        name: agentName, model: agentModel, system_prompt: createAgentSystemPrompt.trim(),
         runtime_kind: createAgentRuntimeKind,
         mcp_connection_ids: createAgentMcpConnectionIds,
         mcp_servers: createAgentMcpConnectionIds.length === 0 ? mcpServers : undefined,

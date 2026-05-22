@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import json
 import sys
-from typing import Any, Optional
+from typing import Any
 
 import typer
-from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.text import Text
@@ -16,15 +15,22 @@ from agentctl.app import get_settings
 from agentctl.client import ApiClient, ApiError
 from agentctl.output import (
     console,
-    print_table,
-    print_detail,
-    print_json_output,
-    success,
-    info,
     fatal,
+    print_json_output,
+    print_table,
 )
 
-chat_app = typer.Typer(no_args_is_help=True, rich_markup_mode="rich")
+chat_app = typer.Typer(
+    no_args_is_help=True,
+    rich_markup_mode="rich",
+    epilog=(
+        "[bold]Examples:[/bold]\n"
+        "  agentctl chat send my-agent \"Hello!\"\n"
+        "  agentctl chat interactive my-agent\n"
+        "  agentctl chat threads\n"
+        "  agentctl chat history thread-abc"
+    ),
+)
 
 
 def _api() -> ApiClient:
@@ -38,8 +44,8 @@ def _ns_params() -> dict[str, Any]:
 @chat_app.command("send")
 def chat_send(
     agent_name: str = typer.Argument(..., help="Agent name."),
-    message: Optional[list[str]] = typer.Argument(None, help="Message text."),
-    thread_id: Optional[str] = typer.Option(None, "--thread", "-t", help="Thread ID for conversation continuity."),
+    message: list[str] | None = typer.Argument(None, help="Message text."),
+    thread_id: str | None = typer.Option(None, "--thread", "-t", help="Thread ID for conversation continuity."),
     stream: bool = typer.Option(True, "--stream/--no-stream", help="Stream response."),
 ) -> None:
     """Send a message to an agent chat session."""
@@ -70,6 +76,7 @@ def chat_send(
                     payload=payload,
                 ) as response:
                     from agentctl.client import ApiClient as _AC
+
                     _AC._raise_for_status(response)
 
                     collected = ""
@@ -122,7 +129,7 @@ def chat_send(
 
 @chat_app.command("threads")
 def chat_threads(
-    agent_name: Optional[str] = typer.Option(None, "--agent", "-a", help="Filter by agent."),
+    agent_name: str | None = typer.Option(None, "--agent", "-a", help="Filter by agent."),
     limit: int = typer.Option(20, "--limit", "-l", min=1, max=100),
 ) -> None:
     """List chat threads / conversations."""
@@ -191,17 +198,18 @@ def chat_history(
 @chat_app.command("interactive")
 def chat_interactive(
     agent_name: str = typer.Argument(..., help="Agent name."),
-    thread_id: Optional[str] = typer.Option(None, "--thread", "-t", help="Resume a thread."),
+    thread_id: str | None = typer.Option(None, "--thread", "-t", help="Resume a thread."),
 ) -> None:
     """Start an interactive chat session (REPL-style)."""
-    settings = get_settings()
     current_thread = thread_id
 
-    console.print(Panel(
-        f"Chat with [bold]{agent_name}[/bold]\n"
-        "[dim]Type your message and press Enter. Use Ctrl+C or 'exit' to quit.[/dim]",
-        border_style="bright_cyan",
-    ))
+    console.print(
+        Panel(
+            f"Chat with [bold]{agent_name}[/bold]\n"
+            "[dim]Type your message and press Enter. Use Ctrl+C or 'exit' to quit.[/dim]",
+            border_style="bright_cyan",
+        )
+    )
 
     try:
         while True:
@@ -226,6 +234,7 @@ def chat_interactive(
                         payload=payload,
                     ) as response:
                         from agentctl.client import ApiClient as _AC
+
                         _AC._raise_for_status(response)
 
                         console.print("[bold green]agent>[/bold green] ", end="")

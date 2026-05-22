@@ -116,7 +116,7 @@ flowchart LR
 
 ### Kubernetes API and CRDs
 
-The Kubernetes API is the source of truth. The platform installs 11 CRDs:
+The Kubernetes API is the source of truth. The platform installs 12 CRDs:
 
 | CRD | Scope | Purpose |
 |-----|-------|---------|
@@ -125,7 +125,9 @@ The Kubernetes API is the source of truth. The platform installs 11 CRDs:
 | `AgentApproval` | Namespaced | Human-in-the-loop approval requests |
 | `AgentWorkflow` | Namespaced | DAG-based multi-agent pipelines |
 | `AgentTenant` | Cluster | Namespace isolation, quotas, RBAC |
-| `MCPConnection` | Namespaced | Connection-driven tool integrations |
+| `McpConnection` | Namespaced | Connection-driven tool integrations |
+| `WebhookReceiver` | Namespaced | Signed inbound webhook configuration |
+| `WorkflowTrigger` | Namespaced | Event-driven workflow trigger metadata |
 | `ConnectorPlugin` | Namespaced | Observability data collection |
 | `ObservationTarget` | Namespaced | What is being observed |
 | `ObservationPolicy` | Namespaced | How telemetry is evaluated |
@@ -248,7 +250,7 @@ flowchart TB
     subgraph Agent["Agent Definition"]
         A[AIAgent]
         P[AgentPolicy]
-        M[MCPConnection]
+        M[McpConnection]
     end
 
     subgraph Governance["Governance"]

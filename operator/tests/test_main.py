@@ -1,3 +1,4 @@
+import base64
 import copy
 import importlib
 import json
@@ -602,6 +603,8 @@ class OperatorManifestTests(unittest.TestCase):
                 "DEFAULT_API_GATEWAY_SHARED_TOKEN",
                 "gateway-secret",
             ),
+            patch.object(_services_k8s, "OPENCODE_IMMUTABLE_CONFIG", False),
+            patch.object(_services_k8s, "PI_IMMUTABLE_CONFIG", False),
             patch.object(_services_k8s, "ensure_secret") as ensure_secret,
         ):
             _services_k8s.ensure_runtime_namespace_secret("tenant-a", "workspace-assistant", logger)
@@ -609,6 +612,61 @@ class OperatorManifestTests(unittest.TestCase):
         manifest = ensure_secret.call_args.args[1]
         self.assertEqual(manifest["stringData"]["LITELLM_MASTER_KEY"], "litellm-secret")
         self.assertEqual(manifest["stringData"]["API_GATEWAY_SHARED_TOKEN"], "gateway-secret")
+
+    def test_runtime_namespace_secret_provisions_immutable_runtime_config_maps(self) -> None:
+        logger = Mock()
+        source_opencode_config = {
+            "metadata": {
+                "name": "kubesynapse-opencode-safe-config",
+                "labels": {"app.kubernetes.io/component": "opencode-runtime-config"},
+            },
+            "immutable": True,
+            "data": {"opencode.json": '{"permission":{"bash":"ask"}}'},
+        }
+        source_pi_config = {
+            "metadata": {
+                "name": "kubesynapse-pi-safe-config",
+                "labels": {"app.kubernetes.io/component": "pi-runtime-config"},
+            },
+            "immutable": True,
+            "data": {"pi-config.json": '{"permissionLevel":"strict"}'},
+        }
+        core_api = Mock()
+        core_api.read_namespaced_config_map.side_effect = [source_opencode_config, source_pi_config]
+
+        with (
+            patch.object(_services_k8s, "SECRET_PROVISIONING_MODE", "native"),
+            patch.object(_services_k8s, "DEFAULT_LITELLM_MASTER_KEY", "litellm-secret"),
+            patch.object(_services_k8s, "DEFAULT_API_GATEWAY_SHARED_TOKEN", "gateway-secret"),
+            patch.object(_services_k8s, "HELM_RELEASE_NAME", "kubesynapse"),
+            patch.object(_services_k8s, "OPERATOR_NAMESPACE", "kubesynapse"),
+            patch.object(_services_k8s, "OPENCODE_IMMUTABLE_CONFIG", True),
+            patch.object(_services_k8s, "PI_IMMUTABLE_CONFIG", True),
+            patch.object(_services_k8s, "ensure_secret") as ensure_secret,
+            patch.object(_services_k8s, "ensure_config_map") as ensure_config_map,
+            patch.object(_services_k8s.kubernetes.client, "CoreV1Api", return_value=core_api, create=True),
+        ):
+            _services_k8s.ensure_runtime_namespace_secret("tenant-a", "workspace-assistant", logger)
+
+        secret_manifest = ensure_secret.call_args.args[1]
+        self.assertEqual(secret_manifest["metadata"]["namespace"], "tenant-a")
+        self.assertEqual(ensure_config_map.call_count, 2)
+
+        config_map_manifests = [call.args[1] for call in ensure_config_map.call_args_list]
+        self.assertEqual(
+            [manifest["metadata"]["name"] for manifest in config_map_manifests],
+            ["kubesynapse-opencode-safe-config", "kubesynapse-pi-safe-config"],
+        )
+        self.assertTrue(all(manifest["metadata"]["namespace"] == "tenant-a" for manifest in config_map_manifests))
+        self.assertTrue(all(manifest["immutable"] is True for manifest in config_map_manifests))
+        self.assertEqual(
+            config_map_manifests[0]["metadata"]["labels"]["app.kubernetes.io/component"],
+            "opencode-runtime-config",
+        )
+        self.assertEqual(
+            config_map_manifests[1]["metadata"]["labels"]["app.kubernetes.io/component"],
+            "pi-runtime-config",
+        )
 
     def test_agent_manifests_include_orphan_pruning_owner_labels(self) -> None:
         service_manifest = _builders_manifests.create_agent_service_manifest("workspace-assistant", "default")
@@ -994,6 +1052,26 @@ class AgentControllerTests(unittest.TestCase):
             outputs.desired_resource_names.return_value,
         )
         self.assertEqual(log_operator_event.call_count, 2)
+
+    def test_create_agent_resources_rejects_blank_model(self) -> None:
+        logger = Mock()
+
+        with (
+            patch.object(_agent_ctrl, "ensure_runtime_access"),
+            patch.object(_agent_ctrl, "ensure_runtime_namespace_secret"),
+            patch.object(_agent_ctrl, "resolve_agent_policy", return_value=(None, {})),
+            patch.object(_agent_ctrl, "resolve_tenant_for_namespace", return_value=None),
+            patch.object(_agent_ctrl, "validate_agent_cross_namespace_targets"),
+            self.assertRaises(kopf_module.PermanentError) as context,
+        ):
+            _agent_ctrl.create_agent_resources(
+                {"model": "   ", "runtime": {"kind": "opencode"}},
+                "workspace-assistant",
+                "default",
+                logger,
+            )
+
+        self.assertIn("spec.model", str(context.exception))
 
 
 class OptionalCrdWatchingTests(unittest.TestCase):
@@ -1401,6 +1479,44 @@ class AllowedNamespacesTests(unittest.TestCase):
             )
 
         self.assertIn("sidecar-based GitHub MCP", str(context.exception))
+
+    def test_opencode_runtime_manifest_requires_explicit_model(self) -> None:
+        with self.assertRaises(operator_main.kopf.PermanentError) as context:
+            _builders_manifests.create_agent_statefulset_manifest(
+                "workspace-assistant",
+                "default",
+                {
+                    "model": "   ",
+                    "runtime": {"kind": "opencode"},
+                    "storage": {"size": "1Gi"},
+                    "systemPrompt": "Be precise.",
+                },
+                None,
+                {},
+            )
+
+        self.assertIn("spec.model", str(context.exception))
+
+    def test_build_provider_auth_content_encodes_copilot_as_oauth(self) -> None:
+        auth_content = _builders_manifests._build_provider_auth_content(
+            {
+                "GITHUB_COPILOT_TOKEN": base64.b64encode(b"gho-test-token").decode("ascii"),
+                "OPENCODE_API_KEY": base64.b64encode(b"opencode-test-key").decode("ascii"),
+            }
+        )
+
+        payload = json.loads(auth_content)
+
+        self.assertEqual(
+            payload["github-copilot"],
+            {
+                "type": "oauth",
+                "refresh": "gho-test-token",
+                "access": "gho-test-token",
+                "expires": 0,
+            },
+        )
+        self.assertEqual(payload["opencode"], {"type": "api", "key": "opencode-test-key"})
 
     def test_mistral_vibe_runtime_manifest_includes_bridge_env(self) -> None:
         manifest = _builders_manifests.create_agent_statefulset_manifest(

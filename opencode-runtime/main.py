@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import contextvars
 import hashlib
 import json
 import mimetypes
@@ -279,6 +280,8 @@ _path_is_within = path_is_within
 # Backward compat: mutable globals need to be visible from this module
 import supervisor as _supervisor_mod
 
+_REQUEST_ID_CTX: contextvars.ContextVar[str | None] = contextvars.ContextVar("request_id", default=None)
+
 RUNTIME_IMPORTED_MODULES = {
     module_name: sys.modules[module_name]
     for module_name in _RUNTIME_LOCAL_MODULES
@@ -300,6 +303,25 @@ def resolve_download_path(raw_value: str) -> Path:
     if not target.exists() or not target.is_file():
         raise HTTPException(status_code=404, detail=f"artifact path '{raw_value}' does not exist")
     return target
+
+
+def build_execution_id(*, thread_id: str | None = None, request_id: str | None = None) -> str:
+    """Build a stable execution id for a single invoke attempt."""
+    request_seed = str(request_id or "").strip()
+    if request_seed:
+        digest = hashlib.sha256(f"request:{request_seed}".encode("utf-8")).hexdigest()[:24]
+        return f"exec-{digest}"
+
+    thread_seed = str(thread_id or "").strip()
+    if thread_seed:
+        return f"exec-{thread_seed[:16]}"
+
+    return f"exec-{uuid.uuid4().hex[:16]}"
+
+
+def _request_execution_seed() -> str | None:
+    request_id = str(_REQUEST_ID_CTX.get() or "").strip()
+    return request_id or None
 
 
 # ---------------------------------------------------------------------------
@@ -483,7 +505,11 @@ def _build_error_response(
 async def add_request_id(request: Request, call_next):  # type: ignore[no-untyped-def]
     request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
     request.state.request_id = request_id
-    response = await call_next(request)
+    token = _REQUEST_ID_CTX.set(request_id)
+    try:
+        response = await call_next(request)
+    finally:
+        _REQUEST_ID_CTX.reset(token)
     response.headers["x-request-id"] = request_id
     return response
 
@@ -653,7 +679,11 @@ def info() -> dict[str, Any]:
 def invoke(request: InvokeRequest) -> InvokeResponse:
     """Invoke the OpenCode agent with optional OTEL tracing."""
     thread_id = request.thread_id or str(uuid.uuid4())
-    execution_id = f"exec-{thread_id[:16]}"
+    request_id = _request_execution_seed() or request.caller_request_id
+    execution_id = build_execution_id(
+        thread_id=thread_id,
+        request_id=request_id,
+    )
     start_time = time.monotonic()
 
     emit_run_started(
@@ -662,76 +692,78 @@ def invoke(request: InvokeRequest) -> InvokeResponse:
         model=request.model or DEFAULT_MODEL_REF,
     )
 
-    tracer = get_tracer()
-    if tracer is not None:
-        with tracer.start_as_current_span(
-            "opencode.invoke",
-            attributes={
-                "agent.name": SERVICE_NAME,
-                "agent.namespace": SERVICE_NAMESPACE,
-                "agent.model": request.model or DEFAULT_MODEL,
-                "agent.autonomous": request.autonomous,
-                "agent.output_format": request.output_format or "",
-            },
-        ) as span:
-            try:
-                result = invoke_opencode(request)
-                span.set_attribute("agent.status", result.status)
-
-                duration_ms = int((time.monotonic() - start_time) * 1000)
-                total_tokens = (result.metadata or {}).get("context_budget", {}).get("total_tokens", 0) if result.metadata else 0
-                _emit_llm_call_from_response(
-                    execution_id=execution_id,
-                    thread_id=thread_id,
-                    session_id=SESSION_REGISTRY.get(thread_id),
-                    response=result,
-                    fallback_duration_ms=duration_ms,
-                )
-                emit_run_completed(
-                    execution_id=execution_id,
-                    thread_id=thread_id,
-                    status=result.status,
-                    total_tokens=total_tokens,
-                    duration_ms=duration_ms,
-                )
-                return result
-            except Exception as exc:
-                if _OTEL_AVAILABLE and StatusCode is not None:
-                    span.set_status(StatusCode.ERROR, str(exc))
-                emit_run_error(
-                    execution_id=execution_id,
-                    thread_id=thread_id,
-                    error=str(exc)[:2048],
-                )
-                raise
     try:
-        result = invoke_opencode(request)
-        duration_ms = int((time.monotonic() - start_time) * 1000)
-        total_tokens = (result.metadata or {}).get("context_budget", {}).get("total_tokens", 0) if result.metadata else 0
-        _emit_llm_call_from_response(
-            execution_id=execution_id,
-            thread_id=thread_id,
-            session_id=SESSION_REGISTRY.get(thread_id),
-            response=result,
-            fallback_duration_ms=duration_ms,
-        )
-        emit_run_completed(
-            execution_id=execution_id,
-            thread_id=thread_id,
-            status=result.status,
-            total_tokens=total_tokens,
-            duration_ms=duration_ms,
-        )
+        tracer = get_tracer()
+        if tracer is not None:
+            with tracer.start_as_current_span(
+                "opencode.invoke",
+                attributes={
+                    "agent.name": SERVICE_NAME,
+                    "agent.namespace": SERVICE_NAMESPACE,
+                    "agent.model": request.model or DEFAULT_MODEL,
+                    "agent.autonomous": request.autonomous,
+                    "agent.output_format": request.output_format or "",
+                },
+            ) as span:
+                try:
+                    result = invoke_opencode(request)
+                    span.set_attribute("agent.status", result.status)
+
+                    duration_ms = int((time.monotonic() - start_time) * 1000)
+                    total_tokens = (result.metadata or {}).get("context_budget", {}).get("total_tokens", 0) if result.metadata else 0
+                    _emit_llm_call_from_response(
+                        execution_id=execution_id,
+                        thread_id=thread_id,
+                        session_id=SESSION_REGISTRY.get(thread_id),
+                        response=result,
+                        fallback_duration_ms=duration_ms,
+                    )
+                    emit_run_completed(
+                        execution_id=execution_id,
+                        thread_id=thread_id,
+                        status=result.status,
+                        total_tokens=total_tokens,
+                        duration_ms=duration_ms,
+                    )
+                    return result
+                except Exception as exc:
+                    if _OTEL_AVAILABLE and StatusCode is not None:
+                        span.set_status(StatusCode.ERROR, str(exc))
+                    emit_run_error(
+                        execution_id=execution_id,
+                        thread_id=thread_id,
+                        error=str(exc)[:2048],
+                    )
+                    raise
+
+        try:
+            result = invoke_opencode(request)
+            duration_ms = int((time.monotonic() - start_time) * 1000)
+            total_tokens = (result.metadata or {}).get("context_budget", {}).get("total_tokens", 0) if result.metadata else 0
+            _emit_llm_call_from_response(
+                execution_id=execution_id,
+                thread_id=thread_id,
+                session_id=SESSION_REGISTRY.get(thread_id),
+                response=result,
+                fallback_duration_ms=duration_ms,
+            )
+            emit_run_completed(
+                execution_id=execution_id,
+                thread_id=thread_id,
+                status=result.status,
+                total_tokens=total_tokens,
+                duration_ms=duration_ms,
+            )
+            return result
+        except Exception as exc:
+            emit_run_error(
+                execution_id=execution_id,
+                thread_id=thread_id,
+                error=str(exc)[:2048],
+            )
+            raise
+    finally:
         flush_sync_queue()
-        return result
-    except Exception as exc:
-        emit_run_error(
-            execution_id=execution_id,
-            thread_id=thread_id,
-            error=str(exc)[:2048],
-        )
-        flush_sync_queue()
-        raise
 
 
 @app.post("/cancel")
@@ -852,10 +884,14 @@ async def invoke_stream(request: InvokeRequest) -> StreamingResponse:
     use_sync_memory_invoke = "you have persistent memory from prior conversations" in str(
         request.system or ""
     ).lower()
+    request_id = _request_execution_seed() or request.caller_request_id
 
     async def event_generator() -> AsyncIterator[str]:
         thread_id = request.thread_id or str(uuid.uuid4())
-        execution_id = f"exec-{thread_id[:16]}"
+        execution_id = build_execution_id(
+            thread_id=thread_id,
+            request_id=request_id,
+        )
         request_with_thread = request.model_copy(update={"thread_id": thread_id})
         streamed_delta_count = 0
         start_time = time.monotonic()
@@ -995,6 +1031,7 @@ async def invoke_stream(request: InvokeRequest) -> StreamingResponse:
                 thread_id=thread_id,
                 error=str(exc.detail)[:2048],
             )
+            flush_sync_queue()
             return
         except Exception as exc:
             yield sse_event("response.error", {"thread_id": thread_id, "error": str(exc)})
@@ -1003,6 +1040,7 @@ async def invoke_stream(request: InvokeRequest) -> StreamingResponse:
                 thread_id=thread_id,
                 error=str(exc)[:2048],
             )
+            flush_sync_queue()
             return
 
         if response.response and streamed_delta_count == 0:

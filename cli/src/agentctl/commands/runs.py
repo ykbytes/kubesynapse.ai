@@ -3,28 +3,32 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import typer
-from rich.panel import Panel
-from rich.pretty import Pretty
-from rich.table import Table
-from rich.text import Text
-from rich import box
 
 from agentctl.app import get_settings
 from agentctl.client import ApiClient, ApiError
 from agentctl.output import (
     console,
-    print_table,
-    print_detail,
-    print_json_output,
-    success,
     fatal,
-    status_style,
+    print_json_output,
+    print_table,
+    success,
 )
 
-runs_app = typer.Typer(no_args_is_help=True, rich_markup_mode="rich")
+runs_app = typer.Typer(
+    no_args_is_help=True,
+    rich_markup_mode="rich",
+    epilog=(
+        "[bold]Examples:[/bold]\n"
+        "  agentctl runs approvals\n"
+        "  agentctl runs approve run-abc-123 --comment LGTM\n"
+        "  agentctl runs deny run-abc-123\n"
+        "  agentctl runs policies\n"
+        "  agentctl runs apply policy.yaml"
+    ),
+)
 
 
 def _ns_params() -> dict[str, Any]:
@@ -50,15 +54,17 @@ def approvals_list() -> None:
         fatal(str(exc))
 
     pending = []
-    for wf in (workflows or []):
+    for wf in workflows or []:
         approval = wf.get("pending_approval")
         if isinstance(approval, dict) and approval.get("name"):
-            pending.append({
-                "approval_name": approval["name"],
-                "workflow": wf.get("name", ""),
-                "step": approval.get("step", "-"),
-                "phase": wf.get("phase", "waiting-approval"),
-            })
+            pending.append(
+                {
+                    "approval_name": approval["name"],
+                    "workflow": wf.get("name", ""),
+                    "step": approval.get("step", "-"),
+                    "phase": wf.get("phase", "waiting-approval"),
+                }
+            )
 
     if settings.output_format == "json":
         print_json_output(pending)
@@ -84,7 +90,7 @@ def approvals_list() -> None:
 @runs_app.command("approve")
 def approval_approve(
     approval_name: str = typer.Argument(..., help="Approval name."),
-    reason: Optional[str] = typer.Option(None, "--reason", help="Review reason."),
+    reason: str | None = typer.Option(None, "--reason", help="Review reason."),
 ) -> None:
     """Approve a pending request."""
     _decide_approval(approval_name, "approved", reason)
@@ -93,7 +99,7 @@ def approval_approve(
 @runs_app.command("deny")
 def approval_deny(
     approval_name: str = typer.Argument(..., help="Approval name."),
-    reason: Optional[str] = typer.Option(None, "--reason", help="Review reason."),
+    reason: str | None = typer.Option(None, "--reason", help="Review reason."),
 ) -> None:
     """Deny a pending request."""
     _decide_approval(approval_name, "denied", reason)
@@ -200,7 +206,9 @@ def apply(
                     except ApiError as e:
                         if e.status_code == 409:
                             update_payload, _ = coerce_workflow_payload(document, for_update=True)
-                            client.patch(f"/api/workflows/{name}", params={"namespace": namespace}, payload=update_payload)
+                            client.patch(
+                                f"/api/workflows/{name}", params={"namespace": namespace}, payload=update_payload
+                            )
                             action = "updated"
                         else:
                             raise

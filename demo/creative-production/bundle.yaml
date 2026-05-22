@@ -1,0 +1,230 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: creative-production-context
+  namespace: default
+data:
+  audience.md: |
+    # Audience
+
+    - Kubernetes operators
+    - platform engineers
+    - DevOps and SRE teams
+    - cloud architects
+    - AI agent workflow enthusiasts who are skeptical of hype
+
+  product-truths.md: |
+    # Product Truths
+
+    - Agents and workflows are Kubernetes custom resources.
+    - The gateway is a real backend surface for auth, CRUD, invoke, webhooks, and traces.
+    - The operator reconciles agents into runtime StatefulSets and workflows into worker Jobs.
+    - Runtimes are isolated and workflow steps can pause for approval.
+    - Runtime events and workflow traces are queryable.
+    - Signed webhooks and approval flows are part of the story.
+
+  messaging-constraints.md: |
+    # Messaging Constraints
+
+    - No AGI language.
+    - No claims that the platform replaces engineers.
+    - No claims that high-risk changes should auto-ship.
+    - The copy must sound like platform engineers wrote it.
+    - Prefer specific proof points over adjectives.
+---
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AgentPolicy
+metadata:
+  name: creative-production-policy
+  namespace: default
+spec:
+  inputGuardrails:
+    blockPromptInjection: true
+    blockedPatterns:
+      - "(?i)promise AGI"
+      - "(?i)claim full autonomy"
+    maxInputTokens: 10000
+  outputGuardrails:
+    maskPII: true
+    blockedOutputPatterns:
+      - "(?i)guaranteed zero risk"
+      - "(?i)replaces your platform team"
+    maxOutputTokens: 6000
+  allowedModels:
+    - github-copilot/gpt-5-mini
+---
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AIAgent
+metadata:
+  name: creative-director-agent
+  namespace: default
+spec:
+  model: github-copilot/gpt-5-mini
+  policyRef: creative-production-policy
+  runtime:
+    kind: opencode
+  systemPrompt: |
+    You are a technical creative director.
+
+    Your job is to define a strong video angle for skeptical infrastructure engineers.
+
+    Required outputs:
+    - opening hook
+    - core thesis
+    - what to prove on screen
+    - what to avoid saying
+
+    Write the detailed concept brief to /workspace/show-concept.md.
+    Keep it sharp, technical, and non-generic.
+  storage:
+    size: 1Gi
+---
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AIAgent
+metadata:
+  name: demo-producer-agent
+  namespace: default
+spec:
+  model: github-copilot/gpt-5-mini
+  policyRef: creative-production-policy
+  runtime:
+    kind: opencode
+  systemPrompt: |
+    You are a demo producer for a technical product launch.
+
+    Your job is to turn the concept brief into a run-of-show that can actually be recorded.
+
+    Required outputs:
+    - shot list
+    - terminal commands
+    - UI beats
+    - lower-thirds
+    - b-roll ideas
+    - fallback plan if a live integration fails
+
+    Write the detailed runbook to /workspace/run-of-show.md.
+  storage:
+    size: 1Gi
+---
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AIAgent
+metadata:
+  name: launch-copy-agent
+  namespace: default
+spec:
+  model: github-copilot/gpt-5-mini
+  policyRef: creative-production-policy
+  runtime:
+    kind: opencode
+  systemPrompt: |
+    You are a launch copy editor for technical audiences.
+
+    Your job is to create launch copy that sounds credible to senior engineers.
+
+    Required outputs:
+    - YouTube title options
+    - thumbnail text options
+    - video description
+    - pinned comment
+    - LinkedIn launch post
+
+    Write the detailed pack to /workspace/social-pack.md.
+    Prefer specifics over hype.
+  storage:
+    size: 1Gi
+---
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AgentWorkflow
+metadata:
+  name: conference-launch-pack
+  namespace: default
+spec:
+  description: >
+    Multi-stage launch workflow for producing a credible technical video package
+    aimed at Kubernetes, platform, and AI workflow audiences.
+  input: >
+    Create a launch pack for a KubeSynapse showcase video targeted at skeptical
+    Kubernetes and AI agent workflow engineers.
+  contextRef: creative-production-context
+  messageBus: in-memory
+  steps:
+    - name: shape-story
+      agentRef: creative-director-agent
+      prompt: |
+        Create the show concept for this request.
+
+        Request:
+        {{input}}
+
+        Read the project context and write the detailed concept brief to
+        /workspace/show-concept.md.
+        Return the opening hook and the main thesis.
+      execution:
+        timeoutSeconds: 180
+        maxAttempts: 1
+
+    - name: build-run-of-show
+      agentRef: demo-producer-agent
+      dependsOn:
+        - shape-story
+      prompt: |
+        Build the recording run-of-show from the concept brief below.
+
+        Concept summary:
+        {{previous_output}}
+
+        Read /workspace/show-concept.md and write the detailed run-of-show to
+        /workspace/run-of-show.md.
+        Return the three most important shots.
+      execution:
+        timeoutSeconds: 180
+        maxAttempts: 1
+
+    - name: write-launch-copy
+      agentRef: launch-copy-agent
+      dependsOn:
+        - build-run-of-show
+      prompt: |
+        Create the public launch copy using the show concept and run-of-show.
+
+        Prior stage output:
+        {{previous_output}}
+
+        Read these files before responding:
+        - /workspace/show-concept.md
+        - /workspace/run-of-show.md
+
+        Write the final social pack to /workspace/social-pack.md.
+        Return the strongest title option and the strongest LinkedIn opening line.
+      execution:
+        timeoutSeconds: 180
+        maxAttempts: 1
+
+    - name: finalize-launch-pack
+      agentRef: creative-director-agent
+      dependsOn:
+        - shape-story
+        - build-run-of-show
+        - write-launch-copy
+      requireApproval: true
+      prompt: |
+        Finalize the launch pack for operator review.
+
+        Prior stage output:
+        {{previous_output}}
+
+        Read all three artifacts:
+        - /workspace/show-concept.md
+        - /workspace/run-of-show.md
+        - /workspace/social-pack.md
+
+        Produce a final handoff summary that tells a producer exactly what is ready,
+        what still needs human judgment, and what should be posted after approval.
+        Write the handoff to /workspace/launch-pack-handoff.md.
+      verify: |
+        PASS only if the handoff clearly references the concept brief, run-of-show,
+        social pack, and any remaining human decisions.
+      execution:
+        timeoutSeconds: 180
+        maxAttempts: 1
+        verifyRetries: 1

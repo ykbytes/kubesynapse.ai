@@ -2,26 +2,36 @@
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 import typer
+from rich import box
 from rich.panel import Panel
 from rich.table import Table
-from rich import box
 
 from agentctl.app import get_settings
 from agentctl.client import ApiClient, ApiError
-from agentctl.config import save_token, clear_token, load_config
+from agentctl.config import clear_token, load_config, save_token
 from agentctl.output import (
     console,
+    fatal,
     print_detail,
     print_json_output,
     success,
-    info,
-    fatal,
 )
 
-auth_app = typer.Typer(no_args_is_help=True, rich_markup_mode="rich")
+auth_app = typer.Typer(
+    no_args_is_help=True,
+    rich_markup_mode="rich",
+    epilog=(
+        "[bold]Examples:[/bold]\n"
+        "  agentctl auth login -u admin -p secret\n"
+        "  agentctl auth register -u newuser -p changeme\n"
+        "  agentctl auth me\n"
+        "  agentctl auth change-password\n"
+        "  agentctl auth config"
+    ),
+)
 
 
 def _api() -> ApiClient:
@@ -70,7 +80,6 @@ def auth_logout(
     revoke: bool = typer.Option(True, "--revoke/--local-only", help="Revoke session on server."),
 ) -> None:
     """Logout — revoke session and clear saved token."""
-    settings = get_settings()
     config = load_config()
 
     if revoke:
@@ -91,8 +100,8 @@ def auth_register(
     password: str = typer.Option(
         ..., "--password", "-p", prompt=True, hide_input=True, confirmation_prompt=True, help="Password (8+ chars)."
     ),
-    email: Optional[str] = typer.Option(None, "--email", help="Email address."),
-    display_name: Optional[str] = typer.Option(None, "--display-name", help="Display name."),
+    email: str | None = typer.Option(None, "--email", help="Email address."),
+    display_name: str | None = typer.Option(None, "--display-name", help="Display name."),
 ) -> None:
     """Register a new local user account."""
     settings = get_settings()
@@ -156,14 +165,16 @@ def auth_change_password(
     ),
 ) -> None:
     """Change your password (local users only)."""
-    settings = get_settings()
     try:
         with console.status("[bold cyan]Updating password...[/bold cyan]"):
             with _api() as client:
-                client.post("/api/auth/change-password", payload={
-                    "current_password": current_password,
-                    "new_password": new_password,
-                })
+                client.post(
+                    "/api/auth/change-password",
+                    payload={
+                        "current_password": current_password,
+                        "new_password": new_password,
+                    },
+                )
     except ApiError as exc:
         fatal(str(exc))
     success("Password updated successfully")

@@ -2,25 +2,33 @@
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 import typer
 from rich.markdown import Markdown
 from rich.syntax import Syntax
 from rich.table import Table
-from rich import box
 
 from agentctl.app import get_settings
 from agentctl.client import ApiClient, ApiError
 from agentctl.output import (
     console,
-    print_table,
+    fatal,
     print_detail,
     print_json_output,
-    fatal,
 )
 
-skills_app = typer.Typer(no_args_is_help=True, rich_markup_mode="rich")
+skills_app = typer.Typer(
+    no_args_is_help=True,
+    rich_markup_mode="rich",
+    epilog=(
+        "[bold]Examples:[/bold]\n"
+        "  agentctl skills list\n"
+        "  agentctl skills show my-skill\n"
+        "  agentctl skills tools my-skill\n"
+        "  agentctl skills hub --refresh"
+    ),
+)
 
 
 def _api() -> ApiClient:

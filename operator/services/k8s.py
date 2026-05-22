@@ -31,9 +31,12 @@ from config import (
     CLUSTER_SECRET_STORE,
     DEFAULT_API_GATEWAY_SHARED_TOKEN,
     DEFAULT_LITELLM_MASTER_KEY,
+    HELM_RELEASE_NAME,
     IMAGE_PULL_SECRETS,
+    OPENCODE_IMMUTABLE_CONFIG,
     OPERATOR_NAMESPACE,
     ORPHAN_PRUNING_ENABLED,
+    PI_IMMUTABLE_CONFIG,
     RUNTIME_CLUSTER_ROLE,
     RUNTIME_SERVICE_ACCOUNT,
     SECRET_NAME,
@@ -432,8 +435,135 @@ def ensure_secret(namespace: str, manifest: dict[str, Any]) -> None:
         raise
 
 
+@_exponential_backoff()
+def ensure_config_map(namespace: str, manifest: dict[str, Any]) -> None:
+    """Create or reconcile a ConfigMap, recreating immutable entries when data changes."""
+    core_api = kubernetes.client.CoreV1Api()
+    config_map_name = str(manifest["metadata"]["name"])
+    try:
+        core_api.create_namespaced_config_map(namespace=namespace, body=manifest)
+        return
+    except ApiException as exc:
+        if exc.status != 409:
+            raise
+
+    try:
+        existing = _sanitize_kube_resource(core_api.read_namespaced_config_map(name=config_map_name, namespace=namespace))
+    except ApiException as exc:
+        if exc.status == 404:
+            core_api.create_namespaced_config_map(namespace=namespace, body=manifest)
+            return
+        raise
+
+    desired_data = copy.deepcopy(manifest.get("data") or {})
+    desired_binary_data = copy.deepcopy(manifest.get("binaryData") or {})
+    desired_immutable = bool(manifest.get("immutable", False))
+
+    existing_data = copy.deepcopy(existing.get("data") or {}) if isinstance(existing, dict) else {}
+    existing_binary_data = copy.deepcopy(existing.get("binaryData") or {}) if isinstance(existing, dict) else {}
+    existing_immutable = bool((existing or {}).get("immutable", False)) if isinstance(existing, dict) else False
+
+    if (
+        existing_data != desired_data
+        or existing_binary_data != desired_binary_data
+        or existing_immutable != desired_immutable
+    ):
+        core_api.delete_namespaced_config_map(name=config_map_name, namespace=namespace)
+        core_api.create_namespaced_config_map(namespace=namespace, body=manifest)
+        return
+
+    metadata = copy.deepcopy(manifest.get("metadata") or {})
+    metadata.pop("namespace", None)
+    if metadata:
+        core_api.patch_namespaced_config_map(
+            name=config_map_name,
+            namespace=namespace,
+            body={"metadata": metadata},
+        )
+
+
+def _runtime_immutable_config_map_names() -> list[str]:
+    release_prefix = HELM_RELEASE_NAME or "kubesynapse"
+    names: list[str] = []
+    if OPENCODE_IMMUTABLE_CONFIG:
+        names.append(f"{release_prefix}-opencode-safe-config")
+    if PI_IMMUTABLE_CONFIG:
+        names.append(f"{release_prefix}-pi-safe-config")
+    return names
+
+
+def _ensure_runtime_namespace_immutable_config_maps(namespace: str, logger: logging.Logger) -> None:
+    """Mirror immutable runtime ConfigMaps into agent namespaces."""
+    if namespace == OPERATOR_NAMESPACE:
+        return
+
+    config_map_names = _runtime_immutable_config_map_names()
+    if not config_map_names:
+        return
+
+    core_api = kubernetes.client.CoreV1Api()
+    for config_map_name in config_map_names:
+        try:
+            source_config_map = _sanitize_kube_resource(
+                core_api.read_namespaced_config_map(name=config_map_name, namespace=OPERATOR_NAMESPACE)
+            )
+        except ApiException as exc:
+            if exc.status == 404:
+                raise kopf.TemporaryError(
+                    (
+                        f"Immutable runtime ConfigMap '{config_map_name}' is missing from operator namespace "
+                        f"'{OPERATOR_NAMESPACE}'."
+                    ),
+                    delay=30,
+                ) from exc
+            raise kopf.TemporaryError(
+                (
+                    f"Failed to read immutable runtime ConfigMap '{config_map_name}' from namespace "
+                    f"'{OPERATOR_NAMESPACE}': {describe_api_exception(exc)}"
+                ),
+                delay=30,
+            ) from exc
+
+        if not isinstance(source_config_map, dict):
+            raise kopf.TemporaryError(
+                (
+                    f"Immutable runtime ConfigMap '{config_map_name}' in namespace '{OPERATOR_NAMESPACE}' "
+                    "did not serialize to a dictionary."
+                ),
+                delay=30,
+            )
+
+        source_metadata = source_config_map.get("metadata") or {}
+        source_labels = source_metadata.get("labels") or {}
+        labels = {
+            "managed-by": "kubesynapse",
+            "kubesynapse.ai/runtime-config": "true",
+        }
+        component_label = str(source_labels.get("app.kubernetes.io/component") or "").strip()
+        if component_label:
+            labels["app.kubernetes.io/component"] = component_label
+
+        config_map_manifest: dict[str, Any] = {
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": {
+                "name": config_map_name,
+                "namespace": namespace,
+                "labels": labels,
+            },
+            "data": copy.deepcopy(source_config_map.get("data") or {}),
+        }
+        if source_config_map.get("binaryData"):
+            config_map_manifest["binaryData"] = copy.deepcopy(source_config_map["binaryData"])
+        if "immutable" in source_config_map:
+            config_map_manifest["immutable"] = bool(source_config_map.get("immutable"))
+
+        ensure_config_map(namespace, config_map_manifest)
+        logger.info("ConfigMap '%s' provisioned for namespace '%s'", config_map_name, namespace)
+
+
 def ensure_runtime_namespace_secret(namespace: str, owner_name: str, logger: logging.Logger) -> None:
-    """Provision the runtime secret for a namespace (via ExternalSecret or native Secret)."""
+    """Provision namespace-scoped runtime prerequisites for an agent namespace."""
     if SECRET_PROVISIONING_MODE == "external-secrets":  # noqa: S105 — provisioning mode, not a password
         external_secret = {
             "apiVersion": "external-secrets.io/v1beta1",
@@ -494,6 +624,7 @@ def ensure_runtime_namespace_secret(namespace: str, owner_name: str, logger: log
                     f"Failed to reconcile ExternalSecret '{SECRET_NAME}' for namespace '{namespace}': {exc}",
                     delay=30,
                 ) from exc
+        _ensure_runtime_namespace_immutable_config_maps(namespace, logger)
         return
 
     string_data: dict[str, str] = {}
@@ -510,6 +641,7 @@ def ensure_runtime_namespace_secret(namespace: str, owner_name: str, logger: log
             ),
             namespace,
         )
+        _ensure_runtime_namespace_immutable_config_maps(namespace, logger)
         return
 
     secret_manifest = {
@@ -529,6 +661,7 @@ def ensure_runtime_namespace_secret(namespace: str, owner_name: str, logger: log
     }
     ensure_secret(namespace, secret_manifest)
     logger.info("Secret '%s' provisioned for namespace '%s'", SECRET_NAME, namespace)
+    _ensure_runtime_namespace_immutable_config_maps(namespace, logger)
 
 
 @_exponential_backoff()

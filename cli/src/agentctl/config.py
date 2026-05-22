@@ -176,10 +176,7 @@ def resolve_settings(
 
     # Namespace: CLI flag > env > profile
     resolved_ns = (
-        namespace
-        or os.environ.get("AGENT_NAMESPACE")
-        or os.environ.get("AGENTCTL_NAMESPACE")
-        or active.namespace
+        namespace or os.environ.get("AGENT_NAMESPACE") or os.environ.get("AGENTCTL_NAMESPACE") or active.namespace
     )
 
     # Timeout: CLI flag > profile

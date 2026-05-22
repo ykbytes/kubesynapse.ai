@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { ModelSelector } from "@/components/settings/ModelSelector";
 import {
   Dialog,
   DialogContent,
@@ -40,7 +41,6 @@ interface AgentTemplate {
   icon: string;
   category: string;
   runtime_kind: RuntimeKind;
-  model: string;
   system_prompt: string;
   mcp_sidecars: string[];
   mcp_servers: string[];
@@ -73,7 +73,6 @@ const TEMPLATES: AgentTemplate[] = [
     icon: "Code",
     category: "development",
     runtime_kind: "opencode",
-    model: "gpt-4o",
     system_prompt: "You are a senior software engineer. Help users write, debug, and review code. Follow best practices and write clean, maintainable code. Always explain your reasoning.",
     mcp_sidecars: ["code-exec", "git"],
     mcp_servers: [],
@@ -85,7 +84,6 @@ const TEMPLATES: AgentTemplate[] = [
     icon: "Search",
     category: "research",
     runtime_kind: "opencode",
-    model: "gpt-4o",
     system_prompt: "You are a research analyst. Search the web, read documents, and synthesize information into clear, well-structured reports. Cite your sources.",
     mcp_sidecars: ["web-search", "documents", "rag"],
     mcp_servers: [],
@@ -97,7 +95,6 @@ const TEMPLATES: AgentTemplate[] = [
     icon: "Database",
     category: "data",
     runtime_kind: "opencode",
-    model: "gpt-4o",
     system_prompt: "You are a data engineer. Help users write SQL queries, design schemas, build data pipelines, and analyze datasets.",
     mcp_sidecars: ["database", "code-exec"],
     mcp_servers: [],
@@ -109,7 +106,6 @@ const TEMPLATES: AgentTemplate[] = [
     icon: "Container",
     category: "operations",
     runtime_kind: "opencode",
-    model: "gpt-4o",
     system_prompt: "You are a DevOps engineer specializing in Kubernetes and cloud infrastructure. Help users manage deployments, troubleshoot pods, and automate CI/CD.",
     mcp_sidecars: ["kubernetes", "git", "code-exec"],
     mcp_servers: [],
@@ -121,8 +117,7 @@ const TEMPLATES: AgentTemplate[] = [
     icon: "Server",
     category: "operations",
     runtime_kind: "opencode",
-    model: "copilot-gpt-5-mini",
-    system_prompt: "You are Cluster Intel, a Kubernetes SRE assistant powered by GPT-5 Mini. You have direct access to live cluster state through the kubernetes MCP tools and may also receive recent cluster intelligence summaries.\n\nWhen the user asks about cluster health, incidents, workloads, or configuration:\n- Inspect the live cluster with the kubernetes MCP tools first.\n- Correlate live findings with any recent cluster intelligence context when it is present.\n- Summarize health, call out anomalies, explain impact, and recommend concrete next actions.\n- Report uncertainty clearly if a resource cannot be inspected.\n\nPrioritize checking:\n- pod health across namespaces\n- node conditions and scheduling failures\n- recent warning events\n- deployments, statefulsets, and daemonsets with unavailable replicas\n- services, ingress, network policies, and obvious RBAC issues when relevant\n\nResponse format:\n## Cluster Health Summary\n- Overall Status: [HEALTHY|DEGRADED|CRITICAL]\n- Key Signals: [short bullets]\n\n## Issues Found\n- [severity] [namespace/kind/name] - finding, impact, evidence\n\n## Recommendations\n- [prioritized action]\n\nDo not ask the user to paste kubectl output when the kubernetes MCP tools can answer the question directly. Only ask for manual command output if the tool path is unavailable or insufficient.",
+    system_prompt: "You are Cluster Intel, a Kubernetes SRE assistant. You have direct access to live cluster state through the kubernetes MCP tools and may also receive recent cluster intelligence summaries.\n\nWhen the user asks about cluster health, incidents, workloads, or configuration:\n- Inspect the live cluster with the kubernetes MCP tools first.\n- Correlate live findings with any recent cluster intelligence context when it is present.\n- Summarize health, call out anomalies, explain impact, and recommend concrete next actions.\n- Report uncertainty clearly if a resource cannot be inspected.\n\nPrioritize checking:\n- pod health across namespaces\n- node conditions and scheduling failures\n- recent warning events\n- deployments, statefulsets, and daemonsets with unavailable replicas\n- services, ingress, network policies, and obvious RBAC issues when relevant\n\nResponse format:\n## Cluster Health Summary\n- Overall Status: [HEALTHY|DEGRADED|CRITICAL]\n- Key Signals: [short bullets]\n\n## Issues Found\n- [severity] [namespace/kind/name] - finding, impact, evidence\n\n## Recommendations\n- [prioritized action]\n\nDo not ask the user to paste kubectl output when the kubernetes MCP tools can answer the question directly. Only ask for manual command output if the tool path is unavailable or insufficient.",
     mcp_sidecars: ["kubernetes"],
     mcp_servers: [],
   },
@@ -133,7 +128,6 @@ const TEMPLATES: AgentTemplate[] = [
     icon: "Globe",
     category: "automation",
     runtime_kind: "opencode",
-    model: "gpt-4o",
     system_prompt: "You are a web automation agent. Navigate websites, fill forms, extract data, and take screenshots.",
     mcp_sidecars: ["browser", "web-search"],
     mcp_servers: [],
@@ -145,7 +139,6 @@ const TEMPLATES: AgentTemplate[] = [
     icon: "FileCode",
     category: "development",
     runtime_kind: "opencode",
-    model: "gpt-4o",
     system_prompt: "",
     mcp_sidecars: [],
     mcp_servers: [],
@@ -157,7 +150,6 @@ const TEMPLATES: AgentTemplate[] = [
     icon: "MessageSquare",
     category: "communication",
     runtime_kind: "opencode",
-    model: "gpt-4o",
     system_prompt: "You are a helpful messaging assistant. Respond concisely and professionally.",
     mcp_sidecars: ["messaging"],
     mcp_servers: [],
@@ -206,14 +198,14 @@ export function AgentTemplateWizard({ open, onOpenChange }: AgentTemplateWizardP
   const handleSelect = (template: AgentTemplate) => {
     setSelected(template);
     setAgentName(template.id);
-    setModel(template.model);
+    setModel(ws.createAgentModel);
     setStep("customize");
   };
 
   const handleApply = () => {
     if (!selected) return;
     ws.setCreateAgentName(agentName || selected.id);
-    ws.setCreateAgentModel(model || selected.model);
+    ws.setCreateAgentModel(model.trim());
     ws.setCreateAgentSystemPrompt(selected.system_prompt);
     ws.setCreateAgentRuntimeKind(selected.runtime_kind);
     ws.setCreateAgentMcpSidecarsText(stringifyMcpSidecars(resolveTemplateSidecars(selected.mcp_sidecars)));
@@ -384,11 +376,10 @@ export function AgentTemplateWizard({ open, onOpenChange }: AgentTemplateWizardP
                     </div>
                     <div className="space-y-1.5">
                       <Label className="text-xs">Model</Label>
-                      <Input
+                      <ModelSelector
                         value={model}
-                        onChange={(e) => setModel(e.target.value)}
-                        placeholder="gpt-4o"
-                        className="h-8 text-sm"
+                        onChange={setModel}
+                        placeholder="Pick from the live model catalog"
                       />
                     </div>
                     <div className="space-y-1.5">

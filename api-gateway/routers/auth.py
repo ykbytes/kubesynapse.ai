@@ -19,6 +19,7 @@ def get_auth_config() -> dict[str, Any]:
 def register_local_user(body: AuthRegisterRequest, raw_request: Request):
     if not local_access_enabled():
         raise HTTPException(status_code=503, detail="Local authentication is not enabled")
+    ensure_browser_auth_available()
     if not registration_allowed():
         raise HTTPException(status_code=403, detail="Self-registration is disabled")
 
@@ -79,6 +80,7 @@ def login(body: AuthLoginRequest, raw_request: Request):
 
     user: dict[str, Any]
     if provider == "local":
+        ensure_browser_auth_available()
         if not local_access_enabled():
             raise HTTPException(status_code=503, detail="Local authentication is not enabled")
         db_user = get_user_by_username(username)
@@ -93,6 +95,7 @@ def login(body: AuthLoginRequest, raw_request: Request):
         reset_failed_logins(cast(int, db_user.id))
         user = get_active_user_context(cast(int, db_user.id)) or serialize_user(db_user)
     elif provider == "ldap":
+        ensure_browser_auth_available()
         if not ldap_enabled():
             raise HTTPException(status_code=503, detail="LDAP authentication is not enabled")
         try:
@@ -139,6 +142,7 @@ def refresh_session(
 ):
     if not refresh_token:
         raise HTTPException(status_code=401, detail="Refresh token cookie is missing")
+    ensure_browser_auth_available()
     try:
         user, session_record, new_refresh_token = rotate_refresh_session(
             refresh_token,
@@ -211,6 +215,7 @@ def change_password_endpoint(
 
 @router.get("/auth/oidc/start/{provider_id}")
 def start_oidc_login(provider_id: str, raw_request: Request, next: str = "/"):
+    ensure_browser_auth_available()
     if get_oidc_provider(provider_id=provider_id) is None:
         raise HTTPException(status_code=404, detail=f"OIDC provider '{provider_id}' is not configured")
     try:
@@ -231,6 +236,7 @@ def finish_oidc_login(
     state: str,
     oidc_transaction: str | None = Cookie(default=None, alias=OIDC_TRANSACTION_COOKIE_NAME),
 ):
+    ensure_browser_auth_available()
     if not oidc_transaction:
         raise HTTPException(status_code=400, detail="OIDC login transaction cookie is missing")
 
@@ -282,6 +288,7 @@ def finish_oidc_login(
 
 @router.get("/auth/saml/start/{provider_id}")
 def start_saml_login(provider_id: str, raw_request: Request, next: str = "/"):
+    ensure_browser_auth_available()
     if get_saml_provider(provider_id=provider_id) is None:
         raise HTTPException(status_code=404, detail=f"SAML provider '{provider_id}' is not configured")
     try:
@@ -302,6 +309,7 @@ async def finish_saml_login(
     raw_request: Request,
     oidc_transaction: str | None = Cookie(default=None, alias=OIDC_TRANSACTION_COOKIE_NAME),
 ):
+    ensure_browser_auth_available()
     if not oidc_transaction:
         raise HTTPException(status_code=400, detail="SAML login transaction cookie is missing")
 

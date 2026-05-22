@@ -2,24 +2,30 @@
 
 from __future__ import annotations
 
-from typing import Optional
-
 import typer
 
 from agentctl.config import (
-    Config,
-    Profile,
-    load_config,
-    save_config,
-    load_token,
-    save_token,
-    clear_token,
     CONFIG_FILE,
-    CREDENTIALS_FILE,
+    Profile,
+    clear_token,
+    load_config,
+    load_token,
+    save_config,
+    save_token,
 )
-from agentctl.output import console, print_table, success, info, error, fatal
+from agentctl.output import fatal, info, print_table, success
 
-profile_app = typer.Typer(no_args_is_help=True, rich_markup_mode="rich")
+profile_app = typer.Typer(
+    no_args_is_help=True,
+    rich_markup_mode="rich",
+    epilog=(
+        "[bold]Examples:[/bold]\n"
+        "  agentctl profile list\n"
+        "  agentctl profile create demo --gateway http://localhost:8080\n"
+        "  agentctl profile use demo\n"
+        "  agentctl profile login --token my-token"
+    ),
+)
 
 
 @profile_app.command("list")
@@ -28,13 +34,15 @@ def profile_list() -> None:
     config = load_config()
     items = []
     for name, p in config.profiles.items():
-        items.append({
-            "name": name,
-            "gateway_url": p.gateway_url,
-            "namespace": p.namespace,
-            "active": "*" if name == config.active_profile else "",
-            "token": "yes" if load_token(name) else "no",
-        })
+        items.append(
+            {
+                "name": name,
+                "gateway_url": p.gateway_url,
+                "namespace": p.namespace,
+                "active": "*" if name == config.active_profile else "",
+                "token": "yes" if load_token(name) else "no",
+            }
+        )
     print_table(
         items,
         columns=[
@@ -67,7 +75,7 @@ def profile_create(
     gateway_url: str = typer.Option("http://localhost:8080", "--gateway", "-g"),
     namespace: str = typer.Option("default", "--namespace", "-n"),
     timeout: float = typer.Option(60.0, "--timeout"),
-    token: Optional[str] = typer.Option(None, "--token", "-t", help="Save a token for this profile."),
+    token: str | None = typer.Option(None, "--token", "-t", help="Save a token for this profile."),
 ) -> None:
     """Create a new connection profile."""
     config = load_config()
@@ -91,10 +99,10 @@ def profile_create(
 @profile_app.command("update")
 def profile_update(
     name: str = typer.Argument(..., help="Profile name."),
-    gateway_url: Optional[str] = typer.Option(None, "--gateway", "-g"),
-    namespace: Optional[str] = typer.Option(None, "--namespace", "-n"),
-    timeout: Optional[float] = typer.Option(None, "--timeout"),
-    token: Optional[str] = typer.Option(None, "--token", "-t"),
+    gateway_url: str | None = typer.Option(None, "--gateway", "-g"),
+    namespace: str | None = typer.Option(None, "--namespace", "-n"),
+    timeout: float | None = typer.Option(None, "--timeout"),
+    token: str | None = typer.Option(None, "--token", "-t"),
 ) -> None:
     """Update an existing profile."""
     config = load_config()
@@ -143,7 +151,7 @@ def profile_delete(
 @profile_app.command("login")
 def profile_login(
     token: str = typer.Option(..., "--token", "-t", prompt=True, hide_input=True, help="Bearer token."),
-    name: Optional[str] = typer.Option(None, "--profile", "-p", help="Profile to save token to."),
+    name: str | None = typer.Option(None, "--profile", "-p", help="Profile to save token to."),
 ) -> None:
     """Save a token for the active (or specified) profile."""
     config = load_config()
@@ -156,7 +164,7 @@ def profile_login(
 
 @profile_app.command("logout")
 def profile_logout(
-    name: Optional[str] = typer.Option(None, "--profile", "-p"),
+    name: str | None = typer.Option(None, "--profile", "-p"),
 ) -> None:
     """Clear saved token for a profile."""
     config = load_config()

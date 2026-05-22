@@ -114,6 +114,9 @@ def resolve_tenant_for_namespace(namespace: str) -> dict[str, Any] | None:
 
 def validate_agent_model(model: str, policy_spec: dict[str, Any], tenant_spec: dict[str, Any] | None) -> None:
     """Validate the agent model against policy and tenant constraints."""
+    if not model:
+        raise kopf.PermanentError("AIAgent.spec.model must be explicitly set.")
+
     policy_models = set(policy_spec.get("allowedModels", []))
     if policy_models and model not in policy_models:
         raise kopf.PermanentError(
@@ -160,7 +163,8 @@ def create_agent_resources(spec: dict[str, Any], name: str, namespace: str, hand
     policy_name, policy_spec = resolve_agent_policy(namespace, spec.get("policyRef"))
     tenant_spec = resolve_tenant_for_namespace(namespace)
     validate_agent_cross_namespace_targets(spec, policy_spec, namespace)
-    validate_agent_model(spec.get("model", "gpt-4"), policy_spec, tenant_spec)
+    model = str(spec.get("model") or "").strip()
+    validate_agent_model(model, policy_spec, tenant_spec)
 
     # --- Translator pattern: produce all manifests in one call ---
     outputs: AgentOutputs = translate_agent(

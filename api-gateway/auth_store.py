@@ -34,10 +34,12 @@ from sqlalchemy import (
     inspect,
     text,
 )
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError
 from sqlalchemy.orm import Session, declarative_base, relationship, sessionmaker
 
 logger = logging.getLogger("api-gateway.auth-store")
+
+_AUTH_STORAGE_ERRORS = (OperationalError, ProgrammingError)
 
 Base = declarative_base()
 PASSWORD_CONTEXT = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
@@ -1327,6 +1329,26 @@ def init_database() -> None:
     _verify_schema_version()
 
 
+def auth_storage_ready(*, require_sessions: bool = False) -> bool:
+    """Return True when the auth tables needed for browser sessions exist."""
+    required_tables = {User.__tablename__}
+    if require_sessions:
+        required_tables.add(UserSession.__tablename__)
+
+    try:
+        with ENGINE.connect() as connection:
+            existing_tables = set(inspect(connection).get_table_names())
+    except _AUTH_STORAGE_ERRORS:
+        logger.exception("Unable to inspect auth storage state.")
+        return False
+
+    missing_tables = sorted(required_tables.difference(existing_tables))
+    if missing_tables:
+        logger.debug("Auth storage missing required tables: %s", ", ".join(missing_tables))
+        return False
+    return True
+
+
 @contextmanager
 def db_session() -> Iterator[Session]:
     session = SessionLocal()
@@ -2039,11 +2061,14 @@ def audit_login_failure(
 
 
 def get_active_user_context(user_id: int) -> dict[str, Any] | None:
-    with db_session() as session:
-        user = session.get(User, user_id)
-        if user is None or not user.is_active or is_user_locked(user):
-            return None
-        return serialize_user(user)
+    try:
+        with db_session() as session:
+            user = session.get(User, user_id)
+            if user is None or not user.is_active or is_user_locked(user):
+                return None
+            return serialize_user(user)
+    except _AUTH_STORAGE_ERRORS:
+        return None
 
 
 def create_session_for_user(
@@ -2083,12 +2108,15 @@ def create_session_for_user(
 def revoke_session(session_id: str) -> None:
     if not session_id:
         return
-    with db_session() as session:
-        record = session.get(UserSession, session_id)
-        if record is None or record.revoked_at is not None:
-            return
-        record.revoked_at = utc_now()
-        record.last_used_at = utc_now()
+    try:
+        with db_session() as session:
+            record = session.get(UserSession, session_id)
+            if record is None or record.revoked_at is not None:
+                return
+            record.revoked_at = utc_now()
+            record.last_used_at = utc_now()
+    except _AUTH_STORAGE_ERRORS:
+        return
 
 
 def revoke_refresh_token(refresh_token: str) -> None:
@@ -2106,16 +2134,19 @@ _SESSION_REVOKE_GRACE_SECONDS = 30
 def is_session_active(session_id: str, *, user_id: int | None = None) -> bool:
     if not session_id:
         return False
-    with db_session() as session:
-        record = session.get(UserSession, session_id)
-        expires_at = ensure_utc(record.expires_at) if record is not None else None
-        if record is None or expires_at is None or expires_at <= utc_now():
-            return False
-        if record.revoked_at is not None:
-            revoked_at = ensure_utc(record.revoked_at)
-            if revoked_at is None or utc_now() > revoked_at + timedelta(seconds=_SESSION_REVOKE_GRACE_SECONDS):
+    try:
+        with db_session() as session:
+            record = session.get(UserSession, session_id)
+            expires_at = ensure_utc(record.expires_at) if record is not None else None
+            if record is None or expires_at is None or expires_at <= utc_now():
                 return False
-        return not (user_id is not None and int(record.user_id) != int(user_id))
+            if record.revoked_at is not None:
+                revoked_at = ensure_utc(record.revoked_at)
+                if revoked_at is None or utc_now() > revoked_at + timedelta(seconds=_SESSION_REVOKE_GRACE_SECONDS):
+                    return False
+            return not (user_id is not None and int(record.user_id) != int(user_id))
+    except _AUTH_STORAGE_ERRORS:
+        return False
 
 
 def verify_refresh_session(refresh_token: str) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -2123,30 +2154,33 @@ def verify_refresh_session(refresh_token: str) -> tuple[dict[str, Any], dict[str
     if not session_id or not separator:
         raise ValueError("Refresh token format is invalid.")
 
-    with db_session() as session:
-        record = session.get(UserSession, session_id)
-        if record is None:
-            raise ValueError("Refresh session was not found.")
-        if record.revoked_at is not None:
-            raise ValueError("Refresh session has been revoked.")
-        expires_at = ensure_utc(record.expires_at)
-        if expires_at is None or expires_at <= utc_now():
-            raise ValueError("Refresh session has expired.")
-        if not secrets.compare_digest(record.refresh_token_hash, hash_refresh_token(refresh_token)):
-            raise ValueError("Refresh token is invalid.")
+    try:
+        with db_session() as session:
+            record = session.get(UserSession, session_id)
+            if record is None:
+                raise ValueError("Refresh session was not found.")
+            if record.revoked_at is not None:
+                raise ValueError("Refresh session has been revoked.")
+            expires_at = ensure_utc(record.expires_at)
+            if expires_at is None or expires_at <= utc_now():
+                raise ValueError("Refresh session has expired.")
+            if not secrets.compare_digest(record.refresh_token_hash, hash_refresh_token(refresh_token)):
+                raise ValueError("Refresh token is invalid.")
 
-        user = session.get(User, record.user_id)
-        if user is None or not user.is_active or is_user_locked(user):
-            raise ValueError("Refresh session user is unavailable.")
+            user = session.get(User, record.user_id)
+            if user is None or not user.is_active or is_user_locked(user):
+                raise ValueError("Refresh session user is unavailable.")
 
-        record.last_used_at = utc_now()
-        session.flush()
-        return serialize_user(user), {
-            "id": record.id,
-            "user_id": record.user_id,
-            "auth_provider": record.auth_provider,
-            "expires_at": expires_at.isoformat(),
-        }
+            record.last_used_at = utc_now()
+            session.flush()
+            return serialize_user(user), {
+                "id": record.id,
+                "user_id": record.user_id,
+                "auth_provider": record.auth_provider,
+                "expires_at": expires_at.isoformat(),
+            }
+    except _AUTH_STORAGE_ERRORS as exc:
+        raise ValueError("Authentication session storage is unavailable.") from exc
 
 
 def rotate_refresh_session(

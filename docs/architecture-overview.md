@@ -2,6 +2,8 @@
 
 This document describes the architecture that the repository currently implements. It focuses on the active runtime path, the current control-plane model, and the observability capabilities that now exist in code.
 
+For the diagram refresh brief that replaces the stale `docs/kubesynth-architectureold.drawio` asset, see [`docs/architecture-diagram-redesign-spec.md`](architecture-diagram-redesign-spec.md). The editable sources now live in [`docs/kubesynapse-architecture.mmd`](kubesynapse-architecture.mmd) and the refreshed [`docs/kubesynth-architectureold.drawio`](kubesynth-architectureold.drawio).
+
 ## 1. System Summary
 
 KubeSynapse is a Kubernetes-native AI agent platform built around these ideas:
@@ -104,7 +106,7 @@ flowchart LR
 
 ### Kubernetes API and CRDs
 
-The Kubernetes API remains the control-plane source of truth. The chart installs CRDs for:
+The Kubernetes API remains the control-plane source of truth. The chart installs 12 CRDs. Core resources include:
 
 | CRD | Scope | Purpose |
 | --- | --- | --- |
@@ -113,6 +115,9 @@ The Kubernetes API remains the control-plane source of truth. The chart installs
 | `AgentApproval` | Namespaced | Represents human approval requests for high-risk actions |
 | `AgentWorkflow` | Namespaced | Defines multi-step agent DAGs with dependencies and optional approval gates |
 | `AgentTenant` | Cluster | Defines namespace isolation, quotas, allowed models, and tenant admins |
+| `McpConnection` | Namespaced | Declares reusable MCP connection records for remote, hub, or sidecar transport |
+| `WebhookReceiver` | Namespaced | Declares signed inbound webhook receivers |
+| `WorkflowTrigger` | Namespaced | Declares event-driven workflow triggers |
 | `ConnectorPlugin` | Namespaced | Declares how observability data is collected |
 | `ObservationTarget` | Namespaced | Declares what is being observed |
 | `ObservationPolicy` | Namespaced | Declares how collected telemetry is evaluated |
@@ -132,7 +137,7 @@ Current responsibilities include:
 
 The operator is not just a bootstrap layer. It is the active control-plane engine for the product.
 
-## 4. Data Plane
+## 4. Application And Execution Plane
 
 ### API Gateway
 

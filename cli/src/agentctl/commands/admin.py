@@ -2,25 +2,32 @@
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 import typer
 from rich.table import Table
 from rich.text import Text
-from rich import box
 
 from agentctl.app import get_settings
 from agentctl.client import ApiClient, ApiError
 from agentctl.output import (
     console,
-    print_table,
-    print_detail,
+    fatal,
     print_json_output,
     success,
-    fatal,
 )
 
-admin_app = typer.Typer(no_args_is_help=True, rich_markup_mode="rich")
+admin_app = typer.Typer(
+    no_args_is_help=True,
+    rich_markup_mode="rich",
+    epilog=(
+        "[bold]Examples:[/bold]\n"
+        "  agentctl admin users\n"
+        "  agentctl admin user-create admin2 --role admin\n"
+        "  agentctl admin user-update admin2 --suspended\n"
+        "  agentctl admin user-delete old-user --yes"
+    ),
+)
 
 
 def _api() -> ApiClient:
@@ -75,9 +82,11 @@ def admin_user_create(
         ..., "--password", "-p", prompt=True, hide_input=True, confirmation_prompt=True, help="Password (8+ chars)."
     ),
     role: str = typer.Option("viewer", "--role", help="Role: viewer, operator, or admin."),
-    email: Optional[str] = typer.Option(None, "--email", help="Email address."),
-    display_name: Optional[str] = typer.Option(None, "--display-name", help="Display name."),
-    allowed_namespaces: Optional[list[str]] = typer.Option(None, "--namespace", help="Allowed namespaces (repeatable)."),
+    email: str | None = typer.Option(None, "--email", help="Email address."),
+    display_name: str | None = typer.Option(None, "--display-name", help="Display name."),
+    allowed_namespaces: list[str] | None = typer.Option(
+        None, "--namespace", help="Allowed namespaces (repeatable)."
+    ),
 ) -> None:
     """Create a new local user (admin only)."""
     settings = get_settings()
@@ -108,10 +117,12 @@ def admin_user_create(
 @admin_app.command("user-update")
 def admin_user_update(
     user_id: int = typer.Argument(..., help="User ID to update."),
-    role: Optional[str] = typer.Option(None, "--role", help="New role: viewer, operator, or admin."),
-    display_name: Optional[str] = typer.Option(None, "--display-name", help="New display name."),
-    active: Optional[bool] = typer.Option(None, "--active/--inactive", help="Enable or disable."),
-    allowed_namespaces: Optional[list[str]] = typer.Option(None, "--namespace", help="Allowed namespaces (repeatable)."),
+    role: str | None = typer.Option(None, "--role", help="New role: viewer, operator, or admin."),
+    display_name: str | None = typer.Option(None, "--display-name", help="New display name."),
+    active: bool | None = typer.Option(None, "--active/--inactive", help="Enable or disable."),
+    allowed_namespaces: list[str] | None = typer.Option(
+        None, "--namespace", help="Allowed namespaces (repeatable)."
+    ),
 ) -> None:
     """Update a local user (admin only)."""
     settings = get_settings()

@@ -82,7 +82,7 @@ OPENCODE_GO_PROVIDER = ProviderConfig(
 )
 
 COPILOT_PROVIDER = ProviderConfig(
-    id="copilot",
+    id="github-copilot",
     name="GitHub Copilot",
     env_mappings=(
         EnvMapping(opencode_env="GITHUB_TOKEN", source_env="GITHUB_TOKEN", required=False),
@@ -132,6 +132,7 @@ ANTHROPIC_PROVIDER = ProviderConfig(
 PROVIDER_REGISTRY: dict[str, ProviderConfig] = {
     "opencode": OPENCODE_GO_PROVIDER,
     "opencode-go": OPENCODE_GO_PROVIDER,
+    "github-copilot": COPILOT_PROVIDER,
     "copilot": COPILOT_PROVIDER,
     "litellm": LITELLM_PROVIDER,
     "openai-compatible": OPENAI_COMPATIBLE_PROVIDER,

@@ -959,7 +959,7 @@ Adopt a consistent log format across all components:
 
 ## 14. Re-Architecture Plan: Security Hardening
 
-### 14.1 — Agent Sandbox Isolation
+### 14.1 — Agent Runtime Isolation
 
 Current: Agents run with `allowPrivilegeEscalation: false` and `readOnlyRootFilesystem: true`. Good start.
 

@@ -1,19 +1,17 @@
 # Getting Started with KubeSynapse
 
-**Time to complete:** 5 minutes  
-**Who is this for:** Platform engineers, DevOps teams, and AI developers who want to deploy their first agent on Kubernetes.
+**Time to complete:** 10-15 minutes  
+**Who is this for:** Platform engineers, DevOps teams, and AI developers who want to run the current KubeSynapse stack and deploy a real agent.
 
 ---
 
-## Table of Contents
+## What This Guide Covers
 
-- [Prerequisites](#prerequisites)
-- [Step 1: Install KubeSynapse via Helm OCI](#step-1-install-KubeSynapse-via-helm-oci)
-- [Step 2: Port-Forward and Verify Health](#step-2-port-forward-and-verify-health)
-- [Step 3: Create Your First Agent](#step-3-create-your-first-agent)
-- [Step 4: Chat with the Agent](#step-4-chat-with-the-agent)
-- [Step 5: Delegate to Another Agent via A2A](#step-5-delegate-to-another-agent-via-a2a)
-- [Next Steps](#next-steps)
+1. Install a local KubeSynapse cluster with the repo-supported Kind helper.
+2. Open the web console and verify the gateway.
+3. Deploy a real sample `AIAgent` and `AgentPolicy` from `examples/`.
+4. Invoke the agent from the UI or `agentctl`.
+5. Optionally run the stronger multi-agent Context7 workflow demo.
 
 ---
 
@@ -21,271 +19,185 @@
 
 | Tool | Minimum Version | Verify Command |
 |------|-----------------|----------------|
-| Kubernetes | 1.25+ | `kubectl version --short` |
+| Docker | Recent | `docker version` |
+| Kind | Recent | `kind version` |
 | Helm | 3.12+ | `helm version` |
 | kubectl | 1.25+ | `kubectl version --client` |
-| LLM API Key | Any supported provider | OpenAI, Anthropic, Azure, etc. |
+| PowerShell | 7+ | `pwsh --version` |
 
-You also need a running Kubernetes cluster. For local testing, use [Kind](https://kind.sigs.k8s.io/):
-
-```bash
-kind create cluster --name KubeSynapse
-```
+You also need credentials for at least one supported model provider before you can successfully invoke agents.
 
 ---
 
-## Step 1: Install KubeSynapse via Helm OCI
+## Step 1: Install KubeSynapse On Kind
 
-One command installs the entire platform:
+The most repeatable local install path in this repository is the checked-in PowerShell helper:
 
-```bash
-helm install KubeSynapse oci://docker.io/kubesynapse/charts/kubesynapse \
-  --namespace kubesynapse --create-namespace \
-  --set platformSecrets.native.openaiApiKey="sk-..." \
-  --set litellm.masterKey="your-secure-litellm-key"
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File ./scripts/deploy-kind.ps1 `
+  -ClusterName kubesynapse-dev `
+  -Namespace kubesynapse `
+  -ReleaseName kubesynapse `
+  -AdminPassword "KubesynapseAdmin9!"
 ```
 
-**What this does:**
-- Deploys the API Gateway, Operator, Web UI, LiteLLM, Redis, Qdrant, PostgreSQL, and NATS
-- Installs 11 CRDs into your cluster
-- Creates the `kubesynapse` namespace
+What it does:
 
-**Expected output:**
+- creates or reuses the `kind-kubesynapse-dev` cluster context
+- builds local `:dev` images for the operator, API gateway, web UI, and OpenCode runtime
+- loads the pinned LiteLLM image required by the chart
+- applies `deploy/values.local-images.example.yaml` and `deploy/values.kind.quickstart.yaml`
+- injects `catalog/skills-catalog.json` so the `Catalog > Skills` tab is populated
+- prints the bootstrap admin credentials and useful port-forward commands
 
-```text
-NAME: KubeSynapse
-LAST DEPLOYED: Mon Apr 27 10:00:00 2026
-NAMESPACE: KubeSynapse
-STATUS: deployed
-REVISION: 1
-```
+The main chart installs 12 CRDs, including agents, workflows, policies, approvals, tenants, MCP connections, webhook receivers, workflow triggers, and observability resources.
 
-Wait for all pods to become ready:
+If you prefer a manual path, see:
 
-```bash
-kubectl wait --for=condition=ready pod --all -n kubesynapse --timeout=300s
-```
+- [`deploy/README.md`](../deploy/README.md)
+- [`charts/kubesynapse/README.md`](../charts/kubesynapse/README.md)
+- [`INSTALL.md`](../INSTALL.md)
 
 ---
 
-## Step 2: Port-Forward and Verify Health
+## Step 2: Verify The Gateway And UI
 
-Forward the API Gateway and Web UI to your local machine:
+Port-forward the gateway and console:
 
 ```bash
-# Terminal 1 — API Gateway
 kubectl port-forward -n kubesynapse svc/kubesynapse-api-gateway 8080:8080
-
-# Terminal 2 — Web UI
 kubectl port-forward -n kubesynapse svc/kubesynapse-web-ui 3000:80
 ```
 
-Verify the gateway is healthy:
+Verify the gateway health endpoint:
 
 ```bash
 curl http://localhost:8080/api/v1/health
 ```
 
-**Expected response:**
+Then open the console:
 
-```json
-{
-  "status": "healthy",
-  "gateway": "KubeSynapse",
-  "auth_mode": "shared_token",
-  "browser_auth_enabled": true,
-  "local_auth_enabled": true,
-  "shared_token_enabled": true
-}
-```
+- Web UI: `http://localhost:3000`
+- API docs: `http://localhost:8080/api/v1/docs`
 
-Open the Web UI at [http://localhost:3000](http://localhost:3000).
+Sign in with the admin username and password printed by `scripts/deploy-kind.ps1`.
+
+Before invoking agents, configure at least one provider credential in the Settings workspace or via chart-managed secrets.
 
 ---
 
-## Step 3: Create Your First Agent
+## Step 3: Deploy Your First Agent
 
-### Option A: Using `agentctl` CLI
-
-```bash
-# Install the CLI
-pip install kubesynapse-cli
-
-# Create an agent
-agentctl agent create \
-  --name onboarding-bot \
-  --namespace default \
-  --model gpt-4o \
-  --system-prompt "You are a friendly DevOps onboarding assistant."
-```
-
-### Option B: Using `kubectl` and YAML
-
-Save this as `first-agent.yaml`:
-
-```yaml
-apiVersion: kubesynapse.ai/v1alpha1
-kind: AIAgent
-metadata:
-  name: onboarding-bot
-  namespace: default
-spec:
-  runtime:
-    kind: opencode
-  systemPrompt: "You are a friendly DevOps onboarding assistant."
-  model: gpt-4o
-  storage:
-    size: 1Gi
-```
-
-Apply it:
+Use the checked-in sample resources:
 
 ```bash
-kubectl apply -f first-agent.yaml
+kubectl apply -f examples/sample-policy.yaml
+kubectl apply -f examples/sample-agent.yaml
 ```
 
-**Verify the agent is running:**
+Verify reconciliation:
 
 ```bash
-kubectl get aiagent -n default
-kubectl get pods -n default -l app.kubernetes.io/name=onboarding-bot
+kubectl get aiagents -n default
+kubectl get pods -n default
 ```
+
+These examples show the current shipped object model:
+
+- `examples/sample-policy.yaml` configures guardrails and MCP policy on an `AgentPolicy`.
+- `examples/sample-agent.yaml` creates an `AIAgent` with:
+  - `spec.runtime.kind: opencode`
+  - file-backed skills under `spec.skills.files`
+  - a `policyRef`
+  - PVC-backed workspace storage
 
 ---
 
-## Step 3b: Create a Pi Runtime Agent (Alternative)
+## Step 4: Invoke The Agent
 
-KubeSynapse also supports the **Pi runtime** as an alternative to OpenCode. Pi uses a Node.js RPC bridge with live reasoning log streaming via SSE.
+### Option A: Web UI
 
-Save this as `pi-agent.yaml`:
+1. Open `http://localhost:3000`.
+2. Go to **Chat Workbench**.
+3. Select `research-assistant`.
+4. Send a prompt.
 
-```yaml
-apiVersion: kubesynapse.ai/v1alpha1
-kind: AIAgent
-metadata:
-  name: pi-onboarding-bot
-  namespace: default
-spec:
-  runtime:
-    kind: pi
-    pi:
-      provider: opencode
-  systemPrompt: "You are a friendly DevOps onboarding assistant."
-  model: gpt-4o
-  storage:
-    size: 1Gi
-```
+### Option B: `agentctl`
 
-Apply it:
+Install the CLI from this repository:
 
 ```bash
-kubectl apply -f pi-agent.yaml
+python -m pip install -e ./cli
 ```
 
-**Note:** The Pi runtime streams live reasoning logs via SSE, visible in the Web UI **Chat Workbench** as terminal-style events.
-
----
-
-## Step 4: Chat with the Agent
-
-### Via CLI
+Log in and export the returned token:
 
 ```bash
-agentctl agent invoke onboarding-bot \
-  --namespace default \
-  --prompt "How do I rotate a Kubernetes secret?"
+agentctl --gateway-url http://localhost:8080 auth login -u admin -p "<your-password>"
+export AGENT_GATEWAY_TOKEN="<token-from-login-output>"
 ```
 
-**Expected response:**
+On PowerShell:
 
-```json
-{
-  "response": "To rotate a Kubernetes secret, create a new secret with updated data...",
-  "status": "completed",
-  "thread_id": "abc123..."
-}
+```powershell
+$env:AGENT_GATEWAY_TOKEN="<token-from-login-output>"
 ```
 
-### Via Web UI
-
-1. Navigate to [http://localhost:3000](http://localhost:3000)
-2. Click **Chat Workbench**
-3. Select `onboarding-bot` from the agent dropdown
-4. Type your message and press Enter
-
-### Via cURL
+Invoke the sample agent:
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/agents/onboarding-bot/invoke \
+agentctl --gateway-url http://localhost:8080 invoke research-assistant "Summarize what KubeSynapse does and why it is Kubernetes-native."
+```
+
+### Option C: Raw API
+
+```bash
+curl -X POST "http://localhost:8080/api/v1/agents/research-assistant/invoke?namespace=default" \
+  -H "Authorization: Bearer <shared-token-or-access-token>" \
   -H "Content-Type: application/json" \
-  -d '{"prompt": "How do I rotate a Kubernetes secret?"}'
+  -d '{"prompt": "Summarize what KubeSynapse does and why it is Kubernetes-native."}'
 ```
 
 ---
 
-## Step 5: Delegate to Another Agent via A2A
+## Step 5: Run The Best Multi-Agent Demo
 
-KubeSynapse supports native A2A (Agent-to-Agent) delegation. Create a second agent that the first can call.
+The strongest repo-backed workflow demo is the Context7 research pipeline.
 
-### 1. Create a specialist agent
-
-```yaml
-apiVersion: kubesynapse.ai/v1alpha1
-kind: AIAgent
-metadata:
-  name: security-specialist
-  namespace: default
-spec:
-  runtime:
-    kind: opencode
-  systemPrompt: "You are a security expert focused on secret rotation and PKI."
-  model: gpt-4o
-  storage:
-    size: 1Gi
-```
+Apply the demo agents and workflow:
 
 ```bash
-kubectl apply -f security-specialist.yaml
+kubectl apply -f examples/context7-demo-agents.yaml
+kubectl apply -f examples/context7-demo-workflow.yaml
 ```
 
-### 2. Allow delegation between agents
-
-Create an `AgentPolicy` that allows A2A targeting:
-
-```yaml
-apiVersion: kubesynapse.ai/v1alpha1
-kind: AgentPolicy
-metadata:
-  name: a2a-delegation-policy
-  namespace: default
-spec:
-  allowedModels:
-    - gpt-4o
-  a2a:
-    allowedTargets:
-      - name: security-specialist
-        namespace: default
-```
+Trigger the workflow:
 
 ```bash
-kubectl apply -f a2a-policy.yaml
+agentctl --gateway-url http://localhost:8080 workflows trigger context7-research-analysis
 ```
 
-### 3. Delegate via chat
+What this demo shows:
 
-In the Web UI or CLI, mention the specialist with `@`:
+- remote Context7 MCP usage
+- workspace file write/read flow
+- agent-to-agent delegation
+- workflow history and artifacts
+- Execution Observatory inspection
 
-```text
-@security-specialist How do I rotate a TLS certificate in cert-manager?
-```
+To inspect runs in the UI, open **Intelligence > Observatory**.
 
-The gateway routes the request to `security-specialist`, which processes it and returns the answer to the original thread.
+---
 
-**What happens under the hood:**
-- Gateway validates the caller against `allowedTargets`
-- Creates an A2A JSON-RPC task record
-- Forwards the prompt to the target agent's runtime
-- Streams or returns the response to the caller
+## Runtime Notes
+
+KubeSynapse currently supports three in-tree runtimes:
+
+- `opencode`
+- `pi`
+- `mistral-vibe`
+
+`opencode` is the default runtime path used by the checked-in examples and local dev flows.
 
 ---
 
@@ -293,17 +205,18 @@ The gateway routes the request to `security-specialist`, which processes it and 
 
 | Goal | Resource |
 |------|----------|
-| Deploy to production | [Production Deployment Guide](production-deployment-guide.md) |
-| Understand architecture | [Architecture Overview](architecture-overview.md) |
-| Configure auth, secrets, policies | [Configuration Reference](configuration-reference.md) |
-| Monitor and alert | [Operator Guide](operator-guide.md) |
-| Explore observability & traces | [Observability Explained](observability-explained.md) |
-| Run Intelligence Layer | [ROADMAP — Stories 5-10](ROADMAP.md) |
-| Troubleshoot issues | [Troubleshooting](troubleshooting.md) |
-| Join the community | [Community](community.md) |
+| Understand the current architecture | [`architecture-overview.md`](architecture-overview.md) |
+| See the implementation walkthrough | [`walkthrough.md`](walkthrough.md) |
+| Deploy with different overlays | [`../deploy/README.md`](../deploy/README.md) |
+| Learn the runtime contract | [`runtime-api-spec.md`](runtime-api-spec.md) |
+| Explore observability and traces | [`observability-explained.md`](observability-explained.md) |
+| Troubleshoot install or runtime issues | [`troubleshooting.md`](troubleshooting.md) |
+| Use the CLI effectively | [`../cli/README.md`](../cli/README.md) |
 
 ---
 
-**Last Updated:** May 4, 2026  
-**Platform Version:** 1.0.0  
-**Run Intelligence Layer:** ✅ Complete (Stories 5-10)
+## Notes
+
+- Workflow details primarily live in worker artifacts and logs; CRD status is summary-oriented.
+- The API gateway is both the invoke edge and the backend for auth, memory, traces, webhooks, and UI metadata.
+- For local Kind installs, `deploy/values.kind.quickstart.yaml` intentionally disables some optional components to keep the cluster lightweight.
