@@ -181,14 +181,16 @@ jobs:
         run: |
           helm template kubesynapse ./charts/kubesynapse \
             --namespace kubesynapse \
-            --set global.imagePullSecrets[0].name=fake \
-            --set litellm.masterKey=fake-key \
+            --set platformSecrets.native.litellmMasterKey=fake-key \
+            --set platformSecrets.native.apiGatewaySharedToken=fake-token \
+            --set platformSecrets.native.databasePassword=fake-db-pass \
+            --set platformSecrets.native.jwtSecret=fake-jwt-secret \
             > /tmp/kubesynapse-manifests.yaml
 
       - name: Run kube-linter
         run: |
           kube-linter lint /tmp/kubesynapse-manifests.yaml \
-            --include "privileged,privilege-escalation,read-only-root-fs,run-as-non-root,capabilities,dangling-service,env-var-secret,sensitive-host-mounts,no-anti-affinity,cluster-admin,rbac" \
+            --include "privileged-container,privilege-escalation-container,no-read-only-root-fs,run-as-non-root,dangling-service,env-var-secret,read-secret-from-env-var,sensitive-host-mounts,no-anti-affinity,cluster-admin-role-binding,access-to-secrets" \
             --format sarif \
             --output /tmp/kube-linter-results.sarif || true
 
@@ -217,14 +219,17 @@ jobs:
           mkdir -p /tmp/kubesynapse-rendered
           helm template kubesynapse ./charts/kubesynapse \
             --namespace kubesynapse \
-            --set global.imagePullSecrets[0].name=fake \
-            --set litellm.masterKey=fake-key \
+            --set platformSecrets.native.litellmMasterKey=fake-key \
+            --set platformSecrets.native.apiGatewaySharedToken=fake-token \
+            --set platformSecrets.native.databasePassword=fake-db-pass \
+            --set platformSecrets.native.jwtSecret=fake-jwt-secret \
             > /tmp/kubesynapse-rendered/all.yaml
 
       - name: Run checkov (Helm chart)
         run: |
           checkov --directory charts/kubesynapse \
             --framework helm \
+            --var-file deploy/values.kind.yaml \
             --output sarif \
             --output-file-path checkov-helm-results.sarif \
             --soft-fail || true
