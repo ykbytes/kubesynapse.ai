@@ -9,14 +9,23 @@
 ## Installation
 
 ```bash
-# From the repository root
+# From the repository root (editable, recommended for development)
 pip install -e ./cli
+
+# Or with dev dependencies (pytest, ruff)
+pip install -e "./cli[dev]"
+
+# Build a wheel for regular install / distribution
+pip install build
+python -m build ./cli
+pip install ./cli/dist/kubesynapse_cli-*.whl
 
 # Verify
 agentctl --version
 ```
 
 **Requirements:** Python 3.11+ (deps: httpx, PyYAML, rich, typer, platformdirs, tenacity)
+**Package name:** [`kubesynapse-cli`](https://pypi.org/project/kubesynapse-cli/) (build and publish with `python -m build` + `twine upload`)
 
 ---
 
