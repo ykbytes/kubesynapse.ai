@@ -1,761 +1,451 @@
 # agentctl
 
-**Modern CLI for KubeSynapse** — a Kubernetes-native multi-runtime AI agent orchestration platform.
+**KubeSynapse CLI** — Kubernetes-native AI agent operations.
 
-`agentctl` provides full control over agents, workflows, policies, approvals, credentials, authentication, and the skills catalog from the terminal.
+`agentctl` provides full control over AI agents, workflows, observability, chat, webhooks, authentication, credentials, and the skills catalog.
 
 ---
 
 ## Installation
 
 ```bash
-# Install from the repository
-python -m pip install -e ./cli
+# From the repository root
+pip install -e ./cli
 
-# Or run directly
-python cli/agentctl.py --help
+# Verify
+agentctl --version
 ```
 
-On Windows with the repository virtual environment, run `.venv\Scripts\agentctl.exe` or activate the venv first:
-
-```powershell
-.venv\Scripts\Activate.ps1
-agentctl --help
-```
-
-**Requirements:** Python 3.11+, httpx, PyYAML, rich, typer.
+**Requirements:** Python 3.11+ (deps: httpx, PyYAML, rich, typer, platformdirs, tenacity)
 
 ---
 
 ## Quick Start
 
 ```bash
-# Check gateway health
-agentctl health
+# Set up a profile
+agentctl profile create demo --gateway http://localhost:8080 --namespace ai-agents
+agentctl profile use demo
 
-# Login (for enterprise auth setups)
+# Login
 agentctl auth login -u admin -p secret
 
-# Create an agent from YAML
-agentctl agents create -f examples/sample-agent.yaml
+# List agents
+agentctl agents list
 
-# Invoke the agent
+# Invoke an agent
 agentctl invoke my-agent "Explain Kubernetes namespaces"
 
-# Stream the response in real-time
+# Stream response
 agentctl invoke my-agent "Build a REST API" --stream
+```
 
-# Create and trigger a workflow
-agentctl workflows create -f examples/sample-workflow.yaml
-agentctl workflows trigger my-workflow "New input for the pipeline"
+---
 
-# Apply any resource (auto-detects kind)
-agentctl apply examples/sample-agent.yaml
+## Configuration
+
+`agentctl` uses **profiles** stored at `~/.config/agentctl/config.yaml`. Tokens are persisted per-profile at `~/.local/share/agentctl/credentials.yaml`.
+
+### Priority (highest to lowest)
+
+1. CLI flag (`--gateway`, `--token`, `--namespace`)
+2. Environment variable (`AGENT_GATEWAY_URL`, `AGENT_GATEWAY_TOKEN`, `AGENT_NAMESPACE`, `AGENTCTL_PROFILE`)
+3. Active profile from config file
+
+### Profile Management
+
+```bash
+agentctl profile list                       # Show all profiles
+agentctl profile create prod --gateway https://gateway.prod.io -n production
+agentctl profile use prod                   # Switch active profile
+agentctl profile login --token <token>      # Save token to current profile
+agentctl profile logout                     # Clear saved token
 ```
 
 ---
 
 ## Global Options
 
-Every command inherits these global options:
+| Option | Env Var | Default | Description |
+|--------|---------|---------|-------------|
+| `--gateway`, `-g` | `AGENT_GATEWAY_URL` | `http://localhost:8080` | Gateway base URL |
+| `--token`, `-t` | `AGENT_GATEWAY_TOKEN` | — | Bearer token |
+| `--namespace`, `-n` | `AGENT_NAMESPACE` | `default` | Target namespace |
+| `--profile`, `-p` | `AGENTCTL_PROFILE` | `default` | Config profile |
+| `--output`, `-o` | — | `table` | Output: `table`, `json`, `yaml`, `wide`, `name` |
+| `--timeout` | — | `60` | Request timeout (seconds) |
+| `--version`, `-V` | — | — | Show version |
 
-| Option | Env Variable | Default | Description |
-|--------|-------------|---------|-------------|
-| `--gateway-url` | `AGENT_GATEWAY_URL` | `http://localhost:8080` | API gateway base URL |
-| `--token` | `AGENT_GATEWAY_TOKEN` | (empty) | Bearer token for authenticated requests |
-| `--namespace`, `-n` | `AGENT_NAMESPACE` | `default` | Default Kubernetes namespace |
-| `--timeout` | — | `60.0` | HTTP timeout in seconds (minimum 1.0) |
-| `--json` | — | `false` | Emit raw JSON instead of rich formatted output |
+### Output Formats
+
+```bash
+agentctl agents list -o json        # Machine-readable JSON
+agentctl agents list -o yaml        # YAML output
+agentctl agents list -o wide        # Table with extra columns
+agentctl agents list -o name        # Just resource names
+```
 
 ---
 
 ## Command Reference
 
-### Root Commands
+### Top-Level
 
 | Command | Description |
 |---------|-------------|
-| `agentctl health` | Check API gateway health status |
-| `agentctl config` | Show the effective CLI configuration |
-| `agentctl version` | Show the CLI version |
-| `agentctl invoke` | Invoke an agent with a prompt |
-| `agentctl logs` | Fetch or stream agent runtime logs |
-| `agentctl apply` | Create or update a resource from a file (auto-detects kind) |
+| `health` | Check API gateway health |
+| `apply` | Create or update a resource from a file (auto-detects kind) |
+| `invoke` | Invoke an agent with a prompt (shortcut for `agents invoke`) |
+| `logs` | Fetch agent logs (shortcut for `agents logs`) |
 
 ### Command Groups
 
 | Group | Description |
 |-------|-------------|
-| `agentctl agents` | Manage and inspect agents |
-| `agentctl workflows` | Manage, trigger, and cancel workflows |
-| `agentctl approvals` | List, review, and decide on approvals |
-| `agentctl policies` | List policies |
-| `agentctl auth` | Authentication and user session management |
-| `agentctl admin` | Admin operations (requires admin role) |
-| `agentctl credentials` | Manage agent git and GitHub credentials |
-| `agentctl skills` | Browse the skills catalog |
-| `agentctl tools` | Browse MCP tool sidecars and hub servers |
+| [`agents`](#agents) | Manage and inspect AI agents |
+| [`workflows`](#workflows) | Manage workflows, trigger executions, check status |
+| [`runs`](#runs) | Approvals, policies, and `apply` |
+| [`observatory`](#observatory) | Metrics, traces, alerts, and platform health |
+| [`chat`](#chat) | Interactive agent chat sessions (including REPL) |
+| [`webhooks`](#webhooks) | Manage webhooks, triggers, and dispatch |
+| [`auth`](#authentication) | Login, register, sessions, and password management |
+| [`admin`](#admin-user-management) | Administrative user management |
+| [`credentials`](#credentials) | Git and GitHub credential management for agents |
+| [`skills`](#skills) | Skills catalog, MCP tools, and MCP hub |
+| [`profile`](#configuration) | CLI configuration profiles and token persistence |
 
 ---
 
 ## Agents
 
-### List Agents
-
 ```bash
-agentctl agents list
-agentctl agents list -n production
+agentctl agents list                        # List agents
+agentctl agents show my-agent               # Agent details
+agentctl agents create -f agent.yaml        # Create from file
+agentctl agents update my-agent -f new.yaml # Update from file
+agentctl agents delete my-agent             # Delete (with confirmation)
+agentctl agents delete my-agent --yes       # Skip confirmation
+agentctl agents discover my-agent           # Show A2A peers
+agentctl agents live-events my-agent        # Stream real-time events
 ```
 
-### Create an Agent
+### Invoke
 
 ```bash
-agentctl agents create -f examples/sample-agent.yaml
-agentctl agents create -f agent.json
-```
-
-Accepts Kubernetes custom resource manifests (`kind: AIAgent`) or direct API payload documents in JSON/YAML.
-
-### Show Agent Details
-
-```bash
-agentctl agents show my-agent
-agentctl agents show my-agent --json
-```
-
-### Update an Agent
-
-```bash
-# Update from a file
-agentctl agents update my-agent -f updated-agent.yaml
-
-# Update OpenCode runtime config files
-agentctl agents update opencode-assistant --opencode-config-file opencode.json=.opencode/opencode.json
-agentctl agents update opencode-assistant --opencode-config-text prompts/review.md="Review changes conservatively and return only the defects."
-agentctl agents update opencode-assistant --clear-opencode-config-files
-```
-
-**OpenCode config flags:**
-- `--opencode-config-file RELATIVE_PATH=FILE` — Map an OpenCode config-root path to a local file
-- `--opencode-config-text RELATIVE_PATH=TEXT` — Set a config file from inline text
-- `--clear-opencode-config-files` — Remove all existing config files before applying overrides
-
-Paths must be relative to the runtime config root (e.g., `config.yaml`, `agents/reviewer.md`, `plugins/custom.ts`).
-
-### Delete an Agent
-
-```bash
-agentctl agents delete my-agent
-agentctl agents delete --file examples/sample-agent.yaml --yes
-```
-
-### Discover A2A Peers
-
-```bash
-agentctl agents discover workspace-assistant
-agentctl agents discover workspace-assistant --include-unreachable
-```
-
-Shows the agent's configured Agent-to-Agent (A2A) communication targets and their reachability status.
-
-### Stream Live Agent Events
-
-```bash
-agentctl agents live-events my-agent
-```
-
-Opens an SSE stream of real-time agent reasoning events (Pi runtime only).
-
----
-
-## Invoking Agents
-
-### Basic Invocation
-
-```bash
-agentctl invoke my-agent "Explain Kubernetes namespaces"
+agentctl invoke my-agent "Prompt here"
 agentctl invoke my-agent --file prompt.txt
-echo "Summarize this" | agentctl invoke my-agent
+agentctl invoke my-agent "Stream this" --stream
+agentctl invoke my-agent --thread-id abc123 "Continue conversation"
 ```
 
-### Streaming
+### Logs
 
 ```bash
-agentctl invoke my-agent "Build a REST API" --stream
+agentctl logs my-agent                     # Last 200 lines
+agentctl logs my-agent --tail 500          # Last 500 lines
+agentctl logs my-agent --follow            # Stream in real-time
 ```
-
-SSE streaming shows real-time deltas as the agent generates its response.
-
-### Thread Continuations
-
-```bash
-agentctl invoke my-agent "What about scaling?" --thread-id abc123
-```
-
-### Agent-to-Agent (A2A) Routing
-
-```bash
-agentctl invoke my-agent "Ask the reviewer for feedback" \
-  --a2a-target-agent reviewer \
-  --a2a-target-namespace team-b \
-  --a2a-timeout-seconds 30
-```
-
-### Runtime-Specific Options
-
-| Option | Runtime | Description |
-|--------|---------|-------------|
-| `--system TEXT` | OpenCode | Additional system instructions |
-| `--max-turns N` | OpenCode | Limit autonomous turns |
-| `--no-session` | OpenCode | Disable session persistence |
-| `--debug` | OpenCode | Enable debug output |
-| `--working-directory DIR` | OpenCode | Run from a subdirectory in workspace |
-| `--max-retries N` | OpenCode | Limit autonomous retries |
-| `--no-autonomous` | OpenCode | Disable autonomous completion prompt |
-| `--output-format FMT` | OpenCode | Preferred output: json, code, markdown, text |
-| `--output-schema-file FILE` | OpenCode | JSON/YAML schema for structured output |
-| `--a2a-target-agent NAME` | A2A | Route the request to another agent explicitly |
-| `--a2a-target-namespace NS` | A2A | Namespace of the explicit A2A target |
-| `--a2a-timeout-seconds N` | A2A | Caller-side timeout for the outbound A2A request |
-
-### Approval Workflow
-
-```bash
-agentctl invoke my-agent "Deploy to production" --require-approval --approval-action "deploy"
-```
-
----
-
-## Logs
-
-```bash
-# Fetch the last 200 lines (default)
-agentctl logs my-agent
-
-# Fetch the last 500 lines
-agentctl logs my-agent --tail 500
-
-# Stream logs in real-time
-agentctl logs my-agent --follow
-
-# Combine tail and follow
-agentctl logs my-agent --follow --tail 50
-```
-
-| Option | Short | Default | Description |
-|--------|-------|---------|-------------|
-| `--tail N` | `-t` | `200` | Number of log lines to retrieve (1-5000) |
-| `--follow` | `-f` | `false` | Stream logs in real-time via SSE |
-
-Press `Ctrl+C` to stop following logs.
 
 ---
 
 ## Workflows
 
-### CRUD Operations
-
 ```bash
-agentctl workflows list
-agentctl workflows create -f examples/sample-workflow.yaml
-agentctl workflows show my-workflow
-agentctl workflows update my-workflow -f updated-workflow.yaml
-agentctl workflows delete my-workflow --yes
-```
-
-### Trigger Execution
-
-```bash
-# Trigger with existing input
-agentctl workflows trigger my-workflow
-
-# Trigger with new input
-agentctl workflows trigger my-workflow "Analyze the Q4 financial data"
-
-# Trigger with input from a file
-agentctl workflows trigger my-workflow --file input.txt
-```
-
-Triggering re-reconciles the workflow even if the spec hasn't changed by resetting the status phase.
-
-### Cancel a Workflow
-
-```bash
-agentctl workflows cancel my-workflow
-agentctl workflows cancel my-workflow --yes  # skip confirmation
-```
-
-Cancels workflows in `running`, `queued`, or `waiting-approval` phase.
-
-### Check Workflow Status
-
-```bash
-agentctl workflows status my-workflow
-```
-
-Shows a focused view of the current execution state including phase, current step, run ID, pending approvals, and per-step status.
-
-### Fetch Workflow Logs
-
-```bash
-agentctl workflows logs my-workflow
-```
-
-Streams the runtime logs for the most recent workflow execution.
-
----
-
-## Approvals
-
-### List Pending Approvals
-
-```bash
-agentctl approvals list
-```
-
-Scans all workflows in the namespace and shows any pending approval gates.
-
-### Show Approval Details
-
-```bash
-agentctl approvals show approval-name
-```
-
-### Approve or Deny
-
-```bash
-agentctl approvals approve approval-name --reason "Reviewed by ops"
-agentctl approvals deny approval-name --reason "Not ready for production"
+agentctl workflows list                    # List workflows
+agentctl workflows show my-wf              # Workflow details
+agentctl workflows create -f wf.yaml       # Create from file
+agentctl workflows update my-wf -f new.yaml
+agentctl workflows delete my-wf            # Delete with confirmation
+agentctl workflows trigger my-wf "input"   # Trigger execution
+agentctl workflows cancel my-wf            # Cancel running
+agentctl workflows status my-wf            # Step states + status
+agentctl workflows logs my-wf              # Workflow runtime logs
+agentctl workflows logs my-wf --run-id abc # Specific run logs
 ```
 
 ---
 
-## Policies
+## Runs
 
 ```bash
-agentctl policies list
-agentctl policies list -n production
+agentctl runs approvals                    # List pending approvals
+agentctl runs approve approval-name --reason "OK"
+agentctl runs deny approval-name --reason "Blocked"
+agentctl runs policies                     # List policies
+agentctl runs apply -f resource.yaml       # Create/update resource
+```
+
+---
+
+## Observatory
+
+```bash
+agentctl observatory health                # Platform health status
+agentctl observatory metrics               # Agent and system metrics
+agentctl observatory metrics --agent my-agent -w 24h
+agentctl observatory traces                # Recent execution traces
+agentctl observatory traces --agent my-agent --status failed
+agentctl observatory trace <trace-id>      # Detailed trace info
+agentctl observatory alerts                # Active alerts
+agentctl observatory signals               # Signal watch events
+agentctl observatory export --format json --since 24h  # Export traces
+```
+
+---
+
+## Chat
+
+```bash
+agentctl chat send my-agent "Hello"        # Send a message
+agentctl chat send my-agent --thread abc   # Continue thread
+agentctl chat threads                      # List chat threads
+agentctl chat history <thread-id>          # Message history
+agentctl chat interactive my-agent         # REPL-style session
+```
+
+---
+
+## Webhooks & Triggers
+
+```bash
+agentctl webhooks list                     # List webhooks
+agentctl webhooks show my-webhook          # Webhook details
+agentctl webhooks create my-webhook --workflow my-wf --event push
+agentctl webhooks delete my-webhook
+agentctl webhooks triggers                 # List trigger executions
+agentctl webhooks trigger-show <id>        # Trigger details
+agentctl webhooks dispatch my-webhook --payload '{"ref":"main"}'
 ```
 
 ---
 
 ## Authentication
 
-### Login
-
 ```bash
-# Interactive (prompts for credentials)
-agentctl auth login
-
-# Non-interactive
-agentctl auth login -u admin -p mypassword
-
-# LDAP provider
-agentctl auth login -u admin -p mypassword --provider ldap
+agentctl auth login -u admin -p secret     # Login (local)
+agentctl auth login -u admin -p pass --provider ldap
+agentctl auth register -u user -p pass --email user@x.com
+agentctl auth me                           # Current user
+agentctl auth change-password --current old --new new
+agentctl auth config                       # Gateway auth config
+agentctl auth logout                       # Revoke session
 ```
-
-On success, prints the access token. Export it to use authenticated commands:
-
-```bash
-export AGENT_GATEWAY_TOKEN=<token>
-```
-
-### Register
-
-```bash
-agentctl auth register -u newuser -p mypassword --email user@example.com --display-name "New User"
-```
-
-The first user registered is automatically assigned the `admin` role.
-
-### Current User
-
-```bash
-agentctl auth me
-```
-
-Shows username, role, auth provider, and allowed namespaces.
-
-### Change Password
-
-```bash
-agentctl auth change-password --current oldpass --new newpass
-```
-
-Available only for local authentication users.
-
-### Logout
-
-```bash
-agentctl auth logout
-```
-
-Revokes the current session and refresh token.
-
-### Auth Configuration
-
-```bash
-agentctl auth config
-```
-
-Shows the gateway's authentication configuration (enabled providers, OIDC/SAML settings, etc.).
 
 ---
 
 ## Admin User Management
 
-All admin commands require the `admin` role.
-
-### List Users
-
 ```bash
-agentctl admin users-list
+agentctl admin users                       # List all users
+agentctl admin user-create -u bob -p pass --role operator
+agentctl admin user-update 42 --role admin --active
+agentctl admin user-delete 42              # Delete user
 ```
 
-### Create a User
-
-```bash
-agentctl admin users-create -u newoperator -p securepass --role operator --namespace default --namespace staging
-```
-
-| Option | Description |
-|--------|-------------|
-| `--username`, `-u` | Username (3-128 chars, required) |
-| `--password`, `-p` | Password (8+ chars, required) |
-| `--role` | Role: `viewer`, `operator`, or `admin` (default: `viewer`) |
-| `--email` | Email address |
-| `--display-name` | Display name |
-| `--namespace` | Allowed namespaces (repeatable) |
-
-### Update a User
-
-```bash
-agentctl admin users-update 42 --role admin --active
-agentctl admin users-update 42 --inactive  # disable account
-agentctl admin users-update 42 --namespace production --namespace staging
-```
-
-| Option | Description |
-|--------|-------------|
-| `--role` | New role: `viewer`, `operator`, or `admin` |
-| `--display-name` | New display name |
-| `--active/--inactive` | Enable or disable the user account |
-| `--namespace` | Replace allowed namespaces (repeatable) |
+Roles: `viewer`, `operator`, `admin`.
 
 ---
 
 ## Credentials
 
-Manage git and GitHub credentials attached to agents. Credentials are stored as Kubernetes Secrets and mounted into agent pods.
-
-### Git Credentials
-
 ```bash
-# Token-based authentication
-agentctl credentials git-set my-agent --method token --token ghp_xxxx
-
-# Basic auth (username + password)
-agentctl credentials git-set my-agent --method basic --username user --password pass
-
-# SSH key authentication
+# Git credentials
+agentctl credentials git-set my-agent --method token --token ghp_xxx
+agentctl credentials git-set my-agent --method basic --username u --password p
 agentctl credentials git-set my-agent --method ssh --ssh-key-file ~/.ssh/id_ed25519
-
-# Show credential metadata (does not reveal secrets)
 agentctl credentials git-show my-agent
+agentctl credentials git-delete my-agent
 
-# Delete credentials
-agentctl credentials git-delete my-agent --yes
-```
-
-| Option | Description |
-|--------|-------------|
-| `--method` | Auth method: `token`, `basic`, or `ssh` (required) |
-| `--token` | PAT token (for `token` method) |
-| `--username` | Username (for `basic` method) |
-| `--password` | Password (for `basic` method) |
-| `--ssh-key-file` | Path to SSH private key file (for `ssh` method) |
-
-If credentials are not provided via options, interactive prompts will appear.
-
-### GitHub MCP Credentials
-
-```bash
-# Set GitHub token for the GitHub MCP sidecar
-agentctl credentials github-set my-agent --token ghp_xxxx
-
-# Show metadata
+# GitHub MCP credentials
+agentctl credentials github-set my-agent --token ghp_xxx
 agentctl credentials github-show my-agent
-
-# Delete
-agentctl credentials github-delete my-agent --yes
+agentctl credentials github-delete my-agent
 ```
 
 ---
 
-## Skills Catalog
-
-### List Skills
+## Skills
 
 ```bash
-agentctl skills list
-agentctl skills list --category "development"
-agentctl skills list --search "kubernetes"
+agentctl skills list                       # Skills catalog
+agentctl skills list --category development
+agentctl skills show <skill-id>            # Skill details + file previews
+agentctl skills tools                      # MCP tool sidecar categories
+agentctl skills hub                        # Shared MCP hub servers
 ```
-
-| Option | Short | Description |
-|--------|-------|-------------|
-| `--category` | `-c` | Filter by skill category |
-| `--search` | `-s` | Search by name or description |
-
-### Get Skill Details
-
-```bash
-agentctl skills get kubernetes-admin
-```
-
-Shows skill metadata, tags, file list, and previews Markdown/text content.
-
----
-
-## MCP Tools
-
-### List Tool Sidecar Categories
-
-```bash
-agentctl tools list
-```
-
-Shows available MCP tool sidecar types (code-exec, web-search, database, browser, documents, git, github, kubernetes, messaging, rag).
-
-### List MCP Hub Servers
-
-```bash
-agentctl tools hub
-```
-
-Shows shared MCP hub servers configured in the gateway, including transport type and connection details.
 
 ---
 
 ## Artifacts
 
-Download files produced by agent runs.
-
-### List Artifacts
-
 ```bash
-agentctl artifacts list my-agent
-```
-
-### Download a File
-
-```bash
-agentctl artifacts download my-agent output/results.json
-```
-
-### Download Workspace ZIP
-
-```bash
-agentctl artifacts zip my-agent
+agentctl artifacts list                    # List artifacts
+agentctl artifacts list --agent my-agent   # Filter by agent
+agentctl artifacts list --workflow my-wf --run-id abc
+agentctl artifacts show <artifact-id>      # Artifact metadata
+agentctl artifacts download <artifact-id>  # Download to file
+agentctl artifacts download <id> --output results.json
 ```
 
 ---
 
-## Apply (Generic Resource Management)
+## Providers
 
 ```bash
-agentctl apply examples/sample-agent.yaml
-agentctl apply examples/sample-workflow.yaml
+agentctl providers list                    # List LLM providers
+agentctl providers show openai             # Provider details
+agentctl providers models openai           # Available models
+agentctl providers health openai           # Connectivity check
 ```
-
-`apply` auto-detects the resource kind from the `kind` field or document structure:
-- `AIAgent` or documents with a `model` field → Agent
-- `AgentWorkflow` or documents with a `steps` field → Workflow
-
-If the resource already exists (HTTP 409), it falls back to an update (PATCH).
-
----
-
-## File Formats
-
-`agentctl` accepts two file formats for resource creation and updates:
-
-### 1. Kubernetes Custom Resource Manifests
-
-```yaml
-apiVersion: kubesynapse.ai/v1alpha1
-kind: AIAgent
-metadata:
-  name: research-assistant
-  namespace: default
-        - name: API_KEY
-          value: secret
-  a2a:
-    allowedCallers:
-      - name: coordinator
-        namespace: default
-  skills:
-    files:
-      analysis/guidelines.md: |
-        # Analysis Guidelines
-        Follow these steps when analyzing data...
-```
-
-### 2. Direct API Payload (snake_case or camelCase)
-
-```yaml
-name: research-assistant
-model: gpt-4
-system_prompt: "You are a research assistant."
-runtime_kind: opencode
-storage_size: 2Gi
-enable_gvisor: false
-mcp_servers:
-  - web-search
-  - documents
-```
-
-Both JSON and YAML are supported.
-
----
-
-## JSON Output
-
-Every command supports `--json` for machine-readable output:
-
-```bash
-agentctl agents list --json | jq '.[].name'
-agentctl workflows status my-workflow --json | jq '.phase'
-agentctl approvals list --json | jq '.[].approval_name'
-```
-
----
-
-## Environment Variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `AGENT_GATEWAY_URL` | API gateway base URL | `http://localhost:8080` |
-| `AGENT_GATEWAY_TOKEN` | Bearer token for authentication | (empty) |
-| `AGENT_NAMESPACE` | Default Kubernetes namespace | `default` |
 
 ---
 
 ## Complete Command List
 
 ```
-agentctl health                         # Gateway health check
-agentctl config                         # Show CLI configuration
-agentctl version                        # Show CLI version
-agentctl apply FILE                     # Create or update resource from file
+Top-level:
+  health                                   Gateway health check
+  apply FILE                               Create or update resource
+  invoke AGENT PROMPT                      Invoke agent (shortcut)
+  logs AGENT                               Agent logs (shortcut)
 
-agentctl invoke AGENT PROMPT            # Invoke agent
-agentctl logs AGENT                     # Fetch/stream agent logs
+agents:
+  agents list                              List agents
+  agents show NAME                         Agent details
+  agents create -f FILE                    Create agent
+  agents update NAME [-f FILE]             Update agent
+  agents delete NAME                       Delete agent
+  agents discover NAME                     A2A peer discovery
+  agents invoke AGENT PROMPT               Invoke agent
+  agents logs AGENT                        Fetch agent logs
+  agents live-events AGENT                 Stream live events
 
-agentctl agents list                    # List agents
-agentctl agents create -f FILE          # Create agent
-agentctl agents show NAME               # Show agent details
-agentctl agents update NAME [-f FILE]   # Update agent
-agentctl agents delete NAME             # Delete agent
-agentctl agents discover NAME           # Show A2A peer discovery
-agentctl agents live-events NAME        # Stream live agent events
+workflows:
+  workflows list                           List workflows
+  workflows show NAME                      Workflow details
+  workflows create -f FILE                 Create workflow
+  workflows update NAME -f FILE            Update workflow
+  workflows delete NAME                    Delete workflow
+  workflows trigger NAME [INPUT]           Trigger execution
+  workflows cancel NAME                    Cancel workflow
+  workflows status NAME                    Run status
+  workflows logs NAME                      Workflow logs
 
-agentctl workflows list                 # List workflows
-agentctl workflows create -f FILE       # Create workflow
-agentctl workflows show NAME            # Show workflow details
-agentctl workflows update NAME -f FILE  # Update workflow
-agentctl workflows delete NAME          # Delete workflow
-agentctl workflows trigger NAME [INPUT] # Trigger workflow execution
-agentctl workflows cancel NAME          # Cancel running workflow
-agentctl workflows status NAME          # Show focused run status
-agentctl workflows logs NAME            # Fetch workflow logs
+runs:
+  runs approvals                           List pending approvals
+  runs approve NAME                        Approve request
+  runs deny NAME                           Deny request
+  runs policies                            List policies
+  runs apply FILE                          Create/update resource
 
-agentctl approvals list                 # List pending approvals
-agentctl approvals show NAME            # Show approval details
-agentctl approvals approve NAME         # Approve request
-agentctl approvals deny NAME            # Deny request
+observatory:
+  observatory health                       Platform health
+  observatory metrics                      Agent/system metrics
+  observatory traces                       Execution traces
+  observatory trace ID                     Trace detail
+  observatory alerts                       Active alerts
+  observatory signals                      Signal watch events
+  observatory export                       Export traces
 
-agentctl policies list                  # List policies
+chat:
+  chat send AGENT MESSAGE                  Send message
+  chat threads                             List threads
+  chat history ID                          Message history
+  chat interactive AGENT                   REPL session
 
-agentctl auth login                     # Login (local/LDAP)
-agentctl auth logout                    # Logout and revoke session
-agentctl auth register                  # Register new user
-agentctl auth me                        # Show current user
-agentctl auth change-password           # Change password
-agentctl auth config                    # Show auth configuration
+webhooks:
+  webhooks list                            List webhooks
+  webhooks show NAME                       Webhook details
+  webhooks create NAME                     Create webhook
+  webhooks delete NAME                     Delete webhook
+  webhooks triggers                        List triggers
+  webhooks trigger-show ID                 Trigger detail
+  webhooks dispatch NAME                   Dispatch webhook
 
-agentctl admin users-list               # List all users (admin)
-agentctl admin users-create             # Create user (admin)
-agentctl admin users-update ID          # Update user (admin)
+auth:
+  auth login                               Login
+  auth logout                              Logout
+  auth register                            Register user
+  auth me                                  Current user
+  auth change-password                     Change password
+  auth config                              Auth configuration
 
-agentctl credentials git-set AGENT      # Set git credentials
-agentctl credentials git-show AGENT     # Show git credential metadata
-agentctl credentials git-delete AGENT   # Delete git credentials
-agentctl credentials github-set AGENT   # Set GitHub credentials
-agentctl credentials github-show AGENT  # Show GitHub credential metadata
-agentctl credentials github-delete AGENT # Delete GitHub credentials
+admin:
+  admin users                              List users
+  admin user-create                        Create user
+  admin user-update ID                     Update user
+  admin user-delete ID                     Delete user
 
-agentctl skills list                    # List skills catalog
-agentctl skills get ID                  # Show skill details
+credentials:
+  credentials git-set AGENT                Set git credentials
+  credentials git-show AGENT               Show git metadata
+  credentials git-delete AGENT             Delete git creds
+  credentials github-set AGENT             Set GitHub creds
+  credentials github-show AGENT            Show GitHub metadata
+  credentials github-delete AGENT          Delete GitHub creds
 
-agentctl tools list                     # List MCP tool sidecars
-agentctl tools hub                      # List shared MCP hub servers
+skills:
+  skills list                              Skills catalog
+  skills show ID                           Skill detail
+  skills tools                             MCP tool categories
+  skills hub                               MCP hub servers
 
-agentctl artifacts list AGENT           # List agent artifacts
-agentctl artifacts download AGENT FILE  # Download a single artifact
-agentctl artifacts zip AGENT            # Download workspace ZIP
+artifacts:
+  artifacts list                           List artifacts
+  artifacts show ID                        Artifact detail
+  artifacts download ID                    Download artifact
+
+providers:
+  providers list                           List providers
+  providers show NAME                      Provider detail
+  providers models NAME                    Provider models
+  providers health NAME                    Provider health
+
+profile:
+  profile list                             List profiles
+  profile use NAME                         Switch profile
+  profile create NAME                      Create profile
+  profile update NAME                      Update profile
+  profile delete NAME                      Delete profile
+  profile login                            Save token
+  profile logout                           Clear token
 ```
 
 ---
 
-## Examples
+## Development
 
 ```bash
-# Full agent lifecycle
-agentctl agents create -f examples/sample-agent.yaml
-agentctl invoke research-assistant "What is Kubernetes?"
-agentctl invoke research-assistant "Tell me more" --thread-id <thread-id> --stream
-agentctl logs research-assistant --follow
-agentctl agents delete research-assistant --yes
+cd cli
+pip install -e ".[dev]"
+pytest tests/ -v              # 78+ tests
+ruff check src/agentctl/      # Lint
+```
 
-# Workflow execution
-agentctl workflows create -f examples/sample-workflow.yaml
-agentctl workflows trigger research-report-pipeline "Analyze Q4 data"
-agentctl workflows status research-report-pipeline
-agentctl approvals list
-agentctl approvals approve approval-xyz --reason "Looks good"
-agentctl workflows cancel research-report-pipeline --yes
+### Package Structure
 
-# Explicit A2A invocation
-agentctl invoke coordinator "Ask the reviewer for feedback" \
-  --a2a-target-agent reviewer \
-  --a2a-target-namespace dev \
-  --a2a-timeout-seconds 30
-
-# OpenCode runtime controls
-agentctl invoke opencode-assistant "Summarize /workspace notes" \
-  --max-turns 20 \
-  --system "Stay read-only" \
-  --working-directory "/workspace/project"
-
-# OpenCode with structured output
-agentctl invoke opencode-assistant "Extract API endpoints" \
-  --output-format json \
-  --output-schema-file schema.json \
-  --max-retries 3
-
-# A2A cross-namespace routing
-agentctl invoke my-agent "Get review from team-b" \
-  --a2a-target-agent reviewer \
-  --a2a-target-namespace team-b \
-  --a2a-timeout-seconds 30
-
-# Credential management
-agentctl credentials git-set my-agent --method token --token ghp_xxxx
-agentctl credentials github-set my-agent --token ghp_xxxx
-
-# Admin user management
-agentctl admin users-create -u operator1 -p securepass --role operator --namespace default
-agentctl admin users-update 42 --role admin --namespace production --namespace staging
-agentctl admin users-list
+```
+cli/src/agentctl/
+  __init__.py         Version
+  __main__.py         Entry point
+  app.py              Typer app + global options
+  config.py           Profile persistence, token store, settings resolution
+  client.py           HTTP client with retry, pagination, SSE
+  output.py           Rich formatters (table/json/yaml/wide/name)
+  commands/
+    __init__.py       Registration + top-level commands
+    _parsers.py       CRD/flat payload normalization
+    agents.py         Agent CRUD, invoke, logs, live-events
+    workflows.py      Workflow CRUD, trigger, cancel, status, logs
+    runs.py           Approvals, policies, apply
+    auth.py           Login, register, sessions
+    admin.py          User management
+    credentials.py    Git/GitHub credentials
+    skills.py         Skills catalog, MCP tools, hub
+    profile.py        Profile management
+    observatory.py    Metrics, traces, alerts, signals, health
+    webhooks.py       Webhooks, triggers, dispatch
+    chat.py           Send, threads, history, interactive
+    artifacts.py      Artifact list, show, download
+    providers.py      Provider list, show, models, health
 ```
