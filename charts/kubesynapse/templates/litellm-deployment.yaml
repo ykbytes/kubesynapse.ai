@@ -1,0 +1,348 @@
+{{- if .Values.litellm.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "kubesynapse.fullname" . }}-litellm
+  labels:
+    {{- include "kubesynapse.labels" . | nindent 4 }}
+    app.kubernetes.io/component: litellm
+    app: litellm
+spec:
+{{- if not (and .Values.autoscaling (.Values.autoscaling.enabled)) }}
+  replicas: {{ .Values.litellm.replicaCount }}
+{{- end }}
+  revisionHistoryLimit: {{ .Values.litellm.revisionHistoryLimit | default 3 }}
+  selector:
+    matchLabels:
+      app: litellm
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/litellm-configmap.yaml") . | sha256sum }}
+        checksum/secrets: {{ include (print $.Template.BasePath "/external-secrets.yaml") . | sha256sum }}
+      labels:
+        {{- include "kubesynapse.labels" . | nindent 8 }}
+        app.kubernetes.io/component: litellm
+        app: litellm
+    spec:
+{{- with (include "kubesynapse.imagePullSecrets" .) }}
+{{ . | nindent 6 }}
+{{- end }}
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: litellm-schema-sync
+          image: "{{ .Values.litellm.image.repository }}:{{ .Values.litellm.image.tag }}"
+          imagePullPolicy: {{ .Values.litellm.image.pullPolicy }}
+          command: ["/bin/sh", "-lc"]
+          args:
+            - cp /app/schema.prisma /work/schema.prisma
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: prisma-schema
+              mountPath: /work
+{{- if .Values.postgresql.enabled }}
+        - name: litellm-db-bootstrap
+          image: "{{ .Values.postgresql.image.repository }}:{{ .Values.postgresql.image.tag }}"
+          imagePullPolicy: {{ .Values.postgresql.image.pullPolicy | default "IfNotPresent" }}
+          command: ["/bin/sh", "-lc"]
+          args:
+            - >-
+              for attempt in $(seq 1 30); do
+                if [ "$(psql -Atqc "SELECT 1 FROM pg_database WHERE datname = 'litellm'")" = "1" ]; then
+                  exit 0;
+                fi;
+                if psql -v ON_ERROR_STOP=1 -c "CREATE DATABASE litellm OWNER {{ .Values.postgresql.username }}"; then
+                  exit 0;
+                fi;
+                echo "[litellm-db-bootstrap] ensure database failed (attempt ${attempt}/30), retrying in 5s";
+                sleep 5;
+              done;
+              echo "[litellm-db-bootstrap] unable to ensure litellm database exists";
+              exit 1
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          env:
+            - name: PGHOST
+              value: {{ printf "%s-postgresql" (include "kubesynapse.fullname" .) | quote }}
+            - name: PGPORT
+              value: {{ .Values.postgresql.service.port | quote }}
+            - name: PGUSER
+              value: {{ .Values.postgresql.username | quote }}
+            - name: PGDATABASE
+              value: postgres
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kubesynapse.fullname" . }}-llm-api-keys
+                  key: DATABASE_PASSWORD
+                  optional: true
+{{- end }}
+        - name: litellm-db-init
+          image: "{{ .Values.litellm.image.repository }}:{{ .Values.litellm.image.tag }}"
+          imagePullPolicy: {{ .Values.litellm.image.pullPolicy }}
+          command: ["/bin/sh", "-lc"]
+          args:
+            - >-
+              for attempt in $(seq 1 30); do
+                prisma db push --schema=/app/schema.prisma --accept-data-loss --skip-generate && exit 0;
+                echo "[litellm-db-init] prisma db push failed (attempt ${attempt}/30), retrying in 5s";
+                sleep 5;
+              done;
+              echo "[litellm-db-init] prisma db push failed after 30 attempts";
+              exit 1
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: config
+              mountPath: /app/config.yaml
+              subPath: config.yaml
+            - name: prisma-schema
+              mountPath: /app/schema.prisma
+              subPath: schema.prisma
+            - name: tmp
+              mountPath: /tmp
+          env:
+            - name: HOME
+              value: /home/litellm
+            - name: XDG_CACHE_HOME
+              value: /home/litellm/.cache
+            - name: PRISMA_HOME_DIR
+              value: /home/litellm
+{{- if .Values.postgresql.enabled }}
+            - name: DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kubesynapse.fullname" . }}-llm-api-keys
+                  key: DATABASE_PASSWORD
+                  optional: true
+            - name: DATABASE_URL
+              value: {{ printf "postgresql://%s:$(DATABASE_PASSWORD)@%s-postgresql:%s/litellm" .Values.postgresql.username (include "kubesynapse.fullname" .) (toString (.Values.postgresql.service.port | default 5432)) | quote }}
+{{- else }}
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kubesynapse.fullname" . }}-llm-api-keys
+                  key: DATABASE_URL
+                  optional: true
+{{- end }}
+      containers:
+        - name: litellm
+          image: "{{ .Values.litellm.image.repository }}:{{ .Values.litellm.image.tag }}"
+          imagePullPolicy: {{ .Values.litellm.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false  # Prisma engine needs writable HOME for lock/socket files
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            capabilities:
+              drop:
+                - ALL
+          ports:
+            - name: http
+              containerPort: 4000
+              protocol: TCP
+          volumeMounts:
+            - name: config
+              mountPath: /app/config.yaml
+              subPath: config.yaml
+            - name: prisma-schema
+              mountPath: /app/schema.prisma
+              subPath: schema.prisma
+            - name: tmp
+              mountPath: /tmp
+          env:
+            - name: HOME
+              value: /home/litellm
+            - name: XDG_CACHE_HOME
+              value: /home/litellm/.cache
+            - name: PRISMA_HOME_DIR
+              value: /home/litellm
+            - name: STORE_MODEL_IN_DB
+              value: "True"
+            - name: LITELLM_LOG
+              value: "INFO"
+            - name: DISABLE_SCHEMA_UPDATE
+              value: "true"
+            - name: LITELLM_LOCAL_MODEL_COST_MAP
+              value: "True"
+{{- if .Values.postgresql.enabled }}
+            - name: DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kubesynapse.fullname" . }}-llm-api-keys
+                  key: DATABASE_PASSWORD
+                  optional: true
+            - name: DATABASE_URL
+              value: {{ printf "postgresql://%s:$(DATABASE_PASSWORD)@%s-postgresql:%s/litellm" .Values.postgresql.username (include "kubesynapse.fullname" .) (toString (.Values.postgresql.service.port | default 5432)) | quote }}
+{{- else }}
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kubesynapse.fullname" . }}-llm-api-keys
+                  key: DATABASE_URL
+                  optional: true
+{{- end }}
+            - name: LITELLM_MASTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kubesynapse.fullname" . }}-llm-api-keys
+                  key: LITELLM_MASTER_KEY
+                  optional: true
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kubesynapse.fullname" . }}-llm-api-keys
+                  key: OPENAI_API_KEY
+                  optional: true
+            - name: OPENROUTER_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kubesynapse.fullname" . }}-llm-api-keys
+                  key: OPENROUTER_API_KEY
+                  optional: true
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kubesynapse.fullname" . }}-llm-api-keys
+                  key: ANTHROPIC_API_KEY
+                  optional: true
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kubesynapse.fullname" . }}-llm-api-keys
+                  key: REDIS_PASSWORD
+                  optional: true
+            # NOTE: GITHUB_COPILOT_TOKEN intentionally omitted — the device auth
+            # flow blocks LiteLLM startup for 5+ minutes when no valid token exists.
+            # GitHub Copilot models will be skipped until a valid token is provided.
+          args: ["--config", "/app/config.yaml"]
+          resources:
+{{ toYaml .Values.litellm.resources | indent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /health/liveliness
+              port: 4000
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health/readiness
+              port: 4000
+            initialDelaySeconds: 15
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          startupProbe:
+            httpGet:
+              path: /health/liveliness
+              port: 4000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 30
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "sleep 15"]
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "kubesynapse.fullname" . }}-litellm-config
+        - name: prisma-schema
+          emptyDir: {}
+        - name: tmp
+          emptyDir:
+            sizeLimit: 512Mi
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kubesynapse.fullname" . }}-litellm-isolation
+  labels:
+    {{- include "kubesynapse.labels" . | nindent 4 }}
+    app.kubernetes.io/component: litellm
+    app: litellm
+spec:
+  podSelector:
+    matchLabels:
+      app: litellm
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: ai-agent
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              app: ai-agent
+        - podSelector:
+            matchLabels:
+              app: api-gateway
+      ports:
+        - protocol: TCP
+          port: 4000
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: redis
+      ports:
+        - protocol: TCP
+          port: 6379
+    - to:
+        - podSelector:
+            matchLabels:
+              app: postgresql
+      ports:
+        - protocol: TCP
+          port: 5432
+    # DNS egress — allow resolution via kube-dns in any namespace
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Allow HTTPS to internet for model cost map and provider API calls
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443
+{{- end }}

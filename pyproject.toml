@@ -1,0 +1,100 @@
+[project]
+name = "kubesynapse"
+version = "0.1.0"
+requires-python = ">=3.11"
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+show_error_codes = true
+plugins = ["pydantic.mypy", "sqlalchemy.ext.mypy.plugin"]
+exclude = [
+    "tests/",
+    "web-ui/",
+    "cli/",
+    "docs/",
+    "examples/",
+    "deploy/",
+    "scripts/",
+]
+
+[[tool.mypy.overrides]]
+module = [
+    "kopf.*",
+    "croniter.*",
+    "opensandbox.*",
+    "opensandbox_code_interpreter.*",
+    "prometheus_fastapi_instrumentator.*",
+    "pythonjsonlogger.*",
+    "langchain_core.*",
+    "langchain_openai.*",
+]
+ignore_missing_imports = true
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = [
+    "E",     # pycodestyle errors
+    "W",     # pycodestyle warnings
+    "F",     # pyflakes
+    "I",     # isort
+    "B",     # flake8-bugbear
+    "C4",    # flake8-comprehensions
+    "UP",    # pyupgrade
+    "S",     # flake8-bandit (security)
+    "SIM",   # flake8-simplify
+    "RUF",   # ruff-specific rules
+]
+ignore = [
+    "E501",  # line length handled by formatter
+    "S101",  # assert is fine in tests
+    "S104",  # binding to 0.0.0.0 is intentional in containers
+    "S603",  # subprocess calls are intentional in sandbox tools
+    "S607",  # partial executable path acceptable in container context
+    "B008",  # FastAPI Depends() in default args is standard pattern
+    "UP042", # (str, Enum) is intentional and widely compatible
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S101", "S105", "S106", "S108", "S110", "SIM117", "RUF003", "RUF012"]  # allow assert, passwords, temp files, nested with, unicode quotes, mutable defaults in tests
+"api-gateway/tests/**/*.py" = ["S101", "S105", "S106", "S108", "S110", "SIM117", "RUF003", "RUF012"]  # same for api-gateway tests
+"api-gateway/main.py" = ["E402", "S105"]  # local imports after sys.path manipulation; S105 false positives on OAuth method names
+"api-gateway/main_old.py" = ["E402", "S105"]  # legacy monolith — same exemptions
+"api-gateway/_core.py" = ["E402", "F401", "F821", "S105", "S110"]  # E402: late imports; F401: imports used by router star-imports; F821: names resolved at import time; S105/S110: pre-existing
+"api-gateway/routers/**/*.py" = ["F403", "F405", "E402", "S105"]  # F403/F405: star imports from _core; E402: legacy late imports; S105: false positives on URL strings
+"opencode-runtime/main.py" = ["E402"]  # late imports for optional deps and backward compat
+"operator/state_store.py" = ["E402"]  # late imports for optional deps
+
+[tool.ruff.lint.isort]
+known-first-party = [
+    "operator",
+    "agent_logic",
+    "guardrails",
+    "hitl",
+    "env_utils",
+    "opensandbox_tools",
+    "utils",
+    "state_store",
+    "auth_store",
+    "enterprise_auth",
+    "jwt_utils",
+    "api_gateway",
+    "opencode_runtime",
+]
+
+[tool.pytest.ini_options]
+addopts = "--import-mode=importlib"
+markers = [
+    "integration: marks tests that require a running OpenCode server (deselect with '-m \"not integration\"')",
+]

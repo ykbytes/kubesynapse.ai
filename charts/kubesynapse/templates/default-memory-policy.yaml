@@ -1,0 +1,26 @@
+{{- if and .Values.memoryPolicy (eq (toString (default false .Values.memoryPolicy.enabled)) "true") -}}
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AgentPolicy
+metadata:
+  name: {{ .Values.memoryPolicy.name | default "default-memory-policy" }}
+  namespace: {{ .Values.memoryPolicy.namespace | default .Release.Namespace }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-delete-policy: before-hook-creation
+    helm.sh/hook-weight: "5"
+  labels:
+    app.kubernetes.io/name: default-memory-policy
+    app.kubernetes.io/component: memory-policy
+    kubesynapse.ai/default-policy: "true"
+spec:
+  memoryPolicy:
+    maxInjectedMemories: {{ .Values.memoryPolicy.maxInjectedMemories | default 8 }}
+    maxInjectedChars: {{ .Values.memoryPolicy.maxInjectedChars | default 2400 }}
+    autoPromote: {{ .Values.memoryPolicy.autoPromote | default true }}
+    {{- if .Values.memoryPolicy.allowedMemoryTypes }}
+    allowedMemoryTypes:
+      {{- range .Values.memoryPolicy.allowedMemoryTypes }}
+      - {{ . | quote }}
+      {{- end }}
+    {{- end }}
+{{- end }}

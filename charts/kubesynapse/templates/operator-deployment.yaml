@@ -1,0 +1,282 @@
+{{- if .Values.operator.enabled }}
+{{- $opencodeRuntime := .Values.opencodeRuntime | default dict -}}
+{{- $opencodeLimits := get $opencodeRuntime "limits" | default dict -}}
+{{- $opencodeAutonomy := get $opencodeRuntime "autonomy" | default dict -}}
+{{- $agentRuntime := .Values.agentRuntime | default dict -}}
+{{- $opencodeEnv := deepCopy (get $opencodeRuntime "env" | default dict) -}}
+{{- $opencodeAdminEnv := deepCopy (get $opencodeRuntime "admin" | default dict) -}}
+{{- if hasKey $opencodeLimits "maxPromptChars" }}{{- $_ := set $opencodeEnv "OPENCODE_MAX_PROMPT_CHARS" (printf "%v" (get $opencodeLimits "maxPromptChars")) -}}{{- end -}}
+{{- if hasKey $opencodeLimits "maxSystemPromptChars" }}{{- $_ := set $opencodeEnv "OPENCODE_MAX_SYSTEM_PROMPT_CHARS" (printf "%v" (get $opencodeLimits "maxSystemPromptChars")) -}}{{- end -}}
+{{- if hasKey $opencodeLimits "maxTeamContextChars" }}{{- $_ := set $opencodeEnv "OPENCODE_MAX_TEAM_CONTEXT_CHARS" (printf "%v" (get $opencodeLimits "maxTeamContextChars")) -}}{{- end -}}
+{{- if hasKey $opencodeLimits "modelContextLimit" }}{{- $_ := set $opencodeEnv "OPENCODE_MODEL_CONTEXT_LIMIT" (printf "%v" (get $opencodeLimits "modelContextLimit")) -}}{{- end -}}
+{{- if hasKey $opencodeLimits "modelOutputLimit" }}{{- $_ := set $opencodeEnv "OPENCODE_MODEL_OUTPUT_LIMIT" (printf "%v" (get $opencodeLimits "modelOutputLimit")) -}}{{- end -}}
+{{- if hasKey $opencodeAutonomy "sessionInitOnCreate" }}{{- $_ := set $opencodeEnv "OPENCODE_SESSION_INIT_ON_CREATE" (printf "%v" (get $opencodeAutonomy "sessionInitOnCreate")) -}}{{- end -}}
+{{- if hasKey $opencodeAutonomy "maxRetries" }}{{- $_ := set $opencodeEnv "OPENCODE_AUTONOMOUS_MAX_RETRIES" (printf "%v" (get $opencodeAutonomy "maxRetries")) -}}{{- end -}}
+{{- if hasKey $opencodeAutonomy "maxTurns" }}{{- $_ := set $opencodeEnv "OPENCODE_AUTONOMOUS_MAX_TURNS" (printf "%v" (get $opencodeAutonomy "maxTurns")) -}}{{- end -}}
+{{- if hasKey $opencodeAutonomy "agentSteps" }}{{- $_ := set $opencodeEnv "OPENCODE_AGENT_STEPS" (printf "%v" (get $opencodeAutonomy "agentSteps")) -}}{{- end -}}
+{{- if hasKey $opencodeAutonomy "compactionTokenThreshold" }}{{- $_ := set $opencodeEnv "OPENCODE_COMPACTION_TOKEN_THRESHOLD" (printf "%v" (get $opencodeAutonomy "compactionTokenThreshold")) -}}{{- end -}}
+{{- if hasKey $opencodeAutonomy "planThresholdChars" }}{{- $_ := set $opencodeEnv "OPENCODE_PLAN_THRESHOLD_CHARS" (printf "%v" (get $opencodeAutonomy "planThresholdChars")) -}}{{- end -}}
+{{- if hasKey $opencodeAutonomy "structuredOutputRetryCount" }}{{- $_ := set $opencodeEnv "OPENCODE_STRUCTURED_OUTPUT_RETRY_COUNT" (printf "%v" (get $opencodeAutonomy "structuredOutputRetryCount")) -}}{{- end -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "kubesynapse.fullname" . }}-operator
+  labels:
+    {{- include "kubesynapse.labels" . | nindent 4 }}
+    app.kubernetes.io/component: operator
+    app: operator
+spec:
+{{- if not (and .Values.autoscaling (.Values.autoscaling.enabled)) }}
+  replicas: {{ .Values.operator.replicaCount | default 2 }}
+{{- end }}
+  revisionHistoryLimit: {{ .Values.operator.revisionHistoryLimit | default 3 }}
+  selector:
+    matchLabels:
+      app: operator
+  template:
+    metadata:
+      annotations:
+        checksum/secrets: {{ include (print $.Template.BasePath "/external-secrets.yaml") . | sha256sum }}
+      labels:
+        {{- include "kubesynapse.labels" . | nindent 8 }}
+        app.kubernetes.io/component: operator
+        app: operator
+    spec:
+{{- with (include "kubesynapse.imagePullSecrets" .) }}
+{{ . | nindent 6 }}
+{{- end }}
+      serviceAccountName: {{ include "kubesynapse.fullname" . }}-operator-sa
+      automountServiceAccountToken: true
+      terminationGracePeriodSeconds: 60
+{{- if .Values.scheduling.priorityClassName }}
+      priorityClassName: {{ .Values.scheduling.priorityClassName | quote }}
+{{- end }}
+{{- if .Values.scheduling.podAntiAffinity.enabled }}
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app: operator
+                topologyKey: kubernetes.io/hostname
+{{- end }}
+{{- if .Values.scheduling.topologySpread.enabled }}
+      topologySpreadConstraints:
+        - maxSkew: {{ .Values.scheduling.topologySpread.maxSkew }}
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: {{ .Values.scheduling.topologySpread.whenUnsatisfiable }}
+          labelSelector:
+            matchLabels:
+              app: operator
+        - maxSkew: {{ .Values.scheduling.topologySpread.maxSkew }}
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: {{ .Values.scheduling.topologySpread.whenUnsatisfiable }}
+          labelSelector:
+            matchLabels:
+              app: operator
+{{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 37
+        fsGroup: 37
+        seccompProfile:
+          type: RuntimeDefault
+      volumes:
+        - name: tmp
+          emptyDir: {}
+      containers:
+        - name: operator
+          image: "{{ .Values.operator.image.repository }}:{{ .Values.operator.image.tag }}"
+          imagePullPolicy: {{ .Values.operator.image.pullPolicy | default "IfNotPresent" }}
+          command: ["kopf"]
+          args: ["run", "/app/main.py", "--verbose", "--liveness=http://0.0.0.0:8080/healthz"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          ports:
+            - containerPort: 8080
+              name: http
+            - containerPort: 8081
+              name: readiness
+          env:
+            - name: HOME
+              value: /tmp
+            - name: XDG_CACHE_HOME
+              value: /tmp
+            - name: STATE_DB_ENABLED
+              value: {{ .Values.operator.stateDbEnabled | quote }}
+{{- if .Values.postgresql.enabled }}
+            - name: DATABASE_HOST
+              value: {{ printf "%s-postgresql" (include "kubesynapse.fullname" .) | quote }}
+            - name: DATABASE_PORT
+              value: {{ .Values.postgresql.service.port | quote }}
+            - name: DATABASE_NAME
+              value: {{ .Values.postgresql.database | quote }}
+            - name: DATABASE_USER
+              value: {{ .Values.postgresql.username | quote }}
+            - name: DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kubesynapse.fullname" . }}-llm-api-keys
+                  key: DATABASE_PASSWORD
+                  optional: true
+{{- else }}
+            - name: DATABASE_SQLITE_PATH
+              value: /tmp/kubesynapse-operator.db
+{{- end }}
+            - name: OPERATOR_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: OPERATOR_PEERING_NAME
+              value: {{ printf "%s-operator-peering" (include "kubesynapse.fullname" .) | quote }}
+            - name: LITELLM_SVC_NAME
+              value: {{ include "kubesynapse.fullname" . }}-litellm
+            - name: LLM_SECRET_NAME
+              value: {{ include "kubesynapse.fullname" . }}-llm-api-keys
+            - name: OPENCODE_RUNTIME_IMAGE
+              value: "{{ .Values.opencodeRuntime.image.repository }}:{{ .Values.opencodeRuntime.image.tag }}"
+            - name: OPENCODE_RUNTIME_IMAGE_PULL_POLICY
+              value: {{ .Values.opencodeRuntime.image.pullPolicy | default "IfNotPresent" | quote }}
+            - name: PI_RUNTIME_IMAGE
+              value: "{{ .Values.piRuntime.image.repository }}:{{ .Values.piRuntime.image.tag }}"
+            - name: PI_RUNTIME_IMAGE_PULL_POLICY
+              value: {{ .Values.piRuntime.image.pullPolicy | default "IfNotPresent" | quote }}
+            - name: MISTRAL_VIBE_RUNTIME_IMAGE
+              value: "{{ .Values.mistralVibeRuntime.image.repository }}:{{ .Values.mistralVibeRuntime.image.tag }}"
+            - name: MISTRAL_VIBE_RUNTIME_IMAGE_PULL_POLICY
+              value: {{ .Values.mistralVibeRuntime.image.pullPolicy | default "IfNotPresent" | quote }}
+            - name: OPENCODE_DEFAULT_PROVIDER
+              value: {{ .Values.opencodeRuntime.provider | default "litellm" | quote }}
+            - name: OPENCODE_RUNTIME_EXTRA_ENV_JSON
+              value: {{ $opencodeEnv | toJson | quote }}
+            - name: OPENCODE_ADMIN_OVERRIDES_JSON
+              value: {{ $opencodeAdminEnv | toJson | quote }}
+            - name: WORKER_IMAGE
+              value: "{{ .Values.operator.workerImage.repository }}:{{ .Values.operator.workerImage.tag }}"
+            - name: WORKER_IMAGE_PULL_POLICY
+              value: {{ .Values.operator.workerImage.pullPolicy | default "IfNotPresent" | quote }}
+            - name: IMAGE_PULL_SECRETS
+              value: {{ join "," .Values.global.imagePullSecrets | quote }}
+            # §security-P0: Workers use a dedicated, minimally-privileged SA.
+            # Was: kubesynapse-operator-sa (full cluster-wide access).
+            - name: WORKER_SERVICE_ACCOUNT_NAME
+              value: {{ include "kubesynapse.fullname" . }}-worker-sa
+            # §security-P0: tenant exec access opt-in (pods/exec, pods/portforward)
+            - name: TENANT_EXEC_ACCESS
+              value: {{ .Values.agentRuntime.tenantExecAccess | default false | toString | quote }}
+            # §security-P0: Immutable runtime configs (mounted read-only ConfigMaps)
+            - name: OPENCODE_IMMUTABLE_CONFIG
+              value: {{ .Values.opencodeRuntime.immutableConfig | default true | toString | quote }}
+            - name: PI_IMMUTABLE_CONFIG
+              value: {{ .Values.piRuntime.immutableConfig | default true | toString | quote }}
+            - name: WORKER_ARTIFACT_SIZE
+              value: {{ .Values.operator.workerArtifacts.size | quote }}
+            - name: WORKER_ARTIFACT_STORAGE_CLASS
+              value: {{ .Values.operator.workerArtifacts.storageClassName | quote }}
+            - name: WORKER_ACTIVE_DEADLINE_SECONDS
+              value: {{ .Values.operator.workerActiveDeadlineSeconds | quote }}
+            - name: WORKER_TTL_SECONDS_AFTER_FINISHED
+              value: {{ .Values.operator.workerTtlSecondsAfterFinished | quote }}
+            - name: WORKER_CPU_REQUEST
+              value: {{ .Values.operator.workerResources.requests.cpu | quote }}
+            - name: WORKER_MEMORY_REQUEST
+              value: {{ .Values.operator.workerResources.requests.memory | quote }}
+            - name: WORKER_CPU_LIMIT
+              value: {{ .Values.operator.workerResources.limits.cpu | quote }}
+            - name: WORKER_MEMORY_LIMIT
+              value: {{ .Values.operator.workerResources.limits.memory | quote }}
+            - name: AGENT_STORAGE_SIZE
+              value: {{ (($agentRuntime).storage).size | default "1Gi" | quote }}
+            - name: AGENT_RUNTIME_TIMEOUT_SECONDS
+              value: {{ .Values.operator.runtimeTimeoutSeconds | quote }}
+            - name: WORKFLOW_POLL_SECONDS
+              value: {{ .Values.operator.workflowPollSeconds | quote }}
+            - name: WORKFLOW_QUEUE_STALE_SECONDS
+              value: {{ .Values.operator.workflowQueueStaleSeconds | quote }}
+            - name: WORKFLOW_RUNNING_STALE_SECONDS
+              value: {{ .Values.operator.workflowRunningStaleSeconds | quote }}
+            - name: QDRANT_SVC_NAME
+              value: {{ include "kubesynapse.fullname" . }}-qdrant
+            - name: CLUSTER_SECRET_STORE
+              value: {{ .Values.operator.clusterSecretStoreName | default (printf "%s-secret-store" (include "kubesynapse.fullname" .)) | quote }}
+            - name: SECRET_PROVISIONING_MODE
+              value: {{ .Values.platformSecrets.mode | quote }}
+            - name: DEFAULT_LITELLM_MASTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kubesynapse.fullname" . }}-llm-api-keys
+                  key: LITELLM_MASTER_KEY
+                  optional: true
+            - name: DEFAULT_API_GATEWAY_SHARED_TOKEN
+              value: {{ include "kubesynapse.secretValue" (dict "value" .Values.platformSecrets.native.apiGatewaySharedToken "default" "your-bearer-token-here" "secretData" dict "key" "API_GATEWAY_SHARED_TOKEN") | quote }}
+            - name: API_GATEWAY_INTERNAL_URL
+              value: {{ printf "http://%s-api-gateway.%s.svc.cluster.local:8080" (include "kubesynapse.fullname" .) .Release.Namespace | quote }}
+            - name: AGENT_HITL_MODE
+              value: {{ ((($agentRuntime).hitl)).mode | default "enforce" | quote }}
+            - name: HITL_NOTIFICATION_WEBHOOK_URL
+              value: {{ ((($agentRuntime).hitl)).notificationWebhookUrl | default "" | quote }}
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ .Values.telemetry.otlpEndpoint | quote }}
+            - name: RUNTIME_SERVICE_ACCOUNT
+              value: {{ .Values.runtimeServiceAccount.name | quote }}
+            - name: RUNTIME_CLUSTER_ROLE
+              value: {{ include "kubesynapse.fullname" . }}-runtime-role
+            - name: MCP_HUB_NAMESPACE
+              value: {{ .Values.mcpHub.namespace | default "mcp-hub" | quote }}
+            - name: HELM_RELEASE_NAME
+              value: {{ include "kubesynapse.fullname" . | quote }}
+            - name: MCP_AUTH_SECRET_NAME
+              value: {{ .Values.mcpHub.auth.secretName | default (printf "%s-mcp-auth" (include "kubesynapse.fullname" .)) | quote }}
+            - name: AGENT_CPU_REQUEST
+              value: {{ ((($agentRuntime).resources).requests).cpu | default "100m" | quote }}
+            - name: AGENT_MEMORY_REQUEST
+              value: {{ ((($agentRuntime).resources).requests).memory | default "256Mi" | quote }}
+            - name: AGENT_CPU_LIMIT
+              value: {{ ((($agentRuntime).resources).limits).cpu | default "1" | quote }}
+            - name: AGENT_MEMORY_LIMIT
+              value: {{ ((($agentRuntime).resources).limits).memory | default "1Gi" | quote }}
+            {{- if .Values.mcpToolSidecars }}
+            - name: MCP_SIDECAR_CATALOG_JSON
+              value: {{ include "kubesynapse.mcpSidecarCatalogJson" . | quote }}
+            {{- end }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          resources:
+{{ toYaml .Values.operator.resources | indent 12 }}
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "sleep 15"]
+{{- end }}

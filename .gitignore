@@ -1,0 +1,75 @@
+# ===========================
+# Python
+# ===========================
+.venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# ===========================
+# Node / Web UI
+# ===========================
+web-ui/dist/
+web-ui/dist-public/
+web-ui/node_modules/
+web-ui/*.tsbuildinfo
+web-ui/vite.config.js
+web-ui/vite.config.d.ts
+
+# ===========================
+# Build artifacts
+# ===========================
+.tmp/
+dist/
+.build-tag.tmp
+.current-tag
+
+# ===========================
+# Lint / test output
+# ===========================
+flake8_output.txt
+mypy_out.txt
+mypy_output.txt
+.pytest-*.txt
+
+# ===========================
+# Local reference clones
+# ===========================
+tools-repos/
+mcp-catalog/
+codecodenewversionKUBESYNAPSE_kagent_reference/
+temp-pi-mono/
+.opencode/
+add_noqa.py
+api-gateway/fix_logger.py
+api-gateway/fix_main.py
+scripts/split_routes.py
+scripts/split_routes_v2.py
+
+# ===========================
+# Runtime / config
+# ===========================
+.sandbox-live.toml
+api-gateway/.local/
+tmp-worker-netpol.yaml
+
+# ===========================
+# OS
+# ===========================
+.DS_Store
+Thumbs.db
+
+# ===========================
+# Security — never commit these
+# ===========================
+*.pem
+*.key
+*.pfx
+id_rsa
+*.env
+credentials.json
+.env*
+*-credentials.*

@@ -1,0 +1,35 @@
+nameOverride: ""
+namespaceOverride: ""
+
+agent:
+  name: code-reviewer
+  model: gpt-4
+  policyRef: ""
+  systemPrompt: |
+    You are a senior code reviewer. Review code changes for correctness,
+    maintainability, test coverage, reliability, and security.
+
+    Prioritize concrete findings, explain impact clearly, and suggest the
+    smallest safe fix. Do not invent issues when the change is sound.
+  runtime:
+    kind: opencode
+    opencode:
+      configFiles: {}
+  storage:
+    size: 2Gi
+  enableGVisor: true
+  mcpServers: []
+  mcpSidecars: []
+  githubConfig: {}
+  gitConfig: {}
+  allowedNamespaces: {}
+  a2a: {}
+  skills:
+    files:
+      skills/code-review/SKILL.md: |
+        ---
+        name: code-review
+        description: Review diffs for bugs, regressions, unsafe changes, and missing tests.
+        ---
+        Focus on correctness first, then security, then maintainability.
+        Prefer actionable review comments with exact file paths and concise reasoning.

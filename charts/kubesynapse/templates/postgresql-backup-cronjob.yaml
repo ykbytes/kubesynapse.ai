@@ -1,0 +1,121 @@
+{{- if and .Values.postgresql.enabled .Values.backup.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "kubesynapse.fullname" . }}-postgresql-backup
+  labels:
+    {{- include "kubesynapse.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backup
+    app: postgresql-backup
+  annotations:
+    backup.velero.io/backup-volumes: backup-data
+spec:
+  schedule: {{ .Values.backup.schedule | default "0 2 * * *" | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: {{ .Values.backup.successfulJobsHistoryLimit | default 3 }}
+  failedJobsHistoryLimit: {{ .Values.backup.failedJobsHistoryLimit | default 3 }}
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            app: postgresql-backup
+        spec:
+          restartPolicy: OnFailure
+          terminationGracePeriodSeconds: 30
+          containers:
+            - name: pg-backup
+              image: {{ .Values.backup.image.repository | default "bitnami/postgresql" }}:{{ .Values.backup.image.tag | default "17" }}
+              imagePullPolicy: {{ .Values.backup.image.pullPolicy | default "IfNotPresent" }}
+              command:
+                - bash
+                - -c
+                - |
+                  set -euo pipefail
+                  TIMESTAMP=$(date -u +"%Y%m%dT%H%M%SZ")
+                  FILENAME="kubesynapse-pg-backup-${TIMESTAMP}.sql.gz"
+                  echo "[$(date -u)] Starting PostgreSQL backup..."
+
+                  {{- if .Values.backup.backend }}
+                  export AWS_ACCESS_KEY_ID="$BACKUP_S3_ACCESS_KEY"
+                  export AWS_SECRET_ACCESS_KEY="$BACKUP_S3_SECRET_KEY"
+                  {{- end }}
+
+                  pg_dump \
+                    -h "$PGHOST" \
+                    -p "$PGPORT" \
+                    -U "$PGUSER" \
+                    -d "$PGDATABASE" \
+                    --no-owner \
+                    --no-acl \
+                    --clean \
+                    --if-exists \
+                    | gzip > "/backup/$FILENAME"
+
+                  echo "[$(date -u)] Backup created: $FILENAME ($(du -h "/backup/$FILENAME" | cut -f1))"
+
+                  {{- if .Values.backup.backend }}
+                  {{- if eq .Values.backup.backend "s3" }}
+                  # Upload to S3-compatible storage
+                  if command -v aws &>/dev/null; then
+                    aws s3 cp "/backup/$FILENAME" "s3://${BACKUP_S3_BUCKET}/kubesynapse/${FILENAME}" {{- if .Values.backup.s3.endpoint }} --endpoint-url {{ .Values.backup.s3.endpoint | quote }}{{- end }}
+                    echo "[$(date -u)] Uploaded to S3."
+                  else
+                    echo "[$(date -u)] WARNING: aws CLI not installed, skipping S3 upload."
+                  fi
+                  {{- else if eq .Values.backup.backend "pvc" }}
+                  # Already on PVC — nothing more to do
+                  echo "[$(date -u)] Backup stored on PVC."
+                  {{- end }}
+                  {{- else }}
+                  echo "[$(date -u)] Backup stored on PVC."
+                  {{- end }}
+
+                  # Cleanup old backups (keep last N)
+                  cd /backup
+                  ls -t kubesynapse-pg-backup-*.sql.gz 2>/dev/null | tail -n +{{ add (.Values.backup.retentionCount | default 7) 1 }} | xargs -r rm -f
+                  echo "[$(date -u)] Cleanup completed. Backup job finished."
+              env:
+                - name: PGHOST
+                  value: {{ printf "%s-postgresql" (include "kubesynapse.fullname" .) | quote }}
+                - name: PGPORT
+                  value: {{ .Values.postgresql.service.port | default "5432" | quote }}
+                - name: PGDATABASE
+                  value: {{ .Values.postgresql.database | quote }}
+                - name: PGUSER
+                  value: {{ .Values.postgresql.username | quote }}
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "kubesynapse.fullname" . }}-llm-api-keys
+                      key: DATABASE_PASSWORD
+                {{- if .Values.backup.backend }}
+                - name: BACKUP_S3_BUCKET
+                  value: {{ .Values.backup.s3.bucket | quote }}
+                - name: BACKUP_S3_ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.backup.s3.credentialsSecretName | default (printf "%s-backup-s3" (include "kubesynapse.fullname" .)) | quote }}
+                      key: {{ .Values.backup.s3.accessKeyIdKey | default "access-key-id" | quote }}
+                - name: BACKUP_S3_SECRET_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.backup.s3.credentialsSecretName | default (printf "%s-backup-s3" (include "kubesynapse.fullname" .)) | quote }}
+                      key: {{ .Values.backup.s3.secretAccessKeyKey | default "secret-access-key" | quote }}
+                {{- end }}
+              volumeMounts:
+                - name: backup-data
+                  mountPath: /backup
+              resources:
+                requests:
+                  cpu: "100m"
+                  memory: "128Mi"
+                limits:
+                  cpu: "500m"
+                  memory: "512Mi"
+          volumes:
+            - name: backup-data
+              persistentVolumeClaim:
+                claimName: {{ .Values.backup.pvcName | default (printf "%s-postgresql-backup" (include "kubesynapse.fullname" .)) }}
+{{- end }}

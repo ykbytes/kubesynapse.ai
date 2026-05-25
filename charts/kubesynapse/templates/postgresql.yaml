@@ -1,0 +1,183 @@
+{{- if .Values.postgresql.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "kubesynapse.fullname" . }}-postgresql
+  labels:
+    app: postgresql
+spec:
+  type: ClusterIP
+  selector:
+    app: postgresql
+  ports:
+    - name: postgres
+      port: {{ .Values.postgresql.service.port | default 5432 }}
+      targetPort: postgres
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "kubesynapse.fullname" . }}-postgresql
+  labels:
+    app: postgresql
+spec:
+  serviceName: {{ include "kubesynapse.fullname" . }}-postgresql
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgresql
+  template:
+    metadata:
+      labels:
+        app: postgresql
+    spec:
+{{- with (include "kubesynapse.imagePullSecrets" .) }}
+{{ . | nindent 6 }}
+{{- end }}
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 70
+        runAsGroup: 70
+        fsGroup: 70
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: fix-permissions
+          image: "{{ .Values.postgresql.image.repository }}:{{ .Values.postgresql.image.tag }}"
+          command: ["sh", "-c", "chown -R 70:70 /var/lib/postgresql/data"]
+          securityContext:
+            runAsNonRoot: false
+            runAsUser: 0
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+      containers:
+        - name: postgresql
+          image: "{{ .Values.postgresql.image.repository }}:{{ .Values.postgresql.image.tag }}"
+          imagePullPolicy: {{ .Values.postgresql.image.pullPolicy | default "IfNotPresent" }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
+          ports:
+            - containerPort: {{ .Values.postgresql.service.port | default 5432 }}
+              name: postgres
+          env:
+            - name: POSTGRES_DB
+              value: {{ .Values.postgresql.database | quote }}
+            - name: POSTGRES_USER
+              value: {{ .Values.postgresql.username | quote }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kubesynapse.fullname" . }}-llm-api-keys
+                  key: DATABASE_PASSWORD
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: tmp
+              mountPath: /tmp
+            - name: initdb
+              mountPath: /docker-entrypoint-initdb.d
+          resources:
+{{ toYaml .Values.postgresql.resources | indent 12 }}
+          startupProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" -h 127.0.0.1 -p {{ .Values.postgresql.service.port | default 5432 }}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 18
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" -h 127.0.0.1 -p {{ .Values.postgresql.service.port | default 5432 }}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" -h 127.0.0.1 -p {{ .Values.postgresql.service.port | default 5432 }}
+            initialDelaySeconds: 20
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi
+        - name: initdb
+          configMap:
+            name: {{ include "kubesynapse.fullname" . }}-postgresql-initdb
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        {{- if .Values.backup.enabled }}
+        annotations:
+          backup.velero.io/backup-volumes: data
+        {{- end }}
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: {{ .Values.postgresql.persistence.size | default "8Gi" }}
+        {{- if .Values.postgresql.persistence.storageClassName }}
+        storageClassName: {{ .Values.postgresql.persistence.storageClassName | quote }}
+        {{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kubesynapse.fullname" . }}-postgresql-isolation
+spec:
+  podSelector:
+    matchLabels:
+      app: postgresql
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: api-gateway
+        - podSelector:
+            matchLabels:
+              app: operator
+        - podSelector:
+            matchLabels:
+              app: operator-worker
+        - podSelector:
+            matchLabels:
+              app: litellm
+      ports:
+        - protocol: TCP
+          port: {{ .Values.postgresql.service.port | default 5432 }}
+  # §security-P0: Restrict Postgres egress to DNS only.
+  egress:
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+{{- end }}

@@ -1,0 +1,28 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: project-rules
+  namespace: default
+data:
+  context: |
+    # Project Context
+
+    ## Tech Stack
+    - Language: Python 3.12
+    - Framework: FastAPI + Pydantic v2
+    - Database: PostgreSQL 16 via SQLAlchemy 2.x async
+    - Testing: pytest with pytest-asyncio
+    - Container runtime: Kubernetes 1.29+
+
+    ## Conventions
+    - All public functions must have type annotations.
+    - Use structured logging via `structlog`.
+    - HTTP handlers return Pydantic models, never raw dicts.
+    - SQL queries use the repository pattern — no inline ORM calls in handlers.
+
+    ## Constraints
+    - No new runtime dependencies without approval.
+    - All API changes must be backward-compatible.
+    - Maximum response payload: 1 MB.
+    - Secrets must come from Kubernetes Secrets or External Secrets Operator,
+      never from environment variables or config files.

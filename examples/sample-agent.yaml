@@ -1,0 +1,40 @@
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AIAgent
+metadata:
+  name: research-assistant
+  namespace: default
+spec:
+  model: gpt-4
+  policyRef: strict-enterprise-policy
+  runtime:
+    kind: opencode
+  systemPrompt: >
+    You are an enterprise research assistant. You help analysts
+    find and summarize information from internal documents and data sources.
+    Always cite your sources and never fabricate information.
+  skills:
+    files:
+      skills/research-brief/SKILL.md: |
+        ---
+        name: research-brief
+        description: Prepare evidence-backed research notes and concise briefings.
+        allowedSandboxTools:
+          - sandbox.filesystem.read
+          - sandbox.filesystem.write
+          - sandbox.filesystem.mkdir
+        allowedMcpServers:
+          - github
+        allowedA2ATargets:
+          - name: analysis-agent
+            namespace: default
+        allowSubagents: true
+        ---
+        Use this skill when the request needs structured evidence gathering, repo inspection,
+        or a handoff to a specialist reviewer.
+
+        Start by collecting the smallest set of concrete facts needed to answer the request.
+        When you delegate, give the teammate a precise task and summarize the result in one
+        actionable paragraph.
+  storage:
+    size: 1Gi
+  enableGVisor: false

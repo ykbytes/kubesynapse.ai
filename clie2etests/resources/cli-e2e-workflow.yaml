@@ -1,0 +1,31 @@
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AgentWorkflow
+metadata:
+  name: cli-e2e-workflow
+  namespace: default
+spec:
+  description: CLI E2E workflow for trigger, approval, status, and logs testing.
+  input: Draft a tiny release note for the CLI e2e validation.
+  messageBus: in-memory
+  steps:
+    - name: draft
+      agentRef: cli-e2e-agent
+      prompt: |
+        Create a concise 3-bullet release note for this request:
+        {{input}}
+      execution:
+        timeoutSeconds: 180
+        maxAttempts: 1
+    - name: review
+      agentRef: cli-e2e-reviewer
+      prompt: |
+        Review and improve this draft:
+        {{previous_output}}
+
+        End with: APPROVED FOR E2E
+      dependsOn:
+        - draft
+      requireApproval: true
+      execution:
+        timeoutSeconds: 180
+        maxAttempts: 1

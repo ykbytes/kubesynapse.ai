@@ -1,0 +1,21 @@
+# Example overlay for enabling managed Google sign-in.
+# Layer this with your base values file during Helm upgrade.
+# This repo and cluster do not currently contain a real Google OAuth client,
+# so this checked-in overlay stays safe by setting the local callback base URL
+# while leaving OIDC providers disabled until real credentials are supplied.
+#
+# To enable Google sign-in later, replace oidcProvidersJson with a JSON array
+# like this:
+# [{"id":"google","name":"Google","issuer":"https://accounts.google.com","client_id":"REAL_CLIENT_ID","client_secret":"REAL_CLIENT_SECRET","scopes":["openid","email","profile"]}]
+
+apiGateway:
+  publicBaseUrl: "http://127.0.0.1:18080"
+  auth:
+    mode: hybrid
+    localAuthEnabled: true
+    registrationEnabled: false
+
+platformSecrets:
+  mode: native
+  native:
+    oidcProvidersJson: "[]"

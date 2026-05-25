@@ -1,0 +1,4 @@
+{{/*
+PodDisruptionBudget resources have been consolidated into pod-disruption-budgets.yaml.
+This file is retained as a placeholder to avoid accidental re-creation of the old resources.
+*/}}

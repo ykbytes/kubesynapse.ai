@@ -1,0 +1,6 @@
+{
+  "name": "kubesynapse-git-safety",
+  "private": true,
+  "type": "module",
+  "pi": { "extensions": ["./index.ts"] }
+}

@@ -1,0 +1,773 @@
+global:
+  imagePullSecrets: []
+  clusterName: "local"
+
+# ---------------------------------------------------------------------------
+# Production Hardening Toggles
+# ---------------------------------------------------------------------------
+podDisruptionBudget:
+  enabled: true
+
+networkPolicy:
+  enabled: true
+  # List of namespace names allowed to reach api-gateway and web-ui ingress.
+  # Defaults to empty (any namespace) for backward compatibility.
+  # Example: ["ingress-nginx", "monitoring"]
+  ingressNamespaces: []
+  # CIDR block for the Kubernetes API server. Override to tighten egress.
+  # Defaults to 0.0.0.0/0 for backward compatibility.
+  clusterApiCidr: "0.0.0.0/0"
+
+litellm:
+  enabled: true
+  image:
+    repository: litellm/litellm
+    tag: v1.82.3-stable
+    pullPolicy: IfNotPresent
+  replicaCount: 2  # §reliability-P1: minimum 2 replicas for PDB efficacy
+  revisionHistoryLimit: 3
+  service:
+    type: ClusterIP
+    port: 4000
+  masterKey: ""  # §security-P0: must be set via platformSecrets.native.litellmMasterKey
+  resources:
+    requests:
+      cpu: "200m"
+      memory: "1Gi"
+    limits:
+      cpu: "2"
+      memory: "4Gi"
+  config:
+    model_list:
+      - model_name: gpt-4
+        litellm_params:
+          model: openai/gpt-4
+          api_key: "os.environ/OPENAI_API_KEY"
+      - model_name: openrouter-gpt-4o-mini
+        litellm_params:
+          model: openrouter/openai/gpt-4o-mini
+          api_key: "os.environ/OPENROUTER_API_KEY"
+    general_settings:
+      master_key: "os.environ/LITELLM_MASTER_KEY"
+      database_url: "os.environ/DATABASE_URL"
+
+agentRuntime:
+  storage:
+    size: 1Gi
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "1"
+      memory: "1Gi"
+  hitl:
+    mode: enforce
+    notificationWebhookUrl: ""
+  # §security-P0: When false (default), tenant admin Roles do NOT include
+  # pods/exec or pods/portforward — prevents shell access to tenant workloads.
+  # Set to true only if you need interactive debugging within tenant namespaces.
+  tenantExecAccess: false
+
+runtimeServiceAccount:
+  name: kubesynapse-agent-runtime
+
+opencodeRuntime:
+  image:
+    repository: docker.io/kubesynapse/kubesynapse-opencode-rt
+    tag: latest
+    pullPolicy: Always
+  provider: litellm
+  # §security-P0: Mount a hardened, immutable ConfigMap at /etc/kubesynapse/opencode.json.
+  # Prevents config-driven RCE via plugins, MCP commands, or provider baseURL redirect.
+  # Set to false only for development/debugging.
+  immutableConfig: true
+  limits:
+    maxPromptChars: 256000
+    maxSystemPromptChars: 64000
+    maxTeamContextChars: 32000
+    modelContextLimit: 256000
+    modelOutputLimit: 16384
+  autonomy: {}
+  # §security-P1: Admin-controlled env vars injected into every OpenCode runtime pod.
+  # These override user-provided env vars and are NOT overridable by agent CRDs.
+  admin:
+    OPENCODE_DISABLE_DEFAULT_PLUGINS: "true"
+    # Uncomment to enforce a global model allowlist at runtime:
+    # OPENCODE_ADMIN_MODEL_OVERRIDE_JSON: '["gpt-4o", "gpt-4o-mini", "claude-sonnet-4-20250514"]'
+    # Uncomment to force all provider traffic through LiteLLM proxy:
+    # OPENCODE_ADMIN_PROVIDER_OVERRIDE_JSON: '{"litellm": {"options": {"baseURL": "http://litellm:4000/v1"}}}'
+    # Uncomment to allowlist specific admin-vetted plugins:
+    # OPENCODE_PLUGIN_LIST_JSON: '[]'
+  # User-facing env vars (overridable via agent config, filtered against
+  # platform-managed list):
+  env: {}
+  # Example OpenCode settings:
+  # autonomy:
+  #   sessionInitOnCreate: false
+  #   maxRetries: 3
+  #   maxTurns: 8
+  #   agentSteps: 128
+  #   compactionTokenThreshold: 0.70
+  #   planThresholdChars: 4096
+  #   structuredOutputRetryCount: 3
+  # env:
+  #   OPENCODE_RUNTIME_CONFIG_FILES_JSON:
+  #     agents/reviewer.md: |
+  #       ---
+  #       description: Review code without editing it
+  #       mode: subagent
+  #       tools:
+  #         write: false
+  #         edit: false
+  #       ---
+  #       Focus on regressions, operational risk, and missing tests.
+  #     plugins/notify.ts: |
+  #       export const NotifyPlugin = async () => ({})
+
+# ---------------------------------------------------------------------------
+# Pi Runtime Configuration
+# ---------------------------------------------------------------------------
+piRuntime:
+  image:
+    repository: docker.io/kubesynapse/kubesynapse-pi-rt
+    tag: latest
+    pullPolicy: Always
+  # §security-P0: Mount a hardened, immutable ConfigMap at /etc/kubesynapse/pi-config/.
+  # Prevents extension loading via jiti.import(), SYSTEM.md injection, and !-prefix RCE.
+  # Set to false only for development/debugging.
+  immutableConfig: true
+  # Default provider auto-detected from API keys (ANTHROPIC_API_KEY, OPENAI_API_KEY, etc.)
+  provider: ""
+  # Default model in provider/id format
+  model: "anthropic/claude-sonnet-4-20250514"
+  # Thinking level: off, minimal, low, medium, high, xhigh
+  thinkingLevel: "medium"
+  # Default tool set (empty = all built-in tools enabled)
+  tools: []
+  # Ephemeral mode (don't persist sessions)
+  noSession: false
+  # Permission level: permissive, moderate, strict
+  permissionLevel: "permissive"
+  # Extra environment variables injected into pi agent pods
+  env: {}
+
+mistralVibeRuntime:
+  image:
+    repository: docker.io/kubesynapse/kubesynapse-vibe-rt
+    tag: latest
+    pullPolicy: Always
+
+operator:
+  enabled: true
+  replicaCount: 2
+  revisionHistoryLimit: 3
+  image:
+    repository: docker.io/kubesynapse/kubesynapse-operator
+    tag: latest
+    pullPolicy: Always
+  workerImage:
+    repository: docker.io/kubesynapse/kubesynapse-operator
+    tag: latest
+    pullPolicy: Always
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "1"
+      memory: "1Gi"
+  clusterSecretStoreName: ""
+  runtimeTimeoutSeconds: 360
+  workerActiveDeadlineSeconds: 14400
+  workerTtlSecondsAfterFinished: 3600
+  workflowPollSeconds: 30
+  workflowQueueStaleSeconds: 300
+  workflowRunningStaleSeconds: 1800
+  workerResources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+  workerArtifacts:
+    size: 2Gi
+    storageClassName: ""
+  stateDbEnabled: true
+  signalWatch:
+    enabled: true
+    intervalSeconds: 60
+    thresholds:
+      highFailureRate: 0.3
+      errorSpikeCount: 3
+      errorSpikeWindowMinutes: 15
+      costOutlierMultiplier: 3.0
+      tokenSpikeMultiplier: 3.0
+      stuckRunDurationMultiplier: 2.0
+
+autoscaling:
+  enabled: false              # Set to true for production
+  apiGateway:
+    minReplicas: 1
+    maxReplicas: 10
+  operator:
+    minReplicas: 1
+    maxReplicas: 5
+  litellm:
+    minReplicas: 1
+    maxReplicas: 5
+
+apiGateway:
+  enabled: true
+  replicaCount: 2  # §reliability-P1: minimum 2 replicas for PDB efficacy
+  revisionHistoryLimit: 3
+  auditRetentionDays: 90  # Days to keep audit logs before auto-purge
+  image:
+    repository: docker.io/kubesynapse/kubesynapse-api-gateway
+    tag: latest
+    pullPolicy: Always
+  ingressClassName: ""
+  ingressHost: ""  # leave empty for a hostless ingress, or set e.g. "agents.mycompany.com"
+  ingress:
+    enabled: false
+    annotations: {}
+  publicBaseUrl: ""
+  corsOrigins: []
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "1"
+      memory: "1Gi"
+  tls:
+    enabled: false
+    secretName: ""  # TLS secret name in the Ingress namespace; create via cert-manager or manually
+    # §security-P0: Never allow insecure TLS connections in production.
+    allowInsecure: false
+  auth:
+    mode: hybrid
+    localAuthEnabled: true
+    registrationEnabled: true
+    jwtIssuer: kubesynapse
+    accessTokenTtlSeconds: 3600   # 1 hour (increase for dev, reduce for prod)
+    refreshTokenTtlSeconds: 604800
+    cookieSecure: true
+    cookieSameSite: lax
+    cookieDomain: ""
+    bootstrapAdminUsername: admin
+    bootstrapAdminEmail: admin@example.com
+    bootstrapAdminDisplayName: Platform Admin
+    bootstrapAdminNamespaces:
+      - "*"
+    oidcIssuer: ""
+    oidcAudience: ""
+    oidcJwksUrl: ""
+    ldap:
+      enabled: false
+      serverUrl: ""
+      bindDn: ""
+      userSearchBase: ""
+      userSearchFilter: "(uid={username})"
+      groupSearchBase: ""
+      groupSearchFilter: "(member={user_dn})"
+      groupAttribute: memberOf
+      usernameAttribute: uid
+      emailAttribute: mail
+      displayNameAttribute: displayName
+      tlsEnabled: false
+      groupRoleMapping: {}
+
+postgresql:
+  enabled: true
+  image:
+    repository: postgres
+    tag: 16-alpine
+    pullPolicy: IfNotPresent
+  service:
+    port: 5432
+  database: kubesynapse
+  username: kubesynapse
+  persistence:
+    size: 8Gi
+    storageClassName: ""
+  resources:
+    requests:
+      cpu: "200m"
+      memory: "512Mi"
+    limits:
+      cpu: "2"
+      memory: "2Gi"
+
+webUi:
+  enabled: true
+  replicaCount: 2  # §reliability-P1: minimum 2 replicas for PDB efficacy
+  revisionHistoryLimit: 3
+  image:
+    repository: docker.io/kubesynapse/kubesynapse-web-ui
+    tag: latest
+    pullPolicy: Always
+  service:
+    type: ClusterIP
+    port: 80
+  ingress:
+    path: "/"
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+
+redis:
+  enabled: true
+  image:
+    repository: redis
+    tag: 7-alpine
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+  persistence:
+    enabled: false
+    size: "1Gi"
+    storageClassName: ""
+  auth:
+    password: ""
+    existingSecret: ""
+    existingSecretKey: "REDIS_PASSWORD"
+
+qdrant:
+  enabled: true
+  image:
+    repository: qdrant/qdrant
+    tag: v1.7.4
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: "200m"
+      memory: "512Mi"
+    limits:
+      cpu: "2"
+      memory: "4Gi"
+  # Note: Qdrant container intentionally uses readOnlyRootFilesystem: false
+  # because it writes vector data to /qdrant/storage at runtime.
+
+nats:
+  enabled: true
+  image:
+    repository: nats
+    tag: 2.10-alpine
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "64Mi"
+    limits:
+      cpu: "200m"
+      memory: "256Mi"
+  auth:
+    token: ""
+    existingSecret: ""
+    existingSecretKey: "NATS_TOKEN"
+
+platformSecrets:
+  mode: native
+  native:
+    openaiApiKey: ""
+    openrouterApiKey: ""
+    anthropicApiKey: ""
+    mistralApiKey: ""
+    opencodeApiKey: ""
+    opencodeGoApiKey: ""
+    # §security-P0: The following four secrets are REQUIRED.
+    # Install will fail with a clear error if these are not overridden.
+    # Generate with: openssl rand -base64 48
+    litellmMasterKey: ""
+    apiGatewaySharedToken: ""
+    databasePassword: ""
+    jwtSecret: "" # JWT signing key — must be separate from other tokens
+    collectorToken: "" # §security: separate from jwtSecret; auto-generated if empty
+    redisPassword: "" # auto-generated if empty
+    natsToken: "" # auto-generated if empty
+    authBootstrapAdminPassword: ""
+    ldapBindPassword: ""
+    # JSON array of OIDC provider objects, for example:
+    # [{"id":"entra","name":"Microsoft Entra ID","issuer":"https://login.microsoftonline.com/<tenant>/v2.0","client_id":"...","client_secret":"..."}]
+    oidcProvidersJson: "[]"
+    # JSON array of SAML provider objects, for example:
+    # [{"id":"corp-saml","name":"Corporate SSO","idp_entity_id":"https://idp.example.com/metadata","sso_url":"https://idp.example.com/sso","x509cert":"-----BEGIN CERTIFICATE-----..."}]
+    samlProvidersJson: "[]"
+  externalSecrets:
+    refreshInterval: 1h
+    createClusterSecretStore: true
+
+telemetry:
+  otlpEndpoint: ""
+  serviceMonitor:
+    enabled: false
+    interval: "30s"
+    scrapeTimeout: "10s"
+    labels: {}
+
+# ---------------------------------------------------------------------------
+# Backup & Disaster Recovery
+#
+# Enable backup with: backup.enabled=true
+# Daily backups run at the configured schedule and store to PVC or S3.
+#
+# RESTORE procedure (PVC backend):
+#   1. Find the backup file: kubectl exec -n <ns> <backup-pod> -- ls /backup/
+#   2. Copy locally:        kubectl cp <ns>/<backup-pod>:/backup/<file>.sql.gz ./backup.sql.gz
+#   3. Decompress:          gunzip backup.sql.gz
+#   4. Restore:             kubectl exec -n <ns> <postgres-pod> -- psql -U kubesynapse -d kubesynapse < backup.sql
+#   5. Verify:              kubectl exec -n <ns> <postgres-pod> -- psql -U kubesynapse -c "SELECT count(*) FROM users;"
+#
+# RESTORE procedure (S3 backend):
+#   1. Download from S3:    aws s3 cp s3://<bucket>/kubesynapse/<file>.sql.gz ./backup.sql.gz
+#   2. Follow steps 3-5 above.
+# ---------------------------------------------------------------------------
+backup:
+  enabled: false               # Set to true for production deployments
+  schedule: "0 2 * * *"        # Daily at 2am UTC
+  retentionCount: 7               # Keep 7 most recent backups
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  backend: "pvc"                  # "pvc" or "s3"
+  pvcName: ""                     # Defaults to <release-name>-postgresql-backup
+  image:
+    repository: bitnami/postgresql
+    tag: "17"
+    pullPolicy: IfNotPresent
+  s3:
+    bucket: ""
+    endpoint: ""
+    credentialsSecretName: ""
+    accessKeyIdKey: access-key-id
+    secretAccessKeyKey: secret-access-key
+
+# ---------------------------------------------------------------------------
+# Garbage Collection — automated cleanup of old audit logs, expired sessions
+# ---------------------------------------------------------------------------
+gc:
+  enabled: true                 # Daily cleanup of old records
+  schedule: "0 3 * * *"         # Daily at 3am UTC (after backup at 2am)
+  image:
+    repository: curlimages/curl
+    tag: "8.12.1"
+    pullPolicy: IfNotPresent
+
+# ---------------------------------------------------------------------------
+# MCP Hub – shared enterprise MCP server pool
+# ---------------------------------------------------------------------------
+mcpHub:
+  enabled: true
+  # Dedicated namespace for all shared MCP servers.
+  # The chart creates this namespace and applies the required label automatically:
+  #   kubesynapse.ai/mcp-hub=true
+  # Tenant namespaces must be labelled:
+  #   kubesynapse.ai/tenant=true
+  namespace: mcp-hub
+
+  # Auth: bearer token agents present in the Authorization header on every
+  # MCP call. The same secret is mounted into each MCP server pod so it can
+  # validate inbound requests. Rotate via ExternalSecret / Vault in production.
+  # NEVER leave the default value in a real deployment.
+  auth:
+    # §security-P0: This must be overridden with a strong random value.
+    # If using ExternalSecret, set secretName instead.
+    bearerToken: ""
+    # If using ExternalSecret, set secretName to the K8s secret that holds
+    # the bearer-token key and leave bearerToken empty. The deployment template
+    # will reference that secret instead of creating a new one.
+    secretName: ""
+
+  # Per-server configuration. Set enabled: false to skip deploying a server.
+  servers:
+    # Shared GitHub access now runs through a local adapter container that
+    # preserves the runtime's /tools/<tool> bridge and proxies to the upstream
+    # GitHub MCP server over streamable HTTP.
+    github:
+      enabled: true
+      image: "docker.io/kubesynapse/mcp-github-adapter:deploy-20260401-212102"
+      imagePullPolicy: IfNotPresent
+      port: 8000
+      servicePort: 8000
+      env:
+        - name: GITHUB_UPSTREAM_URL
+          value: "http://127.0.0.1:8082"
+      extraContainers:
+        - name: github-upstream
+          image: "ghcr.io/github/github-mcp-server:latest"
+          imagePullPolicy: IfNotPresent
+          args:
+            - http
+            - --port
+            - "8082"
+          ports:
+            - containerPort: 8082
+              name: upstream
+              protocol: TCP
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "300m"
+              memory: "256Mi"
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      replicas: 1
+      resources:
+        requests:
+          cpu: "50m"
+          memory: "64Mi"
+        limits:
+          cpu: "300m"
+          memory: "256Mi"
+      livenessProbe:
+        httpGet:
+          path: /healthz
+          port: http
+        initialDelaySeconds: 5
+        periodSeconds: 10
+      readinessProbe:
+        httpGet:
+          path: /healthz
+          port: http
+        initialDelaySeconds: 2
+        periodSeconds: 5
+
+# ---------------------------------------------------------------------------
+# Namespace configuration
+# ---------------------------------------------------------------------------
+namespace:
+  create: false
+  podSecurity:
+    # The bundled PostgreSQL and LiteLLM workloads still require baseline.
+    # Override to restricted only after hardening those manifests.
+    enforce: baseline
+    enforceVersion: latest
+    audit: baseline
+    auditVersion: latest
+    warn: baseline
+    warnVersion: latest
+
+# ---------------------------------------------------------------------------
+# Production scheduling defaults (applied to all control-plane Deployments)
+# ---------------------------------------------------------------------------
+scheduling:
+  # Priority class assigned to control plane pods (api-gateway, operator)
+  # Set to "system-cluster-critical" for production, "" to disable.
+  priorityClassName: ""
+  # Pod anti-affinity: keep replicas on different nodes when possible
+  podAntiAffinity:
+    enabled: true
+  # Topology spread: distribute pods across zones/hosts
+  topologySpread:
+    enabled: true
+    maxSkew: 1
+    # WhenUnsatisfiable: ScheduleAnyway (preferred) or DoNotSchedule (required)
+    whenUnsatisfiable: ScheduleAnyway
+
+nameOverride: ""
+fullnameOverride: ""
+
+# ---------------------------------------------------------------------------
+# Skills Catalog – browsable catalog of reusable skill files
+# ---------------------------------------------------------------------------
+skillsCatalog:
+  enabled: true
+  # JSON catalog data. Generate with: python scripts/build-catalog-index.py
+  # Then supply it at install time:
+  #   helm upgrade --install ... --set-file skillsCatalog.catalogJson=catalog/skills-catalog.json
+  # Defaults to empty; the UI catalog page will show nothing until populated.
+  catalogJson: "[]"
+
+# ---------------------------------------------------------------------------
+# MCP Tool Sidecar Images – per-agent tool containers
+# Repo currently ships 10 bundled sidecars:
+# code-exec, web-search, documents, browser, database, git,
+# github-adapter, kubernetes, messaging, rag
+# ---------------------------------------------------------------------------
+mcpToolSidecars:
+  codeExec:
+    image: docker.io/kubesynapse/mcp-code-exec
+    tag: deploy-20260401-212102
+    port: 8090
+  webSearch:
+    image: docker.io/kubesynapse/mcp-web-search
+    tag: deploy-20260401-212102
+    port: 8091
+  documents:
+    image: docker.io/kubesynapse/mcp-documents
+    tag: deploy-20260401-212102
+    port: 8092
+  browser:
+    image: docker.io/kubesynapse/mcp-browser
+    tag: deploy-20260401-212102
+    port: 8093
+  database:
+    image: docker.io/kubesynapse/mcp-database
+    tag: deploy-20260401-212102
+    port: 8094
+  git:
+    image: docker.io/kubesynapse/mcp-git
+    tag: deploy-20260401-212102
+    port: 8095
+  githubAdapter:
+    image: docker.io/kubesynapse/mcp-github-adapter
+    tag: deploy-20260401-212102
+    port: 8096
+  kubernetes:
+    image: docker.io/kubesynapse/mcp-kubernetes
+    tag: deploy-20260401-212102
+    port: 8097
+  messaging:
+    image: docker.io/kubesynapse/mcp-messaging
+    tag: deploy-20260401-212102
+    port: 8098
+  rag:
+    image: docker.io/kubesynapse/mcp-rag
+    tag: deploy-20260401-212102
+    port: 8099
+  collector:
+    image: docker.io/kubesynapse/mcp-collector
+    tag: dev
+    port: 8100
+
+# Intelligence Collector Agent (DaemonSet on target clusters)
+collector:
+  enabled: false
+  image:
+    repository: docker.io/kubesynapse/kubesynapse-collector
+    tag: v1.0.0
+    pullPolicy: IfNotPresent
+  port: 9100
+  token: ""  # Must be set to a secure random value
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+# ---------------------------------------------------------------------------
+# RBAC configuration (P2-11: security audit — enterprise configurability)
+# ---------------------------------------------------------------------------
+rbac:
+  # Override default RBAC rules per component.  When a rule list is
+  # provided it replaces the built-in rules entirely.  Leave empty to
+  # keep the secure defaults.
+  operator:
+    rules: []
+    #   - apiGroups: ["kubesynapse.ai"]
+    #     resources: [aiagents]
+    #     verbs: [get, list, watch]
+  apiGateway:
+    rules: []
+  runtime:
+    rules: []
+
+# ---------------------------------------------------------------------------
+# Agent runtime security (P1-5: opt-in cluster-wide access)
+# ---------------------------------------------------------------------------
+agentRuntime:
+  # Grant agents cluster-wide read-only access to nodes (for the
+  # Kubernetes MCP sidecar).  Disabled by default — enable only
+  # when agents genuinely need cross-namespace cluster visibility.
+  clusterReadAccess: false
+
+# ---------------------------------------------------------------------------
+# Default Memory Policy
+# ---------------------------------------------------------------------------
+# Creates an AgentPolicy CR with memory defaults.  Agents that have no
+# explicit policyRef will use the gateway's built-in fallback, but agents
+# that reference this policy get autoPromote + higher injection limits.
+memoryPolicy:
+  enabled: true
+  name: "default-memory-policy"
+  namespace: "default"
+  autoPromote: true
+  maxInjectedMemories: 8
+  maxInjectedChars: 2400
+  allowedMemoryTypes: []
+
+# ---------------------------------------------------------------------------
+# Run Intelligence Layer — System Agents (Story 7)
+# ---------------------------------------------------------------------------
+# Predefined AIAgent CRs that are invoked on triggers (failures, anomalies,
+# spend thresholds) rather than running continuously.  Deterministic SQL/rule
+# checks fire first; LLM agents are only invoked for explanation/escalation.
+systemAgents:
+  enabled: true
+  namespace: "kubesynapse-system"
+  # Default model used by all system agents unless overridden per-agent
+  defaultModel: "gpt-4"
+  defaultRuntime: "opencode"
+
+  # ks-run-inspector — invoked when workflow steps fail or error rates spike
+  runInspector:
+    enabled: true
+    model: ""  # inherits defaultModel
+    runtime: ""  # inherits defaultRuntime
+    description: "Investigates failed workflow runs and anomalous execution patterns. Produces concise root-cause summaries with actionable remediation steps."
+    # Trigger thresholds
+    triggers:
+      minFailureRate: 0.3  # invoke when >30% of steps in a run fail
+      minErrorCount: 3     # invoke when >=3 errors detected in a time window
+    # Resource overrides
+    resources:
+      requests:
+        cpu: "50m"
+        memory: "128Mi"
+      limits:
+        cpu: "500m"
+        memory: "512Mi"
+
+  # ks-signal-summarizer — invoked when deterministic anomaly checks fire
+  signalSummarizer:
+    enabled: true
+    model: ""  # inherits defaultModel
+    runtime: ""  # inherits defaultRuntime
+    description: "Summarizes deterministic anomaly signals into human-readable incident briefs. Correlates related events and suggests severity levels."
+    triggers:
+      maxSignalAgeMinutes: 30  # only summarize signals from the last 30 minutes
+    resources:
+      requests:
+        cpu: "50m"
+        memory: "128Mi"
+      limits:
+        cpu: "500m"
+        memory: "512Mi"
+
+  # ks-spend-reviewer — invoked when spend anomalies are detected
+  spendReviewer:
+    enabled: true
+    model: ""  # inherits defaultModel
+    runtime: ""  # inherits defaultRuntime
+    description: "Reviews token/cost spend anomalies across agents and namespaces. Identifies cost outliers and recommends budget adjustments or runtime changes."
+    triggers:
+      costThresholdUsd: 10.0  # invoke when estimated spend exceeds this in the window
+      tokenSpikeMultiplier: 3.0  # invoke when tokens are 3x the rolling average
+    resources:
+      requests:
+        cpu: "50m"
+        memory: "128Mi"
+      limits:
+        cpu: "500m"
+        memory: "512Mi"

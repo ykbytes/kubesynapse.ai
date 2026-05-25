@@ -1,0 +1,176 @@
+{{- if .Values.webUi.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "kubesynapse.fullname" . }}-web-ui-nginx
+  labels:
+    {{- include "kubesynapse.labels" . | nindent 4 }}
+    app.kubernetes.io/component: web-ui
+    app: web-ui
+data:
+  default.conf: |
+    server {
+        listen 8080;
+        server_name _;
+
+        root /usr/share/nginx/html;
+        index index.html;
+
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Frame-Options "SAMEORIGIN" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+        add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+        add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'self'; base-uri 'self'; form-action 'self';" always;
+
+        location = /healthz {
+            access_log off;
+            default_type text/plain;
+            return 200 'ok';
+        }
+
+        # Proxy API calls to the gateway so the UI works whether accessed via
+        # port-forward or ingress, without needing VITE_API_BASE_URL set.
+        location /api {
+            proxy_pass http://{{ include "kubesynapse.fullname" . }}-api-gateway:8080;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_http_version 1.1;
+            proxy_set_header Connection "";
+            proxy_connect_timeout 30s;
+            proxy_send_timeout 900s;
+            proxy_read_timeout 900s;
+            send_timeout 900s;
+            proxy_buffering off;
+            proxy_request_buffering off;
+            proxy_buffer_size 16k;
+            proxy_busy_buffers_size 24k;
+            proxy_buffers 4 16k;
+            gzip off;
+            chunked_transfer_encoding off;
+        }
+
+        location /assets {
+            expires 1y;
+            add_header Cache-Control "public, immutable" always;
+            add_header X-Content-Type-Options "nosniff" always;
+        }
+
+        location / {
+            add_header Cache-Control "no-cache, no-store, must-revalidate" always;
+            add_header X-Content-Type-Options "nosniff" always;
+            try_files $uri $uri/ /index.html;
+        }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "kubesynapse.fullname" . }}-web-ui
+  labels:
+    {{- include "kubesynapse.labels" . | nindent 4 }}
+    app.kubernetes.io/component: web-ui
+    app: web-ui
+spec:
+  replicas: {{ .Values.webUi.replicaCount }}
+  revisionHistoryLimit: {{ .Values.webUi.revisionHistoryLimit | default 3 }}
+  selector:
+    matchLabels:
+      app: web-ui
+  template:
+    metadata:
+      annotations:
+        checksum/nginx-config: {{ .Values.webUi | toYaml | sha256sum }}
+      labels:
+        {{- include "kubesynapse.labels" . | nindent 8 }}
+        app.kubernetes.io/component: web-ui
+        app: web-ui
+    spec:
+{{- with (include "kubesynapse.imagePullSecrets" .) }}
+{{ . | nindent 6 }}
+{{- end }}
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+        runAsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+      volumes:
+        - name: nginx-config
+          configMap:
+            name: {{ include "kubesynapse.fullname" . }}-web-ui-nginx
+        - name: nginx-cache
+          emptyDir:
+            sizeLimit: 128Mi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+      containers:
+        - name: web-ui
+          image: "{{ .Values.webUi.image.repository }}:{{ .Values.webUi.image.tag }}"
+          imagePullPolicy: {{ .Values.webUi.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          ports:
+            - containerPort: 8080
+              name: http
+          volumeMounts:
+            - name: nginx-config
+              mountPath: /etc/nginx/conf.d/default.conf
+              subPath: default.conf
+            - name: nginx-cache
+              mountPath: /var/cache/nginx
+            - name: tmp
+              mountPath: /tmp
+          resources:
+{{ toYaml .Values.webUi.resources | indent 12 }}
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 3
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 12
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 3
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "kubesynapse.fullname" . }}-web-ui
+  labels:
+    {{- include "kubesynapse.labels" . | nindent 4 }}
+    app.kubernetes.io/component: web-ui
+    app: web-ui
+spec:
+  type: {{ .Values.webUi.service.type }}
+  selector:
+    app: web-ui
+  ports:
+    - protocol: TCP
+      port: {{ .Values.webUi.service.port }}
+      targetPort: 8080
+      name: http
+{{- end }}

@@ -1,0 +1,45 @@
+global:
+  clusterName: "dev"
+
+podDisruptionBudget:
+  enabled: false
+
+networkPolicy:
+  enabled: false
+
+litellm:
+  enabled: true
+  masterKey: "dev-litellm-key"
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "512Mi"
+
+agentRuntime:
+  hitl:
+    mode: disabled
+
+operator:
+  replicaCount: 1
+  stateDbEnabled: false
+
+apiGateway:
+  replicaCount: 1
+  auth:
+    mode: shared_token
+    sharedToken: "your-shared-token-here"
+  db:
+    host: ""
+    password: ""
+
+webUi:
+  enabled: true
+
+postgresql:
+  enabled: true
+
+platformSecrets:
+  mode: native
+  native:
+    litellmMasterKey: "dev-litellm-key"
+    apiGatewaySharedToken: "your-shared-token-here"

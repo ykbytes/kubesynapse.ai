@@ -1,0 +1,469 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kubesynapse-factory-context
+  namespace: default
+data:
+  context: |
+    # kubesynapse Factory Context
+
+    ## Mission
+    Design production-grade kubesynapse bundles that create AIAgent,
+    AgentWorkflow, AgentPolicy, and ConfigMap resources with explicit approval
+    boundaries, rich operating instructions, and reliable verification steps.
+
+    The factory is expected to design valuable systems, not just syntactically
+    valid manifests. Prefer outputs that materially save engineering time and
+    reduce manual orchestration.
+
+    ## Supported Resource Kinds
+    - AIAgent
+    - AgentWorkflow
+    - AgentPolicy
+    - ConfigMap
+
+    ## Spec-Driven Factory Design
+    The factory uses a two-stage pipeline:
+    1. The analyst agent receives the raw idea and expands it into a detailed
+       specification with requirements, capabilities, specialist roles, tasks,
+       and verification criteria. The spec is the source of truth.
+    2. The factory agent receives the expanded specification and generates the
+       optimal kubesynapse bundle from it.
+
+    This design means the factory can handle ANY idea — apps, books, learning
+    systems, automations, research pipelines, creative projects, compliance
+    trackers, or anything else — without being limited to a predefined set of
+    domain categories.
+
+    ## Request Interrogation Rules
+    Before generating, identify or infer:
+    - business objective and end state
+    - primary deliverables to create
+    - final artifact format, packaging, and publishing expectations
+    - target users or operators
+    - expected autonomy level
+    - whether the user wants a plan, a deployable bundle, or a fully executed result
+    - external systems, tools, or data sources involved
+    - security, approval, and audit constraints
+    - performance, scale, or cost constraints
+    - what should be verified before claiming success
+
+    ## Runtime Selection Rules
+    - Use OpenCode for every generated agent. Express runtime behavior through
+      prompts, workflow boundaries, MCP sidecars, approval gates, and
+      `runtime.opencode.configFiles` instead of selecting another runtime.
+
+    ## Tool Selection Rules
+    - Choose MCP sidecars deliberately, never by habit.
+    - Add only the tools the role genuinely needs.
+    - Typical mappings:
+      - code or app generation -> `code-exec`, `git`, optional `github-adapter`
+      - browser automation or presentation research -> `browser`, `documents`, `web-search`
+      - data/report workflows -> `database`, `documents`, `rag`
+      - Kubernetes or platform operations -> `kubernetes`, `git`, optional `code-exec`
+      - messaging or human coordination -> `messaging`
+    - When one role needs many unrelated tools, split the work into specialist
+      agents instead of overloading a single agent.
+
+    ## Architecture Rules
+    - Prefer a multi-agent bundle plus an AgentWorkflow when planning, review,
+      deployment, verification, research, implementation, or packaging have
+      different trust boundaries.
+    - Prefer a single agent only when one runtime can safely satisfy the whole
+      request without losing review or approval control.
+    - For broad outcomes like full apps, books, reports, presentations, or
+      enterprise automations, assume multiple specialist roles are required.
+    - Separate spec review from quality review whenever the task is non-trivial.
+    - Add `policyRef` unless the user explicitly requests an unmanaged prototype.
+    - Put every resource in the target namespace.
+    - Keep resource names lowercase, Kubernetes-safe, and stable across revisions.
+    - Default `storage.size` to `1Gi`; increase to `2Gi` only when the agent is
+      expected to write large artifacts or maintain a sizable workspace.
+    - Never invent fields not present in the shipped CRDs.
+
+    ## Capability Discovery Rules
+    Instead of selecting from a fixed set of domain packs, the factory derives
+    capabilities from the analyst's expanded specification. The analyst
+    identifies what capabilities the idea needs; the factory maps those
+    capabilities to specialist agents, tools, and workflows.
+
+    Common capability families (as a reference, not a closed set):
+    - code-generation: building apps, services, CLIs, scripts, APIs
+    - research: gathering information, fact-checking, citation, domain expertise
+    - authoring: writing documents, reports, books, articles, long-form content
+    - data-processing: ETL, analysis, transformation, visualization
+    - presentation: slide decks, talks, demos, visual storytelling
+    - automation: recurring workflows, scheduling, event-driven pipelines
+    - review-and-qa: code review, editorial QA, compliance checking
+    - deployment: infrastructure, CI/CD, container orchestration
+    - testing: unit tests, integration tests, smoke tests, acceptance tests
+    - human-interaction: chat interfaces, approval workflows, feedback loops
+    - domain-specialization: any domain-specific expertise the idea requires
+
+    Capability-to-tooling mapping (guidance, not rigid):
+    - code-generation → `code-exec`, `git`, optionally `github-adapter`
+    - research → `web-search`, `rag`, `documents`
+    - authoring → `documents`, optionally `rag`
+    - data-processing → `database`, `code-exec`, `documents`
+    - presentation → `browser`, `documents`, `web-search`
+    - automation → `kubernetes`, `code-exec`, `git`
+    - review-and-qa → no special tools (reasoning-only reviewers)
+    - deployment → `kubernetes`, `code-exec`, `git`
+    - testing → `code-exec`, `git`
+    - human-interaction → `messaging`
+    - domain-specialization → `web-search`, `rag`, `documents`
+
+    Legacy domain pack names (application-studio, narrative-publishing,
+    presentation-studio, automation-orchestrator, surgical-edit) may still
+    appear in bundle output as convenience labels, but they do not restrict the
+    design. The factory is free to combine capabilities from any family.
+
+    ## Prompt Design Rules
+    Every serious generated agent should have a detailed system prompt that
+    covers:
+    - mission and business objective
+    - exact role and boundaries
+    - expected inputs and outputs
+    - tool usage rules
+    - operating procedure or workflow
+    - quality bar and acceptance checks
+    - failure handling and escalation behavior
+    - formatting or output contract
+    - things the agent must never do
+
+    Avoid generic prompts that only say "help the user" or "follow best
+    practices" unless the requested agent is deliberately trivial.
+
+    ## Workflow Rules
+    - Applying an AgentWorkflow can queue an initial install-time run for the
+      current generation. Treat workflow creation and real workflow execution as
+      separate actions: cancel any empty install-time run, then trigger the
+      workflow explicitly from the UI or `POST /api/workflows/{name}/trigger`
+      when you have real input.
+    - Any step that deploys resources, edits existing live resources, or triggers
+      another workflow must set `requireApproval: true`.
+    - Deployment steps should include a `verify` gate that checks the resulting
+      resources and reports PASS or FAIL with evidence.
+    - For run-ready bundles, include the exact generated workflow name and the
+      exact approved input payload needed to trigger it.
+    - Use dedicated review steps or review agents when requests are complex.
+    - Prefer bounded review/rework loops over one-shot generation when the task
+      has significant quality risk.
+    - Use `sessionGroup` only for sequential steps that benefit from the same
+      runtime session and workspace continuity.
+
+    ## Factory Modes
+    When the request explicitly supplies a factory mode, obey it exactly and
+    echo it back as `factory_mode` in structured output.
+    - `lightweight-draft`: stop at the fastest useful blueprint and do not
+      assume governed review or deployment execution will follow in the same run.
+    - `governed-bundle`: optimize for a review-ready bundle and operator handoff.
+    - `fully-autonomous`: optimize for the strongest end-to-end bundle, but keep
+      deployment and live-change approval boundaries intact.
+
+    ## Deliverable Rules
+    Every bundle MUST include supporting deliverables in addition to manifests:
+    - operator README
+    - verification runbook
+    - example requests or usage scenarios
+    - acceptance criteria
+    - evaluation guidance and follow-up checks
+    - prompt design notes
+
+    These are required by the output schema. Do not stop at "manifests only"
+    unless the user explicitly asks for that.
+
+    ## Execution-First Rules
+    - If the user wants a runnable app, publishable book or report, or usable
+      presentation, the generated bundle should include the workflow that
+      actually produces and verifies that end deliverable.
+    - Always say whether the bundle ends at `design-only`, `bundle-for-handoff`,
+      `deploy-only`, or `deploy-and-run`.
+    - A run-ready bundle must include concrete success checks, evidence to
+      capture, and the final artifacts expected after execution.
+    - If a request cannot be run safely or completely in the current platform,
+      keep `execution_plan.runnable = false` and explain the blockers instead of
+      pretending the system can finish the job.
+
+    ## Deployment Reality
+    - The OpenCode runtime image includes Python 3.12, git, node, bun, curl,
+      PyYAML, and the Kubernetes Python client.
+    - The bundled Kubernetes MCP sidecar is read-oriented in implementation and
+      is strongest for evidence gathering (`list_pods`, `get_pod_logs`,
+      `kubectl_get`, `kubectl_describe`).
+    - If an approved action must apply manifests, use the OpenCode runtime's
+      Python environment with the Kubernetes client; show the exact manifest and
+      the exact action before executing.
+    - `kubectl` is NOT available inside OpenCode sandboxes. All verify blocks
+      and deploy scripts MUST use Python with the `kubernetes` client library.
+    - Generated bundles MUST NOT include CRD definition files. CRDs are
+      installed and managed by the kubesynapse operator. Bundles only produce
+      instances: AIAgent, AgentWorkflow, AgentPolicy, ConfigMap.
+    - Generated manifests MUST use real namespace values (e.g. `default`),
+      NOT Jinja/Helm template syntax such as a namespace placeholder token.
+    - Generated AIAgent resources MUST NOT use placeholder images like
+      `<RUNTIME_IMAGE>`. The operator manages the runtime image automatically
+      based on `spec.runtime.kind`. You only set `spec.runtime`, not the
+      container image.
+    - Generated bundles MUST NOT include phantom infrastructure (custom
+      Deployments, Services, Ingresses) that doesn't exist on the platform.
+      kubesynapse bundles consist of AIAgent + AgentWorkflow + AgentPolicy +
+      ConfigMap resources only.
+    - Every `agentRef` in a workflow step MUST reference an AIAgent defined
+      in the same bundle. Do NOT reference agents like `workflow-runner` that
+      do not exist.
+
+    ## CRD Schema Reference — EXACT VALID FIELDS
+    These are the ONLY valid fields for each CRD. Do NOT invent fields beyond
+    what is listed here. Any field not in this reference will cause a
+    validation error when applied to the cluster.
+
+    ### AIAgent (apiVersion: kubesynapse.ai/v1alpha1)
+    ```yaml
+    spec:
+      model: <string>             # Model route, e.g. "gpt-4.1-mini"
+      policyRef: <string>         # Plain string name of an AgentPolicy
+      runtime:
+        kind: <opencode>
+        opencode:
+          configFiles:            # Map of path → content (NOT a list)
+            opencode.json:
+              default_agent: build
+              permission: allow   # or {edit: deny, bash: deny, webfetch: deny}
+      systemPrompt: <string>      # System prompt for the agent
+      storage:
+        size: <string>            # e.g. "1Gi", "2Gi"
+      resources:
+        requests:
+          memory: <string>        # e.g. "512Mi"
+        limits:
+          memory: <string>        # e.g. "2Gi"
+      enableGVisor: <bool>        # Default false
+      mcpSidecars:                # Array of MCP sidecar configs
+        - name: <string>          # e.g. "kubernetes", "web-search", "git"
+          image: <string>         # Full image reference
+          port: <int>             # Sidecar port
+      mcpServers: <array>         # External MCP server configs
+      skills:                     # Skill file injection
+        files:
+          <path>: <string content>
+      allowedNamespaces: <array>
+      a2a: <object>               # Agent-to-agent config
+      gitConfig: <object>
+      githubConfig: <object>
+    ```
+
+    INVALID AIAgent fields (do NOT use): `displayName`, `description`,
+    `configRef`, `image`, `containerImage`, `replicas`, `env`, `volumes`,
+    `serviceAccount`, `annotations` on spec level.
+
+    ### AgentPolicy (apiVersion: kubesynapse.ai/v1alpha1)
+    ```yaml
+    spec:
+      allowedModels:              # Array of allowed model strings
+        - "gpt-4.1-mini"
+      allowedMcpServers: <array>  # Array of allowed MCP server names
+      allowedNamespaces: <array>
+      budget: <object>
+      mcpRequireHitl: <bool>      # Require human-in-the-loop for MCP
+      memoryPolicy: <object>
+      inputGuardrails:            # Object (NOT array)
+        blockPromptInjection: <bool>
+        blockedPatterns:          # Array of regex strings
+          - "pattern1"
+        maxInputTokens: <int>
+      outputGuardrails:           # Object (NOT array)
+        blockedOutputPatterns:    # Array of regex strings
+          - "pattern1"
+        maskPII: <bool>
+        maxOutputTokens: <int>
+      a2a: <object>
+    ```
+
+    INVALID AgentPolicy fields (do NOT use): `policyRules`, `guidance`,
+    `notes`, `secrets`, `destructive_ops`, `redact_secrets`, `scope_outputs`,
+    `allowedDataSources`, `redactionRequirement`, `redactPatternsRef`,
+    `maxSummaryLengthWords`, `forbidExposure`, `allowedTools`,
+    `allowedActions`.
+
+    ### AgentWorkflow (apiVersion: kubesynapse.ai/v1alpha1)
+    ```yaml
+    spec:
+      description: <string>
+      input: <string>
+      contextRef: <string>        # Name of a ConfigMap
+      messageBus: <string>        # e.g. "in-memory"
+      gitConfig: <object>
+      steps:
+        - name: <string>          # Lowercase, kubernetes-safe
+          agentRef: <string>      # MUST reference an AIAgent in the bundle
+          prompt: <string>
+          dependsOn: <array>      # Array of step names
+          requireApproval: <bool>
+          verify: <string>        # Single string (NOT array)
+          execution:
+            timeoutSeconds: <int>
+            maxAttempts: <int>
+            maxTurns: <int>
+            backoffSeconds: <int>
+            sessionGroup: <string>
+          type: <string>          # e.g. "conditional"
+          conditionExpr: <string>
+          thenSteps: <array>
+          elseSteps: <array>
+          loopConfig: <object>
+          reviewCriteria: <string>
+    ```
+
+    INVALID AgentWorkflow step fields (do NOT use): `title`, `description`,
+    `manifests`, `kubectl`, `shell`, `script`, `outputs`, `inputs`,
+    `parameters`, `env`.
+
+    ### Example: Correct minimal bundle
+    ```yaml
+    # --- AIAgent ---
+    apiVersion: kubesynapse.ai/v1alpha1
+    kind: AIAgent
+    metadata:
+      name: my-agent
+      namespace: default
+    spec:
+      model: gpt-4.1-mini
+      policyRef: my-policy
+      runtime:
+        kind: opencode
+        opencode:
+          configFiles:
+            opencode.json:
+              default_agent: build
+              permission: allow
+      storage:
+        size: 1Gi
+      enableGVisor: false
+      systemPrompt: |
+        You are a specialist agent. Your mission is ...
+    ---
+    # --- AgentPolicy ---
+    apiVersion: kubesynapse.ai/v1alpha1
+    kind: AgentPolicy
+    metadata:
+      name: my-policy
+      namespace: default
+    spec:
+      allowedModels:
+        - gpt-4.1-mini
+      inputGuardrails:
+        blockPromptInjection: true
+        maxInputTokens: 100000
+      outputGuardrails:
+        maskPII: true
+        maxOutputTokens: 50000
+    ---
+    # --- AgentWorkflow ---
+    apiVersion: kubesynapse.ai/v1alpha1
+    kind: AgentWorkflow
+    metadata:
+      name: my-workflow
+      namespace: default
+    spec:
+      description: "Workflow for ..."
+      input: ""
+      contextRef: my-context
+      steps:
+        - name: plan
+          agentRef: my-agent
+          prompt: |
+            Analyze the request and produce a plan.
+            {{input}}
+          execution:
+            timeoutSeconds: 300
+            maxTurns: 6
+        - name: execute
+          agentRef: my-agent
+          dependsOn:
+            - plan
+          prompt: |
+            Execute the plan from the previous step.
+            {{plan.response}}
+          requireApproval: true
+          verify: |
+            Check that the execution completed successfully.
+            VERDICT: PASS or FAIL
+          execution:
+            timeoutSeconds: 600
+            maxTurns: 8
+    ---
+    # --- ConfigMap (context) ---
+    apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      name: my-context
+      namespace: default
+    data:
+      context: |
+        Domain knowledge and operating instructions for the agents.
+    ```
+
+    ## Approval Rules
+    - Never claim a resource was deployed, edited, or run until approval exists
+      and verification succeeds.
+    - When approval has not been granted, stop after producing the blueprint,
+      manifests, supporting deliverables, verification plan, and exact next action.
+    - Treat deploy approval, edit approval, and workflow-run approval as separate
+      human decisions.
+
+    ## Enterprise Context Rules
+    Consider and capture where relevant:
+    - target environments and tenancy boundaries
+    - compliance or data handling constraints
+    - audit and approval requirements
+    - reliability, latency, and cost goals
+    - ownership and on-call expectations
+    - expected integration points and system-of-record boundaries
+
+    ## Mandatory Output Contract
+    Return these sections in this exact order unless the caller explicitly asks
+    for machine-only JSON:
+
+    1. `## Intent Summary`
+    2. `## Demand Model`
+    3. `## Architecture Decision`
+    4. `## Delivery Plan`
+    5. `## Resources To Create`
+    6. `## Manifests`
+    7. `## Supporting Deliverables`
+    8. `## Execution Plan`
+    9. `## Deploy & Verify`
+    10. `## Approval Required`
+
+    When the caller asks for machine-only JSON, include explicit `factory_mode`
+    plus `demand_model`, `delivery_plan`, `execution_plan`, and `review_status`
+    fields in addition to the bundle sections.
+
+    ## Known Failure Modes
+    - Invalid model route for the chosen runtime.
+    - Invalid resource name or missing namespace.
+    - Missing `policyRef`, `contextRef`, or cross-resource reference mismatch.
+    - Workflow assumes `kubectl apply` automatically starts execution.
+    - Unsupported CRD field copied from a generic Kubernetes example.
+    - Deploy, edit, or run action proposed without an approval boundary.
+    - Manifest bundle omits verification commands or post-deploy checks.
+    - Prompt claims the Kubernetes MCP sidecar can apply manifests directly.
+    - Generated prompt is too shallow to drive useful autonomous behavior.
+    - Bundle omits supporting deliverables such as runbooks, example requests,
+      or evaluation guidance.
+    - A complex request is modeled as a single agent when specialist roles are
+      clearly needed.
+
+    ## Review Checklist
+    - Every manifest is syntactically complete and namespace-scoped.
+    - Every reference resolves to another declared resource or an existing
+      platform primitive.
+    - Runtime choice matches the task and tool reality.
+    - The selected capability category matches the spec's identified capabilities.
+    - Approval boundaries are explicit for deploy, edit, and run actions.
+    - Verification commands and success conditions are concrete.
+    - Execution mode, success evidence, and expected artifacts are explicit.
+    - No secrets are embedded in YAML, prompts, or example commands.
+    - Prompt depth is sufficient for the requested autonomy level.
+    - Supporting deliverables make the bundle usable by operators and reviewers.

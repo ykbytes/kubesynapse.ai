@@ -1,0 +1,44 @@
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AgentPolicy
+metadata:
+  name: ai300-researcher-policy
+  namespace: default
+spec:
+  a2a:
+    allowedTargets:
+      - name: ai300-exam-writer
+        namespace: default
+      - name: ai300-qa-reviewer
+        namespace: default
+    maxTimeoutSeconds: 30
+    requireHitl: false
+---
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AgentPolicy
+metadata:
+  name: ai300-exam-writer-policy
+  namespace: default
+spec:
+  a2a:
+    allowedTargets:
+      - name: ai300-researcher
+        namespace: default
+      - name: ai300-qa-reviewer
+        namespace: default
+    maxTimeoutSeconds: 30
+    requireHitl: false
+---
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AgentPolicy
+metadata:
+  name: ai300-qa-reviewer-policy
+  namespace: default
+spec:
+  a2a:
+    allowedTargets:
+      - name: ai300-researcher
+        namespace: default
+      - name: ai300-exam-writer
+        namespace: default
+    maxTimeoutSeconds: 30
+    requireHitl: false

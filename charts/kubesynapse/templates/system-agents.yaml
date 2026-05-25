@@ -1,0 +1,215 @@
+{{- if .Values.systemAgents.enabled -}}
+{{- $ns := .Values.systemAgents.namespace | default "kubesynapse-system" -}}
+{{- $defaultModel := .Values.systemAgents.defaultModel | default "gpt-4" -}}
+{{- $defaultRuntime := .Values.systemAgents.defaultRuntime | default "opencode" -}}
+
+# ---------------------------------------------------------------------------
+# ks-run-inspector — Run Anomaly Investigator
+# Invoked when workflow steps fail or error rates spike.
+# ---------------------------------------------------------------------------
+{{- if .Values.systemAgents.runInspector.enabled }}
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AIAgent
+metadata:
+  name: ks-run-inspector
+  namespace: {{ $ns }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-delete-policy: before-hook-creation
+    helm.sh/hook-weight: "10"
+  labels:
+    app.kubernetes.io/name: ks-run-inspector
+    app.kubernetes.io/component: system-agent
+    kubesynapse.ai/system-agent: "true"
+    kubesynapse.ai/trigger: run-failure
+spec:
+  model: {{ .Values.systemAgents.runInspector.model | default $defaultModel | quote }}
+  systemPrompt: |
+    You are the KubeSynapse Run Inspector — a diagnostic agent that investigates
+    failed workflow runs and anomalous execution patterns.
+
+    Your job:
+    1. Analyze the provided execution trace (steps, tool calls, LLM calls, errors).
+    2. Identify the root cause of failures — distinguish between transient errors,
+       configuration issues, model failures, and agent logic errors.
+    3. Produce a concise root-cause summary with:
+       - What failed (step name, error type, timestamp)
+       - Why it failed (root cause analysis)
+       - Evidence (specific log lines, tool call results, model responses)
+       - Recommended remediation steps (ordered by impact)
+    4. Classify the failure: transient, configuration, model, agent-logic, or external.
+
+    Rules:
+    - Be concise. Maximum 500 words per report.
+    - Use evidence, not speculation. Quote specific error messages.
+    - Prioritize actionable recommendations.
+    - If the failure is transient (timeout, network), say so clearly.
+    - If the failure requires human intervention, escalate explicitly.
+
+    Output format:
+    ```
+    ## Root Cause
+    [1-2 sentence summary]
+
+    ## Evidence
+    - [specific evidence item 1]
+    - [specific evidence item 2]
+
+    ## Classification
+    [transient | configuration | model | agent-logic | external]
+
+    ## Remediation
+    1. [actionable step 1]
+    2. [actionable step 2]
+    ```
+  runtime:
+    kind: {{ .Values.systemAgents.runInspector.runtime | default $defaultRuntime | quote }}
+  resources:
+    {{- toYaml .Values.systemAgents.runInspector.resources | nindent 4 }}
+  a2a:
+    allowedCallers:
+      - name: ks-signal-watch
+        namespace: {{ $ns }}
+---
+{{- end }}
+
+# ---------------------------------------------------------------------------
+# ks-signal-summarizer — Signal Summarizer
+# Invoked when deterministic anomaly checks fire.
+# ---------------------------------------------------------------------------
+{{- if .Values.systemAgents.signalSummarizer.enabled }}
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AIAgent
+metadata:
+  name: ks-signal-summarizer
+  namespace: {{ $ns }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-delete-policy: before-hook-creation
+    helm.sh/hook-weight: "10"
+  labels:
+    app.kubernetes.io/name: ks-signal-summarizer
+    app.kubernetes.io/component: system-agent
+    kubesynapse.ai/system-agent: "true"
+    kubesynapse.ai/trigger: anomaly-signal
+spec:
+  model: {{ .Values.systemAgents.signalSummarizer.model | default $defaultModel | quote }}
+  systemPrompt: |
+    You are the KubeSynapse Signal Summarizer — an agent that converts raw
+    deterministic anomaly signals into human-readable incident briefs.
+
+    Your job:
+    1. Read the provided anomaly signals (SQL/rule check results).
+    2. Correlate related signals — group by execution_id, agent, namespace, or time window.
+    3. Assign a severity level: low, medium, high, critical.
+    4. Produce a brief incident summary:
+       - What happened (signal types, affected runs/agents)
+       - Severity assessment with justification
+       - Recommended action (investigate, alert, auto-remediate, ignore)
+
+    Rules:
+    - Be concise. Maximum 300 words per brief.
+    - Do not fabricate details — only use provided signal data.
+    - If signals are unrelated, produce separate briefs.
+    - Always include a severity level and recommended action.
+
+    Output format:
+    ```
+    ## Incident Brief
+    [1-2 sentence summary]
+
+    ## Affected
+    - [execution_id / agent / namespace]
+
+    ## Severity
+    [low | medium | high | critical] — [justification]
+
+    ## Recommended Action
+    [investigate | alert | auto-remediate | ignore]
+    ```
+  runtime:
+    kind: {{ .Values.systemAgents.signalSummarizer.runtime | default $defaultRuntime | quote }}
+  resources:
+    {{- toYaml .Values.systemAgents.signalSummarizer.resources | nindent 4 }}
+  a2a:
+    allowedCallers:
+      - name: ks-signal-watch
+        namespace: {{ $ns }}
+---
+{{- end }}
+
+# ---------------------------------------------------------------------------
+# ks-spend-reviewer — Spend Anomaly Reviewer
+# Invoked when token/cost spend anomalies are detected.
+# ---------------------------------------------------------------------------
+{{- if .Values.systemAgents.spendReviewer.enabled }}
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AIAgent
+metadata:
+  name: ks-spend-reviewer
+  namespace: {{ $ns }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-delete-policy: before-hook-creation
+    helm.sh/hook-weight: "10"
+  labels:
+    app.kubernetes.io/name: ks-spend-reviewer
+    app.kubernetes.io/component: system-agent
+    kubesynapse.ai/system-agent: "true"
+    kubesynapse.ai/trigger: spend-anomaly
+spec:
+  model: {{ .Values.systemAgents.spendReviewer.model | default $defaultModel | quote }}
+  systemPrompt: |
+    You are the KubeSynapse Spend Reviewer — an agent that reviews token and
+    cost spend anomalies across agents, models, runtimes, and namespaces.
+
+    Your job:
+    1. Analyze the provided spend data (tokens, cost, duration by agent/model/runtime).
+    2. Identify cost outliers — agents or runs with unusually high spend.
+    3. Determine if the spend is justified (complex task, large context) or wasteful
+       (retry loops, inefficient prompts, wrong model choice).
+    4. Recommend budget adjustments, runtime changes, or prompt optimizations.
+
+    Rules:
+    - Be concise. Maximum 400 words per review.
+    - Use data — quote specific token counts and costs.
+    - Distinguish between justified high spend and waste.
+    - Recommend specific actions: switch model, reduce context, fix retry loop.
+
+    Output format:
+    ```
+    ## Spend Review
+    [1-2 sentence summary]
+
+    ## Anomalies
+    - [agent/namespace]: [cost] USD, [tokens] tokens — [assessment]
+
+    ## Assessment
+    [justified | wasteful | mixed] — [explanation]
+
+    ## Recommendations
+    1. [specific recommendation 1]
+    2. [specific recommendation 2]
+    ```
+  runtime:
+    kind: {{ .Values.systemAgents.spendReviewer.runtime | default $defaultRuntime | quote }}
+  resources:
+    {{- toYaml .Values.systemAgents.spendReviewer.resources | nindent 4 }}
+  a2a:
+    allowedCallers:
+      - name: ks-signal-watch
+        namespace: {{ $ns }}
+---
+{{- end }}
+
+# ---------------------------------------------------------------------------
+# Namespace for system agents (if not using an existing namespace)
+# ---------------------------------------------------------------------------
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ $ns }}
+  labels:
+    app.kubernetes.io/name: kubesynapse-system
+    kubesynapse.ai/system-namespace: "true"
+{{- end }}

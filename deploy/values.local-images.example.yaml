@@ -1,0 +1,105 @@
+operator:
+  image:
+    repository: localhost/kubesynapse/kubesynapse-operator
+    tag: dev
+    pullPolicy: IfNotPresent
+  workerImage:
+    repository: localhost/kubesynapse/kubesynapse-operator
+    tag: dev
+    pullPolicy: IfNotPresent
+
+opencodeRuntime:
+  image:
+    repository: localhost/kubesynapse/kubesynapse-opencode-rt
+    tag: dev
+    pullPolicy: IfNotPresent
+  limits:
+    maxPromptChars: 256000
+    maxSystemPromptChars: 64000
+    maxTeamContextChars: 32000
+    modelContextLimit: 256000
+    modelOutputLimit: 16384
+  autonomy:
+    sessionInitOnCreate: false
+    maxRetries: 3
+    compactionTokenThreshold: 0.7
+    planThresholdChars: 4096
+    structuredOutputRetryCount: 3
+
+apiGateway:
+  image:
+    repository: localhost/kubesynapse/kubesynapse-api-gateway
+    tag: dev
+    pullPolicy: IfNotPresent
+
+webUi:
+  image:
+    repository: localhost/kubesynapse/kubesynapse-web-ui
+    tag: dev
+    pullPolicy: IfNotPresent
+
+piRuntime:
+  image:
+    repository: localhost/kubesynapse/kubesynapse-pi-rt
+    tag: dev
+    pullPolicy: IfNotPresent
+
+mistralVibeRuntime:
+  image:
+    repository: localhost/kubesynapse/kubesynapse-vibe-rt
+    tag: dev
+    pullPolicy: IfNotPresent
+
+litellm:
+  image:
+    repository: docker.io/litellm/litellm
+    tag: v1.82.3-stable
+    pullPolicy: IfNotPresent
+
+mcpHub:
+  servers:
+    github:
+      image: localhost/kubesynapse/mcp-github-adapter
+      imagePullPolicy: IfNotPresent
+
+mcpToolSidecars:
+  codeExec:
+    image: localhost/kubesynapse/mcp-code-exec
+    tag: dev
+    port: 8090
+  webSearch:
+    image: localhost/kubesynapse/mcp-web-search
+    tag: dev
+    port: 8091
+  documents:
+    image: localhost/kubesynapse/mcp-documents
+    tag: dev
+    port: 8092
+  browser:
+    image: localhost/kubesynapse/mcp-browser
+    tag: dev
+    port: 8093
+  database:
+    image: localhost/kubesynapse/mcp-database
+    tag: dev
+    port: 8094
+  git:
+    image: localhost/kubesynapse/mcp-git
+    tag: dev
+    port: 8095
+  githubAdapter:
+    image: localhost/kubesynapse/mcp-github-adapter
+    tag: dev
+    port: 8096
+  kubernetes:
+    image: localhost/kubesynapse/mcp-kubernetes
+    tag: dev
+    port: 8097
+  messaging:
+    image: localhost/kubesynapse/mcp-messaging
+    tag: dev
+    port: 8098
+  rag:
+    image: localhost/kubesynapse/mcp-rag
+    tag: dev
+    port: 8099

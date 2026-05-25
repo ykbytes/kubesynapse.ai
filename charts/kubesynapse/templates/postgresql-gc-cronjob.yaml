@@ -1,0 +1,75 @@
+{{- if and .Values.postgresql.enabled .Values.gc.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "kubesynapse.fullname" . }}-gc
+  labels:
+    {{- include "kubesynapse.labels" . | nindent 4 }}
+    app.kubernetes.io/component: garbage-collection
+spec:
+  schedule: {{ .Values.gc.schedule | default "0 3 * * *" | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        metadata:
+          labels:
+            app: kubesynapse-gc
+        spec:
+          restartPolicy: Never
+          terminationGracePeriodSeconds: 15
+          containers:
+            - name: gc
+              image: {{ .Values.gc.image.repository | default "curlimages/curl" }}:{{ .Values.gc.image.tag | default "8.12.1" }}
+              imagePullPolicy: {{ .Values.gc.image.pullPolicy | default "IfNotPresent" }}
+              command:
+                - sh
+                - -c
+                - |
+                  set -e
+                  echo "[$(date -u)] Starting KubeSynapse garbage collection..."
+
+                  # Purge audit logs older than retention period
+                  echo "[$(date -u)] Purging old audit logs..."
+                  AUDIT_RESP=$(curl -s -w "\n%{http_code}" -X DELETE \
+                    -H "Authorization: Bearer $API_GATEWAY_SHARED_TOKEN" \
+                    "http://{{ include "kubesynapse.fullname" . }}-api-gateway.{{ .Release.Namespace }}.svc.cluster.local:8080/api/v1/admin/audit/purge")
+                  AUDIT_CODE=$(echo "$AUDIT_RESP" | tail -1)
+                  AUDIT_BODY=$(echo "$AUDIT_RESP" | sed '$d')
+                  if [ "$AUDIT_CODE" = "200" ]; then
+                    echo "[$(date -u)] Audit purge: $AUDIT_BODY"
+                  else
+                    echo "[$(date -u)] WARNING: Audit purge returned HTTP $AUDIT_CODE: $AUDIT_BODY"
+                  fi
+
+                  # Clean up expired sessions
+                  echo "[$(date -u)] Cleaning expired sessions..."
+                  SESSION_RESP=$(curl -s -w "\n%{http_code}" -X POST \
+                    -H "Authorization: Bearer $API_GATEWAY_SHARED_TOKEN" \
+                    -H "Content-Type: application/json" \
+                    "http://{{ include "kubesynapse.fullname" . }}-api-gateway.{{ .Release.Namespace }}.svc.cluster.local:8080/api/v1/admin/sessions/cleanup")
+                  SESSION_CODE=$(echo "$SESSION_RESP" | tail -1)
+                  if [ "$SESSION_CODE" = "200" ]; then
+                    echo "[$(date -u)] Session cleanup: OK"
+                  else
+                    echo "[$(date -u)] WARNING: Session cleanup returned HTTP $SESSION_CODE"
+                  fi
+
+                  echo "[$(date -u)] Garbage collection complete."
+              env:
+                - name: API_GATEWAY_SHARED_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "kubesynapse.fullname" . }}-llm-api-keys
+                      key: API_GATEWAY_SHARED_TOKEN
+              resources:
+                requests:
+                  cpu: "10m"
+                  memory: "32Mi"
+                limits:
+                  cpu: "50m"
+                  memory: "64Mi"
+{{- end }}

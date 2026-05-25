@@ -1,0 +1,16 @@
+subagent_strategy: parallel
+subagents:
+  - namespace: team-a
+    name: reviewer
+    role: Code Review
+    task: Review the implementation and list concrete defects.
+    input_files:
+      - path: /workspace/README.md
+        purpose: Current public documentation
+        include_content: false
+        max_chars: 256
+  - namespace: team-a
+    name: docs
+    role: Docs
+    task: Draft release notes for the same change.
+    result_file_path: /workspace/artifacts/docs-summary.md

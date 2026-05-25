@@ -1,0 +1,359 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: jupiter8-web-synth-context
+  namespace: default
+data:
+  product.md: |
+    Jupiter-8 inspired browser synth. 8-voice poly, dual oscillators, filter+amp ADSR, LFO, arp, 16-step sequencer, chorus/delay/reverb, presets, on-screen keyboard, Web MIDI.
+  architecture.md: |
+    Stack: React 18, Vite 5, TypeScript strict, Tone.js, Zustand 5, Tailwind CSS 3. File layout: src/{components,engine,stores,hooks,lib,presets,types}. No any, no @ts-ignore. Audio via Tone.start() after gesture. Audio/patch state in engine/store layer. Dispose Tone nodes when replacing. localStorage for presets. Web MIDI feature-detected.
+  acceptance.md: |
+    1. npm install succeeds. 2. npm run check zero TS errors. 3. npm run build succeeds. 4. README.md has quickstart. 5. RUNBOOK.md explains MIDI/presets. 6. PRESET_GUIDE.md lists presets. 7. UI exposes synth/arp/seq/effects. 8. No external backend needed.
+---
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AIAgent
+metadata:
+  name: j8-web-builder
+  namespace: default
+spec:
+  model: opencode/minimax-m2.5-free
+  runtime:
+    kind: pi
+    pi:
+      provider: opencode
+      model: opencode/minimax-m2.5-free
+      thinkingLevel: high
+      tools:
+        - read
+        - bash
+        - edit
+        - write
+        - grep
+        - glob
+        - webfetch
+      permissionLevel: permissive
+  storage:
+    size: 4Gi
+  resources:
+    requests:
+      memory: 2Gi
+      cpu: "1"
+    limits:
+      memory: 8Gi
+      cpu: "4"
+  enableGVisor: false
+  skills:
+    files:
+      skills/j8-audio-architecture/SKILL.md: |
+        ---
+        name: j8-audio-architecture
+        description: Patterns for implementing the Jupiter-8 style synth engine.
+        ---
+
+        # Audio implementation rules
+
+        - Use Tone.js for voices, transport, envelopes, and FX.
+        - Prefer one engine facade that manages voices, arp, sequencer, and FX.
+        - Keep preset serialization plain JSON.
+        - Use Tone.Transport for arp and step sequencing.
+        - Dispose and rebuild nodes safely when architecture changes.
+        - Keep polyphony responsive with predictable defaults.
+
+      skills/j8-ui-patterns/SKILL.md: |
+        ---
+        name: j8-ui-patterns
+        description: UI guidance for a premium hardware-inspired synth layout.
+        ---
+
+        # UI rules
+
+        - Build labeled panels, not generic cards.
+        - Surface the most important controls above the fold.
+        - Use accessible buttons, sliders, switches, and keyboard controls.
+        - Keep the virtual keyboard always playable on desktop.
+        - Make narrow layouts stack cleanly instead of overflowing.
+
+      skills/j8-verification/SKILL.md: |
+        ---
+        name: j8-verification
+        description: Mandatory verification gates after each build phase.
+        ---
+
+        # Verification
+
+        Run these commands when asked and fix failures before finishing:
+
+        ```bash
+        npm install --legacy-peer-deps
+        npm run check
+        npm run build
+        ```
+
+        Never claim success without re-running the failing command.
+        If npm install fails with peer dependency conflicts, use `--legacy-peer-deps` flag.
+---
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AgentWorkflow
+metadata:
+  name: jupiter8-web-synth
+  namespace: default
+spec:
+  autoRetry:
+    enabled: true
+  description: >
+    Build a Jupiter-8 inspired browser synthesizer using a pre-defined architecture
+    blueprint and a pi-runtime implementation workflow. The builder agent creates
+    the actual app across sequential shared-session steps in one persistent workspace.
+  input: >
+    Build a production-quality browser-based Jupiter-8 inspired synthesizer with
+    polyphony, dual-oscillator subtractive synthesis, modulation, arpeggiator,
+    16-step sequencer, chorus/delay/reverb, preset management, Web MIDI support,
+    an on-screen keyboard, computer keyboard playability, and a premium
+    responsive interface using React, Vite, TypeScript, Tone.js, Zustand, and
+    Tailwind CSS.
+  contextRef: jupiter8-web-synth-context
+  messageBus: in-memory
+  steps:
+    - name: scaffold-project
+      agentRef: j8-web-builder
+      prompt: |
+        Create the initial project in /workspace.
+
+        Stack: React 18 + Vite 5 + TypeScript strict + Tone.js + Zustand 5 + Tailwind CSS 3.
+
+        ## Project bootstrap
+        - Create package.json with scripts: dev, build, preview, check.
+        - Use npm, React 18, Vite 5, TypeScript strict, Tone.js, Zustand 5, Tailwind CSS 3.
+        - Use exact compatible versions to avoid peer-dependency conflicts:
+          - vite: "^5.0.0"
+          - @vitejs/plugin-react: "^4.2.0"
+          - typescript: "^5.4.0"
+          - @types/react: "^18.2.0"
+          - @types/react-dom: "^18.2.0"
+          - tailwindcss: "^3.4.1"
+          - postcss: "^8.4.35"
+          - autoprefixer: "^10.4.17"
+        - Create tsconfig.json, vite.config.ts, tailwind.config.ts, postcss.config.js, index.html.
+        - Create src/main.tsx, src/App.tsx, src/index.css.
+        - Create the base folder structure under src/ for components, engine, stores, hooks, lib, presets, and types.
+        - Build a premium shell layout with a header, synth control area, preset sidebar, keyboard section, and sequencer/effects region placeholders.
+        - Add a README.md quickstart draft with install/run/build commands.
+
+        ## Important
+        - Do NOT run `npm install` or `yarn install` during this step.
+        - Only write the configuration and source files.
+        - Installation and build verification will happen in a later step.
+
+        Return ONLY raw JSON with this shape:
+        {
+          "step": "scaffold-project",
+          "created_files": [""],
+          "layout_ready": true
+        }
+      verify: |
+        PASS only if package.json, tsconfig.json, src/App.tsx, src/main.tsx, and README.md exist in /workspace.
+      execution:
+        timeoutSeconds: 3600
+        maxAttempts: 3
+        backoffSeconds: 10
+        maxTurns: 24
+        verifyRetries: 2
+        sessionGroup: j8-dev
+        requiredJsonPaths:
+          - step
+          - created_files.0
+          - layout_ready
+
+    - name: build-synth-core
+      agentRef: j8-web-builder
+      dependsOn:
+        - scaffold-project
+      prompt: |
+        Continue in the existing /workspace project.
+
+        ## Build the synth core
+        Create the real implementation for the engine and state layers.
+
+        Include at minimum:
+        - strict TypeScript types for synth params, modulation, presets, sequencer steps, arp settings, MIDI state, and FX.
+        - engine modules for polyphonic voice handling, oscillator/filter/envelope configuration, arp/step-sequencer scheduling, and FX chain management.
+        - Zustand stores for synth state, transport/sequencer state, preset management, and UI/session state.
+        - localStorage persistence helpers.
+        - a starter preset bank with musically useful defaults.
+
+        Functional requirements:
+        - 8-voice polyphony
+        - dual oscillators plus sub/noise flavor controls where appropriate
+        - amp envelope and filter envelope
+        - LFO routing for pitch/filter/PWM style modulation
+        - arp directions and octave span
+        - 16-step sequencer state capable of storing note, octave, gate, accent, and rest/tie style data
+        - chorus, delay, and reverb parameter state
+
+        ## Verification
+        - If node_modules does not exist, run `npm install --legacy-peer-deps` first.
+        - Run `npm run check` and `npm run build`, then fix anything broken.
+
+        Return ONLY raw JSON with this shape:
+        {
+          "step": "build-synth-core",
+          "modules": [""],
+          "preset_count": 0,
+          "verified_commands": ["npm run check", "npm run build"],
+          "core_ready": true
+        }
+      verify: |
+        PASS only if the workspace contains engine modules, store modules, and preset data, and both `npm run check` and `npm run build` succeed.
+      execution:
+        timeoutSeconds: 5400
+        maxAttempts: 3
+        backoffSeconds: 10
+        maxTurns: 32
+        verifyRetries: 2
+        sessionGroup: j8-dev
+        requiredJsonPaths:
+          - step
+          - modules.0
+          - preset_count
+
+    - name: build-ui-panels
+      agentRef: j8-web-builder
+      dependsOn:
+        - build-synth-core
+      prompt: |
+        Continue in the existing /workspace project.
+
+        ## Build the interface
+        Create the real UI for the synth, using the engine/state modules that now exist.
+
+        The UI must include:
+        - top transport and preset bar
+        - oscillator and mixer panel
+        - filter and envelope panels
+        - modulation/LFO panel
+        - arp panel
+        - step sequencer panel
+        - FX panel
+        - virtual keyboard with pointer and mouse support
+        - patch browser/save/load/export/import flows
+        - MIDI status area with graceful fallback text when MIDI is unavailable
+
+        UX requirements:
+        - hardware-inspired dark styling
+        - responsive layout for desktop and narrow laptop widths
+        - helpful labels, aria labels, and no dead controls
+        - keyboard shortcuts for play/stop and octave changes where sensible
+
+        ## Verification
+        - If node_modules does not exist, run `npm install --legacy-peer-deps` first.
+        - Run `npm run check` and `npm run build`, then fix failures.
+
+        Return ONLY raw JSON with this shape:
+        {
+          "step": "build-ui-panels",
+          "components": [""],
+          "responsive_layout": true,
+          "verified_commands": ["npm run check", "npm run build"],
+          "ui_ready": true
+        }
+      verify: |
+        PASS only if the UI exposes synth controls, keyboard, sequencer, effects, and presets, and both `npm run check` and `npm run build` succeed.
+      execution:
+        timeoutSeconds: 5400
+        maxAttempts: 3
+        backoffSeconds: 10
+        maxTurns: 32
+        verifyRetries: 2
+        sessionGroup: j8-dev
+        requiredJsonPaths:
+          - step
+          - components.0
+          - responsive_layout
+
+    - name: integrate-and-polish
+      agentRef: j8-web-builder
+      dependsOn:
+        - build-ui-panels
+      prompt: |
+        Continue in the existing /workspace project.
+
+        ## Integration and polish
+        Finish the app so it is playable and presentable.
+
+        Required work:
+        - wire all UI panels to the real stores/engine
+        - ensure Tone.start() is triggered from a user gesture before audio playback
+        - implement computer keyboard note triggering
+        - implement Web MIDI detection and event handling with graceful fallback
+        - ensure preset save/load/export/import works using localStorage and JSON files
+        - ship starter presets and make them selectable in the UI
+        - improve copy, labels, empty states, and help text
+        - create RUNBOOK.md and PRESET_GUIDE.md with exact usage instructions
+
+        ## Verification
+        - If node_modules does not exist, run `npm install --legacy-peer-deps` first.
+        - Run `npm run check`.
+        - Run `npm run build`.
+        - Fix all failures before finishing.
+
+        Return ONLY raw JSON with this shape:
+        {
+          "step": "integrate-and-polish",
+          "features_completed": [""],
+          "docs_written": ["README.md", "RUNBOOK.md", "PRESET_GUIDE.md"],
+          "verified_commands": ["npm run check", "npm run build"],
+          "app_ready": true
+        }
+      verify: |
+        PASS only if README.md, RUNBOOK.md, and PRESET_GUIDE.md exist and both `npm run check` and `npm run build` succeed.
+      execution:
+        timeoutSeconds: 5400
+        maxAttempts: 3
+        backoffSeconds: 10
+        maxTurns: 32
+        verifyRetries: 2
+        sessionGroup: j8-dev
+        requiredJsonPaths:
+          - step
+          - features_completed.0
+          - docs_written.0
+
+    - name: final-summary
+      agentRef: j8-web-builder
+      dependsOn:
+        - integrate-and-polish
+      prompt: |
+        Perform a final inspection of /workspace.
+
+        ## Final pass
+        - If node_modules does not exist, run `npm install --legacy-peer-deps` first.
+        - Re-run `npm run check`.
+        - Re-run `npm run build`.
+        - Fix anything still broken.
+        - Ensure README.md quickstart is accurate.
+        - Ensure RUNBOOK.md contains launch, build, preset, and MIDI guidance.
+        - Ensure PRESET_GUIDE.md lists the shipped starter presets and their character.
+
+        Return ONLY raw JSON with this shape:
+        {
+          "step": "final-summary",
+          "run_commands": ["npm install --legacy-peer-deps", "npm run dev", "npm run check", "npm run build"],
+          "important_files": [""],
+          "starter_presets": [""],
+          "ready": true
+        }
+      verify: |
+        PASS only if the run commands in the summary are valid for the workspace, the documentation files exist, and both `npm run check` and `npm run build` succeed.
+      execution:
+        timeoutSeconds: 3600
+        maxAttempts: 3
+        backoffSeconds: 10
+        maxTurns: 24
+        verifyRetries: 2
+        sessionGroup: j8-dev
+        requiredJsonPaths:
+          - step
+          - run_commands.0
+          - important_files.0
+          - starter_presets.0

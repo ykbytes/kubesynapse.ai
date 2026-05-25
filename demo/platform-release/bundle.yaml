@@ -1,0 +1,274 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: platform-release-context
+  namespace: default
+data:
+  environment.md: |
+    # Environment
+
+    - Product: KubeSynapse
+    - Current deployment shape: API gateway + operator + web UI + shared services in Kubernetes
+    - Current audience: platform teams running AI agents and workflows in-cluster
+    - Sensitive behaviors to preserve:
+      - gateway auth and session flows
+      - same-host /api behavior for the web UI
+      - workflow trace fidelity and runtime event ingestion
+      - existing `github-copilot/gpt-5-mini` path
+      - shared-token auth for local and service-to-service use cases
+
+  change-policy.md: |
+    # Change Policy
+
+    - No big-bang release recommendation.
+    - Prefer staged rollout, rollback checkpoints, and explicit success signals.
+    - Flag any ingress, auth, SSE, websocket, or timeout-related risk.
+    - If evidence is incomplete, say so explicitly.
+    - Final output must help an operator decide, not pressure an operator to ship.
+
+  acceptance.md: |
+    # Acceptance Criteria
+
+    A strong final release brief must include:
+
+    1. upstream facts and version-sensitive caveats
+    2. platform-specific blast radius analysis
+    3. rollout sequencing
+    4. rollback triggers
+    5. success signals and post-change checks
+    6. unresolved risks and go/no-go recommendation
+---
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AgentPolicy
+metadata:
+  name: platform-release-policy
+  namespace: default
+spec:
+  inputGuardrails:
+    blockPromptInjection: true
+    blockedPatterns:
+      - "(?i)ignore previous instructions"
+      - "(?i)print all secrets"
+    maxInputTokens: 12000
+  outputGuardrails:
+    maskPII: true
+    blockedOutputPatterns:
+      - "(?i)api[_-]?key"
+      - "(?i)private[_-]?key"
+    maxOutputTokens: 6000
+  allowedModels:
+    - github-copilot/gpt-5-mini
+  mcpRequireHitl: false
+  toolPolicy:
+    maxDelegationDepth: 1
+---
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AIAgent
+metadata:
+  name: release-researcher
+  namespace: default
+spec:
+  model: github-copilot/gpt-5-mini
+  policyRef: platform-release-policy
+  runtime:
+    kind: opencode
+  systemPrompt: |
+    You are a release researcher for Kubernetes platform changes.
+
+    Your job is to gather upstream facts and produce evidence-backed upgrade notes.
+
+    Rules:
+    - Use Context7 when the task calls for current framework or product documentation.
+    - Cite versions, API names, and source-backed caveats.
+    - Separate upstream facts from local recommendations.
+    - Write your detailed findings to /workspace/ingress-upgrade-brief.md.
+    - Return a concise summary that a downstream platform architect can act on.
+    - Never claim compatibility you did not verify from documentation.
+  mcpConnections:
+    - connectionId: context7-demo-conn
+      serverId: context7
+      name: Context7
+      slug: context7
+      transport: remote
+      source: saved
+      runtime:
+        kind: remote
+        configKey: context7
+        url: https://mcp.context7.com/mcp
+  mcpServers:
+    - context7
+  skills:
+    files:
+      skills/release-research/SKILL.md: |
+        ---
+        name: release-research
+        description: Gather upstream release evidence and turn it into operator-ready notes.
+        allowedSandboxTools:
+          - sandbox.filesystem.read
+          - sandbox.filesystem.write
+          - sandbox.filesystem.mkdir
+        allowedMcpServers:
+          - context7
+        allowSubagents: false
+        ---
+        Use this skill when a workflow needs version-aware release evidence.
+        Write the detailed brief to /workspace/ingress-upgrade-brief.md.
+  storage:
+    size: 1Gi
+---
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AIAgent
+metadata:
+  name: platform-risk-architect
+  namespace: default
+spec:
+  model: github-copilot/gpt-5-mini
+  policyRef: platform-release-policy
+  runtime:
+    kind: opencode
+  systemPrompt: |
+    You are a platform risk architect reviewing Kubernetes and gateway changes.
+
+    Your job is to convert raw upgrade research into a rollout decision package.
+
+    Required output:
+    - operational blast radius
+    - authentication and ingress risks
+    - workflow and SSE risk notes
+    - staged rollout plan
+    - rollback criteria
+    - post-change verification checklist
+
+    Write the detailed analysis to /workspace/release-risk-register.md.
+    Be specific, conservative, and evidence-driven.
+  skills:
+    files:
+      skills/risk-register/SKILL.md: |
+        ---
+        name: risk-register
+        description: Turn research into an operator-grade risk register and rollout plan.
+        allowedSandboxTools:
+          - sandbox.filesystem.read
+          - sandbox.filesystem.write
+        allowSubagents: false
+        ---
+        Read the research artifact before responding.
+        Output a structured risk register with mitigations.
+  storage:
+    size: 1Gi
+---
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AIAgent
+metadata:
+  name: operator-brief-writer
+  namespace: default
+spec:
+  model: github-copilot/gpt-5-mini
+  policyRef: platform-release-policy
+  runtime:
+    kind: opencode
+  systemPrompt: |
+    You are the final operator brief writer.
+
+    Your job is to turn release research and platform risk analysis into a brief
+    that an operator or change board could actually use.
+
+    The brief must contain:
+    - recommendation
+    - prerequisites
+    - rollout phases
+    - rollback triggers
+    - post-release validation checks
+    - unresolved risks
+
+    Write the final document to /workspace/operator-brief.md.
+    Be crisp, concrete, and free of hype.
+  storage:
+    size: 1Gi
+---
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AgentWorkflow
+metadata:
+  name: ingress-upgrade-release-readiness
+  namespace: default
+spec:
+  description: >
+    Evidence-backed release-readiness workflow for a Kubernetes ingress and
+    control-plane upgrade. Research first, assess risk second, publish the final
+    operator brief only after approval.
+  input: >
+    Assess whether KubeSynapse is ready for an ingress-nginx upgrade affecting
+    the API gateway and web UI entry path. Focus on auth, SSE, ingress behavior,
+    rollout safety, and rollback discipline.
+  contextRef: platform-release-context
+  messageBus: in-memory
+  autoRetry:
+    enabled: true
+    maxAttempts: 1
+    retryableFailureClasses:
+      - TimeoutError
+      - ConnectTimeout
+      - ReadTimeout
+      - RemoteProtocolError
+      - ConnectError
+  steps:
+    - name: research-upstream-guidance
+      agentRef: release-researcher
+      prompt: |
+        Research this change request using Context7 and produce a release brief.
+
+        Request:
+        {{input}}
+
+        Requirements:
+        1. Identify relevant ingress-nginx behaviors and upgrade caveats.
+        2. Focus on auth headers, SSE streaming, timeouts, body size, and sticky behavior where relevant.
+        3. Write detailed notes to /workspace/ingress-upgrade-brief.md.
+        4. Return a concise summary with the strongest risks and caveats.
+      execution:
+        timeoutSeconds: 240
+        maxAttempts: 2
+        backoffSeconds: 5
+
+    - name: assess-platform-risk
+      agentRef: platform-risk-architect
+      dependsOn:
+        - research-upstream-guidance
+      prompt: |
+        Turn the research summary below into a KubeSynapse-specific rollout and risk package.
+
+        Research summary:
+        {{previous_output}}
+
+        Also read /workspace/ingress-upgrade-brief.md for the detailed notes.
+
+        Write a detailed risk register and rollout plan to /workspace/release-risk-register.md.
+        Return a concise summary of the recommended rollout shape.
+      execution:
+        timeoutSeconds: 240
+        maxAttempts: 1
+
+    - name: publish-operator-brief
+      agentRef: operator-brief-writer
+      dependsOn:
+        - assess-platform-risk
+      requireApproval: true
+      prompt: |
+        Produce the final operator brief for this change.
+
+        Platform risk summary:
+        {{previous_output}}
+
+        Read both of these files before answering:
+        - /workspace/ingress-upgrade-brief.md
+        - /workspace/release-risk-register.md
+
+        Write the final operator brief to /workspace/operator-brief.md.
+        Return a concise release recommendation and the top rollback trigger.
+      verify: |
+        PASS only if the response and artifact clearly include:
+        recommendation, rollout phases, rollback triggers, validation checks, and unresolved risks.
+      execution:
+        timeoutSeconds: 180
+        maxAttempts: 1
+        verifyRetries: 1

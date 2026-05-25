@@ -1,0 +1,17 @@
+{
+  "sidecarName": "code-exec",
+  "version": "1.0.0",
+  "allowedTools": ["run_python", "run_bash", "run_node"],
+  "networkEgress": {
+    "mode": "deny-all",
+    "domains": [],
+    "ips": [],
+    "ports": []
+  },
+  "resourceLimits": {
+    "cpuRequest": "50m",
+    "cpuLimit": "500m",
+    "memoryRequest": "64Mi",
+    "memoryLimit": "256Mi"
+  }
+}

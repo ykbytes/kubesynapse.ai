@@ -1,0 +1,22 @@
+{
+  "name": "KubeSynapse",
+  "short_name": "KubeSynapse",
+  "description": "Kubernetes-Native AI Agent Platform",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0d1116",
+  "theme_color": "#0d1116",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    },
+    {
+      "src": "/apple-touch-icon.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    }
+  ]
+}

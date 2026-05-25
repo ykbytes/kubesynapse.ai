@@ -1,0 +1,16 @@
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AIAgent
+metadata:
+  name: cli-e2e-reviewer
+  namespace: default
+spec:
+  model: github-copilot/gpt-5-mini
+  policyRef: cli-e2e-policy
+  runtime:
+    kind: opencode
+  systemPrompt: >
+    You are the CLI E2E reviewer agent. Review the previous output, improve it,
+    and end with a short approval statement.
+  storage:
+    size: 1Gi
+  enableGVisor: false

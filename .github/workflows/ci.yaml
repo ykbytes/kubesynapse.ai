@@ -1,0 +1,214 @@
+name: CI
+
+on:
+  push:
+    branches: [main, preprod]
+  pull_request:
+    branches: [main, preprod]
+
+env:
+  IMAGE_REGISTRY: ghcr.io
+  IMAGE_NAMESPACE: ${{ github.repository_owner }}
+  VERSION: ${{ github.sha }}
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install linters
+        run: pip install ruff mypy pydantic sqlalchemy types-PyYAML types-croniter
+      - name: Ruff check
+        run: ruff check operator/ api-gateway/ opencode-runtime/ vibe-runtime/
+      - name: Ruff format check
+        run: ruff format --check operator/ api-gateway/ opencode-runtime/ vibe-runtime/
+      - name: Mypy operator
+        run: cd operator && mypy --config-file ../pyproject.toml . --ignore-missing-imports || true
+      - name: Mypy api-gateway
+        run: cd api-gateway && mypy --config-file ../pyproject.toml . --ignore-missing-imports || true
+      - name: Mypy opencode-runtime
+        run: cd opencode-runtime && mypy --config-file ../pyproject.toml . --ignore-missing-imports || true
+      - name: Mypy vibe-runtime
+        run: cd vibe-runtime && mypy --config-file ../pyproject.toml . --ignore-missing-imports || true
+      - name: SHA-1 ban check
+        run: |
+          if grep -rn 'hashlib\.sha1' operator/ api-gateway/ opencode-runtime/ vibe-runtime/ --include='*.py'; then
+            echo "ERROR: hashlib.sha1 usage found. Use sha256 instead."
+            exit 1
+          fi
+
+  test:
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          pip install -r operator/requirements.txt
+          pip install -r api-gateway/requirements.txt
+          pip install -r opencode-runtime/requirements.txt
+          pip install -r vibe-runtime/requirements.txt
+          pip install pytest pytest-cov pytest-asyncio
+      - name: Run Operator Tests
+        run: make test-operator
+      - name: Run API Gateway Tests
+        run: make test-gateway
+      - name: Verify Generated Runtime OpenAPI Artifacts
+        run: |
+          python scripts/generate-runtime-openapi-json.py
+          git diff --exit-code -- opencode-runtime/openapi.json opencode-runtime/openapi.yaml pi-runtime/openapi.json vibe-runtime/openapi.json
+      - name: Run OpenCode Runtime Tests
+        run: |
+          if [ -d opencode-runtime/tests ]; then
+            cd opencode-runtime && python -m pytest tests/ -v --cov=. --cov-report=term-missing --cov-fail-under=30
+          else
+            echo "No opencode-runtime tests found"
+          fi
+      - name: Run Pi Runtime Tests
+        run: npm test --prefix pi-runtime
+      - name: Run Vibe Runtime Tests
+        run: |
+          if [ -d vibe-runtime/tests ]; then
+            cd vibe-runtime && python -m pytest tests/ -v --cov=. --cov-report=term-missing --cov-fail-under=30
+          else
+            echo "No vibe-runtime tests found"
+          fi
+      - name: Run Shared Runtime Contract Tests
+        env:
+          RUNTIME_BEARER_TOKEN: test-token
+          RUNTIME_EXPECT_AUTH: "1"
+          RUNTIME_TIMEOUT_PROMPT: __trigger_timeout__
+          RUNTIME_TIMEOUT_SECONDS: "1"
+          OPENCODE_RUNTIME_URL: http://127.0.0.1:18080
+          PI_RUNTIME_URL: http://127.0.0.1:18080
+          VIBE_RUNTIME_URL: http://127.0.0.1:18080
+        run: |
+          python tests/mock_runtime_server.py &
+          server_pid=$!
+          trap 'kill $server_pid' EXIT
+          python - <<'PY'
+          import time
+          import urllib.request
+
+          for _ in range(50):
+              try:
+                  request = urllib.request.Request(
+                      "http://127.0.0.1:18080/health",
+                      headers={"Authorization": "Bearer test-token"},
+                  )
+                  with urllib.request.urlopen(request, timeout=1):
+                      break
+              except Exception:
+                  time.sleep(0.2)
+          else:
+              raise SystemExit("mock runtime did not become ready")
+          PY
+          pytest tests/test_validate_spec.py tests/test_runtime_conformance.py tests/test_runtime_session.py tests/test_runtime_sse.py tests/test_runtime_artifacts.py -q
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-reports
+          path: |
+            api-gateway/.coverage
+            operator/.coverage
+            opencode-runtime/.coverage
+            vibe-runtime/.coverage
+
+  helm-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v3
+        with:
+          version: v3.14.0
+      - name: Helm Lint
+        run: helm lint ./charts/kubesynapse
+
+  build-and-push:
+    runs-on: ubuntu-latest
+    needs: [test, helm-lint]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v3
+        with:
+          version: v3.14.0
+      - name: Install Podman
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y podman
+
+      - name: Log in to GHCR
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | podman login ${{ env.IMAGE_REGISTRY }} -u "${{ github.actor }}" --password-stdin
+
+      - name: Build & Push Operator
+        run: |
+          podman build --format docker -t ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynapse-operator:${{ env.VERSION }} ./operator
+          podman push ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynapse-operator:${{ env.VERSION }}
+
+      - name: Build & Push OpenCode Runtime
+        run: |
+          podman build --format docker -t ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynapse-opencode-rt:${{ env.VERSION }} ./opencode-runtime
+          podman push ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynapse-opencode-rt:${{ env.VERSION }}
+
+      - name: Build & Push Vibe Runtime
+        run: |
+          podman build --format docker -t ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynapse-vibe-rt:${{ env.VERSION }} ./vibe-runtime
+          podman push ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynapse-vibe-rt:${{ env.VERSION }}
+
+      - name: Build & Push API Gateway
+        run: |
+          podman build --format docker -t ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynapse-api-gateway:${{ env.VERSION }} ./api-gateway
+          podman push ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynapse-api-gateway:${{ env.VERSION }}
+
+      - name: Build & Push Web UI
+        run: |
+          podman build --format docker -t ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynapse-web-ui:${{ env.VERSION }} ./web-ui
+          podman push ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynapse-web-ui:${{ env.VERSION }}
+
+      - name: Verify Chart Renders With Built Images
+        run: |
+          helm template kubesynapse ./charts/kubesynapse \
+            --set operator.image.repository=${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynapse-operator \
+            --set operator.image.tag=${{ env.VERSION }} \
+            --set operator.workerImage.repository=${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynapse-operator \
+            --set operator.workerImage.tag=${{ env.VERSION }} \
+            --set opencodeRuntime.image.repository=${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynapse-opencode-rt \
+            --set opencodeRuntime.image.tag=${{ env.VERSION }} \
+            --set mistralVibeRuntime.image.repository=${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynapse-vibe-rt \
+            --set mistralVibeRuntime.image.tag=${{ env.VERSION }} \
+            --set apiGateway.image.repository=${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynapse-api-gateway \
+            --set apiGateway.image.tag=${{ env.VERSION }} \
+            --set webUi.image.repository=${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kubesynapse-web-ui \
+            --set webUi.image.tag=${{ env.VERSION }} > /tmp/chart-render.yaml
+
+  helm-package:
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v3
+        with:
+          version: v3.14.0
+      - name: Package Helm Chart
+        run: |
+          mkdir -p dist
+          helm package ./charts/kubesynapse -d ./dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: helm-chart
+          path: dist/*.tgz

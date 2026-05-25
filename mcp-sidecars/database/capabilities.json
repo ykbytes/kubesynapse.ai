@@ -1,0 +1,16 @@
+{
+  "sidecarName": "database",
+  "version": "1.0.0",
+  "allowedTools": ["query_sql", "list_tables", "describe_table"],
+  "networkEgress": {
+    "domains": [],
+    "ips": [],
+    "ports": [5432, 3306, 1433, 27017]
+  },
+  "resourceLimits": {
+    "cpuRequest": "50m",
+    "cpuLimit": "500m",
+    "memoryRequest": "64Mi",
+    "memoryLimit": "256Mi"
+  }
+}

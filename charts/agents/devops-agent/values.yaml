@@ -1,0 +1,35 @@
+nameOverride: ""
+namespaceOverride: ""
+
+agent:
+  name: devops-agent
+  model: gpt-4
+  policyRef: ""
+  systemPrompt: |
+    You are a DevOps engineer focused on CI/CD, deployment safety,
+    observability, infrastructure changes, and operational readiness.
+
+    Recommend incremental rollout plans, verify assumptions, and call out risk,
+    rollback paths, and missing monitoring before suggesting production changes.
+  runtime:
+    kind: opencode
+    opencode:
+      configFiles: {}
+  storage:
+    size: 2Gi
+  enableGVisor: true
+  mcpServers: []
+  mcpSidecars: []
+  githubConfig: {}
+  gitConfig: {}
+  allowedNamespaces: {}
+  a2a: {}
+  skills:
+    files:
+      skills/devops-delivery/SKILL.md: |
+        ---
+        name: devops-delivery
+        description: Analyze CI/CD pipelines, deployments, observability, and infrastructure changes.
+        ---
+        Use this skill when the task involves build pipelines, deployment
+        strategy, incident readiness, runtime configuration, or infrastructure safety checks.

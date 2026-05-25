@@ -1,0 +1,19 @@
+{
+  "sidecarName": "collector",
+  "version": "1.0.0",
+  "allowedTools": [
+    "list_collectors", "list_builtin_scripts", "gather_info",
+    "run_builtin_script", "get_system_info", "fan_out_collect"
+  ],
+  "networkEgress": {
+    "domains": [],
+    "ips": [],
+    "ports": [8080, 8443]
+  },
+  "resourceLimits": {
+    "cpuRequest": "50m",
+    "cpuLimit": "500m",
+    "memoryRequest": "64Mi",
+    "memoryLimit": "256Mi"
+  }
+}

@@ -1,0 +1,97 @@
+# Slim LiteLLM image — only OpenAI + Anthropic + OpenRouter.
+# The official litellm[proxy,extra_proxy] installs 100+ provider SDKs bloating
+# the image to 5.6 GB. This image installs everything then copies only the
+# packages we actually need to a clean directory, bringing it down to ~400 MB.
+
+FROM python:3.12-slim-bookworm AS builder
+
+# System deps for building Python packages
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc libpq-dev && \
+    rm -rf /var/lib/apt/lists/*
+
+# Create non-root user for Prisma generation
+RUN groupadd -g 1000 litellm && \
+    useradd -u 1000 -g litellm -m -d /home/litellm -s /bin/bash litellm
+ENV HOME=/home/litellm
+ENV PRISMA_HOME_DIR=/home/litellm
+RUN mkdir -p /home/litellm/.cache && chown -R 1000:1000 /home/litellm
+
+# Install litellm with full proxy extras (needed for prisma)
+RUN pip install --no-cache-dir 'litellm[proxy,extra_proxy]==1.82.3'
+
+# Generate Prisma client using litellm's embedded schema
+RUN python -m prisma generate \
+    --schema=/usr/local/lib/python3.12/site-packages/litellm/proxy/schema.prisma
+RUN sed -i 's#/root/.cache/prisma-python#/home/litellm/.cache/prisma-python#g' /usr/local/lib/python3.12/site-packages/prisma/client.py
+
+# Patch custom_logger_registry.py to remove heavy-dependency logger imports
+# (boto3, azure-storage, google-cloud, opentelemetry) that are imported
+# unconditionally at startup even when not configured.
+# MUST run BEFORE slim-copy.py since that copies from /usr/local/lib/...
+COPY patch-loggers.py /tmp/patch-loggers.py
+RUN python /tmp/patch-loggers.py
+
+# Copy only the packages we need to a clean target directory.
+COPY slim-copy.py /tmp/slim-copy.py
+RUN python /tmp/slim-copy.py
+
+RUN chown -R 1000:1000 /opt/venv
+
+# Strip duplicate Node.js and unused platform binaries from Prisma cache
+# BEFORE copying to the final stage (Docker layers are additive).
+# We only need debian-openssl-3.0.x query engines, but must keep the
+# schema builder wasm and JS files which are platform-agnostic.
+RUN rm -rf /home/litellm/.cache/prisma-python/nodeenv/src && \
+    find /home/litellm/.cache/prisma-python/binaries -type f \
+      \( -name '*query-engine-linux-musl*' \
+        -o -name '*query-engine-debian-openssl-1.1*' \
+        -o -name '*query-engine-rhel*' \
+        -o -name '*libquery_engine-linux-musl*' \
+        -o -name '*libquery_engine-debian-openssl-1.1*' \
+        -o -name '*libquery_engine-rhel*' \
+        -o -name '*schema-engine-linux-musl*' \
+        -o -name '*schema-engine-debian-openssl-1.1*' \
+        -o -name '*schema-engine-rhel*' \) \
+      -delete 2>/dev/null || true
+
+# ---------------------------------------------------------------------------
+FROM python:3.12-slim-bookworm
+
+# Runtime deps only
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq5 libatomic1 && \
+    rm -rf /var/lib/apt/lists/*
+
+# Create non-root user matching the K8s securityContext (UID/GID 1000)
+RUN groupadd -g 1000 litellm && \
+    useradd -u 1000 -g litellm -m -d /home/litellm -s /bin/bash litellm
+
+# Copy only the slim packages from builder
+COPY --from=builder /opt/venv/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
+
+# Copy Prisma engine cache to the non-root user's home
+COPY --from=builder --chown=1000:1000 /home/litellm/.cache/prisma-python /home/litellm/.cache/prisma-python
+COPY --from=builder --chown=1000:1000 /home/litellm/.cache/prisma /home/litellm/.cache/prisma
+
+RUN chown -R 1000:1000 /home/litellm
+
+# Patch hardcoded /root paths in the final image layer too
+RUN sed -i 's#/root/.cache/prisma-python#/home/litellm/.cache/prisma-python#g' /usr/local/lib/python3.12/site-packages/prisma/client.py && \
+    grep -q '/home/litellm/.cache/prisma-python' /usr/local/lib/python3.12/site-packages/prisma/client.py
+
+WORKDIR /app
+COPY --from=builder --chown=1000:1000 /usr/local/lib/python3.12/site-packages/litellm/proxy/schema.prisma /app/schema.prisma
+RUN chown 1000:1000 /app
+
+USER 1000
+
+ENV HOME=/home/litellm
+ENV XDG_CACHE_HOME=/home/litellm/.cache
+ENV PRISMA_HOME_DIR=/home/litellm
+
+EXPOSE 4000
+
+ENTRYPOINT ["litellm"]
+CMD ["--config", "/app/config.yaml", "--port", "4000", "--host", "0.0.0.0"]

@@ -1,0 +1,79 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: agentapprovals.kubesynapse.ai
+spec:
+  group: kubesynapse.ai
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          required: [spec]
+          properties:
+            spec:
+              type: object
+              properties:
+                agentName:
+                  type: string
+                  description: "Name of the AIAgent requesting approval"
+                action:
+                  type: string
+                  description: "Description of the action requiring approval"
+                toolName:
+                  type: string
+                  description: "The MCP tool that triggered the approval request"
+                toolArgs:
+                  type: string
+                  description: "JSON-serialized arguments to the tool"
+                requestId:
+                  type: string
+                  description: "Correlation identifier used to resume an approved request"
+                requestedAt:
+                  type: string
+                  format: date-time
+                  description: "Timestamp when the approval was requested"
+              required:
+                - agentName
+                - action
+            status:
+              type: object
+              properties:
+                decision:
+                  type: string
+                  enum: ["pending", "approved", "denied"]
+                  description: "Current approval status"
+                decidedBy:
+                  type: string
+                  description: "Username or service account that made the decision"
+                decidedAt:
+                  type: string
+                  format: date-time
+                  description: "Timestamp of the decision"
+                reason:
+                  type: string
+                  description: "Optional reason for approval or denial"
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Agent
+          type: string
+          jsonPath: .spec.agentName
+        - name: Action
+          type: string
+          jsonPath: .spec.action
+        - name: Decision
+          type: string
+          jsonPath: .status.decision
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+  scope: Namespaced
+  names:
+    plural: agentapprovals
+    singular: agentapproval
+    kind: AgentApproval
+    shortNames:
+      - approval

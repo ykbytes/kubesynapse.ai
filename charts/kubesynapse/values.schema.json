@@ -1,0 +1,681 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title": "kubesynapse Helm Values",
+  "description": "Configuration schema for the kubesynapse Helm chart",
+  "type": "object",
+  "required": ["global", "apiGateway", "webUi"],
+  "properties": {
+    "global": {
+      "type": "object",
+      "description": "Global settings shared across all components",
+      "properties": {
+        "imagePullSecrets": {
+          "type": "array",
+          "items": { "type": "object" },
+          "default": []
+        },
+        "clusterName": {
+          "type": "string",
+          "default": "local",
+          "description": "Name of the Kubernetes cluster"
+        }
+      }
+    },
+    "podDisruptionBudget": {
+      "type": "object",
+      "description": "Pod Disruption Budget settings for high availability",
+      "properties": {
+        "enabled": { "type": "boolean", "default": true }
+      }
+    },
+    "networkPolicy": {
+      "type": "object",
+      "description": "Network security policies",
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "ingressNamespaces": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "List of namespaces allowed to reach ingress"
+        },
+        "clusterApiCidr": {
+          "type": "string",
+          "default": "0.0.0.0/0",
+          "description": "CIDR block for Kubernetes API server egress"
+        }
+      }
+    },
+    "trustBundle": {
+      "type": "object",
+      "description": "Custom CA trust bundle configuration",
+      "properties": {
+        "enabled": { "type": "boolean", "default": false },
+        "configMapName": { "type": "string", "default": "" },
+        "mountPath": {
+          "type": "string",
+          "default": "/etc/ssl/certs/custom-ca-bundle.pem"
+        }
+      }
+    },
+    "litellm": {
+      "type": "object",
+      "description": "LiteLLM proxy configuration",
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "image": {
+          "type": "object",
+          "properties": {
+            "repository": { "type": "string" },
+            "tag": { "type": "string" },
+            "pullPolicy": {
+              "type": "string",
+              "enum": ["IfNotPresent", "Always", "Never"],
+              "default": "IfNotPresent"
+            }
+          }
+        },
+        "replicaCount": { "type": "integer", "minimum": 1, "default": 1 },
+        "service": {
+          "type": "object",
+          "properties": {
+            "type": { "type": "string", "default": "ClusterIP" },
+            "port": { "type": "integer", "minimum": 1, "maximum": 65535, "default": 4000 }
+          }
+        },
+        "masterKey": {
+          "type": "string",
+          "description": "LiteLLM master key. Use platformSecrets for production."
+        },
+        "resources": {
+          "type": "object",
+          "properties": {
+            "requests": {
+              "type": "object",
+              "properties": {
+                "cpu": { "type": "string" },
+                "memory": { "type": "string" }
+              }
+            },
+            "limits": {
+              "type": "object",
+              "properties": {
+                "cpu": { "type": "string" },
+                "memory": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "agentRuntime": {
+      "type": "object",
+      "description": "Agent runtime (OpenCode) configuration",
+      "properties": {
+        "storage": {
+          "type": "object",
+          "properties": {
+            "size": { "type": "string", "default": "1Gi" }
+          }
+        },
+        "resources": {
+          "type": "object",
+          "properties": {
+            "requests": {
+              "type": "object",
+              "properties": {
+                "cpu": { "type": "string", "default": "100m" },
+                "memory": { "type": "string", "default": "256Mi" }
+              }
+            },
+            "limits": {
+              "type": "object",
+              "properties": {
+                "cpu": { "type": "string", "default": "1" },
+                "memory": { "type": "string", "default": "1Gi" }
+              }
+            }
+          }
+        },
+        "hitl": {
+          "type": "object",
+          "description": "Human-in-the-loop settings",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": ["enforce", "audit", "disabled"],
+              "default": "enforce"
+            },
+            "notificationWebhookUrl": { "type": "string", "default": "" }
+          }
+        },
+        "tenantExecAccess": {
+          "type": "boolean",
+          "default": false,
+          "description": "When false (default), tenant admin Roles do NOT include pods/exec or pods/portforward. Set to true only if you need interactive debugging within tenant namespaces."
+        }
+      }
+    },
+    "runtimeServiceAccount": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "default": "kubesynapse-agent-runtime" }
+      }
+    },
+    "opencodeRuntime": {
+      "type": "object",
+      "description": "OpenCode runtime sidecar configuration",
+      "properties": {
+        "image": {
+          "type": "object",
+          "properties": {
+            "repository": { "type": "string" },
+            "tag": { "type": "string" },
+            "pullPolicy": { "type": "string", "default": "IfNotPresent" }
+          }
+        },
+        "provider": { "type": "string", "default": "litellm" },
+        "limits": {
+          "type": "object",
+          "properties": {
+            "maxPromptChars": { "type": "integer", "default": 256000 },
+            "maxSystemPromptChars": { "type": "integer", "default": 64000 },
+            "maxTeamContextChars": { "type": "integer", "default": 32000 },
+            "modelContextLimit": { "type": "integer", "default": 256000 },
+            "modelOutputLimit": { "type": "integer", "default": 16384 }
+          }
+        },
+        "autonomy": { "type": "object" },
+        "env": { "type": "object" },
+        "admin": {
+          "type": "object",
+          "description": "Admin-controlled env vars injected into every OpenCode runtime pod. These override user-provided env and are NOT overridable by agent CRDs. Used for security-critical runtime behaviour: plugin blocking, provider enforcement, model allowlisting.",
+          "properties": {
+            "OPENCODE_DISABLE_DEFAULT_PLUGINS": {
+              "type": "string",
+              "default": "true",
+              "description": "When 'true', prevents OpenCode from auto-discovering and dynamically importing plugins from .opencode/plugin/*.ts. Closes the plugin auto-discovery RCE vector."
+            },
+            "OPENCODE_ADMIN_PROVIDER_OVERRIDE_JSON": {
+              "type": "string",
+              "description": "JSON object mapping provider IDs to config overrides. Admin can force baseURL through a security proxy (e.g., LiteLLM) to prevent API key exfiltration via provider redirect."
+            },
+            "OPENCODE_ADMIN_MODEL_OVERRIDE_JSON": {
+              "type": "string",
+              "description": "JSON array of allowed model references. If set, the runtime will block any model not in this list and fall back to the first allowed model. Complements AgentPolicy.allowedModels with runtime-level enforcement."
+            },
+            "OPENCODE_PLUGIN_LIST_JSON": {
+              "type": "string",
+              "description": "JSON array of admin-approved plugin entries. When the immutable config blocks all plugins, this is the ONLY way to selectively allow specific vetted plugins."
+            }
+          },
+          "default": {}
+        },
+        "immutableConfig": {
+          "type": "boolean",
+          "default": true,
+          "description": "Mount a hardened, immutable ConfigMap at /etc/kubesynapse/opencode.json. Prevents config-driven RCE."
+        }
+      }
+    },
+    "piRuntime": {
+      "type": "object",
+      "description": "Pi agent runtime configuration",
+      "properties": {
+        "image": {
+          "type": "object",
+          "properties": {
+            "repository": { "type": "string", "default": "kubesynapse-pi-rt" },
+            "tag": { "type": "string", "default": "v0.1.0" },
+            "pullPolicy": { "type": "string", "default": "IfNotPresent" }
+          }
+        },
+        "provider": { "type": "string", "default": "" },
+        "model": { "type": "string", "default": "anthropic/claude-sonnet-4-20250514" },
+        "thinkingLevel": { "type": "string", "default": "medium" },
+        "tools": { "type": "array", "items": { "type": "string" } },
+        "noSession": { "type": "boolean", "default": false },
+        "permissionLevel": { "type": "string", "default": "permissive" },
+        "env": { "type": "object" },
+        "immutableConfig": {
+          "type": "boolean",
+          "default": true,
+          "description": "Mount a hardened, immutable ConfigMap at /etc/kubesynapse/pi-config/. Prevents extension loading and !-prefix RCE."
+        }
+      }
+    },
+    "mistralVibeRuntime": {
+      "type": "object",
+      "description": "Mistral Vibe agent runtime configuration",
+      "properties": {
+        "image": {
+          "type": "object",
+          "properties": {
+            "repository": { "type": "string", "default": "kubesynapse-vibe-rt" },
+            "tag": { "type": "string", "default": "v0.1.0" },
+            "pullPolicy": { "type": "string", "default": "IfNotPresent" }
+          }
+        }
+      }
+    },
+    "operator": {
+      "type": "object",
+      "description": "kubesynapse operator settings",
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "replicaCount": { "type": "integer", "minimum": 1, "default": 2 },
+        "image": {
+          "type": "object",
+          "properties": {
+            "repository": { "type": "string" },
+            "tag": { "type": "string" },
+            "pullPolicy": { "type": "string", "default": "IfNotPresent" }
+          }
+        },
+        "workerImage": {
+          "type": "object",
+          "properties": {
+            "repository": { "type": "string" },
+            "tag": { "type": "string" },
+            "pullPolicy": { "type": "string", "default": "IfNotPresent" }
+          }
+        },
+        "resources": {
+          "type": "object",
+          "properties": {
+            "requests": {
+              "type": "object",
+              "properties": {
+                "cpu": { "type": "string", "default": "100m" },
+                "memory": { "type": "string", "default": "256Mi" }
+              }
+            },
+            "limits": {
+              "type": "object",
+              "properties": {
+                "cpu": { "type": "string", "default": "1" },
+                "memory": { "type": "string", "default": "1Gi" }
+              }
+            }
+          }
+        },
+        "runtimeTimeoutSeconds": { "type": "integer", "default": 360 },
+        "workerActiveDeadlineSeconds": { "type": "integer", "default": 14400 },
+        "workerTtlSecondsAfterFinished": { "type": "integer", "default": 3600 },
+        "workerResources": {
+          "type": "object",
+          "properties": {
+            "requests": {
+              "type": "object",
+              "properties": {
+                "cpu": { "type": "string", "default": "100m" },
+                "memory": { "type": "string", "default": "128Mi" }
+              }
+            },
+            "limits": {
+              "type": "object",
+              "properties": {
+                "cpu": { "type": "string", "default": "500m" },
+                "memory": { "type": "string", "default": "512Mi" }
+              }
+            }
+          }
+        },
+        "workerArtifacts": {
+          "type": "object",
+          "properties": {
+            "size": { "type": "string", "default": "2Gi" },
+            "storageClassName": { "type": "string", "default": "" }
+          }
+        },
+        "stateDbEnabled": { "type": "boolean", "default": true }
+      }
+    },
+    "autoscaling": {
+      "type": "object",
+      "description": "Horizontal Pod Autoscaler settings",
+      "properties": {
+        "enabled": { "type": "boolean", "default": false },
+        "apiGateway": {
+          "type": "object",
+          "properties": {
+            "minReplicas": { "type": "integer", "minimum": 1, "default": 1 },
+            "maxReplicas": { "type": "integer", "minimum": 1, "default": 10 }
+          }
+        },
+        "litellm": {
+          "type": "object",
+          "properties": {
+            "minReplicas": { "type": "integer", "minimum": 1, "default": 1 },
+            "maxReplicas": { "type": "integer", "minimum": 1, "default": 5 }
+          }
+        }
+      }
+    },
+    "apiGateway": {
+      "type": "object",
+      "description": "API Gateway settings",
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "replicaCount": { "type": "integer", "minimum": 1, "default": 2 },
+        "image": {
+          "type": "object",
+          "properties": {
+            "repository": { "type": "string" },
+            "tag": { "type": "string" },
+            "pullPolicy": { "type": "string", "default": "IfNotPresent" }
+          }
+        },
+        "service": {
+          "type": "object",
+          "properties": {
+            "type": { "type": "string", "default": "ClusterIP" },
+            "port": { "type": "integer", "minimum": 1, "maximum": 65535, "default": 8080 }
+          }
+        },
+        "resources": {
+          "type": "object",
+          "properties": {
+            "requests": {
+              "type": "object",
+              "properties": {
+                "cpu": { "type": "string", "default": "100m" },
+                "memory": { "type": "string", "default": "256Mi" }
+              }
+            },
+            "limits": {
+              "type": "object",
+              "properties": {
+                "cpu": { "type": "string", "default": "1" },
+                "memory": { "type": "string", "default": "1Gi" }
+              }
+            }
+          }
+        },
+        "auth": {
+          "type": "object",
+          "description": "Authentication mode and settings",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": ["shared_token", "jwt", "oidc", "ldap", "saml", "hybrid"],
+              "default": "shared_token"
+            },
+            "sharedToken": {
+              "type": "string",
+              "description": "Shared token for auth_mode=shared_token. Use platformSecrets for production."
+            },
+            "jwt": {
+              "type": "object",
+              "properties": {
+                "secretName": { "type": "string", "default": "" },
+                "publicKeyConfigMap": { "type": "string", "default": "" }
+              }
+            }
+          }
+        },
+        "db": {
+          "type": "object",
+          "description": "Database connection settings",
+          "properties": {
+            "host": { "type": "string", "default": "" },
+            "port": { "type": "integer", "default": 5432 },
+            "name": { "type": "string", "default": "kubesynapse" },
+            "user": { "type": "string", "default": "" },
+            "password": {
+              "type": "string",
+              "description": "Database password. Use platformSecrets for production."
+            },
+            "sslMode": {
+              "type": "string",
+              "enum": ["disable", "allow", "prefer", "require", "verify-ca", "verify-full"],
+              "default": "prefer"
+            }
+          }
+        }
+      }
+    },
+    "webUi": {
+      "type": "object",
+      "description": "Web UI frontend settings",
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "replicaCount": { "type": "integer", "minimum": 1, "default": 1 },
+        "image": {
+          "type": "object",
+          "properties": {
+            "repository": { "type": "string" },
+            "tag": { "type": "string" },
+            "pullPolicy": { "type": "string", "default": "IfNotPresent" }
+          }
+        },
+        "service": {
+          "type": "object",
+          "properties": {
+            "type": { "type": "string", "default": "ClusterIP" },
+            "port": { "type": "integer", "minimum": 1, "maximum": 65535, "default": 80 }
+          }
+        }
+      }
+    },
+    "webUI": {
+      "type": "object",
+      "description": "Web UI frontend settings (alternative key)",
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "replicaCount": { "type": "integer", "minimum": 1, "default": 1 },
+        "image": {
+          "type": "object",
+          "properties": {
+            "repository": { "type": "string" },
+            "tag": { "type": "string" },
+            "pullPolicy": { "type": "string", "default": "IfNotPresent" }
+          }
+        },
+        "service": {
+          "type": "object",
+          "properties": {
+            "type": { "type": "string", "default": "ClusterIP" },
+            "port": { "type": "integer", "minimum": 1, "maximum": 65535, "default": 80 }
+          }
+        }
+      }
+    },
+    "ingress": {
+      "type": "object",
+      "description": "Ingress configuration",
+      "properties": {
+        "enabled": { "type": "boolean", "default": false },
+        "className": { "type": "string", "default": "" },
+        "annotations": { "type": "object" },
+        "hosts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "host": { "type": "string" },
+              "paths": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "path": { "type": "string" },
+                    "pathType": { "type": "string" },
+                    "service": { "type": "string" },
+                    "port": { "type": "integer" }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tls": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "secretName": { "type": "string" },
+              "hosts": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        }
+      }
+    },
+    "platformSecrets": {
+      "type": "object",
+      "description": "Platform secret management",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["native", "external-secrets"],
+          "default": "native"
+        },
+        "native": {
+          "type": "object",
+          "properties": {
+            "litellmMasterKey": { "type": "string" },
+            "openaiApiKey": { "type": "string" },
+            "dbPassword": { "type": "string" },
+            "apiGatewaySharedToken": { "type": "string" }
+          }
+        },
+        "externalSecrets": {
+          "type": "object",
+          "properties": {
+            "clusterSecretStoreName": { "type": "string" }
+          }
+        }
+      }
+    },
+    "skillsCatalog": {
+      "type": "object",
+      "description": "Skills catalog configuration",
+      "properties": {
+        "enabled": { "type": "boolean", "default": false },
+        "catalogJson": { "type": "string" }
+      }
+    },
+    "intelligence": {
+      "type": "object",
+      "description": "Intelligence (metrics/alerts) settings",
+      "properties": {
+        "enabled": { "type": "boolean", "default": false },
+        "prometheusRetention": { "type": "string", "default": "15d" }
+      }
+    },
+    "systemAgents": {
+      "type": "object",
+      "description": "Run Intelligence Layer system agents configuration",
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "namespace": { "type": "string", "default": "kubesynapse-system" },
+        "defaultModel": { "type": "string", "default": "gpt-4" },
+        "defaultRuntime": { "type": "string", "default": "opencode" },
+        "runInspector": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean", "default": true },
+            "model": { "type": "string" },
+            "runtime": { "type": "string" },
+            "description": { "type": "string" },
+            "triggers": {
+              "type": "object",
+              "properties": {
+                "minFailureRate": { "type": "number", "default": 0.3 },
+                "minErrorCount": { "type": "integer", "default": 3 }
+              }
+            },
+            "resources": {
+              "type": "object",
+              "properties": {
+                "requests": {
+                  "type": "object",
+                  "properties": {
+                    "cpu": { "type": "string", "default": "50m" },
+                    "memory": { "type": "string", "default": "128Mi" }
+                  }
+                },
+                "limits": {
+                  "type": "object",
+                  "properties": {
+                    "cpu": { "type": "string", "default": "500m" },
+                    "memory": { "type": "string", "default": "512Mi" }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "signalSummarizer": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean", "default": true },
+            "model": { "type": "string" },
+            "runtime": { "type": "string" },
+            "description": { "type": "string" },
+            "triggers": {
+              "type": "object",
+              "properties": {
+                "maxSignalAgeMinutes": { "type": "integer", "default": 30 }
+              }
+            },
+            "resources": {
+              "type": "object",
+              "properties": {
+                "requests": {
+                  "type": "object",
+                  "properties": {
+                    "cpu": { "type": "string", "default": "50m" },
+                    "memory": { "type": "string", "default": "128Mi" }
+                  }
+                },
+                "limits": {
+                  "type": "object",
+                  "properties": {
+                    "cpu": { "type": "string", "default": "500m" },
+                    "memory": { "type": "string", "default": "512Mi" }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "spendReviewer": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean", "default": true },
+            "model": { "type": "string" },
+            "runtime": { "type": "string" },
+            "description": { "type": "string" },
+            "triggers": {
+              "type": "object",
+              "properties": {
+                "costThresholdUsd": { "type": "number", "default": 10.0 },
+                "tokenSpikeMultiplier": { "type": "number", "default": 3.0 }
+              }
+            },
+            "resources": {
+              "type": "object",
+              "properties": {
+                "requests": {
+                  "type": "object",
+                  "properties": {
+                    "cpu": { "type": "string", "default": "50m" },
+                    "memory": { "type": "string", "default": "128Mi" }
+                  }
+                },
+                "limits": {
+                  "type": "object",
+                  "properties": {
+                    "cpu": { "type": "string", "default": "500m" },
+                    "memory": { "type": "string", "default": "512Mi" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

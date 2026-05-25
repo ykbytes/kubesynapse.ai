@@ -1,0 +1,253 @@
+{{- if .Values.redis.enabled }}
+{{- $redisAuthPassword := .Values.redis.auth.password | default "" -}}
+{{- $redisAuthSecretName := .Values.redis.auth.existingSecret | default (printf "%s-redis-auth" (include "kubesynapse.fullname" .)) -}}
+{{- $redisAuthSecretKey := .Values.redis.auth.existingSecretKey | default "REDIS_PASSWORD" -}}
+{{- $redisAuthEnabled := or (ne $redisAuthPassword "") (ne .Values.redis.auth.existingSecret "") -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "kubesynapse.fullname" . }}-redis
+  labels:
+    {{- include "kubesynapse.labels" . | nindent 4 }}
+    app.kubernetes.io/component: redis
+    app: redis
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        {{- include "kubesynapse.labels" . | nindent 8 }}
+        app.kubernetes.io/component: redis
+        app: redis
+    spec:
+{{- with (include "kubesynapse.imagePullSecrets" .) }}
+{{ . | nindent 6 }}
+{{- end }}
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: redis
+          image: "{{ .Values.redis.image.repository }}:{{ .Values.redis.image.tag }}"
+          imagePullPolicy: {{ .Values.redis.image.pullPolicy | default "IfNotPresent" }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          ports:
+            - containerPort: 6379
+              name: redis
+          {{- if $redisAuthEnabled }}
+          {{- if ne $redisAuthPassword "" }}
+          args: ["--save", "", "--appendonly", "no", "--requirepass", {{ $redisAuthPassword | quote }}]
+          {{- else }}
+          args: ["--save", "", "--appendonly", "no", "--requirepass", "$(REDIS_PASSWORD)"]
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $redisAuthSecretName }}
+                  key: {{ $redisAuthSecretKey }}
+                  optional: false
+          {{- end }}
+          {{- else }}
+          args: ["--save", "", "--appendonly", "no"]
+          {{- end }}
+          resources:
+{{ toYaml .Values.redis.resources | indent 12 }}
+          startupProbe:
+            exec:
+              command:
+                {{- if $redisAuthEnabled }}
+                {{- if ne $redisAuthPassword "" }}
+                - "redis-cli"
+                - "-a"
+                - {{ $redisAuthPassword | quote }}
+                - "ping"
+                {{- else }}
+                - "redis-cli"
+                - "-a"
+                - "$(REDIS_PASSWORD)"
+                - "ping"
+                {{- end }}
+                {{- else }}
+                - "redis-cli"
+                - "ping"
+                {{- end }}
+            initialDelaySeconds: 5
+            timeoutSeconds: 5
+            periodSeconds: 5
+            failureThreshold: 18
+          livenessProbe:
+            exec:
+              command:
+                {{- if $redisAuthEnabled }}
+                {{- if ne $redisAuthPassword "" }}
+                - "redis-cli"
+                - "-a"
+                - {{ $redisAuthPassword | quote }}
+                - "ping"
+                {{- else }}
+                - "redis-cli"
+                - "-a"
+                - "$(REDIS_PASSWORD)"
+                - "ping"
+                {{- end }}
+                {{- else }}
+                - "redis-cli"
+                - "ping"
+                {{- end }}
+            initialDelaySeconds: 10
+            timeoutSeconds: 5
+            periodSeconds: 15
+            failureThreshold: 5
+          readinessProbe:
+            exec:
+              command:
+                {{- if $redisAuthEnabled }}
+                {{- if ne $redisAuthPassword "" }}
+                - "redis-cli"
+                - "-a"
+                - {{ $redisAuthPassword | quote }}
+                - "ping"
+                {{- else }}
+                - "redis-cli"
+                - "-a"
+                - "$(REDIS_PASSWORD)"
+                - "ping"
+                {{- end }}
+                {{- else }}
+                - "redis-cli"
+                - "ping"
+                {{- end }}
+            initialDelaySeconds: 5
+            timeoutSeconds: 5
+            periodSeconds: 10
+            failureThreshold: 5
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        {{- if .Values.redis.persistence.enabled }}
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "kubesynapse.fullname" . }}-redis-data
+        {{- else }}
+        - name: data
+          emptyDir: {}
+        {{- end }}
+---
+{{- if .Values.redis.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "kubesynapse.fullname" . }}-redis-data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.redis.persistence.size | default "1Gi" }}
+  {{- if .Values.redis.persistence.storageClassName }}
+  storageClassName: {{ .Values.redis.persistence.storageClassName | quote }}
+  {{- end }}
+---
+{{- end }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "kubesynapse.fullname" . }}-redis
+  labels:
+    {{- include "kubesynapse.labels" . | nindent 4 }}
+    app.kubernetes.io/component: redis
+    app: redis
+spec:
+  selector:
+    app: redis
+  ports:
+    - protocol: TCP
+      port: 6379
+      targetPort: 6379
+      name: redis
+---
+# §security-P0: Redis NetworkPolicy — restrict ingress to control-plane services only.
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kubesynapse.fullname" . }}-redis-isolation
+  labels:
+    {{- include "kubesynapse.labels" . | nindent 4 }}
+    app.kubernetes.io/component: redis
+    app: redis
+spec:
+  podSelector:
+    matchLabels:
+      app: redis
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: litellm
+        - podSelector:
+            matchLabels:
+              app: api-gateway
+        - podSelector:
+            matchLabels:
+              app: operator
+      ports:
+        - protocol: TCP
+          port: 6379
+  egress:
+    # DNS egress — allow resolution via kube-dns in any namespace
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+{{- end }}
+{{- if and $redisAuthEnabled (eq .Values.redis.auth.existingSecret "") }}
+{{- $redisSecretName := printf "%s-redis-auth" (include "kubesynapse.fullname" .) }}
+{{- $existingRedisSecret := lookup "v1" "Secret" .Release.Namespace $redisSecretName -}}
+{{- $existingRedisSecretData := dict -}}
+{{- if $existingRedisSecret -}}
+{{- $existingRedisSecretData = (get $existingRedisSecret "data") | default dict -}}
+{{- end -}}
+{{- $redisPasswordValue := include "kubesynapse.secretValue" (dict "value" $redisAuthPassword "default" "" "secretData" $existingRedisSecretData "key" $redisAuthSecretKey) -}}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $redisSecretName }}
+  labels:
+    {{- include "kubesynapse.labels" . | nindent 4 }}
+    app.kubernetes.io/component: redis
+type: Opaque
+stringData:
+  {{ $redisAuthSecretKey }}: {{ $redisPasswordValue | quote }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,244 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cloud-architecture-context
+  namespace: default
+data:
+  request.md: |
+    We want to evolve from a single-cluster KubeSynapse deployment into a more
+    resilient multi-cluster shape for regulated customers across two regions.
+
+  constraints.md: |
+    # Constraints
+
+    - Preserve Kubernetes as the control-plane source of truth.
+    - Keep the API gateway as the public edge and app backend.
+    - Respect hybrid auth, tenant isolation, and runtime isolation.
+    - Favor explicit rollback and migration phases over disruptive redesigns.
+    - Minimize operational complexity where possible.
+
+  non-negotiables.md: |
+    # Non-Negotiables
+
+    - clear data-residency boundaries
+    - secrets management discipline
+    - auditable approvals for risky changes
+    - observability across regions and workflows
+    - realistic cost and support burden estimates
+---
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AgentPolicy
+metadata:
+  name: cloud-architecture-policy
+  namespace: default
+spec:
+  inputGuardrails:
+    blockPromptInjection: true
+    blockedPatterns:
+      - "(?i)ignore security review"
+      - "(?i)skip approval"
+    maxInputTokens: 12000
+  outputGuardrails:
+    maskPII: true
+    blockedOutputPatterns:
+      - "(?i)secret"
+      - "(?i)token"
+    maxOutputTokens: 6000
+  allowedModels:
+    - github-copilot/gpt-5-mini
+  mcpRequireHitl: false
+---
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AIAgent
+metadata:
+  name: platform-architect
+  namespace: default
+spec:
+  model: github-copilot/gpt-5-mini
+  policyRef: cloud-architecture-policy
+  runtime:
+    kind: opencode
+  systemPrompt: |
+    You are a cloud platform architect.
+
+    Produce architecture options that are concrete, migration-aware, and honest
+    about tradeoffs.
+
+    Required structure:
+    - current-state risks
+    - 2-3 viable target shapes
+    - tradeoff matrix
+    - recommended option
+    - migration phases
+    - rollback posture
+
+    Write the detailed analysis to /workspace/platform-options.md.
+  storage:
+    size: 1Gi
+---
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AIAgent
+metadata:
+  name: security-boundary-reviewer
+  namespace: default
+spec:
+  model: github-copilot/gpt-5-mini
+  policyRef: cloud-architecture-policy
+  runtime:
+    kind: opencode
+  systemPrompt: |
+    You are a security boundary reviewer for platform architecture.
+
+    Focus on:
+    - identity and auth boundaries
+    - secret distribution
+    - tenant isolation
+    - network egress and ingress exposure
+    - webhook and automation blast radius
+    - failure modes that would make operators regret the design
+
+    Be specific and skeptical.
+  storage:
+    size: 1Gi
+---
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AIAgent
+metadata:
+  name: finops-ops-reviewer
+  namespace: default
+spec:
+  model: github-copilot/gpt-5-mini
+  policyRef: cloud-architecture-policy
+  runtime:
+    kind: opencode
+  systemPrompt: |
+    You are a FinOps and operations reviewer.
+
+    Focus on:
+    - steady-state cost shape
+    - failover and standby cost
+    - operator burden
+    - debugging complexity
+    - upgrade overhead
+    - on-call consequences
+
+    Write the detailed review to /workspace/finops-ops-review.md.
+    Avoid vague cost language. Call out real cost drivers.
+  storage:
+    size: 1Gi
+---
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AIAgent
+metadata:
+  name: decision-memo-editor
+  namespace: default
+spec:
+  model: github-copilot/gpt-5-mini
+  policyRef: cloud-architecture-policy
+  runtime:
+    kind: opencode
+  systemPrompt: |
+    You are the final decision memo editor.
+
+    Your memo must be useful to a principal engineer or architecture review board.
+
+    It must contain:
+    - recommendation
+    - why the rejected options lost
+    - top residual risks
+    - migration phases
+    - explicit non-goals
+    - validation and rollback notes
+
+    Write the final memo to /workspace/decision-memo.md.
+  storage:
+    size: 1Gi
+---
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AgentWorkflow
+metadata:
+  name: multi-cluster-platform-decision
+  namespace: default
+spec:
+  description: >
+    Multi-role cloud architecture workflow for deciding whether and how to move
+    KubeSynapse from a single-cluster deployment to a two-region control-plane
+    shape for regulated customers.
+  input: >
+    Decide whether KubeSynapse should remain single-cluster, move to an active-
+    passive two-region design, or move to an active-active multi-cluster shape
+    for regulated enterprise onboarding.
+  contextRef: cloud-architecture-context
+  messageBus: in-memory
+  steps:
+    - name: draft-platform-options
+      agentRef: platform-architect
+      prompt: |
+        Build an architecture options document for this request.
+
+        Request:
+        {{input}}
+
+        Read the project context first.
+        Write the detailed artifact to /workspace/platform-options.md.
+        Return a concise summary of the recommended option and the biggest tradeoff.
+      execution:
+        timeoutSeconds: 240
+        maxAttempts: 2
+        backoffSeconds: 5
+
+    - name: security-red-team
+      type: review
+      agentRef: security-boundary-reviewer
+      dependsOn:
+        - draft-platform-options
+      reviewCriteria: |
+        Review the proposed architecture against these criteria:
+        - identity and auth boundaries remain explicit
+        - secrets and tenant boundaries are not weakened
+        - webhook and automation exposure is controlled
+        - ingress and egress blast radius is limited
+        - the design does not hide failure or audit gaps
+
+    - name: finops-ops-review
+      agentRef: finops-ops-reviewer
+      dependsOn:
+        - draft-platform-options
+      prompt: |
+        Review the architecture options from a FinOps and operator point of view.
+
+        Architecture proposal summary:
+        {{previous_output}}
+
+        Read /workspace/platform-options.md and write your detailed review to
+        /workspace/finops-ops-review.md.
+        Return the strongest operational objection and the strongest reason to proceed.
+      execution:
+        timeoutSeconds: 240
+        maxAttempts: 1
+
+    - name: publish-decision-memo
+      agentRef: decision-memo-editor
+      dependsOn:
+        - security-red-team
+        - finops-ops-review
+      requireApproval: true
+      prompt: |
+        Produce the final cloud architecture decision memo.
+
+        Prior stage output:
+        {{previous_output}}
+
+        Read these supporting artifacts before answering:
+        - /workspace/platform-options.md
+        - /workspace/finops-ops-review.md
+
+        Write the final memo to /workspace/decision-memo.md.
+        Return the recommendation, top residual risk, and first migration phase.
+      verify: |
+        PASS only if the memo includes a recommendation, rejected alternatives,
+        residual risks, migration phases, and rollback posture.
+      execution:
+        timeoutSeconds: 180
+        maxAttempts: 1
+        verifyRetries: 1

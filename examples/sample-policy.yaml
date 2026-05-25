@@ -1,0 +1,30 @@
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AgentPolicy
+metadata:
+  name: strict-enterprise-policy
+  namespace: default
+spec:
+  inputGuardrails:
+    blockPromptInjection: true
+    blockedPatterns:
+      - "password|secret|credential"
+      - "DROP TABLE|DELETE FROM|TRUNCATE"
+    maxInputTokens: 4096
+  outputGuardrails:
+    maskPII: true
+    blockedOutputPatterns:
+      - "internal-api-key-[a-zA-Z0-9]+"
+    maxOutputTokens: 4096
+  # spec.budget is intentionally omitted.
+  # Distributed token, request, and cost budgets are reserved for a future
+  # release and are rejected by the CRD and operator today.
+  allowedModels:
+    - gpt-4
+    - gpt-3.5-turbo
+  # MCP access control: only these server types are reachable by agents bound
+  # to this policy.  The operator enforces this via a per-agent NetworkPolicy
+  # that limits egress to the mcp-hub namespace to only matching pod types.
+  allowedMcpServers: []
+  # Require HITL approval for every MCP tool call (default: true).
+  # Set to false only for fully read-only, trusted MCP servers.
+  mcpRequireHitl: true

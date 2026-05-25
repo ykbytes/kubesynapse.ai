@@ -1,0 +1,73 @@
+# HPA for agent pods based on custom metrics
+{{- if and .Values.autoscaling (.Values.autoscaling.enabled) }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "kubesynapse.fullname" . }}-api-gateway-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "kubesynapse.fullname" . }}-api-gateway
+  minReplicas: {{ .Values.autoscaling.apiGateway.minReplicas | default 1 }}
+  maxReplicas: {{ .Values.autoscaling.apiGateway.maxReplicas | default 10 }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+---
+# HPA for LiteLLM gateway
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "kubesynapse.fullname" . }}-litellm-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "kubesynapse.fullname" . }}-litellm
+  minReplicas: {{ .Values.autoscaling.litellm.minReplicas | default 1 }}
+  maxReplicas: {{ .Values.autoscaling.litellm.maxReplicas | default 5 }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 75
+---
+# HPA for operator
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "kubesynapse.fullname" . }}-operator-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "kubesynapse.fullname" . }}-operator
+  minReplicas: {{ .Values.autoscaling.operator.minReplicas | default 1 }}
+  maxReplicas: {{ .Values.autoscaling.operator.maxReplicas | default 5 }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+{{- end }}

@@ -1,0 +1,25 @@
+{
+  "name": "@kubesynapse/sdk",
+  "version": "0.1.0",
+  "description": "TypeScript SDK for the kubesynapse Kubernetes AI platform",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": ["dist/", "README.md"],
+  "scripts": {
+    "build": "tsc",
+    "test": "npm run build -- --pretty false && node --test dist/tests/client.test.js",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": ["kubesynapse", "kubernetes", "ai", "agents", "llm", "sdk"],
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ykbytes/kubesynapse.ai",
+    "directory": "clients/typescript"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.29",
+    "typescript": "^5.4.0"
+  }
+}

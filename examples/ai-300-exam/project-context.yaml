@@ -1,0 +1,160 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ai300-exam-context
+  namespace: default
+data:
+  exam-spec: |-
+    title: "AI-300 Practice Exam: Operationalizing Machine Learning and Generative AI Solutions (Udemy-Ready)"
+    examCode: AI-300
+    certificationName: "Microsoft Certified: Machine Learning Operations (MLOps) Engineer Associate"
+    totalQuestions: "60"
+    passingScore: "700"
+    examStatus: beta
+    format: >
+      Multiple question types matching real Azure certification exam format:
+      multiple-choice, multiple-select, scenario/case-study, ordering/sequence,
+      and yes/no statement series.
+    outputPath: /workspace/ai300_practice_exam.html
+
+    officialStudyGuideUrl: https://learn.microsoft.com/en-us/credentials/certifications/resources/study-guides/ai-300
+    officialCertPageUrl: https://learn.microsoft.com/en-us/credentials/certifications/operationalizing-machine-learning-and-generative-ai-solutions/
+
+    questionTypeDistribution:
+      multiple-choice: 30
+      multiple-select: 10
+      scenario: 10
+      ordering: 5
+      yes-no-series: 5
+
+    topicBreakdown:
+      - domain: "Design and implement an MLOps infrastructure"
+        weight: "15-20%"
+        questions: 11
+        subtopics:
+          # Create and manage resources in a Machine Learning workspace
+          - Create and manage a workspace
+          - Create and manage datastores
+          - Create and manage compute targets
+          - Configure identity and access management for workspaces
+          # Create and manage assets in a Machine Learning workspace
+          - Create and manage data assets
+          - Create and manage environments
+          - Create and manage components
+          - Share assets across workspaces by using registries
+          # Implement IaC for Machine Learning
+          - Configure GitHub integration with Machine Learning to enable secure access
+          - Deploy Machine Learning workspaces and resources by using Bicep and Azure CLI
+          - Automate resource provisioning by using GitHub Actions workflows
+          - Restrict network access to Machine Learning workspaces
+          - Manage source control for machine learning projects by using Git
+
+      - domain: "Implement machine learning model lifecycle and operations"
+        weight: "25-30%"
+        questions: 16
+        subtopics:
+          # Orchestrate model training
+          - Configure experiment tracking with MLflow
+          - Use automated machine learning to explore optimal models
+          - Use notebooks for experimentation and exploration
+          - Automate hyperparameter tuning
+          - Run model training scripts
+          - Manage distributed training for large and deep learning models
+          - Implement training pipelines
+          - Compare model performance across jobs
+          # Implement model registration and versioning
+          - Package a feature retrieval specification with the model artifact
+          - Register an MLflow model
+          - Evaluate a model by using responsible AI principles
+          - Manage model lifecycle including archiving models
+          # Deploy machine learning models for production environments
+          - Deploy models as real-time or batch endpoints with managed inference options
+          - Test and troubleshoot model endpoints
+          - Implement progressive rollout and safe rollback strategies
+          # Monitor and maintain machine learning models in production
+          - Detect and analyze data drift
+          - Monitor performance metrics of models deployed to production
+          - Configure retraining or alert triggers when thresholds are exceeded
+
+      - domain: "Design and implement a GenAIOps infrastructure"
+        weight: "20-25%"
+        questions: 14
+        subtopics:
+          # Implement Foundry environments and platform configuration
+          - Create and configure Foundry resources and project environments
+          - Configure identity and access management with managed identities and RBAC
+          - Implement network security and private networking configurations
+          - Deploy infrastructure using Bicep templates and Azure CLI
+          # Deploy and manage foundation models for production workloads
+          - Deploy foundation models by using serverless API endpoints and managed compute options
+          - Select appropriate models for specific use cases
+          - Implement model versioning and production deployment strategies
+          - Configure provisioned throughput units for high-volume workloads
+          # Implement prompt versioning and management with source control
+          - Design and develop prompts
+          - Create prompt variants and compare performance across different prompts
+          - Implement version control for prompts by using Git repositories
+
+      - domain: "Implement generative AI quality assurance and observability"
+        weight: "10-15%"
+        questions: 10
+        subtopics:
+          # Configure evaluation and validation for generative AI applications and agents
+          - Create test datasets and data mapping for comprehensive model evaluation
+          - Implement AI quality metrics including groundedness, relevance, coherence, and fluency
+          - Configure risk and safety evaluations for harmful content detection
+          - Set up automated evaluation workflows by using built-in and custom evaluation metrics
+          # Implement observability for generative AI applications and agents
+          - Examine continuous monitoring in Foundry
+          - Monitor performance metrics including latency, throughput, and response times
+          - Track and optimize cost metrics including token consumption and resource usage
+          - Configure detailed logging, tracing, and debugging capabilities for production troubleshooting
+
+      - domain: "Optimize generative AI systems and model performance"
+        weight: "10-15%"
+        questions: 9
+        subtopics:
+          # Optimize retrieval-augmented generation (RAG) performance and accuracy
+          - Optimize retrieval performance by tuning similarity thresholds, chunk sizes, and retrieval strategies
+          - Select and fine-tune embedding models for domain-specific use cases and accuracy improvements
+          - Implement and optimize hybrid search approaches combining semantic and keyword-based retrieval
+          - Evaluate and improve RAG system performance by using relevance metrics and A/B testing frameworks
+          # Implement advanced fine-tuning and model customization
+          - Design and implement advanced fine-tuning methods
+          - Create and manage synthetic data for fine-tuning
+          - Monitor and optimize fine-tuned model performance
+          - Manage a fine-tuned model from development through production deployment
+
+    qualityRules:
+      - Every question explanation must cite at least one Microsoft Learn URL
+      - Do NOT copy or paraphrase proprietary exam dumps or paid content verbatim
+      - Synthesize original questions from official public Microsoft documentation
+      - Include a confidence tag (high/medium/low) when source is not definitive
+      - Use current Azure service names (e.g. Microsoft Foundry, Azure Machine Learning)
+      - Questions must test understanding not rote memorization
+      - Wrong options (distractors) must be plausible Azure ML/Foundry objects, API calls, or configurations
+      - Include realistic code snippets (Python SDK, REST API, Azure CLI, Bicep) in scenario questions
+      - Difficulty distribution approximately 30% easy, 50% medium, 20% hard
+
+    udemyFormatting:
+      htmlStructure: >
+        Single self-contained HTML file with embedded CSS. Table of contents at top.
+        Questions organized by domain section. Each question numbered sequentially.
+        Answer and explanation hidden behind details/summary toggle. Source URLs as
+        clickable hyperlinks. Question type badge displayed for each question.
+        Responsive design for desktop and mobile. Print-friendly layout.
+      cssRequirements: >
+        Professional color scheme. Clear question numbering. Visual differentiation
+        for question types. Readable fonts. Proper spacing between questions.
+        Collapsible answer sections. Highlighted correct answers in green.
+        Domain section headers with question count.
+      interactiveFeatures: >
+        JavaScript score tracker: users can mark their answers and see a running
+        score. Progress bar showing completion. Domain-level score breakdown.
+        Button to reveal all answers at once.
+
+    serpApiKey: e08c97b6302e01661ed49b89fd23139cb0557fb3bfdc1a4ad36610f5e3786b19
+    serpApiUsage: >
+      Use SerpAPI for Google search to find authoritative Microsoft documentation.
+      Preferred query: "TOPIC site:learn.microsoft.com"
+      Endpoint: https://serpapi.com/search.json?engine=google&q=QUERY&api_key=KEY&num=10

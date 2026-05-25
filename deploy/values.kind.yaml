@@ -1,0 +1,336 @@
+# kubesynapse — Kind/Local Kubernetes Deployment Values
+# 
+# Usage:
+#   kind load docker-image docker.io/kubesynapse/kubesynapse-api-gateway:v2.1.0-run-intelligence --name desktop
+#   kind load docker-image docker.io/kubesynapse/kubesynapse-web-ui:v2.1.0-run-intelligence --name desktop
+#   kind load docker-image docker.io/kubesynapse/kubesynapse-operator:v2.1.0-run-intelligence --name desktop
+#   kind load docker-image docker.io/kubesynapse/kubesynapse-opencode-rt:v2.1.0-run-intelligence --name desktop
+#   kind load docker-image docker.io/kubesynapse/kubesynapse-pi-rt:v2.1.0-run-intelligence --name desktop
+#   kind load docker-image docker.io/kubesynapse/kubesynapse-vibe-rt:v2.1.0-run-intelligence --name desktop
+#   kind load docker-image docker.io/litellm/litellm:v1.82.3-stable --name desktop
+#   helm upgrade --install kubesynapse ./charts/kubesynapse -n kubesynapse --create-namespace -f deploy/values.kind.yaml
+
+global:
+  imagePullSecrets: []
+  clusterName: "kind-desktop"
+
+# ---------------------------------------------------------------------------
+# Images — using locally built images loaded into kind
+# ---------------------------------------------------------------------------
+operator:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: docker.io/kubesynapse/kubesynapse-operator
+    tag: latest
+    pullPolicy: Never
+  workerImage:
+    repository: docker.io/kubesynapse/kubesynapse-operator
+    tag: latest
+    pullPolicy: Never
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+  workerResources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+  stateDbEnabled: true
+  signalWatch:
+    enabled: true
+    intervalSeconds: 60
+    thresholds:
+      highFailureRate: 0.3
+      errorSpikeCount: 3
+      errorSpikeWindowMinutes: 15
+      costOutlierMultiplier: 3.0
+      tokenSpikeMultiplier: 3.0
+      stuckRunDurationMultiplier: 2.0
+
+apiGateway:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: docker.io/kubesynapse/kubesynapse-api-gateway
+    tag: latest
+    pullPolicy: Never
+  ingress:
+    enabled: false
+  publicBaseUrl: ""
+  corsOrigins: ["*"]
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+  auth:
+    mode: shared_token
+    localAuthEnabled: true
+    registrationEnabled: true
+    bootstrapAdminNamespaces: ["default"]
+
+webUi:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: docker.io/kubesynapse/kubesynapse-web-ui
+    tag: latest
+    pullPolicy: Never
+  service:
+    type: ClusterIP
+    port: 80
+  ingress:
+    enabled: false
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "64Mi"
+    limits:
+      cpu: "200m"
+      memory: "256Mi"
+
+opencodeRuntime:
+  image:
+    repository: docker.io/kubesynapse/kubesynapse-opencode-rt
+    tag: latest
+    pullPolicy: Never
+  provider: litellm
+  limits:
+    maxPromptChars: 256000
+    maxSystemPromptChars: 64000
+    maxTeamContextChars: 32000
+    modelContextLimit: 256000
+    modelOutputLimit: 16384
+  autonomy:
+    sessionInitOnCreate: false
+    maxRetries: 3
+    maxTurns: 8
+    agentSteps: 128
+    compactionTokenThreshold: 0.70
+    planThresholdChars: 4096
+    structuredOutputRetryCount: 3
+
+piRuntime:
+  image:
+    repository: docker.io/kubesynapse/kubesynapse-pi-rt
+    tag: latest
+    pullPolicy: Never
+  provider: ""
+  model: "anthropic/claude-sonnet-4-20250514"
+  thinkingLevel: "medium"
+  tools: []
+  noSession: false
+  permissionLevel: "permissive"
+  env: {}
+
+mistralVibeRuntime:
+  image:
+    repository: docker.io/kubesynapse/kubesynapse-vibe-rt
+    tag: latest
+    pullPolicy: Never
+
+# ---------------------------------------------------------------------------
+# Dependencies
+# ---------------------------------------------------------------------------
+postgresql:
+  enabled: true
+  image:
+    repository: docker.io/postgres
+    tag: 16-alpine
+    pullPolicy: IfNotPresent
+  persistence:
+    size: 8Gi
+    storageClassName: ""
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "1Gi"
+
+redis:
+  enabled: true
+  image:
+    repository: docker.io/redis
+    tag: 7-alpine
+    pullPolicy: IfNotPresent
+  persistence:
+    enabled: false
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "64Mi"
+    limits:
+      cpu: "200m"
+      memory: "256Mi"
+
+qdrant:
+  enabled: true
+  image:
+    repository: docker.io/qdrant/qdrant
+    tag: v1.7.4
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "1Gi"
+
+nats:
+  enabled: true
+  image:
+    repository: docker.io/nats
+    tag: 2.10-alpine
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "64Mi"
+    limits:
+      cpu: "200m"
+      memory: "256Mi"
+
+litellm:
+  enabled: true
+  image:
+    repository: docker.io/litellm/litellm
+    tag: slim-1.82.3
+    pullPolicy: Never
+  replicaCount: 1
+  config:
+    model_list: []
+    general_settings:
+      master_key: "os.environ/LITELLM_MASTER_KEY"
+      database_url: "os.environ/DATABASE_URL"
+      # Set to true to let LiteLLM auto-detect models from provider API keys
+      # Uses /model/info endpoint to dynamically discover available models
+      litellm_settings:
+        set_verbose: true
+        request_timeout: 120
+        telemetry: false
+  resources:
+    requests:
+      cpu: "200m"
+      memory: "768Mi"
+    limits:
+      cpu: "2"
+      memory: "3Gi"
+
+# ---------------------------------------------------------------------------
+# Security & Secrets (DEV VALUES — CHANGE IN PRODUCTION)
+# ---------------------------------------------------------------------------
+platformSecrets:
+  mode: native
+  native:
+    openaiApiKey: ""
+    openrouterApiKey: ""
+    anthropicApiKey: ""
+    litellmMasterKey: "dev-litellm-master-key"
+    apiGatewaySharedToken: "your-shared-token-here"
+    databasePassword: "kubesynapse-dev-password"
+    jwtSecret: "dev-jwt-secret-change-in-production-min-32-chars-long"
+    authBootstrapAdminPassword: "admin123"
+    ldapBindPassword: ""
+    oidcProvidersJson: "[]"
+    samlProvidersJson: "[]"
+
+# ---------------------------------------------------------------------------
+# Production Hardening (Relaxed for local dev)
+# ---------------------------------------------------------------------------
+podDisruptionBudget:
+  enabled: false
+
+networkPolicy:
+  enabled: false
+
+autoscaling:
+  enabled: false
+
+# ---------------------------------------------------------------------------
+# Collector
+# ---------------------------------------------------------------------------
+collector:
+  enabled: false
+
+# ---------------------------------------------------------------------------
+# MCP Hub
+# ---------------------------------------------------------------------------
+mcpHub:
+  enabled: true
+  namespace: kubesynapse-mcp-hub
+
+# ---------------------------------------------------------------------------
+# Telemetry
+# ---------------------------------------------------------------------------
+telemetry:
+  otlpEndpoint: ""
+  serviceMonitor:
+    enabled: false
+
+# ---------------------------------------------------------------------------
+# Run Intelligence Layer — System Agents
+# ---------------------------------------------------------------------------
+systemAgents:
+  enabled: true
+  namespace: "kubesynapse-system"
+  defaultModel: "gpt-4o-mini"
+  defaultRuntime: "opencode"
+
+  runInspector:
+    enabled: true
+    model: ""
+    runtime: ""
+    description: "Investigates failed workflow runs and anomalous execution patterns."
+    triggers:
+      minFailureRate: 0.3
+      minErrorCount: 3
+    resources:
+      requests:
+        cpu: "50m"
+        memory: "128Mi"
+      limits:
+        cpu: "500m"
+        memory: "512Mi"
+
+  signalSummarizer:
+    enabled: true
+    model: ""
+    runtime: ""
+    description: "Summarizes deterministic anomaly signals into human-readable incident briefs."
+    triggers:
+      maxSignalAgeMinutes: 30
+    resources:
+      requests:
+        cpu: "50m"
+        memory: "128Mi"
+      limits:
+        cpu: "500m"
+        memory: "512Mi"
+
+  spendReviewer:
+    enabled: true
+    model: ""
+    runtime: ""
+    description: "Reviews token/cost spend anomalies across agents and namespaces."
+    triggers:
+      costThresholdUsd: 10.0
+      tokenSpikeMultiplier: 3.0
+    resources:
+      requests:
+        cpu: "50m"
+        memory: "128Mi"
+      limits:
+        cpu: "500m"
+        memory: "512Mi"

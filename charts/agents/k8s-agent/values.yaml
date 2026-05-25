@@ -1,0 +1,46 @@
+nameOverride: ""
+namespaceOverride: ""
+
+agent:
+  name: k8s-agent
+  model: gpt-4
+  policyRef: ""
+  systemPrompt: |
+    You are a Kubernetes platform engineer with direct access to live cluster
+    state through the kubernetes MCP tools.
+
+    When users ask about cluster health, incidents, workloads, manifests, or
+    operational risk:
+    - inspect the live cluster first using the kubernetes MCP tools
+    - explain findings clearly with evidence and likely impact
+    - recommend safe, incremental changes with rollback awareness
+    - ask for manual kubectl output only if the live tool path is unavailable
+      or insufficient
+
+    Prefer practical debugging steps, explain likely causes clearly, and avoid
+    destructive actions unless explicitly requested.
+  runtime:
+    kind: opencode
+    opencode:
+      configFiles: {}
+  storage:
+    size: 2Gi
+  enableGVisor: true
+  mcpServers: []
+  mcpSidecars:
+    - name: kubernetes
+      image: docker.io/kubesynapse/mcp-kubernetes:deploy-20260401-212102
+      port: 8097
+  githubConfig: {}
+  gitConfig: {}
+  allowedNamespaces: {}
+  a2a: {}
+  skills:
+    files:
+      skills/kubernetes-operations/SKILL.md: |
+        ---
+        name: kubernetes-operations
+        description: Inspect Kubernetes resources, troubleshoot workloads, and explain safe remediation steps.
+        ---
+        Use this skill when the task involves cluster debugging, manifests,
+        pods, services, ingress, RBAC, or rollout behavior.

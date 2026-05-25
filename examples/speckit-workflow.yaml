@@ -1,0 +1,120 @@
+# ---------------------------------------------------------------------------
+# Spec Kit Pipeline — AgentWorkflow
+#
+# Chains the five Spec Kit stage agents into a sequential DAG:
+#
+#   write-spec ──► scrum-review ──► create-plan ──► generate-tasks ──► implement
+#
+# Each step passes structured JSON artifacts to the next via
+# {{step.output.json.<field>}} placeholders.  Approval gates are placed
+# after the scrum review (to let a human accept/reject the spec) and
+# before implementation (to let a human sanity-check the task list).
+# ---------------------------------------------------------------------------
+
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AgentWorkflow
+metadata:
+  name: speckit-pipeline
+  namespace: default
+spec:
+  description: >
+    End-to-end Spec Kit pipeline: specify → scrum review → plan → tasks → implement.
+    Feed a plain-English feature idea as input and get working code out.
+  input: ""   # <-- populate with the feature description at trigger time
+  messageBus: in-memory
+
+  steps:
+    # ── Stage 1: Write Specification ────────────────────────────────────
+    - name: write-spec
+      agentRef: spec-writer
+      prompt: |
+        Feature description:
+        {{input}}
+
+        Generate a complete product specification for this feature.
+      execution:
+        timeoutSeconds: 300
+        maxAttempts: 2
+        backoffSeconds: 5
+
+    # ── Stage 2: Scrum Master Review ────────────────────────────────────
+    - name: scrum-review
+      agentRef: scrum-master
+      prompt: |
+        Review the following specification for completeness, quality, and
+        readiness.  If issues are found, produce a corrected version.
+
+        Feature name: {{write-spec.output.json.feature_name}}
+
+        Specification:
+        {{write-spec.output.json.spec_markdown}}
+      dependsOn:
+        - write-spec
+      requireApproval: true          # human gate — accept/reject spec
+      execution:
+        timeoutSeconds: 240
+        maxAttempts: 1
+
+    # ── Stage 3: Create Implementation Plan ─────────────────────────────
+    - name: create-plan
+      agentRef: planner
+      prompt: |
+        Create a detailed implementation plan for the following reviewed
+        specification.
+
+        Feature name: {{write-spec.output.json.feature_name}}
+
+        Specification (post-review):
+        {{scrum-review.output.json.revised_spec_markdown}}
+      dependsOn:
+        - scrum-review
+      execution:
+        timeoutSeconds: 300
+        maxAttempts: 2
+        backoffSeconds: 5
+
+    # ── Stage 4: Generate Task List ─────────────────────────────────────
+    - name: generate-tasks
+      agentRef: task-generator
+      prompt: |
+        Generate an actionable, dependency-ordered task list for this feature.
+
+        Feature name: {{write-spec.output.json.feature_name}}
+        Tech stack: {{create-plan.output.json.tech_stack}}
+        Entities: {{create-plan.output.json.entities}}
+
+        Specification:
+        {{scrum-review.output.json.revised_spec_markdown}}
+
+        Implementation plan:
+        {{create-plan.output.json.plan_markdown}}
+      dependsOn:
+        - create-plan
+      execution:
+        timeoutSeconds: 300
+        maxAttempts: 2
+        backoffSeconds: 5
+
+    # ── Stage 5: Implement ──────────────────────────────────────────────
+    - name: implement
+      agentRef: implementer
+      prompt: |
+        Execute the following task list.  Use the specification and plan for
+        context when writing code.
+
+        Feature name: {{write-spec.output.json.feature_name}}
+
+        Specification:
+        {{scrum-review.output.json.revised_spec_markdown}}
+
+        Implementation plan:
+        {{create-plan.output.json.plan_markdown}}
+
+        Task list:
+        {{generate-tasks.output.json.tasks_markdown}}
+      dependsOn:
+        - generate-tasks
+      requireApproval: true          # human gate — review before coding
+      execution:
+        timeoutSeconds: 600
+        maxAttempts: 1

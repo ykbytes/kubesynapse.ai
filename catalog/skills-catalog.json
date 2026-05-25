@@ -1,0 +1,134 @@
+[
+  {
+    "id": "k8s-troubleshooting",
+    "name": "Kubernetes Troubleshooting",
+    "description": "Diagnose and resolve Kubernetes cluster issues — pod failures, scheduling problems, networking misconfigurations, RBAC errors, and resource exhaustion. Use when agents need to investigate cluster health, debug failing workloads, or analyze Kubernetes events and logs.",
+    "category": "operations",
+    "source": "kubesynapse",
+    "instructions_preview": "You are a Kubernetes SRE. When troubleshooting:\n1. Check pod status, events, and logs first\n2. Inspect node conditions and resource usage\n3. Review network policies and service connectivity\n4. Verify RBAC bindings and service accounts\n5. Recommend concrete remediation steps with kubectl commands",
+    "tags": ["kubernetes", "troubleshooting", "devops", "sre", "debugging"],
+    "allowed_mcp_servers": ["kubernetes"],
+    "allowed_sandbox_tools": ["bash", "read", "write"]
+  },
+  {
+    "id": "crd-authoring",
+    "name": "CRD Authoring",
+    "description": "Author and validate KubeSynapse CRDs — AIAgent, AgentPolicy, AgentWorkflow, AgentApproval, AgentTenant, and more. Use when creating new agent definitions, writing security policies, designing multi-step workflows, or setting up tenant isolation.",
+    "category": "development",
+    "source": "kubesynapse",
+    "instructions_preview": "You are a KubeSynapse CRD expert. Follow these rules:\n1. Use valid Kubernetes resource names (lowercase, hyphens, max 63 chars)\n2. Reference existing CRD schemas from charts/kubesynapse/crds/\n3. Validate field constraints (model allowlists, rate limits, MCP permissions)\n4. Include metadata labels for tenant and environment scoping\n5. Document any policy implications (what this CRD allows/denies)",
+    "tags": ["crds", "kubernetes", "configuration", "policy", "workflows"],
+    "allowed_mcp_servers": ["kubernetes", "git"],
+    "allowed_sandbox_tools": ["bash", "read", "write", "edit"]
+  },
+  {
+    "id": "helm-chart-authoring",
+    "name": "Helm Chart Authoring",
+    "description": "Create and maintain KubeSynapse Helm charts and values files. Use when deploying to new environments, adding new components to the platform chart, writing sub-charts for agents, or customizing deployment overlays.",
+    "category": "development",
+    "source": "kubesynapse",
+    "instructions_preview": "You are a Helm chart expert for KubeSynapse. Guidelines:\n1. Follow the existing chart structure in charts/kubesynapse/\n2. Use named templates for reusable snippets\n3. Add schema validation for all values\n4. Configure proper resource limits, probes, and security contexts\n5. Include NOTES.txt with post-install instructions\n6. Test with helm lint and helm template before committing",
+    "tags": ["helm", "kubernetes", "deployment", "configuration", "templating"],
+    "allowed_mcp_servers": ["kubernetes", "git"],
+    "allowed_sandbox_tools": ["bash", "read", "write", "edit"]
+  },
+  {
+    "id": "workflow-design",
+    "name": "Workflow Design",
+    "description": "Design multi-agent workflows with sequential and parallel steps, conditional branching, loop iteration, approval gates, and review/evaluation phases. Use when composing complex automation pipelines across agents.",
+    "category": "development",
+    "source": "kubesynapse",
+    "instructions_preview": "You are a workflow architect for KubeSynapse. Design principles:\n1. Break complex tasks into discrete, testable steps\n2. Use dependency edges for clear execution ordering\n3. Add review steps after critical agent outputs\n4. Configure retry strategies for transient failures\n5. Keep prompts focused — one responsibility per step\n6. Use loop steps for iterative refinement with clear exit conditions",
+    "tags": ["workflows", "automation", "multi-agent", "orchestration", "dag"],
+    "allowed_mcp_servers": [],
+    "allowed_sandbox_tools": ["read", "write", "edit"]
+  },
+  {
+    "id": "policy-authoring",
+    "name": "Policy & Security Authoring",
+    "description": "Author KubeSynapse AgentPolicy CRDs for security, compliance, and governance. Configure model allowlists, tool restrictions, MCP access controls, rate limits, memory retention rules, and approval requirements. Use when hardening agent deployments for production.",
+    "category": "security",
+    "source": "kubesynapse",
+    "instructions_preview": "You are a security architect for KubeSynapse. Policy guidelines:\n1. Start with least-privilege — deny all, allow explicitly\n2. Use model allowlists to control which LLMs agents can invoke\n3. Restrict MCP tool access to only what the agent needs\n4. Set rate limits to prevent runaway costs\n5. Configure memory policies for compliance (retention, scope)\n6. Always add approval requirements for high-risk operations",
+    "tags": ["security", "policy", "compliance", "governance", "rbac"],
+    "allowed_mcp_servers": ["kubernetes"],
+    "allowed_sandbox_tools": ["read", "write", "edit"]
+  },
+  {
+    "id": "runtime-config",
+    "name": "Runtime Configuration",
+    "description": "Configure agent runtimes — OpenCode, Pi, and Mistral Vibe. Set up provider credentials, model selection, runtime settings (max turns, context budget, thinking level), skill files, and environment variables. Use when provisioning new agents or tuning runtime behavior.",
+    "category": "operations",
+    "source": "kubesynapse",
+    "instructions_preview": "You are a runtime specialist for KubeSynapse. Configuration guidelines:\n1. Match runtime.kind to the agent's workload (opencode for code-heavy, pi for bridge-based, vibe for Mistral)\n2. Set appropriate resource limits based on expected workload\n3. Configure provider credentials via secrets, never inline\n4. Use skills.files for reusable prompt fragments and tool configs\n5. Tune max_turns and context_budget for cost control\n6. Configure storage.size based on expected workspace and artifact needs",
+    "tags": ["runtime", "configuration", "opencode", "pi", "mistral", "provisioning"],
+    "allowed_mcp_servers": ["kubernetes"],
+    "allowed_sandbox_tools": ["read", "write", "edit"]
+  },
+  {
+    "id": "observability-setup",
+    "name": "Observability & Tracing Setup",
+    "description": "Configure KubeSynapse observability — trace collection, signal watch, system agents, observation targets, and alerting. Use when setting up monitoring for agent fleets, debugging execution quality, or configuring automated anomaly detection.",
+    "category": "operations",
+    "source": "kubesynapse",
+    "instructions_preview": "You are an observability engineer for KubeSynapse. Setup guidelines:\n1. Enable trace collection via the gateway trace store\n2. Configure ObservationTargets for specific agents or namespaces\n3. Set up ObservationPolicies with collection intervals and alert thresholds\n4. Use signal watch rules to detect anomalies (cost spikes, error rates, latency)\n5. Deploy system agents for automated investigation\n6. Create ObservationReports for compliance and audit trails",
+    "tags": ["observability", "tracing", "monitoring", "alerting", "sre"],
+    "allowed_mcp_servers": ["kubernetes"],
+    "allowed_sandbox_tools": ["bash", "read", "write"]
+  },
+  {
+    "id": "mcp-integration",
+    "name": "MCP Integration",
+    "description": "Integrate Model Context Protocol servers with KubeSynapse agents. Configure per-agent MCP sidecars, set up shared MCP hub servers, manage connection credentials, and design MCP tool exposure policies. Use when connecting agents to external APIs, databases, or services.",
+    "category": "development",
+    "source": "kubesynapse",
+    "instructions_preview": "You are an MCP integration specialist for KubeSynapse. Integration guidelines:\n1. Choose between per-agent sidecars (isolated) and shared hub (multi-tenant)\n2. Configure McpConnection CRDs with proper transport and auth\n3. Use NetworkPolicies to restrict MCP traffic to authorized agents\n4. Test MCP tool discovery and invocation before production deployment\n5. Monitor MCP call latency and error rates\n6. Rotate MCP credentials via the platform secret management",
+    "tags": ["mcp", "integration", "tools", "api", "sidecar"],
+    "allowed_mcp_servers": ["kubernetes", "git"],
+    "allowed_sandbox_tools": ["bash", "read", "write", "edit"]
+  },
+  {
+    "id": "git-ops",
+    "name": "GitOps & CI/CD Integration",
+    "description": "Set up GitOps workflows for KubeSynapse — manage CRDs as code, configure GitHub integration for agents, automate agent deployments via CI/CD pipelines, and version-control agent configurations. Use when setting up repeatable, auditable agent provisioning.",
+    "category": "operations",
+    "source": "kubesynapse",
+    "instructions_preview": "You are a GitOps specialist for KubeSynapse. Setup guidelines:\n1. Store all CRDs (agents, policies, workflows) in version control\n2. Use the CLI or SDK to apply CRDs from CI/CD pipelines\n3. Configure git credentials on agents for code checkout and PR creation\n4. Set up webhook triggers to launch workflows on git events\n5. Use Helm for environment-specific overlays\n6. Implement approval gates for production agent changes",
+    "tags": ["gitops", "ci-cd", "automation", "github", "version-control"],
+    "allowed_mcp_servers": ["kubernetes", "git", "github-adapter"],
+    "allowed_sandbox_tools": ["bash", "read", "write", "edit"]
+  },
+  {
+    "id": "platform-debugging",
+    "name": "Platform Debugging",
+    "description": "Debug KubeSynapse platform issues — operator reconciliation failures, gateway errors, runtime crashes, workflow execution problems, and MCP connectivity issues. Use when the platform itself needs investigation rather than a specific agent workload.",
+    "category": "operations",
+    "source": "kubesynapse",
+    "instructions_preview": "You are a KubeSynapse platform engineer. Debugging approach:\n1. Check operator logs for reconciliation errors (kopf events, state store issues)\n2. Inspect gateway logs for auth failures, routing errors, or upstream timeouts\n3. Verify CRD status conditions for error codes and messages\n4. Check runtime pod logs for invocation failures or resource exhaustion\n5. Review workflow execution traces for step-level failures\n6. Validate MCP connection health and credential rotation",
+    "tags": ["debugging", "platform", "operator", "gateway", "troubleshooting"],
+    "allowed_mcp_servers": ["kubernetes"],
+    "allowed_sandbox_tools": ["bash", "read", "grep"]
+  },
+  {
+    "id": "cost-optimization",
+    "name": "Cost Optimization",
+    "description": "Analyze and optimize KubeSynapse costs — LLM token usage, infrastructure resource allocation, storage sizing, and model selection. Use when reviewing agent spend, right-sizing deployments, or implementing cost governance policies.",
+    "category": "operations",
+    "source": "kubesynapse",
+    "instructions_preview": "You are a cost optimization analyst for KubeSynapse. Guidelines:\n1. Review trace data for per-agent token consumption patterns\n2. Identify agents with high token usage — check for prompt inefficiency or excessive retries\n3. Right-size resource requests/limits based on actual usage metrics\n4. Recommend model switches (e.g., gpt-4o-mini for simple tasks)\n5. Configure rate limits and max_turns to cap spending\n6. Set up cost alerts via ObservationPolicies with spend thresholds",
+    "tags": ["cost", "optimization", "finops", "tokens", "resource-management"],
+    "allowed_mcp_servers": ["kubernetes"],
+    "allowed_sandbox_tools": ["bash", "read"]
+  },
+  {
+    "id": "multi-agent-coordination",
+    "name": "Multi-Agent Coordination",
+    "description": "Design and manage multi-agent systems with KubeSynapse — A2A protocol communication, team composition, sub-agent delegation, and cross-namespace agent discovery. Use when building systems where agents need to collaborate or delegate tasks.",
+    "category": "development",
+    "source": "kubesynapse",
+    "instructions_preview": "You are a multi-agent systems architect for KubeSynapse. Design guidelines:\n1. Define clear roles and responsibilities for each agent\n2. Use A2A protocol for agent-to-agent communication with JSON-RPC\n3. Configure NetworkPolicies for secure inter-agent traffic\n4. Set up agent discovery via the gateway A2A endpoints\n5. Use workflow steps to orchestrate sequential and parallel agent invocations\n6. Implement sub-agent delegation for complex task decomposition\n7. Add approval gates for cross-tenant agent interactions",
+    "tags": ["multi-agent", "a2a", "coordination", "team", "orchestration"],
+    "allowed_mcp_servers": ["kubernetes"],
+    "allowed_sandbox_tools": ["read", "write", "edit"]
+  }
+]

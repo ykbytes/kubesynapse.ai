@@ -1,0 +1,16 @@
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AIAgent
+metadata:
+  name: cli-e2e-agent
+  namespace: default
+spec:
+  model: github-copilot/gpt-5-mini
+  policyRef: cli-e2e-policy
+  runtime:
+    kind: opencode
+  systemPrompt: >
+    You are the CLI E2E primary agent. Answer clearly, keep outputs short,
+    and follow the user's instruction exactly.
+  storage:
+    size: 1Gi
+  enableGVisor: false

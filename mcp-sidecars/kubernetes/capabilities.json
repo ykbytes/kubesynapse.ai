@@ -1,0 +1,16 @@
+{
+  "sidecarName": "kubernetes",
+  "version": "1.0.0",
+  "allowedTools": ["list_pods", "get_pod_logs", "kubectl_get", "kubectl_describe"],
+  "networkEgress": {
+    "domains": [],
+    "ips": [],
+    "ports": [6443, 443, 8080]
+  },
+  "resourceLimits": {
+    "cpuRequest": "50m",
+    "cpuLimit": "500m",
+    "memoryRequest": "64Mi",
+    "memoryLimit": "256Mi"
+  }
+}

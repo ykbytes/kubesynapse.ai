@@ -1,0 +1,143 @@
+global:
+  clusterName: "production"
+  imagePullSecrets:
+    - name: "regcred"
+
+podDisruptionBudget:
+  enabled: true
+
+networkPolicy:
+  enabled: true
+  ingressNamespaces: ["ingress-nginx", "monitoring"]
+  clusterApiCidr: "10.0.0.0/8"
+
+litellm:
+  enabled: true
+  replicaCount: 3
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "2Gi"
+    limits:
+      cpu: "4"
+      memory: "8Gi"
+
+agentRuntime:
+  storage:
+    size: 10Gi
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "1Gi"
+    limits:
+      cpu: "4"
+      memory: "8Gi"
+  hitl:
+    mode: enforce
+    notificationWebhookUrl: "https://hooks.production.example.com/hitl"
+
+runtimeServiceAccount:
+  name: "kubesynapse-agent-runtime"
+
+opencodeRuntime:
+  limits:
+    maxPromptChars: 256000
+    modelContextLimit: 256000
+    modelOutputLimit: 32768
+
+operator:
+  replicaCount: 3
+  runtimeTimeoutSeconds: 360
+  workerActiveDeadlineSeconds: 14400
+  workerTtlSecondsAfterFinished: 3600
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "1Gi"
+    limits:
+      cpu: "2"
+      memory: "4Gi"
+  workerResources:
+    requests:
+      cpu: "500m"
+      memory: "512Mi"
+    limits:
+      cpu: "2"
+      memory: "2Gi"
+  workerArtifacts:
+    size: 10Gi
+    storageClassName: "fast-ssd"
+  stateDbEnabled: true
+
+autoscaling:
+  enabled: true
+  apiGateway:
+    minReplicas: 3
+    maxReplicas: 20
+  litellm:
+    minReplicas: 2
+    maxReplicas: 10
+
+apiGateway:
+  enabled: true
+  replicaCount: 3
+  ingressClassName: "nginx"
+  ingressHost: "kubesynapse.example.com"
+  tls:
+    enabled: true
+    secretName: "kubesynapse-tls"
+  auth:
+    mode: oidc
+    jwt:
+      secretName: "jwt-signing-key"
+    oidcIssuer: "https://auth.example.com"
+    oidcAudience: "kubesynapse"
+    cookieSecure: true
+    cookieSameSite: strict
+  db:
+    host: "postgres.production.svc.cluster.local"
+    port: 5432
+    name: "kubesynapse"
+    user: "kubesynapse"
+    sslMode: "verify-full"
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "1Gi"
+    limits:
+      cpu: "4"
+      memory: "4Gi"
+
+webUi:
+  enabled: true
+  replicaCount: 3
+
+ingress:
+  enabled: true
+  className: "nginx"
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+  hosts:
+    - host: "kubesynapse.example.com"
+      paths:
+        - path: /
+          pathType: Prefix
+          service: webui
+          port: 80
+        - path: /api
+          pathType: Prefix
+          service: api-gateway
+          port: 8080
+  tls:
+    - secretName: "kubesynapse-tls"
+      hosts:
+        - "kubesynapse.example.com"
+
+platformSecrets:
+  mode: external-secrets
+  externalSecrets:
+    clusterSecretStoreName: "vault-backend"
+
+intelligence:
+  enabled: true
+  prometheusRetention: "30d"

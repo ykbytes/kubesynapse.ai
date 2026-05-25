@@ -1,0 +1,5 @@
+kubernetes>=28.0.0
+fastapi>=0.110.0
+uvicorn>=0.27.0
+pyyaml>=6.0
+psutil>=5.9.0

@@ -1,0 +1,21 @@
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AgentPolicy
+metadata:
+  name: cli-e2e-policy
+  namespace: default
+spec:
+  inputGuardrails:
+    blockPromptInjection: true
+    blockedPatterns:
+      - "(?i)ignore previous instructions"
+    maxInputTokens: 4096
+  outputGuardrails:
+    maskPII: false
+    blockedOutputPatterns: []
+    maxOutputTokens: 4096
+  allowedModels:
+    - github-copilot/gpt-5-mini
+  allowedMcpServers: []
+  mcpRequireHitl: false
+  toolPolicy: {}
+  memoryPolicy: {}

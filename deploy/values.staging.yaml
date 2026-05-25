@@ -1,0 +1,57 @@
+global:
+  clusterName: "staging"
+
+podDisruptionBudget:
+  enabled: true
+
+networkPolicy:
+  enabled: true
+  ingressNamespaces: ["ingress-nginx"]
+  clusterApiCidr: "10.0.0.0/8"
+
+litellm:
+  enabled: true
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: "200m"
+      memory: "1Gi"
+
+agentRuntime:
+  hitl:
+    mode: audit
+    notificationWebhookUrl: "https://hooks.staging.example.com/hitl"
+
+operator:
+  replicaCount: 1
+  runtimeTimeoutSeconds: 600
+  workerActiveDeadlineSeconds: 7200
+
+apiGateway:
+  replicaCount: 2
+  auth:
+    mode: jwt
+    jwt:
+      secretName: "jwt-signing-key"
+  db:
+    host: "postgres.staging.svc.cluster.local"
+    sslMode: "require"
+
+ingress:
+  enabled: true
+  className: "nginx"
+  hosts:
+    - host: "staging.kubesynapse.example.com"
+      paths:
+        - path: /
+          pathType: Prefix
+          service: webui
+          port: 80
+
+platformSecrets:
+  mode: native
+  native:
+    litellmMasterKey: "staging-litellm-key"
+    openaiApiKey: "staging-openai-key"
+    dbPassword: "staging-db-password"
+    apiGatewaySharedToken: "staging-shared-token"

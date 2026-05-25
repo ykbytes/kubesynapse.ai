@@ -1,0 +1,24 @@
+global:
+  clusterName: "kind-local"
+
+podDisruptionBudget:
+  enabled: false
+
+networkPolicy:
+  enabled: false
+
+operator:
+  replicaCount: 1
+
+apiGateway:
+  replicaCount: 1
+
+agentRuntime:
+  hitl:
+    mode: disabled
+
+mcpHub:
+  enabled: false
+
+systemAgents:
+  enabled: false

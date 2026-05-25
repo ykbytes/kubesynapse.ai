@@ -1,0 +1,6 @@
+{
+  "event": "custom",
+  "source": "cli-e2e",
+  "message": "trigger workflow via webhook dispatch",
+  "input": "Webhook-triggered CLI E2E run"
+}

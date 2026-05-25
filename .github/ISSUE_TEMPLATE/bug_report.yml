@@ -1,0 +1,71 @@
+name: Bug Report
+description: File a bug report for KubeSynapse
+labels: [bug, triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to fill out this bug report. Please search existing issues before submitting.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Which version of KubeSynapse are you running?
+      placeholder: "0.3.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      description: Which part of the platform is affected?
+      options:
+        - API Gateway
+        - Operator
+        - CLI (agentctl)
+        - Web UI
+        - Helm Chart
+        - Runtime (OpenCode)
+        - Runtime (Pi)
+        - Runtime (Mistral Vibe)
+        - MCP Sidecars
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Describe the bug and what you expected to happen.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Provide exact commands or steps that trigger the bug.
+      placeholder: |
+        1. Run 'agentctl agents create -f agent.yaml'
+        2. Check 'kubectl get pods -n default'
+        3. See error...
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Paste any relevant logs, error messages, or stack traces.
+      render: shell
+  - type: input
+    id: k8s-version
+    attributes:
+      label: Kubernetes version
+      description: "Output of `kubectl version --short`"
+      placeholder: "v1.29.0"
+  - type: input
+    id: helm-version
+    attributes:
+      label: Helm version
+      description: "Output of `helm version --short`"
+      placeholder: "v3.14.0"

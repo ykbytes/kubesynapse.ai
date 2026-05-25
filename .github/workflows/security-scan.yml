@@ -1,0 +1,485 @@
+name: Security Scan
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 3 * * 1"  # Weekly on Mondays at 03:00 UTC
+  pull_request:
+    branches: [main, preprod, "feat/security-hardening"]
+  push:
+    branches: [main, preprod, "feat/security-hardening"]
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
+jobs:
+  # ── CodeQL (Python + JavaScript/TypeScript) ────────────────────────
+  codeql:
+    name: CodeQL (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [python, javascript-typescript]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          queries: security-extended
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: codeql-${{ matrix.language }}
+
+  # ── Semgrep ────────────────────────────────────────────────────────
+  semgrep:
+    name: Semgrep
+    runs-on: ubuntu-latest
+    container:
+      image: semgrep/semgrep:latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Semgrep (SARIF)
+        continue-on-error: true
+        run: |
+          mkdir -p security-reports/raw
+          semgrep scan \
+            --config "p/default" \
+            --config "p/python" \
+            --config "p/javascript" \
+            --config "p/typescript" \
+            --config "p/secrets" \
+            --sarif \
+            --output security-reports/raw/semgrep.sarif \
+            .
+
+      - name: Run Semgrep (JSON for normalization)
+        continue-on-error: true
+        run: |
+          semgrep scan \
+            --config "p/default" \
+            --config "p/python" \
+            --config "p/javascript" \
+            --config "p/typescript" \
+            --config "p/secrets" \
+            --json \
+            --output security-reports/raw/semgrep.json \
+            . || true
+
+      - name: Upload Semgrep SARIF to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: security-reports/raw/semgrep.sarif
+          category: semgrep
+        continue-on-error: true
+
+      - name: Upload Semgrep raw outputs
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: semgrep-results
+          path: security-reports/raw/semgrep.*
+          if-no-files-found: ignore
+
+  # ── Gitleaks (Secret Scanning) ──────────────────────────────────────
+  gitleaks:
+    name: Gitleaks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Gitleaks
+        run: |
+          GITLEAKS_VERSION=8.18.4
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            | tar -xz -C /usr/local/bin gitleaks
+
+      - name: Run Gitleaks (JSON)
+        continue-on-error: true
+        run: |
+          mkdir -p security-reports/raw
+          gitleaks detect \
+            --source . \
+            --report-format json \
+            --report-path security-reports/raw/gitleaks.json \
+            --exit-code 0 || true
+
+      - name: Run Gitleaks (SARIF)
+        continue-on-error: true
+        run: |
+          gitleaks detect \
+            --source . \
+            --report-format sarif \
+            --report-path security-reports/raw/gitleaks.sarif \
+            --exit-code 0 || true
+
+      - name: Upload Gitleaks SARIF to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: security-reports/raw/gitleaks.sarif
+          category: gitleaks
+        continue-on-error: true
+
+      - name: Upload Gitleaks raw outputs
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gitleaks-results
+          path: security-reports/raw/gitleaks.*
+          if-no-files-found: ignore
+
+  # ── Trivy Filesystem Scan ──────────────────────────────────────────
+  trivy-fs:
+    name: Trivy Filesystem
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create output directory
+        run: mkdir -p security-reports/raw
+
+      - name: Run Trivy (SARIF)
+        uses: aquasecurity/trivy-action@v0.30.0
+        with:
+          scan-type: fs
+          scan-ref: "."
+          format: sarif
+          output: security-reports/raw/trivy-fs.sarif
+          severity: CRITICAL,HIGH,MEDIUM
+          exit-code: "0"
+          ignore-unfixed: false
+
+      - name: Run Trivy (JSON)
+        uses: aquasecurity/trivy-action@v0.30.0
+        with:
+          scan-type: fs
+          scan-ref: "."
+          format: json
+          output: security-reports/raw/trivy-fs.json
+          severity: CRITICAL,HIGH,MEDIUM
+          exit-code: "0"
+          ignore-unfixed: false
+
+      - name: Upload Trivy FS SARIF to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: security-reports/raw/trivy-fs.sarif
+          category: trivy-filesystem
+        continue-on-error: true
+
+      - name: Upload Trivy FS raw outputs
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: trivy-fs-results
+          path: security-reports/raw/trivy-fs.*
+          if-no-files-found: ignore
+
+  # ── pip-audit (Python Dependency Audit) ────────────────────────────
+  pip-audit:
+    name: pip-audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install pip-audit
+        run: pip install pip-audit
+
+      - name: Audit Python requirements files
+        continue-on-error: true
+        run: |
+          mkdir -p security-reports/raw
+          COMBINED_OUTPUT="security-reports/raw/pip-audit.json"
+          echo '{"results":[' > "$COMBINED_OUTPUT"
+          FIRST=true
+          for req in \
+            api-gateway/requirements.txt \
+            operator/requirements.txt \
+            opencode-runtime/requirements.txt \
+            vibe-runtime/requirements.txt \
+            collector-agent/requirements.txt \
+            mcp-sidecars/browser/requirements.txt \
+            mcp-sidecars/rag/requirements.txt \
+            mcp-sidecars/code-exec/requirements.txt \
+            mcp-sidecars/github-adapter/requirements.txt \
+            mcp-sidecars/git/requirements.txt \
+            mcp-sidecars/messaging/requirements.txt \
+            mcp-sidecars/kubernetes/requirements.txt \
+            mcp-sidecars/documents/requirements.txt \
+            mcp-sidecars/web-search/requirements.txt \
+            mcp-sidecars/database/requirements.txt \
+            mcp-sidecars/collector/requirements.txt; do
+            if [ -f "$req" ]; then
+              COMPONENT=$(echo "$req" | cut -d/ -f1)
+              TMPFILE=$(mktemp)
+              pip-audit --requirement "$req" --format json --output "$TMPFILE" --progress-spinner off || true
+              if [ -s "$TMPFILE" ]; then
+                if [ "$FIRST" = "true" ]; then
+                  FIRST=false
+                else
+                  echo ',' >> "$COMBINED_OUTPUT"
+                fi
+                echo "{\"component\": \"$COMPONENT\", \"requirement\": \"$req\", \"findings\": $(cat "$TMPFILE")}" >> "$COMBINED_OUTPUT"
+              fi
+              rm -f "$TMPFILE"
+            fi
+          done
+          echo ']}' >> "$COMBINED_OUTPUT"
+
+      - name: Upload pip-audit raw outputs
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pip-audit-results
+          path: security-reports/raw/pip-audit.json
+          if-no-files-found: ignore
+
+  # ── OSV-Scanner ─────────────────────────────────────────────────────
+  osv-scanner:
+    name: OSV-Scanner
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install OSV-Scanner
+        run: |
+          OSV_VERSION=1.9.2
+          curl -sSfL "https://github.com/google/osv-scanner/releases/download/v${OSV_VERSION}/osv-scanner_linux_amd64" \
+            -o /usr/local/bin/osv-scanner
+          chmod +x /usr/local/bin/osv-scanner
+
+      - name: Run OSV-Scanner (JSON)
+        continue-on-error: true
+        run: |
+          mkdir -p security-reports/raw
+          osv-scanner scan \
+            --recursive \
+            --format json \
+            --output security-reports/raw/osv-scanner.json \
+            . || true
+
+      - name: Run OSV-Scanner (SARIF)
+        continue-on-error: true
+        run: |
+          osv-scanner scan \
+            --recursive \
+            --format sarif \
+            --output security-reports/raw/osv-scanner.sarif \
+            . || true
+
+      - name: Upload OSV-Scanner SARIF to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: security-reports/raw/osv-scanner.sarif
+          category: osv-scanner
+        continue-on-error: true
+
+      - name: Upload OSV-Scanner raw outputs
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: osv-scanner-results
+          path: security-reports/raw/osv-scanner.*
+          if-no-files-found: ignore
+
+  # ── Bandit (Python SAST) ────────────────────────────────────────────
+  bandit:
+    name: Bandit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Bandit
+        run: pip install "bandit[sarif]"
+
+      - name: Run Bandit (SARIF)
+        continue-on-error: true
+        run: |
+          mkdir -p security-reports/raw
+          bandit \
+            -r api-gateway/ operator/ opencode-runtime/ vibe-runtime/ cli/ \
+               collector-agent/ clients/python/ mcp-sidecars/ \
+            -c .bandit.yaml \
+            --format sarif \
+            --output security-reports/raw/bandit.sarif || true
+
+      - name: Run Bandit (JSON)
+        continue-on-error: true
+        run: |
+          bandit \
+            -r api-gateway/ operator/ opencode-runtime/ vibe-runtime/ cli/ \
+               collector-agent/ clients/python/ mcp-sidecars/ \
+            -c .bandit.yaml \
+            --format json \
+            --output security-reports/raw/bandit.json || true
+
+      - name: Upload Bandit SARIF to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: security-reports/raw/bandit.sarif
+          category: bandit
+        continue-on-error: true
+
+      - name: Upload Bandit raw outputs
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bandit-results
+          path: security-reports/raw/bandit.*
+          if-no-files-found: ignore
+
+  # ── Helm Render + Trivy Config + kube-score ─────────────────────────
+  helm-scan:
+    name: Helm Scan (Trivy config + kube-score)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.4
+
+      - name: Install kube-score
+        run: |
+          KUBESCORE_VERSION=1.19.0
+          curl -sSfL "https://github.com/zegl/kube-score/releases/download/v${KUBESCORE_VERSION}/kube-score_${KUBESCORE_VERSION}_linux_amd64.tar.gz" \
+            | tar -xz -C /usr/local/bin kube-score
+
+      - name: Render Helm chart
+        id: helm-render
+        run: |
+          mkdir -p security-reports/raw
+          helm template kubesynapse ./charts/kubesynapse \
+            --namespace kubesynapse \
+            --set global.imagePullSecrets[0].name=placeholder \
+            --set litellm.masterKey=placeholder-key \
+            > security-reports/raw/helm-rendered.yaml
+
+      - name: Run Trivy config scan on rendered manifests (JSON)
+        if: hashFiles('security-reports/raw/helm-rendered.yaml') != ''
+        uses: aquasecurity/trivy-action@v0.30.0
+        continue-on-error: true
+        with:
+          scan-type: config
+          scan-ref: security-reports/raw/helm-rendered.yaml
+          format: json
+          output: security-reports/raw/trivy-config.json
+          exit-code: "0"
+
+      - name: Run Trivy config scan on rendered manifests (SARIF)
+        if: hashFiles('security-reports/raw/helm-rendered.yaml') != ''
+        uses: aquasecurity/trivy-action@v0.30.0
+        continue-on-error: true
+        with:
+          scan-type: config
+          scan-ref: security-reports/raw/helm-rendered.yaml
+          format: sarif
+          output: security-reports/raw/trivy-config.sarif
+          exit-code: "0"
+
+      - name: Upload Trivy config SARIF to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: hashFiles('security-reports/raw/trivy-config.sarif') != ''
+        with:
+          sarif_file: security-reports/raw/trivy-config.sarif
+          category: trivy-helm-config
+        continue-on-error: true
+
+      - name: Run kube-score on rendered manifests
+        if: hashFiles('security-reports/raw/helm-rendered.yaml') != ''
+        continue-on-error: true
+        run: |
+          kube-score score security-reports/raw/helm-rendered.yaml \
+            --output-format json \
+            > security-reports/raw/kube-score.json || true
+          kube-score score security-reports/raw/helm-rendered.yaml \
+            > security-reports/raw/kube-score.txt || true
+
+      - name: Upload Helm scan raw outputs
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: helm-scan-results
+          path: |
+            security-reports/raw/helm-rendered.yaml
+            security-reports/raw/trivy-config.*
+            security-reports/raw/kube-score.*
+          if-no-files-found: ignore
+
+  # ── Normalize Reports ───────────────────────────────────────────────
+  normalize-reports:
+    name: Normalize Reports
+    runs-on: ubuntu-latest
+    needs:
+      - semgrep
+      - gitleaks
+      - trivy-fs
+      - pip-audit
+      - osv-scanner
+      - bandit
+      - helm-scan
+    if: always()
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Download all scanner artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: security-reports/raw
+          merge-multiple: true
+        continue-on-error: true
+
+      - name: Run normalization script
+        run: |
+          mkdir -p security-reports/normalized
+          python scripts/security/normalize_reports.py
+
+      - name: Upload normalized reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: security-normalized-reports
+          path: |
+            security-reports/normalized/remediation-report.json
+            security-reports/summary.md
+          if-no-files-found: ignore
+
+      - name: Print Markdown summary to workflow
+        if: always()
+        run: |
+          if [ -f security-reports/summary.md ]; then
+            cat security-reports/summary.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "## Security Scan" >> "$GITHUB_STEP_SUMMARY"
+            echo "No summary generated." >> "$GITHUB_STEP_SUMMARY"
+          fi

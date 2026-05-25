@@ -1,0 +1,51 @@
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AgentWorkflow
+metadata:
+  name: feature-pipeline
+  namespace: default
+spec:
+  description: "Research -> Implement -> Review -> Report"
+  input: "Add request rate limiting to the API gateway"
+  contextRef: project-rules
+  messageBus: in-memory
+  autoRetry:
+    enabled: true
+    maxAttempts: 1
+    retryableFailureClasses:
+      - TimeoutError
+      - ConnectTimeout
+      - ReadTimeout
+      - PoolTimeout
+      - RemoteProtocolError
+      - ConnectError
+      - ReadError
+      - ApiException
+  steps:
+    - name: research
+      agentRef: research-assistant
+      prompt: "Research approaches for: {{input}}"
+      execution:
+        timeoutSeconds: 180
+        maxAttempts: 2
+        backoffSeconds: 3
+    - name: implement
+      agentRef: developer-agent
+      prompt: "Implement based on research findings: {{previous_output}}"
+      dependsOn:
+        - research
+      verify: "Run tests and confirm implementation satisfies the request. Respond PASS or FAIL."
+      execution:
+        timeoutSeconds: 240
+        continueOnError: false
+    - name: code-review
+      type: review
+      agentRef: reviewer-agent
+      reviewCriteria: "Code quality, test coverage, and adherence to project conventions"
+      dependsOn:
+        - implement
+    - name: report
+      agentRef: report-writer
+      prompt: "Write a concise report with implementation summary and review findings: {{previous_output}}"
+      dependsOn:
+        - code-review
+      requireApproval: true

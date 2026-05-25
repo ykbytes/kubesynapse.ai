@@ -1,0 +1,16 @@
+{
+  "sidecarName": "messaging",
+  "version": "1.0.0",
+  "allowedTools": ["send_email", "send_slack_message", "list_slack_channels"],
+  "networkEgress": {
+    "domains": ["slack.com", "*.slack.com", "*.slack-msgs.com"],
+    "ips": [],
+    "ports": [443, 587]
+  },
+  "resourceLimits": {
+    "cpuRequest": "50m",
+    "cpuLimit": "500m",
+    "memoryRequest": "64Mi",
+    "memoryLimit": "256Mi"
+  }
+}

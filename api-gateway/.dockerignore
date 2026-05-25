@@ -1,0 +1,57 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtualenv
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Git
+.git/
+.gitignore
+
+# Tests
+tests/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+Dockerfile
+.dockerignore
+docker-compose*.yml
+
+# Docs
+*.md
+docs/
+
+# Examples
+examples/
+
+# Charts (not needed for build)
+charts/
+
+# Node modules (if accidentally present)
+node_modules/
+
+# Local development files
+.env
+*.local.*
+deploy/
+scripts/

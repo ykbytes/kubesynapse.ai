@@ -1,0 +1,12 @@
+{
+  "compaction": {
+    "enabled": true,
+    "threshold": 0.7
+  },
+  "retry": {
+    "enabled": true,
+    "maxRetries": 3
+  },
+  "thinkingLevel": "medium",
+  "enableInstallTelemetry": false
+}

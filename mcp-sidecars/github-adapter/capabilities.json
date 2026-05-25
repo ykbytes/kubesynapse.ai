@@ -1,0 +1,16 @@
+{
+  "sidecarName": "github-adapter",
+  "version": "1.0.0",
+  "allowedTools": [],
+  "networkEgress": {
+    "domains": [],
+    "ips": [],
+    "ports": [8082]
+  },
+  "resourceLimits": {
+    "cpuRequest": "50m",
+    "cpuLimit": "500m",
+    "memoryRequest": "64Mi",
+    "memoryLimit": "256Mi"
+  }
+}

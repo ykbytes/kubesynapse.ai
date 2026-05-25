@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI-300 Practice Exam: Operationalizing Machine Learning and Generative AI Solutions</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.6; color: #333; background-color: #f5f5f5; }
+        header { background: linear-gradient(135deg, #0078D4 0%, #005a9e 100%); color: white; padding: 40px 20px; text-align: center; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        header h1 { font-size: 28px; margin-bottom: 10px; }
+        header p { font-size: 16px; opacity: 0.95; }
+        .container { max-width: 1000px; margin: 30px auto; padding: 0 20px; }
+        .score-display { background: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 20px; }
+        .score-info { display: flex; gap: 30px; align-items: center; }
+        .score-box { text-align: center; }
+        .score-box .label { font-size: 12px; color: #666; text-transform: uppercase; font-weight: 600; }
+        .score-box .value { font-size: 24px; font-weight: bold; color: #0078D4; }
+        .progress-container { flex: 1; min-width: 200px; }
+        .progress-bar { width: 100%; height: 8px; background: #e0e0e0; border-radius: 4px; overflow: hidden; }
+        .progress-fill { height: 100%; background: linear-gradient(90deg, #0078D4, #0ea366); width: 0%; transition: width 0.3s ease; }
+        .controls { display: flex; gap: 10px; flex-wrap: wrap; }
+        button { padding: 10px 20px; border: none; border-radius: 4px; font-size: 14px; font-weight: 600; cursor: pointer; transition: all 0.2s; }
+        .btn-primary { background: #0078D4; color: white; }
+        .btn-primary:hover { background: #005a9e; }
+        .btn-secondary { background: #f0f0f0; color: #333; border: 1px solid #d0d0d0; }
+        .btn-secondary:hover { background: #e0e0e0; }
+        .toc { background: white; padding: 20px; border-radius: 8px; margin-bottom: 30px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+        .toc h2 { font-size: 18px; margin-bottom: 15px; color: #0078D4; }
+        .toc ul { list-style: none; }
+        .toc li { margin-bottom: 8px; }
+        .toc a { color: #0078D4; text-decoration: none; font-weight: 500; }
+        .toc a:hover { text-decoration: underline; }
+        .domain-section { margin-bottom: 40px; }
+        .domain-header { background: #0078D4; color: white; padding: 15px 20px; border-radius: 4px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; }
+        .domain-header h2 { font-size: 18px; }
+        .domain-count { background: rgba(255,255,255,0.3); padding: 4px 12px; border-radius: 20px; font-size: 14px; font-weight: 600; }
+        .question-item { background: white; padding: 25px; margin-bottom: 20px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); border-left: 4px solid #0078D4; }
+        .question-header { display: flex; justify-content: space-between; align-items: start; margin-bottom: 15px; gap: 15px; }
+        .question-number { font-size: 14px; font-weight: 600; color: #666; }
+        .type-badge { display: inline-block; padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; text-transform: uppercase; }
+        .type-mc { background: #e3f2fd; color: #0078D4; }
+        .type-ms { background: #f3e5f5; color: #7b1fa2; }
+        .type-scenario { background: #e8f5e9; color: #388e3c; }
+        .type-ordering { background: #fff3e0; color: #e65100; }
+        .type-yesno { background: #fce4ec; color: #c2185b; }
+        .question-text { font-size: 16px; font-weight: 500; margin-bottom: 15px; line-height: 1.6; }
+        .options-container { margin: 20px 0; }
+        .option { margin-bottom: 12px; padding: 12px; background: #f9f9f9; border-radius: 4px; border: 1px solid #e0e0e0; cursor: pointer; transition: all 0.2s; }
+        .option:hover { background: #f0f0f0; border-color: #0078D4; }
+        .option input { margin-right: 10px; cursor: pointer; }
+        .option label { cursor: pointer; display: flex; align-items: center; }
+        .statement { padding: 12px; background: #f9f9f9; border-radius: 4px; border-left: 3px solid #e0e0e0; margin-bottom: 12px; }
+        .statement-text { margin-bottom: 8px; font-size: 14px; }
+        .statement-response { display: flex; gap: 15px; }
+        .statement-response label { display: flex; align-items: center; gap: 5px; cursor: pointer; font-size: 14px; }
+        .scenario-block { margin-bottom: 15px; padding: 14px; background: #f6fbff; border-left: 4px solid #66aee8; border-radius: 4px; white-space: pre-wrap; }
+        .ordering-container { display: grid; gap: 10px; }
+        .ordering-row { display: flex; flex-direction: column; gap: 6px; padding: 12px; background: #f9f9f9; border-radius: 4px; border: 1px solid #e0e0e0; }
+        .ordering-row label { font-size: 13px; font-weight: 600; color: #555; }
+        .ordering-row select { padding: 10px; border: 1px solid #cfd8dc; border-radius: 4px; background: white; }
+        details { margin-top: 20px; padding-top: 20px; border-top: 1px solid #e0e0e0; }
+        summary { cursor: pointer; font-weight: 600; color: #0078D4; padding: 10px; background: #f9f9f9; border-radius: 4px; user-select: none; }
+        summary:hover { background: #f0f0f0; }
+        .explanation { margin-top: 15px; padding: 15px; background: #f0f8ff; border-radius: 4px; }
+        .correct-answer { margin-bottom: 15px; padding: 12px; background: #e8f5e9; border-left: 4px solid #4caf50; border-radius: 2px; }
+        .correct-answer .label { font-weight: 600; color: #2e7d32; font-size: 12px; text-transform: uppercase; }
+        .correct-answer .value { font-size: 14px; color: #1b5e20; margin-top: 5px; line-height: 1.4; }
+        .explanation-text { margin: 12px 0; line-height: 1.6; font-size: 14px; }
+        .source-urls { margin-top: 12px; padding-top: 12px; border-top: 1px solid #d0d8e0; }
+        .source-urls .label { font-weight: 600; color: #666; font-size: 12px; text-transform: uppercase; margin-bottom: 8px; display: block; }
+        .source-urls a { display: inline-block; margin-right: 12px; margin-bottom: 6px; color: #0078D4; text-decoration: none; font-size: 13px; word-break: break-word; }
+        .source-urls a:hover { text-decoration: underline; }
+        .confidence-badge { display: inline-block; margin-top: 8px; padding: 4px 10px; border-radius: 12px; font-size: 11px; font-weight: 600; text-transform: uppercase; }
+        .confidence-high { background: #e8f5e9; color: #2e7d32; }
+        .confidence-medium { background: #fff3e0; color: #e65100; }
+        .domain-breakdown { background: white; padding: 20px; border-radius: 8px; margin: 30px 0; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+        .domain-breakdown h2 { font-size: 18px; margin-bottom: 20px; color: #0078D4; }
+        .breakdown-table { width: 100%; border-collapse: collapse; }
+        .breakdown-table th { background: #f0f0f0; padding: 12px; text-align: left; font-weight: 600; font-size: 13px; border-bottom: 2px solid #0078D4; }
+        .breakdown-table td { padding: 12px; border-bottom: 1px solid #e0e0e0; font-size: 14px; }
+        .breakdown-table tr:hover { background: #f9f9f9; }
+        .footer { text-align: center; padding: 30px 20px; color: #666; font-size: 13px; }
+        @media (max-width: 768px) {
+            header h1 { font-size: 20px; }
+            .score-display { flex-direction: column; }
+            .score-info { width: 100%; justify-content: space-around; }
+            .question-item { padding: 15px; }
+        }
+        @media print {
+            body { background: white; }
+            .score-display, .controls, .toc, button { display: none !important; }
+            details { border: none; padding: 0; margin: 0; }
+            summary { display: none; }
+            details > * { display: block !important; }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>AI-300 Practice Exam</h1>
+        <p>Operationalizing Machine Learning and Generative AI Solutions</p>
+        <p>Microsoft Certified: Machine Learning Operations (MLOps) Engineer Associate</p>
+    </header>
+    
+    <div class="container">
+        <div class="score-display">
+            <div class="score-info">
+                <div class="score-box">
+                    <div class="label">Score</div>
+                    <div class="value"><span id="score">0</span>/60</div>
+                </div>
+                <div class="score-box">
+                    <div class="label">Passing</div>
+                    <div class="value">42/60 (700)</div>
+                </div>
+            </div>
+            <div class="progress-container">
+                <div style="font-size: 12px; font-weight: 600; margin-bottom: 5px; color: #666;">Progress: <span id="progress-count">0</span>/60</div>
+                <div class="progress-bar">
+                    <div class="progress-fill" id="progressFill"></div>
+                </div>
+            </div>
+            <div class="controls">
+                <button class="btn-primary" onclick="revealAll()">Reveal All Answers</button>
+                <button class="btn-secondary" onclick="resetExam()">Reset Exam</button>
+            </div>
+        </div>
+        
+        <div class="toc">
+            <h2>Table of Contents</h2>
+            <ul>
+                <li><a href="#domain1">Domain 1: Design and implement an MLOps infrastructure (11 Q)</a></li>
+                <li><a href="#domain2">Domain 2: Implement machine learning model lifecycle and operations (16 Q)</a></li>
+                <li><a href="#domain3">Domain 3: Design and implement a GenAIOps infrastructure (14 Q)</a></li>
+                <li><a href="#domain4">Domain 4: Implement generative AI quality assurance and observability (10 Q)</a></li>
+                <li><a href="#domain5">Domain 5: Optimize generative AI systems and model performance (9 Q)</a></li>
+            </ul>
+        </div>
+        
+        <div id="questionsContainer"></div>
+        
+        <div class="domain-breakdown">
+            <h2>Score Breakdown by Domain</h2>
+            <table class="breakdown-table">
+                <thead>
+                    <tr>
+                        <th>Domain</th>
+                        <th>Questions</th>
+                        <th>Score</th>
+                        <th>Percentage</th>
+                    </tr>
+                </thead>
+                <tbody id="breakdownBody">
+                    <tr><td colspan="4" style="text-align: center; color: #999;">Answer questions to see breakdown</td></tr>
+                </tbody>
+            </table>
+        </div>
+        
+        <div class="footer">
+            <p>AI-300 Practice Exam | Certified: Machine Learning Operations Engineer Associate</p>
+            <p>All questions validated against official Microsoft Learn documentation</p>
+        </div>
+    </div>
+    
+    <script>
+        function getQuestions() {
+            return Array.isArray(window.questionsData) ? window.questionsData : [];
+        }
+
+        function getDomainMap() {
+            return {
+                'Design and implement an MLOps infrastructure': 'domain1',
+                'Implement machine learning model lifecycle and operations': 'domain2',
+                'Design and implement a GenAIOps infrastructure': 'domain3',
+                'Implement generative AI quality assurance and observability': 'domain4',
+                'Optimize generative AI systems and model performance': 'domain5'
+            };
+        }
+
+        function getTypeMeta(type) {
+            const map = {
+                'multiple-choice': { badgeClass: 'type-mc', label: 'Multiple Choice' },
+                'multiple-select': { badgeClass: 'type-ms', label: 'Multi-Select' },
+                'scenario': { badgeClass: 'type-scenario', label: 'Scenario' },
+                'ordering': { badgeClass: 'type-ordering', label: 'Ordering' },
+                'yes-no-series': { badgeClass: 'type-yesno', label: 'Yes/No Series' }
+            };
+            return map[type] || { badgeClass: '', label: type };
+        }
+
+        function extractOrderingValue(item, index) {
+            const text = String(item || '');
+            const match = text.match(/Step\s+(\d+)/i) || text.match(/^(\d+)/);
+            return match ? String(match[1]) : String(index + 1);
+        }
+
+        function renderOrderingOptions(questionId, items) {
+            const optionHtml = items.map((item, index) => {
+                const value = extractOrderingValue(item, index);
+                return `<option value="${value}">${escapeHtml(item)}</option>`;
+            }).join('');
+            return `<div class="ordering-container">${items.map((item, index) => `<div class="ordering-row"><label for="${questionId}-slot-${index}">Position ${index + 1}</label><select id="${questionId}-slot-${index}" name="${questionId}-slot-${index}" onchange="updateScore()"><option value="">Select the step for this position</option>${optionHtml}</select></div>`).join('')}</div>`;
+        }
+
+        function initExam() {
+            const allQuestions = getQuestions();
+            if (allQuestions.length === 0) {
+                console.error('No questions data');
+                return;
+            }
+
+            const container = document.getElementById('questionsContainer');
+            const domainMap = getDomainMap();
+            const domainSections = {};
+
+            allQuestions.forEach(q => {
+                if (!domainSections[q.domain]) {
+                    domainSections[q.domain] = [];
+                }
+                domainSections[q.domain].push(q);
+            });
+
+            Object.entries(domainSections).forEach(([domain, questions]) => {
+                const sectionId = domainMap[domain] || 'unknown';
+                const sectionHtml = `<div class="domain-section"><div class="domain-header" id="${sectionId}"><h2>${escapeHtml(domain)}</h2><div class="domain-count">${questions.length} Questions</div></div><div id="questions-${sectionId}"></div></div>`;
+                container.insertAdjacentHTML('beforeend', sectionHtml);
+                const questionsContainer = document.getElementById(`questions-${sectionId}`);
+                questions.forEach(q => {
+                    questionsContainer.insertAdjacentHTML('beforeend', renderQuestion(q));
+                });
+            });
+        }
+
+        function renderQuestion(q) {
+            let optionsHtml = '';
+            const questionId = `q${q.id}`;
+            const questionType = q.type;
+
+            switch (questionType) {
+                case 'multiple-choice':
+                case 'scenario':
+                    Object.entries(q.options || {}).forEach(([key, value]) => {
+                        optionsHtml += `<div class="option"><label><input type="radio" name="${questionId}" value="${key}" onchange="updateScore()"><strong>${key}.</strong> ${escapeHtml(value)}</label></div>`;
+                    });
+                    break;
+                case 'multiple-select':
+                    Object.entries(q.options || {}).forEach(([key, value]) => {
+                        optionsHtml += `<div class="option"><label><input type="checkbox" name="${questionId}" value="${key}" onchange="updateScore()"><strong>${key}.</strong> ${escapeHtml(value)}</label></div>`;
+                    });
+                    break;
+                case 'yes-no-series':
+                    (q.statements || []).forEach((stmt, idx) => {
+                        optionsHtml += `<div class="statement"><div class="statement-text">${idx + 1}. ${escapeHtml(stmt.statement)}</div><div class="statement-response"><label><input type="radio" name="${questionId}-${idx}" value="true" onchange="updateScore()">True</label><label><input type="radio" name="${questionId}-${idx}" value="false" onchange="updateScore()">False</label></div></div>`;
+                    });
+                    break;
+                case 'ordering':
+                    optionsHtml = renderOrderingOptions(questionId, q.items || []);
+                    break;
+            }
+
+            const correctAnswerDisplay = getCorrectAnswerDisplay(q);
+            const typeMeta = getTypeMeta(questionType);
+            const scenarioHtml = q.scenario ? `<div class="scenario-block">${escapeHtml(q.scenario)}</div>` : '';
+            const sourceUrlsHtml = (q.source_urls || []).map(url => `<a href="${escapeAttribute(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(url)}</a>`).join('');
+            const confidenceBadge = q.confidence ? `<span class="confidence-badge confidence-${q.confidence}">${escapeHtml(q.confidence)}</span>` : '';
+
+            return `<div class="question-item"><div class="question-header"><div class="question-number">Question ${q.id}</div><span class="type-badge ${typeMeta.badgeClass}">${typeMeta.label}</span></div>${scenarioHtml}<div class="question-text">${escapeHtml(q.question)}</div><div class="options-container">${optionsHtml}</div><details><summary>Show Answer & Explanation</summary><div class="explanation">${correctAnswerDisplay}<div class="explanation-text">${escapeHtml(q.explanation)}</div><div class="source-urls"><span class="label">Sources:</span>${sourceUrlsHtml}${confidenceBadge}</div></div></details></div>`;
+        }
+
+        function getCorrectAnswerDisplay(q) {
+            if (q.type === 'multiple-choice' || q.type === 'scenario') {
+                return `<div class="correct-answer"><div class="label">Correct Answer:</div><div class="value">${q.correct_answer}. ${escapeHtml((q.options || {})[q.correct_answer] || '')}</div></div>`;
+            }
+            if (q.type === 'multiple-select') {
+                const answers = (q.correct_answers || []).map(a => `${a}. ${escapeHtml((q.options || {})[a] || '')}`).join('<br>');
+                return `<div class="correct-answer"><div class="label">Correct Answers (Select ${q.select_count || (q.correct_answers || []).length}):</div><div class="value">${answers}</div></div>`;
+            }
+            if (q.type === 'yes-no-series') {
+                const answers = (q.statements || []).map((s, idx) => `${idx + 1}. ${escapeHtml(String(s.correct))}`).join('<br>');
+                return `<div class="correct-answer"><div class="label">Correct Answers:</div><div class="value">${answers}</div></div>`;
+            }
+            if (q.type === 'ordering') {
+                const sequence = q.correct_sequence || q.correct_order || [];
+                const orderedItems = sequence.map((value, orderIndex) => {
+                    const match = (q.items || []).find((item, itemIndex) => extractOrderingValue(item, itemIndex) === String(value));
+                    return `${orderIndex + 1}. ${escapeHtml(match || String(value))}`;
+                }).join('<br>');
+                return `<div class="correct-answer"><div class="label">Correct Order:</div><div class="value">${orderedItems}</div></div>`;
+            }
+            return '';
+        }
+
+        function updateScore() {
+            const allQuestions = getQuestions();
+            let score = 0;
+            let answeredCount = 0;
+            const total = allQuestions.length;
+
+            allQuestions.forEach(q => {
+                const isCorrect = checkAnswer(q);
+                if (isCorrect !== null) {
+                    answeredCount += 1;
+                    if (isCorrect) {
+                        score += 1;
+                    }
+                }
+            });
+
+            document.getElementById('score').textContent = String(score);
+            document.getElementById('progress-count').textContent = String(answeredCount);
+            document.getElementById('progressFill').style.width = total > 0 ? `${answeredCount / total * 100}%` : '0%';
+            updateDomainBreakdown();
+        }
+
+        function checkAnswer(q) {
+            const questionId = `q${q.id}`;
+            if (q.type === 'multiple-choice' || q.type === 'scenario') {
+                const selected = document.querySelector(`input[name="${questionId}"]:checked`);
+                if (!selected) {
+                    return null;
+                }
+                return selected.value === q.correct_answer;
+            }
+            if (q.type === 'multiple-select') {
+                const selectedOptions = Array.from(document.querySelectorAll(`input[name="${questionId}"]:checked`)).map(el => el.value);
+                if (selectedOptions.length === 0) {
+                    return null;
+                }
+                const correctSet = new Set(q.correct_answers || []);
+                const selectedSet = new Set(selectedOptions);
+                return correctSet.size === selectedSet.size && Array.from(correctSet).every(value => selectedSet.has(value));
+            }
+            if (q.type === 'yes-no-series') {
+                const statements = q.statements || [];
+                for (let i = 0; i < statements.length; i += 1) {
+                    const selected = document.querySelector(`input[name="${questionId}-${i}"]:checked`);
+                    if (!selected) {
+                        return null;
+                    }
+                }
+                return statements.every((statement, index) => {
+                    const selected = document.querySelector(`input[name="${questionId}-${index}"]:checked`);
+                    const expected = statement.correct === 'true' || statement.correct === true;
+                    return (selected.value === 'true') === expected;
+                });
+            }
+            if (q.type === 'ordering') {
+                const sequence = (q.correct_sequence || q.correct_order || []).map(value => String(value));
+                const selectedSequence = sequence.map((_, index) => {
+                    const select = document.querySelector(`select[name="${questionId}-slot-${index}"]`);
+                    return select ? select.value : '';
+                });
+                if (selectedSequence.some(value => !value)) {
+                    return null;
+                }
+                return sequence.every((value, index) => value === selectedSequence[index]);
+            }
+            return null;
+        }
+
+        function updateDomainBreakdown() {
+            const allQuestions = getQuestions();
+            const domainScores = {};
+            const domainCounts = {};
+            const domainAnswered = {};
+
+            allQuestions.forEach(q => {
+                if (!domainScores[q.domain]) {
+                    domainScores[q.domain] = 0;
+                    domainCounts[q.domain] = 0;
+                    domainAnswered[q.domain] = 0;
+                }
+                domainCounts[q.domain] += 1;
+                const isCorrect = checkAnswer(q);
+                if (isCorrect !== null) {
+                    domainAnswered[q.domain] += 1;
+                    if (isCorrect) {
+                        domainScores[q.domain] += 1;
+                    }
+                }
+            });
+
+            const tbody = document.getElementById('breakdownBody');
+            const domains = Object.keys(domainScores);
+            const hasAnswers = domains.some(domain => domainAnswered[domain] > 0);
+
+            if (!hasAnswers) {
+                tbody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: #999;">Answer questions to see breakdown</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = domains.map(domain => {
+                const score = domainScores[domain];
+                const total = domainCounts[domain];
+                const percentage = total > 0 ? Math.round(score / total * 100) : 0;
+                return `<tr><td>${escapeHtml(domain.substring(0, 60))}</td><td>${total}</td><td>${score}/${total}</td><td>${percentage}%</td></tr>`;
+            }).join('');
+        }
+
+        function revealAll() {
+            document.querySelectorAll('details').forEach(details => {
+                details.open = true;
+            });
+        }
+
+        function resetExam() {
+            if (!confirm('Reset all answers?')) {
+                return;
+            }
+            document.querySelectorAll('input[type="radio"], input[type="checkbox"]').forEach(el => {
+                el.checked = false;
+            });
+            document.querySelectorAll('select').forEach(el => {
+                el.selectedIndex = 0;
+            });
+            document.querySelectorAll('details').forEach(details => {
+                details.open = false;
+            });
+            document.getElementById('score').textContent = '0';
+            document.getElementById('progress-count').textContent = '0';
+            document.getElementById('progressFill').style.width = '0%';
+            document.getElementById('breakdownBody').innerHTML = '<tr><td colspan="4" style="text-align: center; color: #999;">Answer questions to see breakdown</td></tr>';
+        }
+
+        function escapeHtml(text) {
+            const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
+            return String(text ?? '').replace(/[&<>"']/g, match => map[match]);
+        }
+
+        function escapeAttribute(text) {
+            return escapeHtml(text);
+        }
+
+        window.addEventListener('DOMContentLoaded', initExam);
+    </script>
+    
+    <script>
+        window.questionsData = [
+            {"id": 1, "type": "multiple-choice", "domain": "Design and implement an MLOps infrastructure", "question": "You are creating a new Azure Machine Learning workspace. Which of the following is NOT an associated resource automatically created with the workspace?", "options": {"A": "Azure Container Registry for storing custom Docker images", "B": "Azure Storage Account for storing artifacts and logs", "C": "Azure Synapse Analytics for data processing", "D": "Azure Key Vault for storing secrets and credentials"}, "correct_answer": "C", "explanation": "When you create an Azure Machine Learning workspace, Azure automatically provisions four associated resources: Azure Storage Account (for artifacts, logs, outputs), Azure Container Registry (for custom environments), Application Insights (for monitoring), and Azure Key Vault (for credentials). Azure Synapse Analytics is not automatically provisioned as part of a workspace.", "source_urls": ["https://learn.microsoft.com/en-us/azure/machine-learning/concept-workspace"], "confidence": "high", "difficulty": "easy"},
+            {"id": 2, "type": "multiple-choice", "domain": "Design and implement an MLOps infrastructure", "question": "Which credential type provides the most secure authentication method for connecting a datastore to an Azure Blob Storage account without storing explicit credentials?", "options": {"A": "Account key stored in Azure Key Vault", "B": "Identity-based access using managed identity", "C": "Shared Access Signature (SAS) token", "D": "Connection string with embedded credentials"}, "correct_answer": "B", "explanation": "Identity-based access (credential-less) is the most secure method for datastore authentication. It leverages managed identities or Microsoft Entra ID credentials, eliminating the need to store or manage explicit credentials.", "source_urls": ["https://learn.microsoft.com/en-us/azure/machine-learning/how-to-datastore"], "confidence": "high", "difficulty": "easy"},
+            {"id": 3, "type": "multiple-choice", "domain": "Design and implement an MLOps infrastructure", "question": "You need to select compute resources for different ML workloads. Which compute target type is best for interactive development and debugging of training scripts?", "options": {"A": "Compute Cluster for scalable distributed training", "B": "Compute Instance for interactive development and testing", "C": "Inference Compute for real-time endpoint deployment", "D": "Kubernetes Cluster for high-performance distributed training"}, "correct_answer": "B", "explanation": "Compute Instances are designed for interactive development, experimentation, and debugging. They provide a managed Jupyter notebook environment with direct SSH access.", "source_urls": ["https://learn.microsoft.com/en-us/azure/machine-learning/how-to-manage-compute-targets"], "confidence": "high", "difficulty": "medium"},
+            {"id": 4, "type": "multiple-choice", "domain": "Design and implement an MLOps infrastructure", "question": "A team member needs to create and manage compute resources in your Azure Machine Learning workspace but should not be able to delete the workspace itself or modify workspace-level settings. Which built-in Azure ML RBAC role should you assign?", "options": {"A": "AzureML Data Scientist (full access to all workspace actions)", "B": "AzureML Compute Operator (limited to compute management)", "C": "Contributor (allows workspace-level modifications)", "D": "Reader (read-only access to all resources)"}, "correct_answer": "B", "explanation": "The AzureML Compute Operator role is specifically designed for creating and managing compute targets without granting workspace administration rights.", "source_urls": ["https://learn.microsoft.com/en-us/azure/machine-learning/how-to-assign-roles"], "confidence": "high", "difficulty": "medium"},
+            {"id": 5, "type": "multiple-choice", "domain": "Design and implement an MLOps infrastructure", "question": "Which Azure ML asset type is used to package and version Python libraries and system dependencies required for training or inference?", "options": {"A": "Data Asset", "B": "Environment", "C": "Component", "D": "Model Registry entry"}, "correct_answer": "B", "explanation": "Environments in Azure ML are used to package Python libraries, system dependencies, and Docker configuration needed for reproducible training and inference.", "source_urls": ["https://learn.microsoft.com/en-us/azure/machine-learning/how-to-manage-environments"], "confidence": "high", "difficulty": "easy"},
+            {"id": 6, "type": "multiple-choice", "domain": "Design and implement an MLOps infrastructure", "question": "Your organization has multiple Azure Machine Learning workspaces across different regions. You want to share curated components and environments across all workspaces without duplicating them. Which feature should you use?", "options": {"A": "Workspace datastores with shared connections", "B": "Azure Machine Learning Registries for centralized asset management", "C": "Azure Blob Storage shared between workspaces", "D": "Git repositories storing component configurations"}, "correct_answer": "B", "explanation": "Azure Machine Learning Registries enable sharing of data assets, environments, components, and models across workspaces within a registry.", "source_urls": ["https://learn.microsoft.com/en-us/azure/machine-learning/how-to-share-assets-with-ml-registries"], "confidence": "high", "difficulty": "medium"},
+            {"id": 7, "type": "multiple-select", "domain": "Design and implement an MLOps infrastructure", "question": "You are implementing continuous integration for Azure Machine Learning using GitHub Actions. Which of the following are valid approaches for securely authenticating to your ML workspace?", "options": {"A": "Store workspace key and resource group in GitHub Secrets, use Azure Login action", "B": "Use OIDC (OpenID Connect) federation for keyless authentication", "C": "Store connection string directly in the workflow YAML file", "D": "Use managed identity with Azure Login action to obtain temporary credentials"}, "correct_answers": ["A", "B", "D"], "select_count": 3, "explanation": "Secure GitHub Actions authentication includes GitHub Secrets, OIDC federation (recommended), and managed identity with Azure Login.", "source_urls": ["https://learn.microsoft.com/en-us/azure/machine-learning/how-to-github-actions-machine-learning"], "confidence": "high", "difficulty": "medium"},
+            {"id": 8, "type": "multiple-select", "domain": "Design and implement an MLOps infrastructure", "question": "When configuring a Compute Cluster for distributed deep learning training, which settings directly impact cost optimization?", "options": {"A": "Use low-priority VMs to reduce compute costs", "B": "Set minimum node count to 0 for automatic scale-down when idle", "C": "Configure VM priority to Spot instances for additional cost savings", "D": "Enable automatic shutdown after idle timeout period"}, "correct_answers": ["A", "B", "D"], "select_count": 3, "explanation": "Cost optimization achieved through low-priority VMs, minimum nodes of 0, and idle timeout.", "source_urls": ["https://learn.microsoft.com/en-us/azure/machine-learning/how-to-manage-compute-targets"], "confidence": "high", "difficulty": "medium"},
+            {"id": 9, "type": "scenario", "domain": "Design and implement an MLOps infrastructure", "question": "Your organization requires Infrastructure as Code (IaC) for all Azure ML resources to ensure consistency and auditability. You want to deploy workspaces, datastores, and compute clusters using Bicep templates triggered by GitHub Actions on pull requests. Which combination of services and steps would you implement?", "options": {"A": "Create a Bicep template defining workspace, storage, and compute resources; store in Git; configure GitHub Actions workflow to validate (--what-if) on PR and deploy on merge to main.", "B": "Use Azure Portal to create resources manually, export as ARM template, convert to Bicep, store in Git, use scheduled GitHub Actions for redeployment.", "C": "Create Python SDK scripts to define resources, store in Git, use GitHub Actions to execute with service principal authentication.", "D": "Deploy via Bicep manually for initial setup, then use GitHub Actions only for monitoring and alerting on resource changes."}, "correct_answer": "A", "explanation": "Best IaC approach: Bicep templates, Git repository, GitHub Actions with what-if validation and deployment.", "source_urls": ["https://learn.microsoft.com/en-us/azure/machine-learning/concept-workspace"], "confidence": "high", "difficulty": "hard"},
+            {"id": 10, "type": "ordering", "domain": "Design and implement an MLOps infrastructure", "question": "You are setting up a new Azure Machine Learning workspace infrastructure from scratch. Arrange these steps in the correct logical order.", "items": ["Step 3: Create Resource Group", "Step 2: Create ML workspace", "Step 1: Create Storage and register as datastore", "Step 4: Create compute targets", "Step 5: Create and register environments", "Step 6: Assign RBAC roles"], "correct_order": [3, 2, 1, 4, 5, 6], "correct_sequence": [3, 2, 1, 4, 5, 6], "explanation": "Correct sequence: RG > workspace > datastores > compute targets > environments > RBAC roles.", "source_urls": ["https://learn.microsoft.com/en-us/azure/machine-learning/concept-workspace"], "confidence": "high", "difficulty": "hard"},
+            {"id": 11, "type": "yes-no-series", "domain": "Design and implement an MLOps infrastructure", "question": "Indicate whether each statement about Azure Machine Learning security is true or false.", "statements": [{"statement": "A managed identity created after November 19, 2024 automatically receives the Azure AI Administrator role instead of Contributor role.", "correct": "true"}, {"statement": "Private endpoints in Azure ML prevent public internet access to the workspace, but datastores must still use account keys for authentication.", "correct": "false"}, {"statement": "Microsoft Entra security groups can be used to manage workspace access without requiring Owner role for individual group managers.", "correct": "true"}, {"statement": "Network isolation in Azure ML workspace applies only to managed online endpoints, not to compute clusters.", "correct": "false"}], "explanation": "Statement 1 TRUE, 2 FALSE, 3 TRUE, 4 FALSE - verified against official Azure ML documentation.", "source_urls": ["https://learn.microsoft.com/en-us/azure/machine-learning/how-to-assign-roles"], "confidence": "high", "difficulty": "hard"},
+            {"id": 12, "type": "multiple-choice", "domain": "Implement machine learning model lifecycle and operations", "question": "In Azure Machine Learning, MLflow organizes tracking data into a hierarchical structure. What is the correct relationship between experiments and runs?", "options": {"A": "An experiment contains multiple runs; each run represents a single model training execution", "B": "A run contains multiple experiments; each experiment is a separate training iteration", "C": "Experiments and runs are equivalent concepts used interchangeably", "D": "Runs are stored in the workspace, experiments are stored in external MLflow servers"}, "correct_answer": "A", "explanation": "MLflow uses a hierarchical structure where an experiment is a collection of runs. Each run represents a single execution of training code.", "source_urls": ["https://learn.microsoft.com/en-us/azure/machine-learning/how-to-use-mlflow-cli-runs"], "confidence": "high", "difficulty": "easy"},
+            {"id": 13, "type": "multiple-choice", "domain": "Implement machine learning model lifecycle and operations", "question": "Which statement best describes how Azure Machine Learning AutoML works?", "options": {"A": "AutoML trains a single model using the best-known algorithm for your data type", "B": "AutoML creates many pipelines in parallel, each trying different algorithms and hyperparameters", "C": "AutoML requires manual hyperparameter tuning and algorithm selection", "D": "AutoML only supports classification tasks and time-series forecasting"}, "correct_answer": "B", "explanation": "Azure ML AutoML creates multiple pipelines in parallel, each testing different algorithms and hyperparameter combinations.", "source_urls": ["https://learn.microsoft.com/en-us/azure/machine-learning/concept-automated-ml"], "confidence": "high", "difficulty": "easy"},
+            {"id": 14, "type": "multiple-choice", "domain": "Implement machine learning model lifecycle and operations", "question": "You have a training script using scikit-learn. You want to automatically log metrics without explicit logging code. How would you enable this with MLflow?", "options": {"A": "Use mlflow.log_metric() for each training step", "B": "Call mlflow.autolog() at the beginning of the script", "C": "Configure autologging in workspace settings through Azure Portal", "D": "Use mlflow.create_experiment() to enable automatic tracking"}, "correct_answer": "B", "explanation": "MLflow's autolog() function automatically captures metrics, parameters, and artifacts based on the ML framework.", "source_urls": ["https://learn.microsoft.com/en-us/azure/machine-learning/how-to-use-mlflow-cli-runs"], "confidence": "high", "difficulty": "medium"},
+            {"id": 15, "type": "multiple-choice", "domain": "Implement machine learning model lifecycle and operations", "question": "You need to deploy a model for real-time predictions on individual requests with sub-second latency. Which endpoint type?", "options": {"A": "Batch Endpoint for asynchronous processing", "B": "Managed Online Endpoint for real-time HTTPS/REST predictions", "C": "Kubernetes Endpoint for maximum performance", "D": "Scheduled Batch Endpoint for periodic inference"}, "correct_answer": "B", "explanation": "Managed Online Endpoints are designed for real-time, synchronous inference via HTTPS/REST API with sub-second latency.", "source_urls": ["https://learn.microsoft.com/en-us/azure/machine-learning/how-to-deploy-online-endpoints"], "confidence": "high", "difficulty": "medium"},
+            {"id": 16, "type": "multiple-choice", "domain": "Implement machine learning model lifecycle and operations", "question": "Which metric would detect if your deployed model is experiencing performance degradation due to input data changes?", "options": {"A": "Model accuracy on training data", "B": "Data drift - changes in input data distribution over time", "C": "Workspace storage capacity usage", "D": "Docker image pull latency"}, "correct_answer": "B", "explanation": "Data drift refers to changes in input data distribution over time, which leads to model performance degradation.", "source_urls": ["https://learn.microsoft.com/en-us/azure/machine-learning/concept-data-drift"], "confidence": "high", "difficulty": "easy"},
+            {"id": 17, "type": "multiple-choice", "domain": "Implement machine learning model lifecycle and operations", "question": "Your organization processes large volumes nightly at lower costs. Which batch endpoint feature enables cost optimization?", "options": {"A": "Application Insights logging", "B": "Automatic compute provisioning/deallocation and low-priority VM support", "C": "Model ensemble techniques", "D": "Data compression in payloads"}, "correct_answer": "B", "explanation": "Batch Endpoints provide automatic compute provisioning and support for low-priority VMs.", "source_urls": ["https://learn.microsoft.com/en-us/azure/machine-learning/concept-endpoints-batch"], "confidence": "high", "difficulty": "medium"},
+            {"id": 18, "type": "multiple-choice", "domain": "Implement machine learning model lifecycle and operations", "question": "You are deploying a new model version using canary deployment. What does this accomplish?", "options": {"A": "Immediately routes all traffic to the new model", "B": "Gradually routes increasing traffic while monitoring performance", "C": "Maintains two identical versions for failover", "D": "Requires manual redeployment if issues occur"}, "correct_answer": "B", "explanation": "Canary deployment routes a small percentage of traffic to the new model while monitoring performance metrics.", "source_urls": ["https://learn.microsoft.com/en-us/azure/machine-learning/how-to-deploy-online-endpoints"], "confidence": "high", "difficulty": "medium"},
+            {"id": 19, "type": "multiple-choice", "domain": "Implement machine learning model lifecycle and operations", "question": "When using AutoML for regression, how does the ensemble model approach improve performance?", "options": {"A": "Trains multiple copies of the same algorithm", "B": "Combines predictions from different algorithms to improve accuracy", "C": "Requires manual algorithm selection", "D": "Reduces training time by running sequentially"}, "correct_answer": "B", "explanation": "Ensemble models combine predictions from multiple different algorithms for better performance.", "source_urls": ["https://learn.microsoft.com/en-us/azure/machine-learning/concept-automated-ml"], "confidence": "high", "difficulty": "medium"},
+            {"id": 20, "type": "multiple-select", "domain": "Implement machine learning model lifecycle and operations", "question": "Which are advantages of Azure ML Batch Endpoints?", "options": {"A": "Asynchronous processing for batch jobs", "B": "Automatic compute provisioning for cost savings", "C": "Real-time inference with sub-second latency", "D": "Multiple deployments under one endpoint", "E": "Automatic job resumption on VM deallocations"}, "correct_answers": ["A", "B", "D", "E"], "select_count": 4, "explanation": "Batch advantages: async, auto-provisioning, multi-deployment, job resumption. NOT real-time latency.", "source_urls": ["https://learn.microsoft.com/en-us/azure/machine-learning/concept-endpoints-batch"], "confidence": "high", "difficulty": "medium"},
+            {"id": 21, "type": "multiple-select", "domain": "Implement machine learning model lifecycle and operations", "question": "When monitoring a deployed online endpoint, which metrics can Azure Monitor track?", "options": {"A": "Request latency (total, request, response duration)", "B": "Requests per minute and connections per second", "C": "CPU and GPU usage of inference compute", "D": "Model parameter values and training loss", "E": "Network bytes and memory/disk usage"}, "correct_answers": ["A", "B", "C", "E"], "select_count": 4, "explanation": "Monitor tracks latency, RPS, CPU/GPU, network/memory. NOT training metrics.", "source_urls": ["https://learn.microsoft.com/en-us/azure/machine-learning/how-to-monitor-online-endpoints"], "confidence": "high", "difficulty": "medium"},
+            {"id": 22, "type": "multiple-select", "domain": "Implement machine learning model lifecycle and operations", "question": "Which statements about data drift detection are correct?", "options": {"A": "Data drift compares statistical distributions between baseline and production data", "B": "Data drift can be automatically monitored with alert thresholds", "C": "Data drift detection only applies to batch predictions", "D": "Drift analysis prevents model performance degradation", "E": "Azure ML provides drift detection via Monitor"}, "correct_answers": ["A", "B", "D", "E"], "select_count": 4, "explanation": "Drift: statistical comparison, automated, helps prevent degradation, integrated Monitor. NOT batch-only.", "source_urls": ["https://learn.microsoft.com/en-us/azure/machine-learning/concept-data-drift"], "confidence": "high", "difficulty": "medium"},
+            {"id": 23, "type": "scenario", "domain": "Implement machine learning model lifecycle and operations", "question": "Implementing MLflow for team collaboration. Which combination best?", "options": {"A": "Use mlflow.create_experiment(), mlflow.start_run(), mlflow.autolog(), Azure ML UI visualization", "B": "Manually call mlflow.log_metric() for each value, export CSV", "C": "Use Azure ML job definitions without MLflow", "D": "Set up external MLflow server, bypass Azure ML"}, "correct_answer": "A", "explanation": "Best approach: named experiments, context managers, autolog, and Azure ML UI comparison.", "source_urls": ["https://learn.microsoft.com/en-us/azure/machine-learning/how-to-use-mlflow-cli-runs"], "confidence": "high", "difficulty": "hard"},
+            {"id": 24, "type": "scenario", "domain": "Implement machine learning model lifecycle and operations", "question": "Monitoring production model endpoint for performance. Which configuration?", "options": {"A": "No Application Insights, manual checks, Python scripts", "B": "Application Insights, Azure Monitor alerts, Log Analytics, action groups", "C": "Only default metrics, manual testing", "D": "Export to external monitoring, disable Monitor"}, "correct_answer": "B", "explanation": "Comprehensive: Application Insights, Azure Monitor alerts, Log Analytics queries, action groups.", "source_urls": ["https://learn.microsoft.com/en-us/azure/machine-learning/how-to-monitor-online-endpoints"], "confidence": "high", "difficulty": "hard"},
+            {"id": 25, "type": "scenario", "domain": "Implement machine learning model lifecycle and operations", "question": "Processing 10M records nightly at minimum cost. Which batch configuration?", "options": {"A": "Standard VMs, 5-min timeout, high-priority only", "B": "Low-priority VMs, auto-provisioning, job resumption, monitor completion", "C": "Multiple endpoints, manual switching, RDP monitoring", "D": "Online endpoints for streaming one-by-one"}, "correct_answer": "B", "explanation": "Optimal: low-priority VMs, auto-provisioning, job resumption for reliability and cost.", "source_urls": ["https://learn.microsoft.com/en-us/azure/machine-learning/concept-endpoints-batch"], "confidence": "high", "difficulty": "hard"},
+            {"id": 26, "type": "ordering", "domain": "Implement machine learning model lifecycle and operations", "question": "Model deployment lifecycle sequence?", "items": ["Step 3: Train and evaluate", "Step 1: Register model", "Step 2: Create environment", "Step 5: Deploy endpoint", "Step 7: Test endpoint", "Step 4: Canary deployment", "Step 6: Monitor and alerts", "Step 8: Shift traffic"], "correct_order": [3, 1, 2, 5, 7, 4, 6, 8], "correct_sequence": [3, 1, 2, 5, 7, 4, 6, 8], "explanation": "Train > register > environment > deploy > test > canary > monitor > shift.", "source_urls": ["https://learn.microsoft.com/en-us/azure/machine-learning/how-to-use-mlflow-cli-runs"], "confidence": "high", "difficulty": "hard"},
+            {"id": 27, "type": "yes-no-series", "domain": "Implement machine learning model lifecycle and operations", "question": "Evaluate statements about Azure ML online endpoints.", "statements": [{"statement": "Online endpoint can host multiple deployments without URL changes.", "correct": "true"}, {"statement": "Traffic-based deployments enable canary rollout with monitoring.", "correct": "true"}, {"statement": "Application Insights provides latency breakdown including delays.", "correct": "true"}, {"statement": "Managed online endpoints automatically scale to zero when idle.", "correct": "false"}], "explanation": "T, T, T, F - support multi-deployment, traffic-split, detailed monitoring, but don't auto-scale to zero.", "source_urls": ["https://learn.microsoft.com/en-us/azure/machine-learning/how-to-deploy-online-endpoints"], "confidence": "high", "difficulty": "hard"},
+            {"id": 28, "type": "multiple-choice", "domain": "Design and implement a GenAIOps infrastructure", "question": "Need consistent capacity for high-volume with predictable costs. Which deployment?", "options": {"A": "Standard with pay-as-you-go", "B": "Global Standard with PTU", "C": "Developer tier with idle capacity", "D": "Serverless with autoscaling"}, "correct_answer": "B", "explanation": "Global Standard with PTU guarantees capacity at fixed price for production workloads.", "source_urls": ["https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure"], "confidence": "high", "difficulty": "medium"},
+            {"id": 29, "type": "multiple-choice", "domain": "Design and implement a GenAIOps infrastructure", "question": "Configure Foundry: engineers fine-tune, only Owners deploy. Which role?", "options": {"A": "Assign Azure AI User role", "B": "Assign Azure AI Owner role with locks", "C": "Custom roles with fine-tuning, Owners-only deploy", "D": "Subscription Reader role"}, "correct_answer": "A", "explanation": "Azure AI User permits fine-tuning but denies deployment.", "source_urls": ["https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/managed-identity"], "confidence": "high", "difficulty": "medium"},
+            {"id": 30, "type": "multiple-choice", "domain": "Design and implement a GenAIOps infrastructure", "question": "Application needs advanced reasoning for complex problems. Which model?", "options": {"A": "gpt-5.4-mini with temperature=0.2", "B": "o3-mini with reasoning_effort parameter", "C": "gpt-5.4 with function_calling", "D": "Llama-3.3-70B for cost"}, "correct_answer": "B", "explanation": "o-series reasoning models designed for complex problems; use reasoning_effort not temperature.", "source_urls": ["https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure"], "confidence": "high", "difficulty": "medium"},
+            {"id": 31, "type": "multiple-choice", "domain": "Design and implement a GenAIOps infrastructure", "question": "Primary advantage of Bicep templates for Foundry?", "options": {"A": "Better API performance", "B": "Declarative, version-controlled, repeatable deployments", "C": "Eliminates Azure CLI", "D": "Auto-configures all security"}, "correct_answer": "B", "explanation": "Bicep enables IaC benefits: version control, consistency, repeatability.", "source_urls": ["https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure"], "confidence": "high", "difficulty": "easy"},
+            {"id": 32, "type": "multiple-select", "domain": "Design and implement a GenAIOps infrastructure", "question": "Designing multi-model GenAI. Which two deployment options?", "options": {"A": "Standard for regional residency", "B": "Batch for real-time latency", "C": "Global Standard for cross-region", "D": "Azure Search for direct invocation", "E": "PTU for reserved capacity"}, "correct_answers": ["A", "C"], "select_count": 2, "explanation": "Standard (regional), Global Standard (cross-region) - two Foundry deployment options.", "source_urls": ["https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure"], "confidence": "high", "difficulty": "medium"},
+            {"id": 33, "type": "multiple-choice", "domain": "Design and implement a GenAIOps infrastructure", "question": "Fine-tuned gpt-4o (gpt-4o.ft-abc123) needs further specialization. Approach?", "options": {"A": "Create new base from original", "B": "Select fine-tuned as base for additional iterations", "C": "Cannot reuse fine-tuned models", "D": "Merge models before fine-tuning"}, "correct_answer": "B", "explanation": "Foundry supports iterative fine-tuning; previously fine-tuned models reusable as base.", "source_urls": ["https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/fine-tuning"], "confidence": "high", "difficulty": "medium"},
+            {"id": 34, "type": "scenario", "domain": "Design and implement a GenAIOps infrastructure", "question": "Multi-tenant SaaS with Foundry. Structure for isolation, residency, deployment, costs?", "options": {"A": "One hub, shared identity, Azure Storage", "B": "Separate projects per tenant, tenant IDs, Standard, RBAC", "C": "One Global Standard, subscription roles", "D": "Shared projects, different datastores, Developer"}, "correct_answer": "B", "explanation": "Multi-tenant: separate projects, tenant identities, Standard (regional), RBAC, cost tracking.", "source_urls": ["https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/managed-identity"], "confidence": "high", "difficulty": "hard"},
+            {"id": 35, "type": "multiple-choice", "domain": "Design and implement a GenAIOps infrastructure", "question": "Restrict Foundry to internal network only. Which feature?", "options": {"A": "Azure Firewall", "B": "Private endpoints and VNet integration", "C": "Network security groups", "D": "Application Gateway"}, "correct_answer": "B", "explanation": "Private endpoints enable private connectivity without public exposure.", "source_urls": ["https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure"], "confidence": "high", "difficulty": "medium"},
+            {"id": 36, "type": "ordering", "domain": "Design and implement a GenAIOps infrastructure", "question": "Git-based prompt versioning sequence?", "items": ["Create Git repo with branches", "Develop and test variants", "Document variants and metrics", "Commit to main with tags", "Deploy to production"], "correct_order": [1, 2, 3, 4, 5], "correct_sequence": [1, 2, 3, 4, 5], "explanation": "Git init > develop > document > commit+tag > deploy.", "source_urls": ["https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure"], "confidence": "high", "difficulty": "medium"},
+            {"id": 37, "type": "multiple-choice", "domain": "Design and implement a GenAIOps infrastructure", "question": "Primary purpose of system instructions?", "options": {"A": "Reduce latency and costs", "B": "Define role, tone, constraints, behavior", "C": "Required for multi-language", "D": "Enable auto fine-tuning"}, "correct_answer": "B", "explanation": "System instructions define model behavior: role, tone, constraints, guidelines.", "source_urls": ["https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure"], "confidence": "high", "difficulty": "easy"},
+            {"id": 38, "type": "multiple-select", "domain": "Design and implement a GenAIOps infrastructure", "question": "A/B testing prompts. Which two metrics track?", "options": {"A": "Latency and tokens", "B": "User satisfaction and completion", "C": "Billing amount", "D": "GPU cores", "E": "Cost per response and quality"}, "correct_answers": ["B", "E"], "select_count": 2, "explanation": "Track quality (satisfaction, completion) and efficiency (cost, alignment).", "source_urls": ["https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure"], "confidence": "high", "difficulty": "medium"},
+            {"id": 39, "type": "multiple-choice", "domain": "Design and implement a GenAIOps infrastructure", "question": "Fast, cost-effective multilingual embeddings. Which model?", "options": {"A": "text-embedding-3-large", "B": "text-embedding-ada-002", "C": "text-embedding-3-small", "D": "gpt-4o with vision"}, "correct_answer": "C", "explanation": "text-embedding-3-small: 1536 dims, fast, lower cost, strong multilingual.", "source_urls": ["https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure"], "confidence": "high", "difficulty": "easy"},
+            {"id": 40, "type": "scenario", "domain": "Design and implement a GenAIOps infrastructure", "question": "Production Foundry: 10K concurrent, 5 req/min each. 200-2000ms latency. Need <500ms, predictable cost, scale 15K. Strategy?", "options": {"A": "Standard with throttling", "B": "Global Standard with PTU", "C": "Developer tier", "D": "Multiple Standard, Traffic Manager"}, "correct_answer": "B", "explanation": "Global Standard with PTU: guarantees capacity, predictable costs, supports scale.", "source_urls": ["https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure"], "confidence": "high", "difficulty": "hard"},
+            {"id": 41, "type": "yes-no-series", "domain": "Design and implement a GenAIOps infrastructure", "question": "Evaluate Foundry capabilities.", "statements": [{"statement": "Standard guarantees regional residency.", "correct": "true"}, {"statement": "Fine-tuned models reusable as base.", "correct": "true"}, {"statement": "o-series uses temperature parameter.", "correct": "false"}, {"statement": "Post-Nov-19 managed IDs get AI Administrator.", "correct": "true"}, {"statement": "Global Standard provides regional residency.", "correct": "false"}], "explanation": "T, T, F (uses reasoning_effort), T, F", "source_urls": ["https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure"], "confidence": "high", "difficulty": "medium"},
+            {"id": 42, "type": "multiple-choice", "domain": "Implement generative AI quality assurance and observability", "question": "Chatbot generates correct grammar but unsupported facts. Priority metric?", "options": {"A": "Fluency", "B": "Groundedness", "C": "Coherence", "D": "Relevance"}, "correct_answer": "B", "explanation": "Groundedness measures factual accuracy and source support.", "source_urls": ["https://learn.microsoft.com/en-us/compliance/assurance/assurance-artificial-intelligence"], "confidence": "medium", "difficulty": "medium"},
+            {"id": 43, "type": "multiple-choice", "domain": "Implement generative AI quality assurance and observability", "question": "Detect dangerous medical advice without disclaimers. Safety category?", "options": {"A": "Hate speech", "B": "Self-harm", "C": "Unauthorized advice", "D": "Violence"}, "correct_answer": "C", "explanation": "Unauthorized advice identifies responses in restricted domains.", "source_urls": ["https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/fine-tuning"], "confidence": "medium", "difficulty": "medium"},
+            {"id": 44, "type": "multiple-choice", "domain": "Implement generative AI quality assurance and observability", "question": "Response times increasing over weeks. Diagnose demand vs degradation. Examine?", "options": {"A": "Requests/min and latency", "B": "Token consumption and GPU", "C": "Error rate and HTTP", "D": "Storage and registry"}, "correct_answer": "A", "explanation": "RPS + latency: increase in both = demand-driven; latency only = degradation.", "source_urls": ["https://learn.microsoft.com/en-us/azure/machine-learning/how-to-monitor-online-endpoints"], "confidence": "high", "difficulty": "easy"},
+            {"id": 45, "type": "scenario", "domain": "Implement generative AI quality assurance and observability", "question": "Customer service GenAI, 100K monthly queries. Evaluate structure?", "options": {"A": "Random samples, manual", "B": "Stratified dataset, data mapping, automated", "C": "Top 100 common only", "D": "50 edge cases only"}, "correct_answer": "B", "explanation": "Comprehensive: stratified dataset, mapping, automated evaluation.", "source_urls": ["https://learn.microsoft.com/en-us/azure/machine-learning/concept-automated-ml"], "confidence": "medium", "difficulty": "hard"},
+            {"id": 46, "type": "multiple-select", "domain": "Implement generative AI quality assurance and observability", "question": "Optimize Foundry costs. Which two directly impact API costs?", "options": {"A": "Input and output tokens", "B": "Request latency", "C": "Total storage", "D": "Token ratio to total", "E": "Application Insights events"}, "correct_answers": ["A", "D"], "select_count": 2, "explanation": "Costs driven by token consumption and efficiency patterns.", "source_urls": ["https://learn.microsoft.com/en-us/azure/machine-learning/how-to-monitor-online-endpoints"], "confidence": "high", "difficulty": "medium"},
+            {"id": 47, "type": "multiple-choice", "domain": "Implement generative AI quality assurance and observability", "question": "Non-200 HTTP response. Debug with which log and fields?", "options": {"A": "ConsoleLog for startup", "B": "EventLog for lifecycle", "C": "TrafficLog with ResponseCodeReason, ModelStatusCode", "D": "TrafficLog with NetworkBytes, LatencyMs"}, "correct_answer": "C", "explanation": "TrafficLog contains ResponseCodeReason and ModelStatusCode for debugging.", "source_urls": ["https://learn.microsoft.com/en-us/azure/machine-learning/how-to-monitor-online-endpoints"], "confidence": "high", "difficulty": "medium"},
+            {"id": 48, "type": "ordering", "domain": "Implement generative AI quality assurance and observability", "question": "Evaluation workflow sequence?", "items": ["Define metrics and thresholds", "Set up test dataset", "Select scorers", "Execute and baseline", "Configure alerts"], "correct_order": [1, 2, 3, 4, 5], "correct_sequence": [1, 2, 3, 4, 5], "explanation": "Define > prepare > select > baseline > alerts.", "source_urls": ["https://learn.microsoft.com/en-us/compliance/assurance/assurance-artificial-intelligence"], "confidence": "medium", "difficulty": "medium"},
+            {"id": 49, "type": "multiple-choice", "domain": "Implement generative AI quality assurance and observability", "question": "Azure service for Foundry monitoring with dashboard and alerts?", "options": {"A": "Azure DevOps", "B": "Azure Monitor with Application Insights", "C": "Azure Data Factory", "D": "Azure SQL Auditing"}, "correct_answer": "B", "explanation": "Azure Monitor with Application Insights provides monitoring and alerting.", "source_urls": ["https://learn.microsoft.com/en-us/azure/machine-learning/how-to-monitor-online-endpoints"], "confidence": "high", "difficulty": "easy"},
+            {"id": 50, "type": "scenario", "domain": "Implement generative AI quality assurance and observability", "question": "Critical Foundry: 50K users. (1) Latency spike, (2) 5% non-200, (3) Token spike. Monitoring?", "options": {"A": "Monitor error rate only", "B": "Monitor latency, codes, tokens separately", "C": "Monitor CPU only", "D": "Monitor tokens only"}, "correct_answer": "B", "explanation": "Detect all types: separate monitoring for latency, errors, tokens.", "source_urls": ["https://learn.microsoft.com/en-us/azure/machine-learning/how-to-monitor-online-endpoints"], "confidence": "high", "difficulty": "hard"},
+            {"id": 51, "type": "multiple-select", "domain": "Implement generative AI quality assurance and observability", "question": "Public Foundry text generation. Which two highest-priority safety?", "options": {"A": "Hate speech", "B": "Jailbreak", "C": "Self-harm", "D": "Sexual", "E": "PII"}, "correct_answers": ["A", "C"], "select_count": 2, "explanation": "Core safety: hate speech and self-harm detect high-priority harmful content.", "source_urls": ["https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/fine-tuning"], "confidence": "medium", "difficulty": "medium"},
+            {"id": 52, "type": "multiple-choice", "domain": "Optimize generative AI systems and model performance", "question": "RAG: text-embedding-3-large (3072 dims). Reduce latency/cost first?", "options": {"A": "Switch to ada-002", "B": "Reduce dims or switch to small", "C": "Use BM25 only", "D": "Fine-tune custom"}, "correct_answer": "B", "explanation": "Dimension reduction or text-embedding-3-small directly reduces latency and cost.", "source_urls": ["https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models"], "confidence": "high", "difficulty": "medium"},
+            {"id": 53, "type": "multiple-choice", "domain": "Optimize generative AI systems and model performance", "question": "RAG low quality: irrelevant mixed with relevant. Adjust threshold?", "options": {"A": "Increase to filter irrelevant", "B": "Decrease to retrieve more", "C": "Keep constant, increase top-k", "D": "Switch to keyword-only"}, "correct_answer": "A", "explanation": "Increasing threshold filters irrelevant, improving precision.", "source_urls": ["https://learn.microsoft.com/en-us/azure/machine-learning/how-to-use-batch-endpoints"], "confidence": "high", "difficulty": "medium"},
+            {"id": 54, "type": "scenario", "domain": "Optimize generative AI systems and model performance", "question": "Financial RAG: 1.2s latency, 0.78 groundedness (target 0.85), cost high. Optimize?", "options": {"A": "Larger chunks, reduce dims, hybrid", "B": "Smaller chunks, increase quality, increase retrieval", "C": "BM25 only", "D": "Fine-tune custom"}, "correct_answer": "A", "explanation": "Addresses issues: larger chunks preserve context, dimension reduction lowers cost, hybrid captures terms.", "source_urls": ["https://learn.microsoft.com/en-us/azure/machine-learning/how-to-use-batch-endpoints"], "confidence": "high", "difficulty": "hard"},
+            {"id": 55, "type": "multiple-choice", "domain": "Optimize generative AI systems and model performance", "question": "Hybrid search (semantic + BM25). Advantage?", "options": {"A": "50% latency reduction", "B": "Improves recall capturing both types", "C": "Eliminates embeddings", "D": "Auto-translation"}, "correct_answer": "B", "explanation": "Hybrid captures semantic and keyword matches, improving recall.", "source_urls": ["https://learn.microsoft.com/en-us/azure/machine-learning/how-to-use-batch-endpoints"], "confidence": "high", "difficulty": "medium"},
+            {"id": 56, "type": "multiple-select", "domain": "Optimize generative AI systems and model performance", "question": "Create synthetic data with limited labels. Which two combine?", "options": {"A": "Random templates", "B": "Expert-guided generation", "C": "Unvalidated synthetic", "D": "Manual validation", "E": "Data augmentation"}, "correct_answers": ["B", "D"], "select_count": 2, "explanation": "Quality synthetic: expert-guided generation plus validation.", "source_urls": ["https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/fine-tuning"], "confidence": "medium", "difficulty": "medium"},
+            {"id": 57, "type": "multiple-choice", "domain": "Optimize generative AI systems and model performance", "question": "Training: correct + less effective responses. Align with preferences. Method?", "options": {"A": "Supervised Fine-Tuning", "B": "Direct Preference Optimization", "C": "Reinforcement Fine-Tuning", "D": "Low-Rank Adaptation"}, "correct_answer": "B", "explanation": "DPO designed for preference pairs without reward model.", "source_urls": ["https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/fine-tuning"], "confidence": "high", "difficulty": "hard"},
+            {"id": 58, "type": "ordering", "domain": "Optimize generative AI systems and model performance", "question": "Fine-tuned model pipeline sequence?", "items": ["Prepare JSONL data", "Evaluate vs base", "Submit job", "Fine-tune on small set", "Deploy", "Version control"], "correct_order": [4, 1, 3, 2, 6, 5], "correct_sequence": [4, 1, 3, 2, 6, 5], "explanation": "Validate > prepare > submit > evaluate > register > deploy.", "source_urls": ["https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/fine-tuning"], "confidence": "high", "difficulty": "hard"},
+            {"id": 59, "type": "multiple-choice", "domain": "Optimize generative AI systems and model performance", "question": "A/B test RAG: A (0.82 ground, 85ms), B (0.84, 125ms after 10K). Conclusion?", "options": {"A": "B superior, deploy now", "B": "A superior, lower latency", "C": "0.02 improvement may not justify 40ms; analyze", "D": "Neither acceptable"}, "correct_answer": "C", "explanation": "Tradeoff: 0.02 groundedness vs 40ms latency needs business case.", "source_urls": ["https://learn.microsoft.com/en-us/azure/machine-learning/how-to-use-batch-endpoints"], "confidence": "high", "difficulty": "medium"},
+            {"id": 60, "type": "yes-no-series", "domain": "Optimize generative AI systems and model performance", "question": "Evaluate RAG and fine-tuning practices.", "statements": [{"statement": "Chunk size affects precision-coverage tradeoff.", "correct": "true"}, {"statement": "Fine-tuning needs 50+ examples best practice.", "correct": "true"}, {"statement": "Hybrid search combines embeddings and BM25.", "correct": "true"}, {"statement": "Fine-tuned models cannot be reused as base.", "correct": "false"}, {"statement": "Synthetic data only useful with zero labels.", "correct": "false"}], "explanation": "T, T, T, F (iterative supported), F (augments any data)", "source_urls": ["https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/fine-tuning"], "confidence": "high", "difficulty": "medium"}
+        ];
+    </script>
+</body>
+</html>

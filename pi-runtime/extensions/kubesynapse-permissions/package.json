@@ -1,0 +1,6 @@
+{
+  "name": "kubesynapse-permissions",
+  "private": true,
+  "type": "module",
+  "pi": { "extensions": ["./index.ts"] }
+}

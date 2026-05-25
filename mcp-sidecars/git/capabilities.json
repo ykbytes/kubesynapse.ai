@@ -1,0 +1,20 @@
+{
+  "sidecarName": "git",
+  "version": "1.0.0",
+  "allowedTools": [
+    "git_clone", "git_status", "git_diff", "git_log", "git_add",
+    "git_commit", "git_push", "git_branch", "git_checkout", "git_pull",
+    "git_stash", "github_api"
+  ],
+  "networkEgress": {
+    "domains": ["github.com", "*.github.com", "gitlab.com", "*.gitlab.com", "bitbucket.org", "*.bitbucket.org"],
+    "ips": [],
+    "ports": [22, 443]
+  },
+  "resourceLimits": {
+    "cpuRequest": "50m",
+    "cpuLimit": "500m",
+    "memoryRequest": "64Mi",
+    "memoryLimit": "256Mi"
+  }
+}

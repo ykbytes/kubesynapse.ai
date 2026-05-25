@@ -1,0 +1,116 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: workflowtriggers.kubesynapse.ai
+spec:
+  group: kubesynapse.ai
+  names:
+    kind: WorkflowTrigger
+    listKind: WorkflowTriggerList
+    plural: workflowtriggers
+    singular: workflowtrigger
+    shortNames:
+      - wft
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: SourceKind
+          type: string
+          jsonPath: .spec.sourceKind
+        - name: SourceRef
+          type: string
+          jsonPath: .spec.sourceRef
+        - name: Workflow
+          type: string
+          jsonPath: .spec.workflowRef.name
+        - name: Enabled
+          type: boolean
+          jsonPath: .spec.enabled
+        - name: Executions
+          type: integer
+          jsonPath: .status.executionCount
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          type: object
+          required: [spec]
+          properties:
+            spec:
+              type: object
+              required: [sourceRef, sourceKind, workflowRef]
+              properties:
+                sourceRef:
+                  type: string
+                  description: "Name of the source resource (e.g. WebhookReceiver name)"
+                sourceKind:
+                  type: string
+                  enum: [WebhookReceiver, AgentEvent]
+                  description: "Kind of source resource"
+                eventFilter:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                  description: "JSON filter conditions applied to the event payload"
+                workflowRef:
+                  type: object
+                  required: [name]
+                  properties:
+                    name:
+                      type: string
+                      description: "Name of the AgentWorkflow to execute"
+                    namespace:
+                      type: string
+                      description: "Namespace of the AgentWorkflow (defaults to trigger namespace)"
+                payloadMapping:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                  description: "Optional JSON payload mapping for workflow input"
+                maxRetries:
+                  type: integer
+                  default: 0
+                  minimum: 0
+                  description: "Maximum retry attempts for failed trigger executions"
+                backoffSeconds:
+                  type: integer
+                  default: 60
+                  minimum: 0
+                  description: "Backoff between retries in seconds"
+                enabled:
+                  type: boolean
+                  default: true
+                  description: "Whether this trigger is active"
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  enum: [Pending, Active, Degraded, Failed]
+                lastEvaluated:
+                  type: string
+                  format: date-time
+                executionCount:
+                  type: integer
+                  minimum: 0
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                        enum: ["True", "False", "Unknown"]
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      reason:
+                        type: string
+                      message:
+                        type: string

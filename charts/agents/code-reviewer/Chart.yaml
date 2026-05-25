@@ -1,0 +1,6 @@
+apiVersion: v2
+name: code-reviewer
+description: Pre-built Helm chart for a pull-request and patch review AIAgent
+type: application
+version: 0.1.0
+appVersion: "v1alpha1"
