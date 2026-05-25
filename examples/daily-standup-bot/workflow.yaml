@@ -33,6 +33,7 @@ spec:
         maxAttempts: 2
         backoffSeconds: 5
         maxTurns: 6
+        sessionGroup: standup-session
 
     # ── Step 2: Track Jira sprint status ──
     - name: track-jira
@@ -54,6 +55,7 @@ spec:
         maxAttempts: 2
         backoffSeconds: 5
         maxTurns: 6
+        sessionGroup: standup-session
 
     # ── Step 3: Compose standup report ──
     - name: compose-standup
@@ -82,3 +84,4 @@ spec:
         maxAttempts: 2
         backoffSeconds: 5
         maxTurns: 10
+        sessionGroup: standup-session

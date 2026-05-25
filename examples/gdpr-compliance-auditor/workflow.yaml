@@ -36,6 +36,7 @@ spec:
         maxAttempts: 2
         backoffSeconds: 10
         maxTurns: 15
+        sessionGroup: gdpr-audit-session
 
     # ── Step 2: Classify findings ──
     - name: classify-findings
@@ -58,6 +59,7 @@ spec:
         maxAttempts: 2
         backoffSeconds: 5
         maxTurns: 12
+        sessionGroup: gdpr-audit-session
 
     # ── Step 3: Generate compliance report ──
     - name: generate-report
@@ -84,6 +86,7 @@ spec:
         maxAttempts: 2
         backoffSeconds: 5
         maxTurns: 15
+        sessionGroup: gdpr-audit-session
 
     # ── Step 4: Self-verify report completeness ──
     - name: verify-report
@@ -118,3 +121,4 @@ spec:
         maxAttempts: 2
         backoffSeconds: 5
         maxTurns: 10
+        sessionGroup: gdpr-audit-session

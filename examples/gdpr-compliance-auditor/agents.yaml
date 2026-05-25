@@ -6,7 +6,7 @@ metadata:
   labels:
     app.kubernetes.io/part-of: kubesynapse-demo
 spec:
-  model: gpt-4o
+  model: github-copilot/gpt-5-mini
   runtime:
     kind: opencode
   systemPrompt: |
@@ -239,7 +239,7 @@ metadata:
   labels:
     app.kubernetes.io/part-of: kubesynapse-demo
 spec:
-  model: gpt-4o
+  model: github-copilot/gpt-5-mini
   runtime:
     kind: opencode
   systemPrompt: |
@@ -309,7 +309,7 @@ metadata:
   labels:
     app.kubernetes.io/part-of: kubesynapse-demo
 spec:
-  model: gpt-4o
+  model: github-copilot/gpt-5-mini
   runtime:
     kind: opencode
   systemPrompt: |
