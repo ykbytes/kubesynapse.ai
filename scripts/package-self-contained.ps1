@@ -140,10 +140,10 @@ mcpToolSidecars:
 platformSecrets:
   mode: native
   native:
-    openaiApiKey: "replace-me"
-    openrouterApiKey: "replace-me"
-    anthropicApiKey: "replace-me"
-    litellmMasterKey: "replace-me"
+    openaiApiKey: "changeme"
+    openrouterApiKey: "changeme"
+    anthropicApiKey: "changeme"
+    litellmMasterKey: "changeme"
     apiGatewaySharedToken: "your-bearer-token-here"
 "@ | Set-Content -Path $valuesPath -Encoding UTF8
 
