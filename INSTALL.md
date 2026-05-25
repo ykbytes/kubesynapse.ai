@@ -146,7 +146,7 @@ Key capabilities:
 
 ### Request Flow
 
-1. Client sends `POST /api/agents/{name}/invoke` with a prompt and bearer token
+1. Client sends `POST /api/v1/agents/{name}/invoke` with a prompt and bearer token
 2. API Gateway authenticates the token, resolves the agent's runtime Service
 3. Gateway forwards the request to the agent runtime's `/invoke` endpoint
 4. Runtime applies **input guardrails** (prompt injection check, blocked patterns, token limits)
@@ -252,7 +252,7 @@ kubectl apply -f examples/sample-agent.yaml
 kubectl logs -l app=operator -f
 
 # Once "research-assistant" StatefulSet is running:
-curl -X POST http://localhost:8080/api/agents/research-assistant/invoke \
+curl -X POST http://localhost:8080/api/v1/agents/research-assistant/invoke \
   -H "Authorization: Bearer my-secure-bearer-token" \
   -H "Content-Type: application/json" \
   -d '{"prompt": "What is Kubernetes?"}'
@@ -471,7 +471,7 @@ kubectl logs -l app=operator -f
 Once the `research-assistant` StatefulSet is running, invoke it:
 
 ```bash
-curl -X POST http://localhost:8080/api/agents/research-assistant/invoke \
+curl -X POST http://localhost:8080/api/v1/agents/research-assistant/invoke \
   -H "Authorization: Bearer my-secret-bearer-token" \
   -H "Content-Type: application/json" \
   -d '{"prompt": "What is Kubernetes?"}'
@@ -920,7 +920,7 @@ Skill files must use relative Markdown paths. The frontmatter is optional, but w
 Via curl:
 
 ```bash
-curl -X POST http://localhost:8080/api/agents/my-assistant/invoke?namespace=agent-tenant-my-team \
+curl -X POST http://localhost:8080/api/v1/agents/my-assistant/invoke?namespace=agent-tenant-my-team \
   -H "Authorization: Bearer my-secret-bearer-token" \
   -H "Content-Type: application/json" \
   -d '{"prompt": "Explain Kubernetes namespaces in simple terms"}'
@@ -951,7 +951,7 @@ runtime:
 For **streaming responses** (Server-Sent Events):
 
 ```bash
-curl -N -X POST http://localhost:8080/api/agents/my-assistant/invoke/stream?namespace=agent-tenant-my-team \
+curl -N -X POST http://localhost:8080/api/v1/agents/my-assistant/invoke/stream?namespace=agent-tenant-my-team \
   -H "Authorization: Bearer my-secret-bearer-token" \
   -H "Content-Type: application/json" \
   -d '{"prompt": "Write a summary of cloud computing trends"}'
@@ -1031,13 +1031,13 @@ Via API:
 
 ```bash
 # Create
-curl -X POST http://localhost:8080/api/workflows?namespace=agent-tenant-my-team \
+curl -X POST http://localhost:8080/api/v1/workflows?namespace=agent-tenant-my-team \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d @my-workflow.yaml
 
 # Status
-curl http://localhost:8080/api/workflows/research-pipeline?namespace=agent-tenant-my-team \
+curl http://localhost:8080/api/v1/workflows/research-pipeline?namespace=agent-tenant-my-team \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -1051,7 +1051,7 @@ List pending approvals:
 kubectl get agentapprovals -n agent-tenant-my-team
 
 # Via API
-curl http://localhost:8080/api/approvals/approval-name?namespace=agent-tenant-my-team \
+curl http://localhost:8080/api/v1/approvals/approval-name?namespace=agent-tenant-my-team \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -1059,13 +1059,13 @@ Approve or deny:
 
 ```bash
 # Approve
-curl -X PATCH http://localhost:8080/api/approvals/approval-name?namespace=agent-tenant-my-team \
+curl -X PATCH http://localhost:8080/api/v1/approvals/approval-name?namespace=agent-tenant-my-team \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"decision": "approved", "reason": "Looks good"}'
 
 # Deny
-curl -X PATCH http://localhost:8080/api/approvals/approval-name?namespace=agent-tenant-my-team \
+curl -X PATCH http://localhost:8080/api/v1/approvals/approval-name?namespace=agent-tenant-my-team \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"decision": "denied", "reason": "Too risky"}'
@@ -1227,38 +1227,38 @@ All endpoints are prefixed with `/api` and require an `Authorization: Bearer <to
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/api/agents?namespace=` | List all agents |
-| `POST` | `/api/agents?namespace=` | Create an agent (JSON body with AIAgent spec) |
-| `GET` | `/api/agents/{name}?namespace=` | Get agent details |
-| `PATCH` | `/api/agents/{name}?namespace=` | Update agent spec |
-| `DELETE` | `/api/agents/{name}?namespace=` | Delete an agent |
-| `GET` | `/api/agents/{name}/discover?namespace=` | Discover configured A2A peers and reachability |
-| `POST` | `/api/agents/{name}/invoke?namespace=` | Invoke agent (JSON: `{"prompt": "...", "thread_id": "..."}`) |
-| `POST` | `/api/agents/{name}/invoke/stream?namespace=` | Invoke with SSE streaming |
-| `GET` | `/api/agents/{name}/logs?namespace=` | Get agent pod logs |
+| `GET` | `/api/v1/agents?namespace=` | List all agents |
+| `POST` | `/api/v1/agents?namespace=` | Create an agent (JSON body with AIAgent spec) |
+| `GET` | `/api/v1/agents/{name}?namespace=` | Get agent details |
+| `PATCH` | `/api/v1/agents/{name}?namespace=` | Update agent spec |
+| `DELETE` | `/api/v1/agents/{name}?namespace=` | Delete an agent |
+| `GET` | `/api/v1/agents/{name}/discover?namespace=` | Discover configured A2A peers and reachability |
+| `POST` | `/api/v1/agents/{name}/invoke?namespace=` | Invoke agent (JSON: `{"prompt": "...", "thread_id": "..."}`) |
+| `POST` | `/api/v1/agents/{name}/invoke/stream?namespace=` | Invoke with SSE streaming |
+| `GET` | `/api/v1/agents/{name}/logs?namespace=` | Get agent pod logs |
 
 ### Workflows
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/api/workflows?namespace=` | List workflows |
-| `POST` | `/api/workflows?namespace=` | Create a workflow |
-| `GET` | `/api/workflows/{name}?namespace=` | Get workflow status |
-| `PATCH` | `/api/workflows/{name}?namespace=` | Update workflow |
-| `DELETE` | `/api/workflows/{name}?namespace=` | Delete workflow |
+| `GET` | `/api/v1/workflows?namespace=` | List workflows |
+| `POST` | `/api/v1/workflows?namespace=` | Create a workflow |
+| `GET` | `/api/v1/workflows/{name}?namespace=` | Get workflow status |
+| `PATCH` | `/api/v1/workflows/{name}?namespace=` | Update workflow |
+| `DELETE` | `/api/v1/workflows/{name}?namespace=` | Delete workflow |
 
 ### Approvals
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/api/approvals/{name}?namespace=` | Get approval details |
-| `PATCH` | `/api/approvals/{name}?namespace=` | Approve or deny (`{"decision": "approved\|denied", ...}`) |
+| `GET` | `/api/v1/approvals/{name}?namespace=` | Get approval details |
+| `PATCH` | `/api/v1/approvals/{name}?namespace=` | Approve or deny (`{"decision": "approved\|denied", ...}`) |
 
 ### Policies
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/api/policies?namespace=` | List policies |
+| `GET` | `/api/v1/policies?namespace=` | List policies |
 
 ---
 
@@ -1429,7 +1429,7 @@ The agent runtime exposes Prometheus metrics at `/metrics` via `prometheus-fasta
 - **Operator logs**: `kubectl logs -l app=operator`
 - **Agent runtime logs**: `kubectl logs -n <tenant-ns> <agent-pod-name>`
 - **API Gateway logs**: `kubectl logs -l app=api-gateway`
-- **Per-agent logs via API**: `GET /api/agents/{name}/logs?namespace=`
+- **Per-agent logs via API**: `GET /api/v1/agents/{name}/logs?namespace=`
 
 ### Execution Observatory and Workflow Runs
 

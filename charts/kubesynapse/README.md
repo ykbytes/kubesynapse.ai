@@ -70,9 +70,8 @@ helm upgrade --install kubesynapse ./charts/kubesynapse \
 
 ## Runtime Support
 
-- `opencode` is the default runtime kind exposed by the chart and the path used by the checked-in examples.
-- `pi` remains the supported alternative runtime kind and is wired through the chart values and operator deployment.
-- `mistral-vibe` remains a supported runtime kind and is wired through the chart values and operator deployment.
+- `opencode` is the default and production runtime, used by all checked-in examples.
+- `pi` and `mistral-vibe` are available in alpha but not recommended for production workloads. They remain wired through the chart values and operator deployment.
 
 ## Default Memory Policy
 

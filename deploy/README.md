@@ -7,14 +7,31 @@ The most repeatable local path in this repository is the checked-in Kind helper 
 ```bash
 kind create cluster
 
-# Build images
-docker build -t kubesynapse/kubesynapse-api-gateway:latest api-gateway/
-docker build -t kubesynapse/kubesynapse-operator:latest operator/
-docker build -t kubesynapse/kubesynapse-web-ui:latest web-ui/
-docker build -t kubesynapse/kubesynapse-opencode-rt:latest opencode-runtime/
+# Build core platform images
+docker build -t localhost/kubesynapse/kubesynapse-api-gateway:dev api-gateway/
+docker build -t localhost/kubesynapse/kubesynapse-operator:dev operator/
+docker build -t localhost/kubesynapse/kubesynapse-web-ui:dev web-ui/
+docker build -t localhost/kubesynapse/kubesynapse-opencode-rt:dev opencode-runtime/
+
+# Build LiteLLM (pinned version required by the chart)
+docker build -f deploy/litellm/Dockerfile -t docker.io/litellm/litellm:v1.82.3-stable deploy/litellm
+
+# Build MCP sidecars (optional — only needed if agents use mcpSidecars or mcpServers)
+# Use `make docker-build REGISTRY=localhost/kubesynapse VERSION=dev` to build all 10 in one pass,
+# or build individually:
+# docker build -t localhost/kubesynapse/mcp-code-exec:dev -f mcp-sidecars/code-exec/Dockerfile mcp-sidecars
+# docker build -t localhost/kubesynapse/mcp-web-search:dev -f mcp-sidecars/web-search/Dockerfile mcp-sidecars
+# ... (see deploy/values.local-images.example.yaml for the full list)
 
 # Load into Kind
-kind load docker-image kubesynapse/kubesynapse-api-gateway:latest kubesynapse/kubesynapse-operator:latest kubesynapse/kubesynapse-web-ui:latest kubesynapse/kubesynapse-opencode-rt:latest
+kind load docker-image localhost/kubesynapse/kubesynapse-api-gateway:dev
+kind load docker-image localhost/kubesynapse/kubesynapse-operator:dev
+kind load docker-image localhost/kubesynapse/kubesynapse-web-ui:dev
+kind load docker-image localhost/kubesynapse/kubesynapse-opencode-rt:dev
+kind load docker-image docker.io/litellm/litellm:v1.82.3-stable
+# Load MCP sidecars if you built them:
+# kind load docker-image localhost/kubesynapse/mcp-code-exec:dev
+# ...
 
 # Generate secrets
 export LITELLM_KEY=$(openssl rand -hex 16)
@@ -25,8 +42,9 @@ export JWT_SECRET=$(openssl rand -hex 32)
 # Install
 helm install kubesynapse ./charts/kubesynapse \
   --namespace kubesynapse --create-namespace \
-  --values deploy/values.kind.quickstart.yaml \
-  --set global.imagePullPolicy=Never \
+  -f deploy/values.local-images.example.yaml \
+  -f deploy/values.kind.quickstart.yaml \
+  --set-file skillsCatalog.catalogJson=catalog/skills-catalog.json \
   --set platformSecrets.native.litellmMasterKey="$LITELLM_KEY" \
   --set platformSecrets.native.apiGatewaySharedToken="$API_TOKEN" \
   --set platformSecrets.native.databasePassword="$DB_PASS" \
@@ -48,6 +66,11 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File ./scripts/deploy-kind.ps1 `
   -AdminPassword "KubesynapseAdmin9!"
 ```
 
+> **MCP sidecars:** The quickstart above installs without MCP sidecars (the sample
+> agents in `examples/` don't use them). If your agents reference sidecars via
+> `spec.mcpSidecars`, build the matching images first — see the Kind Development
+> Loop section below, or use `make docker-build REGISTRY=localhost/kubesynapse VERSION=dev`.
+
 ### Services
 
 | Service | URL | Description |
@@ -56,6 +79,7 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File ./scripts/deploy-kind.ps1 `
 | Web UI | http://localhost:3000 | React frontend |
 | LiteLLM | http://localhost:4000 | Model proxy |
 | OpenCode RT | In-cluster service | Default agent runtime for checked-in examples |
+| MCP Sidecars | Per-agent localhost | 10 bundled sidecars (code exec, web search, browser, etc.) — optional, only if agents use `spec.mcpSidecars` |
 | Postgres | localhost:5432 | State + trace database |
 | Redis | localhost:6379 | Cache / sessions |
 | NATS | in-cluster | Shared messaging service |
@@ -154,6 +178,18 @@ kind load docker-image localhost/kubesynapse/kubesynapse-web-ui:dev --name kubes
 kind load docker-image localhost/kubesynapse/kubesynapse-opencode-rt:dev --name kubesynapse-dev
 kind load docker-image docker.io/litellm/litellm:v1.82.3-stable --name kubesynapse-dev
 
+# Load MCP sidecars if you built them (make docker-build includes all 10 by default):
+kind load docker-image localhost/kubesynapse/mcp-code-exec:dev --name kubesynapse-dev
+kind load docker-image localhost/kubesynapse/mcp-web-search:dev --name kubesynapse-dev
+kind load docker-image localhost/kubesynapse/mcp-documents:dev --name kubesynapse-dev
+kind load docker-image localhost/kubesynapse/mcp-browser:dev --name kubesynapse-dev
+kind load docker-image localhost/kubesynapse/mcp-database:dev --name kubesynapse-dev
+kind load docker-image localhost/kubesynapse/mcp-git:dev --name kubesynapse-dev
+kind load docker-image localhost/kubesynapse/mcp-github-adapter:dev --name kubesynapse-dev
+kind load docker-image localhost/kubesynapse/mcp-kubernetes:dev --name kubesynapse-dev
+kind load docker-image localhost/kubesynapse/mcp-messaging:dev --name kubesynapse-dev
+kind load docker-image localhost/kubesynapse/mcp-rag:dev --name kubesynapse-dev
+
 helm upgrade --install kubesynapse ./charts/kubesynapse -n kubesynapse --create-namespace \
   -f deploy/values.local-images.example.yaml \
   -f deploy/values.kind.quickstart.yaml \
@@ -163,6 +199,11 @@ helm upgrade --install kubesynapse ./charts/kubesynapse -n kubesynapse --create-
 See `deploy/values.local-images.example.yaml` for the full local-image registry and
 tag overrides. `deploy/values.kind.quickstart.yaml` is the recommended single-node Kind
 overlay because it disables optional MCP Hub and system-agent workloads.
+
+If your agents use `spec.mcpSidecars`, you must build and load the corresponding MCP
+sidecar images. The Makefile builds all 10 in one pass (`make docker-build`), and
+`values.local-images.example.yaml` maps all of them to localhost tags. The sample
+agents in `examples/` do not use MCP sidecars, so a basic quickstart works without them.
 
 The extra `--set-file` keeps the `Catalog > Skills` tab populated in local clusters. Without it, the chart defaults the browsable Skills catalog to an empty list.
 
