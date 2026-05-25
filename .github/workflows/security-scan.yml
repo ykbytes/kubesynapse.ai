@@ -154,7 +154,7 @@ jobs:
         run: mkdir -p security-reports/raw
 
       - name: Run Trivy (SARIF)
-        uses: aquasecurity/trivy-action@v0.30.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
           scan-ref: "."
@@ -165,7 +165,7 @@ jobs:
           ignore-unfixed: false
 
       - name: Run Trivy (JSON)
-        uses: aquasecurity/trivy-action@v0.30.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
           scan-ref: "."
@@ -378,12 +378,15 @@ jobs:
           helm template kubesynapse ./charts/kubesynapse \
             --namespace kubesynapse \
             --set global.imagePullSecrets[0].name=placeholder \
-            --set litellm.masterKey=placeholder-key \
+            --set platformSecrets.native.litellmMasterKey=placeholder-litellm-master-key-0123456789 \
+            --set platformSecrets.native.apiGatewaySharedToken=placeholder-api-gateway-token-0123456789 \
+            --set platformSecrets.native.databasePassword=placeholder-database-password-0123456789 \
+            --set platformSecrets.native.jwtSecret=placeholder-jwt-secret-0123456789 \
             > security-reports/raw/helm-rendered.yaml
 
       - name: Run Trivy config scan on rendered manifests (JSON)
         if: hashFiles('security-reports/raw/helm-rendered.yaml') != ''
-        uses: aquasecurity/trivy-action@v0.30.0
+        uses: aquasecurity/trivy-action@v0.36.0
         continue-on-error: true
         with:
           scan-type: config
@@ -394,7 +397,7 @@ jobs:
 
       - name: Run Trivy config scan on rendered manifests (SARIF)
         if: hashFiles('security-reports/raw/helm-rendered.yaml') != ''
-        uses: aquasecurity/trivy-action@v0.30.0
+        uses: aquasecurity/trivy-action@v0.36.0
         continue-on-error: true
         with:
           scan-type: config
