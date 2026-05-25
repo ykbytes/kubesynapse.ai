@@ -2326,8 +2326,8 @@ def create_agent_statefulset_manifest(
         )
         logger.info("Injected OPA sidecar for agent '%s' (policies from ConfigMap '%s')", name, opa_policy_cm)
 
-    # Enable service account token when the kubernetes MCP sidecar is present
-    # so kubectl / in-cluster clients can reach the API server.
+    # Only mount the service account token when the kubernetes MCP sidecar
+    # is present (needs in-cluster API access for kubectl / K8s operations).
     has_k8s_sidecar = any(
         s.get("name") == "kubernetes" or s.get("serverId") == "kubernetes-mcp" for s in mcp_sidecars
     )
@@ -2574,6 +2574,7 @@ def create_worker_job_manifest(
     job_name = hashed_resource_name(kind, resource_namespace, resource_name, suffix=f"{generation}-{timestamp}")
     artifact_journal_path = workflow_journal_path(artifact_path)
     pod_security_context = {
+        "runAsNonRoot": True,
         "runAsUser": 999,
         "runAsGroup": 37,
         "fsGroup": 37,

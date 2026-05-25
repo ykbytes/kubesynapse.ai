@@ -21,10 +21,24 @@ spec:
         spec:
           restartPolicy: Never
           terminationGracePeriodSeconds: 15
+          automountServiceAccountToken: false
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            fsGroup: 1000
+            seccompProfile:
+              type: RuntimeDefault
           containers:
             - name: gc
               image: {{ .Values.gc.image.repository | default "curlimages/curl" }}:{{ .Values.gc.image.tag | default "8.12.1" }}
               imagePullPolicy: {{ .Values.gc.image.pullPolicy | default "IfNotPresent" }}
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop:
+                    - ALL
               command:
                 - sh
                 - -c

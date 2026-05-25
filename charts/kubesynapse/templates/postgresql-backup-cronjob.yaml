@@ -24,10 +24,24 @@ spec:
         spec:
           restartPolicy: OnFailure
           terminationGracePeriodSeconds: 30
+          automountServiceAccountToken: false
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            fsGroup: 1000
+            seccompProfile:
+              type: RuntimeDefault
           containers:
             - name: pg-backup
               image: {{ .Values.backup.image.repository | default "bitnami/postgresql" }}:{{ .Values.backup.image.tag | default "17" }}
               imagePullPolicy: {{ .Values.backup.image.pullPolicy | default "IfNotPresent" }}
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: false  # pg_dump + gzip need writable /tmp
+                capabilities:
+                  drop:
+                    - ALL
               command:
                 - bash
                 - -c
