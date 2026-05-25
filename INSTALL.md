@@ -395,7 +395,7 @@ platformSecrets:
     openaiApiKey: "sk-your-real-openai-key"            # optional
     openrouterApiKey: "sk-or-your-openrouter-key"      # optional
     anthropicApiKey: "sk-ant-your-anthropic-key"       # optional
-    litellmMasterKey: "replace-me"
+    litellmMasterKey: "changeme"
     apiGatewaySharedToken: "my-secret-bearer-token"    # replace with a strong random string
 ```
 

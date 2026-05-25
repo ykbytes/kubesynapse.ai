@@ -1,16 +1,16 @@
 Thank you for installing kubesynapse!
 
 {{ if and (eq .Values.platformSecrets.mode "native")
-          (or (eq (default "" .Values.platformSecrets.native.litellmMasterKey) "replace-me")
-              (eq (default "" .Values.platformSecrets.native.apiGatewaySharedToken) "replace-me-with-a-long-random-bearer-token")
-              (eq (default "" .Values.platformSecrets.native.databasePassword) "replace-me-with-a-long-random-database-password")
-              (eq (default "" .Values.platformSecrets.native.jwtSecret) "replace-me-with-a-long-random-jwt-secret")) }}
+          (or (eq (default "" .Values.platformSecrets.native.litellmMasterKey) "changeme")
+              (eq (default "" .Values.platformSecrets.native.apiGatewaySharedToken) "changeme")
+              (eq (default "" .Values.platformSecrets.native.databasePassword) "changeme")
+              (eq (default "" .Values.platformSecrets.native.jwtSecret) "changeme")) }}
 
 ========================================================
 ⚠️  SECURITY WARNING — DEFAULT SECRETS DETECTED
 ========================================================
 
-One or more platform secrets are still using their default "replace-me"
+One or more platform secrets are still using their default "changeme"
 placeholder values from the chart.  This is insecure for production.
 
 Production deployments MUST override these in a custom values file:
