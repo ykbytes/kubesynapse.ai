@@ -1522,12 +1522,10 @@ function FaithfulAgentManagementPanel() {
 
   const runtimeMeta: Record<string, { label: string; desc: string; tone: string }> = {
     opencode: { label: "OpenCode", desc: "Default persistent runtime with memory, skills, and workspace state", tone: "border-emerald-500/30 bg-emerald-500/5 text-emerald-200" },
-    pi: { label: "Pi", desc: "Alternative lightweight runtime with streaming tool-use via pi bridge", tone: "border-violet-500/30 bg-violet-500/5 text-violet-200" },
-    "mistral-vibe": { label: "Mistral Vibe", desc: "Mistral-backed runtime bridge with content generation focus", tone: "border-fuchsia-500/30 bg-fuchsia-500/5 text-fuchsia-200" },
   };
 
   const rt = runtimeMeta[runtimeKind];
-  const RUNTIMES = ["opencode", "pi", "mistral-vibe"];
+  const RUNTIMES = ["opencode"];
 
   return (
     <div className="h-full overflow-auto bg-[oklch(0.145_0.022_264)] p-4">
@@ -2687,7 +2685,6 @@ function ArchitectureSection() {
       iconColor: "text-violet-400",
       items: [
         { name: "OpenCode Runtime", sub: "Persistent StatefulSet" },
-        { name: "Pi Runtime", sub: "Streaming bridge" },
         { name: "MCP Sidecars (11)", sub: "Tools, search, browser…" },
         { name: "Worker Jobs", sub: "Workflow step execution" },
       ],

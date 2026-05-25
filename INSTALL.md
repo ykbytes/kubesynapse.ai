@@ -56,7 +56,7 @@ For the most current deployment entry points, prefer these docs first:
 
 **KubeSynapse** is a Kubernetes-native platform for deploying, governing, and orchestrating AI agents at enterprise scale. It lets you define agents, policies, multi-agent workflows, approvals, and observability resources as Kubernetes custom resources while a Python operator reconciles them into running infrastructure.
 
-The current supported runtimes are OpenCode, Pi, and Mistral Vibe. Older references in the repository to LangGraph, Goose, or Codex describe earlier architecture phases rather than the primary runtime paths used by the current code.
+The production runtime is OpenCode. Pi and Mistral Vibe are available in alpha but not recommended for production workloads. Older references in the repository to LangGraph, Goose, or Codex describe earlier architecture phases rather than the primary runtime paths used by the current code.
 
 Key capabilities:
 

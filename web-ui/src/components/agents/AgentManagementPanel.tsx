@@ -924,14 +924,28 @@ export function AgentManagementPanel({
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          {(["opencode", "pi", "mistral-vibe"] as RuntimeKind[]).map((kind) => {
+                          {(["opencode"] as RuntimeKind[]).map((kind) => {
                             const signal = getRuntimeSignal(kind);
                             return (
                               <SelectItem key={kind} value={kind} className="text-xs">
                                 <span className="inline-flex items-center gap-1.5">
                                   <signal.icon className="h-3.5 w-3.5" />
                                   {signal.label}
-                                  {signal.alpha && <Badge variant="outline" className="h-3 px-1 text-[9px]">Alpha</Badge>}
+                                </span>
+                              </SelectItem>
+                            );
+                          })}
+                          <div className="border-t border-border/40 mt-1 pt-1 px-2">
+                            <p className="text-[9px] text-muted-foreground/60 mb-1">Alpha (not recommended for production)</p>
+                          </div>
+                          {(["pi", "mistral-vibe"] as RuntimeKind[]).map((kind) => {
+                            const signal = getRuntimeSignal(kind);
+                            return (
+                              <SelectItem key={kind} value={kind} className="text-xs opacity-60">
+                                <span className="inline-flex items-center gap-1.5">
+                                  <signal.icon className="h-3.5 w-3.5" />
+                                  {signal.label}
+                                  <Badge variant="outline" className="h-3 px-1 text-[9px]">Alpha</Badge>
                                 </span>
                               </SelectItem>
                             );
@@ -946,18 +960,11 @@ export function AgentManagementPanel({
                           Best for autonomous multi-turn coding with structured output, session management, context-overflow recovery, shared MCP routing, and managed sidecars.
                         </p>
                       </div>
-                    ) : runtimeKind === "pi" ? (
-                      <div className="rounded-2xl border border-violet-500/30 bg-violet-500/5 px-4 py-3 text-left text-foreground">
-                        <p className="font-medium text-sm">Pi runtime</p>
-                        <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                          Lightweight alternative runtime using the pi coding agent. Supports streaming, tool use, and MCP connections via the pi extension system.
-                        </p>
-                      </div>
                     ) : (
-                      <div className="rounded-2xl border border-fuchsia-500/30 bg-fuchsia-500/5 px-4 py-3 text-left text-foreground">
-                        <p className="font-medium text-sm">Mistral Vibe runtime</p>
+                      <div className="rounded-2xl border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-left text-foreground">
+                        <p className="font-medium text-sm">{runtimeKind === "pi" ? "Pi" : "Mistral Vibe"} runtime <span className="text-[10px] font-normal text-amber-400 ml-1">(alpha)</span></p>
                         <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                          Mistral-backed coding runtime with the same core invoke, session, and artifact surfaces exposed through the KubeSynapse runtime bridge.
+                          This runtime is in alpha. OpenCode is recommended for production workloads.
                         </p>
                       </div>
                     )}

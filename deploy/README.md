@@ -224,7 +224,9 @@ ingress:
   host: kubesynapse.example.com
 ```
 
-### Pi Runtime Deployment
+### Alpha Runtimes (Pi & Mistral Vibe)
+
+> **Warning:** Pi and Mistral Vibe runtimes are in alpha and not recommended for production workloads.
 
 The Pi runtime is **opt-in per agent**. Create agents with `spec.runtime.kind: pi` to launch the Pi runtime.
 
@@ -234,8 +236,6 @@ piRuntime:
     repository: localhost/kubesynapse/kubesynapse-pi-rt
     tag: dev
 ```
-
-### Mistral Vibe Runtime Deployment
 
 Mistral Vibe is also **opt-in per agent**. Configure its runtime image defaults through `mistralVibeRuntime` and create agents with `spec.runtime.kind: mistral-vibe`.
 

@@ -33,9 +33,9 @@ https://github.com/ykbytes/kubesynapse.ai/security/advisories/new
 
 ## Security Audit History
 
-### 2026-04-28 — Pi Runtime Security Review
+### 2026-04-28 — Pi Runtime Security Review (Alpha Runtime)
 
-A security review of the Pi runtime integration was conducted. The following protections were implemented:
+A security review of the Pi runtime integration was conducted. Note: Pi is an alpha runtime and not recommended for production. The following protections were implemented:
 
 1. **Model Timeout Prevents Resource Exhaustion**
    - **Control**: `MODEL_TIMEOUT_MS=120s` aborts hung model calls automatically

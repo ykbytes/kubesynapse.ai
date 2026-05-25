@@ -39,7 +39,7 @@ cd web-ui && npm install && cd ..
 | CLI | `cli/` | Python (Typer) | `pytest tests/ -v -q` |
 | Web UI | `web-ui/` | TypeScript (React) | `npm run build` |
 | Helm Chart | `charts/kubesynapse/` | YAML | `helm lint` |
-| Runtimes | `opencode-runtime/`, `pi-runtime/` | Python | `pytest tests/ -v` |
+| Runtimes | `opencode-runtime/` | Python | `pytest tests/ -v` |
 
 ## Code conventions
 

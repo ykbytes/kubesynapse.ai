@@ -191,11 +191,11 @@ To inspect runs in the UI, open **Intelligence > Observatory**.
 
 ## Runtime Notes
 
-KubeSynapse currently supports three in-tree runtimes:
+KubeSynapse uses OpenCode as its production runtime:
 
-- `opencode`
-- `pi`
-- `mistral-vibe`
+- `opencode` — production runtime (recommended)
+- `pi` — alpha, not recommended for production
+- `mistral-vibe` — alpha, not recommended for production
 
 `opencode` is the default runtime path used by the checked-in examples and local dev flows.
 

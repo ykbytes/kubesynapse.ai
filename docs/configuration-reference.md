@@ -151,7 +151,7 @@ See [`values.schema.json`](../charts/kubesynapse/values.schema.json) for the com
 - `litellm` — LLM proxy configuration
 - `agentRuntime` — Agent resource limits and HITL
 - `opencodeRuntime` — Default OpenCode runtime image, provider, and memory settings
-- `piRuntime` — Pi runtime image, provider, and bridge defaults
+- `piRuntime` — Pi runtime image, provider, and bridge defaults (alpha)
 - `operator` — Controller and worker settings
 - `autoscaling` — HPA configuration
 - `apiGateway` — Gateway replicas, auth, DB

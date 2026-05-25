@@ -13,7 +13,7 @@ This file gives AI coding agents the minimum repo-specific context needed to wor
 - Kubernetes CRDs are the control-plane source of truth.
 - Treat the API gateway as a substantial backend, not a thin proxy. It owns auth, CRUD, invoke routing, A2A, SSE, traces, and UI-facing metadata.
 - Treat the operator as the active control-plane engine. It reconciles agents into runtime StatefulSets and workflows into Jobs.
-- OpenCode is the default runtime assumption for most work. Pi and Mistral Vibe are also supported and remain wired through the chart, operator, gateway, CLI, and UI.
+- OpenCode is the production runtime. Pi and Mistral Vibe are available in alpha but not recommended for production and should not be featured in user-facing materials.
 - Workflow detail lives mainly in worker artifacts and logs; CRD status is summary-level.
 - MCP exists in two forms: per-agent sidecars and the shared MCP hub.
 - Run intelligence is built into the platform: runtime events flow into the gateway trace store, then into signal watch and system-agent driven analysis.
@@ -22,7 +22,7 @@ This file gives AI coding agents the minimum repo-specific context needed to wor
 
 - [api-gateway/](api-gateway/) FastAPI public surface: auth, CRUD, invoke, A2A, SSE, traces.
 - [operator/](operator/) Kopf controllers, manifest builders, and worker orchestration.
-- [opencode-runtime/](opencode-runtime/), [pi-runtime/](pi-runtime/) agent runtime implementations.
+- [opencode-runtime/](opencode-runtime/) production agent runtime. [pi-runtime/](pi-runtime/), [vibe-runtime/](vibe-runtime/) are alpha.
 - [web-ui/](web-ui/) Vite, React, and TypeScript frontend. Production is served by Nginx and proxies `/api` to the gateway.
 - [charts/kubesynapse/](charts/kubesynapse/) main platform chart: CRDs, control plane, shared services, system agents, collector, secret wiring.
 - [charts/agents/](charts/agents/) starter charts that install single `AIAgent` resources.

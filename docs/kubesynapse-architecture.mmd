@@ -38,14 +38,6 @@ flowchart TB
     FastAPI wrapper · Session persistence
     Checkpoint recovery · SSE streaming"):::runtime
 
-    PI("🧠 Pi Runtime
-    Node.js bridge · RPC mode
-    Artifact APIs · 120s timeout"):::runtime
-
-    VIBE("✨ Mistral Vibe
-    Python bridge · Workspace volumes
-    Mistral-specific settings"):::runtime
-
     JOB("📦 Workflow Jobs
     Short-lived · Artifact persistence
     DAG step execution"):::worker
@@ -104,7 +96,6 @@ flowchart TB
     CLI --> GW
     EXT --> GW
     GH -. "git clone" .-> OC
-    GH -. "git clone" .-> PI
 
     GW -->|"CRUD / Watch"| K8S
     GW -->|"App state"| PG
@@ -112,8 +103,6 @@ flowchart TB
     K8S -->|"reconcile"| OP
 
     OP ==>|"provisions"| OC
-    OP ==>|"provisions"| PI
-    OP ==>|"provisions"| VIBE
     OP -->|"creates"| JOB
     OP -.->|"config"| SEC
 
@@ -123,18 +112,9 @@ flowchart TB
     OC --> REDIS
     OC --> QDRANT
 
-    PI --> MCP
-    PI --> PVC
-    PI -->|"LLM calls"| LLM
-
-    VIBE --> PVC
-    VIBE -->|"LLM calls"| LLM
-
     LLM --> REDIS
 
     OC -. "events" .-> TRACE
-    PI -. "events" .-> TRACE
-    VIBE -. "events" .-> TRACE
     JOB -. "events" .-> TRACE
 
     TRACE --> SIGNAL

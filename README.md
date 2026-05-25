@@ -118,7 +118,7 @@ Agent runtimes ship with defense-in-depth across four layers:
 [Learn more about the security model →](docs/architecture-overview.md#10-security-model)
 
 - 12 CRDs model every platform concern: agents, workflows, policies, approvals, tenants, MCP connections, webhooks, and observability targets
-- Three runtimes included: `opencode` (default), `pi`, and `mistral-vibe`
+- OpenCode runtime for production workloads (Pi and Mistral Vibe available in alpha)
 - Model calls proxy through LiteLLM with cost tracking and fallback
 - Persistent workspace state on PVC with session checkpointing
 
@@ -217,8 +217,6 @@ flowchart TB
     OP("🔧 Operator"):::o
 
     OC("🤖 OpenCode"):::r
-    PI("🧠 Pi"):::r
-    VIBE("✨ Mistral Vibe"):::r
     JOB("📦 Workflow Jobs"):::w
 
     MCP("🔌 MCP Sidecars"):::s
@@ -240,19 +238,12 @@ flowchart TB
     GW --> PG
     K8S --> OP
     OP ==> OC
-    OP ==> PI
-    OP ==> VIBE
     OP --> JOB
     OC --> MCP
     OC --> PVC
     OC --> LLM
     OC --> REDIS
     OC --> QDRANT
-    PI --> MCP
-    PI --> PVC
-    PI --> LLM
-    VIBE --> PVC
-    VIBE --> LLM
     LLM --> REDIS
     OC -. "events" .-> TRACE
     JOB -. "events" .-> TRACE
@@ -357,8 +348,8 @@ Read [`cli/README.md`](cli/README.md) for the full command surface.
 | [`api-gateway/`](api-gateway/) | FastAPI backend: auth, CRUD, invoke, chat, A2A, webhooks, observability |
 | [`operator/`](operator/) | Kopf operator, manifest builders, worker orchestration, trace emission |
 | [`opencode-runtime/`](opencode-runtime/) | Default AI agent runtime |
-| [`pi-runtime/`](pi-runtime/) | Pi runtime bridge |
-| [`vibe-runtime/`](vibe-runtime/) | Mistral Vibe runtime bridge |
+| [`pi-runtime/`](pi-runtime/) | Pi runtime bridge (alpha) |
+| [`vibe-runtime/`](vibe-runtime/) | Mistral Vibe runtime bridge (alpha) |
 | [`web-ui/`](web-ui/) | React 18 + Vite + Tailwind v4 console |
 | [`mcp-sidecars/`](mcp-sidecars/) | Bundled MCP sidecars (10 tools) |
 | [`cli/`](cli/) | `agentctl` CLI with shell completion |

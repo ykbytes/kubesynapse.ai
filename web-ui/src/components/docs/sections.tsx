@@ -313,9 +313,9 @@ function ArchitectureSection() {
       <div id="arch-execution">
         <SectionHeading icon={Server}>Execution Plane</SectionHeading>
         <p className="mt-2 text-base leading-7 text-[oklch(0.80_0.01_264)]">
-          Each agent runs as an isolated singleton StatefulSet backed by one of three supported runtimes —
-          <strong>OpenCode</strong> (default), <strong>Pi</strong>, or <strong>Mistral Vibe</strong> —
+          Each agent runs as an isolated singleton StatefulSet backed by the <strong>OpenCode</strong> runtime
           with session persistence and checkpoint recovery.
+          Additional runtimes (Pi, Mistral Vibe) are available in alpha but not recommended for production.
           Optional <strong>MCP sidecars</strong> run alongside the runtime to provide tools such as code execution,
           web search, browser automation, and database access.
         </p>
@@ -364,7 +364,7 @@ function AgentsSection() {
         items={[
           { label: "CRD Kind", value: "AIAgent" },
           { label: "Required Fields", value: "name, model, runtime.kind" },
-          { label: "Runtimes", value: "opencode, pi, mistral-vibe" },
+          { label: "Runtimes", value: "opencode (production)" },
           { label: "API Endpoint", value: "POST /api/v1/agents" },
           { label: "Storage Default", value: "1Gi PVC" },
         ]}
@@ -382,7 +382,7 @@ function AgentsSection() {
           rows={[
             ["spec.model", "string", "Yes", "LLM model identifier routed through LiteLLM (e.g., gpt-4o, claude-3-sonnet)."],
             ["spec.systemPrompt", "string", "No", "System instruction defining behavior, responsibilities, and output format."],
-            ["spec.runtime.kind", "string", "Yes", "Runtime engine: opencode, pi, or mistral-vibe."],
+            ["spec.runtime.kind", "string", "Yes", "Runtime engine: opencode (production), pi (alpha), or mistral-vibe (alpha)."],
             ["spec.policyRef", "string", "No", "AgentPolicy name in the same namespace (or namespace/name for cross-namespace)."],
             ["spec.enableGVisor", "boolean", "No", "Run the runtime container inside a gVisor sandbox for additional isolation."],
             ["spec.storage.size", "string", "No", "PVC size (e.g., 1Gi, 5Gi). Default: 1Gi."],
@@ -398,17 +398,8 @@ function AgentsSection() {
         <DocsTable
           headers={["Field", "Type", "Description"]}
           rows={[
-            ["runtime.kind", "opencode | pi | mistral-vibe", "Runtime engine selector. opencode is the default."],
+            ["runtime.kind", "opencode | pi | mistral-vibe", "Runtime engine selector. opencode is the production runtime (pi and mistral-vibe are alpha)."],
             ["runtime.opencode.configFiles", "object", "Inline ConfigMap-style files injected into the OpenCode runtime (max 64 files, 256 KB total)."],
-            ["runtime.pi.provider", "string", "LLM provider for Pi runtime."],
-            ["runtime.pi.model", "string", "LLM model for Pi runtime."],
-            ["runtime.pi.thinkingLevel", "off | minimal | low | medium | high | xhigh", "Reasoning effort for Pi runtime."],
-            ["runtime.pi.noTools", "boolean", "Disable tool use in Pi runtime."],
-            ["runtime.pi.tools", "string[]", "Allowed tool names for Pi runtime."],
-            ["runtime.pi.noSession", "boolean", "Disable session persistence."],
-            ["runtime.pi.permissionLevel", "permissive | moderate | strict", "Tool permission level for Pi runtime."],
-            ["runtime.mistralVibe.model", "string", "LLM model for Mistral Vibe runtime."],
-            ["runtime.mistralVibe.noSession", "boolean", "Disable session persistence."],
           ]}
         />
 

@@ -14,7 +14,7 @@ KubeSynapse is a Kubernetes-native AI agent platform built around these ideas:
 - route model calls through LiteLLM and optional retrieval through Qdrant
 - expose the platform through a FastAPI gateway, a React web UI, and the `agentctl` CLI
 
-The platform supports three in-tree runtimes: OpenCode (`runtime.kind: opencode`), Pi (`runtime.kind: pi`), and Mistral Vibe (`runtime.kind: mistral-vibe`).
+The platform uses OpenCode as its production runtime (`runtime.kind: opencode`). Two additional runtimes — Pi (`runtime.kind: pi`) and Mistral Vibe (`runtime.kind: mistral-vibe`) — are available in alpha but not recommended for production workloads.
 
 ## 2. Top-Level Architecture
 
@@ -45,14 +45,6 @@ flowchart TB
     OC("🤖 OpenCode Runtime
     FastAPI wrapper · Session persistence
     Checkpoint recovery · SSE streaming"):::runtime
-
-    PI("🧠 Pi Runtime
-    Node.js bridge · RPC mode
-    Artifact APIs · 120s timeout"):::runtime
-
-    VIBE("✨ Mistral Vibe
-    Python bridge · Workspace volumes
-    Mistral-specific settings"):::runtime
 
     JOB("📦 Workflow Jobs
     Short-lived · Artifact persistence
@@ -109,8 +101,6 @@ flowchart TB
     K8S -->|"reconcile"| OP
 
     OP ==>|"provisions"| OC
-    OP ==>|"provisions"| PI
-    OP ==>|"provisions"| VIBE
     OP -->|"creates"| JOB
     OP -.->|"config"| SEC
 
@@ -120,18 +110,9 @@ flowchart TB
     OC --> REDIS
     OC --> QDRANT
 
-    PI --> MCP
-    PI --> PVC
-    PI -->|"LLM calls"| LLM
-
-    VIBE --> PVC
-    VIBE -->|"LLM calls"| LLM
-
     LLM --> REDIS
 
     OC -. "events" .-> TRACE
-    PI -. "events" .-> TRACE
-    VIBE -. "events" .-> TRACE
     JOB -. "events" .-> TRACE
 
     TRACE --> SIGNAL
@@ -155,7 +136,7 @@ flowchart TB
 - **Clients** (blue) — Web UI, CLI, and external apps all hit the gateway
 - **Control Plane** (blue/purple/amber) — Gateway handles auth + CRUD, Kubernetes API stores CRDs, Operator reconciles them into real resources
 - **Security** (green) — Defense-in-depth enforced at the operator level: plugin isolation, immutable config, traffic enforcement, audit trail
-- **Execution Plane** (green/pink/teal) — Three runtimes (OpenCode, Pi, Mistral Vibe) run as isolated StatefulSets with optional MCP sidecars and persistent state
+- **Execution Plane** (green/pink/teal) — The OpenCode runtime runs as an isolated StatefulSet with optional MCP sidecars and persistent state (Pi and Mistral Vibe are available in alpha)
 - **Shared Services** (gray) — LiteLLM proxies all LLM calls, PostgreSQL stores durable state, Redis caches, Qdrant handles semantic memory
 - **Run Intelligence** (purple) — Runtime events flow into the Execution Observatory, signal watch detects anomalies, system agents provide AI-powered analysis
 - runtime StatefulSets call LiteLLM for model access and Qdrant for retrieval
@@ -215,7 +196,7 @@ Current responsibilities include:
 
 ### Runtime sandboxes
 
-Each agent runs in an isolated sandbox. The supported runtime paths are OpenCode, Pi, and Mistral Vibe.
+Each agent runs in an isolated sandbox. The production runtime is OpenCode.
 
 An OpenCode agent sandbox typically contains:
 
@@ -225,9 +206,7 @@ An OpenCode agent sandbox typically contains:
 - a persistent state volume
 - policy and approval enforcement hooks
 
-The Pi runtime runs as a separate StatefulSet using a Node.js HTTP bridge (`pi-runtime/pi_bridge.js`) that wraps Pi's RPC mode. It exposes artifact APIs (`/artifacts/list`, `/artifacts/download`, `/artifacts/zip`) backed by a pod-local filesystem and enforces a 120-second model timeout (`MODEL_TIMEOUT_MS`) with auto-abort and retry to prevent runaway sessions.
-
-The Mistral Vibe runtime runs as a separate StatefulSet using the Python HTTP bridge in `vibe-runtime/`. It exposes the same core contract endpoints, uses pod-local workspace and state volumes, and binds Mistral-specific model settings through `spec.runtime.mistralVibe` plus the shared runtime API surface.
+> **Alpha runtimes:** Pi (`pi-runtime/`) and Mistral Vibe (`vibe-runtime/`) are available as alpha runtimes but are not recommended for production use. They follow the same runtime API contract but have limited hardening and test coverage.
 
 ### Worker Jobs
 
@@ -255,7 +234,7 @@ The Run Intelligence Layer extends the Execution Observatory with semantic event
 
 ### Event Flow
 
-1. **Emission**: Each runtime (opencode, pi, vibe) and the operator worker emit events via their `runtime_events` module
+1. **Emission**: The OpenCode runtime and the operator worker emit events via their `runtime_events` module (alpha runtimes also emit events when used)
 2. **Ingestion**: Events are batched and POSTed to `POST /api/v1/traces/runtime-events`
 3. **Storage**: The API gateway upserts events into the `runtime_run_events` table (idempotent on `event_id`)
 4. **Detection**: The signal watch controller runs SQL checks every 60 seconds
@@ -346,7 +325,7 @@ Security is enforced across several layers:
 
 If you need the shortest possible architectural summary, these are the points that matter most:
 
-1. The supported in-tree runtimes are OpenCode, Pi, and Mistral Vibe.
+1. The production in-tree runtime is OpenCode. Pi and Mistral Vibe are available in alpha.
 2. The gateway is now a substantive application backend, not just a thin router.
 3. Workflow detail lives in worker artifacts more than CRD status.
 4. MCP is both sidecar-based and connection-driven.

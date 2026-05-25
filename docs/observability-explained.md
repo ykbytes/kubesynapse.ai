@@ -298,7 +298,7 @@ When a check fires, an `ObservationReport` CR is created with severity classific
 | `step_count` | `INTEGER` | Number of steps |
 | `llm_call_count` | `INTEGER` | Total LLM calls |
 | `tool_call_count` | `INTEGER` | Total tool calls |
-| `total_tokens` | `INTEGER` | Token usage (pi-runtime does not report this) |
+| `total_tokens` | `INTEGER` | Token usage (alpha pi-runtime does not report this) |
 | `total_cost_usd` | `FLOAT` | Estimated cost |
 | `steps_json` | `JSONB` | Step records with per-step LLM/tool arrays |
 | `llm_calls_json` | `JSONB` | All LLM call records |
@@ -416,7 +416,7 @@ curl http://localhost:8080/api/v1/workflows/context7-research-analysis/logs?name
 
 ### Execution shows "0 LLM calls" despite LLM interactions
 
-**Cause:** The pi-runtime does not emit separate LLM call events in the `response.completed` stream event. The metadata field may be `null` instead of a dict.
+**Cause:** The alpha pi-runtime does not emit separate LLM call events in the `response.completed` stream event. The metadata field may be `null` instead of a dict.
 
 **Fix:** The worker now records LLM calls whenever a `response` field is present (not just when `model` is explicitly set). This is fixed in operator `trace-fix-v13+`.
 
@@ -451,20 +451,20 @@ kubectl get deployment kubesynapse-operator -n kubesynapse -o jsonpath='{.spec.t
 
 | Runtime | Agent Example | LLM Calls | Tool Calls | Logs | Runtime Events | Status |
 |---|---|---|---|---|---|---|
-| **pi-runtime** | `minimax` (mistral/devstral-small) | ✅ | ✅ | ✅ | ✅ | Full support |
-| **opencode** | `opencode-test` (gpt-4o-mini) | Requires image build | — | — | ✅ | Image must be built locally for kind |
+| **opencode** | `opencode-test` (gpt-4o-mini) | ✅ | ✅ | ✅ | ✅ | Production runtime |
+| **pi-runtime** (alpha) | `minimax` (mistral/devstral-small) | ✅ | ✅ | ✅ | ✅ | Alpha — not for production |
 
 ### Runtime Event Emission
 
-All runtimes now emit structured events to the Run Intelligence Layer via their `runtime_events` module:
+All runtimes emit structured events to the Run Intelligence Layer via their `runtime_events` module:
 
 - **opencode-runtime**: `runtime_events.py` — sync + async emitter, integrated into `/invoke`, `/invoke/stream`, lifespan
-- **pi-runtime**: `runtime_events.js` — Node.js emitter, integrated into `/invoke`, `/invoke/stream`, shutdown
+- **pi-runtime** (alpha): `runtime_events.js` — Node.js emitter, integrated into `/invoke`, `/invoke/stream`, shutdown
 - **operator worker**: `runtime_events.py` — emits workflow/step/agent/tool events alongside existing TraceClient and drains queued terminal events during worker shutdown
 
 Events are batched, idempotent, and sanitized before being sent to `POST /api/v1/traces/runtime-events`.
 
-### Pi-Runtime Specific Notes
+### Pi-Runtime Specific Notes (Alpha)
 - LLM calls are recorded when the runtime returns a `response` field (model is inferred from the agent spec or marked as "unknown")
 - Token counts are **not reported** by the pi-runtime — this is a known limitation
 - Tool calls are fully captured with args, results, and error messages

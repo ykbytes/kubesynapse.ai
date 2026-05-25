@@ -951,7 +951,7 @@ All runtimes that implement `/invoke/stream` MUST emit events using this canonic
 
 ## Migration Guide for Existing Runtimes
 
-### pi-runtime
+### pi-runtime (alpha)
 | Action | Endpoint |
 |--------|----------|
 | Add | `GET /info`, `GET /capabilities` |
@@ -962,4 +962,4 @@ All runtimes that implement `/invoke/stream` MUST emit events using this canonic
 | Remove | `/api/*` alias paths (or keep as deprecated) |
 | Remove | `/prompt` legacy endpoint |
 
-The supported in-tree runtime implementations are `opencode-runtime` and `pi-runtime`.
+The production runtime is `opencode-runtime`. The `pi-runtime` is available in alpha.

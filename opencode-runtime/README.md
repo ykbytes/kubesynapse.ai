@@ -52,5 +52,5 @@ The server binds to `0.0.0.0:8081` by default.
 
 ## Current Status
 
-Stable. This is the default in-tree runtime, with Pi and Mistral Vibe supported
-alongside it as additional runtime options.
+Stable. This is the production runtime for KubeSynapse. Pi and Mistral Vibe are
+available as alpha runtimes but are not recommended for production use.

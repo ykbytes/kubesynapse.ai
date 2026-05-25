@@ -27,7 +27,7 @@ What the chart installs now:
 
 Important current chart characteristics:
 
-- the CRD allows OpenCode, Pi, and Mistral Vibe runtime kinds, each with its own nested runtime config block
+- the CRD allows OpenCode (production), Pi (alpha), and Mistral Vibe (alpha) runtime kinds, each with its own nested runtime config block
 - bundled MCP sidecars are still defined in values for per-agent local tools
 - the chart includes both shared MCP hub servers and structured MCP connection support
 - published-image installs use `deploy/values.cluster.example.yaml`, while local image development starts from `deploy/values.local-images.example.yaml`
@@ -53,7 +53,7 @@ Notable implementation changes relative to the old docs:
 
 ## 3. Runtime Paths
 
-The old LangGraph, Goose, and Codex runtime paths are no longer the active architecture described by this repository. The supported in-tree runtimes are OpenCode under `opencode-runtime/`, Pi under `pi-runtime/`, and Mistral Vibe under `vibe-runtime/`.
+The old LangGraph, Goose, and Codex runtime paths are no longer the active architecture described by this repository. The production runtime is OpenCode under `opencode-runtime/`. Pi (`pi-runtime/`) and Mistral Vibe (`vibe-runtime/`) are available in alpha.
 
 What the runtime does today:
 

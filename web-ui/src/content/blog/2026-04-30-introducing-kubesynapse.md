@@ -100,7 +100,7 @@ spec:
 
 We are actively working on:
 
-- **Mistral Vibe runtime** integration for vision-capable agents
+- **Runtime hardening** with defense-in-depth security controls
 - **Enhanced A2A protocol** for cross-cluster agent communication
 - **Helm chart hardening** for production enterprise deployments
 - **Expanded MCP sidecar catalog** with database and cloud provider tools
