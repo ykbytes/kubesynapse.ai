@@ -19,85 +19,145 @@ The platform supports three in-tree runtimes: OpenCode (`runtime.kind: opencode`
 ## 2. Top-Level Architecture
 
 ```mermaid
-flowchart LR
-    User[User / CLI / UI]
-    Ingress[Ingress or Port-Forward]
-    Gateway[API Gateway]
-    K8s[Kubernetes API]
-    Operator[Operator]
-    Worker[Workflow Workers]
+%%{init: {'theme': 'dark', 'themeVariables': { 'fontSize': '14px' }}}%%
+flowchart TB
+    UI["🖥️ Web UI"]:::client
+    CLI["⌨️ agentctl CLI"]:::client
+    EXT["🔗 External Apps & Webhooks"]:::client
 
-    subgraph AgentPlane[Per-Agent Runtime Plane]
-        OpenCodeSTS[OpenCode Runtime StatefulSet]
-        PiSTS[Pi Runtime StatefulSet]
-        Sidecar[Optional MCP Sidecars]
-        SharedMCP[Shared MCP Hub]
-        StatePVC[State PVC]
-        ApprovalCR[AgentApproval CRDs]
-    end
+    GW("⚡ API Gateway
+    FastAPI · Auth · CRUD · Invoke · SSE"):::gateway
 
-    subgraph SharedServices[Shared Platform Services]
-        LiteLLM[LiteLLM]
-        Redis[Redis]
-        Qdrant[Qdrant]
-        Postgres[PostgreSQL]
-        NATS[NATS]
-        WebUI[Web UI]
-    end
+    K8S{{"☸️ Kubernetes API
+    AIAgent · AgentWorkflow
+    AgentPolicy · AgentTenant
+    12 CRDs total"}}:::k8s
 
-    subgraph Observability[Observability Module]
-        ObservationCRDs[Observation CRDs]
-        Collector[Collector Agent]
-        Reports[Observation Reports]
-    end
+    OP("🔧 Operator
+    Kopf-based · Reconcile
+    StatefulSets · PVCs · Secrets"):::operator
 
-    subgraph RunIntelligence[Run Intelligence Layer]
-        TraceStore[trace_store.py]
-        RuntimeEvents[runtime_events modules]
-        SignalWatch[Signal Watch Controller]
-        SystemAgents[System Agents CRs]
-        AnalyticsAPIs[Analytics APIs]
-    end
+    SEC["🛡️ Security Layers
+    Plugin Isolation · Immutable Config
+    Traffic Enforcement · Audit Trail
+    Hardened by Default"]:::security
 
-    User --> Ingress --> Gateway
-    User --> WebUI
-    User -. apply CRDs .-> K8s
-    Gateway --> K8s
-    K8s --> Operator
-    Operator --> OpenCodeSTS
-    Operator --> PiSTS
-    Operator --> Worker
-    Operator --> ObservationCRDs
-    Worker --> K8s
-    OpenCodeSTS --> LiteLLM --> Redis
-    OpenCodeSTS --> Qdrant
-    OpenCodeSTS -. optional .-> Sidecar
-    OpenCodeSTS -. optional .-> SharedMCP
-    OpenCodeSTS --> StatePVC
-    OpenCodeSTS --> ApprovalCR
-    PiSTS --> LiteLLM
-    PiSTS -. optional .-> Sidecar
-    PiSTS -. optional .-> SharedMCP
-    PiSTS --> StatePVC
-    PiSTS --> ApprovalCR
-    Gateway --> Postgres
-    ObservationCRDs --> Reports
-    Collector --> Reports
-    OpenCodeSTS -. events .-> RuntimeEvents
-    PiSTS -. events .-> RuntimeEvents
-    Worker -. events .-> RuntimeEvents
-    RuntimeEvents --> TraceStore
-    TraceStore --> SignalWatch
-    SignalWatch --> Reports
-    SignalWatch -. invokes .-> SystemAgents
-    TraceStore --> AnalyticsAPIs
+    OC("🤖 OpenCode Runtime
+    FastAPI wrapper · Session persistence
+    Checkpoint recovery · SSE streaming"):::runtime
+
+    PI("🧠 Pi Runtime
+    Node.js bridge · RPC mode
+    Artifact APIs · 120s timeout"):::runtime
+
+    VIBE("✨ Mistral Vibe
+    Python bridge · Workspace volumes
+    Mistral-specific settings"):::runtime
+
+    JOB("📦 Workflow Jobs
+    Short-lived · Artifact persistence
+    DAG step execution"):::worker
+
+    MCP("🔌 MCP Sidecars
+    11 bundled · Hot-attach
+    Per-agent or shared hub"):::sidecar
+
+    PVC[("💾 State PVC
+    Survives restarts
+    Workspace + sessions")]:::storage
+
+    LLM("🧪 LiteLLM
+    Provider abstraction
+    Rate limiting · Key mgmt"):::shared
+
+    PG[("🗄️ PostgreSQL
+    Auth · Sessions
+    Audit · Traces")]:::shared
+
+    REDIS[("⚡ Redis
+    Session cache
+    LLM response cache")]:::shared
+
+    QDRANT[("🔍 Qdrant
+    Vector search
+    Semantic memory")]:::shared
+
+    NATS("📡 NATS
+    Async messaging
+    Event bus"):::shared
+
+    TRACE("📊 Execution Observatory
+    Trace store · Timeline APIs
+    LLM + tool call records"):::intel
+
+    SIGNAL("🚨 Signal Watch
+    SQL-based anomaly detection
+    Failure rates · Token spend"):::intel
+
+    SYS("🧪 System Agents
+    ks-run-inspector
+    ks-signal-summarizer
+    ks-spend-reviewer"):::intel
+
+    UI --> GW
+    CLI --> GW
+    EXT --> GW
+
+    GW -->|"CRUD / Watch"| K8S
+    GW -->|"App state"| PG
+
+    K8S -->|"reconcile"| OP
+
+    OP ==>|"provisions"| OC
+    OP ==>|"provisions"| PI
+    OP ==>|"provisions"| VIBE
+    OP -->|"creates"| JOB
+    OP -.->|"config"| SEC
+
+    OC --> MCP
+    OC --> PVC
+    OC -->|"LLM calls"| LLM
+    OC --> REDIS
+    OC --> QDRANT
+
+    PI --> MCP
+    PI --> PVC
+    PI -->|"LLM calls"| LLM
+
+    VIBE --> PVC
+    VIBE -->|"LLM calls"| LLM
+
+    LLM --> REDIS
+
+    OC -. "events" .-> TRACE
+    PI -. "events" .-> TRACE
+    VIBE -. "events" .-> TRACE
+    JOB -. "events" .-> TRACE
+
+    TRACE --> SIGNAL
+    SIGNAL -. "invokes" .-> SYS
+
+    classDef client fill:#1a2332,stroke:#326CE5,stroke-width:2px,color:#7baaf7
+    classDef gateway fill:#1a1a3e,stroke:#7c3aed,stroke-width:3px,color:#c4b5fd
+    classDef k8s fill:#0d2137,stroke:#326CE5,stroke-width:3px,color:#93c5fd
+    classDef operator fill:#1a2332,stroke:#f59e0b,stroke-width:2px,color:#fcd34d
+    classDef runtime fill:#0d3320,stroke:#10b981,stroke-width:2px,color:#6ee7b7
+    classDef worker fill:#1a2332,stroke:#6366f1,stroke-width:2px,color:#a5b4fc
+    classDef sidecar fill:#1a2332,stroke:#ec4899,stroke-width:2px,color:#f9a8d4
+    classDef storage fill:#1a2332,stroke:#14b8a6,stroke-width:2px,color:#99f6e4
+    classDef shared fill:#1a1a2e,stroke:#64748b,stroke-width:2px,color:#94a3b8
+    classDef intel fill:#2d1b4e,stroke:#a855f7,stroke-width:2px,color:#d8b4fe
+    classDef security fill:#1a2e1a,stroke:#22c55e,stroke-width:3px,color:#86efac
 ```
 
 ### What the diagram shows
 
-- external clients enter through the ingress and API gateway
-- the operator provisions singleton runtime StatefulSets from `AIAgent` resources
-- workflow execution is delegated to background worker Jobs
+- **Clients** (blue) — Web UI, CLI, and external apps all hit the gateway
+- **Control Plane** (blue/purple/amber) — Gateway handles auth + CRUD, Kubernetes API stores CRDs, Operator reconciles them into real resources
+- **Security** (green) — Defense-in-depth enforced at the operator level: plugin isolation, immutable config, traffic enforcement, audit trail
+- **Execution Plane** (green/pink/teal) — Three runtimes (OpenCode, Pi, Mistral Vibe) run as isolated StatefulSets with optional MCP sidecars and persistent state
+- **Shared Services** (gray) — LiteLLM proxies all LLM calls, PostgreSQL stores durable state, Redis caches, Qdrant handles semantic memory
+- **Run Intelligence** (purple) — Runtime events flow into the Execution Observatory, signal watch detects anomalies, system agents provide AI-powered analysis
 - runtime StatefulSets call LiteLLM for model access and Qdrant for retrieval
 - the gateway persists application state beyond simple request routing, especially for auth and connection metadata
 - observability now exists as a first-class module with its own CRDs, controller logic, UI surfaces, and collector path

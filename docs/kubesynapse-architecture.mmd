@@ -1,0 +1,157 @@
+%%{init: {'theme': 'dark', 'themeVariables': { 'fontSize': '14px' }}}%%
+flowchart TB
+    %% ═══════════════════════════════════════════════════
+    %% CLIENTS
+    %% ═══════════════════════════════════════════════════
+    UI["🖥️ Web UI"]:::client
+    CLI["⌨️ agentctl CLI"]:::client
+    EXT["🔗 External Apps & Webhooks"]:::client
+    GH["🐙 GitHub"]:::external
+
+    %% ═══════════════════════════════════════════════════
+    %% CONTROL PLANE
+    %% ═══════════════════════════════════════════════════
+    GW("⚡ API Gateway
+    FastAPI · Auth · CRUD · Invoke · SSE"):::gateway
+
+    K8S{{"☸️ Kubernetes API
+    AIAgent · AgentWorkflow
+    AgentPolicy · AgentTenant
+    12 CRDs total"}}:::k8s
+
+    OP("🔧 Operator
+    Kopf-based · Reconcile · StatefulSets
+    PVCs · NetworkPolicy · Secrets"):::operator
+
+    %% ═══════════════════════════════════════════════════
+    %% SECURITY
+    %% ═══════════════════════════════════════════════════
+    SEC["🛡️ Security Layers
+    Plugin Isolation · Immutable Config
+    Traffic Enforcement · Audit Trail
+    Hardened by Default"]:::security
+
+    %% ═══════════════════════════════════════════════════
+    %% EXECUTION PLANE
+    %% ═══════════════════════════════════════════════════
+    OC("🤖 OpenCode Runtime
+    FastAPI wrapper · Session persistence
+    Checkpoint recovery · SSE streaming"):::runtime
+
+    PI("🧠 Pi Runtime
+    Node.js bridge · RPC mode
+    Artifact APIs · 120s timeout"):::runtime
+
+    VIBE("✨ Mistral Vibe
+    Python bridge · Workspace volumes
+    Mistral-specific settings"):::runtime
+
+    JOB("📦 Workflow Jobs
+    Short-lived · Artifact persistence
+    DAG step execution"):::worker
+
+    MCP("🔌 MCP Sidecars
+    11 bundled · Hot-attach
+    Per-agent or shared hub"):::sidecar
+
+    PVC[("💾 State PVC
+    Survives restarts
+    Workspace + sessions")]:::storage
+
+    %% ═══════════════════════════════════════════════════
+    %% SHARED SERVICES
+    %% ═══════════════════════════════════════════════════
+    LLM("🧪 LiteLLM
+    Provider abstraction
+    Rate limiting · Key mgmt"):::shared
+
+    PG[("🗄️ PostgreSQL
+    Auth · Sessions
+    Audit · Traces")]:::shared
+
+    REDIS[("⚡ Redis
+    Session cache
+    LLM response cache")]:::shared
+
+    QDRANT[("🔍 Qdrant
+    Vector search
+    Semantic memory")]:::shared
+
+    NATS("📡 NATS
+    Async messaging
+    Event bus"):::shared
+
+    %% ═══════════════════════════════════════════════════
+    %% INTELLIGENCE
+    %% ═══════════════════════════════════════════════════
+    TRACE("📊 Execution Observatory
+    Trace store · Timeline APIs
+    LLM call + tool invocation records"):::intel
+
+    SIGNAL("🚨 Signal Watch
+    SQL-based anomaly detection
+    Failure rates · Token spend"):::intel
+
+    SYS("🧪 System Agents
+    ks-run-inspector
+    ks-signal-summarizer
+    ks-spend-reviewer"):::intel
+
+    %% ═══════════════════════════════════════════════════
+    %% CONNECTIONS
+    %% ═══════════════════════════════════════════════════
+    UI --> GW
+    CLI --> GW
+    EXT --> GW
+    GH -. "git clone" .-> OC
+    GH -. "git clone" .-> PI
+
+    GW -->|"CRUD / Watch"| K8S
+    GW -->|"App state"| PG
+
+    K8S -->|"reconcile"| OP
+
+    OP ==>|"provisions"| OC
+    OP ==>|"provisions"| PI
+    OP ==>|"provisions"| VIBE
+    OP -->|"creates"| JOB
+    OP -.->|"config"| SEC
+
+    OC --> MCP
+    OC --> PVC
+    OC -->|"LLM calls"| LLM
+    OC --> REDIS
+    OC --> QDRANT
+
+    PI --> MCP
+    PI --> PVC
+    PI -->|"LLM calls"| LLM
+
+    VIBE --> PVC
+    VIBE -->|"LLM calls"| LLM
+
+    LLM --> REDIS
+
+    OC -. "events" .-> TRACE
+    PI -. "events" .-> TRACE
+    VIBE -. "events" .-> TRACE
+    JOB -. "events" .-> TRACE
+
+    TRACE --> SIGNAL
+    SIGNAL -. "invokes" .-> SYS
+
+    %% ═══════════════════════════════════════════════════
+    %% STYLING
+    %% ═══════════════════════════════════════════════════
+    classDef client fill:#1a2332,stroke:#326CE5,stroke-width:2px,color:#7baaf7
+    classDef external fill:#1a1a2e,stroke:#555,stroke-width:1px,color:#888
+    classDef gateway fill:#1a1a3e,stroke:#7c3aed,stroke-width:3px,color:#c4b5fd
+    classDef k8s fill:#0d2137,stroke:#326CE5,stroke-width:3px,color:#93c5fd
+    classDef operator fill:#1a2332,stroke:#f59e0b,stroke-width:2px,color:#fcd34d
+    classDef runtime fill:#0d3320,stroke:#10b981,stroke-width:2px,color:#6ee7b7
+    classDef worker fill:#1a2332,stroke:#6366f1,stroke-width:2px,color:#a5b4fc
+    classDef sidecar fill:#1a2332,stroke:#ec4899,stroke-width:2px,color:#f9a8d4
+    classDef storage fill:#1a2332,stroke:#14b8a6,stroke-width:2px,color:#99f6e4
+    classDef shared fill:#1a1a2e,stroke:#64748b,stroke-width:2px,color:#94a3b8
+    classDef intel fill:#2d1b4e,stroke:#a855f7,stroke-width:2px,color:#d8b4fe
+    classDef security fill:#1a2e1a,stroke:#22c55e,stroke-width:3px,color:#86efac
