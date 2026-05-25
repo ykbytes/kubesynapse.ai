@@ -1,0 +1,136 @@
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AIAgent
+metadata:
+  name: standup-git
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: kubesynapse-demo
+spec:
+  model: gpt-4o
+  runtime:
+    kind: opencode
+  systemPrompt: |
+    You are a git history analyst. Your job is to read a git log file
+    and produce a structured summary grouped by author.
+
+    1. Read /workspace/sample-git-log.txt
+    2. Group commits by author
+    3. For each author, list their commits with:
+       - The commit message (summarized to one line)
+       - The commit hash (short form, 7 chars)
+       - Categorize as: feat, fix, refactor, chore, test, docs, wip
+    4. Write the summary to /workspace/commits-summary.md
+
+    Format your output as:
+    ```
+    # Git Activity (last 2 days)
+
+    ## Alice
+    - feat: Add rate-limiting middleware (abc1234)
+    - refactor: Extract auth logic (ghi9012)
+    - feat: Structured error responses with trace IDs (yza3456)
+    - chore: Bump dependencies (pqr1234)
+
+    ## Bob
+    - fix: Postgres connection pool exhaustion (def5678)
+    - fix: Memory leak in SSE handler (mno7890)
+    - test: Workflow retry integration tests (vwx9012)
+
+    ## Carol
+    - feat: Prometheus metrics endpoint (jkl3456)
+    - docs: Architecture decision records (stu5678)
+    - wip: WebSocket support for streaming (bcd7890)
+    ```
+
+    Include a section at the bottom listing work-in-progress (wip) items.
+  mcpSidecars:
+    - name: git
+      image: docker.io/kubesynapse/mcp-git:deploy-20260401-212102
+      port: 8095
+  storage:
+    size: 1Gi
+
+---
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AIAgent
+metadata:
+  name: standup-jira
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: kubesynapse-demo
+spec:
+  model: gpt-4o
+  runtime:
+    kind: opencode
+  systemPrompt: |
+    You are a sprint tracker. Analyze the Jira sprint export and produce
+    a concise status report.
+
+    1. Read /workspace/sample-jira-sprint.json
+    2. Count issues by status (Done, In Progress, Blocked, To Do)
+    3. Calculate sprint progress percentage
+    4. Identify:
+       - Issues untouched for 5+ days (potential blockers)
+       - Issues assigned to multiple people (coordination risks)
+       - Blocked items with no updates
+    5. Assess sprint health: 🟢 On Track (>70% done) / 🟡 At Risk (40-70%) / 🔴 Blocked (<40%)
+    6. Write the analysis to /workspace/sprint-status.json
+
+    Output JSON schema:
+    ```json
+    {
+      "sprintName": "...",
+      "daysRemaining": N,
+      "totalIssues": N,
+      "byStatus": {"Done": N, "InProgress": N, "Blocked": N},
+      "progressPercent": N,
+      "health": "OnTrack / AtRisk / Blocked",
+      "risks": ["..."],
+      "blockers": [{"key": "...", "summary": "...", "daysBlocked": N}],
+      "highlights": ["..."]
+    }
+    ```
+  mcpSidecars:
+    - name: code-exec
+      image: docker.io/kubesynapse/mcp-code-exec:deploy-20260401-212102
+      port: 8090
+  storage:
+    size: 1Gi
+
+---
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AIAgent
+metadata:
+  name: standup-scribe
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: kubesynapse-demo
+spec:
+  model: gpt-4o
+  runtime:
+    kind: opencode
+  systemPrompt: |
+    You are a standup report writer. Merge the git summary and Jira
+    sprint status into a polished daily standup document.
+
+    1. Read /workspace/commits-summary.md (from standup-git)
+    2. Read /workspace/sprint-status.json (from standup-jira)
+    3. Compose a standup report following the format defined in
+       /workspace/rules.md (under "Output Format")
+    4. Include:
+       - What shipped yesterday (from git history)
+       - What's in progress today
+       - Blockers and risks (from Jira analysis)
+       - Sprint progress bar and health indicator
+       - Action items (specific, assignable tasks)
+    5. Write the final report to /workspace/standup-YYYY-MM-DD.md
+       (use today's actual date)
+
+    Keep the report professional but with personality — this goes to
+    a team of engineers who appreciate clarity over corporate jargon.
+  mcpSidecars:
+    - name: code-exec
+      image: docker.io/kubesynapse/mcp-code-exec:deploy-20260401-212102
+      port: 8090
+  storage:
+    size: 1Gi

@@ -1,0 +1,120 @@
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AgentWorkflow
+metadata:
+  name: gdpr-compliance-audit
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: kubesynapse-demo
+spec:
+  description: "Full GDPR compliance audit — scan, classify, report, verify"
+  input: "Audit the sample codebase for GDPR compliance"
+  messageBus: in-memory
+  contextRef: gdpr-project-context
+  autoRetry:
+    enabled: true
+    maxAttempts: 1
+  steps:
+    # ── Step 1: Scan codebase for PII ──
+    - name: scan-codebase
+      type: agent
+      agentRef: gdpr-scanner
+      prompt: |
+        ## Task: Scan for PII Exposure
+
+        1. Create the four sample source files from your system prompt
+           at /workspace/src/auth/users.py, /workspace/src/api/customer_export.py,
+           /workspace/src/logging/request_logger.py, and /workspace/src/analytics/tracker.py
+        2. Scan each file for PII patterns (emails, SSNs, credit cards,
+           IPs, phones, hardcoded secrets) using regex
+        3. Record every finding with file, line, PII type, masked text,
+           count, GDPR article, severity, and description
+        4. Write ALL findings to /workspace/findings.json
+
+        Use the patterns defined in /workspace/rules.md.
+      execution:
+        timeoutSeconds: 300
+        maxAttempts: 2
+        backoffSeconds: 10
+        maxTurns: 15
+
+    # ── Step 2: Classify findings ──
+    - name: classify-findings
+      type: agent
+      agentRef: gdpr-classifier
+      prompt: |
+        ## Task: Classify GDPR Findings
+
+        Read /workspace/findings.json and classify each finding:
+        1. Verify GDPR article correctness
+        2. Assign risk level (CRITICAL/HIGH/MEDIUM/LOW)
+        3. Add specific remediation recommendation
+        4. Add "why_this_matters" impact explanation
+        5. Group by file, calculate overall risk score
+        6. Write to /workspace/classified-findings.json
+      dependsOn:
+        - scan-codebase
+      execution:
+        timeoutSeconds: 240
+        maxAttempts: 2
+        backoffSeconds: 5
+        maxTurns: 12
+
+    # ── Step 3: Generate compliance report ──
+    - name: generate-report
+      type: agent
+      agentRef: gdpr-report-writer
+      prompt: |
+        ## Task: Generate Compliance Report
+
+        Read /workspace/classified-findings.json and /workspace/rules.md.
+        Produce a boardroom-ready GDPR compliance report at
+        /workspace/compliance-report.md.
+
+        Follow the exact structure from your system prompt:
+        - Executive Summary with overall risk score
+        - Risk Dashboard
+        - Per-file findings tables
+        - Remediation Plan (immediate → this sprint → next sprint)
+        - GDPR Article Cross-Reference
+        - Verification Statement (to be filled by verification step)
+      dependsOn:
+        - classify-findings
+      execution:
+        timeoutSeconds: 300
+        maxAttempts: 2
+        backoffSeconds: 5
+        maxTurns: 15
+
+    # ── Step 4: Self-verify report completeness ──
+    - name: verify-report
+      type: agent
+      agentRef: gdpr-report-writer
+      prompt: |
+        ## Task: Verify Report Completeness
+
+        Read /workspace/compliance-report.md and /workspace/classified-findings.json.
+
+        Verify:
+        1. Every finding from classified-findings.json appears in the report
+        2. All GDPR article references are accurate
+        3. Risk score is correct (count severity-weighted findings)
+        4. Every remediation item is specific and has a file reference
+        5. No PII has leaked into the report itself (irony check!)
+
+        If any issues:
+        - Fix them directly in /workspace/compliance-report.md
+        - Document what you fixed
+
+        When complete, add this verification block at the end of the report:
+        ```
+        ✅ Verified: YYYY-MM-DD HH:MM UTC
+        All N findings accounted for. No discrepancies.
+        Verified by: gdpr-report-writer (automated)
+        ```
+      dependsOn:
+        - generate-report
+      execution:
+        timeoutSeconds: 180
+        maxAttempts: 2
+        backoffSeconds: 5
+        maxTurns: 10

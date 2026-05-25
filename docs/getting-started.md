@@ -160,30 +160,51 @@ curl -X POST "http://localhost:8080/api/v1/agents/research-assistant/invoke?name
 
 ---
 
-## Step 5: Run The Best Multi-Agent Demo
+## Step 5: Run The Best Multi-Agent Demos
 
-The strongest repo-backed workflow demo is the Context7 research pipeline.
+Three showcase demos demonstrate KubeSynapse at increasing levels of complexity:
 
-Apply the demo agents and workflow:
-
-```bash
-kubectl apply -f examples/context7-demo-agents.yaml
-kubectl apply -f examples/context7-demo-workflow.yaml
-```
-
-Trigger the workflow:
+### Quick: Daily Standup Bot
+3 agents produce a structured standup report from git history and Jira data.
 
 ```bash
-agentctl --gateway-url http://localhost:8080 workflows trigger context7-research-analysis
+kubectl apply -f examples/daily-standup-bot/project-context.yaml
+kubectl apply -f examples/daily-standup-bot/agents.yaml
+kubectl apply -f examples/daily-standup-bot/policy.yaml
+kubectl apply -f examples/daily-standup-bot/workflow.yaml
+agentctl workflows trigger daily-standup
 ```
 
-What this demo shows:
+### Intermediate: GDPR Compliance Auditor
+3 agents scan code, classify PII risks, and generate a boardroom-ready compliance report.
 
-- remote Context7 MCP usage
-- workspace file write/read flow
-- agent-to-agent delegation
-- workflow history and artifacts
-- Execution Observatory inspection
+```bash
+kubectl apply -f examples/gdpr-compliance-auditor/project-context.yaml
+kubectl apply -f examples/gdpr-compliance-auditor/agents.yaml
+kubectl apply -f examples/gdpr-compliance-auditor/policy.yaml
+kubectl apply -f examples/gdpr-compliance-auditor/workflow.yaml
+agentctl workflows trigger gdpr-compliance-audit
+```
+
+### Advanced: Self-Healing Platform
+5 agents run a full incident response pipeline — detect → triage → forensics → remediate (with human approval gate) → postmortem.
+
+```bash
+kubectl apply -f examples/self-healing-platform/project-context.yaml
+kubectl apply -f examples/self-healing-platform/agents.yaml
+kubectl apply -f examples/self-healing-platform/policy.yaml
+kubectl apply -f examples/self-healing-platform/workflow.yaml
+agentctl workflows trigger self-healing-incident
+# The workflow pauses at the approval gate — a human must approve before execution continues
+agentctl runs approve <approval-name> --reason "Plan looks correct — proceed"
+```
+
+What these demos show:
+- Multi-agent collaboration with structured handoffs
+- workspace file I/O across steps
+- Human-in-the-loop approval gates
+- Full Execution Observatory timeline inspection
+- Each demo is self-contained — all sample data is embedded in the manifests
 
 To inspect runs in the UI, open **Intelligence > Observatory**.
 

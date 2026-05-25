@@ -1,0 +1,84 @@
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AgentWorkflow
+metadata:
+  name: daily-standup
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: kubesynapse-demo
+spec:
+  description: "Generate daily standup report from git log + Jira sprint data"
+  input: "Generate today's standup report"
+  messageBus: in-memory
+  contextRef: standup-project-context
+  autoRetry:
+    enabled: true
+    maxAttempts: 1
+  steps:
+    # ── Step 1: Summarize git activity ──
+    - name: summarize-git
+      type: agent
+      agentRef: standup-git
+      prompt: |
+        ## Task: Summarize Git Activity
+
+        Read /workspace/sample-git-log.txt and produce a structured
+        summary grouped by author. Categorize each commit as feat,
+        fix, refactor, chore, test, docs, or wip.
+
+        Write the output to /workspace/commits-summary.md.
+
+        Use the format described in /workspace/rules.md.
+      execution:
+        timeoutSeconds: 120
+        maxAttempts: 2
+        backoffSeconds: 5
+        maxTurns: 6
+
+    # ── Step 2: Track Jira sprint status ──
+    - name: track-jira
+      type: agent
+      agentRef: standup-jira
+      prompt: |
+        ## Task: Analyze Sprint Progress
+
+        Read /workspace/sample-jira-sprint.json and produce a
+        sprint status analysis. Calculate progress percentage,
+        identify blockers and risks, and assess sprint health.
+
+        Write the output to /workspace/sprint-status.json as
+        structured JSON following the schema in your system prompt.
+      dependsOn:
+        - summarize-git
+      execution:
+        timeoutSeconds: 120
+        maxAttempts: 2
+        backoffSeconds: 5
+        maxTurns: 6
+
+    # ── Step 3: Compose standup report ──
+    - name: compose-standup
+      type: agent
+      agentRef: standup-scribe
+      prompt: |
+        ## Task: Write Daily Standup Report
+
+        Read /workspace/commits-summary.md and /workspace/sprint-status.json.
+        Merge both into a polished daily standup document following the
+        format in /workspace/rules.md.
+
+        Include:
+        - What shipped yesterday
+        - What's in progress today
+        - Blockers and risks
+        - Sprint progress with health indicator
+        - Action items
+
+        Write the final report to /workspace/standup-$(date +%Y-%m-%d).md
+      dependsOn:
+        - summarize-git
+        - track-jira
+      execution:
+        timeoutSeconds: 180
+        maxAttempts: 2
+        backoffSeconds: 5
+        maxTurns: 10

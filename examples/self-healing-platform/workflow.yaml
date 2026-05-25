@@ -1,0 +1,198 @@
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AgentWorkflow
+metadata:
+  name: self-healing-incident
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: kubesynapse-demo
+spec:
+  description: "Full self-healing incident pipeline — detect, triage, forensics, remediate (with HITL approval), postmortem"
+  input: "Payment processing degradation detected in prod-us-east-1 cluster"
+  messageBus: in-memory
+  contextRef: self-healing-project-context
+  autoRetry:
+    enabled: true
+    maxAttempts: 1
+  steps:
+    # ── Step 1: Detect anomaly ──
+    - name: detect-anomaly
+      type: agent
+      agentRef: platform-monitor
+      prompt: |
+        ## Task: Analyze Production Metrics
+
+        Read /workspace/mock-metrics.json — it contains real (simulated)
+        production metrics showing an active incident on payment-api.
+
+        1. Identify all alerts and their severity
+        2. Correlate the OOMKill on payment-worker-3 with the API error spike
+        3. Assess blast radius — which services are affected?
+        4. Recommend immediate actions
+
+        Write your alert analysis to /workspace/alert.json.
+      execution:
+        timeoutSeconds: 180
+        maxAttempts: 2
+        backoffSeconds: 5
+        maxTurns: 8
+
+    # ── Step 2: Triage incident ──
+    - name: triage-incident
+      type: agent
+      agentRef: incident-triage
+      prompt: |
+        ## Task: Triage the Alert
+
+        Read /workspace/alert.json and /workspace/infrastructure-context.md.
+
+        1. Classify the incident severity (this involves payment failures
+           at 47% error rate — classify based on real-world criteria)
+        2. Generate incident ID: INC-2026-001
+        3. Document customer + revenue impact
+        4. Assign escalation path
+
+        Write the incident record to /workspace/incident.json.
+      dependsOn:
+        - detect-anomaly
+      execution:
+        timeoutSeconds: 120
+        maxAttempts: 2
+        backoffSeconds: 5
+        maxTurns: 6
+
+    # ── Step 3: Collect forensics ──
+    - name: collect-forensics
+      type: agent
+      agentRef: forensics-collector
+      prompt: |
+        ## Task: Investigate Root Cause
+
+        Read /workspace/incident.json, /workspace/mock-metrics.json,
+        /workspace/mock-pod-events.json, and /workspace/mock-app-logs.txt.
+
+        1. Build a minute-by-minute timeline of the incident
+        2. Apply 5 Whys to identify root cause
+        3. Correlate metrics, events, and logs — do they tell the same story?
+        4. Identify contributing factors (not just the trigger)
+
+        Write the forensics report to /workspace/forensics-report.json.
+      dependsOn:
+        - triage-incident
+      execution:
+        timeoutSeconds: 300
+        maxAttempts: 2
+        backoffSeconds: 10
+        maxTurns: 12
+
+    # ── Step 4: Plan remediation ──
+    - name: plan-remediation
+      type: agent
+      agentRef: remediation-planner
+      prompt: |
+        ## Task: Design Fix Plan
+
+        Read /workspace/forensics-report.json and /workspace/infrastructure-context.md.
+
+        Based on the root cause analysis (memory exhaustion on payment-worker
+        causing cascading failures), design a remediation plan with:
+
+        1. Specific changes (memory limits, HPA, circuit breaker tuning)
+        2. YAML patches for each change
+        3. Rollback steps
+        4. Success criteria
+        5. Risk assessment
+
+        Write the plan to /workspace/remediation-plan.yaml.
+
+        IMPORTANT: This plan requires human approval before execution.
+        Mark `approval_required: true` in the output.
+      dependsOn:
+        - collect-forensics
+      execution:
+        timeoutSeconds: 240
+        maxAttempts: 2
+        backoffSeconds: 5
+        maxTurns: 12
+
+    # ── Step 5: HITL Approval Gate ──
+    - name: approval-gate
+      type: review
+      agentRef: remediation-planner
+      prompt: |
+        ## ⏸️ HUMAN APPROVAL REQUIRED
+
+        The remediation plan at /workspace/remediation-plan.yaml has been
+        designed and is ready for review.
+
+        Please review:
+        1. Memory limit increase: 512Mi → 1Gi for payment-worker
+        2. HPA addition for payment-worker
+        3. Circuit breaker timeout tuning
+
+        Approve to proceed with execution. Deny to return for revision.
+      dependsOn:
+        - plan-remediation
+      requireApproval: true
+      execution:
+        timeoutSeconds: 3600
+        maxAttempts: 1
+
+    # ── Step 6: Execute remediation (runs after approval) ──
+    - name: execute-remediation
+      type: agent
+      agentRef: remediation-executor
+      prompt: |
+        ## Task: Apply Approved Fix
+
+        Read /workspace/remediation-plan.yaml — it has been APPROVED.
+
+        For each change in the plan:
+        1. Generate the exact command that would be run
+        2. Describe the expected outcome
+        3. Simulate post-fix verification against the metrics data
+
+        Write execution results to /workspace/execution-result.json.
+
+        NOTE: This is a demo. Generate simulated results based on
+        the metrics data. The fix should show error rate dropping
+        from 47% → <1% within 3 minutes.
+      dependsOn:
+        - approval-gate
+      execution:
+        timeoutSeconds: 180
+        maxAttempts: 2
+        backoffSeconds: 5
+        maxTurns: 8
+
+    # ── Step 7: Write postmortem ──
+    - name: write-postmortem
+      type: agent
+      agentRef: postmortem-writer
+      prompt: |
+        ## Task: Write Incident Postmortem
+
+        Read the full incident chain:
+        - /workspace/alert.json
+        - /workspace/incident.json
+        - /workspace/forensics-report.json
+        - /workspace/remediation-plan.yaml
+        - /workspace/execution-result.json
+        - /workspace/runbook-rules.md
+
+        Produce a comprehensive, blameless postmortem following the
+        structure in your system prompt.
+
+        Key points to cover:
+        - The cascading failure: order-service latency → queue backup → OOM → API errors
+        - Timeline from 14:18 to 14:42 UTC
+        - Action items with owners and deadlines
+        - Prevention measures
+
+        Write to /workspace/postmortem-INC-2026-001.md
+      dependsOn:
+        - execute-remediation
+      execution:
+        timeoutSeconds: 300
+        maxAttempts: 2
+        backoffSeconds: 5
+        maxTurns: 15

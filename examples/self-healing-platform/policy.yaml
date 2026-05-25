@@ -1,0 +1,47 @@
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AgentPolicy
+metadata:
+  name: self-healing-demo-policy
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: kubesynapse-demo
+spec:
+  inputGuardrails:
+    blockPromptInjection: true
+    maxInputTokens: 65536
+  outputGuardrails:
+    maskPII: false
+    maxOutputTokens: 32768
+  allowedModels:
+    - gpt-4o
+    - gpt-4o-mini
+    - gpt-4
+    - claude-sonnet-4-20250514
+  allowedMcpServers: []
+  mcpRequireHitl: true
+  toolPolicy:
+    maxDelegationDepth: 2
+    allowedToolPrefixes:
+      - "local.command."
+    requireApprovalFor:
+      - "kubectl"
+      - "helm"
+  memoryPolicy:
+    maxInjectedMemories: 0
+    autoPromote: false
+  a2a:
+    allowedTargets:
+      - name: platform-monitor
+        namespace: default
+      - name: incident-triage
+        namespace: default
+      - name: forensics-collector
+        namespace: default
+      - name: remediation-planner
+        namespace: default
+      - name: remediation-executor
+        namespace: default
+      - name: postmortem-writer
+        namespace: default
+    maxTimeoutSeconds: 300
+    requireHitl: true

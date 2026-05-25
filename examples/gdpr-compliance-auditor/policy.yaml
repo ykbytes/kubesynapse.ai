@@ -1,0 +1,31 @@
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AgentPolicy
+metadata:
+  name: gdpr-demo-policy
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: kubesynapse-demo
+spec:
+  inputGuardrails:
+    blockPromptInjection: true
+    maxInputTokens: 65536
+  outputGuardrails:
+    maskPII: true
+    maxOutputTokens: 32768
+  allowedModels:
+    - gpt-4o
+    - gpt-4o-mini
+    - gpt-4
+    - claude-sonnet-4-20250514
+  allowedMcpServers: []
+  mcpRequireHitl: false
+  toolPolicy:
+    maxDelegationDepth: 1
+    allowedToolPrefixes:
+      - "local.command."
+  memoryPolicy:
+    maxInjectedMemories: 0
+    autoPromote: false
+  a2a:
+    allowedTargets: []
+    maxTimeoutSeconds: 120

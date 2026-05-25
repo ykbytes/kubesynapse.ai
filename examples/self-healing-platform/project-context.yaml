@@ -1,0 +1,179 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: self-healing-project-context
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: kubesynapse-demo
+data:
+  infrastructure-context.md: |
+    # Production Infrastructure Context
+
+    ## Services
+    | Service | Namespace | Owner | Criticality |
+    |---------|-----------|-------|-------------|
+    | payment-api | prod-payments | Payments Team | CRITICAL |
+    | payment-worker | prod-payments | Payments Team | CRITICAL |
+    | order-service | prod-orders | Orders Team | HIGH |
+    | notification-svc | prod-comms | Comms Team | MEDIUM |
+    | api-gateway | prod-platform | Platform Team | CRITICAL |
+
+    ## Cluster Topology
+    - Cluster: prod-us-east-1
+    - Nodes: 12 (m5.xlarge)
+    - Node pool "payments": 3 nodes, dedicated to payment services
+    - Istio service mesh v1.22 with mTLS enabled
+
+    ## Incident Response Runbook
+    1. Detect → Triage (severity assessment)
+    2. Contain → Forensics (log/metric collection)
+    3. Plan → Approval Gate (human sign-off required for production changes)
+    4. Execute → Verify (apply fix, monitor for 5 min)
+    5. Postmortem → Action Items (timeline, RCA, prevention)
+
+  mock-metrics.json: |
+    {
+      "timestamp": "2026-05-25T14:32:00Z",
+      "cluster": "prod-us-east-1",
+      "alerts": [
+        {
+          "alert_name": "HighErrorRate",
+          "severity": "critical",
+          "service": "payment-api",
+          "namespace": "prod-payments",
+          "value": 47.3,
+          "threshold": 5.0,
+          "duration_minutes": 12,
+          "description": "Error rate on payment-api increased from 0.2% to 47.3% over 12 minutes"
+        },
+        {
+          "alert_name": "PodOOMKilled",
+          "severity": "critical",
+          "service": "payment-worker",
+          "namespace": "prod-payments",
+          "pod": "payment-worker-3",
+          "value": 1,
+          "threshold": 0,
+          "description": "payment-worker-3 was OOMKilled after memory usage reached 512Mi (limit: 512Mi)"
+        },
+        {
+          "alert_name": "HighLatencyP99",
+          "severity": "warning",
+          "service": "order-service",
+          "namespace": "prod-orders",
+          "value": 3200,
+          "threshold": 1000,
+          "unit": "ms",
+          "description": "P99 latency on order-service increased to 3200ms (normal: 200ms)"
+        }
+      ],
+      "metrics_snapshot": {
+        "payment-api": {
+          "request_rate": 1240,
+          "error_rate_percent": 47.3,
+          "p50_latency_ms": 450,
+          "p99_latency_ms": 5200,
+          "cpu_percent": 78,
+          "memory_percent": 62
+        },
+        "payment-worker": {
+          "active_jobs": 340,
+          "failed_jobs_5min": 87,
+          "memory_usage_mb": 512,
+          "memory_limit_mb": 512,
+          "cpu_percent": 45,
+          "restart_count_1h": 3
+        }
+      }
+    }
+
+  mock-pod-events.json: |
+    {
+      "events": [
+        {
+          "timestamp": "2026-05-25T14:19:00Z",
+          "pod": "payment-worker-3",
+          "namespace": "prod-payments",
+          "type": "Warning",
+          "reason": "OOMKilled",
+          "message": "Memory cgroup out of memory: Killed process 2847 (python) total-vm:1048576kB, anon-rss:523264kB"
+        },
+        {
+          "timestamp": "2026-05-25T14:19:15Z",
+          "pod": "payment-worker-3",
+          "namespace": "prod-payments",
+          "type": "Normal",
+          "reason": "Created",
+          "message": "Created container payment-worker"
+        },
+        {
+          "timestamp": "2026-05-25T14:19:20Z",
+          "pod": "payment-worker-3",
+          "namespace": "prod-payments",
+          "type": "Warning",
+          "reason": "Unhealthy",
+          "message": "Readiness probe failed: Get http://10.42.3.17:8080/ready: context deadline exceeded"
+        },
+        {
+          "timestamp": "2026-05-25T14:28:00Z",
+          "pod": "payment-api-2",
+          "namespace": "prod-payments",
+          "type": "Warning",
+          "reason": "FailedMount",
+          "message": "Unable to attach or mount volumes: timed out waiting for the condition"
+        },
+        {
+          "timestamp": "2026-05-25T14:28:30Z",
+          "pod": "payment-worker-3",
+          "namespace": "prod-payments",
+          "type": "Warning",
+          "reason": "OOMKilled",
+          "message": "Memory cgroup out of memory: Killed process 2912 (python) total-vm:1048576kB, anon-rss:524288kB"
+        },
+        {
+          "timestamp": "2026-05-25T14:29:00Z",
+          "pod": "payment-worker-3",
+          "namespace": "prod-payments",
+          "type": "Warning",
+          "reason": "BackOff",
+          "message": "Back-off restarting failed container"
+        }
+      ]
+    }
+
+  mock-app-logs.txt: |
+    [2026-05-25 14:18:22] WARNING payment-worker-3: Job queue depth exceeded threshold: 287 pending (limit: 200)
+    [2026-05-25 14:18:45] WARNING payment-worker-3: Memory pressure detected: RSS=489MB / Limit=512MB (95%)
+    [2026-05-25 14:18:52] ERROR payment-worker-3: Failed to process job PAY-88291: ConnectionError to payment-api: timeout after 30s
+    [2026-05-25 14:19:00] FATAL payment-worker-3: Out of memory — process killed by kernel
+    [2026-05-25 14:19:02] INFO payment-worker-3: Container restart initiated (restart #1 in last hour)
+    [2026-05-25 14:19:05] INFO payment-worker-3: Rebuilding job queue from Redis backlog...
+    [2026-05-25 14:20:15] ERROR payment-worker-3: Redis connection pool exhausted (32/32 connections in use)
+    [2026-05-25 14:22:30] WARNING payment-worker-3: Job PAY-88291 retry #4 — previous attempts failed with timeout
+    [2026-05-25 14:25:00] ERROR payment-api-2: Upstream timeout from order-service: GET /api/v1/orders/validate timed out after 30s
+    [2026-05-25 14:26:10] WARNING payment-api-2: Circuit breaker open for order-service (failure rate: 62% over 5 min)
+    [2026-05-25 14:27:45] ERROR payment-api-2: Failed to process payment: downstream service unavailable (order-service)
+    [2026-05-25 14:28:00] WARNING payment-worker-3: Job queue depth: 412 pending (memory usage: 512MB / 512MB)
+    [2026-05-25 14:28:30] FATAL payment-worker-3: Out of memory — process killed by kernel (second OOM in 10 min)
+
+  runbook-rules.md: |
+    # Self-Healing Platform — Operational Rules
+
+    ## Incident Severity Classification
+    - **SEV1 (Critical)**: Customer-facing outage, revenue impact, data loss risk
+    - **SEV2 (High)**: Degraded service, >10% error rate, cascading failures
+    - **SEV3 (Medium)**: Non-critical feature broken, <10% error rate
+    - **SEV4 (Low)**: Cosmetic issue, no customer impact
+
+    ## Remediation Constraints
+    - Production changes REQUIRE human approval (AgentApproval CR)
+    - Memory limit increases must be accompanied by HPA configuration
+    - Circuit breaker thresholds must be tuned based on p99 latency
+    - All changes must be reversible (document rollback steps)
+
+    ## Postmortem Requirements
+    - Timeline with exact timestamps from detection to resolution
+    - Root cause analysis (5 Whys or similar)
+    - Impact assessment (customers affected, revenue lost, data at risk)
+    - Action items with owners and deadlines
+    - Prevention measures (automated tests, alerts, runbooks)
