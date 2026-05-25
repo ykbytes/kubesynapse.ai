@@ -54,10 +54,7 @@ spec:
       ]
     }
     ```
-  mcpSidecars:
-    - name: code-exec
-      image: docker.io/kubesynapse/mcp-code-exec:deploy-20260401-212102
-      port: 8090
+  mcpSidecars: []
   storage:
     size: 1Gi
 
@@ -109,10 +106,7 @@ spec:
       "escalation": {"pagerduty_team": "...", "slack_channel": "#prod-incidents"}
     }
     ```
-  mcpSidecars:
-    - name: code-exec
-      image: docker.io/kubesynapse/mcp-code-exec:deploy-20260401-212102
-      port: 8090
+  mcpSidecars: []
   storage:
     size: 1Gi
 
@@ -169,10 +163,7 @@ spec:
       "similar_incidents": "none known / reference to past incident"
     }
     ```
-  mcpSidecars:
-    - name: code-exec
-      image: docker.io/kubesynapse/mcp-code-exec:deploy-20260401-212102
-      port: 8090
+  mcpSidecars: []
   storage:
     size: 1Gi
 
@@ -244,10 +235,7 @@ spec:
       mitigation: "HPA scales replicas at 80% memory, preventing single-pod saturation"
     approval_required: true
     ```
-  mcpSidecars:
-    - name: code-exec
-      image: docker.io/kubesynapse/mcp-code-exec:deploy-20260401-212102
-      port: 8090
+  mcpSidecars: []
   storage:
     size: 1Gi
 
@@ -304,10 +292,7 @@ spec:
       "summary": "All 3 changes applied successfully. Error rate normalized within 3 minutes of fix."
     }
     ```
-  mcpSidecars:
-    - name: code-exec
-      image: docker.io/kubesynapse/mcp-code-exec:deploy-20260401-212102
-      port: 8090
+  mcpSidecars: []
   storage:
     size: 1Gi
 
@@ -406,9 +391,6 @@ spec:
 
     Make this postmortem BLAMELESS — focus on systems and processes,
     not individuals. This is a learning document, not an accusation.
-  mcpSidecars:
-    - name: code-exec
-      image: docker.io/kubesynapse/mcp-code-exec:deploy-20260401-212102
-      port: 8090
+  mcpSidecars: []
   storage:
     size: 1Gi

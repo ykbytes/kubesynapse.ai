@@ -223,10 +223,7 @@ spec:
       "description": "Hardcoded admin email in source code"
     }
     ```
-  mcpSidecars:
-    - name: code-exec
-      image: docker.io/kubesynapse/mcp-code-exec:deploy-20260401-212102
-      port: 8090
+  mcpSidecars: []
   storage:
     size: 1Gi
 
@@ -293,10 +290,7 @@ spec:
     - Art. 32: Security of processing — encryption, pseudonymisation
     - Art. 33: Notification of personal data breach to supervisory authority
     - Art. 44: General principle for transfers — adequate level of protection
-  mcpSidecars:
-    - name: code-exec
-      image: docker.io/kubesynapse/mcp-code-exec:deploy-20260401-212102
-      port: 8090
+  mcpSidecars: []
   storage:
     size: 1Gi
 
@@ -374,9 +368,6 @@ spec:
 
     Make the report boardroom-ready — a CTO or DPO should be able to
     read the executive summary and understand the risk in 60 seconds.
-  mcpSidecars:
-    - name: code-exec
-      image: docker.io/kubesynapse/mcp-code-exec:deploy-20260401-212102
-      port: 8090
+  mcpSidecars: []
   storage:
     size: 1Gi

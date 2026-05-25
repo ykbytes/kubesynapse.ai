@@ -43,10 +43,7 @@ spec:
     ```
 
     Include a section at the bottom listing work-in-progress (wip) items.
-  mcpSidecars:
-    - name: git
-      image: docker.io/kubesynapse/mcp-git:deploy-20260401-212102
-      port: 8095
+  mcpSidecars: []
   storage:
     size: 1Gi
 
@@ -90,13 +87,8 @@ spec:
       "highlights": ["..."]
     }
     ```
-  mcpSidecars:
-    - name: code-exec
-      image: docker.io/kubesynapse/mcp-code-exec:deploy-20260401-212102
-      port: 8090
   storage:
     size: 1Gi
-
 ---
 apiVersion: kubesynapse.ai/v1alpha1
 kind: AIAgent
@@ -128,9 +120,5 @@ spec:
 
     Keep the report professional but with personality — this goes to
     a team of engineers who appreciate clarity over corporate jargon.
-  mcpSidecars:
-    - name: code-exec
-      image: docker.io/kubesynapse/mcp-code-exec:deploy-20260401-212102
-      port: 8090
   storage:
     size: 1Gi
