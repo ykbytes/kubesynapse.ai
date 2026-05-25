@@ -91,32 +91,33 @@ flowchart TB
     ks-signal-summarizer
     ks-spend-reviewer"):::intel
 
-    UI --> GW
-    CLI --> GW
-    EXT --> GW
+    UI -->|"HTTPS /api/*"| GW
+    CLI -->|"REST + SSE"| GW
+    EXT -->|"Signed webhooks"| GW
 
-    GW -->|"CRUD / Watch"| K8S
-    GW -->|"App state"| PG
+    GW -->|"CRUD (CustomObjectsApi)"| K8S
+    GW -->|"SQLAlchemy — auth, memory, traces"| PG
+    GW -->|"Agent CRD cache"| REDIS
+    GW -.->|"Configured (async ext.)"| NATS
 
-    K8S -->|"reconcile"| OP
+    K8S -->|"Watch CRDs (Kopf)"| OP
 
-    OP ==>|"provisions"| OC
-    OP -->|"creates"| JOB
-    OP -.->|"config"| SEC
+    OP ==>|"Provisions StatefulSet + PVC"| OC
+    OP -->|"Creates worker Job"| JOB
+    OP -.->|"Injects immutable config"| SEC
 
-    OC --> MCP
-    OC --> PVC
-    OC -->|"LLM calls"| LLM
-    OC --> REDIS
-    OC --> QDRANT
+    OC -->|"localhost — per-pod sidecar"| MCP
+    OC -->|"Workspace, sessions, artifacts"| PVC
+    OC -->|"HTTPS /v1/chat/completions"| LLM
+    OC -->|"Vector search (qdrant-client)"| QDRANT
 
-    LLM --> REDIS
+    LLM -->|"Response cache"| REDIS
 
-    OC -. "events" .-> TRACE
-    JOB -. "events" .-> TRACE
+    OC -.->|"POST runtime-events"| TRACE
+    JOB -.->|"POST runtime-events"| TRACE
 
-    TRACE --> SIGNAL
-    SIGNAL -. "invokes" .-> SYS
+    TRACE -->|"SQL anomaly queries"| SIGNAL
+    SIGNAL -.->|"Invokes for explanation"| SYS
 
     classDef client fill:#1a2332,stroke:#326CE5,stroke-width:2px,color:#7baaf7
     classDef gateway fill:#1a1a3e,stroke:#7c3aed,stroke-width:3px,color:#c4b5fd
@@ -133,15 +134,12 @@ flowchart TB
 
 ### What the diagram shows
 
-- **Clients** (blue) — Web UI, CLI, and external apps all hit the gateway
-- **Control Plane** (blue/purple/amber) — Gateway handles auth + CRUD, Kubernetes API stores CRDs, Operator reconciles them into real resources
-- **Security** (green) — Defense-in-depth enforced at the operator level: plugin isolation, immutable config, traffic enforcement, audit trail
-- **Execution Plane** (green/pink/teal) — The OpenCode runtime runs as an isolated StatefulSet with optional MCP sidecars and persistent state (Pi and Mistral Vibe are available in alpha)
-- **Shared Services** (gray) — LiteLLM proxies all LLM calls, PostgreSQL stores durable state, Redis caches, Qdrant handles semantic memory
-- **Run Intelligence** (purple) — Runtime events flow into the Execution Observatory, signal watch detects anomalies, system agents provide AI-powered analysis
-- runtime StatefulSets call LiteLLM for model access and Qdrant for retrieval
-- the gateway persists application state beyond simple request routing, especially for auth and connection metadata
-- observability now exists as a first-class module with its own CRDs, controller logic, UI surfaces, and collector path
+- **Clients** (blue) — Web UI, CLI, and external apps all hit the gateway via HTTPS
+- **Control Plane** (blue/purple/amber) — Gateway handles auth + CRUD (reads/writes CRDs via the Kubernetes API), persists app state to Postgres and caches in Redis; Operator watches CRDs and reconciles them into real resources
+- **Security** (green) — Defense-in-depth enforced at the operator level: plugin isolation, immutable config, traffic enforcement, audit trail. Hardened baseline injected into every runtime pod.
+- **Execution Plane** (green/pink/teal) — The OpenCode runtime runs as an isolated StatefulSet with optional MCP sidecars on localhost and persistent state (Pi and Mistral Vibe are available in alpha)
+- **Shared Services** (gray) — LiteLLM proxies all LLM calls with Redis-backed response caching; PostgreSQL stores durable state (auth, sessions, memory, audit, traces); Qdrant handles semantic memory; NATS provides async messaging (extension point for A2A)
+- **Run Intelligence** (purple) — Runtime events flow into the Execution Observatory (Postgres-backed trace store), signal watch runs periodic SQL anomaly detection queries, system agents are invoked for AI-powered analysis of detected anomalies
 
 ## 3. Control Plane
 

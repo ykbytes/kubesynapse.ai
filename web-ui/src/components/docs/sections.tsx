@@ -254,23 +254,42 @@ function ArchitectureSection() {
         GW[API Gateway FastAPI]
         OP[Operator Kopf]
         K8S[Kubernetes API Server]
-        UI_SRV[Web UI Server]
+        PG[Postgres Auth · Sessions · Traces]
+        SEC[Security Layers]
     end
     subgraph EP[Execution Plane]
-        STS[OpenCode StatefulSet]
-        MCP[MCP Sidecars]
+        OC[OpenCode Runtime StatefulSet]
+        MCP[MCP Sidecars localhost]
         PVC[State PVC]
+        JOB[Workflow Jobs]
     end
-    UI --> GW
-    CLI --> GW
-    EXT --> GW
-    GW --> K8S
-    GW --> OP
-    GW --> UI_SRV
-    OP --> K8S
-    K8S --> STS
-    STS --> MCP
-    STS --> PVC`}
+    subgraph Shared[Shared Services]
+        LLM[LiteLLM Model Proxy]
+        REDIS[Redis Cache]
+        QDRANT[Qdrant Semantic Memory]
+    end
+    subgraph Intel[Intelligence]
+        TRACE[Observatory Trace Store]
+        SIGNAL[Signal Watch Anomaly Detection]
+    end
+    UI -->|HTTPS| GW
+    CLI -->|REST + SSE| GW
+    EXT -->|Webhooks| GW
+    GW -->|CRUD via K8s API| K8S
+    GW -->|SQLAlchemy| PG
+    GW -->|Agent cache| REDIS
+    K8S -->|Watch CRDs Kopf| OP
+    OP -->|Provision| OC
+    OP -->|Create Job| JOB
+    OP -.->|Immutable config| SEC
+    OC -->|localhost| MCP
+    OC -->|Read/write| PVC
+    OC -->|LLM calls| LLM
+    OC -->|Vector search| QDRANT
+    LLM -->|Response cache| REDIS
+    OC -.->|Runtime events| TRACE
+    JOB -.->|Runtime events| TRACE
+    TRACE -->|Anomaly queries| SIGNAL`}
         />
       </div>
       <div id="arch-control">

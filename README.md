@@ -213,46 +213,64 @@ flowchart TB
     CLI["⌨️ agentctl"]:::c
     EXT["🔗 External Apps"]:::c
 
-    GW("⚡ API Gateway"):::g
+    GW("⚡ API Gateway
+    FastAPI · Auth · CRUD · SSE"):::g
 
     K8S{{"☸️ Kubernetes API
     12 CRDs"}}:::k
 
-    OP("🔧 Operator"):::o
+    OP("🔧 Operator
+    Reconcile · Provision"):::o
 
-    OC("🤖 OpenCode"):::r
-    JOB("📦 Workflow Jobs"):::w
+    SEC["🛡️ Security Layers
+    Plugin Isolation · NetworkPolicy"]:::sec
 
-    MCP("🔌 MCP Sidecars"):::s
+    OC("🤖 OpenCode Runtime
+    StatefulSet · Sessions · Stream"):::r
+    JOB("📦 Workflow Jobs
+    DAG step execution"):::w
+
+    MCP("🔌 MCP Sidecars
+    10 bundled"):::s
     PVC[("💾 State PVC")]:::d
 
-    LLM("🧪 LiteLLM"):::h
-    PG[("🗄️ Postgres")]:::h
-    REDIS[("⚡ Redis")]:::h
-    QDRANT[("🔍 Qdrant")]:::h
+    LLM("🧪 LiteLLM
+    Model proxy"):::shared
+    PG[("🗄️ Postgres
+    Auth · Memory · Traces")]:::shared
+    REDIS[("⚡ Redis
+    Cache · Sessions")]:::shared
+    QDRANT[("🔍 Qdrant
+    Semantic memory")]:::shared
+    NATS("📡 NATS
+    Async messaging"):::shared
 
-    TRACE("📊 Observatory"):::i
-    SIGNAL("🚨 Signal Watch"):::i
-    SYS("🧪 System Agents"):::i
+    TRACE("📊 Observatory
+    Trace store · Timeline"):::intel
+    SIGNAL("🚨 Signal Watch
+    Anomaly detection"):::intel
+    SYS("🧪 System Agents
+    Auto-analysis"):::intel
 
-    UI --> GW
-    CLI --> GW
-    EXT --> GW
-    GW --> K8S
-    GW --> PG
-    K8S --> OP
-    OP ==> OC
-    OP --> JOB
-    OC --> MCP
-    OC --> PVC
-    OC --> LLM
-    OC --> REDIS
-    OC --> QDRANT
-    LLM --> REDIS
-    OC -. "events" .-> TRACE
-    JOB -. "events" .-> TRACE
-    TRACE --> SIGNAL
-    SIGNAL -.-> SYS
+    UI -->|"HTTPS /api/*"| GW
+    CLI -->|"REST + SSE"| GW
+    EXT -->|"Webhooks"| GW
+    GW -->|"CRUD (CustomObjectsApi)"| K8S
+    GW -->|"SQLAlchemy"| PG
+    GW -->|"Agent cache"| REDIS
+    K8S -->|"Watch CRDs (Kopf)"| OP
+    OP ==>|"Provisions StatefulSet"| OC
+    OP -->|"Creates worker Job"| JOB
+    OP -.->|"Immutable config"| SEC
+    OC -->|"localhost sidecar"| MCP
+    OC -->|"Workspace · Checkpoints"| PVC
+    OC -->|"HTTPS /v1/chat/completions"| LLM
+    OC -->|"Vector search"| QDRANT
+    LLM -->|"Response cache"| REDIS
+    OC -.->|"POST runtime-events"| TRACE
+    JOB -.->|"POST runtime-events"| TRACE
+    TRACE -->|"SQL anomaly queries"| SIGNAL
+    SIGNAL -.->|"Invokes for analysis"| SYS
 
     classDef c fill:#1a2332,stroke:#326CE5,stroke-width:2px,color:#7baaf7
     classDef g fill:#1a1a3e,stroke:#7c3aed,stroke-width:3px,color:#c4b5fd
@@ -262,12 +280,13 @@ flowchart TB
     classDef w fill:#1a2332,stroke:#6366f1,stroke-width:2px,color:#a5b4fc
     classDef s fill:#1a2332,stroke:#ec4899,stroke-width:2px,color:#f9a8d4
     classDef d fill:#1a2332,stroke:#14b8a6,stroke-width:2px,color:#99f6e4
-    classDef h fill:#1a1a2e,stroke:#64748b,stroke-width:2px,color:#94a3b8
-    classDef i fill:#2d1b4e,stroke:#a855f7,stroke-width:2px,color:#d8b4fe
+    classDef shared fill:#1a1a2e,stroke:#64748b,stroke-width:2px,color:#94a3b8
+    classDef intel fill:#2d1b4e,stroke:#a855f7,stroke-width:2px,color:#d8b4fe
+    classDef sec fill:#1a2e1a,stroke:#22c55e,stroke-width:3px,color:#86efac
 ```
-> **Layers:** 🔵 Clients → 🟣 Gateway → 🔵 K8s API → 🟡 Operator → 🟢 Runtimes → ⚫ Shared Services → 🟣 Intelligence
-> 
-> Kubernetes is the source of truth. Each agent is an isolated `StatefulSet`. Workflow detail lives in worker artifacts; CRD status is summary-level. The gateway is both the public edge and the application backend.
+> **Layers:** 🔵 Clients → 🟣 Gateway → 🔵 K8s API → 🟡 Operator → 🟢 Runtimes → ⚫ Shared Services → 🟣 Intelligence → 🟢 Security
+>
+> **Data flow:** The gateway reads/writes CRDs via the Kubernetes API and persists app state to Postgres + Redis. The operator watches CRDs and provisions isolated StatefulSets. Each runtime streams responses via SSE, calls models through LiteLLM, and emits trace events to the Observatory. Signal Watch runs SQL anomaly detection and invokes system agents for AI-powered analysis.
 
 <br>
 

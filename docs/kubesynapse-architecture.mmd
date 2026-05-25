@@ -92,33 +92,34 @@ flowchart TB
     %% ═══════════════════════════════════════════════════
     %% CONNECTIONS
     %% ═══════════════════════════════════════════════════
-    UI --> GW
-    CLI --> GW
-    EXT --> GW
+    UI -->|"HTTPS /api/*"| GW
+    CLI -->|"REST + SSE"| GW
+    EXT -->|"Webhooks · HMAC-signed"| GW
     GH -. "git clone" .-> OC
 
-    GW -->|"CRUD / Watch"| K8S
-    GW -->|"App state"| PG
+    GW -->|"CRUD (CustomObjectsApi)"| K8S
+    GW -->|"SQLAlchemy — auth, memory, traces"| PG
+    GW -->|"Agent CRD cache"| REDIS
+    GW -.->|"Configured (async ext.)"| NATS
 
-    K8S -->|"reconcile"| OP
+    K8S -->|"Watch CRDs (Kopf)"| OP
 
-    OP ==>|"provisions"| OC
-    OP -->|"creates"| JOB
-    OP -.->|"config"| SEC
+    OP ==>|"Provisions StatefulSet + PVC"| OC
+    OP -->|"Creates worker Job"| JOB
+    OP -.->|"Injects immutable config"| SEC
 
-    OC --> MCP
-    OC --> PVC
-    OC -->|"LLM calls"| LLM
-    OC --> REDIS
-    OC --> QDRANT
+    OC -->|"localhost — per-pod sidecar"| MCP
+    OC -->|"Workspace, sessions, artifacts"| PVC
+    OC -->|"HTTPS /v1/chat/completions"| LLM
+    OC -->|"Vector search (qdrant-client)"| QDRANT
 
-    LLM --> REDIS
+    LLM -->|"Response cache"| REDIS
 
-    OC -. "events" .-> TRACE
-    JOB -. "events" .-> TRACE
+    OC -.->|"POST runtime-events"| TRACE
+    JOB -.->|"POST runtime-events"| TRACE
 
-    TRACE --> SIGNAL
-    SIGNAL -. "invokes" .-> SYS
+    TRACE -->|"SQL anomaly queries"| SIGNAL
+    SIGNAL -.->|"Invokes for explanation"| SYS
 
     %% ═══════════════════════════════════════════════════
     %% STYLING
