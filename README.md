@@ -203,64 +203,76 @@ Schema changes use Alembic migrations, not ad-hoc `CREATE TABLE` calls. Backups 
 ## 🏗 Architecture
 
 ```mermaid
-flowchart LR
-    subgraph Clients[Clients]
-        UI[Web UI]
-        CLI[agentctl & SDKs]
-        EXT[External apps & webhooks]
-    end
+%%{init: {'theme': 'dark', 'themeVariables': { 'fontSize': '13px' }}}%%
+flowchart TB
+    UI["🖥️ Web UI"]:::c
+    CLI["⌨️ agentctl"]:::c
+    EXT["🔗 External Apps"]:::c
 
-    subgraph Control[Control plane]
-        K8S[Kubernetes API & CRDs]
-        OP[Operator]
-        GW[API Gateway]
-    end
+    GW("⚡ API Gateway"):::g
 
-    subgraph Execute[Execution plane]
-        RT[Per-agent runtimes<br/>opencode / pi / mistral-vibe]
-        JOB[Workflow Jobs]
-        SIDE[Optional MCP sidecars]
-        PVC[PVC-backed state & artifacts]
-    end
+    K8S{{"☸️ Kubernetes API
+    12 CRDs"}}:::k
 
-    subgraph Shared[Shared services]
-        LLM[LiteLLM]
-        PG[PostgreSQL]
-        REDIS[Redis]
-        QDRANT[Qdrant]
-        NATS[NATS]
-    end
+    OP("🔧 Operator"):::o
 
-    subgraph Intelligence[Run Intelligence]
-        TRACE[Execution Observatory & trace store]
-        SIGNAL[Signal watch]
-        SYS[System agents]
-    end
+    OC("🤖 OpenCode"):::r
+    PI("🧠 Pi"):::r
+    VIBE("✨ Mistral Vibe"):::r
+    JOB("📦 Workflow Jobs"):::w
 
-    UI -->|same-host /api| GW
+    MCP("🔌 MCP Sidecars"):::s
+    PVC[("💾 State PVC")]:::d
+
+    LLM("🧪 LiteLLM"):::h
+    PG[("🗄️ Postgres")]:::h
+    REDIS[("⚡ Redis")]:::h
+    QDRANT[("🔍 Qdrant")]:::h
+
+    TRACE("📊 Observatory"):::i
+    SIGNAL("🚨 Signal Watch"):::i
+    SYS("🧪 System Agents"):::i
+
+    UI --> GW
     CLI --> GW
     EXT --> GW
     GW --> K8S
-    OP -->|watch & reconcile| K8S
-    OP --> RT
-    OP --> JOB
-    RT --> SIDE
-    RT --> PVC
-    RT --> LLM
-    RT --> REDIS
-    RT --> QDRANT
     GW --> PG
-    JOB -. runtime events .-> TRACE
-    RT -. runtime events .-> TRACE
+    K8S --> OP
+    OP ==> OC
+    OP ==> PI
+    OP ==> VIBE
+    OP --> JOB
+    OC --> MCP
+    OC --> PVC
+    OC --> LLM
+    OC --> REDIS
+    OC --> QDRANT
+    PI --> MCP
+    PI --> PVC
+    PI --> LLM
+    VIBE --> PVC
+    VIBE --> LLM
+    LLM --> REDIS
+    OC -. "events" .-> TRACE
+    JOB -. "events" .-> TRACE
     TRACE --> SIGNAL
-    SIGNAL --> SYS
-```
+    SIGNAL -.-> SYS
 
-- Kubernetes is the source of truth for the control plane.
-- Each agent is an isolated singleton `StatefulSet`.
-- Workflow detail lives in worker artifacts and logs; CRD status stays summary-oriented.
-- The API gateway is the public edge AND the application backend for auth, sessions, memory, chat, and observability.
-- The [runtime API contract](docs/runtime-api-spec.md) defines core endpoints every runtime implements.
+    classDef c fill:#1a2332,stroke:#326CE5,stroke-width:2px,color:#7baaf7
+    classDef g fill:#1a1a3e,stroke:#7c3aed,stroke-width:3px,color:#c4b5fd
+    classDef k fill:#0d2137,stroke:#326CE5,stroke-width:3px,color:#93c5fd
+    classDef o fill:#1a2332,stroke:#f59e0b,stroke-width:2px,color:#fcd34d
+    classDef r fill:#0d3320,stroke:#10b981,stroke-width:2px,color:#6ee7b7
+    classDef w fill:#1a2332,stroke:#6366f1,stroke-width:2px,color:#a5b4fc
+    classDef s fill:#1a2332,stroke:#ec4899,stroke-width:2px,color:#f9a8d4
+    classDef d fill:#1a2332,stroke:#14b8a6,stroke-width:2px,color:#99f6e4
+    classDef h fill:#1a1a2e,stroke:#64748b,stroke-width:2px,color:#94a3b8
+    classDef i fill:#2d1b4e,stroke:#a855f7,stroke-width:2px,color:#d8b4fe
+```
+> **Layers:** 🔵 Clients → 🟣 Gateway → 🔵 K8s API → 🟡 Operator → 🟢 Runtimes → ⚫ Shared Services → 🟣 Intelligence
+> 
+> Kubernetes is the source of truth. Each agent is an isolated `StatefulSet`. Workflow detail lives in worker artifacts; CRD status is summary-level. The gateway is both the public edge and the application backend.
 
 <br>
 
