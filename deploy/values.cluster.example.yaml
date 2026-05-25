@@ -89,14 +89,14 @@ platformSecrets:
   mode: native
   native:
     openaiApiKey: ""
-    openrouterApiKey: "replace-me"
+    openrouterApiKey: "changeme"
     anthropicApiKey: ""
-    litellmMasterKey: "replace-me"
+    litellmMasterKey: "changeme"
     apiGatewaySharedToken: "your-bearer-token-here"
 
 mcpHub:
   auth:
-    bearerToken: "replace-me-if-you-enable-mcp"
+    bearerToken: "changeme"
     secretName: ""
   servers:
     github:
