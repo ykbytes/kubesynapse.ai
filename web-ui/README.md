@@ -4,11 +4,11 @@ Vite + React + TypeScript frontend for the KubeSynapse API gateway.
 
 ## Supported runtimes
 
-The console creates and manages agents for the three supported runtime kinds:
+The console creates and manages agents for the following runtime kinds:
 
-- `opencode` is the default runtime and gets the richer config-file editing flows.
-- `pi` is the supported alternative runtime and uses the same create, edit, inspect, and invoke surfaces.
-- `mistral-vibe` is the supported Mistral-backed runtime bridge and uses the same create, edit, inspect, and invoke surfaces.
+- `opencode` — the production runtime with richer config-file editing flows.
+- `pi` — available in alpha. Not recommended for production.
+- `mistral-vibe` — available in alpha. Not recommended for production.
 
 ## Local development
 
@@ -36,8 +36,6 @@ Run `npm run build` to create a production bundle in `dist/`.
 Build the production image with `podman build -t docker.io/kubesynapse/kubesynapse-web-ui:<tag> .`.
 
 The image serves the Vite bundle through Nginx with SPA fallback enabled. In the Helm chart the UI is published on `/`, while the API gateway remains on `/api` for the same host.
-
-Current deployed image: `docker.io/kubesynapse/kubesynapse-web-ui:v1.2.0`.
 
 ## Console navigation
 

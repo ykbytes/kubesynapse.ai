@@ -51,13 +51,24 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File ./scripts/deploy-kind.ps1 `
   -ClusterName kubesynapse-dev -Namespace kubesynapse -ReleaseName kubesynapse `
   -AdminPassword "KubesynapseAdmin9!"
 
-# 2. Port-forward the gateway and UI
+# 2. Port-forward the gateway and UI (run each in a separate terminal)
 kubectl port-forward svc/kubesynapse-api-gateway -n kubesynapse 8080:8080
 kubectl port-forward svc/kubesynapse-web-ui -n kubesynapse 3000:80
 
-# 3. Open the UI, log in with admin / your password
-open http://localhost:3000
+# 3. Configure an LLM API key (required before invoking agents)
+#    Open the UI → Settings → Providers, or set via kubectl:
+#    (PowerShell)
+kubectl patch secret kubesynapse-llm-api-keys -n kubesynapse `
+  --patch "{`"data`":{`"OPENAI_API_KEY`":`"$([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('sk-your-key')))`"}}"
+#    (bash)
+#    kubectl patch secret kubesynapse-llm-api-keys -n kubesynapse -p '{"data":{"OPENAI_API_KEY":"'$(echo -n 'sk-your-key' | base64)'"}}'
+
+# 4. Deploy the sample policy and agent
+kubectl apply -f examples/sample-policy.yaml
 kubectl apply -f examples/sample-agent.yaml
+
+# 5. Open the UI and log in
+open http://localhost:3000
 ```
 
 ### Default Credentials
@@ -66,22 +77,12 @@ After install, log in with:
 - **Username:** `admin`
 - **Password:** The value you passed to `-AdminPassword` (e.g., `KubesynapseAdmin9!`)
 
-Forgot your password? Retrieve it from the Kubernetes secret:
+Forgot your password? The deploy script prints it on success. You can also retrieve it:
 
 ```bash
-kubectl get secret kubesynapse-llm-api-keys -n kubesynapse \
-  -o jsonpath='{.data.API_GATEWAY_SHARED_TOKEN}' | base64 -d
+kubectl get secret kubesynapse-platform-secrets -n kubesynapse \
+  -o jsonpath='{.data.AUTH_BOOTSTRAP_ADMIN_PASSWORD}' | base64 -d
 ```
-
-Or if you didn't set a password and want the default:
-
-```bash
-# The bootstrap admin password is stored in the gateway deployment env
-kubectl get deploy kubesynapse-api-gateway -n kubesynapse \
-  -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="AUTH_BOOTSTRAP_ADMIN_PASSWORD")].valueFrom.secretKeyRef}'
-```
-
-> **Note:** Local auth requires a password of at least 8 characters. The quickstart script enforces this.
 
 ### Helm (any cluster)
 
@@ -91,10 +92,13 @@ helm upgrade --install kubesynapse ./charts/kubesynapse -n kubesynapse --create-
   --set platformSecrets.native.apiGatewaySharedToken=$(openssl rand -hex 32) \
   --set platformSecrets.native.databasePassword=$(openssl rand -hex 16) \
   --set platformSecrets.native.jwtSecret=$(openssl rand -hex 32) \
-  --set apiGateway.auth.bootstrapAdminPassword="YourStrongPassword!"
+  --set platformSecrets.native.authBootstrapAdminPassword="YourStrongPassword!" \
+  --set platformSecrets.native.openaiApiKey="sk-your-openai-key"
 ```
 
 After install, log in at `http://<your-cluster>:8080` with username `admin` and the password you set above.
+
+> **Note:** Local auth requires a password of at least 8 characters. Include an LLM API key (`openaiApiKey` or `openrouterApiKey`) or agents won't be able to invoke models.
 
 <br>
 
@@ -306,22 +310,25 @@ agentctl --<TAB>        -> --gateway, --profile, --namespace, --output, --token.
 ### Quick workflow
 
 ```bash
-# Login and configure
+# Login and configure (use the same password you set at deploy time)
 agentctl --gateway-url http://localhost:8080 auth login -u admin -p "<password>"
-export AGENT_GATEWAY_TOKEN="<token>"
+export AGENT_GATEWAY_TOKEN="<token-from-login-output>"
+export AGENT_GATEWAY_URL="http://localhost:8080"
 
 # CRUD
 agentctl agents list
-agentctl agents create -f examples/sample-agent.yaml
 agentctl agents show research-assistant
 
 # Invoke (streaming)
 agentctl agents invoke research-assistant "What is Kubernetes?" --stream
 
+# Create a new agent from YAML
+agentctl agents create -f examples/sample-opencode-agent.yaml
+
 # Workflows
 agentctl workflows list
-agentctl workflows trigger research-workflow
-agentctl workflows status research-workflow
+agentctl workflows trigger feature-pipeline
+agentctl workflows status feature-pipeline
 
 # Observatory
 agentctl observatory metrics --window 24h
@@ -407,15 +414,18 @@ Windows note: the root `Makefile` uses POSIX shell constructs. Use Git Bash, WSL
 ### Local Kind development
 
 ```bash
-# Build and load images
-docker build -t kubesynapse-api-gateway:latest api-gateway/
-kind load docker-image kubesynapse-api-gateway:latest --name kubesynapse-dev
+# Build and load images (use :dev tag matching values.local-images.example.yaml)
+docker build -t localhost/kubesynapse/kubesynapse-api-gateway:dev api-gateway/
+docker build -t localhost/kubesynapse/kubesynapse-operator:dev operator/
+docker build -t localhost/kubesynapse/kubesynapse-web-ui:dev web-ui/
+docker build -t localhost/kubesynapse/kubesynapse-opencode-rt:dev opencode-runtime/
+kind load docker-image localhost/kubesynapse/kubesynapse-api-gateway:dev --name kubesynapse-dev
+kind load docker-image localhost/kubesynapse/kubesynapse-operator:dev --name kubesynapse-dev
+kind load docker-image localhost/kubesynapse/kubesynapse-web-ui:dev --name kubesynapse-dev
+kind load docker-image localhost/kubesynapse/kubesynapse-opencode-rt:dev --name kubesynapse-dev
 kubectl rollout restart deployment/kubesynapse-api-gateway -n kubesynapse
-
-# Port-forward
-kubectl port-forward svc/kubesynapse-api-gateway -n kubesynapse 8080:8080
-kubectl port-forward svc/kubesynapse-web-ui -n kubesynapse 3000:80
-```
+kubectl rollout restart deployment/kubesynapse-operator -n kubesynapse
+kubectl rollout restart deployment/kubesynapse-web-ui -n kubesynapse
 
 ### CLI tests against live Kind
 
