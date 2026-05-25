@@ -378,7 +378,10 @@ jobs:
           helm template kubesynapse ./charts/kubesynapse \
             --namespace kubesynapse \
             --set global.imagePullSecrets[0].name=placeholder \
-            --set litellm.masterKey=placeholder-key \
+            --set platformSecrets.native.litellmMasterKey=placeholder-litellm-master-key-0123456789 \
+            --set platformSecrets.native.apiGatewaySharedToken=placeholder-api-gateway-token-0123456789 \
+            --set platformSecrets.native.databasePassword=placeholder-database-password-0123456789 \
+            --set platformSecrets.native.jwtSecret=placeholder-jwt-secret-0123456789 \
             > security-reports/raw/helm-rendered.yaml
 
       - name: Run Trivy config scan on rendered manifests (JSON)
