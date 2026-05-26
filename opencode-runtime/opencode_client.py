@@ -399,6 +399,70 @@ def list_pending_questions() -> list[dict[str, Any]]:
     return []
 
 
+def list_pending_permissions() -> list[dict[str, Any]]:
+    """Fetch pending permission questions from the OpenCode server.
+
+    Permission questions (bash/edit/write with "ask" config) are separate
+    from regular questions and live at GET /permission, not GET /question.
+    """
+    try:
+        with runtime_http_client() as hclient:
+            response = hclient.get("/permission")
+            if response.status_code != 200:
+                return []
+            payload = response.json()
+            if isinstance(payload, list):
+                return [item for item in payload if isinstance(item, dict)]
+    except (httpx.HTTPError, ValueError):
+        pass
+    return []
+
+
+def auto_approve_pending_questions() -> list[str]:
+    """Auto-approve all pending questions and permission requests.
+
+    This is used when the runtime is operating in autonomous/headless mode
+    (HITL_MODE=disabled) where no human is available to interactively
+    approve bash/edit/write tool use. The OpenCode immutable config sets
+    permissions to "ask" as a security floor, but in autonomous mode these
+    questions must be auto-approved to avoid deadlock.
+
+    Handles two separate question types:
+    1. Regular questions via GET /question and POST /question/{id}/reply
+    2. Permission questions via GET /permission and POST /permission/{id}/reply
+
+    Returns a list of all approved question/permission IDs.
+    """
+    approved_ids: list[str] = []
+
+    # Handle regular questions
+    questions = list_pending_questions()
+    for q in questions:
+        qid = str(q.get("id", "")).strip()
+        if not qid:
+            continue
+        if reply_to_question(qid, [["Yes"]]):
+            approved_ids.append(qid)
+            logger.info("Auto-approved question %s (autonomous mode)", qid)
+        else:
+            logger.warning("Failed to auto-approve question %s", qid)
+
+    # Handle permission questions (bash/edit/write "ask" prompts)
+    # These have IDs starting with "per_" and use a different endpoint
+    permissions = list_pending_permissions()
+    for p in permissions:
+        pid = str(p.get("id", "")).strip()
+        if not pid:
+            continue
+        if reply_to_permission(pid, "always"):
+            approved_ids.append(pid)
+            logger.info("Auto-approved permission %s (%s) (autonomous mode)", pid, p.get("permission", "?"))
+        else:
+            logger.warning("Failed to auto-approve permission %s", pid)
+
+    return approved_ids
+
+
 def reply_to_question(request_id: str, answers: list[list[str]]) -> bool:
     """Submit answers to a pending question request."""
     try:
@@ -421,6 +485,27 @@ def reject_question(request_id: str) -> bool:
             return response.status_code == 200
     except httpx.HTTPError:
         logger.warning("Failed to reject question %s", request_id)
+        return False
+
+
+def reply_to_permission(request_id: str, reply: str = "always") -> bool:
+    """Submit a reply to a pending permission question.
+
+    Permission questions (bash/edit/write with "ask" config) use a separate
+    endpoint from regular questions. The reply value must be one of:
+    "once" - approve this time only
+    "always" - approve and remember for session
+    "reject" - deny the permission
+    """
+    try:
+        with runtime_http_client() as hclient:
+            response = hclient.post(
+                f"/permission/{request_id}/reply",
+                json={"reply": reply},
+            )
+            return response.status_code == 200
+    except httpx.HTTPError:
+        logger.warning("Failed to reply to permission %s", request_id)
         return False
 
 

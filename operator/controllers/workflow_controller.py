@@ -28,6 +28,7 @@ from services import (
     ensure_worker_artifact_storage,
     patch_custom_status,
     read_job_state,
+    read_worker_lease_freshness,
 )
 
 from controllers.agent_controller import resolve_tenant_for_namespace
@@ -341,11 +342,21 @@ def resolve_failed_workflow_auto_retry_plan(
     }
 
 
-def workflow_should_requeue(status: dict[str, Any], job_state: str) -> str | None:
+def workflow_should_requeue(status: dict[str, Any], job_state: str, *, name: str = "", generation: int = 0) -> str | None:
     """Return a human-readable reason if the workflow should be re-enqueued, else None."""
     phase = str(status.get("phase", "") or "")
     if phase not in {"queued", "running"}:
         return None
+
+    # §reliability-P2: If the worker lease is still fresh, the worker is alive
+    # regardless of job_state reporting lag. Don't requeue active workers.
+    if name and generation and phase in {"queued", "running"}:
+        try:
+            lease_fresh, _lease_holder = read_worker_lease_freshness("workflow", name, generation)
+            if lease_fresh:
+                return None
+        except Exception:
+            pass  # If lease check fails, fall through to normal logic
 
     summary = status.get("summary", {}) or {}
     now = datetime.now(UTC)
@@ -500,6 +511,7 @@ def enqueue_workflow_job(
         run_id=resolved_run_id,
         git_config=git_config if git_config else None,
         max_parallel_steps=max_parallel_steps,
+        resource_uid=owner_uid,
     )
     existing_summary = workflow_status.get("summary", {}) or {}
     preserved_summary = clear_summary_lifecycle_fields(existing_summary) if preserve_generation_state else {}
@@ -512,12 +524,36 @@ def enqueue_workflow_job(
         "rootSteps": graph.get("roots") or [],
         "runId": resolved_run_id,
     }
+    # §reliability-P2: Store resource UID in summary for DB conflict scoping
+    if owner_uid:
+        summary["resourceUid"] = owner_uid
     if requeue_reason:
         summary["lastRequeueReason"] = requeue_reason
 
     current_step = str(workflow_status.get("currentStep", "") or "") if preserve_generation_state else ""
     pending_approval = workflow_status.get("pendingApproval") if preserve_generation_state else None
     step_states = workflow_status.get("stepStates", {}) or {} if preserve_generation_state else {}
+
+    # §reliability-P2: When re-enqueueing with the same generation but a different
+    # run_id, clear lifecycle fields from failed/errored steps to prevent the new
+    # worker from inheriting stale error/latency/completedAt timestamps.
+    if preserve_generation_state and step_states:
+        current_run_id = str(workflow_status.get("runId") or "")
+        if current_run_id and current_run_id != resolved_run_id:
+            cleaned_states: dict[str, Any] = {}
+            for step_name, step_state in step_states.items():
+                if not isinstance(step_state, dict):
+                    cleaned_states[step_name] = step_state
+                    continue
+                step_status = str(step_state.get("status", "")).strip()
+                if step_status in ("completed", "continued"):
+                    cleaned_states[step_name] = step_state
+                else:
+                    cleaned_states[step_name] = {
+                        k: v for k, v in step_state.items()
+                        if k not in ("error", "latencyMs", "completedAt", "failureClass", "iterationFailures")
+                    }
+            step_states = cleaned_states
 
     patch_custom_status(
         WORKFLOW_PLURAL,
@@ -573,6 +609,27 @@ def enqueue_workflow_job(
 # ---------------------------------------------------------------------------
 
 
+def _read_live_workflow_status(namespace: str, name: str) -> dict[str, Any] | None:
+    """Fetch the latest workflow status directly from the K8s API.
+
+    §reliability-P2: Kopf event payloads can be stale when multiple handlers
+    fire concurrently (create + resume at operator startup). Reading the live
+    object prevents redundant enqueue operations.
+    """
+    try:
+        import kubernetes.client
+        obj = kubernetes.client.CustomObjectsApi().get_namespaced_custom_object(
+            group=GROUP,
+            version=VERSION,
+            namespace=namespace,
+            plural=WORKFLOW_PLURAL,
+            name=name,
+        )
+        return dict(obj.get("status") or {})
+    except Exception:
+        return None
+
+
 @kopf.on.create(GROUP, VERSION, WORKFLOW_PLURAL)  # type: ignore[arg-type]
 @kopf.on.update(GROUP, VERSION, WORKFLOW_PLURAL)  # type: ignore[arg-type]
 def run_workflow(
@@ -593,6 +650,38 @@ def run_workflow(
     generation = int((meta or {}).get("generation", 1))
     observed_generation = int(current_status.get("observedGeneration", 0) or 0)
     phase = str(current_status.get("phase", ""))
+
+    # §reliability-P2: If the event payload says observedGeneration is stale,
+    # fetch the live status to avoid re-enqueueing a workflow that was already
+    # queued by a concurrent handler (e.g., create + resume race at startup).
+    if observed_generation != generation and phase not in {"queued", "running", "waiting-approval"}:
+        live_status = _read_live_workflow_status(namespace, name)
+        if live_status is not None:
+            live_observed = int(live_status.get("observedGeneration", 0) or 0)
+            live_phase = str(live_status.get("phase", "") or "")
+            if live_observed == generation and live_phase in {
+                "queued",
+                "running",
+                "waiting-approval",
+                "completed",
+                "failed",
+                "cancelled",
+            }:
+                log_operator_event(
+                    logger,
+                    logging.INFO,
+                    "Skipping workflow enqueue — live status already reconciled by concurrent handler.",
+                    resource_kind="AgentWorkflow",
+                    name=name,
+                    namespace=namespace,
+                    meta=meta,
+                    generation=generation,
+                    action="run-workflow",
+                    liveObservedGeneration=live_observed,
+                    livePhase=live_phase,
+                )
+                return
+
     if observed_generation == generation and phase in {
         "queued",
         "running",
@@ -680,7 +769,7 @@ def run_workflow_watchdog(
         str(worker_job.get("name") or ""),
         str(worker_job.get("namespace") or OPERATOR_NAMESPACE),
     )
-    reason = workflow_should_requeue(current_status, job_state)
+    reason = workflow_should_requeue(current_status, job_state, name=name, generation=int((meta or {}).get("generation", 1)))
     if reason is not None:
         logger.warning(
             "Workflow '%s/%s' will be re-enqueued by watchdog: %s",

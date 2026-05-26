@@ -7,9 +7,9 @@ metadata:
     app.kubernetes.io/part-of: kubesynapse-demo
 data:
   rules.md: |
-    # Daily Standup Bot — Project Rules
+    # Daily Standup Bot — Output Rules
 
-    ## Output Format
+    ## Report Format
     Every standup report must follow this exact structure:
 
     ```
@@ -33,106 +33,8 @@ data:
     - [ ] Action item
     ```
 
-    ## Git Log Format
-    The git log is stored at /workspace/sample-git-log.txt with one entry per line:
-    `HASH | AUTHOR | DATE | MESSAGE`
-
-    ## Jira Data Format
-    The sprint export is at /workspace/sample-jira-sprint.json with:
-    - issues: [{key, summary, status, assignee, priority, type}]
-    - sprint: {name, startDate, endDate, goal}
-
     ## Rules
     - Always group by author, not by chronological order
     - Mark any issue untouched for 5+ days as potentially blocked
-    - Flag any issue assigned to multiple people as a coordination risk
     - Keep the report under 2000 words
-    - Use emoji indicators: 🚀 for shipped, 🏗️ for in-progress, 🚫 for blocked
-
-  sample-git-log.txt: |
-    abc1234 | alice | 2026-05-23 | feat: add rate-limiting middleware to API gateway
-    def5678 | bob | 2026-05-23 | fix: resolve Postgres connection pool exhaustion under load
-    ghi9012 | alice | 2026-05-23 | refactor: extract auth logic into separate module
-    jkl3456 | carol | 2026-05-23 | feat: add Prometheus metrics endpoint for agent invocations
-    mno7890 | bob | 2026-05-24 | fix: correct memory leak in SSE stream handler (issue #342)
-    pqr1234 | alice | 2026-05-24 | chore: bump dependencies — FastAPI 0.115, SQLAlchemy 2.0.36
-    stu5678 | carol | 2026-05-24 | docs: add architecture decision records for A2A protocol
-    vwx9012 | bob | 2026-05-24 | test: add integration tests for workflow retry logic
-    yza3456 | alice | 2026-05-24 | feat: implement structured error responses with trace IDs
-    bcd7890 | carol | 2026-05-25 | wip: initial work on WebSocket support for agent streaming
-
-  sample-jira-sprint.json: |
-    {
-      "sprint": {
-        "name": "Sprint 24 — Platform Hardening",
-        "startDate": "2026-05-12",
-        "endDate": "2026-05-26",
-        "goal": "Production-ready security and observability for KubeSynapse v2.2"
-      },
-      "issues": [
-        {
-          "key": "KS-421",
-          "summary": "Add rate limiting to agent invoke and CRUD endpoints",
-          "status": "Done",
-          "assignee": "Alice",
-          "priority": "Critical",
-          "type": "Feature"
-        },
-        {
-          "key": "KS-422",
-          "summary": "Fix Postgres connection pool exhaustion",
-          "status": "Done",
-          "assignee": "Bob",
-          "priority": "Critical",
-          "type": "Bug"
-        },
-        {
-          "key": "KS-423",
-          "summary": "Implement structured error response schema",
-          "status": "Done",
-          "assignee": "Alice",
-          "priority": "High",
-          "type": "Feature"
-        },
-        {
-          "key": "KS-424",
-          "summary": "Add Prometheus metrics for agent invocations",
-          "status": "In Progress",
-          "assignee": "Carol",
-          "priority": "High",
-          "type": "Feature"
-        },
-        {
-          "key": "KS-425",
-          "summary": "Architecture Decision Records for A2A protocol",
-          "status": "In Progress",
-          "assignee": "Carol",
-          "priority": "Medium",
-          "type": "Documentation"
-        },
-        {
-          "key": "KS-426",
-          "summary": "Integration tests for workflow retry logic",
-          "status": "In Progress",
-          "assignee": "Bob",
-          "priority": "High",
-          "type": "Testing"
-        },
-        {
-          "key": "KS-427",
-          "summary": "WebSocket support for agent streaming",
-          "status": "In Progress",
-          "assignee": "Carol",
-          "priority": "Medium",
-          "type": "Feature"
-        },
-        {
-          "key": "KS-428",
-          "summary": "PostgreSQL backup CronJob with S3 support",
-          "status": "Blocked",
-          "assignee": "Bob",
-          "priority": "High",
-          "type": "Feature"
-        }
-      ]
-    }
+    - Use emoji: 🚀 shipped, 🏗️ in-progress, 🚫 blocked

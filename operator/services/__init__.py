@@ -24,6 +24,7 @@ from services.k8s import (
     patch_custom_status,
     prune_orphaned_resources,
     read_job_state,
+    read_worker_lease_freshness,
 )
 
 __all__ = [
@@ -46,4 +47,5 @@ __all__ = [
     "patch_custom_status",
     "prune_orphaned_resources",
     "read_job_state",
+    "read_worker_lease_freshness",
 ]

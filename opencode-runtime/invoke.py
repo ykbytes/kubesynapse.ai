@@ -50,6 +50,7 @@ from config import (
     DEFAULT_MODEL,
     DEFAULT_MODEL_REF,
     DEFAULT_SYSTEM_PROMPT,
+    LIVE_UPDATE_MAX_WALL_SECONDS,
     LIVE_UPDATE_TIMEOUT_SECONDS,
     MAX_COMPACTION_ATTEMPTS,
     MAX_PROMPT_CHARS,
@@ -79,6 +80,7 @@ from opencode_client import (
     get_session_status,
     get_session_todos,
     init_session,
+    auto_approve_pending_questions,
     send_prompt_async,
     summarize_session,
     wait_for_session_idle,
@@ -689,6 +691,8 @@ def _send_prompt_with_live_updates_and_recovery(
             raise
 
     deadline = time.monotonic() + LIVE_UPDATE_TIMEOUT_SECONDS
+    # Absolute cap: even with progress, never exceed this wall-clock limit per turn.
+    absolute_deadline = time.monotonic() + LIVE_UPDATE_MAX_WALL_SECONDS
     last_snapshots = {"text": "", "reasoning": ""}
     latest_payload: dict[str, Any] | None = None
     # Grace period: after sending prompt_async, wait a short time before
@@ -696,8 +700,31 @@ def _send_prompt_with_live_updates_and_recovery(
     # a moment to transition from idle → busy → generating.
     idle_grace_until = time.monotonic() + 5.0
 
+    # Auto-approve permission questions in autonomous mode to prevent deadlock.
+    # When HITL_MODE=disabled (the default for workflow agents), OpenCode's
+    # "ask" permissions would block forever without this.
+    from hitl import HITL_MODE
+    _should_auto_approve = HITL_MODE == "disabled"
+
+    # Track progress to extend the deadline when OpenCode is actively working.
+    # If the session is "busy" (tools executing, LLM responding), we should
+    # wait — the hard deadline only applies when the session stalls.
+    _last_progress_message_count: int = 0
+
     while True:
+        # Auto-approve any pending permission questions before polling messages.
+        # This ensures OpenCode is never blocked waiting for tool permission.
+        if _should_auto_approve:
+            auto_approve_pending_questions()
+
         messages = get_session_messages(session_id)
+
+        # Detect progress: if new messages appeared, the session is making progress.
+        # Extend the deadline to give OpenCode more time to finish (capped by absolute max).
+        if len(messages) > _last_progress_message_count:
+            _last_progress_message_count = len(messages)
+            deadline = min(time.monotonic() + LIVE_UPDATE_TIMEOUT_SECONDS, absolute_deadline)
+
         latest_payload = _find_assistant_payload_for_parent(messages, user_message_id)
         if latest_payload is not None:
             _emit_live_snapshot_updates(turn, latest_payload, last_snapshots, emit)
@@ -713,6 +740,9 @@ def _send_prompt_with_live_updates_and_recovery(
                 payload["_session_recovered"] = recovered
                 payload["_live_streamed"] = bool(last_snapshots["text"] or last_snapshots["reasoning"])
                 return session_id, payload
+            # Session is busy and making progress — extend deadline (capped)
+            if str(session_status.get("type", "idle")) != "idle":
+                deadline = min(time.monotonic() + LIVE_UPDATE_TIMEOUT_SECONDS, absolute_deadline)
         else:
             # No assistant reply yet.  If the session went idle, the sidecar
             # silently dropped our prompt (e.g. after a pod restart, transient
@@ -741,8 +771,20 @@ def _send_prompt_with_live_updates_and_recovery(
                         idle_grace_until = time.monotonic() + 5.0
                         latest_payload = None
                         last_snapshots = {"text": "", "reasoning": ""}
+                else:
+                    # Session is busy but no assistant reply yet — extend deadline (capped)
+                    deadline = min(time.monotonic() + LIVE_UPDATE_TIMEOUT_SECONDS, absolute_deadline)
 
         if time.monotonic() >= deadline:
+            # Abort the session to stop any in-progress generation.
+            # Without this, a timed-out session remains "busy" and future
+            # prompt_async calls on the same session_id are silently queued
+            # behind the stale generation — causing retries to hang.
+            try:
+                abort_session(session_id)
+                logger.info("Session %s aborted after deadline timeout.", session_id)
+            except Exception:
+                logger.warning("Failed to abort session %s on deadline.", session_id)
             if latest_payload is not None:
                 payload = dict(latest_payload)
                 payload["_session_recovered"] = recovered

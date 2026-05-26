@@ -12,6 +12,8 @@ import logging
 import random
 import time
 from collections.abc import Callable
+from datetime import UTC as _UTC
+from datetime import datetime as _datetime
 from functools import wraps
 from typing import Any
 
@@ -826,6 +828,7 @@ def enqueue_worker_job(
     run_id: str | None = None,
     git_config: dict[str, Any] | None = None,
     max_parallel_steps: int | None = None,
+    resource_uid: str | None = None,
 ) -> str:
     """Create a worker Job and return its name."""
     manifest = create_worker_job_manifest(
@@ -838,6 +841,7 @@ def enqueue_worker_job(
         run_id=run_id,
         git_config=git_config,
         max_parallel_steps=max_parallel_steps,
+        resource_uid=resource_uid,
     )
     job_name = str(manifest["metadata"]["name"])
     batch_api = kubernetes.client.BatchV1Api()
@@ -896,6 +900,39 @@ def cancel_worker_job(name: str, namespace: str) -> bool:
         if exc.status == 404:
             return False
         raise
+
+
+def read_worker_lease_freshness(kind: str, name: str, generation: int) -> tuple[bool, str]:
+    """Check if a worker lease is currently held and fresh.
+
+    §reliability-P2: Returns (is_fresh, holder_identity). A lease is considered
+    fresh if its renew_time is within lease_duration_seconds of now.
+    Used by the watchdog to avoid re-enqueueing workflows with active workers.
+    """
+    lease_name = f"{name}-gen-{generation}-{kind}"[:253]
+    try:
+        lease = kubernetes.client.CoordinationV1Api().read_namespaced_lease(
+            name=lease_name, namespace=OPERATOR_NAMESPACE,
+        )
+    except ApiException as exc:
+        if exc.status == 404:
+            return False, ""
+        raise
+
+    spec = lease.spec
+    if spec is None:
+        return False, ""
+
+    holder = str(spec.holder_identity or "")
+    renew_time = spec.renew_time or spec.acquire_time
+    duration = spec.lease_duration_seconds or 120
+
+    if renew_time is None:
+        return False, holder
+
+    now = _datetime.now(_UTC)
+    age_seconds = (now - renew_time).total_seconds()
+    return age_seconds <= duration, holder
 
 
 # ---------------------------------------------------------------------------

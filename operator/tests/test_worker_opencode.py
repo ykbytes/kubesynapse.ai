@@ -1299,7 +1299,10 @@ class LoadArtifactCorruptTests(unittest.TestCase):
 
 
 class ResumeWorkflowStateFromArtifactTests(unittest.TestCase):
-    def test_same_generation_retry_with_new_run_id_preserves_completed_work(self) -> None:
+    def test_same_generation_retry_with_new_run_id_starts_fresh(self) -> None:
+        """§2.6 strict run_id match: when artifact.runId != worker run_id,
+        the worker starts fresh even if the generation matches. This prevents
+        ghost runs from stale artifact data."""
         from worker import resume_workflow_state_from_artifact
 
         artifact_matches_generation, step_results, step_states, pending_approval, started_at = (
@@ -1330,11 +1333,13 @@ class ResumeWorkflowStateFromArtifactTests(unittest.TestCase):
             )
         )
 
-        self.assertTrue(artifact_matches_generation)
-        self.assertEqual(step_results["draft-blueprint"]["status"], "completed")
-        self.assertEqual(step_states["deploy-bundle"]["status"], "pending")
+        # Strict run_id match: artifact has different run_id, so worker starts fresh
+        self.assertFalse(artifact_matches_generation)
+        self.assertEqual(step_results, {})
+        self.assertEqual(step_states, {})
         self.assertEqual(pending_approval, {})
-        self.assertEqual(started_at, "2026-04-06T20:00:00Z")
+        # started_at should be current time (now_iso()), not stale artifact timestamp
+        self.assertNotEqual(started_at, "2026-04-06T20:00:00Z")
 
     def test_new_run_id_without_preserved_progress_starts_fresh(self) -> None:
         from worker import resume_workflow_state_from_artifact

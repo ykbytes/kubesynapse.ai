@@ -139,6 +139,7 @@ ARTIFACT_JOURNAL_PATH = (
 )
 ARTIFACT_PVC_NAME = os.getenv("ARTIFACT_PVC_NAME", "").strip()
 WORKFLOW_RUN_ID = os.getenv("WORKFLOW_RUN_ID", "").strip()
+TARGET_UID = os.getenv("TARGET_UID", "").strip()
 AGENT_RUNTIME_READY_TIMEOUT_SECONDS = max(
     float(os.getenv("AGENT_RUNTIME_READY_TIMEOUT_SECONDS", "180")),
     5.0,
@@ -373,7 +374,7 @@ def check_run_id_conflict(kind: str, namespace: str, name: str, generation: int,
     """Raise RuntimeError if a different run_id is already active for this resource+generation."""
     if kind != "workflow":
         return
-    conflict = check_workflow_run_conflict(namespace, name, generation, run_id)
+    conflict = check_workflow_run_conflict(namespace, name, generation, run_id, resource_uid=TARGET_UID)
     if conflict:
         raise RuntimeError(
             f"Another {kind} run (run_id={conflict}) is already active "
@@ -569,7 +570,11 @@ def resume_workflow_state_from_artifact(
     )
 
     if not artifact_matches_generation:
-        return False, {}, {}, {}, str(artifact.get("startedAt") or now_iso())
+        # §reliability-P2: Use current time, not stale artifact startedAt,
+        # when the artifact doesn't match the current run. The old code
+        # returned artifact.get("startedAt") which caused the watchdog to
+        # miscalculate running age based on a previous run's timestamp.
+        return False, {}, {}, {}, now_iso()
 
     step_results = dict(artifact.get("stepResults", {}) or {})
     step_states = status_step_states if "stepStates" in status else dict(artifact.get("stepStates", {}) or {})
@@ -3582,6 +3587,19 @@ def main() -> int:
     # §2.6 — Acquire distributed lease before execution
     resource = get_resource(resource_plural())
     generation = int(resource.get("metadata", {}).get("generation", 1))
+
+    # §reliability-P2: Validate resource UID to prevent old workers from
+    # contaminating new CRs that reuse the same name after delete/recreate.
+    if TARGET_UID:
+        actual_uid = str(resource.get("metadata", {}).get("uid", ""))
+        if actual_uid != TARGET_UID:
+            logger.warning(
+                "Resource UID mismatch: expected %s, got %s. "
+                "This worker targets a deleted resource. Exiting gracefully.",
+                TARGET_UID, actual_uid,
+            )
+            return 0
+
     run_id = (
         str(
             WORKFLOW_RUN_ID

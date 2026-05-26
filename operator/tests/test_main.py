@@ -1605,6 +1605,46 @@ class AllowedNamespacesTests(unittest.TestCase):
 
         self.assertEqual(manifest["metadata"]["ownerReferences"][0]["name"], "my-wf")
 
+    def test_worker_job_manifest_deterministic_naming_from_run_id(self) -> None:
+        """§reliability-P2: Same run_id always produces same job name (idempotent)."""
+        manifest_a = _builders_manifests.create_worker_job_manifest(
+            "workflow", "default", "standup", 1, "pvc-1", "/artifacts/run.json",
+            run_id="wf-run-default-standup-1-abc123",
+        )
+        manifest_b = _builders_manifests.create_worker_job_manifest(
+            "workflow", "default", "standup", 1, "pvc-1", "/artifacts/run.json",
+            run_id="wf-run-default-standup-1-abc123",
+        )
+        # Same run_id → same job name (deterministic)
+        self.assertEqual(manifest_a["metadata"]["name"], manifest_b["metadata"]["name"])
+
+        # Different run_id → different job name
+        manifest_c = _builders_manifests.create_worker_job_manifest(
+            "workflow", "default", "standup", 1, "pvc-1", "/artifacts/run.json",
+            run_id="wf-run-default-standup-1-xyz789",
+        )
+        self.assertNotEqual(manifest_a["metadata"]["name"], manifest_c["metadata"]["name"])
+
+    def test_worker_job_manifest_includes_target_uid_env(self) -> None:
+        """§reliability-P2: Worker job must carry TARGET_UID for UID validation."""
+        manifest = _builders_manifests.create_worker_job_manifest(
+            "workflow", "default", "standup", 1, "pvc-1", "/artifacts/run.json",
+            run_id="run-1", resource_uid="uid-abcdef",
+        )
+        env_map = {
+            e["name"]: e["value"] for e in manifest["spec"]["template"]["spec"]["containers"][0]["env"] if "value" in e
+        }
+        self.assertEqual(env_map["TARGET_UID"], "uid-abcdef")
+
+    def test_worker_job_manifest_includes_resource_uid_label(self) -> None:
+        """§reliability-P2: Job labels must include resource UID for label-based queries."""
+        manifest = _builders_manifests.create_worker_job_manifest(
+            "workflow", "default", "standup", 1, "pvc-1", "/artifacts/run.json",
+            run_id="run-1", resource_uid="uid-label-test",
+        )
+        labels = manifest["metadata"]["labels"]
+        self.assertEqual(labels["kubesynapse.ai/resource-uid"], "uid-label-test")
+
 
 if __name__ == "__main__":
     unittest.main()

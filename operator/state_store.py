@@ -231,19 +231,23 @@ def db_session() -> Iterator[Session]:
 # §2.6 — Idempotency: runId uniqueness check
 # ---------------------------------------------------------------------------
 
-def check_workflow_run_conflict(namespace: str, resource_name: str, generation: int, run_id: str) -> str | None:
+def check_workflow_run_conflict(namespace: str, resource_name: str, generation: int, run_id: str, *, resource_uid: str = "") -> str | None:
     """Return conflicting run_id if another run is active for this workflow+generation.
 
     §reliability-P1: Returns None only on "no conflict found", not on DB errors.
     OperationalError (e.g., connection loss) is logged and treated as no-conflict
     so the caller can proceed; a subsequent safe_record_workflow_state will retry.
     IntegrityError is re-raised (duplicate key).
+
+    §reliability-P2: When resource_uid is provided, only rows whose summary_json
+    contains a matching resourceUid are considered conflicts. This prevents old
+    rows from deleted CRs (same name, different UID) from blocking new workflows.
     """
     if not STATE_DB_ENABLED:
         return None
     try:
         with db_session() as session:
-            record = (
+            query = (
                 session.query(WorkflowRun)
                 .filter(
                     WorkflowRun.namespace == namespace,
@@ -252,8 +256,13 @@ def check_workflow_run_conflict(namespace: str, resource_name: str, generation: 
                     WorkflowRun.phase.in_(["queued", "running"]),
                     WorkflowRun.run_id != run_id,
                 )
-                .first()
             )
+            if resource_uid:
+                # Only conflict with rows from the same resource UID
+                query = query.filter(
+                    WorkflowRun.summary_json.contains(f'"resourceUid": "{resource_uid}"')
+                )
+            record = query.first()
             if record is not None:
                 return str(record.run_id)
     except OperationalError as exc:

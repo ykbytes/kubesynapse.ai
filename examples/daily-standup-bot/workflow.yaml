@@ -21,15 +21,36 @@ spec:
       prompt: |
         ## Task: Summarize Git Activity
 
-        Read /workspace/sample-git-log.txt and produce a structured
-        summary grouped by author. Categorize each commit as feat,
-        fix, refactor, chore, test, docs, or wip.
+        The git log data is provided below. Produce a structured summary
+        grouped by author. Categorize each commit as: feat, fix, refactor,
+        chore, test, docs, wip.
+
+        Git log (one entry per line: HASH | AUTHOR | DATE | MESSAGE):
+        abc1234 | alice | 2026-05-23 | feat: add rate-limiting middleware to API gateway
+        def5678 | bob   | 2026-05-23 | fix: resolve Postgres connection pool exhaustion under load
+        ghi9012 | alice | 2026-05-23 | refactor: extract auth logic into separate module
+        jkl3456 | carol | 2026-05-23 | feat: add Prometheus metrics endpoint for agent invocations
+        mno7890 | bob   | 2026-05-24 | fix: correct memory leak in SSE stream handler (issue #342)
+        pqr1234 | alice | 2026-05-24 | chore: bump dependencies — FastAPI 0.115, SQLAlchemy 2.0.36
+        stu5678 | carol | 2026-05-24 | docs: add architecture decision records for A2A protocol
+        vwx9012 | bob   | 2026-05-24 | test: add integration tests for workflow retry logic
+        yza3456 | alice | 2026-05-24 | feat: implement structured error responses with trace IDs
+        bcd7890 | carol | 2026-05-25 | wip: initial work on WebSocket support for agent streaming
 
         Write the output to /workspace/commits-summary.md.
+        Format: see [Project Context] ## rules.md.
+        Group by author (NOT chronological order). Mark WIP items separately.
 
-        Use the format described in /workspace/rules.md.
+        IMPORTANT: After writing the file, you MUST append your complete
+        output in this format at the end of your response:
+
+        [FILE_CONTENT]
+        (paste the COMPLETE /workspace/commits-summary.md content here)
+        [/FILE_CONTENT]
+
+        The next workflow step depends on receiving this embedded content.
       execution:
-        timeoutSeconds: 120
+        timeoutSeconds: 180
         maxAttempts: 2
         backoffSeconds: 5
         maxTurns: 6
@@ -42,16 +63,33 @@ spec:
       prompt: |
         ## Task: Analyze Sprint Progress
 
-        Read /workspace/sample-jira-sprint.json and produce a
-        sprint status analysis. Calculate progress percentage,
-        identify blockers and risks, and assess sprint health.
+        The Jira sprint data is provided below. Produce a sprint status
+        analysis. Calculate progress percentage, identify blockers and risks,
+        and assess sprint health.
+
+        Jira data:
+        - Sprint: Sprint 24 — Platform Hardening (ends 2026-05-26)
+        - Issues: KS-421 Done alice, KS-422 Done bob, KS-423 Done alice,
+          KS-424 In Progress carol, KS-425 In Progress carol,
+          KS-426 In Progress bob, KS-427 In Progress carol, KS-428 Blocked bob
 
         Write the output to /workspace/sprint-status.json as
-        structured JSON following the schema in your system prompt.
+        structured JSON. Schema: {sprintName, daysRemaining, totalIssues,
+        byStatus: {Done, InProgress, Blocked}, progressPercent,
+        health: "OnTrack/AtRisk/Blocked", risks, blockers, highlights}
+
+        IMPORTANT: After writing the file, you MUST append your complete
+        output in this format at the end of your response:
+
+        [FILE_CONTENT]
+        (paste the COMPLETE /workspace/sprint-status.json content here)
+        [/FILE_CONTENT]
+
+        The next workflow step depends on receiving this embedded content.
       dependsOn:
         - summarize-git
       execution:
-        timeoutSeconds: 120
+        timeoutSeconds: 180
         maxAttempts: 2
         backoffSeconds: 5
         maxTurns: 6
@@ -64,9 +102,13 @@ spec:
       prompt: |
         ## Task: Write Daily Standup Report
 
-        Read /workspace/commits-summary.md and /workspace/sprint-status.json.
-        Merge both into a polished daily standup document following the
-        format in /workspace/rules.md.
+        The git commits summary and Jira sprint status from earlier workflow
+        steps are embedded below under [Previous Step Output]. Parse and
+        merge both into a polished daily standup document using the format
+        in [Project Context] ## rules.md.
+
+        IMPORTANT: Do NOT try to read /workspace/ files — they may not exist
+        in this pod's filesystem. Use ONLY the embedded content below.
 
         Include:
         - What shipped yesterday
@@ -76,11 +118,14 @@ spec:
         - Action items
 
         Write the final report to /workspace/standup-$(date +%Y-%m-%d).md
+
+        [Previous Step Output]
+        {{previous_output}}
       dependsOn:
         - summarize-git
         - track-jira
       execution:
-        timeoutSeconds: 180
+        timeoutSeconds: 300
         maxAttempts: 2
         backoffSeconds: 5
         maxTurns: 10

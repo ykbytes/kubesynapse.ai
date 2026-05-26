@@ -77,6 +77,7 @@ def _install_stub_modules() -> dict[str, object | None]:
     services_module.enqueue_worker_job = lambda *_args, **_kwargs: "worker-job"
     services_module.patch_custom_status = lambda *_args, **_kwargs: None
     services_module.read_job_state = lambda *_args, **_kwargs: "missing"
+    services_module.read_worker_lease_freshness = lambda *_args, **_kwargs: (False, "")
 
     utils_module = types.ModuleType("utils")
     utils_module.build_workflow_run_id = (
@@ -155,7 +156,7 @@ class WorkflowControllerRunIdTests(unittest.TestCase):
             7,
             workflow_status={
                 "runId": "wf-run-default-kubesynapse-factory-pipeline-7-retry",
-                "observedGeneration": None,
+                "observedGeneration": 7,
                 "artifactRef": {"generation": 7},
             },
         )
@@ -212,7 +213,7 @@ class WorkflowControllerRunIdTests(unittest.TestCase):
                 logger=logging.getLogger("test"),
                 current_status={
                     "runId": "wf-run-default-kubesynapse-factory-pipeline-7-retry",
-                    "observedGeneration": None,
+                    "observedGeneration": 7,
                     "artifactRef": {"generation": 7, "path": "/tmp/gen-7.json"},  # noqa: S108
                     "currentStep": "deploy-bundle",
                     "stepStates": {
@@ -501,3 +502,190 @@ class WorkflowControllerRunIdTests(unittest.TestCase):
         enqueue_mock.assert_called_once()
         enqueue_kwargs = enqueue_mock.call_args.kwargs
         self.assertEqual(enqueue_kwargs["run_id"], "wf-run-default-kubesynapse-factory-pipeline-9-new")
+
+
+class WorkflowDispatchReliabilityTests(unittest.TestCase):
+    """§reliability-P2: Regression tests for workflow dispatch fixes."""
+
+    def setUp(self) -> None:
+        self.module_name, self.controller, self.previous_modules = load_workflow_controller()
+        self.addCleanup(lambda: sys.modules.pop(self.module_name, None))
+        self.addCleanup(self._cleanup_stub_modules)
+
+    def _cleanup_stub_modules(self) -> None:
+        for module_name in reversed(STUB_MODULE_NAMES):
+            previous_module = self.previous_modules.get(module_name)
+            if previous_module is None:
+                sys.modules.pop(module_name, None)
+            else:
+                sys.modules[module_name] = previous_module
+
+    def test_workflow_should_requeue_returns_none_when_lease_is_fresh(self) -> None:
+        """Watchdog must NOT requeue when worker lease is still fresh."""
+        # Simulate a fresh lease — patch the controller module's reference
+        with patch.object(
+            self.controller,
+            "read_worker_lease_freshness",
+            return_value=(True, "workflow-default-standup-af4f22a46b"),
+        ):
+            reason = self.controller.workflow_should_requeue(
+                {"phase": "queued", "summary": {"queuedAt": "2026-04-08T11:00:00Z"}},
+                "active",
+                name="standup",
+                generation=1,
+            )
+        self.assertIsNone(reason)
+
+    def test_workflow_should_requeue_falls_through_when_lease_expired(self) -> None:
+        """Watchdog should requeue when the lease has expired and job is missing."""
+        with patch.object(
+            self.controller,
+            "read_worker_lease_freshness",
+            return_value=(False, ""),
+        ):
+            reason = self.controller.workflow_should_requeue(
+                {
+                    "phase": "queued",
+                    "summary": {"queuedAt": "2020-01-01T00:00:00Z"},
+                },
+                "missing",
+                name="standup",
+                generation=1,
+            )
+        self.assertIsNotNone(reason)
+        self.assertIn("missing", reason)
+
+    def test_enqueue_workflow_job_passes_resource_uid_to_service(self) -> None:
+        """resource_uid from meta.uid must propagate to enqueue_worker_job."""
+        enqueue_mock = MagicMock(return_value="job-uid-test")
+        patch_mock = MagicMock()
+
+        with patch.object(self.controller, "enqueue_worker_job", enqueue_mock), \
+             patch.object(self.controller, "patch_custom_status", patch_mock):
+            self.controller.enqueue_workflow_job(
+                spec={"steps": [{"name": "plan"}]},
+                meta={"generation": 1, "uid": "uid-abc123"},
+                name="test-workflow",
+                namespace="default",
+                logger=logging.getLogger("test"),
+            )
+
+        enqueue_mock.assert_called_once()
+        _, kwargs = enqueue_mock.call_args
+        self.assertEqual(kwargs.get("resource_uid"), "uid-abc123")
+
+    def test_enqueue_workflow_job_stores_resource_uid_in_summary(self) -> None:
+        """Summary must contain resourceUid for DB conflict scoping."""
+        patch_mock = MagicMock()
+        enqueue_mock = MagicMock(return_value="job-sum-test")
+
+        with patch.object(self.controller, "enqueue_worker_job", enqueue_mock), \
+             patch.object(self.controller, "patch_custom_status", patch_mock):
+            self.controller.enqueue_workflow_job(
+                spec={"steps": [{"name": "plan"}]},
+                meta={"generation": 1, "uid": "uid-xyz789"},
+                name="test-workflow",
+                namespace="default",
+                logger=logging.getLogger("test"),
+            )
+
+        patched_status = patch_mock.call_args.args[3]
+        self.assertEqual(patched_status["summary"]["resourceUid"], "uid-xyz789")
+
+    def test_enqueue_workflow_job_clears_stale_step_lifecycle_on_run_id_change(self) -> None:
+        """When run_id changes within same generation, stale error/latency fields are cleared."""
+        patch_mock = MagicMock()
+        enqueue_mock = MagicMock(return_value="job-clear-test")
+
+        with patch.object(self.controller, "enqueue_worker_job", enqueue_mock), \
+             patch.object(self.controller, "patch_custom_status", patch_mock):
+            self.controller.enqueue_workflow_job(
+                spec={"steps": [{"name": "plan"}, {"name": "execute"}]},
+                meta={"generation": 3, "uid": "uid-333"},
+                name="test-workflow",
+                namespace="default",
+                logger=logging.getLogger("test"),
+                current_status={
+                    "runId": "old-run-id",
+                    "observedGeneration": 3,
+                    "stepStates": {
+                        "plan": {
+                            "status": "completed",
+                            "completedAt": "2026-04-08T10:00:00Z",
+                            "latencyMs": 5000,
+                        },
+                        "execute": {
+                            "status": "failed",
+                            "error": "timeout after 300s",
+                            "failureClass": "TimeoutError",
+                            "latencyMs": 300000,
+                            "completedAt": "2026-04-08T10:05:00Z",
+                        },
+                    },
+                    "summary": {"completedSteps": 1, "runId": "old-run-id"},
+                    "workerJob": {"name": "old-job", "namespace": "ai-agent-sandbox"},
+                },
+                # A new run_id is explicitly passed (different from current status runId)
+                run_id="new-run-id",
+            )
+
+        patched_status = patch_mock.call_args.args[3]
+        step_states = patched_status["stepStates"]
+        # Completed step keeps all lifecycle fields intact
+        self.assertEqual(step_states["plan"]["status"], "completed")
+        self.assertEqual(step_states["plan"]["completedAt"], "2026-04-08T10:00:00Z")
+        self.assertEqual(step_states["plan"]["latencyMs"], 5000)
+        # Failed step has stale lifecycle fields stripped
+        self.assertEqual(step_states["execute"]["status"], "failed")
+        self.assertNotIn("error", step_states["execute"])
+        self.assertNotIn("failureClass", step_states["execute"])
+        self.assertNotIn("latencyMs", step_states["execute"])
+        self.assertNotIn("completedAt", step_states["execute"])
+
+    def test_run_workflow_skips_when_live_status_shows_generation_reconciled(self) -> None:
+        """run_workflow must not re-enqueue if live API shows generation already queued."""
+        enqueue_mock = MagicMock(return_value="job-skip")
+
+        # Simulate: event payload says observedGeneration=0, but live read shows generation=5 queued
+        with patch.object(self.controller, "enqueue_workflow_job", enqueue_mock), \
+             patch.object(
+                 self.controller,
+                 "_read_live_workflow_status",
+                 return_value={"observedGeneration": 5, "phase": "queued"},
+             ):
+            self.controller.run_workflow(
+                spec={"steps": [{"name": "plan"}]},
+                status={"observedGeneration": 0, "phase": ""},
+                meta={"generation": 5, "uid": "uid-live"},
+                name="test-workflow",
+                namespace="default",
+                logger=logging.getLogger("test"),
+            )
+
+        # enqueue_workflow_job should NOT have been called
+        enqueue_mock.assert_not_called()
+
+    def test_run_workflow_proceeds_when_live_status_is_stale(self) -> None:
+        """run_workflow must enqueue if live API also shows stale generation."""
+        enqueue_mock = MagicMock(return_value="job-proceed")
+        patch_mock = MagicMock()
+
+        with patch.object(self.controller, "enqueue_workflow_job", enqueue_mock), \
+             patch.object(self.controller, "patch_custom_status", patch_mock), \
+             patch.object(
+                 self.controller,
+                 "_read_live_workflow_status",
+                 return_value={"observedGeneration": 0, "phase": ""},
+             ):
+            self.controller.run_workflow(
+                spec={"steps": [{"name": "plan"}]},
+                status={"observedGeneration": 0, "phase": ""},
+                meta={"generation": 5, "uid": "uid-proceed"},
+                name="test-workflow",
+                namespace="default",
+                logger=logging.getLogger("test"),
+            )
+
+        # enqueue_workflow_job IS called (inside execute_reconcile lambda)
+        # The reconcile lambda calls both patch_custom_status and enqueue_workflow_job
+        enqueue_mock.assert_called_once()

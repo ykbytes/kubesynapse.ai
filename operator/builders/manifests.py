@@ -2567,10 +2567,14 @@ def create_worker_job_manifest(
     run_id: str | None = None,
     git_config: dict[str, Any] | None = None,
     max_parallel_steps: int | None = None,
+    resource_uid: str | None = None,
 ) -> dict[str, Any]:
     """Build a Kubernetes Job manifest for a workflow worker."""
-    timestamp = int(time.time())
-    job_name = hashed_resource_name(kind, resource_namespace, resource_name, suffix=f"{generation}-{timestamp}")
+    # §reliability-P2: Deterministic job naming from run_id makes concurrent
+    # enqueue attempts idempotent — the same run_id always produces the same
+    # job name, allowing enqueue_worker_job to detect and return existing jobs.
+    run_id_suffix = run_id.strip() if run_id else str(int(time.time()))
+    job_name = hashed_resource_name(kind, resource_namespace, resource_name, suffix=f"{generation}-{run_id_suffix}")
     artifact_journal_path = workflow_journal_path(artifact_path)
     pod_security_context = {
         "runAsNonRoot": True,
@@ -2596,6 +2600,7 @@ def create_worker_job_manifest(
                 "kubesynapse.ai/resource-kind": kind,
                 "kubesynapse.ai/resource-name": resource_name,
                 "kubesynapse.ai/resource-namespace": resource_namespace,
+                "kubesynapse.ai/resource-uid": (resource_uid or "")[:63],
             },
         },
         "spec": {
@@ -2653,6 +2658,7 @@ def create_worker_job_manifest(
                                 {"name": "ARTIFACT_PVC_NAME", "value": artifact_pvc_name},
                                 {"name": "AGENT_RUNTIME_TIMEOUT_SECONDS", "value": AGENT_RUNTIME_TIMEOUT_SECONDS},
                                 {"name": "WORKFLOW_RUN_ID", "value": run_id or ""},
+                                {"name": "TARGET_UID", "value": resource_uid or ""},
                                 {"name": "PYTHONDONTWRITEBYTECODE", "value": "1"},
                                 {
                                     "name": "MAX_PARALLEL_STEPS",

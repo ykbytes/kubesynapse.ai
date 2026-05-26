@@ -180,6 +180,7 @@ from models import InvokeRequest, InvokeResponse
 from opencode_client import (  # noqa: F401 — re-exported
     _send_prompt_with_session_recovery,
     abort_session,
+    auto_approve_pending_questions,
     build_model_payload,
     create_remote_session,
     ensure_remote_session,
@@ -966,31 +967,52 @@ async def invoke_stream(request: InvokeRequest) -> StreamingResponse:
                     continue
 
         async def _poll_questions() -> None:
+            from hitl import HITL_MODE
+            should_auto_approve = HITL_MODE == "disabled"
             last_ids: set[str] = set()
             while not stop_todo_poller.is_set():
                 try:
-                    questions = await asyncio.to_thread(list_pending_questions)
-                    current_ids = {q.get("id", "") for q in questions if q.get("id")}
-                    new_ids = current_ids - last_ids
-                    if new_ids:
-                        for q in questions:
-                            if q.get("id") in new_ids:
+                    # Auto-approve pending questions in autonomous mode to prevent
+                    # deadlock when OpenCode's permission config uses "ask" mode.
+                    # Without this, headless agents block forever waiting for
+                    # human approval that will never come.
+                    if should_auto_approve:
+                        approved = await asyncio.to_thread(auto_approve_pending_questions)
+                        if approved:
+                            for qid in approved:
                                 await event_queue.put(
                                     {
-                                        "event": "question.asked",
+                                        "event": "question.auto_approved",
                                         "data": {
                                             "thread_id": thread_id,
                                             "source": "opencode",
-                                            **q,
+                                            "id": qid,
                                         },
                                     }
                                 )
-                        emit_question_asked(
-                            execution_id=execution_id,
-                            question=new_ids.pop() if new_ids else "",
-                            thread_id=thread_id,
-                        )
-                    last_ids = current_ids
+                    else:
+                        questions = await asyncio.to_thread(list_pending_questions)
+                        current_ids = {q.get("id", "") for q in questions if q.get("id")}
+                        new_ids = current_ids - last_ids
+                        if new_ids:
+                            for q in questions:
+                                if q.get("id") in new_ids:
+                                    await event_queue.put(
+                                        {
+                                            "event": "question.asked",
+                                            "data": {
+                                                "thread_id": thread_id,
+                                                "source": "opencode",
+                                                **q,
+                                            },
+                                        }
+                                    )
+                            emit_question_asked(
+                                execution_id=execution_id,
+                                question=new_ids.pop() if new_ids else "",
+                                thread_id=thread_id,
+                            )
+                        last_ids = current_ids
                 except Exception:
                     logger.debug("Question poller callback failed", exc_info=True)
                 try:
