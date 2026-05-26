@@ -13,7 +13,7 @@ spec:
     maskPII: false
     maxOutputTokens: 8192
   allowedModels:
-    - github-copilot/gpt-5-mini
+    - opencode-go/glm-5
   allowedMcpServers: []
   mcpRequireHitl: false
   toolPolicy:
