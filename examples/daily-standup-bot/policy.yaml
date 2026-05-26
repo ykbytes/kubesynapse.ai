@@ -13,7 +13,7 @@ spec:
     maskPII: false
     maxOutputTokens: 8192
   allowedModels:
-    - opencode-go/glm-5
+    - opencode-go/deepseek-v4-flash
   allowedMcpServers: []
   mcpRequireHitl: false
   toolPolicy:

@@ -6,7 +6,7 @@ metadata:
   labels:
     app.kubernetes.io/part-of: kubesynapse-demo
 spec:
-  model: opencode-go/glm-5
+  model: opencode-go/deepseek-v4-flash
   runtime:
     kind: opencode
   systemPrompt: |
@@ -236,7 +236,7 @@ metadata:
   labels:
     app.kubernetes.io/part-of: kubesynapse-demo
 spec:
-  model: opencode-go/glm-5
+  model: opencode-go/deepseek-v4-flash
   runtime:
     kind: opencode
   systemPrompt: |
@@ -303,7 +303,7 @@ metadata:
   labels:
     app.kubernetes.io/part-of: kubesynapse-demo
 spec:
-  model: opencode-go/glm-5
+  model: opencode-go/deepseek-v4-flash
   runtime:
     kind: opencode
   systemPrompt: |
