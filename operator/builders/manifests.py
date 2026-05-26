@@ -990,7 +990,6 @@ def _build_provider_auth_content(auth_data: dict[str, str]) -> str:
                     "type": "oauth",
                     "refresh": decoded,
                     "access": decoded,
-                    "expires": 0,
                 }
             else:
                 vals[provider_id] = {"type": "api", "key": decoded}
