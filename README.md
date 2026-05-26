@@ -80,7 +80,7 @@ After install, log in with:
 Forgot your password? The deploy script prints it on success. You can also retrieve it:
 
 ```bash
-kubectl get secret kubesynapse-platform-secrets -n kubesynapse \
+kubectl get secret kubesynapse-llm-api-keys -n kubesynapse \
   -o jsonpath='{.data.AUTH_BOOTSTRAP_ADMIN_PASSWORD}' | base64 -d
 ```
 
